@@ -13060,6 +13060,7 @@ export async function ensureFullSettingsLoaded() {
 }
 
 export async function getSettings(options = {}) {
+    let shouldPersistFirstRunCompletion = false;
     const useBootstrap = options?.bootstrap === true;
     const data = options?.payload ?? await fetchSettingsPayload(useBootstrap ? '/api/settings/bootstrap' : '/api/settings/get');
 
@@ -13170,15 +13171,22 @@ export async function getSettings(options = {}) {
         firstRun = !!settings.firstRun;
 
         if (firstRun) {
-            await initLoaderHandle?.hide();
+            if (isLoaderVisible()) {
+                await hideLoader();
+            }
             await doOnboarding(user_avatar);
             firstRun = false;
+            shouldPersistFirstRunCompletion = true;
         }
     }
     await validateDisabledSamplers();
     rememberSettingsSnapshot(buildSettingsPayload());
     settingsReady = true;
     await eventSource.emit(event_types.SETTINGS_LOADED);
+
+    if (shouldPersistFirstRunCompletion) {
+        await saveSettings(0, { directSave: true });
+    }
 
     if (useBootstrap) {
         void warmPreloadFullSettings();
