@@ -1,0 +1,640 @@
+# Extension API Reference
+
+This document is the complete reference for the Luker Extension API, intended for plugin developers. All APIs are exposed through `Luker.getContext()`.
+
+## Global Entry Point
+
+```js
+const context = Luker.getContext();
+```
+
+| Alias | Description |
+|------|------|
+| `Luker.getContext()` | Recommended |
+| `SillyTavern.getContext()` | Compatibility alias |
+| `st.getContext()` | Compatibility alias |
+
+New plugins should use `Luker.getContext()` exclusively. Compatibility aliases are retained only for the migration period.
+
+## API Differences from SillyTavern
+
+Luker is built on SillyTavern but has the following major API-level differences:
+
+| Area | SillyTavern | Luker |
+|------|-------------|-------|
+| Chat persistence | Full-file overwrite | Patch-first (RFC 6902 incremental updates) |
+| Chat-bound state | `chat_metadata` only | New Chat State mechanism |
+| Preset management | Direct import of internal modules | Unified `context.presets.*` API |
+| Prompt assembly | Manual concatenation required | `buildPresetAwarePromptMessages()` |
+| World Info simulation | None | `simulateWorldInfoActivation()` |
+| Generation hooks | Basic events | New fine-grained hooks such as `GENERATION_CONTEXT_READY`, `GENERATION_BEFORE_WORLD_INFO_SCAN`, etc. |
+| Event ordering | Registration order | Supports `priority`, `pluginOrder`, `makeFirst`/`makeLast` |
+| Regex runtime | No plugin API | `registerManagedRegexProvider()` |
+| Search tools | No plugin API | `Luker.searchTools` global API |
+| Function calling | No shared runtime | `requestToolCallsWithRetry()` shared runtime |
+| Connection config | Single global config | `context.presets.resolve()` supports per-preset connection resolution |
+
+> [!IMPORTANT]
+> Prefer the APIs provided by `Luker.getContext()` over calling the underlying HTTP endpoints directly. The Context API encapsulates patch-first semantics, conflict handling, and retry logic; calling endpoints directly requires you to handle these details yourself.
+
+## Chat Data (Read-Only)
+
+The following properties provide read-only access to the current chat:
+
+| Property | Type | Description |
+|------|------|------|
+| `context.chat` | `ChatMessage[]` | Current chat message array |
+| `context.characters` | `Character[]` | Character list |
+| `context.groups` | `Group[]` | Group list |
+| `context.name1` | `string` | User name |
+| `context.name2` | `string` | Character name |
+| `context.characterId` | `number` | Current character ID |
+| `context.groupId` | `string` | Current group ID |
+| `context.chat_metadata` | `object` | Metadata of the current chat |
+| `context.online_status` | `string` | API connection status |
+
+## Chat Persistence
+
+Luker uses a patch-first model for chat persistence. The following APIs encapsulate the incremental update logic:
+
+### appendChatMessages
+
+```ts
+appendChatMessages(messages: ChatMessage[]): Promise<boolean>
+```
+
+Appends messages to the current chat. Messages are appended to the end of the chat file.
+
+- Returns `true` on success
+- Returns `false` on failure (e.g., no active chat)
+
+### patchChatMessages
+
+```ts
+patchChatMessages(
+  operations: JsonPatchOperation[] | JsonPatchOperation
+): Promise<boolean>
+```
+
+Modifies chat messages using RFC 6902 JSON Patch operations. Supports a single operation or an array of operations.
+
+Operation format:
+
+```js
+// Replace the content of the 5th message
+await context.patchChatMessages({
+  op: 'replace',
+  path: '/4/mes',
+  value: 'New message content',
+});
+
+// Batch operations
+await context.patchChatMessages([
+  { op: 'replace', path: '/4/mes', value: 'New content' },
+  { op: 'replace', path: '/4/extra/model', value: 'gpt-4o' },
+]);
+```
+
+### saveChatMetadata
+
+```ts
+saveChatMetadata(withMetadata?: object): Promise<boolean>
+```
+
+Saves chat metadata. If `withMetadata` is provided, it is merged into `chat_metadata` before saving.
+
+## Chat State
+
+Chat State is a new chat-bound state mechanism introduced by Luker, allowing plugins to bind structured data to a specific chat instead of stuffing it into `chat_metadata`.
+
+### getChatState
+
+```ts
+getChatState(
+  namespace: string,
+  options?: { target?: ChatTarget }
+): Promise<any | null>
+```
+
+Reads the chat state for a given namespace. Returns `null` if no data exists for that namespace.
+
+- `namespace`: A unique identifier for the plugin; using the plugin name is recommended
+- `target`: Optional; specifies the target chat (for cross-chat reads, e.g., branching scenarios)
+
+### getChatStateBatch
+
+```ts
+getChatStateBatch(
+  namespaces: string[],
+  options?: { target?: ChatTarget }
+): Promise<Record<string, any>>
+```
+
+Reads chat state for multiple namespaces in batch. Returns an object keyed by namespace.
+
+### updateChatState
+
+```ts
+updateChatState(
+  namespace: string,
+  updater: (current: any) => any,
+  options?: { target?: ChatTarget }
+): Promise<{ ok: boolean }>
+```
+
+**Recommended read-modify-write approach.** The `updater` function receives the current state and returns the new state. The system automatically handles concurrency conflicts.
+
+```js
+await context.updateChatState('my-plugin', (current = {}) => ({
+  ...current,
+  counter: (current.counter || 0) + 1,
+  lastUpdated: Date.now(),
+}));
+```
+
+### deleteChatState
+
+```ts
+deleteChatState(
+  namespace: string,
+  options?: { target?: ChatTarget }
+): Promise<{ ok: boolean }>
+```
+
+Deletes the chat state for a given namespace.
+
+### Best Practices
+
+- Use `updateChatState()` for read-modify-write instead of manually chaining `getChatState()` + `patchChatState()`
+- Keep payloads as JSON-serializable plain objects
+- Handle `ok: false` return values to keep your plugin UI resilient
+- For large plugin data, prefer Chat State over `chat_metadata`
+
+## Preset API
+
+`context.presets` provides a unified preset management interface, replacing direct imports of the `PresetManager` internal module.
+
+### presets.list
+
+```ts
+presets.list(collection?: string): Array<PresetRef>
+```
+
+Lists all saved presets in the specified collection. `collection` is the preset collection name (e.g., `'openai'`).
+
+### presets.getSelected
+
+```ts
+presets.getSelected(collection?: string): PresetRef | null
+```
+
+Gets the currently selected preset reference. Returns `null` if the current selection is a runtime preset bound to a Character Card.
+
+### presets.getLive
+
+```ts
+presets.getLive(collection?: string): PresetBody | null
+```
+
+Gets the preset content currently being edited in the UI (including unsaved changes). Useful when you need to read the currently effective configuration.
+
+### presets.getStored
+
+```ts
+presets.getStored(ref: { collection: string, name: string }): PresetBody | null
+```
+
+Gets the saved content of a specific preset. Useful for cross-preset comparison or copying content.
+
+### presets.save
+
+```ts
+presets.save(
+  ref: { collection: string, name: string },
+  body: PresetBody
+): Promise<void>
+```
+
+Saves preset content.
+
+### presets.resolve
+
+```ts
+presets.resolve(
+  target?: PresetRef,
+  options?: object
+): ConnectionProfile
+```
+
+Resolves the connection configuration (API endpoint, model, key, etc.) for a preset. This is the recommended way for plugins to obtain connection information when making independent API calls.
+
+The returned `ConnectionProfile` contains:
+
+| Field | Description |
+|------|------|
+| `requestApi` | Normalized API type (e.g., `'openai'`) |
+| `requestModel` | Model name |
+| `requestUrl` | API endpoint URL |
+| `secretId` | Secret key identifier |
+
+### presets.state
+
+```ts
+presets.state.update(
+  namespace: string,
+  updater: (current: any) => any,
+  options?: { target: PresetRef }
+): Promise<void>
+```
+
+Manages plugin runtime/session data bound to a preset. This data is not exported with the preset and is only used for plugin runtime state.
+
+### Usage Rules
+
+- `list()` and `getSelected()` only return saved presets
+- Use `getLive()` for the preset currently being edited
+- Runtime presets bound to a Character Card are not considered "saved" — `getSelected()` returns `null`, but `getLive()` can still read them
+- Do not stuff plugin runtime data into the preset body; use `presets.state.*` instead
+
+## Prompt and World Info Assembly
+
+### buildPresetAwarePromptMessages
+
+```ts
+buildPresetAwarePromptMessages(options: {
+  messages: Array<{ role: string, content: string }>,
+  envelopeOptions?: {
+    includeCharacterCard?: boolean,
+    api?: string,
+    promptPresetName?: string,
+  },
+  promptPresetName?: string,
+  runtimeWorldInfo?: object,
+}): PromptMessage[]
+```
+
+Assembles chat messages into a prompt message list ready to be sent to an API, based on the current preset configuration. This is the most essential API for plugins making independent LLM calls.
+
+**Parameters:**
+
+| Parameter | Description |
+|------|------|
+| `messages` | Array of messages to send, each containing `role` (`'system'`/`'user'`/`'assistant'`) and `content` |
+| `envelopeOptions.includeCharacterCard` | Whether to include the current Character Card's definitions in the prompt (default `true`) |
+| `envelopeOptions.api` | Specifies the API type to use (e.g., `'openai'`); uses the current connection if not specified |
+| `envelopeOptions.promptPresetName` | Specifies the preset name to use; uses the current preset if not specified |
+| `promptPresetName` | Same as `envelopeOptions.promptPresetName`; top-level shortcut |
+| `runtimeWorldInfo` | Pre-resolved World Info activation results (obtained via `resolveWorldInfoForMessages`) |
+
+**Key Behaviors:**
+
+- Preserves content from the active preset outside of chat history (system prompt, character description, etc.)
+- Only replaces the chat history portion with the `messages` you provide
+- If `runtimeWorldInfo` is provided, World Info entries are injected at the corresponding positions
+- If `promptPresetName` is specified, that preset's prompt template is used instead of the current preset
+
+**Practical Example** (based on the Memory Graph plugin's recall flow):
+
+```js
+// 1. First resolve World Info activation results
+const runtimeWorldInfo = await context.resolveWorldInfoForMessages(
+  resolverMessages,
+  {
+    type: 'quiet',
+    fallbackToCurrentChat: false,
+    postActivationHook: rewriteDepthWorldInfoToAfter, // Rewrite directive: move depth-type World Info entries to the after position
+  }
+);
+
+// 2. Assemble the prompt
+const promptMessages = context.buildPresetAwarePromptMessages({
+  messages: [
+    { role: 'system', content: 'You are a memory analysis assistant...' },
+    { role: 'user', content: 'Please analyze the key information in the following conversation...' },
+  ],
+  envelopeOptions: {
+    includeCharacterCard: true,
+    api: envelopeApi,
+    promptPresetName: selectedPromptPresetName,
+  },
+  promptPresetName: selectedPromptPresetName,
+  runtimeWorldInfo: runtimeWorldInfo,
+});
+
+// 3. Send to the LLM
+const response = await context.generateQuietPrompt(promptMessages);
+```
+
+::: tip About the Rewrite Directive (postActivationHook)
+The `postActivationHook` parameter of `resolveWorldInfoForMessages` allows you to modify entry positions after World Info activation but before injection. This is useful in plugin scenarios — for example, the Memory Graph moves depth-type World Info entries to the after position to prevent them from being inserted into the chat depth and interfering with the plugin's own instructions.
+:::
+
+### resolveWorldInfoForMessages
+
+```ts
+resolveWorldInfoForMessages(
+  messages: Array<{ role: string, content: string }>,
+  options?: {
+    type?: string,
+    fallbackToCurrentChat?: boolean,
+    postActivationHook?: (entries: object) => object,
+  }
+): Promise<object>
+```
+
+Performs a World Info activation scan against the specified messages and returns the activation results. This is essentially a World Info "rescan" against custom messages.
+
+**Parameters:**
+
+| Parameter | Description |
+|------|------|
+| `messages` | Message list used to trigger World Info keyword matching |
+| `options.type` | Activation type (e.g., `'quiet'` for silent scan that does not affect the main conversation) |
+| `options.fallbackToCurrentChat` | Whether to fall back to current chat messages if `messages` is empty |
+| `options.postActivationHook` | Post-activation hook function that can modify entry injection positions |
+
+The returned object contains fields such as `worldInfoBeforeEntries`, `worldInfoAfterEntries`, and `worldInfoDepth`, which can be passed directly to the `runtimeWorldInfo` parameter of `buildPresetAwarePromptMessages`.
+
+::: tip World Info Rescan
+`resolveWorldInfoForMessages` is essentially a World Info rescan against custom messages. Plugins can use it to:
+- Obtain relevant World Info entries for independent LLM calls
+- Test which World Info entries a specific message would trigger
+- Simulate World Info activation without affecting the main conversation
+:::
+
+### Recommended Popup Generation Pattern
+
+When a plugin needs to make independent LLM calls (e.g., AI-assisted features in a popup), the following pattern is recommended:
+
+```js
+const context = Luker.getContext();
+
+// 1. Resolve World Info activation results
+const wi = await context.resolveWorldInfoForMessages(myCustomMessages, {
+  type: 'quiet',
+  fallbackToCurrentChat: false,
+});
+
+// 2. Assemble the prompt
+const requestMessages = context.buildPresetAwarePromptMessages({
+  messages: myCustomMessages,
+  runtimeWorldInfo: wi,
+});
+
+// 3. Send the request (using the current preset's connection config)
+const response = await fetch('/api/backends/chat-completions/generate', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ messages: requestMessages }),
+});
+```
+
+## Regex Runtime API
+
+Plugins can register managed regex processors via `registerManagedRegexProvider()` to participate in Luker's regex processing pipeline. This function is exported from the regex engine module:
+
+```js
+import { registerManagedRegexProvider } from '../../extensions/regex/engine.js';
+
+const handle = registerManagedRegexProvider('my-plugin', {
+  reloadOnChange: true,
+});
+
+// Add a regex script
+handle.upsertScript({
+  id: 'my-rule-1',
+  scriptName: 'My Regex Rule',
+  findRegex: 'foo',
+  replaceString: 'bar',
+  // ...other regex script fields
+});
+
+// Unregister on teardown
+handle.unregister();
+```
+
+The handle returned by `registerManagedRegexProvider` provides `upsertScript`, `removeScript`, `setScripts`, `clearScripts`, and `unregister` methods.
+
+## Search Tools API
+
+The search plugin exposes its API through the `Luker.searchTools` global object, allowing other plugins to leverage search capabilities:
+
+```js
+// Check if the search plugin is available
+if (globalThis?.Luker?.searchTools) {
+  // Get the list of available search tool names
+  const toolNames = Luker.searchTools.toolNames;
+  // Get tool definitions (for function calling)
+  const toolDefs = Luker.searchTools.getToolDefs();
+  // Check if a tool name belongs to search tools
+  const isSearchTool = Luker.searchTools.isToolName('web_search');
+}
+```
+
+`Luker.searchTools` exposes tool definition metadata; actual search execution is performed through the tool-calling loop of `requestToolCallsWithRetry()`. See [Search Tools](/features/search-tools) for details.
+
+## Function Calling Shared Runtime
+
+Luker provides a shared function calling runtime that plugins can reuse to implement tool-calling loops:
+
+```js
+import { requestToolCallsWithRetry } from '../search-tools/main.js';
+
+const result = await requestToolCallsWithRetry({
+  messages: requestMessages,
+  tools: myToolDefinitions,
+  maxRounds: 3,
+  // Connection config (optional, defaults to current preset)
+  requestApi: profile.requestApi,
+  requestModel: profile.requestModel,
+  requestUrl: profile.requestUrl,
+  secretId: profile.secretId,
+});
+```
+
+> [!NOTE]
+> `requestToolCallsWithRetry` is not on `Luker.getContext()` but is a function exported from the `search-tools/main.js` module. Other built-in plugins (such as Orchestrator and Memory Graph) use it via ES Module import.
+
+This runtime handles the complete tool-calling loop: send request → parse tool calls → execute tools → inject results into messages → request again, until the model stops calling tools or the maximum number of rounds is reached.
+
+## Connection Configuration Resolution
+
+When a plugin needs to use a connection configuration other than the current preset, use `presets.resolve()`:
+
+```js
+const profile = context.presets.resolve(
+  { collection: 'openai', name: 'My Preset' }
+);
+
+// profile contains:
+// - requestApi: 'openai'
+// - requestModel: 'gpt-4o'
+// - requestUrl: 'https://api.openai.com/v1'
+// - secretId: '...'
+```
+
+`secret_id` request override: In the chat-completions request body, you can use the `secret_id` field to specify which API key to use, overriding the global selection. This is particularly useful in multi-agent scenarios where different agents may use different API keys.
+
+## Character State
+
+```js
+// Read character-level persistent state
+const state = context.getCharacterState(namespace);
+
+// Write character-level persistent state
+await context.setCharacterState(namespace, newState);
+```
+
+Character state is bound to the Character Card and shared across all chats. It is suitable for storing character-level plugin configuration (e.g., CardApp application state).
+
+## Inter-Extension Communication
+
+### registerExtensionApi
+
+```js
+context.registerExtensionApi('my-plugin', {
+  doSomething: () => { /* ... */ },
+  getData: () => myData,
+});
+```
+
+### Finding Another Plugin's API
+
+```js
+const api = context.getExtensionApi('other-plugin');
+if (api) {
+  api.doSomething();
+}
+```
+
+## Event System
+
+### eventSource
+
+```js
+// Listen
+context.eventSource.on(eventName, handler, options?);
+
+// Unlisten
+context.eventSource.off(eventName, handler);
+
+// Ensure execution first
+context.eventSource.makeFirst(eventName, handler);
+
+// Ensure execution last
+context.eventSource.makeLast(eventName, handler);
+
+// Inspect listener info (for debugging)
+context.eventSource.getListenersMeta(eventName);
+
+// Configure plugin ordering
+context.eventSource.setOrderConfig(config);
+```
+
+### Listener Options
+
+```js
+context.eventSource.on(eventName, handler, {
+  priority: 10,  // Higher numbers execute first
+});
+```
+
+### Event Types
+
+All event types are accessed via `context.eventTypes`. For the complete event list and callback parameters, see [Plugin Development Basics](/development/plugin-basics#event-system).
+
+## World Info Read/Write
+
+Plugins can read and write World Info entries through the context API.
+
+## Low-Level Endpoint Reference (Advanced / Debugging)
+
+> [!WARNING]
+> The following endpoints are provided only as a reference for advanced debugging and integration scenarios where `Luker.getContext()` cannot be used. They are same-origin web application routes, not the primary plugin API contract. Normal plugin development should use the Context API described above.
+
+### Character Chats
+
+| Method | Path | Description |
+|------|------|------|
+| POST | `/api/chats/save` | Save chat (patch-first) |
+| POST | `/api/chats/get` | Get chat list |
+| POST | `/api/chats/delete` | Delete chat |
+| POST | `/api/chats/rename` | Rename chat |
+| POST | `/api/chats/export` | Export chat |
+
+### Group Chats
+
+| Method | Path | Description |
+|------|------|------|
+| POST | `/api/chats/group/save` | Save group chat |
+| POST | `/api/chats/group/get` | Get group chat list |
+| POST | `/api/chats/group/delete` | Delete group chat |
+
+### Chat State
+
+| Method | Path | Description |
+|------|------|------|
+| POST | `/api/chats/state/get` | Batch read state |
+| POST | `/api/chats/state/patch` | Incrementally update state |
+| POST | `/api/chats/state/delete` | Delete state |
+
+### Settings
+
+| Method | Path | Description |
+|------|------|------|
+| POST | `/api/settings/save` | Save settings (patch-first) |
+| POST | `/api/settings/get` | Get settings |
+
+### World Info
+
+| Method | Path | Description |
+|------|------|------|
+| POST | `/api/worldinfo/save` | Save World Info (patch-first) |
+| POST | `/api/worldinfo/get` | Get World Info |
+
+### Search / Visit
+
+| Method | Path | Description |
+|------|------|------|
+| POST | `/api/plugins/search/search` | Execute search |
+| POST | `/api/plugins/search/visit` | Visit a URL and extract content |
+
+### Patch Operation Format
+
+Message patches use the RFC 6902 JSON Patch format:
+
+```json
+[
+  { "op": "replace", "path": "/4/mes", "value": "New content" },
+  { "op": "add", "path": "/4/extra/note", "value": "Note" },
+  { "op": "remove", "path": "/4/extra/old_field" }
+]
+```
+
+Object patches (`meta/patch`, `state/patch`, `settings/patch`, `worldinfo/patch`) also use the same RFC 6902 format.
+
+### Patch Conflicts and Integrity Semantics
+
+- The server validates whether the path in a patch operation exists
+- `replace` operations require the target path to already exist
+- `add` operations create paths that do not exist
+- On conflict, an error is returned; the client should retry or fall back to a full save
+
+### Chat-Completions Request Body
+
+```json
+{
+  "messages": [...],
+  "model": "gpt-4o",
+  "secret_id": "optional-override"
+}
+```
+
+The `secret_id` field allows overriding the API key used at the request level, suitable for scenarios such as multi-agent orchestration that require different keys.
+
+## Related Pages
+
+- [Plugin Development Basics](/development/plugin-basics) — Plugin structure, event system, UI integration
+- [Character Card Development](/development/card-developers) — Character Card extension fields and CardApp
+- [Incremental Sync](/improvements/incremental-sync) — Technical details of incremental saving
+- [Preset Decoupling](/improvements/preset-decoupling) — Mechanism for decoupling presets from API selection

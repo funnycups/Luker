@@ -1,0 +1,70 @@
+# 請求檢查器
+
+請求檢查器（Request Inspector）是 Luker 的核心後端模組之一，用於追蹤每個 AI 生成請求從發起到完成的完整生命週期，並記錄詳細的 Token 用量資料。它是生成診斷能力的基礎設施。
+
+## 問題背景
+
+在 SillyTavern 中，AI 生成請求發出後，後端不會系統性地記錄請求的 Token 消耗。使用者無法得知每次生成實際花費了多少 Token，管理員也無法追蹤多使用者場景下的資源使用情況。
+
+Luker 實現了一套完整的請求生命週期追蹤系統，涵蓋文字生成和圖像生成兩類請求。
+
+## 核心能力
+
+### 請求生命週期追蹤
+
+每個 AI 生成請求都會經歷以下狀態流轉：
+
+1. **開始**（`startInspection`）— 記錄請求中繼資料，標記請求進入追蹤
+2. **完成**（`completeInspection`）— 請求成功回傳，記錄 Token 用量
+3. **失敗**（`failInspection`）— 請求出錯，記錄錯誤資訊
+4. **中止**（`abortInspection`）— 使用者主動取消生成
+
+### Token 用量統計
+
+請求檢查器記錄每次生成的詳細 Token 資料：
+
+- **Prompt Tokens** — 輸入提示詞消耗的 Token 數
+- **Completion Tokens** — 模型生成內容消耗的 Token 數
+- **Total Tokens** — 總用量
+
+這些資料從 API 回應中提取，並與使用者帳戶關聯，用於用量統計和診斷分析。
+
+### 串流回應的 Token 統計
+
+對於串流（SSE）回應，Token 用量資訊通常包含在最後一個 SSE 事件中。請求檢查器透過 `completeInspectionFromStream` 和 `extractUsageFromStreamEvents` 函數，從 SSE 事件流中提取 `usage` 欄位，確保串流生成也能準確統計 Token 消耗。
+
+### 圖像生成請求追蹤
+
+除文字生成外，請求檢查器還支援追蹤圖像生成請求。透過獨立的 `startImageInspection` / `completeImageInspection` / `failImageInspection` 函數，涵蓋所有圖像生成後端的請求記錄。
+
+## 主要能力
+
+| 函數 | 用途 |
+|------|------|
+| `startInspection(requestId, metadata)` | 開始追蹤一個生成請求 |
+| `completeInspection(requestId, result)` | 標記請求完成並記錄結果 |
+| `failInspection(requestId, error)` | 標記請求失敗 |
+| `abortInspection(requestId)` | 標記請求被中止 |
+| `completeInspectionFromStream(requestId, events)` | 從串流事件中提取用量並完成追蹤 |
+| `extractUsageFromStreamEvents(events)` | 從 SSE 事件陣列中提取 Token 用量 |
+| `startImageInspection(requestId, metadata)` | 開始追蹤圖像生成請求 |
+| `completeImageInspection(requestId, result)` | 完成圖像生成追蹤 |
+| `failImageInspection(requestId, error)` | 標記圖像生成失敗 |
+
+## 整合點
+
+請求檢查器被以下模組呼叫：
+
+- **`chat-completions.js`** — 在 OpenAI 相容 API 呼叫中記錄 Token 用量
+- **統一生成層** — 在[統一生成層](/zh-TW/improvements/generation-layer)中統一呼叫
+- **`chats.js`** — 在 `acknowledge-generation` 端點中關聯生成結果
+
+## Token 用量統計
+
+請求檢查器追蹤的 Token 用量是獨立的統計功能，用於幫助使用者和管理員了解 AI 生成的資源消耗情況。這與[認證與配額](/zh-TW/improvements/auth-and-quota)中的儲存配額管理是兩個獨立的系統：
+
+- **Token 用量統計**：請求檢查器記錄每次 AI 生成的 Token 消耗，提供用量視覺化和診斷資料
+- **儲存配額管理**：管理檔案儲存空間的分配和限制
+
+> [!TIP]
+> 請求檢查器在伺服器啟動時透過 `server-startup.js` 自動初始化，無需額外配置。

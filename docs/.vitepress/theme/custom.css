@@ -1,0 +1,349 @@
+/**
+ * Luker Docs — Editorial Manuscript Theme
+ * A warm, story-driven aesthetic for a roleplay platform.
+ * Deep teal brand with amber accents, textured feel.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,400;0,600;0,700;1,400&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* Brand — Deep Teal */
+  --vp-c-brand-1: #0D7377;
+  --vp-c-brand-2: #0A5C5F;
+  --vp-c-brand-3: #084547;
+  --vp-c-brand-soft: rgba(13, 115, 119, 0.10);
+
+  /* Accent — Warm Amber */
+  --luker-accent: #D97706;
+  --luker-accent-soft: rgba(217, 119, 6, 0.10);
+
+  /* Typography */
+  --vp-font-family-base: 'DM Sans', -apple-system, BlinkMacSystemFont,
+    'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --vp-font-family-mono: 'JetBrains Mono', 'Fira Code', Menlo, Monaco,
+    Consolas, monospace;
+
+  /* Subtle warm tint to backgrounds */
+  --vp-c-bg: #FAFAF8;
+  --vp-c-bg-soft: #F5F4F0;
+  --vp-c-bg-mute: #EEEDEA;
+}
+
+.dark {
+  --vp-c-brand-1: #2DD4BF;
+  --vp-c-brand-2: #14B8A6;
+  --vp-c-brand-3: #0D9488;
+  --vp-c-brand-soft: rgba(45, 212, 191, 0.10);
+
+  --luker-accent: #FBBF24;
+  --luker-accent-soft: rgba(251, 191, 36, 0.08);
+
+  --vp-c-bg: #1A1A1E;
+  --vp-c-bg-soft: #222226;
+  --vp-c-bg-mute: #2A2A2E;
+}
+
+/* ===== Hero Section ===== */
+.VPHero .name {
+  font-family: 'Crimson Pro', Georgia, 'Noto Serif SC', serif !important;
+  font-weight: 700;
+  font-size: 4rem !important;
+  letter-spacing: -0.03em;
+  background: linear-gradient(145deg, #0D7377 0%, #14B8A6 40%, #D97706 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.dark .VPHero .name {
+  background: linear-gradient(145deg, #2DD4BF 0%, #5EEAD4 40%, #FBBF24 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.VPHero .text {
+  font-family: 'Crimson Pro', Georgia, serif !important;
+  font-size: 2.2rem !important;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  color: var(--vp-c-text-1);
+}
+
+.VPHero .tagline {
+  font-size: 1.1rem !important;
+  line-height: 1.75;
+  max-width: 580px;
+  color: var(--vp-c-text-2);
+  font-style: italic;
+}
+
+/* Hero background texture */
+.VPHome {
+  background-image:
+    radial-gradient(ellipse at 20% 50%, var(--vp-c-brand-soft) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, var(--luker-accent-soft) 0%, transparent 40%);
+}
+
+/* ===== Feature Cards ===== */
+.VPFeature {
+  border-radius: 4px !important;
+  border: 1px solid var(--vp-c-divider) !important;
+  border-left: 3px solid var(--vp-c-brand-1) !important;
+  transition: all 0.25s ease !important;
+  background: var(--vp-c-bg) !important;
+}
+
+.VPFeature:hover {
+  border-left-color: var(--luker-accent) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06) !important;
+  transform: translateY(-1px);
+}
+
+.dark .VPFeature:hover {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25) !important;
+}
+
+.VPFeature .icon {
+  font-size: 1.5rem;
+  filter: saturate(0.85);
+}
+
+.VPFeature .title {
+  font-family: 'DM Sans', sans-serif !important;
+  font-weight: 700 !important;
+  font-size: 1rem !important;
+  letter-spacing: -0.01em;
+}
+
+.VPFeature .details {
+  font-size: 0.875rem !important;
+  line-height: 1.7 !important;
+  color: var(--vp-c-text-2);
+}
+
+/* ===== Content Typography ===== */
+.vp-doc h1 {
+  font-family: 'Crimson Pro', Georgia, serif;
+  font-size: 2.2rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  border-bottom: none;
+  padding-bottom: 0.5rem;
+  position: relative;
+}
+
+.vp-doc h1::after {
+  content: '';
+  display: block;
+  width: 60px;
+  height: 3px;
+  background: linear-gradient(90deg, var(--vp-c-brand-1), var(--luker-accent));
+  margin-top: 0.75rem;
+  border-radius: 2px;
+}
+
+.vp-doc h2 {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 1.45rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin-top: 2.5rem;
+  border-top: none;
+  padding-top: 1rem;
+  color: var(--vp-c-text-1);
+}
+
+.vp-doc h2::before {
+  content: '§';
+  color: var(--vp-c-brand-1);
+  margin-right: 0.5em;
+  font-weight: 400;
+  opacity: 0.5;
+}
+
+.vp-doc h3 {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--vp-c-text-1);
+}
+
+.vp-doc p {
+  line-height: 1.8;
+}
+
+/* ===== Code Blocks ===== */
+.vp-doc div[class*='language-'] {
+  border-radius: 6px !important;
+  border: 1px solid var(--vp-c-divider);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.dark .vp-doc div[class*='language-'] {
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.vp-doc div[class*='language-'] code {
+  font-size: 0.85rem;
+  line-height: 1.75;
+}
+
+/* ===== Tables ===== */
+.vp-doc table {
+  border-radius: 4px;
+  border: 1px solid var(--vp-c-divider);
+  font-size: 0.9rem;
+  display: table;
+  width: 100%;
+  max-width: 100%;
+  table-layout: auto;
+}
+
+@media (max-width: 768px) {
+  .vp-doc table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    width: 100%;
+  }
+}
+
+.vp-doc table th,
+.vp-doc table td {
+  white-space: normal;
+}
+
+.vp-doc th {
+  background-color: var(--vp-c-bg-soft) !important;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  color: var(--vp-c-text-2);
+}
+
+.vp-doc tr:hover td {
+  background-color: var(--vp-c-brand-soft);
+}
+
+/* ===== Buttons ===== */
+.VPButton.brand {
+  border-radius: 4px !important;
+  font-weight: 600 !important;
+  padding: 0 28px !important;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  font-size: 0.85rem !important;
+  transition: all 0.2s ease !important;
+}
+
+.VPButton.brand:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(13, 115, 119, 0.25);
+}
+
+.dark .VPButton.brand:hover {
+  box-shadow: 0 4px 16px rgba(45, 212, 191, 0.2);
+}
+
+.VPButton.alt {
+  border-radius: 4px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  font-size: 0.85rem !important;
+}
+
+/* ===== Blockquote ===== */
+.vp-doc blockquote {
+  border-left: 3px solid var(--luker-accent);
+  background-color: var(--luker-accent-soft);
+  border-radius: 0 4px 4px 0;
+  padding: 14px 20px;
+  margin: 1.5rem 0;
+  font-style: italic;
+}
+
+/* ===== Custom containers (tip, info, warning) ===== */
+.vp-doc .custom-block.tip {
+  border-color: var(--vp-c-brand-1);
+}
+
+.vp-doc .custom-block.info {
+  border-color: var(--vp-c-brand-2);
+}
+
+/* ===== Sidebar ===== */
+.VPSidebarItem .text {
+  font-size: 0.875rem;
+  transition: color 0.15s ease;
+}
+
+.VPSidebarItem.is-active > .item > .indicator {
+  background-color: var(--vp-c-brand-1) !important;
+}
+
+.VPSidebarItem.is-active > .item > .link > .text {
+  font-weight: 600;
+}
+
+/* ===== Nav ===== */
+.VPNavBar {
+  backdrop-filter: blur(12px) saturate(150%);
+}
+
+.VPNavBarTitle .title {
+  font-family: 'Crimson Pro', Georgia, serif !important;
+  font-weight: 700;
+  font-size: 1.15rem;
+  letter-spacing: -0.02em;
+}
+
+/* ===== Footer ===== */
+.VPFooter {
+  border-top: 1px solid var(--vp-c-divider);
+  font-size: 0.85rem;
+}
+
+/* ===== Scrollbar ===== */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--vp-c-divider);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--vp-c-text-3);
+}
+
+/* ===== Links ===== */
+.vp-doc a {
+  text-decoration-color: var(--vp-c-brand-soft);
+  text-underline-offset: 3px;
+  transition: color 0.15s ease, text-decoration-color 0.15s ease;
+}
+
+.vp-doc a:hover {
+  text-decoration-color: var(--vp-c-brand-1);
+}
+
+/* ===== Smooth scroll ===== */
+html {
+  scroll-behavior: smooth;
+}
+
+/* ===== Outline marker ===== */
+.VPDocOutlineItem .outline-link.active {
+  color: var(--vp-c-brand-1);
+  font-weight: 500;
+}
