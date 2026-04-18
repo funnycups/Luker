@@ -133,6 +133,7 @@ import { updateReasoningUI, parseReasoningFromString, getReasoningTemplateByName
 import { IGNORE_SYMBOL, inject_ids } from './constants.js';
 import { macros } from './macros/macro-system.js';
 import { getRegexedString, regex_placement } from './extensions/regex/engine.js';
+import { addMessages, updateMessages, deleteMessages, getMessage, getMessageCount } from './messages.js';
 
 function safeClone(value, fallback = {}) {
     try {
@@ -2139,9 +2140,17 @@ export function getContext() {
         streamingProcessor,
         eventSource,
         eventTypes: event_types,
+        /** @deprecated Use addMessages() instead */
         addOneMessage,
+        /** @deprecated Use deleteMessages(chat.length - 1) instead */
         deleteLastMessage,
+        /** @deprecated Use deleteMessages() instead */
         deleteMessage,
+        addMessages,
+        updateMessages,
+        deleteMessages,
+        getMessage,
+        getMessageCount,
         generate: Generate,
         sendStreamingRequest,
         sendGenerationRequest,
@@ -2155,7 +2164,9 @@ export function getContext() {
         setExtensionPrompt,
         updateChatMetadata,
         saveChat: saveChatConditional,
+        /** @deprecated Internal, use addMessages() instead */
         appendChatMessages,
+        /** @deprecated Internal, use updateMessages()/deleteMessages() instead */
         patchChatMessages,
         saveChatMetadata,
         getChatState,

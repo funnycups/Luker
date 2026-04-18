@@ -104,7 +104,7 @@ const converters = {
  * @param {number[]} indexes Zero-based chat message indexes (header excluded).
  * @returns {Promise<void>}
  */
-async function patchMessagesByIndex(indexes) {
+export async function patchMessagesByIndex(indexes) {
     const unique = [...new Set((Array.isArray(indexes) ? indexes : []).map(i => Number(i)).filter(Number.isInteger))];
     if (unique.length === 0) {
         return;
