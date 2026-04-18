@@ -31,7 +31,7 @@ Luker is built on SillyTavern but has the following major API-level differences:
 | Event ordering | Registration order | Supports `priority`, `pluginOrder`, `makeFirst`/`makeLast` |
 | Regex runtime | No plugin API | `registerManagedRegexProvider()` |
 | Search tools | No plugin API | `Luker.searchTools` global API |
-| Function calling | No shared runtime | `requestToolCallsWithRetry()` shared runtime |
+| Function calling | Basic `ToolManager` | Plain-text mode support + connection-level toggle + `sendOpenAIRequest` preset override |
 | Connection config | Single global config | `context.presets.resolve()` supports per-preset connection resolution |
 
 > [!IMPORTANT]
@@ -54,8 +54,6 @@ The following properties provide read-only access to the current chat:
 | `context.online_status` | `string` | API connection status |
 
 ## Messages API
-
-> **Module source**: `scripts/messages.js` → `getContext()`
 
 Luker provides a unified high-level message API. Every operation is a full pipeline: memory update + DOM rendering + event emission + persistence.
 
@@ -354,7 +352,7 @@ buildPresetAwarePromptMessages(options: {
 }): PromptMessage[]
 ```
 
-Assembles chat messages into a prompt message list ready to be sent to an API, based on the current preset configuration. This is the most essential API for plugins making independent LLM calls.
+Assembles plugin messages into a prompt message list ready to be sent to an API, arranged according to the prompt preset's ordering. This is an **optional** assembly tool — simple LLM calls don't need it. You only need it when you want to reuse character cards, world info, or prompt templates.
 
 **Parameters:**
 
@@ -403,11 +401,14 @@ const promptMessages = context.buildPresetAwarePromptMessages({
 });
 
 // 3. Send to the LLM
-const response = await context.generateQuietPrompt(promptMessages);
+import { sendOpenAIRequest } from '../../../openai.js';
+const response = await sendOpenAIRequest('quiet', promptMessages, signal, {
+ requestScope: 'extension_internal',
+});
 ```
 
-::: tip About the Rewrite Directive (postActivationHook)
-The `postActivationHook` parameter of `resolveWorldInfoForMessages` allows you to modify entry positions after World Info activation but before injection. This is useful in plugin scenarios — for example, the Memory Graph moves depth-type World Info entries to the after position to prevent them from being inserted into the chat depth and interfering with the plugin's own instructions.
+::: tip About the Post-Activation Hook (postActivationHook)
+The `postActivationHook` parameter of `resolveWorldInfoForMessages` allows you to make arbitrary modifications to entries after World Info activation but before injection — including modifying content, adjusting injection positions and depth, or even adding/removing entries. The hook receives the fully normalized World Info payload and returns the modified version. For example, the Memory Graph plugin uses this hook to rewrite depth-type World Info entries to the after position, preventing them from being inserted into the chat depth and interfering with the plugin's own instructions.
 :::
 
 ### resolveWorldInfoForMessages
@@ -432,7 +433,7 @@ Performs a World Info activation scan against the specified messages and returns
 | `messages` | Message list used to trigger World Info keyword matching |
 | `options.type` | Activation type (e.g., `'quiet'` for silent scan that does not affect the main conversation) |
 | `options.fallbackToCurrentChat` | Whether to fall back to current chat messages if `messages` is empty |
-| `options.postActivationHook` | Post-activation hook function that can modify entry injection positions |
+| `options.postActivationHook` | Post-activation hook function that receives the full World Info payload; can modify entry content, positions, depth, or add/remove entries |
 
 The returned object contains fields such as `worldInfoBeforeEntries`, `worldInfoAfterEntries`, and `worldInfoDepth`, which can be passed directly to the `runtimeWorldInfo` parameter of `buildPresetAwarePromptMessages`.
 
@@ -443,32 +444,33 @@ The returned object contains fields such as `worldInfoBeforeEntries`, `worldInfo
 - Simulate World Info activation without affecting the main conversation
 :::
 
-### Recommended Popup Generation Pattern
+### Recommended Independent LLM Call Pattern
 
 When a plugin needs to make independent LLM calls (e.g., AI-assisted features in a popup), the following pattern is recommended:
 
 ```js
+import { sendOpenAIRequest } from '../../../openai.js';
 const context = Luker.getContext();
 
 // 1. Resolve World Info activation results
 const wi = await context.resolveWorldInfoForMessages(myCustomMessages, {
-  type: 'quiet',
-  fallbackToCurrentChat: false,
+ type: 'quiet',
+ fallbackToCurrentChat: false,
 });
 
-// 2. Assemble the prompt
+// 2. Assemble the prompt (inject character card, world info, arrange by prompt_order)
 const requestMessages = context.buildPresetAwarePromptMessages({
-  messages: myCustomMessages,
-  runtimeWorldInfo: wi,
+ messages: myCustomMessages,
+ runtimeWorldInfo: wi,
 });
 
-// 3. Send the request (using the current preset's connection config)
-const response = await fetch('/api/backends/chat-completions/generate', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ messages: requestMessages }),
+// 3. Send the request
+const result = await sendOpenAIRequest('quiet', requestMessages, signal, {
+ requestScope: 'extension_internal',
 });
 ```
+
+If you don't need character cards or world info, you can skip steps 1-2 and pass messages directly to `sendOpenAIRequest`.
 
 ## Regex Runtime API
 
@@ -512,31 +514,163 @@ if (globalThis?.Luker?.searchTools) {
 }
 ```
 
-`Luker.searchTools` exposes tool definition metadata; actual search execution is performed through the tool-calling loop of `requestToolCallsWithRetry()`. See [Search Tools](/features/search-tools) for details.
+`Luker.searchTools` exposes tool definition metadata; actual search execution is performed through the internal tool-calling loop. See [Search Tools](/features/search-tools) for details.
 
-## Function Calling Shared Runtime
+## Sending LLM Requests
 
-Luker provides a shared function calling runtime that plugins can reuse to implement tool-calling loops:
+Plugins can send independent LLM requests using `sendOpenAIRequest`, the core generation function exposed on `getContext()`.
+
+### Basic Usage
+
+For simple LLM calls that don't need character cards or world info:
 
 ```js
-import { requestToolCallsWithRetry } from '../search-tools/main.js';
+import { sendOpenAIRequest } from '../../../openai.js';
 
-const result = await requestToolCallsWithRetry({
-  messages: requestMessages,
-  tools: myToolDefinitions,
-  maxRounds: 3,
-  // Connection config (optional, defaults to current preset)
-  requestApi: profile.requestApi,
-  requestModel: profile.requestModel,
-  requestUrl: profile.requestUrl,
-  secretId: profile.secretId,
+const result = await sendOpenAIRequest('quiet', [
+    { role: 'system', content: 'You are a translation assistant.' },
+    { role: 'user', content: 'Translate this text...' },
+], signal, {
+    requestScope: 'extension_internal',
 });
 ```
 
-> [!NOTE]
-> `requestToolCallsWithRetry` is not on `Luker.getContext()` but is a function exported from the `search-tools/main.js` module. Other built-in plugins (such as Orchestrator and Memory Graph) use it via ES Module import.
+The first argument `'quiet'` means this is a background request that won't appear in the chat UI.
 
-This runtime handles the complete tool-calling loop: send request → parse tool calls → execute tools → inject results into messages → request again, until the model stops calling tools or the maximum number of rounds is reached.
+### Preset Override
+
+`sendOpenAIRequest` accepts override parameters to control which model, API endpoint, and generation settings to use:
+
+```js
+const result = await sendOpenAIRequest('quiet', messages, signal, {
+    llmPresetName: 'my-low-temp',       // Override generation params (temperature, top_p, etc.)
+    apiSettingsOverride: profileOverride, // Override connection settings (model, API URL, etc.)
+    requestScope: 'extension_internal',
+});
+```
+
+| Parameter | Purpose |
+|-----------|--------|
+| `llmPresetName` | Load an LLM preset to override **generation parameters** (temperature, top_p, frequency_penalty, max_tokens, etc.). Does not affect connection fields. |
+| `apiPresetName` | Load an API preset to override **connection fields** (chat_completion_source, model, API URL, reverse_proxy, etc.). Does not affect generation parameters. |
+| `apiSettingsOverride` | Directly override connection settings with an object (typically from Connection Manager's profile resolution). |
+| `requestScope` | Set to `'extension_internal'` to skip main chat CHAT_COMPLETION hooks. |
+
+### Tool Calls
+
+To include tool definitions in the request:
+
+```js
+const result = await sendOpenAIRequest('quiet', messages, signal, {
+    tools: [
+        {
+            type: 'function',
+            function: {
+                name: 'search_web',
+                description: 'Search the web for information',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        query: { type: 'string', description: 'Search query' },
+                    },
+                    required: ['query'],
+                },
+            },
+        },
+    ],
+    toolChoice: 'auto',
+    functionCallMode: 'native',  // or 'prompt_xml' for plain-text mode
+    requestScope: 'extension_internal',
+});
+```
+
+Note: these `tools` are only used for this specific request. They are separate from the global tool registry (see [Tool Registration](#tool-registration) below).
+
+### With Prompt Assembly
+
+For requests that need to incorporate character cards, world info, or prompt templates, use `buildPresetAwarePromptMessages` to assemble the messages first:
+
+```js
+const context = Luker.getContext();
+
+// Step 1: Resolve world info
+const worldInfo = await context.resolveWorldInfoForMessages(rawMessages);
+
+// Step 2: Assemble messages using prompt preset layout
+const messages = context.buildPresetAwarePromptMessages({
+    messages: [
+        { role: 'system', content: taskSystemPrompt },
+        { role: 'user', content: taskUserPrompt },
+    ],
+    envelopeOptions: {
+        includeCharacterCard: true,
+        api: 'openai',
+    },
+    runtimeWorldInfo: worldInfo,
+});
+
+// Step 3: Send the assembled messages
+const result = await sendOpenAIRequest('quiet', messages, signal, {
+    llmPresetName,
+    apiSettingsOverride,
+    requestScope: 'extension_internal',
+});
+```
+
+`buildPresetAwarePromptMessages` arranges your messages according to the active prompt preset's `prompt_order`, optionally injecting the character card and world info entries. It controls **what to send**; `sendOpenAIRequest`'s preset parameters control **how to send it** (model, temperature, connection).
+
+## Tool Registration
+
+Plugins can register tools into the global tool registry via `getContext()`. Registered tools appear in the main chat's tool calling flow — the model can invoke them during normal conversation.
+
+```js
+const context = Luker.getContext();
+
+context.registerFunctionTool({
+    name: 'my_plugin_tool',
+    displayName: 'My Tool',
+    description: 'Does something useful',
+    parameters: {
+        type: 'object',
+        properties: {
+            input: { type: 'string', description: 'Input text' },
+        },
+        required: ['input'],
+    },
+    action: async (args) => {
+        // Execute the tool and return a result string
+        return `Result for: ${args.input}`;
+    },
+    formatMessage: (args) => {
+        // Optional: format a human-readable message for the chat
+        return `Used my tool with input: ${args.input}`;
+    },
+    shouldRegister: async () => {
+        // Optional: return false to conditionally skip registration
+        return true;
+    },
+    stealth: false, // Optional: if true, tool results won't show in chat
+});
+```
+
+To remove a registered tool:
+
+```js
+context.unregisterFunctionTool('my_plugin_tool');
+```
+
+Utility methods:
+
+| Method | Description |
+|--------|------------|
+| `context.registerFunctionTool(tool)` | Register a tool to the global registry |
+| `context.unregisterFunctionTool(name)` | Remove a tool from the global registry |
+| `context.isToolCallingSupported()` | Check if the current API/model supports tool calling |
+| `context.canPerformToolCalls(type)` | Check if tool calls can be performed for a given request type |
+
+::: warning Global vs Per-Request Tools
+`registerFunctionTool` adds tools to the **global registry** — they are available in the main chat for the model to call. The `tools` parameter in `sendOpenAIRequest` provides tools for **that specific request only** and does not affect the global registry.
+:::
 
 ## Connection Configuration Resolution
 
@@ -558,15 +692,60 @@ const profile = context.presets.resolve(
 
 ## Character State
 
-```js
-// Read character-level persistent state
-const state = context.getCharacterState(namespace);
+Character state is persistent storage bound to the Character Card itself, shared across all chats for that character. Unlike chat state (which is scoped to a single chat), character state is suitable for storing cross-chat, character-level configuration.
 
-// Write character-level persistent state
-await context.setCharacterState(namespace, newState);
+### getCharacterState
+
+```ts
+getCharacterState(namespace: string): Promise<any | null>
 ```
 
-Character state is bound to the Character Card and shared across all chats. It is suitable for storing character-level plugin configuration (e.g., CardApp application state).
+Reads the character state data under the specified namespace. Returns `null` if no data has been stored for that namespace.
+
+| Parameter | Description |
+|------|------|
+| `namespace` | Storage namespace, typically the plugin name (e.g., `'my-extension'`) |
+
+### setCharacterState
+
+```ts
+setCharacterState(namespace: string, data: any): Promise<void>
+```
+
+Writes character state data under the specified namespace. Pass `null` as `data` to delete the state for that namespace.
+
+| Parameter | Description |
+|------|------|
+| `namespace` | Storage namespace |
+| `data` | Data to store (any serializable object); pass `null` to delete |
+
+### Usage Example
+
+```js
+const context = Luker.getContext();
+
+// Read character state
+const state = await context.getCharacterState('my-extension');
+console.log(state); // { someConfig: true } or null
+
+// Write character state
+await context.setCharacterState('my-extension', {
+  someConfig: true,
+  lastUpdated: Date.now(),
+});
+
+// Delete character state
+await context.setCharacterState('my-extension', null);
+```
+
+### Character State vs Chat State
+
+| | Character State | Chat State |
+|------|------|------|
+| Scope | Bound to Character Card, shared across all chats | Bound to a single chat |
+| Typical Use | Character-level plugin config, CardApp application state | Temporary in-chat data, conversation context |
+| API | `getCharacterState` / `setCharacterState` | `getChatState` / `getChatStateBatch` / `updateChatState` / `deleteChatState` |
+| Storage Location | Character Card JSON file | Chat metadata |
 
 ## Inter-Extension Communication
 

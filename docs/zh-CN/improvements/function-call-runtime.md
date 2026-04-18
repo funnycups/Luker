@@ -78,10 +78,27 @@ Luker 内置了统一的函数调用（Function Calling）运行时，让 AI 角
 搜索插件注册了全局工具：网页搜索（支持 DuckDuckGo、SearXNG、Brave Search 等搜索引擎）和网页访问。其他模块（编辑助手、编排器、预设助手）在各自的独立上下文中使用工具调用机制，不通过全局工具注册表。
 
 ::: info 扩展工具
-第三方扩展可以通过运行时提供的 API 注册自定义工具，扩展 AI 角色的能力边界。工具定义遵循统一的 schema 格式，注册后自动适配原生模式和纯文本模式。
+第三方扩展可以通过 `context.registerFunctionTool()` 注册自定义工具（由核心的 `ToolManager` 提供）。工具定义遵循统一的 schema 格式，注册后自动适配原生模式和纯文本模式。详见[扩展 API — 工具注册](/zh-CN/development/extension-api#工具注册)文档。
 :::
+
+## 底层实现
+
+对于想了解内部实现的开发者，函数调用系统由三个核心模块组成：
+
+| 模块 | 文件 | 职责 |
+|------|------|------|
+| **ToolManager** | `tool-calling.js` | 全局工具注册表、工具 schema 转换、流式工具调用片段重组、工具执行编排和结果注入 |
+| **函数调用运行时** | `function-call-runtime.js` | 纯文本模式支持——将工具使用说明注入 System Prompt（`injectToolCallPrompt`）、从文本响应中解析工具调用（`parseToolCallsFromText`）、将工具结果合并回 prompt messages（`mergeToolCallResultIntoPromptMessages`） |
+| **请求引擎** | `openai.js`（`sendOpenAIRequest`） | 核心 LLM 请求函数，处理预设解析、连接覆盖，并将请求分发到对应的 API 后端 |
+
+**原生模式**的流程：`ToolManager` 将注册的工具转换为模型的 schema → `sendOpenAIRequest` 将其附加到 API 请求 → 模型返回结构化的工具调用 → `ToolManager` 解析、执行并注入结果。
+
+**纯文本模式**的流程多了一层：`function-call-runtime.js` 将工具描述注入 System Prompt → 模型输出文本格式的工具调用 → `function-call-runtime.js` 解析文本 → `ToolManager` 执行并注入结果。
+
+需要自行发送带工具调用的 LLM 请求的插件，直接使用 `sendOpenAIRequest` 并传入 `tools` 和 `toolChoice` 参数——这与全局工具注册表是分开的。详见[扩展 API — 发送 LLM 请求](/zh-CN/development/extension-api#发送-llm-请求)文档。
 
 ## 相关页面
 
 - [改进总览](/zh-CN/improvements/overview) — 所有技术改进的概述
 - [预设解耦](/zh-CN/improvements/preset-decoupling) — 函数调用开关与连接配置的关系
+- [扩展 API](/zh-CN/development/extension-api) — 插件开发指南，包含工具注册和 LLM 请求 API

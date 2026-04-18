@@ -78,10 +78,27 @@ This works in coordination with the [Preset Decoupling](/improvements/preset-dec
 The search plugin registers global tools: web search (supporting DuckDuckGo, SearXNG, Brave Search, and other search engines) and web access. Other modules (Editing Assistant, Orchestrator, Preset Assistant) use the tool calling mechanism in their own independent contexts, not through the global tool registry.
 
 ::: info Extension Tools
-Third-party extensions can register custom tools through the API provided by the runtime, extending the capabilities of AI characters. Tool definitions follow a unified schema format and automatically adapt to both native mode and plain-text mode after registration.
+Third-party extensions can register custom tools via `context.registerFunctionTool()` (provided by the `ToolManager` in the core). Tool definitions follow a unified schema format and automatically adapt to both native mode and plain-text mode after registration. See the [Extension API — Tool Registration](/development/extension-api#tool-registration) documentation for details.
 :::
+
+## Under the Hood
+
+For developers curious about the internal implementation, the function calling system is composed of three core modules:
+
+| Module | File | Responsibility |
+|--------|------|---------------|
+| **ToolManager** | `tool-calling.js` | Global tool registry, tool schema conversion, streaming tool call fragment reassembly, tool execution orchestration, and result injection |
+| **Function Call Runtime** | `function-call-runtime.js` | Plain-text mode support — injecting tool usage instructions into System Prompt (`injectToolCallPrompt`), parsing tool calls from text responses (`parseToolCallsFromText`), and merging tool results back into prompt messages (`mergeToolCallResultIntoPromptMessages`) |
+| **Request Engine** | `openai.js` (`sendOpenAIRequest`) | The core LLM request function that handles preset resolution, connection override, and dispatching requests to the appropriate API backend |
+
+In **native mode**, the flow is: `ToolManager` converts registered tools to the model's schema → `sendOpenAIRequest` attaches them to the API request → model returns structured tool calls → `ToolManager` parses, executes, and injects results.
+
+In **plain-text mode**, the flow adds an extra layer: `function-call-runtime.js` injects tool descriptions into the System Prompt → model outputs text-formatted tool calls → `function-call-runtime.js` parses the text → `ToolManager` executes and injects results.
+
+Plugins that need to make their own LLM requests with tool calling use `sendOpenAIRequest` directly with `tools` and `toolChoice` parameters — this is separate from the global tool registry. See the [Extension API — Sending LLM Requests](/development/extension-api#sending-llm-requests) documentation.
 
 ## Related Pages
 
 - [Improvements Overview](/improvements/overview) — Overview of all technical improvements
 - [Preset Decoupling](/improvements/preset-decoupling) — The relationship between function calling toggles and connection configurations
+- [Extension API](/development/extension-api) — Plugin development guide including tool registration and LLM request APIs

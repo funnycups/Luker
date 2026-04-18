@@ -31,7 +31,7 @@ Luker 基于 SillyTavern 构建，但在 API 层面有以下主要差异：
 | 事件排序 | 注册顺序 | 支持 `priority`、`pluginOrder`、`makeFirst`/`makeLast` |
 | 正则运行时 | 无插件 API | `registerManagedRegexProvider()` |
 | 搜索工具 | 无插件 API | `Luker.searchTools` 全局 API |
-| 函数调用 | 无共享运行时 | `requestToolCallsWithRetry()` 共享运行时 |
+| 函数调用 | 基础 `ToolManager` | 纯文本模式支持 + 连接级独立开关 + `sendOpenAIRequest` 预设覆盖 |
 | 连接配置 | 全局单一 | `context.presets.resolve()` 支持按预设解析连接配置 |
 
 > [!IMPORTANT]
@@ -54,8 +54,6 @@ Luker 基于 SillyTavern 构建，但在 API 层面有以下主要差异：
 | `context.online_status` | `string` | API 连接状态 |
 
 ## 消息 API
-
-> **模块来源**：`scripts/messages.js` → `getContext()`
 
 Luker 提供了统一的高层消息操作 API。每个操作都是完整的一条龙流程：内存更新 + DOM 渲染 + 事件触发 + 持久化。
 
@@ -354,7 +352,7 @@ buildPresetAwarePromptMessages(options: {
 }): PromptMessage[]
 ```
 
-基于当前预设配置，将聊天消息组装为可发送给 API 的提示词消息列表。这是插件进行独立 LLM 调用时最核心的 API。
+基于当前预设配置，将插件的消息按照 prompt 预设的排列顺序组装为可发送给 API 的提示词消息列表。这是一个**可选的**组装工具——简单的 LLM 调用不需要它，只有当你需要复用角色卡、世界书或 prompt 模板时才需要使用。
 
 **参数说明：**
 
@@ -403,11 +401,14 @@ const promptMessages = context.buildPresetAwarePromptMessages({
 });
 
 // 3. 发送给 LLM
-const response = await context.generateQuietPrompt(promptMessages);
+import { sendOpenAIRequest } from '../../../openai.js';
+const response = await sendOpenAIRequest('quiet', promptMessages, signal, {
+ requestScope: 'extension_internal',
+});
 ```
 
-::: tip 关于重写指令（postActivationHook）
-`resolveWorldInfoForMessages` 的 `postActivationHook` 参数允许你在世界书激活后、注入前修改条目的位置。这在插件场景中很有用——例如记忆图将 depth 类型的世界书条目重写到 after 位置，避免插入到聊天深度中干扰插件自己的指令。
+::: tip 关于后处理钩子（postActivationHook）
+`resolveWorldInfoForMessages` 的 `postActivationHook` 参数允许你在世界书激活后、注入前对条目进行任意修改——包括修改内容、调整注入位置和深度、甚至增删条目。hook 接收归一化后的完整世界书 payload 并返回修改后的版本。例如记忆图插件利用此钩子将 depth 类型的世界书条目重写到 after 位置，避免插入到聊天深度中干扰插件自己的指令。
 :::
 
 ### resolveWorldInfoForMessages
@@ -432,7 +433,7 @@ resolveWorldInfoForMessages(
 | `messages` | 用于触发世界书关键词匹配的消息列表 |
 | `options.type` | 激活类型（如 `'quiet'` 表示静默扫描，不影响主对话） |
 | `options.fallbackToCurrentChat` | 如果 messages 为空，是否回退到当前聊天消息 |
-| `options.postActivationHook` | 激活后的钩子函数，可以修改条目的注入位置 |
+| `options.postActivationHook` | 激活后的钩子函数，接收完整的世界书 payload，可以修改条目的内容、位置、深度，或增删条目 |
 
 返回的对象包含 `worldInfoBeforeEntries`、`worldInfoAfterEntries`、`worldInfoDepth` 等字段，可以直接传给 `buildPresetAwarePromptMessages` 的 `runtimeWorldInfo` 参数。
 
@@ -443,32 +444,33 @@ resolveWorldInfoForMessages(
 - 在不影响主对话的情况下进行世界书激活模拟
 :::
 
-### 推荐的弹窗生成模式
+### 推荐的独立 LLM 调用模式
 
 当插件需要进行独立的 LLM 调用（如弹窗中的 AI 辅助功能）时，推荐以下模式：
 
 ```js
+import { sendOpenAIRequest } from '../../../openai.js';
 const context = Luker.getContext();
 
 // 1. 解析世界书激活结果
 const wi = await context.resolveWorldInfoForMessages(myCustomMessages, {
-  type: 'quiet',
-  fallbackToCurrentChat: false,
+ type: 'quiet',
+ fallbackToCurrentChat: false,
 });
 
-// 2. 组装提示词
+// 2. 组装提示词（注入角色卡、世界书、按 prompt_order 排列）
 const requestMessages = context.buildPresetAwarePromptMessages({
-  messages: myCustomMessages,
-  runtimeWorldInfo: wi,
+ messages: myCustomMessages,
+ runtimeWorldInfo: wi,
 });
 
-// 3. 发送请求（使用当前预设的连接配置）
-const response = await fetch('/api/backends/chat-completions/generate', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ messages: requestMessages }),
+// 3. 发送请求
+const result = await sendOpenAIRequest('quiet', requestMessages, signal, {
+ requestScope: 'extension_internal',
 });
 ```
+
+如果不需要角色卡和世界书，可以跳过步骤 1-2，直接传 messages 给 `sendOpenAIRequest`。
 
 ## 正则运行时 API
 
@@ -512,31 +514,163 @@ if (globalThis?.Luker?.searchTools) {
 }
 ```
 
-`Luker.searchTools` 暴露的是工具定义元数据，实际的搜索执行通过 `requestToolCallsWithRetry()` 的工具调用循环完成。详见[搜索插件](/zh-CN/features/search-tools)。
+`Luker.searchTools` 暴露的是工具定义元数据，实际的搜索执行通过内部的工具调用循环完成。详见[搜索插件](/zh-CN/features/search-tools)。
 
-## 函数调用共享运行时
+## 发送 LLM 请求
 
-Luker 提供了共享的函数调用运行时，插件可以复用它来实现工具调用循环：
+插件可以使用 `sendOpenAIRequest` 发送独立的 LLM 请求，这是核心的生成函数。
+
+### 基本用法
+
+对于不需要角色卡或世界书的简单 LLM 调用：
 
 ```js
-import { requestToolCallsWithRetry } from '../search-tools/main.js';
+import { sendOpenAIRequest } from '../../../openai.js';
 
-const result = await requestToolCallsWithRetry({
-  messages: requestMessages,
-  tools: myToolDefinitions,
-  maxRounds: 3,
-  // 连接配置（可选，默认使用当前预设）
-  requestApi: profile.requestApi,
-  requestModel: profile.requestModel,
-  requestUrl: profile.requestUrl,
-  secretId: profile.secretId,
+const result = await sendOpenAIRequest('quiet', [
+    { role: 'system', content: '你是一个翻译助手。' },
+    { role: 'user', content: '翻译这段文字...' },
+], signal, {
+    requestScope: 'extension_internal',
 });
 ```
 
-> [!NOTE]
-> `requestToolCallsWithRetry` 不在 `Luker.getContext()` 上，而是从 `search-tools/main.js` 模块导出的函数。其他内置插件（如 orchestrator、memory-graph）通过 ES Module import 使用它。
+第一个参数 `'quiet'` 表示这是一个后台请求，不会出现在聊天 UI 中。
 
-这个运行时处理了工具调用的完整循环：发送请求 → 解析工具调用 → 执行工具 → 将结果注入消息 → 再次请求，直到模型不再调用工具或达到最大轮次。
+### 预设覆盖
+
+`sendOpenAIRequest` 接受覆盖参数来控制使用哪个模型、API 端点和生成设置：
+
+```js
+const result = await sendOpenAIRequest('quiet', messages, signal, {
+    llmPresetName: 'my-low-temp',       // 覆盖生成参数（温度、top_p 等）
+    apiSettingsOverride: profileOverride, // 覆盖连接设置（模型、API URL 等）
+    requestScope: 'extension_internal',
+});
+```
+
+| 参数 | 用途 |
+|------|------|
+| `llmPresetName` | 加载 LLM 预设来覆盖**生成参数**（温度、top_p、frequency_penalty、max_tokens 等）。不影响连接字段。 |
+| `apiPresetName` | 加载 API 预设来覆盖**连接字段**（chat_completion_source、模型、API URL、reverse_proxy 等）。不影响生成参数。 |
+| `apiSettingsOverride` | 直接用对象覆盖连接设置（通常来自连接管理器的配置解析）。 |
+| `requestScope` | 设为 `'extension_internal'` 可跳过主聊天的 CHAT_COMPLETION 钩子。 |
+
+### 工具调用
+
+在请求中包含工具定义：
+
+```js
+const result = await sendOpenAIRequest('quiet', messages, signal, {
+    tools: [
+        {
+            type: 'function',
+            function: {
+                name: 'search_web',
+                description: '搜索网页获取信息',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        query: { type: 'string', description: '搜索关键词' },
+                    },
+                    required: ['query'],
+                },
+            },
+        },
+    ],
+    toolChoice: 'auto',
+    functionCallMode: 'native',  // 或 'prompt_xml' 使用纯文本模式
+    requestScope: 'extension_internal',
+});
+```
+
+这些 `tools` 仅用于本次请求，与全局工具注册表（见下方[工具注册](#工具注册)）是分开的。
+
+### 配合 Prompt 组装
+
+对于需要融入角色卡、世界书或 prompt 模板的请求，先使用 `buildPresetAwarePromptMessages` 组装消息：
+
+```js
+const context = Luker.getContext();
+
+// 第一步：解析世界书
+const worldInfo = await context.resolveWorldInfoForMessages(rawMessages);
+
+// 第二步：按 prompt 预设布局组装消息
+const messages = context.buildPresetAwarePromptMessages({
+    messages: [
+        { role: 'system', content: taskSystemPrompt },
+        { role: 'user', content: taskUserPrompt },
+    ],
+    envelopeOptions: {
+        includeCharacterCard: true,
+        api: 'openai',
+    },
+    runtimeWorldInfo: worldInfo,
+});
+
+// 第三步：发送组装好的消息
+const result = await sendOpenAIRequest('quiet', messages, signal, {
+    llmPresetName,
+    apiSettingsOverride,
+    requestScope: 'extension_internal',
+});
+```
+
+`buildPresetAwarePromptMessages` 按照当前 prompt 预设的 `prompt_order` 排列消息，可选地注入角色卡和世界书条目。它控制**发送什么**；`sendOpenAIRequest` 的预设参数控制**怎么发送**（模型、温度、连接）。
+
+## 工具注册
+
+插件可以通过 `getContext()` 将工具注册到全局工具注册表。注册的工具会出现在主聊天的工具调用流程中——模型可以在正常对话中调用它们。
+
+```js
+const context = Luker.getContext();
+
+context.registerFunctionTool({
+    name: 'my_plugin_tool',
+    displayName: 'My Tool',
+    description: '执行某个有用的操作',
+    parameters: {
+        type: 'object',
+        properties: {
+            input: { type: 'string', description: '输入文本' },
+        },
+        required: ['input'],
+    },
+    action: async (args) => {
+        // 执行工具并返回结果字符串
+        return `结果：${args.input}`;
+    },
+    formatMessage: (args) => {
+        // 可选：格式化一条人类可读的消息显示在聊天中
+        return `使用了工具，输入：${args.input}`;
+    },
+    shouldRegister: async () => {
+        // 可选：返回 false 可条件性地跳过注册
+        return true;
+    },
+    stealth: false, // 可选：为 true 时工具结果不会显示在聊天中
+});
+```
+
+移除已注册的工具：
+
+```js
+context.unregisterFunctionTool('my_plugin_tool');
+```
+
+工具相关方法：
+
+| 方法 | 说明 |
+|------|------|
+| `context.registerFunctionTool(tool)` | 将工具注册到全局注册表 |
+| `context.unregisterFunctionTool(name)` | 从全局注册表移除工具 |
+| `context.isToolCallingSupported()` | 检查当前 API/模型是否支持工具调用 |
+| `context.canPerformToolCalls(type)` | 检查指定请求类型是否可以执行工具调用 |
+
+::: warning 全局工具 vs 单次请求工具
+`registerFunctionTool` 将工具添加到**全局注册表**——它们在主聊天中可供模型调用。`sendOpenAIRequest` 的 `tools` 参数仅为**该次请求**提供工具，不影响全局注册表。
+:::
 
 ## 连接配置解析
 
@@ -558,15 +692,60 @@ const profile = context.presets.resolve(
 
 ## 角色状态
 
-```js
-// 读取角色级别的持久化状态
-const state = context.getCharacterState(namespace);
+角色状态是绑定到角色卡本身的持久化存储，在该角色的所有聊天之间共享。与聊天状态（仅在单个聊天内有效）不同，角色状态适合存储跨聊天的角色级别配置。
 
-// 写入角色级别的持久化状态
-await context.setCharacterState(namespace, newState);
+### getCharacterState
+
+```ts
+getCharacterState(namespace: string): Promise<any | null>
 ```
 
-角色状态绑定到角色卡，在所有聊天之间共享。适合存储角色级别的插件配置（如 CardApp 的应用状态）。
+读取指定命名空间下的角色状态数据。如果该命名空间没有存储过数据，返回 `null`。
+
+| 参数 | 说明 |
+|------|------|
+| `namespace` | 存储命名空间，通常使用插件名称（如 `'my-extension'`） |
+
+### setCharacterState
+
+```ts
+setCharacterState(namespace: string, data: any): Promise<void>
+```
+
+写入指定命名空间下的角色状态数据。传入 `null` 作为 `data` 可以删除该命名空间的状态。
+
+| 参数 | 说明 |
+|------|------|
+| `namespace` | 存储命名空间 |
+| `data` | 要存储的数据（任意可序列化对象），传 `null` 删除 |
+
+### 使用示例
+
+```js
+const context = Luker.getContext();
+
+// 读取角色状态
+const state = await context.getCharacterState('my-extension');
+console.log(state); // { someConfig: true } 或 null
+
+// 写入角色状态
+await context.setCharacterState('my-extension', {
+  someConfig: true,
+  lastUpdated: Date.now(),
+});
+
+// 删除角色状态
+await context.setCharacterState('my-extension', null);
+```
+
+### 角色状态 vs 聊天状态
+
+| | 角色状态 | 聊天状态 |
+|------|------|------|
+| 作用范围 | 绑定到角色卡，所有聊天共享 | 绑定到单个聊天 |
+| 典型用途 | 角色级别的插件配置、CardApp 应用状态 | 聊天内的临时数据、对话上下文 |
+| API | `getCharacterState` / `setCharacterState` | `getChatState` / `setChatStateBatch` / `updateChatState` / `deleteChatState` |
+| 存储位置 | 角色卡 JSON 文件 | 聊天元数据 |
 
 ## 扩展间通信
 

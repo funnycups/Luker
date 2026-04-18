@@ -1,86 +1,25 @@
 # CardApp
 
-CardApp 是 Luker 的角色卡內嵌應用系統，允許角色卡創作者在角色卡中嵌入互動式 JavaScript 應用。這些應用可以追蹤遊戲狀態、顯示自訂 UI 元素、與聊天系統互動，為角色扮演增添遊戲化和視覺化的體驗。
+CardApp 是 Luker 獨有的角色卡內嵌應用系統。它允許角色卡在 `data.extensions.card_app` 中定義小型應用（包含 HTML、JavaScript 和樣式），這些應用會在聊天介面中載入和渲染，為角色卡賦予互動式的動態能力。
 
-## 適用場景
+::: tip 開發 CardApp
+推薦使用[角色卡編輯助手](/zh-TW/features/card-editor)中的 **CardApp Studio** 來開發和除錯 CardApp。Studio 提供了 CodeMirror 6 程式碼編輯器、即時預覽和 AI 輔助開發。完整的 API 參考和開發指南請參閱[角色卡開發者指南](/zh-TW/development/card-developers)。
+:::
 
-- **狀態追蹤**：好感度、體力值、庫存等遊戲化元素
-- **互動元素**：骰子、卡牌、小遊戲
-- **視覺化**：關係圖、時間線、地圖
-- **自訂 UI**：角色專屬的介面元件
+## 生命週期
 
-## 應用定義
+1. **掛載** — 角色切換時，系統從角色卡提取應用定義，將應用掛載到聊天介面的 UI 容器，並呼叫應用的 `init(ctx)` 函數
+2. **執行** — 應用透過 `ctx` 上下文物件與 Luker 互動，回應聊天事件並更新自身狀態
+3. **卸載** — 切換到其他角色或關閉聊天時，系統清理應用實例，自動釋放所有透過 `ctx` 註冊的計時器、事件監聽器和 dispose 回呼
 
-CardApp 定義在角色卡的 `data.extensions.card_app` 欄位中，包含三個部分：
+## 使用場景
 
-| 欄位 | 說明 |
-|------|------|
-| `html` | 應用的 HTML 範本 |
-| `script` | 應用的 JavaScript 程式碼 |
-| `style` | 應用的 CSS 樣式 |
-
-## 入口函式
-
-CardApp 的 `script` 欄位應匯出一個預設函式，該函式接收上下文物件 `ctx`：
-
-```javascript
-export default function (ctx) {
-  const container = ctx.container;
-
-  async function init() {
-    const state = ctx.getChatState('my_app');
-    render(state);
-  }
-
-  function render(state) {
-    const fav = state?.favorability ?? 0;
-    container.innerHTML = `
-      <div class="fav-panel">
-        <h3>好感度</h3>
-        <span>${fav} / 100</span>
-      </div>
-    `;
-  }
-
-  init();
-}
-```
-
-## 上下文 API
-
-CardApp 的上下文物件提供以下 API：
-
-| API | 說明 |
-|-----|------|
-| `ctx.container` | 應用的 DOM 容器元素 |
-| `ctx.charId` | 當前角色 ID |
-| `ctx.sendMessage(text, options?)` | 傳送訊息 |
-| `ctx.stopGeneration()` | 停止當前生成 |
-| `ctx.continueGeneration()` | 繼續生成 |
-| `ctx.getChatState(namespace)` | 讀取聊天綁定的持久化狀態 |
-| `ctx.getChatList()` | 取得當前角色的聊天列表 |
-
-## 安全限制
-
-CardApp 運行在受限環境中：
-
-- ✅ 可以操作 `ctx.container` 內的 DOM
-- ✅ 可以透過 `ctx` API 讀寫聊天狀態
-- ✅ 可以傳送訊息和控制生成
-- ❌ 不應直接操作沙箱外的 DOM
-- ❌ 不應直接發起網路請求
-- ❌ 不應直接存取其他擴充功能的資料
-
-## CardApp Studio
-
-[角色卡編輯助手](/zh-TW/features/card-editor)內建了 CardApp Studio，提供基於 CodeMirror 6 的程式碼編輯器，支援即時預覽和除錯。建議使用 Studio 進行 CardApp 開發，而非手動編輯 JSON。
-
-## 狀態持久化
-
-CardApp 透過[狀態系統](/zh-TW/features/state-system)實現資料持久化。應用可以將遊戲進度、使用者偏好等資料儲存到聊天狀態或角色狀態中，確保資料在重新載入後不會遺失。
+- **角色卡內嵌互動元素** — 狀態面板、情緒指示器、自訂按鈕等
+- **小遊戲** — 文字冒險選擇介面、骰子投擲器、卡牌遊戲元件等
+- **狀態追蹤** — 透過 `getChatState` / `setChatState` 持久化好感度、任務進度、物品清單等資料
 
 ## 相關頁面
 
-- [角色卡編輯助手](/zh-TW/features/card-editor) — CardApp Studio 開發環境
-- [狀態系統](/zh-TW/features/state-system) — 資料持久化機制
-- [角色卡開發者指南](/zh-TW/development/card-developers) — 完整的 CardApp 開發文件
+- [角色卡編輯助手](/zh-TW/features/card-editor) — 使用 Studio 開發和除錯 CardApp
+- [角色卡開發者指南](/zh-TW/development/card-developers) — 完整的 CardApp API 參考和開發文件
+- [狀態系統](/zh-TW/features/state-system) — 角色狀態和聊天狀態
