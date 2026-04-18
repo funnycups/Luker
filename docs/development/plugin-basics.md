@@ -142,7 +142,8 @@ const context = Luker.getContext();
 The context object includes APIs in the following major categories:
 
 - **Chat Data** — `context.chat`, `context.characters`, `context.groups`, etc.
-- **Chat Persistence** — `appendChatMessages()`, `patchChatMessages()`, `saveChatMetadata()`, etc.
+- **Messages** — `addMessages()`, `updateMessages()`, `deleteMessages()`, `getMessage()`, `getMessageCount()`
+- **Chat Persistence** — `saveChatMetadata()`, etc. (low-level `appendChatMessages()`, `patchChatMessages()` are deprecated — use the Messages API)
 - **Chat State** — `getChatState()`, `updateChatState()`, etc.
 - **Presets** — `context.presets.list()`, `context.presets.resolve()`, etc.
 - **Prompt / World Info Assembly** — `buildPresetAwarePromptMessages()`, `simulateWorldInfoActivation()`, etc.

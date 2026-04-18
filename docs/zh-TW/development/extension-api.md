@@ -53,47 +53,128 @@ Luker 基於 SillyTavern 建構，但在 API 層面有以下主要差異：
 | `context.chat_metadata` | `object` | 當前聊天的中繼資料 |
 | `context.online_status` | `string` | API 連線狀態 |
 
-## 聊天持久化
+## 訊息 API
 
-Luker 使用 patch-first 模型進行聊天持久化。以下 API 封裝了增量更新邏輯：
+> **模組來源**：`scripts/messages.js` → `getContext()`
 
-### appendChatMessages
+Luker 提供了統一的高層訊息操作 API。每個操作都是完整的一條龍流程：記憶體更新 + DOM 渲染 + 事件觸發 + 持久化。
 
-```ts
-appendChatMessages(messages: ChatMessage[]): Promise<boolean>
-```
-
-向當前聊天追加訊息。訊息會被追加到聊天檔案末尾。
-
-- 回傳 `true` 表示成功
-- 回傳 `false` 表示失敗（如無活躍聊天）
-
-### patchChatMessages
+### addMessages
 
 ```ts
-patchChatMessages(
-  operations: JsonPatchOperation[] | JsonPatchOperation
-): Promise<boolean>
+addMessages(
+ messages: ChatMessage | ChatMessage[],
+ options?: { scroll?: boolean, silent?: boolean }
+): Promise<number | number[]>
 ```
 
-使用 RFC 6902 JSON Patch 操作修改聊天訊息。支援單個操作或操作陣列。
+新增一條或多條訊息到聊天中。
 
-操作格式：
+- 自動 push 到 `chat[]`、渲染 DOM、觸發 `MESSAGE_SENT`/`MESSAGE_RECEIVED` 和 `MESSAGE_RENDERED` 事件、持久化到後端
+- 傳入陣列時批次操作，只觸發一次持久化
+- 回傳新訊息的索引（單條回傳 `number`，批次回傳 `number[]`）
 
 ```js
-// 替換第 5 條訊息的內容
-await context.patchChatMessages({
-  op: 'replace',
-  path: '/4/mes',
-  value: '新的訊息內容',
+// 新增單條訊息
+const index = await context.addMessages({
+ name: 'System',
+ mes: '這是一條系統訊息',
+ is_system: true,
 });
 
-// 批次操作
-await context.patchChatMessages([
-  { op: 'replace', path: '/4/mes', value: '新內容' },
-  { op: 'replace', path: '/4/extra/model', value: 'gpt-4o' },
+// 批次新增
+const indices = await context.addMessages([
+ { name: 'User', mes: '你好', is_user: true },
+ { name: 'Assistant', mes: '你好！有什麼可以幫你的？', is_user: false },
 ]);
 ```
+
+### updateMessages
+
+```ts
+updateMessages(
+ updates: { index: number, patch: object } | { index: number, patch: object }[],
+ options?: { rerender?: boolean, silent?: boolean }
+): Promise<void>
+```
+
+更新一條或多條訊息的內容並持久化。
+
+- `patch` 物件的欄位會合併到 `chat[index]` 中
+- 自動重新渲染 DOM、觸發 `MESSAGE_EDITED` 和 `MESSAGE_UPDATED` 事件、透過 RFC 6902 增量持久化
+- 批次操作時合併為一次持久化呼叫
+
+```js
+// 更新單條訊息
+await context.updateMessages({
+ index: 4,
+ patch: { mes: '修改後的內容' },
+});
+
+// 批次更新
+await context.updateMessages([
+ { index: 3, patch: { mes: '新內容 A' } },
+ { index: 5, patch: { mes: '新內容 B', extra: { model: 'gpt-4o' } } },
+]);
+```
+
+### deleteMessages
+
+```ts
+deleteMessages(
+ index: number | number[],
+ options?: { swipe?: number, silent?: boolean }
+): Promise<ChatMessage | ChatMessage[]>
+```
+
+刪除一條或多條訊息。
+
+- 自動從 `chat[]` 移除、清理 DOM、觸發 `MESSAGE_DELETED` 事件、透過 RFC 6902 增量持久化
+- 批次刪除時自動處理索引偏移
+- 指定 `swipe` 選項時，只刪除該訊息的特定 swipe 而非整條訊息
+- 回傳被刪除的訊息物件
+
+```js
+// 刪除單條訊息
+const deleted = await context.deleteMessages(5);
+
+// 批次刪除
+const deletedList = await context.deleteMessages([3, 5, 7]);
+
+// 只刪除特定 swipe
+await context.deleteMessages(5, { swipe: 2 });
+```
+
+### getMessage
+
+```ts
+getMessage(index: number): Readonly<ChatMessage> | null
+```
+
+取得指定索引的訊息（唯讀）。回傳一個 Proxy 物件，嘗試修改屬性會拋出錯誤並引導使用 `updateMessages()`。
+
+### getMessageCount
+
+```ts
+getMessageCount(): number
+```
+
+回傳當前聊天的訊息總數。
+
+---
+
+::: warning 已棄用的底層 API
+以下函式仍然可用但已標記為 deprecated，外掛開發者應使用上述統一 API：
+
+- `addOneMessage()` → 使用 `addMessages()`
+- `deleteLastMessage()` → 使用 `deleteMessages(chat.length - 1)`
+- `deleteMessage()` → 使用 `deleteMessages()`
+- `updateMessageBlock()` → 使用 `updateMessages()`
+- `patchChatMessages()` → 底層 RFC 6902 傳輸層，使用 `updateMessages()` / `deleteMessages()`
+- `appendChatMessages()` → 底層追加傳輸層，使用 `addMessages()`
+:::
+
+## 聊天持久化
 
 ### saveChatMetadata
 

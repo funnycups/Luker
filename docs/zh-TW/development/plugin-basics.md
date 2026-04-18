@@ -142,7 +142,8 @@ const context = Luker.getContext();
 上下文物件包含以下主要類別的 API：
 
 - **聊天資料** — `context.chat`、`context.characters`、`context.groups` 等
-- **聊天持久化** — `appendChatMessages()`、`patchChatMessages()`、`saveChatMetadata()` 等
+- **訊息操作** — `addMessages()`、`updateMessages()`、`deleteMessages()`、`getMessage()`、`getMessageCount()`
+- **聊天持久化** — `saveChatMetadata()` 等（底層的 `appendChatMessages()`、`patchChatMessages()` 已棄用，請使用訊息 API）
 - **聊天狀態** — `getChatState()`、`updateChatState()` 等
 - **預設** — `context.presets.list()`、`context.presets.resolve()` 等
 - **提示詞/世界書組裝** — `buildPresetAwarePromptMessages()`、`simulateWorldInfoActivation()` 等

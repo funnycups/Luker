@@ -53,47 +53,128 @@ The following properties provide read-only access to the current chat:
 | `context.chat_metadata` | `object` | Metadata of the current chat |
 | `context.online_status` | `string` | API connection status |
 
-## Chat Persistence
+## Messages API
 
-Luker uses a patch-first model for chat persistence. The following APIs encapsulate the incremental update logic:
+> **Module source**: `scripts/messages.js` → `getContext()`
 
-### appendChatMessages
+Luker provides a unified high-level message API. Every operation is a full pipeline: memory update + DOM rendering + event emission + persistence.
 
-```ts
-appendChatMessages(messages: ChatMessage[]): Promise<boolean>
-```
-
-Appends messages to the current chat. Messages are appended to the end of the chat file.
-
-- Returns `true` on success
-- Returns `false` on failure (e.g., no active chat)
-
-### patchChatMessages
+### addMessages
 
 ```ts
-patchChatMessages(
-  operations: JsonPatchOperation[] | JsonPatchOperation
-): Promise<boolean>
+addMessages(
+ messages: ChatMessage | ChatMessage[],
+ options?: { scroll?: boolean, silent?: boolean }
+): Promise<number | number[]>
 ```
 
-Modifies chat messages using RFC 6902 JSON Patch operations. Supports a single operation or an array of operations.
+Adds one or more messages to the chat.
 
-Operation format:
+- Automatically pushes to `chat[]`, renders DOM, emits `MESSAGE_SENT`/`MESSAGE_RECEIVED` and `MESSAGE_RENDERED` events, and persists to backend
+- When an array is passed, operations are batched with a single persistence call
+- Returns the index of the new message(s) (`number` for single, `number[]` for batch)
 
 ```js
-// Replace the content of the 5th message
-await context.patchChatMessages({
-  op: 'replace',
-  path: '/4/mes',
-  value: 'New message content',
+// Add a single message
+const index = await context.addMessages({
+ name: 'System',
+ mes: 'This is a system message',
+ is_system: true,
 });
 
-// Batch operations
-await context.patchChatMessages([
-  { op: 'replace', path: '/4/mes', value: 'New content' },
-  { op: 'replace', path: '/4/extra/model', value: 'gpt-4o' },
+// Batch add
+const indices = await context.addMessages([
+ { name: 'User', mes: 'Hello', is_user: true },
+ { name: 'Assistant', mes: 'Hi! How can I help?', is_user: false },
 ]);
 ```
+
+### updateMessages
+
+```ts
+updateMessages(
+ updates: { index: number, patch: object } | { index: number, patch: object }[],
+ options?: { rerender?: boolean, silent?: boolean }
+): Promise<void>
+```
+
+Updates one or more messages and persists the changes.
+
+- Fields from the `patch` object are merged into `chat[index]`
+- Automatically re-renders DOM, emits `MESSAGE_EDITED` and `MESSAGE_UPDATED` events, and persists via RFC 6902 incremental patch
+- Batch operations are merged into a single persistence call
+
+```js
+// Update a single message
+await context.updateMessages({
+ index: 4,
+ patch: { mes: 'Updated content' },
+});
+
+// Batch update
+await context.updateMessages([
+ { index: 3, patch: { mes: 'New content A' } },
+ { index: 5, patch: { mes: 'New content B', extra: { model: 'gpt-4o' } } },
+]);
+```
+
+### deleteMessages
+
+```ts
+deleteMessages(
+ index: number | number[],
+ options?: { swipe?: number, silent?: boolean }
+): Promise<ChatMessage | ChatMessage[]>
+```
+
+Deletes one or more messages.
+
+- Automatically removes from `chat[]`, cleans up DOM, emits `MESSAGE_DELETED` event, and persists via RFC 6902 incremental patch
+- Batch deletion automatically handles index shifting
+- When the `swipe` option is specified, only that specific swipe is deleted rather than the entire message
+- Returns the deleted message object(s)
+
+```js
+// Delete a single message
+const deleted = await context.deleteMessages(5);
+
+// Batch delete
+const deletedList = await context.deleteMessages([3, 5, 7]);
+
+// Delete only a specific swipe
+await context.deleteMessages(5, { swipe: 2 });
+```
+
+### getMessage
+
+```ts
+getMessage(index: number): Readonly<ChatMessage> | null
+```
+
+Retrieves the message at the specified index (read-only). Returns a Proxy object that throws an error on write attempts, guiding developers to use `updateMessages()`.
+
+### getMessageCount
+
+```ts
+getMessageCount(): number
+```
+
+Returns the total number of messages in the current chat.
+
+---
+
+::: warning Deprecated Low-Level APIs
+The following functions are still available but marked as deprecated. Plugin developers should use the unified API above:
+
+- `addOneMessage()` → Use `addMessages()`
+- `deleteLastMessage()` → Use `deleteMessages(chat.length - 1)`
+- `deleteMessage()` → Use `deleteMessages()`
+- `updateMessageBlock()` → Use `updateMessages()`
+- `patchChatMessages()` → Low-level RFC 6902 transport, use `updateMessages()` / `deleteMessages()`
+- `appendChatMessages()` → Low-level append transport, use `addMessages()`
+:::
+
+## Chat Persistence
 
 ### saveChatMetadata
 
