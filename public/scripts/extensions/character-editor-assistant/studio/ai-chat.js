@@ -13,6 +13,8 @@ import {
  validateParsedToolCalls,
 } from '../../function-call-runtime.js';
 import { fetchFileList, fetchFileContent, saveFileContent, deleteFile, renameFile } from './studio.js';
+import { characters, this_chid, saveCharacterDebounced } from '../../../../script.js';
+import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, selected_world_info } from '../../../world-info.js';
 
 const MODULE_NAME = 'card-app/studio/ai';
 const MAX_TOOL_ROUNDS = 10;
@@ -26,6 +28,13 @@ const TOOL_NAMES = Object.freeze({
  PATCH_FILE: 'cardapp_patch_file',
  DELETE_FILE: 'cardapp_delete_file',
  RENAME_FILE: 'cardapp_rename_file',
+ CHARACTER_GET_FIELDS: 'character_get_fields',
+ CHARACTER_UPDATE_FIELDS: 'character_update_fields',
+ WORLDINFO_LIST_BOOKS: 'worldinfo_list_books',
+ WORLDINFO_GET_ENTRIES: 'worldinfo_get_entries',
+ WORLDINFO_CREATE_ENTRY: 'worldinfo_create_entry',
+ WORLDINFO_UPDATE_ENTRY: 'worldinfo_update_entry',
+ WORLDINFO_DELETE_ENTRY: 'worldinfo_delete_entry',
 });
 
 function buildTools() {
@@ -113,6 +122,116 @@ function buildTools() {
  to_path: { type: 'string', description: 'New file path' },
  },
  required: ['from_path', 'to_path'],
+ additionalProperties: false,
+ },
+ },
+ },
+ // ==================== Character Fields ====================
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.CHARACTER_GET_FIELDS,
+ description: 'Get all editable fields of the current character card (name, description, personality, scenario, first_mes, mes_example, system_prompt, post_history_instructions, creator_notes, creator, character_version, tags, talkativeness, depth_prompt settings).',
+ parameters: { type: 'object', properties: {}, additionalProperties: false },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.CHARACTER_UPDATE_FIELDS,
+ description: 'Update one or more character card fields. Supported keys: name, description, personality, scenario, first_mes, mes_example, system_prompt, post_history_instructions, creator_notes, creator, character_version, tags (comma-separated string), talkativeness (number 0-1), depth_prompt_prompt, depth_prompt_depth, depth_prompt_role.',
+ parameters: {
+ type: 'object',
+ properties: {
+ fields: {
+ type: 'object',
+ description: 'Key-value pairs of fields to update',
+ additionalProperties: true,
+ },
+ },
+ required: ['fields'],
+ additionalProperties: false,
+ },
+ },
+ },
+ // ==================== World Info ====================
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.WORLDINFO_LIST_BOOKS,
+ description: 'List world book names associated with the current character (character-bound + globally activated).',
+ parameters: { type: 'object', properties: {}, additionalProperties: false },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.WORLDINFO_GET_ENTRIES,
+ description: 'Get all entries from a world book. Returns entries as uid-keyed object.',
+ parameters: {
+ type: 'object',
+ properties: {
+ book_name: { type: 'string', description: 'World book name' },
+ },
+ required: ['book_name'],
+ additionalProperties: false,
+ },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.WORLDINFO_CREATE_ENTRY,
+ description: 'Create a new entry in a world book. Returns the new entry with its assigned uid.',
+ parameters: {
+ type: 'object',
+ properties: {
+ book_name: { type: 'string', description: 'World book name' },
+ comment: { type: 'string', description: 'Entry title/comment' },
+ content: { type: 'string', description: 'Entry content text' },
+ key: { type: 'array', items: { type: 'string' }, description: 'Trigger keywords' },
+ keysecondary: { type: 'array', items: { type: 'string' }, description: 'Secondary keywords (optional)' },
+ constant: { type: 'boolean', description: 'Always active (default false)' },
+ selective: { type: 'boolean', description: 'Selective triggering (default false)' },
+ disable: { type: 'boolean', description: 'Disabled (default false)' },
+ position: { type: 'number', description: 'Injection position' },
+ order: { type: 'number', description: 'Sort order' },
+ depth: { type: 'number', description: 'Injection depth' },
+ },
+ required: ['book_name'],
+ additionalProperties: false,
+ },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.WORLDINFO_UPDATE_ENTRY,
+ description: 'Update fields of an existing world book entry.',
+ parameters: {
+ type: 'object',
+ properties: {
+ book_name: { type: 'string', description: 'World book name' },
+ uid: { type: 'number', description: 'Entry UID' },
+ patch: { type: 'object', description: 'Fields to update (shallow merge)', additionalProperties: true },
+ },
+ required: ['book_name', 'uid', 'patch'],
+ additionalProperties: false,
+ },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.WORLDINFO_DELETE_ENTRY,
+ description: 'Delete a world book entry.',
+ parameters: {
+ type: 'object',
+ properties: {
+ book_name: { type: 'string', description: 'World book name' },
+ uid: { type: 'number', description: 'Entry UID' },
+ },
+ required: ['book_name', 'uid'],
  additionalProperties: false,
  },
  },
@@ -268,6 +387,118 @@ async function executeTool(charId, toolName, args, options = {}) {
  case TOOL_NAMES.RENAME_FILE: {
  await renameFile(charId, args.from_path, args.to_path);
  return { ok: true, message: `File renamed from ${args.from_path} to ${args.to_path}.` };
+ }
+ // ==================== Character Fields ====================
+ case TOOL_NAMES.CHARACTER_GET_FIELDS: {
+ if (this_chid === undefined || this_chid === null) {
+ return { ok: false, error: 'No active character' };
+ }
+ const char = characters[this_chid];
+ const d = char?.data || {};
+ return {
+ ok: true,
+ fields: {
+ name: char?.name || '',
+ description: d.description || '',
+ personality: d.personality || '',
+ scenario: d.scenario || '',
+ first_mes: d.first_mes || '',
+ mes_example: d.mes_example || '',
+ system_prompt: d.system_prompt || '',
+ post_history_instructions: d.post_history_instructions || '',
+ creator_notes: d.creator_notes || '',
+ creator: d.creator || '',
+ character_version: d.character_version || '',
+ tags: Array.isArray(d.tags) ? d.tags.join(', ') : '',
+ talkativeness: d.extensions?.talkativeness ?? 0.5,
+ depth_prompt_prompt: d.depth_prompt?.prompt || '',
+ depth_prompt_depth: d.depth_prompt?.depth ?? 4,
+ depth_prompt_role: d.depth_prompt?.role || 'system',
+ },
+ };
+ }
+ case TOOL_NAMES.CHARACTER_UPDATE_FIELDS: {
+ if (this_chid === undefined || this_chid === null) {
+ return { ok: false, error: 'No active character' };
+ }
+ const FIELD_MAP = {
+ name: '#character_name_pole',
+ description: '#description_textarea',
+ personality: '#personality_textarea',
+ scenario: '#scenario_pole',
+ first_mes: '#firstmessage_textarea',
+ mes_example: '#mes_example_textarea',
+ system_prompt: '#system_prompt_textarea',
+ post_history_instructions: '#post_history_instructions_textarea',
+ creator_notes: '#creator_notes_textarea',
+ creator: '#creator_textarea',
+ character_version: '#character_version_textarea',
+ tags: '#tags_textarea',
+ talkativeness: '#talkativeness_slider',
+ depth_prompt_prompt: '#depth_prompt_prompt',
+ depth_prompt_depth: '#depth_prompt_depth',
+ depth_prompt_role: '#depth_prompt_role',
+ };
+ const updated = [];
+ for (const [key, value] of Object.entries(args.fields || {})) {
+ const selector = FIELD_MAP[key];
+ if (!selector) continue;
+ const $el = $(selector);
+ if ($el.length > 0) {
+ $el.val(value);
+ $el.trigger('input');
+ updated.push(key);
+ }
+ }
+ saveCharacterDebounced();
+ return { ok: true, message: `Updated fields: ${updated.join(', ')}` };
+ }
+ // ==================== World Info ====================
+ case TOOL_NAMES.WORLDINFO_LIST_BOOKS: {
+ const books = [];
+ const charData = characters[this_chid];
+ const boundBook = String(charData?.data?.extensions?.world || '').trim();
+ if (boundBook) books.push(boundBook);
+ if (Array.isArray(selected_world_info)) {
+ for (const name of selected_world_info) {
+ if (name && !books.includes(name)) books.push(name);
+ }
+ }
+ return { ok: true, books };
+ }
+ case TOOL_NAMES.WORLDINFO_GET_ENTRIES: {
+ const data = await loadWorldInfo(args.book_name);
+ if (!data) return { ok: false, error: `World book "${args.book_name}" not found` };
+ return { ok: true, entries: data.entries || {} };
+ }
+ case TOOL_NAMES.WORLDINFO_CREATE_ENTRY: {
+ const data = await loadWorldInfo(args.book_name);
+ if (!data) return { ok: false, error: `World book "${args.book_name}" not found` };
+ const newEntry = createWorldInfoEntry(args.book_name, data);
+ if (!newEntry) return { ok: false, error: 'Failed to create entry' };
+ const { book_name: _bn, ...entryFields } = args;
+ if (Object.keys(entryFields).length > 0) {
+ Object.assign(newEntry, entryFields);
+ }
+ await saveWorldInfo(args.book_name, data, true);
+ return { ok: true, entry: newEntry };
+ }
+ case TOOL_NAMES.WORLDINFO_UPDATE_ENTRY: {
+ const data = await loadWorldInfo(args.book_name);
+ if (!data) return { ok: false, error: `World book "${args.book_name}" not found` };
+ const entry = data.entries?.[args.uid];
+ if (!entry) return { ok: false, error: `Entry UID ${args.uid} not found` };
+ Object.assign(entry, args.patch);
+ entry.uid = args.uid;
+ await saveWorldInfo(args.book_name, data, true);
+ return { ok: true, message: `Entry ${args.uid} updated` };
+ }
+ case TOOL_NAMES.WORLDINFO_DELETE_ENTRY: {
+ const data = await loadWorldInfo(args.book_name);
+ if (!data) return { ok: false, error: `World book "${args.book_name}" not found` };
+ await deleteWorldInfoEntry(data, args.uid, { silent: true });
+ await saveWorldInfo(args.book_name, data, true);
+ return { ok: true, message: `Entry ${args.uid} deleted` };
  }
  default:
  return { ok: false, error: `Unknown tool: ${toolName}` };
