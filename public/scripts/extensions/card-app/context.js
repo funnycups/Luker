@@ -2,9 +2,10 @@
  * CardApp Context - builds the ctx object passed to CardApp's init() function.
  */
 
-import { eventSource, event_types, chat, chat_metadata, this_chid, characters, getRequestHeaders, openCharacterChat, doNewChat, closeCurrentChat, getPastCharacterChats, deleteMessage as lukerDeleteMessage, deleteLastMessage, swipe_right } from '../../../script.js';
+import { eventSource, event_types, chat, chat_metadata, this_chid, characters, getRequestHeaders, openCharacterChat, doNewChat, closeCurrentChat, getPastCharacterChats, deleteMessage as lukerDeleteMessage, deleteLastMessage, swipe_right, saveCharacterDebounced } from '../../../script.js';
 import { getContext, saveMetadataDebounced } from '../../extensions.js';
 import { executeSlashCommandsWithOptions } from '../../slash-commands.js';
+import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, world_names, selected_world_info } from '../../world-info.js';
 
 /**
  * Build the context object for a CardApp.
@@ -176,6 +177,60 @@ export function buildContext(container, charId, config) {
         },
 
         /**
+         * Update character fields and save. Follows the same path as the popup editor:
+         * write to DOM form elements → trigger debounced save.
+         *
+         * Supported keys: name, description, personality, scenario, first_mes,
+         * mes_example, system_prompt, post_history_instructions, creator_notes,
+         * creator, character_version, tags (comma-separated string),
+         * talkativeness (number), depth_prompt_prompt, depth_prompt_depth, depth_prompt_role
+         *
+         * @param {Object} fields - Key-value pairs of fields to update
+         * @returns {Promise<void>}
+         * @throws {Error} If no active character
+         */
+        async updateCharacterFields(fields) {
+            if (this_chid === undefined || this_chid === null) {
+                throw new Error('[CardApp] No active character to update');
+            }
+
+            /** @type {Record<string, string>} field name → DOM selector */
+            const FIELD_MAP = {
+                name: '#character_name_pole',
+                description: '#description_textarea',
+                personality: '#personality_textarea',
+                scenario: '#scenario_pole',
+                first_mes: '#firstmessage_textarea',
+                mes_example: '#mes_example_textarea',
+                system_prompt: '#system_prompt_textarea',
+                post_history_instructions: '#post_history_instructions_textarea',
+                creator_notes: '#creator_notes_textarea',
+                creator: '#creator_textarea',
+                character_version: '#character_version_textarea',
+                tags: '#tags_textarea',
+                talkativeness: '#talkativeness_slider',
+                depth_prompt_prompt: '#depth_prompt_prompt',
+                depth_prompt_depth: '#depth_prompt_depth',
+                depth_prompt_role: '#depth_prompt_role',
+            };
+
+            for (const [key, value] of Object.entries(fields)) {
+                const selector = FIELD_MAP[key];
+                if (!selector) {
+                    console.warn(`[CardApp] updateCharacterFields: unknown field "${key}", skipping`);
+                    continue;
+                }
+                const $el = $(selector);
+                if ($el.length > 0) {
+                    $el.val(value);
+                    $el.trigger('input');
+                }
+            }
+
+            saveCharacterDebounced();
+        },
+
+        /**
          * Get a chat variable.
          * @param {string} key
          * @returns {*}
@@ -316,6 +371,89 @@ export function buildContext(container, charId, config) {
                 disposeCallbacks.push(fn);
             }
         },
+
+        // ==================== World Info ====================
+
+        /**
+         * Get world book names associated with the current character.
+         * Includes character-bound world book + globally activated world books.
+         * @returns {string[]}
+         */
+        getWorldBooks() {
+            const books = [];
+            // Character-bound world book
+            const charData = characters[this_chid];
+            const boundBook = String(charData?.data?.extensions?.world || '').trim();
+            if (boundBook) books.push(boundBook);
+            // Globally activated world books
+            if (Array.isArray(selected_world_info)) {
+                for (const name of selected_world_info) {
+                    if (name && !books.includes(name)) books.push(name);
+                }
+            }
+            return books;
+        },
+
+        /**
+         * Get all entries from a world book.
+         * @param {string} bookName - World book name
+         * @returns {Promise<Object|null>} The world info data object with entries, or null
+         */
+        async getWorldBookEntries(bookName) {
+            if (!bookName) return null;
+            return await loadWorldInfo(bookName);
+        },
+
+        /**
+         * Create a new entry in a world book.
+         * @param {string} bookName - World book name
+         * @param {Object} [fields] - Initial field values (merged onto template)
+         * @returns {Promise<Object|null>} The new entry object (with uid), or null on failure
+         */
+        async createWorldBookEntry(bookName, fields = {}) {
+            const data = await loadWorldInfo(bookName);
+            if (!data) throw new Error(`[CardApp] World book "${bookName}" not found`);
+            const newEntry = createWorldInfoEntry(bookName, data);
+            if (!newEntry) throw new Error(`[CardApp] Failed to create entry in "${bookName}"`);
+            if (fields && typeof fields === 'object') {
+                Object.assign(newEntry, fields);
+            }
+            await saveWorldInfo(bookName, data, true);
+            return newEntry;
+        },
+
+        /**
+         * Update a world book entry.
+         * @param {string} bookName - World book name
+         * @param {number} uid - Entry UID
+         * @param {Object} patch - Fields to update (shallow merge)
+         * @returns {Promise<void>}
+         */
+        async updateWorldBookEntry(bookName, uid, patch) {
+            const data = await loadWorldInfo(bookName);
+            if (!data) throw new Error(`[CardApp] World book "${bookName}" not found`);
+            const entry = data.entries?.[uid];
+            if (!entry) throw new Error(`[CardApp] Entry UID ${uid} not found in "${bookName}"`);
+            Object.assign(entry, patch);
+            // Prevent uid from being overwritten
+            entry.uid = uid;
+            await saveWorldInfo(bookName, data, true);
+        },
+
+        /**
+         * Delete a world book entry.
+         * @param {string} bookName - World book name
+         * @param {number} uid - Entry UID
+         * @returns {Promise<void>}
+         */
+        async deleteWorldBookEntry(bookName, uid) {
+            const data = await loadWorldInfo(bookName);
+            if (!data) throw new Error(`[CardApp] World book "${bookName}" not found`);
+            await deleteWorldInfoEntry(data, uid, { silent: true });
+            await saveWorldInfo(bookName, data, true);
+        },
+
+        // ==================== Rendering ====================
 
         /**
          * Render raw text through Luker's message formatting pipeline.
