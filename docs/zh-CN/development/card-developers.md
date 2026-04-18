@@ -160,6 +160,8 @@ export default function (ctx) {
 
 CardApp 的上下文对象提供以下 API：
 
+#### 消息与生成
+
 | API | 说明 |
 |-----|------|
 | `ctx.container` | 应用的 DOM 容器元素 |
@@ -167,8 +169,28 @@ CardApp 的上下文对象提供以下 API：
 | `ctx.sendMessage(text, options?)` | 发送消息 |
 | `ctx.stopGeneration()` | 停止当前生成 |
 | `ctx.continueGeneration()` | 继续生成 |
+
+#### 数据与状态
+
+| API | 说明 |
+|-----|------|
+| `ctx.getCharacterData()` | 获取当前角色数据（只读） |
+| `ctx.updateCharacterFields(fields)` | 更新角色字段并保存。支持 name、description、personality、scenario、first_mes、mes_example、system_prompt、post_history_instructions、creator_notes、creator、character_version、tags（逗号分隔字符串）、talkativeness（数字）、depth_prompt 相关字段 |
 | `ctx.getChatState(namespace)` | 读取聊天绑定的持久化状态 |
+| `ctx.setChatState(namespace, key, value)` | 设置聊天状态 |
+| `ctx.getVariable(key)` | 获取聊天变量 |
+| `ctx.setVariable(key, value)` | 设置聊天变量 |
 | `ctx.getChatList()` | 获取当前角色的聊天列表 |
+
+#### 世界书操作
+
+| API | 说明 |
+|-----|------|
+| `ctx.getWorldBooks()` | 获取当前角色关联的世界书名称列表（角色绑定 + 全局激活） |
+| `ctx.getWorldBookEntries(bookName)` | 获取指定世界书的所有条目 |
+| `ctx.createWorldBookEntry(bookName, fields?)` | 创建世界书条目，返回新条目对象（含 uid） |
+| `ctx.updateWorldBookEntry(bookName, uid, patch)` | 更新世界书条目（浅合并） |
+| `ctx.deleteWorldBookEntry(bookName, uid)` | 删除世界书条目 |
 
 ### 安全限制
 

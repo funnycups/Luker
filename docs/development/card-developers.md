@@ -160,6 +160,8 @@ export default function (ctx) {
 
 The CardApp context object provides the following APIs:
 
+#### Messages & Generation
+
 | API | Description |
 |-----|-------------|
 | `ctx.container` | The application's DOM container element |
@@ -167,8 +169,28 @@ The CardApp context object provides the following APIs:
 | `ctx.sendMessage(text, options?)` | Send a message |
 | `ctx.stopGeneration()` | Stop current generation |
 | `ctx.continueGeneration()` | Continue generation |
+
+#### Data & State
+
+| API | Description |
+|-----|-------------|
+| `ctx.getCharacterData()` | Get current character data (read-only) |
+| `ctx.updateCharacterFields(fields)` | Update character fields and save. Supports name, description, personality, scenario, first_mes, mes_example, system_prompt, post_history_instructions, creator_notes, creator, character_version, tags (comma-separated string), talkativeness (number), depth_prompt fields |
 | `ctx.getChatState(namespace)` | Read chat-bound persisted state |
+| `ctx.setChatState(namespace, key, value)` | Set chat state |
+| `ctx.getVariable(key)` | Get chat variable |
+| `ctx.setVariable(key, value)` | Set chat variable |
 | `ctx.getChatList()` | Get the chat list for the current character |
+
+#### World Info Operations
+
+| API | Description |
+|-----|-------------|
+| `ctx.getWorldBooks()` | Get world book names associated with the current character (character-bound + globally activated) |
+| `ctx.getWorldBookEntries(bookName)` | Get all entries from a world book |
+| `ctx.createWorldBookEntry(bookName, fields?)` | Create a world book entry, returns the new entry object (with uid) |
+| `ctx.updateWorldBookEntry(bookName, uid, patch)` | Update a world book entry (shallow merge) |
+| `ctx.deleteWorldBookEntry(bookName, uid)` | Delete a world book entry |
 
 ### Security Guidelines
 
