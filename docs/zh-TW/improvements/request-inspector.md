@@ -41,15 +41,15 @@ Luker 實現了一套完整的請求生命週期追蹤系統，涵蓋文字生�
 
 | 函數 | 用途 |
 |------|------|
-| `startInspection(requestId, metadata)` | 開始追蹤一個生成請求 |
-| `completeInspection(requestId, result)` | 標記請求完成並記錄結果 |
-| `failInspection(requestId, error)` | 標記請求失敗 |
-| `abortInspection(requestId)` | 標記請求被中止 |
-| `completeInspectionFromStream(requestId, events)` | 從串流事件中提取用量並完成追蹤 |
-| `extractUsageFromStreamEvents(events)` | 從 SSE 事件陣列中提取 Token 用量 |
-| `startImageInspection(requestId, metadata)` | 開始追蹤圖像生成請求 |
-| `completeImageInspection(requestId, result)` | 完成圖像生成追蹤 |
-| `failImageInspection(requestId, error)` | 標記圖像生成失敗 |
+| `startInspection(request)` | 開始追蹤一個生成請求 |
+| `completeInspection(request, payload, rawApiResponse?)` | 標記請求完成並記錄結果 |
+| `failInspection(request, errorMessage, httpStatus?)` | 標記請求失敗 |
+| `abortInspection(request)` | 標記請求被中止 |
+| `completeInspectionFromStream(request, events)` | 從串流事件中提取用量並完成追蹤 |
+| `extractUsageFromStreamEvents(events, source)` | 從 SSE 事件陣列中提取 Token 用量 |
+| `startImageInspection(request, meta)` | 開始追蹤圖像生成請求 |
+| `completeImageInspection(request, resultMeta?)` | 完成圖像生成追蹤 |
+| `failImageInspection(request, errorMessage, httpStatus?)` | 標記圖像生成失敗 |
 
 ## 整合點
 

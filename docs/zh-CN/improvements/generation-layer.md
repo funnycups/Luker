@@ -31,9 +31,11 @@ Luker 新增了统一生成层端点（`/api/backends/luker-generation`），作
 
 统一生成层在生成请求的前后自动调用[请求检查器](/zh-CN/improvements/request-inspector)：
 
-1. 生成前调用 `startInspection` 记录请求元数据
-2. 生成完成后调用 `completeInspection` 记录 Token 用量
-3. 生成失败时调用 `failInspection` 记录错误信息
+1. 流式传输完成后调用 `completeInspectionFromStream` 从流事件中记录 Token 用量
+2. 生成失败时调用 `failInspection` 记录错误信息
+3. 生成中止时调用 `abortInspection` 记录中断
+
+注意：`startInspection` 由后端端点（如 `chat-completions.js`）调用，而非由生成层本身调用。
 
 这确保了无论使用哪个后端，Token 消耗都能被准确追踪。
 
@@ -44,7 +46,7 @@ Luker 新增了统一生成层端点（`/api/backends/luker-generation`），作
 - 解析不同后端的 SSE 事件格式
 - 从流式事件中提取 Token 用量信息
 - 统一的流中断和恢复处理
-- 与 [WebSocket 代理](/zh-CN/improvements/other#websocket-代理)配合支持流偏移恢复
+- 与 [WebSocket 代理](/zh-CN/improvements/ws-proxy)配合支持流偏移恢复
 
 ### 统一错误处理
 

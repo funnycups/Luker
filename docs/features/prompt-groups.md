@@ -4,16 +4,15 @@ Prompt Groups is an organizational feature added by Luker on top of SillyTavern'
 
 ## Data Model
 
-### group_id Field
+### identifiers Field
 
-Each prompt entry can carry a `group_id` field to associate it with a group:
+Each group contains an `identifiers` array listing the prompt entries that belong to it. Membership is determined by the group referencing prompt identifiers, not by prompts pointing to a group:
 
 ```js
-// Prompt entry
+// Prompt entry (no group reference)
 {
     identifier: string,      // Prompt identifier
-    enabled: boolean,         // Whether enabled
-    group_id: string | null   // Associated group ID, null means ungrouped
+    enabled: boolean         // Whether enabled
 }
 ```
 
@@ -24,9 +23,10 @@ Group definitions are stored independently in the preset, alongside `prompt_orde
 ```js
 // Group definition
 {
-    id: string,         // Unique identifier
-    name: string,       // Display name
-    collapsed: boolean  // Whether collapsed
+    id: string,              // Unique identifier
+    name: string,            // Display name
+    collapsed: boolean,      // Whether collapsed
+    identifiers: string[]    // Ordered list of prompt identifiers in this group
 }
 ```
 

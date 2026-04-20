@@ -71,3 +71,4 @@ Logs may contain partial API request information. When sharing logs, please chec
 ## Related Pages
 
 - [Basic Configuration](/guide/configuration) — Log-related configuration options
+- [Auth & Quota](/improvements/auth-and-quota) — Authentication, permissions, and storage quota controls

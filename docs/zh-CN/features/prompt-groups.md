@@ -4,16 +4,15 @@
 
 ## 数据模型
 
-### group_id 字段
+### identifiers 字段
 
-每个提示词条目可携带 `group_id` 字段，用于关联到所属分组：
+每个分组包含一个 `identifiers` 数组，列出属于该分组的提示词条目。成员关系由分组引用提示词标识符来确定，而非提示词指向分组：
 
 ```js
-// 提示词条目
+// 提示词条目（不包含分组引用）
 {
     identifier: string,      // 提示词标识符
-    enabled: boolean,         // 是否启用
-    group_id: string | null   // 关联的分组 ID，null 表示未分组
+    enabled: boolean         // 是否启用
 }
 ```
 
@@ -24,9 +23,10 @@
 ```js
 // 分组定义
 {
-    id: string,         // 唯一标识
-    name: string,       // 显示名称
-    collapsed: boolean  // 是否折叠
+    id: string,              // 唯一标识
+    name: string,            // 显示名称
+    collapsed: boolean,      // 是否折叠
+    identifiers: string[]    // 该分组内提示词标识符的有序列表
 }
 ```
 

@@ -73,7 +73,7 @@ Luker 新增了三個增量端點，覆蓋聊天資料的不同修改場景：
 1. 前端偵測到資料變更
 2. 延遲觸發合併短時間內的多次修改
 3. 傳送增量 patch 請求（攜帶 integrity UUID）
-4. 後端透過[序列化寫入佇列](/zh-TW/improvements/backend-storage#序列化聊天寫入)排隊執行
+4. 前端透過[序列化聊天寫入流程](/zh-TW/improvements/backend-storage#序列化聊天寫入)將本地寫入任務串行送出
 5. 驗證 integrity → 套用 patch → 持久化到磁碟 → 更新狀態檔案
 6. 回傳新的 integrity UUID 供下次請求使用
 

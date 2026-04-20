@@ -199,8 +199,8 @@ Memory Graph has a built-in complete change rollback mechanism. When you edit or
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| Embedding Source | `transformers` | Embedding vector source |
-| Embedding Model | (empty) | Embedding model name |
+| Embedding Source | `transformers` | Embedding source from Vector Storage extension settings (`vectors.source`) |
+| Embedding Model | (empty) | Embedding model from Vector Storage extension settings (source-specific model field) |
 | Vector Retrieval Top-K | `20` | Top-K count for vector retrieval |
 | Graph Diffusion Steps | `2` | Graph diffusion steps |
 | Graph Diffusion Decay | `0.6` | Graph diffusion decay coefficient |
@@ -259,7 +259,9 @@ The PEDSA (Personalized Efficient Diffusion with Sparse Approximation) algorithm
 
 ### Vector Index
 
-Memory Graph uses an incremental update strategy to manage vector embeddings — detecting node content changes through hash comparison and only regenerating embedding vectors when content actually changes. Supports 15 embedding sources (including Transformers, OpenAI, Cohere, Jina AI, etc.).
+Memory Graph uses an incremental update strategy to manage vector embeddings — detecting node content changes through hash comparison and only regenerating embedding vectors when content actually changes.
+In hybrid recall, embedding source and model are read from Vector Storage extension settings, so available providers follow Vector Storage capabilities (including Jina).
+If Vector Storage settings are unavailable, Memory Graph falls back to its legacy local source/model fields.
 
 For more technical implementation details, please refer to the source code.
 

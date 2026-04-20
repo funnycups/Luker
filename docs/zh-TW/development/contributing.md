@@ -131,7 +131,7 @@ git push origin feat/my-new-feature
 ### 模組系統
 
 - **前端程式碼**：ES Module（`import`/`export`）
-- **後端程式碼**：CommonJS（`require`/`module.exports`）
+- **後端程式碼**：ES Module（`import`/`export`）
 
 ### 註解
 

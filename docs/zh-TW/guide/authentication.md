@@ -74,7 +74,7 @@ enableDiscreetLogin: true
 
 Luker 支援透過 GitHub 帳號登入。使用者點擊登入後會被重新導向到 GitHub 授權頁面，授權完成後自動建立或關聯本機使用者帳號。
 
-設定方式：在管理面板（Admin Panel）中設定 GitHub OAuth App 憑據，包括 `clientId` 和 `clientSecret`。OAuth 相關設定儲存在 `admin-settings.json` 中，而非 `config.yaml`。
+設定方式：在管理面板（Admin Panel）中設定 GitHub OAuth App 憑據，包括 `clientId` 和 `clientSecret`。OAuth 相關設定透過 `node-persist` 持久化儲存在 `data/_storage` 目錄中，而非 `config.yaml`。
 
 你需要先在 GitHub 上建立一個 OAuth App，將回呼地址設定為 `https://your-domain/api/users/oauth/callback/github`。
 

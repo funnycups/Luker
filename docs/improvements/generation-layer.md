@@ -31,9 +31,11 @@ The frontend initiates generation requests through the Unified Generation Layer,
 
 The Unified Generation Layer automatically calls the [Request Inspector](/improvements/request-inspector) before and after generation requests:
 
-1. Before generation, calls `startInspection` to record request metadata
-2. After generation completes, calls `completeInspection` to record token usage
-3. On generation failure, calls `failInspection` to record error information
+1. After streaming completes, calls `completeInspectionFromStream` to record token usage from stream events
+2. On generation failure, calls `failInspection` to record error information
+3. On generation abort, calls `abortInspection` to record the interruption
+
+Note: `startInspection` is called by the backend endpoint (e.g. `chat-completions.js`), not by the generation layer itself.
 
 This ensures that regardless of which backend is used, token consumption is accurately tracked.
 

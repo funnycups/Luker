@@ -42,16 +42,16 @@ In SillyTavern, AI generation results first arrive at the frontend, which decide
 
 ## Serialized Chat Writes {#serialized-chat-writes}
 
-To prevent file corruption from concurrent writes, Luker uses a serialization queue to ensure write operations to the same chat file are executed in order.
+To prevent write races and corruption, Luker serializes chat write tasks on the frontend (via `runSerializedChatWrite`), while the backend enforces integrity checks on every write.
 
-When multiple write requests arrive simultaneously (e.g., the user rapidly edits multiple messages, or generation completion and user editing happen at the same time), the serialization queue will:
+When multiple write operations are triggered close together (e.g., rapid message edits, or generation completion overlapping with manual edits), the flow is:
 
-1. Queue requests in arrival order
-2. Execute write operations one by one
-3. Update the integrity UUID after each write completes
-4. If an integrity mismatch is detected while queued, return `409 Conflict`
+1. Frontend write tasks are queued in arrival order
+2. Tasks are executed one by one against incremental endpoints
+3. After each successful write, the backend updates the integrity UUID in the chat state sidecar
+4. If a queued request carries stale integrity, the backend returns `409 Conflict`
 
-This ensures that even in high-concurrency scenarios, chat files won't experience data corruption or partial writes.
+This client-side serialization plus backend integrity validation keeps writes ordered without relying on a backend in-memory write queue.
 
 ## Collaboration with Incremental Sync
 

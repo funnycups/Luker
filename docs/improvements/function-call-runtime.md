@@ -88,7 +88,7 @@ For developers curious about the internal implementation, the function calling s
 | Module | File | Responsibility |
 |--------|------|---------------|
 | **ToolManager** | `tool-calling.js` | Global tool registry, tool schema conversion, streaming tool call fragment reassembly, tool execution orchestration, and result injection |
-| **Function Call Runtime** | `function-call-runtime.js` | Plain-text mode support — injecting tool usage instructions into System Prompt (`injectToolCallPrompt`), parsing tool calls from text responses (`parseToolCallsFromText`), and merging tool results back into prompt messages (`mergeToolCallResultIntoPromptMessages`) |
+| **Function Call Runtime** | `function-call-runtime.js` | Plain-text mode support — building tool protocol messages for System Prompt (`buildPlainTextToolProtocolMessage`), extracting function calls from text responses (`extractAllFunctionCallsFromText` / `extractToolCallsFromTextResponse`), and merging addendum text into prompt messages (`mergeUserAddendumIntoPromptMessages` / `mergeSystemAddendumIntoPromptMessages`) |
 | **Request Engine** | `openai.js` (`sendOpenAIRequest`) | The core LLM request function that handles preset resolution, connection override, and dispatching requests to the appropriate API backend |
 
 In **native mode**, the flow is: `ToolManager` converts registered tools to the model's schema → `sendOpenAIRequest` attaches them to the API request → model returns structured tool calls → `ToolManager` parses, executes, and injects results.

@@ -41,15 +41,15 @@ Luker 实现了一套完整的请求生命周期追踪系统，覆盖文本生�
 
 | 函数 | 用途 |
 |------|------|
-| `startInspection(requestId, metadata)` | 开始追踪一个生成请求 |
-| `completeInspection(requestId, result)` | 标记请求完成并记录结果 |
-| `failInspection(requestId, error)` | 标记请求失败 |
-| `abortInspection(requestId)` | 标记请求被中止 |
-| `completeInspectionFromStream(requestId, events)` | 从流式事件中提取用量并完成追踪 |
-| `extractUsageFromStreamEvents(events)` | 从 SSE 事件数组中提取 Token 用量 |
-| `startImageInspection(requestId, metadata)` | 开始追踪图像生成请求 |
-| `completeImageInspection(requestId, result)` | 完成图像生成追踪 |
-| `failImageInspection(requestId, error)` | 标记图像生成失败 |
+| `startInspection(request)` | 开始追踪一个生成请求 |
+| `completeInspection(request, payload, rawApiResponse?)` | 标记请求完成并记录结果 |
+| `failInspection(request, errorMessage, httpStatus?)` | 标记请求失败 |
+| `abortInspection(request)` | 标记请求被中止 |
+| `completeInspectionFromStream(request, events)` | 从流式事件中提取用量并完成追踪 |
+| `extractUsageFromStreamEvents(events, source)` | 从 SSE 事件数组中提取 Token 用量 |
+| `startImageInspection(request, meta)` | 开始追踪图像生成请求 |
+| `completeImageInspection(request, resultMeta?)` | 完成图像生成追踪 |
+| `failImageInspection(request, errorMessage, httpStatus?)` | 标记图像生成失败 |
 
 ## 集成点
 

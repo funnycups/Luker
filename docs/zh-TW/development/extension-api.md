@@ -16,7 +16,7 @@ const context = Luker.getContext();
 
 新外掛應統一使用 `Luker.getContext()`。相容別名僅為遷移期保留。
 
-## 与 SillyTavern 的 API 差異
+## 與 SillyTavern 的 API 差異
 
 Luker 基於 SillyTavern 建構，但在 API 層面有以下主要差異：
 
@@ -37,9 +37,9 @@ Luker 基於 SillyTavern 建構，但在 API 層面有以下主要差異：
 > [!IMPORTANT]
 > 優先使用 `Luker.getContext()` 提供的 API，而非直接呼叫底層 HTTP 端點。Context API 封裝了 patch-first 語義、衝突處理和重試邏輯，直接呼叫端點需要自行處理這些細節。
 
-## 聊天資料（只读）
+## 聊天資料（唯讀）
 
-以下屬性提供當前聊天的只读存取：
+以下屬性提供當前聊天的唯讀存取：
 
 | 屬性 | 類型 | 說明 |
 |------|------|------|
@@ -259,7 +259,7 @@ deleteChatState(
 presets.list(collection?: string): Array<PresetRef>
 ```
 
-列出指定集合的所有已儲存預設。`collection` 为預設集合名（如 `'openai'`）。
+列出指定集合的所有已儲存預設。`collection` 為預設集合名（如 `'openai'`）。
 
 ### presets.getSelected
 

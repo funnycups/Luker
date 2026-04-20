@@ -202,8 +202,9 @@ Luker's event listeners execute **serially** in the following priority order (ea
 | `MESSAGE_RECEIVED` | AI reply received | `(messageId, type?)` |
 | `MESSAGE_EDITED` | Message edited | `(messageId, meta?)` |
 | `MESSAGE_UPDATED` | Message block refreshed | `(messageId)` |
-| `MESSAGE_DELETED` | Message deleted | `(messageId)` |
-| `MESSAGE_SWIPED` | Message swiped | `(payload)` — see below |
+| `MESSAGE_DELETED` | Message deleted | `(chatLength, meta?)` |
+| `MESSAGE_SWIPED` | Message swiped | `(messageId, meta?)` |
+| `MESSAGE_SWIPE_DELETED` | Swipe option deleted | `({ messageId, swipeId, newSwipeId })` |
 
 ### System Events
 
@@ -216,14 +217,31 @@ Luker's event listeners execute **serially** in the following priority order (ea
 
 ### Event Payload Details
 
-#### MESSAGE_SWIPED payload
+#### MESSAGE_DELETED meta
 
 ```ts
-({
-  mesId: number,
-  swipeId: number,
-  prevSwipeId: number | null,
-  nextSwipeId: number | null,
+(
+  chatLength: number,
+  meta?: {
+    kind: 'delete',
+    deletedPlayableSeqFrom: number | null,
+    deletedPlayableSeqTo: number | null,
+    deletedAssistantSeqFrom: number | null,
+    deletedAssistantSeqTo: number | null,
+  },
+)
+```
+
+#### MESSAGE_SWIPED meta
+
+```ts
+(
+  messageId: number,
+  meta?: {
+    pendingGeneration: boolean,
+    previousSwipeId: number | null,
+    nextSwipeId: number | null,
+  },
 })
 ```
 

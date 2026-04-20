@@ -12,7 +12,7 @@
 
 - 一个扩展负责翻译用户输入，另一个扩展负责内容过滤——翻译应该在过滤之前执行
 - 一个扩展修改提示词格式，另一个扩展添加额外上下文——格式化应该在添加上下文之后执行
-- [记忆图谱](/zh-CN/features/memory-graph)需要在[多Agent编排](/zh-CN/features/orchestrator)之前完成记忆检索
+- [记忆图](/zh-CN/features/memory-graph)需要在[多Agent编排](/zh-CN/features/orchestrator)之前完成记忆检索
 
 如果没有明确的执行顺序控制，扩展之间的交互可能产生不可预期的结果。
 
@@ -20,12 +20,12 @@
 
 Hook Order 支持第三方扩展的 ID 识别，你可以将第三方扩展纳入排序管理，确保它们与内置扩展之间的执行顺序符合预期。
 
-## 拖拽排序界面
+## 上下移动排序界面
 
-Hook Order 提供直观的拖拽排序界面：
+Hook Order 提供直观的上下移动排序界面：
 
 - 列出所有注册了钩子的扩展
-- 通过拖拽调整扩展的执行顺序
+- 通过上移/下移按钮调整扩展的执行顺序
 - 排在列表上方的扩展优先执行
 - 支持按消息事件类型分别配置排序
 
@@ -36,4 +36,4 @@ Hook Order 提供直观的拖拽排序界面：
 ## 相关功能
 
 - [多Agent编排](/zh-CN/features/orchestrator) — 编排器的多个 Agent 节点也有执行顺序
-- [记忆图谱](/zh-CN/features/memory-graph) — 记忆检索的时机受钩子顺序影响
+- [记忆图](/zh-CN/features/memory-graph) — 记忆检索的时机受钩子顺序影响

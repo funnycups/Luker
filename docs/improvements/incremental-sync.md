@@ -73,8 +73,8 @@ Incremental Sync works closely with [Backend Real-Time Storage](/improvements/ba
 1. Frontend detects data changes
 2. Debounce merges multiple modifications within a short time window
 3. Sends incremental patch request (carrying integrity UUID)
-4. Backend queues execution through the [serialized write queue](/improvements/backend-storage#serialized-chat-writes)
-5. Verifies integrity → Applies patch → Persists to disk → Updates state file
+4. Frontend serializes local write tasks through the [serialized chat write flow](/improvements/backend-storage#serialized-chat-writes)
+5. Backend verifies integrity → Applies patch → Persists to disk → Updates state file
 6. Returns new integrity UUID for the next request
 
 This flow ensures a complete chain from frontend data changes to disk persistence, both efficient and safe.

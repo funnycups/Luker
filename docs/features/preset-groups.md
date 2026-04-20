@@ -8,13 +8,13 @@ Each group contains the following fields:
 
 ```js
 {
-    id: string,         // Unique identifier (UUID)
+    id: string,         // Group ID (currently generated as pg-<timestamp>-<random>)
     name: string,       // Group name
     presets: string[]    // List of member preset names
 }
 ```
 
-Group data is managed through `PresetManager`'s `getPresetGroups()` / `setPresetGroups()` methods and persisted in settings.
+Group data is stored per API type in `power_user.preset_groups[apiId]`, read via `getPresetGroups()`, and mutated via methods such as `createPresetGroup()`, `renamePresetGroup()`, `deletePresetGroup()`, `addPresetToGroup()`, and `removePresetFromGroup()`, then persisted through settings saves.
 
 ## Independent Per API Type
 

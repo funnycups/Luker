@@ -4,16 +4,15 @@
 
 ## 資料模型
 
-### group_id 欄位
+### identifiers 欄位
 
-每個提示詞條目可攜帶 `group_id` 欄位，用於關聯到所屬分組：
+每個分組包含一個 `identifiers` 陣列，列出屬於該分組的提示詞條目。成員關係由分組引用提示詞識別碼來確定，而非提示詞指向分組：
 
 ```js
-// 提示詞條目
+// 提示詞條目（不包含分組引用）
 {
     identifier: string,      // 提示詞識別碼
-    enabled: boolean,         // 是否啟用
-    group_id: string | null   // 關聯的分組 ID，null 表示未分組
+    enabled: boolean         // 是否啟用
 }
 ```
 
@@ -24,9 +23,10 @@
 ```js
 // 分組定義
 {
-    id: string,         // 唯一標識
-    name: string,       // 顯示名稱
-    collapsed: boolean  // 是否折疊
+    id: string,              // 唯一標識
+    name: string,            // 顯示名稱
+    collapsed: boolean,      // 是否折疊
+    identifiers: string[]    // 該分組內提示詞識別碼的有序列表
 }
 ```
 

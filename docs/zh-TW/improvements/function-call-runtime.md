@@ -88,7 +88,7 @@ Luker 內建了統一的函數呼叫（Function Calling）執行時，讓 AI 角
 | 模組 | 檔案 | 職責 |
 |------|------|------|
 | **ToolManager** | `tool-calling.js` | 全域工具註冊表、工具 schema 轉換、串流工具呼叫片段重組、工具執行編排和結果注入 |
-| **函數呼叫執行時** | `function-call-runtime.js` | 純文字模式支援——將工具使用說明注入 System Prompt（`injectToolCallPrompt`）、從文字回應中解析工具呼叫（`parseToolCallsFromText`）、將工具結果合併回 prompt messages（`mergeToolCallResultIntoPromptMessages`） |
+| **函數呼叫執行時** | `function-call-runtime.js` | 純文字模式支援——建構工具協議訊息注入 System Prompt（`buildPlainTextToolProtocolMessage`）、從文字回應中提取函式呼叫（`extractAllFunctionCallsFromText` / `extractToolCallsFromTextResponse`）、將附加文字合併到 prompt messages（`mergeUserAddendumIntoPromptMessages` / `mergeSystemAddendumIntoPromptMessages`） |
 | **請求引擎** | `openai.js`（`sendOpenAIRequest`） | 核心 LLM 請求函數，處理預設解析、連線覆寫，並將請求分發到對應的 API 後端 |
 
 **原生模式**的流程：`ToolManager` 將註冊的工具轉換為模型的 schema → `sendOpenAIRequest` 將其附加到 API 請求 → 模型回傳結構化的工具呼叫 → `ToolManager` 解析、執行並注入結果。

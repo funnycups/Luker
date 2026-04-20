@@ -131,7 +131,7 @@ git push origin feat/my-new-feature
 ### Module System
 
 - **Frontend code**: ES Modules (`import`/`export`)
-- **Backend code**: CommonJS (`require`/`module.exports`)
+- **Backend code**: ES Modules (`import`/`export`)
 
 ### Comments
 
@@ -155,6 +155,7 @@ Luker/
 │   └── ...                # Static assets
 ├── docs/                  # Documentation
 │   ├── zh-CN/             # Chinese documentation
+│   ├── zh-TW/             # Traditional Chinese documentation
 │   └── en/                # English documentation
 └── config.yaml            # Server configuration
 ```
@@ -171,6 +172,7 @@ Luker/
 Documentation is located in the `docs/` directory and uses Markdown format:
 
 - Chinese documentation: `docs/zh-CN/`
+- Traditional Chinese documentation: `docs/zh-TW/`
 - English documentation: `docs/en/` (if available)
 
 Documentation contributions follow the same PR workflow described above. When writing documentation, please note:
@@ -178,7 +180,7 @@ Documentation contributions follow the same PR workflow described above. When wr
 - Use accurate technical terminology
 - Keep code and API names in English
 - Use code blocks and tables where appropriate
-- Use `/zh-CN/` or `/en/` prefixed paths for cross-references
+- Use `/zh-CN/`, `/zh-TW/`, or `/en/` prefixed paths for cross-references
 - All files must use LF line endings
 
 ## Reporting Issues

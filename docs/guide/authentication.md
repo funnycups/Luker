@@ -74,7 +74,7 @@ When enabled, the login page won't display obvious Luker branding — useful for
 
 Luker supports logging in with a GitHub account. Users are redirected to GitHub's authorization page, and upon completion, a local user account is automatically created or linked.
 
-Configuration: Set up GitHub OAuth App credentials (`clientId` and `clientSecret`) in the Admin Panel. OAuth settings are stored in `admin-settings.json`, not in `config.yaml`.
+Configuration: Set up GitHub OAuth App credentials (`clientId` and `clientSecret`) in the Admin Panel. OAuth settings are persisted via `node-persist` in the `data/_storage` directory, not in `config.yaml`.
 
 You'll need to create an OAuth App on GitHub first, setting the callback URL to `https://your-domain/api/users/oauth/callback/github`.
 

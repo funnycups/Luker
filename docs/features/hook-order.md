@@ -20,12 +20,12 @@ Without explicit execution order control, interactions between extensions may pr
 
 Hook Order supports ID recognition for third-party extensions, allowing you to include third-party extensions in the ordering management to ensure their execution order relative to built-in extensions meets expectations.
 
-## Drag-and-Drop Sorting Interface
+## Up/Down Button Sorting Interface
 
-Hook Order provides an intuitive drag-and-drop sorting interface:
+Hook Order provides an intuitive up/down button sorting interface:
 
 - Lists all extensions that have registered hooks
-- Adjust extension execution order through drag-and-drop
+- Adjust extension execution order through up/down arrow buttons
 - Extensions higher in the list execute first
 - Supports separate ordering configuration by message event type
 

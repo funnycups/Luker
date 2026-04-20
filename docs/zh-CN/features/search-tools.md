@@ -9,7 +9,7 @@
 搜索功能作为创作 LLM 的可调用工具注册到[函数调用运行时](/zh-CN/improvements/function-call-runtime)中。当 AI 判断需要搜索信息时，会主动发起工具调用。
 
 - 通过 `enabled` 配置项开启
-- 注册 `luker_search_web` 和 `luker_visit_web_page` 两个函数工具
+- 注册 `luker_web_search` 和 `luker_web_visit` 两个函数工具
 - AI 自主决定何时搜索、搜索什么内容
 - 搜索结果作为工具调用返回值注入对话上下文
 
@@ -79,7 +79,7 @@
 const api = Luker.searchTools;
 if (api) {
   // 检查是否为搜索工具
-  api.isToolName('luker_search_web'); // true
+  api.isToolName('luker_web_search'); // true
 
   // 获取工具定义
   const defs = api.getToolDefs();

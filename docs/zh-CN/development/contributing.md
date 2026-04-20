@@ -131,7 +131,7 @@ git push origin feat/my-new-feature
 ### 模块系统
 
 - **前端代码**：ES Module（`import`/`export`）
-- **后端代码**：CommonJS（`require`/`module.exports`）
+- **后端代码**：ES Module（`import`/`export`）
 
 ### 注释
 
@@ -155,6 +155,7 @@ Luker/
 │   └── ...                # 静态资源
 ├── docs/                  # 文档
 │   ├── zh-CN/             # 中文文档
+│   ├── zh-TW/             # 繁体中文文档
 │   └── en/                # 英文文档
 └── config.yaml            # 服务器配置
 ```
@@ -171,6 +172,7 @@ Luker/
 文档位于 `docs/` 目录下，使用 Markdown 格式：
 
 - 中文文档：`docs/zh-CN/`
+- 繁体中文文档：`docs/zh-TW/`
 - 英文文档：`docs/en/`（如有）
 
 文档贡献同样遵循上述 PR 流程。编写文档时请注意：
@@ -178,7 +180,7 @@ Luker/
 - 使用准确的技术术语
 - 代码和 API 名称保留英文
 - 适当使用代码块和表格
-- 交叉引用使用 `/zh-CN/` 或 `/en/` 前缀的路径
+- 交叉引用使用 `/zh-CN/`、`/zh-TW/` 或 `/en/` 前缀的路径
 - 所有文件使用 LF 换行符
 
 ## 报告问题

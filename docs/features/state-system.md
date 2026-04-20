@@ -18,12 +18,13 @@ The lifecycle of character state is bound to the character itself — when a cha
 
 ## Chat State
 
-Luker maintains an independent state file (`.luker-state.<chatID>.json`) for each chat, used to store additional information related to that chat.
+Luker stores chat state in namespace sidecar files next to each chat file, using the pattern `<chatFileBase>.luker-state.<namespace>.json`.
 
 ### State File Characteristics
 
-- Stored as a hidden file in the same directory as the chat file
-- Lifecycle is bound to the chat file: when a chat is renamed, the state file is renamed accordingly; when a chat is deleted, the state file is deleted as well
+- Stored as sidecar files in the same directory as the chat file (not a single global state file)
+- One chat can have multiple state sidecars (one per namespace), created lazily on first write
+- Lifecycle is bound to the chat file: when a chat is renamed, bound sidecars are renamed accordingly; when a chat is deleted, bound sidecars are deleted as well
 - Supports incremental updates — no need to write the complete data every time
 
 ### Stored Content
@@ -48,9 +49,9 @@ The state system follows these principles:
 
 | State Type | Storage Location | Lifecycle |
 | --- | --- | --- |
-| Character State | Character data directory | Created/deleted with the character |
-| Chat State | Same directory as the chat file | Created/deleted/renamed with the chat |
-| Preset State | Preset data directory | Created/deleted with the preset |
+| Character State | Sidecar files next to character cards (`<character>.state.<namespace>.json`) | Created on first namespace write; renamed/deleted with the character |
+| Chat State | Sidecar files next to chat files (`<chat>.luker-state.<namespace>.json`) | Created on first namespace write; renamed/deleted with the chat |
+| Preset State | Sidecar files next to preset files (`<preset>.luker-state.<namespace>.json`) | Created on first namespace write; renamed/deleted with the preset |
 
 All state data is persisted to disk and will not be lost due to server restarts. State file cleanup is automatic — when the associated character, chat, or preset is deleted, the corresponding state file is automatically cleaned up.
 

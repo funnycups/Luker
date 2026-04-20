@@ -8,13 +8,13 @@
 
 ```js
 {
-    id: string,         // 唯一标识（UUID）
+    id: string,         // 分组 ID（当前实现为 pg-<timestamp>-<random>）
     name: string,       // 分组名称
     presets: string[]    // 成员预设名称列表
 }
 ```
 
-分组数据通过 `PresetManager` 的 `getPresetGroups()` / `setPresetGroups()` 方法管理，持久化存储在设置中。
+分组数据按 API 类型存储在 `power_user.preset_groups[apiId]` 中，通过 `getPresetGroups()` 读取，并由 `createPresetGroup()`、`renamePresetGroup()`、`deletePresetGroup()`、`addPresetToGroup()`、`removePresetFromGroup()` 等方法修改，随后通过设置保存持久化。
 
 ## 每个 API 类型独立维护
 

@@ -27,12 +27,13 @@ Spec Workflow is the most flexible static mode, using a **Stage → Node** DAG (
 
 When each node executes, the system builds a message list (system prompt + user prompt template + context) to call the LLM, with support for node iteration (controlled by "Node Iteration Max Rounds"). Stage outputs are aggregated and automatically passed to the next stage.
 
-The default Spec workflow includes the following stage structure:
+The default Spec workflow includes the following 5-stage structure:
 
-1. **Distiller** → **Constraint Agent** (parallel execution)
-2. **Planner** + **Memory Analyzer** (parallel execution)
-3. **Reviewer**
-4. **Synthesizer**
+1. **Distiller** (serial execution)
+2. **Lorebook Reader** + **Constraint Agent** (parallel execution)
+3. **Planner** + **Memory Analyzer** (parallel execution)
+4. **Reviewer** (serial execution)
+5. **Synthesizer** (serial execution)
 
 #### Template Variables
 

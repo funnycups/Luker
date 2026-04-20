@@ -44,7 +44,7 @@ ssl:
 
 ### 代理设置
 
-SillyTavern 支持通过 SOCKS5 或 HTTP 代理转发出站请求（如 API 调用），Luker 继承了这一功能：
+SillyTavern 支持通过 HTTP、HTTPS 或 SOCKS 代理转发出站请求（如 API 调用），Luker 继承了这一功能：
 
 ```yaml
 requestProxy:
@@ -55,7 +55,7 @@ requestProxy:
     - 127.0.0.1
 ```
 
-- `url`：代理服务器地址，支持 `socks5://` 和 `http://` 协议
+- `url`：代理服务器地址，支持 `http://`、`https://`、`socks://`、`socks4://`、`socks4a://`、`socks5://`、`socks5h://` 和 `pac+*://` 协议
 - `bypass`：不走代理的地址列表
 
 ### CORS 代理
@@ -129,7 +129,7 @@ hostWhitelist:
   hosts: []
 ```
 
-限制允许访问的主机地址。启用 `scan` 后会自动扫描局域网主机。
+限制允许访问的主机地址。启用 `scan` 后会记录来自不在白名单中的不受信任主机的请求警告，但不会阻止它们（除非同时将 `enabled` 设置为 `true`）。
 
 ## 安全设置
 

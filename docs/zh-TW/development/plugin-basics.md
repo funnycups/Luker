@@ -202,17 +202,35 @@ Luker 的事件監聽器按以下優先順序**串行**執行（每個監聽器�
 | `MESSAGE_RECEIVED` | 收到 AI 回覆 | `(messageId, type?)` |
 | `MESSAGE_EDITED` | 訊息被編輯 | `(messageId, meta?)` |
 | `MESSAGE_UPDATED` | 訊息區塊重新整理 | `(messageId)` |
-| `MESSAGE_DELETED` | 訊息被刪除 | `(count)` |
-| `MESSAGE_SWIPED` | 訊息被滑動切換 | `(payload)` |
+| `MESSAGE_DELETED` | 訊息被刪除 | `(chatLength, meta?)` |
+| `MESSAGE_SWIPED` | 訊息被滑動切換 | `(messageId, meta?)` |
+| `MESSAGE_SWIPE_DELETED` | 滑動選項被刪除 | `({ messageId, swipeId, newSwipeId })` |
 
-#### MESSAGE_SWIPED 的 payload
+#### MESSAGE_DELETED 的 meta
 
 ```ts
-({
-  mesId: number,
-  swipeId: number,
-  prevSwipeId: number | null,
-  nextSwipeId: number | null,
+(
+  chatLength: number,
+  meta?: {
+    kind: 'delete',
+    deletedPlayableSeqFrom: number | null,
+    deletedPlayableSeqTo: number | null,
+    deletedAssistantSeqFrom: number | null,
+    deletedAssistantSeqTo: number | null,
+  },
+)
+```
+
+#### MESSAGE_SWIPED 的 meta
+
+```ts
+(
+  messageId: number,
+  meta?: {
+    pendingGeneration: boolean,
+    previousSwipeId: number | null,
+    nextSwipeId: number | null,
+  },
 })
 ```
 

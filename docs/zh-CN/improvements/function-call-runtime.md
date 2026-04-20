@@ -88,7 +88,7 @@ Luker 内置了统一的函数调用（Function Calling）运行时，让 AI 角
 | 模块 | 文件 | 职责 |
 |------|------|------|
 | **ToolManager** | `tool-calling.js` | 全局工具注册表、工具 schema 转换、流式工具调用片段重组、工具执行编排和结果注入 |
-| **函数调用运行时** | `function-call-runtime.js` | 纯文本模式支持——将工具使用说明注入 System Prompt（`injectToolCallPrompt`）、从文本响应中解析工具调用（`parseToolCallsFromText`）、将工具结果合并回 prompt messages（`mergeToolCallResultIntoPromptMessages`） |
+| **函数调用运行时** | `function-call-runtime.js` | 纯文本模式支持——构建工具协议消息注入 System Prompt（`buildPlainTextToolProtocolMessage`）、从文本响应中提取函数调用（`extractAllFunctionCallsFromText` / `extractToolCallsFromTextResponse`）、将附加文本合并到 prompt messages（`mergeUserAddendumIntoPromptMessages` / `mergeSystemAddendumIntoPromptMessages`） |
 | **请求引擎** | `openai.js`（`sendOpenAIRequest`） | 核心 LLM 请求函数，处理预设解析、连接覆盖，并将请求分发到对应的 API 后端 |
 
 **原生模式**的流程：`ToolManager` 将注册的工具转换为模型的 schema → `sendOpenAIRequest` 将其附加到 API 请求 → 模型返回结构化的工具调用 → `ToolManager` 解析、执行并注入结果。

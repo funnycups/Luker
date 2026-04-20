@@ -44,7 +44,7 @@ To enable HTTPS, set `enabled` to `true` and provide the certificate and private
 
 ### Proxy Settings
 
-SillyTavern supports forwarding outbound requests (such as API calls) through SOCKS5 or HTTP proxies, and Luker inherits this feature:
+SillyTavern supports forwarding outbound requests (such as API calls) through HTTP, HTTPS, or SOCKS proxies, and Luker inherits this feature:
 
 ```yaml
 requestProxy:
@@ -55,7 +55,7 @@ requestProxy:
     - 127.0.0.1
 ```
 
-- `url`: Proxy server address, supporting `socks5://` and `http://` protocols
+- `url`: Proxy server address, supporting `http://`, `https://`, `socks://`, `socks4://`, `socks4a://`, `socks5://`, `socks5h://`, and `pac+*://` protocols
 - `bypass`: List of addresses that bypass the proxy
 
 ### CORS Proxy
@@ -129,7 +129,7 @@ hostWhitelist:
   hosts: []
 ```
 
-Restricts which host addresses are allowed to access the server. When `scan` is enabled, it automatically scans for LAN hosts.
+Restricts which host addresses are allowed to access the server. When `scan` is enabled, it logs warnings about requests from untrusted hosts not in the whitelist, without blocking them (unless `enabled` is also set to `true`).
 
 ## Security Settings
 

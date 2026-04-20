@@ -41,15 +41,15 @@ Beyond text generation, the Request Inspector also supports tracking image gener
 
 | Function | Purpose |
 |----------|--------|
-| `startInspection(requestId, metadata)` | Start tracking a generation request |
-| `completeInspection(requestId, result)` | Mark request as complete and record results |
-| `failInspection(requestId, error)` | Mark request as failed |
-| `abortInspection(requestId)` | Mark request as aborted |
-| `completeInspectionFromStream(requestId, events)` | Extract usage from streaming events and complete tracking |
-| `extractUsageFromStreamEvents(events)` | Extract token usage from SSE event arrays |
-| `startImageInspection(requestId, metadata)` | Start tracking an image generation request |
-| `completeImageInspection(requestId, result)` | Complete image generation tracking |
-| `failImageInspection(requestId, error)` | Mark image generation as failed |
+| `startInspection(request)` | Start tracking a generation request |
+| `completeInspection(request, payload, rawApiResponse?)` | Mark request as complete and record results |
+| `failInspection(request, errorMessage, httpStatus?)` | Mark request as failed |
+| `abortInspection(request)` | Mark request as aborted |
+| `completeInspectionFromStream(request, events)` | Extract usage from streaming events and complete tracking |
+| `extractUsageFromStreamEvents(events, source)` | Extract token usage from SSE event arrays |
+| `startImageInspection(request, meta)` | Start tracking an image generation request |
+| `completeImageInspection(request, resultMeta?)` | Complete image generation tracking |
+| `failImageInspection(request, errorMessage, httpStatus?)` | Mark image generation as failed |
 
 ## Integration Points
 
