@@ -5956,7 +5956,8 @@ function getCompressionRoundsByType(stats, type) {
 }
 
 function collectSemanticRootsByDepth(store, type, depth, options = {}) {
-    const maxSeq = Number.isFinite(Number(options?.maxSeq)) ? Math.max(0, Math.floor(Number(options.maxSeq))) : null;
+    const rawMaxSeq = options?.maxSeq;
+    const maxSeq = (rawMaxSeq !== null && rawMaxSeq !== undefined && Number.isFinite(Number(rawMaxSeq))) ? Math.max(0, Math.floor(Number(rawMaxSeq))) : null;
     return getSemanticNodesForType(store, type)
         .filter(node => Number(node?.semanticDepth ?? 0) === Number(depth))
         .filter(node => !String(node.parentId || '').trim())
@@ -6151,6 +6152,7 @@ async function compressSemanticHierarchical(context, store, settings, spec, type
         return false;
     }
 
+    console.log(`[${MODULE_NAME}] compressSemanticHierarchical: type=${type}, forceMode=${forceMode}, threshold=${threshold}, fanIn=${fanIn}, maxRoundsPerType=${maxRoundsPerType}, maxDepth=${Number(config.maxDepth || 1)}`);
     for (let depth = 0; depth < Number(config.maxDepth || 1); depth++) {
         while (guard < 120 && compressedRounds < maxRoundsPerType) {
             if (isAbortSignalLike(options?.abortSignal) && options.abortSignal.aborted) {
@@ -6158,6 +6160,7 @@ async function compressSemanticHierarchical(context, store, settings, spec, type
             }
             guard += 1;
             let candidates = collectSemanticRootsByDepth(store, type, depth, options);
+            console.log(`[${MODULE_NAME}] compress depth=${depth}, guard=${guard}, candidates=${candidates.length}, ids=[${candidates.slice(0, 5).map(n => n.id).join(',')}${candidates.length > 5 ? ',...' : ''}]`);
             if (ruleMatcher.enabled) {
                 candidates = candidates.filter(node => ruleMatcher.test(node));
             }
