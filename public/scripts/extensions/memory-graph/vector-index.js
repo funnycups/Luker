@@ -20,7 +20,7 @@ const VECTOR_REQUEST_TIMEOUT_MS = 120_000;
 
 export const EMBEDDING_SOURCES = [
     'transformers', 'openai', 'openrouter', 'nomicai', 'cohere',
-    'ollama', 'llamacpp', 'vllm', 'extras', 'makersuite',
+    'jina', 'ollama', 'llamacpp', 'vllm', 'extras', 'makersuite',
     'vertexai', 'mistral', 'chutes', 'nanogpt', 'electronhub',
 ];
 
@@ -28,6 +28,7 @@ export const EMBEDDING_DEFAULT_MODELS = {
     openai: 'text-embedding-3-small',
     openrouter: 'openai/text-embedding-3-large',
     cohere: 'embed-multilingual-v3.0',
+    jina: 'jina-embeddings-v3',
     mistral: 'mistral-embed',
     ollama: 'nomic-embed-text',
     llamacpp: '',
@@ -56,6 +57,7 @@ const VECTOR_EXT_MODEL_KEYS = {
     openrouter: 'openrouter_model',
     togetherai: 'togetherai_model',
     cohere: 'cohere_model',
+    jina: 'jina_model',
     ollama: 'ollama_model',
     vllm: 'vllm_model',
     webllm: 'webllm_model',
