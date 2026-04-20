@@ -5409,7 +5409,7 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
     const rebuildCreateOnly = Boolean(options?.rebuildCreateOnly);
     const graphNodes = rebuildCreateOnly
         ? []
-        : buildGraphNodeHints(store, schema, 0, { maxSeq: extractionMaxSeq, scope: 'full' });
+        : buildGraphNodeHints(store, schema, 0, { maxSeq: extractionMaxSeq, scope: 'visible' });
     const graphNodeIds = new Set(graphNodes.map(node => String(node?.id || '')).filter(Boolean));
     const graphEdges = rebuildCreateOnly
         ? []
@@ -5453,10 +5453,10 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
             initialized: graphNodes.length > 0,
             editable_type_ids: Array.from(editableTypeSet.values()),
             projection_policy: {
-                hierarchical_types: 'full',
+                hierarchical_types: 'top_level_rollups_only',
                 non_hierarchical_types: 'full',
             },
-            graph_scope: 'full',
+            graph_scope: 'visible',
             semantic_node_total: semanticNodeTotal,
             visible_node_count: graphNodes.length,
             nodes: graphNodes,
