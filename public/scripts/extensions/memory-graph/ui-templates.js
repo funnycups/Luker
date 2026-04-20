@@ -146,7 +146,7 @@ export function buildManualCompressionPopupHtml(deps, popupId, settings, compres
             <option value="older" selected>${escapeHtml(i18n('Older nodes only (exclude recent N assistant turns)'))}</option>
         </select>
     </label>
-    <label>${escapeHtml(i18n('Exclude recent assistant turns'))}
+    <label id="${popupId}_exclude_recent_label">${escapeHtml(i18n('Exclude recent assistant turns'))}
         <input id="${popupId}_exclude_recent" class="text_pole" type="number" min="0" step="1" value="${excludeRecentDefault}" />
     </label>
     <label>${escapeHtml(i18n('Compression mode'))}

@@ -13429,6 +13429,14 @@ async function openManualCompressionPopup(context, settings) {
             wide: true,
             large: false,
             allowVerticalScrolling: true,
+            onOpen: () => {
+                const popupRoot = jQuery(`#${popupId}`);
+                const scopeSelect = popupRoot.find(`#${popupId}_scope`);
+                const excludeLabel = popupRoot.find(`#${popupId}_exclude_recent_label`);
+                const toggleExclude = () => excludeLabel.toggle(scopeSelect.val() === 'older');
+                toggleExclude();
+                scopeSelect.on('change', toggleExclude);
+            },
             onClosing: () => {
                 captured = readValues();
                 return true;
