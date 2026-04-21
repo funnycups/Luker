@@ -1206,6 +1206,7 @@ function toggleSettings() {
     $('#google_vectorsModel').toggle(settings.source === 'palm' || settings.source === 'vertexai');
     $('#siliconflow_vectorsModel').toggle(settings.source === 'siliconflow');
     $('#vector_altEndpointUrl').toggle(vectorApiRequiresUrl.includes(settings.source));
+    toggleJinaApiKeyVisibility();
     switch (settings.source) {
         case 'webllm':
             loadWebLlmModels();
@@ -1228,14 +1229,22 @@ function toggleSettings() {
     }
 }
 
+function toggleJinaApiKeyVisibility() {
+    const usesJinaEmbedding = settings.source === 'jina';
+    const usesJinaRerank = settings.rerank_enabled && settings.rerank_source === 'jina';
+    $('#jina_apiKey').toggle(usesJinaEmbedding || usesJinaRerank);
+}
+
 function toggleRerankSettings() {
     $('#vectors_rerank_settings').toggle(settings.rerank_enabled);
+    toggleJinaApiKeyVisibility();
 }
 
 function toggleRerankSourceSettings() {
     $('#rerank_cohere_model').toggle(settings.rerank_source === 'cohere');
     $('#rerank_jina_model').toggle(settings.rerank_source === 'jina');
     $('#rerank_custom_settings').toggle(settings.rerank_source === 'custom');
+    toggleJinaApiKeyVisibility();
 }
 
 function updateRerankModelFromSource() {
@@ -2164,11 +2173,16 @@ jQuery(async () => {
         saveSettingsDebounced();
     });
 
-    $('#api_key_nomicai').toggleClass('success', !!secret_state[SECRET_KEYS.NOMICAI]);
+    const updateSecretButtonStatus = () => {
+        $('#api_key_nomicai').toggleClass('success', !!secret_state[SECRET_KEYS.NOMICAI]);
+        $('#api_key_jina').toggleClass('success', !!secret_state[SECRET_KEYS.JINA]);
+    };
+
+    updateSecretButtonStatus();
     [event_types.SECRET_WRITTEN, event_types.SECRET_DELETED, event_types.SECRET_ROTATED].forEach(event => {
         eventSource.on(event, (/** @type {string} */ key) => {
-            if (key !== SECRET_KEYS.NOMICAI) return;
-            $('#api_key_nomicai').toggleClass('success', !!secret_state[SECRET_KEYS.NOMICAI]);
+            if (key !== SECRET_KEYS.NOMICAI && key !== SECRET_KEYS.JINA) return;
+            updateSecretButtonStatus();
         });
     });
 

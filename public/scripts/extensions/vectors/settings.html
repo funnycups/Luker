@@ -309,15 +309,6 @@
                         <option value="jina-reranker-v1-turbo-en">jina-reranker-v1-turbo-en</option>
                         <option value="jina-reranker-v1-tiny-en">jina-reranker-v1-tiny-en</option>
                     </select>
-                    <div class="flex-container alignItemsCenter">
-                        <label for="api_key_jina" class="flex1">
-                            <span data-i18n="Jina API Key">Jina API Key</span>
-                        </label>
-                        <div id="api_key_jina" class="menu_button menu_button_icon manage-api-keys" data-key="api_key_jina">
-                            <i class="fa-solid fa-key"></i>
-                            <span data-i18n="Click to set">Click to set</span>
-                        </div>
-                    </div>
                 </div>
                 <div class="flex-container flexFlowColumn" id="rerank_custom_settings">
                     <label for="vectors_rerank_custom_model">
@@ -332,6 +323,15 @@
                         <small data-i18n="Rerank API Key">Rerank API Key</small>
                     </label>
                     <input id="vectors_rerank_api_key" class="text_pole" type="password" placeholder="(Optional)" />
+                </div>
+                <div class="flex-container alignItemsCenter" id="jina_apiKey">
+                    <label for="api_key_jina" class="flex1">
+                        <span data-i18n="Jina API Key">Jina API Key</span>
+                    </label>
+                    <div id="api_key_jina" class="menu_button menu_button_icon manage-api-keys" data-key="api_key_jina">
+                        <i class="fa-solid fa-key"></i>
+                        <span data-i18n="Click to set">Click to set</span>
+                    </div>
                 </div>
             </div>
 
