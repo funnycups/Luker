@@ -9653,15 +9653,6 @@ export async function assignLorebookToChat(event) {
         worldSelect.append(option);
     }
 
-    if (worldSelect.length && typeof worldSelect.select2 === 'function') {
-        worldSelect.select2({
-            width: '100%',
-            closeOnSelect: false,
-            placeholder: t`Select lorebooks...`,
-            searchInputPlaceholder: t`Search lorebooks...`,
-        });
-    }
-
     worldSelect.on('change', function () {
         pendingSelection = normalizeArray(
             Array.isArray($(this).val())
@@ -9674,10 +9665,23 @@ export async function assignLorebookToChat(event) {
     });
 
     try {
-        await callGenericPopup(template, POPUP_TYPE.TEXT, '', {
+        const popup = new Popup(template, POPUP_TYPE.TEXT, '', {
             wide: true,
             allowVerticalScrolling: true,
+            onOpen: (popup) => {
+                if (worldSelect.length && typeof worldSelect.select2 === 'function' && !isMobile()) {
+                    const popupDialog = $(popup.dlg);
+                    worldSelect.select2({
+                        width: '100%',
+                        closeOnSelect: false,
+                        placeholder: t`Select lorebooks...`,
+                        searchInputPlaceholder: t`Search lorebooks...`,
+                        dropdownParent: popupDialog,
+                    });
+                }
+            },
         });
+        await popup.show();
     } finally {
         if (worldSelect.length && typeof worldSelect.select2 === 'function' && worldSelect.hasClass('select2-hidden-accessible')) {
             worldSelect.select2('destroy');
