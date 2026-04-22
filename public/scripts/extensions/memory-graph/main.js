@@ -3801,7 +3801,17 @@ function reparentNode(store, childId, parentId) {
 }
 
 function listNodesByLevel(store, level) {
-    return Object.values(store.nodes).filter(node => node.level === level);
+    return Object.values(store.nodes)
+        .filter(node => node.level === level)
+        .sort((a, b) => {
+            if (a.level === LEVEL.SEMANTIC && b.level === LEVEL.SEMANTIC) {
+                const depthDiff = Number(b.semanticDepth ?? 0) - Number(a.semanticDepth ?? 0);
+                if (depthDiff !== 0) return depthDiff;
+            }
+            const seqDiff = Number(a.seqTo ?? 0) - Number(b.seqTo ?? 0);
+            if (seqDiff !== 0) return seqDiff;
+            return String(a.id || '').localeCompare(String(b.id || ''));
+        });
 }
 
 function getChildren(store, nodeId) {
