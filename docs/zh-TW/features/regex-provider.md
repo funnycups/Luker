@@ -26,4 +26,4 @@ SillyTavern 的正則系統允許使用者定義文字替換規則，在 AI 回�
 
 - [記憶圖](/zh-TW/features/memory-graph) — 外掛註冊正則的主要使用者
 - [Extension API 參考](/zh-TW/development/extension-api) — 完整的擴充 API 文件
-- [外掛開發基礎](/zh-TW/development/plugin-basics) — 如何開發 Luker 外掛
+- [前端外掛開發](/zh-TW/development/frontend-plugin) — 如何開發 Luker 外掛

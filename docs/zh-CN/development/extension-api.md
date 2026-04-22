@@ -801,7 +801,7 @@ context.eventSource.on(eventName, handler, {
 
 ### 事件类型
 
-所有事件类型通过 `context.eventTypes` 访问。完整的事件列表和回调参数请参阅[插件开发基础](/zh-CN/development/plugin-basics#事件系统)。
+所有事件类型通过 `context.eventTypes` 访问。完整的事件列表和回调参数请参阅[前端插件开发](/zh-CN/development/frontend-plugin#事件系统)。
 
 ## 世界书读写
 
@@ -894,7 +894,7 @@ context.eventSource.on(eventName, handler, {
 
 ## 相关页面
 
-- [插件开发基础](/zh-CN/development/plugin-basics) — 插件结构、事件系统、UI 集成
+- [前端插件开发](/zh-CN/development/frontend-plugin) — 插件结构、事件系统、UI 集成
 - [角色卡开发](/zh-CN/development/card-developers) — 角色卡扩展字段和 CardApp
 - [增量同步](/zh-CN/improvements/incremental-sync) — 增量保存的技术细节
 - [预设解耦](/zh-CN/improvements/preset-decoupling) — 预设与 API 选择的解耦机制

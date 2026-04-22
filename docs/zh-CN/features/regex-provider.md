@@ -26,4 +26,4 @@ SillyTavern 的正则系统允许用户定义文本替换规则，在 AI 回复�
 
 - [记忆图](/zh-CN/features/memory-graph) — 插件注册正则的主要使用者
 - [Extension API 参考](/zh-CN/development/extension-api) — 完整的扩展 API 文档
-- [插件开发基础](/zh-CN/development/plugin-basics) — 如何开发 Luker 插件
+- [前端插件开发](/zh-CN/development/frontend-plugin) — 如何开发 Luker 插件

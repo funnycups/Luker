@@ -801,7 +801,7 @@ context.eventSource.on(eventName, handler, {
 
 ### Event Types
 
-All event types are accessed via `context.eventTypes`. For the complete event list and callback parameters, see [Plugin Development Basics](/development/plugin-basics#event-system).
+All event types are accessed via `context.eventTypes`. For the complete event list and callback parameters, see [Frontend Plugin Development](/development/frontend-plugin#event-system).
 
 ## World Info Read/Write
 
@@ -894,7 +894,7 @@ The `secret_id` field allows overriding the API key used at the request level, s
 
 ## Related Pages
 
-- [Plugin Development Basics](/development/plugin-basics) — Plugin structure, event system, UI integration
+- [Frontend Plugin Development](/development/frontend-plugin) — Plugin structure, event system, UI integration
 - [Character Card Development](/development/card-developers) — Character Card extension fields and CardApp
 - [Incremental Sync](/improvements/incremental-sync) — Technical details of incremental saving
 - [Preset Decoupling](/improvements/preset-decoupling) — Mechanism for decoupling presets from API selection

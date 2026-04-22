@@ -62,10 +62,11 @@ const zhCNSidebar = [
   {
   text: '开发文档',
   items: [
-  { text: '插件开发基础', link: '/zh-CN/development/plugin-basics' },
-  { text: 'Extension API 参考', link: '/zh-CN/development/extension-api' },
-  { text: '角色卡开发者指南', link: '/zh-CN/development/card-developers' },
-  { text: '贡献指南', link: '/zh-CN/development/contributing' },
+  { text: '前端插件开发', link: '/zh-CN/development/frontend-plugin' },
+          { text: '后端插件开发', link: '/zh-CN/development/server-plugin' },
+          { text: 'Extension API 参考', link: '/zh-CN/development/extension-api' },
+          { text: '角色卡开发者指南', link: '/zh-CN/development/card-developers' },
+          { text: '贡献指南', link: '/zh-CN/development/contributing' },
   ],
   },
 ]
@@ -123,10 +124,11 @@ const zhTWSidebar = [
   {
     text: '開發文檔',
     items: [
-      { text: '外掛開發基礎', link: '/zh-TW/development/plugin-basics' },
-      { text: 'Extension API 參考', link: '/zh-TW/development/extension-api' },
-      { text: '角色卡開發者指南', link: '/zh-TW/development/card-developers' },
-      { text: '貢獻指南', link: '/zh-TW/development/contributing' },
+      { text: '前端外掛開發', link: '/zh-TW/development/frontend-plugin' },
+              { text: '後端外掛開發', link: '/zh-TW/development/server-plugin' },
+              { text: 'Extension API 參考', link: '/zh-TW/development/extension-api' },
+              { text: '角色卡開發者指南', link: '/zh-TW/development/card-developers' },
+              { text: '貢獻指南', link: '/zh-TW/development/contributing' },
     ],
   },
 ]
@@ -184,10 +186,11 @@ const enSidebar = [
   {
     text: 'Development',
     items: [
-      { text: 'Plugin Basics', link: '/development/plugin-basics' },
-      { text: 'Extension API Reference', link: '/development/extension-api' },
-      { text: 'Card Developer Guide', link: '/development/card-developers' },
-      { text: 'Contributing', link: '/development/contributing' },
+      { text: 'Frontend Plugin Development', link: '/development/frontend-plugin' },
+              { text: 'Server Plugin Development', link: '/development/server-plugin' },
+              { text: 'Extension API Reference', link: '/development/extension-api' },
+              { text: 'Card Developer Guide', link: '/development/card-developers' },
+              { text: 'Contributing', link: '/development/contributing' },
     ],
   },
 ]
@@ -228,7 +231,7 @@ export default defineConfig({
     nav: [
       { text: 'Guide', link: '/guide/what-is-luker' },
       { text: 'Features', link: '/features/memory-graph' },
-      { text: 'Development', link: '/development/plugin-basics' },
+      { text: 'Development', link: '/development/frontend-plugin' },
       { text: 'Changelog', link: '/changelog' },
     ],
 

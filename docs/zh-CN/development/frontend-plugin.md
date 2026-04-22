@@ -1,4 +1,4 @@
-# 插件开发基础
+# 前端插件开发
 
 Luker 的插件系统基于 SillyTavern 的扩展架构，并在此基础上进行了增强。本文档面向希望为 Luker 开发第三方插件的开发者，涵盖插件的文件结构、生命周期、事件系统、UI 集成和调试技巧。
 
@@ -478,6 +478,7 @@ Luker 内置了前端日志管理器，会拦截 `console` 输出和 `fetch` 请
 
 ## 相关页面
 
-- [扩展 API 参考](/zh-CN/development/extension-api) — 完整的 API 列表和详细参数说明
+- [后端插件开发](/zh-CN/development/server-plugin) — 服务端插件开发指南（文件系统、API 代理、凭证存储）
+- [Extension API 参考](/zh-CN/development/extension-api) — 完整的 API 列表和详细参数说明
 - [角色卡开发](/zh-CN/development/card-developers) — 角色卡扩展字段和 CardApp 开发
 - [贡献指南](/zh-CN/development/contributing) — 如何向 Luker 提交代码

@@ -26,4 +26,4 @@ If you are a plugin developer and want to register regex rules in your own plugi
 
 - [Memory Graph](/features/memory-graph) — The primary user of Plugin Regex Provider
 - [Extension API Reference](/development/extension-api) — Complete extension API documentation
-- [Plugin Development Basics](/development/plugin-basics) — How to develop Luker plugins
+- [Frontend Plugin Development](/development/frontend-plugin) — How to develop Luker plugins

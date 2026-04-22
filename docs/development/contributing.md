@@ -198,6 +198,6 @@ Please respect all contributors and users. Maintain a friendly and professional 
 
 ## Related Pages
 
-- [Plugin Development Basics](/development/plugin-basics) — Getting started with third-party plugin development
+- [Frontend Plugin Development](/development/frontend-plugin) — Getting started with third-party plugin development
 - [Extension API Reference](/development/extension-api) — Complete API documentation
 - [Character Card Development](/development/card-developers) — Character Card extension features

@@ -1,4 +1,4 @@
-# 外掛開發基礎
+# 前端外掛開發
 
 Luker 的外掛系統基於 SillyTavern 的擴充功能架構，並在此基礎上進行了增強。本文件面向希望為 Luker 開發第三方外掛的開發者，涵蓋外掛的檔案結構、生命週期、事件系統、UI 整合和除錯技巧。
 
@@ -462,6 +462,7 @@ Luker 內建了前端日誌管理器，會攔截 `console` 輸出和 `fetch` 請
 
 ## 相關頁面
 
+- [後端外掛開發](/zh-TW/development/server-plugin) — 伺服端外掛開發指南（檔案系統、API 代理、憑證儲存）
 - [擴充 API 參考](/zh-TW/development/extension-api) — 完整的 API 列表和詳細參數說明
 - [角色卡開發](/zh-TW/development/card-developers) — 角色卡擴充欄位和 CardApp 開發
 - [貢獻指南](/zh-TW/development/contributing) — 如何向 Luker 提交程式碼

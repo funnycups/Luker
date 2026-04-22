@@ -801,7 +801,7 @@ context.eventSource.on(eventName, handler, {
 
 ### 事件類型
 
-所有事件類型透過 `context.eventTypes` 存取。完整的事件列表和回呼參數請參閱[外掛開發基礎](/zh-TW/development/plugin-basics#事件系統)。
+所有事件類型透過 `context.eventTypes` 存取。完整的事件列表和回呼參數請參閱[前端外掛開發](/zh-TW/development/frontend-plugin#事件系統)。
 
 ## 世界書讀寫
 
@@ -894,7 +894,7 @@ context.eventSource.on(eventName, handler, {
 
 ## 相關頁面
 
-- [外掛開發基礎](/zh-TW/development/plugin-basics) — 外掛結構、事件系統、UI 整合
+- [前端外掛開發](/zh-TW/development/frontend-plugin) — 外掛結構、事件系統、UI 整合
 - [角色卡開發](/zh-TW/development/card-developers) — 角色卡擴充功能欄位和 CardApp
 - [增量同步](/zh-TW/improvements/incremental-sync) — 增量儲存的技術細節
 - [預設解耦](/zh-TW/improvements/preset-decoupling) — 預設與 API 選擇的解耦機制

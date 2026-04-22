@@ -1,4 +1,4 @@
-# Plugin Development Basics
+# Frontend Plugin Development
 
 Luker's plugin system is built on SillyTavern's extension architecture with additional enhancements. This document is intended for developers who want to build third-party plugins for Luker, covering file structure, lifecycle, event system, UI integration, and debugging tips.
 
@@ -473,6 +473,10 @@ During development, you can trigger a reload by disabling/enabling the plugin th
 
 ## Related Pages
 
+## See Also
+
+- [Frontend Plugin Development](/development/frontend-plugin) — Frontend extension development guide
+- [Server Plugin Development](/development/server-plugin) — Server-side plugin development guide (filesystem, API proxy, credential storage)
 - [Extension API Reference](/development/extension-api) — Complete API list with detailed parameter descriptions
 - [Character Card Development](/development/card-developers) — Character Card extension fields and CardApp development
 - [Contributing Guide](/development/contributing) — How to submit code to Luker
