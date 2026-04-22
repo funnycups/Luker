@@ -3033,6 +3033,37 @@ async function persistMemoryStoreByChatKey(context, chatKey, store, { syncPersis
     }
 }
 
+async function persistRecallMetadataByChatKey(context, chatKey, { trace, projection } = {}) {
+    const target = memoryStoreTargets.get(chatKey);
+    if (!target) {
+        return;
+    }
+    if (typeof context.updateChatState !== 'function') {
+        throw new Error('Chat state update API is unavailable in extension context.');
+    }
+    const state = getMemoryState(chatKey);
+    state.lastRecallTrace = structuredClone(Array.isArray(trace) ? trace : []);
+    state.lastRecallProjection = projection && typeof projection === 'object'
+        ? structuredClone(projection)
+        : null;
+    const result = await context.updateChatState(
+        CHAT_STATE_NAMESPACE,
+        () => normalizePersistedStateBase(state),
+        { target, maxOperations: 16000 },
+    );
+    if (!result?.ok) {
+        throw new Error('Failed to persist recall metadata.');
+    }
+    const store = memoryStoreCache.get(chatKey);
+    if (store) {
+        store.lastRecallTrace = structuredClone(Array.isArray(trace) ? trace : []);
+        store.lastRecallProjection = projection && typeof projection === 'object'
+            ? structuredClone(projection)
+            : null;
+    }
+    return result;
+}
+
 async function inheritMemoryStoreForBranch(context, payload) {
     const sourceTarget = normalizeExplicitChatStateTarget(payload?.sourceTarget);
     const targetTarget = normalizeExplicitChatStateTarget(payload?.targetTarget);
@@ -8518,7 +8549,10 @@ async function injectMemoryPrompts(context, payload) {
     if (isAbortSignalLike(payload?.signal) && payload.signal.aborted) {
         const chatKey = getChatKey(context, targetHint);
         store.lastRecallProjection = { at: Date.now(), blocks: { corePacket, focusPacket: '' } };
-        await persistMemoryStoreByChatKey(context, chatKey, store);
+        await persistRecallMetadataByChatKey(context, chatKey, {
+            trace: store.lastRecallTrace,
+            projection: store.lastRecallProjection,
+        });
         await syncRuntimeLorebookProjection(context, settings, store);
         updateUiStatus(isAbortSignalLike(generationAbortSignal) && generationAbortSignal.aborted
             ? i18n('Generation aborted. Skipped memory recall.')
@@ -8539,7 +8573,10 @@ async function injectMemoryPrompts(context, payload) {
             at: Date.now(),
             blocks,
         };
-        await persistMemoryStoreByChatKey(context, chatKey, store);
+        await persistRecallMetadataByChatKey(context, chatKey, {
+            trace: store.lastRecallTrace,
+            projection: store.lastRecallProjection,
+        });
         throwIfRecallRunInvalid(recallRunToken, payload?.signal, 'Memory recall aborted.');
         const runtimeSync = await syncRuntimeLorebookProjection(context, settings, store);
         throwIfRecallRunInvalid(recallRunToken, payload?.signal, 'Memory recall aborted.');
@@ -8643,7 +8680,10 @@ async function injectMemoryPrompts(context, payload) {
         at: Date.now(),
         blocks,
     };
-    await persistMemoryStoreByChatKey(context, chatKey, store);
+    await persistRecallMetadataByChatKey(context, chatKey, {
+        trace: store.lastRecallTrace,
+        projection: store.lastRecallProjection,
+    });
     throwIfRecallRunInvalid(recallRunToken, payload?.signal, 'Memory recall aborted.');
     const runtimeSync = await syncRuntimeLorebookProjection(context, settings, store);
     throwIfRecallRunInvalid(recallRunToken, payload?.signal, 'Memory recall aborted.');
