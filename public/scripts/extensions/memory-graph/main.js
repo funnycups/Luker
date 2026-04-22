@@ -1057,7 +1057,8 @@ const memoryLoadTasks = new Map();
 const rollbackHistoryCache = new Map();
 const pendingMutationInvalidations = new Map();
 const scheduledExtractionSingleFlightStates = new Map();
-let activeRuntimeInfoToast = null;
+let activeExtractionToast = null;
+let activeRecallToast = null;
 let activePersistentRuntimeNoticeToast = null;
 let activeRecallAbortController = null;
 let activeExtractionAbortController = null;
@@ -2813,7 +2814,7 @@ async function restoreSwipeTailCacheForMessage(context, messageIndex) {
         extractionTimers.delete(chatKey);
     }
     if (activeExtractionAbortController && !activeExtractionAbortController.signal.aborted) {
-        clearRuntimeInfoToast();
+        clearRuntimeInfoToast('extraction');
         activeExtractionAbortController.abort();
     }
     const nextState = normalizePersistedStateBase(currentState);
@@ -8760,6 +8761,7 @@ async function safeInjectMemoryPrompts(context, payload, trigger = 'after_world_
         : null;
     if (shouldShowRuntimeToast) {
         showRuntimeInfoToast(i18n('Memory recall running...'), {
+            kind: 'recall',
             stopLabel: i18n('Stop'),
             onStop: () => {
                 resolveStopRequest?.();
@@ -8830,7 +8832,7 @@ async function safeInjectMemoryPrompts(context, payload, trigger = 'after_world_
             activeRecallAbortController = null;
         }
         if (shouldShowRuntimeToast) {
-            clearRuntimeInfoToast();
+            clearRuntimeInfoToast('recall');
         }
     }
 }
@@ -9016,8 +9018,7 @@ async function runScheduledExtractionPass(chatKey) {
         if (activeExtractionAbortController === extractionAbortController) {
             activeExtractionAbortController = null;
         }
-        clearRuntimeInfoToast();
-    }
+        clearRuntimeInfoToast('extraction');
 }
 
 function scheduleExtraction(context) {
@@ -11402,23 +11403,25 @@ function notifyEventCompressionIfAny(compressionStats) {
     notifyInfo(i18nFormat('Event compression completed: ${0} round(s).', eventRounds));
 }
 
-function showRuntimeInfoToast(message, { stopLabel = '', onStop = null } = {}) {
+function showRuntimeInfoToast(message, { stopLabel = '', onStop = null, kind = 'extraction' } = {}) {
     if (typeof toastr === 'undefined') {
         return;
     }
-    clearPersistentRuntimeNotice();
-    if (activeRuntimeInfoToast) {
-        toastr.clear(activeRuntimeInfoToast);
-        activeRuntimeInfoToast = null;
+    const activeRef = kind === 'recall' ? 'activeRecallToast' : 'activeExtractionToast';
+    if (kind === 'recall') {
+        if (activeRecallToast) { toastr.clear(activeRecallToast); activeRecallToast = null; }
+    } else {
+        if (activeExtractionToast) { toastr.clear(activeExtractionToast); activeExtractionToast = null; }
     }
-    activeRuntimeInfoToast = toastr.info(String(message || ''), '', {
+    const toastRef = toastr.info(String(message || ''), '', {
         timeOut: 0,
         extendedTimeOut: 0,
         tapToDismiss: false,
         closeButton: true,
         progressBar: false,
     });
-    const toastBody = activeRuntimeInfoToast ? activeRuntimeInfoToast.find('.toast-message') : null;
+    if (kind === 'recall') { activeRecallToast = toastRef; } else { activeExtractionToast = toastRef; }
+    const toastBody = toastRef ? toastRef.find('.toast-message') : null;
     if (toastBody && toastBody.length > 0) {
         toastBody.empty();
         const textNode = jQuery('<div class="luker-rpg-memory-toast-text"></div>');
@@ -11432,7 +11435,7 @@ function showRuntimeInfoToast(message, { stopLabel = '', onStop = null } = {}) {
                 event.stopPropagation();
                 button.prop('disabled', true);
                 const toastElement = button.closest('.toast');
-                clearRuntimeInfoToast();
+                clearRuntimeInfoToast(kind);
                 if (toastElement && toastElement.length > 0) {
                     toastElement.remove();
                 }
@@ -11443,22 +11446,29 @@ function showRuntimeInfoToast(message, { stopLabel = '', onStop = null } = {}) {
     }
 }
 
-function updateRuntimeInfoToastMessage(message) {
-    if (!activeRuntimeInfoToast) {
+function updateRuntimeInfoToastMessage(message, kind = 'extraction') {
+    const toastRef = kind === 'recall' ? activeRecallToast : activeExtractionToast;
+    if (!toastRef) {
         return;
     }
-    const textNode = activeRuntimeInfoToast.find('.luker-rpg-memory-toast-text');
+    const textNode = toastRef.find('.luker-rpg-memory-toast-text');
     if (textNode.length > 0) {
         textNode.text(String(message || ''));
     }
 }
 
-function clearRuntimeInfoToast() {
-    if (typeof toastr === 'undefined' || !activeRuntimeInfoToast) {
+function clearRuntimeInfoToast(kind) {
+    if (typeof toastr === 'undefined') {
         return;
     }
-    toastr.clear(activeRuntimeInfoToast);
-    activeRuntimeInfoToast = null;
+    if (kind === 'recall') {
+        if (activeRecallToast) { toastr.clear(activeRecallToast); activeRecallToast = null; }
+    } else if (kind === 'extraction') {
+        if (activeExtractionToast) { toastr.clear(activeExtractionToast); activeExtractionToast = null; }
+    } else {
+        if (activeExtractionToast) { toastr.clear(activeExtractionToast); activeExtractionToast = null; }
+        if (activeRecallToast) { toastr.clear(activeRecallToast); activeRecallToast = null; }
+    }
 }
 
 async function stopMemoryRuntimeWork() {
@@ -13578,10 +13588,10 @@ async function openManualCompressionPopup(context, settings) {
     } finally {
         if (activeExtractionAbortController === compressionAbortController) {
             activeExtractionAbortController = null;
+            }
+            clearRuntimeInfoToast('extraction');
         }
-        clearRuntimeInfoToast();
-    }
-}
+        }
 
 function bindUi() {
     const context = getContext();
@@ -13886,7 +13896,7 @@ function bindUi() {
             if (activeExtractionAbortController === fillAbortController) {
                 activeExtractionAbortController = null;
             }
-            clearRuntimeInfoToast();
+            clearRuntimeInfoToast('extraction');
         }
     });
 
@@ -13961,13 +13971,13 @@ function bindUi() {
             }
             console.warn(`[${MODULE_NAME}] Rebuild failed`, error);
             notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'rebuild', String(error?.message || error)));
-        } finally {
-            if (activeExtractionAbortController === rebuildAbortController) {
-                activeExtractionAbortController = null;
+            } finally {
+                if (activeExtractionAbortController === rebuildAbortController) {
+                    activeExtractionAbortController = null;
+                }
+                clearRuntimeInfoToast('extraction');
             }
-            clearRuntimeInfoToast();
-        }
-    });
+            });
 
     root.find('#luker_rpg_memory_rebuild_recent').off('click').on('click', async function () {
         await ensureMemoryStoreLoaded(context);
@@ -14088,13 +14098,13 @@ function bindUi() {
             }
             console.warn(`[${MODULE_NAME}] Recent rebuild failed`, error);
             notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'rebuild_recent', String(error?.message || error)));
-        } finally {
-            if (activeExtractionAbortController === rebuildAbortController) {
-                activeExtractionAbortController = null;
+            } finally {
+                if (activeExtractionAbortController === rebuildAbortController) {
+                    activeExtractionAbortController = null;
+                }
+                clearRuntimeInfoToast('extraction');
             }
-            clearRuntimeInfoToast();
-        }
-    });
+            });
 
     root.find('#luker_rpg_memory_manual_compress').off('click').on('click', async function () {
         await openManualCompressionPopup(context, getEffectiveSettings(context, settings));
@@ -14294,8 +14304,7 @@ jQuery(() => {
                 }
                 if (activeExtractionAbortController && !activeExtractionAbortController.signal.aborted) {
                     if (isCurrentChat) {
-                        clearRuntimeInfoToast();
-                        showPersistentRuntimeNotice(mutationInterruptedToastText, { level: 'warning' });
+                        clearRuntimeInfoToast('extraction');
                     }
                     activeExtractionAbortController.abort();
                 }
@@ -14349,7 +14358,7 @@ jQuery(() => {
         context.eventSource.on(context.eventTypes.GENERATION_ENDED, async () => {
             generationInProgress = false;
             await clearRuntimeProjectionAfterGeneration();
-            clearRuntimeInfoToast();
+            clearRuntimeInfoToast('recall');
             const runtimeContext = getContext();
             const abortedByUser = Boolean(runtimeContext?.streamingProcessor?.abortController?.signal?.aborted);
             if (abortedByUser) {
