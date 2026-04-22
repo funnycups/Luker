@@ -8506,6 +8506,10 @@ async function injectMemoryPrompts(context, payload) {
     throwIfRecallRunInvalid(recallRunToken, payload?.signal, 'Memory recall aborted.');
     const corePacket = normalizeMultilineText(persistentSync.corePacket || '');
     if (isAbortSignalLike(payload?.signal) && payload.signal.aborted) {
+        const chatKey = getChatKey(context, targetHint);
+        store.lastRecallProjection = { at: Date.now(), blocks: { corePacket, focusPacket: '' } };
+        await persistMemoryStoreByChatKey(context, chatKey, store);
+        await syncRuntimeLorebookProjection(context, settings, store);
         updateUiStatus(isAbortSignalLike(generationAbortSignal) && generationAbortSignal.aborted
             ? i18n('Generation aborted. Skipped memory recall.')
             : i18n('Memory recall cancelled by user.'));
