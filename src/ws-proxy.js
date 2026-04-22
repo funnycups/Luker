@@ -5,29 +5,35 @@
  * the rest of the app sees a normal Response object.
  *
  * Key feature: disconnect recovery. When the WS drops mid-stream, the backend
- * keeps the localhost fetch running and buffers chunks. When the client
+ * keeps the internal dispatch running and buffers chunks. When the client
  * reconnects and sends a "resume" message, buffered data is replayed and
  * live streaming continues seamlessly.
  *
  * Protocol (JSON over WS):
  *
- *   Client → Server  { type:"request",  id, url, method, headers, body }
- *   Client → Server  { type:"resume",   id }                // reconnect recovery
- *   Client → Server  { type:"abort",    id }
- *   Client → Server  { type:"ping" }
+ * Client → Server { type:"request", id, url, method, headers, body }
+ * Client → Server { type:"resume", id } // reconnect recovery
+ * Client → Server { type:"abort", id }
+ * Client → Server { type:"ping" }
  *
- *   Server → Client  { type:"head",     id, status, headers }
- *   Server → Client  { type:"chunk",    id, data }          // streaming body (base64)
- *   Server → Client  { type:"end",      id }                // body finished
- *   Server → Client  { type:"error",    id, message }
- *   Server → Client  { type:"pong" }
+ * Server → Client { type:"head", id, status, headers }
+ * Server → Client { type:"chunk", id, data } // streaming body (base64)
+ * Server → Client { type:"end", id } // body finished
+ * Server → Client { type:"error", id, message }
+ * Server → Client { type:"pong" }
  */
 
+import { EventEmitter } from 'node:events';
+import http from 'node:http';
+import { Readable } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import { color } from './util.js';
 
 /** @type {WebSocketServer|null} */
 let wss = null;
+
+/** @type {import('express').Express|null} */
+let app = null;
 
 /**
  * Global job registry — survives WS reconnects.
@@ -36,28 +42,30 @@ let wss = null;
  */
 const jobs = new Map();
 
-const JOB_ORPHAN_TTL = 5 * 60 * 1000;  // 5 min — cleanup orphaned (disconnected + idle) jobs
-const JOB_CLEANUP_INTERVAL = 60_000;   // check every 60s
+const JOB_ORPHAN_TTL = 5 * 60 * 1000; // 5 min — cleanup orphaned (disconnected + idle) jobs
+const JOB_CLEANUP_INTERVAL = 60_000; // check every 60s
 
 /**
  * @typedef {object} Job
  * @property {string} id
  * @property {AbortController} ac
- * @property {import('ws').WebSocket|null} ws  — current WS (null if disconnected)
+ * @property {import('ws').WebSocket|null} ws — current WS (null if disconnected)
  * @property {boolean} headSent
- * @property {object|null} head               — { status, headers }
- * @property {string[]} buffer                — buffered base64 chunks
- * @property {boolean} done                   — response fully received
- * @property {string|null} error              — error message if failed
- * @property {number} lastActivity             — updated on every chunk/head/end
- * @property {object} ctx                     — { cookie, csrfToken, localOrigin, originalHost }
+ * @property {object|null} head — { status, headers }
+ * @property {string[]} buffer — buffered base64 chunks
+ * @property {boolean} done — response fully received
+ * @property {string|null} error — error message if failed
+ * @property {number} lastActivity — updated on every chunk/head/end
+ * @property {object} ctx — { cookie, csrfToken, originalHost }
  */
 
 /**
  * Initialize the WS proxy on every HTTP(S) server instance.
  * @param {import('http').Server[]} servers
+ * @param {import('express').Express} expressApp
  */
-export function initWsProxy(servers) {
+export function initWsProxy(servers, expressApp) {
+    app = expressApp;
     wss = new WebSocketServer({ noServer: true });
 
     for (const server of servers) {
@@ -102,18 +110,7 @@ function handleConnection(ws, req) {
     const csrfToken = upgradeUrl.searchParams.get('csrf') || '';
     const originalHost = req.headers.host || 'localhost';
 
-    // Build local origin from actual server socket
-    const addr = req.socket.server?.address();
-    const protocol = req.socket.encrypted ? 'https' : 'http';
-    let localOrigin;
-    if (addr && typeof addr === 'object') {
-        const host = (addr.family === 'IPv6' || addr.address === '::') ? '127.0.0.1' : (addr.address === '0.0.0.0' ? '127.0.0.1' : addr.address);
-        localOrigin = `${protocol}://${host}:${addr.port}`;
-    } else {
-        localOrigin = `${protocol}://${originalHost}`;
-    }
-
-    const ctx = { cookie, csrfToken, localOrigin, originalHost };
+    const ctx = { cookie, csrfToken, originalHost };
 
     /** Track which job IDs this connection owns */
     const ownedJobs = new Set();
@@ -162,7 +159,7 @@ function handleConnection(ws, req) {
     ws.on('close', () => {
         clearInterval(wsPingInterval);
         // Detach WS from all owned jobs — but do NOT abort them.
-        // The backend fetch continues running, buffering chunks.
+        // The backend dispatch continues running, buffering chunks.
         for (const id of ownedJobs) {
             const job = jobs.get(id);
             if (job) {
@@ -219,7 +216,107 @@ function handleResume(ws, id, ownedJobs, fromChunk = 0) {
 }
 
 /**
- * Start a new proxy job: fetch locally, stream response, buffer on disconnect.
+ * Create a mock ServerResponse that captures write/end calls
+ * and feeds them into the job's WS + buffer pipeline.
+ *
+ * @param {string} id - Job ID
+ * @param {import('http').IncomingMessage} req - The mock request
+ * @param {Job} job - The job object
+ * @returns {import('http').ServerResponse}
+ */
+function createMockResponse(id, req, job) {
+    const res = new http.ServerResponse(req);
+
+    // Mock socket — ServerResponse needs it for internal checks.
+    // Provide enough surface to avoid cork/buffer errors when Express
+    // internals call socket methods during write/end.
+    const mockSocket = new EventEmitter();
+    mockSocket.writable = true;
+    mockSocket._writableState = { corked: 0 };
+    mockSocket.destroy = () => {};
+    mockSocket.write = () => true;
+    mockSocket.end = () => mockSocket;
+    mockSocket.cork = () => {};
+    mockSocket.uncork = () => {};
+    mockSocket.setTimeout = () => mockSocket;
+    mockSocket.setNoDelay = () => mockSocket;
+    mockSocket.setKeepAlive = () => mockSocket;
+
+    res.socket = mockSocket;
+    res.connection = mockSocket;
+
+    const capturedHeaders = {};
+    let statusCode = 200;
+    let headSent = false;
+
+    const sendHead = () => {
+        if (headSent) return;
+        headSent = true;
+        job.head = { status: statusCode, headers: { ...capturedHeaders } };
+        job.headSent = true;
+        job.lastActivity = Date.now();
+        wsSend(job.ws, { type: 'head', id, status: statusCode, headers: { ...capturedHeaders } });
+    };
+
+    const origWriteHead = res.writeHead.bind(res);
+    res.writeHead = (status, reasonOrHeaders, headers) => {
+        statusCode = status;
+        if (typeof reasonOrHeaders === 'object' && reasonOrHeaders !== null) {
+            for (const [k, v] of Object.entries(reasonOrHeaders)) {
+                capturedHeaders[k.toLowerCase()] = v;
+            }
+        }
+        if (headers && typeof headers === 'object') {
+            for (const [k, v] of Object.entries(headers)) {
+                capturedHeaders[k.toLowerCase()] = v;
+            }
+        }
+        return origWriteHead(status, reasonOrHeaders, headers);
+    };
+
+    const origSetHeader = res.setHeader.bind(res);
+    res.setHeader = (name, value) => {
+        capturedHeaders[name.toLowerCase()] = value;
+        return origSetHeader(name, value);
+    };
+
+    const origWrite = res.write.bind(res);
+    res.write = (chunk, encoding) => {
+        if (!headSent) sendHead();
+
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, typeof encoding === 'string' ? encoding : undefined);
+        const b64 = buf.toString('base64');
+        job.buffer.push(b64);
+        job.lastActivity = Date.now();
+        wsSend(job.ws, { type: 'chunk', id, data: b64 });
+        return true;
+    };
+
+    const origEnd = res.end.bind(res);
+    res.end = (chunk, encoding) => {
+        if (chunk) {
+            if (!headSent) sendHead();
+            const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, typeof encoding === 'string' ? encoding : undefined);
+            const b64 = buf.toString('base64');
+            job.buffer.push(b64);
+            job.lastActivity = Date.now();
+            wsSend(job.ws, { type: 'chunk', id, data: b64 });
+        } else if (!headSent) {
+            // Empty body — still send head
+            sendHead();
+        }
+
+        job.done = true;
+        wsSend(job.ws, { type: 'end', id });
+        if (job.ws) jobs.delete(id);
+        return origEnd.call(res);
+    };
+
+    return res;
+}
+
+/**
+ * Start a new proxy job: dispatch internally via app.handle(), stream response, buffer on disconnect.
  */
 async function startJob(ws, msg, ctx) {
     const { id, url, method, headers: clientHeaders, body } = msg;
@@ -241,72 +338,62 @@ async function startJob(ws, msg, ctx) {
     jobs.set(id, job);
 
     try {
-        const fetchHeaders = { ...clientHeaders };
-        fetchHeaders['cookie'] = ctx.cookie;
-        fetchHeaders['host'] = ctx.originalHost;
-        if (!fetchHeaders['x-csrf-token'] && !fetchHeaders['X-CSRF-Token'] && ctx.csrfToken) {
-            fetchHeaders['x-csrf-token'] = ctx.csrfToken;
+        // Construct a mock IncomingMessage
+        const bodyStr = body != null ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
+        const bodyStream = bodyStr != null ? Readable.from([bodyStr]) : Readable.from([]);
+
+        const req = new http.IncomingMessage(bodyStream);
+        req.method = method || 'POST';
+        req.url = url;
+
+        // Build request headers — forward client headers + WS context
+        const reqHeaders = { ...clientHeaders };
+        reqHeaders['host'] = ctx.originalHost;
+        if (ctx.cookie) reqHeaders['cookie'] = ctx.cookie;
+        if (!reqHeaders['x-csrf-token'] && !reqHeaders['X-CSRF-Token'] && ctx.csrfToken) {
+            reqHeaders['x-csrf-token'] = ctx.csrfToken;
         }
+        if (bodyStr != null && !reqHeaders['content-type']) {
+            reqHeaders['content-type'] = 'application/json';
+        }
+        if (bodyStr != null) {
+            reqHeaders['content-length'] = String(Buffer.byteLength(bodyStr));
+        }
+        req.headers = reqHeaders;
 
-        const fetchUrl = `${ctx.localOrigin}${url}`;
-        const resp = await fetch(fetchUrl, {
-            method: method || 'POST',
-            headers: fetchHeaders,
-            body: body || undefined,
-            signal: ac.signal,
-            redirect: 'follow',
-        });
+        // Feed body content into the IncomingMessage
+        bodyStream.on('data', (chunk) => req.push(chunk));
+        bodyStream.on('end', () => req.push(null));
 
-        // Store and send head
-        const respHeaders = {};
-        resp.headers.forEach((v, k) => { respHeaders[k] = v; });
-        job.head = { status: resp.status, headers: respHeaders };
-        job.headSent = true;
-        wsSend(job.ws, { type: 'head', id, status: resp.status, headers: respHeaders });
+        // Create mock response that feeds into our WS pipeline
+        const res = createMockResponse(id, req, job);
 
-        // Stream body chunks
-        if (resp.body) {
-            const reader = resp.body.getReader();
-            try {
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-
-                    const b64 = Buffer.from(value).toString('base64');
-                    // Always buffer (for resume support)
-                    job.buffer.push(b64);
-                    job.lastActivity = Date.now();
-                    // Send to WS if connected
-                    wsSend(job.ws, { type: 'chunk', id, data: b64 });
-                }
-            } catch (err) {
-                if (err.name !== 'AbortError') {
-                    job.error = `Stream read error: ${err.message}`;
-                    job.done = true;
-                    wsSend(job.ws, { type: 'error', id, message: job.error });
-                    return;
-                }
+        // Wire up abort signal
+        const onAbort = () => {
+            // If the handler hasn't finished yet, destroy the response
+            if (!job.done && !res.writableEnded) {
+                res.destroy();
             }
-        }
-
-        job.done = true;
-        wsSend(job.ws, { type: 'end', id });
-
-        // If client is connected, clean up immediately
-        if (job.ws) {
             jobs.delete(id);
-        }
-        // If disconnected, keep job alive for resume (TTL cleanup will handle it)
+        };
+        ac.signal.addEventListener('abort', onAbort, { once: true });
+
+        // Dispatch directly through Express — no HTTP, no middleware auth
+        app.handle(req, res, (err) => {
+            if (err && !job.done) {
+                job.error = err.message || 'Internal dispatch error';
+                job.done = true;
+                wsSend(job.ws, { type: 'error', id, message: job.error });
+                if (job.ws) jobs.delete(id);
+            }
+        });
     } catch (err) {
         if (err.name !== 'AbortError') {
             job.error = err.message;
             job.done = true;
-            wsSend(job.ws, { type: 'error', id, message: err.message });
-            if (job.ws) {
-                jobs.delete(id);
-            }
+            wsSend(job.ws, { type: 'error', id, message: job.error });
+            if (job.ws) jobs.delete(id);
         } else {
-            // Aborted — clean up
             jobs.delete(id);
         }
     }

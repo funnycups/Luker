@@ -362,7 +362,7 @@ async function preSetupTasks() {
 async function postSetupTasks(result) {
     // Initialize WebSocket proxy for stable long-running requests
     if (result.servers && result.servers.length > 0) {
-        initWsProxy(result.servers);
+        initWsProxy(result.servers, app);
     }
 
     const browserLaunchHostname = await cliArgs.getBrowserLaunchHostname(result);
