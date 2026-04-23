@@ -25,7 +25,6 @@
 
 import { EventEmitter } from 'node:events';
 import http from 'node:http';
-import { Readable } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import { color } from './util.js';
 
@@ -339,10 +338,17 @@ async function startJob(ws, msg, ctx) {
 
     try {
         // Construct a mock IncomingMessage
+        // http.IncomingMessage requires a net.Socket as its first argument.
+        // Provide a minimal mock socket so Express internals work correctly.
         const bodyStr = body != null ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
-        const bodyStream = bodyStr != null ? Readable.from([bodyStr]) : Readable.from([]);
 
-        const req = new http.IncomingMessage(bodyStream);
+        const mockSocket = new EventEmitter();
+        mockSocket.readable = true;
+        mockSocket.writable = false;
+        mockSocket.destroy = () => {};
+        mockSocket.destroyed = false;
+
+        const req = new http.IncomingMessage(mockSocket);
         req.method = method || 'POST';
         req.url = url;
 
@@ -361,9 +367,11 @@ async function startJob(ws, msg, ctx) {
         }
         req.headers = reqHeaders;
 
-        // Feed body content into the IncomingMessage
-        bodyStream.on('data', (chunk) => req.push(chunk));
-        bodyStream.on('end', () => req.push(null));
+        // Feed body content into the IncomingMessage via push
+        if (bodyStr != null) {
+            req.push(bodyStr, 'utf8');
+        }
+        req.push(null); // signal end of body
 
         // Create mock response that feeds into our WS pipeline
         const res = createMockResponse(id, req, job);
