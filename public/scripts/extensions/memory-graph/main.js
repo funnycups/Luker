@@ -9019,6 +9019,7 @@ async function runScheduledExtractionPass(chatKey) {
             activeExtractionAbortController = null;
         }
         clearRuntimeInfoToast('extraction');
+    }
 }
 
 function scheduleExtraction(context) {
