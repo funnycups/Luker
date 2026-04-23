@@ -27,7 +27,7 @@
 /* --- Base list item --- */
 #completion_prompt_manager #completion_prompt_manager_list li {
     display: grid;
-    grid-template-columns: minmax(0, 4fr) auto 45px;
+    grid-template-columns: minmax(0, 4fr) auto 32px;
     margin-bottom: 0;
     width: 100%;
 }
@@ -80,7 +80,7 @@
     align-items: stretch;
     border: none;
     border-left: 3px solid transparent;
-    grid-template-columns: minmax(0, 1fr) auto 5em;
+    grid-template-columns: minmax(0, 1fr) auto 3em;
     grid-template-rows: auto auto;
     padding: 0.5em 0.65em;
     column-gap: 0.4em;
@@ -99,7 +99,7 @@
     display: flex;
     justify-content: flex-end;
     align-items: center;
-    gap: 0.4em;
+    gap: 0.25em;
     font-size: calc(var(--mainFontSize) * 1.1);
 }
 
@@ -108,8 +108,8 @@
     align-items: center;
     justify-content: center;
     flex: 0 0 auto;
-    height: 1.4em;
-    width: 1.4em;
+    height: 1.2em;
+    width: 1.2em;
 }
 
 /* Action buttons: base style (visible on touch devices) */
@@ -710,7 +710,7 @@
 /* --- Group header row --- */
 #completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-group {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto 5em;
+    grid-template-columns: auto minmax(0, 1fr) auto 3em;
     align-items: center;
     column-gap: 0.5em;
     padding: 0.45em 0.65em;
