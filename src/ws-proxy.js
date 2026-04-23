@@ -23,7 +23,7 @@
  * Server → Client { type:"pong" }
  */
 
-import { EventEmitter } from 'node:events';
+import { Readable, Writable } from 'node:stream';
 import http from 'node:http';
 import { WebSocketServer } from 'ws';
 import { color } from './util.js';
@@ -227,16 +227,16 @@ function createMockResponse(id, req, job) {
     const res = new http.ServerResponse(req);
 
     // Mock socket — ServerResponse needs it for internal checks.
-    // Provide enough surface to avoid cork/buffer errors when Express
-    // internals call socket methods during write/end.
-    const mockSocket = new EventEmitter();
-    mockSocket.writable = true;
-    mockSocket._writableState = { corked: 0 };
+    // Use a Writable stream so the response lifecycle (cork/uncork/write/end)
+    // works correctly and the 'finish' event fires after res.end().
+    const mockSocket = new Writable({
+        write(chunk, encoding, callback) { callback(); },
+        final(callback) { callback(); },
+    });
+    mockSocket.readable = true;
     mockSocket.destroy = () => {};
-    mockSocket.write = () => true;
-    mockSocket.end = () => mockSocket;
-    mockSocket.cork = () => {};
-    mockSocket.uncork = () => {};
+    mockSocket.cork = function () { Writable.prototype.cork.call(this); };
+    mockSocket.uncork = function () { Writable.prototype.uncork.call(this); };
     mockSocket.setTimeout = () => mockSocket;
     mockSocket.setNoDelay = () => mockSocket;
     mockSocket.setKeepAlive = () => mockSocket;
@@ -338,15 +338,16 @@ async function startJob(ws, msg, ctx) {
 
     try {
         // Construct a mock IncomingMessage
-        // http.IncomingMessage requires a net.Socket as its first argument.
-        // Provide a minimal mock socket so Express internals work correctly.
+        // http.IncomingMessage requires a Stream (Readable) as its first argument.
+        // Using a plain EventEmitter triggers ERR_INVALID_ARG_TYPE when Node's
+        // eos() / _destroy internally tries to pipe or destroy the socket.
         const bodyStr = body != null ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
 
-        const mockSocket = new EventEmitter();
+        const mockSocket = new Readable({ read() {} });
         mockSocket.readable = true;
         mockSocket.writable = false;
-        mockSocket.destroy = () => {};
         mockSocket.destroyed = false;
+        mockSocket.destroy = function () { this.destroyed = true; this.push(null); };
 
         const req = new http.IncomingMessage(mockSocket);
         req.method = method || 'POST';
