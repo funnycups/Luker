@@ -727,15 +727,15 @@ async function renderDetailsContent(detailsContent) {
         const globalValue = Boolean(oai_settings.function_calling_plain_text);
         const globalRetryValue = Boolean(oai_settings.function_calling_plain_text_error_retry);
         const globalRetryAttempts = clampPlainTextRetryAttempts(oai_settings.function_calling_plain_text_error_retry_max_attempts);
-        const profileMode = profile ? resolveProfileMode(profile) : (main_api === 'openai' ? 'cc' : 'tc');
-        const supported = profileMode === 'cc';
-        const parsed = profileMode === 'cc'
+        const profileMode = profile ? resolveProfileMode(profile) : '';
+        const supported = !profile || profileMode === 'cc';
+        const parsed = profileMode === 'cc' && profile
             ? parseProfileBoolean(profile['function-calling-plain-text'])
             : null;
-        const parsedRetry = profileMode === 'cc'
+        const parsedRetry = profileMode === 'cc' && profile
             ? parseProfileBoolean(profile['function-calling-plain-text-error-retry'])
             : null;
-        const parsedRetryAttempts = profileMode === 'cc'
+        const parsedRetryAttempts = profileMode === 'cc' && profile
             ? parseProfileInteger(profile['function-calling-plain-text-error-retry-max-attempts'])
             : null;
         const plainTextEnabled = parsed ?? globalValue;
