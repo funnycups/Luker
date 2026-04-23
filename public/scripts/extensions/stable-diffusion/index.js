@@ -2847,15 +2847,20 @@ function ensureSelectionExists(setting, selector) {
 }
 
 function updateGenerationIndicator() {
+    console.debug(`SD: updateGenerationIndicator called, activeGenerations=${activeGenerations}, generationToast=${generationToast ? 'exists' : 'null'}`);
+
     const clearGenerationToast = () => {
+        console.debug('SD: clearGenerationToast called, generationToast=', generationToast ? 'exists' : 'null');
         if (generationToast) {
             toastr.clear(generationToast);
             generationToast = null;
+            console.debug('SD: generationToast cleared and set to null');
         }
 
         $('.sd_generation_abort_btn').each((_, button) => {
             const toastElement = $(button).closest('.toast');
             if (toastElement.length) {
+                console.debug('SD: clearing orphaned abort toast button');
                 toastr.clear(toastElement);
             }
         });
@@ -2913,7 +2918,9 @@ function syncGenerationTrackingState() {
         }
     }
 
+    const prevActive = activeGenerations;
     activeGenerations = activeControllers.size;
+    console.debug(`SD: syncGenerationTrackingState, controllers=${generationAbortControllers.length}, activeGenerations: ${prevActive} → ${activeGenerations}`);
     updateGenerationIndicator();
 }
 
@@ -2933,8 +2940,10 @@ function endGenerationTracking(controller = null) {
 
 function endGenerationTrackingEarly(controller) {
     if (!(controller instanceof AbortController) || !trackedGenerationControllers.has(controller)) {
+        console.debug('SD: endGenerationTrackingEarly skipped, controller not tracked or invalid');
         return;
     }
+    console.debug('SD: endGenerationTrackingEarly called (abort event listener)');
     syncGenerationTrackingState();
 }
 
@@ -2954,6 +2963,7 @@ function unregisterAbortController(controller) {
 }
 
 function abortOneActiveGeneration(reason = 'Aborted by user') {
+    console.debug(`SD: abortOneActiveGeneration called, reason="${reason}", controllers=${generationAbortControllers.length}, tracked=${trackedGenerationControllers.size}`);
     const tryAbort = (trackedOnly) => {
         for (let i = generationAbortControllers.length - 1; i >= 0; i -= 1) {
             const controller = generationAbortControllers[i];
@@ -3060,6 +3070,7 @@ async function generatePicture(initiator, args, trigger, message, callback) {
         registerAbortController(abortController);
         startGenerationTracking(abortController);
         abortController.signal.addEventListener('abort', () => endGenerationTrackingEarly(abortController), { once: true });
+        console.debug(`SD: generatePicture — registered abort controller, activeGenerations=${activeGenerations}`);
         $(stopButton).show();
 
         if (typeof args?._abortController?.addEventListener === 'function') {
@@ -3071,8 +3082,7 @@ async function generatePicture(initiator, args, trigger, message, callback) {
     } catch (err) {
         // Check if this was an intentional abort by user
         if (abortController.signal.aborted) {
-            console.log('SD: Image generation aborted by user');
-            toastr.info('Image generation stopped.', 'Image Generation');
+            console.log('SD: Image generation aborted by user (generatePicture catch)');
             return;
         }
 
@@ -3091,6 +3101,7 @@ async function generatePicture(initiator, args, trigger, message, callback) {
         }
         unregisterAbortController(abortController);
         endGenerationTracking(abortController);
+        console.debug(`SD: generatePicture finally — unregistered controller, activeGenerations=${activeGenerations}`);
     }
 
     return imagePath;
@@ -3422,8 +3433,7 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
     } catch (err) {
         // Check if this was an intentional abort by user
         if (signal?.aborted) {
-            console.log('SD: Image generation aborted by user');
-            toastr.info('Image generation stopped.', 'Image Generation');
+            console.log('SD: Image generation aborted by user (sendGenerationRequest catch)');
             return;
         }
 
