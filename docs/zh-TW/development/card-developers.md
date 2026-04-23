@@ -162,31 +162,47 @@ CardApp 的上下文物件提供以下 API：
 
 #### 訊息與生成
 
+#### 訊息與生成
+
 | API | 說明 |
 |-----|------|
-| `ctx.container` | 應用的 DOM 容器元素 |
-| `ctx.charId` | 當前角色 ID |
-| `ctx.sendMessage(text, options?)` | 傳送訊息 |
+| `ctx.container` | 應用的DOM容器元素 |
+| `ctx.charId` | 當前角色ID |
+| `ctx.sendMessage(text, options?)` | 傳送訊息（內部呼叫`sendTextareaMessage`） |
 | `ctx.stopGeneration()` | 停止當前生成 |
 | `ctx.continueGeneration()` | 繼續生成 |
+| `ctx.getHistory(limit?, offset?)` | 取得聊天歷史記錄，支援限制條數和偏移 |
+| `ctx.editMessage(messageId, newText)` | 編輯指定訊息 |
+| `ctx.deleteMessage(messageId)` | 刪除指定訊息 |
+| `ctx.deleteLastMessage()` | 刪除最後一條訊息 |
+| `ctx.swipe()` | 切換到下一個回覆變體 |
+| `ctx.regenerate()` | 重新生成最後一條AI訊息（呼叫`Generate('regenerate')`） |
 
 #### 資料與狀態
 
 | API | 說明 |
 |-----|------|
 | `ctx.getCharacterData()` | 取得當前角色資料（唯讀） |
-| `ctx.updateCharacterFields(fields)` | 更新角色欄位並儲存。支援 name、description、personality、scenario、first_mes、mes_example、system_prompt、post_history_instructions、creator_notes、creator、character_version、tags（逗號分隔字串）、talkativeness（數字）、depth_prompt 相關欄位 |
+| `ctx.updateCharacterFields(fields)` | 更新角色欄位並儲存。支援name、description、personality、scenario、first_mes、mes_example、system_prompt、post_history_instructions、creator_notes、creator、character_version、tags（逗號分隔字串）、talkativeness（數字）、depth_prompt相關欄位 |
 | `ctx.getChatState(namespace)` | 讀取聊天綁定的持久化狀態 |
 | `ctx.setChatState(namespace, key, value)` | 設定聊天狀態 |
 | `ctx.getVariable(key)` | 取得聊天變數 |
-| `ctx.setVariable(key, value)` | 設定聊天變數 |
+| `ctx.setVariable(key, value)` | 設定聊天變數並持久化 |
+
+#### 聊天管理
+
+| API | 說明 |
+|-----|------|
 | `ctx.getChatList()` | 取得當前角色的聊天列表 |
+| `ctx.switchChat(chatName)` | 切換到指定聊天 |
+| `ctx.newChat()` | 建立新聊天 |
+| `ctx.closeChat()` | 關閉當前聊天 |
 
 #### 世界書操作
 
 | API | 說明 |
 |-----|------|
-| `ctx.getWorldBooks()` | 取得當前角色關聯的世界書名稱列表（角色綁定 + 全域啟用） |
+| `ctx.getWorldBooks()` | 取得當前角色關聯的世界書名稱列表（角色綁定+全域啟用） |
 | `ctx.getWorldBookEntries(bookName)` | 取得指定世界書的所有條目 |
 | `ctx.createWorldBookEntry(bookName, fields?)` | 建立世界書條目，回傳新條目物件（含 uid） |
 | `ctx.updateWorldBookEntry(bookName, uid, patch)` | 更新世界書條目（淺合併） |

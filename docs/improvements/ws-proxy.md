@@ -27,6 +27,38 @@ In some network environments, firewalls or enterprise proxies may timeout and di
 
 AI generation typically uses streaming transmission (SSE), and a single generation may last tens of seconds. The WS proxy provides a more reliable underlying channel for streaming transmission.
 
+## Internal Dispatch Mechanism
+
+The WS proxy uses `app.handle()` for internal request dispatch instead of HTTP self-fetch. This is a key architectural decision that affects how requests flow through the server.
+
+### app.handle() Dispatch
+
+When the WS proxy receives a generation request from a client, it constructs mock `http.IncomingMessage` and `http.ServerResponse` objects and dispatches them directly through Express via `app.handle(req, res, callback)` — no HTTP round-trip is involved.
+
+**Mock IncomingMessage**: Built with a `Readable` stream as the socket (required by Node's internal `_destroy`/`eos` plumbing). The request body is pushed into the stream and then `null` is pushed to signal end-of-body.
+
+**Mock ServerResponse**: Built with a `Writable` stream as the socket. All response output (`writeHead`, `setHeader`, `write`, `end`) is intercepted and forwarded to the WS client as `{ type: "head" }` and `{ type: "chunk" }` messages.
+
+### Why Not HTTP Self-Fetch
+
+A self-fetch through `localhost` HTTP would pass through all HTTP-level middleware, including Basic Auth. Since WS connections are already authenticated at the upgrade handshake, making the proxy re-authenticate each tunneled request would be redundant and could fail if the auth mechanism differs. `app.handle()` skips all HTTP middleware (including auth) while still running Express routing and app-level middleware, so the request reaches the correct handler without auth interference.
+
+### Cookie and CSRF Forwarding
+
+Cookies and the CSRF token are extracted from the WS connection context (the upgrade request headers and URL query parameters) and injected into the mock request headers. This ensures the dispatched request carries the same authentication context as the original WS connection, without requiring the client to re-send credentials per request.
+
+### Heartbeat and Keepalive
+
+To prevent spurious disconnects (code=1006) caused by NAT timeouts, idle proxies, or network switches, the server sends WebSocket protocol-level pings every 30 seconds. The application-level `ping`/`pong` message pair provides an additional keepalive layer. Both mechanisms ensure dead TCP connections are detected promptly, allowing the client to trigger reconnection before user-visible failures occur.
+
+### Stream Offset Recovery
+
+If a WS connection drops mid-stream, the backend keeps the internal dispatch running and buffers all response chunks. When the client reconnects and sends a `{ type: "resume", id, fromChunk }` message, buffered data starting at the specified offset is replayed and live streaming continues. This means even a brief network interruption does not lose content that has already been generated.
+
+### Job Cleanup
+
+Orphaned jobs (those with no WS connection attached) are cleaned up based on the `lastActivity` timestamp rather than `createdAt`. A job is considered stale if it has been idle (no chunks, no head, no end event) for longer than the orphan TTL, regardless of when it was created. Active jobs with a live WS connection are never killed by the cleanup interval.
+
 ## Reconnection and Recovery Capabilities
 
 The WS proxy has multiple built-in robustness mechanisms:

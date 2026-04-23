@@ -758,7 +758,9 @@ context.registerExtensionApi('my-plugin', {
 });
 ```
 
-### 查詢其他外掛的 API
+將一個API物件註冊到指定名稱下，供其他擴充功能透過`getExtensionApi`取得。如果同名API已被註冊，會在控制台輸出警告並覆蓋。
+
+### getExtensionApi
 
 ```js
 const api = context.getExtensionApi('other-plugin');
@@ -766,6 +768,12 @@ if (api) {
   api.doSomething();
 }
 ```
+
+按名稱取得其他擴充功能註冊的API物件。如果該名稱尚未註冊，返回`undefined`。
+
+### 典型用途
+
+擴充功能間通訊最常見的場景是解耦：一個擴充功能提供能力，另一個擴充功能消費能力，而不需要硬編碼依賴。例如，CardApp Studio透過`registerExtensionApi`將自身的編輯器API暴露出來，其他擴充功能可以在Studio就緒後直接呼叫。
 
 ## 事件系統
 

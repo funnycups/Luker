@@ -758,7 +758,9 @@ context.registerExtensionApi('my-plugin', {
 });
 ```
 
-### 查找其他插件的 API
+将一个API对象注册到指定名称下，供其他扩展通过`getExtensionApi`获取。如果同名API已被注册，会在控制台输出警告并覆盖。
+
+### getExtensionApi
 
 ```js
 const api = context.getExtensionApi('other-plugin');
@@ -766,6 +768,12 @@ if (api) {
   api.doSomething();
 }
 ```
+
+按名称获取其他扩展注册的API对象。如果该名称尚未注册，返回`undefined`。
+
+### 典型用途
+
+扩展间通信最常见的场景是解耦：一个扩展提供能力，另一个扩展消费能力，而不需要硬编码依赖。例如，CardApp Studio通过`registerExtensionApi`将自身的编辑器API暴露出来，其他扩展可以在Studio就绪后直接调用。
 
 ## 事件系统
 

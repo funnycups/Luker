@@ -164,23 +164,37 @@ The CardApp context object provides the following APIs:
 
 | API | Description |
 |-----|-------------|
-| `ctx.container` | The application's DOM container element |
-| `ctx.charId` | Current character ID |
-| `ctx.sendMessage(text, options?)` | Send a message |
+| `ctx.sendMessage(text, options?)` | Send a message. Internally uses `sendTextareaMessage` (writes to the send textarea and triggers the send flow), not `Generate` |
 | `ctx.stopGeneration()` | Stop current generation |
 | `ctx.continueGeneration()` | Continue generation |
+| `ctx.getHistory(limit?, offset?)` | Get chat message history. With `limit`, returns the most recent `limit` messages (offset from the end) |
+| `ctx.editMessage(messageId, newText)` | Edit a message by index and save |
+| `ctx.deleteMessage(messageId)` | Delete a message by index |
+| `ctx.deleteLastMessage()` | Delete the last message in the chat |
+| `ctx.swipe()` | Swipe to the next response variant |
+| `ctx.regenerate()` | Regenerate the last AI message. Internally uses `Generate('regenerate')` |
+
+#### Chat Management
+
+| API | Description |
+|-----|-------------|
+| `ctx.getChatList()` | Get all chats for the current character |
+| `ctx.switchChat(chatName)` | Switch to a different chat |
+| `ctx.newChat()` | Create a new chat |
+| `ctx.closeChat()` | Close the current chat |
 
 #### Data & State
 
 | API | Description |
 |-----|-------------|
+| `ctx.container` | The application's DOM container element |
+| `ctx.charId` | Current character ID |
 | `ctx.getCharacterData()` | Get current character data (read-only) |
 | `ctx.updateCharacterFields(fields)` | Update character fields and save. Supports name, description, personality, scenario, first_mes, mes_example, system_prompt, post_history_instructions, creator_notes, creator, character_version, tags (comma-separated string), talkativeness (number), depth_prompt fields |
 | `ctx.getChatState(namespace)` | Read chat-bound persisted state |
 | `ctx.setChatState(namespace, key, value)` | Set chat state |
 | `ctx.getVariable(key)` | Get chat variable |
 | `ctx.setVariable(key, value)` | Set chat variable |
-| `ctx.getChatList()` | Get the chat list for the current character |
 
 #### World Info Operations
 

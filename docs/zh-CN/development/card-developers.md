@@ -164,29 +164,43 @@ CardApp 的上下文对象提供以下 API：
 
 | API | 说明 |
 |-----|------|
-| `ctx.container` | 应用的 DOM 容器元素 |
-| `ctx.charId` | 当前角色 ID |
-| `ctx.sendMessage(text, options?)` | 发送消息 |
+| `ctx.container` | 应用的DOM容器元素 |
+| `ctx.charId` | 当前角色ID |
+| `ctx.sendMessage(text, options?)` | 发送消息（内部调用`sendTextareaMessage`） |
 | `ctx.stopGeneration()` | 停止当前生成 |
 | `ctx.continueGeneration()` | 继续生成 |
+| `ctx.getHistory(limit?, offset?)` | 获取聊天历史记录，支持限制条数和偏移 |
+| `ctx.editMessage(messageId, newText)` | 编辑指定消息 |
+| `ctx.deleteMessage(messageId)` | 删除指定消息 |
+| `ctx.deleteLastMessage()` | 删除最后一条消息 |
+| `ctx.swipe()` | 切换到下一个回复变体 |
+| `ctx.regenerate()` | 重新生成最后一条AI消息（调用`Generate('regenerate')`） |
 
 #### 数据与状态
 
 | API | 说明 |
 |-----|------|
 | `ctx.getCharacterData()` | 获取当前角色数据（只读） |
-| `ctx.updateCharacterFields(fields)` | 更新角色字段并保存。支持 name、description、personality、scenario、first_mes、mes_example、system_prompt、post_history_instructions、creator_notes、creator、character_version、tags（逗号分隔字符串）、talkativeness（数字）、depth_prompt 相关字段 |
+| `ctx.updateCharacterFields(fields)` | 更新角色字段并保存。支持name、description、personality、scenario、first_mes、mes_example、system_prompt、post_history_instructions、creator_notes、creator、character_version、tags（逗号分隔字符串）、talkativeness（数字）、depth_prompt相关字段 |
 | `ctx.getChatState(namespace)` | 读取聊天绑定的持久化状态 |
 | `ctx.setChatState(namespace, key, value)` | 设置聊天状态 |
 | `ctx.getVariable(key)` | 获取聊天变量 |
-| `ctx.setVariable(key, value)` | 设置聊天变量 |
+| `ctx.setVariable(key, value)` | 设置聊天变量并持久化 |
+
+#### 聊天管理
+
+| API | 说明 |
+|-----|------|
 | `ctx.getChatList()` | 获取当前角色的聊天列表 |
+| `ctx.switchChat(chatName)` | 切换到指定聊天 |
+| `ctx.newChat()` | 创建新聊天 |
+| `ctx.closeChat()` | 关闭当前聊天 |
 
 #### 世界书操作
 
 | API | 说明 |
 |-----|------|
-| `ctx.getWorldBooks()` | 获取当前角色关联的世界书名称列表（角色绑定 + 全局激活） |
+| `ctx.getWorldBooks()` | 获取当前角色关联的世界书名称列表（角色绑定+全局激活） |
 | `ctx.getWorldBookEntries(bookName)` | 获取指定世界书的所有条目 |
 | `ctx.createWorldBookEntry(bookName, fields?)` | 创建世界书条目，返回新条目对象（含 uid） |
 | `ctx.updateWorldBookEntry(bookName, uid, patch)` | 更新世界书条目（浅合并） |

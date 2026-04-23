@@ -43,6 +43,28 @@ WS 代理內建了多項健壯性機制：
 
 如果在 AI 生成過程中連線短暫中斷，WS 代理支援**串流偏移恢復**——重連後從斷點處繼續接收生成內容，而不是從頭開始。這意味著即使網路閃斷，你也不會遺失已經生成的內容。
 
+## 內部調度機制
+
+WS代理的伺服器端在轉發生成請求時，使用`app.handle()`直接調度Express路由，而非透過HTTP自請求訪問localhost。這種設計繞過了Basic Auth等HTTP層中介軟體，同時保留了cookie和CSRF令牌的轉發。
+
+### 工作原理
+
+1. 從WebSocket訊息中提取請求參數（URL、方法、請求標頭、請求體）
+2. 構造mock `http.IncomingMessage`——使用Readable流作為socket參數，透過`req.push()`注入請求體
+3. 構造mock `http.ServerResponse`——使用Writable流作為socket參數，確保cork/uncork/write/end完整生命週期正常運作
+4. 呼叫`app.handle(req, res, callback)`，請求直接進入Express路由，跳過所有HTTP層中介軟體
+5. 回應資料（狀態碼、回應標頭、串流chunk）透過WebSocket隧道回傳給用戶端
+
+### 為什麼不用self-fetch
+
+透過localhost HTTP自請求訪問時，請求會經過所有HTTP層中介軟體，包括Basic Auth。而WS代理的用戶端已經透過WebSocket完成了認證，再次經過Basic Auth會導致鑑權失敗。`app.handle()`直接在行程內調度，跳過了HTTP層但保留了Express應用層邏輯。
+
+### 連線健壯性
+
+- **心跳保活**：用戶端和伺服器端定期交換心跳訊息，防止中間網路裝置因空閒逾時斷開連線
+- **串流偏移恢復**：生成過程中如果連線短暫中斷，重連後可以從斷點繼續接收內容
+- **作業清理**：使用`lastActivity`時間戳檢測過期作業，而非`createdAt`，確保活躍中的長生成不會被誤清理
+
 ## 使用場景
 
 以下場景特別適合使用 WS 代理：

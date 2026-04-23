@@ -747,23 +747,59 @@ await context.setCharacterState('my-extension', null);
 | API | `getCharacterState` / `setCharacterState` | `getChatState` / `getChatStateBatch` / `updateChatState` / `deleteChatState` |
 | Storage Location | Character Card JSON file | Chat metadata |
 
-## Inter-Extension Communication
+## Extension API Registry
 
-### registerExtensionApi
+Extensions can register public APIs and consume other extensions' APIs through the `registerExtensionApi` / `getExtensionApi` mechanism. This provides a decoupled way for extensions to expose functionality without direct module imports.
+
+### registerExtensionApi(name, api)
+
+Registers a public API object under a unique name. If a name is already registered, a warning is logged to the console and the existing API is overwritten.
 
 ```js
-context.registerExtensionApi('my-plugin', {
+context.registerExtensionApi('my-extension', {
   doSomething: () => { /* ... */ },
   getData: () => myData,
+  onEvent: (callback) => { /* ... */ },
 });
 ```
 
-### Finding Another Plugin's API
+- **name** — A unique string identifier for the API (conventionally matches the extension's package name)
+- **api** — Any object that other extensions will interact with
+
+### getExtensionApi(name)
+
+Retrieves a previously registered API by name. Returns `undefined` if no API has been registered under that name.
 
 ```js
-const api = context.getExtensionApi('other-plugin');
+const api = context.getExtensionApi('my-extension');
 if (api) {
   api.doSomething();
+}
+```
+
+Both methods are available on the context object returned by `getContext()`:
+
+```js
+const context = Luker.getContext();
+context.registerExtensionApi('name', apiObj);
+context.getExtensionApi('name');
+```
+
+### Typical Usage
+
+A common pattern is for an extension to register its API during initialization so other extensions can consume it:
+
+```js
+// In extension A's init code:
+context.registerExtensionApi('card-app', {
+  getActiveApp: () => activeApp,
+  sendMessage: (text) => { /* ... */ },
+});
+
+// In extension B's init code:
+const cardApp = context.getExtensionApi('card-app');
+if (cardApp) {
+  const app = cardApp.getActiveApp();
 }
 ```
 

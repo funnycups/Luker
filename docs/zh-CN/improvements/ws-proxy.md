@@ -43,6 +43,28 @@ WS 代理内置了多项健壮性机制：
 
 如果在 AI 生成过程中连接短暂中断，WS 代理支持**流偏移恢复**——重连后从断点处继续接收生成内容，而不是从头开始。这意味着即使网络闪断，你也不会丢失已经生成的内容。
 
+## 内部调度机制
+
+WS代理的服务端在转发生成请求时，使用`app.handle()`直接调度Express路由，而非通过HTTP自请求访问localhost。这种设计绕过了Basic Auth等HTTP层中间件，同时保留了cookie和CSRF令牌的转发。
+
+### 工作原理
+
+1. 从WebSocket消息中提取请求参数（URL、方法、请求头、请求体）
+2. 构造mock `http.IncomingMessage`——使用Readable流作为socket参数，通过`req.push()`注入请求体
+3. 构造mock `http.ServerResponse`——使用Writable流作为socket参数，确保cork/uncork/write/end完整生命周期正常运作
+4. 调用`app.handle(req, res, callback)`，请求直接进入Express路由，跳过所有HTTP层中间件
+5. 响应数据（状态码、响应头、流式chunk）通过WebSocket隧道回传给客户端
+
+### 为什么不用self-fetch
+
+通过localhost HTTP自请求访问时，请求会经过所有HTTP层中间件，包括Basic Auth。而WS代理的客户端已经通过WebSocket完成了认证，再次经过Basic Auth会导致鉴权失败。`app.handle()`直接在进程内调度，跳过了HTTP层但保留了Express应用层逻辑。
+
+### 连接健壮性
+
+- **心跳保活**：客户端和服务端定期交换心跳消息，防止中间网络设备因空闲超时断开连接
+- **流偏移恢复**：生成过程中如果连接短暂中断，重连后可以从断点继续接收内容
+- **作业清理**：使用`lastActivity`时间戳检测过期作业，而非`createdAt`，确保活跃中的长生成不会被误清理
+
 ## 使用场景
 
 以下场景特别适合使用 WS 代理：
