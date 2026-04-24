@@ -3613,8 +3613,16 @@ async function postChatCompletionGenerateRequest(requestBody, signal, { quietErr
     });
 
     if (!response.ok) {
-        tryParseStreamingError(response, await response.text(), { quiet: quietErrors });
-        throw new Error(`Got response status ${response.status}`);
+        const responseBody = await response.text();
+        tryParseStreamingError(response, responseBody, { quiet: quietErrors });
+        console.error(`[openai] ${response.status} from ${response.url}`, {
+            status: response.status,
+            statusText: response.statusText,
+            url: response.url,
+            responseHeaders: Object.fromEntries(response.headers.entries()),
+            body: responseBody.substring(0, 500),
+        });
+        throw new Error(`Got response status ${response.status} from ${response.url}: ${responseBody.substring(0, 200)}`);
     }
 
     return response;
