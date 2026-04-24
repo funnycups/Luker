@@ -102,16 +102,23 @@ Luker 同样支持 Discord OAuth 登录，并提供更细粒度的访问控制�
 
 ## 白名单
 
-Luker 默认启用 IP 白名单模式，仅允许本机访问：
+Luker 默认启用 IP 白名单模式，且 `listen` 默认为 `false`（仅监听本机回环地址），局域网无法直接访问。如需局域网访问，需要同时做两件事：
+
+1. **开启监听** — 将 `listen` 设为 `true`，使 Luker 监听所有网络接口：
+
+```yaml
+listen: true
+```
+
+2. **配置白名单** — 将对应 IP 加入 `whitelist` 列表，或关闭 `whitelistMode`：
 
 ```yaml
 whitelistMode: true
 whitelist:
-  - ::1
-  - 127.0.0.1
+- ::1
+- 127.0.0.1
+- 192.168.1.0/24  # 你的局域网网段
 ```
-
-如需局域网访问，将对应 IP 加入 `whitelist` 列表，或关闭 `whitelistMode`。
 
 此外，Luker 还支持主机白名单（`hostWhitelist`），可以限制允许访问的主机地址，并支持自动扫描局域网主机。
 

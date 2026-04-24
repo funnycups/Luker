@@ -102,16 +102,23 @@ Administrators can set quotas individually for each user in the frontend admin p
 
 ## Whitelist
 
-Luker enables IP whitelist mode by default, allowing only local access:
+Luker enables IP whitelist mode by default, and `listen` defaults to `false` (only listening on the loopback address), so LAN devices cannot connect directly. To allow LAN access, you need to do two things:
+
+1. **Enable listening** — Set `listen` to `true` so that Luker listens on all network interfaces:
+
+```yaml
+listen: true
+```
+
+2. **Configure the whitelist** — Add the corresponding IPs to the `whitelist` list, or disable `whitelistMode`:
 
 ```yaml
 whitelistMode: true
 whitelist:
-  - ::1
-  - 127.0.0.1
+- ::1
+- 127.0.0.1
+- 192.168.1.0/24  # your LAN subnet
 ```
-
-To allow LAN access, add the corresponding IPs to the `whitelist` list, or disable `whitelistMode`.
 
 Luker also supports a host whitelist (`hostWhitelist`) that can restrict allowed host addresses and supports automatic LAN host scanning.
 

@@ -102,16 +102,23 @@ Luker 同樣支援 Discord OAuth 登入，並提供更細緻的存取控制—�
 
 ## 白名單
 
-Luker 預設啟用 IP 白名單模式，僅允許本機存取：
+Luker 預設啟用 IP 白名單模式，且 `listen` 預設為 `false`（僅監聽本機回環地址），區域網路無法直接存取。如需區域網路存取，需要同時做兩件事：
+
+1. **開啟監聽** — 將 `listen` 設為 `true`，使 Luker 監聽所有網路介面：
+
+```yaml
+listen: true
+```
+
+2. **設定白名單** — 將對應 IP 加入 `whitelist` 列表，或關閉 `whitelistMode`：
 
 ```yaml
 whitelistMode: true
 whitelist:
-  - ::1
-  - 127.0.0.1
+- ::1
+- 127.0.0.1
+- 192.168.1.0/24  # 你的區域網路網段
 ```
-
-如需區域網路存取，將對應 IP 加入 `whitelist` 列表，或關閉 `whitelistMode`。
 
 此外，Luker 還支援主機白名單（`hostWhitelist`），可以限制允許存取的主機地址，並支援自動掃描區域網路主機。
 
