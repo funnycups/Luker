@@ -32,7 +32,8 @@ const basicAuthMiddleware = async function (request, response, callback) {
     }
 
     const unauthorizedWebpage = safeReadFileSync('./public/error/unauthorized.html') ?? '';
-    const unauthorizedResponse = (res) => {
+    const unauthorizedResponse = (res, reason = 'no_credentials') => {
+        console.warn(`[basicAuth] 401 rejected: ${reason} path=${res.req?.path} ip=${res.req?.ip}`);
         res.set('WWW-Authenticate', 'Basic realm="Luker", charset="UTF-8"');
         return res.status(401).send(unauthorizedWebpage);
     };
@@ -42,13 +43,13 @@ const basicAuthMiddleware = async function (request, response, callback) {
     const authHeader = request.headers.authorization;
 
     if (!authHeader) {
-        return unauthorizedResponse(response);
+        return unauthorizedResponse(response, 'missing_authorization');
     }
 
     const [scheme, credentials] = authHeader.split(' ');
 
     if (scheme !== 'Basic' || !credentials) {
-        return unauthorizedResponse(response);
+        return unauthorizedResponse(response, 'invalid_scheme');
     }
 
     const usePerUserAuth = PER_USER_BASIC_AUTH && ENABLE_ACCOUNTS;
