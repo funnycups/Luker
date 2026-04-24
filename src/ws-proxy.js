@@ -348,6 +348,7 @@ async function startJob(ws, msg, ctx) {
         mockSocket.writable = false;
         mockSocket.destroyed = false;
         mockSocket.destroy = function () { this.destroyed = true; this.push(null); };
+        mockSocket.remoteAddress = '127.0.0.1';
 
         const req = new http.IncomingMessage(mockSocket);
         req.method = method || 'POST';
