@@ -3663,6 +3663,8 @@
     "Prompt order updated.": "提示词顺序已更新。",
     "Prompt removed from order.": "提示词已从顺序中移除。",
     "Prompts removed from order.": "提示词已从顺序中移除。",
+    "WS Proxy": "WS 代理",
+    "WebSocket connection failed. Request will fall back to HTTP (possibly due to authentication failure).": "WebSocket 连接失败，请求将回退到 HTTP（可能因鉴权失败）。",
     "Warn before closing/reloading this page.": "关闭或刷新页面前提示确认。",
     "Leave-page confirmation": "离开页面确认",
     "Only when risky": "仅在有风险时",

@@ -76,6 +76,14 @@
         return arr;
     }
 
+    function i18n(text) {
+        const translateFn = /** @type {any} */ (globalThis.translate);
+        if (typeof translateFn === 'function') {
+            return translateFn(text, text);
+        }
+        return text;
+    }
+
     // ── CSRF Token ──────────────────────────────────────────────────
 
     async function fetchCsrfToken() {
@@ -358,6 +366,9 @@
         const connected = await waitForConnection(3000);
         if (!connected) {
             console.warn('[ws-proxy] WS not connected, falling back to HTTP');
+            if (typeof toastr !== 'undefined') {
+                toastr.error(i18n('WebSocket connection failed. Request will fall back to HTTP (possibly due to authentication failure).'), i18n('WS Proxy'));
+            }
             return originalFetch.apply(this, arguments);
         }
 

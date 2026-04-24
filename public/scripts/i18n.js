@@ -127,6 +127,11 @@ export function translate(text, key = null) {
     return localeData?.[translationKey] || text;
 }
 
+// Expose i18n helpers for early-loaded classic scripts (e.g. ws-fetch-proxy.js)
+// that cannot import ESM modules directly.
+globalThis.t = t;
+globalThis.translate = translate;
+
 /**
  * Fetches the raw locale data for the given language.
  * @param {string} language Language code

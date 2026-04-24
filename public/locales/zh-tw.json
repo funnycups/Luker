@@ -3640,6 +3640,8 @@
     "Prompt import complete.": "提示詞匯入完成。",
     "Proxy Deleted": "代理已刪除",
     "Proxy Saved": "代理已儲存",
+    "WS Proxy": "WS 代理",
+    "WebSocket connection failed. Request will fall back to HTTP (possibly due to authentication failure).": "WebSocket 連線失敗，請求將回退到 HTTP（可能因驗證失敗）。",
     "Proxy preset '${value}' not found": "未找到代理預設 '${value}'",
     "Proxy preset '${0}' not found": "未找到代理預設 '${0}'",
     "Proxy preset '${value}' not found in proxies array.": "在代理列表中未找到代理預設 '${value}'。",

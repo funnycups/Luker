@@ -105,11 +105,12 @@ function cleanupJobs() {
  */
 function handleConnection(ws, req) {
     const cookie = req.headers.cookie || '';
+    const authorization = req.headers.authorization || '';
     const upgradeUrl = new URL(req.url, `http://${req.headers.host}`);
     const csrfToken = upgradeUrl.searchParams.get('csrf') || '';
     const originalHost = req.headers.host || 'localhost';
 
-    const ctx = { cookie, csrfToken, originalHost };
+    const ctx = { cookie, authorization, csrfToken, originalHost };
 
     /** Track which job IDs this connection owns */
     const ownedJobs = new Set();
@@ -358,6 +359,9 @@ async function startJob(ws, msg, ctx) {
         const reqHeaders = { ...clientHeaders };
         reqHeaders['host'] = ctx.originalHost;
         if (ctx.cookie) reqHeaders['cookie'] = ctx.cookie;
+        if (!reqHeaders['authorization'] && !reqHeaders['Authorization'] && ctx.authorization) {
+            reqHeaders['authorization'] = ctx.authorization;
+        }
         if (!reqHeaders['x-csrf-token'] && !reqHeaders['X-CSRF-Token'] && ctx.csrfToken) {
             reqHeaders['x-csrf-token'] = ctx.csrfToken;
         }
