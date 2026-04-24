@@ -70,8 +70,9 @@ const basicAuthMiddleware = async function (request, response, callback) {
                 }
             }
         }
+        return unauthorizedResponse(response, 'wrong_user_credentials');
     }
-    return unauthorizedResponse(response);
+    return unauthorizedResponse(response, 'wrong_credentials');
 };
 
 export default basicAuthMiddleware;
