@@ -4928,5 +4928,14 @@
     "Jina API Key": "Jina API 密钥",
     "Rerank API URL": "重排序 API 地址",
     "Rerank API Key": "重排序 API 密钥",
-    "Hint: Uses the same Cohere API key from API Connections.": "提示：使用 API 连接中相同的 Cohere API 密钥。"
+    "Hint: Uses the same Cohere API key from API Connections.": "提示：使用 API 连接中相同的 Cohere API 密钥。",
+    "Group Edit": "分组编辑",
+    "selected": "已选",
+    "Selection not contiguous": "选中项不连续",
+    "Toggle selected prompts on/off": "开关选中提示词",
+    "Toggle Selected": "开关选中",
+    "Mark selected as extra": "标记选中项为Extra",
+    "Mark Extra": "标记Extra",
+    "Remove selected from list": "从列表移除选中项",
+    "Remove Selected": "移除选中"
 }

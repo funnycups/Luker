@@ -866,6 +866,13 @@ li.prompt-manager-group.expanded .prompt-manager-group-toggle {
     gap: 0.35em;
 }
 
+.prompt-manager-group-edit-separator {
+    width: 1px;
+    height: 1.2em;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 30%, transparent);
+    margin: 0 0.15em;
+}
+
 /* Checkbox in edit mode */
 .prompt-manager-group-select {
     cursor: pointer;

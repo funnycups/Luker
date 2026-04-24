@@ -3776,6 +3776,19 @@ class PromptManager {
                     <span class="prompt-manager-group-edit-warning"></span>
                 </div>
                 <div class="prompt-manager-group-edit-toolbar-actions">
+                    <a class="menu_button prompt-manager-group-toggle-btn" title="Toggle selected prompts on/off" data-i18n="[title]Toggle selected prompts on/off">
+                        <span class="fa-solid fa-power-off"></span>
+                        <span data-i18n="Toggle Selected">Toggle Selected</span>
+                    </a>
+                    <a class="menu_button prompt-manager-group-extra-btn" title="Mark selected as extra" data-i18n="[title]Mark selected as extra">
+                        <span class="fa-solid fa-star"></span>
+                        <span data-i18n="Mark Extra">Mark Extra</span>
+                    </a>
+                    <a class="menu_button prompt-manager-group-remove-btn" title="Remove selected from list" data-i18n="[title]Remove selected from list">
+                        <span class="fa-solid fa-circle-minus"></span>
+                        <span data-i18n="Remove Selected">Remove Selected</span>
+                    </a>
+                    <span class="prompt-manager-group-edit-separator"></span>
                     <a class="menu_button prompt-manager-group-create-btn" title="Create group from selection" data-i18n="[title]Create group from selection">
                         <span class="fa-solid fa-folder-plus"></span>
                         <span data-i18n="Create Group">Create Group</span>
@@ -3794,6 +3807,9 @@ class PromptManager {
         const toolbar = container.querySelector('.prompt-manager-group-edit-toolbar');
         toolbar.querySelector('.prompt-manager-group-create-btn').addEventListener('click', () => this.handleCreateGroupFromSelection());
         toolbar.querySelector('.prompt-manager-group-cancel-btn').addEventListener('click', () => this.exitGroupEditMode());
+        toolbar.querySelector('.prompt-manager-group-toggle-btn').addEventListener('click', () => this.handleBatchToggle());
+        toolbar.querySelector('.prompt-manager-group-extra-btn').addEventListener('click', () => this.handleBatchExtra());
+        toolbar.querySelector('.prompt-manager-group-remove-btn').addEventListener('click', () => this.handleBatchRemove());
 
         this.updateGroupEditUI();
     }
@@ -3810,19 +3826,30 @@ class PromptManager {
         const countEl = toolbar.querySelector('.prompt-manager-group-edit-selected-count');
         const warningEl = toolbar.querySelector('.prompt-manager-group-edit-warning');
         const createBtn = toolbar.querySelector('.prompt-manager-group-create-btn');
+        const toggleBtn = toolbar.querySelector('.prompt-manager-group-toggle-btn');
+        const extraBtn = toolbar.querySelector('.prompt-manager-group-extra-btn');
+        const removeBtn = toolbar.querySelector('.prompt-manager-group-remove-btn');
 
-        if (countEl) countEl.textContent = count > 0 ? `${count} selected` : '';
+        if (countEl) countEl.textContent = count > 0 ? `${count} ${t`selected`}` : '';
 
         const isContiguous = count > 0 && this.areIdentifiersContiguous([...this._groupEditSelection]);
         const canCreate = count >= 2 && isContiguous;
+        const canAct = count >= 1;
 
         if (warningEl) {
-            warningEl.textContent = (count >= 2 && !isContiguous) ? '⚠ Selection not contiguous' : '';
+            warningEl.textContent = (count >= 2 && !isContiguous) ? `⚠ ${t`Selection not contiguous`}` : '';
         }
 
         if (createBtn) {
             createBtn.style.opacity = canCreate ? '1' : '0.4';
             createBtn.style.pointerEvents = canCreate ? '' : 'none';
+        }
+
+        for (const btn of [toggleBtn, extraBtn, removeBtn]) {
+            if (btn) {
+                btn.style.opacity = canAct ? '1' : '0.4';
+                btn.style.pointerEvents = canAct ? '' : 'none';
+            }
         }
     }
 
@@ -3869,10 +3896,111 @@ class PromptManager {
         toastr.success(t`Group "${result}" created.`);
         this.exitGroupEditMode();
         this.saveServiceSettings();
-    }
+        }
 
-    /**
-     * Handle renaming a group.
+        /**
+         * Batch toggle enabled/disabled for all selected prompts.
+         * If any selected prompt is disabled → enable all; otherwise → disable all.
+         */
+        handleBatchToggle() {
+            if (!this._groupEditSelection || this._groupEditSelection.size === 0) return;
+
+            const identifiers = [...this._groupEditSelection];
+            const promptOrder = this.getPromptOrderForCharacter(this.activeCharacter);
+
+            // Determine target state: if any is disabled, enable all; otherwise disable all
+            const hasDisabled = identifiers.some(id => {
+                const entry = promptOrder.find(e => e.identifier === id);
+                return entry && !entry.enabled;
+            });
+            const targetEnabled = hasDisabled;
+
+            let changedCount = 0;
+            for (const promptID of identifiers) {
+                const promptOrderEntry = promptOrder.find(e => e.identifier === promptID);
+                if (!promptOrderEntry || promptOrderEntry.enabled === targetEnabled) continue;
+
+                const wasEnabled = Boolean(promptOrderEntry.enabled);
+                promptOrderEntry.enabled = targetEnabled;
+                this.enqueueToggleUndo(promptID, wasEnabled, targetEnabled);
+                if (!this.updateToggleInPlace(promptID, targetEnabled)) {
+                    this.render();
+                }
+                changedCount++;
+            }
+
+            if (changedCount > 0) {
+                this.updateTokenDisplayDebounced();
+                this.saveServiceSettings();
+                this.updateGroupEditUI();
+            }
+        }
+
+        /**
+         * Batch toggle plugin_extra for all selected prompts.
+         * If any selected prompt is not extra → mark all extra; otherwise → unmark all.
+         */
+        handleBatchExtra() {
+            if (!this._groupEditSelection || this._groupEditSelection.size === 0) return;
+
+            const identifiers = [...this._groupEditSelection];
+
+            // Determine target state: if any is not extra, mark all; otherwise unmark all
+            const hasNonExtra = identifiers.some(id => !this.isPromptPluginExtra(id));
+            const targetExtra = hasNonExtra;
+
+            let changedCount = 0;
+            for (const promptID of identifiers) {
+                const current = this.isPromptPluginExtra(promptID);
+                if (current === targetExtra) continue;
+
+                this.setPromptPluginExtra(promptID, targetExtra);
+                if (!this.updatePluginExtraInPlace(promptID, targetExtra)) {
+                    this.render();
+                }
+                changedCount++;
+            }
+
+            if (changedCount > 0) {
+                this.saveServiceSettings();
+                this.updateGroupEditUI();
+            }
+        }
+
+        /**
+         * Batch remove (detach) all selected prompts from the order list.
+         */
+        handleBatchRemove() {
+            if (!this._groupEditSelection || this._groupEditSelection.size === 0) return;
+            if (null === this.activeCharacter) return;
+
+            const identifiers = [...this._groupEditSelection];
+            let removedCount = 0;
+
+            for (const promptID of identifiers) {
+                const prompt = this.getPromptById(promptID);
+                if (!prompt) continue;
+
+                const detached = this.detachPrompt(prompt, this.activeCharacter);
+                if (!detached) continue;
+
+                this.enqueueDetachUndo(promptID, detached.entry, detached.index);
+                if (!this.removePromptItemInPlace(promptID)) {
+                    this.render();
+                }
+                removedCount++;
+            }
+
+            if (removedCount > 0) {
+                this._groupEditSelection.clear();
+                this.updateTokenDisplayDebounced();
+                this.saveServiceSettings();
+                this.updateGroupEditUI();
+            }
+        }
+
+        /**
+        * Handle renaming a group.
      * @param {string} groupId
      */
     async handleGroupRename(groupId) {
