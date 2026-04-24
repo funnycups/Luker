@@ -2852,6 +2852,10 @@ function updateGenerationIndicator() {
     const clearGenerationToast = () => {
         console.debug('SD: clearGenerationToast called, generationToast=', generationToast ? 'exists' : 'null');
         if (generationToast) {
+            // Blur any focused element inside the toast to prevent toastr.clear()
+            // from silently skipping removal (toastr checks :focus before hiding)
+            const focused = $(generationToast).find(':focus');
+            if (focused.length) focused.trigger('blur');
             toastr.clear(generationToast);
             generationToast = null;
             console.debug('SD: generationToast cleared and set to null');
