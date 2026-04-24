@@ -2856,14 +2856,6 @@ function updateGenerationIndicator() {
             generationToast = null;
             console.debug('SD: generationToast cleared and set to null');
         }
-
-        $('.sd_generation_abort_btn').each((_, button) => {
-            const toastElement = $(button).closest('.toast');
-            if (toastElement.length) {
-                console.debug('SD: clearing orphaned abort toast button');
-                toastr.clear(toastElement);
-            }
-        });
     };
 
     if (activeGenerations > 0) {
@@ -2883,9 +2875,6 @@ function updateGenerationIndicator() {
                     extendedTimeOut: 0,
                     tapToDismiss: false,
                     escapeHtml: false,
-                    onHidden: () => {
-                        generationToast = null;
-                    },
                 },
             );
         } else {
