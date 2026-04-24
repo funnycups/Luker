@@ -347,7 +347,7 @@ async function startJob(ws, msg, ctx) {
         mockSocket.readable = true;
         mockSocket.writable = false;
         mockSocket.destroyed = false;
-        mockSocket.destroy = function () { this.destroyed = true; this.push(null); };
+        mockSocket.destroy = function () { this.destroyed = true; };
         mockSocket.remoteAddress = '127.0.0.1';
 
         const req = new http.IncomingMessage(mockSocket);
@@ -373,6 +373,12 @@ async function startJob(ws, msg, ctx) {
         if (bodyStr != null) {
             req.push(bodyStr, 'utf8');
         }
+        // Mark the request as complete before signalling end-of-stream.
+        // Without this, IncomingMessage._destroy() sees readableEnded=true but
+        // complete=false (mock sockets bypass the HTTP parser, which normally
+        // sets complete=true), fires the 'aborted' event, and
+        // bindRequestCloseAbort kills the upstream request with a 502.
+        req.complete = true;
         req.push(null); // signal end of body
 
         // Create mock response that feeds into our WS pipeline
