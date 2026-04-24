@@ -57,6 +57,11 @@ function styleRegexDragPlaceholder(ui) {
     });
 }
 
+function getRegexSortableDelay() {
+    // Keep desktop behavior from utils, but avoid very long touch hold on mobile.
+    return Math.min(getSortableDelay(), 180);
+}
+
 function summarizeRegexScriptForLog(script) {
     if (!script || typeof script !== 'object') {
         return null;
@@ -1706,11 +1711,11 @@ async function onRegexDebuggerOpenClick() {
     populateDebuggerRuleList(debuggerHtml);
 
     // @ts-ignore
-    debuggerHtml.find('#regex_debugger_rules_global').sortable({ delay: getSortableDelay() }).disableSelection();
+    debuggerHtml.find('#regex_debugger_rules_global').sortable({ delay: getRegexSortableDelay() }).disableSelection();
     // @ts-ignore
-    debuggerHtml.find('#regex_debugger_rules_scoped').sortable({ delay: getSortableDelay() }).disableSelection();
+    debuggerHtml.find('#regex_debugger_rules_scoped').sortable({ delay: getRegexSortableDelay() }).disableSelection();
     // @ts-ignore
-    debuggerHtml.find('#regex_debugger_rules_preset').sortable({ delay: getSortableDelay() }).disableSelection();
+    debuggerHtml.find('#regex_debugger_rules_preset').sortable({ delay: getRegexSortableDelay() }).disableSelection();
 
     debuggerHtml.find('#regex_debugger_run_test').on('click', function () {
         const allScripts = debuggerHtml.data('allScripts');
@@ -1811,11 +1816,11 @@ async function onRegexDebuggerOpenClick() {
         const currentPopupContent = $('div:has(> #regex_debugger_rules)');
         populateDebuggerRuleList(currentPopupContent);
         // @ts-ignore
-        currentPopupContent.find('#regex_debugger_rules_global').sortable({ delay: getSortableDelay() }).disableSelection();
+        currentPopupContent.find('#regex_debugger_rules_global').sortable({ delay: getRegexSortableDelay() }).disableSelection();
         // @ts-ignore
-        currentPopupContent.find('#regex_debugger_rules_scoped').sortable({ delay: getSortableDelay() }).disableSelection();
+        currentPopupContent.find('#regex_debugger_rules_scoped').sortable({ delay: getRegexSortableDelay() }).disableSelection();
         // @ts-ignore
-        currentPopupContent.find('#regex_debugger_rules_preset').sortable({ delay: getSortableDelay() }).disableSelection();
+        currentPopupContent.find('#regex_debugger_rules_preset').sortable({ delay: getRegexSortableDelay() }).disableSelection();
     });
 
     debuggerHtml.find('#regex_debugger_expand_steps').on('click', function () {
@@ -2491,7 +2496,7 @@ jQuery(async () => {
     for (const { selector, setter, getter } of sortableDatas) {
         // @ts-ignore
         $(selector).sortable({
-            delay: getSortableDelay(),
+            delay: getRegexSortableDelay(),
             handle: '.regex-script-handle',
             helper: (_event, ui) => buildRegexDragHelper(ui),
             appendTo: document.body,
@@ -2524,6 +2529,11 @@ jQuery(async () => {
                 await loadRegexScripts();
             },
         });
+
+        // Suppress native long-press context menu on drag handles.
+        $(selector)
+            .off('contextmenu.regexHandle', '.regex-script-handle')
+            .on('contextmenu.regexHandle', '.regex-script-handle', (event) => event.preventDefault());
     }
 
     $('#regex_scoped_toggle').on('input', function () {

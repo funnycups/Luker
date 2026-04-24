@@ -612,6 +612,9 @@
 #completion_prompt_manager #completion_prompt_manager_list .completion_prompt_manager_prompt .prompt-manager-marker-handle {
     cursor: grab;
     touch-action: none;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
     user-select: none;
 }
 

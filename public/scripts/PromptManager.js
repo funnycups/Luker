@@ -4175,7 +4175,9 @@ class PromptManager {
         // Don't enable drag in group edit mode
         if (this._groupEditMode) return;
 
-        $(`#${this.configuration.prefix}prompt_manager_list`).sortable({
+        const listSelector = `#${this.configuration.prefix}prompt_manager_list`;
+
+        $(listSelector).sortable({
             delay: this.configuration.sortableDelay,
             handle: '.prompt-manager-marker-handle',
             items: `.${this.configuration.prefix}prompt_manager_prompt_draggable`,
@@ -4209,6 +4211,11 @@ class PromptManager {
                 this.saveServiceSettings();
             },
         });
+
+        // Suppress native long-press context menu on drag handles.
+        $(listSelector)
+            .off('contextmenu.promptManagerHandle', '.prompt-manager-marker-handle')
+            .on('contextmenu.promptManagerHandle', '.prompt-manager-marker-handle', (event) => event.preventDefault());
     }
 
     /**
