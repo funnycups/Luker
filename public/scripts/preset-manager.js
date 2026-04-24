@@ -404,6 +404,9 @@ function registerPresetManagers() {
                 presetGroupCallbacks: {
                     getGroups: () => primaryManager.getPresetGroups(),
                     getGroupForPreset: (name) => primaryManager.getGroupForPreset(name),
+                    rebuild: () => {
+                        primaryManager.rebuildSelectWithGroups();
+                    },
                     createGroup: async (name) => {
                         const id = primaryManager.createPresetGroup(name);
                         primaryManager.rebuildSelectWithGroups();

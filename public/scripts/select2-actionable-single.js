@@ -1,3 +1,5 @@
+import { t } from './i18n.js';
+
 let actionableSingleSelectCounter = 0;
 
 /** @type {Map<string, Set<string>>} ownerKey -> collapsed group IDs (session-only) */
@@ -33,6 +35,15 @@ function isDeleteButtonTarget(target, ownerKey) {
     }
 
     const button = target.closest('.luker-action-select2-option__delete');
+    return button instanceof HTMLElement && button.dataset.lukerActionOwner === ownerKey;
+}
+
+function isGroupMenuButtonTarget(target, ownerKey) {
+    if (!(target instanceof Element)) {
+        return false;
+    }
+
+    const button = target.closest('.luker-action-select2-option__group');
     return button instanceof HTMLElement && button.dataset.lukerActionOwner === ownerKey;
 }
 
@@ -88,6 +99,19 @@ function applyCollapsedState(selectElement, collapsedGroups) {
 }
 
 /**
+ * Re-renders an already-open Select2 dropdown after options are rebuilt.
+ * @param {HTMLSelectElement} selectElement
+ */
+function refreshOpenDropdown(selectElement) {
+    const $select = $(selectElement);
+    const isOpen = $select.next('.select2-container').hasClass('select2-container--open');
+    if (isOpen) {
+        $select.select2('close');
+        $select.select2('open');
+    }
+}
+
+/**
  * Dismisses any open preset context menu.
  */
 function dismissContextMenu() {
@@ -96,13 +120,13 @@ function dismissContextMenu() {
 
 /**
  * Shows a context menu for a preset option.
- * @param {MouseEvent} event
+ * @param {MouseEvent|{x:number,y:number}} anchor
  * @param {string} presetName
  * @param {object} callbacks
  * @param {HTMLSelectElement} selectElement
  * @param {string} ownerKey
  */
-function showPresetContextMenu(event, presetName, callbacks, selectElement, ownerKey) {
+function showPresetContextMenu(anchor, presetName, callbacks, selectElement, ownerKey) {
     dismissContextMenu();
     if (!callbacks) return;
 
@@ -113,34 +137,45 @@ function showPresetContextMenu(event, presetName, callbacks, selectElement, owne
 
     // "New Group..." option
     const $newGroup = $('<div class="luker-preset-ctx-menu__item luker-preset-ctx-menu__item--new"></div>')
-        .html('<i class="fa-solid fa-folder-plus"></i> New Group...')
+        .html('<i class="fa-solid fa-folder-plus"></i> ' + t`New Preset Group...`)
         .on('click', async (e) => {
             e.stopPropagation();
             dismissContextMenu();
-            const name = prompt('Group name:');
+            const name = prompt(t`Preset group name:`);
             if (!name?.trim()) return;
             const groupId = await callbacks.createGroup(name.trim());
             if (groupId) {
                 await callbacks.addToGroup(presetName, groupId);
             }
+            refreshOpenDropdown(selectElement);
         });
     $menu.append($newGroup);
 
     // Existing groups
     if (groups.length > 0) {
         $menu.append('<div class="luker-preset-ctx-menu__divider"></div>');
+
+        if (currentGroup) {
+            const $current = $('<div class="luker-preset-ctx-menu__item luker-preset-ctx-menu__item--label"></div>')
+                .text(`${t`Current group`}: ${currentGroup.name}`);
+            $menu.append($current);
+        } else {
+            const $current = $('<div class="luker-preset-ctx-menu__item luker-preset-ctx-menu__item--label"></div>')
+                .text(t`Current group: Ungrouped`);
+            $menu.append($current);
+        }
+
         for (const group of groups) {
             const isActive = currentGroup?.id === group.id;
             const $item = $('<div class="luker-preset-ctx-menu__item"></div>')
-                .text(group.name)
+                .text(isActive ? `${t`In group`}: ${group.name}` : `${t`Move to group`}: ${group.name}`)
                 .toggleClass('luker-preset-ctx-menu__item--active', isActive)
                 .on('click', async (e) => {
                     e.stopPropagation();
                     dismissContextMenu();
-                    if (isActive) {
-                        await callbacks.removeFromGroup(presetName);
-                    } else {
+                    if (!isActive) {
                         await callbacks.addToGroup(presetName, group.id);
+                        refreshOpenDropdown(selectElement);
                     }
                 });
             if (isActive) {
@@ -154,20 +189,29 @@ function showPresetContextMenu(event, presetName, callbacks, selectElement, owne
     if (currentGroup) {
         $menu.append('<div class="luker-preset-ctx-menu__divider"></div>');
         const $remove = $('<div class="luker-preset-ctx-menu__item luker-preset-ctx-menu__item--remove"></div>')
-            .html('<i class="fa-solid fa-folder-minus"></i> Remove from Group')
+            .html('<i class="fa-solid fa-folder-minus"></i> ' + t`Remove from preset group`)
             .on('click', async (e) => {
                 e.stopPropagation();
                 dismissContextMenu();
                 await callbacks.removeFromGroup(presetName);
+                refreshOpenDropdown(selectElement);
             });
         $menu.append($remove);
+    } else if (groups.length === 0) {
+        $menu.append('<div class="luker-preset-ctx-menu__divider"></div>');
+        const $empty = $('<div class="luker-preset-ctx-menu__item luker-preset-ctx-menu__item--label"></div>')
+            .text(t`No preset groups yet`);
+        $menu.append($empty);
     }
 
     // Position and show
+    const x = anchor instanceof MouseEvent ? anchor.clientX : Number(anchor?.x ?? 0);
+    const y = anchor instanceof MouseEvent ? anchor.clientY : Number(anchor?.y ?? 0);
+
     $menu.css({
         position: 'fixed',
-        left: event.clientX + 'px',
-        top: event.clientY + 'px',
+        left: x + 'px',
+        top: y + 'px',
         zIndex: 99999,
     });
 
@@ -221,7 +265,7 @@ export function initActionableSingleSelect(select, {
 
     const previousNamespace = selectElement.dataset.lukerActionableSingleSelectNamespace;
     if (previousNamespace) {
-        $select.off(`select2:selecting${previousNamespace} select2:open${previousNamespace}`);
+        $select.off(`select2:selecting${previousNamespace} select2:opening${previousNamespace} select2:open${previousNamespace}`);
         $(document).off(`pointerdown${previousNamespace} mousedown${previousNamespace} mouseup${previousNamespace} touchstart${previousNamespace} touchend${previousNamespace} pointerup${previousNamespace} contextmenu${previousNamespace}`);
     }
 
@@ -292,6 +336,16 @@ export function initActionableSingleSelect(select, {
                 const label = $('<span class="luker-action-select2-option__label"></span>').text(optionData.text);
                 row.append(label);
 
+                if (presetGroupCallbacks) {
+                    const groupButton = $('<button type="button" class="luker-action-select2-option__group" tabindex="-1"><i class="fa-solid fa-folder-tree"></i></button>')
+                        .attr('title', t`Manage preset group`)
+                        .attr('aria-label', t`Manage preset group`)
+                        .attr('data-luker-action-owner', ownerKey)
+                        .attr('data-option-value', optionData.value)
+                        .attr('data-option-text', optionData.text);
+                    row.append(groupButton);
+                }
+
                 if (canDelete(optionData)) {
                     const deleteButton = $('<button type="button" class="luker-action-select2-option__delete" tabindex="-1"><i class="fa-solid fa-trash-can"></i></button>')
                         .attr('title', deleteButtonTitle)
@@ -306,22 +360,36 @@ export function initActionableSingleSelect(select, {
             }
 
             // === Ungrouped (original logic) ===
-            if (!option?.element || option.loading || optionData.value === '' || !canDelete(optionData)) {
+            if (!option?.element || option.loading || optionData.value === '') {
                 return $('<span></span>').text(String(option?.text || ''));
             }
 
             const row = $('<div class="luker-action-select2-option"></div>');
             const label = $('<span class="luker-action-select2-option__label"></span>').text(optionData.text);
-            const deleteButton = $('<button type="button" class="luker-action-select2-option__delete" tabindex="-1"><i class="fa-solid fa-trash-can"></i></button>');
+            row.append(label);
 
-            deleteButton
-                .attr('title', deleteButtonTitle)
-                .attr('aria-label', deleteButtonTitle)
-                .attr('data-luker-action-owner', ownerKey)
-                .attr('data-option-value', optionData.value)
-                .attr('data-option-text', optionData.text);
+            if (presetGroupCallbacks) {
+                const groupButton = $('<button type="button" class="luker-action-select2-option__group" tabindex="-1"><i class="fa-solid fa-folder-tree"></i></button>');
+                groupButton
+                    .attr('title', t`Manage preset group`)
+                    .attr('aria-label', t`Manage preset group`)
+                    .attr('data-luker-action-owner', ownerKey)
+                    .attr('data-option-value', optionData.value)
+                    .attr('data-option-text', optionData.text);
+                row.append(groupButton);
+            }
 
-            row.append(label, deleteButton);
+            if (canDelete(optionData)) {
+                const deleteButton = $('<button type="button" class="luker-action-select2-option__delete" tabindex="-1"><i class="fa-solid fa-trash-can"></i></button>');
+                deleteButton
+                    .attr('title', deleteButtonTitle)
+                    .attr('aria-label', deleteButtonTitle)
+                    .attr('data-luker-action-owner', ownerKey)
+                    .attr('data-option-value', optionData.value)
+                    .attr('data-option-text', optionData.text);
+                row.append(deleteButton);
+            }
+
             return row;
         },
         ...select2Options,
@@ -330,6 +398,14 @@ export function initActionableSingleSelect(select, {
     $select.next('.select2-container')
         .addClass('luker-action-select2')
         .addClass(containerCssClass);
+
+    $select
+        .off('select2:opening' + namespace)
+        .on('select2:opening' + namespace, function () {
+            if (presetGroupCallbacks && typeof presetGroupCallbacks.rebuild === 'function') {
+                presetGroupCallbacks.rebuild();
+            }
+        });
 
     // === select2:open - apply collapsed state & default-collapse new groups ===
     $select
@@ -355,6 +431,30 @@ export function initActionableSingleSelect(select, {
             // Apply after a microtask to let select2 finish rendering
             requestAnimationFrame(() => {
                 applyCollapsedState(selectElement, collapsedGroups);
+
+                if (presetGroupCallbacks) {
+                    const $dropdown = $select.data('select2')?.$dropdown;
+                    const $results = $dropdown?.find('.select2-results');
+                    if ($results?.length) {
+                        $results.find('.luker-preset-group-toolbar').remove();
+
+                        const $toolbar = $('<div class="luker-preset-group-toolbar"></div>');
+                        const $newGroupButton = $('<button type="button" class="luker-preset-group-toolbar__new"></button>')
+                            .html('<i class="fa-solid fa-folder-plus"></i> ' + t`New Preset Group...`)
+                            .on('click', async (event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+
+                                const name = prompt(t`Preset group name:`);
+                                if (!name?.trim()) return;
+                                await presetGroupCallbacks.createGroup(name.trim());
+                                refreshOpenDropdown(selectElement);
+                            });
+
+                        $toolbar.append($newGroupButton);
+                        $results.prepend($toolbar);
+                    }
+                }
             });
         });
 
@@ -367,6 +467,10 @@ export function initActionableSingleSelect(select, {
                 event.preventDefault();
                 return;
             }
+            if (isGroupMenuButtonTarget(originalTarget, ownerKey)) {
+                event.preventDefault();
+                return;
+            }
             if (isGroupHeaderTarget(originalTarget) || isGroupActionTarget(originalTarget)) {
                 event.preventDefault();
                 return;
@@ -376,7 +480,7 @@ export function initActionableSingleSelect(select, {
     // === Pointer events for delete buttons, group headers, group actions ===
     $(document)
         .off('pointerdown' + namespace + ' mousedown' + namespace + ' mouseup' + namespace + ' touchstart' + namespace + ' touchend' + namespace)
-        .on('pointerdown' + namespace + ' mousedown' + namespace + ' mouseup' + namespace + ' touchstart' + namespace + ' touchend' + namespace, '.luker-action-select2-option__delete, .luker-preset-group-header, .luker-preset-group-action', function (event) {
+        .on('pointerdown' + namespace + ' mousedown' + namespace + ' mouseup' + namespace + ' touchstart' + namespace + ' touchend' + namespace, '.luker-action-select2-option__delete, .luker-action-select2-option__group, .luker-preset-group-header, .luker-preset-group-action', function (event) {
             const $el = $(this);
             // Only handle events for our owner
             if ($el.data('lukerActionOwner') !== ownerKey && $el.closest('[data-luker-action-owner]').data('lukerActionOwner') !== ownerKey) {
@@ -387,10 +491,30 @@ export function initActionableSingleSelect(select, {
             event.stopPropagation();
         });
 
+    // === Group menu button handler ===
+    $(document)
+        .off('pointerup' + namespace + '.groupMenu')
+        .on('pointerup' + namespace + '.groupMenu', '.luker-action-select2-option__group', function (event) {
+            if ($(this).data('lukerActionOwner') !== ownerKey || !presetGroupCallbacks) {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+
+            const presetName = String($(this).data('optionText') ?? '').trim();
+            if (!presetName) {
+                return;
+            }
+
+            const rect = this.getBoundingClientRect();
+            showPresetContextMenu({ x: rect.right + 6, y: rect.top + rect.height / 2 }, presetName, presetGroupCallbacks, selectElement, ownerKey);
+        });
+
     // === Delete button handler ===
     $(document)
-        .off('pointerup' + namespace)
-        .on('pointerup' + namespace, '.luker-action-select2-option__delete', async function (event) {
+        .off('pointerup' + namespace + '.delete')
+        .on('pointerup' + namespace + '.delete', '.luker-action-select2-option__delete', async function (event) {
             if ($(this).data('lukerActionOwner') !== ownerKey || typeof onDelete !== 'function') {
                 return;
             }
@@ -472,7 +596,7 @@ export function initActionableSingleSelect(select, {
                 const group = groups.find(g => g.id === groupId);
                 if (!group) return;
 
-                const newName = prompt('Rename group:', group.name);
+                const newName = prompt(t`Rename preset group:`, group.name);
                 if (!newName?.trim() || newName.trim() === group.name) return;
 
                 if ($select.data('select2')) {
@@ -480,8 +604,9 @@ export function initActionableSingleSelect(select, {
                 }
 
                 await presetGroupCallbacks.renameGroup(groupId, newName.trim());
+                refreshOpenDropdown(selectElement);
             } else if (action === 'delete') {
-                if (!confirm('Delete this group? Presets will become ungrouped.')) return;
+                if (!confirm(t`Delete this preset group? Presets will become ungrouped.`)) return;
 
                 if ($select.data('select2')) {
                     $select.select2('close');
@@ -489,37 +614,8 @@ export function initActionableSingleSelect(select, {
 
                 collapsedGroups.delete(groupId);
                 await presetGroupCallbacks.deleteGroup(groupId);
+                refreshOpenDropdown(selectElement);
             }
         });
 
-    // === Context menu on preset options ===
-    if (presetGroupCallbacks) {
-        $(document)
-            .off('contextmenu' + namespace)
-            .on('contextmenu' + namespace, '.luker-action-select2-dropdown .select2-results__option', function (event) {
-                const $li = $(this);
-                const $content = $li.children().first();
-
-                // Only for selectable options (not headers)
-                if ($content.hasClass('luker-preset-group-header')) {
-                    return;
-                }
-
-                // Get the preset name from the label
-                const $label = $content.find('.luker-action-select2-option__label');
-                const presetName = $label.length ? $label.text().trim() : $content.text().trim();
-                if (!presetName) return;
-
-                // Check owner
-                const $owner = $content.find('[data-luker-action-owner]');
-                if ($owner.length && $owner.data('lukerActionOwner') !== ownerKey) {
-                    return;
-                }
-
-                event.preventDefault();
-                event.stopPropagation();
-
-                showPresetContextMenu(event.originalEvent, presetName, presetGroupCallbacks, selectElement, ownerKey);
-            });
-    }
 }

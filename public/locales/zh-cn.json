@@ -4939,5 +4939,16 @@
     "Remove selected from list": "从列表移除选中项",
     "Remove Selected": "移除选中",
     "Batch Edit": "批量编辑",
-    "Batch edit: toggle, mark extra, remove, or group prompts": "批量编辑：开关、标记Extra、移除或分组提示词"
+    "Batch edit: toggle, mark extra, remove, or group prompts": "批量编辑：开关、标记Extra、移除或分组提示词",
+    "Manage preset group": "管理预设分组",
+    "New Preset Group...": "新建预设分组...",
+    "Preset group name:": "预设分组名称：",
+    "Current group": "当前分组",
+    "Current group: Ungrouped": "当前分组：未分组",
+    "In group": "所在分组",
+    "Move to group": "移入分组",
+    "Remove from preset group": "从预设分组移出",
+    "No preset groups yet": "当前还没有预设分组",
+    "Rename preset group:": "重命名预设分组：",
+    "Delete this preset group? Presets will become ungrouped.": "删除此预设分组？组内预设将变为未分组。"
 }

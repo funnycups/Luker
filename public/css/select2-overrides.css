@@ -451,10 +451,41 @@ span.select2.select2-container .select2-selection__choice__remove:hover {
         transform var(--animation-duration-1x);
 }
 
+.luker-action-select2-option__group {
+    flex: 0 0 auto;
+    width: 1.85rem;
+    height: 1.85rem;
+    border: none;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: color-mix(in srgb, var(--SmartThemeBodyColor) 58%, transparent);
+    background: transparent;
+    cursor: pointer;
+    opacity: 0.72;
+    transition:
+        opacity var(--animation-duration-1x),
+        color var(--animation-duration-1x),
+        background-color var(--animation-duration-1x),
+        transform var(--animation-duration-1x);
+}
+
 .luker-action-select2-dropdown .select2-results__option--highlighted .luker-action-select2-option__delete,
 .luker-action-select2-dropdown .select2-results__option--selected .luker-action-select2-option__delete,
+.luker-action-select2-dropdown .select2-results__option--highlighted .luker-action-select2-option__group,
+.luker-action-select2-dropdown .select2-results__option--selected .luker-action-select2-option__group,
+.luker-action-select2-option__group:focus-visible,
 .luker-action-select2-option__delete:focus-visible {
     opacity: 1;
+}
+
+.luker-action-select2-option__group:hover,
+.luker-action-select2-option__group:focus-visible {
+    color: color-mix(in srgb, var(--SmartThemeQuoteColor) 85%, var(--SmartThemeBodyColor));
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 20%, transparent);
+    transform: scale(1.06);
+    outline: none;
 }
 
 .luker-action-select2-option__delete:hover,
@@ -583,6 +614,36 @@ span.select2.select2-container .select2-selection__choice__remove:hover {
     display: none !important;
 }
 
+/* ===== Preset Group: Dropdown Toolbar ===== */
+
+.luker-preset-group-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0.25rem 0.55rem 0.35rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 46%, transparent);
+    margin-bottom: 0.25rem;
+}
+
+.luker-preset-group-toolbar__new {
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 82%, transparent);
+    border-radius: 999px;
+    padding: 0.2rem 0.65rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: color-mix(in srgb, var(--SmartThemeQuoteColor) 85%, var(--SmartThemeBodyColor));
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 92%, transparent);
+    cursor: pointer;
+    transition: background-color var(--animation-duration-1x), color var(--animation-duration-1x), transform var(--animation-duration-1x);
+}
+
+.luker-preset-group-toolbar__new:hover,
+.luker-preset-group-toolbar__new:focus-visible {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 16%, var(--SmartThemeBlurTintColor));
+    color: var(--SmartThemeBodyColor);
+    transform: translateY(-1px);
+    outline: none;
+}
+
 /* ===== Preset Context Menu ===== */
 
 .luker-preset-ctx-menu {
@@ -619,6 +680,16 @@ span.select2.select2-container .select2-selection__choice__remove:hover {
 .luker-preset-ctx-menu__item--active {
     font-weight: 600;
     color: var(--SmartThemeQuoteColor);
+}
+
+.luker-preset-ctx-menu__item--label {
+    font-size: 0.78rem;
+    color: color-mix(in srgb, var(--SmartThemeBodyColor) 68%, transparent);
+    cursor: default;
+}
+
+.luker-preset-ctx-menu__item--label:hover {
+    background: transparent;
 }
 
 .luker-preset-ctx-menu__item--new {
