@@ -3388,9 +3388,9 @@ class PromptManager {
                     <span class="prompt-manager-group-count">(${group.identifiers.length})</span>
                 </span>
                 <span class="prompt-manager-group-actions">
-                    <span class="prompt-manager-group-rename fa-solid fa-pencil fa-xs" title="Rename group"></span>
-                    <span class="prompt-manager-group-ungroup fa-solid fa-object-ungroup fa-xs" title="Ungroup"></span>
-                    <span class="prompt-manager-group-toggle-all fa-solid ${toggleAllClass}" title="Toggle all in group"></span>
+                    <span class="prompt-manager-group-rename fa-solid fa-pencil fa-xs" title="Rename group" data-i18n="[title]Rename group"></span>
+                                <span class="prompt-manager-group-ungroup fa-solid fa-object-ungroup fa-xs" title="Ungroup" data-i18n="[title]Ungroup"></span>
+                                <span class="prompt-manager-group-toggle-all fa-solid ${toggleAllClass}" title="Toggle all in group" data-i18n="[title]Toggle all in group"></span>
                 </span>
                 <span class="prompt-manager-group-tokens">${displayTokens}</span>
             </li>
@@ -3530,8 +3530,8 @@ class PromptManager {
                             ${escapeHtml(group.name)}
                         </span>
                         <span class="prompt-manager-group-edit-label-actions">
-                            <span class="prompt-manager-group-edit-rename fa-solid fa-pencil fa-xs" title="Rename" data-pm-group-id="${escapeHtml(groupId)}"></span>
-                            <span class="prompt-manager-group-edit-dissolve fa-solid fa-object-ungroup fa-xs caution" title="Dissolve group" data-pm-group-id="${escapeHtml(groupId)}"></span>
+                            <span class="prompt-manager-group-edit-rename fa-solid fa-pencil fa-xs" title="Rename" data-i18n="[title]Rename" data-pm-group-id="${escapeHtml(groupId)}"></span>
+                                            <span class="prompt-manager-group-edit-dissolve fa-solid fa-object-ungroup fa-xs caution" title="Dissolve group" data-i18n="[title]Dissolve group" data-pm-group-id="${escapeHtml(groupId)}"></span>
                         </span>
                     </li>
                 `;

@@ -4809,5 +4809,10 @@
     "Remove from preset group": "從預設分組移出",
     "No preset groups yet": "目前尚未建立任何預設分組",
     "Rename preset group:": "重新命名預設分組：",
-    "Delete this preset group? Presets will become ungrouped.": "刪除此預設分組？分組內預設將變為未分組。"
+    "Delete this preset group? Presets will become ungrouped.": "刪除此預設分組？分組內預設將變為未分組。",
+    "Rename group": "重新命名分組",
+    "Ungroup": "取消分組",
+    "Toggle all in group": "開關分組內全部",
+    "Dissolve group": "解散分組",
+    "Create group from selection": "從選中項建立分組"
 }
