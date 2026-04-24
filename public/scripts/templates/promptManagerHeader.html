@@ -1,25 +1,30 @@
 <div class="range-block">
-    {{#if error}}
-        {{{errorDiv}}}
-    {{/if}}
-    <div class="{{prefix}}prompt_manager_header">
-        <div class="{{prefix}}prompt_manager_header_advanced">
-            <span data-i18n="Prompts">Prompts</span>
-            <span class="prompt-manager-group-header-btn fa-solid fa-object-group" id="{{prefix}}prompt_manager_group_btn" title="Manage prompt groups" data-i18n="[title]Manage prompt groups"></span>
-        </div>
-        <div><span data-i18n="Total Tokens:">Total Tokens:</span> {{totalActiveTokens}} </div>
+{{#if error}}
+{{{errorDiv}}}
+{{/if}}
+<div class="{{prefix}}prompt_manager_header">
+    <div class="{{prefix}}prompt_manager_header_advanced">
+        <span data-i18n="Prompts">Prompts</span>
     </div>
-    <div class="completion_prompt_manager_search">
-        <div class="completion_prompt_manager_search_controls">
-            <input id="{{prefix}}prompt_manager_search" class="text_pole" type="search" placeholder="Search prompts or placeholders..." data-i18n="[placeholder]Search prompts or placeholders..." />
-            <button type="button" id="{{prefix}}prompt_manager_search_help" class="menu_button prompt_manager_search_help_button" title="Search syntax help" data-i18n="[title]Search syntax help">
-                <i class="fa-solid fa-circle-question"></i>
-            </button>
-            <label class="checkbox_label prompt_manager_search_toggle_label" for="{{prefix}}prompt_manager_search_advanced" title="Enable advanced prompt search syntax such as quotes, OR, -, name:, content:, placeholder:, id:, source:, and role:." data-i18n="[title]Enable advanced prompt search syntax such as quotes, OR, -, name:, content:, placeholder:, id:, source:, and role:.">
-                <input id="{{prefix}}prompt_manager_search_advanced" type="checkbox" />
-                <small data-i18n="Advanced syntax">Advanced syntax</small>
-            </label>
-        </div>
+    <div class="{{prefix}}prompt_manager_header_right">
+        <a class="menu_button prompt-manager-group-header-btn" id="{{prefix}}prompt_manager_group_btn" title="Batch edit: toggle, mark extra, remove, or group prompts" data-i18n="[title]Batch edit: toggle, mark extra, remove, or group prompts">
+            <i class="fa-solid fa-list-check"></i>
+            <span data-i18n="Batch Edit">Batch Edit</span>
+        </a>
+        <span class="prompt-manager-header-token-count"><span data-i18n="Total Tokens:">Total Tokens:</span> {{totalActiveTokens}}</span>
     </div>
-    <ul id="{{prefix}}prompt_manager_list" class="text_pole"></ul>
+</div>
+<div class="completion_prompt_manager_search">
+    <div class="completion_prompt_manager_search_controls">
+        <input id="{{prefix}}prompt_manager_search" class="text_pole" type="search" placeholder="Search prompts or placeholders..." data-i18n="[placeholder]Search prompts or placeholders..." />
+        <button type="button" id="{{prefix}}prompt_manager_search_help" class="menu_button prompt_manager_search_help_button" title="Search syntax help" data-i18n="[title]Search syntax help">
+            <i class="fa-solid fa-circle-question"></i>
+        </button>
+        <label class="checkbox_label prompt_manager_search_toggle_label" for="{{prefix}}prompt_manager_search_advanced" title="Enable advanced prompt search syntax such as quotes, OR, -, name:, content:, placeholder:, id:, source:, and role:." data-i18n="[title]Enable advanced prompt search syntax such as quotes, OR, -, name:, content:, placeholder:, id:, source:, and role:.">
+            <input id="{{prefix}}prompt_manager_search_advanced" type="checkbox" />
+            <small data-i18n="Advanced syntax">Advanced syntax</small>
+        </label>
+    </div>
+</div>
+<ul id="{{prefix}}prompt_manager_list" class="text_pole"></ul>
 </div>

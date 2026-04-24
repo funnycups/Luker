@@ -4796,5 +4796,7 @@
     "Mark selected as extra": "標記選中項為Extra",
     "Mark Extra": "標記Extra",
     "Remove selected from list": "從列表移除選中項",
-    "Remove Selected": "移除選中"
+    "Remove Selected": "移除選中",
+    "Batch Edit": "批量編輯",
+    "Batch edit: toggle, mark extra, remove, or group prompts": "批量編輯：開關、標記Extra、移除或分組提示詞"
 }

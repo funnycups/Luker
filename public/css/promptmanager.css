@@ -835,18 +835,26 @@ li.prompt-manager-group.expanded .prompt-manager-group-toggle {
     border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor) 30%, transparent);
     border-radius: 6px;
     margin: 0.25em 0.25em 0.5em;
+    overflow: hidden;
+    min-width: 0;
 }
 
 .prompt-manager-group-edit-toolbar-info {
     display: flex;
+    flex-direction: row;
     align-items: center;
     gap: 0.5em;
     font-size: calc(var(--mainFontSize) * 0.9);
     font-weight: 600;
+    white-space: nowrap;
 }
 
 .prompt-manager-group-edit-toolbar-info .fa-object-group {
     color: var(--SmartThemeQuoteColor);
+}
+
+.prompt-manager-group-edit-label {
+    white-space: nowrap;
 }
 
 .prompt-manager-group-edit-selected-count {
@@ -864,6 +872,21 @@ li.prompt-manager-group.expanded .prompt-manager-group-toggle {
     display: flex;
     align-items: center;
     gap: 0.35em;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+.prompt-manager-group-edit-toolbar-actions .menu_button {
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.prompt-manager-group-edit-toolbar-actions .menu_button i {
+    margin-right: 0.25em;
+}
+
+.prompt-manager-group-edit-toolbar-actions .menu_button span {
+    white-space: nowrap;
 }
 
 .prompt-manager-group-edit-separator {
@@ -871,6 +894,7 @@ li.prompt-manager-group.expanded .prompt-manager-group-toggle {
     height: 1.2em;
     background: color-mix(in srgb, var(--SmartThemeQuoteColor) 30%, transparent);
     margin: 0 0.15em;
+    flex-shrink: 0;
 }
 
 /* Checkbox in edit mode */
@@ -912,16 +936,38 @@ li.prompt-manager-group.expanded .prompt-manager-group-toggle {
 /* Group header button in prompt manager header */
 .prompt-manager-group-header-btn {
     cursor: pointer;
-    opacity: 0.5;
-    transition: opacity var(--animation-duration-2x);
     font-size: calc(var(--mainFontSize) * 0.9);
-    padding: 0.15em 0.3em;
+    padding: 0.15em 0.5em;
     border-radius: 4px;
+    display: inline-flex !important;
+    flex-direction: row !important;
+    align-items: center;
+    gap: 0.3em;
+    color: var(--SmartThemeQuoteColor);
+    text-decoration: none;
+    white-space: nowrap;
+    flex-shrink: 0;
+    margin: 0;
+    width: auto !important;
 }
 
-.prompt-manager-group-header-btn:hover {
-    opacity: 1;
-    background: color-mix(in srgb, var(--SmartThemeBodyColor) 8%, transparent);
+.prompt-manager-group-header-btn span {
+    flex-direction: row !important;
+    white-space: nowrap;
+}
+
+.prompt-manager-header-right {
+    display: flex;
+    flex-direction: row !important;
+    align-items: center;
+    gap: 0.5em;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.prompt-manager-header-token-count {
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 /* Group toggle-all active state */

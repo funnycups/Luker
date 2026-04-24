@@ -3770,31 +3770,28 @@ class PromptManager {
         const toolbarHtml = `
             <div class="prompt-manager-group-edit-toolbar">
                 <div class="prompt-manager-group-edit-toolbar-info">
-                    <span class="fa-solid fa-object-group"></span>
-                    <span data-i18n="Group Edit">Group Edit</span>
+                    <i class="fa-solid fa-object-group"></i>
+                    <span class="prompt-manager-group-edit-label" data-i18n="Group Edit">Group Edit</span>
                     <span class="prompt-manager-group-edit-selected-count"></span>
                     <span class="prompt-manager-group-edit-warning"></span>
                 </div>
                 <div class="prompt-manager-group-edit-toolbar-actions">
                     <a class="menu_button prompt-manager-group-toggle-btn" title="Toggle selected prompts on/off" data-i18n="[title]Toggle selected prompts on/off">
-                        <span class="fa-solid fa-power-off"></span>
+                        <i class="fa-solid fa-power-off"></i>
                         <span data-i18n="Toggle Selected">Toggle Selected</span>
                     </a>
                     <a class="menu_button prompt-manager-group-extra-btn" title="Mark selected as extra" data-i18n="[title]Mark selected as extra">
-                        <span class="fa-solid fa-star"></span>
+                        <i class="fa-solid fa-star"></i>
                         <span data-i18n="Mark Extra">Mark Extra</span>
                     </a>
                     <a class="menu_button prompt-manager-group-remove-btn" title="Remove selected from list" data-i18n="[title]Remove selected from list">
-                        <span class="fa-solid fa-circle-minus"></span>
+                        <i class="fa-solid fa-circle-minus"></i>
                         <span data-i18n="Remove Selected">Remove Selected</span>
                     </a>
                     <span class="prompt-manager-group-edit-separator"></span>
                     <a class="menu_button prompt-manager-group-create-btn" title="Create group from selection" data-i18n="[title]Create group from selection">
-                        <span class="fa-solid fa-folder-plus"></span>
+                        <i class="fa-solid fa-folder-plus"></i>
                         <span data-i18n="Create Group">Create Group</span>
-                    </a>
-                    <a class="menu_button prompt-manager-group-cancel-btn" title="Cancel" data-i18n="[title]Cancel">
-                        <span class="fa-solid fa-xmark"></span>
                     </a>
                 </div>
             </div>
@@ -3806,7 +3803,6 @@ class PromptManager {
         // Bind toolbar events
         const toolbar = container.querySelector('.prompt-manager-group-edit-toolbar');
         toolbar.querySelector('.prompt-manager-group-create-btn').addEventListener('click', () => this.handleCreateGroupFromSelection());
-        toolbar.querySelector('.prompt-manager-group-cancel-btn').addEventListener('click', () => this.exitGroupEditMode());
         toolbar.querySelector('.prompt-manager-group-toggle-btn').addEventListener('click', () => this.handleBatchToggle());
         toolbar.querySelector('.prompt-manager-group-extra-btn').addEventListener('click', () => this.handleBatchExtra());
         toolbar.querySelector('.prompt-manager-group-remove-btn').addEventListener('click', () => this.handleBatchRemove());
