@@ -6584,7 +6584,7 @@ export async function simulateWorldInfoActivation({
     const resolvedCoreChat = Array.isArray(coreChat) ? coreChat : [];
     const resolvedMaxContext = Number.isFinite(maxContextOverride) && Number(maxContextOverride) > 0
         ? Number(maxContextOverride)
-        : getMaxContextSize();
+        : getMaxPromptTokens();
     const resolvedChatForWI = Array.isArray(chatForWI)
         ? chatForWI
         : buildWorldInfoChatInput(resolvedCoreChat, includeNames);
