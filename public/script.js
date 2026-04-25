@@ -310,8 +310,10 @@ import { onboardingExperimentalMacroEngine } from './scripts/macros/engine/Macro
 import { showUndoToast } from './scripts/undo-toast.js';
 import { compressRequest, setRequestCompressionConfig } from './scripts/request-compression.js';
 import { canJumpToSwipeForMessage, canOpenSwipePickerForMessage, initSwipePicker } from './scripts/swipe-picker.js';
+import { bootSelfProfilerFromStorage } from './scripts/self-profiler.js';
 
 installFrontendLogCapture();
+bootSelfProfilerFromStorage();
 
 // API OBJECT FOR EXTERNAL WIRING
 const lukerApi = {

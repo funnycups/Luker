@@ -1,3 +1,51 @@
+// @ts-nocheck
+
+const SELF_PROFILING_STORAGE_KEY = 'luker.selfProfilingEnabled';
+const SELF_PROFILING_SAMPLE_INTERVAL = 10;
+const SELF_PROFILING_MAX_BUFFER_SIZE = 50000;
+const SELF_PROFILING_STATE_KEY = '__lukerSelfProfilerState';
+
+function startSelfProfilerAtEarliestPoint() {
+    try {
+        /** @type {any} */
+        const globalAny = globalThis;
+
+        if (localStorage.getItem(SELF_PROFILING_STORAGE_KEY) !== '1') {
+            return;
+        }
+
+        const ProfilerCtor = globalAny.Profiler;
+        if (typeof ProfilerCtor !== 'function') {
+            return;
+        }
+
+        const profiler = new ProfilerCtor({
+            sampleInterval: SELF_PROFILING_SAMPLE_INTERVAL,
+            maxBufferSize: SELF_PROFILING_MAX_BUFFER_SIZE,
+        });
+
+        globalAny[SELF_PROFILING_STATE_KEY] = {
+            profiler,
+            sampleInterval: SELF_PROFILING_SAMPLE_INTERVAL,
+            maxBufferSize: SELF_PROFILING_MAX_BUFFER_SIZE,
+            bufferFull: false,
+            startedAt: performance.now(),
+            startedAtIso: new Date().toISOString(),
+        };
+
+        profiler.addEventListener('samplebufferfull', () => {
+            const state = globalAny[SELF_PROFILING_STATE_KEY];
+            if (state && typeof state === 'object') {
+                state.bufferFull = true;
+            }
+        });
+    } catch {
+        // Ignore errors during earliest bootstrap path.
+    }
+}
+
+startSelfProfilerAtEarliestPoint();
+
 const PERF_ENABLED = (() => {
     try {
         const search = String(globalThis.location?.search || '');
@@ -12,6 +60,7 @@ const PERF_ENABLED = (() => {
     }
 })();
 
+/** @param {string} name */
 function safePerfMark(name) {
     if (!PERF_ENABLED) {
         return;
@@ -24,6 +73,7 @@ function safePerfMark(name) {
     }
 }
 
+/** @param {string} name @param {string} startMark @param {string} endMark */
 function safePerfMeasure(name, startMark, endMark) {
     if (!PERF_ENABLED) {
         return;

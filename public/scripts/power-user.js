@@ -70,6 +70,7 @@ import { IMAGE_OVERSWIPE, MEDIA_DISPLAY } from './constants.js';
 import { setFrontendConsoleDebugLoggingEnabled } from './frontend-log-manager.js';
 import { t } from './i18n.js';
 import { getBackgroundPath, isCustomBackgroundUrl } from './backgrounds.js';
+import { downloadCurrentSelfProfileReport, setSelfProfilerPreference, syncSelfProfilerEnabled } from './self-profiler.js';
 
 export const toastPositionClasses = [
     'toast-top-left',
@@ -218,6 +219,7 @@ export const power_user = {
     auto_fix_generated_markdown: true,
     send_on_enter: send_on_enter_options.AUTO,
     frontend_debug_logging: false,
+    self_profiling_enabled: false,
     console_log_prompts: false,
     request_token_probabilities: false,
     show_group_chat_queue: false,
@@ -2000,6 +2002,7 @@ export async function loadPowerUserSettings(settings, data) {
     $('#context_size_derived').prop('checked', !!power_user.context_size_derived);
 
     $('#frontend_debug_logging').prop('checked', power_user.frontend_debug_logging);
+    $('#self_profiling_enabled').prop('checked', power_user.self_profiling_enabled);
     $('#console_log_prompts').prop('checked', power_user.console_log_prompts);
     $('#request_token_probabilities').prop('checked', power_user.request_token_probabilities);
     $('#show_group_chat_queue').prop('checked', power_user.show_group_chat_queue);
@@ -2047,6 +2050,8 @@ export async function loadPowerUserSettings(settings, data) {
     $('#prefer_character_jailbreak').prop('checked', power_user.prefer_character_jailbreak);
     $('#enableZenSliders').prop('checked', power_user.enableZenSliders).trigger('input');
     $('#enableLabMode').prop('checked', power_user.enableLabMode).trigger('input', { fromInit: true });
+    setSelfProfilerPreference(!!power_user.self_profiling_enabled);
+    void syncSelfProfilerEnabled(!!power_user.self_profiling_enabled);
     $(`input[name="avatar_style"][value="${power_user.avatar_style}"]`).prop('checked', true);
     $(`#chat_display option[value=${power_user.chat_display}]`).prop('selected', true).trigger('change');
     $(`#toastr_position option[value=${power_user.toastr_position}]`).prop('selected', true).trigger('change');
@@ -3967,6 +3972,41 @@ jQuery(() => {
         power_user.frontend_debug_logging = !!$(this).prop('checked');
         setFrontendConsoleDebugLoggingEnabled(power_user.frontend_debug_logging, { announce: true });
         saveSettingsDebounced();
+    });
+
+    $('#self_profiling_enabled').on('input', async function () {
+        power_user.self_profiling_enabled = !!$(this).prop('checked');
+        setSelfProfilerPreference(power_user.self_profiling_enabled);
+        await syncSelfProfilerEnabled(power_user.self_profiling_enabled);
+        saveSettingsDebounced();
+
+        if (!power_user.self_profiling_enabled || !settingsReady) {
+            return;
+        }
+
+        const shouldReload = await callGenericPopup(
+            t`To activate JS Self-Profiling at the earliest page lifecycle stage, reload this page now?`,
+            POPUP_TYPE.CONFIRM,
+            '',
+            {
+                okButton: t`Reload now`,
+                cancelButton: t`Later`,
+            },
+        );
+
+        if (shouldReload) {
+            window.location.reload();
+        }
+    });
+
+    $('#download_self_profile_report').on('click', async function () {
+        try {
+            await downloadCurrentSelfProfileReport();
+            toastr.success(t`Performance profile downloaded.`, t`JS Self-Profiling`);
+        } catch (error) {
+            console.warn('Failed to download self profile report', error);
+            toastr.error(t`Unable to download profile report. Ensure profiling is enabled and browser supports Profiler API.`, t`JS Self-Profiling`);
+        }
     });
 
     $('#console_log_prompts').on('input', function () {

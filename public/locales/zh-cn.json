@@ -4958,5 +4958,16 @@
     "Create group from selection": "从选中项创建分组",
     "Create sub-group": "创建子分组",
     "Enter sub-group name:": "输入子分组名称：",
-    "Sub-group name:": "子分组名称："
+    "Sub-group name:": "子分组名称：",
+    "Enable JS Self-Profiling (Experimental)": "启用 JS 自采样分析（实验性）",
+    "Start JS Self-Profiling as early as possible on page load and keep collecting samples until disabled.": "在页面加载时尽可能早地启动 JS 自采样分析，并持续采集直到关闭。",
+    "Download Performance Profile": "下载性能报告",
+    "Download a profile snapshot now. Profiling continues automatically after download when enabled.": "立即下载当前采样快照。开启后下载完成会自动继续采样。",
+    "JS Self-Profiling API support is limited to Chrome/Edge based browsers. Safari and Firefox are not supported.": "JS Self-Profiling API 仅支持基于 Chrome/Edge 的浏览器，Safari 与 Firefox 暂不支持。",
+    "Performance profile downloaded.": "性能报告已下载。",
+    "Unable to download profile report. Ensure profiling is enabled and browser supports Profiler API.": "无法下载性能报告。请确认已启用采样，并且浏览器支持 Profiler API。",
+    "JS Self-Profiling": "JS 自采样分析"
+    ,"To activate JS Self-Profiling at the earliest page lifecycle stage, reload this page now?": "要让 JS 自采样分析在页面生命周期最早阶段生效，需要立即刷新页面。现在刷新吗？"
+    ,"Reload now": "立即刷新"
+    ,"Later": "稍后"
 }

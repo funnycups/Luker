@@ -108,6 +108,12 @@ const app = express();
 app.use(helmet({
     contentSecurityPolicy: false,
 }));
+// Allow JS Self-Profiling API in supported browsers.
+// We send both legacy and mode-based directives for broader Chromium compatibility.
+app.use((_, res, next) => {
+    res.setHeader('Document-Policy', 'js-profiling, js-profiling-mode=lazy');
+    next();
+});
 app.use(compression({
     filter: (req, res) => {
         const contentType = String(res.getHeader('Content-Type') || '');

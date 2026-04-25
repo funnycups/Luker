@@ -5594,6 +5594,14 @@
                                     <input id="frontend_debug_logging" type="checkbox" />
                                     <small data-i18n="Frontend debug logs">Frontend debug logs</small>
                                 </label>
+                                <label class="checkbox_label" for="self_profiling_enabled" title="Start JS Self-Profiling as early as possible on page load and keep collecting samples until disabled." data-i18n="[title]Start JS Self-Profiling as early as possible on page load and keep collecting samples until disabled.">
+                                    <input id="self_profiling_enabled" type="checkbox" />
+                                    <small data-i18n="Enable JS Self-Profiling (Experimental)">Enable JS Self-Profiling (Experimental)</small>
+                                    <i class="fa-solid fa-circle-exclamation" title="JS Self-Profiling API support is limited to Chrome/Edge based browsers. Safari and Firefox are not supported." data-i18n="[title]JS Self-Profiling API support is limited to Chrome/Edge based browsers. Safari and Firefox are not supported."></i>
+                                </label>
+                                <div class="flex-container alignitemscenter" title="Download a profile snapshot now. Profiling continues automatically after download when enabled." data-i18n="[title]Download a profile snapshot now. Profiling continues automatically after download when enabled.">
+                                    <button id="download_self_profile_report" class="menu_button whitespacenowrap" type="button" data-i18n="Download Performance Profile">Download Performance Profile</button>
+                                </div>
                                 <label class="checkbox_label" for="console_log_prompts">
                                     <input id="console_log_prompts" type="checkbox" />
                                     <small data-i18n="Log prompts to console">Log prompts to console</small>
