@@ -12472,13 +12472,20 @@ export async function getChat() {
         }
 
         const data = await response.json();
+
+        // Corrupted chat file — do NOT overwrite server data
+        if (data?.corrupted) {
+            toastr.error(t`Chat data is corrupted. Reload the page to retry.`, t`Chat load failed`);
+            return;
+        }
+
         if (Array.isArray(data) && data.length > 0) {
             /** @type {ChatHeader} */
             const chatHeader = data.shift();
             chat_metadata = chatHeader?.chat_metadata ?? {};
             chat.splice(0, chat.length, ...data);
         } else {
-            // An empty/corrupted chat file.
+            // New chat (data.new_chat === true) or legacy empty response
             chat.splice(0, chat.length);
             chat_metadata = {};
         }
@@ -12503,7 +12510,7 @@ export async function getChat() {
             $('#send_textarea').trigger('click').trigger('focus');
         });
     } catch (error) {
-        await getChatResult();
+        toastr.error(t`Chat could not be loaded. Reload the page to retry.`, t`Chat load failed`);
         console.log(error);
     }
 }

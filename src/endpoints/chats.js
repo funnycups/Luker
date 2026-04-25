@@ -1454,7 +1454,11 @@ export async function patchChatMessagesInFile({ filePath, operations, chatMetada
 
     /** @type {object[]} */
     let chatData = fs.existsSync(filePath) ? getChatData(filePath) : [];
-    if (!Array.isArray(chatData) || chatData.length === 0) {
+    // getChatData may return { new_chat: true } or { corrupted: true } — coerce to array
+    if (!Array.isArray(chatData)) {
+        chatData = [];
+    }
+    if (chatData.length === 0) {
         chatData = [createChatHeader(_.isObjectLike(chatMetadata) ? chatMetadata : {})];
     }
 
@@ -1510,7 +1514,11 @@ export async function updateChatMetadataInFile({ filePath, chatMetadata = {}, in
 
     /** @type {object[]} */
     let chatData = getChatData(filePath);
-    const created = !Array.isArray(chatData) || chatData.length === 0;
+    // getChatData may return { new_chat: true } or { corrupted: true } — coerce to array
+    if (!Array.isArray(chatData)) {
+        chatData = [];
+    }
+    const created = chatData.length === 0;
     if (created) {
         chatData = [createChatHeader({})];
     }
@@ -1559,7 +1567,11 @@ export async function patchChatMetadataInFile({ filePath, operations = [], integ
 
     /** @type {object[]} */
     let chatData = getChatData(filePath);
-    const created = !Array.isArray(chatData) || chatData.length === 0;
+    // getChatData may return { new_chat: true } or { corrupted: true } — coerce to array
+    if (!Array.isArray(chatData)) {
+        chatData = [];
+    }
+    const created = chatData.length === 0;
     if (created) {
         chatData = [createChatHeader({})];
     }
@@ -1598,6 +1610,7 @@ export async function patchChatMetadataInFile({ filePath, operations = [], integ
  */
 function getChatDataDelta(chatFilePath, fromIndex = 0, limit = 0) {
     const chatData = getChatData(chatFilePath);
+    // getChatData may return { new_chat: true } or { corrupted: true } — coerce to array
     if (!Array.isArray(chatData) || chatData.length === 0) {
         return {
             chat: [],
@@ -1867,15 +1880,25 @@ router.post('/meta/patch', validateAvatarUrlMiddleware, async function (request,
  * @returns {Array}} If the chatFilePath cannot be read, this will return [].
  */
 export function getChatData(chatFilePath) {
-    let chatData = [];
+    const chatJSON = tryReadFileSync(chatFilePath);
 
-    const chatJSON = tryReadFileSync(chatFilePath) ?? '';
-    if (chatJSON.length > 0) {
-        const lines = chatJSON.split('\n');
-        // Iterate through the array of strings and parse each line as JSON
-        chatData = lines.map(line => tryParse(line)).filter(x => x);
-    } else {
-        console.warn(`File not found: ${chatFilePath}. The chat does not exist or is empty.`);
+    // File does not exist → genuinely new chat
+    if (chatJSON === null) {
+        return { new_chat: true };
+    }
+
+    // File exists but is empty → corrupted (a valid chat file always has at least a header line)
+    if (chatJSON.length === 0) {
+        console.warn(`Chat file is empty (corrupted): ${chatFilePath}`);
+        return { corrupted: true };
+    }
+
+    const lines = chatJSON.split('\n');
+    const chatData = lines.map(line => tryParse(line)).filter(x => x);
+
+    if (chatData.length === 0) {
+        console.warn(`Chat file has no valid JSON lines (corrupted): ${chatFilePath}`);
+        return { corrupted: true };
     }
 
     return attachCurrentIntegrityToChatData(chatData, chatFilePath);
@@ -1893,11 +1916,11 @@ router.post('/get', validateAvatarUrlMiddleware, function (request, response) {
         //if no chat dir for the character is found, make one with the character name
         if (!chatDirExists) {
             fs.mkdirSync(directoryPath);
-            return response.send({});
+            return response.send({ new_chat: true });
         }
 
         if (!request.body.file_name) {
-            return response.send({});
+            return response.send({ new_chat: true });
         }
 
         const chatFileName = `${String(request.body.file_name)}.jsonl`;
@@ -1906,7 +1929,7 @@ router.post('/get', validateAvatarUrlMiddleware, function (request, response) {
         return response.send(getChatData(chatFilePath));
     } catch (error) {
         console.error(error);
-        return response.send({});
+        return response.status(500).send({ corrupted: true });
     }
 });
 
