@@ -65,9 +65,25 @@ const LEVEL = {
 };
 
 const DEFAULT_EVENT_SUMMARY_COLUMN_HINT = 'Start with "时间：<time>；" using an explicit full in-world date/time or date span, then give a concise event abstraction with causality and outcome.';
-const DEFAULT_EVENT_KEY_SENTENCES_COLUMN_HINT = 'Key sentences in this event from characters involved in. Start with characters name and seperated by semicolons.';
 const DEFAULT_EVENT_EXTRACT_HINT = 'Critical plot events, turning points, commitments, betrayals, irreversible outcomes, and their explicit in-world time/time span written at the start of summary.';
-const DEFAULT_EVENT_COMPRESSION_INSTRUCTION = 'Compress event nodes into high-value storyline milestones. Preserve explicit in-world time/time span by writing it at the start of summary, along with causality, irreversible outcomes, and unresolved hooks. Keep each summary focused and compact, target within 150 Chinese characters (soft limit). Hallucinate is not allowed except continuity-consistent inference for missing event time. You shall only compress and summary instead of continuing any story. Output time as explicit full in-world time/time span, never placeholders. Summary must start with "时间：<time>；". Output key_sentences as a few core lines, each prefixed by character name and separated by semicolons.';
+const DEFAULT_EVENT_COMPRESSION_INSTRUCTION = [
+    'Compress child event nodes into ONE higher-level storyline milestone.',
+    '',
+    '## Step 1: Classify each child by narrative weight',
+    '- KEY event (turning point, irreversible outcome, commitment, betrayal, major reveal, new bond, death): write a clear causal sentence.',
+    '- ROUTINE event (travel, rest, minor talk, transition, repeated action): collapse into one brief clause like "途经X" "短暂休整" "日常互动" — never expand.',
+    '- DUPLICATE event (same event retold by another node): merge into the key version, drop duplicates entirely.',
+    '',
+    '## Step 2: Write summary',
+    '- Must start with "时间：<time>；" covering the full time span of ALL children.',
+    '- State key events compactly; routine events get at most one clause each; duplicates are merged.',
+    '- Preserve: causality chains between key events, irreversible outcomes, unresolved hooks.',
+    '- DISCARD: raw dialogue, scene description, rhetorical flourish, future predictions ("为X埋下伏笔"), character commentary.',
+    '- FACTUAL CONSTRAINT: Only include events that happened WITHIN the seq range of the child nodes. Never write events from later seq numbers.',
+    '- Target: 60-120 Chinese characters. Hard ceiling 150. Every character must earn its place.',
+    '- No story continuation. No hallucination except continuity-consistent inference for missing event time.',
+    '- Never use time placeholders (e.g. 某年某月, 未知时间). Always output explicit full in-world time.',
+].join('\n');
 const EVENT_SUMMARY_TIME_EXTRACT_PROMPT_LINES = [
     'Event summary time hard rule: every event row must put an explicit full in-world date/time or date span at the start of summary, formatted as "时间：<time>；<summary>".',
     'Event summary time completeness rule: use complete year/month/day-style precision when the world supports it; for non-real-world settings, use that world\'s full calendar/date notation instead of modern placeholders.',
@@ -81,11 +97,10 @@ const defaultNodeTypeSchema = [
         id: 'event',
         label: 'Event',
         tableName: 'event_table',
-        tableColumns: ['summary', 'key_sentences'],
-        embeddingColumns: ['summary', 'key_sentences'],
+        tableColumns: ['summary'],
+        embeddingColumns: ['summary'],
         columnHints: {
             summary: DEFAULT_EVENT_SUMMARY_COLUMN_HINT,
-            key_sentences: DEFAULT_EVENT_KEY_SENTENCES_COLUMN_HINT,
         },
         requiredColumns: ['summary'],
         forceUpdate: true,
@@ -3896,8 +3911,9 @@ function buildCompressionSummaryInstruction(baseInstruction) {
     const instruction = base || defaultInstruction;
     return [
         instruction,
-        'Length guide: target within 150 Chinese characters (soft limit; slight overflow only if critical information would be lost).',
-        'Avoid raw dialogue and excessive detail. Keep only durable plot signal.',
+        'Higher depth = more abstract. At L2+, collapse routine details into single clauses; only key turning points deserve full sentences.',
+        'Never copy-paste or concatenate child summaries. Synthesize into one coherent milestone.',
+        'Do not continue story. Do not predict future events.',
     ].join('\n');
 }
 
