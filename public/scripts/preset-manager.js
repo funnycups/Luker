@@ -402,33 +402,34 @@ function registerPresetManagers() {
                     width: '100%',
                 },
                 presetGroupCallbacks: {
-                    getGroups: () => primaryManager.getPresetGroups(),
-                    getGroupForPreset: (name) => primaryManager.getGroupForPreset(name),
-                    rebuild: () => {
-                        primaryManager.rebuildSelectWithGroups();
-                    },
-                    createGroup: async (name) => {
-                        const id = primaryManager.createPresetGroup(name);
-                        primaryManager.rebuildSelectWithGroups();
-                        return id;
-                    },
-                    renameGroup: async (groupId, newName) => {
-                        primaryManager.renamePresetGroup(groupId, newName);
-                        primaryManager.rebuildSelectWithGroups();
-                    },
-                    deleteGroup: async (groupId) => {
-                        primaryManager.deletePresetGroup(groupId);
-                        primaryManager.rebuildSelectWithGroups();
-                    },
-                    addToGroup: async (presetName, groupId) => {
-                        primaryManager.addPresetToGroup(presetName, groupId);
-                        primaryManager.rebuildSelectWithGroups();
-                    },
-                    removeFromGroup: async (presetName) => {
-                        primaryManager.removePresetFromGroup(presetName);
-                        primaryManager.rebuildSelectWithGroups();
-                    },
-                },
+                            getGroups: () => primaryManager.getPresetGroups(),
+                            getGroupForPreset: (name) => primaryManager.getGroupForPreset(name),
+                            getGroupDepth: (groupId) => primaryManager.getGroupDepth(groupId),
+                            rebuild: () => {
+                                primaryManager.rebuildSelectWithGroups();
+                            },
+                            createGroup: async (name, parentId) => {
+                                const id = primaryManager.createPresetGroup(name, parentId || null);
+                                primaryManager.rebuildSelectWithGroups();
+                                return id;
+                            },
+                            renameGroup: async (groupId, newName) => {
+                                primaryManager.renamePresetGroup(groupId, newName);
+                                primaryManager.rebuildSelectWithGroups();
+                            },
+                            deleteGroup: async (groupId) => {
+                                primaryManager.deletePresetGroup(groupId);
+                                primaryManager.rebuildSelectWithGroups();
+                            },
+                            addToGroup: async (presetName, groupId) => {
+                                primaryManager.addPresetToGroup(presetName, groupId);
+                                primaryManager.rebuildSelectWithGroups();
+                            },
+                            removeFromGroup: async (presetName) => {
+                                primaryManager.removePresetFromGroup(presetName);
+                                primaryManager.rebuildSelectWithGroups();
+                            },
+                        },
             });
         }
     });
@@ -1407,6 +1408,79 @@ class PresetManager {
     }
 
     /**
+     * Get the nesting depth of a preset group (0 = top-level).
+     * @param {string} groupId
+     * @returns {number}
+     */
+    getGroupDepth(groupId) {
+        const groups = this.getPresetGroups();
+        const groupMap = new Map(groups.map(g => [g.id, g]));
+        let depth = 0;
+        let current = groupMap.get(groupId);
+        while (current && current.parentId) {
+            depth++;
+            current = groupMap.get(current.parentId);
+            if (depth > 100) break; // guard against circular refs
+        }
+        return depth;
+    }
+
+    /**
+     * Get direct child groups of a given preset group.
+     * @param {string} groupId
+     * @returns {Array}
+     */
+    getGroupChildren(groupId) {
+        return this.getPresetGroups().filter(g => (g.parentId ?? null) === groupId);
+    }
+
+    /**
+     * Check if a preset group is visible (all ancestor groups are expanded).
+     * @param {string} groupId
+     * @returns {boolean}
+     */
+    isGroupVisible(groupId) {
+        const groups = this.getPresetGroups();
+        const groupMap = new Map(groups.map(g => [g.id, g]));
+        let current = groupMap.get(groupId);
+        while (current && current.parentId) {
+            const parent = groupMap.get(current.parentId);
+            if (!parent) break; // orphaned, treat as visible
+            if (parent.collapsed) return false;
+            current = parent;
+        }
+        return true;
+    }
+
+    /**
+     * Sort preset groups hierarchically: top-level first, then their children recursively.
+     * @returns {Array}
+     */
+    getPresetGroupsSorted() {
+        const groups = this.getPresetGroups();
+        const topLevel = groups.filter(g => !g.parentId);
+        const result = [];
+        const addWithChildren = (parent) => {
+            result.push(parent);
+            const children = groups.filter(g => (g.parentId ?? null) === parent.id);
+            for (const child of children) {
+                addWithChildren(child);
+            }
+        };
+        for (const g of topLevel) {
+            addWithChildren(g);
+        }
+        // Include any orphaned groups
+        const included = new Set(result.map(g => g.id));
+        for (const g of groups) {
+            if (!included.has(g.id)) {
+                result.push(g);
+            }
+        }
+        return result;
+    }
+
+    /**
      * Gets the group a preset belongs to, if any.
      * @param {string} presetName
      * @returns {{id: string, name: string, presets: string[]}|null}
@@ -1420,10 +1494,10 @@ class PresetManager {
      * @param {string} name
      * @returns {string} The new group's ID
      */
-    createPresetGroup(name) {
+    createPresetGroup(name, parentId = null) {
         const groups = this.getPresetGroups();
         const id = `pg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        groups.push({ id, name, presets: [] });
+        groups.push({ id, name, presets: [], parentId });
         saveSettingsDebounced();
         return id;
     }
@@ -1449,6 +1523,14 @@ class PresetManager {
         const groups = this.getPresetGroups();
         const index = groups.findIndex(g => g.id === groupId);
         if (index !== -1) {
+            const deletedGroup = groups[index];
+            // Move child groups up to the deleted group's parent
+            const parentId = deletedGroup.parentId ?? null;
+            for (const group of groups) {
+                if ((group.parentId ?? null) === groupId) {
+                    group.parentId = parentId || null;
+                }
+            }
             groups.splice(index, 1);
             saveSettingsDebounced();
         }
@@ -1494,6 +1576,7 @@ class PresetManager {
         const $select = $(this.select);
         const currentValue = $select.val();
         const groups = this.getPresetGroups();
+        const sortedGroups = this.getPresetGroupsSorted();
 
         if (!groups.length) {
             return;
@@ -1538,30 +1621,52 @@ class PresetManager {
             }
         }
 
-        // Add group headers and their presets
-        for (const group of groups) {
+        // Add group headers and their presets (hierarchically)
+        const renderGroup = (group, depth) => {
+            const indent = '\u00A0'.repeat(depth * 3);
+            const prefix = depth > 0 ? '└ ' : '';
+
             const $header = $('<option></option>')
-                .val(`__group_header__${group.id}`)
-                .text(group.name)
-                .attr('data-preset-group-id', group.id)
-                .attr('data-preset-group-header', 'true')
-                .prop('disabled', true);
-            $select.append($header);
+                        .val(`__group_header__${group.id}`)
+                        .text(indent + prefix + group.name)
+                        .attr('data-preset-group-id', group.id)
+                        .attr('data-preset-group-header', 'true')
+                        .attr('data-depth', depth);
+                        if (group.parentId) {
+                            $header.attr('data-preset-group-parent-id', group.parentId);
+                        }
+                        $header.prop('disabled', true);
+                        $select.append($header);
 
             for (const presetName of group.presets) {
                 const opt = allOptions.find(o => o.text === presetName);
                 if (opt) {
+                    const memberIndent = '\u00A0'.repeat((depth + 1) * 3);
                     const $option = $('<option></option>')
                         .val(opt.value)
-                        .text(opt.text)
+                        .text(memberIndent + opt.text)
                         .attr('data-preset-group-id', group.id)
-                        .attr('data-preset-group-member', 'true');
+                        .attr('data-preset-group-member', 'true')
+                        .attr('data-depth', depth);
                     for (const [k, v] of Object.entries(opt.attrs)) {
                         $option.attr(k, v);
                     }
                     $select.append($option);
                 }
             }
+
+            // Render child groups
+            const childGroups = this.getGroupChildren(group.id);
+            for (const child of childGroups) {
+                const childFromSorted = sortedGroups.find(g => g.id === child.id) || child;
+                renderGroup(childFromSorted, depth + 1);
+            }
+        };
+
+        // Render top-level groups and their descendants
+        const topLevelGroups = sortedGroups.filter(g => !g.parentId);
+        for (const group of topLevelGroups) {
+            renderGroup(group, 0);
         }
 
         // Restore selection

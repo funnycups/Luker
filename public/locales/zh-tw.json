@@ -4814,5 +4814,8 @@
     "Ungroup": "取消分組",
     "Toggle all in group": "開關分組內全部",
     "Dissolve group": "解散分組",
-    "Create group from selection": "從選中項建立分組"
+    "Create group from selection": "從選中項建立分組",
+    "Create sub-group": "建立子分組",
+    "Enter sub-group name:": "輸入子分組名稱：",
+    "Sub-group name:": "子分組名稱："
 }

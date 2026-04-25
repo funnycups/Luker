@@ -822,8 +822,12 @@ li.prompt-manager-group.expanded .prompt-manager-group-toggle {
     border-left-width: 2px;
 }
 
-/* Collapsed children */
+/* Collapsed children — also hide sub-group headers and child items when an ancestor is collapsed */
 #completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-group-child-hidden {
+    display: none;
+}
+/* Hide sub-group headers and their children when a parent group is collapsed */
+#completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-group.prompt-manager-group-hidden {
     display: none;
 }
 
@@ -1032,4 +1036,23 @@ li.prompt-manager-group.expanded .prompt-manager-group-toggle {
 
 #completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-group-editing:hover {
     background: color-mix(in srgb, var(--SmartThemeBodyColor) 6%, var(--SmartThemeBlurTintColor));
+}
+
+/* ===== Nested Group Indentation ===== */
+.prompt-manager-group,
+.prompt-manager-group-child,
+.prompt-manager-group-edit-label,
+li.prompt-manager-group-editing {
+    --group-indent: 0px;
+    padding-left: var(--group-indent);
+}
+
+/* Sub-group create button */
+.prompt-manager-group-subgroup {
+    opacity: 0.5;
+    cursor: pointer;
+    margin-left: 0.5em;
+}
+.prompt-manager-group-subgroup:hover {
+    opacity: 1;
 }
