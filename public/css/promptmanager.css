@@ -717,10 +717,12 @@
     align-items: center;
     column-gap: 0.5em;
     padding: 0.45em 0.65em;
+    padding-left: calc(var(--group-indent, 0px) + 0.65em);
     cursor: pointer;
     user-select: none;
     background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 80%, transparent);
     border-left: 3px solid var(--SmartThemeQuoteColor);
+    margin-left: var(--group-indent, 0px);
     transition: background-color var(--animation-duration-2x);
 }
 
