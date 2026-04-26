@@ -4017,12 +4017,25 @@ class PromptManager {
         const items = list.querySelectorAll('.prompt-manager-group-editing');
         for (const item of items) {
             const gid = item.dataset.pmGroupId;
-            if (gid && this._groupEditCollapsed.has(gid)) {
+            if (gid && this._isGroupOrAncestorCollapsedInEdit(gid)) {
                 item.classList.add('prompt-manager-group-editing-hidden');
             } else {
                 item.classList.remove('prompt-manager-group-editing-hidden');
             }
         }
+    }
+
+    _isGroupOrAncestorCollapsedInEdit(groupId) {
+        if (this._groupEditCollapsed.has(groupId)) return true;
+        let currentId = groupId;
+        const groups = this.getPromptGroups();
+        while (currentId) {
+            const group = groups.find(g => g.id === currentId);
+            if (!group || !group.parentId) break;
+            if (this._groupEditCollapsed.has(group.parentId)) return true;
+            currentId = group.parentId;
+        }
+        return false;
     }
 
     /**

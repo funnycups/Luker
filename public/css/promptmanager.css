@@ -1041,6 +1041,9 @@ li.prompt-manager-group.expanded .prompt-manager-group-toggle {
 }
 
 /* ===== Nested Group Indentation ===== */
+#completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-group-child {
+    padding-left: var(--group-indent);
+}
 .prompt-manager-group,
 .prompt-manager-group-child,
 .prompt-manager-group-edit-label,
