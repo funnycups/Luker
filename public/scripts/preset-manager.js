@@ -1581,9 +1581,13 @@ class PresetManager {
         const allOptions = [];
         $select.find('option').each((_, el) => {
             if (!el.dataset.presetGroupHeader) {
+                // Strip leading indentation (non-breaking spaces) that may have
+                // been added by a previous rebuild — textContent is used for
+                // matching against group.presets which stores clean names
+                const cleanText = el.textContent.replace(/^[\u00A0]+/, '');
                 allOptions.push({
                     value: el.value,
-                    text: el.textContent,
+                    text: cleanText,
                     selected: el.selected,
                     attrs: {},
                 });

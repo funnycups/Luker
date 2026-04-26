@@ -176,7 +176,7 @@ function showPresetContextMenu(anchor, presetName, callbacks, selectElement, own
             dismissContextMenu();
             const name = prompt(t`Preset group name:`);
             if (!name?.trim()) return;
-            const groupId = await callbacks.createGroup(name.trim());
+            const groupId = await callbacks.createGroup(name.trim(), currentGroup?.id);
             if (groupId) {
                 await callbacks.addToGroup(presetName, groupId);
             }
