@@ -3606,63 +3606,78 @@ class PromptManager {
         const renderedGroupIds = new Set();
         const isSearching = Boolean(searchQuery);
 
-        // Build a map of groupId -> prompts in that group (in visible order)
-        const groupPromptsMap = new Map();
-        for (const g of sortedGroups) {
-            groupPromptsMap.set(g.id, []);
-        }
-        for (const prompt of visiblePrompts) {
-            if (!prompt) continue;
-            const group = this.getGroupForPrompt(prompt.identifier);
-            if (group && groupPromptsMap.has(group.id)) {
-                groupPromptsMap.get(group.id).push(prompt);
-            }
-        }
+         // Render hierarchically: for each top-level group, render its header, its prompts,
+         // then recursively its child groups — interleaved by prompt order.
+         const renderGroupAndChildren = (groupId) => {
+             const group = groups.find(g => g.id === groupId);
+             if (!group || renderedGroupIds.has(groupId)) return;
+             renderedGroupIds.add(groupId);
 
-        // Render hierarchically: for each top-level group, render its header, its prompts,
-        // then recursively its child groups, then ungrouped prompts at the end.
-        const renderGroupAndChildren = (groupId) => {
-            const group = groups.find(g => g.id === groupId);
-            if (!group || renderedGroupIds.has(groupId)) return;
-            renderedGroupIds.add(groupId);
+             // Render group header
+             const groupHiddenClass = (!isSearching && this._isAncestorCollapsed(groupId)) ? ' prompt-manager-group-hidden' : '';
+             const groupHtml = this.buildGroupHeaderHtml(group);
+             // Inject hidden class into the group header if needed
+             listItemHtml += groupHiddenClass
+                 ? groupHtml.replace('prompt-manager-group ', `prompt-manager-group${groupHiddenClass} `)
+                 : groupHtml;
 
-            // Render group header
-            const groupHiddenClass = (!isSearching && this._isAncestorCollapsed(groupId)) ? ' prompt-manager-group-hidden' : '';
-            const groupHtml = this.buildGroupHeaderHtml(group);
-            // Inject hidden class into the group header if needed
-            listItemHtml += groupHiddenClass
-                ? groupHtml.replace('prompt-manager-group ', `prompt-manager-group${groupHiddenClass} `)
-                : groupHtml;
+             // Collect all descendant identifiers (including from child groups)
+             const descendantIds = new Set();
+             const collectDescendants = (g) => {
+                 for (const id of g.identifiers) descendantIds.add(id);
+                 const children = this.getGroupChildren(g.id);
+                 for (const child of children) collectDescendants(child);
+             };
+             collectDescendants(group);
 
-            // Render prompts belonging to this group
-            const groupPrompts = groupPromptsMap.get(groupId) || [];
-            for (const prompt of groupPrompts) {
-                const isHidden = !isSearching && this._isGroupOrAncestorCollapsed(groupId);
-                const depth = this.getGroupDepth(groupId);
-                const childClass = 'prompt-manager-group-child';
-                const hiddenClass = isHidden ? 'prompt-manager-group-child-hidden' : '';
-                const groupIdAttr = `data-pm-group-id="${escapeHtml(groupId)}"`;
-                const depthAttr = `data-depth="${depth}"`;
-                const indentStyle = `style="--group-indent:${depth * 24}px"`;
+             // Map each identifier to the child group that directly owns it (if any)
+             const childGroups = this.getGroupChildren(groupId);
+             const idToChildGroup = new Map();
+             for (const child of childGroups) {
+                 for (const id of child.identifiers) {
+                     idToChildGroup.set(id, child);
+                 }
+             }
 
-                const listEntry = this.getPromptOrderEntry(this.activeCharacter, prompt.identifier);
-                const html = this.buildPromptItemHtml(prompt, listEntry);
+             // Build set of direct prompts in this group
+             const directIds = new Set(group.identifiers);
 
-                const extraClasses = `${childClass} ${hiddenClass}`.trim();
-                listItemHtml += html.replace(
-                    /^(\s*<li\s+class=")/,
-                    `$1${extraClasses} `,
-                ).replace(
-                    /^(\s*<li\s)/,
-                    `$1${groupIdAttr} ${depthAttr} ${indentStyle} `,
-                );
-            }
+             const renderPromptItem = (prompt) => {
+                 const isHidden = !isSearching && this._isGroupOrAncestorCollapsed(groupId);
+                 const depth = this.getGroupDepth(groupId);
+                 const childClass = 'prompt-manager-group-child';
+                 const hiddenClass = isHidden ? 'prompt-manager-group-child-hidden' : '';
+                 const groupIdAttr = `data-pm-group-id="${escapeHtml(groupId)}"`;
+                 const depthAttr = `data-depth="${depth}"`;
+                 const indentStyle = `style="--group-indent:${depth * 24}px"`;
 
-            // Recursively render child groups
-            const childGroups = this.getGroupChildren(groupId);
-            for (const child of childGroups) {
-                renderGroupAndChildren(child.id);
-            }
+                 const listEntry = this.getPromptOrderEntry(this.activeCharacter, prompt.identifier);
+                 const html = this.buildPromptItemHtml(prompt, listEntry);
+
+                 const extraClasses = `${childClass} ${hiddenClass}`.trim();
+                 listItemHtml += html.replace(
+                     /^(\s*<li\s+class=")/,
+                     `$1${extraClasses} `,
+                 ).replace(
+                     /^(\s*<li\s)/,
+                     `$1${groupIdAttr} ${depthAttr} ${indentStyle} `,
+                 );
+             };
+
+             // Render direct prompts and child groups interleaved by visible order
+             const renderedChildIds = new Set();
+             for (const prompt of visiblePrompts) {
+                 const id = prompt.identifier;
+                 if (!descendantIds.has(id)) continue;
+
+                 const childGroup = idToChildGroup.get(id);
+                 if (childGroup && !renderedChildIds.has(childGroup.id)) {
+                     renderGroupAndChildren(childGroup.id);
+                     renderedChildIds.add(childGroup.id);
+                 } else if (!childGroup && directIds.has(id)) {
+                     renderPromptItem(prompt);
+                 }
+             }
         };
 
         if (!isSearching) {
