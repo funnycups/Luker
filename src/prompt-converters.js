@@ -1364,7 +1364,9 @@ export function embedOpenRouterMedia(messages, { audio = true, video = true } = 
 }
 
 /**
- * Adds a dummy reasoning_content field to messages with tool calls for DeepSeek reasoner.
+ * Adds reasoning_content field to messages with tool calls for DeepSeek models that require it.
+ * DeepSeek reasoner (v1/v3) and V4 series (pro/flash) both require reasoning_content
+ * to be passed back in multi-turn tool call sequences.
  * @param {object[]} messages Array of messages
  * @returns {void}
  */
@@ -1378,7 +1380,7 @@ export function addReasoningContentToToolCalls(messages) {
             continue;
         }
 
-        message.reasoning_content = '';
+        message.reasoning_content = message.reasoning || '';
     }
 }
 
