@@ -1049,6 +1049,30 @@ li.prompt-manager-group-editing {
     padding-left: var(--group-indent);
 }
 
+/* ===== Group Edit Mode Collapse ===== */
+.prompt-manager-group-edit-toggle {
+    width: 16px;
+    text-align: center;
+    flex-shrink: 0;
+    cursor: pointer;
+    transition: transform 0.2s ease;
+    font-size: var(--font-size-sm, 0.85em);
+    opacity: 0.6;
+}
+.prompt-manager-group-edit-toggle:hover {
+    opacity: 1;
+}
+.prompt-manager-group-edit-label.collapsed .prompt-manager-group-edit-toggle {
+    transform: rotate(0deg);
+}
+.prompt-manager-group-edit-label:not(.collapsed) .prompt-manager-group-edit-toggle {
+    transform: rotate(90deg);
+}
+
+.prompt-manager-group-editing-hidden {
+    display: none !important;
+}
+
 /* Sub-group create button */
 .prompt-manager-group-subgroup {
     opacity: 0.5;

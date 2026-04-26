@@ -452,6 +452,7 @@ class PromptManager {
         // Group edit mode state
         this._groupEditMode = false;
         this._groupEditSelection = null;
+        this._groupEditCollapsed = new Set();
 
         // Batched toggle undo state
         this.toggleUndoBatch = null;
@@ -3591,6 +3592,7 @@ class PromptManager {
             listItemHtml += this.renderGroupEditModeList(searchQuery, searchClauses);
             promptManagerList.insertAdjacentHTML('beforeend', listItemHtml);
             this.setupListEventDelegation(promptManagerList);
+            this._applyGroupEditCollapsedState();
             return;
         }
 
@@ -3771,6 +3773,7 @@ class PromptManager {
                 const indentPx = depth * 24;
                 html += `
                 <li class="prompt-manager-group-edit-label" data-pm-group-id="${escapeHtml(groupId)}" data-depth="${depth}" style="--group-indent:${indentPx}px">
+                    <span class="prompt-manager-group-edit-toggle fa-solid fa-chevron-right"></span>
                     <span class="prompt-manager-group-indicator" data-group-color="${colorIdx}"></span>
         <span class="prompt-manager-group-edit-label-name">
             <span class="fa-solid fa-folder" style="opacity:0.5"></span>
@@ -3812,7 +3815,7 @@ class PromptManager {
                 const encodedName = escapeHtml(prompt.name);
 
                 html += `
-                <li class="${prefix}prompt_manager_prompt prompt-manager-group-editing ${enabledClass}" data-pm-identifier="${escapeHtml(prompt.identifier)}" data-depth="${depth}" style="--group-indent:${indentPx}px">
+                <li class="${prefix}prompt_manager_prompt prompt-manager-group-editing ${enabledClass}" data-pm-identifier="${escapeHtml(prompt.identifier)}" data-pm-group-id="${escapeHtml(groupId ?? '')}" data-depth="${depth}" style="--group-indent:${indentPx}px">
                     ${indicatorHtml}
         <span class="prompt-manager-group-select fa-solid ${isSelected ? 'fa-square-check' : 'fa-square'} ${selectedClass}" data-pm-identifier="${escapeHtml(prompt.identifier)}"></span>
         <span class="${prefix}prompt_manager_prompt_name" data-pm-name="${encodedName}">
@@ -3853,6 +3856,23 @@ class PromptManager {
                 if (editRow && !target.closest('.prompt-manager-group-edit-rename') && !target.closest('.prompt-manager-group-edit-dissolve')) {
                     const id = editRow.dataset.pmIdentifier;
                     if (id) this.toggleGroupEditSelection(id);
+                    return;
+                }
+                // Edit mode: toggle group collapse
+                const editToggle = target.closest('.prompt-manager-group-edit-toggle');
+                if (editToggle) {
+                    const groupLabel = editToggle.closest('.prompt-manager-group-edit-label');
+                    const groupId = groupLabel?.dataset.pmGroupId;
+                    if (groupId) {
+                        if (this._groupEditCollapsed.has(groupId)) {
+                            this._groupEditCollapsed.delete(groupId);
+                            groupLabel.classList.remove('collapsed');
+                        } else {
+                            this._groupEditCollapsed.add(groupId);
+                            groupLabel.classList.add('collapsed');
+                        }
+                        this._applyGroupEditCollapsedState();
+                    }
                     return;
                 }
                 // Edit mode: rename group
@@ -3982,9 +4002,27 @@ class PromptManager {
     exitGroupEditMode() {
         this._groupEditMode = false;
         this._groupEditSelection = null;
+        this._groupEditCollapsed = new Set();
         this.removeGroupEditUI();
         this.renderPromptManagerListItems();
         this.makeDraggable();
+    }
+
+    /**
+     * Show/hide prompt items in edit mode based on group collapse state.
+     */
+    _applyGroupEditCollapsedState() {
+        const list = this.promptList;
+        if (!list || !this._groupEditMode) return;
+        const items = list.querySelectorAll('.prompt-manager-group-editing');
+        for (const item of items) {
+            const gid = item.dataset.pmGroupId;
+            if (gid && this._groupEditCollapsed.has(gid)) {
+                item.classList.add('prompt-manager-group-editing-hidden');
+            } else {
+                item.classList.remove('prompt-manager-group-editing-hidden');
+            }
+        }
     }
 
     /**
