@@ -3548,8 +3548,28 @@ class PromptManager {
     /**
      * Empties, then re-assembles the prompt list.
      * Now supports prompt groups: inserts group headers and handles collapsed state.
+     *
+     * Debounced via requestAnimationFrame: multiple calls within one frame
+     * are collapsed into a single render, avoiding redundant DOM rebuilds
+     * when triggered by cascading state changes (e.g. model switch →
+     * settings refresh → prompt list update).
      */
     async renderPromptManagerListItems() {
+        if (!this.serviceSettings.prompts) return;
+        if (this._rlrafId) {
+            cancelAnimationFrame(this._rlrafId);
+        }
+        this._rlrafId = requestAnimationFrame(() => {
+            this._rlrafId = null;
+            this._renderPromptManagerListItemsImpl();
+        });
+    }
+
+    /**
+     * Internal: performs the actual DOM rebuild.
+     * Do not call directly — use renderPromptManagerListItems().
+     */
+    async _renderPromptManagerListItemsImpl() {
         if (!this.serviceSettings.prompts) return;
 
         // Validate groups before rendering
