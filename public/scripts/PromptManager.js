@@ -4142,7 +4142,19 @@ class PromptManager {
         const result = await Popup.show.input(t`Enter group name:`, null, '');
         if (!result) return;
 
-        const group = this.createPromptGroup(result, identifiers);
+        // If all selected identifiers belong to the same group, create the
+        // new group as its child (nested sub-group) instead of a top-level group
+        let parentId = null;
+        const groups = this.getPromptGroups();
+        for (const g of groups) {
+            const allInThis = identifiers.every(id => g.identifiers.includes(id));
+            if (allInThis) {
+                parentId = g.id;
+                break;
+            }
+        }
+
+        const group = this.createPromptGroup(result, identifiers, parentId);
         if (!group) {
             toastr.error(t`Failed to create group.`);
             return;
