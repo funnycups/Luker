@@ -820,7 +820,7 @@ li.prompt-manager-group.expanded .prompt-manager-group-toggle {
 
 /* --- Group child indentation --- */
 #completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-group-child {
-    margin-left: 12px;
+    margin-left: calc(var(--group-indent, 0px) + 12px);
     border-left-width: 2px;
 }
 
