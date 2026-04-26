@@ -432,6 +432,10 @@ async function sendClaudeRequest(request, response) {
             additionalHeaders['anthropic-beta'] = betaHeaders.join(',');
         }
 
+        mergeObjectWithYaml(requestBody, request.body.custom_include_body);
+        excludeKeysByYaml(requestBody, request.body.custom_exclude_body);
+        mergeObjectWithYaml(additionalHeaders, request.body.custom_include_headers);
+
         console.debug('Claude request:', requestBody);
 
         const generateResponse = await fetch(apiUrl + '/messages', {
@@ -1095,6 +1099,7 @@ async function sendDeepSeekRequest(request, response) {
 
     try {
         let bodyParams = {};
+        const headers = {};
 
         if (request.body.logprobs > 0) {
             bodyParams['top_logprobs'] = request.body.logprobs;
@@ -1126,6 +1131,9 @@ async function sendDeepSeekRequest(request, response) {
             request.body.messages.push(message);
         }
 
+        mergeObjectWithYaml(bodyParams, request.body.custom_include_body);
+        mergeObjectWithYaml(headers, request.body.custom_include_headers);
+
         const processedMessages = addAssistantPrefix(postProcessPrompt(request.body.messages, PROMPT_PROCESSING_TYPE.SEMI_TOOLS, getPromptNames(request)), bodyParams.tools, 'prefix');
 
         if (/-reasoner/.test(request.body.model)) {
@@ -1146,11 +1154,14 @@ async function sendDeepSeekRequest(request, response) {
             ...bodyParams,
         };
 
+        excludeKeysByYaml(requestBody, request.body.custom_exclude_body);
+
         const config = {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': 'Bearer ' + apiKey,
+                ...headers,
             },
             body: JSON.stringify(requestBody),
             signal: controller.signal,
@@ -1847,6 +1858,7 @@ router.post('/status', async function (request, statusResponse) {
             apiUrl = new URL(request.body.reverse_proxy || API_DEEPSEEK.replace('/beta', '')).toString();
             apiKey = request.body.reverse_proxy ? request.body.proxy_password : readProviderSecret(request, SECRET_KEYS.DEEPSEEK);
             headers = {};
+            mergeObjectWithYaml(headers, request.body.custom_include_headers);
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.XAI) {
             apiUrl = new URL(request.body.reverse_proxy || API_XAI).toString();
             apiKey = request.body.reverse_proxy ? request.body.proxy_password : readProviderSecret(request, SECRET_KEYS.XAI);
@@ -1879,6 +1891,8 @@ router.post('/status', async function (request, statusResponse) {
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.CLAUDE) {
             apiUrl = new URL(request.body.reverse_proxy || API_CLAUDE).toString();
             apiKey = request.body.reverse_proxy ? request.body.proxy_password : readProviderSecret(request, SECRET_KEYS.CLAUDE);
+            headers = {};
+            mergeObjectWithYaml(headers, request.body.custom_include_headers);
 
             if (!apiKey && !request.body.reverse_proxy) {
                 console.warn('Claude API key is missing.');
@@ -1891,6 +1905,7 @@ router.post('/status', async function (request, statusResponse) {
                     headers: {
                         'anthropic-version': '2023-06-01',
                         ...(apiKey ? { 'x-api-key': apiKey } : {}),
+                        ...headers,
                     },
                 });
 
