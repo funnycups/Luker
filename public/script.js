@@ -13213,7 +13213,7 @@ function rememberSettingsSnapshot(nextSettings = null) {
         settingsSnapshotCache = null;
         return;
     }
-    settingsSnapshotCache = normalizeJsonObject(nextSettings);
+    settingsSnapshotCache = nextSettings;
 }
 
 function getSettingsSnapshot() {
