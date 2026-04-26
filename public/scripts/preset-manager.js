@@ -1640,10 +1640,9 @@ class PresetManager {
             for (const presetName of group.presets) {
                 const opt = allOptions.find(o => o.text === presetName);
                 if (opt) {
-                    const memberIndent = '\u00A0'.repeat((depth + 1) * 3);
                     const $option = $('<option></option>')
                         .val(opt.value)
-                        .text(memberIndent + opt.text)
+                        .text(opt.text)
                         .attr('data-preset-group-id', group.id)
                         .attr('data-preset-group-member', 'true')
                         .attr('data-depth', depth);
