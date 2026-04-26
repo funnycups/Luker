@@ -4012,7 +4012,7 @@ class PromptManager {
      * Show/hide prompt items in edit mode based on group collapse state.
      */
     _applyGroupEditCollapsedState() {
-        const list = this.promptList;
+        const list = this.listElement;
         if (!list || !this._groupEditMode) return;
         const items = list.querySelectorAll('.prompt-manager-group-editing');
         for (const item of items) {
