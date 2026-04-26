@@ -410,24 +410,19 @@ function registerPresetManagers() {
                             },
                             createGroup: async (name, parentId) => {
                                 const id = primaryManager.createPresetGroup(name, parentId || null);
-                                primaryManager.rebuildSelectWithGroups();
                                 return id;
                             },
                             renameGroup: async (groupId, newName) => {
                                 primaryManager.renamePresetGroup(groupId, newName);
-                                primaryManager.rebuildSelectWithGroups();
                             },
                             deleteGroup: async (groupId) => {
                                 primaryManager.deletePresetGroup(groupId);
-                                primaryManager.rebuildSelectWithGroups();
                             },
                             addToGroup: async (presetName, groupId) => {
                                 primaryManager.addPresetToGroup(presetName, groupId);
-                                primaryManager.rebuildSelectWithGroups();
                             },
                             removeFromGroup: async (presetName) => {
                                 primaryManager.removePresetFromGroup(presetName);
-                                primaryManager.rebuildSelectWithGroups();
                             },
                         },
             });

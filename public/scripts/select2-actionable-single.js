@@ -139,6 +139,8 @@ function refreshOpenDropdown(selectElement) {
     if (isOpen) {
         $select.select2('close');
         $select.select2('open');
+    } else {
+        $select.select2('open');
     }
 }
 
