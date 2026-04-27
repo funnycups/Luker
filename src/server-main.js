@@ -16,11 +16,17 @@ import responseTime from 'response-time';
 import helmet from 'helmet';
 import bodyParser from 'body-parser';
 
-// Timestamp all console output for easier log correlation
+// Timestamp all console output and capture to circular log buffer
+const BACKEND_LOG_MAX = 500;
+export const backendLogBuffer = [];
+let backendLogCounter = 0;
 ['log', 'warn', 'error'].forEach((level) => {
     const original = console[level].bind(console);
     console[level] = (...args) => {
         const ts = new Date().toISOString();
+        const entry = { id: ++backendLogCounter, ts, level, message: args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ') };
+        if (backendLogBuffer.length >= BACKEND_LOG_MAX) backendLogBuffer.shift();
+        backendLogBuffer.push(entry);
         original(`[${ts}]`, ...args);
     };
 });
@@ -279,6 +285,27 @@ app.post('/api/ping', (request, response) => {
     }
 
     response.sendStatus(204);
+});
+
+// Debug export endpoints
+app.get('/api/debug/backend-logs', (_request, response) => {
+    response.json(backendLogBuffer);
+});
+
+app.get('/api/debug/export', async (request, response) => {
+    const bundle = {
+        exportedAt: new Date().toISOString(),
+        backendLogs: backendLogBuffer,
+        runtime: {
+            node: process.version,
+            platform: process.platform,
+            arch: process.arch,
+            uptime: process.uptime(),
+            memory: process.memoryUsage(),
+            cwd: serverDirectory,
+        },
+    };
+    response.json(bundle);
 });
 
 if (cliArgs.enableCorsProxy) {

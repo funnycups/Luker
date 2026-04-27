@@ -270,6 +270,7 @@ import { appendFileContent, hasPendingFileAttachment, populateFileAttachment, de
 import { getPresetManager, initPresetManager } from './scripts/preset-manager.js';
 import { evaluateMacros, getLastMessageId, initMacros } from './scripts/macros.js';
 import { installFrontendLogCapture, setFrontendConsoleDebugLoggingEnabled } from './scripts/frontend-log-manager.js';
+import { initDebugExportButton } from './scripts/debug-export.js';
 import { currentUser, isAdmin, setUserControls } from './scripts/user.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup, callGenericPopup, fixToastrForDialogs } from './scripts/popup.js';
 import { renderTemplate, renderTemplateAsync } from './scripts/templates.js';
@@ -1650,6 +1651,7 @@ export async function pingServer() {
 //MARK: firstLoadInit
 async function firstLoadInit() {
     console.debug('[init] firstLoadInit start');
+    performance.mark('[init] start');
     installSettingsGetRequestInterceptor();
 
     try {
@@ -1694,6 +1696,7 @@ async function firstLoadInit() {
     console.debug('[init] calling getSettings...');
     await getSettings({ bootstrap: true, payload: bootstrapSnapshot?.settings });
     console.debug('[init] getSettings done');
+    performance.mark('[init] getSettings done');
     primeRecentChatsSnapshotPromise(fetchRecentChatsSnapshot());
     initWelcomeScreen();
     initKeyboard();
@@ -1706,6 +1709,7 @@ async function firstLoadInit() {
         console.debug('[init] hiding loader');
         await hideLoader();
         console.debug('[init] loader hidden');
+        performance.mark('[init] loader hidden');
     }
     await fixViewport();
     await yieldToBrowser();
@@ -1729,6 +1733,7 @@ async function firstLoadInit() {
         () => getCharacters(),
     ]);
     console.debug('[init] startup tasks batch 1 done');
+    performance.mark('[init] batch1 done');
     await yieldToBrowser();
 
     const shouldAutoloadCurrentChat = Boolean(power_user.auto_load_chat && (active_character || active_group));
@@ -1753,6 +1758,7 @@ async function firstLoadInit() {
         () => loadMacroAutoCompleteModule().then(({ initMacroAutoComplete }) => initMacroAutoComplete()),
     ]);
     console.debug('[init] startup tasks batch 2 done');
+    performance.mark('[init] batch2 done');
     await yieldToBrowser();
 
     console.debug('[init] startup tasks batch 3 start');
@@ -1777,8 +1783,11 @@ async function firstLoadInit() {
         () => doDailyExtensionUpdatesCheck(),
     ]);
     console.debug('[init] startup tasks batch 3 done');
+    performance.mark('[init] batch3 done');
     await eventSource.emit(event_types.APP_READY);
     console.debug('[init] firstLoadInit complete');
+    performance.mark('[init] complete');
+    initDebugExportButton();
 }
 
 async function fixViewport() {
