@@ -16,6 +16,15 @@ import responseTime from 'response-time';
 import helmet from 'helmet';
 import bodyParser from 'body-parser';
 
+// Timestamp all console output for easier log correlation
+['log', 'warn', 'error'].forEach((level) => {
+    const original = console[level].bind(console);
+    console[level] = (...args) => {
+        const ts = new Date().toISOString();
+        original(`[${ts}]`, ...args);
+    };
+});
+
 // local library imports
 import './fetch-patch.js';
 import { serverDirectory } from './server-directory.js';

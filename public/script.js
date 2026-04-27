@@ -1649,6 +1649,7 @@ export async function pingServer() {
 
 //MARK: firstLoadInit
 async function firstLoadInit() {
+    console.debug('[init] firstLoadInit start');
     installSettingsGetRequestInterceptor();
 
     try {
@@ -1660,6 +1661,7 @@ async function firstLoadInit() {
         throw new Error('Initialization failed');
     }
 
+    console.debug('[init] csrf-token done, showing loader');
     showLoader();
     const clientVersionPromise = getClientVersion();
     const bootstrapPromise = fetchBootstrapSnapshot();
@@ -1673,7 +1675,9 @@ async function firstLoadInit() {
     applyBrowserFixes();
     await clientVersionPromise;
     await initSecrets();
+    console.debug('[init] fetching bootstrap snapshot...');
     const bootstrapSnapshot = await bootstrapPromise;
+    console.debug('[init] bootstrap snapshot received');
     if (bootstrapSnapshot?.secret_state) {
         primeSecretStateSnapshot(bootstrapSnapshot.secret_state);
     }
@@ -1687,7 +1691,9 @@ async function firstLoadInit() {
     initKoboldSettings();
     initNovelAISettings();
     initSystemPrompts();
+    console.debug('[init] calling getSettings...');
     await getSettings({ bootstrap: true, payload: bootstrapSnapshot?.settings });
+    console.debug('[init] getSettings done');
     primeRecentChatsSnapshotPromise(fetchRecentChatsSnapshot());
     initWelcomeScreen();
     initKeyboard();
@@ -1697,11 +1703,15 @@ async function firstLoadInit() {
     restoreCharacterSearchVisibility();
 
     if (isLoaderVisible()) {
+        console.debug('[init] hiding loader');
         await hideLoader();
+        console.debug('[init] loader hidden');
     }
     await fixViewport();
     await yieldToBrowser();
+    console.debug('[init] initPresetManager start');
     await initPresetManager();
+    console.debug('[init] initPresetManager done');
 
     if (bootstrapSnapshot) {
         primeUserAvatarsSnapshot(bootstrapSnapshot.avatars);
@@ -1709,6 +1719,7 @@ async function firstLoadInit() {
         primeCharactersSnapshot(bootstrapSnapshot.characters);
     }
 
+    console.debug('[init] startup tasks batch 1 start');
     await runStartupTasks([
         () => initTags(),
         () => initBookmarks(),
@@ -1717,14 +1728,18 @@ async function firstLoadInit() {
         () => getUserAvatars(true, user_avatar),
         () => getCharacters(),
     ]);
+    console.debug('[init] startup tasks batch 1 done');
     await yieldToBrowser();
 
     const shouldAutoloadCurrentChat = Boolean(power_user.auto_load_chat && (active_character || active_group));
     if (!shouldAutoloadCurrentChat) {
+        console.debug('[init] openWelcomeScreen start');
         await openWelcomeScreen({ force: true });
+        console.debug('[init] openWelcomeScreen done');
         await yieldToBrowser();
     }
 
+    console.debug('[init] startup tasks batch 2 start (extensions)');
     await runStartupTasks([
         () => initTextGenModelSelects(),
         () => initSystemMessages(),
@@ -1737,8 +1752,10 @@ async function firstLoadInit() {
         () => initSlashCommandAutoComplete(),
         () => loadMacroAutoCompleteModule().then(({ initMacroAutoComplete }) => initMacroAutoComplete()),
     ]);
+    console.debug('[init] startup tasks batch 2 done');
     await yieldToBrowser();
 
+    console.debug('[init] startup tasks batch 3 start');
     await runStartupTasks([
         () => initWorldInfo(),
         () => initHorde(),
@@ -1759,7 +1776,9 @@ async function firstLoadInit() {
         () => addDebugFunctions(),
         () => doDailyExtensionUpdatesCheck(),
     ]);
+    console.debug('[init] startup tasks batch 3 done');
     await eventSource.emit(event_types.APP_READY);
+    console.debug('[init] firstLoadInit complete');
 }
 
 async function fixViewport() {

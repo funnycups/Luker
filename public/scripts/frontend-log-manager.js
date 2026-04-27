@@ -485,7 +485,9 @@ export function installFrontendLogCapture() {
                 return;
             }
 
-            emitConsoleToBase(normalizedLevel, args);
+            const now = new Date();
+            const ts = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}.${String(now.getMilliseconds()).padStart(3, '0')}`;
+            emitConsoleToBase(normalizedLevel, [`[${ts}]`, ...args]);
         };
     }
 
