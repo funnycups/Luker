@@ -29,6 +29,23 @@ export const AUTOCOMPLETE_STATE = {
     ALWAYS: 2,
 };
 
+/**
+ * Throttles a function to at most once per animation frame.
+ * Multiple calls within the same frame are collapsed into one.
+ * @param {Function} fn
+ * @returns {Function}
+ */
+function rafThrottle(fn) {
+    let rafId = null;
+    return () => {
+        if (rafId !== null) return;
+        rafId = requestAnimationFrame(() => {
+            rafId = null;
+            fn();
+        });
+    };
+}
+
 export class AutoComplete {
     /**@type {HTMLTextAreaElement|HTMLInputElement}*/ textarea;
     /**@type {boolean}*/ isFloating = false;
@@ -111,9 +128,9 @@ export class AutoComplete {
 
         this.renderDebounced = debounce(this.render.bind(this), 10);
         this.renderDetailsDebounced = debounce(this.renderDetails.bind(this), 10);
-        this.updatePositionDebounced = debounce(this.updatePosition.bind(this), 10);
-        this.updateDetailsPositionDebounced = debounce(this.updateDetailsPosition.bind(this), 10);
-        this.updateFloatingPositionDebounced = debounce(this.updateFloatingPosition.bind(this), 10);
+        this.updatePositionDebounced = rafThrottle(this.updatePosition.bind(this));
+        this.updateDetailsPositionDebounced = rafThrottle(this.updateDetailsPosition.bind(this));
+        this.updateFloatingPositionDebounced = rafThrottle(this.updateFloatingPosition.bind(this));
 
         textarea.addEventListener('input', () => {
             this.selectionStart = this.textarea.selectionStart;
@@ -126,9 +143,15 @@ export class AutoComplete {
         });
         textarea.addEventListener('blur', () => this.hide());
         if (isFloating) {
-            textarea.addEventListener('scroll', () => this.updateFloatingPositionDebounced());
+            textarea.addEventListener('scroll', () => {
+                if (power_user.stscript.autocomplete.state === AUTOCOMPLETE_STATE.DISABLED) return;
+                this.updateFloatingPositionDebounced();
+            });
         }
-        window.addEventListener('resize', () => this.updatePositionDebounced());
+        window.addEventListener('resize', () => {
+            if (power_user.stscript.autocomplete.state === AUTOCOMPLETE_STATE.DISABLED) return;
+            this.updatePositionDebounced();
+        });
     }
 
     /**
