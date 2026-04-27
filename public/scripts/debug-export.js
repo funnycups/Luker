@@ -4,6 +4,7 @@
  * redacts sensitive data, and downloads as JSON.
  */
 import { getFrontendLogsSnapshot } from './frontend-log-manager.js';
+import { t } from './i18n.js';
 
 const REDACT_PATTERNS = [
     // API keys: sk-... , Bearer ... , key=...
@@ -87,40 +88,19 @@ export async function downloadDebugBundle() {
     URL.revokeObjectURL(url);
 
     console.log('[debug-export] Debug bundle downloaded');
-    toastr.success('调试日志已导出', '导出成功');
+    toastr.success(t`Debug logs have been exported.`, t`Export complete`);
 }
 
 /**
- * Inject the export button into the UI.
- * Places it in the user settings panel under the debug logging toggle.
+ * Bind click behavior to the export button in User Settings.
  */
 export function initDebugExportButton() {
-    const tryInject = () => {
-        const checkbox = document.getElementById('frontend_debug_logging');
-        if (!checkbox) {
-            setTimeout(tryInject, 500);
-            return;
-        }
+    const button = document.getElementById('debug-export-btn');
+    if (!button) return;
+    if (button.dataset.debugExportBound === 'true') return;
 
-        if (document.getElementById('debug-export-btn')) return;
-
-        const label = checkbox.closest('label');
-        if (!label) return;
-
-        const container = document.createElement('div');
-        container.className = 'flex-container alignItemsCenter';
-        container.style.marginTop = '8px';
-        container.innerHTML = `
-            <button id="debug-export-btn" class="menu_button" type="button">
-                <i class="fa-solid fa-bug"></i> 导出调试日志
-            </button>
-        `;
-        label.insertAdjacentElement('afterend', container);
-
-        document.getElementById('debug-export-btn').addEventListener('click', () => {
-            downloadDebugBundle();
-        });
-    };
-
-    tryInject();
+    button.dataset.debugExportBound = 'true';
+    button.addEventListener('click', () => {
+        downloadDebugBundle();
+    });
 }

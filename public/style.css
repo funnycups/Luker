@@ -4207,6 +4207,21 @@ button.toast-close-button {
     margin-top: 8px;
 }
 
+#debug-export-btn {
+    width: auto;
+    min-width: max-content;
+    max-width: 100%;
+    white-space: nowrap;
+    display: inline-flex;
+    writing-mode: horizontal-tb;
+    text-orientation: mixed;
+    gap: 0.35em;
+}
+
+#account_controls #debug-export-btn {
+    flex: 0 0 auto;
+}
+
 #dialogue_del_mes {
     display: none;
 }
