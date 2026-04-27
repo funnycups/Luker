@@ -161,6 +161,44 @@ Orchestration results are bound to the user message floor that triggered orchest
 
 Runtime traces (each node's input/output, execution time, etc.) are only saved in memory, automatically cleared when switching chats, and not persisted to disk.
 
+### Result Event Dispatch
+
+The Orchestrator dispatches a frontend event after each run outcome so external extensions/scripts can consume orchestration results without reading UI internals.
+
+- Event name: `luker.orchestrator.result`
+- Dispatch channel: `getContext().eventSource`
+- Trigger timing: emitted when orchestration is `completed`, `reused`, `cancelled`, or `failed`
+
+Event payload fields:
+
+| Field | Type | Description |
+|------|------|-------------|
+| `module` | string | Always `orchestrator` |
+| `event` | string | Always `luker.orchestrator.result` |
+| `status` | string | `completed` / `reused` / `cancelled` / `failed` |
+| `generationType` | string | Current generation type (`normal`, `continue`, etc.) |
+| `chatKey` | string | Current chat key |
+| `at` | string | ISO timestamp |
+| `anchorPlayableFloor` | number | Bound user turn floor (0 when unavailable) |
+| `anchorHash` | string | Anchor hash for validation |
+| `capsuleText` | string | Final injected orchestration guidance text |
+| `stageOutputs` | array | Compact stage outputs (present for `completed` / `reused`) |
+| `reviewRerunCount` | number | Review rerun count |
+| `reason` | string | Machine-readable reason for cancellation/failure/skips |
+| `note` | string | Human-readable note |
+| `error` | string | Error message when status is `failed` |
+
+Example subscriber:
+
+```js
+const context = getContext();
+context.eventSource.on('luker.orchestrator.result', (evt) => {
+  if (evt.status === 'completed' || evt.status === 'reused') {
+    console.log('Orchestrator capsule:', evt.capsuleText);
+  }
+});
+```
+
 ## Import/Export
 
 Orchestration configurations support JSON file import/export, using two format identifiers:

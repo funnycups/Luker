@@ -26,6 +26,7 @@ import {
 } from './ui-templates.js';
 
 const MODULE_NAME = 'orchestrator';
+const ORCH_RESULT_EVENT = 'luker.orchestrator.result';
 const CAPSULE_PROMPT_KEY = 'luker_orchestrator_capsule';
 const UI_BLOCK_ID = 'orchestrator_settings';
 const ORCH_CHAT_STATE_NAMESPACE = 'luker_orchestrator_state';
@@ -1966,6 +1967,50 @@ function getLatestOrchestrationEntry(context) {
         anchorPlayableFloor: normalizeAnchorPlayableFloor(latestOrchestrationSnapshot.anchorPlayableFloor),
         injectedText,
     };
+}
+
+function buildOrchestratorResultEventPayload(context, payload, status, options = {}) {
+    const generationType = String(payload?.type || 'normal').trim().toLowerCase() || 'normal';
+    const chatKey = String(getChatKey(context) || '');
+    const includeSnapshot = Boolean(options.includeSnapshot);
+    const snapshot = includeSnapshot && latestOrchestrationSnapshot && typeof latestOrchestrationSnapshot === 'object'
+        ? latestOrchestrationSnapshot
+        : null;
+    const sameChatSnapshot = snapshot && String(snapshot.chatKey || '') === chatKey
+        ? snapshot
+        : null;
+    const entry = sameChatSnapshot ? getLatestOrchestrationEntry(context) : null;
+
+    return {
+        module: MODULE_NAME,
+        event: ORCH_RESULT_EVENT,
+        status: String(status || 'unknown'),
+        generationType,
+        chatKey,
+        at: new Date().toISOString(),
+        anchorPlayableFloor: Number(entry?.anchorPlayableFloor || 0),
+        anchorHash: String(sameChatSnapshot?.anchorHash || ''),
+        capsuleText: String(entry?.injectedText || ''),
+        stageOutputs: sameChatSnapshot && Array.isArray(sameChatSnapshot.stageOutputs)
+            ? structuredClone(sameChatSnapshot.stageOutputs)
+            : [],
+        reviewRerunCount: Number(options.reviewRerunCount || 0),
+        reason: String(options.reason || ''),
+        note: String(options.note || ''),
+        error: String(options.error || ''),
+    };
+}
+
+async function emitOrchestratorResultEvent(context, payload, status, options = {}) {
+    if (!context?.eventSource || typeof context.eventSource.emit !== 'function') {
+        return;
+    }
+    const eventPayload = buildOrchestratorResultEventPayload(context, payload, status, options);
+    try {
+        await context.eventSource.emit(ORCH_RESULT_EVENT, eventPayload);
+    } catch (error) {
+        console.warn(`[${MODULE_NAME}] Failed to emit result event`, error);
+    }
 }
 
 function getTargetAssistantLayer(payload) {
@@ -5454,6 +5499,11 @@ async function onWorldInfoFinalized(payload) {
         await loadOrchestratorChatState(context, { force: false });
         clearCapsulePrompt(context);
         await selectLatestValidOrchestrationSnapshot(context, { persistCleanup: true });
+        await emitOrchestratorResultEvent(context, payload, 'cancelled', {
+            reason: 'generation_aborted_before_orchestration',
+            note: 'Generation was aborted before orchestration started.',
+            includeSnapshot: false,
+        });
         updateUiStatus(i18n('Generation aborted. Skipped orchestration.'));
         return;
     }
@@ -5492,6 +5542,11 @@ async function onWorldInfoFinalized(payload) {
             clearLatestOrchestrationRuntimeTrace(context);
             clearCapsulePrompt(context);
             await selectLatestValidOrchestrationSnapshot(context, { persistCleanup: true });
+            await emitOrchestratorResultEvent(context, payload, 'cancelled', {
+                reason: 'empty_messages',
+                note: 'Skipped orchestration because there are no playable messages.',
+                includeSnapshot: false,
+            });
             return;
         }
         const chatKey = getChatKey(context);
@@ -5513,6 +5568,10 @@ async function onWorldInfoFinalized(payload) {
                 });
                 injectCapsuleToPayload(payload, capsuleText, settings);
                 throwIfAborted(orchestrationPayload?.signal, 'Orchestration aborted.');
+                await emitOrchestratorResultEvent(context, payload, 'reused', {
+                    includeSnapshot: true,
+                    note: 'Reused previous orchestration snapshot.',
+                });
                 updateUiStatus(i18n('Orchestrator completed.'));
                 clearRunInfoToast();
                 return;
@@ -5544,6 +5603,11 @@ async function onWorldInfoFinalized(payload) {
                 note: i18n('Orchestration cancelled by user before completion.'),
             });
             clearCapsulePrompt(context);
+            await emitOrchestratorResultEvent(context, payload, 'cancelled', {
+                reason: 'user_stopped',
+                note: 'Orchestration cancelled by user before completion.',
+                includeSnapshot: false,
+            });
             updateUiStatus(i18n('Orchestrator cancelled by user.'));
             return;
         }
@@ -5559,6 +5623,10 @@ async function onWorldInfoFinalized(payload) {
             reviewRerunCount: Number(finalRun?.reviewRerunCount || 0),
         });
         throwIfAborted(orchestrationPayload?.signal, 'Orchestration aborted.');
+        await emitOrchestratorResultEvent(context, payload, 'completed', {
+            includeSnapshot: true,
+            reviewRerunCount: Number(finalRun?.reviewRerunCount || 0),
+        });
         updateUiStatus(i18n('Orchestrator completed.'));
         clearRunInfoToast();
     } catch (error) {
@@ -5573,6 +5641,13 @@ async function onWorldInfoFinalized(payload) {
             updateUiStatus(generationAborted
                 ? i18n('Generation aborted. Skipped orchestration.')
                 : i18n('Orchestrator cancelled by user.'));
+            await emitOrchestratorResultEvent(context, payload, 'cancelled', {
+                reason: generationAborted ? 'generation_aborted' : 'orchestration_cancelled',
+                note: generationAborted
+                    ? 'Generation aborted before orchestration completed.'
+                    : 'Orchestration cancelled by user.',
+                includeSnapshot: false,
+            });
             clearRunInfoToast();
             return;
         }
@@ -5584,6 +5659,11 @@ async function onWorldInfoFinalized(payload) {
         const failText = i18nFormat('Orchestrator failed: ${0}', String(error?.message || error));
         updateUiStatus(failText);
         clearRunInfoToast();
+        await emitOrchestratorResultEvent(context, payload, 'failed', {
+            reason: 'runtime_error',
+            error: String(error?.message || error),
+            includeSnapshot: false,
+        });
         notifyError(failText);
     } finally {
         linkedAbort.cleanup();

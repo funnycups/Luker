@@ -161,6 +161,44 @@ AI 迭代工作台的會話歷史會持久化到角色卡或全域設定中。�
 
 運行態軌跡（每個節點的輸入輸出、執行時間等）僅儲存在記憶體中，聊天切換時自動清空，不持久化到磁碟。
 
+### 編排結果事件下發
+
+編排器會在每次運行結論產生後下發前端事件，外部外掛或腳本無需依賴 UI 內部狀態即可消費編排結果。
+
+- 事件名：`luker.orchestrator.result`
+- 下發通道：`getContext().eventSource`
+- 觸發時機：編排狀態為 `completed`、`reused`、`cancelled`、`failed` 時
+
+事件負載欄位：
+
+| 欄位 | 型別 | 說明 |
+|------|------|------|
+| `module` | string | 固定為 `orchestrator` |
+| `event` | string | 固定為 `luker.orchestrator.result` |
+| `status` | string | `completed` / `reused` / `cancelled` / `failed` |
+| `generationType` | string | 當前生成類型（`normal`、`continue` 等） |
+| `chatKey` | string | 當前聊天鍵 |
+| `at` | string | ISO 時間戳 |
+| `anchorPlayableFloor` | number | 綁定的使用者樓層（不可用時為 0） |
+| `anchorHash` | string | 錨點雜湊（用於校驗） |
+| `capsuleText` | string | 最終注入提示詞的編排指導文字 |
+| `stageOutputs` | array | 壓縮後的階段輸出（`completed` / `reused` 時提供） |
+| `reviewRerunCount` | number | 審查重跑次數 |
+| `reason` | string | 面向機器的取消/失敗/跳過原因 |
+| `note` | string | 面向人的補充說明 |
+| `error` | string | `failed` 時的錯誤訊息 |
+
+訂閱範例：
+
+```js
+const context = getContext();
+context.eventSource.on('luker.orchestrator.result', (evt) => {
+  if (evt.status === 'completed' || evt.status === 'reused') {
+    console.log('編排注入文字:', evt.capsuleText);
+  }
+});
+```
+
 ## 匯入匯出
 
 編排設定支援 JSON 檔案的匯入匯出，使用兩種格式標識：
