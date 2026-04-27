@@ -152,6 +152,35 @@ function dismissContextMenu() {
 }
 
 /**
+ * Repositions a context menu so it always stays within the viewport.
+ * @param {JQuery<HTMLElement>} $menu
+ * @param {number} x
+ * @param {number} y
+ */
+function positionContextMenuInViewport($menu, x, y) {
+    if (!$menu?.length) {
+        return;
+    }
+
+    const margin = 8;
+    const viewportWidth = window.visualViewport?.width ?? window.innerWidth ?? document.documentElement.clientWidth;
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight ?? document.documentElement.clientHeight;
+    const menuWidth = $menu.outerWidth() ?? 0;
+    const menuHeight = $menu.outerHeight() ?? 0;
+
+    const maxLeft = Math.max(margin, viewportWidth - menuWidth - margin);
+    const maxTop = Math.max(margin, viewportHeight - menuHeight - margin);
+
+    const left = Math.min(Math.max(margin, x), maxLeft);
+    const top = Math.min(Math.max(margin, y), maxTop);
+
+    $menu.css({
+        left: left + 'px',
+        top: top + 'px',
+    });
+}
+
+/**
  * Shows a context menu for a preset option.
  * @param {MouseEvent|{x:number,y:number}} anchor
  * @param {string} presetName
@@ -252,6 +281,7 @@ function showPresetContextMenu(anchor, presetName, callbacks, selectElement, own
     });
 
     $(document.body).append($menu);
+    positionContextMenuInViewport($menu, x, y);
 
     // Dismiss on outside click (next tick)
     requestAnimationFrame(() => {
