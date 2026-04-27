@@ -1,6 +1,7 @@
 import { describe, test, expect, jest } from '@jest/globals';
 import {
     keyToEnv,
+    getConfigValue,
     getBasicAuthHeader,
     getHexString,
     normalizeZipEntryPath,
@@ -36,6 +37,22 @@ describe('keyToEnv', () => {
 
     test('should coerce non-string input via String()', () => {
         expect(keyToEnv(42)).toBe('SILLYTAVERN_42');
+    });
+});
+
+describe('getConfigValue', () => {
+    test('should parse env var "false" as boolean false with boolean converter', () => {
+        const envKey = keyToEnv('hostWhitelist.enabled');
+        const originalValue = process.env[envKey];
+        process.env[envKey] = 'false';
+
+        expect(getConfigValue('hostWhitelist.enabled', true, 'boolean')).toBe(false);
+
+        if (originalValue === undefined) {
+            delete process.env[envKey];
+        } else {
+            process.env[envKey] = originalValue;
+        }
     });
 });
 
