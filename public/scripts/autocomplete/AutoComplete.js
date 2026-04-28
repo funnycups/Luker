@@ -537,7 +537,8 @@ export class AutoComplete {
     /**
      * Update position of DOM.
      */
-    updatePosition() {
+     updatePosition() {
+        if (!this.visible) return;
         if (this.isFloating) {
             this.updateFloatingPosition();
         } else {
@@ -677,42 +678,61 @@ export class AutoComplete {
     getCursorPosition() {
         const inputRect = this.textarea.getBoundingClientRect();
         const style = window.getComputedStyle(this.textarea);
-        if (!this.clone) {
-            this.clone = document.createElement('div');
-            for (const key of style) {
-                this.clone.style[key] = style[key];
+        if (!this._cursorClone) {
+            this._cursorClone = document.createElement('div');
+            // Only copy layout-relevant CSS properties, not all ~300
+            const RELEVANT_PROPS = [
+                'direction', 'font', 'fontFamily', 'fontSize', 'fontStretch', 'fontStyle',
+                'fontVariant', 'fontWeight', 'letterSpacing', 'lineHeight',
+                'overflowWrap', 'padding', 'paddingBlock', 'paddingInline',
+                'tabSize', 'textAlign', 'textIndent', 'textRendering', 'textTransform',
+                'whiteSpace', 'wordBreak', 'wordSpacing', 'writingMode',
+                'border', 'borderBlock', 'borderInline', 'boxSizing',
+            ];
+            for (const key of RELEVANT_PROPS) {
+                this._cursorClone.style[key] = style[key];
             }
-            this.clone.style.position = 'fixed';
-            this.clone.style.visibility = 'hidden';
-            document.body.append(this.clone);
+            this._cursorClone.style.position = 'fixed';
+            this._cursorClone.style.visibility = 'hidden';
+            this._cursorClone.style.pointerEvents = 'none';
+            document.body.append(this._cursorClone);
+            this._cursorLocator = document.createElement('span');
+            this._cursorClone.append(this._cursorLocator);
             const mo = new MutationObserver(muts => {
                 if (muts.find(it => Array.from(it.removedNodes).includes(this.textarea))) {
-                    this.clone.remove();
+                    this._cursorClone.remove();
+                    this._cursorClone = null;
+                    this._cursorLocator = null;
                 }
             });
             mo.observe(this.textarea.parentElement, { childList: true });
         }
-        this.clone.style.height = `${inputRect.height}px`;
-        this.clone.style.left = `${inputRect.left}px`;
-        this.clone.style.top = `${inputRect.top}px`;
-        this.clone.style.whiteSpace = style.whiteSpace;
-        this.clone.style.tabSize = style.tabSize;
+        this._cursorClone.style.height = `${inputRect.height}px`;
+        this._cursorClone.style.left = `${inputRect.left}px`;
+        this._cursorClone.style.top = `${inputRect.top}px`;
+        this._cursorClone.style.whiteSpace = style.whiteSpace;
+        this._cursorClone.style.tabSize = style.tabSize;
         const text = this.textarea.value;
         const before = text.slice(0, this.textarea.selectionStart);
-        this.clone.textContent = before;
-        const locator = document.createElement('span');
-        locator.textContent = text[this.textarea.selectionStart];
-        this.clone.append(locator);
-        this.clone.append(text.slice(this.textarea.selectionStart + 1));
-        this.clone.scrollTop = this.textarea.scrollTop;
-        this.clone.scrollLeft = this.textarea.scrollLeft;
-        const locatorRect = locator.getBoundingClientRect();
-        const location = {
+        const atChar = text[this.textarea.selectionStart] || '';
+        this._cursorClone.childNodes.forEach((n, i) => {
+            if (i === 0) n.textContent = before;
+            else this._cursorClone.removeChild(n);
+        });
+        this._cursorLocator.textContent = atChar;
+        // Restore any trailing text after cursor
+        const after = text.slice(this.textarea.selectionStart + 1);
+        if (after) {
+            this._cursorClone.append(document.createTextNode(after));
+        }
+        this._cursorClone.scrollTop = this.textarea.scrollTop;
+        this._cursorClone.scrollLeft = this.textarea.scrollLeft;
+        const locatorRect = this._cursorLocator.getBoundingClientRect();
+        return {
             left: locatorRect.left,
             top: locatorRect.top,
             bottom: locatorRect.bottom,
         };
-        return location;
     }
 
 
