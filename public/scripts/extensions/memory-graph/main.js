@@ -6722,30 +6722,6 @@ function formatNodeDetail(node, settings = null, context = null, extra = {}) {
     };
 }
 
-function extractWorldInfoHints(payload) {
-    const hints = [];
-    hints.push(...normalizeWorldInfoEntries(payload?.worldInfoBeforeEntries));
-    hints.push(...normalizeWorldInfoEntries(payload?.worldInfoAfterEntries));
-
-    const allActivated = payload?.worldInfoResolution?.allActivatedEntries;
-    if (allActivated && typeof allActivated[Symbol.iterator] === 'function') {
-        for (const entry of allActivated) {
-            if (!entry || typeof entry !== 'object') {
-                continue;
-            }
-            const raw = normalizeText(entry.comment || entry.content || entry.key || entry.keys || '');
-            if (raw) {
-                hints.push(raw);
-            }
-            if (hints.length >= 8) {
-                break;
-            }
-        }
-    }
-
-    return hints;
-}
-
 function compareNodesByRecency(a, b) {
     const aSeq = Number(a?.seqTo ?? -1);
     const bSeq = Number(b?.seqTo ?? -1);
@@ -6854,16 +6830,14 @@ function getRecallQueryBundle(payload, context, settings = null) {
         }
     }
     recentMessages.reverse();
-    const wiHints = extractWorldInfoHints(payload);
     const recentText = recentMessages
         .map(item => `${item.role}: ${item.text}`)
         .join('\n');
-    const fullText = normalizeText([recentText, ...wiHints].join('\n'));
+    const fullText = normalizeText(recentText);
     return {
         last_user: normalizeText(lastUser),
         last_assistant: normalizeText(lastAssistant),
         recent_messages: recentMessages,
-        wi_hints: wiHints,
         fullText,
     };
 }
