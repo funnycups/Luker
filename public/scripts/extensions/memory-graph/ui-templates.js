@@ -191,7 +191,7 @@ export function buildMemoryGraphSettingsHtml(deps) {
                 <option value="hybrid_llm">${escapeHtml(i18n('Hybrid + LLM Rerank'))}</option>
             </select>
             <div id="luker_rpg_memory_hybrid_settings" style="display:none">
-                <small style="opacity:0.85">${escapeHtml(i18n('Embedding uses Vector Storage extension settings (source & model).'))}</small>
+                <small style="opacity:0.85">${escapeHtml(i18n('Embedding uses Vector Storage extension settings (source & model).'))}</small><br>
                 <label>${escapeHtml(i18n('Vector pre-filter Top-K'))} <input id="luker_rpg_memory_vector_topk" class="text_pole" type="number" min="5" max="100" step="1" /></label>
                 <label>${escapeHtml(i18n('Max recall results'))} <input id="luker_rpg_memory_hybrid_max_results" class="text_pole" type="number" min="3" max="50" step="1" /></label>
             </div>
