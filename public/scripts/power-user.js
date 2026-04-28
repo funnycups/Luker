@@ -345,7 +345,7 @@ export const power_user = {
     stscript: {
         matching: 'fuzzy',
         autocomplete: {
-            state: AUTOCOMPLETE_STATE.ALWAYS,
+            state: AUTOCOMPLETE_STATE.DISABLED,
             autoHide: false,
             style: 'theme',
             font: {
