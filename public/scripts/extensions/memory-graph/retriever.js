@@ -348,7 +348,10 @@ export async function runHybridRecall(store, queryText, chatId, settings, option
             if (isAbortError(err)) throw err;
             console.warn(`[${MODULE_NAME}] Vector search failed, continuing without it`, err);
             if (typeof toastr !== 'undefined') {
-                toastr.warning('Vector search failed. Hybrid recall may return suboptimal results. Check your embedding API configuration.');
+                const msg = typeof translate === 'function'
+                    ? await translate('Vector search failed. Hybrid recall may return suboptimal results. Check your embedding API configuration.')
+                    : 'Vector search failed. Hybrid recall may return suboptimal results. Check your embedding API configuration.';
+                toastr.warning(msg);
             }
         }
         timings.vectorMs = Math.round((performance.now() - tVec) * 10) / 10;
