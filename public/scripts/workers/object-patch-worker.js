@@ -1,4 +1,4 @@
-import { applyPatch as applyJsonPatch, compare as compareJsonPatch } from '../util/fast-json-patch.js';
+import { compare as compareJsonPatch } from '../util/fast-json-patch.js';
 
 function isPlainObject(value) {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -82,7 +82,6 @@ function attachObjectPatchTests(previousState, operations) {
         return sourceOperations;
     }
 
-    let workingState = cloneJsonValue(previousState);
     let lastTestedPath = null;
     const guardedOperations = [];
 
@@ -103,7 +102,7 @@ function attachObjectPatchTests(previousState, operations) {
             && path !== lastTestedPath;
 
         if (shouldAddTest) {
-            const resolved = getJsonPointerValue(workingState, path);
+            const resolved = getJsonPointerValue(previousState, path);
             if (resolved.found) {
                 guardedOperations.push({
                     op: 'test',
@@ -115,13 +114,6 @@ function attachObjectPatchTests(previousState, operations) {
         }
 
         guardedOperations.push(operation);
-
-        try {
-            const patchResult = applyJsonPatch(workingState, [operation], true, false);
-            workingState = patchResult?.newDocument;
-        } catch {
-            // Keep operation list intact even if local simulation fails.
-        }
 
         if (opName === 'add' || opName === 'remove') {
             lastTestedPath = null;
