@@ -263,6 +263,8 @@ PEDSA（Personalized Efficient Diffusion with Sparse Approximation）演算法�
 在混合召回中，嵌入來源和模型會讀取 Vector Storage 擴充功能設定，因此可用來源會跟隨 Vector Storage 的能力（包括 Jina）。
 當 Vector Storage 設定不可用時，記憶圖會回退到自身舊版的本地來源/模型欄位。
 
+記憶圖在插入向量時會透過 `metadata` 欄位附帶 `nodeId`，Vector Storage 後端將 `metadata` 原樣透傳儲存。其他外掛也可利用 `metadata` 欄位儲存自訂資料，查詢時隨結果一併返回。此設計使 `hash → nodeId` 的映射不再完全依賴前端索引狀態，即使前端快取遺失也能透過查詢結果直接匹配節點。
+
 如需了解更多技術實作細節，請參閱原始碼。
 
 </details>

@@ -263,6 +263,8 @@ Memory Graph uses an incremental update strategy to manage vector embeddings —
 In hybrid recall, embedding source and model are read from Vector Storage extension settings, so available providers follow Vector Storage capabilities (including Jina).
 If Vector Storage settings are unavailable, Memory Graph falls back to its legacy local source/model fields.
 
+When inserting vectors, the memory graph includes `nodeId` in the `metadata` field. The Vector Storage backend stores `metadata` as-is. Other plugins can also use the `metadata` field for custom data, which is returned alongside query results. This design allows `hash → nodeId` mapping to bypass the frontend index cache — even if the cache is lost, nodes can be matched directly from query results.
+
 For more technical implementation details, please refer to the source code.
 
 </details>

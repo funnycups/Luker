@@ -27,6 +27,7 @@ import {
     getVectorConfigFromSettings,
     validateVectorConfig,
     syncVectorIndex,
+    ensureVectorIndexState,
 } from './vector-index.js';
 import {
     isEntityType,
@@ -8586,6 +8587,18 @@ async function injectMemoryPrompts(context, payload) {
         const queryBundle = getRecallQueryBundle(payload, context, settings);
         const queryText = normalizeText(queryBundle.fullText || '');
         const currentSeq = getLatestSeqIndex(store);
+
+        // Ensure vector index is synced before first hybrid recall
+        const vs = ensureVectorIndexState(store);
+        if (!vs.hashToNodeId || Object.keys(vs.hashToNodeId).length === 0) {
+            const syncVectorConfig = getVectorConfigFromSettings(settings);
+            const effectiveSchema = getEffectiveNodeTypeSchema(context, settings);
+            await syncVectorIndex(store, syncVectorConfig, chatKey, {
+                schema: effectiveSchema,
+                signal: payload?.signal,
+            });
+        }
+
         const enableRerank = recallMethod === 'hybrid_rerank';
         const rerankConfig = enableRerank ? {
             source: String(settings.rerankSource || 'cohere'),

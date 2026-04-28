@@ -294,7 +294,7 @@ export async function insertVectorItems(collectionId, config, items, signal) {
             hash: item.hash,
             text: item.text,
             index: item.index,
-            ...(item.nodeId ? { nodeId: item.nodeId } : {}),
+            metadata: { ...(item.metadata || {}), ...(item.nodeId ? { nodeId: item.nodeId } : {}) },
         })),
     }, signal);
 }

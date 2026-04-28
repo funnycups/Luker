@@ -317,7 +317,7 @@ async function getIndex(directories, collectionId, source, sourceSettings) {
  * @param {string} collectionId - The collection ID
  * @param {string} source - The source of the vector
  * @param {Object} sourceSettings - Settings for the source, if it needs any
- * @param {{ hash: number; text: string; index: number; }[]} items - The items to insert
+ * @param {{ hash: number; text: string; index: number; metadata?: Object; }[]} items - The items to insert
  */
 async function insertVectorItems(directories, collectionId, source, sourceSettings, items) {
     const store = await getIndex(directories, collectionId, source, sourceSettings);
@@ -329,7 +329,7 @@ async function insertVectorItems(directories, collectionId, source, sourceSettin
     for (let i = 0; i < items.length; i++) {
         const item = items[i];
         const vector = vectors[i];
-        await store.upsertItem({ vector: vector, metadata: { hash: item.hash, text: item.text, index: item.index } });
+        await store.upsertItem({ vector: vector, metadata: { hash: item.hash, text: item.text, index: item.index, ...(item.metadata || {}) } });
     }
 
     await store.endUpdate();
@@ -585,7 +585,12 @@ router.post('/insert', async (req, res) => {
         }
 
         const collectionId = String(req.body.collectionId);
-        const items = req.body.items.map(x => ({ hash: x.hash, text: x.text, index: x.index }));
+        const items = req.body.items.map(x => ({
+            hash: x.hash,
+            text: x.text,
+            index: x.index,
+            ...(x.metadata && typeof x.metadata === 'object' && !Array.isArray(x.metadata) ? { metadata: x.metadata } : {}),
+        }));
         const source = String(req.body.source) || 'transformers';
         const sourceSettings = getSourceSettings(source, req);
 
