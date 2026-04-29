@@ -260,9 +260,28 @@
         padding-bottom: 5px;
     }
 
+    /* On mobile, float the multi-select checkbox out of the flex row so expand/toggle have room */
+    .world_entry .wi-card-entry {
+        position: relative;
+    }
+
+    .world_entry_select_label {
+        position: absolute;
+        top: 8px;
+        left: 28px;
+        z-index: 1;
+    }
+
     #worldInfoScanningCheckboxes {
         flex-flow: row;
         flex-wrap: wrap;
+    }
+
+    /* Prompt preset controls (mobile): spread first 3 icons, keep toggle position unchanged */
+    #completion_prompt_manager #completion_prompt_manager_list li.completion_prompt_manager_prompt .prompt_manager_prompt_controls > span.prompt-manager-detach-action,
+    #completion_prompt_manager #completion_prompt_manager_list li.completion_prompt_manager_prompt .prompt_manager_prompt_controls > span.prompt-manager-edit-action,
+    #completion_prompt_manager #completion_prompt_manager_list li.completion_prompt_manager_prompt .prompt_manager_prompt_controls > span.prompt-manager-plugin-extra-action {
+        margin-right: 0.6em;
     }
 
     body {
