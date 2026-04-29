@@ -475,13 +475,15 @@ span.select2.select2-container .select2-selection__choice__remove:hover {
 .luker-action-select2-dropdown .select2-results__option--selected .luker-action-select2-option__delete,
 .luker-action-select2-dropdown .select2-results__option--highlighted .luker-action-select2-option__group,
 .luker-action-select2-dropdown .select2-results__option--selected .luker-action-select2-option__group,
+.luker-action-select2-option__group--selected,
 .luker-action-select2-option__group:focus-visible,
 .luker-action-select2-option__delete:focus-visible {
     opacity: 1;
 }
 
 .luker-action-select2-option__group:hover,
-.luker-action-select2-option__group:focus-visible {
+.luker-action-select2-option__group:focus-visible,
+.luker-action-select2-option__group--selected {
     color: color-mix(in srgb, var(--SmartThemeQuoteColor) 85%, var(--SmartThemeBodyColor));
     background: color-mix(in srgb, var(--SmartThemeQuoteColor) 20%, transparent);
     transform: scale(1.06);

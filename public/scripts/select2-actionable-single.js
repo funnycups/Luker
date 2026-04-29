@@ -133,12 +133,37 @@ function applyCollapsedState(selectElement, collapsedGroups) {
  * Re-renders an already-open Select2 dropdown after options are rebuilt.
  * @param {HTMLSelectElement} selectElement
  */
-function refreshOpenDropdown(selectElement) {
+function refreshOpenDropdown(selectElement, ownerKey = '') {
     const $select = $(selectElement);
     const isOpen = $select.next('.select2-container').hasClass('select2-container--open');
     if (isOpen) {
-        $select.select2('close');
-        $select.select2('open');
+        const select2 = $select.data('select2');
+        if (!select2) return;
+
+        const $results = select2.$dropdown?.find('.select2-results__options');
+        const scrollTop = $results?.scrollTop() ?? 0;
+        const term = String(select2.dropdown?.$search?.val?.() ?? '');
+        const params = term ? { term } : {};
+
+        if (typeof select2.dataAdapter?.query === 'function' && typeof select2.trigger === 'function') {
+            select2.dataAdapter.query(params, (data) => {
+                select2.trigger('results:all', { data, query: params });
+                requestAnimationFrame(() => {
+                    const $updatedResults = select2.$dropdown?.find('.select2-results__options');
+                    if ($updatedResults?.length) {
+                        $updatedResults.scrollTop(scrollTop);
+                    }
+
+                    const collapsedGroups = ownerKey ? collapsedGroupsMap.get(ownerKey) : null;
+                    if (collapsedGroups) {
+                        applyCollapsedState(selectElement, collapsedGroups);
+                    }
+                });
+            });
+            return;
+        }
+
+        $select.trigger('change.select2');
     } else {
         $select.select2('open');
     }
@@ -149,6 +174,31 @@ function refreshOpenDropdown(selectElement) {
  */
 function dismissContextMenu() {
     $('.luker-preset-ctx-menu').remove();
+    $(document).off('pointerdown.lukerCtxMenu');
+    $('.luker-action-select2-option__group--selected').removeClass('luker-action-select2-option__group--selected');
+}
+
+function getOpenPresetContextMenu(ownerKey) {
+    return $('.luker-preset-ctx-menu').filter(function () {
+        return this.dataset.lukerActionOwner === ownerKey;
+    }).first();
+}
+
+function getPresetContextSelection($menu) {
+    const selected = $menu.data('selectedPresetNames');
+    return Array.isArray(selected) ? selected : [];
+}
+
+function syncPresetContextSelectionState(ownerKey, selectedPresetNames = []) {
+    const selected = new Set(selectedPresetNames);
+    $('.luker-action-select2-option__group').each(function () {
+        const $button = $(this);
+        if ($button.data('lukerActionOwner') !== ownerKey) {
+            return;
+        }
+        const presetName = String($button.data('optionText') ?? '').trim();
+        $button.toggleClass('luker-action-select2-option__group--selected', selected.has(presetName));
+    });
 }
 
 /**
@@ -189,27 +239,59 @@ function positionContextMenuInViewport($menu, x, y) {
  * @param {string} ownerKey
  */
 function showPresetContextMenu(anchor, presetName, callbacks, selectElement, ownerKey) {
+    const $existingMenu = getOpenPresetContextMenu(ownerKey);
+    const existingSelection = getPresetContextSelection($existingMenu);
+    const keepPosition = $existingMenu.length > 0;
+    let selectedPresetNames = [presetName].filter(Boolean);
+
+    if (keepPosition && selectedPresetNames.length) {
+        if (existingSelection.includes(presetName)) {
+            selectedPresetNames = existingSelection.length > 1 ? existingSelection.filter(name => name !== presetName) : existingSelection;
+        } else {
+            selectedPresetNames = [...existingSelection, presetName];
+        }
+    }
+
+    selectedPresetNames = Array.from(new Set(selectedPresetNames));
+
+    const existingX = Number.parseFloat($existingMenu.css('left'));
+    const existingY = Number.parseFloat($existingMenu.css('top'));
+
     dismissContextMenu();
     if (!callbacks) return;
 
     const groups = callbacks.getGroups();
-    const currentGroup = callbacks.getGroupForPreset(presetName);
+    const selectedGroups = selectedPresetNames.map(name => callbacks.getGroupForPreset(name));
+    const currentGroup = selectedPresetNames.length === 1 ? selectedGroups[0] : null;
+    const commonGroup = selectedGroups.length > 0 && selectedGroups.every(group => group?.id === selectedGroups[0]?.id) ? selectedGroups[0] : null;
+    const hasGroupedPreset = selectedGroups.some(Boolean);
 
-    const $menu = $('<div class="luker-preset-ctx-menu"></div>');
+    const $menu = $('<div class="luker-preset-ctx-menu"></div>')
+        .attr('data-luker-action-owner', ownerKey)
+        .data('selectedPresetNames', selectedPresetNames)
+        .on('pointerdown mousedown mouseup pointerup touchstart touchend click', (e) => {
+            e.stopPropagation();
+        });
 
     // "New Group..." option
     const $newGroup = $('<div class="luker-preset-ctx-menu__item luker-preset-ctx-menu__item--new"></div>')
         .html('<i class="fa-solid fa-folder-plus"></i> ' + t`New Preset Group...`)
         .on('click', async (e) => {
+            e.preventDefault();
             e.stopPropagation();
             dismissContextMenu();
             const name = prompt(t`Preset group name:`);
             if (!name?.trim()) return;
-            const groupId = await callbacks.createGroup(name.trim(), currentGroup?.id);
+            const groupId = await callbacks.createGroup(name.trim(), commonGroup?.id);
             if (groupId) {
-                await callbacks.addToGroup(presetName, groupId);
+                for (const selectedPresetName of selectedPresetNames) {
+                    await callbacks.addToGroup(selectedPresetName, groupId);
+                }
             }
-            refreshOpenDropdown(selectElement);
+            if (typeof callbacks.rebuild === 'function') {
+                callbacks.rebuild();
+            }
+            refreshOpenDropdown(selectElement, ownerKey);
         });
     $menu.append($newGroup);
 
@@ -217,7 +299,11 @@ function showPresetContextMenu(anchor, presetName, callbacks, selectElement, own
     if (groups.length > 0) {
         $menu.append('<div class="luker-preset-ctx-menu__divider"></div>');
 
-        if (currentGroup) {
+        if (selectedPresetNames.length > 1) {
+            const $current = $('<div class="luker-preset-ctx-menu__item luker-preset-ctx-menu__item--label"></div>')
+                .text(`${t`Selected presets`}: ${selectedPresetNames.length}`);
+            $menu.append($current);
+        } else if (currentGroup) {
             const $current = $('<div class="luker-preset-ctx-menu__item luker-preset-ctx-menu__item--label"></div>')
                 .text(`${t`Current group`}: ${currentGroup.name}`);
             $menu.append($current);
@@ -228,7 +314,7 @@ function showPresetContextMenu(anchor, presetName, callbacks, selectElement, own
         }
 
         for (const group of groups) {
-            const isActive = currentGroup?.id === group.id;
+            const isActive = selectedPresetNames.length > 0 && selectedGroups.every(selectedGroup => selectedGroup?.id === group.id);
             const depth = callbacks.getGroupDepth ? callbacks.getGroupDepth(group.id) : 0;
             const indent = '\u00A0'.repeat(depth * 2);
             const prefix = depth > 0 ? '└ ' : '';
@@ -236,11 +322,17 @@ function showPresetContextMenu(anchor, presetName, callbacks, selectElement, own
                 .text(isActive ? `${indent}${prefix}${t`In group`}: ${group.name}` : `${indent}${prefix}${t`Move to group`}: ${group.name}`)
                 .toggleClass('luker-preset-ctx-menu__item--active', isActive)
                 .on('click', async (e) => {
+                    e.preventDefault();
                     e.stopPropagation();
                     dismissContextMenu();
                     if (!isActive) {
-                        await callbacks.addToGroup(presetName, group.id);
-                        refreshOpenDropdown(selectElement);
+                        for (const selectedPresetName of selectedPresetNames) {
+                            await callbacks.addToGroup(selectedPresetName, group.id);
+                        }
+                        if (typeof callbacks.rebuild === 'function') {
+                            callbacks.rebuild();
+                        }
+                        refreshOpenDropdown(selectElement, ownerKey);
                     }
                 });
             if (isActive) {
@@ -251,15 +343,21 @@ function showPresetContextMenu(anchor, presetName, callbacks, selectElement, own
     }
 
     // "Remove from group" if currently grouped
-    if (currentGroup) {
+    if (hasGroupedPreset) {
         $menu.append('<div class="luker-preset-ctx-menu__divider"></div>');
         const $remove = $('<div class="luker-preset-ctx-menu__item luker-preset-ctx-menu__item--remove"></div>')
             .html('<i class="fa-solid fa-folder-minus"></i> ' + t`Remove from preset group`)
             .on('click', async (e) => {
+                e.preventDefault();
                 e.stopPropagation();
                 dismissContextMenu();
-                await callbacks.removeFromGroup(presetName);
-                refreshOpenDropdown(selectElement);
+                for (const selectedPresetName of selectedPresetNames) {
+                    await callbacks.removeFromGroup(selectedPresetName);
+                }
+                if (typeof callbacks.rebuild === 'function') {
+                    callbacks.rebuild();
+                }
+                refreshOpenDropdown(selectElement, ownerKey);
             });
         $menu.append($remove);
     } else if (groups.length === 0) {
@@ -270,8 +368,8 @@ function showPresetContextMenu(anchor, presetName, callbacks, selectElement, own
     }
 
     // Position and show
-    const x = anchor instanceof MouseEvent ? anchor.clientX : Number(anchor?.x ?? 0);
-    const y = anchor instanceof MouseEvent ? anchor.clientY : Number(anchor?.y ?? 0);
+    const x = keepPosition && Number.isFinite(existingX) ? existingX : anchor instanceof MouseEvent ? anchor.clientX : Number(anchor?.x ?? 0);
+    const y = keepPosition && Number.isFinite(existingY) ? existingY : anchor instanceof MouseEvent ? anchor.clientY : Number(anchor?.y ?? 0);
 
     $menu.css({
         position: 'fixed',
@@ -282,13 +380,23 @@ function showPresetContextMenu(anchor, presetName, callbacks, selectElement, own
 
     $(document.body).append($menu);
     positionContextMenuInViewport($menu, x, y);
+    syncPresetContextSelectionState(ownerKey, selectedPresetNames);
 
     // Dismiss on outside click (next tick)
     requestAnimationFrame(() => {
-        $(document).one('pointerdown.lukerCtxMenu', (e) => {
-            if (!$(e.target).closest('.luker-preset-ctx-menu').length) {
-                dismissContextMenu();
+        $(document).off('pointerdown.lukerCtxMenu').on('pointerdown.lukerCtxMenu', (e) => {
+            const $target = $(e.target);
+            const $groupButton = $target.closest('.luker-action-select2-option__group');
+            if ($target.closest('.luker-preset-ctx-menu').length) {
+                return;
             }
+            if ($groupButton.length && $groupButton.data('lukerActionOwner') === ownerKey) {
+                return;
+            }
+            if ($target.closest('.luker-action-select2-dropdown').length) {
+                return;
+            }
+            dismissContextMenu();
         });
     });
 }
@@ -331,8 +439,8 @@ export function initActionableSingleSelect(select, {
 
     const previousNamespace = selectElement.dataset.lukerActionableSingleSelectNamespace;
     if (previousNamespace) {
-        $select.off(`select2:selecting${previousNamespace} select2:opening${previousNamespace} select2:open${previousNamespace}`);
-        $(document).off(`pointerdown${previousNamespace} mousedown${previousNamespace} mouseup${previousNamespace} touchstart${previousNamespace} touchend${previousNamespace} pointerup${previousNamespace} contextmenu${previousNamespace}`);
+        $select.off(`select2:selecting${previousNamespace} select2:opening${previousNamespace} select2:open${previousNamespace} select2:close${previousNamespace}`);
+        $(document).off(`pointerdown${previousNamespace} mousedown${previousNamespace} mouseup${previousNamespace} touchstart${previousNamespace} touchend${previousNamespace} pointerup${previousNamespace} click${previousNamespace} contextmenu${previousNamespace}`);
     }
 
     const ownerKey = buildOwnerKey(selectElement);
@@ -525,7 +633,10 @@ export function initActionableSingleSelect(select, {
                                 const name = prompt(t`Preset group name:`);
                                 if (!name?.trim()) return;
                                 await presetGroupCallbacks.createGroup(name.trim());
-                                refreshOpenDropdown(selectElement);
+                                if (typeof presetGroupCallbacks.rebuild === 'function') {
+                                    presetGroupCallbacks.rebuild();
+                                }
+                                refreshOpenDropdown(selectElement, ownerKey);
                             });
 
                         $toolbar.append($newGroupButton);
@@ -533,6 +644,12 @@ export function initActionableSingleSelect(select, {
                     }
                 }
             });
+        });
+
+    $select
+        .off('select2:close' + namespace)
+        .on('select2:close' + namespace, function () {
+            dismissContextMenu();
         });
 
     // === Prevent selection of group headers and action buttons ===
@@ -677,7 +794,10 @@ export function initActionableSingleSelect(select, {
                 }
 
                 await presetGroupCallbacks.createGroup(name.trim(), groupId);
-                refreshOpenDropdown(selectElement);
+                if (typeof presetGroupCallbacks.rebuild === 'function') {
+                    presetGroupCallbacks.rebuild();
+                }
+                refreshOpenDropdown(selectElement, ownerKey);
             } else if (action === 'rename') {
                 const groups = presetGroupCallbacks.getGroups();
                 const group = groups.find(g => g.id === groupId);
@@ -691,7 +811,10 @@ export function initActionableSingleSelect(select, {
                 }
 
                 await presetGroupCallbacks.renameGroup(groupId, newName.trim());
-                refreshOpenDropdown(selectElement);
+                if (typeof presetGroupCallbacks.rebuild === 'function') {
+                    presetGroupCallbacks.rebuild();
+                }
+                refreshOpenDropdown(selectElement, ownerKey);
             } else if (action === 'delete') {
                 if (!confirm(t`Delete this preset group? Presets will become ungrouped.`)) return;
 
@@ -701,7 +824,10 @@ export function initActionableSingleSelect(select, {
 
                 collapsedGroups.delete(groupId);
                 await presetGroupCallbacks.deleteGroup(groupId);
-                refreshOpenDropdown(selectElement);
+                if (typeof presetGroupCallbacks.rebuild === 'function') {
+                    presetGroupCallbacks.rebuild();
+                }
+                refreshOpenDropdown(selectElement, ownerKey);
             }
         });
 
