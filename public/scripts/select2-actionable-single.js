@@ -470,18 +470,18 @@ export function initActionableSingleSelect(select, {
             const element = option?.element;
 
             // === Group header ===
-                    if (element?.dataset?.presetGroupHeader === 'true') {
-                        const groupId = element.dataset.presetGroupId;
-                        const isCollapsed = collapsedGroups.has(groupId);
-                        const depth = parseInt(element.dataset.depth || '0', 10);
-                        const parentId = element.dataset.presetGroupParentId || null;
+            if (element?.dataset?.presetGroupHeader === 'true') {
+                const groupId = element.dataset.presetGroupId;
+                const isCollapsed = collapsedGroups.has(groupId);
+                const depth = parseInt(element.dataset.depth || '0', 10);
+                const parentId = element.dataset.presetGroupParentId || null;
 
-                        const header = $('<div class="luker-preset-group-header"></div>')
-                        .attr('data-preset-group-id', groupId)
-                        .attr('data-luker-action-owner', ownerKey)
-                        .attr('data-preset-group-parent-id', parentId || '')
-                        .css('padding-left', depth > 0 ? (depth * 20) + 'px' : '');
-                        const chevron = $('<i class="fa-solid fa-chevron-right luker-preset-group-chevron"></i>')
+                const header = $('<div class="luker-preset-group-header"></div>')
+                    .attr('data-preset-group-id', groupId)
+                    .attr('data-luker-action-owner', ownerKey)
+                    .attr('data-preset-group-parent-id', parentId || '')
+                    .css('padding-left', depth > 0 ? (depth * 20) + 'px' : '');
+                const chevron = $('<i class="fa-solid fa-chevron-right luker-preset-group-chevron"></i>')
                     .toggleClass('luker-preset-group-chevron--expanded', !isCollapsed);
                 const label = $('<span class="luker-preset-group-header__label"></span>').text(option.text);
 
@@ -489,12 +489,12 @@ export function initActionableSingleSelect(select, {
                 const count = $('<span class="luker-preset-group-header__count"></span>').text('(' + memberCount + ')');
 
                 const actions = $('<span class="luker-preset-group-header__actions"></span>');
-                            const subgroupBtn = $('<button type="button" class="luker-preset-group-action luker-preset-group-subgroup" tabindex="-1"></button>')
-                                .attr('data-action', 'subgroup')
-                                .attr('data-group-id', groupId)
-                                .attr('data-luker-action-owner', ownerKey)
-                                .html('<i class="fa-solid fa-folder-plus"></i>');
-                            const renameBtn = $('<button type="button" class="luker-preset-group-action" tabindex="-1"></button>')
+                const subgroupBtn = $('<button type="button" class="luker-preset-group-action luker-preset-group-subgroup" tabindex="-1"></button>')
+                    .attr('data-action', 'subgroup')
+                    .attr('data-group-id', groupId)
+                    .attr('data-luker-action-owner', ownerKey)
+                    .html('<i class="fa-solid fa-folder-plus"></i>');
+                const renameBtn = $('<button type="button" class="luker-preset-group-action" tabindex="-1"></button>')
                     .attr('data-action', 'rename')
                     .attr('data-group-id', groupId)
                     .attr('data-luker-action-owner', ownerKey)
@@ -511,14 +511,14 @@ export function initActionableSingleSelect(select, {
             }
 
             // === Group member ===
-                if (element?.dataset?.presetGroupMember === 'true') {
-                    const groupId = element.dataset.presetGroupId;
-                    const depth = parseInt(element.dataset.depth || '0', 10);
+            if (element?.dataset?.presetGroupMember === 'true') {
+                const groupId = element.dataset.presetGroupId;
+                const depth = parseInt(element.dataset.depth || '0', 10);
 
-                    const row = $('<div class="luker-action-select2-option luker-preset-group-member"></div>')
+                const row = $('<div class="luker-action-select2-option luker-preset-group-member"></div>')
                     .attr('data-preset-group-id', groupId)
                     .css('padding-left', depth > 0 ? ((depth + 1) * 20) + 'px' : '');
-                    const label = $('<span class="luker-action-select2-option__label"></span>').text(optionData.text);
+                const label = $('<span class="luker-action-select2-option__label"></span>').text(optionData.text);
                 row.append(label);
 
                 if (presetGroupCallbacks) {
@@ -743,7 +743,7 @@ export function initActionableSingleSelect(select, {
         });
 
     // === Group header click - toggle collapse ===
-        $(document)
+    $(document)
         .off('click' + namespace + '.groupHeader')
         .on('click' + namespace + '.groupHeader', '.luker-preset-group-header', function (event) {
             const $header = $(this);
@@ -771,8 +771,8 @@ export function initActionableSingleSelect(select, {
             applyCollapsedState(selectElement, collapsedGroups);
         });
 
-        // === Group action buttons (rename/delete/create sub-group) ===
-        $(document)
+    // === Group action buttons (rename/delete/create sub-group) ===
+    $(document)
         .off('click' + namespace + '.groupAction')
         .on('click' + namespace + '.groupAction', '.luker-preset-group-action, .luker-preset-group-subgroup', async function (event) {
             if ($(this).data('lukerActionOwner') !== ownerKey || !presetGroupCallbacks) {
@@ -830,5 +830,4 @@ export function initActionableSingleSelect(select, {
                 refreshOpenDropdown(selectElement, ownerKey);
             }
         });
-
 }
