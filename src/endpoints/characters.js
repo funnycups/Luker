@@ -528,18 +528,19 @@ async function mapWithConcurrency(items, concurrency, mapper) {
     return results;
 }
 
-export async function getCharactersSnapshot(directories) {
+export async function getCharactersSnapshot(directories, { useShallowCharacters: callerShallow } = {}) {
+    const shallow = callerShallow !== undefined ? callerShallow : useShallowCharacters;
     const files = fs.readdirSync(directories.characters);
     const pngFiles = files.filter(file => file.endsWith('.png'));
     if (!isAndroid) {
-        const processingPromises = pngFiles.map(file => processCharacter(file, directories, { shallow: useShallowCharacters }));
+        const processingPromises = pngFiles.map(file => processCharacter(file, directories, { shallow }));
         return (await Promise.all(processingPromises)).filter(character => _.get(character, 'data.name', character.name));
     }
 
     const characters = await mapWithConcurrency(
         pngFiles,
         1,
-        (file) => processCharacter(file, directories, { shallow: useShallowCharacters }),
+        (file) => processCharacter(file, directories, { shallow }),
     );
     return characters.filter(character => _.get(character, 'data.name', character.name));
 }
