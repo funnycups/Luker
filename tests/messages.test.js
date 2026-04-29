@@ -1,4 +1,4 @@
-import { describe, test, beforeEach, mock } from 'node:test';
+import { describe, test, beforeEach } from '@jest/globals';
 import assert from 'node:assert/strict';
 
 // ============================================================
@@ -51,8 +51,6 @@ let addOneMessageCalls = [];
 const addOneMessage = (msg, opts) => addOneMessageCalls.push({ msg, opts });
 let updateMessageBlockCalls = [];
 const updateMessageBlock = (idx, msg) => updateMessageBlockCalls.push({ idx, msg });
-const chatElement = { find: () => ({ length: 0, remove: () => {} }) };
-const getFirstDisplayedMessageId = () => 0;
 const updateViewMessageIds = (s) => viewIdsUpdated.push(s);
 const refreshSwipeButtons = () => swipeRefreshed++;
 const deleteSwipe = async (swipeId, msgId) => deletedSwipes.push({ swipeId, msgId });

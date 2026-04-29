@@ -264,7 +264,7 @@ describe('extractCardAppFiles - edge cases', () => {
                     card_app: {
                         enabled: true,
                         files: {
-                            '../../../etc/passwd': 'malicious content',
+                            '../outside/passwd': 'malicious content',
                             'safe.js': 'safe content',
                         },
                     },
@@ -279,7 +279,7 @@ describe('extractCardAppFiles - edge cases', () => {
         expect(fs.existsSync(path.join(cardAppsDir, 'traversal-test', 'safe.js'))).toBe(true);
 
         // Malicious path should NOT have created files outside the char directory
-        expect(fs.existsSync(path.join(cardAppsDir, '..', '..', '..', 'etc', 'passwd'))).toBe(false);
+        expect(fs.existsSync(path.join(cardAppsDir, 'outside', 'passwd'))).toBe(false);
     });
 
     test('should handle non-string file content gracefully', () => {

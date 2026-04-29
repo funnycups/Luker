@@ -900,11 +900,17 @@ export function getImages(directoryPath, sortBy = 'name', type = MEDIA_REQUEST_T
  * @param {import('node-fetch').Response} from The Fetch API response to pipe from.
  * @param {import('express').Response} to The Express response to pipe to.
  */
-export function forwardFetchResponse(from, to) {
+export async function forwardFetchResponse(from, to, options = {}) {
     let statusCode = from.status;
     let statusText = from.statusText;
 
     if (!from.ok) {
+        if (options.jsonErrorResponse && !to.headersSent) {
+            const errorText = await from.text().catch(() => '');
+            console.warn(`Streaming request failed with status ${statusCode} ${statusText}${errorText ? ` ${errorText}` : ''}`);
+            const errorJson = tryParse(errorText) ?? { error: true };
+            return to.status(500).send(errorJson);
+        }
         console.warn(`Streaming request failed with status ${statusCode} ${statusText}`);
     }
 
@@ -2071,7 +2077,7 @@ export function convertClaudeToolChoice(toolChoice, parallelToolCalls = undefine
         }
 
         if (claudeToolChoice.type !== 'none') {
-            claudeToolChoice.disable_parallel_tool_use = !Boolean(parallelToolCalls);
+            claudeToolChoice.disable_parallel_tool_use = !parallelToolCalls;
         }
     }
 

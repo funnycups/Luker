@@ -6,7 +6,7 @@ import sanitize from 'sanitize-filename';
 
 import { CHAT_COMPLETION_SOURCES } from '../../constants.js';
 import { appendMessagesToChatFile } from '../chats.js';
-import { getConfigValue } from '../../util.js';
+import { getConfigValue, tryParse } from '../../util.js';
 import {
     completeInspectionFromStream,
     failInspection,
@@ -733,6 +733,29 @@ export function acknowledgeGenerationJobsForPersistTarget(request, persistTarget
 
 export async function forwardStreamingWithGenerationJob(fetchResponse, response, request, job, options = {}) {
     const modelName = String(options.modelName || request.body?.model || '');
+    let clientClosed = false;
+    response.socket?.on('close', () => {
+        clientClosed = true;
+    });
+    if (!response.headersSent) {
+        response.setHeader('x-luker-generation-id', job.id);
+    }
+    if (!fetchResponse.ok) {
+        const errorText = await fetchResponse.text().catch(() => '');
+        const errorMessage = `${fetchResponse.status} ${fetchResponse.statusText}`.trim();
+        console.warn(`Streaming API returned error: ${errorMessage}${errorText ? ` ${errorText}` : ''}`);
+        failGenerationJob(job, errorMessage || errorText || 'Streaming request failed');
+        failInspection(request, errorMessage || errorText || 'Streaming request failed', fetchResponse.status);
+        if (!clientClosed && !response.writableEnded) {
+            if (!response.headersSent) {
+                const errorJson = tryParse(errorText) ?? { error: true };
+                return response.status(500).send(errorJson);
+            }
+            response.end(errorText || '');
+        }
+        return;
+    }
+
     let statusCode = fetchResponse.status;
     if (statusCode === 401) {
         statusCode = 400;
@@ -740,7 +763,6 @@ export async function forwardStreamingWithGenerationJob(fetchResponse, response,
 
     response.statusCode = statusCode;
     response.statusMessage = fetchResponse.statusText;
-    response.setHeader('x-luker-generation-id', job.id);
     const contentType = fetchResponse.headers.get('content-type');
     if (contentType) {
         response.setHeader('content-type', contentType);
@@ -751,21 +773,6 @@ export async function forwardStreamingWithGenerationJob(fetchResponse, response,
     response.setHeader('X-Accel-Buffering', 'no');
     if (typeof response.flushHeaders === 'function') {
         response.flushHeaders();
-    }
-
-    let clientClosed = false;
-    response.socket?.on('close', () => {
-        clientClosed = true;
-    });
-
-    if (!fetchResponse.ok) {
-        const errorText = await fetchResponse.text().catch(() => '');
-        failGenerationJob(job, `${fetchResponse.status} ${fetchResponse.statusText}`.trim());
-        failInspection(request, `${fetchResponse.status} ${fetchResponse.statusText}`.trim(), fetchResponse.status);
-        if (!clientClosed && !response.writableEnded) {
-            response.end(errorText || '');
-        }
-        return;
     }
 
     // Preserve the original byte stream for the client and decode incrementally only for SSE bookkeeping.
