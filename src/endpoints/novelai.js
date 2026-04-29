@@ -286,7 +286,7 @@ router.post('/generate', async function (req, res) {
                 return await forwardStreamingWithGenerationJob(response, res, req, lukerGenerationJob, { modelName: req.body.model });
             }
             // Pipe remote SSE stream to Express response
-            return forwardFetchResponse(response, res);
+            return forwardFetchResponse(response, res, { jsonErrorResponse: true });
         } else {
             if (!response.ok) {
                 const text = await response.text();

@@ -253,7 +253,7 @@ async function forwardStreamingResponseWithJob(request, response, fetchResponse)
     if (job) {
         return await forwardStreamingWithGenerationJob(fetchResponse, response, request, job, { modelName: request.body?.model });
     }
-    return forwardFetchResponse(fetchResponse, response);
+    return forwardFetchResponse(fetchResponse, response, { jsonErrorResponse: true });
 }
 
 async function finalizePayloadWithJob(request, response, payload, rawApiResponse) {

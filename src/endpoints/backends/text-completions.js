@@ -12,7 +12,7 @@ import {
     FEATHERLESS_KEYS,
     OPENAI_KEYS,
 } from '../../constants.js';
-import { forwardFetchResponse, trimV1, getConfigValue } from '../../util.js';
+import { forwardFetchResponse, trimV1, getConfigValue, tryParse } from '../../util.js';
 import { setAdditionalHeaders } from '../../additional-headers.js';
 import { createHash } from 'node:crypto';
 import {
@@ -37,6 +37,30 @@ export const router = express.Router();
  */
 async function parseOllamaStream(jsonStream, request, response, job = null) {
     try {
+        let clientClosed = false;
+        response.socket?.on('close', () => {
+            clientClosed = true;
+        });
+        if (job && !response.headersSent) {
+            response.setHeader('x-luker-generation-id', job.id);
+        }
+        if (!jsonStream.ok) {
+            const errorText = await jsonStream.text().catch(() => '');
+            const errorMessage = `${jsonStream.status} ${jsonStream.statusText}`.trim();
+            console.warn(`Ollama streaming request failed: ${errorMessage}${errorText ? ` ${errorText}` : ''}`);
+            if (job) {
+                failGenerationJob(job, errorMessage || errorText || 'Ollama request failed');
+            }
+            if (!clientClosed && !response.writableEnded) {
+                if (!response.headersSent) {
+                    const errorJson = tryParse(errorText) ?? { error: true };
+                    return response.status(500).send(errorJson);
+                }
+                response.end(errorText || '');
+            }
+            return;
+        }
+
         let statusCode = jsonStream.status;
         if (statusCode === 401) {
             statusCode = 400;
@@ -44,25 +68,6 @@ async function parseOllamaStream(jsonStream, request, response, job = null) {
         response.statusCode = statusCode;
         response.statusMessage = jsonStream.statusText;
         response.setHeader('content-type', 'text/event-stream; charset=utf-8');
-        if (job) {
-            response.setHeader('x-luker-generation-id', job.id);
-        }
-
-        let clientClosed = false;
-        response.socket?.on('close', () => {
-            clientClosed = true;
-        });
-
-        if (!jsonStream.ok) {
-            const errorText = await jsonStream.text().catch(() => '');
-            if (job) {
-                failGenerationJob(job, `${jsonStream.status} ${jsonStream.statusText}`.trim());
-            }
-            if (!clientClosed && !response.writableEnded) {
-                response.end(errorText || '');
-            }
-            return;
-        }
 
         if (!jsonStream.body) {
             throw new Error('No body in the response');
@@ -494,7 +499,7 @@ router.post('/generate', async function (request, response) {
                 return await forwardStreamingWithGenerationJob(completionsStream, response, request, lukerGenerationJob, { modelName: request.body.model });
             }
             // Pipe remote SSE stream to Express response
-            return forwardFetchResponse(completionsStream, response);
+            return forwardFetchResponse(completionsStream, response, { jsonErrorResponse: true });
         }
         else {
             const completionsReply = await fetch(url, args);
