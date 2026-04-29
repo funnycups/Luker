@@ -1,4 +1,4 @@
-import { describe, test, beforeEach, mock } from 'node:test';
+import { describe, test, beforeEach } from '@jest/globals';
 import assert from 'node:assert/strict';
 
 // ============================================================

@@ -500,8 +500,7 @@ router.post('/generate', async function (request, response) {
             }
             // Pipe remote SSE stream to Express response
             return forwardFetchResponse(completionsStream, response, { jsonErrorResponse: true });
-        }
-        else {
+        } else {
             const completionsReply = await fetch(url, args);
 
             if (completionsReply.ok) {

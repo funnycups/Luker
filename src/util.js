@@ -2077,7 +2077,7 @@ export function convertClaudeToolChoice(toolChoice, parallelToolCalls = undefine
         }
 
         if (claudeToolChoice.type !== 'none') {
-            claudeToolChoice.disable_parallel_tool_use = !Boolean(parallelToolCalls);
+            claudeToolChoice.disable_parallel_tool_use = !parallelToolCalls;
         }
     }
 

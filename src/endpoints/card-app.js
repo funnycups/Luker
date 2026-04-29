@@ -365,15 +365,15 @@ export function extractCardAppFiles(charData, charId, cardAppsDir) {
     const charAppDir = path.join(cardAppsDir, sanitize(charId));
 
     for (const [filePath, content] of entries) {
-        const sanitizedPath = filePath.split('/').map(segment => sanitize(segment)).join('/');
-        const fullPath = path.join(charAppDir, sanitizedPath);
-
+        const normalizedPath = String(filePath || '').replace(/\\/g, '/');
+        const sanitizedPath = normalizedPath.split('/').map(segment => sanitize(segment)).join('/');
         // Security: ensure path is within the character's card-app directory
-        const resolved = resolvePathWithinParent(charAppDir, sanitizedPath);
+        const resolved = resolvePathWithinParent(charAppDir, normalizedPath);
         if (!resolved) {
             console.warn(`[card-app] Skipping file with invalid path: ${filePath}`);
             continue;
         }
+        const fullPath = path.join(charAppDir, sanitizedPath);
 
         // Create parent directories
         const dir = path.dirname(fullPath);

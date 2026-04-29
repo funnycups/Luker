@@ -1,4 +1,4 @@
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, beforeEach } from '@jest/globals';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { Readable, Writable } from 'node:stream';
