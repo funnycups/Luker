@@ -103,6 +103,40 @@ function ensurePresetLinkedLorebookButton(apiId) {
     $anchor.after($button);
 }
 
+function ensurePresetEmbeddedRegexImportButton(apiId) {
+    if ($(`[data-preset-manager-reimport-regex="${apiId}"]`).length) {
+        return;
+    }
+
+    const $anchor = $(`[data-preset-manager-linked-lorebook="${apiId}"], [data-preset-manager-restore="${apiId}"], [data-preset-manager-new="${apiId}"], [data-preset-manager-update="${apiId}"], [data-preset-manager-rename="${apiId}"]`).last();
+    if (!$anchor.length) {
+        return;
+    }
+
+    const title = t`Import embedded regex scripts`;
+    const tagName = String($anchor.prop('tagName') || '').toUpperCase();
+    let $button;
+
+    if (tagName === 'I') {
+        $button = $('<i />')
+            .addClass('menu_button fa-solid fa-file-import')
+            .attr('title', title);
+    } else {
+        $button = $('<div />')
+            .addClass('menu_button menu_button_icon')
+            .attr('title', title)
+            .append($('<i />').addClass('fa-solid fa-file-import'));
+        if ($anchor.hasClass('margin0')) {
+            $button.addClass('margin0');
+        }
+    }
+
+    $button
+        .attr('data-i18n', '[title]Import embedded regex scripts')
+        .attr('data-preset-manager-reimport-regex', apiId);
+    $anchor.after($button);
+}
+
 async function promptLorebookNameToBind(worldNames, defaultName = '') {
     const names = Array.isArray(worldNames) ? worldNames : [];
     if (!names.length) {
@@ -386,6 +420,7 @@ function registerPresetManagers() {
             console.debug(`Registering preset manager for API: ${apiId}`);
             presetManagers[apiId] = new PresetManager($(e), apiId);
             ensurePresetLinkedLorebookButton(apiId);
+            ensurePresetEmbeddedRegexImportButton(apiId);
             primaryManager ??= presetManagers[apiId];
         }
 
@@ -1914,6 +1949,12 @@ export async function initPresetManager() {
     $(document).on('click', '[data-preset-manager-linked-lorebook]', async function () {
         const apiId = $(this).data('preset-manager-linked-lorebook');
         await managePresetLinkedLorebook(apiId);
+    });
+
+    $(document).on('click', '[data-preset-manager-reimport-regex]', async function () {
+        const apiId = $(this).data('preset-manager-reimport-regex');
+        const { reimportPresetEmbeddedRegexScripts } = await import('./extensions/regex/index.js');
+        await reimportPresetEmbeddedRegexScripts(apiId);
     });
 
     $(document).on('change', '[data-preset-manager-file]', async function (e) {

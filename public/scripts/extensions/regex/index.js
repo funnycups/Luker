@@ -1,7 +1,7 @@
 import { characters, chatElement, eventSource, event_types, getCurrentChatId, messageFormatting, redisplayChat, reloadCurrentChat, saveSettingsDebounced, this_chid, unshallowCharacter } from '../../../script.js';
 import { extension_settings, renderExtensionTemplateAsync } from '../../extensions.js';
 import { selected_group } from '../../group-chats.js';
-import { callGenericPopup, Popup, POPUP_TYPE } from '../../popup.js';
+import { callGenericPopup, POPUP_RESULT, Popup, POPUP_TYPE } from '../../popup.js';
 import { SlashCommand } from '../../slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from '../../slash-commands/SlashCommandArgument.js';
 import { commonEnumProviders, enumIcons } from '../../slash-commands/SlashCommandCommonEnumsProvider.js';
@@ -23,6 +23,7 @@ const REGEX_SCRIPT_TYPE_LABELS = Object.freeze({
     [SCRIPT_TYPES.PRESET]: 'preset',
     [SCRIPT_TYPE_UNKNOWN]: 'runtime',
 });
+const PRESET_EMBEDDED_REGEX_SOURCE_PATH = 'luker.embedded_regex_scripts_source';
 
 function buildRegexDragHelper(item) {
     const itemEl = item?.get?.(0) || item?.[0] || item;
@@ -2198,6 +2199,301 @@ function notifyReloadCurrentChat(presetName) {
         });
 }
 
+function getRegexPlacementPreviewLabel(placement) {
+    switch (Number(placement)) {
+        case regex_placement.MD_DISPLAY:
+            return t`Markdown Display`;
+        case regex_placement.USER_INPUT:
+            return t`User Input`;
+        case regex_placement.AI_OUTPUT:
+            return t`AI Output`;
+        case regex_placement.SLASH_COMMAND:
+            return t`Slash Commands`;
+        case regex_placement.WORLD_INFO:
+            return t`World Info`;
+        case regex_placement.REASONING:
+            return t`Reasoning`;
+        default:
+            return String(placement);
+    }
+}
+
+function getSubstituteRegexPreviewLabel(value) {
+    switch (Number(value)) {
+        case substitute_find_regex.RAW:
+            return t`Raw`;
+        case substitute_find_regex.ESCAPED:
+            return t`Escaped`;
+        case substitute_find_regex.NONE:
+        default:
+            return t`None`;
+    }
+}
+
+function getDepthPreviewLabel(value) {
+    if (value === null || value === undefined || value === '' || Number(value) === -1) {
+        return t`Unlimited`;
+    }
+
+    return String(value);
+}
+
+function clonePresetEmbeddedRegexScripts(scripts) {
+    return Array.isArray(scripts)
+        ? scripts.filter(isRegexScriptRecord).map(script => structuredClone(script))
+        : [];
+}
+
+function getPresetEmbeddedRegexSignature(script) {
+    return JSON.stringify({
+        scriptName: String(script?.scriptName ?? ''),
+        findRegex: String(script?.findRegex ?? ''),
+        replaceString: String(script?.replaceString ?? ''),
+        trimStrings: Array.isArray(script?.trimStrings) ? script.trimStrings.map(String) : [],
+        placement: Array.isArray(script?.placement) ? script.placement.map(Number) : [],
+        disabled: Boolean(script?.disabled),
+        markdownOnly: Boolean(script?.markdownOnly),
+        promptOnly: Boolean(script?.promptOnly),
+        pluginOnly: Boolean(script?.pluginOnly),
+        runOnEdit: Boolean(script?.runOnEdit),
+        substituteRegex: Number(script?.substituteRegex ?? substitute_find_regex.NONE),
+        minDepth: script?.minDepth ?? null,
+        maxDepth: script?.maxDepth ?? null,
+    });
+}
+
+function getPresetEmbeddedRegexDuplicateIndexes(scripts, existingScripts) {
+    const existingSignatures = new Set(clonePresetEmbeddedRegexScripts(existingScripts).map(getPresetEmbeddedRegexSignature));
+    const duplicateIndexes = new Set();
+    clonePresetEmbeddedRegexScripts(scripts).forEach((script, index) => {
+        if (existingSignatures.has(getPresetEmbeddedRegexSignature(script))) {
+            duplicateIndexes.add(index);
+        }
+    });
+    return duplicateIndexes;
+}
+
+function getUniquePresetEmbeddedRegexScripts(scripts, existingScripts) {
+    const usedIds = new Set(clonePresetEmbeddedRegexScripts(existingScripts).map(script => String(script.id || '').trim()).filter(Boolean));
+    return clonePresetEmbeddedRegexScripts(scripts).map(script => {
+        const scriptId = String(script.id || '').trim();
+        if (!scriptId || usedIds.has(scriptId)) {
+            script.id = uuidv4();
+        }
+        usedIds.add(String(script.id || '').trim());
+        return script;
+    });
+}
+
+async function getPresetEmbeddedRegexSourceScripts(presetManager, presetName, fallbackScripts = []) {
+    const storedSource = presetManager?.readPresetExtensionField({ name: presetName, path: PRESET_EMBEDDED_REGEX_SOURCE_PATH });
+    if (Array.isArray(storedSource) && storedSource.length > 0) {
+        return clonePresetEmbeddedRegexScripts(storedSource);
+    }
+
+    const fallbackSource = clonePresetEmbeddedRegexScripts(fallbackScripts);
+    if (presetManager && fallbackSource.length > 0) {
+        await presetManager.writePresetExtensionField({
+            name: presetName,
+            path: PRESET_EMBEDDED_REGEX_SOURCE_PATH,
+            value: fallbackSource,
+        });
+    }
+    return fallbackSource;
+}
+
+function getPresetEmbeddedRegexPreviewData(scripts, presetName, { defaultSelected = true, existingScripts = [] } = {}) {
+    const duplicateIndexes = getPresetEmbeddedRegexDuplicateIndexes(scripts, existingScripts);
+    const previewScripts = scripts.map((script, index) => {
+        const trimStrings = Array.isArray(script.trimStrings) ? script.trimStrings.join('\n') : '';
+        const placement = Array.isArray(script.placement) && script.placement.length > 0
+            ? script.placement.map(getRegexPlacementPreviewLabel).join(', ')
+            : t`None`;
+        const flags = [
+            script.markdownOnly ? t`Only Format Display` : '',
+            script.promptOnly ? t`Only Format Prompt` : '',
+            script.pluginOnly ? t`Only Format Plugin` : '',
+            script.runOnEdit ? t`Run on Edit` : '',
+        ].filter(Boolean);
+
+        return {
+            index,
+            number: index + 1,
+            scriptName: String(script.scriptName || t`Unnamed regex script`),
+            statusLabel: script.disabled ? t`Disabled` : t`Enabled`,
+            disabled: Boolean(script.disabled),
+            selected: Boolean(defaultSelected),
+            duplicate: duplicateIndexes.has(index),
+            duplicateLabel: t`Already exists`,
+            findRegex: String(script.findRegex ?? ''),
+            replaceString: String(script.replaceString ?? ''),
+            trimStrings,
+            hasTrimStrings: trimStrings.length > 0,
+            placement,
+            substituteRegex: getSubstituteRegexPreviewLabel(script.substituteRegex),
+            minDepth: getDepthPreviewLabel(script.minDepth),
+            maxDepth: getDepthPreviewLabel(script.maxDepth),
+            flags,
+            hasFlags: flags.length > 0,
+        };
+    });
+
+    return {
+        presetName: String(presetName || t`Unknown preset`),
+        scriptCount: previewScripts.length,
+        enabledScriptCount: previewScripts.filter(script => !script.disabled).length,
+        selectedScriptCount: previewScripts.filter(script => script.selected).length,
+        hasDuplicateScripts: previewScripts.some(script => script.duplicate),
+        scripts: previewScripts,
+    };
+}
+
+function getSelectedPresetEmbeddedRegexIndexes(template) {
+    return template
+        .find('.regex-preset-embedded-preview__select:checked')
+        .map(function () { return Number($(this).data('regexPreviewIndex')); })
+        .get()
+        .filter(index => Number.isInteger(index));
+}
+
+function bindPresetEmbeddedRegexPreviewControls(template) {
+    const updateSelectedCount = () => {
+        const selectedCount = getSelectedPresetEmbeddedRegexIndexes(template).length;
+        template.find('[data-regex-preview-selected-count]').text(String(selectedCount));
+    };
+
+    template.find('.regex-preset-embedded-preview__select').on('click', event => event.stopPropagation());
+    template.find('.regex-preset-embedded-preview__select').on('input', updateSelectedCount);
+    template.find('[data-regex-preview-select-all]').on('click', () => {
+        template.find('.regex-preset-embedded-preview__select').prop('checked', true);
+        updateSelectedCount();
+    });
+    template.find('[data-regex-preview-clear-selection]').on('click', () => {
+        template.find('.regex-preset-embedded-preview__select').prop('checked', false);
+        updateSelectedCount();
+    });
+    updateSelectedCount();
+}
+
+function getSelectedPresetEmbeddedRegexScripts(template, scripts) {
+    const selectedIndexes = getSelectedPresetEmbeddedRegexIndexes(template);
+    return selectedIndexes
+        .map(index => scripts[index])
+        .filter(isRegexScriptRecord);
+}
+
+async function showPresetEmbeddedRegexImportPopup(scripts, presetName, {
+    defaultSelected = true,
+    existingScripts = [],
+    okButton = t`Import Selected`,
+    cancelButton = t`Cancel`,
+    checkDuplicates = false,
+} = {}) {
+    const sourceScripts = clonePresetEmbeddedRegexScripts(scripts);
+    const duplicateIndexes = getPresetEmbeddedRegexDuplicateIndexes(sourceScripts, existingScripts);
+    const previewData = getPresetEmbeddedRegexPreviewData(sourceScripts, presetName, { defaultSelected, existingScripts });
+    const template = $(await renderExtensionTemplateAsync('regex', 'presetEmbeddedScripts', previewData));
+    let duplicateConfirmed = false;
+
+    bindPresetEmbeddedRegexPreviewControls(template);
+
+    const result = await callGenericPopup(template, POPUP_TYPE.CONFIRM, '', {
+        okButton,
+        cancelButton,
+        wide: true,
+        large: true,
+        allowVerticalScrolling: true,
+        leftAlign: true,
+        onClosing: async (popup) => {
+            if (popup.result !== POPUP_RESULT.AFFIRMATIVE) {
+                return true;
+            }
+
+            const selectedIndexes = getSelectedPresetEmbeddedRegexIndexes(template);
+            if (selectedIndexes.length === 0) {
+                toastr.warning(t`Select at least one regex script to import.`);
+                return false;
+            }
+
+            const selectedDuplicateIndexes = selectedIndexes.filter(index => duplicateIndexes.has(index));
+            if (!checkDuplicates || selectedDuplicateIndexes.length === 0 || duplicateConfirmed) {
+                return true;
+            }
+
+            const duplicateList = selectedDuplicateIndexes
+                .map(index => `<li>${escapeHtml(String(sourceScripts[index]?.scriptName || t`Unnamed regex script`))}</li>`)
+                .join('');
+            const confirm = await callGenericPopup(
+                `<div>${t`The following selected regex scripts already exist in this preset:`}</div><ul>${duplicateList}</ul><div>${t`Import them again anyway?`}</div>`,
+                POPUP_TYPE.CONFIRM,
+                '',
+                {
+                    okButton: t`Import Anyway`,
+                    cancelButton: t`Review`,
+                    wide: true,
+                    leftAlign: true,
+                },
+            );
+
+            duplicateConfirmed = confirm === POPUP_RESULT.AFFIRMATIVE;
+            return duplicateConfirmed;
+        },
+    });
+
+    if (result !== POPUP_RESULT.AFFIRMATIVE) {
+        return null;
+    }
+
+    return getSelectedPresetEmbeddedRegexScripts(template, sourceScripts);
+}
+
+export async function reimportPresetEmbeddedRegexScripts(apiId = getCurrentPresetAPI()) {
+    const presetManager = getPresetManager(apiId);
+    if (!presetManager) {
+        console.warn(`Preset Manager not found for API: ${apiId}`);
+        return false;
+    }
+
+    const presetName = String(presetManager.getSelectedPresetName() || '').trim();
+    if (!presetName) {
+        toastr.warning(t`No preset selected.`);
+        return false;
+    }
+
+    const currentScripts = clonePresetEmbeddedRegexScripts(presetManager.readPresetExtensionField({ name: presetName, path: 'regex_scripts' }));
+    const sourceScripts = await getPresetEmbeddedRegexSourceScripts(presetManager, presetName, currentScripts);
+    if (sourceScripts.length === 0) {
+        toastr.warning(t`This preset does not have embedded regex scripts to import.`);
+        return false;
+    }
+
+    const selectedScripts = await showPresetEmbeddedRegexImportPopup(sourceScripts, presetName, {
+        defaultSelected: false,
+        existingScripts: currentScripts,
+        okButton: t`Import Selected`,
+        cancelButton: t`Cancel`,
+        checkDuplicates: true,
+    });
+
+    if (!selectedScripts) {
+        return false;
+    }
+
+    const importedScripts = getUniquePresetEmbeddedRegexScripts(selectedScripts, currentScripts);
+    await presetManager.writePresetExtensionField({
+        name: presetName,
+        path: 'regex_scripts',
+        value: [...currentScripts, ...importedScripts],
+    });
+    allowPresetScripts(apiId, presetName);
+    await loadRegexScripts();
+    if (getCurrentChatId()) {
+        await requestRegexChatReload();
+    }
+    toastr.success(t`Preset regex scripts imported.`);
+    return true;
+}
+
 async function checkPresetEmbeddedRegexScripts(event = {}) {
     const apiId = getCurrentPresetAPI();
     const name = getCurrentPresetName();
@@ -2224,14 +2520,26 @@ async function checkPresetEmbeddedRegexScripts(event = {}) {
 
             if (!accountStorage.getItem(checkKey)) {
                 accountStorage.setItem(checkKey, 'true');
-                const template = await renderExtensionTemplateAsync('regex', 'presetEmbeddedScripts', {});
-                const result = await callGenericPopup(template, POPUP_TYPE.CONFIRM, '');
+                const presetManager = getPresetManager(apiId);
+                if (!presetManager) {
+                    return;
+                }
 
-                if (result) {
+                const sourceScripts = await getPresetEmbeddedRegexSourceScripts(presetManager, name, scripts);
+                const selectedScripts = await showPresetEmbeddedRegexImportPopup(sourceScripts, name, {
+                    defaultSelected: true,
+                    okButton: t`Import Selected`,
+                    cancelButton: t`Cancel`,
+                });
+
+                if (selectedScripts) {
+                    await presetManager.writePresetExtensionField({ name, path: 'regex_scripts', value: selectedScripts });
                     allowPresetScripts(apiId, name);
                     if (getCurrentChatId()) {
                         await requestRegexChatReload();
                     }
+                } else {
+                    await presetManager.writePresetExtensionField({ name, path: 'regex_scripts', value: [] });
                 }
             }
         } else if (getCurrentChatId() && scripts.filter(script => !script.disabled).length > 0) {
