@@ -437,29 +437,29 @@ function registerPresetManagers() {
                     width: '100%',
                 },
                 presetGroupCallbacks: {
-                            getGroups: () => primaryManager.getPresetGroups(),
-                            getGroupForPreset: (name) => primaryManager.getGroupForPreset(name),
-                            getGroupDepth: (groupId) => primaryManager.getGroupDepth(groupId),
-                            rebuild: () => {
-                                primaryManager.rebuildSelectWithGroups();
-                            },
-                            createGroup: async (name, parentId) => {
-                                const id = primaryManager.createPresetGroup(name, parentId || null);
-                                return id;
-                            },
-                            renameGroup: async (groupId, newName) => {
-                                primaryManager.renamePresetGroup(groupId, newName);
-                            },
-                            deleteGroup: async (groupId) => {
-                                primaryManager.deletePresetGroup(groupId);
-                            },
-                            addToGroup: async (presetName, groupId) => {
-                                primaryManager.addPresetToGroup(presetName, groupId);
-                            },
-                            removeFromGroup: async (presetName) => {
-                                primaryManager.removePresetFromGroup(presetName);
-                            },
-                        },
+                    getGroups: () => primaryManager.getPresetGroups(),
+                    getGroupForPreset: (name) => primaryManager.getGroupForPreset(name),
+                    getGroupDepth: (groupId) => primaryManager.getGroupDepth(groupId),
+                    rebuild: () => {
+                        primaryManager.rebuildSelectWithGroups();
+                    },
+                    createGroup: async (name, parentId) => {
+                        const id = primaryManager.createPresetGroup(name, parentId || null);
+                        return id;
+                    },
+                    renameGroup: async (groupId, newName) => {
+                        primaryManager.renamePresetGroup(groupId, newName);
+                    },
+                    deleteGroup: async (groupId) => {
+                        primaryManager.deletePresetGroup(groupId);
+                    },
+                    addToGroup: async (presetName, groupId) => {
+                        primaryManager.addPresetToGroup(presetName, groupId);
+                    },
+                    removeFromGroup: async (presetName) => {
+                        primaryManager.removePresetFromGroup(presetName);
+                    },
+                },
             });
         }
     });
@@ -1025,8 +1025,7 @@ class PresetManager {
                     $(this.select).find(`option[value="${name}"]`).prop('selected', true);
                     $(this.select).val(name).trigger('change');
                 }
-            }
-            else {
+            } else {
                 const value = preset_names[name];
                 presets[value] = preset;
                 if (select) {
@@ -1661,16 +1660,16 @@ class PresetManager {
             const prefix = depth > 0 ? '└ ' : '';
 
             const $header = $('<option></option>')
-                        .val(`__group_header__${group.id}`)
-                        .text(indent + prefix + group.name)
-                        .attr('data-preset-group-id', group.id)
-                        .attr('data-preset-group-header', 'true')
-                        .attr('data-depth', depth);
-                        if (group.parentId) {
-                            $header.attr('data-preset-group-parent-id', group.parentId);
-                        }
-                        $header.prop('disabled', true);
-                        $select.append($header);
+                .val(`__group_header__${group.id}`)
+                .text(indent + prefix + group.name)
+                .attr('data-preset-group-id', group.id)
+                .attr('data-preset-group-header', 'true')
+                .attr('data-depth', depth);
+            if (group.parentId) {
+                $header.attr('data-preset-group-parent-id', group.parentId);
+            }
+            $header.prop('disabled', true);
+            $select.append($header);
 
             for (const presetName of group.presets) {
                 const opt = allOptions.find(o => o.text === presetName);
