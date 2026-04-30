@@ -44,6 +44,7 @@ const zhCNSidebar = [
   text: '独有功能',
   items: [
   { text: '记忆图', link: '/zh-CN/features/memory-graph' },
+  { text: '变量操作日志', link: '/zh-CN/features/variable-op-log' },
   { text: '多Agent编排', link: '/zh-CN/features/orchestrator' },
   { text: '角色卡编辑助手', link: '/zh-CN/features/card-editor' },
   { text: '搜索插件', link: '/zh-CN/features/search-tools' },
@@ -110,6 +111,7 @@ const zhTWSidebar = [
     text: '獨有功能',
     items: [
       { text: '記憶圖', link: '/zh-TW/features/memory-graph' },
+      { text: '變數操作日誌', link: '/zh-TW/features/variable-op-log' },
       { text: '多Agent編排', link: '/zh-TW/features/orchestrator' },
       { text: '角色卡編輯助手', link: '/zh-TW/features/card-editor' },
       { text: '搜尋外掛', link: '/zh-TW/features/search-tools' },
@@ -172,6 +174,7 @@ const enSidebar = [
     text: 'Unique Features',
     items: [
       { text: 'Memory Graph', link: '/features/memory-graph' },
+      { text: 'Variable Op-Log', link: '/features/variable-op-log' },
       { text: 'Multi-Agent Orchestrator', link: '/features/orchestrator' },
       { text: 'Card Editor Assistant', link: '/features/card-editor' },
       { text: 'Search Tools', link: '/features/search-tools' },

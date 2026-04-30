@@ -1,0 +1,113 @@
+# 變數操作日誌
+
+Luker 在 SillyTavern 原生變數系統之上引入了**逐樓層的變數操作日誌**。AI 回覆裡寫的變數賦值會被自動提取、結構化、隨訊息一起儲存，並在聊天歷史發生變化時被確定性地重播——刪除訊息、切換 swipe、重新生成回覆後，你的變數自動落到正確狀態。
+
+## 為什麼需要這個
+
+原生 SillyTavern 裡，副作用宏 `{{setvar::hp::50}}` 只在它出現在 *prompt 範本* 裡（預設、世界書、首樓）時才會被執行。如果 AI 在回覆裡寫了同樣的字面量，什麼都不會發生——它就是一段普通文字。更糟的是字面量會原樣顯示給使用者，污染敘事。
+
+Luker 的解法：在儲存 AI / 使用者訊息時把副作用宏從文字裡提取出來，作為結構化操作掛在那條訊息上，需要時重播。字面量從可見文字裡消失，操作作為資料被保留。
+
+## 工作原理
+
+### 提取
+
+訊息儲存時（AI 回覆、續寫、重新生成、swipe、使用者訊息），Luker 掃描 `mes` 尋找下面這些副作用宏：
+
+- `{{setvar::name::value}}`
+- `{{addvar::name::value}}`
+- `{{incvar::name}}`
+- `{{decvar::name}}`
+- `{{deletevar::name}}`
+
+按出現順序逐個處理：
+
+1. value 裡巢狀的**展示型**宏（`{{user}}`、`{{getvar::other_key}}`、`{{time}}` 等）針對當前狀態求值。
+2. op 立即前向 apply 到 `chat_metadata.variables`，這樣同一條訊息裡後續的 op 能讀到結果。
+3. 結構化記錄追加到 `message.extra.var_ops`。
+4. 字面量從 `mes` 裡刪掉。
+
+聊天介面看到的就是乾淨敘事；變數是最新的；操作歷史可查詢。
+
+::: info 順序求值
+同一條訊息裡兩個相互依賴的 op 會按預期工作：
+
+```
+{{setvar::a::1}} {{setvar::b::{{getvar::a}}}}
+```
+
+提取完成後：`a = 1`，`b = 1`。每個宏都是先完整求值再 apply，再處理下一個。
+:::
+
+### 結構性變化時重播
+
+聊天結構變化時，Luker 重建變數快取的相關部分：
+
+| 事件 | 動作 |
+|------|------|
+| `MESSAGE_DELETED` | 從存活 op 重播；只有出現在存活日誌裡的 key 會被改動 |
+| `MESSAGE_SWIPED` | 重播（活躍 swipe 的 `extra.var_ops` 此時已就位） |
+| `MESSAGE_SWIPE_DELETED` | 重播 |
+| `CHAT_CHANGED` | 針對剛載入的 chat 重播 |
+| `MESSAGE_EDITED` | 重播（**不**重新提取——編輯敘事不會觸發 setvar） |
+
+重播是刻意保守的：只動那些出現在存活 op 日誌裡的 key。其他來源寫的變數——世界書副作用、slash 命令、Quick Reply、第三方擴充、舊 chat 遺留——一律不動。
+
+### Swipe 生命週期
+
+`var_ops` 掛在 `message.extra` 上，SillyTavern 已經透過 `swipe_info[i].extra` 自動鏡像到每個 swipe。切換 swipe 時正確的 op 自動跟過來。
+
+新 swipe 開始生成時，`clearMessageData` 會丟掉前一個 swipe 的 `var_ops`（Luker 把它加進了白名單），這樣提取從乾淨狀態開始。
+
+### 續寫
+
+續寫會把新 token 追加到現有 `mes` 後面。因為之前的提取已經把字面量從 `mes` 裡刪乾淨了，下一次提取只會看到新增部分，把新 op 追加到同一個 `var_ops` 陣列末尾。不需要時間戳、偏移量、旗標位。
+
+## 操作面板
+
+任何帶有 op 日誌的訊息按鈕排上會出現一個小燒瓶圖示。點開能：
+
+- 檢視這條訊息記錄的所有操作。
+- 編輯某個操作的 `op` / `key` / `value`。
+- 刪除某個操作。
+- 新增操作。
+
+儲存時該訊息的 op 陣列被你的編輯替換、快取重建、聊天落盤。**手動調整變數推薦這條路**——它把改動落在時間線上一個具體的訊息上，未來的結構性變化（刪除、swipe）能正確保留意圖。
+
+## 與其他變數來源的共存
+
+| 來源 | 行為 |
+|------|------|
+| 世界書 `{{setvar}}` | 走 SillyTavern 原生流程，prompt 組裝時執行；快取裡這個 key 每輪都會被 WI 的值覆蓋。如果想讓 WI 充當「初始化」而不是「每輪覆蓋」，把這類條目放在高 depth / prompt 最前。 |
+| 預設 `{{setvar}}` | 同世界書。 |
+| Slash 命令 `/setvar` | 直接寫 `chat_metadata.variables`。下次重播掃到同名 key（即存活的 AI op 提到了這個 key）時會被覆蓋。 |
+| Quick Reply 腳本 | 同 slash 命令。給 QR 管理的變數起一個 AI op 不會碰的名字。 |
+| `{{setglobalvar}}` 系列 | 不被提取。全域變數在 chat-local op 日誌的範圍之外，按原生語義工作。 |
+
+## 角色卡作者建議
+
+如果一個變數打算讓 **AI 在 RP 過程中擁有並修改**，就只讓它透過 AI 寫的 `{{setvar}}` 來變化，不要從世界書或 QR 裡再寫。
+
+如果一個變數打算 **chat 開始時初始化一次**，把它寫在角色卡的首樓或 alt greeting 裡——它們也會被提取到 `chat[0].extra.var_ops`。
+
+如果一個變數打算 **每輪 prompt 組裝時按當前情境重算**（比如根據當前位置算天氣），就放世界書；快取被覆蓋是預期行為。
+
+## 儲存結構
+
+```jsonc
+chat[i] = {
+    "mes": "...剝離了副作用宏的敘事...",
+    "extra": {
+        "var_ops": [
+            { "op": "setvar", "key": "hp", "value": "50" },
+            { "op": "incvar", "key": "turn" }
+        ]
+    },
+    "swipe_info": [
+        { "extra": { "var_ops": [...] } },
+        { "extra": { "var_ops": [...] } }
+    ]
+}
+```
+
+`chat_metadata.variables` 仍是 SillyTavern 原生快取，是 `{{getvar}}` 的真源。op 日誌是我們擁有的那部分值的 *來源*；快取是所有來源合併後的執行時視圖。
