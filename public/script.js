@@ -270,6 +270,7 @@ import { appendFileContent, hasPendingFileAttachment, populateFileAttachment, de
 import { getPresetManager, initPresetManager } from './scripts/preset-manager.js';
 import { evaluateMacros, getLastMessageId, initMacros } from './scripts/macros.js';
 import { initVariableOpLog, extractMessageById } from './scripts/variable-op-log/index.js';
+import { initVarOpsPanelHandler } from './scripts/variable-op-log/panel.js';
 import { installFrontendLogCapture, setFrontendConsoleDebugLoggingEnabled } from './scripts/frontend-log-manager.js';
 import { initDebugExportButton } from './scripts/debug-export.js';
 import { currentUser, isAdmin, setUserControls } from './scripts/user.js';
@@ -13207,6 +13208,7 @@ export async function getSettings(options = {}) {
         // power_user.experimental_macro_engine
         initMacros();
         initVariableOpLog();
+        initVarOpsPanelHandler();
 
         if (data.enable_extensions) {
             const enableAutoUpdate = Boolean(data.enable_extensions_auto_update);
