@@ -134,6 +134,7 @@ import { IGNORE_SYMBOL, inject_ids } from './constants.js';
 import { macros } from './macros/macro-system.js';
 import { getRegexedString, regex_placement } from './extensions/regex/engine.js';
 import { addMessages, updateMessages, deleteMessages, getMessage, getMessageCount } from './messages.js';
+import { createFloorState } from './floor-state.js';
 
 function safeClone(value, fallback = {}) {
     try {
@@ -2174,6 +2175,7 @@ export function getContext() {
         patchChatState,
         updateChatState,
         deleteChatState,
+        createFloorState,
         presets: {
             list: listPresetRefs,
             resolve: normalizePresetRef,
