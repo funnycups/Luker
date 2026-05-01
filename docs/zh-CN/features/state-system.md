@@ -73,6 +73,64 @@ CardApp 是状态系统最典型的使用者。角色卡内嵌的应用可以通
 
 [Memory Graph](/zh-CN/features/memory-graph) 等记忆类扩展可以利用角色状态存储记忆摘要和索引数据，实现按角色隔离的记忆管理。
 
+## 楼层状态（带回退的聊天状态）
+
+普通聊天状态只能整体覆写：用户回切 swipe、删消息或者切换聊天时，插件得自己重新读取命名空间、自己对账数据。楼层状态在聊天状态之上加了一层薄封装，自动处理这件事。每次写入都会附带聊天尾部的位置（楼层索引 + swipe 编号）记到日志里，聊天结构变化时自动重放。
+
+### 工作方式
+
+一个楼层状态实例独占一个聊天状态命名空间（`<ns>`）以及一份私有提交日志（`<ns>__floor_log`）。所有写入都通过实例的 `patch` 或 `update` 进入，同时更新业务命名空间和追加一条提交。实例订阅四个聊天事件：
+
+- `CHAT_CHANGED`——切换到新聊天，按这份聊天的日志重建数据
+- `MESSAGE_SWIPED`——用户切换 swipe，按新的活动 swipe 重建数据
+- `MESSAGE_DELETED`——聊天截短，丢弃楼层超出新长度的提交后重建
+- `MESSAGE_SWIPE_DELETED`——某个 swipe 被删除，相关提交重新编号后重建
+
+重建始终从 `{}` 起步，按顺序重放幸存提交，确保业务命名空间永远对应当前的 swipe 路径。
+
+### 创建实例
+
+在插件或 CardApp 里使用 `getContext().createFloorState({ namespace })`。每个实例绑定一个命名空间；如果业务状态分多块，请创建多个实例。
+
+```js
+const ctx = SillyTavern.getContext();
+const fs = await ctx.createFloorState({ namespace: 'my-plugin' });
+
+// 直接应用 RFC 6902 操作：
+await fs.patch([{ op: 'add', path: '/score', value: 10 }]);
+
+// 或者写 reducer，差异会自动计算并提交：
+await fs.update((current) => ({ ...current, level: (current?.level ?? 0) + 1 }));
+
+// 读取当前状态：
+const state = await fs.get();
+
+// 在读取之前等待重建完成：
+await fs.ready();
+
+// 解除事件监听（极少需要，实例通常和页面同寿）：
+fs.destroy();
+```
+
+### 何时要 `await ready()`
+
+如果你的插件在 `GENERATION_STARTED` 之类紧跟在四个结构事件之后的钩子里读楼层状态，那就先 `await fs.ready()`。没有重建在进行时，这个 Promise 立即解决，开销可以忽略。
+
+### 约定
+
+- 一个命名空间一个主人。不要在同一个命名空间上同时用 `patchChatState(ns, ...)` 和 `floorState.patch(...)`——重建时会把直接写入的部分覆盖掉。
+- 名字以 `__floor_log` 结尾的命名空间留给楼层状态的私有日志，不要占用。
+- reducer 必须返回普通对象。数组、基础类型、`null`、`undefined` 一律忽略。
+
+### 参考
+
+- `createFloorState({ namespace })`——异步工厂，返回冻结的实例。
+- `instance.patch(operations)`——应用 RFC 6902 操作并追加提交。
+- `instance.update(reducer)`——读—改—写；reducer 收到当前状态，返回下一份状态。
+- `instance.get()`——读取业务命名空间。
+- `instance.ready()`——重建结束时解决。
+- `instance.destroy()`——解除事件监听并冻结实例。
+
 ## 相关页面
 
 - [CardApp](/zh-CN/features/cardapp) — 角色卡内嵌应用系统

@@ -73,6 +73,64 @@ See [Extension API](/development/extension-api) for details.
 
 [Memory Graph](/features/memory-graph) and other memory-type extensions can use character state to store memory summaries and index data, enabling per-character isolated memory management.
 
+## Floor State (chat state with rewind)
+
+Plain chat state is overwrite-only — when a user swipes, deletes a message, or switches chats, plugins must reload the namespace and reconcile their data manually. Floor state is a thin layer on top of chat state that handles this for you: every write is logged at the chat tail (floor index + swipe id) and replayed automatically when the chat structure changes.
+
+### How it works
+
+A floor state instance owns one chat-state namespace (`<ns>`) and a private commit log (`<ns>__floor_log`). Writes go through the instance's `patch` or `update` methods, which both update the data namespace and append a commit. The instance subscribes to four chat events:
+
+- `CHAT_CHANGED` — new chat opened; rebuild data from this chat's log
+- `MESSAGE_SWIPED` — user switched swipes; rebuild data with the new active swipe
+- `MESSAGE_DELETED` — chat truncated; drop commits at or beyond the new length, then rebuild
+- `MESSAGE_SWIPE_DELETED` — a swipe was deleted; renumber affected commits, then rebuild
+
+Rebuilding starts from `{}` and replays surviving commits in order, so the data namespace always reflects the current swipe path.
+
+### Creating an instance
+
+Use `getContext().createFloorState({ namespace })` from a plugin or CardApp. Each instance is bound to one namespace; create a separate instance per logical state slice.
+
+```js
+const ctx = SillyTavern.getContext();
+const fs = await ctx.createFloorState({ namespace: 'my-plugin' });
+
+// Apply RFC 6902 operations directly:
+await fs.patch([{ op: 'add', path: '/score', value: 10 }]);
+
+// Or write reducer-style; the diff is computed and committed:
+await fs.update((current) => ({ ...current, level: (current?.level ?? 0) + 1 }));
+
+// Read current state:
+const state = await fs.get();
+
+// Wait for any in-flight rebuild to finish before reading:
+await fs.ready();
+
+// Detach event listeners (rarely needed; instances usually live for the page session):
+fs.destroy();
+```
+
+### When to await `ready()`
+
+If your plugin reads floor-managed state inside an event handler that fires near the four structural events above (for example `GENERATION_STARTED` immediately after `CHAT_CHANGED`), call `await fs.ready()` first. The instance returns its currently-resolved promise when no rebuild is in flight, so the cost is minimal.
+
+### Conventions
+
+- One namespace, one owner. Don't mix `patchChatState(ns, ...)` and `floorState.patch(...)` against the same namespace — the floor state rebuild will overwrite the raw write.
+- Namespace strings ending in `__floor_log` are reserved for the private logs.
+- Reducer return values must be plain objects; arrays, primitives, `null`, and `undefined` are ignored.
+
+### Reference
+
+- `createFloorState({ namespace })` — async factory; returns a frozen instance.
+- `instance.patch(operations)` — apply RFC 6902 operations and append a commit.
+- `instance.update(reducer)` — read-modify-write; reducer receives the current state and returns the next.
+- `instance.get()` — read the current data namespace.
+- `instance.ready()` — resolves when no rebuild is in flight.
+- `instance.destroy()` — detach event listeners and freeze the instance.
+
 ## Related Pages
 
 - [CardApp](/features/cardapp) — In-card application system

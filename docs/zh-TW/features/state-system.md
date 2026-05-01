@@ -73,6 +73,64 @@ CardApp 是狀態系統最典型的使用者。角色卡內嵌的應用可以透
 
 [Memory Graph](/zh-TW/features/memory-graph) 等記憶類擴充功能可以利用角色狀態儲存記憶摘要和索引資料，實現按角色隔離的記憶管理。
 
+## 樓層狀態（可回退的聊天狀態）
+
+普通聊天狀態只能整體覆寫：使用者回切 swipe、刪訊息或切換聊天時，外掛得自己重新讀取命名空間、自己對帳資料。樓層狀態在聊天狀態之上加了一層薄封裝，自動處理這件事。每次寫入都會附帶聊天尾端的位置（樓層索引 + swipe 編號）記入日誌，聊天結構變化時自動重播。
+
+### 運作方式
+
+一個樓層狀態實例獨佔一個聊天狀態命名空間（`<ns>`）以及一份私有提交日誌（`<ns>__floor_log`）。所有寫入都透過實例的 `patch` 或 `update` 進入，同時更新業務命名空間並追加一筆提交。實例訂閱四個聊天事件：
+
+- `CHAT_CHANGED`——切換到新聊天，依這份聊天的日誌重建資料
+- `MESSAGE_SWIPED`——使用者切換 swipe，依新的作用 swipe 重建資料
+- `MESSAGE_DELETED`——聊天被截短，丟棄樓層超出新長度的提交後重建
+- `MESSAGE_SWIPE_DELETED`——某個 swipe 被刪除，相關提交重新編號後重建
+
+重建一律從 `{}` 起步，依序重播倖存提交，確保業務命名空間永遠對應目前的 swipe 路徑。
+
+### 建立實例
+
+在外掛或 CardApp 裡使用 `getContext().createFloorState({ namespace })`。每個實例綁定一個命名空間；若業務狀態分多塊，請建立多個實例。
+
+```js
+const ctx = SillyTavern.getContext();
+const fs = await ctx.createFloorState({ namespace: 'my-plugin' });
+
+// 直接套用 RFC 6902 操作：
+await fs.patch([{ op: 'add', path: '/score', value: 10 }]);
+
+// 或寫 reducer，差異會自動計算並提交：
+await fs.update((current) => ({ ...current, level: (current?.level ?? 0) + 1 }));
+
+// 讀取目前狀態：
+const state = await fs.get();
+
+// 在讀取前等待重建完成：
+await fs.ready();
+
+// 解除事件監聽（極少需要，實例通常與頁面同壽）：
+fs.destroy();
+```
+
+### 何時需要 `await ready()`
+
+若外掛在 `GENERATION_STARTED` 之類緊接在四個結構事件之後的鉤子裡讀樓層狀態，請先 `await fs.ready()`。沒有重建進行時，這個 Promise 會立即解析，開銷可以忽略。
+
+### 約定
+
+- 一個命名空間一個主人。不要在同一個命名空間同時使用 `patchChatState(ns, ...)` 與 `floorState.patch(...)`——重建時會把直接寫入的部分覆蓋掉。
+- 命名空間結尾為 `__floor_log` 的字串保留給樓層狀態的私有日誌，請勿佔用。
+- reducer 必須回傳普通物件。陣列、基本型別、`null`、`undefined` 一律忽略。
+
+### 參考
+
+- `createFloorState({ namespace })`——非同步工廠，回傳凍結的實例。
+- `instance.patch(operations)`——套用 RFC 6902 操作並追加提交。
+- `instance.update(reducer)`——讀—改—寫；reducer 收到目前狀態，回傳下一份狀態。
+- `instance.get()`——讀取業務命名空間。
+- `instance.ready()`——重建結束時解析。
+- `instance.destroy()`——解除事件監聽並凍結實例。
+
 ## 相關頁面
 
 - [CardApp](/zh-TW/features/cardapp) — 角色卡內嵌應用系統
