@@ -271,4 +271,9 @@ describe('inferCommitTargetFromChat', () => {
         expect(inferCommitTargetFromChat([{}])).toEqual({ floor: 0, swipeId: 0 });
         expect(inferCommitTargetFromChat([{}, { swipe_id: -1 }])).toEqual({ floor: 1, swipeId: 0 });
     });
+
+    test('coerces non-integer swipe_id to 0', () => {
+        expect(inferCommitTargetFromChat([{ swipe_id: 1.7 }])).toEqual({ floor: 0, swipeId: 0 });
+        expect(inferCommitTargetFromChat([{ swipe_id: 'oops' }])).toEqual({ floor: 0, swipeId: 0 });
+    });
 });

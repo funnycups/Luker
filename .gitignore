@@ -28,6 +28,8 @@ public/stats.json
 /docker/data
 /docker/dist
 .DS_Store
+/coverage/
+/tests/coverage/
 public/settings.json
 /thumbnails
 whitelist.txt

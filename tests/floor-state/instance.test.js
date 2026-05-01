@@ -423,3 +423,230 @@ describe('multi-instance isolation', () => {
         expect(store._raw.get('plugin-b')).toEqual({});
     });
 });
+
+describe('error tolerance', () => {
+    test('patch returns false when patchChatState fails', async () => {
+        const chatRef = { value: [msg(0)] };
+        const base = makeDeps(chatRef);
+        const deps = {
+            ...base.deps,
+            patchChatState: async () => false,
+        };
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+
+        const ok = await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
+        expect(ok).toBe(false);
+        // No commit recorded because patch bailed early.
+        expect(base.store._raw.get('foo__floor_log')).toBeUndefined();
+    });
+
+    test('patch still returns true when commit log write fails after data write', async () => {
+        // Real-world tradeoff: data is in, log is not. Caller sees success
+        // because the data namespace did update; on next rematerialize the
+        // commit log is the source of truth and the orphaned write is gone.
+        const chatRef = { value: [msg(0)] };
+        const base = makeDeps(chatRef);
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const deps = {
+                ...base.deps,
+                updateChatState: async (ns, updater) => {
+                    if (ns === 'foo__floor_log') return { ok: false, state: null, updated: false };
+                    return base.deps.updateChatState(ns, updater);
+                },
+            };
+            const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+
+            const ok = await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
+            expect(ok).toBe(true);
+            expect(base.store._raw.get('foo')).toEqual({ x: 1 });
+            // appendCommit's failure path was hit and warned about.
+            expect(warn).toHaveBeenCalledWith(
+                expect.stringContaining('appendCommit failed'),
+                expect.anything(),
+            );
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    test('rematerialize swallows store errors and warns', async () => {
+        const chatRef = { value: [msg(0)] };
+        const base = makeDeps(chatRef);
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            // Throw when writing the data namespace during rematerialize.
+            const deps = {
+                ...base.deps,
+                updateChatState: async (ns, updater) => {
+                    if (ns === 'foo') throw new Error('boom');
+                    return base.deps.updateChatState(ns, updater);
+                },
+            };
+            const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+
+            // Trigger CHAT_CHANGED so rematerialize runs and hits the throw.
+            await base.eventSource.emit(event_types.CHAT_CHANGED);
+            await fs.ready();
+
+            expect(warn).toHaveBeenCalledWith(
+                expect.stringContaining('rematerialize failed'),
+                expect.anything(),
+            );
+            // The instance survived and stays usable.
+            expect(typeof fs.patch).toBe('function');
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    test('rematerialize warns when updateChatState reports ok=false', async () => {
+        const chatRef = { value: [msg(0)] };
+        const base = makeDeps(chatRef);
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const deps = {
+                ...base.deps,
+                updateChatState: async (ns, updater) => {
+                    if (ns === 'foo') return { ok: false, state: null, updated: false };
+                    return base.deps.updateChatState(ns, updater);
+                },
+            };
+            const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+
+            await base.eventSource.emit(event_types.CHAT_CHANGED);
+            await fs.ready();
+
+            expect(warn).toHaveBeenCalledWith(
+                expect.stringContaining('rematerialize write failed'),
+                expect.anything(),
+            );
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    test('handleMessageDeleted catches errors from readLog and still releases ready gate', async () => {
+        const chatRef = { value: [msg(0)] };
+        const base = makeDeps(chatRef);
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            // Make the very first read fail; this short-circuits the handler.
+            const deps = {
+                ...base.deps,
+                getChatState: async (ns) => {
+                    if (ns === 'foo__floor_log') throw new Error('read boom');
+                    return base.deps.getChatState(ns);
+                },
+            };
+            const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+
+            await base.eventSource.emit(event_types.MESSAGE_DELETED, 0);
+            // ready() must resolve even after the error path.
+            await fs.ready();
+
+            expect(warn).toHaveBeenCalledWith(
+                expect.stringContaining('truncate failed'),
+                expect.anything(),
+            );
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    test('handleSwipeDeleted ignores malformed payloads without entering the gate', async () => {
+        const chatRef = { value: [msg(0)] };
+        const base = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, base.deps);
+
+        // ready stays resolved before and after — the early bail returns immediately.
+        await fs.ready();
+        await base.eventSource.emit(event_types.MESSAGE_SWIPE_DELETED, undefined);
+        await base.eventSource.emit(event_types.MESSAGE_SWIPE_DELETED, { messageId: 'oops' });
+        await base.eventSource.emit(event_types.MESSAGE_SWIPE_DELETED, { messageId: 0, swipeId: 'oops' });
+        // No log entry was created.
+        expect(base.store._raw.get('foo__floor_log')).toBeUndefined();
+    });
+
+    test('handleSwipeDeleted catches errors and releases ready gate', async () => {
+        const chatRef = { value: [msg(0)] };
+        const base = makeDeps(chatRef);
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const deps = {
+                ...base.deps,
+                getChatState: async (ns) => {
+                    if (ns === 'foo__floor_log') throw new Error('read boom');
+                    return base.deps.getChatState(ns);
+                },
+            };
+            const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+
+            await base.eventSource.emit(event_types.MESSAGE_SWIPE_DELETED, { messageId: 0, swipeId: 0 });
+            await fs.ready();
+
+            expect(warn).toHaveBeenCalledWith(
+                expect.stringContaining('swipe-delete failed'),
+                expect.anything(),
+            );
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    test('writeLog returns false on store failure (covered indirectly via truncate)', async () => {
+        const chatRef = { value: [msg(0), msg(0)] };
+        const base = makeDeps(chatRef);
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const fs = createFloorStateWithDeps({ namespace: 'foo' }, base.deps);
+            // Seed a commit so truncate has something to remove.
+            await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
+            chatRef.value.push(msg(0));
+            await fs.patch([{ op: 'add', path: '/y', value: 2 }]);
+
+            // Replace updateChatState to fail when writing the log during truncate.
+            base.deps.updateChatState = async (ns, updater) => {
+                if (ns === 'foo__floor_log') return { ok: false, state: null, updated: false };
+                // fall through with a fresh closure capturing the original store
+                const k = ns.toLowerCase();
+                const current = base.store._raw.get(k) ?? null;
+                const next = await updater(current == null ? null : structuredClone(current));
+                if (next === null || next === undefined) base.store._raw.delete(k);
+                else base.store._raw.set(k, structuredClone(next));
+                return { ok: true, state: base.store._raw.get(k) ?? null, updated: true };
+            };
+
+            chatRef.value = chatRef.value.slice(0, 1);
+            await base.eventSource.emit(event_types.MESSAGE_DELETED, 1);
+            await fs.ready();
+
+            expect(warn).toHaveBeenCalledWith(
+                expect.stringContaining('writeLog failed'),
+                expect.anything(),
+            );
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    test('update bails when reducer is not a function', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+
+        expect(await fs.update(null)).toBe(false);
+        expect(await fs.update('not a function')).toBe(false);
+        expect(await fs.update(42)).toBe(false);
+        expect(store._raw.size).toBe(0);
+    });
+
+    test('update propagates reducer exceptions to caller', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+
+        await expect(fs.update(() => { throw new Error('reducer boom'); }))
+            .rejects.toThrow('reducer boom');
+    });
+});
