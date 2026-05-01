@@ -19,15 +19,6 @@
  */
 
 import {
-    chat,
-    getChatState,
-    patchChatState,
-    updateChatState,
-    buildObjectPatchOperationsAsync,
-} from '../../script.js';
-import { eventSource, event_types } from '../events.js';
-
-import {
     LOG_VERSION,
     isValidCommit,
     normalizeLog,
@@ -41,39 +32,47 @@ import {
 const LOG_SUFFIX = '__floor_log';
 
 /**
- * Default runtime dependencies. Tests pass their own deps to bypass the
- * global script.js / eventSource wiring.
- *
- * @returns {{
- *   getChatState: typeof getChatState,
- *   patchChatState: typeof patchChatState,
- *   updateChatState: typeof updateChatState,
- *   buildObjectPatchOperationsAsync: typeof buildObjectPatchOperationsAsync,
- *   eventSource: typeof eventSource,
- *   event_types: typeof event_types,
- *   getChat: () => Array,
- * }}
+ * Resolve runtime deps from script.js + events.js. Lazy so test files can
+ * import this module without pulling in the full app bundle.
  */
-function makeDefaultDeps() {
+async function makeDefaultDeps() {
+    const script = await import('../../script.js');
+    const events = await import('../events.js');
     return {
-        getChatState,
-        patchChatState,
-        updateChatState,
-        buildObjectPatchOperationsAsync,
-        eventSource,
-        event_types,
-        getChat: () => chat,
+        getChatState: script.getChatState,
+        patchChatState: script.patchChatState,
+        updateChatState: script.updateChatState,
+        buildObjectPatchOperationsAsync: script.buildObjectPatchOperationsAsync,
+        eventSource: events.eventSource,
+        event_types: events.event_types,
+        getChat: () => script.chat,
     };
 }
 
 /**
  * Create a floor state instance bound to a chat-state namespace.
  *
+ * Returns a Promise so default deps can be lazily resolved without
+ * forcing module-load-time evaluation of script.js (which has DOM /
+ * jQuery side effects unsuitable for Node test environments).
+ *
  * @param {{ namespace: string }} options
- * @param {object} [deps] Internal — for tests only.
+ * @returns {Promise<FloorStateInstance>}
+ */
+export async function createFloorState(options) {
+    const deps = await makeDefaultDeps();
+    return createFloorStateWithDeps(options, deps);
+}
+
+/**
+ * Synchronous variant accepting injected deps. Exported for tests; CardApp
+ * and plugin code should prefer createFloorState() above.
+ *
+ * @param {{ namespace: string }} options
+ * @param {object} deps
  * @returns {FloorStateInstance}
  */
-export function createFloorState(options, deps = null) {
+export function createFloorStateWithDeps(options, deps) {
     const namespace = String(options?.namespace ?? '').trim().toLowerCase();
     if (!namespace) {
         throw new Error('[floor-state] createFloorState requires a non-empty namespace');
@@ -82,7 +81,7 @@ export function createFloorState(options, deps = null) {
         throw new Error(`[floor-state] namespace must not end with "${LOG_SUFFIX}"`);
     }
     const logNamespace = `${namespace}${LOG_SUFFIX}`;
-    const runtime = deps || makeDefaultDeps();
+    const runtime = deps;
 
     let destroyed = false;
 
@@ -142,12 +141,14 @@ export function createFloorState(options, deps = null) {
 
     /**
      * Compute the target state from the log + current chat, and overwrite
-     * the data namespace with it. Wraps in a ready-gate transition so
-     * concurrent reads can await completion.
+     * the data namespace with it.
+     *
+     * The ready gate is managed by the caller (event handlers) so that
+     * compound operations like truncate+rematerialize stay pending in a
+     * single observable transition.
      */
     async function rematerialize() {
         if (destroyed) return;
-        beginPending();
         try {
             const log = await readLog();
             const swipeMap = buildSwipeMapFromChat(runtime.getChat());
@@ -158,8 +159,6 @@ export function createFloorState(options, deps = null) {
             }
         } catch (error) {
             console.warn(`[floor-state:${namespace}] rematerialize failed`, error);
-        } finally {
-            endPending();
         }
     }
 
@@ -175,13 +174,12 @@ export function createFloorState(options, deps = null) {
             if (survivors.length !== log.commits.length) {
                 await writeLog({ version: LOG_VERSION, commits: survivors });
             }
+            await rematerialize();
         } catch (error) {
             console.warn(`[floor-state:${namespace}] truncate failed`, error);
         } finally {
             endPending();
         }
-        // rematerialize manages its own gate; chain after truncate.
-        await rematerialize();
     }
 
     /**
@@ -199,20 +197,28 @@ export function createFloorState(options, deps = null) {
             if (next.length !== log.commits.length || next.some((c, i) => c !== log.commits[i])) {
                 await writeLog({ version: LOG_VERSION, commits: next });
             }
+            await rematerialize();
         } catch (error) {
             console.warn(`[floor-state:${namespace}] swipe-delete failed`, error);
         } finally {
             endPending();
         }
-        await rematerialize();
     }
 
     // --- event wiring ---
 
-    const onChatChanged = () => { void rematerialize(); };
-    const onMessageSwiped = () => { void rematerialize(); };
-    const onMessageDeleted = (newChatLength) => { void handleMessageDeleted(newChatLength); };
-    const onMessageSwipeDeleted = (payload) => { void handleSwipeDeleted(payload); };
+    const onChatChanged = async () => {
+        beginPending();
+        try { await rematerialize(); }
+        finally { endPending(); }
+    };
+    const onMessageSwiped = async () => {
+        beginPending();
+        try { await rematerialize(); }
+        finally { endPending(); }
+    };
+    const onMessageDeleted = (newChatLength) => handleMessageDeleted(newChatLength);
+    const onMessageSwipeDeleted = (payload) => handleSwipeDeleted(payload);
 
     runtime.eventSource.on(runtime.event_types.CHAT_CHANGED, onChatChanged);
     runtime.eventSource.on(runtime.event_types.MESSAGE_SWIPED, onMessageSwiped);
