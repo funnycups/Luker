@@ -112,6 +112,30 @@ await fs.ready();
 fs.destroy();
 ```
 
+### Attaching state to a non-tail floor
+
+`patch` and `update` both accept an optional second argument `{ floor, swipeId? }` that pins the commit to an explicit floor instead of the chat tail. The typical use case is a lagging write — e.g. a memory extension that summarizes at `chat.length - N` when the user has configured the last N floors to be excluded from generation.
+
+```js
+// floor only — swipeId is read from chat[floor].swipe_id
+await fs.patch(
+    [{ op: 'add', path: '/summaries/0', value: '...' }],
+    { floor: targetFloor },
+);
+
+// floor + swipeId pinned (e.g. backfilling state on a specific swipe)
+await fs.patch(operations, { floor: targetFloor, swipeId: 0 });
+
+// update accepts the same override
+await fs.update((current) => nextState, { floor: targetFloor });
+```
+
+When `options` is omitted the chat tail is used, exactly as before. `floor` must be a valid index into the current `chat` (`0 <= floor < chat.length`); out-of-range, negative, non-integer, or negative `swipeId` overrides are rejected and `patch` returns `false`, so misuse fails fast instead of silently mis-attributing the commit.
+
+::: tip
+The override only changes what label this commit carries in the log — `MESSAGE_DELETED` still truncates by floor and `MESSAGE_SWIPE_DELETED` still renumbers by (floor, swipeId). Replay order is the log's insertion order; specifying a smaller `floor` does not "jump the queue" during rematerialize.
+:::
+
 ### When to await `ready()`
 
 If your plugin reads floor-managed state inside an event handler that fires near the four structural events above (for example `GENERATION_STARTED` immediately after `CHAT_CHANGED`), call `await fs.ready()` first. The instance returns its currently-resolved promise when no rebuild is in flight, so the cost is minimal.
@@ -125,8 +149,8 @@ If your plugin reads floor-managed state inside an event handler that fires near
 ### Reference
 
 - `createFloorState({ namespace })` — async factory; returns a frozen instance.
-- `instance.patch(operations)` — apply RFC 6902 operations and append a commit.
-- `instance.update(reducer)` — read-modify-write; reducer receives the current state and returns the next.
+- `instance.patch(operations, options?)` — apply RFC 6902 operations and append a commit. Optional `options = { floor, swipeId? }` pins the commit to an explicit floor instead of the chat tail.
+- `instance.update(reducer, options?)` — read-modify-write; reducer receives the current state and returns the next. `options` are identical to `patch`.
 - `instance.get()` — read the current data namespace.
 - `instance.ready()` — resolves when no rebuild is in flight.
 - `instance.destroy()` — detach event listeners and freeze the instance.

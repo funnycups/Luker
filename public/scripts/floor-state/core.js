@@ -161,3 +161,42 @@ export function inferCommitTargetFromChat(chat) {
     const swipeId = Number.isInteger(raw) && raw >= 0 ? raw : 0;
     return { floor, swipeId };
 }
+
+/**
+ * Resolve a commit target, preferring an explicit override over chat-tail
+ * inference. The override may pin only `floor` (the swipeId is then read
+ * from `chat[floor].swipe_id`, defaulting to 0) or both `floor` and
+ * `swipeId`. The override `floor` must be a valid index into `chat` —
+ * anything else returns `null` so the caller can flag a misuse.
+ *
+ * Used by plugins that attach state to a non-tail floor (e.g. memory
+ * extensions tagging an older message). Returning the tail by default
+ * keeps the existing `fs.patch(ops)` callsites working unchanged.
+ *
+ * @param {Array} chat
+ * @param {{floor?: number, swipeId?: number} | null | undefined} override
+ * @returns {{floor: number, swipeId: number} | null}
+ */
+export function resolveCommitTarget(chat, override) {
+    if (override === null || override === undefined) {
+        return inferCommitTargetFromChat(chat);
+    }
+    if (typeof override !== 'object') return null;
+    if (override.floor === undefined || override.floor === null) {
+        // No explicit floor → fall back to inference even if other fields
+        // were passed; a swipeId without a floor has no anchor.
+        return inferCommitTargetFromChat(chat);
+    }
+    if (!Array.isArray(chat) || chat.length === 0) return null;
+    const floor = Number(override.floor);
+    if (!Number.isInteger(floor) || floor < 0 || floor >= chat.length) return null;
+    let swipeId;
+    if (override.swipeId !== undefined && override.swipeId !== null) {
+        swipeId = Number(override.swipeId);
+        if (!Number.isInteger(swipeId) || swipeId < 0) return null;
+    } else {
+        const raw = chat[floor]?.swipe_id;
+        swipeId = Number.isInteger(raw) && raw >= 0 ? raw : 0;
+    }
+    return { floor, swipeId };
+}

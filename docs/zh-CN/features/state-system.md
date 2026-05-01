@@ -112,6 +112,30 @@ await fs.ready();
 fs.destroy();
 ```
 
+### 把状态挂到非尾部的楼层
+
+`patch` 与 `update` 都接受一个可选的第二参数 `{ floor, swipeId? }`，用来把这次提交显式挂到指定楼层而不是聊天尾部。常见场景是「滞后写入」——比如记忆扩展在用户设置了「最后 N 层不参与生成」时，需要把摘要挂到 `chat.length - N` 而不是当前最新楼层。
+
+```js
+// 只指定 floor：swipeId 自动取 chat[floor].swipe_id
+await fs.patch(
+    [{ op: 'add', path: '/summaries/0', value: '...' }],
+    { floor: targetFloor },
+);
+
+// 同时指定 floor + swipeId（用于回填某条具体 swipe 上的状态）
+await fs.patch(operations, { floor: targetFloor, swipeId: 0 });
+
+// update 也接受同样的覆写
+await fs.update((current) => nextState, { floor: targetFloor });
+```
+
+不传 `options` 时按聊天尾部推断，行为与早期版本一致。`floor` 必须是当前 `chat` 的有效索引（`0 <= floor < chat.length`），越界、负数、非整数、负 `swipeId` 都会被拒绝并返回 `false`，避免悄无声息地把状态错挂到不存在的楼层。
+
+::: tip
+覆写只影响这条提交在日志里的标签——`MESSAGE_DELETED` 仍按 floor 截断，`MESSAGE_SWIPE_DELETED` 仍按 (floor, swipeId) 重编号。重建顺序由日志的写入顺序决定，不会因为你指定了较小的 `floor` 就被「插队」到前面执行。
+:::
+
 ### 何时要 `await ready()`
 
 如果你的插件在 `GENERATION_STARTED` 之类紧跟在四个结构事件之后的钩子里读楼层状态，那就先 `await fs.ready()`。没有重建在进行时，这个 Promise 立即解决，开销可以忽略。
@@ -125,8 +149,8 @@ fs.destroy();
 ### 参考
 
 - `createFloorState({ namespace })`——异步工厂，返回冻结的实例。
-- `instance.patch(operations)`——应用 RFC 6902 操作并追加提交。
-- `instance.update(reducer)`——读—改—写；reducer 收到当前状态，返回下一份状态。
+- `instance.patch(operations, options?)`——应用 RFC 6902 操作并追加提交。可选的 `options = { floor, swipeId? }` 把提交挂到指定楼层而非聊天尾部。
+- `instance.update(reducer, options?)`——读—改—写；reducer 收到当前状态，返回下一份状态。`options` 与 `patch` 一致。
 - `instance.get()`——读取业务命名空间。
 - `instance.ready()`——重建结束时解决。
 - `instance.destroy()`——解除事件监听并冻结实例。

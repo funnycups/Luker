@@ -775,6 +775,161 @@ describe('branch inheritance via CHAT_BRANCH_CREATED', () => {
     });
 });
 
+describe('explicit floor tagging', () => {
+    test('patch with { floor } pins the commit to a non-tail floor', async () => {
+        // Three messages; tail is floor 2 with swipe 0. Plugin attaches
+        // state to floor 1 (e.g. memory extension's lag pattern).
+        const chatRef = { value: [msg(0), msg(2), msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        const ok = await fs.patch(
+            [{ op: 'add', path: '/x', value: 1 }],
+            { floor: 1 },
+        );
+        expect(ok).toBe(true);
+
+        const log = store._raw.get('foo__floor_log');
+        expect(log.commits).toHaveLength(1);
+        // swipeId picked up from chat[1].swipe_id (= 2), not the tail's swipe.
+        expect(log.commits[0]).toMatchObject({ floor: 1, swipeId: 2 });
+        expect(store._raw.get('foo')).toEqual({ x: 1 });
+    });
+
+    test('patch with { floor, swipeId } honors both', async () => {
+        const chatRef = { value: [msg(0), msg(0), msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        await fs.patch(
+            [{ op: 'add', path: '/x', value: 1 }],
+            { floor: 0, swipeId: 5 },
+        );
+
+        const log = store._raw.get('foo__floor_log');
+        expect(log.commits[0]).toMatchObject({ floor: 0, swipeId: 5 });
+    });
+
+    test('patch with no options keeps inferring from chat tail', async () => {
+        const chatRef = { value: [msg(0), msg(2)] };
+        const { store, deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
+
+        const log = store._raw.get('foo__floor_log');
+        // Tail = floor 1, swipe 2.
+        expect(log.commits[0]).toMatchObject({ floor: 1, swipeId: 2 });
+    });
+
+    test('patch rejects out-of-range floor and writes nothing', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+            await fs.ready();
+
+            const ok = await fs.patch(
+                [{ op: 'add', path: '/x', value: 1 }],
+                { floor: 5 },
+            );
+            expect(ok).toBe(false);
+            expect(store._raw.get('foo')).toBeUndefined();
+            expect(store._raw.get('foo__floor_log')).toBeUndefined();
+            expect(warn).toHaveBeenCalledWith(
+                expect.stringContaining('invalid floor/swipeId override'),
+                expect.anything(),
+            );
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    test('patch rejects negative floor', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+            await fs.ready();
+            expect(await fs.patch([{ op: 'add', path: '/x', value: 1 }], { floor: -1 })).toBe(false);
+            expect(store._raw.get('foo__floor_log')).toBeUndefined();
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    test('patch rejects negative swipeId on a valid floor', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+            await fs.ready();
+            expect(await fs.patch(
+                [{ op: 'add', path: '/x', value: 1 }],
+                { floor: 0, swipeId: -1 },
+            )).toBe(false);
+            expect(store._raw.get('foo__floor_log')).toBeUndefined();
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    test('update forwards the override to the underlying patch', async () => {
+        const chatRef = { value: [msg(0), msg(0), msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        await fs.update(
+            (current) => ({ ...current, level: (current?.level ?? 0) + 1 }),
+            { floor: 1 },
+        );
+
+        const log = store._raw.get('foo__floor_log');
+        expect(log.commits).toHaveLength(1);
+        expect(log.commits[0]).toMatchObject({ floor: 1, swipeId: 0 });
+        expect(store._raw.get('foo')).toEqual({ level: 1 });
+    });
+
+    test('explicit floor commit survives MESSAGE_DELETED that spares it', async () => {
+        // Tag a commit on floor 0 while there are 3 floors; deleting tail
+        // (length=1) keeps floor 0 → commit stays.
+        const chatRef = { value: [msg(0), msg(0), msg(0)] };
+        const { store, eventSource, deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        await fs.patch([{ op: 'add', path: '/x', value: 1 }], { floor: 0 });
+        chatRef.value = chatRef.value.slice(0, 1);
+        await eventSource.emit(event_types.MESSAGE_DELETED, 1);
+        await fs.ready();
+
+        expect(store._raw.get('foo__floor_log').commits).toHaveLength(1);
+        expect(store._raw.get('foo')).toEqual({ x: 1 });
+    });
+
+    test('explicit floor commit dropped by MESSAGE_DELETED that removes its floor', async () => {
+        const chatRef = { value: [msg(0), msg(0), msg(0)] };
+        const { store, eventSource, deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        await fs.patch([{ op: 'add', path: '/x', value: 1 }], { floor: 2 });
+        chatRef.value = chatRef.value.slice(0, 2);
+        await eventSource.emit(event_types.MESSAGE_DELETED, 2);
+        await fs.ready();
+
+        expect(store._raw.get('foo__floor_log').commits).toHaveLength(0);
+        expect(store._raw.get('foo')).toEqual({});
+    });
+});
+
 describe('multi-instance isolation', () => {
     test('two instances on different namespaces do not interfere', async () => {
         const chatRef = { value: [msg(0)] };

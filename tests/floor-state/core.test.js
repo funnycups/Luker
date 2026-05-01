@@ -20,6 +20,7 @@ import {
     truncateCommits,
     removeSwipeFromCommits,
     inferCommitTargetFromChat,
+    resolveCommitTarget,
 } from '../../public/scripts/floor-state/core.js';
 
 describe('isValidCommit', () => {
@@ -275,5 +276,65 @@ describe('inferCommitTargetFromChat', () => {
     test('coerces non-integer swipe_id to 0', () => {
         expect(inferCommitTargetFromChat([{ swipe_id: 1.7 }])).toEqual({ floor: 0, swipeId: 0 });
         expect(inferCommitTargetFromChat([{ swipe_id: 'oops' }])).toEqual({ floor: 0, swipeId: 0 });
+    });
+});
+
+describe('resolveCommitTarget', () => {
+    const chat = [{ swipe_id: 0 }, { swipe_id: 2 }, { swipe_id: 1 }];
+
+    test('falls back to inference when override is null/undefined', () => {
+        expect(resolveCommitTarget(chat, null)).toEqual({ floor: 2, swipeId: 1 });
+        expect(resolveCommitTarget(chat, undefined)).toEqual({ floor: 2, swipeId: 1 });
+    });
+
+    test('falls back to inference when override.floor is absent', () => {
+        // swipeId without an anchoring floor is meaningless — caller likely
+        // forgot to set floor; behave like no override at all.
+        expect(resolveCommitTarget(chat, {})).toEqual({ floor: 2, swipeId: 1 });
+        expect(resolveCommitTarget(chat, { swipeId: 5 })).toEqual({ floor: 2, swipeId: 1 });
+    });
+
+    test('rejects non-object override', () => {
+        expect(resolveCommitTarget(chat, 0)).toBeNull();
+        expect(resolveCommitTarget(chat, 'oops')).toBeNull();
+    });
+
+    test('uses chat[floor].swipe_id when only floor is provided', () => {
+        expect(resolveCommitTarget(chat, { floor: 0 })).toEqual({ floor: 0, swipeId: 0 });
+        expect(resolveCommitTarget(chat, { floor: 1 })).toEqual({ floor: 1, swipeId: 2 });
+    });
+
+    test('honors explicit floor + swipeId pair', () => {
+        expect(resolveCommitTarget(chat, { floor: 0, swipeId: 3 })).toEqual({ floor: 0, swipeId: 3 });
+    });
+
+    test('rejects out-of-range floor', () => {
+        expect(resolveCommitTarget(chat, { floor: -1 })).toBeNull();
+        expect(resolveCommitTarget(chat, { floor: 3 })).toBeNull();
+        expect(resolveCommitTarget(chat, { floor: 100 })).toBeNull();
+    });
+
+    test('rejects non-integer floor', () => {
+        expect(resolveCommitTarget(chat, { floor: 1.5 })).toBeNull();
+        expect(resolveCommitTarget(chat, { floor: 'oops' })).toBeNull();
+        expect(resolveCommitTarget(chat, { floor: NaN })).toBeNull();
+    });
+
+    test('rejects negative or non-integer swipeId', () => {
+        expect(resolveCommitTarget(chat, { floor: 0, swipeId: -1 })).toBeNull();
+        expect(resolveCommitTarget(chat, { floor: 0, swipeId: 1.5 })).toBeNull();
+        expect(resolveCommitTarget(chat, { floor: 0, swipeId: 'oops' })).toBeNull();
+    });
+
+    test('returns null when override is set but chat is empty', () => {
+        expect(resolveCommitTarget([], { floor: 0 })).toBeNull();
+        expect(resolveCommitTarget(null, { floor: 0 })).toBeNull();
+    });
+
+    test('coerces missing chat[floor].swipe_id to 0', () => {
+        const sparse = [{}, { swipe_id: 'bad' }, null];
+        expect(resolveCommitTarget(sparse, { floor: 0 })).toEqual({ floor: 0, swipeId: 0 });
+        expect(resolveCommitTarget(sparse, { floor: 1 })).toEqual({ floor: 1, swipeId: 0 });
+        expect(resolveCommitTarget(sparse, { floor: 2 })).toEqual({ floor: 2, swipeId: 0 });
     });
 });

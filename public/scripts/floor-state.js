@@ -27,6 +27,7 @@ import {
     truncateCommits,
     removeSwipeFromCommits,
     inferCommitTargetFromChat,
+    resolveCommitTarget,
 } from './floor-state/core.js';
 
 const LOG_SUFFIX = '__floor_log';
@@ -290,15 +291,34 @@ export function createFloorStateWithDeps(options, deps) {
      * so a successful return implies "the operation is recorded and the data
      * namespace reflects it (or will, after the recovery rematerialize)".
      *
+     * Plugins that attach state to a non-tail floor (e.g. a memory extension
+     * tagging an older message) can pass an explicit `{ floor }` — the swipeId
+     * is then read from that floor's current swipe, or can be pinned with
+     * `{ floor, swipeId }`. An invalid override (out-of-range floor, negative
+     * swipeId) is rejected so misuse fails fast instead of silently
+     * mis-attributing the commit.
+     *
      * @param {object[]} operations
+     * @param {{floor?: number, swipeId?: number}} [options]
      * @returns {Promise<boolean>} true on success
      */
-    async function patch(operations) {
+    async function patch(operations, options) {
         if (destroyed) return false;
         if (!Array.isArray(operations) || operations.length === 0) return true;
 
-        const target = inferCommitTargetFromChat(runtime.getChat());
-        if (!target) return true;
+        const hasOverride = options !== null && options !== undefined
+            && typeof options === 'object'
+            && options.floor !== undefined && options.floor !== null;
+        const target = hasOverride
+            ? resolveCommitTarget(runtime.getChat(), options)
+            : inferCommitTargetFromChat(runtime.getChat());
+        if (!target) {
+            if (hasOverride) {
+                console.warn(`[floor-state:${namespace}] patch rejected: invalid floor/swipeId override`, options);
+                return false;
+            }
+            return true;
+        }
 
         beginPending();
         try {
@@ -324,10 +344,17 @@ export function createFloorStateWithDeps(options, deps) {
      * Read current state, run reducer, diff into RFC 6902 operations,
      * apply patch + append commit. Returns false on patch failure.
      *
+     * Accepts the same `{ floor, swipeId? }` override as `patch()`; when
+     * provided, the resulting commit is tagged with the override instead of
+     * the chat tail. The reducer always sees the materialized current state —
+     * the override only controls which (floor, swipeId) the diff is attributed
+     * to in the commit log.
+     *
      * @param {(state: object) => object} reducer
+     * @param {{floor?: number, swipeId?: number}} [options]
      * @returns {Promise<boolean>}
      */
-    async function update(reducer) {
+    async function update(reducer, options) {
         if (destroyed) return false;
         if (typeof reducer !== 'function') return false;
 
@@ -337,7 +364,7 @@ export function createFloorStateWithDeps(options, deps) {
 
         const operations = await runtime.buildObjectPatchOperationsAsync(current, next);
         if (!Array.isArray(operations) || operations.length === 0) return true;
-        return patch(operations);
+        return patch(operations, options);
     }
 
     /**
