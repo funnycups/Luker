@@ -85,19 +85,29 @@ export function createFloorStateWithDeps(options, deps) {
 
     let destroyed = false;
 
-    // ready gate: pending while a rematerialize is running, resolved otherwise.
+    // ready gate: pending while one or more long-running operations
+    // (rematerialize, patch+commit, init) are in flight, resolved otherwise.
+    // Counted so nested / overlapping begin/end calls compose correctly — the
+    // gate only resolves when the LAST in-flight operation completes.
+    let pendingCount = 0;
     let readyPromise = Promise.resolve();
     let pendingResolver = null;
 
     function beginPending() {
-        if (pendingResolver) return; // already pending; reuse same promise
-        readyPromise = new Promise((resolve) => { pendingResolver = resolve; });
+        if (pendingCount === 0) {
+            readyPromise = new Promise((resolve) => { pendingResolver = resolve; });
+        }
+        pendingCount++;
     }
 
     function endPending() {
-        const r = pendingResolver;
-        pendingResolver = null;
-        if (r) r();
+        if (pendingCount === 0) return;
+        pendingCount--;
+        if (pendingCount === 0 && pendingResolver) {
+            const r = pendingResolver;
+            pendingResolver = null;
+            r();
+        }
     }
 
     /**
@@ -231,6 +241,12 @@ export function createFloorStateWithDeps(options, deps) {
      * Apply RFC 6902 operations to the data namespace and append a commit
      * tagged with the current chat tail (floor, swipeId).
      *
+     * Order is commit-first: appending the log entry before writing the data
+     * namespace makes the log the source of truth in any race with a concurrent
+     * rematerialize. If the data write fails we recover by replaying the log,
+     * so a successful return implies "the operation is recorded and the data
+     * namespace reflects it (or will, after the recovery rematerialize)".
+     *
      * @param {object[]} operations
      * @returns {Promise<boolean>} true on success
      */
@@ -238,18 +254,27 @@ export function createFloorStateWithDeps(options, deps) {
         if (destroyed) return false;
         if (!Array.isArray(operations) || operations.length === 0) return true;
 
-        const ok = await runtime.patchChatState(namespace, operations);
-        if (!ok) return false;
-
         const target = inferCommitTargetFromChat(runtime.getChat());
         if (!target) return true;
 
-        await appendCommit({
-            floor: target.floor,
-            swipeId: target.swipeId,
-            patches: operations,
-        });
-        return true;
+        beginPending();
+        try {
+            const appended = await appendCommit({
+                floor: target.floor,
+                swipeId: target.swipeId,
+                patches: operations,
+            });
+            if (!appended) return false;
+
+            const ok = await runtime.patchChatState(namespace, operations);
+            if (!ok) {
+                console.warn(`[floor-state:${namespace}] patch data-namespace write failed; reconciling from log`);
+                await rematerialize();
+            }
+            return true;
+        } finally {
+            endPending();
+        }
     }
 
     /**
@@ -302,10 +327,17 @@ export function createFloorStateWithDeps(options, deps) {
         runtime.eventSource.removeListener(runtime.event_types.MESSAGE_SWIPED, onMessageSwiped);
         runtime.eventSource.removeListener(runtime.event_types.MESSAGE_DELETED, onMessageDeleted);
         runtime.eventSource.removeListener(runtime.event_types.MESSAGE_SWIPE_DELETED, onMessageSwipeDeleted);
-        endPending();
+        // Force-resolve any pending gate so callers awaiting ready() unblock; in-flight
+        // work will complete on its own without further side effects on this instance.
+        pendingCount = 0;
+        if (pendingResolver) {
+            const r = pendingResolver;
+            pendingResolver = null;
+            r();
+        }
     }
 
-    return Object.freeze({
+    const instance = Object.freeze({
         namespace,
         patch,
         update,
@@ -313,4 +345,32 @@ export function createFloorStateWithDeps(options, deps) {
         ready,
         destroy,
     });
+
+    // Initial rematerialize: catch the data namespace up to the persisted log
+    // so `fs.get()` reflects the source of truth even when the instance is
+    // created after CHAT_CHANGED already fired, or when the previous session
+    // left the namespace out of sync. Skipped when the log is absent or empty
+    // to avoid clobbering a never-touched namespace with `{}`. Wrapped in the
+    // ready gate so callers can `await fs.ready()` to wait for it.
+    beginPending();
+    (async () => {
+        try {
+            if (destroyed) return;
+            const log = await readLog();
+            if (destroyed) return;
+            if (log.commits.length === 0) return;
+            const swipeMap = buildSwipeMapFromChat(runtime.getChat());
+            const targetState = computeTargetState(log.commits, swipeMap);
+            const result = await runtime.updateChatState(namespace, () => targetState);
+            if (!result || result.ok === false) {
+                console.warn(`[floor-state:${namespace}] initial rematerialize write failed`, result);
+            }
+        } catch (error) {
+            console.warn(`[floor-state:${namespace}] initial rematerialize failed`, error);
+        } finally {
+            endPending();
+        }
+    })();
+
+    return instance;
 }

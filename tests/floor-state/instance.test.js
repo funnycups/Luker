@@ -397,6 +397,175 @@ describe('destroy', () => {
     });
 });
 
+describe('initial rematerialize', () => {
+    test('replays existing log so data namespace reflects log on creation', async () => {
+        // Pre-seed the log as if from a prior session; data namespace empty.
+        // After construction + ready(), data must reflect the log replay.
+        const chatRef = { value: [msg(0), msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+        store._raw.set('foo__floor_log', {
+            version: 1,
+            commits: [
+                { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/a', value: 1 }] },
+                { floor: 1, swipeId: 0, patches: [{ op: 'add', path: '/b', value: 2 }] },
+            ],
+        });
+
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        expect(store._raw.get('foo')).toEqual({ a: 1, b: 2 });
+    });
+
+    test('respects current swipe map when replaying on creation', async () => {
+        // Log has commits across two swipes of floor 0; only the active swipe
+        // should appear after replay.
+        const chatRef = { value: [{ swipe_id: 1, mes: 'x' }] };
+        const { store, deps } = makeDeps(chatRef);
+        store._raw.set('foo__floor_log', {
+            version: 1,
+            commits: [
+                { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/from0', value: true }] },
+                { floor: 0, swipeId: 1, patches: [{ op: 'add', path: '/from1', value: true }] },
+            ],
+        });
+
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        expect(store._raw.get('foo')).toEqual({ from1: true });
+    });
+
+    test('skips initial write when log namespace is absent', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        expect(store._raw.get('foo')).toBeUndefined();
+        expect(store._raw.get('foo__floor_log')).toBeUndefined();
+    });
+
+    test('skips initial write when log exists but has no commits', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+        store._raw.set('foo__floor_log', { version: 1, commits: [] });
+
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        expect(store._raw.get('foo')).toBeUndefined();
+    });
+
+    test('init failure is swallowed and instance stays usable', async () => {
+        const chatRef = { value: [msg(0)] };
+        const base = makeDeps(chatRef);
+        // Pre-seed a log so init actually attempts to replay.
+        base.store._raw.set('foo__floor_log', {
+            version: 1,
+            commits: [{ floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/x', value: 1 }] }],
+        });
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const deps = {
+                ...base.deps,
+                updateChatState: async (ns, updater) => {
+                    if (ns === 'foo') throw new Error('init boom');
+                    return base.deps.updateChatState(ns, updater);
+                },
+            };
+            const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+            await fs.ready();
+
+            expect(warn).toHaveBeenCalledWith(
+                expect.stringContaining('initial rematerialize failed'),
+                expect.anything(),
+            );
+            // Instance is still alive — patch / get keep working.
+            expect(typeof fs.patch).toBe('function');
+        } finally {
+            warn.mockRestore();
+        }
+    });
+});
+
+describe('concurrency: patch vs rematerialize', () => {
+    test('patch + concurrent CHAT_CHANGED leaves data in sync with log', async () => {
+        // Stall the appendCommit write so a concurrent CHAT_CHANGED rematerialize
+        // races with it. Whichever ordering wins, the final state must match
+        // computeTargetState(log) — i.e. the new commit must be reflected in
+        // the data namespace.
+        const chatRef = { value: [msg(0)] };
+        const base = makeDeps(chatRef);
+        await base.deps.updateChatState; // touch to keep referenced
+
+        let releaseAppend;
+        let appendIntercepted = false;
+        const block = new Promise((r) => { releaseAppend = r; });
+        const slowUpdate = async (ns, updater) => {
+            if (ns === 'foo__floor_log' && !appendIntercepted) {
+                appendIntercepted = true;
+                await block;
+            }
+            return base.deps.updateChatState(ns, updater);
+        };
+        const deps = { ...base.deps, updateChatState: slowUpdate };
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        const patchPromise = fs.patch([{ op: 'add', path: '/x', value: 1 }]);
+        await flush();
+        // CHAT_CHANGED races: handler reads the log before or after the commit lands.
+        const emitPromise = base.eventSource.emit(event_types.CHAT_CHANGED);
+        await flush();
+
+        releaseAppend();
+        await Promise.all([patchPromise, emitPromise]);
+        await fs.ready();
+
+        const log = base.store._raw.get('foo__floor_log');
+        expect(log.commits).toHaveLength(1);
+        expect(base.store._raw.get('foo')).toEqual({ x: 1 });
+    });
+
+    test('ready() waits for both an in-flight patch and a concurrent event', async () => {
+        // Counted ready gate: the gate must stay pending until BOTH the patch
+        // and the concurrent rematerialize end, not just whichever finishes first.
+        const chatRef = { value: [msg(0)] };
+        const base = makeDeps(chatRef);
+
+        let releaseAppend;
+        let appendIntercepted = false;
+        const block = new Promise((r) => { releaseAppend = r; });
+        const slowUpdate = async (ns, updater) => {
+            if (ns === 'foo__floor_log' && !appendIntercepted) {
+                appendIntercepted = true;
+                await block;
+            }
+            return base.deps.updateChatState(ns, updater);
+        };
+        const deps = { ...base.deps, updateChatState: slowUpdate };
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        const patchPromise = fs.patch([{ op: 'add', path: '/x', value: 1 }]);
+        await flush();
+        const emitPromise = base.eventSource.emit(event_types.CHAT_CHANGED);
+        await flush();
+
+        let readyResolved = false;
+        const readyPromise = fs.ready().then(() => { readyResolved = true; });
+        await flush();
+        // Both patch and the handler are still in flight — gate must be pending.
+        expect(readyResolved).toBe(false);
+
+        releaseAppend();
+        await Promise.all([patchPromise, emitPromise, readyPromise]);
+        expect(readyResolved).toBe(true);
+    });
+});
+
 describe('multi-instance isolation', () => {
     test('two instances on different namespaces do not interfere', async () => {
         const chatRef = { value: [msg(0)] };
@@ -425,25 +594,35 @@ describe('multi-instance isolation', () => {
 });
 
 describe('error tolerance', () => {
-    test('patch returns false when patchChatState fails', async () => {
+    test('patch reconciles via rematerialize when patchChatState fails', async () => {
+        // Commit-first order: appendCommit lands successfully, then the
+        // data-namespace write fails. patch recovers by replaying the log
+        // (which now includes the new commit) so the data namespace catches up.
         const chatRef = { value: [msg(0)] };
         const base = makeDeps(chatRef);
-        const deps = {
-            ...base.deps,
-            patchChatState: async () => false,
-        };
-        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const deps = {
+                ...base.deps,
+                patchChatState: async () => false,
+            };
+            const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
 
-        const ok = await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
-        expect(ok).toBe(false);
-        // No commit recorded because patch bailed early.
-        expect(base.store._raw.get('foo__floor_log')).toBeUndefined();
+            const ok = await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
+            expect(ok).toBe(true);
+            expect(base.store._raw.get('foo__floor_log').commits).toHaveLength(1);
+            expect(base.store._raw.get('foo')).toEqual({ x: 1 });
+            expect(warn).toHaveBeenCalledWith(
+                expect.stringContaining('reconciling from log'),
+            );
+        } finally {
+            warn.mockRestore();
+        }
     });
 
-    test('patch still returns true when commit log write fails after data write', async () => {
-        // Real-world tradeoff: data is in, log is not. Caller sees success
-        // because the data namespace did update; on next rematerialize the
-        // commit log is the source of truth and the orphaned write is gone.
+    test('patch returns false when commit log append fails (no data write)', async () => {
+        // Commit-first order means a failed appendCommit short-circuits patch
+        // before any data-namespace write — neither side observes the operation.
         const chatRef = { value: [msg(0)] };
         const base = makeDeps(chatRef);
         const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
@@ -458,9 +637,8 @@ describe('error tolerance', () => {
             const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
 
             const ok = await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
-            expect(ok).toBe(true);
-            expect(base.store._raw.get('foo')).toEqual({ x: 1 });
-            // appendCommit's failure path was hit and warned about.
+            expect(ok).toBe(false);
+            expect(base.store._raw.get('foo')).toBeUndefined();
             expect(warn).toHaveBeenCalledWith(
                 expect.stringContaining('appendCommit failed'),
                 expect.anything(),
