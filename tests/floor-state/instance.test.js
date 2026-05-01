@@ -15,34 +15,54 @@ import {
 // --- minimal in-memory mocks ---
 
 function makeStore() {
-    const data = new Map();
+    // Targets are partitioned: each target gets its own namespace map. The
+    // empty-key partition stands in for "current chat" (calls without an
+    // explicit options.target). This lets tests exercise cross-target ops
+    // (e.g. branch inheritance) without leaking state across chats.
+    const partitions = new Map();
+    function targetKey(target) {
+        if (!target || typeof target !== 'object') return '';
+        if (target.is_group) return `g:${String(target.id ?? '')}`;
+        return `c:${String(target.avatar_url ?? '')}/${String(target.file_name ?? '')}`;
+    }
+    function partitionFor(target) {
+        const key = targetKey(target);
+        if (!partitions.has(key)) partitions.set(key, new Map());
+        return partitions.get(key);
+    }
     return {
-        async getChatState(ns) {
+        async getChatState(ns, options) {
             const k = String(ns ?? '').trim().toLowerCase();
-            const v = data.get(k);
+            const part = partitionFor(options?.target);
+            const v = part.get(k);
             return v == null ? null : structuredClone(v);
         },
-        async patchChatState(ns, ops) {
+        async patchChatState(ns, ops, options) {
             const k = String(ns ?? '').trim().toLowerCase();
-            const current = data.get(k) ?? {};
+            const part = partitionFor(options?.target);
+            const current = part.get(k) ?? {};
             const { applyPatch } = await import('../../public/scripts/util/fast-json-patch.js');
             const next = structuredClone(current);
             applyPatch(next, ops, false, true);
-            data.set(k, next);
+            part.set(k, next);
             return true;
         },
-        async updateChatState(ns, updater) {
+        async updateChatState(ns, updater, options) {
             const k = String(ns ?? '').trim().toLowerCase();
-            const current = data.get(k) ?? null;
+            const part = partitionFor(options?.target);
+            const current = part.get(k) ?? null;
             const next = await updater(current == null ? null : structuredClone(current));
             if (next === null || next === undefined) {
-                data.delete(k);
+                part.delete(k);
             } else {
-                data.set(k, structuredClone(next));
+                part.set(k, structuredClone(next));
             }
-            return { ok: true, state: data.get(k) ?? null, updated: true };
+            return { ok: true, state: part.get(k) ?? null, updated: true };
         },
-        _raw: data,
+        // Backwards-compatible alias for tests that pre-seed / inspect the
+        // default-target partition directly.
+        get _raw() { return partitionFor(undefined); },
+        _rawFor(target) { return partitionFor(target); },
     };
 }
 
@@ -71,6 +91,7 @@ const event_types = {
     MESSAGE_SWIPED: 'message_swiped',
     MESSAGE_DELETED: 'message_deleted',
     MESSAGE_SWIPE_DELETED: 'message_swipe_deleted',
+    CHAT_BRANCH_CREATED: 'chat_branch_created',
 };
 
 async function buildObjectPatchOperationsAsync(prev, next) {
@@ -563,6 +584,194 @@ describe('concurrency: patch vs rematerialize', () => {
         releaseAppend();
         await Promise.all([patchPromise, emitPromise, readyPromise]);
         expect(readyResolved).toBe(true);
+    });
+});
+
+describe('branch inheritance via CHAT_BRANCH_CREATED', () => {
+    const SOURCE = { is_group: false, avatar_url: 'char.png', file_name: 'chat-A' };
+    const TARGET = { is_group: false, avatar_url: 'char.png', file_name: 'chat-A - Branch #1' };
+
+    function seedSourceLog(store, commits) {
+        store._rawFor(SOURCE).set('foo__floor_log', { version: 1, commits });
+    }
+
+    test('truncates source commits at the branch point and writes to target sidecar', async () => {
+        const chatRef = { value: [msg(0), msg(0), msg(0), msg(0), msg(0)] };
+        const { store, eventSource, deps } = makeDeps(chatRef);
+        seedSourceLog(store, [
+            { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/a', value: 1 }] },
+            { floor: 1, swipeId: 0, patches: [{ op: 'add', path: '/b', value: 2 }] },
+            { floor: 3, swipeId: 0, patches: [{ op: 'add', path: '/c', value: 3 }] },
+            { floor: 4, swipeId: 0, patches: [{ op: 'add', path: '/d', value: 4 }] },
+        ]);
+
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        // Branch from floor 2 → new chat length = 3, surviving commits floors 0..2.
+        await eventSource.emit(event_types.CHAT_BRANCH_CREATED, {
+            mesId: 2,
+            branchName: 'chat-A - Branch #1',
+            assistantMessageCount: 1,
+            sourceTarget: SOURCE,
+            targetTarget: TARGET,
+        });
+
+        const branchLog = store._rawFor(TARGET).get('foo__floor_log');
+        expect(branchLog.commits).toHaveLength(2);
+        expect(branchLog.commits.map((c) => c.floor)).toEqual([0, 1]);
+        // Source log untouched.
+        expect(store._rawFor(SOURCE).get('foo__floor_log').commits).toHaveLength(4);
+    });
+
+    test('branch inheritance + subsequent CHAT_CHANGED produces correct data namespace', async () => {
+        // Full end-to-end: seed source, branch, "open" the new chat (swap chatRef
+        // to the truncated content + emit CHAT_CHANGED), and assert the data
+        // namespace on the target reflects only the surviving commits.
+        const chatRef = { value: [msg(0), msg(0), msg(0), msg(0)] };
+        const { store, eventSource, deps } = makeDeps(chatRef);
+        seedSourceLog(store, [
+            { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/a', value: 1 }] },
+            { floor: 2, swipeId: 0, patches: [{ op: 'add', path: '/b', value: 2 }] },
+            { floor: 3, swipeId: 0, patches: [{ op: 'add', path: '/c', value: 3 }] },
+        ]);
+
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        await eventSource.emit(event_types.CHAT_BRANCH_CREATED, {
+            mesId: 2,
+            sourceTarget: SOURCE,
+            targetTarget: TARGET,
+        });
+
+        // Caller flow: openChat(branch) swaps chat, emits CHAT_CHANGED. Mock that
+        // by replacing the deps' getChat to point at the branch's content (3 floors).
+        chatRef.value = [msg(0), msg(0), msg(0)];
+        // Target the branch's data namespace by routing the default partition's
+        // 'foo' through the TARGET partition. Easier: rebuild deps with TARGET
+        // as the default by remapping store calls.
+        const branchDeps = {
+            ...deps,
+            getChatState: (ns, options) => deps.getChatState(ns, { ...options, target: options?.target ?? TARGET }),
+            patchChatState: (ns, ops, options) => deps.patchChatState(ns, ops, { ...options, target: options?.target ?? TARGET }),
+            updateChatState: (ns, updater, options) => deps.updateChatState(ns, updater, { ...options, target: options?.target ?? TARGET }),
+        };
+        // Spawn a fresh instance scoped to the branch chat (mirrors what happens
+        // when the user opens the branch in a new session).
+        const branchFs = createFloorStateWithDeps({ namespace: 'foo' }, branchDeps);
+        await branchFs.ready();
+
+        // Initial rematerialize on creation already replays the inherited log.
+        expect(store._rawFor(TARGET).get('foo')).toEqual({ a: 1, b: 2 });
+    });
+
+    test('does nothing when source log is empty / absent', async () => {
+        const chatRef = { value: [msg(0), msg(0)] };
+        const { store, eventSource, deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        await eventSource.emit(event_types.CHAT_BRANCH_CREATED, {
+            mesId: 1,
+            sourceTarget: SOURCE,
+            targetTarget: TARGET,
+        });
+
+        // No log was created on the target — nothing to inherit means we
+        // don't write an empty stub either.
+        expect(store._rawFor(TARGET).get('foo__floor_log')).toBeUndefined();
+    });
+
+    test('drops everything when branching at floor before any commit', async () => {
+        const chatRef = { value: [msg(0), msg(0), msg(0)] };
+        const { store, eventSource, deps } = makeDeps(chatRef);
+        seedSourceLog(store, [
+            { floor: 1, swipeId: 0, patches: [{ op: 'add', path: '/a', value: 1 }] },
+            { floor: 2, swipeId: 0, patches: [{ op: 'add', path: '/b', value: 2 }] },
+        ]);
+
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        // Branch at floor 0 — new chat has only floor 0, all commits at floor>=1 die.
+        await eventSource.emit(event_types.CHAT_BRANCH_CREATED, {
+            mesId: 0,
+            sourceTarget: SOURCE,
+            targetTarget: TARGET,
+        });
+
+        // No survivors → no log written to target (avoid storing an empty stub).
+        expect(store._rawFor(TARGET).get('foo__floor_log')).toBeUndefined();
+    });
+
+    test('ignores malformed payloads', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { store, eventSource, deps } = makeDeps(chatRef);
+        seedSourceLog(store, [
+            { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/a', value: 1 }] },
+        ]);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        // Missing fields — handler must bail without touching the target sidecar.
+        await eventSource.emit(event_types.CHAT_BRANCH_CREATED, undefined);
+        await eventSource.emit(event_types.CHAT_BRANCH_CREATED, { mesId: 0 });
+        await eventSource.emit(event_types.CHAT_BRANCH_CREATED, { sourceTarget: SOURCE, targetTarget: TARGET });
+        await eventSource.emit(event_types.CHAT_BRANCH_CREATED, {
+            mesId: -1, sourceTarget: SOURCE, targetTarget: TARGET,
+        });
+        await eventSource.emit(event_types.CHAT_BRANCH_CREATED, {
+            mesId: 1.5, sourceTarget: SOURCE, targetTarget: TARGET,
+        });
+        await eventSource.emit(event_types.CHAT_BRANCH_CREATED, {
+            mesId: 0, sourceTarget: 'oops', targetTarget: TARGET,
+        });
+
+        expect(store._rawFor(TARGET).get('foo__floor_log')).toBeUndefined();
+    });
+
+    test('does not affect current-chat state during branching', async () => {
+        // Sanity: emitting CHAT_BRANCH_CREATED must not touch the default-target
+        // partition (i.e. the chat the user is currently on).
+        const chatRef = { value: [msg(0), msg(0), msg(0)] };
+        const { store, eventSource, deps } = makeDeps(chatRef);
+        seedSourceLog(store, [
+            { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/x', value: 1 }] },
+        ]);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+        const beforeDefault = JSON.stringify([...store._raw.entries()]);
+
+        await eventSource.emit(event_types.CHAT_BRANCH_CREATED, {
+            mesId: 1,
+            sourceTarget: SOURCE,
+            targetTarget: TARGET,
+        });
+
+        // Default partition unchanged.
+        expect(JSON.stringify([...store._raw.entries()])).toBe(beforeDefault);
+        // Target partition has the inherited log.
+        expect(store._rawFor(TARGET).get('foo__floor_log').commits).toHaveLength(1);
+    });
+
+    test('destroy detaches the CHAT_BRANCH_CREATED listener', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { store, eventSource, deps } = makeDeps(chatRef);
+        seedSourceLog(store, [
+            { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/x', value: 1 }] },
+        ]);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        fs.destroy();
+        await eventSource.emit(event_types.CHAT_BRANCH_CREATED, {
+            mesId: 0,
+            sourceTarget: SOURCE,
+            targetTarget: TARGET,
+        });
+
+        expect(store._rawFor(TARGET).get('foo__floor_log')).toBeUndefined();
     });
 });
 

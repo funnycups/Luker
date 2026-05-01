@@ -215,6 +215,45 @@ export function createFloorStateWithDeps(options, deps) {
         }
     }
 
+    /**
+     * Inherit the source chat's commit log into a freshly-created branch / checkpoint
+     * chat. The host (`createBranch` in `bookmarks.js`) only copies the chat file
+     * itself; chat-state sidecars do NOT follow automatically. Without this handler
+     * the next CHAT_CHANGED into the new branch would find an empty log and reset
+     * the data namespace to {}, silently losing all accumulated state.
+     *
+     * Strategy: read the source chat's log, truncate commits past the branch point
+     * (mesId is the last included floor; new chat length = mesId + 1), and write
+     * the result to the target chat's log sidecar. We do NOT seed the target's
+     * data namespace — the next CHAT_CHANGED on the new branch will rematerialize
+     * using the branch's actual chat array (and the swipe map derived from it).
+     */
+    async function handleBranchCreated(payload) {
+        if (destroyed) return;
+        const sourceTarget = payload?.sourceTarget;
+        const targetTarget = payload?.targetTarget;
+        const mesId = Number(payload?.mesId);
+        if (!sourceTarget || typeof sourceTarget !== 'object') return;
+        if (!targetTarget || typeof targetTarget !== 'object') return;
+        if (!Number.isInteger(mesId) || mesId < 0) return;
+        try {
+            const raw = await runtime.getChatState(logNamespace, { target: sourceTarget });
+            const sourceLog = normalizeLog(raw);
+            const survivors = truncateCommits(sourceLog.commits, mesId + 1);
+            if (survivors.length === 0) return;
+            const result = await runtime.updateChatState(
+                logNamespace,
+                () => ({ version: LOG_VERSION, commits: survivors }),
+                { target: targetTarget },
+            );
+            if (!result || result.ok === false) {
+                console.warn(`[floor-state:${namespace}] branch inheritance write failed`, result);
+            }
+        } catch (error) {
+            console.warn(`[floor-state:${namespace}] branch inheritance failed`, error);
+        }
+    }
+
     // --- event wiring ---
 
     const onChatChanged = async () => {
@@ -229,11 +268,15 @@ export function createFloorStateWithDeps(options, deps) {
     };
     const onMessageDeleted = (newChatLength) => handleMessageDeleted(newChatLength);
     const onMessageSwipeDeleted = (payload) => handleSwipeDeleted(payload);
+    const onBranchCreated = (payload) => handleBranchCreated(payload);
 
     runtime.eventSource.on(runtime.event_types.CHAT_CHANGED, onChatChanged);
     runtime.eventSource.on(runtime.event_types.MESSAGE_SWIPED, onMessageSwiped);
     runtime.eventSource.on(runtime.event_types.MESSAGE_DELETED, onMessageDeleted);
     runtime.eventSource.on(runtime.event_types.MESSAGE_SWIPE_DELETED, onMessageSwipeDeleted);
+    if (runtime.event_types.CHAT_BRANCH_CREATED) {
+        runtime.eventSource.on(runtime.event_types.CHAT_BRANCH_CREATED, onBranchCreated);
+    }
 
     // --- public API ---
 
@@ -327,6 +370,9 @@ export function createFloorStateWithDeps(options, deps) {
         runtime.eventSource.removeListener(runtime.event_types.MESSAGE_SWIPED, onMessageSwiped);
         runtime.eventSource.removeListener(runtime.event_types.MESSAGE_DELETED, onMessageDeleted);
         runtime.eventSource.removeListener(runtime.event_types.MESSAGE_SWIPE_DELETED, onMessageSwipeDeleted);
+        if (runtime.event_types.CHAT_BRANCH_CREATED) {
+            runtime.eventSource.removeListener(runtime.event_types.CHAT_BRANCH_CREATED, onBranchCreated);
+        }
         // Force-resolve any pending gate so callers awaiting ready() unblock; in-flight
         // work will complete on its own without further side effects on this instance.
         pendingCount = 0;
