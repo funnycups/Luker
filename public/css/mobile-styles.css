@@ -260,16 +260,84 @@
         padding-bottom: 5px;
     }
 
-    /* On mobile, float the multi-select checkbox out of the flex row so expand/toggle have room */
+    /* WI entry: column layout, icons row on top, title row below */
     .world_entry .wi-card-entry {
-        position: relative;
+        position: static;
+    }
+
+    .world_entry .inline-drawer-header {
+        align-items: flex-start;
+    }
+
+    .world_entry .inline-drawer-header .drag-handle {
+        align-self: flex-start;
+        padding-top: 2px;
     }
 
     .world_entry_select_label {
-        position: absolute;
-        top: 8px;
-        left: 28px;
-        z-index: 1;
+        position: static;
+        flex-shrink: 0;
+        transform: scale(0.85);
+        opacity: 0.6;
+    }
+
+    .world_entry_thin_controls {
+        flex-direction: column;
+        align-items: stretch;
+        align-self: flex-start;
+        justify-content: flex-start;
+        gap: 4px;
+        width: 100%;
+    }
+
+    .wi-header-icons-row {
+        flex-shrink: 0;
+        align-items: center;
+        padding: 4px 0 2px;
+    }
+
+    .WIEntryTitleAndStatus {
+        width: 100%;
+        min-width: 0;
+    }
+
+    .WIEntryTitleAndStatus .flex-container.flex1 {
+        min-width: 0;
+        flex: 1;
+    }
+
+    .WIEntryTitleAndStatus select[name="entryStateSelector"] {
+        flex-shrink: 0;
+        max-width: 3em;
+    }
+
+    /* The wrapper div around WIEntryTitleAndStatus */
+    .world_entry_thin_controls > .flex-container {
+        flex-shrink: 0;
+        align-items: center;
+        width: 100%;
+    }
+
+    /* Override world-info.css flex: 1 1 18rem which stretches this div in column layout */
+    .world_entry .inline-drawer-header > .world_entry_thin_controls > .flex-container {
+        flex: 0 0 auto !important;
+        min-width: 0;
+        width: 100%;
+    }
+
+    /* Hide action buttons and metadata controls when collapsed; show when expanded */
+    .world_entry .move_entry_button,
+    .world_entry .duplicate_entry_button,
+    .world_entry .delete_entry_button,
+    .world_entry .WIEntryHeaderControls {
+        display: none !important;
+    }
+
+    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .move_entry_button,
+    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .duplicate_entry_button,
+    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .delete_entry_button,
+    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .WIEntryHeaderControls {
+        display: flex !important;
     }
 
     #worldInfoScanningCheckboxes {
@@ -360,11 +428,6 @@
     .wi-settings {
         flex-direction: column;
         gap: 5px !important;
-    }
-
-    .WIEntryTitleAndStatus,
-    .WIEntryHeaderControls {
-        width: 100%;
     }
 
     #WIEntryHeaderTitlesPC {
