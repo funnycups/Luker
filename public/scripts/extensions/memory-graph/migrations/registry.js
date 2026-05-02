@@ -10,10 +10,12 @@
  *   - nextId:   string | null  (used for documentation; driver uses detect)
  */
 
+import { v8Oplog } from './shapes/v8-oplog.js';
 import { v2FloorState } from './shapes/v2-floor-state.js';
 
 export const SHAPES = [
     // 顺序:older / more-specific 在前。新版本接在末尾。
+    v8Oplog,
     v2FloorState,
 ];
 
