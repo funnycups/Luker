@@ -4,7 +4,7 @@ Luker 在 SillyTavern 原生变量系统之上引入了**逐楼层的变量操�
 
 ## 为什么需要这个
 
-原生 SillyTavern 里，副作用宏 `{{setvar::hp::50}}` 只在它出现在 *prompt 模板* 里（预设、世界书、首楼）时才会被执行。如果 AI 在回复里写了同样的字面量，什么都不会发生——它就是一段普通文本。更糟的是字面量会原样显示给用户，污染叙事。
+原生 SillyTavern 里，副作用宏 <code v-pre>{{setvar::hp::50}}</code> 只在它出现在 *prompt 模板* 里（预设、世界书、首楼）时才会被执行。如果 AI 在回复里写了同样的字面量，什么都不会发生——它就是一段普通文本。更糟的是字面量会原样显示给用户，污染叙事。
 
 Luker 的解法：在保存 AI / 用户消息时把副作用宏从文本里提取出来，作为结构化操作挂在那条消息上，需要时重放。字面量从可见文本里消失，操作作为数据被保留。
 
@@ -14,15 +14,15 @@ Luker 的解法：在保存 AI / 用户消息时把副作用宏从文本里提�
 
 消息保存时（AI 回复、续写、重新生成、swipe、用户消息），Luker 扫描 `mes` 寻找下面这些副作用宏：
 
-- `{{setvar::name::value}}`
-- `{{addvar::name::value}}`
-- `{{incvar::name}}`
-- `{{decvar::name}}`
-- `{{deletevar::name}}`
+- <code v-pre>{{setvar::name::value}}</code>
+- <code v-pre>{{addvar::name::value}}</code>
+- <code v-pre>{{incvar::name}}</code>
+- <code v-pre>{{decvar::name}}</code>
+- <code v-pre>{{deletevar::name}}</code>
 
 按出现顺序逐个处理：
 
-1. value 里嵌套的**展示型**宏（`{{user}}`、`{{getvar::other_key}}`、`{{time}}` 等）针对当前状态求值。
+1. value 里嵌套的**展示型**宏（<code v-pre>{{user}}</code>、<code v-pre>{{getvar::other_key}}</code>、<code v-pre>{{time}}</code> 等）针对当前状态求值。
 2. op 立即前向 apply 到 `chat_metadata.variables`，这样同一条消息里后续的 op 能读到结果。
 3. 结构化记录追加到 `message.extra.var_ops`。
 4. 字面量从 `mes` 里删掉。
@@ -78,15 +78,15 @@ Luker 的解法：在保存 AI / 用户消息时把副作用宏从文本里提�
 
 | 来源 | 行为 |
 |------|------|
-| 世界书 `{{setvar}}` | 走 SillyTavern 原生流程，prompt 组装时执行；缓存里这个 key 每轮都会被 WI 的值覆盖。如果想让 WI 充当"初始化"而不是"每轮覆盖"，把这类条目放在高 depth / prompt 最前。 |
-| 预设 `{{setvar}}` | 同世界书。 |
+| 世界书 <code v-pre>{{setvar}}</code> | 走 SillyTavern 原生流程，prompt 组装时执行；缓存里这个 key 每轮都会被 WI 的值覆盖。如果想让 WI 充当"初始化"而不是"每轮覆盖"，把这类条目放在高 depth / prompt 最前。 |
+| 预设 <code v-pre>{{setvar}}</code> | 同世界书。 |
 | Slash 命令 `/setvar` | 直接写 `chat_metadata.variables`。下次重放扫到同名 key（即存活的 AI op 提到了这个 key）时会被覆盖。 |
 | Quick Reply 脚本 | 同 slash 命令。给 QR 管理的变量起一个 AI op 不会碰的名字。 |
-| `{{setglobalvar}}` 系列 | 不被提取。全局变量在 chat-local op 日志的范围之外，按原生语义工作。 |
+| <code v-pre>{{setglobalvar}}</code> 系列 | 不被提取。全局变量在 chat-local op 日志的范围之外，按原生语义工作。 |
 
 ## 角色卡作者建议
 
-如果一个变量打算让 **AI 在 RP 过程中拥有并修改**，就只让它通过 AI 写的 `{{setvar}}` 来变化，不要从世界书或 QR 里再写。
+如果一个变量打算让 **AI 在 RP 过程中拥有并修改**，就只让它通过 AI 写的 <code v-pre>{{setvar}}</code> 来变化，不要从世界书或 QR 里再写。
 
 如果一个变量打算 **chat 开始时初始化一次**，把它写在角色卡的首楼或 alt greeting 里——它们也会被提取到 `chat[0].extra.var_ops`。
 
@@ -110,4 +110,4 @@ chat[i] = {
 }
 ```
 
-`chat_metadata.variables` 仍是 SillyTavern 原生缓存，是 `{{getvar}}` 的真源。op 日志是我们拥有的那部分值的 *来源*；缓存是所有来源合并后的运行时视图。
+`chat_metadata.variables` 仍是 SillyTavern 原生缓存，是 <code v-pre>{{getvar}}</code> 的真源。op 日志是我们拥有的那部分值的 *来源*；缓存是所有来源合并后的运行时视图。

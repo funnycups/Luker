@@ -4,7 +4,7 @@ Luker introduces a per-message **variable operation log** on top of SillyTavern'
 
 ## Why this exists
 
-In stock SillyTavern, side-effect macros like `{{setvar::hp::50}}` only run when they appear in a *prompt template* (preset, world info, or the very first message). If the AI writes the same literal in its reply, nothing happens — the macro is just text. Even worse, when the literal is rendered to the user it shows up verbatim, polluting the narrative.
+In stock SillyTavern, side-effect macros like <code v-pre>{{setvar::hp::50}}</code> only run when they appear in a *prompt template* (preset, world info, or the very first message). If the AI writes the same literal in its reply, nothing happens — the macro is just text. Even worse, when the literal is rendered to the user it shows up verbatim, polluting the narrative.
 
 Luker fixes this by extracting side-effect macros out of AI / user messages at save time, recording them as structured ops attached to that message, and replaying them when needed. The literal is removed from the visible text; the operation is preserved as data.
 
@@ -14,15 +14,15 @@ Luker fixes this by extracting side-effect macros out of AI / user messages at s
 
 When a message is saved (AI reply, continue, regenerate, swipe, or user message), Luker scans `mes` for the recognized side-effect macros:
 
-- `{{setvar::name::value}}`
-- `{{addvar::name::value}}`
-- `{{incvar::name}}`
-- `{{decvar::name}}`
-- `{{deletevar::name}}`
+- <code v-pre>{{setvar::name::value}}</code>
+- <code v-pre>{{addvar::name::value}}</code>
+- <code v-pre>{{incvar::name}}</code>
+- <code v-pre>{{decvar::name}}</code>
+- <code v-pre>{{deletevar::name}}</code>
 
 For each match in source order:
 
-1. Any nested **display** macros inside the value (e.g. `{{user}}`, `{{getvar::other_key}}`, `{{time}}`) are resolved against the current state.
+1. Any nested **display** macros inside the value (e.g. <code v-pre>{{user}}</code>, <code v-pre>{{getvar::other_key}}</code>, <code v-pre>{{time}}</code>) are resolved against the current state.
 2. The op is forward-applied to `chat_metadata.variables` immediately, so subsequent ops in the same message see the result.
 3. A structured record is appended to `message.extra.var_ops`.
 4. The literal is stripped from `mes`.
@@ -78,15 +78,15 @@ When you save, the message's op array is replaced with your edits, the cache is 
 
 | Source | Behavior |
 |--------|----------|
-| World info `{{setvar}}` | Runs at prompt assembly via stock SillyTavern. Cache is overwritten with the WI value each time. To make WI act as initialization rather than per-turn override, place its variable-setting entries at high depth / front of prompt. |
-| Preset `{{setvar}}` | Same as world info. |
+| World info <code v-pre>{{setvar}}</code> | Runs at prompt assembly via stock SillyTavern. Cache is overwritten with the WI value each time. To make WI act as initialization rather than per-turn override, place its variable-setting entries at high depth / front of prompt. |
+| Preset <code v-pre>{{setvar}}</code> | Same as world info. |
 | Slash command `/setvar` | Writes directly to `chat_metadata.variables`. Survives until the next replay touches the same key — i.e. as long as no surviving AI op mentions that key. |
 | Quick Reply scripts | Same as slash command. Keep QR-managed variables on names that AI ops do not touch. |
-| `{{setglobalvar}}` and friends | Not extracted. Global variables live outside the chat-local op-log. They follow stock SillyTavern semantics. |
+| <code v-pre>{{setglobalvar}}</code> and friends | Not extracted. Global variables live outside the chat-local op-log. They follow stock SillyTavern semantics. |
 
 ## Recommendation for character authors
 
-If a variable is meant to be **owned and mutated by AI** during the roleplay, expose it through AI-authored `{{setvar}}` calls and never write to it from world info or QR.
+If a variable is meant to be **owned and mutated by AI** during the roleplay, expose it through AI-authored <code v-pre>{{setvar}}</code> calls and never write to it from world info or QR.
 
 If a variable is meant to be **set up once at the start** of a chat, use the character card's first message or an alt greeting — those are extracted into `chat[0].extra.var_ops` like any other source.
 
@@ -110,4 +110,4 @@ chat[i] = {
 }
 ```
 
-`chat_metadata.variables` remains the SillyTavern-native cache and the source of truth for `{{getvar}}`. The op-log is the *origin* of the values that we own; the cache is the runtime view of all sources combined.
+`chat_metadata.variables` remains the SillyTavern-native cache and the source of truth for <code v-pre>{{getvar}}</code>. The op-log is the *origin* of the values that we own; the cache is the runtime view of all sources combined.
