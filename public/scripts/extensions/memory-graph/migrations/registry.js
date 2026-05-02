@@ -10,7 +10,12 @@
  *   - nextId:   string | null  (used for documentation; driver uses detect)
  */
 
-export const SHAPES = [];
+import { v2FloorState } from './shapes/v2-floor-state.js';
+
+export const SHAPES = [
+    // 顺序:older / more-specific 在前。新版本接在末尾。
+    v2FloorState,
+];
 
 export function findShape(predicate) {
     return SHAPES.find(predicate) || null;

@@ -1,5 +1,6 @@
 import { describe, test, expect } from '@jest/globals';
 import { runMigrationPipeline } from '../../../public/scripts/extensions/memory-graph/migrations/index.js';
+import { v2FloorState } from '../../../public/scripts/extensions/memory-graph/migrations/shapes/v2-floor-state.js';
 
 describe('runMigrationPipeline driver basics', () => {
     test('returns input unchanged when registry has no matching detect', async () => {
@@ -24,3 +25,17 @@ function makeMinimalCtx() {
         SCHEMA_VERSION: 2,
     };
 }
+
+describe('runMigrationPipeline with v2-floor-state', () => {
+    test('returns terminal v2 input as changed=false, migrations=[]', async () => {
+        const input = {
+            data: { nodes: {}, edges: [] },
+            meta: { schemaVersion: 2 },
+            log: { version: 1, commits: [] },
+        };
+        const result = await runMigrationPipeline(input, makeMinimalCtx());
+        expect(result.changed).toBe(false);
+        expect(result.migrations).toEqual([]);
+        expect(result.data).toEqual(input.data);
+    });
+});
