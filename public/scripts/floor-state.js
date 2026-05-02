@@ -37,8 +37,8 @@ const LOG_SUFFIX = '__floor_log';
  * import this module without pulling in the full app bundle.
  */
 async function makeDefaultDeps() {
-    const script = await import('../../script.js');
-    const events = await import('../events.js');
+    const script = await import('../script.js');
+    const events = await import('./events.js');
     return {
         getChatState: script.getChatState,
         patchChatState: script.patchChatState,
