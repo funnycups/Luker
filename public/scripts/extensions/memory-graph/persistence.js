@@ -245,19 +245,42 @@ export async function migrateLegacyMemoryGraphState(
         // fresh install / 已最新:仅在 meta 缺 schemaVersion 时补 stamp
         if (!meta || Number(meta?.schemaVersion || 0) < SCHEMA_VERSION) {
             const baseMeta = meta && typeof meta === 'object' ? meta : {};
-            await context.updateChatState(
+            const stampResult = await context.updateChatState(
                 META_NAMESPACE,
                 () => ({ ...baseMeta, schemaVersion: SCHEMA_VERSION }),
                 targetWriteOption,
             );
+            if (!stampResult?.ok) {
+                console.warn(`[${MODULE_NAME}] migration: meta stamp failed`, { target, result: stampResult });
+            } else {
+                console.info(`[${MODULE_NAME}] migration: stamped __meta.schemaVersion=${SCHEMA_VERSION} (no shape detected, data was ${data == null ? 'absent' : 'unrecognized'})`);
+            }
+        } else {
+            console.info(`[${MODULE_NAME}] migration: already at schemaVersion=${SCHEMA_VERSION}, no-op`);
         }
         return { migrated: false, migrations: result.migrations };
     }
 
-    // 写顺序:log → data → meta(schemaVersion 最后落,保证 idempotency)
-    await context.updateChatState(LOG_NAMESPACE, () => result.log, targetWriteOption);
-    await context.updateChatState(MODULE_NAME, () => result.data, targetWriteOption);
-    await context.updateChatState(META_NAMESPACE, () => result.meta, targetWriteOption);
+    // 写顺序:log → data → meta(schemaVersion 最后落,保证 idempotency)。
+    // 任意一步失败立即抛错,wrapper 的 caller 会 catch + 警告;不继续往下写以免
+    // 留下"data 已新但 meta 没 stamp"等中间态(实际上这种中间态下次启动还会
+    // 重跑迁移,但 silent 失败更难定位)。
+    const commitCount = Array.isArray(result.log?.commits) ? result.log.commits.length : 0;
+    console.info(`[${MODULE_NAME}] migration: pipeline=[${result.migrations.join(' → ')}] producing ${commitCount} commits, writing log → data → meta`);
+
+    const logResult = await context.updateChatState(LOG_NAMESPACE, () => result.log, targetWriteOption);
+    if (!logResult?.ok) {
+        throw new Error(`[${MODULE_NAME}] migration: __floor_log write failed (state=${JSON.stringify(logResult)})`);
+    }
+    const dataResult = await context.updateChatState(MODULE_NAME, () => result.data, targetWriteOption);
+    if (!dataResult?.ok) {
+        throw new Error(`[${MODULE_NAME}] migration: data namespace write failed (state=${JSON.stringify(dataResult)})`);
+    }
+    const metaResult = await context.updateChatState(META_NAMESPACE, () => result.meta, targetWriteOption);
+    if (!metaResult?.ok) {
+        throw new Error(`[${MODULE_NAME}] migration: __meta write failed (state=${JSON.stringify(metaResult)})`);
+    }
+    console.info(`[${MODULE_NAME}] migration: complete, schemaVersion=${SCHEMA_VERSION} stamped`);
     return { migrated: true, migrations: result.migrations };
 }
 

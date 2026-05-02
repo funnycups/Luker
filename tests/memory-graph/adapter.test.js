@@ -821,14 +821,20 @@ describe('main.js sequencing: CHAT_CHANGED migration handler runs before fs hand
         expect(meta.schemaVersion).toBe(2);
     });
 
-    test('reversed order (fs first, migration second) silently loses graph from chats with non-trivial chat array', async () => {
-        // This is the regression we are guarding against. With fs's
-        // CHAT_CHANGED handler registered before our migration handler, fs
-        // runs first: it reads the empty `__floor_log` (legacy chat
-        // hasn't been migrated yet), takes the swipeMap from the new
-        // chat (NON-empty), and overwrites the data namespace with the
-        // computed target state (`{}`). The legacy `opLog` payload sitting
-        // in the same namespace is gone before migration gets a chance.
+    test('reversed order (fs first, migration second) is now non-destructive thanks to defensive shortcut', async () => {
+        // History: with fs's CHAT_CHANGED handler registered before our
+        // migration handler, fs used to run first, read the empty
+        // `__floor_log` (legacy chat hasn't been migrated yet), and overwrite
+        // the data namespace with `{}` — losing the legacy `opLog` payload
+        // before migration could read it.
+        //
+        // After the defensive fix in floor-state.rematerialize() (skip when
+        // the log namespace was never written), the destruction no longer
+        // happens. fs now leaves the legacy data alone; migration runs second
+        // and translates the opLog cleanly. Ordering still matters for
+        // correctness in pathological cases (a writeLog from a concurrent
+        // path could materialize an empty log before migration runs), but
+        // the simple legacy-load case is now safe in either order.
         const chatRef = { value: [assistantMsg(), assistantMsg()] };
         const { store, eventSource, context } = makeContext(chatRef);
 
@@ -856,17 +862,14 @@ describe('main.js sequencing: CHAT_CHANGED migration handler runs before fs hand
         await eventSource.emit(event_types.CHAT_CHANGED);
         await fs.ready();
 
-        // fs ran first → wrote `{}` to data namespace, OVERWRITING the
-        // legacy opLog. Migration ran second → main namespace is now `{}`,
-        // no opLog to translate, only stamps schemaVersion. n_switched is
-        // gone forever.
-        expect(store._raw.get(adapterConstants.MODULE_NAME)).toEqual({});
-        // No commits were written because the legacy opLog never made it
-        // through to the migration translator.
-        expect(store._raw.get(adapterConstants.LOG_NAMESPACE)).toBeUndefined();
-        // Schema is stamped at v2, so future startups won't re-attempt
-        // migration — the data loss is permanent.
-        expect(store._raw.get(adapterConstants.META_NAMESPACE)).toEqual({ schemaVersion: 2 });
+        // fs ran first BUT defensively skipped (log never written). Then
+        // migration ran second on the intact legacy opLog and translated it
+        // cleanly into the v2 layout.
+        const data = store._raw.get(adapterConstants.MODULE_NAME);
+        expect(Object.keys(data.nodes).sort()).toEqual(['n_switched']);
+        const log = store._raw.get(adapterConstants.LOG_NAMESPACE);
+        expect(log.commits).toHaveLength(1);
+        expect(store._raw.get(adapterConstants.META_NAMESPACE).schemaVersion).toBe(2);
     });
 });
 

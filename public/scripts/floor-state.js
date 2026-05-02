@@ -112,11 +112,21 @@ export function createFloorStateWithDeps(options, deps) {
     }
 
     /**
-     * Read and normalize the private commit log.
+     * Read and normalize the private commit log. Returns `{ log, existed }`
+     * so callers that need to distinguish "log namespace truly never written"
+     * from "log namespace exists but is empty" can do so — see the rematerialize
+     * shortcut below for why this matters (a legacy chat with un-migrated data
+     * sitting in the data namespace must not have its data clobbered by a
+     * synthetic empty target state computed from a never-written log).
      */
-    async function readLog() {
+    async function readLogWithExistence() {
         const raw = await runtime.getChatState(logNamespace);
-        return normalizeLog(raw);
+        return { log: normalizeLog(raw), existed: raw != null };
+    }
+
+    async function readLog() {
+        const { log } = await readLogWithExistence();
+        return log;
     }
 
     /**
@@ -157,11 +167,25 @@ export function createFloorStateWithDeps(options, deps) {
      * The ready gate is managed by the caller (event handlers) so that
      * compound operations like truncate+rematerialize stay pending in a
      * single observable transition.
+     *
+     * Defensive skip: if the log namespace has NEVER been written (raw null
+     * from getChatState), we leave the data namespace alone. This prevents
+     * data loss for legacy chats whose data namespace holds un-migrated
+     * payload (e.g. memory-graph v8 opLog) when a structural event fires
+     * before the plugin's migration code has had a chance to populate the
+     * log. Once the log has been written even once (truncate to empty,
+     * appendCommit, etc.), the namespace is "owned" by floor-state and
+     * subsequent rematerializes proceed normally — including legitimate
+     * resets to {} after all messages are deleted.
      */
     async function rematerialize() {
         if (destroyed) return;
         try {
-            const log = await readLog();
+            const { log, existed } = await readLogWithExistence();
+            if (!existed && log.commits.length === 0) {
+                console.info(`[floor-state:${namespace}] skipping rematerialize: log namespace never written, preserving existing data namespace`);
+                return;
+            }
             const swipeMap = buildSwipeMapFromChat(runtime.getChat());
             const targetState = computeTargetState(log.commits, swipeMap);
             const result = await runtime.updateChatState(namespace, () => targetState);

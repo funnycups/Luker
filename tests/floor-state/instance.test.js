@@ -223,10 +223,12 @@ describe('event reactions', () => {
         await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
         expect(store._raw.get('foo')).toEqual({ x: 1 });
 
-        // Simulate switching to a different chat by replacing the array
-        // and the underlying log+data being whatever they were.
-        // For chat B, pretend log is empty (fresh chat).
-        store._raw.delete('foo__floor_log');
+        // Simulate switching to a different chat by replacing the array.
+        // For chat B, the log file *exists* but holds zero commits — this is
+        // the legitimate "all messages deleted" reset path. We seed an empty
+        // log explicitly (rather than deleting the namespace) so the
+        // never-written defensive shortcut doesn't kick in.
+        store._raw.set('foo__floor_log', { version: 1, commits: [] });
         chatRef.value = [msg(0)]; // chat B has just one floor
 
         await eventSource.emit(event_types.CHAT_CHANGED);
@@ -234,6 +236,30 @@ describe('event reactions', () => {
 
         // Empty log → data namespace must be reset to {}.
         expect(store._raw.get('foo')).toEqual({});
+    });
+
+    test('CHAT_CHANGED preserves data when log namespace was never written (defensive)', async () => {
+        // Defensive shortcut for un-migrated legacy data: if the log file has
+        // never been written (raw null), rematerialize must NOT clobber the
+        // data namespace. Otherwise structural events (CHAT_CHANGED, swipe,
+        // delete) on legacy chats would write {} over un-migrated payloads
+        // before the plugin's migration code has a chance to run. See
+        // floor-state.js rematerialize() for the matching skip.
+        const chatRef = { value: [msg(0), msg(0)] };
+        const { store, eventSource, deps } = makeDeps(chatRef);
+        // Pre-seed the data namespace with un-migrated legacy payload, but
+        // leave the log namespace untouched (never written).
+        store._raw.set('foo', { version: 8, opLog: [{ seq: 1, ops: [] }], legacy: true });
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        await eventSource.emit(event_types.CHAT_CHANGED);
+        await fs.ready();
+
+        // Defensive skip preserved the legacy payload.
+        expect(store._raw.get('foo')).toEqual({ version: 8, opLog: [{ seq: 1, ops: [] }], legacy: true });
+        // Log namespace was never created.
+        expect(store._raw.has('foo__floor_log')).toBe(false);
     });
 
     test('MESSAGE_DELETED truncates commits at or beyond new length', async () => {
@@ -357,6 +383,8 @@ describe('ready gate', () => {
     test('ready blocks while a rematerialize is running, then resolves', async () => {
         const chatRef = { value: [msg(0)] };
         const baseDeps = makeDeps(chatRef);
+        // Seed the log so rematerialize doesn't take the never-written defensive shortcut.
+        baseDeps.store._raw.set('foo__floor_log', { version: 1, commits: [] });
         // Wrap updateChatState to add a small delay so we can observe pending state.
         let resolveBlock;
         const blocker = new Promise((r) => { resolveBlock = r; });
@@ -1015,6 +1043,8 @@ describe('error tolerance', () => {
     test('rematerialize swallows store errors and warns', async () => {
         const chatRef = { value: [msg(0)] };
         const base = makeDeps(chatRef);
+        // Seed the log so rematerialize doesn't shortcut on never-written.
+        base.store._raw.set('foo__floor_log', { version: 1, commits: [] });
         const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
         try {
             // Throw when writing the data namespace during rematerialize.
@@ -1045,6 +1075,8 @@ describe('error tolerance', () => {
     test('rematerialize warns when updateChatState reports ok=false', async () => {
         const chatRef = { value: [msg(0)] };
         const base = makeDeps(chatRef);
+        // Seed the log so rematerialize doesn't shortcut on never-written.
+        base.store._raw.set('foo__floor_log', { version: 1, commits: [] });
         const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
         try {
             const deps = {
