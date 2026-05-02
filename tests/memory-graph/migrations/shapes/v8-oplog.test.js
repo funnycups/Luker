@@ -55,6 +55,16 @@ describe('v8-oplog shape', () => {
         expect(out.log.commits[0]).toMatchObject({ floor: 0, swipeId: 0 });
         expect(out.log.commits[1]).toMatchObject({ floor: 1, swipeId: 0 });
 
+        // Snapshot semantics: each commit is a diff from {} (empty), so it adds the full /nodes
+        // map. commit[0] has just n_1, but commit[1] must include BOTH n_1 AND n_2 — a regression
+        // to incremental diffs would shrink commit[1]'s /nodes to only n_2.
+        const nodesFromCommit = (commit) => {
+            const addNodes = commit.patches.find(p => p.op === 'add' && p.path === '/nodes');
+            return addNodes ? Object.keys(addNodes.value).sort() : [];
+        };
+        expect(nodesFromCommit(out.log.commits[0])).toEqual(['n_1']);
+        expect(nodesFromCommit(out.log.commits[1])).toEqual(['n_1', 'n_2']);
+
         expect(Object.keys(out.data.nodes).sort()).toEqual(['n_1', 'n_2']);
         expect(out.data.coveredAssistantSeq).toBe(2);
 
