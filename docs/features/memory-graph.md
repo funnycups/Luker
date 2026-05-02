@@ -265,6 +265,14 @@ If Vector Storage settings are unavailable, Memory Graph falls back to its legac
 
 When inserting vectors, the memory graph includes `nodeId` in the `metadata` field. The Vector Storage backend stores `metadata` as-is. Other plugins can also use the `metadata` field for custom data, which is returned alongside query results. This design allows `hash → nodeId` mapping to bypass the frontend index cache — even if the cache is lost, nodes can be matched directly from query results.
 
+### Automatic schema migration
+
+On chat load, memory-graph runs a migration pipeline that translates older
+persisted shapes (v5 raw, v8 opLog) into the current v2 floor-state layout
+(graph payload + `__floor_log` commit log + `__meta` sidecar). The pipeline
+is idempotent, runs only when the input shape isn't already v2, and never
+modifies chat-state if any step fails.
+
 For more technical implementation details, please refer to the source code.
 
 </details>

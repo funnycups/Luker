@@ -265,6 +265,13 @@ PEDSA（Personalized Efficient Diffusion with Sparse Approximation）演算法�
 
 記憶圖在插入向量時會透過 `metadata` 欄位附帶 `nodeId`，Vector Storage 後端將 `metadata` 原樣透傳儲存。其他外掛也可利用 `metadata` 欄位儲存自訂資料，查詢時隨結果一併返回。此設計使 `hash → nodeId` 的映射不再完全依賴前端索引狀態，即使前端快取遺失也能透過查詢結果直接匹配節點。
 
+### 自動 schema 遷移
+
+聊天載入時 memory-graph 會跑一遍遷移 pipeline，把舊的持久化形態（v5 raw、
+v8 opLog）翻譯到當前的 v2 floor-state 佈局（graph payload + `__floor_log`
+提交日誌 + `__meta` sidecar）。pipeline 冪等，只在輸入形態不是 v2 時才改
+chat-state，任意一步失敗均不改寫。
+
 如需了解更多技術實作細節，請參閱原始碼。
 
 </details>
