@@ -79,14 +79,14 @@ Plain chat state is overwrite-only — when a user swipes, deletes a message, or
 
 ### How it works
 
-A floor state instance owns one chat-state namespace (`<ns>`) and a private commit log (`<ns>__floor_log`). Writes go through the instance's `patch` or `update` methods, which both update the data namespace and append a commit. The instance subscribes to four chat events:
+A floor state instance owns one chat-state namespace (`<ns>`) and a private commit log (`<ns>__floor_log`). Writes go through the instance's `update` method, which reads the current state, runs your reducer, computes the diff, applies it to the data namespace, and appends a commit. The instance subscribes to four chat events:
 
 - `CHAT_CHANGED` — new chat opened; rebuild data from this chat's log
 - `MESSAGE_SWIPED` — user switched swipes; rebuild data with the new active swipe
 - `MESSAGE_DELETED` — chat truncated; drop commits at or beyond the new length, then rebuild
-- `MESSAGE_SWIPE_DELETED` — a swipe was deleted; renumber affected commits, then rebuild
+- `MESSAGE_SWIPE_DELETED` — a swipe was deleted on the chat tail; renumber the affected floor's commits, then rebuild
 
-Rebuilding starts from `{}` and replays surviving commits in order, so the data namespace always reflects the current swipe path.
+Each commit stores an incremental diff from the materialized state at commit time to the next state. Rebuild walks all commits in order, drops the ones whose `(floor, swipeId)` no longer matches the active swipe map, and applies the surviving patches sequentially against `{}`. Because deletions are tail-only — `MESSAGE_DELETED` truncates a suffix and `MESSAGE_SWIPE_DELETED` only fires on the chat tail — the surviving commits on the active path always form a contiguous chain, and incremental patches compose correctly.
 
 ### Creating an instance
 
@@ -96,11 +96,14 @@ Use `getContext().createFloorState({ namespace })` from a plugin or CardApp. Eac
 const ctx = SillyTavern.getContext();
 const fs = await ctx.createFloorState({ namespace: 'my-plugin' });
 
-// Apply RFC 6902 operations directly:
-await fs.patch([{ op: 'add', path: '/score', value: 10 }]);
-
-// Or write reducer-style; the diff is computed and committed:
+// Recommended: reducer-style writes. The reducer receives the current state
+// and returns the next state; the diff is computed and committed for you.
+await fs.update((current) => ({ ...current, score: 10 }));
 await fs.update((current) => ({ ...current, level: (current?.level ?? 0) + 1 }));
+await fs.update((current) => {
+    const { temp, ...rest } = current ?? {};
+    return rest;
+});
 
 // Read current state:
 const state = await fs.get();
@@ -112,29 +115,36 @@ await fs.ready();
 fs.destroy();
 ```
 
+::: warning
+Reducers must return a plain object. Returning an array, primitive, `null`, or `undefined` is treated as "no change" and the call resolves without writing.
+:::
+
 ### Attaching state to a non-tail floor
 
-`patch` and `update` both accept an optional second argument `{ floor, swipeId? }` that pins the commit to an explicit floor instead of the chat tail. The typical use case is a lagging write — e.g. a memory extension that summarizes at `chat.length - N` when the user has configured the last N floors to be excluded from generation.
+`update` accepts an optional second argument `{ floor, swipeId? }` that pins the commit to an explicit floor instead of the chat tail. The typical use case is a lagging write — e.g. a memory extension that summarizes at `chat.length - N` when the user has configured the last N floors to be excluded from generation.
 
 ```js
 // floor only — swipeId is read from chat[floor].swipe_id
-await fs.patch(
-    [{ op: 'add', path: '/summaries/0', value: '...' }],
+await fs.update(
+    (current) => ({ ...current, summaries: { ...(current?.summaries ?? {}), 0: '...' } }),
     { floor: targetFloor },
 );
 
 // floor + swipeId pinned (e.g. backfilling state on a specific swipe)
-await fs.patch(operations, { floor: targetFloor, swipeId: 0 });
-
-// update accepts the same override
-await fs.update((current) => nextState, { floor: targetFloor });
+await fs.update((current) => nextState, { floor: targetFloor, swipeId: 0 });
 ```
 
-When `options` is omitted the chat tail is used, exactly as before. `floor` must be a valid index into the current `chat` (`0 <= floor < chat.length`); out-of-range, negative, non-integer, or negative `swipeId` overrides are rejected and `patch` returns `false`, so misuse fails fast instead of silently mis-attributing the commit.
+When `options` is omitted the chat tail is used. `floor` must be a valid index into the current `chat` (`0 <= floor < chat.length`); out-of-range, negative, non-integer, or negative `swipeId` overrides are rejected and the call returns `false`, so misuse fails fast instead of silently mis-attributing the commit.
 
 ::: tip
 The override only changes what label this commit carries in the log — `MESSAGE_DELETED` still truncates by floor and `MESSAGE_SWIPE_DELETED` still renumbers by (floor, swipeId). Replay order is the log's insertion order; specifying a smaller `floor` does not "jump the queue" during rematerialize.
 :::
+
+### Advanced: pre-computed patches
+
+If you already have an incremental RFC 6902 diff against the current materialized state — for example, you computed it yourself for performance reasons or you're driving a one-shot migration — you can call `instance.patch(operations, options?)` to append it directly. The operations MUST be diffed against `await fs.get()`; a snapshot-from-empty patch (one that overwrites the whole state) is not a valid commit because rebuild assumes each commit's patches compose with the prior surviving commits' patches.
+
+For everything else, prefer `update` — it computes the right diff for you.
 
 ### When to await `ready()`
 
@@ -142,15 +152,15 @@ If your plugin reads floor-managed state inside an event handler that fires near
 
 ### Conventions
 
-- One namespace, one owner. Don't mix `patchChatState(ns, ...)` and `floorState.patch(...)` against the same namespace — the floor state rebuild will overwrite the raw write.
+- One namespace, one owner. Don't mix `patchChatState(ns, ...)` and `floorState.update(...)` against the same namespace — the floor state rebuild will overwrite the raw write.
 - Namespace strings ending in `__floor_log` are reserved for the private logs.
 - Reducer return values must be plain objects; arrays, primitives, `null`, and `undefined` are ignored.
 
 ### Reference
 
 - `createFloorState({ namespace })` — async factory; returns a frozen instance.
-- `instance.patch(operations, options?)` — apply RFC 6902 operations and append a commit. Optional `options = { floor, swipeId? }` pins the commit to an explicit floor instead of the chat tail.
-- `instance.update(reducer, options?)` — read-modify-write; reducer receives the current state and returns the next. `options` are identical to `patch`.
+- `instance.update(reducer, options?)` — read-modify-write; reducer receives the current state and returns the next, the diff is computed and committed for you. Optional `options = { floor, swipeId? }` pins the commit to an explicit floor instead of the chat tail. **This is the recommended write API.**
+- `instance.patch(operations, options?)` — advanced: append a commit whose patches you already computed yourself. Operations must be an incremental RFC 6902 diff (`buildObjectPatchOperationsAsync(prev, next)` against `await instance.get()`); not for snapshot-style overwrites. Same `options` shape as `update`.
 - `instance.get()` — read the current data namespace.
 - `instance.ready()` — resolves when no rebuild is in flight.
 - `instance.destroy()` — detach event listeners and freeze the instance.

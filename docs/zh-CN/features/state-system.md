@@ -79,14 +79,14 @@ CardApp 是状态系统最典型的使用者。角色卡内嵌的应用可以通
 
 ### 工作方式
 
-一个楼层状态实例独占一个聊天状态命名空间（`<ns>`）以及一份私有提交日志（`<ns>__floor_log`）。所有写入都通过实例的 `patch` 或 `update` 进入，同时更新业务命名空间和追加一条提交。实例订阅四个聊天事件：
+一个楼层状态实例独占一个聊天状态命名空间（`<ns>`）以及一份私有提交日志（`<ns>__floor_log`）。所有写入都通过实例的 `update` 方法进入：它读取当前状态、运行你的 reducer、计算差异、把差异写入业务命名空间并追加一条提交。实例订阅四个聊天事件：
 
 - `CHAT_CHANGED`——切换到新聊天，按这份聊天的日志重建数据
 - `MESSAGE_SWIPED`——用户切换 swipe，按新的活动 swipe 重建数据
 - `MESSAGE_DELETED`——聊天截短，丢弃楼层超出新长度的提交后重建
-- `MESSAGE_SWIPE_DELETED`——某个 swipe 被删除，相关提交重新编号后重建
+- `MESSAGE_SWIPE_DELETED`——聊天尾部某个 swipe 被删除，相关楼层的提交重新编号后重建
 
-重建始终从 `{}` 起步，按顺序重放幸存提交，确保业务命名空间永远对应当前的 swipe 路径。
+每条提交存的是「提交时刻 materialized 状态 → 下一份状态」的增量 diff。重建按写入顺序遍历所有提交，丢弃 `(floor, swipeId)` 已不在当前活动 swipe 上的提交，然后把幸存的 patch 依次应用在 `{}` 上。删除事件都只发生在尾部——`MESSAGE_DELETED` 只截尾部、`MESSAGE_SWIPE_DELETED` 也只在聊天尾部触发——所以活动路径上的幸存提交始终是连续的链，增量 patch 正确组合。
 
 ### 创建实例
 
@@ -96,45 +96,54 @@ CardApp 是状态系统最典型的使用者。角色卡内嵌的应用可以通
 const ctx = SillyTavern.getContext();
 const fs = await ctx.createFloorState({ namespace: 'my-plugin' });
 
-// 直接应用 RFC 6902 操作：
-await fs.patch([{ op: 'add', path: '/score', value: 10 }]);
-
-// 或者写 reducer，差异会自动计算并提交：
+// 推荐:reducer 风格写入。reducer 收到当前状态、返回下一份状态,差异自动算完并提交。
+await fs.update((current) => ({ ...current, score: 10 }));
 await fs.update((current) => ({ ...current, level: (current?.level ?? 0) + 1 }));
+await fs.update((current) => {
+    const { temp, ...rest } = current ?? {};
+    return rest;
+});
 
-// 读取当前状态：
+// 读取当前状态:
 const state = await fs.get();
 
-// 在读取之前等待重建完成：
+// 在读取之前等待重建完成:
 await fs.ready();
 
-// 解除事件监听（极少需要，实例通常和页面同寿）：
+// 解除事件监听(极少需要,实例通常和页面同寿):
 fs.destroy();
 ```
 
+::: warning
+reducer 必须返回普通对象。返回数组、基础类型、`null`、`undefined` 一律视作「无变化」,调用直接成功返回但不写入。
+:::
+
 ### 把状态挂到非尾部的楼层
 
-`patch` 与 `update` 都接受一个可选的第二参数 `{ floor, swipeId? }`，用来把这次提交显式挂到指定楼层而不是聊天尾部。常见场景是「滞后写入」——比如记忆扩展在用户设置了「最后 N 层不参与生成」时，需要把摘要挂到 `chat.length - N` 而不是当前最新楼层。
+`update` 接受一个可选的第二参数 `{ floor, swipeId? }`,用来把这次提交显式挂到指定楼层而不是聊天尾部。常见场景是「滞后写入」——比如记忆扩展在用户设置了「最后 N 层不参与生成」时,需要把摘要挂到 `chat.length - N` 而不是当前最新楼层。
 
 ```js
-// 只指定 floor：swipeId 自动取 chat[floor].swipe_id
-await fs.patch(
-    [{ op: 'add', path: '/summaries/0', value: '...' }],
+// 只指定 floor:swipeId 自动取 chat[floor].swipe_id
+await fs.update(
+    (current) => ({ ...current, summaries: { ...(current?.summaries ?? {}), 0: '...' } }),
     { floor: targetFloor },
 );
 
-// 同时指定 floor + swipeId（用于回填某条具体 swipe 上的状态）
-await fs.patch(operations, { floor: targetFloor, swipeId: 0 });
-
-// update 也接受同样的覆写
-await fs.update((current) => nextState, { floor: targetFloor });
+// 同时指定 floor + swipeId(用于回填某条具体 swipe 上的状态)
+await fs.update((current) => nextState, { floor: targetFloor, swipeId: 0 });
 ```
 
-不传 `options` 时按聊天尾部推断，行为与早期版本一致。`floor` 必须是当前 `chat` 的有效索引（`0 <= floor < chat.length`），越界、负数、非整数、负 `swipeId` 都会被拒绝并返回 `false`，避免悄无声息地把状态错挂到不存在的楼层。
+不传 `options` 时按聊天尾部推断。`floor` 必须是当前 `chat` 的有效索引(`0 <= floor < chat.length`),越界、负数、非整数、负 `swipeId` 都会被拒绝并返回 `false`,避免悄无声息地把状态错挂到不存在的楼层。
 
 ::: tip
-覆写只影响这条提交在日志里的标签——`MESSAGE_DELETED` 仍按 floor 截断，`MESSAGE_SWIPE_DELETED` 仍按 (floor, swipeId) 重编号。重建顺序由日志的写入顺序决定，不会因为你指定了较小的 `floor` 就被「插队」到前面执行。
+覆写只影响这条提交在日志里的标签——`MESSAGE_DELETED` 仍按 floor 截断,`MESSAGE_SWIPE_DELETED` 仍按 (floor, swipeId) 重编号。重建顺序由日志的写入顺序决定,不会因为你指定了较小的 `floor` 就被「插队」到前面执行。
 :::
+
+### 进阶:预先算好的 patch
+
+如果你已经手上有一份针对当前 materialized 状态的增量 RFC 6902 diff——比如出于性能考虑自己算了 diff、或者在跑一次性迁移——可以调 `instance.patch(operations, options?)` 直接追加。operations 必须是 `buildObjectPatchOperationsAsync(prev, next)` 形式的增量 diff,prev 取自 `await fs.get()`;不能传「整盘覆写」式的 snapshot patch,因为重建假设每条提交的 patch 跟前面幸存提交的 patch 顺序组合。
+
+其他场景一律走 `update`——它会帮你算好 diff。
 
 ### 何时要 `await ready()`
 
@@ -142,15 +151,15 @@ await fs.update((current) => nextState, { floor: targetFloor });
 
 ### 约定
 
-- 一个命名空间一个主人。不要在同一个命名空间上同时用 `patchChatState(ns, ...)` 和 `floorState.patch(...)`——重建时会把直接写入的部分覆盖掉。
+- 一个命名空间一个主人。不要在同一个命名空间上同时用 `patchChatState(ns, ...)` 和 `floorState.update(...)`——重建时会把直接写入的部分覆盖掉。
 - 名字以 `__floor_log` 结尾的命名空间留给楼层状态的私有日志，不要占用。
 - reducer 必须返回普通对象。数组、基础类型、`null`、`undefined` 一律忽略。
 
 ### 参考
 
 - `createFloorState({ namespace })`——异步工厂，返回冻结的实例。
-- `instance.patch(operations, options?)`——应用 RFC 6902 操作并追加提交。可选的 `options = { floor, swipeId? }` 把提交挂到指定楼层而非聊天尾部。
-- `instance.update(reducer, options?)`——读—改—写；reducer 收到当前状态，返回下一份状态。`options` 与 `patch` 一致。
+- `instance.update(reducer, options?)`——读—改—写;reducer 收到当前状态、返回下一份状态,差异自动算完并提交。可选的 `options = { floor, swipeId? }` 把提交挂到指定楼层而非聊天尾部。**这是推荐的写入 API。**
+- `instance.patch(operations, options?)`——进阶:追加一条「自己已经算好 patch」的提交。operations 必须是相对 `await instance.get()` 的增量 RFC 6902 diff(`buildObjectPatchOperationsAsync(prev, next)`),不能是整盘覆写式 snapshot。`options` 与 `update` 相同。
 - `instance.get()`——读取业务命名空间。
 - `instance.ready()`——重建结束时解决。
 - `instance.destroy()`——解除事件监听并冻结实例。
