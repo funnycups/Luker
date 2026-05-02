@@ -114,3 +114,33 @@ describe('runMigrationPipeline v5 → v8 → v2 chain', () => {
         expect(result.log.commits).toHaveLength(1);
     });
 });
+
+describe('runMigrationPipeline robustness', () => {
+    test('throws when shape registry has a self-cycle exceeding MAX_HOPS', async () => {
+        const cycleShapes = [{
+            id: 'cycle',
+            detect: () => true,
+            migrate: async (input) => input,
+            nextId: 'cycle',
+        }];
+        const ctx = await makeRichCtx([]);
+        await expect(
+            runMigrationPipeline({ data: { foo: 1 }, meta: null, log: null }, ctx, cycleShapes)
+        ).rejects.toThrow(/MAX_HOPS/);
+    });
+
+    test('migrate throw is caught: returns input unchanged with <id>:error in migrations', async () => {
+        const brokenShapes = [{
+            id: 'broken',
+            detect: () => true,
+            migrate: async () => { throw new Error('synthetic test failure'); },
+            nextId: 'next',
+        }];
+        const ctx = await makeRichCtx([]);
+        const input = { data: { foo: 1 }, meta: null, log: null };
+        const result = await runMigrationPipeline(input, ctx, brokenShapes);
+        expect(result.changed).toBe(false);
+        expect(result.migrations).toEqual(['broken:error']);
+        expect(result.data).toEqual({ foo: 1 });
+    });
+});

@@ -15,14 +15,14 @@ import { SHAPES } from './registry.js';
 
 const MAX_HOPS = 16;
 
-export async function runMigrationPipeline(input, ctx) {
+export async function runMigrationPipeline(input, ctx, shapes = SHAPES) {
     if (!input || typeof input !== 'object') {
         return { data: null, meta: null, log: null, migrations: [], changed: false };
     }
     let current = { data: input.data ?? null, meta: input.meta ?? null, log: input.log ?? null };
     const migrations = [];
     for (let hop = 0; hop < MAX_HOPS; hop++) {
-        const node = SHAPES.find(s => safeDetect(s, current));
+        const node = shapes.find(s => safeDetect(s, current));
         if (!node) {
             return { ...current, migrations, changed: migrations.length > 0 };
         }
