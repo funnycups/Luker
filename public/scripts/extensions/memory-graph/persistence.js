@@ -1,0 +1,912 @@
+/**
+ * Floor-state adapter for the memory-graph extension.
+ *
+ * Memory-graph used to maintain its own log+rematerialize machinery (opLog,
+ * swipeTailCache, multiple watermarks) in the chat-state namespace
+ * `memory_graph`. The generic FloorState (public/scripts/floor-state.js)
+ * supersedes that machinery: it owns one chat-state namespace as a data
+ * cell, ships a sibling `<ns>__floor_log` for the commit log, filters
+ * commits by (floor, swipeId), and replays automatically on the four
+ * structure events.
+ *
+ * Responsibilities:
+ *  - Lazy singleton holding the FloorState instance for the memory-graph
+ *    namespace (recreated when the extension reloads, never per-chat).
+ *  - Translate memory-graph's "log entry of ops" shape into snapshot-style
+ *    `fs.patch` calls, reusing the existing `applyMemoryLogEntryToStore`
+ *    so we don't duplicate op semantics.
+ *  - Sidecar for non-floor-bound metadata (lastRecallTrace etc.) lives in
+ *    `<ns>__meta` and is written directly via the chat-state API — those
+ *    fields would otherwise be replayed-then-overwritten by the floor-state
+ *    rebuild from `{}`.
+ *  - One-shot upgrade from the old persisted schema (opLog inside the data
+ *    namespace, schemaVersion 1) to the new layout (commits in
+ *    `<ns>__floor_log`, metadata in `<ns>__meta`, graph in main namespace).
+ */
+
+import { LEVEL, normalizeText, isExtractableAssistantMessage } from './primitives.js';
+import {
+    addEdge,
+    dropNode,
+    repairStoreAfterRollback,
+    cloneRollbackNodeSnapshot,
+    cloneRollbackEdgeSnapshot,
+    getRollbackEdgeKey,
+    compareNodesByTimeline,
+    getSemanticCoverageSeq,
+} from './graph-ops.js';
+
+const MODULE_NAME = 'memory_graph';
+const META_NAMESPACE = `${MODULE_NAME}__meta`;
+const LOG_NAMESPACE = `${MODULE_NAME}__floor_log`;
+const FLOOR_STATE_LOG_VERSION = 1;
+const SCHEMA_VERSION = 2;
+
+/**
+ * Bumped on every backwards-incompatible change to the persisted store
+ * shape. Used by `normalizePersistedMemoryState` to flag a state as
+ * "needs re-save" when the version stamp is missing or older than this.
+ *
+ * Versions are intentionally not range-checked; we only differentiate
+ * "current" from "anything else, please rewrite on next save".
+ */
+const PERSISTED_STORE_VERSION = 8;
+
+/**
+ * Fields of memory-graph's runtime store that fs owns. Anything outside
+ * this whitelist must NOT leak into commits — the reducer overlays this
+ * shape on top of the existing data so unrelated payload doesn't accumulate
+ * in the floor-state log.
+ */
+const GRAPH_PAYLOAD_DEFAULTS = Object.freeze({
+    nodes: {},
+    edges: [],
+    nodeSeq: 0,
+    seqCounter: 0,
+    appliedSeqTo: 0,
+    loggedSeqTo: 0,
+    coveredAssistantSeq: 0,
+});
+
+function makeEmptyGraphPayload() {
+    return {
+        nodes: {},
+        edges: [],
+        nodeSeq: 0,
+        seqCounter: 0,
+        appliedSeqTo: 0,
+        loggedSeqTo: 0,
+        coveredAssistantSeq: 0,
+    };
+}
+
+/**
+ * Walk the chat array counting `isExtractableAssistantMessage` matches and
+ * return the chat index whose count equals `assistantSeq` (1-based).
+ *
+ * Symmetric inverse of `findAffectedAssistantSeqFromMessageIndex`. Caller
+ * must pass the `isExtractableAssistantMessage` predicate so we don't
+ * duplicate it here.
+ *
+ * @param {Array} chat
+ * @param {number} assistantSeq
+ * @param {(message: any) => boolean} isExtractableAssistantMessage
+ * @returns {number | null} chat index, or null if no such floor exists yet
+ */
+export function getFloorFromAssistantSeq(chat, assistantSeq, isExtractableAssistantMessage) {
+    const target = Math.floor(Number(assistantSeq || 0));
+    if (!Number.isInteger(target) || target <= 0) return null;
+    const source = Array.isArray(chat) ? chat : [];
+    let count = 0;
+    for (let i = 0; i < source.length; i++) {
+        if (!isExtractableAssistantMessage(source[i])) continue;
+        count += 1;
+        if (count === target) return i;
+    }
+    return null;
+}
+
+let floorStatePromise = null;
+
+/**
+ * Lazy singleton — first call kicks off `createFloorState`, subsequent
+ * calls reuse the same Promise. The instance lives for the page session;
+ * it auto-rebinds to the active chat via its own CHAT_CHANGED listener,
+ * so callers don't need to re-create it on chat switches.
+ */
+export async function getFloorStateInstance(context) {
+    if (!floorStatePromise) {
+        if (typeof context?.createFloorState !== 'function') {
+            throw new Error('[memory-graph] createFloorState API is unavailable in extension context.');
+        }
+        floorStatePromise = context.createFloorState({ namespace: MODULE_NAME });
+    }
+    return floorStatePromise;
+}
+
+/**
+ * Test-only escape hatch: drop the cached singleton so subsequent
+ * `getFloorStateInstance` calls create a fresh instance. Production code
+ * never needs this — the instance lives for the page session.
+ */
+export function resetFloorStateInstanceForTesting() {
+    floorStatePromise = null;
+}
+
+/**
+ * Read the metadata sidecar (`<ns>__meta`). May return `null` when the
+ * sidecar has never been written for this chat.
+ */
+export async function loadMetaFields(context, target = undefined) {
+    const options = target ? { target } : undefined;
+    return await context.getChatState(META_NAMESPACE, options);
+}
+
+/**
+ * Write the metadata sidecar. Caller must pass the full meta object — we
+ * don't merge against existing.
+ */
+export async function persistMetaFields(context, meta, target = undefined) {
+    const options = target ? { target, maxOperations: 16000 } : { maxOperations: 16000 };
+    const result = await context.updateChatState(META_NAMESPACE, () => meta, options);
+    if (!result?.ok) {
+        throw new Error('[memory-graph] Failed to persist memory-graph meta sidecar.');
+    }
+    return result;
+}
+
+/**
+ * Apply a memory-graph "log entry" (ops array) as a single floor-state
+ * commit tagged at the given assistant floor. The reducer overlays the
+ * graph payload defaults so a fresh data namespace doesn't trip over
+ * undefined counters when `applyMemoryLogEntryToStore` does Math.max.
+ *
+ * Each commit's patches are built as a snapshot diff from `{}` (i.e. the
+ * full cumulative state at this commit), not as an incremental diff from
+ * `prev → next`. The reason is replay: floor-state filters surviving
+ * commits by (floor, swipeId) on swipe / delete events, then replays the
+ * survivors against `{}`. Incremental patches would assume the dropped
+ * commits' scaffolding is present (`add /nodes/n_X` requires `/nodes` to
+ * exist) and fail / silently corrupt the data namespace. Snapshot patches
+ * apply cleanly in any order against any starting state — fast-json-patch's
+ * `add` on an existing key is a replace, so applying multiple snapshots
+ * sequentially leaves only the last survivor's view, exactly what we want.
+ *
+ * Returns the latest payload (post-write) as a convenience for callers
+ * that want to update their in-memory cache without an extra read.
+ *
+ * @param {object} context — getContext() result
+ * @param {{seq: number, ops: object[]}} entry
+ * @param {number} floor — chat index where this entry belongs
+ * @param {(store: object, entry: object) => void} applyMemoryLogEntryToStore
+ * @returns {Promise<object|null>} latest payload after the commit, or null
+ *   when the commit was skipped (empty ops, invalid floor)
+ */
+export async function commitGraphEntry(context, entry, floor, applyMemoryLogEntryToStore) {
+    if (!entry || !Array.isArray(entry.ops) || entry.ops.length === 0) {
+        return null;
+    }
+    if (!Number.isInteger(floor) || floor < 0) {
+        return null;
+    }
+    const fs = await getFloorStateInstance(context);
+    const seq = Math.max(0, Math.floor(Number(entry.seq || 0)));
+
+    const current = (await fs.get()) ?? {};
+    const draft = { ...GRAPH_PAYLOAD_DEFAULTS, ...current };
+    // structuredClone so applyMemoryLogEntryToStore can mutate draft without
+    // touching the captured `current` reference (which is shared with fs's
+    // internal cache view).
+    const next = structuredClone(draft);
+    applyMemoryLogEntryToStore(next, { seq, ops: entry.ops });
+    next.coveredAssistantSeq = Math.max(Number(next.coveredAssistantSeq || 0), seq);
+
+    const patches = await context.buildObjectPatchOperationsAsync({}, next);
+    if (!Array.isArray(patches) || patches.length === 0) return null;
+    const ok = await fs.patch(patches, { floor });
+    if (!ok) return null;
+    return await fs.get();
+}
+
+/**
+ * One-shot upgrade from schema v1 (opLog + swipeTailCache + metadata all
+ * inside the main namespace) to schema v2 (graph in main, log in
+ * `<ns>__floor_log`, metadata in `<ns>__meta`).
+ *
+ * Idempotent via `__meta.schemaVersion`. Safe to retry on partial failure
+ * because each step is overwrite-only:
+ *   1. Compute per-entry commits in memory (no writes yet).
+ *   2. Write the log namespace as one updateChatState call.
+ *   3. Overwrite the main namespace with the materialized graph payload.
+ *   4. Write `__meta` with schemaVersion + extracted metadata last.
+ *
+ * If a crash occurs before step 4, schemaVersion is still missing and the
+ * next startup re-runs all steps; steps 2/3 are idempotent overwrites.
+ *
+ * @param {object} context — getContext() result
+ * @param {object|undefined} target — chat target; default = current chat
+ * @param {(message: any) => boolean} isExtractableAssistantMessage
+ * @param {(store: object, entry: object) => void} applyMemoryLogEntryToStore
+ * @returns {Promise<{migrated: boolean}>}
+ */
+export async function migrateLegacyMemoryGraphState(
+    context,
+    target,
+    isExtractableAssistantMessage,
+    applyMemoryLogEntryToStore,
+) {
+    const targetOption = target ? { target } : undefined;
+    const targetWriteOption = target
+        ? { target, maxOperations: 16000 }
+        : { maxOperations: 16000 };
+
+    const meta = await context.getChatState(META_NAMESPACE, targetOption);
+    if (Number(meta?.schemaVersion || 0) >= SCHEMA_VERSION) {
+        return { migrated: false };
+    }
+
+    const raw = await context.getChatState(MODULE_NAME, targetOption);
+    const opLog = Array.isArray(raw?.opLog) ? raw.opLog : [];
+
+    // Fresh install OR already-clean main namespace: no opLog to translate,
+    // just stamp the schema version so we don't re-check next time.
+    if (opLog.length === 0) {
+        await context.updateChatState(
+            META_NAMESPACE,
+            () => ({ schemaVersion: SCHEMA_VERSION }),
+            targetWriteOption,
+        );
+        return { migrated: false };
+    }
+
+    // Step 1: replay every entry in memory, building (a) the per-entry
+    // commits to write to the log and (b) the final graph payload. Each
+    // commit's patches are a snapshot diff from `{}` to the cumulative
+    // state AFTER applying that entry — i.e. each commit is self-contained.
+    // The reason is the same as commitGraphEntry: floor-state filters
+    // commits on swipe/delete events, and an isolated incremental commit
+    // would silently fail to apply against an empty data namespace because
+    // its patches assume scaffolding from earlier commits. Snapshot
+    // commits replay correctly in any subset; later snapshots overwrite
+    // earlier ones at the same top-level key (RFC 6902 `add` on an
+    // existing object key is a replace).
+    const chat = Array.isArray(context?.chat) ? context.chat : [];
+    let cumulative = makeEmptyGraphPayload();
+    const commits = [];
+    for (const entry of opLog) {
+        const seq = Math.max(0, Math.floor(Number(entry?.seq || 0)));
+        const floor = getFloorFromAssistantSeq(chat, seq, isExtractableAssistantMessage);
+        if (!Number.isInteger(floor) || floor < 0) continue;
+        const next = structuredClone(cumulative);
+        applyMemoryLogEntryToStore(next, entry);
+        next.coveredAssistantSeq = Math.max(Number(next.coveredAssistantSeq || 0), seq);
+        const patches = await context.buildObjectPatchOperationsAsync({}, next);
+        if (Array.isArray(patches) && patches.length > 0) {
+            const swipeIdRaw = chat[floor]?.swipe_id;
+            const swipeId = Number.isInteger(swipeIdRaw) && swipeIdRaw >= 0 ? swipeIdRaw : 0;
+            commits.push({ floor, swipeId, patches });
+        }
+        cumulative = next;
+    }
+
+    // Step 2: write the log file. floor-state's instance, when it next
+    // mounts (or was already mounted), will pick this up via its init or
+    // CHAT_CHANGED rematerialize.
+    await context.updateChatState(
+        LOG_NAMESPACE,
+        () => ({ version: FLOOR_STATE_LOG_VERSION, commits }),
+        targetWriteOption,
+    );
+
+    // Step 3: overwrite the main namespace with the replayed graph so any
+    // reader using getChatState(MODULE_NAME) directly (we don't, but other
+    // callsites might be racing during the upgrade) sees the v2 shape.
+    await context.updateChatState(
+        MODULE_NAME,
+        () => cumulative,
+        targetWriteOption,
+    );
+
+    // Step 4: pull non-floor-bound metadata across, then stamp the schema.
+    await context.updateChatState(
+        META_NAMESPACE,
+        () => ({
+            schemaVersion: SCHEMA_VERSION,
+            lastRecallTrace: Array.isArray(raw?.lastRecallTrace)
+                ? structuredClone(raw.lastRecallTrace)
+                : [],
+            lastRecallProjection: raw?.lastRecallProjection && typeof raw.lastRecallProjection === 'object'
+                ? structuredClone(raw.lastRecallProjection)
+                : null,
+            sourceMessageCount: Math.max(0, Number(raw?.sourceMessageCount || 0)),
+        }),
+        targetWriteOption,
+    );
+
+    return { migrated: true };
+}
+
+export const constants = Object.freeze({
+    MODULE_NAME,
+    META_NAMESPACE,
+    LOG_NAMESPACE,
+    FLOOR_STATE_LOG_VERSION,
+    SCHEMA_VERSION,
+    PERSISTED_STORE_VERSION,
+});
+
+// =============================================================================
+// Store ↔ persistence transformations
+// =============================================================================
+//
+// The runtime "store" is the in-memory graph cache main.js mutates as it
+// extracts / recalls / compresses. The "persisted state" is the JSON shape
+// floor-state and the v1 legacy chat-state used. The functions below encode
+// every transformation between those two views: empty constructors,
+// normalization, opLog encode/decode, payload+meta split, and the meta cache
+// that mirrors the `<ns>__meta` sidecar in memory.
+//
+// All of this is pure data shuffling — no I/O, no event emission. Every
+// function is safe to call from tests with a hand-rolled context.
+
+/**
+ * Cache of `<ns>__meta` sidecar contents keyed by chat key. Mirrors what
+ * persistence.js writes to disk so callers can synchronously read meta
+ * fields without round-tripping through `getChatState`. Cleared by
+ * `clearCachedMeta` on chat delete / rename.
+ */
+const memoryMetaCache = new Map();
+
+export function getCachedMeta(chatKey) {
+    const key = String(chatKey || '').trim();
+    if (!key) return null;
+    return memoryMetaCache.get(key) || null;
+}
+
+export function setCachedMeta(chatKey, meta) {
+    const key = String(chatKey || '').trim();
+    if (!key) return;
+    memoryMetaCache.set(key, meta || {});
+}
+
+/**
+ * Drop a chat's cached meta entry. Call this from `CHAT_DELETED` /
+ * `CHAT_RENAMED` handlers so a freshly-created chat with the same key
+ * doesn't read stale metadata.
+ */
+export function clearCachedMeta(chatKey) {
+    const key = String(chatKey || '').trim();
+    if (!key) return;
+    memoryMetaCache.delete(key);
+}
+
+/**
+ * Construct a fresh empty runtime store. Every field has a stable default
+ * so downstream code can assume `Math.max(store.appliedSeqTo, …)` is safe.
+ */
+export function createEmptyStore() {
+    return {
+        nodes: {},
+        edges: [],
+        nodeSeq: 0,
+        seqCounter: 0,
+        appliedSeqTo: 0,
+        loggedSeqTo: 0,
+        sourceMessageCount: 0,
+        lastRecallTrace: [],
+        lastRecallProjection: null,
+    };
+}
+
+/**
+ * Construct a fresh empty persisted state in v8 shape. `version` is
+ * stamped on every `synthesizePersistedStateFromStoreAndMeta` call so
+ * stored states always advertise their format.
+ */
+export function createEmptyPersistedMemoryState() {
+    return {
+        version: PERSISTED_STORE_VERSION,
+        coveredSeqTo: 0,
+        sourceMessageCount: 0,
+        lastRecallTrace: [],
+        lastRecallProjection: null,
+        opLog: [],
+    };
+}
+
+/**
+ * Repair / canonicalize a runtime store after it's been deserialized from
+ * disk or imported from a foreign source. Safe to call on any input —
+ * non-objects collapse to the empty store.
+ *
+ * Performs three classes of fix-up the import / advanced-JSON-edit paths
+ * rely on:
+ *   1. Drop nodes that aren't SEMANTIC (e.g. legacy `thread` nodes, or
+ *      future levels we don't yet handle) and rebuild every kept node from
+ *      a fixed field whitelist. Foreign sources cannot inject extra fields
+ *      that quietly survive into the runtime.
+ *   2. Rederive `nodeSeq` from the highest `n_<N>` id and `seqCounter`
+ *      from the highest node `seqTo`. Without this, an import whose
+ *      counters have desynced from its node ids (common after manual
+ *      JSON edits) makes the next `nextNodeId` collide with an existing
+ *      node and silently overwrite it.
+ *   3. Cascade the coverage watermarks: `appliedSeqTo` falls back to
+ *      `seqCounter` when the input doesn't carry a finite value, then
+ *      `loggedSeqTo >= appliedSeqTo` and `seqCounter >= loggedSeqTo`.
+ *
+ * Edge rebuild + parent/child link repair is delegated to
+ * `repairStoreAfterRollback`, which uses `cloneRollbackEdgeSnapshot` to
+ * normalize edge types and dedupe.
+ */
+export function normalizeStoreForRuntime(store) {
+    const empty = createEmptyStore();
+    if (!store || typeof store !== 'object') {
+        return empty;
+    }
+    const normalized = { ...empty, ...store };
+    const rawNodes = (normalized.nodes && typeof normalized.nodes === 'object' && !Array.isArray(normalized.nodes))
+        ? normalized.nodes
+        : {};
+    normalized.nodes = {};
+    normalized.edges = Array.isArray(normalized.edges) ? normalized.edges : [];
+    normalized.lastRecallTrace = Array.isArray(normalized.lastRecallTrace) ? normalized.lastRecallTrace : [];
+    normalized.lastRecallProjection = (normalized.lastRecallProjection && typeof normalized.lastRecallProjection === 'object')
+        ? normalized.lastRecallProjection
+        : null;
+    normalized.nodeSeq = Math.max(0, Math.floor(Number(normalized.nodeSeq || 0)));
+    normalized.seqCounter = Math.max(0, Math.floor(Number(normalized.seqCounter || 0)));
+    normalized.loggedSeqTo = Math.max(0, Math.floor(Number(normalized.loggedSeqTo || 0)));
+    normalized.sourceMessageCount = Math.max(0, Number(normalized.sourceMessageCount || 0));
+
+    for (const [id, rawNode] of Object.entries(rawNodes)) {
+        if (!rawNode || typeof rawNode !== 'object') continue;
+        const nodeId = String(id || '').trim();
+        if (!nodeId) continue;
+        const nodeType = String(rawNode.type || 'semantic').trim().toLowerCase();
+        if (nodeType === 'thread') continue;
+        const level = String(rawNode.level || LEVEL.SEMANTIC).trim();
+        if (level !== LEVEL.SEMANTIC) continue;
+        const seqTo = Number.isFinite(Number(rawNode.seqTo))
+            ? Math.max(0, Math.floor(Number(rawNode.seqTo)))
+            : 0;
+        const fields = rawNode.fields && typeof rawNode.fields === 'object' && !Array.isArray(rawNode.fields)
+            ? { ...rawNode.fields }
+            : {};
+        normalized.nodes[nodeId] = {
+            id: nodeId,
+            type: String(rawNode.type || 'semantic'),
+            level: LEVEL.SEMANTIC,
+            title: normalizeText(rawNode.title || nodeId),
+            seqTo,
+            fields,
+            semanticDepth: Number.isFinite(Number(rawNode.semanticDepth)) ? Number(rawNode.semanticDepth) : 0,
+            semanticRollup: Boolean(rawNode.semanticRollup),
+            childrenIds: Array.isArray(rawNode.childrenIds) ? rawNode.childrenIds.map(child => String(child || '').trim()).filter(Boolean) : [],
+            parentId: String(rawNode.parentId || '').trim(),
+            archived: Boolean(rawNode.archived),
+        };
+        normalized.seqCounter = Math.max(normalized.seqCounter, seqTo);
+        const extractedNodeSeq = Number(String(nodeId).replace(/^n_/, ''));
+        if (Number.isFinite(extractedNodeSeq)) {
+            normalized.nodeSeq = Math.max(normalized.nodeSeq, extractedNodeSeq);
+        }
+    }
+
+    normalized.appliedSeqTo = Math.max(
+        0,
+        Math.floor(Number.isFinite(Number(store.appliedSeqTo)) ? Number(store.appliedSeqTo) : normalized.seqCounter),
+    );
+    normalized.loggedSeqTo = Math.max(normalized.loggedSeqTo, normalized.appliedSeqTo);
+    normalized.seqCounter = Math.max(normalized.seqCounter, normalized.loggedSeqTo);
+
+    repairStoreAfterRollback(normalized);
+    return normalized;
+}
+
+/**
+ * Single op in a memory-log entry. Four shapes:
+ *   { type: 'upsert_node', node }
+ *   { type: 'delete_node', nodeId }
+ *   { type: 'upsert_edge', edge }
+ *   { type: 'delete_edge', edge }
+ *
+ * Returns null for malformed input so the caller's `.filter(Boolean)`
+ * drops bad ops without aborting the whole entry.
+ */
+function normalizeMemoryLogOperation(raw) {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+    const type = String(raw.type || '').trim().toLowerCase();
+    if (type === 'upsert_node') {
+        const node = cloneRollbackNodeSnapshot(raw.node || raw);
+        return node ? { type, node } : null;
+    }
+    if (type === 'delete_node') {
+        const nodeId = String(raw?.nodeId || raw?.id || '').trim();
+        return nodeId ? { type, nodeId } : null;
+    }
+    if (type === 'upsert_edge' || type === 'delete_edge') {
+        const edge = cloneRollbackEdgeSnapshot(raw?.edge || raw);
+        return edge ? { type, edge } : null;
+    }
+    return null;
+}
+
+function normalizeMemoryLogEntry(raw) {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+    // entry.seq gates the whole batch; replay/branch trimming must not split ops inside one entry.
+    const seq = Math.max(0, Math.floor(Number(raw.seq || 0)));
+    const ops = Array.isArray(raw.ops)
+        ? raw.ops.map(normalizeMemoryLogOperation).filter(Boolean)
+        : [];
+    if (seq <= 0 && ops.length === 0) {
+        return null;
+    }
+    return { seq, ops };
+}
+
+function getLatestLoggedSeq(stateOrLog) {
+    const log = Array.isArray(stateOrLog)
+        ? stateOrLog
+        : (Array.isArray(stateOrLog?.opLog) ? stateOrLog.opLog : []);
+    return log.reduce((maxSeq, entry) => Math.max(maxSeq, Math.max(0, Math.floor(Number(entry?.seq || 0)))), 0);
+}
+
+function getPersistedCoveredSeqTo(state) {
+    const rawCoveredSeqTo = Number.isFinite(Number(state?.coveredSeqTo))
+        ? Math.max(0, Math.floor(Number(state.coveredSeqTo)))
+        : 0;
+    return Math.max(rawCoveredSeqTo, getLatestLoggedSeq(state));
+}
+
+/**
+ * Highest seq this runtime store can claim coverage for. Combines three
+ * independent signals so a store recovered from any subset of metadata
+ * still reports the correct watermark:
+ *   - `appliedSeqTo` (what's been persisted-and-replayed)
+ *   - `loggedSeqTo`  (what's in the floor-state log)
+ *   - the live semantic-node coverage (in case both above were lost)
+ */
+export function getStoreCoveredSeqTo(store) {
+    return Math.max(
+        0,
+        Math.floor(Number(store?.appliedSeqTo || 0)),
+        Math.floor(Number(store?.loggedSeqTo || 0)),
+        Math.floor(Number(getSemanticCoverageSeq(store) || 0)),
+    );
+}
+
+function normalizePersistedStateBase(raw) {
+    const normalized = createEmptyPersistedMemoryState();
+    if (!raw || typeof raw !== 'object') {
+        return normalized;
+    }
+    normalized.sourceMessageCount = Math.max(0, Number(raw.sourceMessageCount || 0));
+    normalized.lastRecallTrace = Array.isArray(raw.lastRecallTrace) ? structuredClone(raw.lastRecallTrace) : [];
+    normalized.lastRecallProjection = raw.lastRecallProjection && typeof raw.lastRecallProjection === 'object'
+        ? structuredClone(raw.lastRecallProjection)
+        : null;
+    normalized.opLog = Array.isArray(raw.opLog)
+        ? raw.opLog.map(normalizeMemoryLogEntry).filter(Boolean)
+        : [];
+    normalized.coveredSeqTo = getPersistedCoveredSeqTo({
+        coveredSeqTo: raw.coveredSeqTo,
+        opLog: normalized.opLog,
+    });
+    return normalized;
+}
+
+/**
+ * Encode the current store as a sequence of opLog ops. Used by the
+ * legacy-state migration path that turns an in-memory v7 store into a
+ * single v8 entry, and by export.
+ */
+export function buildMemoryLogOpsFromStore(store) {
+    const normalized = normalizeStoreForRuntime(store);
+    const ops = [];
+    const nodes = Object.values(normalized.nodes || {}).sort(compareNodesByTimeline);
+    for (const node of nodes) {
+        const snapshot = cloneRollbackNodeSnapshot(node);
+        if (snapshot) {
+            ops.push({ type: 'upsert_node', node: snapshot });
+        }
+    }
+    for (const edge of Array.isArray(normalized.edges) ? normalized.edges : []) {
+        const snapshot = cloneRollbackEdgeSnapshot(edge);
+        if (snapshot) {
+            ops.push({ type: 'upsert_edge', edge: snapshot });
+        }
+    }
+    return ops;
+}
+
+function buildLegacyMigrationSeq(context, legacyStore) {
+    void context;
+    return getStoreCoveredSeqTo(legacyStore);
+}
+
+function buildPersistedStateFromLegacyStore(raw, context) {
+    const normalized = createEmptyPersistedMemoryState();
+    const legacyStore = normalizeStoreForRuntime(raw || createEmptyStore());
+    normalized.sourceMessageCount = Math.max(0, Number(legacyStore.sourceMessageCount || 0));
+    normalized.lastRecallTrace = structuredClone(Array.isArray(legacyStore.lastRecallTrace) ? legacyStore.lastRecallTrace : []);
+    normalized.lastRecallProjection = legacyStore.lastRecallProjection && typeof legacyStore.lastRecallProjection === 'object'
+        ? structuredClone(legacyStore.lastRecallProjection)
+        : null;
+
+    const hasLegacyPayload = Object.keys(legacyStore.nodes || {}).length > 0
+        || (Array.isArray(legacyStore.edges) && legacyStore.edges.length > 0)
+        || normalized.sourceMessageCount > 0
+        || normalized.lastRecallTrace.length > 0
+        || Boolean(normalized.lastRecallProjection);
+    if (hasLegacyPayload) {
+        const seq = buildLegacyMigrationSeq(context, legacyStore);
+        normalized.coveredSeqTo = Math.max(0, seq);
+        const ops = buildMemoryLogOpsFromStore(legacyStore);
+        if (seq > 0 || ops.length > 0) {
+            normalized.opLog = [{ seq: Math.max(0, seq), ops }];
+        }
+    }
+    return { state: normalized, migrated: hasLegacyPayload };
+}
+
+/**
+ * Two-shape input dispatcher: a v8-style state passes through
+ * `normalizePersistedStateBase`; anything else is treated as a legacy v7
+ * store and gets wrapped in a single migration entry. Returns
+ * `{ state, migrated }` so callers know whether to schedule a write.
+ */
+export function normalizePersistedMemoryState(raw, context) {
+    if (raw && typeof raw === 'object' && Array.isArray(raw.opLog)) {
+        return {
+            state: normalizePersistedStateBase(raw),
+            migrated: Number(raw.version || 0) !== PERSISTED_STORE_VERSION,
+        };
+    }
+    if (raw && typeof raw === 'object') {
+        return buildPersistedStateFromLegacyStore(raw, context);
+    }
+    return {
+        state: createEmptyPersistedMemoryState(),
+        migrated: false,
+    };
+}
+
+/**
+ * Cheap "is this state actually populated?" test. Used to decide whether
+ * to skip a write when the store is empty in all the ways that matter.
+ */
+export function hasPersistedMemoryStatePayload(state) {
+    const normalized = normalizePersistedStateBase(state);
+    return normalized.coveredSeqTo > 0
+        || normalized.opLog.length > 0
+        || normalized.lastRecallTrace.length > 0
+        || Boolean(normalized.lastRecallProjection)
+        || normalized.sourceMessageCount > 0;
+}
+
+/**
+ * Apply a single `upsert_node` snapshot to the store, also bumping the
+ * counters that drive new-id allocation. Used by `applyMemoryLogEntryToStore`.
+ */
+export function applyLoggedNodeSnapshot(store, node) {
+    const snapshot = cloneRollbackNodeSnapshot(node);
+    if (!snapshot) {
+        return;
+    }
+    store.nodes[snapshot.id] = snapshot;
+    const extractedNodeSeq = Number(String(snapshot.id || '').replace(/^n_/, ''));
+    if (Number.isFinite(extractedNodeSeq)) {
+        store.nodeSeq = Math.max(store.nodeSeq, extractedNodeSeq);
+    }
+    store.seqCounter = Math.max(store.seqCounter, Math.max(0, Number(snapshot.seqTo || 0)));
+}
+
+function removeLoggedEdge(store, edge) {
+    const key = getRollbackEdgeKey(edge);
+    if (!key) {
+        return;
+    }
+    store.edges = (Array.isArray(store.edges) ? store.edges : []).filter(item => getRollbackEdgeKey(item) !== key);
+}
+
+/**
+ * Replay one memory-log entry into a runtime store. Each op type is
+ * dispatched through the corresponding graph-ops primitive. Bumps the
+ * three coverage counters (`loggedSeqTo`, `seqCounter`, `appliedSeqTo`)
+ * to the entry's `seq` so subsequent writes see a consistent watermark.
+ */
+export function applyMemoryLogEntryToStore(store, entry) {
+    if (!store || typeof store !== 'object' || !entry || typeof entry !== 'object') {
+        return;
+    }
+    for (const operation of Array.isArray(entry.ops) ? entry.ops : []) {
+        const type = String(operation?.type || '').trim().toLowerCase();
+        if (type === 'delete_edge') {
+            removeLoggedEdge(store, operation.edge);
+            continue;
+        }
+        if (type === 'delete_node') {
+            const nodeId = String(operation?.nodeId || '').trim();
+            if (nodeId) {
+                dropNode(store, nodeId, true);
+            }
+            continue;
+        }
+        if (type === 'upsert_node') {
+            applyLoggedNodeSnapshot(store, operation.node);
+            continue;
+        }
+        if (type === 'upsert_edge') {
+            const edge = cloneRollbackEdgeSnapshot(operation.edge);
+            if (edge) {
+                addEdge(store, edge.from, edge.to, edge.type);
+            }
+        }
+    }
+    repairStoreAfterRollback(store);
+    store.loggedSeqTo = Math.max(store.loggedSeqTo, Math.max(0, Math.floor(Number(entry.seq || 0))));
+    store.seqCounter = Math.max(store.seqCounter, store.loggedSeqTo);
+    store.appliedSeqTo = Math.max(store.appliedSeqTo, Math.max(0, Math.floor(Number(entry.seq || 0))));
+}
+
+/**
+ * Build a fresh runtime store by replaying every entry in the persisted
+ * state's opLog from scratch. Used by the legacy-state path; v2 callers
+ * use `buildRuntimeStoreFromGraphPayloadAndMeta` against the floor-state
+ * payload instead.
+ */
+export function buildRuntimeStoreFromPersistedState(state) {
+    const normalizedState = normalizePersistedStateBase(state);
+    const runtimeStore = createEmptyStore();
+    for (const entry of normalizedState.opLog) {
+        applyMemoryLogEntryToStore(runtimeStore, entry);
+    }
+    runtimeStore.appliedSeqTo = Math.max(runtimeStore.appliedSeqTo, getPersistedCoveredSeqTo(normalizedState));
+    runtimeStore.loggedSeqTo = Math.max(runtimeStore.loggedSeqTo, getLatestLoggedSeq(normalizedState), runtimeStore.appliedSeqTo);
+    runtimeStore.seqCounter = Math.max(runtimeStore.seqCounter, runtimeStore.loggedSeqTo);
+    runtimeStore.lastRecallTrace = structuredClone(Array.isArray(normalizedState.lastRecallTrace) ? normalizedState.lastRecallTrace : []);
+    runtimeStore.lastRecallProjection = normalizedState.lastRecallProjection && typeof normalizedState.lastRecallProjection === 'object'
+        ? structuredClone(normalizedState.lastRecallProjection)
+        : null;
+    runtimeStore.sourceMessageCount = Math.max(0, Number(normalizedState.sourceMessageCount || 0));
+    return runtimeStore;
+}
+
+/**
+ * Extract the meta-sidecar shape from a runtime store. This is what gets
+ * written to `<ns>__meta` on every persist call.
+ */
+export function metaFieldsFromStore(store) {
+    return {
+        schemaVersion: SCHEMA_VERSION,
+        sourceMessageCount: Math.max(0, Number(store?.sourceMessageCount || 0)),
+        lastRecallTrace: structuredClone(Array.isArray(store?.lastRecallTrace) ? store.lastRecallTrace : []),
+        lastRecallProjection: store?.lastRecallProjection && typeof store.lastRecallProjection === 'object'
+            ? structuredClone(store.lastRecallProjection)
+            : null,
+    };
+}
+
+/**
+ * Extract the floor-state payload shape from a runtime store. This is
+ * what `commitGraphEntry` snapshots into the data namespace on each
+ * commit. Excludes the meta fields (those go to `<ns>__meta`).
+ */
+export function graphPayloadFromStore(store) {
+    const normalized = normalizeStoreForRuntime(store);
+    const appliedSeq = Math.max(0, Math.floor(Number(normalized.appliedSeqTo || 0)));
+    const loggedSeq = Math.max(appliedSeq, Math.floor(Number(normalized.loggedSeqTo || 0)));
+    return {
+        nodes: structuredClone(normalized.nodes || {}),
+        edges: structuredClone(Array.isArray(normalized.edges) ? normalized.edges : []),
+        nodeSeq: Math.max(0, Math.floor(Number(normalized.nodeSeq || 0))),
+        seqCounter: Math.max(0, Math.floor(Number(normalized.seqCounter || 0))),
+        appliedSeqTo: appliedSeq,
+        loggedSeqTo: loggedSeq,
+        coveredAssistantSeq: appliedSeq,
+    };
+}
+
+/**
+ * Inverse of the (graph payload, meta) split: reconstruct a runtime
+ * store from the two halves as read from floor-state + the meta sidecar.
+ */
+export function buildRuntimeStoreFromGraphPayloadAndMeta(payload, meta) {
+    const runtime = createEmptyStore();
+    if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+        if (payload.nodes && typeof payload.nodes === 'object') {
+            runtime.nodes = structuredClone(payload.nodes);
+        }
+        if (Array.isArray(payload.edges)) {
+            runtime.edges = structuredClone(payload.edges);
+        }
+        runtime.nodeSeq = Math.max(0, Math.floor(Number(payload.nodeSeq || 0)));
+        runtime.seqCounter = Math.max(0, Math.floor(Number(payload.seqCounter || 0)));
+        runtime.appliedSeqTo = Math.max(0, Math.floor(Number(payload.appliedSeqTo || 0)));
+        runtime.loggedSeqTo = Math.max(0, Math.floor(Number(payload.loggedSeqTo || 0)));
+        const covered = Math.max(0, Math.floor(Number(payload.coveredAssistantSeq || 0)));
+        runtime.appliedSeqTo = Math.max(runtime.appliedSeqTo, covered);
+        runtime.loggedSeqTo = Math.max(runtime.loggedSeqTo, runtime.appliedSeqTo);
+        runtime.seqCounter = Math.max(runtime.seqCounter, runtime.loggedSeqTo);
+    }
+    if (meta && typeof meta === 'object') {
+        runtime.sourceMessageCount = Math.max(0, Number(meta.sourceMessageCount || 0));
+        runtime.lastRecallTrace = Array.isArray(meta.lastRecallTrace)
+            ? structuredClone(meta.lastRecallTrace) : [];
+        runtime.lastRecallProjection = meta.lastRecallProjection && typeof meta.lastRecallProjection === 'object'
+            ? structuredClone(meta.lastRecallProjection) : null;
+    }
+    return normalizeStoreForRuntime(runtime);
+}
+
+/**
+ * Synthesize a v8 persisted-state shape from a (store, meta) pair WITHOUT
+ * an opLog. Used on the v2 path where the floor-state log is authoritative
+ * and the data-namespace persisted-state shim only carries meta + the
+ * coverage watermark for legacy readers.
+ */
+export function synthesizePersistedStateFromStoreAndMeta(store, meta) {
+    const state = createEmptyPersistedMemoryState();
+    state.coveredSeqTo = getStoreCoveredSeqTo(store);
+    state.sourceMessageCount = meta && typeof meta === 'object'
+        ? Math.max(0, Number(meta.sourceMessageCount || 0))
+        : Math.max(0, Number(store?.sourceMessageCount || 0));
+    state.lastRecallTrace = meta && typeof meta === 'object' && Array.isArray(meta.lastRecallTrace)
+        ? structuredClone(meta.lastRecallTrace) : [];
+    state.lastRecallProjection = meta && typeof meta === 'object' && meta.lastRecallProjection && typeof meta.lastRecallProjection === 'object'
+        ? structuredClone(meta.lastRecallProjection) : null;
+    // opLog stays empty — under v2 there is no opLog, the floor-state log is authoritative.
+    return state;
+}
+
+/**
+ * Convert an assistant-seq watermark into a chat-array index ("floor")
+ * for the supplied context. Returns null when the seq points past the
+ * current chat (e.g. messages haven't arrived yet).
+ */
+export function seqToFloor(context, seq) {
+    const target = Math.max(0, Math.floor(Number(seq || 0)));
+    if (target <= 0) return null;
+    return getFloorFromAssistantSeq(
+        Array.isArray(context?.chat) ? context.chat : [],
+        target,
+        isExtractableAssistantMessage,
+    );
+}
+
+/**
+ * Active swipe id at the given chat floor, or null when the floor is
+ * invalid. `swipe_id` is normalized to a non-negative integer (0 when
+ * absent) so callers can compare values directly.
+ */
+export function activeSwipeIdAtFloor(context, floor) {
+    const chat = Array.isArray(context?.chat) ? context.chat : [];
+    if (!Number.isInteger(floor) || floor < 0 || floor >= chat.length) return null;
+    const raw = chat[floor]?.swipe_id;
+    return Number.isInteger(raw) && raw >= 0 ? raw : 0;
+}
+
+/**
+ * True when the comparable metadata (coverage watermark, source count,
+ * lastRecallTrace, lastRecallProjection) differs between two stores.
+ * Used to skip no-op writes — if nothing the persistence layer cares
+ * about changed, we don't touch the meta sidecar.
+ */
+export function hasPersistedStoreMetadataChanges(beforeStore, afterStore) {
+    const beforeTrace = JSON.stringify(Array.isArray(beforeStore?.lastRecallTrace) ? beforeStore.lastRecallTrace : []);
+    const afterTrace = JSON.stringify(Array.isArray(afterStore?.lastRecallTrace) ? afterStore.lastRecallTrace : []);
+    const beforeProjection = JSON.stringify(beforeStore?.lastRecallProjection && typeof beforeStore.lastRecallProjection === 'object'
+        ? beforeStore.lastRecallProjection
+        : null);
+    const afterProjection = JSON.stringify(afterStore?.lastRecallProjection && typeof afterStore.lastRecallProjection === 'object'
+        ? afterStore.lastRecallProjection
+        : null);
+    return getStoreCoveredSeqTo(beforeStore) !== getStoreCoveredSeqTo(afterStore)
+        || Math.max(0, Number(beforeStore?.sourceMessageCount || 0)) !== Math.max(0, Number(afterStore?.sourceMessageCount || 0))
+        || beforeTrace !== afterTrace
+        || beforeProjection !== afterProjection;
+}

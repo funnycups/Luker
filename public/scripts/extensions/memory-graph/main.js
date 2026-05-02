@@ -3,7 +3,33 @@
 
 import { extension_prompt_roles, extension_prompt_types, resolveChatStateTarget, saveSettings, saveSettingsDebounced } from '../../../script.js';
 import { extension_settings, getContext } from '../../extensions.js';
-import { addLocaleData, translate } from '../../i18n.js';
+import { i18n, i18nFormat, registerLocaleData } from './i18n.js';
+import {
+    configure as configureCharacterOverrides,
+    getCurrentAvatar,
+    getCharacterByAvatar,
+    getCharacterIndexByAvatar,
+    getCharacterDisplayNameByAvatar,
+    getCharacterExtensionDataByAvatar,
+    getCharacterSchemaOverrideByAvatar,
+    getCharacterAdvancedOverrideByAvatar,
+    getEffectiveAdvancedSettings,
+    getEffectiveSettings,
+    getEffectiveNodeTypeSchema,
+    getSchemaScopeInfo,
+    getAdvancedScopeInfo,
+    persistCharacterSchemaOverride,
+    removeCharacterSchemaOverride,
+    persistCharacterAdvancedOverride,
+    removeCharacterAdvancedOverride,
+} from './character-overrides.js';
+import {
+    sanitizeMemoryGraphFileNamePart,
+    getMemoryGraphExportFileName,
+    getImportedStoreBindingFloor,
+    clearImportedStoreTransientState,
+    bindImportedStoreToAssistantFloor,
+} from './import-export.js';
 import { sendOpenAIRequest } from '../../openai.js';
 import { performFuzzySearch } from '../../power-user.js';
 import { download, getFileText, getStringHash } from '../../utils.js';
@@ -32,10 +58,59 @@ import {
 import {
     isEntityType,
 } from './diffusion.js';
+import {
+    getFloorStateInstance,
+    getFloorFromAssistantSeq,
+    loadMetaFields,
+    persistMetaFields,
+    migrateLegacyMemoryGraphState,
+    constants as floorStateAdapterConstants,
+    createEmptyStore,
+    createEmptyPersistedMemoryState,
+    normalizeStoreForRuntime,
+    normalizePersistedMemoryState,
+    hasPersistedMemoryStatePayload,
+    applyLoggedNodeSnapshot,
+    applyMemoryLogEntryToStore,
+    buildRuntimeStoreFromPersistedState,
+    buildMemoryLogOpsFromStore,
+    graphPayloadFromStore,
+    metaFieldsFromStore,
+    buildRuntimeStoreFromGraphPayloadAndMeta,
+    synthesizePersistedStateFromStoreAndMeta,
+    hasPersistedStoreMetadataChanges,
+    getStoreCoveredSeqTo,
+    getCachedMeta,
+    setCachedMeta,
+    clearCachedMeta,
+    seqToFloor,
+    activeSwipeIdAtFloor,
+} from './persistence.js';
+import {
+    LEVEL,
+    normalizeText,
+    normalizeMultilineText,
+    ensureNodeFieldsObject,
+    isExtractableAssistantMessage,
+} from './primitives.js';
+import {
+    cloneRollbackNodeSnapshot,
+    cloneRollbackEdgeSnapshot,
+    getRollbackEdgeKey,
+    addEdge,
+    dropNode,
+    repairStoreAfterRollback,
+    compareNodesByTimeline,
+    getSemanticCoverageSeq,
+} from './graph-ops.js';
 
 const MODULE_NAME = 'memory_graph';
 const CHAT_STATE_NAMESPACE = MODULE_NAME;
-const PERSISTED_STORE_VERSION = 8;
+const META_NAMESPACE = floorStateAdapterConstants.META_NAMESPACE;
+const LOG_NAMESPACE = floorStateAdapterConstants.LOG_NAMESPACE;
+const FLOOR_STATE_LOG_VERSION = floorStateAdapterConstants.FLOOR_STATE_LOG_VERSION;
+const META_SCHEMA_VERSION = floorStateAdapterConstants.SCHEMA_VERSION;
+const PERSISTED_STORE_VERSION = floorStateAdapterConstants.PERSISTED_STORE_VERSION;
 const UI_BLOCK_ID = 'memory_graph_settings';
 const STYLE_ID = 'memory_graph_style';
 const SHARED_LOREBOOK_NAME = '__MEMORY_GRAPH__';
@@ -47,7 +122,6 @@ const CHARACTER_SCHEMA_OVERRIDE_KEY = 'schemaOverride';
 const CHARACTER_ADVANCED_OVERRIDE_KEY = 'advancedOverride';
 const MEMORY_GRAPH_SEARCH_ALL_TYPE = '__all__';
 const MEMORY_GRAPH_SEARCH_RESULT_PREVIEW_LIMIT = 10;
-const SWIPE_TAIL_CACHE_MAX_ENTRIES = 12;
 const GENERATION_VISIBLE_HISTORY_REGEX_PROVIDER_ID = `${MODULE_NAME}_generation_visible_history`;
 const GENERATION_VISIBLE_HISTORY_REGEX_SCRIPT_ID = `${MODULE_NAME}_generation_visible_history_runtime_script`;
 const RECALL_INJECT_POSITION_SCHEMA_VERSION = 2;
@@ -60,10 +134,6 @@ const SUPPORTED_WORLD_INFO_POSITIONS = Object.freeze([
     world_info_position.EMBottom,
     world_info_position.atDepth,
 ]);
-
-const LEVEL = {
-    SEMANTIC: 'semantic',
-};
 
 const DEFAULT_EVENT_SUMMARY_COLUMN_HINT = 'Start with "时间：<time>；" using an explicit full in-world date/time or date span, then give a concise event abstraction with causality and outcome.';
 const DEFAULT_EVENT_EXTRACT_HINT = 'Critical plot events, turning points, commitments, betrayals, irreversible outcomes, and their explicit in-world time/time span written at the start of summary.';
@@ -406,668 +476,9 @@ const defaultSettings = {
     rpmLimit: 0,
 };
 
-function i18n(text) {
-    return translate(String(text || ''));
-}
-
-function i18nFormat(key, ...values) {
-    return i18n(key).replace(/\$\{(\d+)\}/g, (_, index) => String(values[Number(index)] ?? ''));
-}
-
-function normalizeExtractExcludeRecentTurns(value) {
-    return Math.max(0, Math.floor(Number(value) || 0));
-}
-
-function getExtractableLatestSeq(totalTurns, settings = null) {
-    const total = Math.max(0, Math.floor(Number(totalTurns || 0)));
-    const excludedRecentTurns = normalizeExtractExcludeRecentTurns(
-        settings?.extractExcludeRecentTurns ?? defaultSettings.extractExcludeRecentTurns,
-    );
-    return Math.max(0, total - excludedRecentTurns);
-}
-
-function registerLocaleData() {
-    addLocaleData('zh-cn', {
-        'Memory': '记忆',
-        'Enabled': '启用',
-        'Enable recall injection': '启用记忆召回注入',
-        'Recall method': '召回方法',
-        'LLM Recall (default)': 'LLM 召回（默认）',
-        'Hybrid Pipeline (vector + graph diffusion)': '混合管线（向量+图扩散）',
-        'Hybrid + Rerank': '混合+重排',
-        'Hybrid + LLM Rerank': '混合+LLM 精排',
-        'Embedding source': '嵌入源',
-        'Embedding model (empty = source default)': '嵌入模型（留空=源默认）',
-        'Vector pre-filter Top-K': '向量预筛 Top-K',
-        'Max recall results': '最大召回结果数',
-        'Rerank source': '重排源',
-        'Rerank model (empty = default)': '重排模型（留空=默认）',
-        'Graph Diffusion Parameters': '图扩散参数',
-        'Diffusion steps': '扩散步数',
-        'Diffusion decay factor': '扩散衰减因子',
-        'Diffusion Top-K (per step)': '扩散 Top-K（每步）',
-        'PPR teleport alpha (0 = disabled)': 'PPR 回拉概率（0=禁用）',
-        'Embedding Columns (comma separated, empty = all table columns)': '嵌入字段（逗号分隔，留空=全部表字段）',
-        'Injection position': '注入位置',
-        'Before Character Definitions': '角色定义前',
-        'After Character Definitions': '角色定义后',
-        "Before Author's Note": '作者注释前',
-        "After Author's Note": '作者注释后',
-        'Before Example Messages': '示例消息前',
-        'After Example Messages': '示例消息后',
-        'At Chat Depth': '聊天深度',
-        'Injection depth (At Chat Depth only)': '注入深度（仅聊天深度位置）',
-        'Injection role (At Chat Depth only)': '注入角色（仅聊天深度位置）',
-        'System': 'System',
-        'User': 'User',
-        'Assistant': 'Assistant',
-        'Recall API preset (Connection profile, empty = current)': '召回 API 预设（连接配置，留空=当前）',
-        'Recall preset (params + prompt, empty = current)': '召回提示词预设（参数+提示词，留空=当前）',
-        'Extract API preset (Connection profile, empty = current)': '生成图 API 预设（连接配置，留空=当前）',
-        'Extract preset (params + prompt, empty = current)': '生成图提示词预设（参数+提示词，留空=当前）',
-        'Include world info': '包含世界书信息',
-        'Exclude latest N assistant turns from memory injection': '记忆注入时排除最近 N 条 Assistant 回复',
-        'Recall max iterations': '召回最大轮数',
-        'Extract context assistant turns': '生成图时参考最近 Assistant 回复条数',
-        'Recall query recent assistant turns': '召回查询使用最近 Assistant 回复条数',
-        'Visible recent message layers for generation (0 = disabled)': '创作 LLM 仅可见最近 N 条消息（0=不裁剪）',
-        'Extract batch assistant turns': '每次生成图处理的 Assistant 回复条数',
-        'Exclude latest N assistant turns from graph extraction': '生成图时排除最近 N 条 Assistant 回复',
-        'Tool-call retries': '工具调用重试次数',
-        'RPM limit (0 = unlimited)': 'RPM 限制（0 = 不限制）',
-        'Plain-text function-call mode': '纯文本函数调用模式',
-        'Extract Table Fill Prompt': '生成图提示词',
-        'Recall Stage 1 Prompt (Route/Drill)': '召回阶段1提示词（路由/深挖）',
-        'Recall Stage 2 Prompt (Finalize)': '召回阶段2提示词（最终选择）',
-        'Advanced Settings': '高级设置',
-        'Open Advanced Settings': '打开高级设置',
-        'Save Advanced Settings': '保存高级设置',
-        'Reset Advanced Settings': '重置高级设置',
-        'Advanced settings saved.': '高级设置已保存。',
-        'Saved advanced settings.': '已保存高级设置。',
-        'Advanced settings saved to global settings.': '高级设置已保存到全局设置。',
-        'Save Advanced to Global': '将高级设置保存到全局',
-        'Save Advanced to Character': '将高级设置保存到角色卡',
-        'Clear Character Advanced Override': '清除角色卡高级设置覆写',
-        'Advanced scope: character override (${0})': '高级设置作用域：角色卡覆写（${0}）',
-        'Advanced scope: global': '高级设置作用域：全局',
-        'Advanced settings saved to character override: ${0}.': '高级设置已保存到角色卡覆写：${0}。',
-        'Failed to persist character advanced override.': '角色卡高级设置覆写保存失败。',
-        'Failed to clear character advanced override.': '清除角色卡高级设置覆写失败。',
-        'Cleared character advanced override: ${0}.': '已清除角色卡高级设置覆写：${0}。',
-        'Advanced settings reset to defaults in editor.': '高级设置已在编辑器中重置为默认值。',
-        'Reset advanced settings editor to default? This will overwrite current unsaved advanced edits.': '确认将高级设置编辑器重置为默认？这会覆盖当前未保存的编辑。',
-        'Update every N assistant turns': '每 N 条 Assistant 回复自动生成图',
-        'Node Type Schema (Visual Editor)': '节点类型 Schema（可视化编辑）',
-        'Configure memory table types, extraction hints, and compression strategy in a popup editor.': '在弹窗里配置记忆节点类型、生成图提示与压缩策略。',
-        'Schema scope: character override (${0})': 'Schema 作用域：角色卡覆写（${0}）',
-        'Schema scope: global': 'Schema 作用域：全局',
-        'Open Schema Editor': '打开 Schema 编辑器',
-        'Save Schema to Global': '将 Schema 保存到全局',
-        'Save Schema to Character': '将 Schema 保存到角色卡',
-        'Clear Character Schema Override': '清除角色卡 Schema 覆写',
-        'Schema saved to global settings.': 'Schema 已保存到全局设置。',
-        'No active character selected.': '当前未选择角色卡。',
-        'Schema saved to character override: ${0}.': 'Schema 已保存到角色卡覆写：${0}。',
-        'Failed to persist character schema override.': '角色卡 Schema 覆写保存失败。',
-        'Failed to clear character schema override.': '清除角色卡 Schema 覆写失败。',
-        'Cleared character schema override: ${0}.': '已清除角色卡 Schema 覆写：${0}。',
-        'Save Settings': '保存设置',
-        'View Graph': '查看图',
-        'Fill Graph (Incremental)': '生成图（仅增量）',
-        'Rebuild From Chat': '从聊天重建',
-        'Rebuild Recent N Assistant Turns': '重建最近 N 条 Assistant 回复',
-        'Rebuild recent assistant turns: enter N (1-${0}).': '重建最近 Assistant 回复：请输入 N（1-${0}）。',
-        'Rebuild Recent': '重建最近范围',
-        'Please enter a valid integer between 1 and ${0}.': '请输入 1 到 ${0} 之间的整数。',
-        'No assistant turns available to rebuild.': '当前没有可重建的 Assistant 回复。',
-        'Memory graph rebuilt for recent ${0} assistant turn(s).': '已完成最近 ${0} 条 Assistant 回复的记忆图重建。',
-        'Rebuilt recent memory graph range: seq ${0}-${1}.': '已重建最近范围：楼层 ${0}-${1}。',
-        'Manual Compress': '手动压缩',
-        'Reset Current Chat': '重置当前聊天',
-        'Export Current Chat Graph': '导出当前聊天图',
-        'Import Current Chat Graph': '导入当前聊天图',
-        'Recall debug query': '召回调试查询',
-        'e.g. what happened at the ruins with Mira?': '例如：和 Mira 在遗迹发生了什么？',
-        'Run Recall Debug': '运行召回调试',
-        'View Last Injection': '查看最近注入',
-        'Injection Content': '注入内容',
-        'Injection content is empty.': '注入内容为空。',
-        'No recall injection result yet.': '当前还没有召回注入结果。',
-        'Memory recall running...': '记忆召回进行中...',
-        'Memory graph update running...': '记忆图更新进行中...',
-        'Memory graph update running... seq ${0}-${1} / latest ${2}': '记忆图更新进行中... 楼层 ${0}-${1} / 最新 ${2}',
-        'No active chat selected.': '未选择有效聊天。',
-        'Paste memory graph JSON for current chat.': '为当前聊天粘贴记忆图 JSON。',
-        'Memory graph exported for current chat.': '当前聊天记忆图已导出。',
-        'Downloaded memory graph file: ${0}': '已下载记忆图文件：${0}',
-        'Import': '导入',
-        'Cancel': '取消',
-        'Delete': '删除',
-        'Memory graph imported for current chat.': '当前聊天记忆图已导入。',
-        'Imported memory graph JSON.': '已导入记忆图 JSON。',
-        'Imported memory graph JSON as current chat baseline.': '已将记忆图 JSON 作为当前聊天基线导入。',
-        'Choose how to attach the imported memory graph to assistant floors.': '选择要如何把导入的记忆图绑定到 Assistant 楼层。',
-        'Restore Exported Floor': '恢复导出时楼层',
-        'Bind Latest Floor': '绑定到当前最新楼层',
-        'Bind Specific Floor': '绑定到指定楼层',
-        'Specific assistant floor': '指定 Assistant 楼层',
-        'Imported nodes: ${0} | Edges: ${1} | Exported floor: ${2}': '导入节点：${0} | 边：${1} | 导出楼层：${2}',
-        'Current chat latest assistant floor: ${0}': '当前聊天最新 Assistant 楼层：${0}',
-        'Restore keeps exported floor numbers for same-chat recovery. Bind modes rewrite all imported nodes to the selected floor.': '恢复模式会保留导出时的楼层编号，用于同聊天恢复。绑定模式会把所有导入节点重写到所选楼层。',
-        'Restore requires current chat to have at least ${0} assistant floor(s). Current chat only has ${1}. Choose a bind mode instead.': '恢复模式要求当前聊天至少有 ${0} 个 Assistant 楼层，但当前只有 ${1} 个。请改用绑定模式。',
-        'Current chat has no assistant floors to bind.': '当前聊天没有可绑定的 Assistant 楼层。',
-        'Enter a floor between 1 and ${0}.': '请输入 1 到 ${0} 之间的楼层。',
-        'Imported memory graph and restored exported floor ${0}.': '已导入记忆图，并恢复导出楼层 ${0}。',
-        'Imported memory graph and bound it to latest assistant floor ${0}.': '已导入记忆图，并绑定到当前最新 Assistant 楼层 ${0}。',
-        'Imported memory graph and bound it to assistant floor ${0}.': '已导入记忆图，并绑定到 Assistant 楼层 ${0}。',
-        'Memory graph import failed.': '记忆图导入失败。',
-        'Memory graph incremental fill completed.': '记忆图增量补全完成。',
-        'Memory graph is already up to date.': '记忆图已是最新，无需补全。',
-        'Import failed: ${0}': '导入失败：${0}',
-        'Types: ${0} | Always Inject: ${1} | Force Update: ${2} | Hierarchical: ${3}': '类型：${0} | 常驻注入：${1} | 强制更新：${2} | 分层压缩：${3}',
-        'Types: ${0} | Editable: ${1} | Always Inject: ${2} | Force Update: ${3} | Hierarchical: ${4}': '类型：${0} | 可编辑：${1} | 常驻注入：${2} | 强制更新：${3} | 分层压缩：${4}',
-        '(Current preset)': '（当前预设）',
-        '(Current API config)': '（当前 API 配置）',
-        '(missing)': '（缺失）',
-        '(none)': '（无）',
-        '(select node)': '（选择节点）',
-        '(unset)': '（未设置）',
-        '(new)': '（新建）',
-        'Memory Graph': '记忆图',
-        'Inspector': '检查器',
-        'Select a node or edge to edit.': '点击节点或边以编辑。',
-        'Apply Changes': '应用修改',
-        'No node selected. Click a node in graph first.': '未选择节点。请先在图中点击一个节点。',
-        'Nodes: ${0} | Edges: ${1} | Assistant turns: ${2} | Source turns: ${3}': '节点：${0} | 边：${1} | Assistant 楼层：${2} | 源楼层：${3}',
-        'semantic=${0}': 'semantic=${0}',
-        'Last recall steps: ${0}': '最近召回步数：${0}',
-        'Visual graph ready. Click a node or edge to select it for editing.': '可视化图已就绪。点击节点或边可选择并编辑。',
-        'Search Graph': '搜索图谱',
-        'Search graph nodes, summaries, IDs, or fields...': '搜索节点、摘要、ID 或字段……',
-        'All types': '全部类型',
-        'Clear Search': '清空搜索',
-        'Prev Result': '上一个结果',
-        'Next Result': '下一个结果',
-        'Start typing to search the graph.': '开始输入以搜索图谱。',
-        'No nodes match the current search.': '当前搜索没有匹配节点。',
-        'Try a different keyword or type filter.': '请尝试其他关键词或类型筛选。',
-        'Showing ${0} of ${1} matching nodes.': '显示 ${1} 个匹配节点中的 ${0} 个。',
-        'Select a result to focus it in graph.': '选择一个结果以在图中定位。',
-        'Fit View': '适配视图',
-        'Add Edge': '新增边',
-        'Edit Selected Edge': '编辑所选边',
-        'Delete Selected Node': '删除所选节点',
-        'Delete Selected Edge': '删除所选边',
-        'Advanced JSON View': '高级 JSON 查看',
-        'Advanced JSON Edit': '高级 JSON 编辑',
-        'ID': 'ID',
-        'Level': '层级',
-        'Type': '类型',
-        'Title': '标题',
-        'Summary': '摘要',
-        'Children': '子节点',
-        'SeqRange': '序列范围',
-        'Actions': '操作',
-        'Recent Edges': '最近边',
-        'From': '起点',
-        'To': '终点',
-        'Edit': '编辑',
-        'Last Projection': '最近投影',
-        'View': '查看',
-        'Form Edit': '表单编辑',
-        'Form editor for one node. Parent/child relationships and graph persistence are applied automatically.': '单节点表单编辑器。父子关系和图持久化会自动处理。',
-        'Node ID': '节点 ID',
-        'Parent Node': '父节点',
-        'Sequence': '序号',
-        'From Sequence': '起始序号',
-        'To Sequence': '结束序号',
-        'Archived': '已归档',
-        'Fields (one key=value per line)': '字段（每行一个 key=value）',
-        'Edge ${0}: configure relation between two nodes.': '边 ${0}：配置两个节点之间的关系。',
-        'From Node': '起点节点',
-        'To Node': '终点节点',
-        'Edge not found: #${0}': '未找到边：#${0}',
-        'Apply Edge': '应用边',
-        'Create Edge': '创建边',
-        'Edge form not found': '未找到边表单',
-        'From/To node is required': '起点/终点节点必填',
-        'From/To node does not exist': '起点/终点节点不存在',
-        'From and To cannot be the same node': '起点和终点不能是同一节点',
-        'Edge updated (#${0})': '边已更新（#${0}）',
-        'Updated edge #${0}.': '已更新边 #${0}。',
-        'Edge created.': '边已创建。',
-        'Created edge #${0}.': '已创建边 #${0}。',
-        'Edge edit failed: ${0}': '边编辑失败：${0}',
-        'Node not found: ${0}': '未找到节点：${0}',
-        'Apply Node': '应用节点',
-        'Node form not found': '未找到节点表单',
-        'Parent node does not exist: ${0}': '父节点不存在：${0}',
-        'Parent node cannot be itself': '父节点不能是自身',
-        'Parent selection would create a cycle': '当前父节点选择会产生环',
-        'Updated node ${0}.': '已更新节点 ${0}。',
-        'Node updated: ${0}': '节点已更新：${0}',
-        'Node edit failed: ${0}': '节点编辑失败：${0}',
-        'Fitted graph view.': '图视图已适配。',
-        'No edge selected. Click an edge in graph first.': '未选择边。请先在图中点击一条边。',
-        'Delete edge #${0}: ${1} -> ${2} [${3}]?': '删除边 #${0}：${1} -> ${2} [${3}]？',
-        'Deleted edge #${0}.': '已删除边 #${0}。',
-        'Deleted selected edge.': '已删除所选边。',
-        'Delete node ${0}: ${1}? This will remove its subtree and related edges.': '删除节点 ${0}: ${1}？这会删除其子树和相关边。',
-        'Deleted node ${0}.': '已删除节点 ${0}。',
-        'Deleted selected node.': '已删除所选节点。',
-        'Advanced: edit full memory graph JSON for current chat.': '高级：编辑当前聊天的完整记忆图 JSON。',
-        'Apply Graph': '应用图',
-        'Applied raw graph JSON edit.': '已应用原始图 JSON 编辑。',
-        'Memory graph JSON updated.': '记忆图 JSON 已更新。',
-        'Graph edit failed: ${0}': '图编辑失败：${0}',
-        'Memory disabled, cleared memory lorebook injections.': '记忆已禁用，已清理记忆图世界书注入。',
-        'Memory store unavailable for current chat.': '当前聊天的记忆存储不可用。',
-        'Recall ready. selected=${0}': '召回就绪。selected=${0}',
-        'Recall injection failed (${0}): ${1}': '召回注入失败（${0}）：${1}',
-        'nodes=${0}, edges=${1}, messages=${2}, source=${3}, semantic=${4}': 'nodes=${0}, edges=${1}, messages=${2}, source=${3}, semantic=${4}',
-        'Memory Node Schema Editor': '记忆节点 Schema 编辑器',
-        'Define node tables, extraction hints, and compression strategy. This controls what your memory graph stores and how it compacts over time.': '定义节点表、生成图提示和压缩策略。这会控制记忆图存储内容及其随时间压缩方式。',
-        'Hierarchical Compression': '分层压缩',
-        'Latest-only Merge': 'Latest-only 合并',
-        'Always Inject': '常驻注入',
-        'Current type count: ${0}': '当前类型数量：${0}',
-        'Add Type': '新增类型',
-        'Reset to Default Schema': '重置为默认 Schema',
-        'Schema reset to default in editor.': '已在编辑器中重置为默认 Schema。',
-        'Reset schema editor content to default? This will overwrite current unsaved schema edits.': '确认将 Schema 编辑器重置为默认？这会覆盖当前未保存的编辑。',
-        'table: ${0}': '表：${0}',
-        'mode: ${0}': '模式：${0}',
-        'always inject': '常驻注入',
-        'Type ID': '类型 ID',
-        'Label': '标签',
-        'Table Name': '表名',
-        'Table Columns (comma separated)': '表列（逗号分隔）',
-        'Required Columns (comma separated)': '必填列（逗号分隔）',
-        'Column Hints (one per line: column=meaning)': '列含义（每行一个：列名=含义）',
-        'Keywords (comma separated)': '关键词（逗号分隔）',
-        'Force Update (must appear each extraction batch)': '强制更新（每次生成图必须出现）',
-        'Latest Only Upsert': 'Latest-only 覆写',
-        'Editable': '可编辑',
-        'Create-only': '仅创建',
-        'Editable (enable edit/delete tools and graph edit context)': '可编辑（启用编辑/删除工具与图编辑上下文）',
-        'Primary Key Columns': '主键列',
-        'Extract Hint': '生成图提示',
-        'Enable Hierarchical Compression': '启用层级压缩',
-        'none': 'none',
-        'hierarchical': 'hierarchical',
-        'Threshold': '阈值',
-        'Fan-In': '扇入',
-        'Max Depth': '最大深度',
-        'Keep Recent Leaves': '保留最近叶子',
-        'Compression Rule (optional)': '压缩规则（可选）',
-        'Filter nodes eligible for compression. One condition per line or use &&. Examples: status in resolved,dropped ; semantic_rollup=false': '过滤可参与压缩的节点。每行一条条件，或使用 && 连接。示例：status in resolved,dropped ; semantic_rollup=false',
-        'Invalid compression rule for type ${0}: ${1}': '类型 ${0} 的压缩规则无效：${1}',
-        'Summarize Instruction': '摘要指令',
-        'Duplicate Type': '复制类型',
-        'Remove Type': '删除类型',
-        'Apply Schema': '应用 Schema',
-        'Memory schema updated.': '记忆 Schema 已更新。',
-        'Applied memory schema from popup editor.': '已应用弹窗编辑器中的记忆 Schema。',
-        'Saved memory settings.': '记忆设置已保存。',
-        'Invalid schema settings: ${0}': 'Schema 设置无效：${0}',
-        'Memory settings save failed.': '记忆设置保存失败。',
-        'Memory graph rebuilt from current chat.': '已从当前聊天重建记忆图。',
-        'Rebuilt memory graph and compression from chat.': '已从聊天重建记忆图并完成压缩。',
-        'Manual Compression': '手动压缩',
-        'Compression scope': '压缩范围',
-        'All nodes': '全图节点',
-        'Older nodes only (exclude recent N assistant turns)': '仅旧节点（排除最近 N 条 Assistant 回复）',
-        'Exclude recent assistant turns': '排除最近 Assistant 回复条数',
-        'Compression mode': '压缩模式',
-        'Use schema thresholds': '按 Schema 阈值压缩',
-        'Force compress (ignore threshold)': '强制压缩（忽略阈值）',
-        'Max rounds per type': '每种类型最大轮数',
-        'Types to compress': '要压缩的类型',
-        'Apply Manual Compression': '执行手动压缩',
-        'No compressible types in current schema.': '当前 Schema 没有可压缩类型。',
-        'Select at least one type to compress.': '请至少选择一种要压缩的类型。',
-        'No nodes are eligible for the selected scope.': '当前范围内没有可压缩节点。',
-        'Manual compression completed. Created=${0}, archived=${1}': '手动压缩完成。新建=${0}，归档=${1}',
-        'Manual compression made no changes.': '手动压缩未产生变化。',
-        'Event compression completed: ${0} round(s).': '事件压缩完成：本次 ${0} 轮。',
-        'Current chat memory graph reset.': '已重置当前聊天记忆图。',
-        'Reset memory graph for current chat.': '已重置当前聊天的记忆图。',
-        'Reset current chat memory graph? This cannot be undone.': '确认重置当前聊天记忆图吗？此操作不可撤销。',
-        'Visual graph unavailable: failed to load Cytoscape.': '可视化图不可用：加载 Cytoscape 失败。',
-        'Selected node: ${0}. Tip: click an edge to edit relation.': '已选择节点：${0}。提示：点击边可编辑关系。',
-        'Selected edge index ${0} (missing).': '已选择边索引 ${0}（缺失）。',
-        'Selected edge #${0}: ${1} -> ${2} [${3}]': '已选择边 #${0}：${1} -> ${2} [${3}]',
-        'Chat mutation detected. Memory graph will re-sync on next generation.': '检测到聊天变更。记忆图会在下次生成时重新同步。',
-        'Chat changes interrupted memory graph update. It will re-sync on next generation.': '聊天消息发生变化，记忆图更新已中断，将在下次生成时重新同步。',
-        'Generation aborted. Skipped memory recall.': '生成已中断，已跳过记忆召回。',
-        'Memory recall cancelled by user.': '记忆召回已由用户终止。',
-        'Memory graph update cancelled by user.': '记忆图更新已由用户终止。',
-        'Stop': '终止',
-    });
-    addLocaleData('zh-tw', {
-        'Memory': '記憶',
-        'Enabled': '啟用',
-        'Enable recall injection': '啟用記憶召回注入',
-        'Recall method': '召回方法',
-        'LLM Recall (default)': 'LLM 召回（預設）',
-        'Hybrid Pipeline (vector + graph diffusion)': '混合管線（向量+圖擴散）',
-        'Hybrid + Rerank': '混合+重排',
-        'Hybrid + LLM Rerank': '混合+LLM 精排',
-        'Embedding source': '嵌入源',
-        'Embedding model (empty = source default)': '嵌入模型（留空=源預設）',
-        'Vector pre-filter Top-K': '向量預篩 Top-K',
-        'Max recall results': '最大召回結果數',
-        'Rerank source': '重排源',
-        'Rerank model (empty = default)': '重排模型（留空=預設）',
-        'Graph Diffusion Parameters': '圖擴散參數',
-        'Diffusion steps': '擴散步數',
-        'Diffusion decay factor': '擴散衰減因子',
-        'Diffusion Top-K (per step)': '擴散 Top-K（每步）',
-        'PPR teleport alpha (0 = disabled)': 'PPR 回拉概率（0=停用）',
-        'Embedding Columns (comma separated, empty = all table columns)': '嵌入欄位（逗號分隔，留空=全部表欄位）',
-        'Injection position': '注入位置',
-        'Before Character Definitions': '角色定義前',
-        'After Character Definitions': '角色定義後',
-        "Before Author's Note": '作者註釋前',
-        "After Author's Note": '作者註釋後',
-        'Before Example Messages': '示例訊息前',
-        'After Example Messages': '示例訊息後',
-        'At Chat Depth': '聊天深度',
-        'Injection depth (At Chat Depth only)': '注入深度（僅聊天深度位置）',
-        'Injection role (At Chat Depth only)': '注入角色（僅聊天深度位置）',
-        'System': 'System',
-        'User': 'User',
-        'Assistant': 'Assistant',
-        'Recall API preset (Connection profile, empty = current)': '召回 API 預設（連線設定，留空=目前）',
-        'Recall preset (params + prompt, empty = current)': '召回提示詞預設（參數+提示詞，留空=目前）',
-        'Extract API preset (Connection profile, empty = current)': '生成圖 API 預設（連線設定，留空=目前）',
-        'Extract preset (params + prompt, empty = current)': '生成圖提示詞預設（參數+提示詞，留空=目前）',
-        'Include world info': '包含世界書資訊',
-        'Exclude latest N assistant turns from memory injection': '記憶注入時排除最近 N 條 Assistant 回覆',
-        'Recall max iterations': '召回最大輪數',
-        'Extract context assistant turns': '生成圖時參考最近 Assistant 回覆條數',
-        'Recall query recent assistant turns': '召回查詢使用最近 Assistant 回覆條數',
-        'Visible recent message layers for generation (0 = disabled)': '創作 LLM 僅可見最近 N 條訊息（0=不裁切）',
-        'Extract batch assistant turns': '每次生成圖處理的 Assistant 回覆條數',
-        'Exclude latest N assistant turns from graph extraction': '生成圖時排除最近 N 條 Assistant 回覆',
-        'Tool-call retries': '工具呼叫重試次數',
-        'RPM limit (0 = unlimited)': 'RPM 限制（0 = 不限制）',
-        'Plain-text function-call mode': '純文字函式呼叫模式',
-        'Extract Table Fill Prompt': '生成圖提示詞',
-        'Recall Stage 1 Prompt (Route/Drill)': '召回階段1提示詞（路由/深挖）',
-        'Recall Stage 2 Prompt (Finalize)': '召回階段2提示詞（最終選擇）',
-        'Advanced Settings': '進階設定',
-        'Open Advanced Settings': '打開進階設定',
-        'Save Advanced Settings': '儲存進階設定',
-        'Reset Advanced Settings': '重置進階設定',
-        'Advanced settings saved.': '進階設定已儲存。',
-        'Saved advanced settings.': '已儲存進階設定。',
-        'Advanced settings saved to global settings.': '進階設定已儲存到全域設定。',
-        'Save Advanced to Global': '將進階設定儲存到全域',
-        'Save Advanced to Character': '將進階設定儲存到角色卡',
-        'Clear Character Advanced Override': '清除角色卡進階設定覆寫',
-        'Advanced scope: character override (${0})': '進階設定作用域：角色卡覆寫（${0}）',
-        'Advanced scope: global': '進階設定作用域：全域',
-        'Advanced settings saved to character override: ${0}.': '進階設定已儲存到角色卡覆寫：${0}。',
-        'Failed to persist character advanced override.': '角色卡進階設定覆寫儲存失敗。',
-        'Failed to clear character advanced override.': '清除角色卡進階設定覆寫失敗。',
-        'Cleared character advanced override: ${0}.': '已清除角色卡進階設定覆寫：${0}。',
-        'Advanced settings reset to defaults in editor.': '進階設定已在編輯器中重設為預設值。',
-        'Reset advanced settings editor to default? This will overwrite current unsaved advanced edits.': '確認將進階設定編輯器重設為預設？這會覆蓋目前未儲存的編輯。',
-        'Update every N assistant turns': '每 N 條 Assistant 回覆自動生成圖',
-        'Node Type Schema (Visual Editor)': '節點類型 Schema（視覺化編輯）',
-        'Configure memory table types, extraction hints, and compression strategy in a popup editor.': '在彈窗中配置記憶節點類型、生成圖提示與壓縮策略。',
-        'Schema scope: character override (${0})': 'Schema 作用域：角色卡覆寫（${0}）',
-        'Schema scope: global': 'Schema 作用域：全域',
-        'Open Schema Editor': '開啟 Schema 編輯器',
-        'Save Schema to Global': '將 Schema 儲存到全域',
-        'Save Schema to Character': '將 Schema 儲存到角色卡',
-        'Clear Character Schema Override': '清除角色卡 Schema 覆寫',
-        'Schema saved to global settings.': 'Schema 已儲存到全域設定。',
-        'No active character selected.': '目前未選擇角色卡。',
-        'Schema saved to character override: ${0}.': 'Schema 已儲存到角色卡覆寫：${0}。',
-        'Failed to persist character schema override.': '角色卡 Schema 覆寫儲存失敗。',
-        'Failed to clear character schema override.': '清除角色卡 Schema 覆寫失敗。',
-        'Cleared character schema override: ${0}.': '已清除角色卡 Schema 覆寫：${0}。',
-        'Save Settings': '儲存設定',
-        'View Graph': '查看圖譜',
-        'Fill Graph (Incremental)': '生成圖（僅增量）',
-        'Rebuild From Chat': '從聊天重建',
-        'Rebuild Recent N Assistant Turns': '重建最近 N 條 Assistant 回覆',
-        'Rebuild recent assistant turns: enter N (1-${0}).': '重建最近 Assistant 回覆：請輸入 N（1-${0}）。',
-        'Rebuild Recent': '重建最近範圍',
-        'Please enter a valid integer between 1 and ${0}.': '請輸入 1 到 ${0} 之間的整數。',
-        'No assistant turns available to rebuild.': '目前沒有可重建的 Assistant 回覆。',
-        'Memory graph rebuilt for recent ${0} assistant turn(s).': '已完成最近 ${0} 條 Assistant 回覆的記憶圖重建。',
-        'Rebuilt recent memory graph range: seq ${0}-${1}.': '已重建最近範圍：樓層 ${0}-${1}。',
-        'Manual Compress': '手動壓縮',
-        'Reset Current Chat': '重設目前聊天',
-        'Export Current Chat Graph': '匯出目前聊天圖',
-        'Import Current Chat Graph': '匯入目前聊天圖',
-        'Recall debug query': '召回除錯查詢',
-        'e.g. what happened at the ruins with Mira?': '例如：和 Mira 在遺跡發生了什麼？',
-        'Run Recall Debug': '執行召回除錯',
-        'View Last Injection': '查看最近注入',
-        'Injection Content': '注入內容',
-        'Injection content is empty.': '注入內容為空。',
-        'No recall injection result yet.': '目前還沒有召回注入結果。',
-        'Memory recall running...': '記憶召回進行中...',
-        'Memory graph update running...': '記憶圖更新進行中...',
-        'Memory graph update running... seq ${0}-${1} / latest ${2}': '記憶圖更新進行中... 樓層 ${0}-${1} / 最新 ${2}',
-        'No active chat selected.': '未選擇有效聊天。',
-        'Paste memory graph JSON for current chat.': '請貼上目前聊天的記憶圖 JSON。',
-        'Memory graph exported for current chat.': '目前聊天記憶圖已匯出。',
-        'Downloaded memory graph file: ${0}': '已下載記憶圖檔案：${0}',
-        'Import': '匯入',
-        'Cancel': '取消',
-        'Delete': '刪除',
-        'Memory graph imported for current chat.': '目前聊天記憶圖已匯入。',
-        'Imported memory graph JSON.': '已匯入記憶圖 JSON。',
-        'Imported memory graph JSON as current chat baseline.': '已將記憶圖 JSON 作為目前聊天基線匯入。',
-        'Choose how to attach the imported memory graph to assistant floors.': '選擇要如何把導入的記憶圖綁定到 Assistant 樓層。',
-        'Restore Exported Floor': '恢復導出時樓層',
-        'Bind Latest Floor': '綁定到目前最新樓層',
-        'Bind Specific Floor': '綁定到指定樓層',
-        'Specific assistant floor': '指定 Assistant 樓層',
-        'Imported nodes: ${0} | Edges: ${1} | Exported floor: ${2}': '導入節點：${0} | 邊：${1} | 導出樓層：${2}',
-        'Current chat latest assistant floor: ${0}': '目前聊天最新 Assistant 樓層：${0}',
-        'Restore keeps exported floor numbers for same-chat recovery. Bind modes rewrite all imported nodes to the selected floor.': '恢復模式會保留導出時的樓層編號，用於同聊天恢復。綁定模式會把所有導入節點重寫到所選樓層。',
-        'Restore requires current chat to have at least ${0} assistant floor(s). Current chat only has ${1}. Choose a bind mode instead.': '恢復模式要求目前聊天至少有 ${0} 個 Assistant 樓層，但目前只有 ${1} 個。請改用綁定模式。',
-        'Current chat has no assistant floors to bind.': '目前聊天沒有可綁定的 Assistant 樓層。',
-        'Enter a floor between 1 and ${0}.': '請輸入 1 到 ${0} 之間的樓層。',
-        'Imported memory graph and restored exported floor ${0}.': '已導入記憶圖，並恢復導出樓層 ${0}。',
-        'Imported memory graph and bound it to latest assistant floor ${0}.': '已導入記憶圖，並綁定到目前最新 Assistant 樓層 ${0}。',
-        'Imported memory graph and bound it to assistant floor ${0}.': '已導入記憶圖，並綁定到 Assistant 樓層 ${0}。',
-        'Memory graph import failed.': '記憶圖匯入失敗。',
-        'Memory graph incremental fill completed.': '記憶圖譜增量補全完成。',
-        'Memory graph is already up to date.': '記憶圖譜已是最新，無需補全。',
-        'Import failed: ${0}': '匯入失敗：${0}',
-        'Types: ${0} | Always Inject: ${1} | Force Update: ${2} | Hierarchical: ${3}': '類型：${0} | 常駐注入：${1} | 強制更新：${2} | 分層壓縮：${3}',
-        'Types: ${0} | Editable: ${1} | Always Inject: ${2} | Force Update: ${3} | Hierarchical: ${4}': '類型：${0} | 可編輯：${1} | 常駐注入：${2} | 強制更新：${3} | 分層壓縮：${4}',
-        '(Current preset)': '（目前預設）',
-        '(Current API config)': '（目前 API 設定）',
-        '(missing)': '（缺失）',
-        '(none)': '（無）',
-        '(select node)': '（選擇節點）',
-        '(unset)': '（未設定）',
-        '(new)': '（新建）',
-        'Memory Graph': '記憶圖',
-        'Inspector': '檢視器',
-        'Select a node or edge to edit.': '點擊節點或邊以編輯。',
-        'Apply Changes': '套用修改',
-        'No node selected. Click a node in graph first.': '未選擇節點。請先在圖中點擊一個節點。',
-        'Nodes: ${0} | Edges: ${1} | Assistant turns: ${2} | Source turns: ${3}': '節點：${0} | 邊：${1} | Assistant 樓層：${2} | 來源樓層：${3}',
-        'semantic=${0}': 'semantic=${0}',
-        'Last recall steps: ${0}': '最近召回步數：${0}',
-        'Visual graph ready. Click a node or edge to select it for editing.': '視覺化圖已就緒。點擊節點或邊可選取並編輯。',
-        'Search Graph': '搜尋圖譜',
-        'Search graph nodes, summaries, IDs, or fields...': '搜尋節點、摘要、ID 或欄位……',
-        'All types': '全部類型',
-        'Clear Search': '清空搜尋',
-        'Prev Result': '上一個結果',
-        'Next Result': '下一個結果',
-        'Start typing to search the graph.': '開始輸入以搜尋圖譜。',
-        'No nodes match the current search.': '目前搜尋沒有符合的節點。',
-        'Try a different keyword or type filter.': '請嘗試其他關鍵字或類型篩選。',
-        'Showing ${0} of ${1} matching nodes.': '顯示 ${1} 個符合節點中的 ${0} 個。',
-        'Select a result to focus it in graph.': '選擇一個結果以在圖中定位。',
-        'Fit View': '適配視圖',
-        'Add Edge': '新增邊',
-        'Edit Selected Edge': '編輯所選邊',
-        'Delete Selected Node': '刪除所選節點',
-        'Delete Selected Edge': '刪除所選邊',
-        'Advanced JSON View': '進階 JSON 檢視',
-        'Advanced JSON Edit': '進階 JSON 編輯',
-        'ID': 'ID',
-        'Level': '層級',
-        'Type': '類型',
-        'Title': '標題',
-        'Summary': '摘要',
-        'Children': '子節點',
-        'SeqRange': '序列範圍',
-        'Actions': '操作',
-        'Recent Edges': '最近邊',
-        'From': '起點',
-        'To': '終點',
-        'Edit': '編輯',
-        'Last Projection': '最近投影',
-        'View': '查看',
-        'Form Edit': '表單編輯',
-        'Form editor for one node. Parent/child relationships and graph persistence are applied automatically.': '單節點表單編輯器。父子關係與圖持久化會自動處理。',
-        'Node ID': '節點 ID',
-        'Parent Node': '父節點',
-        'Sequence': '序號',
-        'From Sequence': '起始序號',
-        'To Sequence': '結束序號',
-        'Archived': '已封存',
-        'Fields (one key=value per line)': '字段（每行一個 key=value）',
-        'Edge ${0}: configure relation between two nodes.': '邊 ${0}：設定兩個節點之間的關係。',
-        'From Node': '起點節點',
-        'To Node': '終點節點',
-        'Edge not found: #${0}': '找不到邊：#${0}',
-        'Apply Edge': '套用邊',
-        'Create Edge': '建立邊',
-        'Edge form not found': '找不到邊表單',
-        'From/To node is required': '起點/終點節點為必填',
-        'From/To node does not exist': '起點/終點節點不存在',
-        'From and To cannot be the same node': '起點與終點不能是同一節點',
-        'Edge updated (#${0})': '邊已更新（#${0}）',
-        'Updated edge #${0}.': '已更新邊 #${0}。',
-        'Edge created.': '邊已建立。',
-        'Created edge #${0}.': '已建立邊 #${0}。',
-        'Edge edit failed: ${0}': '邊編輯失敗：${0}',
-        'Node not found: ${0}': '找不到節點：${0}',
-        'Apply Node': '套用節點',
-        'Node form not found': '找不到節點表單',
-        'Parent node does not exist: ${0}': '父節點不存在：${0}',
-        'Parent node cannot be itself': '父節點不能是自己',
-        'Parent selection would create a cycle': '目前父節點選擇會形成循環',
-        'Updated node ${0}.': '已更新節點 ${0}。',
-        'Node updated: ${0}': '節點已更新：${0}',
-        'Node edit failed: ${0}': '節點編輯失敗：${0}',
-        'Fitted graph view.': '圖視圖已適配。',
-        'No edge selected. Click an edge in graph first.': '未選擇邊。請先在圖中點擊一條邊。',
-        'Delete edge #${0}: ${1} -> ${2} [${3}]?': '刪除邊 #${0}：${1} -> ${2} [${3}]？',
-        'Deleted edge #${0}.': '已刪除邊 #${0}。',
-        'Deleted selected edge.': '已刪除所選邊。',
-        'Delete node ${0}: ${1}? This will remove its subtree and related edges.': '刪除節點 ${0}: ${1}？這會刪除其子樹與相關邊。',
-        'Deleted node ${0}.': '已刪除節點 ${0}。',
-        'Deleted selected node.': '已刪除所選節點。',
-        'Advanced: edit full memory graph JSON for current chat.': '進階：編輯目前聊天的完整記憶圖 JSON。',
-        'Apply Graph': '套用圖',
-        'Applied raw graph JSON edit.': '已套用原始圖 JSON 編輯。',
-        'Memory graph JSON updated.': '記憶圖 JSON 已更新。',
-        'Graph edit failed: ${0}': '圖編輯失敗：${0}',
-        'Memory disabled, cleared memory lorebook injections.': '記憶已停用，已清理記憶圖世界書注入。',
-        'Memory store unavailable for current chat.': '目前聊天的記憶儲存不可用。',
-        'Recall ready. selected=${0}': '召回就緒。selected=${0}',
-        'Recall injection failed (${0}): ${1}': '召回注入失敗（${0}）：${1}',
-        'nodes=${0}, edges=${1}, messages=${2}, source=${3}, semantic=${4}': 'nodes=${0}, edges=${1}, messages=${2}, source=${3}, semantic=${4}',
-        'Memory Node Schema Editor': '記憶節點 Schema 編輯器',
-        'Define node tables, extraction hints, and compression strategy. This controls what your memory graph stores and how it compacts over time.': '定義節點資料表、生成圖提示與壓縮策略。這會控制記憶圖儲存內容及其隨時間壓縮方式。',
-        'Hierarchical Compression': '分層壓縮',
-        'Latest-only Merge': 'Latest-only 合併',
-        'Always Inject': '常駐注入',
-        'Current type count: ${0}': '目前類型數量：${0}',
-        'Add Type': '新增類型',
-        'Reset to Default Schema': '重設為預設 Schema',
-        'Schema reset to default in editor.': '已在編輯器中重設為預設 Schema。',
-        'Reset schema editor content to default? This will overwrite current unsaved schema edits.': '確認將 Schema 編輯器重設為預設？這會覆蓋目前未儲存的編輯。',
-        'table: ${0}': '表：${0}',
-        'mode: ${0}': '模式：${0}',
-        'always inject': '常駐注入',
-        'Type ID': '類型 ID',
-        'Label': '標籤',
-        'Table Name': '表名',
-        'Table Columns (comma separated)': '表欄位（逗號分隔）',
-        'Required Columns (comma separated)': '必填欄位（逗號分隔）',
-        'Column Hints (one per line: column=meaning)': '欄位說明（每行一個：欄位=說明）',
-        'Keywords (comma separated)': '關鍵字（逗號分隔）',
-        'Force Update (must appear each extraction batch)': '強制更新（每次生成圖必須出現）',
-        'Latest Only Upsert': 'Latest-only 覆寫',
-        'Editable': '可編輯',
-        'Create-only': '僅建立',
-        'Editable (enable edit/delete tools and graph edit context)': '可編輯（啟用編輯/刪除工具與圖編輯上下文）',
-        'Primary Key Columns': '主鍵列',
-        'Extract Hint': '生成圖提示',
-        'Enable Hierarchical Compression': '啟用分層壓縮',
-        'none': 'none',
-        'hierarchical': 'hierarchical',
-        'Threshold': '閾值',
-        'Fan-In': '扇入',
-        'Max Depth': '最大深度',
-        'Keep Recent Leaves': '保留最近葉節點',
-        'Compression Rule (optional)': '壓縮規則（可選）',
-        'Filter nodes eligible for compression. One condition per line or use &&. Examples: status in resolved,dropped ; semantic_rollup=false': '過濾可參與壓縮的節點。每行一條條件，或使用 && 連接。示例：status in resolved,dropped ; semantic_rollup=false',
-        'Invalid compression rule for type ${0}: ${1}': '類型 ${0} 的壓縮規則無效：${1}',
-        'Summarize Instruction': '摘要指令',
-        'Duplicate Type': '複製類型',
-        'Remove Type': '移除類型',
-        'Apply Schema': '套用 Schema',
-        'Memory schema updated.': '記憶 Schema 已更新。',
-        'Applied memory schema from popup editor.': '已套用彈窗編輯器中的記憶 Schema。',
-        'Saved memory settings.': '記憶設定已儲存。',
-        'Invalid schema settings: ${0}': 'Schema 設定無效：${0}',
-        'Memory settings save failed.': '記憶設定儲存失敗。',
-        'Memory graph rebuilt from current chat.': '已從目前聊天重建記憶圖。',
-        'Rebuilt memory graph and compression from chat.': '已從聊天重建記憶圖並完成壓縮。',
-        'Manual Compression': '手動壓縮',
-        'Compression scope': '壓縮範圍',
-        'All nodes': '全圖節點',
-        'Older nodes only (exclude recent N assistant turns)': '僅舊節點（排除最近 N 條 Assistant 回覆）',
-        'Exclude recent assistant turns': '排除最近 Assistant 回覆條數',
-        'Compression mode': '壓縮模式',
-        'Use schema thresholds': '按 Schema 閾值壓縮',
-        'Force compress (ignore threshold)': '強制壓縮（忽略閾值）',
-        'Max rounds per type': '每種類型最大輪數',
-        'Types to compress': '要壓縮的類型',
-        'Apply Manual Compression': '執行手動壓縮',
-        'No compressible types in current schema.': '目前 Schema 沒有可壓縮類型。',
-        'Select at least one type to compress.': '請至少選擇一種要壓縮的類型。',
-        'No nodes are eligible for the selected scope.': '目前範圍內沒有可壓縮節點。',
-        'Manual compression completed. Created=${0}, archived=${1}': '手動壓縮完成。新建=${0}，歸檔=${1}',
-        'Manual compression made no changes.': '手動壓縮未產生變化。',
-        'Event compression completed: ${0} round(s).': '事件壓縮完成：本次 ${0} 輪。',
-        'Current chat memory graph reset.': '已重設目前聊天記憶圖。',
-        'Reset memory graph for current chat.': '已重設目前聊天記憶圖。',
-        'Reset current chat memory graph? This cannot be undone.': '確認重設目前聊天記憶圖嗎？此操作不可撤銷。',
-        'Visual graph unavailable: failed to load Cytoscape.': '視覺化圖不可用：載入 Cytoscape 失敗。',
-        'Selected node: ${0}. Tip: click an edge to edit relation.': '已選擇節點：${0}。提示：點擊邊可編輯關係。',
-        'Selected edge index ${0} (missing).': '已選擇邊索引 ${0}（缺失）。',
-        'Selected edge #${0}: ${1} -> ${2} [${3}]': '已選擇邊 #${0}：${1} -> ${2} [${3}]',
-        'Chat mutation detected. Memory graph will re-sync on next generation.': '偵測到聊天變更。記憶圖會在下次生成時重新同步。',
-        'Chat changes interrupted memory graph update. It will re-sync on next generation.': '聊天訊息發生變化，記憶圖更新已中斷，將在下次生成時重新同步。',
-        'Generation aborted. Skipped memory recall.': '生成已中斷，已跳過記憶召回。',
-        'Memory recall cancelled by user.': '記憶召回已由使用者終止。',
-        'Memory graph update cancelled by user.': '記憶圖更新已由使用者終止。',
-        'Stop': '終止',
-    });
-}
 
 const extractionTimers = new Map();
 const memoryStoreCache = new Map();
-const memoryStateCache = new Map();
 const memoryStoreTargets = new Map();
 const memoryLoadTasks = new Map();
 const rollbackHistoryCache = new Map();
@@ -1407,206 +818,6 @@ function applyAdvancedSettings(target, values) {
     target.recallFinalizeSystemPrompt = normalized.recallFinalizeSystemPrompt;
 }
 
-function getCurrentAvatar(context) {
-    const ctx = context || getContext();
-    return String(ctx?.characters?.[ctx?.characterId]?.avatar || '').trim();
-}
-
-function getCharacterByAvatar(context, avatar) {
-    const target = String(avatar || '').trim();
-    if (!target) {
-        return null;
-    }
-    return (context?.characters || []).find((item) => String(item?.avatar || '').trim() === target) || null;
-}
-
-function getCharacterIndexByAvatar(context, avatar) {
-    const target = String(avatar || '').trim();
-    if (!target) {
-        return -1;
-    }
-    return (context?.characters || []).findIndex((item) => String(item?.avatar || '').trim() === target);
-}
-
-function getCharacterDisplayNameByAvatar(context, avatar) {
-    const character = getCharacterByAvatar(context, avatar);
-    return String(character?.name || avatar || '').trim();
-}
-
-function getCharacterExtensionDataByAvatar(context, avatar) {
-    const character = getCharacterByAvatar(context, avatar);
-    const payload = character?.data?.extensions?.[MODULE_NAME];
-    return payload && typeof payload === 'object' ? payload : {};
-}
-
-function getCharacterSchemaOverrideByAvatar(context, avatar) {
-    const extensionData = getCharacterExtensionDataByAvatar(context, avatar);
-    const schema = extensionData?.[CHARACTER_SCHEMA_OVERRIDE_KEY];
-    if (!Array.isArray(schema) || schema.length === 0) {
-        return null;
-    }
-    return normalizeNodeTypeSchema(schema);
-}
-
-function getCharacterAdvancedOverrideByAvatar(context, avatar) {
-    const extensionData = getCharacterExtensionDataByAvatar(context, avatar);
-    const override = extensionData?.[CHARACTER_ADVANCED_OVERRIDE_KEY];
-    if (!override || typeof override !== 'object') {
-        return null;
-    }
-    return normalizeAdvancedSettings(override, defaultSettings);
-}
-
-function getEffectiveAdvancedSettings(context = null, settings = null) {
-    const ctx = context || getContext();
-    const currentSettings = settings || getSettings();
-    const base = normalizeAdvancedSettings(currentSettings, defaultSettings);
-    const avatar = getCurrentAvatar(ctx);
-    const override = avatar ? getCharacterAdvancedOverrideByAvatar(ctx, avatar) : null;
-    if (!override) {
-        return base;
-    }
-    return normalizeAdvancedSettings({ ...base, ...override }, base);
-}
-
-function getEffectiveSettings(context = null, settings = null) {
-    const base = settings || getSettings();
-    return {
-        ...base,
-        ...getEffectiveAdvancedSettings(context, base),
-    };
-}
-
-function getEffectiveNodeTypeSchema(context = null, settings = null) {
-    const ctx = context || getContext();
-    const currentSettings = settings || getSettings();
-    const avatar = getCurrentAvatar(ctx);
-    const overrideSchema = getCharacterSchemaOverrideByAvatar(ctx, avatar);
-    if (overrideSchema && overrideSchema.length > 0) {
-        return overrideSchema;
-    }
-    return normalizeNodeTypeSchema(currentSettings?.nodeTypeSchema);
-}
-
-function getSchemaScopeInfo(context = null, settings = null) {
-    const ctx = context || getContext();
-    const currentSettings = settings || getSettings();
-    const avatar = getCurrentAvatar(ctx);
-    const hasAvatar = Boolean(avatar);
-    const characterName = hasAvatar ? getCharacterDisplayNameByAvatar(ctx, avatar) : '';
-    const overrideSchema = hasAvatar ? getCharacterSchemaOverrideByAvatar(ctx, avatar) : null;
-    const hasOverride = Array.isArray(overrideSchema) && overrideSchema.length > 0;
-    const effectiveSchema = hasOverride
-        ? overrideSchema
-        : normalizeNodeTypeSchema(currentSettings?.nodeTypeSchema);
-    return {
-        avatar,
-        hasAvatar,
-        characterName,
-        hasOverride,
-        scope: hasOverride ? 'character' : 'global',
-        schema: effectiveSchema,
-    };
-}
-
-function getAdvancedScopeInfo(context = null, settings = null) {
-    const ctx = context || getContext();
-    const currentSettings = settings || getSettings();
-    const avatar = getCurrentAvatar(ctx);
-    const hasAvatar = Boolean(avatar);
-    const characterName = hasAvatar ? getCharacterDisplayNameByAvatar(ctx, avatar) : '';
-    const overrideSettings = hasAvatar ? getCharacterAdvancedOverrideByAvatar(ctx, avatar) : null;
-    const hasOverride = Boolean(overrideSettings);
-    const effectiveSettings = hasOverride
-        ? normalizeAdvancedSettings(overrideSettings, currentSettings)
-        : normalizeAdvancedSettings(currentSettings, defaultSettings);
-    return {
-        avatar,
-        hasAvatar,
-        characterName,
-        hasOverride,
-        scope: hasOverride ? 'character' : 'global',
-        settings: effectiveSettings,
-    };
-}
-
-async function persistCharacterSchemaOverride(context, avatar, schema) {
-    const target = String(avatar || '').trim();
-    if (!target || typeof context?.writeExtensionField !== 'function') {
-        return false;
-    }
-    const characterIndex = getCharacterIndexByAvatar(context, target);
-    if (characterIndex < 0) {
-        return false;
-    }
-    const previous = getCharacterExtensionDataByAvatar(context, target);
-    const next = {
-        ...previous,
-        [CHARACTER_SCHEMA_OVERRIDE_KEY]: normalizeNodeTypeSchema(schema),
-    };
-    await context.writeExtensionField(characterIndex, MODULE_NAME, next);
-    return true;
-}
-
-async function removeCharacterSchemaOverride(context, avatar) {
-    const target = String(avatar || '').trim();
-    if (!target || typeof context?.writeExtensionField !== 'function') {
-        return false;
-    }
-    const characterIndex = getCharacterIndexByAvatar(context, target);
-    if (characterIndex < 0) {
-        return false;
-    }
-    const previous = getCharacterExtensionDataByAvatar(context, target);
-    if (!Object.prototype.hasOwnProperty.call(previous, CHARACTER_SCHEMA_OVERRIDE_KEY)) {
-        return true;
-    }
-    const next = { ...previous };
-    // writeExtensionField() persists via merge-attributes, so removals must be
-    // sent as explicit nulls instead of omitted keys.
-    next[CHARACTER_SCHEMA_OVERRIDE_KEY] = null;
-    await context.writeExtensionField(characterIndex, MODULE_NAME, next);
-    return true;
-}
-
-async function persistCharacterAdvancedOverride(context, avatar, advancedSettings) {
-    const target = String(avatar || '').trim();
-    if (!target || typeof context?.writeExtensionField !== 'function') {
-        return false;
-    }
-    const characterIndex = getCharacterIndexByAvatar(context, target);
-    if (characterIndex < 0) {
-        return false;
-    }
-    const previous = getCharacterExtensionDataByAvatar(context, target);
-    const next = {
-        ...previous,
-        [CHARACTER_ADVANCED_OVERRIDE_KEY]: normalizeAdvancedSettings(advancedSettings, defaultSettings),
-    };
-    await context.writeExtensionField(characterIndex, MODULE_NAME, next);
-    return true;
-}
-
-async function removeCharacterAdvancedOverride(context, avatar) {
-    const target = String(avatar || '').trim();
-    if (!target || typeof context?.writeExtensionField !== 'function') {
-        return false;
-    }
-    const characterIndex = getCharacterIndexByAvatar(context, target);
-    if (characterIndex < 0) {
-        return false;
-    }
-    const previous = getCharacterExtensionDataByAvatar(context, target);
-    if (!Object.prototype.hasOwnProperty.call(previous, CHARACTER_ADVANCED_OVERRIDE_KEY)) {
-        return true;
-    }
-    const next = { ...previous };
-    // writeExtensionField() persists via merge-attributes, so removals must be
-    // sent as explicit nulls instead of omitted keys.
-    next[CHARACTER_ADVANCED_OVERRIDE_KEY] = null;
-    await context.writeExtensionField(characterIndex, MODULE_NAME, next);
-    return true;
-}
 
 function escapeHtml(value) {
     return String(value ?? '')
@@ -1777,57 +988,12 @@ function buildLegacyMemoryTargetCandidates(context, canonicalTarget, explicitTar
     return candidates;
 }
 
-function sanitizeMemoryGraphFileNamePart(value, fallback = 'current-chat') {
-    const sanitized = String(value || '')
-        .trim()
-        .replace(/\.[^/.]+$/, '')
-        .replace(/[^a-z0-9._-]+/gi, '_')
-        .replace(/^_+|_+$/g, '');
-    return sanitized || fallback;
-}
-
-function getMemoryGraphExportFileName(context) {
-    const target = buildMemoryTargetFromContext(context);
-    if (!target) {
-        return 'memory-graph-current-chat.json';
-    }
-    if (target.is_group) {
-        return `memory-graph-group-${sanitizeMemoryGraphFileNamePart(target.id)}.json`;
-    }
-    return `memory-graph-${sanitizeMemoryGraphFileNamePart(target.file_name)}.json`;
-}
-
 function getLatestAssistantFloorFromContext(context) {
     return Math.max(0, Math.floor(Number(computeChatSourceState(context)?.messageCount || 0)));
 }
 
-function getImportedStoreBindingFloor(store) {
-    const normalized = normalizeStoreForRuntime(store);
-    return getStoreCoveredSeqTo(normalized);
-}
-
-function clearImportedStoreTransientState(store) {
-    const normalized = normalizeStoreForRuntime(store);
-    normalized.lastRecallTrace = [];
-    normalized.lastRecallProjection = null;
-    normalized.swipeTailCache = {};
-    normalized.lastExtractionDebug = null;
-    return normalized;
-}
-
-function bindImportedStoreToAssistantFloor(store, bindSeq) {
-    const normalized = clearImportedStoreTransientState(store);
-    const targetSeq = Math.max(1, Math.floor(Number(bindSeq || 0)));
-    for (const node of Object.values(normalized.nodes || {})) {
-        if (!node || typeof node !== 'object') {
-            continue;
-        }
-        node.seqTo = targetSeq;
-    }
-    normalized.appliedSeqTo = targetSeq;
-    normalized.seqCounter = targetSeq;
-    normalized.loggedSeqTo = targetSeq;
-    return normalized;
+function getMemoryGraphExportFileNameForContext(context) {
+    return getMemoryGraphExportFileName(buildMemoryTargetFromContext(context));
 }
 
 async function promptMemoryGraphImportMode(context, store) {
@@ -1972,19 +1138,6 @@ async function importMemoryGraphStore(context, parsed) {
     };
 }
 
-async function loadMemoryStoreByTarget(context, target) {
-    if (typeof context.getChatState !== 'function') {
-        throw new Error('Chat state API is unavailable in extension context.');
-    }
-    const data = await context.getChatState(CHAT_STATE_NAMESPACE, { target });
-    const { state, migrated } = normalizePersistedMemoryState(data, context);
-    return {
-        state,
-        store: buildRuntimeStoreFromPersistedState(state),
-        migrated,
-    };
-}
-
 async function deleteMemoryStoreByTarget(context, target) {
     if (typeof context.deleteChatState !== 'function') {
         throw new Error('Chat state delete API is unavailable in extension context.');
@@ -1993,805 +1146,19 @@ async function deleteMemoryStoreByTarget(context, target) {
     if (!ok) {
         throw new Error('Failed to delete memory store.');
     }
-}
-
-function createEmptyStore() {
-    return {
-        version: 5,
-        nodeSeq: 0,
-        seqCounter: 0,
-        appliedSeqTo: 0,
-        loggedSeqTo: 0,
-        pendingFullRebuild: false,
-        nodes: {},
-        edges: [],
-        lastRecallTrace: [],
-        lastRecallProjection: null,
-        sourceMessageCount: 0,
-        swipeTailCache: {},
-    };
-}
-
-function createEmptyPersistedMemoryState() {
-    return {
-        version: PERSISTED_STORE_VERSION,
-        // Global replay/incremental coverage floor for the whole graph; distinct from node-local seqTo.
-        coveredSeqTo: 0,
-        // Replay source of truth: each entry is one atomic graph mutation batch.
-        opLog: [],
-        lastRecallTrace: [],
-        lastRecallProjection: null,
-        sourceMessageCount: 0,
-        swipeTailCache: {},
-    };
-}
-
-function normalizeStoreForRuntime(store) {
-    if (!store || typeof store !== 'object') {
-        return createEmptyStore();
+    // Sister sidecars created by floor-state and the meta layer. Failure to
+    // delete these is a soft warning — the next migration / load path
+    // overwrites them anyway, but we don't want orphan data lingering.
+    try {
+        await context.deleteChatState(LOG_NAMESPACE, { target });
+    } catch (error) {
+        console.warn(`[${MODULE_NAME}] Failed to delete floor-state log sidecar`, { target, error });
     }
-    const normalized = createEmptyStore();
-    normalized.sourceMessageCount = Math.max(0, Number(store.sourceMessageCount || 0));
-    normalized.loggedSeqTo = Math.max(0, Math.floor(Number(store.loggedSeqTo || 0)));
-    normalized.pendingFullRebuild = Boolean(store.pendingFullRebuild);
-    normalized.lastRecallTrace = Array.isArray(store.lastRecallTrace) ? store.lastRecallTrace : [];
-    normalized.lastRecallProjection = store.lastRecallProjection && typeof store.lastRecallProjection === 'object'
-        ? store.lastRecallProjection
-        : null;
-    normalized.swipeTailCache = normalizeSwipeTailCache(store.swipeTailCache);
-
-    if (store.nodes && typeof store.nodes === 'object') {
-        for (const [id, rawNode] of Object.entries(store.nodes)) {
-            if (!rawNode || typeof rawNode !== 'object') {
-                continue;
-            }
-            const nodeId = String(id || '').trim();
-            if (!nodeId) {
-                continue;
-            }
-            const nodeType = String(rawNode.type || 'semantic').trim().toLowerCase();
-            if (nodeType === 'thread') {
-                continue;
-            }
-            const level = String(rawNode.level || LEVEL.SEMANTIC).trim();
-            if (level !== LEVEL.SEMANTIC) {
-                continue;
-            }
-            const seqTo = Number.isFinite(Number(rawNode.seqTo))
-                ? Math.max(0, Math.floor(Number(rawNode.seqTo)))
-                : 0;
-            const fields = rawNode.fields && typeof rawNode.fields === 'object' && !Array.isArray(rawNode.fields)
-                ? { ...rawNode.fields }
-                : {};
-            normalized.nodes[nodeId] = {
-                id: nodeId,
-                type: String(rawNode.type || 'semantic'),
-                level: LEVEL.SEMANTIC,
-                title: normalizeText(rawNode.title || nodeId),
-                seqTo,
-                fields,
-                semanticDepth: Number.isFinite(Number(rawNode.semanticDepth)) ? Number(rawNode.semanticDepth) : 0,
-                semanticRollup: Boolean(rawNode.semanticRollup),
-                childrenIds: Array.isArray(rawNode.childrenIds) ? rawNode.childrenIds.map(child => String(child || '').trim()).filter(Boolean) : [],
-                parentId: String(rawNode.parentId || '').trim(),
-                archived: Boolean(rawNode.archived),
-            };
-            normalized.seqCounter = Math.max(normalized.seqCounter, seqTo);
-            const extractedNodeSeq = Number(String(nodeId).replace(/^n_/, ''));
-            if (Number.isFinite(extractedNodeSeq)) {
-                normalized.nodeSeq = Math.max(normalized.nodeSeq, extractedNodeSeq);
-            }
-        }
+    try {
+        await context.deleteChatState(META_NAMESPACE, { target });
+    } catch (error) {
+        console.warn(`[${MODULE_NAME}] Failed to delete memory-graph meta sidecar`, { target, error });
     }
-
-    const validNodeIds = new Set(Object.keys(normalized.nodes));
-    for (const node of Object.values(normalized.nodes)) {
-        node.childrenIds = node.childrenIds.filter(id => validNodeIds.has(id));
-        if (node.parentId && !validNodeIds.has(node.parentId)) {
-            node.parentId = '';
-        }
-    }
-
-    normalized.edges = Array.isArray(store.edges)
-        ? store.edges
-            .filter(edge => edge && typeof edge === 'object')
-            .map(edge => ({
-                from: String(edge.from || '').trim(),
-                to: String(edge.to || '').trim(),
-                type: normalizeText(edge.type || 'related') || 'related',
-            }))
-            .filter(edge => edge.from && edge.to && edge.from !== edge.to && validNodeIds.has(edge.from) && validNodeIds.has(edge.to))
-        : [];
-
-    normalized.appliedSeqTo = Math.max(
-        0,
-        Math.floor(Number.isFinite(Number(store.appliedSeqTo)) ? Number(store.appliedSeqTo) : normalized.seqCounter),
-    );
-    normalized.loggedSeqTo = Math.max(normalized.loggedSeqTo, normalized.appliedSeqTo);
-    normalized.seqCounter = Math.max(normalized.seqCounter, normalized.loggedSeqTo);
-    return normalized;
-}
-
-function normalizeMemoryLogOperation(raw) {
-    const type = String(raw?.type || '').trim().toLowerCase();
-    if (type === 'upsert_node') {
-        const node = cloneRollbackNodeSnapshot(raw?.node);
-        return node ? { type, node } : null;
-    }
-    if (type === 'delete_node') {
-        const nodeId = String(raw?.nodeId || raw?.id || '').trim();
-        return nodeId ? { type, nodeId } : null;
-    }
-    if (type === 'upsert_edge' || type === 'delete_edge') {
-        const edge = cloneRollbackEdgeSnapshot(raw?.edge || raw);
-        return edge ? { type, edge } : null;
-    }
-    return null;
-}
-
-function normalizeMemoryLogEntry(raw) {
-    if (!raw || typeof raw !== 'object') {
-        return null;
-    }
-    // entry.seq gates the whole batch; replay/branch trimming must not split ops inside one entry.
-    const seq = Math.max(0, Math.floor(Number(raw.seq || 0)));
-    const ops = Array.isArray(raw.ops)
-        ? raw.ops.map(normalizeMemoryLogOperation).filter(Boolean)
-        : [];
-    if (seq <= 0 && ops.length === 0) {
-        return null;
-    }
-    return { seq, ops };
-}
-
-function normalizeSwipeTailCacheEntry(raw) {
-    if (!raw || typeof raw !== 'object') {
-        return null;
-    }
-    const seqFrom = Math.max(1, Math.floor(Number(raw.seqFrom || 0)));
-    if (!Number.isFinite(seqFrom) || seqFrom <= 0) {
-        return null;
-    }
-    return {
-        seqFrom,
-        prefixHash: String(raw.prefixHash || ''),
-        tailLog: Array.isArray(raw.tailLog)
-            ? raw.tailLog.map(normalizeMemoryLogEntry).filter(Boolean)
-            : [],
-        cachedAt: Number.isFinite(Number(raw.cachedAt))
-            ? Math.max(0, Math.floor(Number(raw.cachedAt)))
-            : 0,
-    };
-}
-
-function normalizeSwipeTailCache(raw) {
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-        return {};
-    }
-    const normalized = {};
-    for (const [key, value] of Object.entries(raw)) {
-        const cacheKey = String(key || '').trim();
-        if (!cacheKey) {
-            continue;
-        }
-        const entry = normalizeSwipeTailCacheEntry(value);
-        if (!entry) {
-            continue;
-        }
-        normalized[cacheKey] = entry;
-    }
-    return normalized;
-}
-
-function cloneSwipeTailCache(cache) {
-    return structuredClone(normalizeSwipeTailCache(cache));
-}
-
-function buildSwipeTailMessageHash(message) {
-    const payload = {
-        name: String(message?.name || ''),
-        send_date: String(message?.send_date || ''),
-        mes: normalizeText(message?.mes || ''),
-    };
-    return String(getStringHash(JSON.stringify(payload)));
-}
-
-function buildSwipeTailCacheKey(assistantSeq, messageHash) {
-    return `${Math.max(1, Math.floor(Number(assistantSeq || 0)))}:${String(messageHash || '')}`;
-}
-
-function computeSwipeTailPrefixHash(state, seqFrom) {
-    const startSeq = Math.max(1, Math.floor(Number(seqFrom || 0)));
-    const normalizedState = normalizePersistedStateBase(state);
-    const prefixLog = normalizedState.opLog.filter(entry => Math.max(0, Math.floor(Number(entry?.seq || 0))) < startSeq);
-    return String(getStringHash(JSON.stringify(prefixLog)));
-}
-
-function pruneSwipeTailCache(cache, { activeSeq = null, maxEntries = SWIPE_TAIL_CACHE_MAX_ENTRIES } = {}) {
-    const normalized = normalizeSwipeTailCache(cache);
-    const targetSeq = Number.isFinite(Number(activeSeq)) && Number(activeSeq) > 0
-        ? Math.max(1, Math.floor(Number(activeSeq)))
-        : null;
-    let entries = Object.entries(normalized);
-    if (targetSeq !== null) {
-        entries = entries.filter(([, entry]) => Math.max(0, Math.floor(Number(entry?.seqFrom || 0))) === targetSeq);
-    }
-    entries.sort(([, a], [, b]) => Math.max(0, Number(b?.cachedAt || 0)) - Math.max(0, Number(a?.cachedAt || 0)));
-    return Object.fromEntries(entries.slice(0, Math.max(1, Math.floor(Number(maxEntries || SWIPE_TAIL_CACHE_MAX_ENTRIES)))).map(([key, value]) => [key, structuredClone(value)]));
-}
-
-function buildActiveSwipeTailDescriptor(context, { messageIndex = null, expectedAssistantSeq = null } = {}) {
-    const source = Array.isArray(context?.chat) ? context.chat : [];
-    if (source.length === 0) {
-        return null;
-    }
-    const targetIndex = messageIndex === null || messageIndex === undefined
-        ? source.length - 1
-        : Math.max(0, Math.floor(Number(messageIndex)));
-    if (!Number.isFinite(targetIndex) || targetIndex < 0 || targetIndex >= source.length) {
-        return null;
-    }
-    if (targetIndex !== source.length - 1) {
-        return null;
-    }
-    const message = source[targetIndex];
-    if (!isExtractableAssistantMessage(message)) {
-        return null;
-    }
-    if (!Array.isArray(message?.swipes) || message.swipes.length < 2) {
-        return null;
-    }
-    const assistantSeq = findAffectedAssistantSeqFromMessageIndex(context, targetIndex);
-    if (!Number.isFinite(assistantSeq) || assistantSeq <= 0) {
-        return null;
-    }
-    const requiredSeq = Number.isFinite(Number(expectedAssistantSeq)) && Number(expectedAssistantSeq) > 0
-        ? Math.max(1, Math.floor(Number(expectedAssistantSeq)))
-        : null;
-    if (requiredSeq !== null && assistantSeq !== requiredSeq) {
-        return null;
-    }
-    const messageHash = buildSwipeTailMessageHash(message);
-    return {
-        messageIndex: targetIndex,
-        assistantSeq,
-        messageHash,
-        cacheKey: buildSwipeTailCacheKey(assistantSeq, messageHash),
-    };
-}
-
-function getLatestLoggedSeq(stateOrLog) {
-    const log = Array.isArray(stateOrLog)
-        ? stateOrLog
-        : (Array.isArray(stateOrLog?.opLog) ? stateOrLog.opLog : []);
-    return log.reduce((maxSeq, entry) => Math.max(maxSeq, Math.max(0, Math.floor(Number(entry?.seq || 0)))), 0);
-}
-
-function getPersistedCoveredSeqTo(state) {
-    const rawCoveredSeqTo = Number.isFinite(Number(state?.coveredSeqTo))
-        ? Math.max(0, Math.floor(Number(state.coveredSeqTo)))
-        : 0;
-    return Math.max(rawCoveredSeqTo, getLatestLoggedSeq(state));
-}
-
-function getStoreCoveredSeqTo(store) {
-    return Math.max(
-        0,
-        Math.floor(Number(store?.appliedSeqTo || 0)),
-        Math.floor(Number(store?.loggedSeqTo || 0)),
-        Math.floor(Number(getSemanticCoverageSeq(store) || 0)),
-    );
-}
-
-function normalizePersistedStateBase(raw) {
-    const normalized = createEmptyPersistedMemoryState();
-    if (!raw || typeof raw !== 'object') {
-        return normalized;
-    }
-    normalized.sourceMessageCount = Math.max(0, Number(raw.sourceMessageCount || 0));
-    normalized.lastRecallTrace = Array.isArray(raw.lastRecallTrace) ? structuredClone(raw.lastRecallTrace) : [];
-    normalized.lastRecallProjection = raw.lastRecallProjection && typeof raw.lastRecallProjection === 'object'
-        ? structuredClone(raw.lastRecallProjection)
-        : null;
-    normalized.swipeTailCache = normalizeSwipeTailCache(raw.swipeTailCache);
-    normalized.opLog = Array.isArray(raw.opLog)
-        ? raw.opLog.map(normalizeMemoryLogEntry).filter(Boolean)
-        : [];
-    normalized.coveredSeqTo = getPersistedCoveredSeqTo({
-        coveredSeqTo: raw.coveredSeqTo,
-        opLog: normalized.opLog,
-    });
-    return normalized;
-}
-
-function buildMemoryLogOpsFromStore(store) {
-    const normalized = normalizeStoreForRuntime(store);
-    const ops = [];
-    const nodes = Object.values(normalized.nodes || {}).sort(compareNodesByTimeline);
-    for (const node of nodes) {
-        const snapshot = cloneRollbackNodeSnapshot(node);
-        if (snapshot) {
-            ops.push({ type: 'upsert_node', node: snapshot });
-        }
-    }
-    for (const edge of Array.isArray(normalized.edges) ? normalized.edges : []) {
-        const snapshot = cloneRollbackEdgeSnapshot(edge);
-        if (snapshot) {
-            ops.push({ type: 'upsert_edge', edge: snapshot });
-        }
-    }
-    return ops;
-}
-
-function buildLegacyMigrationSeq(context, legacyStore) {
-    void context;
-    return getStoreCoveredSeqTo(legacyStore);
-}
-
-function buildPersistedStateFromLegacyStore(raw, context) {
-    const normalized = createEmptyPersistedMemoryState();
-    const legacyStore = normalizeStoreForRuntime(raw || createEmptyStore());
-    normalized.sourceMessageCount = Math.max(0, Number(legacyStore.sourceMessageCount || 0));
-    normalized.lastRecallTrace = structuredClone(Array.isArray(legacyStore.lastRecallTrace) ? legacyStore.lastRecallTrace : []);
-    normalized.lastRecallProjection = legacyStore.lastRecallProjection && typeof legacyStore.lastRecallProjection === 'object'
-        ? structuredClone(legacyStore.lastRecallProjection)
-        : null;
-    normalized.swipeTailCache = cloneSwipeTailCache(legacyStore.swipeTailCache);
-
-    const hasLegacyPayload = Object.keys(legacyStore.nodes || {}).length > 0
-        || (Array.isArray(legacyStore.edges) && legacyStore.edges.length > 0)
-        || normalized.sourceMessageCount > 0
-        || normalized.lastRecallTrace.length > 0
-        || Boolean(normalized.lastRecallProjection)
-        || Object.keys(normalized.swipeTailCache).length > 0;
-    if (hasLegacyPayload) {
-        const seq = buildLegacyMigrationSeq(context, legacyStore);
-        normalized.coveredSeqTo = Math.max(0, seq);
-        const ops = buildMemoryLogOpsFromStore(legacyStore);
-        if (seq > 0 || ops.length > 0) {
-            normalized.opLog = [{ seq: Math.max(0, seq), ops }];
-        }
-    }
-    return { state: normalized, migrated: hasLegacyPayload };
-}
-
-function normalizePersistedMemoryState(raw, context) {
-    if (raw && typeof raw === 'object' && Array.isArray(raw.opLog)) {
-        return {
-            state: normalizePersistedStateBase(raw),
-            migrated: Number(raw.version || 0) !== PERSISTED_STORE_VERSION,
-        };
-    }
-    if (raw && typeof raw === 'object') {
-        return buildPersistedStateFromLegacyStore(raw, context);
-    }
-    return {
-        state: createEmptyPersistedMemoryState(),
-        migrated: false,
-    };
-}
-
-function hasPersistedMemoryStatePayload(state) {
-    const normalized = normalizePersistedStateBase(state);
-    return normalized.coveredSeqTo > 0
-        || normalized.opLog.length > 0
-        || normalized.lastRecallTrace.length > 0
-        || Boolean(normalized.lastRecallProjection)
-        || normalized.sourceMessageCount > 0
-        || Object.keys(normalized.swipeTailCache).length > 0;
-}
-
-function applyLoggedNodeSnapshot(store, node) {
-    const snapshot = cloneRollbackNodeSnapshot(node);
-    if (!snapshot) {
-        return;
-    }
-    store.nodes[snapshot.id] = snapshot;
-    const extractedNodeSeq = Number(String(snapshot.id || '').replace(/^n_/, ''));
-    if (Number.isFinite(extractedNodeSeq)) {
-        store.nodeSeq = Math.max(store.nodeSeq, extractedNodeSeq);
-    }
-    store.seqCounter = Math.max(store.seqCounter, Math.max(0, Number(snapshot.seqTo || 0)));
-}
-
-function removeLoggedEdge(store, edge) {
-    const key = getRollbackEdgeKey(edge);
-    if (!key) {
-        return;
-    }
-    store.edges = (Array.isArray(store.edges) ? store.edges : []).filter(item => getRollbackEdgeKey(item) !== key);
-}
-
-function applyMemoryLogEntryToStore(store, entry) {
-    if (!store || typeof store !== 'object' || !entry || typeof entry !== 'object') {
-        return;
-    }
-    for (const operation of Array.isArray(entry.ops) ? entry.ops : []) {
-        const type = String(operation?.type || '').trim().toLowerCase();
-        if (type === 'delete_edge') {
-            removeLoggedEdge(store, operation.edge);
-            continue;
-        }
-        if (type === 'delete_node') {
-            const nodeId = String(operation?.nodeId || '').trim();
-            if (nodeId) {
-                dropNode(store, nodeId, true);
-            }
-            continue;
-        }
-        if (type === 'upsert_node') {
-            applyLoggedNodeSnapshot(store, operation.node);
-            continue;
-        }
-        if (type === 'upsert_edge') {
-            const edge = cloneRollbackEdgeSnapshot(operation.edge);
-            if (edge) {
-                addEdge(store, edge.from, edge.to, edge.type);
-            }
-        }
-    }
-    repairStoreAfterRollback(store);
-    store.loggedSeqTo = Math.max(store.loggedSeqTo, Math.max(0, Math.floor(Number(entry.seq || 0))));
-    store.seqCounter = Math.max(store.seqCounter, store.loggedSeqTo);
-    store.appliedSeqTo = Math.max(store.appliedSeqTo, Math.max(0, Math.floor(Number(entry.seq || 0))));
-}
-
-function buildRuntimeStoreFromPersistedState(state) {
-    const normalizedState = normalizePersistedStateBase(state);
-    const runtimeStore = createEmptyStore();
-    for (const entry of normalizedState.opLog) {
-        applyMemoryLogEntryToStore(runtimeStore, entry);
-    }
-    runtimeStore.appliedSeqTo = Math.max(runtimeStore.appliedSeqTo, getPersistedCoveredSeqTo(normalizedState));
-    runtimeStore.loggedSeqTo = Math.max(runtimeStore.loggedSeqTo, getLatestLoggedSeq(normalizedState), runtimeStore.appliedSeqTo);
-    runtimeStore.seqCounter = Math.max(runtimeStore.seqCounter, runtimeStore.loggedSeqTo);
-    runtimeStore.lastRecallTrace = structuredClone(Array.isArray(normalizedState.lastRecallTrace) ? normalizedState.lastRecallTrace : []);
-    runtimeStore.lastRecallProjection = normalizedState.lastRecallProjection && typeof normalizedState.lastRecallProjection === 'object'
-        ? structuredClone(normalizedState.lastRecallProjection)
-        : null;
-    runtimeStore.sourceMessageCount = Math.max(0, Number(normalizedState.sourceMessageCount || 0));
-    runtimeStore.swipeTailCache = cloneSwipeTailCache(normalizedState.swipeTailCache);
-    return runtimeStore;
-}
-
-function buildBranchStateFromPersistedState(state, branchCutoffSeq) {
-    const normalizedState = normalizePersistedStateBase(state);
-    const cutoffSeq = Math.max(0, Math.floor(Number(branchCutoffSeq || 0)));
-    const nextState = applyStoreMetadataToPersistedState(createEmptyPersistedMemoryState(), normalizedState);
-    nextState.coveredSeqTo = Math.min(getPersistedCoveredSeqTo(normalizedState), cutoffSeq);
-    const branchStore = createEmptyStore();
-    const delayedBackfillNodeIds = new Set();
-    const backfillEntriesBySeq = new Map();
-
-    const appendBackfillOperation = (seq, operation) => {
-        const normalizedSeq = Math.max(0, Math.floor(Number(seq || 0)));
-        if (!normalizedSeq || !operation || typeof operation !== 'object') {
-            return;
-        }
-        if (!backfillEntriesBySeq.has(normalizedSeq)) {
-            backfillEntriesBySeq.set(normalizedSeq, []);
-        }
-        backfillEntriesBySeq.get(normalizedSeq).push(structuredClone(operation));
-    };
-
-    for (const entry of normalizedState.opLog) {
-        const entrySeq = Math.max(0, Math.floor(Number(entry?.seq || 0)));
-        if (entrySeq <= cutoffSeq) {
-            const clonedEntry = normalizeMemoryLogEntry(structuredClone(entry));
-            if (!clonedEntry) {
-                continue;
-            }
-            nextState.opLog.push(clonedEntry);
-            applyMemoryLogEntryToStore(branchStore, clonedEntry);
-        }
-    }
-
-    // Delayed extraction/compression can write old-content nodes after the branch cutoff.
-    for (const entry of normalizedState.opLog) {
-        const entrySeq = Math.max(0, Math.floor(Number(entry?.seq || 0)));
-        if (entrySeq <= cutoffSeq) {
-            continue;
-        }
-        for (const operation of Array.isArray(entry?.ops) ? entry.ops : []) {
-            if (String(operation?.type || '').trim().toLowerCase() !== 'upsert_node') {
-                continue;
-            }
-            const node = cloneRollbackNodeSnapshot(operation?.node);
-            const nodeSeq = Math.max(0, Math.floor(Number(node?.seqTo || 0)));
-            if (!node || nodeSeq <= 0 || nodeSeq > cutoffSeq) {
-                continue;
-            }
-            const currentNode = branchStore.nodes?.[node.id];
-            const currentSeq = Math.max(0, Math.floor(Number(currentNode?.seqTo || 0)));
-            if (!currentNode || nodeSeq >= currentSeq) {
-                applyLoggedNodeSnapshot(branchStore, node);
-                delayedBackfillNodeIds.add(node.id);
-                appendBackfillOperation(nodeSeq, { type: 'upsert_node', node });
-            }
-        }
-    }
-
-    if (delayedBackfillNodeIds.size > 0) {
-        for (const entry of normalizedState.opLog) {
-            const entrySeq = Math.max(0, Math.floor(Number(entry?.seq || 0)));
-            if (entrySeq <= cutoffSeq) {
-                continue;
-            }
-            for (const operation of Array.isArray(entry?.ops) ? entry.ops : []) {
-                if (String(operation?.type || '').trim().toLowerCase() !== 'upsert_edge') {
-                    continue;
-                }
-                const edge = cloneRollbackEdgeSnapshot(operation?.edge);
-                if (!edge) {
-                    continue;
-                }
-                const fromNode = branchStore.nodes?.[edge.from];
-                const toNode = branchStore.nodes?.[edge.to];
-                if (!fromNode || !toNode) {
-                    continue;
-                }
-                if (!delayedBackfillNodeIds.has(edge.from) && !delayedBackfillNodeIds.has(edge.to)) {
-                    continue;
-                }
-                const edgeKey = getRollbackEdgeKey(edge);
-                const hadEdge = Array.isArray(branchStore.edges) && branchStore.edges.some(item => getRollbackEdgeKey(item) === edgeKey);
-                addEdge(branchStore, edge.from, edge.to, edge.type);
-                if (!hadEdge) {
-                    const edgeSeq = Math.max(
-                        0,
-                        Math.floor(Number(fromNode?.seqTo || 0)),
-                        Math.floor(Number(toNode?.seqTo || 0)),
-                    );
-                    appendBackfillOperation(edgeSeq, { type: 'upsert_edge', edge });
-                }
-            }
-        }
-    }
-
-    repairStoreAfterRollback(branchStore);
-    nextState.opLog.push(
-        ...Array.from(backfillEntriesBySeq.entries())
-            .sort((a, b) => a[0] - b[0])
-            .map(([seq, ops]) => ({ seq, ops })),
-    );
-    branchStore.appliedSeqTo = Math.max(branchStore.appliedSeqTo, nextState.coveredSeqTo);
-    branchStore.loggedSeqTo = Math.max(branchStore.loggedSeqTo, getLatestLoggedSeq(nextState), branchStore.appliedSeqTo);
-    branchStore.seqCounter = Math.max(branchStore.seqCounter, branchStore.loggedSeqTo);
-    branchStore.lastRecallTrace = structuredClone(Array.isArray(normalizedState.lastRecallTrace) ? normalizedState.lastRecallTrace : []);
-    branchStore.lastRecallProjection = normalizedState.lastRecallProjection && typeof normalizedState.lastRecallProjection === 'object'
-        ? structuredClone(normalizedState.lastRecallProjection)
-        : null;
-    branchStore.sourceMessageCount = Math.max(0, Number(normalizedState.sourceMessageCount || 0));
-    branchStore.swipeTailCache = cloneSwipeTailCache(normalizedState.swipeTailCache);
-    nextState.opLog = nextState.opLog
-        .map(entry => normalizeMemoryLogEntry(entry))
-        .filter(Boolean)
-        .sort((a, b) => a.seq - b.seq);
-    return {
-        state: nextState,
-        store: branchStore,
-    };
-}
-
-function getMemoryState(chatKey) {
-    const key = String(chatKey || '').trim();
-    if (!key) {
-        return createEmptyPersistedMemoryState();
-    }
-    if (!memoryStateCache.has(key)) {
-        memoryStateCache.set(key, createEmptyPersistedMemoryState());
-    }
-    return memoryStateCache.get(key);
-}
-
-function updatePersistedStateMetadataFromStore(chatKey, store) {
-    const state = getMemoryState(chatKey);
-    state.coveredSeqTo = Math.max(getPersistedCoveredSeqTo(state), getStoreCoveredSeqTo(store));
-    state.sourceMessageCount = Math.max(0, Number(store?.sourceMessageCount || 0));
-    state.lastRecallTrace = structuredClone(Array.isArray(store?.lastRecallTrace) ? store.lastRecallTrace : []);
-    state.lastRecallProjection = store?.lastRecallProjection && typeof store.lastRecallProjection === 'object'
-        ? structuredClone(store.lastRecallProjection)
-        : null;
-    state.swipeTailCache = cloneSwipeTailCache(store?.swipeTailCache);
-    memoryStateCache.set(chatKey, state);
-    return state;
-}
-
-function rematerializeStoreForChatKey(chatKey) {
-    const state = getMemoryState(chatKey);
-    const store = buildRuntimeStoreFromPersistedState(state);
-    memoryStoreCache.set(chatKey, store);
-    return store;
-}
-
-function trimPersistedOpLogFromSeq(chatKey, fromSeq) {
-    const key = String(chatKey || '').trim();
-    const startSeq = Math.max(1, Math.floor(Number(fromSeq || 0)));
-    const state = getMemoryState(key);
-    const nextLog = state.opLog.filter(entry => Math.max(0, Math.floor(Number(entry?.seq || 0))) < startSeq);
-    if (nextLog.length === state.opLog.length) {
-        return {
-            changed: false,
-            store: memoryStoreCache.get(key) || buildRuntimeStoreFromPersistedState(state),
-        };
-    }
-    state.opLog = nextLog;
-    memoryStateCache.set(key, state);
-    return {
-        changed: true,
-        store: rematerializeStoreForChatKey(key),
-    };
-}
-
-function captureStoreDiffSnapshot(store) {
-    const normalized = normalizeStoreForRuntime(store);
-    return {
-        nodes: Object.fromEntries(
-            Object.entries(normalized.nodes || {}).map(([id, node]) => [id, cloneRollbackNodeSnapshot(node)]),
-        ),
-        edges: (Array.isArray(normalized.edges) ? normalized.edges : []).map(cloneRollbackEdgeSnapshot).filter(Boolean),
-    };
-}
-
-function buildMemoryLogDiffOps(beforeStore, afterStore) {
-    const beforeSnapshot = captureStoreDiffSnapshot(beforeStore);
-    const afterSnapshot = captureStoreDiffSnapshot(afterStore);
-    const operations = [];
-    const beforeNodeIds = new Set(Object.keys(beforeSnapshot.nodes || {}));
-    const afterNodeIds = new Set(Object.keys(afterSnapshot.nodes || {}));
-
-    for (const nodeId of [...beforeNodeIds].sort((a, b) => a.localeCompare(b))) {
-        if (!afterNodeIds.has(nodeId)) {
-            operations.push({ type: 'delete_node', nodeId });
-        }
-    }
-
-    for (const nodeId of [...afterNodeIds].sort((a, b) => a.localeCompare(b))) {
-        const beforeNode = beforeSnapshot.nodes?.[nodeId] ?? null;
-        const afterNode = afterSnapshot.nodes?.[nodeId] ?? null;
-        if (JSON.stringify(beforeNode) === JSON.stringify(afterNode)) {
-            continue;
-        }
-        const node = cloneRollbackNodeSnapshot(afterNode);
-        if (node) {
-            operations.push({ type: 'upsert_node', node });
-        }
-    }
-
-    const beforeEdges = new Map(beforeSnapshot.edges.map(edge => [getRollbackEdgeKey(edge), edge]));
-    const afterEdges = new Map(afterSnapshot.edges.map(edge => [getRollbackEdgeKey(edge), edge]));
-
-    for (const key of [...beforeEdges.keys()].sort((a, b) => a.localeCompare(b))) {
-        if (!afterEdges.has(key)) {
-            const edge = cloneRollbackEdgeSnapshot(beforeEdges.get(key));
-            if (edge) {
-                operations.push({ type: 'delete_edge', edge });
-            }
-        }
-    }
-
-    for (const key of [...afterEdges.keys()].sort((a, b) => a.localeCompare(b))) {
-        if (!beforeEdges.has(key)) {
-            const edge = cloneRollbackEdgeSnapshot(afterEdges.get(key));
-            if (edge) {
-                operations.push({ type: 'upsert_edge', edge });
-            }
-        }
-    }
-
-    return operations;
-}
-
-function appendPersistedDiffEntry(chatKey, beforeStore, afterStore, seq) {
-    const key = String(chatKey || '').trim();
-    if (!key) {
-        return false;
-    }
-    const normalizedSeq = Math.max(0, Math.floor(Number(seq || 0)));
-    const state = getMemoryState(key);
-    state.coveredSeqTo = Math.max(getPersistedCoveredSeqTo(state), normalizedSeq);
-    const ops = buildMemoryLogDiffOps(beforeStore, afterStore);
-    if (ops.length === 0) {
-        return false;
-    }
-    state.opLog.push({ seq: normalizedSeq, ops });
-    const prepared = prepareCommittedStateWithSwipeTailCache(getContext(), state, afterStore, normalizedSeq);
-    memoryStateCache.set(key, prepared.state);
-    afterStore.loggedSeqTo = Math.max(Number(afterStore?.loggedSeqTo || 0), getPersistedCoveredSeqTo(prepared.state));
-    const runtimeStore = normalizeStoreForRuntime(prepared.store);
-    runtimeStore.loggedSeqTo = Math.max(getPersistedCoveredSeqTo(prepared.state), runtimeStore.loggedSeqTo);
-    runtimeStore.lastRecallTrace = structuredClone(Array.isArray(prepared.store?.lastRecallTrace) ? prepared.store.lastRecallTrace : []);
-    runtimeStore.lastRecallProjection = prepared.store?.lastRecallProjection && typeof prepared.store.lastRecallProjection === 'object'
-        ? structuredClone(prepared.store.lastRecallProjection)
-        : null;
-    runtimeStore.sourceMessageCount = Math.max(0, Number(prepared.store?.sourceMessageCount || 0));
-    runtimeStore.swipeTailCache = cloneSwipeTailCache(prepared.store?.swipeTailCache);
-    memoryStoreCache.set(key, runtimeStore);
-    updatePersistedStateMetadataFromStore(key, runtimeStore);
-    return true;
-}
-
-function applyStoreMetadataToPersistedState(state, store) {
-    const nextState = state && typeof state === 'object'
-        ? state
-        : createEmptyPersistedMemoryState();
-    nextState.coveredSeqTo = Number.isFinite(Number(store?.coveredSeqTo))
-        ? Math.max(0, Math.floor(Number(store.coveredSeqTo)))
-        : getStoreCoveredSeqTo(store);
-    nextState.sourceMessageCount = Math.max(0, Number(store?.sourceMessageCount || 0));
-    nextState.lastRecallTrace = structuredClone(Array.isArray(store?.lastRecallTrace) ? store.lastRecallTrace : []);
-    nextState.lastRecallProjection = store?.lastRecallProjection && typeof store.lastRecallProjection === 'object'
-        ? structuredClone(store.lastRecallProjection)
-        : null;
-    nextState.swipeTailCache = cloneSwipeTailCache(store?.swipeTailCache);
-    return nextState;
-}
-
-function buildRuntimeStoreWithPersistedMetadata(state, sourceStore) {
-    const runtimeStore = buildRuntimeStoreFromPersistedState(state);
-    runtimeStore.lastRecallTrace = structuredClone(Array.isArray(sourceStore?.lastRecallTrace) ? sourceStore.lastRecallTrace : []);
-    runtimeStore.lastRecallProjection = sourceStore?.lastRecallProjection && typeof sourceStore.lastRecallProjection === 'object'
-        ? structuredClone(sourceStore.lastRecallProjection)
-        : null;
-    runtimeStore.sourceMessageCount = Math.max(0, Number(sourceStore?.sourceMessageCount || 0));
-    runtimeStore.swipeTailCache = cloneSwipeTailCache(sourceStore?.swipeTailCache);
-    runtimeStore.lastExtractionDebug = sourceStore?.lastExtractionDebug && typeof sourceStore.lastExtractionDebug === 'object'
-        ? structuredClone(sourceStore.lastExtractionDebug)
-        : null;
-    return runtimeStore;
-}
-
-function hasPersistedStoreMetadataChanges(beforeStore, afterStore) {
-    const beforeTrace = JSON.stringify(Array.isArray(beforeStore?.lastRecallTrace) ? beforeStore.lastRecallTrace : []);
-    const afterTrace = JSON.stringify(Array.isArray(afterStore?.lastRecallTrace) ? afterStore.lastRecallTrace : []);
-    const beforeProjection = JSON.stringify(beforeStore?.lastRecallProjection && typeof beforeStore.lastRecallProjection === 'object'
-        ? beforeStore.lastRecallProjection
-        : null);
-    const afterProjection = JSON.stringify(afterStore?.lastRecallProjection && typeof afterStore.lastRecallProjection === 'object'
-        ? afterStore.lastRecallProjection
-        : null);
-    const beforeSwipeTailCache = JSON.stringify(normalizeSwipeTailCache(beforeStore?.swipeTailCache));
-    const afterSwipeTailCache = JSON.stringify(normalizeSwipeTailCache(afterStore?.swipeTailCache));
-    return getStoreCoveredSeqTo(beforeStore) !== getStoreCoveredSeqTo(afterStore)
-        || Math.max(0, Number(beforeStore?.sourceMessageCount || 0)) !== Math.max(0, Number(afterStore?.sourceMessageCount || 0))
-        || beforeTrace !== afterTrace
-        || beforeProjection !== afterProjection
-        || beforeSwipeTailCache !== afterSwipeTailCache;
-}
-
-function prepareCommittedStateWithSwipeTailCache(context, state, store, seq) {
-    const normalizedState = normalizePersistedStateBase(state);
-    const normalizedStore = normalizeStoreForRuntime(store);
-    const normalizedSeq = Math.max(0, Math.floor(Number(seq || getStoreCoveredSeqTo(normalizedStore) || 0)));
-    normalizedState.coveredSeqTo = Math.max(getPersistedCoveredSeqTo(normalizedState), normalizedSeq);
-    normalizedStore.appliedSeqTo = Math.max(getStoreCoveredSeqTo(normalizedStore), normalizedSeq);
-    normalizedStore.loggedSeqTo = Math.max(normalizedStore.loggedSeqTo, normalizedStore.appliedSeqTo);
-    normalizedStore.seqCounter = Math.max(normalizedStore.seqCounter, normalizedStore.loggedSeqTo);
-    const settings = getEffectiveSettings(context, getSettings());
-    const latestSeq = getExtractableLatestSeq(buildPlayableFramesFromContext(context).length, settings);
-    const descriptor = latestSeq > 0
-        ? buildActiveSwipeTailDescriptor(context, { expectedAssistantSeq: latestSeq })
-        : null;
-    let nextCache = descriptor
-        ? pruneSwipeTailCache(normalizedState.swipeTailCache, { activeSeq: descriptor.assistantSeq })
-        : {};
-    if (descriptor && normalizedSeq >= latestSeq) {
-        nextCache[descriptor.cacheKey] = {
-            seqFrom: descriptor.assistantSeq,
-            prefixHash: computeSwipeTailPrefixHash(normalizedState, descriptor.assistantSeq),
-            tailLog: normalizedState.opLog
-                .filter(entry => Math.max(0, Math.floor(Number(entry?.seq || 0))) >= descriptor.assistantSeq)
-                .map(entry => structuredClone(entry)),
-            cachedAt: Date.now(),
-        };
-        nextCache = pruneSwipeTailCache(nextCache, { activeSeq: descriptor.assistantSeq });
-    }
-    normalizedState.swipeTailCache = nextCache;
-    normalizedStore.swipeTailCache = cloneSwipeTailCache(nextCache);
-    return {
-        state: normalizedState,
-        store: normalizedStore,
-    };
 }
 
 function cancelPendingMutationInvalidation(chatKey) {
@@ -2806,157 +1173,213 @@ function cancelPendingMutationInvalidation(chatKey) {
     pendingMutationInvalidations.delete(key);
 }
 
-async function restoreSwipeTailCacheForMessage(context, messageIndex) {
-    const chatKey = getChatKey(context);
-    if (!chatKey || chatKey === 'invalid_target') {
-        return false;
+/**
+ * Direct overwrite of the floor-state log + data namespaces at a given target.
+ * Used for `replace`-style commits (full rebuild, JSON editor apply, import,
+ * legacy schema migration) where appending a diff would be incorrect — the
+ * caller wants the new store to be the only commit on the log.
+ *
+ * Bypasses the FloorState public API because that API is append-only. We
+ * still serialise against the singleton's in-flight queue via fs.ready() to
+ * avoid races with rematerialize.
+ */
+async function replaceGraphLogForTarget(context, target, store, seq) {
+    const fs = await getFloorStateInstance(context);
+    await fs.ready();
+    const normalizedStore = normalizeStoreForRuntime(store);
+    const normalizedSeq = Math.max(0, Math.floor(Number(seq || getStoreCoveredSeqTo(normalizedStore) || 0)));
+    const finalPayload = graphPayloadFromStore(normalizedStore);
+    finalPayload.coveredAssistantSeq = Math.max(finalPayload.coveredAssistantSeq, normalizedSeq);
+    finalPayload.appliedSeqTo = Math.max(finalPayload.appliedSeqTo, normalizedSeq);
+    finalPayload.loggedSeqTo = Math.max(finalPayload.loggedSeqTo, normalizedSeq);
+
+    const targetWriteOption = target ? { target, maxOperations: 16000 } : { maxOperations: 16000 };
+    const floor = seqToFloor(context, normalizedSeq);
+    const swipeId = floor === null ? 0 : (activeSwipeIdAtFloor(context, floor) ?? 0);
+    const patches = await context.buildObjectPatchOperationsAsync({}, finalPayload);
+
+    if (Array.isArray(patches) && patches.length > 0 && Number.isInteger(floor) && floor >= 0) {
+        await context.updateChatState(LOG_NAMESPACE, () => ({
+            version: FLOOR_STATE_LOG_VERSION,
+            commits: [{ floor, swipeId, patches }],
+        }), targetWriteOption);
+        await context.updateChatState(CHAT_STATE_NAMESPACE, () => finalPayload, targetWriteOption);
+    } else {
+        await context.updateChatState(LOG_NAMESPACE, () => ({
+            version: FLOOR_STATE_LOG_VERSION,
+            commits: [],
+        }), targetWriteOption);
+        await context.updateChatState(CHAT_STATE_NAMESPACE, () => ({}), targetWriteOption);
     }
-    const descriptor = buildActiveSwipeTailDescriptor(context, { messageIndex });
-    if (!descriptor) {
-        return false;
-    }
-    const currentState = normalizePersistedStateBase(getMemoryState(chatKey));
-    const cacheEntry = normalizeSwipeTailCacheEntry(currentState.swipeTailCache?.[descriptor.cacheKey]);
-    if (!cacheEntry) {
-        return false;
-    }
-    const prefixHash = computeSwipeTailPrefixHash(currentState, descriptor.assistantSeq);
-    if (String(cacheEntry.prefixHash || '') !== prefixHash) {
-        return false;
-    }
-    cancelPendingMutationInvalidation(chatKey);
-    if (extractionTimers.has(chatKey)) {
-        clearTimeout(extractionTimers.get(chatKey));
-        extractionTimers.delete(chatKey);
-    }
-    if (activeExtractionAbortController && !activeExtractionAbortController.signal.aborted) {
-        clearRuntimeInfoToast('extraction');
-        activeExtractionAbortController.abort();
-    }
-    const nextState = normalizePersistedStateBase(currentState);
-    nextState.opLog = nextState.opLog
-        .filter(entry => Math.max(0, Math.floor(Number(entry?.seq || 0))) < descriptor.assistantSeq)
-        .concat(cacheEntry.tailLog.map(entry => structuredClone(entry)));
-    nextState.coveredSeqTo = Math.max(
-        getLatestLoggedSeq(nextState),
-        Math.min(getPersistedCoveredSeqTo(currentState), Math.max(0, descriptor.assistantSeq)),
-    );
-    nextState.sourceMessageCount = Math.max(0, Number(computeChatSourceState(context)?.messageCount || nextState.sourceMessageCount || 0));
-    nextState.lastRecallTrace = [];
-    nextState.lastRecallProjection = null;
-    nextState.swipeTailCache = pruneSwipeTailCache(nextState.swipeTailCache, { activeSeq: descriptor.assistantSeq });
-    const restoredStore = buildRuntimeStoreWithPersistedMetadata(nextState, {
-        sourceMessageCount: nextState.sourceMessageCount,
-        lastRecallTrace: [],
-        lastRecallProjection: null,
-        swipeTailCache: nextState.swipeTailCache,
-        lastExtractionDebug: {
-            beginSeq: descriptor.assistantSeq,
-            latestSeq: descriptor.assistantSeq,
-            coveredSeqTo: Math.max(0, descriptor.assistantSeq - 1),
-            extracted: cacheEntry.tailLog.length > 0,
-            reason: 'swipe_cache_hit',
-            at: Date.now(),
-        },
-    });
-    await persistPreparedMemoryStateByChatKey(context, chatKey, nextState, restoredStore, { syncPersistentProjection: true });
-    refreshUiStats();
-    return true;
+    return { payload: finalPayload, hasCommit: Array.isArray(patches) && patches.length > 0 && Number.isInteger(floor) && floor >= 0 };
 }
 
-async function persistPreparedMemoryStateByChatKey(context, chatKey, nextState, runtimeStore, { syncPersistentProjection = false } = {}) {
+async function loadMemoryStoreByTarget(context, target) {
+    if (typeof context.getChatState !== 'function') {
+        throw new Error('Chat state API is unavailable in extension context.');
+    }
+    const data = await context.getChatState(CHAT_STATE_NAMESPACE, { target });
+    const meta = await context.getChatState(META_NAMESPACE, { target });
+    const isV2 = meta && Number(meta.schemaVersion || 0) >= META_SCHEMA_VERSION;
+
+    if (isV2 || (data && typeof data === 'object' && !Array.isArray(data) && !Array.isArray(data.opLog))) {
+        // v2 schema: graph payload in main namespace, meta in __meta sidecar.
+        const runtimeStore = buildRuntimeStoreFromGraphPayloadAndMeta(data, meta);
+        return {
+            state: synthesizePersistedStateFromStoreAndMeta(runtimeStore, meta),
+            store: runtimeStore,
+            migrated: false,
+            meta: meta && typeof meta === 'object' ? structuredClone(meta) : null,
+            v2: true,
+        };
+    }
+
+    // v1 / legacy raw fallback: opLog inside main namespace, no __meta.
+    const { state, migrated } = normalizePersistedMemoryState(data, context);
+    return {
+        state,
+        store: buildRuntimeStoreFromPersistedState(state),
+        migrated,
+        meta: null,
+        v2: false,
+    };
+}
+
+/**
+ * Persist the meta sidecar for a chat target and refresh the cache.
+ */
+async function persistMetaForChatKey(context, chatKey, store, target = undefined) {
+    const resolvedTarget = target || memoryStoreTargets.get(chatKey);
+    if (!resolvedTarget) return null;
+    const meta = metaFieldsFromStore(store);
+    setCachedMeta(chatKey, meta);
+    await persistMetaFields(context, meta, resolvedTarget);
+    return meta;
+}
+
+/**
+ * Replace-style persist: wipes the log and writes one commit covering the
+ * given store at `seq`'s floor. Updates __meta and the runtime caches.
+ *
+ * Used by import, raw-graph editor apply, and the rebuild flow's
+ * onBatchApplied/onCompressionApplied checkpoints.
+ */
+async function commitMemoryStoreReplaceByChatKey(context, chatKey, store, seq, { syncPersistentProjection = false } = {}) {
     const target = memoryStoreTargets.get(chatKey);
     if (!target) {
         throw new Error('Memory store target is unavailable.');
     }
-    if (typeof context.updateChatState !== 'function') {
-        throw new Error('Chat state update API is unavailable in extension context.');
-    }
+    const normalizedStore = normalizeStoreForRuntime(store);
+    const normalizedSeq = Math.max(0, Math.floor(Number(seq || getStoreCoveredSeqTo(normalizedStore) || 0)));
 
-    const persistedState = normalizePersistedStateBase(nextState);
-    const normalizedStore = normalizeStoreForRuntime(runtimeStore);
-    normalizedStore.lastExtractionDebug = runtimeStore?.lastExtractionDebug && typeof runtimeStore.lastExtractionDebug === 'object'
-        ? structuredClone(runtimeStore.lastExtractionDebug)
+    const { payload } = await replaceGraphLogForTarget(context, target, normalizedStore, normalizedSeq);
+
+    const meta = await persistMetaForChatKey(context, chatKey, {
+        ...normalizedStore,
+        sourceMessageCount: normalizedStore.sourceMessageCount,
+    }, target);
+
+    const runtimeStore = buildRuntimeStoreFromGraphPayloadAndMeta(payload, meta);
+    runtimeStore.lastExtractionDebug = normalizedStore?.lastExtractionDebug && typeof normalizedStore.lastExtractionDebug === 'object'
+        ? structuredClone(normalizedStore.lastExtractionDebug)
         : null;
-    const result = await context.updateChatState(
-        CHAT_STATE_NAMESPACE,
-        () => normalizePersistedStateBase(persistedState),
-        { target, maxOperations: 16000 },
-    );
-    if (!result?.ok) {
-        throw new Error('Failed to persist memory store.');
-    }
-
-    memoryStateCache.set(chatKey, persistedState);
-    memoryStoreCache.set(chatKey, normalizedStore);
+    runtimeStore.pendingFullRebuild = Boolean(normalizedStore?.pendingFullRebuild);
+    memoryStoreCache.set(chatKey, runtimeStore);
 
     if (syncPersistentProjection && chatKey === getChatKey(context)) {
         const effectiveSettings = getEffectiveSettings(context, getSettings());
-        await syncPersistentLorebookProjection(context, effectiveSettings, normalizedStore);
+        await syncPersistentLorebookProjection(context, effectiveSettings, runtimeStore);
     }
-
-    return normalizedStore;
+    return runtimeStore;
 }
 
-async function commitMemoryStoreReplaceByChatKey(context, chatKey, store, seq, { syncPersistentProjection = false } = {}) {
-    const normalizedStore = normalizeStoreForRuntime(store);
-    const normalizedSeq = Math.max(0, Math.floor(Number(seq || getStoreCoveredSeqTo(normalizedStore) || 0)));
-    const nextState = applyStoreMetadataToPersistedState(createEmptyPersistedMemoryState(), normalizedStore);
-    const ops = buildMemoryLogOpsFromStore(normalizedStore);
-    nextState.opLog = (normalizedSeq > 0 || ops.length > 0)
-        ? [{ seq: normalizedSeq, ops }]
-        : [];
-    const prepared = prepareCommittedStateWithSwipeTailCache(context, nextState, normalizedStore, normalizedSeq);
-    const runtimeStore = buildRuntimeStoreWithPersistedMetadata(prepared.state, prepared.store);
-    return await persistPreparedMemoryStateByChatKey(context, chatKey, prepared.state, runtimeStore, { syncPersistentProjection });
-}
-
+/**
+ * Diff-style persist: appends one commit to the floor-state log carrying the
+ * full state-as-of-this-commit (snapshot patches from `{}` to afterPayload),
+ * updates __meta if metadata changed, refreshes caches.
+ *
+ * Why snapshot patches: floor-state filters commits by (floor, swipeId) on
+ * swipe / delete events. An incremental patch `prev → next` only applies
+ * cleanly when prev's scaffolding is present; if earlier commits get
+ * filtered out, replay starts from `{}` and the patch fails. Snapshot
+ * patches apply correctly regardless of which subset survives, because
+ * RFC 6902 `add` on an existing key is a replace — sequential snapshots
+ * therefore yield the last-survivor's view.
+ */
 async function commitMemoryStoreDiffByChatKey(context, chatKey, beforeStore, afterStore, seq, { syncPersistentProjection = false } = {}) {
+    const target = memoryStoreTargets.get(chatKey);
+    if (!target) {
+        throw new Error('Memory store target is unavailable.');
+    }
+    const fs = await getFloorStateInstance(context);
     const normalizedBefore = normalizeStoreForRuntime(beforeStore);
     const normalizedAfter = normalizeStoreForRuntime(afterStore);
-    const ops = buildMemoryLogDiffOps(normalizedBefore, normalizedAfter);
     const normalizedSeq = Math.max(0, Math.floor(Number(seq || getStoreCoveredSeqTo(normalizedAfter) || 0)));
-    const nextState = normalizePersistedStateBase(getMemoryState(chatKey));
-    nextState.coveredSeqTo = Math.max(getPersistedCoveredSeqTo(nextState), normalizedSeq);
-    if (ops.length > 0) {
-        nextState.opLog.push({ seq: normalizedSeq, ops });
+
+    const beforePayload = graphPayloadFromStore(normalizedBefore);
+    const afterPayload = graphPayloadFromStore(normalizedAfter);
+    afterPayload.coveredAssistantSeq = Math.max(afterPayload.coveredAssistantSeq, normalizedSeq);
+    afterPayload.appliedSeqTo = Math.max(afterPayload.appliedSeqTo, normalizedSeq);
+    afterPayload.loggedSeqTo = Math.max(afterPayload.loggedSeqTo, normalizedSeq);
+
+    const incrementalOps = await context.buildObjectPatchOperationsAsync(beforePayload, afterPayload);
+    const metadataChanged = hasPersistedStoreMetadataChanges(normalizedBefore, normalizedAfter);
+    const hasGraphChange = Array.isArray(incrementalOps) && incrementalOps.length > 0;
+
+    if (!hasGraphChange && !metadataChanged) {
+        const cached = memoryStoreCache.get(chatKey);
+        return cached || normalizedAfter;
     }
-    applyStoreMetadataToPersistedState(nextState, normalizedAfter);
-    const prepared = prepareCommittedStateWithSwipeTailCache(context, nextState, normalizedAfter, normalizedSeq);
-    const metadataChanged = hasPersistedStoreMetadataChanges(normalizedBefore, prepared.store);
-    if (ops.length === 0 && !metadataChanged) {
-        return prepared.store;
+
+    if (hasGraphChange) {
+        const snapshotOps = await context.buildObjectPatchOperationsAsync({}, afterPayload);
+        const floor = seqToFloor(context, normalizedSeq);
+        if (Number.isInteger(floor) && floor >= 0 && Array.isArray(snapshotOps) && snapshotOps.length > 0) {
+            await fs.patch(snapshotOps, { floor });
+        } else {
+            // No corresponding floor in current chat (seq past the tail).
+            // Write data namespace directly as a best-effort; subsequent
+            // CHAT_CHANGED rematerialize would clobber this anyway.
+            const targetWriteOption = { target, maxOperations: 16000 };
+            await context.updateChatState(CHAT_STATE_NAMESPACE, () => afterPayload, targetWriteOption);
+        }
     }
-    const runtimeStore = buildRuntimeStoreWithPersistedMetadata(prepared.state, prepared.store);
-    return await persistPreparedMemoryStateByChatKey(context, chatKey, prepared.state, runtimeStore, { syncPersistentProjection });
+
+    const meta = await persistMetaForChatKey(context, chatKey, normalizedAfter, target);
+    const latestPayload = await fs.get();
+    const payload = latestPayload && typeof latestPayload === 'object'
+        ? latestPayload
+        : afterPayload;
+    const runtimeStore = buildRuntimeStoreFromGraphPayloadAndMeta(payload, meta);
+    runtimeStore.lastExtractionDebug = normalizedAfter?.lastExtractionDebug && typeof normalizedAfter.lastExtractionDebug === 'object'
+        ? structuredClone(normalizedAfter.lastExtractionDebug)
+        : null;
+    runtimeStore.pendingFullRebuild = Boolean(normalizedAfter?.pendingFullRebuild);
+    memoryStoreCache.set(chatKey, runtimeStore);
+
+    if (syncPersistentProjection && chatKey === getChatKey(context)) {
+        const effectiveSettings = getEffectiveSettings(context, getSettings());
+        await syncPersistentLorebookProjection(context, effectiveSettings, runtimeStore);
+    }
+    return runtimeStore;
 }
 
-function replacePersistedGraphWithStore(chatKey, store, seq) {
-    const key = String(chatKey || '').trim();
-    if (!key) {
-        return null;
-    }
-    const normalizedStore = normalizeStoreForRuntime(store);
-    const state = getMemoryState(key);
-    const normalizedSeq = Math.max(0, Math.floor(Number(seq || getStoreCoveredSeqTo(normalizedStore) || 0)));
-    const ops = buildMemoryLogOpsFromStore(normalizedStore);
-    state.coveredSeqTo = normalizedSeq;
-    state.opLog = (normalizedSeq > 0 || ops.length > 0)
-        ? [{ seq: normalizedSeq, ops }]
-        : [];
-    const prepared = prepareCommittedStateWithSwipeTailCache(getContext(), state, normalizedStore, normalizedSeq);
-    memoryStateCache.set(key, prepared.state);
-    store.loggedSeqTo = Math.max(Number(store?.loggedSeqTo || 0), getPersistedCoveredSeqTo(prepared.state));
-    const runtimeStore = buildRuntimeStoreFromPersistedState(prepared.state);
-    runtimeStore.lastRecallTrace = structuredClone(Array.isArray(prepared.store.lastRecallTrace) ? prepared.store.lastRecallTrace : []);
-    runtimeStore.lastRecallProjection = prepared.store.lastRecallProjection && typeof prepared.store.lastRecallProjection === 'object'
-        ? structuredClone(prepared.store.lastRecallProjection)
-        : null;
-    runtimeStore.sourceMessageCount = Math.max(0, Number(prepared.store.sourceMessageCount || 0));
-    runtimeStore.swipeTailCache = cloneSwipeTailCache(prepared.store.swipeTailCache);
-    updatePersistedStateMetadataFromStore(key, runtimeStore);
-    memoryStoreCache.set(key, runtimeStore);
-    return runtimeStore;
+/**
+ * Sync alias kept for callsites that don't await; thin wrapper around
+ * commitMemoryStoreReplaceByChatKey. Returns the promise so callers that DO
+ * want to await can.
+ */
+function replacePersistedGraphWithStore(context, chatKey, store, seq) {
+    return commitMemoryStoreReplaceByChatKey(context, chatKey, store, seq);
+}
+
+/**
+ * Editor-save path: caller has a beforeStore and an afterStore and wants the
+ * delta committed. Same semantics as commitMemoryStoreDiffByChatKey.
+ */
+async function appendPersistedDiffEntry(context, chatKey, beforeStore, afterStore, seq) {
+    const result = await commitMemoryStoreDiffByChatKey(context, chatKey, beforeStore, afterStore, seq);
+    return Boolean(result);
 }
 
 async function ensureMemoryStoreLoaded(context, { force = false, targetHint = null } = {}) {
@@ -2976,10 +1399,37 @@ async function ensureMemoryStoreLoaded(context, { force = false, targetHint = nu
     }
 
     const task = (async () => {
+        // Schema migration runs at init/CHAT_CHANGED for current target; legacy
+        // target candidates may still be in v1. Run migration before reading
+        // each candidate so we always read v2 shape.
+        try {
+            await migrateLegacyMemoryGraphState(
+                context,
+                target,
+                isExtractableAssistantMessage,
+                applyMemoryLogEntryToStore,
+            );
+        } catch (error) {
+            console.warn(`[${MODULE_NAME}] Legacy schema migration failed for target`, { target, error });
+        }
+
         let loaded = await loadMemoryStoreByTarget(context, target);
         let migratedFromTarget = null;
-        if (!hasPersistedMemoryStatePayload(loaded.state)) {
+
+        const targetIsEmpty = !loaded.v2 && !hasPersistedMemoryStatePayload(loaded.state)
+            || (loaded.v2 && !hasPersistedMemoryStatePayload(loaded.state));
+        if (targetIsEmpty) {
             for (const legacyTarget of buildLegacyMemoryTargetCandidates(context, target, targetHint)) {
+                try {
+                    await migrateLegacyMemoryGraphState(
+                        context,
+                        legacyTarget,
+                        isExtractableAssistantMessage,
+                        applyMemoryLogEntryToStore,
+                    );
+                } catch (error) {
+                    console.warn(`[${MODULE_NAME}] Legacy schema migration failed for legacy target`, { legacyTarget, error });
+                }
                 const legacyLoaded = await loadMemoryStoreByTarget(context, legacyTarget);
                 if (!hasPersistedMemoryStatePayload(legacyLoaded.state)) {
                     continue;
@@ -2993,10 +1443,16 @@ async function ensureMemoryStoreLoaded(context, { force = false, targetHint = nu
                 break;
             }
         }
-        memoryStateCache.set(chatKey, loaded.state);
+
+        setCachedMeta(chatKey, loaded.meta || metaFieldsFromStore(loaded.store));
         memoryStoreCache.set(chatKey, loaded.store);
         if (migratedFromTarget) {
-            await persistPreparedMemoryStateByChatKey(context, chatKey, loaded.state, loaded.store);
+            await commitMemoryStoreReplaceByChatKey(
+                context,
+                chatKey,
+                loaded.store,
+                getStoreCoveredSeqTo(loaded.store),
+            );
             try {
                 await deleteMemoryStoreByTarget(context, migratedFromTarget);
             } catch (error) {
@@ -3007,9 +1463,14 @@ async function ensureMemoryStoreLoaded(context, { force = false, targetHint = nu
                 });
             }
         } else if (loaded.migrated) {
-            await persistMemoryStoreByChatKey(context, chatKey, loaded.store);
+            await commitMemoryStoreReplaceByChatKey(
+                context,
+                chatKey,
+                loaded.store,
+                getStoreCoveredSeqTo(loaded.store),
+            );
         }
-        return loaded.store;
+        return memoryStoreCache.get(chatKey) || loaded.store;
     })();
     memoryLoadTasks.set(chatKey, task);
 
@@ -3025,6 +1486,12 @@ function getMemoryStore(context, targetHint = null) {
     return memoryStoreCache.get(chatKey) || null;
 }
 
+/**
+ * Persist meta-only updates (sourceMessageCount, lastRecallTrace,
+ * lastRecallProjection) without touching the floor-state log. Used after
+ * non-graph-mutating store updates (e.g. updateStoreSourceState in the
+ * mutation invalidation path, editor save's metadata refresh).
+ */
 async function persistMemoryStoreByChatKey(context, chatKey, store, { syncPersistentProjection = false } = {}) {
     const target = memoryStoreTargets.get(chatKey);
     if (!target) {
@@ -3034,16 +1501,12 @@ async function persistMemoryStoreByChatKey(context, chatKey, store, { syncPersis
         throw new Error('Chat state update API is unavailable in extension context.');
     }
     const nextStore = normalizeStoreForRuntime(store);
+    nextStore.lastExtractionDebug = store?.lastExtractionDebug && typeof store.lastExtractionDebug === 'object'
+        ? structuredClone(store.lastExtractionDebug)
+        : null;
+    nextStore.pendingFullRebuild = Boolean(store?.pendingFullRebuild);
     memoryStoreCache.set(chatKey, nextStore);
-    const nextState = updatePersistedStateMetadataFromStore(chatKey, nextStore);
-    const result = await context.updateChatState(
-        CHAT_STATE_NAMESPACE,
-        () => normalizePersistedStateBase(nextState),
-        { target, maxOperations: 16000 },
-    );
-    if (!result?.ok) {
-        throw new Error('Failed to persist memory store.');
-    }
+    await persistMetaForChatKey(context, chatKey, nextStore, target);
     if (syncPersistentProjection && chatKey === getChatKey(context)) {
         const effectiveSettings = getEffectiveSettings(context, getSettings());
         await syncPersistentLorebookProjection(context, effectiveSettings, nextStore);
@@ -3058,70 +1521,48 @@ async function persistRecallMetadataByChatKey(context, chatKey, { trace, project
     if (typeof context.updateChatState !== 'function') {
         throw new Error('Chat state update API is unavailable in extension context.');
     }
-    const state = getMemoryState(chatKey);
-    state.lastRecallTrace = structuredClone(Array.isArray(trace) ? trace : []);
-    state.lastRecallProjection = projection && typeof projection === 'object'
-        ? structuredClone(projection)
-        : null;
-    const result = await context.updateChatState(
-        CHAT_STATE_NAMESPACE,
-        () => normalizePersistedStateBase(state),
-        { target, maxOperations: 16000 },
-    );
-    if (!result?.ok) {
-        throw new Error('Failed to persist recall metadata.');
-    }
+    const cached = getCachedMeta(chatKey) || {};
+    const nextMeta = {
+        schemaVersion: META_SCHEMA_VERSION,
+        sourceMessageCount: Math.max(0, Number(cached.sourceMessageCount || 0)),
+        lastRecallTrace: structuredClone(Array.isArray(trace) ? trace : []),
+        lastRecallProjection: projection && typeof projection === 'object'
+            ? structuredClone(projection)
+            : null,
+    };
+    setCachedMeta(chatKey, nextMeta);
+    await persistMetaFields(context, nextMeta, target);
     const store = memoryStoreCache.get(chatKey);
     if (store) {
-        store.lastRecallTrace = structuredClone(Array.isArray(trace) ? trace : []);
-        store.lastRecallProjection = projection && typeof projection === 'object'
-            ? structuredClone(projection)
+        store.lastRecallTrace = structuredClone(nextMeta.lastRecallTrace);
+        store.lastRecallProjection = nextMeta.lastRecallProjection
+            ? structuredClone(nextMeta.lastRecallProjection)
             : null;
     }
-    return result;
+    return { ok: true };
 }
 
+/**
+ * Branch inheritance: floor-state's own CHAT_BRANCH_CREATED handler copies
+ * the commit log to the target sidecar, so the graph itself is already
+ * inherited. We only need to seed the new chat's `__meta` with reset values
+ * and clear runtime caches that might have been populated speculatively.
+ */
 async function inheritMemoryStoreForBranch(context, payload) {
     const sourceTarget = normalizeExplicitChatStateTarget(payload?.sourceTarget);
     const targetTarget = normalizeExplicitChatStateTarget(payload?.targetTarget);
     if (!sourceTarget || !targetTarget) {
         return;
     }
-
     const assistantMessageCount = Math.max(0, Math.floor(Number(payload?.assistantMessageCount || 0)));
-    await ensureMemoryStoreLoaded(context, { targetHint: sourceTarget });
-    const sourceChatKey = getChatKey(context, sourceTarget);
     const targetChatKey = getChatKey(context, targetTarget);
-    if (!sourceChatKey || sourceChatKey === 'invalid_target' || !targetChatKey || targetChatKey === 'invalid_target') {
+    if (!targetChatKey || targetChatKey === 'invalid_target') {
         return;
     }
-
-    const sourceState = normalizePersistedStateBase(memoryStateCache.get(sourceChatKey));
-    const branchState = buildBranchStateFromPersistedState(sourceState, assistantMessageCount);
-    const nextState = branchState.state;
-    const branchStore = branchState.store;
-    branchStore.sourceMessageCount = assistantMessageCount;
-    branchStore.lastRecallTrace = [];
-    branchStore.lastRecallProjection = null;
-    branchStore.swipeTailCache = {};
-    branchStore.pendingFullRebuild = false;
-    branchStore.lastExtractionDebug = null;
-    branchStore.appliedSeqTo = Math.max(0, Number(branchStore.appliedSeqTo || 0));
-    branchStore.loggedSeqTo = Math.max(Number(branchStore.loggedSeqTo || 0), Number(branchStore.appliedSeqTo || 0));
-    branchStore.seqCounter = Math.max(branchStore.seqCounter, branchStore.loggedSeqTo);
-    nextState.sourceMessageCount = assistantMessageCount;
-    nextState.lastRecallTrace = [];
-    nextState.lastRecallProjection = null;
-    nextState.swipeTailCache = {};
-    nextState.opLog = nextState.opLog
-        .map(entry => normalizeMemoryLogEntry(entry))
-        .filter(Boolean)
-        .sort((a, b) => a.seq - b.seq);
-
     memoryStoreTargets.set(targetChatKey, targetTarget);
     memoryLoadTasks.delete(targetChatKey);
     memoryStoreCache.delete(targetChatKey);
-    memoryStateCache.delete(targetChatKey);
+    clearCachedMeta(targetChatKey);
     clearRollbackHistory(targetChatKey);
     const pendingInvalidation = pendingMutationInvalidations.get(targetChatKey);
     if (pendingInvalidation?.timer) {
@@ -3133,28 +1574,20 @@ async function inheritMemoryStoreForBranch(context, payload) {
         extractionTimers.delete(targetChatKey);
     }
 
-    await persistPreparedMemoryStateByChatKey(context, targetChatKey, nextState, branchStore);
-}
-
-function normalizeText(text) {
-    return String(text || '').replace(/\s+/g, ' ').trim();
-}
-
-function normalizeMultilineText(text) {
-    return String(text || '')
-        .replace(/\r\n/g, '\n')
-        .replace(/\u00A0/g, ' ')
-        .trim();
-}
-
-function ensureNodeFieldsObject(node) {
-    if (!node || typeof node !== 'object') {
-        return {};
+    const branchMeta = {
+        schemaVersion: META_SCHEMA_VERSION,
+        sourceMessageCount: assistantMessageCount,
+        lastRecallTrace: [],
+        lastRecallProjection: null,
+    };
+    setCachedMeta(targetChatKey, branchMeta);
+    if (typeof context.updateChatState === 'function') {
+        await context.updateChatState(
+            META_NAMESPACE,
+            () => branchMeta,
+            { target: targetTarget, maxOperations: 16000 },
+        );
     }
-    if (!node.fields || typeof node.fields !== 'object' || Array.isArray(node.fields)) {
-        node.fields = {};
-    }
-    return node.fields;
 }
 
 function tryParseJsonObject(text) {
@@ -3287,13 +1720,6 @@ function findValueByKeyDeep(value, targetKey, depth = 0) {
     return undefined;
 }
 
-function isExtractableAssistantMessage(message) {
-    if (!message || message.is_system || message.is_user) {
-        return false;
-    }
-    return Boolean(normalizeText(message?.mes || ''));
-}
-
 function getAssistantChatMessages(sourceOrContext) {
     const source = Array.isArray(sourceOrContext)
         ? sourceOrContext
@@ -3349,54 +1775,6 @@ function updateStoreSourceState(store, context) {
     const source = computeChatSourceState(context);
     store.sourceMessageCount = Number(source.messageCount || 0);
     store.pendingFullRebuild = false;
-}
-
-function cloneRollbackNodeSnapshot(rawNode) {
-    if (!rawNode || typeof rawNode !== 'object') {
-        return null;
-    }
-    return {
-        id: String(rawNode.id || '').trim(),
-        type: String(rawNode.type || 'unknown'),
-        level: String(rawNode.level || LEVEL.SEMANTIC),
-        title: normalizeText(rawNode.title || rawNode.id || ''),
-        parentId: String(rawNode.parentId || '').trim(),
-        childrenIds: Array.isArray(rawNode.childrenIds)
-            ? rawNode.childrenIds.map(child => String(child || '').trim()).filter(Boolean)
-            : [],
-        fields: rawNode.fields && typeof rawNode.fields === 'object' && !Array.isArray(rawNode.fields)
-            ? structuredClone(rawNode.fields)
-            : {},
-        semanticDepth: Number.isFinite(Number(rawNode.semanticDepth)) ? Number(rawNode.semanticDepth) : 0,
-        semanticRollup: Boolean(rawNode.semanticRollup),
-        // Node-local last-touched/visible-through index for sorting/filtering helpers; main replay uses opLog entry.seq.
-        seqTo: Number.isFinite(Number(rawNode.seqTo)) ? Math.max(0, Math.floor(Number(rawNode.seqTo))) : undefined,
-        archived: Boolean(rawNode.archived),
-    };
-}
-
-function cloneRollbackEdgeSnapshot(rawEdge) {
-    if (!rawEdge || typeof rawEdge !== 'object') {
-        return null;
-    }
-    const from = String(rawEdge.from || '').trim();
-    const to = String(rawEdge.to || '').trim();
-    if (!from || !to || from === to) {
-        return null;
-    }
-    return {
-        from,
-        to,
-        type: normalizeText(rawEdge.type || 'related') || 'related',
-    };
-}
-
-function getRollbackEdgeKey(edge) {
-    const snapshot = cloneRollbackEdgeSnapshot(edge);
-    if (!snapshot) {
-        return '';
-    }
-    return `${snapshot.from}\u241F${snapshot.type}\u241F${snapshot.to}`;
 }
 
 function getRollbackHistory(chatKey) {
@@ -3475,54 +1853,6 @@ function restoreStoreFromRollbackSnapshot(store, snapshot) {
         ? snapshot.edges.map(cloneRollbackEdgeSnapshot).filter(Boolean)
         : [];
     repairStoreAfterRollback(store);
-}
-
-function repairStoreAfterRollback(store) {
-    if (!store || typeof store !== 'object') {
-        return;
-    }
-    const validNodeIds = new Set(Object.keys(store.nodes || {}));
-    for (const node of Object.values(store.nodes || {})) {
-        if (!node || typeof node !== 'object') {
-            continue;
-        }
-        node.childrenIds = Array.isArray(node.childrenIds)
-            ? [...new Set(node.childrenIds.map(child => String(child || '').trim()).filter(child => child && child !== node.id && validNodeIds.has(child)))]
-            : [];
-        const parentId = String(node.parentId || '').trim();
-        node.parentId = parentId && parentId !== node.id && validNodeIds.has(parentId) ? parentId : '';
-    }
-    for (const node of Object.values(store.nodes || {})) {
-        if (!node || typeof node !== 'object' || !node.parentId) {
-            continue;
-        }
-        const parent = store.nodes?.[node.parentId];
-        if (!parent || typeof parent !== 'object') {
-            node.parentId = '';
-            continue;
-        }
-        if (!Array.isArray(parent.childrenIds)) {
-            parent.childrenIds = [];
-        }
-        if (!parent.childrenIds.includes(node.id)) {
-            parent.childrenIds.push(node.id);
-        }
-    }
-    const nextEdges = [];
-    const seen = new Set();
-    for (const edge of Array.isArray(store.edges) ? store.edges : []) {
-        const snapshot = cloneRollbackEdgeSnapshot(edge);
-        const key = getRollbackEdgeKey(snapshot);
-        if (!snapshot || !key || seen.has(key)) {
-            continue;
-        }
-        if (!validNodeIds.has(snapshot.from) || !validNodeIds.has(snapshot.to)) {
-            continue;
-        }
-        seen.add(key);
-        nextEdges.push(snapshot);
-    }
-    store.edges = nextEdges;
 }
 
 function buildRollbackEntry(chatKey, beforeSnapshot, store, { seqFrom = 0, seqTo = 0, kind = 'extract' } = {}) {
@@ -3808,23 +2138,6 @@ function createNode(store, node) {
     return store.nodes[id];
 }
 
-function addEdge(store, from, to, type = 'related') {
-    if (!from || !to || from === to) {
-        return;
-    }
-
-    const found = store.edges.find(edge => edge.from === from && edge.to === to && edge.type === type);
-    if (found) {
-        return;
-    }
-
-    store.edges.push({
-        from,
-        to,
-        type,
-    });
-}
-
 function reparentNode(store, childId, parentId) {
     const child = store.nodes[childId];
     const parent = store.nodes[parentId];
@@ -3868,27 +2181,6 @@ function getChildren(store, nodeId) {
         return [];
     }
     return node.childrenIds.map(id => store.nodes[id]).filter(child => Boolean(child) && !child.archived);
-}
-
-function dropNode(store, nodeId, recursive = true) {
-    const node = store.nodes[nodeId];
-    if (!node) {
-        return;
-    }
-
-    if (recursive && Array.isArray(node.childrenIds)) {
-        for (const childId of [...node.childrenIds]) {
-            dropNode(store, childId, true);
-        }
-    }
-
-    if (node.parentId && store.nodes[node.parentId]) {
-        const parent = store.nodes[node.parentId];
-        parent.childrenIds = parent.childrenIds.filter(id => id !== nodeId);
-    }
-
-    delete store.nodes[nodeId];
-    store.edges = store.edges.filter(edge => edge.from !== nodeId && edge.to !== nodeId);
 }
 
 function archiveNode(store, nodeId) {
@@ -7416,15 +5708,6 @@ async function chooseFocusNodes(context, settings, recallState) {
     }
 }
 
-function compareNodesByTimeline(a, b) {
-    const aTo = Number(a?.seqTo ?? Number.MAX_SAFE_INTEGER);
-    const bTo = Number(b?.seqTo ?? Number.MAX_SAFE_INTEGER);
-    if (aTo !== bTo) {
-        return aTo - bTo;
-    }
-    return String(a?.id || '').localeCompare(String(b?.id || ''));
-}
-
 function getActiveSemanticParentOfType(store, node, type) {
     const parentId = String(node?.parentId || '').trim();
     if (!parentId) {
@@ -8375,22 +6658,6 @@ function rebaseStoreToChatBaseline(store, context) {
     store.seqCounter = baselineSeq;
     store.lastRecallTrace = [];
     store.lastRecallProjection = null;
-}
-
-function getSemanticCoverageSeq(store) {
-    const nodes = Object.values(store?.nodes || {})
-        .filter(node => node && !node.archived && node.level === LEVEL.SEMANTIC);
-    if (nodes.length === 0) {
-        return 0;
-    }
-    const maxSeq = nodes.reduce((maxSeq, node) => {
-        const seq = Number(node?.seqTo ?? 0);
-        if (!Number.isFinite(seq)) {
-            return maxSeq;
-        }
-        return Math.max(maxSeq, Math.max(0, Math.floor(seq)));
-    }, 0);
-    return Number.isFinite(maxSeq) ? maxSeq : 0;
 }
 
 function computeExtractionWindow(context, store, startSeq = null, settings = null) {
@@ -10409,9 +8676,9 @@ ${renderEdgeFormEditorHtml(latest, editorId, edge, selectedEdgeIndex)}
             ? Math.max(0, Math.floor(Number(seq)))
             : getStoreCoveredSeqTo(latest);
         if (replaceGraph) {
-            replacePersistedGraphWithStore(chatKey, latest, effectiveSeq);
+            await replacePersistedGraphWithStore(context, chatKey, latest, effectiveSeq);
         } else if (beforeStore) {
-            appendPersistedDiffEntry(chatKey, beforeStore, latest, effectiveSeq);
+            await appendPersistedDiffEntry(context, chatKey, beforeStore, latest, effectiveSeq);
         }
         await persistMemoryStoreByChatKey(context, chatKey, latest, { syncPersistentProjection: true });
         refreshUiStats();
@@ -14131,7 +12398,7 @@ function bindUi() {
             memoryStoreTargets.set(chatKey, target);
         }
         memoryStoreCache.set(chatKey, createEmptyStore());
-        memoryStateCache.set(chatKey, createEmptyPersistedMemoryState());
+        clearCachedMeta(chatKey);
         clearRollbackHistory(chatKey);
         if (target) {
             await deleteMemoryStoreByTarget(context, target);
@@ -14151,7 +12418,7 @@ function bindUi() {
             notifyError(i18n('No active chat selected.'));
             return;
         }
-        const fileName = getMemoryGraphExportFileName(context);
+        const fileName = getMemoryGraphExportFileNameForContext(context);
         download(JSON.stringify(store, null, 2), fileName, 'application/json');
         notifySuccess(i18n('Memory graph exported for current chat.'));
         updateUiStatus(i18nFormat('Downloaded memory graph file: ${0}', fileName));
@@ -14235,11 +12502,117 @@ jQuery(() => {
     const context = getContext();
     registerLocaleData();
     ensureSettings();
+    configureCharacterOverrides({
+        MODULE_NAME,
+        defaultSettings,
+        normalizeNodeTypeSchema,
+        normalizeAdvancedSettings,
+        getSettings,
+    });
     generationVisibleHistoryRegexProvider = registerManagedRegexProvider(GENERATION_VISIBLE_HISTORY_REGEX_PROVIDER_ID);
     syncGenerationVisibleHistoryRuntimeRegexScripts();
     saveSettingsDebounced();
     ensureUi();
     void syncPersistentProjectionForCurrentChat();
+
+    // ORDER MATTERS for the migration path. Floor-state's CHAT_CHANGED
+    // handler clobbers the data namespace with `{}` whenever the log is
+    // empty (which is the case for legacy chats whose log doesn't exist
+    // yet). If we let floor-state mount first and run its rematerialize,
+    // it would overwrite the legacy `opLog` payload sitting in the main
+    // namespace before our migration could read it.
+    //
+    // We therefore: (a) subscribe memory-graph's CHAT_CHANGED handler
+    // BEFORE mounting floor-state — its `migrateLegacyMemoryGraphState`
+    // call runs first on every chat switch, so by the time fs's handler
+    // executes, the new log already exists; (b) run an explicit migration
+    // for the initial chat before mounting the singleton, so the
+    // singleton's initial rematerialize sees the migrated log too.
+    context.eventSource.on(context.eventTypes.CHAT_CHANGED, async () => {
+        latestRecallSnapshot = null;
+        ensureUi();
+        const runtimeContext = getContext();
+        const newTarget = buildMemoryTargetFromContext(runtimeContext);
+        const newChatKey = getChatKey(runtimeContext);
+        if (newTarget && newChatKey && newChatKey !== 'invalid_target') {
+            memoryStoreTargets.set(newChatKey, newTarget);
+            try {
+                await migrateLegacyMemoryGraphState(
+                    runtimeContext,
+                    newTarget,
+                    isExtractableAssistantMessage,
+                    applyMemoryLogEntryToStore,
+                );
+            } catch (error) {
+                console.warn(`[${MODULE_NAME}] Schema migration failed on CHAT_CHANGED`, { target: newTarget, error });
+            }
+        }
+    });
+
+    // Mount the floor-state singleton AFTER subscribing the migration
+    // handler. The initial migration writes the log for the current chat,
+    // then mounting the instance runs its initial rematerialize against
+    // the migrated log. From this point onward, fs's CHAT_CHANGED handler
+    // executes after ours on every switch.
+    void (async () => {
+        const initialChatKey = getChatKey(context);
+        if (initialChatKey && initialChatKey !== 'invalid_target') {
+            const initialTarget = buildMemoryTargetFromContext(context);
+            if (initialTarget) {
+                memoryStoreTargets.set(initialChatKey, initialTarget);
+                try {
+                    await migrateLegacyMemoryGraphState(
+                        context,
+                        initialTarget,
+                        isExtractableAssistantMessage,
+                        applyMemoryLogEntryToStore,
+                    );
+                } catch (error) {
+                    console.warn(`[${MODULE_NAME}] Initial schema migration failed`, { target: initialTarget, error });
+                }
+            }
+        }
+        try {
+            await getFloorStateInstance(context);
+        } catch (error) {
+            console.warn(`[${MODULE_NAME}] Failed to mount floor-state singleton`, error);
+        }
+    })();
+
+    /**
+     * Refresh the in-memory runtime store cache for `chatKey` from the
+     * floor-state graph payload + the __meta sidecar. Awaits fs.ready() so
+     * any floor-state-driven rematerialize (CHAT_CHANGED, MESSAGE_DELETED,
+     * MESSAGE_SWIPED, MESSAGE_SWIPE_DELETED) has settled before we read.
+     */
+    const refreshMemoryStoreCacheFromFloorState = async (runtimeContext, chatKey) => {
+        if (!chatKey || chatKey === 'invalid_target') return null;
+        let payload = null;
+        let meta = null;
+        const target = memoryStoreTargets.get(chatKey);
+        try {
+            const fs = await getFloorStateInstance(runtimeContext);
+            await fs.ready();
+            if (chatKey === getChatKey(runtimeContext)) {
+                payload = await fs.get();
+            } else if (target) {
+                payload = await runtimeContext.getChatState(CHAT_STATE_NAMESPACE, { target });
+            }
+        } catch (error) {
+            console.warn(`[${MODULE_NAME}] floor-state ready/get failed during cache refresh`, error);
+        }
+        if (target) {
+            try {
+                meta = await loadMetaFields(runtimeContext, target);
+            } catch (error) {
+                console.warn(`[${MODULE_NAME}] meta sidecar read failed during cache refresh`, error);
+            }
+        }
+        if (meta) setCachedMeta(chatKey, meta);
+        const runtimeStore = buildRuntimeStoreFromGraphPayloadAndMeta(payload, meta || getCachedMeta(chatKey));
+        memoryStoreCache.set(chatKey, runtimeStore);
+        return runtimeStore;
+    };
 
     const wiAfterEvent = context.eventTypes.GENERATION_AFTER_WORLD_INFO_SCAN;
     if (wiAfterEvent) {
@@ -14268,6 +12641,18 @@ jQuery(() => {
     };
     const mutationStatusText = i18n('Chat mutation detected. Memory graph will re-sync on next generation.');
     const mutationInterruptedToastText = i18n('Chat changes interrupted memory graph update. It will re-sync on next generation.');
+    /**
+     * Coalesce structural-event reactions into a microtask:
+     *  - cancel any in-flight extraction
+     *  - wait for floor-state to finish its rematerialize/truncate
+     *  - rebuild the in-memory runtime store from the new fs payload
+     *  - clear stale recall trace + sourceMessageCount, persist to __meta
+     *  - optionally schedule a fresh extraction replay
+     *
+     * Floor-state owns the graph payload's response to MESSAGE_DELETED /
+     * MESSAGE_SWIPED / MESSAGE_SWIPE_DELETED. Memory-graph's job here is only
+     * to flush its read-side caches and reset its non-floor metadata.
+     */
     const queueMutationInvalidation = (fromSeq = null, { scheduleReplay = false } = {}) => {
         const runtimeContext = getContext();
         const chatKey = getChatKey(runtimeContext);
@@ -14293,11 +12678,6 @@ jQuery(() => {
                 pendingMutationInvalidations.delete(chatKey);
                 const liveContext = getContext();
                 const isCurrentChat = getChatKey(liveContext) === chatKey;
-                let store = memoryStoreCache.get(chatKey);
-                if (!store) {
-                    latestRecallSnapshot = null;
-                    return;
-                }
                 const preserveLatestRecallSnapshot = shouldPreserveLatestRecallSnapshotForAssistantMutation(liveContext, task.fromSeq);
                 if (!preserveLatestRecallSnapshot) {
                     latestRecallSnapshot = null;
@@ -14312,42 +12692,48 @@ jQuery(() => {
                     }
                     activeExtractionAbortController.abort();
                 }
-                const hasAffectedSeq = Number.isFinite(task.fromSeq) && task.fromSeq > 0;
-                if (!hasAffectedSeq) {
-                    return;
-                }
-                const trimResult = trimPersistedOpLogFromSeq(chatKey, task.fromSeq);
-                store = trimResult.store || store;
-                updateStoreSourceState(store, liveContext);
-                store.lastRecallTrace = [];
-                store.lastRecallProjection = null;
+                let store = null;
                 try {
-                    await persistMemoryStoreByChatKey(liveContext, chatKey, store);
+                    store = await refreshMemoryStoreCacheFromFloorState(liveContext, chatKey);
+                } catch (error) {
+                    console.warn(`[${MODULE_NAME}] Failed to refresh memory store cache after mutation`, error);
+                }
+                if (!store) {
+                    store = memoryStoreCache.get(chatKey) || null;
+                }
+                if (store) {
+                    updateStoreSourceState(store, liveContext);
+                    store.lastRecallTrace = [];
+                    store.lastRecallProjection = null;
+                    try {
+                        await persistMetaForChatKey(liveContext, chatKey, store);
+                    } catch (error) {
+                        console.warn(`[${MODULE_NAME}] Failed to persist meta after mutation for ${chatKey}`, error);
+                    }
                     if (isCurrentChat) {
                         const effectiveSettings = getEffectiveSettings(liveContext, getSettings());
-                        if (!effectiveSettings.enabled) {
-                            await clearAllMemoryLorebookProjection(liveContext, effectiveSettings);
-                        } else {
-                            await clearRuntimeLorebookProjection(liveContext, effectiveSettings);
-                            await syncPersistentLorebookProjection(liveContext, effectiveSettings, store);
+                        try {
+                            if (!effectiveSettings.enabled) {
+                                await clearAllMemoryLorebookProjection(liveContext, effectiveSettings);
+                            } else {
+                                await clearRuntimeLorebookProjection(liveContext, effectiveSettings);
+                                await syncPersistentLorebookProjection(liveContext, effectiveSettings, store);
+                            }
+                        } catch (error) {
+                            console.warn(`[${MODULE_NAME}] Lorebook projection sync failed after mutation`, error);
                         }
                     }
-                    refreshUiStats();
-                    if (isCurrentChat) {
-                        updateUiStatus(mutationStatusText);
-                    }
-                    if (task.scheduleReplay && isCurrentChat) {
-                        setTimeout(() => {
-                            if (!generationInProgress) {
-                                scheduleExtraction(getContext());
-                            }
-                        }, 0);
-                    }
-                } catch (error) {
-                    console.warn(`[${MODULE_NAME}] Failed to trim memory graph op log for ${chatKey}`, error);
-                    if (isCurrentChat) {
-                        updateUiStatus(mutationStatusText);
-                    }
+                }
+                refreshUiStats();
+                if (isCurrentChat) {
+                    updateUiStatus(mutationStatusText);
+                }
+                if (task.scheduleReplay && isCurrentChat) {
+                    setTimeout(() => {
+                        if (!generationInProgress) {
+                            scheduleExtraction(getContext());
+                        }
+                    }, 0);
                 }
             }, 0),
         };
@@ -14381,6 +12767,10 @@ jQuery(() => {
             }
         });
     }
+    // Floor-state owns the graph payload's response to the four structural
+    // events (CHAT_CHANGED, MESSAGE_DELETED, MESSAGE_SWIPED,
+    // MESSAGE_SWIPE_DELETED). Memory-graph subscribes to a subset of those
+    // for its own non-graph state: cache invalidation + extraction restart.
     context.eventSource.on(context.eventTypes.MESSAGE_DELETED, async (_messageCount, mutationMeta) => {
         const runtimeContext = getContext();
         const assistantFromSeq = Number(mutationMeta?.deletedAssistantSeqFrom || 0);
@@ -14391,40 +12781,16 @@ jQuery(() => {
         queueMutationInvalidation(fromSeq, { scheduleReplay: true });
     });
     if (context.eventTypes.MESSAGE_SWIPED) {
-        context.eventSource.on(context.eventTypes.MESSAGE_SWIPED, async (messageId, meta) => {
-            if (meta?.pendingGeneration === true) {
-                // Swipe with pending generation: rollback the last assistant floor's
-                // opLog entries so the upcoming generation starts from a clean state.
-                // Without this, extraction results from the previous swipe remain in
-                // the graph and leak into the injected memory prompt.
-                const runtimeContext = getContext();
-                const fromSeq = findAffectedAssistantSeqFromMessageIndex(runtimeContext, messageId);
-                if (Number.isFinite(fromSeq) && fromSeq > 0) {
-                    const chatKey = getChatKey(runtimeContext);
-                    if (chatKey && chatKey !== 'invalid_target') {
-                        const trimResult = trimPersistedOpLogFromSeq(chatKey, fromSeq);
-                        if (trimResult.changed && trimResult.store) {
-                            updateStoreSourceState(trimResult.store, runtimeContext);
-                            try {
-                                await persistMemoryStoreByChatKey(runtimeContext, chatKey, trimResult.store);
-                            } catch (error) {
-                                console.warn(`[${MODULE_NAME}] Failed to persist store after swipe rollback`, error);
-                            }
-                        }
-                    }
-                }
-                return;
-            }
-            if (await restoreSwipeTailCacheForMessage(getContext(), messageId)) {
-                return;
-            }
+        context.eventSource.on(context.eventTypes.MESSAGE_SWIPED, async (messageId, _meta) => {
+            // Both the pendingGeneration and idle-swipe cases collapse to the
+            // same response now: floor-state filters commits by (floor,
+            // swipeId) on its own MESSAGE_SWIPED handler, so the swipe-cache
+            // gymnastics from the legacy implementation are gone. We only
+            // need to flush our read-side cache + extraction state. The bug
+            // about regenerate getting `swipe_cache_hit` is naturally fixed
+            // because the swipe_tail_cache that misidentified prefixes no
+            // longer exists.
             const fromSeq = findAffectedAssistantSeqFromMessageIndex(getContext(), messageId);
-            queueMutationInvalidation(fromSeq, { scheduleReplay: true });
-        });
-    }
-    if (context.eventTypes.MESSAGE_SWIPE_DELETED) {
-        context.eventSource.on(context.eventTypes.MESSAGE_SWIPE_DELETED, (payload) => {
-            const fromSeq = findAffectedAssistantSeqFromMessageIndex(getContext(), payload?.messageId);
             queueMutationInvalidation(fromSeq, { scheduleReplay: true });
         });
     }
@@ -14454,9 +12820,22 @@ jQuery(() => {
     for (const eventName of connectionProfileEvents) {
         context.eventSource.on(eventName, () => ensureUi());
     }
-    context.eventSource.on(context.eventTypes.CHAT_CHANGED, () => {
-        latestRecallSnapshot = null;
-        ensureUi();
+    context.eventSource.on(context.eventTypes.CHAT_CHANGED, async () => {
+        // The pre-fs-mount CHAT_CHANGED handler at the top of jQuery init
+        // already runs migration; this listener fires after both that one
+        // and floor-state's own rematerialize, so by now fs.get() reflects
+        // the new chat. Our job here is to refresh the runtime store cache
+        // and trigger UI updates.
+        const runtimeContext = getContext();
+        const newChatKey = getChatKey(runtimeContext);
+        if (newChatKey && newChatKey !== 'invalid_target') {
+            try {
+                await refreshMemoryStoreCacheFromFloorState(runtimeContext, newChatKey);
+            } catch (error) {
+                console.warn(`[${MODULE_NAME}] Failed to refresh memory store cache on CHAT_CHANGED`, error);
+            }
+            refreshUiStats();
+        }
         void syncPersistentProjectionForCurrentChat();
     });
 });
