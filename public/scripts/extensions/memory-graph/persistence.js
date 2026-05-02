@@ -69,18 +69,6 @@ const GRAPH_PAYLOAD_DEFAULTS = Object.freeze({
     coveredAssistantSeq: 0,
 });
 
-function makeEmptyGraphPayload() {
-    return {
-        nodes: {},
-        edges: [],
-        nodeSeq: 0,
-        seqCounter: 0,
-        appliedSeqTo: 0,
-        loggedSeqTo: 0,
-        coveredAssistantSeq: 0,
-    };
-}
-
 /**
  * Walk the chat array counting `isExtractableAssistantMessage` matches and
  * return the chat index whose count equals `assistantSeq` (1-based).
