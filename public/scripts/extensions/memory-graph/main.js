@@ -60,6 +60,7 @@ import {
 } from './diffusion.js';
 import {
     getFloorStateInstance,
+    resolveBuildObjectPatchOperationsAsync,
     getFloorFromAssistantSeq,
     loadMetaFields,
     persistMetaFields,
@@ -1208,7 +1209,8 @@ async function replaceGraphLogForTarget(context, target, store, seq) {
     const targetWriteOption = target ? { target, maxOperations: 16000 } : { maxOperations: 16000 };
     const floor = seqToFloor(context, normalizedSeq);
     const swipeId = floor === null ? 0 : (activeSwipeIdAtFloor(context, floor) ?? 0);
-    const patches = await context.buildObjectPatchOperationsAsync({}, finalPayload);
+    const buildObjectPatchOperationsAsync = await resolveBuildObjectPatchOperationsAsync(context);
+    const patches = await buildObjectPatchOperationsAsync({}, finalPayload);
 
     if (Array.isArray(patches) && patches.length > 0 && Number.isInteger(floor) && floor >= 0) {
         await context.updateChatState(LOG_NAMESPACE, () => ({
@@ -1334,7 +1336,8 @@ async function commitMemoryStoreDiffByChatKey(context, chatKey, beforeStore, aft
     afterPayload.appliedSeqTo = Math.max(afterPayload.appliedSeqTo, normalizedSeq);
     afterPayload.loggedSeqTo = Math.max(afterPayload.loggedSeqTo, normalizedSeq);
 
-    const incrementalOps = await context.buildObjectPatchOperationsAsync(beforePayload, afterPayload);
+    const buildObjectPatchOperationsAsync = await resolveBuildObjectPatchOperationsAsync(context);
+    const incrementalOps = await buildObjectPatchOperationsAsync(beforePayload, afterPayload);
     const metadataChanged = hasPersistedStoreMetadataChanges(normalizedBefore, normalizedAfter);
     const hasGraphChange = Array.isArray(incrementalOps) && incrementalOps.length > 0;
 
@@ -1344,7 +1347,7 @@ async function commitMemoryStoreDiffByChatKey(context, chatKey, beforeStore, aft
     }
 
     if (hasGraphChange) {
-        const snapshotOps = await context.buildObjectPatchOperationsAsync({}, afterPayload);
+        const snapshotOps = await buildObjectPatchOperationsAsync({}, afterPayload);
         const floor = seqToFloor(context, normalizedSeq);
         if (Number.isInteger(floor) && floor >= 0 && Array.isArray(snapshotOps) && snapshotOps.length > 0) {
             await fs.patch(snapshotOps, { floor });

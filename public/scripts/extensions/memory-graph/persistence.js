@@ -33,7 +33,7 @@ import { LEVEL, normalizeText, isExtractableAssistantMessage } from './primitive
  * which run in Node without the DOM that script.js touches at module-load
  * time. In production this resolves once per migration call (cheap).
  */
-async function resolveBuildObjectPatchOperationsAsync(context) {
+export async function resolveBuildObjectPatchOperationsAsync(context) {
     if (typeof context?.buildObjectPatchOperationsAsync === 'function') {
         return context.buildObjectPatchOperationsAsync;
     }
