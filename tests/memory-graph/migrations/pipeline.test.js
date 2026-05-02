@@ -68,11 +68,12 @@ describe('runMigrationPipeline v8 → v2 chain', () => {
 
 async function makeRichCtx(chat) {
     const { compare } = await import('../../../public/scripts/util/fast-json-patch.js');
-    const { applyMemoryLogEntryToStore } = await import('../../../public/scripts/extensions/memory-graph/persistence.js');
+    const { applyMemoryLogEntryToStore, getFloorFromAssistantSeq } = await import('../../../public/scripts/extensions/memory-graph/persistence.js');
     return {
         chat,
         isExtractableAssistantMessage: (m) => Boolean(m && !m.is_user && !m.is_system && m.mes),
         applyMemoryLogEntryToStore,
+        getFloorFromAssistantSeq,
         buildObjectPatchOperationsAsync: async (prev, next) => compare(prev ?? {}, next ?? {}),
         FLOOR_STATE_LOG_VERSION: 1,
         SCHEMA_VERSION: 2,

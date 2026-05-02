@@ -15,22 +15,6 @@
  * Drops `swipeTailCache` — the (floor, swipeId) commit filter replaces it.
  */
 
-// Inlined locally to avoid a v8-oplog → persistence.js → migrations/index.js
-// → registry.js → v8-oplog cycle once persistence.js depends on the
-// migration pipeline. Mirrors `getFloorFromAssistantSeq` in persistence.js.
-function getFloorFromAssistantSeq(chat, assistantSeq, isExtractableAssistantMessage) {
-    const target = Math.floor(Number(assistantSeq || 0));
-    if (!Number.isInteger(target) || target <= 0) return null;
-    const source = Array.isArray(chat) ? chat : [];
-    let count = 0;
-    for (let i = 0; i < source.length; i++) {
-        if (!isExtractableAssistantMessage(source[i])) continue;
-        count += 1;
-        if (count === target) return i;
-    }
-    return null;
-}
-
 function emptyGraphPayload() {
     return {
         nodes: {},
@@ -77,7 +61,7 @@ export const v8Oplog = Object.freeze({
         for (const entry of opLog) {
             if (!entry || typeof entry !== 'object') continue;
             const seq = sanitizeSeq(entry.seq);
-            const floor = getFloorFromAssistantSeq(ctx.chat, seq, ctx.isExtractableAssistantMessage);
+            const floor = ctx.getFloorFromAssistantSeq(ctx.chat, seq, ctx.isExtractableAssistantMessage);
             if (!Number.isInteger(floor) || floor < 0) continue;
             const next = structuredClone(cumulative);
             ctx.applyMemoryLogEntryToStore(next, entry);

@@ -244,6 +244,7 @@ export async function migrateLegacyMemoryGraphState(
         isExtractableAssistantMessage,
         applyMemoryLogEntryToStore,
         buildObjectPatchOperationsAsync: context.buildObjectPatchOperationsAsync,
+        getFloorFromAssistantSeq,
         FLOOR_STATE_LOG_VERSION,
         SCHEMA_VERSION,
     };

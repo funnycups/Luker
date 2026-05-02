@@ -1,7 +1,7 @@
 import { describe, test, expect } from '@jest/globals';
 import { compare } from '../../../../public/scripts/util/fast-json-patch.js';
 import { v8Oplog } from '../../../../public/scripts/extensions/memory-graph/migrations/shapes/v8-oplog.js';
-import { applyMemoryLogEntryToStore } from '../../../../public/scripts/extensions/memory-graph/persistence.js';
+import { applyMemoryLogEntryToStore, getFloorFromAssistantSeq } from '../../../../public/scripts/extensions/memory-graph/persistence.js';
 
 function isExtractableAssistantMessage(message) {
     if (!message || message.is_system || message.is_user) return false;
@@ -17,6 +17,7 @@ function makeCtx(chat) {
         chat,
         isExtractableAssistantMessage,
         applyMemoryLogEntryToStore,
+        getFloorFromAssistantSeq,
         buildObjectPatchOperationsAsync: async (prev, next) => compare(prev ?? {}, next ?? {}),
         FLOOR_STATE_LOG_VERSION: 1,
         SCHEMA_VERSION: 2,
