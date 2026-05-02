@@ -4335,6 +4335,22 @@ function collectSemanticRootsByDepth(store, type, depth, options = {}) {
         });
 }
 
+function collectFlatSemanticRoots(store, type, options = {}) {
+    const rawMaxSeq = options?.maxSeq;
+    const maxSeq = (rawMaxSeq !== null && rawMaxSeq !== undefined && Number.isFinite(Number(rawMaxSeq))) ? Math.max(0, Math.floor(Number(rawMaxSeq))) : null;
+    return getSemanticNodesForType(store, type)
+        .filter(node => !String(node.parentId || '').trim())
+        .filter(node => maxSeq === null || Number(node?.seqTo ?? 0) <= maxSeq)
+        .sort((a, b) => {
+            const aTo = Number(a.seqTo ?? 0);
+            const bTo = Number(b.seqTo ?? 0);
+            if (aTo !== bTo) {
+                return aTo - bTo;
+            }
+            return String(a?.id || '').localeCompare(String(b?.id || ''));
+        });
+}
+
 function normalizeCompressionRuleToken(raw) {
     return String(raw || '')
         .trim()
@@ -4612,11 +4628,120 @@ async function compressSemanticHierarchical(context, store, settings, spec, type
     return changed;
 }
 
+async function compressSemanticFlat(context, store, settings, spec, type, config, options = {}) {
+    let changed = false;
+    let guard = 0;
+    let compressedRounds = 0;
+    const maxRoundsPerType = Number.isFinite(Number(options?.maxRoundsPerType))
+        ? Math.max(1, Math.floor(Number(options.maxRoundsPerType)))
+        : Number.POSITIVE_INFINITY;
+    const threshold = 2;
+    const fanIn = Math.max(2, Number(config.fanIn || 2));
+    const ruleMatcher = buildCompressionRuleMatcher(config.rule);
+    if (ruleMatcher.enabled && !ruleMatcher.valid) {
+        const invalidPart = ruleMatcher.invalid.length > 0 ? ruleMatcher.invalid.join(' | ') : String(config.rule || '');
+        console.warn(`[${MODULE_NAME}]`, i18nFormat('Invalid compression rule for type ${0}: ${1}', String(type || 'unknown'), invalidPart));
+        return false;
+    }
+
+    console.log(`[${MODULE_NAME}] compressSemanticFlat: type=${type}, threshold=${threshold}, fanIn=${fanIn}, maxRoundsPerType=${maxRoundsPerType}`);
+    while (guard < 120 && compressedRounds < maxRoundsPerType) {
+        if (isAbortSignalLike(options?.abortSignal) && options.abortSignal.aborted) {
+            throw new DOMException('Memory compression aborted.', 'AbortError');
+        }
+        guard += 1;
+        let candidates = collectFlatSemanticRoots(store, type, options);
+        console.log(`[${MODULE_NAME}] flat compress guard=${guard}, candidates=${candidates.length}, ids=[${candidates.slice(0, 5).map(n => `${n.id}@L${Number(n?.semanticDepth ?? 0)}`).join(',')}${candidates.length > 5 ? ',...' : ''}]`);
+        if (ruleMatcher.enabled) {
+            candidates = candidates.filter(node => ruleMatcher.test(node));
+        }
+        if (candidates.length < threshold) {
+            break;
+        }
+
+        const groupSize = Math.min(fanIn, candidates.length);
+        if (groupSize < 2) {
+            break;
+        }
+        const group = candidates.slice(0, groupSize);
+
+        const roundBeforeStore = typeof options?.onRoundApplied === 'function'
+            ? normalizeStoreForRuntime(store)
+            : null;
+        const lines = group.map(node => `${node.title}: ${getNodeSummary(node)}`);
+        const instruction = buildCompressionSummaryInstruction(
+            config.summarizeInstruction
+            || `Compress semantic type "${type}" into a higher-level summary node. Keep enduring facts and unresolved hooks.`,
+        );
+        const rollupFields = await summarizeRollupFieldsWithLLM(
+            context,
+            settings,
+            spec,
+            instruction,
+            group,
+            options?.abortSignal || null,
+        );
+        if (!normalizeText(rollupFields?.summary || '')) {
+            const fallbackSummary = await summarizeTextWithLLM(
+                context,
+                settings,
+                instruction,
+                lines,
+                options?.abortSignal || null,
+            );
+            if (fallbackSummary) {
+                rollupFields.summary = fallbackSummary;
+            }
+        }
+        if (!normalizeText(rollupFields?.summary || '')) {
+            break;
+        }
+
+        // Parent depth follows the "max(child)+1" invariant so subsequent
+        // hierarchical compression and depth-based sorts remain coherent.
+        const maxChildDepth = group.reduce((max, node) => {
+            const d = Number(node?.semanticDepth ?? 0);
+            return Number.isFinite(d) && d > max ? d : max;
+        }, 0);
+        const rollupDepth = maxChildDepth + 1;
+        const rollupOrdinal = getNextSemanticRollupOrdinal(store, type, rollupDepth);
+        const parent = createNode(store, {
+            type: String(type || 'semantic'),
+            level: LEVEL.SEMANTIC,
+            title: `${String(config.label || type || 'Semantic')} Summary L${rollupDepth} #${rollupOrdinal}`,
+            fields: rollupFields,
+            archived: false,
+            semanticRollup: true,
+            semanticDepth: rollupDepth,
+            seqTo: Math.max(...group.map(node => Number(node.seqTo ?? 0))),
+        });
+
+        for (const child of group) {
+            reparentNode(store, child.id, parent.id);
+            addEdge(store, parent.id, child.id, 'semantic_contains');
+        }
+        changed = true;
+        compressedRounds += 1;
+        recordCompressionRound(options?.compressionStats, type, 1);
+        if (typeof options?.onRoundApplied === 'function' && roundBeforeStore) {
+            await options.onRoundApplied({
+                type: String(type || ''),
+                depth: rollupDepth - 1,
+                roundSeqTo: Number(parent?.seqTo ?? 0),
+                beforeStore: roundBeforeStore,
+            });
+        }
+    }
+
+    return changed;
+}
+
 async function compressSemanticTypesIfNeeded(context, store, settings, options = {}) {
     const schema = getEffectiveNodeTypeSchema(context, settings);
     const selectedTypeSet = Array.isArray(options?.typeIds)
         ? new Set(options.typeIds.map(item => String(item || '').trim().toLowerCase()).filter(Boolean))
         : null;
+    const flatten = Boolean(options?.flatten);
     let changed = false;
     for (const spec of schema) {
         const type = String(spec.id || '').toLowerCase();
@@ -4628,6 +4753,12 @@ async function compressSemanticTypesIfNeeded(context, store, settings, options =
         }
         const config = getSemanticCompressionConfig(settings, type, context);
         if (config.mode === 'none') {
+            continue;
+        }
+        if (flatten) {
+            if (await compressSemanticFlat(context, store, settings, spec, type, config, options)) {
+                changed = true;
+            }
             continue;
         }
         if (config.mode === 'hierarchical') {
@@ -11831,7 +11962,8 @@ async function openManualCompressionPopup(context, settings) {
     try {
         const changed = await runCompressionLoop(context, store, settings, {
             typeIds: values.selectedTypeIds,
-            force: values.mode === 'force',
+            force: values.mode === 'force' || values.mode === 'flat',
+            flatten: values.mode === 'flat',
             maxRoundsPerType: values.maxRoundsPerType,
             maxSeq,
             compressionStats,

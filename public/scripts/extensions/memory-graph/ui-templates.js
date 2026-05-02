@@ -153,6 +153,7 @@ export function buildManualCompressionPopupHtml(deps, popupId, settings, compres
         <select id="${popupId}_mode" class="text_pole">
             <option value="schema" selected>${escapeHtml(i18n('Use schema thresholds'))}</option>
             <option value="force">${escapeHtml(i18n('Force compress (ignore threshold)'))}</option>
+            <option value="flat">${escapeHtml(i18n('Force compress across depths (ignore hierarchy)'))}</option>
         </select>
     </label>
     <label>${escapeHtml(i18n('Max rounds per type'))}
