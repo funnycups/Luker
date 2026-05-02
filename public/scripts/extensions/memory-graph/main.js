@@ -662,6 +662,18 @@ function normalizeRecallInjectRole(value) {
     return allowed.includes(numeric) ? numeric : extension_prompt_roles.SYSTEM;
 }
 
+function normalizeExtractExcludeRecentTurns(value) {
+    return Math.max(0, Math.floor(Number(value) || 0));
+}
+
+function getExtractableLatestSeq(totalTurns, settings = null) {
+    const total = Math.max(0, Math.floor(Number(totalTurns || 0)));
+    const excludedRecentTurns = normalizeExtractExcludeRecentTurns(
+        settings?.extractExcludeRecentTurns ?? defaultSettings.extractExcludeRecentTurns,
+    );
+    return Math.max(0, total - excludedRecentTurns);
+}
+
 function ensureSettings() {
     if (!extension_settings[MODULE_NAME] || typeof extension_settings[MODULE_NAME] !== 'object') {
         extension_settings[MODULE_NAME] = {};
