@@ -1,5 +1,70 @@
-<div>
+<div class="regex-preset-embedded-preview">
     <h3 data-i18n="This preset has embedded regex script(s).">This preset has embedded regex script(s).</h3>
+    <div class="m-b-1">
+        <span data-i18n="Preset">Preset</span>: <strong>{{presetName}}</strong>
+    </div>
+    <div class="m-b-1">
+        <span data-i18n="Regex scripts">Regex scripts</span>: <strong>{{scriptCount}}</strong>
+        <span>(<span data-i18n="Enabled">Enabled</span>: {{enabledScriptCount}})</span>
+    </div>
+    <div class="regex-preset-embedded-preview__toolbar">
+        <span>
+            <span data-i18n="Selected">Selected</span>:
+            <strong data-regex-preview-selected-count>{{selectedScriptCount}}</strong>
+        </span>
+        <button type="button" class="menu_button" data-regex-preview-select-all data-i18n="Select All">Select All</button>
+        <button type="button" class="menu_button" data-regex-preview-clear-selection data-i18n="Clear Selection">Clear Selection</button>
+    </div>
+    {{#if hasDuplicateScripts}}
+    <div class="warning_text m-b-1" data-i18n="Some regex scripts already exist in this preset.">Some regex scripts already exist in this preset.</div>
+    {{/if}}
+    <div class="m-b-1" data-i18n="Review the embedded regex scripts before allowing them.">Review the embedded regex scripts before allowing them.</div>
+    <div class="regex-preset-embedded-preview__list">
+        {{#each scripts}}
+        <details class="regex-preset-embedded-preview__item{{#if duplicate}} regex-preset-embedded-preview__item--duplicate{{/if}}">
+            <summary class="regex-preset-embedded-preview__summary">
+                <input type="checkbox" class="regex-preset-embedded-preview__select" data-regex-preview-index="{{index}}"{{#if selected}} checked{{/if}}>
+                <span class="regex-preset-embedded-preview__title">{{number}}. {{scriptName}}</span>
+                {{#if duplicate}}
+                <span class="regex-preset-embedded-preview__badge regex-preset-embedded-preview__badge--duplicate">{{duplicateLabel}}</span>
+                {{/if}}
+                <span class="regex-preset-embedded-preview__badge{{#if disabled}} regex-preset-embedded-preview__badge--disabled{{/if}}">{{statusLabel}}</span>
+            </summary>
+            <div class="regex-preset-embedded-preview__meta">
+                <span><strong data-i18n="Affects">Affects</strong>: {{placement}}</span>
+                <span><strong data-i18n="Substitute Variables">Substitute Variables</strong>: {{substituteRegex}}</span>
+                <span><strong data-i18n="Min Depth">Min Depth</strong>: {{minDepth}}</span>
+                <span><strong data-i18n="Max Depth">Max Depth</strong>: {{maxDepth}}</span>
+            </div>
+            <div class="regex-preset-embedded-preview__field">
+                <strong data-i18n="Find Regex">Find Regex</strong>
+                <pre>{{findRegex}}</pre>
+            </div>
+            <div class="regex-preset-embedded-preview__field">
+                <strong data-i18n="Replace With">Replace With</strong>
+                <pre>{{replaceString}}</pre>
+            </div>
+            {{#if hasTrimStrings}}
+            <div class="regex-preset-embedded-preview__field">
+                <strong data-i18n="Trim Out">Trim Out</strong>
+                <pre>{{trimStrings}}</pre>
+            </div>
+            {{/if}}
+            <div class="regex-preset-embedded-preview__field">
+                <strong data-i18n="Other Options">Other Options</strong>
+                {{#if hasFlags}}
+                <ul>
+                    {{#each flags}}
+                    <li>{{this}}</li>
+                    {{/each}}
+                </ul>
+                {{else}}
+                <div data-i18n="None">None</div>
+                {{/if}}
+            </div>
+        </details>
+        {{/each}}
+    </div>
     <h3 data-i18n="Would you like to allow using them?">Would you like to allow using them?</h3>
     <div class="m-b-1" data-i18n="If you want to do it later, select 'Regex' from the extensions menu.">If you want to do it later, select "Regex" from the extensions menu.</div>
 </div>
