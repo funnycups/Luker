@@ -25,6 +25,21 @@
  */
 
 import { LEVEL, normalizeText, isExtractableAssistantMessage } from './primitives.js';
+
+/**
+ * Resolve buildObjectPatchOperationsAsync. getContext() doesn't expose it
+ * (verified May 2026), so we must reach into ../../../script.js. Dynamic
+ * import keeps the module out of the static dep graph — important for tests
+ * which run in Node without the DOM that script.js touches at module-load
+ * time. In production this resolves once per migration call (cheap).
+ */
+async function resolveBuildObjectPatchOperationsAsync(context) {
+    if (typeof context?.buildObjectPatchOperationsAsync === 'function') {
+        return context.buildObjectPatchOperationsAsync;
+    }
+    const script = await import('../../../script.js');
+    return script.buildObjectPatchOperationsAsync;
+}
 import {
     addEdge,
     dropNode,
@@ -190,7 +205,8 @@ export async function commitGraphEntry(context, entry, floor, applyMemoryLogEntr
     applyMemoryLogEntryToStore(next, { seq, ops: entry.ops });
     next.coveredAssistantSeq = Math.max(Number(next.coveredAssistantSeq || 0), seq);
 
-    const patches = await context.buildObjectPatchOperationsAsync({}, next);
+    const buildPatches = await resolveBuildObjectPatchOperationsAsync(context);
+    const patches = await buildPatches({}, next);
     if (!Array.isArray(patches) || patches.length === 0) return null;
     const ok = await fs.patch(patches, { floor });
     if (!ok) return null;
@@ -231,7 +247,14 @@ export async function migrateLegacyMemoryGraphState(
         chat: Array.isArray(context?.chat) ? context.chat : [],
         isExtractableAssistantMessage,
         applyMemoryLogEntryToStore,
-        buildObjectPatchOperationsAsync: context.buildObjectPatchOperationsAsync,
+        // getContext() doesn't expose buildObjectPatchOperationsAsync — see
+        // resolveBuildObjectPatchOperationsAsync above for why we reach into
+        // script.js. Without this, v8-oplog migrate would throw on
+        // `await ctx.buildObjectPatchOperationsAsync({}, next)`, the driver
+        // would catch and return changed:false, and the wrapper would
+        // silently stamp meta only — exactly the bug observed at 00:35
+        // when v8 data didn't migrate to v2 floor-state.
+        buildObjectPatchOperationsAsync: await resolveBuildObjectPatchOperationsAsync(context),
         getFloorFromAssistantSeq,
         buildMemoryLogOpsFromStore,
         getStoreCoveredSeqTo,
