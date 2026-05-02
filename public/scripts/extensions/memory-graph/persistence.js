@@ -161,20 +161,20 @@ export async function persistMetaFields(context, meta, target = undefined) {
 
 /**
  * Apply a memory-graph "log entry" (ops array) as a single floor-state
- * commit tagged at the given assistant floor. The reducer overlays the
- * graph payload defaults so a fresh data namespace doesn't trip over
- * undefined counters when `applyMemoryLogEntryToStore` does Math.max.
+ * commit tagged at the given assistant floor. Each commit stores an
+ * incremental `prev → next` diff: `next` is the materialized data namespace
+ * state with this entry's ops applied, `prev` is the materialized state
+ * floor-state already holds. The reducer overlays the graph-payload defaults
+ * so a never-written namespace doesn't trip Math.max-on-undefined when
+ * `applyMemoryLogEntryToStore` runs.
  *
- * Each commit's patches are built as a snapshot diff from `{}` (i.e. the
- * full cumulative state at this commit), not as an incremental diff from
- * `prev → next`. The reason is replay: floor-state filters surviving
- * commits by (floor, swipeId) on swipe / delete events, then replays the
- * survivors against `{}`. Incremental patches would assume the dropped
- * commits' scaffolding is present (`add /nodes/n_X` requires `/nodes` to
- * exist) and fail / silently corrupt the data namespace. Snapshot patches
- * apply cleanly in any order against any starting state — fast-json-patch's
- * `add` on an existing key is a replace, so applying multiple snapshots
- * sequentially leaves only the last survivor's view, exactly what we want.
+ * Why incremental, not snapshot-from-empty: snapshot patches grow O(N×state)
+ * — every commit serializes the full graph — and produced 19MB log files
+ * for ~1MB worth of data. The user requirement for floor-state is that
+ * deletions (message delete, swipe delete) are tail-only, so commits on the
+ * active replay path always form a contiguous chain and incremental patches
+ * compose cleanly. Snapshot semantics were over-engineered for a middle-skip
+ * scenario that doesn't exist in practice.
  *
  * Returns the latest payload (post-write) as a convenience for callers
  * that want to update their in-memory cache without an extra read.
@@ -196,19 +196,20 @@ export async function commitGraphEntry(context, entry, floor, applyMemoryLogEntr
     const fs = await getFloorStateInstance(context);
     const seq = Math.max(0, Math.floor(Number(entry.seq || 0)));
 
-    const current = (await fs.get()) ?? {};
-    const draft = { ...GRAPH_PAYLOAD_DEFAULTS, ...current };
-    // structuredClone so applyMemoryLogEntryToStore can mutate draft without
-    // touching the captured `current` reference (which is shared with fs's
-    // internal cache view).
-    const next = structuredClone(draft);
-    applyMemoryLogEntryToStore(next, { seq, ops: entry.ops });
-    next.coveredAssistantSeq = Math.max(Number(next.coveredAssistantSeq || 0), seq);
-
-    const buildPatches = await resolveBuildObjectPatchOperationsAsync(context);
-    const patches = await buildPatches({}, next);
-    if (!Array.isArray(patches) || patches.length === 0) return null;
-    const ok = await fs.patch(patches, { floor });
+    // fs.update handles the prev→next diff internally: it reads the current
+    // materialized state, runs the reducer, and uses the host-injected
+    // buildObjectPatchOperationsAsync to compute the incremental patches.
+    // structuredClone is essential — applyMemoryLogEntryToStore mutates the
+    // store in place, and fs.update diffs `current` (the source) against the
+    // reducer's return value. Without the clone, next.nodes/edges share refs
+    // with current, mutation propagates back, and the diff comes out empty.
+    const ok = await fs.update((current) => {
+        const safeCurrent = current && typeof current === 'object' ? current : {};
+        const next = structuredClone({ ...GRAPH_PAYLOAD_DEFAULTS, ...safeCurrent });
+        applyMemoryLogEntryToStore(next, { seq, ops: entry.ops });
+        next.coveredAssistantSeq = Math.max(Number(next.coveredAssistantSeq || 0), seq);
+        return next;
+    }, { floor });
     if (!ok) return null;
     return await fs.get();
 }

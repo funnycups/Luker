@@ -560,8 +560,8 @@ describe('migrateLegacyMemoryGraphState', () => {
 
     test('post-migration tail-floor delete only drops that floor\'s commit', async () => {
         // Reproduces the reason the migration emits PER-ENTRY commits rather
-        // than one snapshot tagged at the tail: deleting the tail must not
-        // wipe earlier-floor graph data.
+        // than one commit lumped at the tail floor: deleting the tail must
+        // not wipe earlier-floor graph data.
         const chatRef = {
             value: [assistantMsg(), assistantMsg(), assistantMsg()],
         };

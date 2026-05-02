@@ -4,13 +4,16 @@
  * The legacy chat-state held one record with `{ version: 8, opLog,
  * coveredSeqTo, swipeTailCache, lastRecallTrace, lastRecallProjection,
  * sourceMessageCount }`. This shape replays each opLog entry into a
- * cumulative graph payload, emitting one snapshot-style commit per entry
- * tagged at the entry's resolved (floor, swipeId).
+ * cumulative graph payload, emitting one commit per entry tagged at the
+ * entry's resolved (floor, swipeId).
  *
- * Snapshot-from-empty patches (rather than incremental diffs) because
- * floor-state filters surviving commits by (floor, swipeId) on swipe /
- * delete events; an isolated incremental commit would silently fail to
- * apply against an empty data namespace.
+ * Patches are INCREMENTAL (`prev → next` per entry), not snapshot-from-empty.
+ * Floor-state's deletion semantics are tail-only (truncate at floor F drops
+ * commits at floor >= F; swipe deletion only happens at the chat tail), so
+ * surviving commits on the active replay path always form a contiguous
+ * chain and incremental patches compose cleanly. Snapshot-from-empty was
+ * over-engineered for a middle-skip case that doesn't exist; it grew log
+ * size O(N×state) — 19MB log for ~1MB of source data.
  *
  * Drops `swipeTailCache` — the (floor, swipeId) commit filter replaces it.
  */
@@ -56,22 +59,27 @@ export const v8Oplog = Object.freeze({
     },
     async migrate(input, ctx) {
         const opLog = input.data.opLog;
-        let cumulative = emptyGraphPayload();
+        // `cumulative` doubles as the running materialized state and as the
+        // `prev` for the next iteration's diff. Starts as `{}` so the first
+        // commit's patches add the default scaffolding (nodes, edges, …) —
+        // floor-state replay starts from `{}` and needs that first commit
+        // to seed the structure.
+        let cumulative = {};
         const commits = [];
         for (const entry of opLog) {
             if (!entry || typeof entry !== 'object') continue;
             const seq = sanitizeSeq(entry.seq);
             const floor = ctx.getFloorFromAssistantSeq(ctx.chat, seq, ctx.isExtractableAssistantMessage);
             if (!Number.isInteger(floor) || floor < 0) continue;
-            const next = structuredClone(cumulative);
+            const next = structuredClone({ ...emptyGraphPayload(), ...cumulative });
             ctx.applyMemoryLogEntryToStore(next, entry);
-            next.coveredAssistantSeq = Math.max(next.coveredAssistantSeq, seq);
-            const patches = await ctx.buildObjectPatchOperationsAsync({}, next);
+            next.coveredAssistantSeq = Math.max(Number(next.coveredAssistantSeq || 0), seq);
+            const patches = await ctx.buildObjectPatchOperationsAsync(cumulative, next);
             if (Array.isArray(patches) && patches.length > 0) {
                 const swipeId = sanitizeSwipeId(ctx.chat[floor]?.swipe_id);
                 commits.push({ floor, swipeId, patches });
+                cumulative = next;
             }
-            cumulative = next;
         }
         return {
             data: cumulative,

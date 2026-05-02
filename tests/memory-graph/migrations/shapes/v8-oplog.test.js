@@ -56,15 +56,19 @@ describe('v8-oplog shape', () => {
         expect(out.log.commits[0]).toMatchObject({ floor: 0, swipeId: 0 });
         expect(out.log.commits[1]).toMatchObject({ floor: 1, swipeId: 0 });
 
-        // Snapshot semantics: each commit is a diff from {} (empty), so it adds the full /nodes
-        // map. commit[0] has just n_1, but commit[1] must include BOTH n_1 AND n_2 — a regression
-        // to incremental diffs would shrink commit[1]'s /nodes to only n_2.
-        const nodesFromCommit = (commit) => {
-            const addNodes = commit.patches.find(p => p.op === 'add' && p.path === '/nodes');
-            return addNodes ? Object.keys(addNodes.value).sort() : [];
-        };
-        expect(nodesFromCommit(out.log.commits[0])).toEqual(['n_1']);
-        expect(nodesFromCommit(out.log.commits[1])).toEqual(['n_1', 'n_2']);
+        // Incremental semantics: commit[0] seeds the structure (adds /nodes
+        // with n_1, plus the default scaffolding), commit[1] only contains
+        // the diff for the second entry — adding n_2 to the existing /nodes.
+        // A regression to snapshot-from-empty would balloon commit[1] to a
+        // full state copy and re-add /nodes wholesale.
+        const commit0 = out.log.commits[0];
+        const addNodes0 = commit0.patches.find(p => p.op === 'add' && p.path === '/nodes');
+        expect(addNodes0 && Object.keys(addNodes0.value).sort()).toEqual(['n_1']);
+
+        const commit1 = out.log.commits[1];
+        // commit[1] should NOT re-add /nodes; instead it adds the single new entry.
+        expect(commit1.patches.find(p => p.op === 'add' && p.path === '/nodes')).toBeUndefined();
+        expect(commit1.patches.some(p => p.op === 'add' && p.path === '/nodes/n_2')).toBe(true);
 
         expect(Object.keys(out.data.nodes).sort()).toEqual(['n_1', 'n_2']);
         expect(out.data.coveredAssistantSeq).toBe(2);
@@ -105,6 +109,9 @@ describe('v8-oplog shape', () => {
         );
         expect(out.log.commits).toEqual([]);
         expect(out.meta.schemaVersion).toBe(2);
-        expect(out.data.nodes).toEqual({});
+        // No commits ⇒ no scaffolding seeded; replay produces {}, so the
+        // pipeline output's data is {} too. Subsequent commitGraphEntry calls
+        // will overlay GRAPH_PAYLOAD_DEFAULTS on the empty namespace.
+        expect(out.data).toEqual({});
     });
 });
