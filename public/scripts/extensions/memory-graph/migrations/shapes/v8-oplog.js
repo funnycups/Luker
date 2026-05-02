@@ -15,7 +15,21 @@
  * Drops `swipeTailCache` — the (floor, swipeId) commit filter replaces it.
  */
 
-import { getFloorFromAssistantSeq } from '../../persistence.js';
+// Inlined locally to avoid a v8-oplog → persistence.js → migrations/index.js
+// → registry.js → v8-oplog cycle once persistence.js depends on the
+// migration pipeline. Mirrors `getFloorFromAssistantSeq` in persistence.js.
+function getFloorFromAssistantSeq(chat, assistantSeq, isExtractableAssistantMessage) {
+    const target = Math.floor(Number(assistantSeq || 0));
+    if (!Number.isInteger(target) || target <= 0) return null;
+    const source = Array.isArray(chat) ? chat : [];
+    let count = 0;
+    for (let i = 0; i < source.length; i++) {
+        if (!isExtractableAssistantMessage(source[i])) continue;
+        count += 1;
+        if (count === target) return i;
+    }
+    return null;
+}
 
 function emptyGraphPayload() {
     return {

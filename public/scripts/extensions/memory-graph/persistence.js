@@ -35,6 +35,7 @@ import {
     compareNodesByTimeline,
     getSemanticCoverageSeq,
 } from './graph-ops.js';
+import { runMigrationPipeline } from './migrations/index.js';
 
 const MODULE_NAME = 'memory_graph';
 const META_NAMESPACE = `${MODULE_NAME}__meta`;
@@ -209,25 +210,17 @@ export async function commitGraphEntry(context, entry, floor, applyMemoryLogEntr
 }
 
 /**
- * One-shot upgrade from schema v1 (opLog + swipeTailCache + metadata all
- * inside the main namespace) to schema v2 (graph in main, log in
- * `<ns>__floor_log`, metadata in `<ns>__meta`).
+ * One-shot upgrade from any historical chat-state shape to the current
+ * v2 floor-state layout. The actual translation logic lives in the
+ * `migrations/` registry; this function is the IO wrapper that reads the
+ * three chat-state namespaces, runs the pipeline, and writes results
+ * back in the (log → data → meta) order required for crash idempotency.
  *
- * Idempotent via `__meta.schemaVersion`. Safe to retry on partial failure
- * because each step is overwrite-only:
- *   1. Compute per-entry commits in memory (no writes yet).
- *   2. Write the log namespace as one updateChatState call.
- *   3. Overwrite the main namespace with the materialized graph payload.
- *   4. Write `__meta` with schemaVersion + extracted metadata last.
- *
- * If a crash occurs before step 4, schemaVersion is still missing and the
- * next startup re-runs all steps; steps 2/3 are idempotent overwrites.
- *
- * @param {object} context — getContext() result
+ * @param {object} context
  * @param {object|undefined} target — chat target; default = current chat
  * @param {(message: any) => boolean} isExtractableAssistantMessage
  * @param {(store: object, entry: object) => void} applyMemoryLogEntryToStore
- * @returns {Promise<{migrated: boolean}>}
+ * @returns {Promise<{migrated: boolean, migrations: string[]}>}
  */
 export async function migrateLegacyMemoryGraphState(
     context,
@@ -240,90 +233,41 @@ export async function migrateLegacyMemoryGraphState(
         ? { target, maxOperations: 16000 }
         : { maxOperations: 16000 };
 
-    const meta = await context.getChatState(META_NAMESPACE, targetOption);
-    if (Number(meta?.schemaVersion || 0) >= SCHEMA_VERSION) {
-        return { migrated: false };
-    }
+    const [data, meta, log] = await Promise.all([
+        context.getChatState(MODULE_NAME, targetOption),
+        context.getChatState(META_NAMESPACE, targetOption),
+        context.getChatState(LOG_NAMESPACE, targetOption),
+    ]);
 
-    const raw = await context.getChatState(MODULE_NAME, targetOption);
-    const opLog = Array.isArray(raw?.opLog) ? raw.opLog : [];
+    const ctx = {
+        chat: Array.isArray(context?.chat) ? context.chat : [],
+        isExtractableAssistantMessage,
+        applyMemoryLogEntryToStore,
+        buildObjectPatchOperationsAsync: context.buildObjectPatchOperationsAsync,
+        FLOOR_STATE_LOG_VERSION,
+        SCHEMA_VERSION,
+    };
 
-    // Fresh install OR already-clean main namespace: no opLog to translate,
-    // just stamp the schema version so we don't re-check next time.
-    if (opLog.length === 0) {
-        await context.updateChatState(
-            META_NAMESPACE,
-            () => ({ schemaVersion: SCHEMA_VERSION }),
-            targetWriteOption,
-        );
-        return { migrated: false };
-    }
+    const result = await runMigrationPipeline({ data, meta, log }, ctx);
 
-    // Step 1: replay every entry in memory, building (a) the per-entry
-    // commits to write to the log and (b) the final graph payload. Each
-    // commit's patches are a snapshot diff from `{}` to the cumulative
-    // state AFTER applying that entry — i.e. each commit is self-contained.
-    // The reason is the same as commitGraphEntry: floor-state filters
-    // commits on swipe/delete events, and an isolated incremental commit
-    // would silently fail to apply against an empty data namespace because
-    // its patches assume scaffolding from earlier commits. Snapshot
-    // commits replay correctly in any subset; later snapshots overwrite
-    // earlier ones at the same top-level key (RFC 6902 `add` on an
-    // existing object key is a replace).
-    const chat = Array.isArray(context?.chat) ? context.chat : [];
-    let cumulative = makeEmptyGraphPayload();
-    const commits = [];
-    for (const entry of opLog) {
-        const seq = Math.max(0, Math.floor(Number(entry?.seq || 0)));
-        const floor = getFloorFromAssistantSeq(chat, seq, isExtractableAssistantMessage);
-        if (!Number.isInteger(floor) || floor < 0) continue;
-        const next = structuredClone(cumulative);
-        applyMemoryLogEntryToStore(next, entry);
-        next.coveredAssistantSeq = Math.max(Number(next.coveredAssistantSeq || 0), seq);
-        const patches = await context.buildObjectPatchOperationsAsync({}, next);
-        if (Array.isArray(patches) && patches.length > 0) {
-            const swipeIdRaw = chat[floor]?.swipe_id;
-            const swipeId = Number.isInteger(swipeIdRaw) && swipeIdRaw >= 0 ? swipeIdRaw : 0;
-            commits.push({ floor, swipeId, patches });
+    if (!result.changed) {
+        // fresh install / 已最新:仅在 meta 缺 schemaVersion 时补 stamp
+        if (!meta || Number(meta?.schemaVersion || 0) < SCHEMA_VERSION) {
+            const baseMeta = meta && typeof meta === 'object' ? meta : {};
+            await context.updateChatState(
+                META_NAMESPACE,
+                () => ({ ...baseMeta, schemaVersion: SCHEMA_VERSION }),
+                targetWriteOption,
+            );
         }
-        cumulative = next;
+        return { migrated: false, migrations: result.migrations };
     }
 
-    // Step 2: write the log file. floor-state's instance, when it next
-    // mounts (or was already mounted), will pick this up via its init or
-    // CHAT_CHANGED rematerialize.
-    await context.updateChatState(
-        LOG_NAMESPACE,
-        () => ({ version: FLOOR_STATE_LOG_VERSION, commits }),
-        targetWriteOption,
-    );
-
-    // Step 3: overwrite the main namespace with the replayed graph so any
-    // reader using getChatState(MODULE_NAME) directly (we don't, but other
-    // callsites might be racing during the upgrade) sees the v2 shape.
-    await context.updateChatState(
-        MODULE_NAME,
-        () => cumulative,
-        targetWriteOption,
-    );
-
-    // Step 4: pull non-floor-bound metadata across, then stamp the schema.
-    await context.updateChatState(
-        META_NAMESPACE,
-        () => ({
-            schemaVersion: SCHEMA_VERSION,
-            lastRecallTrace: Array.isArray(raw?.lastRecallTrace)
-                ? structuredClone(raw.lastRecallTrace)
-                : [],
-            lastRecallProjection: raw?.lastRecallProjection && typeof raw.lastRecallProjection === 'object'
-                ? structuredClone(raw.lastRecallProjection)
-                : null,
-            sourceMessageCount: Math.max(0, Number(raw?.sourceMessageCount || 0)),
-        }),
-        targetWriteOption,
-    );
-
-    return { migrated: true };
+    // 写顺序:log → data → meta(schemaVersion 最后落,保证 idempotency)
+    await context.updateChatState(LOG_NAMESPACE, () => result.log, targetWriteOption);
+    await context.updateChatState(MODULE_NAME, () => result.data, targetWriteOption);
+    await context.updateChatState(META_NAMESPACE, () => result.meta, targetWriteOption);
+    return { migrated: true, migrations: result.migrations };
 }
 
 export const constants = Object.freeze({
