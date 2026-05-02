@@ -16,6 +16,19 @@ import {
     validateParsedToolCalls,
 } from '../function-call-runtime.js';
 import { createSearchToolsSettingsUi } from './settings-ui.js';
+import {
+    buildLastUserAnchor,
+    getPlayableMessageAt,
+    normalizeAnchorPlayableFloor,
+} from './anchors.js';
+import {
+    getFloorStateInstance,
+    loadAnchorMap,
+    loadMetaSidecar,
+    migrateLegacyAnchorsIfNeeded,
+    persistFallbackManagedEntries,
+    pickLatestValidSnapshot,
+} from './persistence.js';
 
 const MODULE_NAME = 'search_tools';
 const UI_BLOCK_ID = 'search_tools_settings';
@@ -24,9 +37,6 @@ const STATUS_ID = 'search_tools_status';
 const CHAT_LOREBOOK_METADATA_KEY = 'world_info';
 const SHARED_LOREBOOK_NAME = '__SEARCH_TOOLS__';
 const MANAGED_COMMENT_PREFIX = 'SEARCH_TOOLS';
-const SEARCH_CHAT_STATE_NAMESPACE = 'luker_search_tools_state';
-const SEARCH_CHAT_STATE_VERSION = 3;
-const SEARCH_CHAT_CONTENT_NAMESPACE_PREFIX = `${SEARCH_CHAT_STATE_NAMESPACE}_anchor_`;
 const ALLOWED_GENERATION_TYPES = new Set(['normal', 'continue', 'regenerate', 'swipe', 'impersonate']);
 const REUSE_GENERATION_TYPES = new Set(['continue', 'regenerate', 'swipe']);
 const TOOL_NAMES = Object.freeze({
@@ -338,7 +348,6 @@ const SUPPORTED_WORLD_INFO_POSITIONS = Object.freeze([
 let activeAgentRunToken = 0;
 let activeAgentAbortController = null;
 let latestSearchAgentSnapshot = null;
-let latestSearchHistoryIndex = null;
 let latestManagedEntries = [];
 let loadedChatStateKey = '';
 
@@ -352,10 +361,6 @@ function clampInteger(value, min, max, fallback) {
         return fallback;
     }
     return Math.max(min, Math.min(max, parsed));
-}
-
-function normalizeAnchorPlayableFloor(value) {
-    return Math.max(0, Math.floor(Number(value) || 0));
 }
 
 function getAvailableSearchProviders() {
@@ -574,31 +579,6 @@ function normalizePreviewText(text, maxChars = 240) {
     return `${normalized.slice(0, maxChars - 1).trim()}...`;
 }
 
-function normalizeSearchAgentSnapshot(raw) {
-    const source = raw && typeof raw === 'object' ? raw : null;
-    if (!source) {
-        return null;
-    }
-
-    const chatKey = String(source.chatKey || '').trim();
-    const anchorHash = String(source.anchorHash || '').trim();
-    if (!chatKey || !anchorHash) {
-        return null;
-    }
-
-    return {
-        chatKey,
-        anchorFloor: normalizeAnchorPlayableFloor(source.anchorFloor),
-        anchorPlayableFloor: normalizeAnchorPlayableFloor(source.anchorPlayableFloor || source.anchorFloor),
-        anchorHash,
-        updatedAt: String(source.updatedAt || '').trim(),
-        summary: normalizeWhitespace(source.summary || ''),
-        mutationCount: Math.max(0, Math.floor(Number(source.mutationCount || 0))),
-        managedEntryCount: Math.max(0, Math.floor(Number(source.managedEntryCount || 0))),
-        bookName: normalizeWhitespace(source.bookName || ''),
-    };
-}
-
 function normalizeStoredManagedEntries(raw) {
     if (!Array.isArray(raw)) {
         return [];
@@ -628,36 +608,6 @@ function normalizeStoredManagedEntries(raw) {
     }
 
     return output.sort((a, b) => String(a.entryId || '').localeCompare(String(b.entryId || '')));
-}
-
-function normalizeSearchHistoryAnchors(raw) {
-    if (!Array.isArray(raw)) {
-        return [];
-    }
-
-    const anchors = [];
-    const seen = new Set();
-    for (const value of raw) {
-        const normalized = normalizeAnchorPlayableFloor(value);
-        if (!normalized || seen.has(normalized)) {
-            continue;
-        }
-        seen.add(normalized);
-        anchors.push(normalized);
-    }
-    return anchors.sort((left, right) => left - right);
-}
-
-function equalNumberArrays(left = [], right = []) {
-    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
-        return false;
-    }
-    for (let index = 0; index < left.length; index += 1) {
-        if (Number(left[index]) !== Number(right[index])) {
-            return false;
-        }
-    }
-    return true;
 }
 
 function normalizeStoredSearchAgentSnapshot(raw) {
@@ -706,47 +656,6 @@ function materializeSearchAgentSnapshot(chatKey, anchorPlayableFloor, snapshot) 
     };
 }
 
-function normalizeSearchToolsChatState(raw) {
-    const source = raw && typeof raw === 'object' ? raw : {};
-    return {
-        version: Number(source.version || SEARCH_CHAT_STATE_VERSION),
-        anchors: normalizeSearchHistoryAnchors(source.anchors),
-        legacySnapshot: normalizeSearchAgentSnapshot(source.snapshot),
-        managedEntries: normalizeStoredManagedEntries(source.managedEntries),
-    };
-}
-
-function setLoadedSearchHistoryIndex(chatKey, anchors) {
-    const normalizedChatKey = String(chatKey || '').trim();
-    if (!normalizedChatKey) {
-        latestSearchHistoryIndex = null;
-        return;
-    }
-    latestSearchHistoryIndex = {
-        chatKey: normalizedChatKey,
-        anchors: normalizeSearchHistoryAnchors(anchors),
-    };
-}
-
-function getLoadedSearchHistoryAnchors(context) {
-    const chatKey = getChatKey(context);
-    if (!latestSearchHistoryIndex || typeof latestSearchHistoryIndex !== 'object') {
-        return [];
-    }
-    if (String(latestSearchHistoryIndex.chatKey || '') !== String(chatKey || '')) {
-        return [];
-    }
-    return normalizeSearchHistoryAnchors(latestSearchHistoryIndex.anchors);
-}
-
-function getSearchAgentSnapshotNamespace(anchorPlayableFloor) {
-    const normalized = normalizeAnchorPlayableFloor(anchorPlayableFloor);
-    if (!normalized) {
-        return '';
-    }
-    return `${SEARCH_CHAT_CONTENT_NAMESPACE_PREFIX}${normalized}`;
-}
-
 function getChatKey(context) {
     if (context.groupId) {
         return `group:${context.groupId}`;
@@ -771,7 +680,6 @@ async function loadSearchToolsChatState(context, { force = false } = {}) {
     const chatKey = getChatKey(context);
     if (!chatKey) {
         latestSearchAgentSnapshot = null;
-        latestSearchHistoryIndex = null;
         latestManagedEntries = [];
         loadedChatStateKey = '';
         return;
@@ -780,185 +688,35 @@ async function loadSearchToolsChatState(context, { force = false } = {}) {
         return;
     }
 
-    let payload = null;
-    if (typeof context?.getChatState === 'function') {
-        payload = await context.getChatState(SEARCH_CHAT_STATE_NAMESPACE, {});
-    }
-    const normalized = normalizeSearchToolsChatState(payload);
+    // One-shot legacy upgrade. Idempotent — the persistence layer's schema
+    // sidecar marks it complete after the first run on each chat.
+    await migrateLegacyAnchorsIfNeeded(context);
+
     loadedChatStateKey = chatKey;
-    let nextAnchors = normalized.anchors.slice();
-    let migratedLegacySnapshot = false;
-    if (normalized.legacySnapshot) {
-        const legacyAnchor = normalizeAnchorPlayableFloor(normalized.legacySnapshot.anchorPlayableFloor || normalized.legacySnapshot.anchorFloor);
-        if (legacyAnchor) {
-            await persistStoredSearchAgentSnapshot(context, legacyAnchor, {
-                anchorHash: normalized.legacySnapshot.anchorHash,
-                updatedAt: normalized.legacySnapshot.updatedAt,
-                summary: normalized.legacySnapshot.summary,
-                mutationCount: normalized.legacySnapshot.mutationCount,
-                managedEntryCount: Math.max(normalized.legacySnapshot.managedEntryCount, normalized.managedEntries.length),
-                bookName: normalized.legacySnapshot.bookName,
-                managedEntries: normalized.managedEntries,
-            });
-            nextAnchors = normalizeSearchHistoryAnchors([...nextAnchors, legacyAnchor]);
-            migratedLegacySnapshot = true;
-        }
-    }
-    setLoadedSearchHistoryIndex(chatKey, nextAnchors);
-    await selectLatestValidSearchAgentSnapshot(context, { persistCleanup: true });
-    if (!latestSearchAgentSnapshot && nextAnchors.length === 0 && !normalized.legacySnapshot) {
-        latestManagedEntries = normalized.managedEntries;
+    const map = await loadAnchorMap(context);
+    const pick = pickLatestValidSnapshot(context, map);
+
+    if (pick) {
+        latestSearchAgentSnapshot = materializeSearchAgentSnapshot(chatKey, pick.playableFloor, pick.snapshot);
+        latestManagedEntries = latestSearchAgentSnapshot
+            ? normalizeStoredManagedEntries(latestSearchAgentSnapshot.managedEntries)
+            : [];
+    } else {
+        // No valid snapshot — fall back to the meta sidecar's
+        // `fallbackManagedEntries`, populated only by legacy migrations.
+        latestSearchAgentSnapshot = null;
+        const meta = await loadMetaSidecar(context);
+        latestManagedEntries = normalizeStoredManagedEntries(meta.fallbackManagedEntries);
     }
 
-    if (latestManagedEntries.length === 0) {
+    if (latestManagedEntries.length === 0 && !latestSearchAgentSnapshot) {
+        // Bootstrap from a pre-existing chat lorebook on a never-touched chat.
         const migratedEntries = await loadLegacyManagedEntries(context);
         if (migratedEntries.length > 0) {
             latestManagedEntries = migratedEntries;
-            await persistSearchToolsChatState(context);
+            await persistFallbackManagedEntries(context, migratedEntries);
         }
     }
-    if (migratedLegacySnapshot) {
-        await persistSearchToolsChatState(context);
-    }
-}
-
-async function persistSearchToolsChatState(context) {
-    const chatKey = getChatKey(context);
-    if (!chatKey) {
-        return;
-    }
-
-    loadedChatStateKey = chatKey;
-    const anchors = getLoadedSearchHistoryAnchors(context);
-    const fallbackManagedEntries = anchors.length === 0 ? normalizeStoredManagedEntries(latestManagedEntries) : [];
-    if (anchors.length === 0 && fallbackManagedEntries.length === 0 && typeof context?.deleteChatState === 'function') {
-        await context.deleteChatState(SEARCH_CHAT_STATE_NAMESPACE, {});
-        return;
-    }
-    if (typeof context?.updateChatState !== 'function') {
-        return;
-    }
-    await context.updateChatState(SEARCH_CHAT_STATE_NAMESPACE, () => ({
-        version: SEARCH_CHAT_STATE_VERSION,
-        anchors,
-        managedEntries: fallbackManagedEntries,
-    }), { maxOperations: 2000, maxRetries: 1 });
-}
-
-async function loadStoredSearchAgentSnapshot(context, anchorPlayableFloor) {
-    const namespace = getSearchAgentSnapshotNamespace(anchorPlayableFloor);
-    if (!namespace || typeof context?.getChatState !== 'function') {
-        return null;
-    }
-    const payload = await context.getChatState(namespace, {});
-    return normalizeStoredSearchAgentSnapshot(payload);
-}
-
-async function persistStoredSearchAgentSnapshot(context, anchorPlayableFloor, snapshot) {
-    const namespace = getSearchAgentSnapshotNamespace(anchorPlayableFloor);
-    const normalized = normalizeStoredSearchAgentSnapshot(snapshot);
-    if (!namespace || !normalized || typeof context?.updateChatState !== 'function') {
-        return false;
-    }
-    const result = await context.updateChatState(namespace, () => ({
-        anchorHash: String(normalized.anchorHash || '').trim(),
-        updatedAt: normalized.updatedAt,
-        summary: normalized.summary,
-        mutationCount: normalized.mutationCount,
-        managedEntryCount: normalized.managedEntries.length,
-        bookName: normalized.bookName,
-        managedEntries: normalizeStoredManagedEntries(normalized.managedEntries),
-    }), { maxOperations: 2000, maxRetries: 1 });
-    return Boolean(result?.ok);
-}
-
-async function deleteStoredSearchAgentSnapshot(context, anchorPlayableFloor) {
-    const namespace = getSearchAgentSnapshotNamespace(anchorPlayableFloor);
-    if (!namespace || typeof context?.deleteChatState !== 'function') {
-        return false;
-    }
-    return Boolean(await context.deleteChatState(namespace, {}));
-}
-
-async function deleteStoredSearchAgentAnchors(context, anchors) {
-    const normalizedAnchors = normalizeSearchHistoryAnchors(anchors);
-    for (const anchorPlayableFloor of normalizedAnchors) {
-        await deleteStoredSearchAgentSnapshot(context, anchorPlayableFloor);
-    }
-}
-
-function getPlayableMessageAt(messages, playableFloor) {
-    const source = Array.isArray(messages) ? messages : [];
-    const targetPlayableFloor = normalizeAnchorPlayableFloor(playableFloor);
-    if (!targetPlayableFloor) {
-        return null;
-    }
-    let playableSeq = 0;
-    for (let index = 0; index < source.length; index += 1) {
-        const message = source[index];
-        if (!message || message.is_system) {
-            continue;
-        }
-        playableSeq += 1;
-        if (playableSeq === targetPlayableFloor) {
-            return { index, message };
-        }
-    }
-    return null;
-}
-
-function isStoredSearchAgentSnapshotValidForMessages(anchorPlayableFloor, snapshot, messages) {
-    const normalizedSnapshot = normalizeStoredSearchAgentSnapshot(snapshot);
-    if (!normalizedSnapshot) {
-        return false;
-    }
-    const target = getPlayableMessageAt(messages, anchorPlayableFloor);
-    if (!target?.message || target.message.is_system || !target.message.is_user) {
-        return false;
-    }
-    const storedHash = String(normalizedSnapshot.anchorHash || '').trim();
-    if (!storedHash) {
-        return false;
-    }
-    const currentHash = String(getStringHash(String(target.message.mes ?? '')));
-    return currentHash === storedHash;
-}
-
-async function selectLatestValidSearchAgentSnapshot(context, { persistCleanup = false } = {}) {
-    const chatKey = getChatKey(context);
-    if (!chatKey) {
-        latestSearchAgentSnapshot = null;
-        latestSearchHistoryIndex = null;
-        latestManagedEntries = [];
-        return null;
-    }
-
-    const messages = Array.isArray(context?.chat) ? context.chat : [];
-    const previousAnchors = getLoadedSearchHistoryAnchors(context);
-    const nextAnchors = previousAnchors.slice();
-    let nextSnapshot = null;
-
-    for (let index = nextAnchors.length - 1; index >= 0; index -= 1) {
-        const anchorPlayableFloor = nextAnchors[index];
-        const snapshot = await loadStoredSearchAgentSnapshot(context, anchorPlayableFloor);
-        if (!snapshot || !isStoredSearchAgentSnapshotValidForMessages(anchorPlayableFloor, snapshot, messages)) {
-            nextAnchors.splice(index, 1);
-            if (persistCleanup) {
-                await deleteStoredSearchAgentSnapshot(context, anchorPlayableFloor);
-            }
-            continue;
-        }
-        nextSnapshot = materializeSearchAgentSnapshot(chatKey, anchorPlayableFloor, snapshot);
-        break;
-    }
-
-    setLoadedSearchHistoryIndex(chatKey, nextAnchors);
-    latestSearchAgentSnapshot = nextSnapshot;
-    latestManagedEntries = nextSnapshot ? normalizeStoredManagedEntries(nextSnapshot.managedEntries) : [];
-    if (persistCleanup && !equalNumberArrays(previousAnchors, nextAnchors)) {
-        await persistSearchToolsChatState(context);
-    }
-    return nextSnapshot;
 }
 
 function getOpenAIPresetNames(context) {
@@ -2151,43 +1909,6 @@ function buildRecentChatText(messages = [], limit = 12) {
     return lines.length > 0 ? lines.join('\n\n') : '(No recent chat messages available)';
 }
 
-function extractLastUserMessage(messages) {
-    const source = Array.isArray(messages) ? messages : [];
-    for (let i = source.length - 1; i >= 0; i -= 1) {
-        if (source[i]?.is_user) {
-            return { index: i, message: source[i] };
-        }
-    }
-    return { index: -1, message: null };
-}
-
-function buildLastUserAnchorFromMessages(messages) {
-    const { index, message } = extractLastUserMessage(messages);
-    if (index < 0 || !message) {
-        return null;
-    }
-
-    const text = String(message.mes ?? '');
-    const playableFloor = normalizeAnchorPlayableFloor(messages
-        .slice(0, index + 1)
-        .reduce((count, item) => count + (item && !item.is_system ? 1 : 0), 0));
-    return {
-        floor: index + 1,
-        playableFloor,
-        hash: String(getStringHash(text)),
-    };
-}
-
-function buildLastUserAnchor(context, payloadMessages) {
-    const contextMessages = Array.isArray(context?.chat) ? context.chat : [];
-    const contextAnchor = buildLastUserAnchorFromMessages(contextMessages);
-    if (contextAnchor) {
-        return contextAnchor;
-    }
-
-    return buildLastUserAnchorFromMessages(payloadMessages);
-}
-
 function canReuseLatestSearchAgentSnapshot(chatKey, anchor) {
     if (!latestSearchAgentSnapshot || typeof latestSearchAgentSnapshot !== 'object') {
         return false;
@@ -2233,7 +1954,9 @@ async function storeCompletedSearchAgentSnapshot(context, anchor, result) {
     if (!chatKey || !anchorPlayableFloor || !anchorHash) {
         latestSearchAgentSnapshot = null;
         latestManagedEntries = managedEntries;
-        await persistSearchToolsChatState(context);
+        // Anchor unresolvable — stash entries in the meta sidecar so the
+        // shared lorebook keeps reflecting them across reloads.
+        await persistFallbackManagedEntries(context, managedEntries);
         return null;
     }
 
@@ -2246,23 +1969,36 @@ async function storeCompletedSearchAgentSnapshot(context, anchor, result) {
         bookName: normalizeWhitespace(result?.bookName || ''),
         managedEntries,
     };
-    const previousAnchors = getLoadedSearchHistoryAnchors(context);
-    const removedAnchors = previousAnchors.filter(existingAnchor => existingAnchor > anchorPlayableFloor);
-    if (removedAnchors.length > 0) {
-        await deleteStoredSearchAgentAnchors(context, removedAnchors);
+
+    // Compound op: drop any anchors above this floor (a fresh search at an
+    // earlier turn invalidates everything above) AND add the new snapshot,
+    // all tagged at the new anchor's user message so the cleanup survives
+    // exactly as long as the new anchor itself does.
+    const messages = Array.isArray(context?.chat) ? context.chat : [];
+    const target = getPlayableMessageAt(messages, anchorPlayableFloor);
+    if (!target?.message || !target.message.is_user) {
+        throw new Error(i18n('Failed to persist search agent snapshot.'));
     }
-    const ok = await persistStoredSearchAgentSnapshot(context, anchorPlayableFloor, nextSnapshot);
+    const swipeIdRaw = target.message.swipe_id;
+    const swipeId = Number.isInteger(swipeIdRaw) && swipeIdRaw >= 0 ? swipeIdRaw : 0;
+
+    const fs = await getFloorStateInstance(context);
+    const currentMap = await loadAnchorMap(context);
+    const ops = [];
+    for (const key of Object.keys(currentMap)) {
+        const f = Number(key);
+        if (Number.isInteger(f) && f > anchorPlayableFloor) {
+            ops.push({ op: 'remove', path: `/${f}` });
+        }
+    }
+    ops.push({ op: 'add', path: `/${anchorPlayableFloor}`, value: nextSnapshot });
+    const ok = await fs.patch(ops, { floor: target.index, swipeId });
     if (!ok) {
         throw new Error(i18n('Failed to persist search agent snapshot.'));
     }
-    const nextAnchors = normalizeSearchHistoryAnchors([
-        ...previousAnchors.filter(existingAnchor => existingAnchor <= anchorPlayableFloor),
-        anchorPlayableFloor,
-    ]);
-    setLoadedSearchHistoryIndex(chatKey, nextAnchors);
+
     latestSearchAgentSnapshot = materializeSearchAgentSnapshot(chatKey, anchorPlayableFloor, nextSnapshot);
     latestManagedEntries = managedEntries;
-    await persistSearchToolsChatState(context);
     return latestSearchAgentSnapshot;
 }
 
@@ -2278,44 +2014,6 @@ function getLatestSearchAgentEntry(context) {
         anchorPlayableFloor: normalizeAnchorPlayableFloor(latestSearchAgentSnapshot.anchorPlayableFloor),
         managedEntryCount: normalizeStoredManagedEntries(latestManagedEntries).length,
     };
-}
-
-function updateSearchHistoryStatusAfterInvalidation(context) {
-    const entry = getLatestSearchAgentEntry(context);
-    if (entry?.anchorPlayableFloor) {
-        updateUiStatus(i18n(`Search history invalidated. Rolled back to user turn ${entry.anchorPlayableFloor}.`));
-        return;
-    }
-    updateUiStatus(i18n('Search history invalidated. No valid stored result remains.'));
-}
-
-async function invalidateStoredSearchAgentAnchors(context, thresholdPlayableFloor = 0, { inclusive = true } = {}) {
-    const chatKey = getChatKey(context);
-    if (!chatKey) {
-        latestSearchAgentSnapshot = null;
-        latestSearchHistoryIndex = null;
-        latestManagedEntries = [];
-        await syncSharedLorebookForCurrentChat(context);
-        return false;
-    }
-
-    const currentAnchors = getLoadedSearchHistoryAnchors(context);
-    const normalizedThreshold = normalizeAnchorPlayableFloor(thresholdPlayableFloor);
-    const removedAnchors = normalizedThreshold > 0
-        ? currentAnchors.filter(anchorPlayableFloor => inclusive ? anchorPlayableFloor >= normalizedThreshold : anchorPlayableFloor > normalizedThreshold)
-        : currentAnchors.slice();
-    if (removedAnchors.length === 0) {
-        return false;
-    }
-
-    await deleteStoredSearchAgentAnchors(context, removedAnchors);
-    const nextAnchors = currentAnchors.filter(anchorPlayableFloor => !removedAnchors.includes(anchorPlayableFloor));
-    setLoadedSearchHistoryIndex(chatKey, nextAnchors);
-    await persistSearchToolsChatState(context);
-    await selectLatestValidSearchAgentSnapshot(context, { persistCleanup: true });
-    await syncSharedLorebookForCurrentChat(context);
-    updateSearchHistoryStatusAfterInvalidation(context);
-    return true;
 }
 
 function buildManagedEntryCatalog(entries = []) {
@@ -2867,63 +2565,6 @@ async function maybeRunPreRequestSearchAgent(payload) {
     }
 }
 
-async function onMessageDeleted(_chatLength, details) {
-    const context = getContext();
-    await loadSearchToolsChatState(context, { force: false });
-    const deletedPlayableFrom = normalizeAnchorPlayableFloor(details?.deletedPlayableSeqFrom);
-    const deletedPlayableTo = normalizeAnchorPlayableFloor(details?.deletedPlayableSeqTo);
-    const deletedAssistantFrom = Math.max(0, Math.floor(Number(details?.deletedAssistantSeqFrom) || 0));
-    const deletedAssistantTo = Math.max(0, Math.floor(Number(details?.deletedAssistantSeqTo) || 0));
-    const deletedPlayableCount = deletedPlayableFrom > 0 && deletedPlayableTo >= deletedPlayableFrom
-        ? (deletedPlayableTo - deletedPlayableFrom + 1)
-        : 0;
-    const deletedAssistantCount = deletedAssistantFrom > 0 && deletedAssistantTo >= deletedAssistantFrom
-        ? (deletedAssistantTo - deletedAssistantFrom + 1)
-        : 0;
-    const deletedUserCount = Math.max(deletedPlayableCount - deletedAssistantCount, 0);
-
-    if (!deletedPlayableCount && !deletedAssistantCount) {
-        await invalidateStoredSearchAgentAnchors(context, 0, { inclusive: true });
-        return;
-    }
-    if (deletedUserCount > 0 && deletedPlayableFrom > 0) {
-        await invalidateStoredSearchAgentAnchors(context, deletedPlayableFrom, { inclusive: true });
-        return;
-    }
-    if (deletedPlayableTo > 0) {
-        await invalidateStoredSearchAgentAnchors(context, deletedPlayableTo, { inclusive: false });
-        return;
-    }
-}
-
-async function onMessageEdited(messageId, mutationMeta = null) {
-    const context = getContext();
-    await loadSearchToolsChatState(context, { force: false });
-    const sourceMessages = Array.isArray(context?.chat) ? context.chat : [];
-    const resolvedMessageId = Math.floor(Number(messageId));
-    const meta = mutationMeta && typeof mutationMeta === 'object'
-        ? mutationMeta
-        : null;
-    const message = Number.isInteger(resolvedMessageId) && resolvedMessageId >= 0 && resolvedMessageId < sourceMessages.length
-        ? sourceMessages[resolvedMessageId]
-        : null;
-    const playableSeq = normalizeAnchorPlayableFloor(meta?.playableSeq ?? (
-        message && !message.is_system
-            ? sourceMessages.slice(0, resolvedMessageId + 1).reduce((count, item) => count + (item && !item.is_system ? 1 : 0), 0)
-            : 0
-    ));
-    const isUser = meta ? Boolean(meta.isUser) : Boolean(message?.is_user);
-    const isAssistant = meta ? Boolean(meta.isAssistant) : Boolean(message && !message.is_system && !message.is_user);
-    const isSystem = meta ? Boolean(meta.isSystem) : Boolean(message?.is_system);
-
-    if (isSystem || !playableSeq) {
-        await invalidateStoredSearchAgentAnchors(context, 0, { inclusive: true });
-        return;
-    }
-
-    await invalidateStoredSearchAgentAnchors(context, playableSeq, { inclusive: isUser || !isAssistant });
-}
-
 function registerLocaleData() {
     addLocaleData('zh-cn', {
         'Search Tools': '搜索工具',
@@ -3094,20 +2735,11 @@ jQuery(() => {
         });
     }
 
-    if (context?.eventTypes?.MESSAGE_DELETED) {
-        context.eventSource.on(context.eventTypes.MESSAGE_DELETED, onMessageDeleted);
-    }
-
-    if (context?.eventTypes?.MESSAGE_EDITED) {
-        context.eventSource.on(context.eventTypes.MESSAGE_EDITED, onMessageEdited);
-    }
-
     if (context?.eventTypes?.CHAT_CHANGED) {
         context.eventSource.on(context.eventTypes.CHAT_CHANGED, () => {
             abortActiveSearchAgentRun();
             loadedChatStateKey = '';
             latestSearchAgentSnapshot = null;
-            latestSearchHistoryIndex = null;
             latestManagedEntries = [];
             const liveContext = getContext();
             void loadSearchToolsChatState(liveContext, { force: true })
