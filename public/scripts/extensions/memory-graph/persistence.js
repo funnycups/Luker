@@ -233,6 +233,8 @@ export async function migrateLegacyMemoryGraphState(
         applyMemoryLogEntryToStore,
         buildObjectPatchOperationsAsync: context.buildObjectPatchOperationsAsync,
         getFloorFromAssistantSeq,
+        buildMemoryLogOpsFromStore,
+        getStoreCoveredSeqTo,
         FLOOR_STATE_LOG_VERSION,
         SCHEMA_VERSION,
     };
