@@ -309,6 +309,18 @@ export function createFloorStateWithDeps(options, deps) {
      * Apply RFC 6902 operations to the data namespace and append a commit
      * tagged with the current chat tail (floor, swipeId).
      *
+     * The operations MUST be an incremental diff from the current materialized
+     * data namespace state to the desired next state. Replay (`computeTargetState`
+     * in core.js) walks commits in order and applies surviving patches against
+     * `{}` — each commit assumes the prior surviving commits' patches are
+     * already in place. Snapshot-from-empty patches (a commit that overwrites
+     * the whole state) defeat the point of the log: every commit then carries
+     * a full state copy, blowing up log size.
+     *
+     * If you have a fresh `next` object rather than a precomputed diff, prefer
+     * `update(reducer)` — it reads the current state, runs your reducer, and
+     * computes the diff for you.
+     *
      * Order is commit-first: appending the log entry before writing the data
      * namespace makes the log the source of truth in any race with a concurrent
      * rematerialize. If the data write fails we recover by replaying the log,
@@ -322,7 +334,7 @@ export function createFloorStateWithDeps(options, deps) {
      * swipeId) is rejected so misuse fails fast instead of silently
      * mis-attributing the commit.
      *
-     * @param {object[]} operations
+     * @param {object[]} operations — incremental RFC 6902 diff (prev → next)
      * @param {{floor?: number, swipeId?: number}} [options]
      * @returns {Promise<boolean>} true on success
      */
@@ -365,8 +377,12 @@ export function createFloorStateWithDeps(options, deps) {
     }
 
     /**
-     * Read current state, run reducer, diff into RFC 6902 operations,
-     * apply patch + append commit. Returns false on patch failure.
+     * Read current state, run reducer, diff into incremental RFC 6902
+     * operations, apply patch + append commit. Returns false on patch
+     * failure. Preferred over `patch()` when you have a fresh `next` object
+     * rather than a precomputed diff — `update` guarantees the recorded
+     * patches are incremental against the current materialized state, which
+     * is what replay expects.
      *
      * Accepts the same `{ floor, swipeId? }` override as `patch()`; when
      * provided, the resulting commit is tagged with the override instead of

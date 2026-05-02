@@ -12,7 +12,18 @@
  * Concepts:
  *  - floor: chat array index (0-based) where the commit was created.
  *  - swipeId: which swipe of that floor's message the commit belongs to.
- *  - patches: RFC 6902 operations applied to the namespace state.
+ *  - patches: RFC 6902 operations diffing the commit's `prev` materialized
+ *    state to its `next`. Replay walks commits in order, filters by the
+ *    current swipe map, and applies surviving patches sequentially against
+ *    `{}`. Patches are incremental — a commit's patches assume the prior
+ *    surviving commits' patches have already been applied. This is sound
+ *    because the only filtering that drops a commit is (a) truncate at a
+ *    floor >= some N (drops a tail suffix) and (b) swipe-delete on the
+ *    tail floor (drops only that floor's stale-swipe commits, no later
+ *    commits exist by construction). Mid-chat swipe SWITCHING that leaves
+ *    a stale-swipe commit between two active ones is unsupported by the
+ *    chain-replay invariant; deleting a swipe in the middle of a chat is
+ *    not a workflow this design accommodates.
  *  - swipeMap: object {floor: activeSwipeId} derived from the live chat
  *    array; used to filter commits whose swipe is no longer active.
  */
@@ -89,8 +100,11 @@ export function shouldKeepCommit(commit, swipeMap) {
 }
 
 /**
- * Replay all valid commits sequentially against an empty object to compute
- * the target state for a single namespace.
+ * Replay surviving commits sequentially against `{}` to compute the target
+ * state for a single namespace. Each commit's patches are diffed `prev →
+ * next` against the running state at the moment the commit was made, so
+ * the chain only stays valid when the active replay path is contiguous —
+ * see the module-level note on incremental patch semantics.
  *
  * @param {object[]} commits
  * @param {Object<number, number>} swipeMap
@@ -122,6 +136,15 @@ export function truncateCommits(commits, newChatLength) {
  * Drop all commits on a given floor whose swipeId equals the deleted one,
  * and decrement swipeId for commits whose swipeId is greater than the
  * deleted one. Used when MESSAGE_SWIPE_DELETED removes a swipe.
+ *
+ * Sound under incremental patch semantics because swipe deletion only ever
+ * happens on the chat tail floor: there are no commits at higher floors
+ * whose `prev` would have been computed against the deleted swipe's
+ * contributions, so dropping its commits doesn't break any downstream
+ * chain. Shifting `swipeId > deleted` down by 1 preserves the (floor,
+ * swipeId) labels of survivors without touching their patches — those
+ * patches were diffed against state-at-commit-time, which depended on the
+ * swipe map THEN, not on the relabeling now.
  *
  * @param {object[]} commits
  * @param {number} floor
