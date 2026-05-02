@@ -1,0 +1,143 @@
+/**
+ * Spec / preset schema helpers for the orchestrator.
+ *
+ * Pure helpers that operate on the orchestration *spec* shape — the
+ * stages-and-nodes tree the user authors and the runtime walks.
+ *
+ *   - `cloneDefault` / `cloneJsonCompatible` — defensive deep-clones used
+ *     when seeding fresh settings or copying snapshots so editors do not
+ *     mutate shared defaults.
+ *   - `normalizeNodeType` / `normalizeNodeSpec` — coerce hand-edited or
+ *     loaded node entries (string preset id OR object node spec) into the
+ *     canonical `{ id, preset, type, userPromptTemplate }` shape downstream
+ *     code expects.
+ *   - `sanitizeSpec` — strip the spec down to its safe shape, drop empty
+ *     stages, and fall back to `defaultSpec` when the input is unusable.
+ *   - `isReviewNodeSpec` / `getStageRuntimeMode` — runtime classification
+ *     of a node / stage. A stage that contains a review node always runs
+ *     serial regardless of its declared `mode`.
+ *   - `getNodeIterationMaxRounds` / `getReviewRerunMaxRounds` — settings
+ *     readers with sensible defaults; both fall back to live
+ *     `extension_settings.orchestrator` when the caller passes no arg.
+ *
+ * `sanitizePresetMap` / `mergePresetMaps` / `ensureSettings` stay in
+ * main.js for now because they call into editor draft helpers
+ * (`createPresetDraft`, `sanitizeIdentifierToken`, etc.) that haven't
+ * moved yet.
+ */
+
+import { extension_settings } from '../../extensions.js';
+import {
+    ORCH_NODE_TYPE_REVIEW,
+    ORCH_NODE_TYPE_WORKER,
+    defaultSpec,
+} from './defaults.js';
+
+const MODULE_NAME = 'orchestrator';
+
+export function cloneDefault(value) {
+    return Array.isArray(value) || typeof value === 'object' ? cloneJsonCompatible(value) : value;
+}
+
+export function cloneJsonCompatible(value) {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    try {
+        return structuredClone(value);
+    } catch {
+        const serialized = JSON.stringify(value);
+        return serialized === undefined ? undefined : JSON.parse(serialized);
+    }
+}
+
+export function normalizeNodeType(value) {
+    return String(value || '').trim().toLowerCase() === ORCH_NODE_TYPE_REVIEW
+        ? ORCH_NODE_TYPE_REVIEW
+        : ORCH_NODE_TYPE_WORKER;
+}
+
+export function normalizeNodeSpec(node) {
+    if (typeof node === 'string') {
+        return {
+            id: node,
+            preset: node,
+            type: ORCH_NODE_TYPE_WORKER,
+            userPromptTemplate: undefined,
+        };
+    }
+
+    const id = String(node?.id || node?.node || node?.preset || '').trim();
+    const preset = String(node?.preset || id).trim();
+    return {
+        id: id || preset,
+        preset,
+        type: normalizeNodeType(node?.type),
+        userPromptTemplate: typeof node?.userPromptTemplate === 'string' ? node.userPromptTemplate : undefined,
+    };
+}
+
+export function sanitizeSpec(spec) {
+    if (!spec || typeof spec !== 'object') {
+        return structuredClone(defaultSpec);
+    }
+
+    const stages = Array.isArray(spec.stages) ? spec.stages : [];
+    const normalizedStages = stages.map((stage, stageIndex) => {
+        const nodes = Array.isArray(stage?.nodes) ? stage.nodes : [];
+        const normalizedNodes = nodes
+            .map(node => {
+                if (typeof node === 'string') {
+                    return node.trim();
+                }
+                if (node && typeof node === 'object') {
+                    const compact = {
+                        id: String(node.id || node.node || node.preset || '').trim(),
+                        preset: String(node.preset || node.id || node.node || '').trim(),
+                        type: normalizeNodeType(node.type),
+                        userPromptTemplate: typeof node.userPromptTemplate === 'string' ? node.userPromptTemplate : undefined,
+                    };
+                    if (!compact.id && compact.preset) {
+                        compact.id = compact.preset;
+                    }
+                    if (!compact.preset && compact.id) {
+                        compact.preset = compact.id;
+                    }
+                    return compact.id ? compact : null;
+                }
+                return null;
+            })
+            .filter(Boolean);
+
+        return {
+            id: String(stage?.id || `stage_${stageIndex + 1}`),
+            mode: String(stage?.mode || 'serial').toLowerCase() === 'parallel' ? 'parallel' : 'serial',
+            nodes: normalizedNodes,
+        };
+    }).filter(stage => Array.isArray(stage.nodes) && stage.nodes.length > 0);
+
+    return {
+        stages: normalizedStages.length > 0 ? normalizedStages : structuredClone(defaultSpec.stages),
+    };
+}
+
+export function isReviewNodeSpec(nodeSpec) {
+    return normalizeNodeType(nodeSpec?.type) === ORCH_NODE_TYPE_REVIEW;
+}
+
+export function getStageRuntimeMode(stage) {
+    const mode = String(stage?.mode || 'serial').toLowerCase() === 'parallel' ? 'parallel' : 'serial';
+    const nodes = Array.isArray(stage?.nodes) ? stage.nodes : [];
+    return nodes.some(node => isReviewNodeSpec(normalizeNodeSpec(node))) ? 'serial' : mode;
+}
+
+export function getNodeIterationMaxRounds(settings = null) {
+    const source = settings && typeof settings === 'object' ? settings : extension_settings[MODULE_NAME];
+    return Math.max(1, Math.min(20, Math.floor(Number(source?.nodeIterationMaxRounds) || 0)));
+}
+
+export function getReviewRerunMaxRounds(settings = null) {
+    const source = settings && typeof settings === 'object' ? settings : extension_settings[MODULE_NAME];
+    return Math.max(0, Math.min(20, Math.floor(Number(source?.reviewRerunMaxRounds) || 0)));
+}
