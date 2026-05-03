@@ -138,23 +138,62 @@ const SUPPORTED_WORLD_INFO_POSITIONS = Object.freeze([
 
 const DEFAULT_EVENT_SUMMARY_COLUMN_HINT = 'Start with "时间：<time>；" using an explicit full in-world date/time or date span, then give a concise event abstraction with causality and outcome.';
 const DEFAULT_EVENT_EXTRACT_HINT = 'Critical plot events, turning points, commitments, betrayals, irreversible outcomes, and their explicit in-world time/time span written at the start of summary.';
+
+// Shared writing-style standard, reused by both event extraction and event compression.
+// Aim: keep summaries action-verb-driven and free of source-text mimicry, regardless of layer.
+const EVENT_SUMMARY_STYLE_STANDARD = [
+    '## Event summary writing standard',
+    'Sentence form: 时间：<具体时间>；<人物> 在 <地点> <动作动词>(对象)[，<后果>]。',
+    '',
+    'Allowed: any action verb that abstracts behavior. Examples (non-exhaustive): 调侃 / 支配 / 击溃 / 决裂 / 联手击退 / 捕获 / 臣服 / 立约 / 揭破 / 救援. Pick whichever verb best fits the situation; you are not limited to this list.',
+    'Proper nouns (character / location / pact / artifact names) stay as nouns; do not narrate their execution process.',
+    '',
+    'Forbidden in any layer:',
+    '  1. Direct dialogue or narration quoted from source. Rewrite every "..." as an action description.',
+    '       ✗ C 反复以"再一局就回前台"推脱归岗',
+    '       ✓ C 借故拖延归岗',
+    '  2. Character-specific verbal habits, catchphrases, or stylized phrasings.',
+    '  3. Clothing, expression, or fine-grained body-action / scene details.',
+    '  4. Story continuation or future prediction (e.g. "为X埋下伏笔", "为后续...预留", "暗示...").',
+    '  5. Concatenating or copy-pasting child summaries. Always re-synthesize.',
+    '',
+    'Time prefix is mandatory and must be a concrete in-world date/time/span; no placeholders such as 某年某月 / 未知时间.',
+].join('\n');
+
 const DEFAULT_EVENT_COMPRESSION_INSTRUCTION = [
-    'Compress child event nodes into ONE higher-level storyline milestone.',
+    'Compress N child event nodes into ONE higher-level storyline rollup.',
     '',
-    '## Step 1: Classify each child by narrative weight',
-    '- KEY event (turning point, irreversible outcome, commitment, betrayal, major reveal, new bond, death): write a clear causal sentence.',
-    '- ROUTINE event (travel, rest, minor talk, transition, repeated action): collapse into one brief clause like "途经X" "短暂休整" "日常互动" — never expand.',
-    '- DUPLICATE event (same event retold by another node): merge into the key version, drop duplicates entirely.',
+    EVENT_SUMMARY_STYLE_STANDARD,
     '',
-    '## Step 2: Write summary',
-    '- Must start with "时间：<time>；" covering the full time span of ALL children.',
-    '- State key events compactly; routine events get at most one clause each; duplicates are merged.',
-    '- Preserve: causality chains between key events, irreversible outcomes, unresolved hooks.',
-    '- DISCARD: raw dialogue, scene description, rhetorical flourish, future predictions ("为X埋下伏笔"), character commentary.',
-    '- FACTUAL CONSTRAINT: Only include events that happened WITHIN the seq range of the child nodes. Never write events from later seq numbers.',
-    '- Target: 60-120 Chinese characters. Hard ceiling 150. Every character must earn its place.',
-    '- No story continuation. No hallucination except continuity-consistent inference for missing event time.',
-    '- Never use time placeholders (e.g. 某年某月, 未知时间). Always output explicit full in-world time.',
+    '## Required <thought> before tool call',
+    'You must output exactly one <thought>...</thought> block before calling the summary tool.',
+    'The <thought> block must contain the following 5 sections in order. Reference children by their id as listed in the user message.',
+    '',
+    '[1] 子节点点检（每行一个孩子，用动作动词概括其核心，禁引原文）：',
+    '  - <child_id>: <一句话>',
+    '',
+    '[2] 分类与折叠（每个孩子必须落入下面之一）：',
+    '  - KEY: [id 列表] — 转折 / 不可逆 / 承诺 / 决裂，独立保留',
+    '  - ROUTINE: [id 列表] — 路过 / 休整 / 重复行为，折叠为一从句',
+    '  - DUPLICATE: [id → 合并到的 id] — 同事件重述，丢弃保一份',
+    '  时间跨度：<min seq_to> ~ <max seq_to>',
+    '',
+    '[3] 抽象档位：当前 L<depth>。本层应处于 <按 L1-2 / L3-4 / L5+ 套档位>。',
+    '  因此本次产出粒度：<一句话承诺>。',
+    '',
+    '[4] 草稿（按句式 "时间：<具体时间>；<动作动词>(对象)" 写）：',
+    '  <一段>',
+    '',
+    '[5] 自检（逐项打勾，发现违规必须改写后重列草稿）：',
+    '  - 引号原文：✓ / 列出 → 改写',
+    '  - 衣着 / 表情 / 肢体 / 场景细节：✓ / 列出 → 删',
+    '  - 续写或未来预测：✓ / 列出 → 删',
+    '  - 是否照搬子节点摘要：✓ / 是 → 重写',
+    '',
+    'After </thought>, call the summary tool. The summary field must equal the final draft from [4] (post-self-check) word-for-word.',
+    'Do not rewrite or "polish" the summary inside the tool call.',
+    '',
+    'Factual constraint: only include events that happened WITHIN the seq range of the child nodes. Never write events from later seq numbers, never continue the story.',
 ].join('\n');
 const EVENT_SUMMARY_TIME_EXTRACT_PROMPT_LINES = [
     'Event summary time hard rule: every event row must put an explicit full in-world date/time or date span at the start of summary, formatted as "时间：<time>；<summary>".',
@@ -421,8 +460,8 @@ const DEFAULT_EXTRACT_SYSTEM_PROMPT = [
     'Event strict link rule: event create must include links. If truly no relation can be grounded, set links: [] and provide no_link_reason.',
     'Summary rule: summary is abstraction, not raw text copy.',
     'Summary quality: emphasize causality, turning points, commitments, outcomes, and unresolved hooks.',
-    'Length guide for summary: target around 300 Chinese characters (soft limit).',
-    'Never paste long dialogue, narration, or quotes into summary.',
+    'For event-type summaries, the writing style standard below is mandatory; the same standard is also enforced during compression so source material must already obey it.',
+    EVENT_SUMMARY_STYLE_STANDARD,
     'If information is large, split into multiple focused create/edit operations instead of one oversized summary.',
     'For non-event types, summary is optional unless schema requires it.',
     'Title policy: non-event nodes should use short stable human-readable titles.',
@@ -2223,14 +2262,27 @@ function summarizeTextHeuristic(lines) {
         .join('\n');
 }
 
-function buildCompressionSummaryInstruction(baseInstruction) {
+function buildCompressionSummaryInstruction(baseInstruction, options = {}) {
     const base = normalizeText(baseInstruction || '');
     const defaultInstruction = 'Compress semantic nodes into concise higher-level memory while preserving key causality and unresolved hooks.';
     const instruction = base || defaultInstruction;
+    const depth = Math.max(1, Math.floor(Number(options?.depth) || 1));
+    const fanIn = Math.max(2, Math.floor(Number(options?.fanIn) || 2));
+    let levelGuide;
+    if (depth <= 2) {
+        levelGuide = '具体事件因果链：每个孩子对应 1-2 个动作短语，可保留转折与悬念，但仍按写作禁令去除细节与引文。';
+    } else if (depth <= 4) {
+        levelGuide = '篇章弧合并：同类事件折叠为单从句；只保留多事件之间的因果链与未解钩子。';
+    } else {
+        levelGuide = '阶段性变化：仅写势力/关系/世界状态/未解钩子的转移，不列具体桥段；最多 3 个并列点。';
+    }
     return [
         instruction,
-        'Higher depth = more abstract. At L2+, collapse routine details into single clauses; only key turning points deserve full sentences.',
-        'Never copy-paste or concatenate child summaries. Synthesize into one coherent milestone.',
+        '',
+        '## Layer-aware abstraction',
+        `Current rollup level: L${depth} (fanIn=${fanIn}).`,
+        `[3] 中应填的档位：${levelGuide}`,
+        'Higher depth = more abstract. Never copy-paste or concatenate child summaries — re-synthesize.',
         'Do not continue story. Do not predict future events.',
     ].join('\n');
 }
@@ -2459,6 +2511,7 @@ async function summarizeTextWithLLM(context, settings, instruction, lines, abort
                 additionalProperties: false,
             },
             abortSignal,
+            allowPreamble: true,
         });
         return normalizeText(result?.summary || '');
     } catch (error) {
@@ -2471,6 +2524,7 @@ async function summarizeRollupFieldsWithLLM(context, settings, spec, instruction
     const columns = getCompressionColumnNames(spec);
     const rows = (Array.isArray(group) ? group : []).map((node) => {
         const row = {
+            id: String(node?.id || ''),
             title: String(node?.title || ''),
             seq_to: String(node?.seqTo ?? ''),
         };
@@ -2507,6 +2561,7 @@ async function summarizeRollupFieldsWithLLM(context, settings, spec, instruction
                 additionalProperties: false,
             },
             abortSignal,
+            allowPreamble: true,
         });
         const out = {};
         for (const column of columns) {
@@ -2728,6 +2783,7 @@ async function requestToolCallWithRetry(settings, promptMessages, {
     apiSettingsOverride = null,
     abortSignal = null,
     recallRunToken = 0,
+    allowPreamble = false,
 } = {}) {
     const fnName = String(functionName || '').trim();
     if (!fnName) {
@@ -2743,10 +2799,15 @@ async function requestToolCallWithRetry(settings, promptMessages, {
             parameters: parameters && typeof parameters === 'object' ? parameters : { type: 'object', additionalProperties: true },
         },
     }];
-    const toolChoice = {
-        type: 'function',
-        function: { name: fnName },
+    const toolChoice = allowPreamble
+        ? 'auto'
+        : { type: 'function', function: { name: fnName } };
+    const functionCallOptions = {
+        protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
     };
+    if (!allowPreamble) {
+        functionCallOptions.requiredFunctionName = fnName;
+    }
     let lastError = null;
     for (let attempt = 0; attempt <= retries; attempt++) {
         const requestController = createLinkedAbortController(isAbortSignalLike(abortSignal) ? abortSignal : null);
@@ -2761,10 +2822,7 @@ async function requestToolCallWithRetry(settings, promptMessages, {
                 llmPresetName: String(llmPresetName || '').trim(),
                 apiSettingsOverride: apiSettingsOverride && typeof apiSettingsOverride === 'object' ? apiSettingsOverride : null,
                 requestScope: 'extension_internal',
-                functionCallOptions: {
-                    requiredFunctionName: fnName,
-                    protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
-                },
+                functionCallOptions,
             });
             throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
             const calls = extractAllFunctionCalls(responseData, [fnName]);
@@ -2872,6 +2930,7 @@ async function runFunctionCallTask(context, settings, {
     parameters = {},
     abortSignal = null,
     recallRunToken = 0,
+    allowPreamble = false,
 } = {}) {
     const fnName = String(functionName || '').trim();
     if (!fnName) {
@@ -2911,6 +2970,7 @@ async function runFunctionCallTask(context, settings, {
         apiSettingsOverride: apiSettingsOverride && typeof apiSettingsOverride === 'object' ? apiSettingsOverride : null,
         abortSignal,
         recallRunToken,
+        allowPreamble,
     });
 }
 
@@ -4575,10 +4635,12 @@ async function compressSemanticHierarchical(context, store, settings, spec, type
             const roundBeforeStore = typeof options?.onRoundApplied === 'function'
                 ? normalizeStoreForRuntime(store)
                 : null;
-            const lines = group.map(node => `${node.title}: ${getNodeSummary(node)}`);
+            const rollupDepth = depth + 1;
+            const lines = group.map(node => `${node.id} | ${node.title}: ${getNodeSummary(node)}`);
             const instruction = buildCompressionSummaryInstruction(
                 config.summarizeInstruction
                 || `Compress semantic type "${type}" into a higher-level summary node. Keep enduring facts and unresolved hooks.`,
+                { depth: rollupDepth, fanIn: group.length },
             );
             const rollupFields = await summarizeRollupFieldsWithLLM(
                 context,
@@ -4604,7 +4666,6 @@ async function compressSemanticHierarchical(context, store, settings, spec, type
                 break;
             }
 
-            const rollupDepth = depth + 1;
             const rollupOrdinal = getNextSemanticRollupOrdinal(store, type, rollupDepth);
             const parent = createNode(store, {
                 type: String(type || 'semantic'),
@@ -4681,10 +4742,18 @@ async function compressSemanticFlat(context, store, settings, spec, type, config
         const roundBeforeStore = typeof options?.onRoundApplied === 'function'
             ? normalizeStoreForRuntime(store)
             : null;
-        const lines = group.map(node => `${node.title}: ${getNodeSummary(node)}`);
+        // Parent depth follows the "max(child)+1" invariant so subsequent
+        // hierarchical compression and depth-based sorts remain coherent.
+        const maxChildDepth = group.reduce((max, node) => {
+            const d = Number(node?.semanticDepth ?? 0);
+            return Number.isFinite(d) && d > max ? d : max;
+        }, 0);
+        const rollupDepth = maxChildDepth + 1;
+        const lines = group.map(node => `${node.id} | ${node.title}: ${getNodeSummary(node)}`);
         const instruction = buildCompressionSummaryInstruction(
             config.summarizeInstruction
             || `Compress semantic type "${type}" into a higher-level summary node. Keep enduring facts and unresolved hooks.`,
+            { depth: rollupDepth, fanIn: group.length },
         );
         const rollupFields = await summarizeRollupFieldsWithLLM(
             context,
@@ -4710,13 +4779,6 @@ async function compressSemanticFlat(context, store, settings, spec, type, config
             break;
         }
 
-        // Parent depth follows the "max(child)+1" invariant so subsequent
-        // hierarchical compression and depth-based sorts remain coherent.
-        const maxChildDepth = group.reduce((max, node) => {
-            const d = Number(node?.semanticDepth ?? 0);
-            return Number.isFinite(d) && d > max ? d : max;
-        }, 0);
-        const rollupDepth = maxChildDepth + 1;
         const rollupOrdinal = getNextSemanticRollupOrdinal(store, type, rollupDepth);
         const parent = createNode(store, {
             type: String(type || 'semantic'),
