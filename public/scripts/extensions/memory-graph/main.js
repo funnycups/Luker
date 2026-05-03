@@ -1309,16 +1309,25 @@ async function commitMemoryStoreReplaceByChatKey(context, chatKey, store, seq, {
 
 /**
  * Diff-style persist: appends one commit to the floor-state log carrying the
- * full state-as-of-this-commit (snapshot patches from `{}` to afterPayload),
- * updates __meta if metadata changed, refreshes caches.
+ * incremental `prev → next` diff between the materialized data namespace and
+ * `afterPayload`, updates __meta if metadata changed, refreshes caches.
  *
- * Why snapshot patches: floor-state filters commits by (floor, swipeId) on
- * swipe / delete events. An incremental patch `prev → next` only applies
- * cleanly when prev's scaffolding is present; if earlier commits get
- * filtered out, replay starts from `{}` and the patch fails. Snapshot
- * patches apply correctly regardless of which subset survives, because
- * RFC 6902 `add` on an existing key is a replace — sequential snapshots
- * therefore yield the last-survivor's view.
+ * Why incremental, not snapshot-from-empty: floor-state.js documents that
+ * each commit's patches must be a `prev → next` diff against the running
+ * materialized state — replay walks commits sequentially against `{}` and
+ * each commit assumes the prior surviving commits' patches are already in
+ * place. Snapshot-from-empty patches violate that contract and balloon log
+ * size (every commit serializes the full graph). Floor-state guarantees
+ * deletions are tail-only on the active replay path, so commits form a
+ * contiguous chain and incremental patches replay correctly. Same reasoning
+ * as persistence.js commitGraphEntry.
+ *
+ * fs.update reads the current materialized state, runs the reducer (which
+ * here just returns afterPayload), computes the prev→next diff via the
+ * host-injected buildObjectPatchOperationsAsync, and appends a single commit
+ * tagged at `floor`. This guarantees the recorded patches are coherent with
+ * whatever state floor-state actually holds — even if our beforeStore copy
+ * happens to be stale.
  */
 async function commitMemoryStoreDiffByChatKey(context, chatKey, beforeStore, afterStore, seq, { syncPersistentProjection = false } = {}) {
     const target = memoryStoreTargets.get(chatKey);
@@ -1347,14 +1356,15 @@ async function commitMemoryStoreDiffByChatKey(context, chatKey, beforeStore, aft
     }
 
     if (hasGraphChange) {
-        const snapshotOps = await buildObjectPatchOperationsAsync({}, afterPayload);
         const floor = seqToFloor(context, normalizedSeq);
-        if (Number.isInteger(floor) && floor >= 0 && Array.isArray(snapshotOps) && snapshotOps.length > 0) {
-            await fs.patch(snapshotOps, { floor });
-        } else {
-            // No corresponding floor in current chat (seq past the tail).
-            // Write data namespace directly as a best-effort; subsequent
-            // CHAT_CHANGED rematerialize would clobber this anyway.
+        const committed = Number.isInteger(floor) && floor >= 0
+            ? await fs.update(() => afterPayload, { floor })
+            : false;
+        if (!committed) {
+            // No corresponding floor in current chat (seq past the tail), or
+            // fs.update rejected the override. Write data namespace directly
+            // as a best-effort; subsequent CHAT_CHANGED rematerialize would
+            // clobber this anyway.
             const targetWriteOption = { target, maxOperations: 16000 };
             await context.updateChatState(CHAT_STATE_NAMESPACE, () => afterPayload, targetWriteOption);
         }
