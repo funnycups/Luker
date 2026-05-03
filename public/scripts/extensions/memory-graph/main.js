@@ -7810,18 +7810,27 @@ function renderGraphInspectorHtml(store, options = {}) {
             const nodeId = String(node?.id || '');
             const summary = clipMemoryGraphText(getNodeSummary(node) || getMemoryGraphNodeSearchText(node), 160);
             return `
-<button
-    type="button"
+<div
     class="luker-rpg-memory-graph-search-result${nodeId === searchModel.activeNodeId ? ' is-active' : ''}"
     data-node-id="${escapeHtml(nodeId)}"
+    role="button"
+    tabindex="0"
 >
-    <span class="luker-rpg-memory-graph-search-result-topline">
-        <span class="luker-rpg-memory-graph-search-result-title">${escapeHtml(String(node?.title || nodeId || ''))}</span>
-        <span class="luker-rpg-memory-graph-search-result-type">${escapeHtml(String(node?.type || 'unknown'))}</span>
-    </span>
-    <span class="luker-rpg-memory-graph-search-result-meta">#${escapeHtml(nodeId)} · seq ${escapeHtml(String(node?.seqTo ?? ''))}</span>
-    <span class="luker-rpg-memory-graph-search-result-summary">${escapeHtml(summary || String(node?.type || ''))}</span>
-</button>`;
+    <div class="luker-rpg-memory-graph-search-result-body">
+        <span class="luker-rpg-memory-graph-search-result-topline">
+            <span class="luker-rpg-memory-graph-search-result-title">${escapeHtml(String(node?.title || nodeId || ''))}</span>
+            <span class="luker-rpg-memory-graph-search-result-type">${escapeHtml(String(node?.type || 'unknown'))}</span>
+        </span>
+        <span class="luker-rpg-memory-graph-search-result-meta">#${escapeHtml(nodeId)} · seq ${escapeHtml(String(node?.seqTo ?? ''))}</span>
+        <span class="luker-rpg-memory-graph-search-result-summary">${escapeHtml(summary || String(node?.type || ''))}</span>
+    </div>
+    <div class="luker-rpg-memory-graph-search-result-actions">
+        <div class="menu_button menu_button_small luker-graph-locate-node luker-rpg-memory-graph-search-result-action" data-node-id="${escapeHtml(nodeId)}" title="${escapeHtml(i18n('Locate in Graph'))}"><i class="fa-solid fa-crosshairs fa-fw"></i></div>
+        <div class="menu_button menu_button_small luker-rpg-memory-node-view luker-rpg-memory-graph-search-result-action" data-node-id="${escapeHtml(nodeId)}" title="${escapeHtml(i18n('View'))}"><i class="fa-solid fa-eye fa-fw"></i></div>
+        <div class="menu_button menu_button_small luker-rpg-memory-node-edit luker-rpg-memory-graph-search-result-action" data-node-id="${escapeHtml(nodeId)}" title="${escapeHtml(i18n('Form Edit'))}"><i class="fa-solid fa-pen fa-fw"></i></div>
+        <div class="menu_button menu_button_small luker-rpg-memory-node-delete luker-rpg-memory-graph-search-result-action" data-node-id="${escapeHtml(nodeId)}" title="${escapeHtml(i18n('Delete'))}"><i class="fa-solid fa-trash fa-fw"></i></div>
+    </div>
+</div>`;
         }).join('')
         : `
 <div class="luker-rpg-memory-graph-search-empty">
@@ -8026,22 +8035,16 @@ function parseMarkdownTableToHtml(mdTable) {
     if (dataRows.length === 0) {
         return '';
     }
-    const thCells = headers.map(h => `<th style="padding:6px 10px;text-align:left;font-weight:600;white-space:nowrap;border-bottom:2px solid var(--SmartThemeBorderColor, #555);">${escapeHtml(h)}</th>`).join('');
+    const thCells = headers.map(h => `<th>${escapeHtml(h)}</th>`).join('');
     const bodyRows = dataRows.map(row => {
         const cells = headers.map((_, i) => {
             const val = row[i] ?? '';
-            const isLong = val.length > 60;
-            const style = isLong
-                ? 'padding:6px 10px;border-bottom:1px solid var(--SmartThemeBorderColor, #333);line-height:1.45;'
-                : 'padding:6px 10px;white-space:nowrap;border-bottom:1px solid var(--SmartThemeBorderColor, #333);';
-            return `<td style="${style}">${escapeHtml(val)}</td>`;
+            const cls = val.length > 60 ? 'luker-injection-cell-wrap' : 'luker-injection-cell-tight';
+            return `<td class="${cls}">${escapeHtml(val)}</td>`;
         }).join('');
         return `<tr>${cells}</tr>`;
     }).join('');
-    return `<table style="width:100%;border-collapse:collapse;font-size:13px;">
-<thead><tr>${thCells}</tr></thead>
-<tbody>${bodyRows}</tbody>
-</table>`;
+    return `<table class="luker-injection-table"><thead><tr>${thCells}</tr></thead><tbody>${bodyRows}</tbody></table>`;
 }
 
 function renderPacketSectionsAsHtml(packetText) {
@@ -8055,71 +8058,156 @@ function renderPacketSectionsAsHtml(packetText) {
         sections.push({ title: match[1].trim(), body: match[2].trim() });
     }
     if (sections.length === 0) {
-        return `<pre style="white-space:pre-wrap;font-size:13px;opacity:0.9;">${escapeHtml(packetText)}</pre>`;
+        return `<pre class="luker-injection-rawpre">${escapeHtml(packetText)}</pre>`;
     }
     return sections.map(section => {
         const tableHtml = parseMarkdownTableToHtml(section.body);
-        const content = tableHtml || `<pre style="white-space:pre-wrap;font-size:13px;">${escapeHtml(section.body)}</pre>`;
-        return `<div style="margin-bottom:12px;">
-<div style="font-size:12px;font-weight:600;padding:3px 8px;border-radius:4px;display:inline-block;margin-bottom:6px;background:var(--SmartThemeBlurTintColor, rgba(100,100,255,0.15));color:var(--SmartThemeBodyColor, #ccc);">${escapeHtml(section.title)}</div>
-${content}
+        const content = tableHtml || `<pre class="luker-injection-rawpre">${escapeHtml(section.body)}</pre>`;
+        return `<div class="luker-injection-section">
+    <div class="luker-injection-section-head">
+        <span class="luker-injection-section-title">${escapeHtml(section.title)}</span>
+    </div>
+    <div class="luker-injection-section-body">${content}</div>
 </div>`;
     }).join('');
 }
 
 function buildLastRecallCorePacketHtml(store, options = {}) {
     const projection = getLastRecallProjection(store);
-    if (!projection) {
-        return `<div style="opacity:0.8;">${escapeHtml(i18n('No recall injection result yet.'))}</div>`;
-    }
     const showHeader = options?.showHeader !== false;
+    const headerLabel = escapeHtml(i18n('Injection Content'));
+
+    if (!projection) {
+        return `
+<div class="luker-injection-shell">
+    ${showHeader ? `<div class="luker-injection-header"><div class="luker-injection-title">${headerLabel}</div></div>` : ''}
+    <div class="luker-injection-empty">${escapeHtml(i18n('No recall injection result yet.'))}</div>
+</div>`;
+    }
+
     const at = Number(projection?.at);
     const renderedAt = Number.isFinite(at) ? new Date(at).toLocaleString() : '';
-    const header = showHeader
-        ? `<div style="font-weight:600; margin-bottom:6px;">${escapeHtml(i18n('Injection Content'))}</div>`
-        : '';
-    const timeLine = renderedAt
-        ? `<div style="font-size:12px; opacity:0.8; margin-bottom:8px;">${escapeHtml(renderedAt)}</div>`
-        : '';
     const corePacket = normalizeMultilineText(projection?.blocks?.corePacket || '');
     const focusPacket = normalizeMultilineText(projection?.blocks?.focusPacket || '');
-    if (!corePacket && !focusPacket) {
-        const legacyText = normalizeMultilineText(projection?.corePacket || '');
-        if (!legacyText) {
-            return `
-<div style="display:flex; flex-direction:column; gap:4px;">
-    ${header}
-    ${timeLine}
-    <div style="opacity:0.8;">${escapeHtml(i18n('Injection content is empty.'))}</div>
-</div>`;
-        }
+    const legacyPacket = (!corePacket && !focusPacket) ? normalizeMultilineText(projection?.corePacket || '') : '';
+
+    const headerHtml = showHeader
+        ? `
+<div class="luker-injection-header">
+    <div class="luker-injection-title">${headerLabel}</div>
+    ${renderedAt ? `<div class="luker-injection-time"><i class="fa-regular fa-clock"></i> ${escapeHtml(renderedAt)}</div>` : ''}
+    <div class="luker-injection-header-actions">
+        <button type="button" class="menu_button menu_button_small luker-injection-copy-all" title="${escapeHtml(i18n('Copy'))}"><i class="fa-solid fa-copy fa-fw"></i></button>
+    </div>
+</div>`
+        : '';
+
+    if (!corePacket && !focusPacket && !legacyPacket) {
         return `
-<div style="display:flex; flex-direction:column; gap:4px;">
-    ${header}
-    ${timeLine}
-    ${renderPacketSectionsAsHtml(legacyText)}
+<div class="luker-injection-shell">
+    ${headerHtml}
+    <div class="luker-injection-empty">${escapeHtml(i18n('Injection content is empty.'))}</div>
 </div>`;
     }
-    const packetBadgeStyle = 'font-size:11px;font-weight:700;letter-spacing:0.5px;padding:2px 8px;border-radius:3px;display:inline-block;margin-bottom:6px;';
-    const blocks = [];
-    if (corePacket) {
-        blocks.push(`<div style="margin-bottom:16px;">
-<div style="${packetBadgeStyle}background:rgba(76,175,80,0.2);color:#81c784;">CORE</div>
-${renderPacketSectionsAsHtml(corePacket)}
-</div>`);
-    }
-    if (focusPacket) {
-        blocks.push(`<div style="margin-bottom:16px;">
-<div style="${packetBadgeStyle}background:rgba(33,150,243,0.2);color:#64b5f6;">FOCUS</div>
-${renderPacketSectionsAsHtml(focusPacket)}
-</div>`);
-    }
+
+    const buildBlock = (label, packet, variant) => {
+        if (!packet) return '';
+        return `
+<section class="luker-injection-block luker-injection-block-${variant}" data-variant="${variant}">
+    <header class="luker-injection-block-head">
+        <span class="luker-injection-block-badge">${escapeHtml(label)}</span>
+        <button type="button" class="menu_button menu_button_small luker-injection-copy-block" data-variant="${variant}" title="${escapeHtml(i18n('Copy'))}"><i class="fa-solid fa-copy fa-fw"></i></button>
+    </header>
+    <textarea class="luker-injection-block-source" data-variant="${variant}" readonly hidden>${escapeHtml(packet)}</textarea>
+    <div class="luker-injection-block-body">${renderPacketSectionsAsHtml(packet)}</div>
+</section>`;
+    };
+
+    const blocksHtml = legacyPacket
+        ? `<section class="luker-injection-block luker-injection-block-core" data-variant="core">
+    <textarea class="luker-injection-block-source" data-variant="core" readonly hidden>${escapeHtml(legacyPacket)}</textarea>
+    <div class="luker-injection-block-body">${renderPacketSectionsAsHtml(legacyPacket)}</div>
+</section>`
+        : [
+            buildBlock('CORE', corePacket, 'core'),
+            buildBlock('FOCUS', focusPacket, 'focus'),
+        ].filter(Boolean).join('');
+
     return `
-<div style="display:flex; flex-direction:column; gap:4px; max-height:70vh; overflow:auto;">
-    ${header}
-    ${timeLine}
-    ${blocks.join('')}
+<div class="luker-injection-shell">
+    ${headerHtml}
+    <div class="luker-injection-content">
+        ${blocksHtml}
+    </div>
 </div>`;
+}
+
+async function copyTextToClipboard(text) {
+    const value = String(text ?? '');
+    if (!value) return false;
+    try {
+        if (navigator?.clipboard?.writeText) {
+            await navigator.clipboard.writeText(value);
+            return true;
+        }
+    } catch (_err) { /* fall through to legacy */ }
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = value;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand && document.execCommand('copy');
+        document.body.removeChild(ta);
+        return Boolean(ok);
+    } catch (_err) {
+        return false;
+    }
+}
+
+let injectionViewerBindingsInstalled = false;
+function ensureInjectionViewerBindings() {
+    if (injectionViewerBindingsInstalled) return;
+    injectionViewerBindingsInstalled = true;
+    const ns = '.luker-injection-viewer';
+    jQuery(document).off(ns)
+        .on(`click${ns}`, '.luker-injection-copy-block', async function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            const block = jQuery(this).closest('.luker-injection-block');
+            const text = String(block.find('.luker-injection-block-source').val() || '');
+            const ok = await copyTextToClipboard(text);
+            if (ok) {
+                notifySuccess(i18n('Copied.'));
+            } else {
+                notifyError(i18n('Copy failed.'));
+            }
+        })
+        .on(`click${ns}`, '.luker-injection-copy-all', async function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            const shell = jQuery(this).closest('.luker-injection-shell');
+            const parts = [];
+            shell.find('.luker-injection-block').each(function () {
+                const variant = String(jQuery(this).data('variant') || '').toUpperCase();
+                const text = String(jQuery(this).find('.luker-injection-block-source').val() || '').trim();
+                if (!text) return;
+                parts.push(variant ? `[${variant}_PACKET]\n${text}` : text);
+            });
+            const all = parts.join('\n\n');
+            if (!all) {
+                notifyInfo(i18n('Injection content is empty.'));
+                return;
+            }
+            const ok = await copyTextToClipboard(all);
+            if (ok) {
+                notifySuccess(i18n('Copied.'));
+            } else {
+                notifyError(i18n('Copy failed.'));
+            }
+        });
 }
 
 function encodeFieldsAsLines(fields) {
@@ -8328,9 +8416,37 @@ function buildGraphCytoscapeElements(store) {
             }
             return String(a.id || '').localeCompare(String(b.id || ''));
         });
-    // Keep event nodes on the primary horizontal rail, then fan secondary nodes into parallel lanes nearby.
-    const railNodes = timelineNodes.filter(node => String(node.type || '').trim() === 'event');
-    const primaryRailNodes = railNodes.length > 0 ? railNodes : timelineNodes;
+    // Keep event nodes on per-depth horizontal rails (L0 at the bottom, L1/L2 rollups stacked above),
+    // then fan secondary nodes into parallel lanes that clear the highest rollup tier.
+    const eventDepthOf = (node) => {
+        const raw = Number(node?.semanticDepth);
+        return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 0;
+    };
+    const eventNodesScoped = timelineNodes.filter(node => String(node.type || '').trim() === 'event');
+    const eventsByDepth = new Map();
+    for (const ev of eventNodesScoped) {
+        const d = eventDepthOf(ev);
+        if (!eventsByDepth.has(d)) {
+            eventsByDepth.set(d, []);
+        }
+        eventsByDepth.get(d).push(ev);
+    }
+    const compareEventsForRail = (a, b) => {
+        const at = Number(a?.seqTo ?? 0);
+        const bt = Number(b?.seqTo ?? 0);
+        if (at !== bt) {
+            return at - bt;
+        }
+        return String(a?.id || '').localeCompare(String(b?.id || ''));
+    };
+    for (const tier of eventsByDepth.values()) {
+        tier.sort(compareEventsForRail);
+    }
+    const eventDepths = [...eventsByDepth.keys()].sort((a, b) => a - b);
+    const primaryEventDepth = eventDepths.length > 0 ? eventDepths[0] : 0;
+    const maxEventDepth = eventDepths.length > 0 ? eventDepths[eventDepths.length - 1] : 0;
+    const primaryEventTier = eventsByDepth.get(primaryEventDepth) || [];
+    const primaryRailNodes = primaryEventTier.length > 0 ? primaryEventTier : timelineNodes;
     const railIndexByNodeId = new Map();
     primaryRailNodes.forEach((node, index) => {
         railIndexByNodeId.set(String(node.id || ''), index);
@@ -8374,13 +8490,21 @@ function buildGraphCytoscapeElements(store) {
     const laneDepthGap = 170;
     const laneFanX = railCount <= 10 ? 92 : railCount <= 24 ? 76 : 64;
     const laneFanY = 60;
+    // Vertical spacing between event compression tiers; rollups float above the L0 rail.
+    const eventLayerGap = 180;
+    const rollupTierSpan = Math.max(0, (maxEventDepth - primaryEventDepth)) * eventLayerGap;
     const getRailX = (railIndex) => (railIndex - railCenter) * colGap;
+    const getEventLayerY = (depth) => -(Math.max(0, Number(depth) - primaryEventDepth)) * eventLayerGap;
     const getLaneCenterY = (type) => {
         const slot = laneSlotByType.get(type) || { side: 1, depth: 1 };
         if (slot.side === 0) {
             return 0;
         }
-        return slot.side * (laneBaseOffset + (slot.depth * laneDepthGap));
+        if (slot.side < 0) {
+            // Push above-event lanes past every rollup tier so they never collide with L1/L2 rows.
+            return -(rollupTierSpan + laneBaseOffset + (slot.depth * laneDepthGap));
+        }
+        return laneBaseOffset + (slot.depth * laneDepthGap);
     };
     const getLaneStackOffset = (index, side) => {
         if (index <= 0) {
@@ -8508,17 +8632,38 @@ function buildGraphCytoscapeElements(store) {
     }
 
     const positionByNodeId = new Map();
-    for (const node of scopedNodeList) {
+    // Place L0 (primary) events first, then iteratively place each higher rollup tier
+    // at the X-mean of its already-placed children so parent rollups float visually
+    // above the events they summarize.
+    for (const node of primaryEventTier) {
         const nodeId = String(node.id || '');
-        const type = String(node.type || 'unknown').trim() || 'unknown';
-        if (type !== 'event') {
-            continue;
-        }
-        const railIndex = Number(anchoredRailIndexByNodeId.get(nodeId) ?? 0);
+        const railIndex = Number(railIndexByNodeId.get(nodeId) ?? 0);
         positionByNodeId.set(nodeId, {
             x: getRailX(railIndex),
-            y: 0,
+            y: getEventLayerY(primaryEventDepth),
         });
+    }
+    for (const depth of eventDepths) {
+        if (depth === primaryEventDepth) {
+            continue;
+        }
+        const layerY = getEventLayerY(depth);
+        const tier = eventsByDepth.get(depth) || [];
+        for (const node of tier) {
+            const nodeId = String(node.id || '');
+            const childIds = Array.isArray(node.childrenIds) ? node.childrenIds : [];
+            const childPositions = childIds
+                .map(cid => positionByNodeId.get(String(cid)))
+                .filter(pos => pos && Number.isFinite(pos.x));
+            let x;
+            if (childPositions.length > 0) {
+                x = childPositions.reduce((sum, p) => sum + p.x, 0) / childPositions.length;
+            } else {
+                const railIndex = Number(anchoredRailIndexByNodeId.get(nodeId) ?? 0);
+                x = getRailX(railIndex);
+            }
+            positionByNodeId.set(nodeId, { x, y: layerY });
+        }
     }
     for (const bucket of secondaryBuckets.values()) {
         const type = String(bucket.type || 'unknown').trim() || 'unknown';
@@ -8550,17 +8695,26 @@ function buildGraphCytoscapeElements(store) {
     }
 
     const nodes = scopedNodeList
-        .map(node => ({
-            data: {
-                id: `node:${node.id}`,
-                nodeId: String(node.id),
-                label: `${String(node.title || node.id)}\n${String(node.level || '')}/${String(node.type || '')}`,
-                level: String(node.level || ''),
-                type: String(node.type || ''),
-                archived: Boolean(node.archived),
-            },
-            position: positionByNodeId.get(String(node.id)) || { x: 0, y: 0 },
-        }));
+        .map(node => {
+            const isEvent = String(node.type || '').trim() === 'event';
+            const depth = isEvent ? eventDepthOf(node) : -1;
+            const tierLabel = isEvent
+                ? `L${depth}`
+                : String(node.level || '');
+            const labelLine2 = `${tierLabel}${tierLabel ? '/' : ''}${String(node.type || '')}`;
+            return {
+                data: {
+                    id: `node:${node.id}`,
+                    nodeId: String(node.id),
+                    label: `${String(node.title || node.id)}\n${labelLine2}`,
+                    level: String(node.level || ''),
+                    type: String(node.type || ''),
+                    depth: String(depth),
+                    archived: Boolean(node.archived),
+                },
+                position: positionByNodeId.get(String(node.id)) || { x: 0, y: 0 },
+            };
+        });
 
     const edges = scopedEdges
         .map(item => {
@@ -8581,7 +8735,31 @@ function buildGraphCytoscapeElements(store) {
             };
         });
 
-    return { nodes, edges };
+    // Tier guide labels (non-interactive) sit on the left margin of each compression row
+    // so users can read off "L0 / L1 / L2" without inspecting node titles.
+    const tierLabelNodes = [];
+    if (eventDepths.length >= 2) {
+        const labelX = getRailX(-1.6);
+        for (const depth of eventDepths) {
+            tierLabelNodes.push({
+                data: {
+                    id: `tier:${depth}`,
+                    nodeId: `tier:${depth}`,
+                    label: `L${depth}`,
+                    tierLabel: 1,
+                    type: 'tier',
+                    level: '',
+                    depth: String(depth),
+                    archived: false,
+                },
+                position: { x: labelX, y: getEventLayerY(depth) },
+                grabbable: false,
+                selectable: false,
+            });
+        }
+    }
+
+    return { nodes: [...tierLabelNodes, ...nodes], edges };
 }
 
 function getEdgeNodeOptionsHtml(store, selectedNodeId = '') {
@@ -8644,6 +8822,7 @@ function renderEdgeFormEditorHtml(store, editorId, edge = {}, edgeIndex = -1) {
 
 async function openGraphInspectorPopup(context) {
     await ensureStoreSyncedWithChat(context);
+    ensureInjectionViewerBindings();
     const chatKey = getChatKey(context);
     const store = getMemoryStore(context);
     if (!store) {
@@ -8775,6 +8954,11 @@ ${renderEdgeFormEditorHtml(latest, editorId, edge, selectedEdgeIndex)}
         const searchModel = syncSearchState(latest);
         cy.startBatch();
         cy.nodes().forEach(nodeElement => {
+            if (Number(nodeElement.data('tierLabel')) === 1) {
+                nodeElement.removeClass('luker-search-match');
+                nodeElement.removeClass('luker-search-dimmed');
+                return;
+            }
             const nodeId = String(nodeElement.data('nodeId') || '');
             const matched = !searchModel.active || searchModel.matchNodeIdSet.has(nodeId);
             nodeElement.toggleClass('luker-search-match', searchModel.active && matched);
@@ -8970,6 +9154,29 @@ ${renderEdgeFormEditorHtml(latest, editorId, edge, selectedEdgeIndex)}
                             'text-outline-color': '#14283d',
                         },
                     },
+                    { selector: 'node[type = "event"][depth = "1"]', style: { 'background-color': '#5ba0d8', 'border-color': '#bcdfff' } },
+                    { selector: 'node[type = "event"][depth = "2"]', style: { 'background-color': '#84bce3', 'border-color': '#dcefff' } },
+                    { selector: 'node[type = "event"][depth = "3"]', style: { 'background-color': '#aed4ee', 'border-color': '#eef7ff' } },
+                    { selector: 'node[type = "event"][depth = "4"]', style: { 'background-color': '#cde6f5', 'border-color': '#f4faff' } },
+                    {
+                        selector: 'node[tierLabel = 1]',
+                        style: {
+                            label: 'data(label)',
+                            'background-opacity': 0,
+                            'border-opacity': 0,
+                            'text-valign': 'center',
+                            'text-halign': 'center',
+                            color: 'rgba(255,255,255,0.55)',
+                            'font-size': 18,
+                            'font-weight': 700,
+                            'text-outline-color': 'rgba(0,0,0,0.6)',
+                            'text-outline-width': 2,
+                            width: 56,
+                            height: 32,
+                            events: 'no',
+                            'overlay-opacity': 0,
+                        },
+                    },
                     { selector: 'node[type = "character_sheet"]', style: { 'background-color': '#a55c3f' } },
                     { selector: 'node[type = "location_state"]', style: { 'background-color': '#2f8c6d' } },
                     { selector: 'node[type = "rule_constraint"]', style: { 'background-color': '#8b6a24' } },
@@ -9099,6 +9306,9 @@ ${renderEdgeFormEditorHtml(latest, editorId, edge, selectedEdgeIndex)}
             applySearchGraphState();
 
             cy.on('tap', 'node', (event) => {
+                if (Number(event.target.data('tierLabel')) === 1) {
+                    return;
+                }
                 const nodeId = String(event.target.data('nodeId') || '');
                 selectNodeForInspection(nodeId);
             });
@@ -9576,7 +9786,11 @@ ${renderEdgeFormEditorHtml(latest, editorId, edge, selectedEdgeIndex)}
             nextType: String(jQuery(this).data('search-type') || MEMORY_GRAPH_SEARCH_ALL_TYPE),
         });
     });
-    jQuery(document).on(`click${namespace}`, `${selector} .luker-rpg-memory-graph-search-result`, function () {
+    jQuery(document).on(`click${namespace}`, `${selector} .luker-rpg-memory-graph-search-result`, function (event) {
+        // Action buttons inside the card have their own handlers; don't double-fire selection.
+        if (jQuery(event.target).closest('.luker-rpg-memory-graph-search-result-action').length > 0) {
+            return;
+        }
         const nodeId = String(jQuery(this).data('node-id') || '').trim();
         if (!nodeId) {
             return;
@@ -10831,14 +11045,14 @@ function ensureStyles() {
 
 .luker-rpg-memory-graph-search-results {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     gap: 8px;
 }
 
 .luker-rpg-memory-graph-search-result {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     width: 100%;
     min-width: 0;
     padding: 10px;
@@ -10849,6 +11063,38 @@ function ensureStyles() {
     text-align: left;
     cursor: pointer;
     transition: border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.luker-rpg-memory-graph-search-result-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.luker-rpg-memory-graph-search-result-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-end;
+    padding-top: 6px;
+    border-top: 1px dashed rgba(123, 163, 196, 0.22);
+}
+
+.luker-rpg-memory-graph-search-result-actions .menu_button,
+.luker-rpg-memory-graph-search-result-actions .menu_button_small {
+    width: 30px;
+    height: 30px;
+    min-width: 0;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+}
+
+.luker-rpg-memory-graph-search-result-action {
+    cursor: pointer;
 }
 
 .luker-rpg-memory-graph-search-result:hover {
@@ -11016,6 +11262,244 @@ function ensureStyles() {
 .luker-rpg-memory-graph-table-wrap td {
     word-break: break-word;
     overflow-wrap: anywhere;
+}
+
+/* --- Last-injection viewer --- */
+.luker-injection-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+    min-width: 0;
+    max-height: 72vh;
+    max-height: 72dvh;
+    overflow: auto;
+    padding: 4px 2px;
+    box-sizing: border-box;
+}
+
+.luker-injection-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    border: 1px solid rgba(123, 163, 196, 0.22);
+    border-radius: 12px;
+    background:
+        radial-gradient(circle at 0% 0%, rgba(76, 175, 80, 0.12), transparent 55%),
+        radial-gradient(circle at 100% 0%, rgba(33, 150, 243, 0.10), transparent 55%),
+        linear-gradient(140deg, rgba(20, 24, 33, 0.85), rgba(11, 14, 20, 0.6));
+}
+
+.luker-injection-title {
+    font-weight: 600;
+    font-size: 1.02em;
+}
+
+.luker-injection-time {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.82em;
+    opacity: 0.78;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.luker-injection-header-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 6px;
+}
+
+.luker-injection-header-actions .menu_button,
+.luker-injection-header-actions .menu_button_small {
+    width: 30px;
+    height: 30px;
+    min-width: 0;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+}
+
+.luker-injection-empty {
+    padding: 24px 16px;
+    text-align: center;
+    border: 1px dashed rgba(123, 163, 196, 0.28);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.02);
+    opacity: 0.86;
+    font-size: 0.92em;
+}
+
+.luker-injection-content {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.luker-injection-block {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    border: 1px solid rgba(123, 163, 196, 0.22);
+    border-radius: 12px;
+    padding: 12px;
+    background: linear-gradient(160deg, rgba(20, 24, 33, 0.6), rgba(11, 14, 20, 0.4));
+}
+
+.luker-injection-block-core {
+    border-color: rgba(80, 175, 120, 0.4);
+    box-shadow: inset 3px 0 0 rgba(80, 175, 120, 0.55);
+}
+
+.luker-injection-block-focus {
+    border-color: rgba(80, 150, 220, 0.4);
+    box-shadow: inset 3px 0 0 rgba(80, 150, 220, 0.55);
+}
+
+.luker-injection-block-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.luker-injection-block-badge {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    color: #f5fffa;
+}
+
+.luker-injection-block-core .luker-injection-block-badge {
+    background: rgba(76, 175, 80, 0.32);
+    color: #b3eac0;
+}
+
+.luker-injection-block-focus .luker-injection-block-badge {
+    background: rgba(33, 150, 243, 0.28);
+    color: #aedaff;
+}
+
+.luker-injection-block-head .menu_button,
+.luker-injection-block-head .menu_button_small {
+    margin-left: auto;
+    width: 28px;
+    height: 28px;
+    min-width: 0;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+}
+
+.luker-injection-block-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+}
+
+.luker-injection-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.18);
+    border: 1px solid rgba(123, 163, 196, 0.14);
+}
+
+.luker-injection-section-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.luker-injection-section-title {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: rgba(120, 160, 220, 0.16);
+    color: rgba(220, 234, 250, 0.96);
+}
+
+.luker-injection-section-body {
+    width: 100%;
+    overflow-x: auto;
+}
+
+.luker-injection-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    table-layout: auto;
+}
+
+.luker-injection-table th {
+    padding: 6px 10px;
+    text-align: left;
+    font-weight: 600;
+    white-space: nowrap;
+    border-bottom: 2px solid var(--SmartThemeBorderColor, rgba(120, 120, 120, 0.5));
+    background: rgba(255, 255, 255, 0.03);
+    position: sticky;
+    top: 0;
+}
+
+.luker-injection-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(120, 120, 120, 0.22);
+    line-height: 1.45;
+    vertical-align: top;
+}
+
+.luker-injection-table tr:hover td {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.luker-injection-cell-tight {
+    white-space: nowrap;
+}
+
+.luker-injection-cell-wrap {
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    min-width: 220px;
+}
+
+.luker-injection-rawpre {
+    white-space: pre-wrap;
+    font-size: 12.5px;
+    margin: 0;
+    padding: 8px;
+    background: rgba(0, 0, 0, 0.22);
+    border-radius: 6px;
+    line-height: 1.45;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+    .luker-injection-section {
+        padding: 6px 6px;
+    }
+    .luker-injection-table th,
+    .luker-injection-table td {
+        padding: 4px 6px;
+    }
+    .luker-injection-cell-tight {
+        white-space: normal;
+    }
 }
 
 .luker-rpg-memory-node-form {
@@ -12417,6 +12901,7 @@ function bindUi() {
             notifyError(i18n('No active chat selected.'));
             return;
         }
+        ensureInjectionViewerBindings();
         const html = buildLastRecallCorePacketHtml(store, { showHeader: true });
         await context.callGenericPopup(html, context.POPUP_TYPE.TEXT, i18n('View Last Injection'), { wide: true, large: true });
     });
