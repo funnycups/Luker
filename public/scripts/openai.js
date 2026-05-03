@@ -1331,8 +1331,8 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
             }
         }
 
-        if (canUseTools && Array.isArray(chatPrompt.invocations)) {
-            const promptIdx = messages.indexOf(chatPrompt);
+        if (canUseTools && Array.isArray(entry.chatPrompt.invocations)) {
+            const promptIdx = messages.indexOf(entry.chatPrompt);
             const reasoningIsEligible = toolReasoningMode !== tool_reasoning_modes.DISABLED
                 && promptIdx > lastUserIdx;
             let previousAssistantReasoning = '';
@@ -1376,7 +1376,7 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
                 }
             }
             /** @type {import('./tool-calling.js').ToolInvocation[]} */
-            const invocations = chatPrompt.invocations.map(invocation => {
+            const invocations = entry.chatPrompt.invocations.map(invocation => {
                 const clone = structuredClone(invocation);
                 if (!reasoningIsEligible) {
                     delete clone.reasoning;
@@ -1942,6 +1942,7 @@ export async function prepareOpenAIMessages({
             promptManager.error = t`The name of at least one character contained whitespaces or special characters. Please check your user and character name.`;
         } else {
             toastr.error(t`An unknown error occurred while counting tokens. Further information may be available in console.`);
+            console.error('Unexpected error while preparing prompts', error);
             chatCompletion.log('----- Unexpected error while preparing prompts -----');
             chatCompletion.log(error);
             chatCompletion.log(error.stack);
