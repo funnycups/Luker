@@ -10557,9 +10557,20 @@ function ensureStyles() {
 }
 
 .luker-graph-search-collapsible.is-open {
-    max-height: 600px;
-    overflow: visible;
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+    overflow: hidden;
     padding: 0 0 8px;
+    display: flex;
+    flex-direction: column;
+}
+
+/* When search is open, take over the popup body — hide tabs + panels so
+ * results aren't visually mixed with the squeezed graph/inspector strip. */
+.luker-graph-search-collapsible.is-open ~ .luker-graph-tab-bar,
+.luker-graph-search-collapsible.is-open ~ .luker-graph-tab-panel {
+    display: none;
 }
 
 /* --- Tab bar --- */
@@ -10797,13 +10808,14 @@ function ensureStyles() {
     width: 100%;
     max-width: 100%;
     min-width: 0;
+    flex: 1;
+    min-height: 0;
     box-sizing: border-box;
     border: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.35));
     border-radius: 14px;
     padding: 10px;
-    background:
-        radial-gradient(circle at top left, rgba(63, 166, 111, 0.18), transparent 42%),
-        linear-gradient(140deg, rgba(20, 24, 33, 0.9), rgba(11, 14, 20, 0.72));
+    background: var(--SmartThemeBlurTintColor, rgba(20, 24, 33, 0.95));
+    color: var(--SmartThemeBodyColor, inherit);
 }
 
 .luker-rpg-memory-graph-search-head {
@@ -10820,9 +10832,9 @@ function ensureStyles() {
     min-width: 0;
     padding: 8px 12px;
     border-radius: 12px;
-    border: 1px solid rgba(123, 163, 196, 0.28);
-    background: rgba(7, 10, 16, 0.4);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(123, 163, 196, 0.28));
+    background: color-mix(in srgb, var(--SmartThemeBodyColor, #888) 6%, transparent);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--SmartThemeBodyColor, #fff) 4%, transparent);
 }
 
 .luker-rpg-memory-graph-search-input-wrap > i {
@@ -10870,22 +10882,22 @@ function ensureStyles() {
     gap: 6px;
     padding: 6px 10px;
     border-radius: 999px;
-    border: 1px solid rgba(123, 163, 196, 0.24);
-    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(123, 163, 196, 0.24));
+    background: color-mix(in srgb, var(--SmartThemeBodyColor, #888) 5%, transparent);
     color: inherit;
     cursor: pointer;
     transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
 }
 
 .luker-rpg-memory-graph-search-filter:hover {
-    border-color: rgba(140, 205, 168, 0.48);
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor, rgb(140,205,168)) 60%, transparent);
     transform: translateY(-1px);
 }
 
 .luker-rpg-memory-graph-search-filter.is-active {
-    border-color: rgba(140, 205, 168, 0.8);
-    background: linear-gradient(135deg, rgba(40, 86, 68, 0.82), rgba(28, 48, 62, 0.76));
-    color: #f3fff8;
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor, rgb(140,205,168)) 90%, transparent);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, rgb(140,205,168)) 22%, transparent);
+    color: var(--SmartThemeBodyColor, inherit);
 }
 
 .luker-rpg-memory-graph-search-filter-count {
@@ -10895,7 +10907,7 @@ function ensureStyles() {
     min-width: 22px;
     padding: 1px 6px;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.1);
+    background: color-mix(in srgb, var(--SmartThemeBodyColor, #888) 12%, transparent);
     font-size: 0.82em;
     opacity: 0.92;
 }
@@ -10909,6 +10921,11 @@ function ensureStyles() {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     gap: 8px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    align-content: start;
+    padding-right: 4px;
 }
 
 .luker-rpg-memory-graph-search-result {
@@ -10919,8 +10936,8 @@ function ensureStyles() {
     min-width: 0;
     padding: 10px;
     border-radius: 12px;
-    border: 1px solid rgba(123, 163, 196, 0.22);
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.015));
+    border: 1px solid var(--SmartThemeBorderColor, rgba(123, 163, 196, 0.22));
+    background: color-mix(in srgb, var(--SmartThemeBodyColor, #888) 6%, transparent);
     color: inherit;
     text-align: left;
     cursor: pointer;
@@ -10940,7 +10957,7 @@ function ensureStyles() {
     gap: 6px;
     justify-content: flex-end;
     padding-top: 6px;
-    border-top: 1px dashed rgba(123, 163, 196, 0.22);
+    border-top: 1px dashed var(--SmartThemeBorderColor, rgba(123, 163, 196, 0.22));
 }
 
 .luker-rpg-memory-graph-search-result-actions .menu_button,
@@ -10961,14 +10978,14 @@ function ensureStyles() {
 
 .luker-rpg-memory-graph-search-result:hover {
     transform: translateY(-1px);
-    border-color: rgba(140, 205, 168, 0.5);
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor, rgb(140,205,168)) 60%, transparent);
+    box-shadow: 0 8px 20px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.15));
 }
 
 .luker-rpg-memory-graph-search-result.is-active {
-    border-color: rgba(255, 217, 108, 0.82);
-    background: linear-gradient(180deg, rgba(84, 62, 18, 0.34), rgba(38, 28, 10, 0.16));
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor, rgb(255,217,108)) 90%, transparent);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, rgb(255,217,108)) 18%, transparent);
+    box-shadow: 0 10px 24px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.22));
 }
 
 .luker-rpg-memory-graph-search-result-topline {
@@ -10988,8 +11005,9 @@ function ensureStyles() {
     font-size: 0.76em;
     padding: 3px 8px;
     border-radius: 999px;
-    background: rgba(83, 133, 176, 0.18);
-    color: rgba(223, 239, 255, 0.96);
+    background: color-mix(in srgb, var(--SmartThemeBodyColor, #888) 12%, transparent);
+    color: var(--SmartThemeBodyColor, inherit);
+    opacity: 0.9;
 }
 
 .luker-rpg-memory-graph-search-result-meta {
@@ -11009,8 +11027,8 @@ function ensureStyles() {
     gap: 4px;
     padding: 12px;
     border-radius: 12px;
-    border: 1px dashed rgba(123, 163, 196, 0.24);
-    background: rgba(255, 255, 255, 0.02);
+    border: 1px dashed var(--SmartThemeBorderColor, rgba(123, 163, 196, 0.24));
+    background: color-mix(in srgb, var(--SmartThemeBodyColor, #888) 4%, transparent);
     opacity: 0.86;
 }
 
