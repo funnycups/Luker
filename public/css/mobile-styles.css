@@ -257,19 +257,124 @@
     }
 
     .world_entry .inline-drawer-toggle {
-        padding-bottom: 5px;
+        align-self: center;
+        padding-bottom: 0;
     }
 
-    /* On mobile, float the multi-select checkbox out of the flex row so expand/toggle have room */
+    /* WI entry: fix title being squeezed on narrow screens, CSS-only, no HTML changes */
     .world_entry .wi-card-entry {
-        position: relative;
+        position: static;
     }
 
     .world_entry_select_label {
-        position: absolute;
-        top: 8px;
-        left: 28px;
-        z-index: 1;
+        position: static;
+        flex-shrink: 0;
+        order: 99;
+    }
+
+    /* Let WIEntryTitleAndStatus shrink properly */
+    .WIEntryTitleAndStatus {
+        min-width: 0;
+        flex: 1 1 0;
+    }
+
+    .WIEntryTitleAndStatus .flex-container.flex1 {
+        min-width: 0;
+        flex: 1 1 0;
+    }
+
+    .WIEntryTitleAndStatus .flex-container.flex1 textarea {
+        min-width: 0;
+    }
+
+    .WIEntryTitleAndStatus select[name="entryStateSelector"] {
+        flex-shrink: 0;
+    }
+
+    /* Override world-info.css flex: 1 1 18rem on the wrapper div */
+    .world_entry .inline-drawer-header > .world_entry_thin_controls > .flex-container {
+        flex: 1 1 0 !important;
+        min-width: 0;
+    }
+
+    /* Hide action buttons when collapsed; show when expanded */
+    .world_entry .move_entry_button,
+    .world_entry .duplicate_entry_button,
+    .world_entry .delete_entry_button,
+    .world_entry .trace_activation_button,
+    .world_entry .WIEntryHeaderControls,
+    .world_entry select[name="entryStateSelector"] {
+        display: none !important;
+    }
+
+    /* ── 展开状态布局 ──────────────────────────────────────────── */
+    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .inline-drawer-header {
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0 !important;
+        padding: 0 !important;
+    }
+
+    /* 打通 thin_controls 和中间 flex-container，让子元素参与 header 的 flex 流 */
+    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .world_entry_thin_controls,
+    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .world_entry_thin_controls > .flex-container {
+        display: contents !important;
+    }
+
+    /* 行1：▼ 👁 ✓ — 三个平分整行 */
+    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .drag-handle {
+        display: none !important;
+    }
+    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .inline-drawer-toggle {
+        order: 1; flex: 0 0 calc(100% / 3);
+        display: flex; align-items: center; justify-content: center;
+    }
+    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .killSwitch {
+        order: 2; flex: 0 0 calc(100% / 3);
+        display: flex; align-items: center; justify-content: center;
+    }
+    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .world_entry_select_label {
+        order: 3; flex: 0 0 calc(100% / 3); margin-left: 0;
+        display: flex; align-items: center; justify-content: center;
+    }
+
+    /* 行2：标题 + 🔵▼，order:10 + 100% 宽度触发换行 */
+    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .WIEntryTitleAndStatus {
+        order: 10;
+        flex: 1 1 100%;
+        min-width: 0;
+    }
+    .world_entry .inline-drawer:has(.inline-drawer-icon.up) select[name="entryStateSelector"] {
+        display: flex !important;
+        order: 10;
+        flex: 0 0 auto;
+    }
+
+    /* 行3：WIEntryHeaderControls 作为真实容器撑满整行，4个按钮无法挤入 */
+    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .WIEntryHeaderControls {
+        display: flex !important;
+        order: 20;
+        flex: 1 1 100%;
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 4px;
+    }
+
+    /* 输入框撑满可用空间 */
+    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .WIEntryHeaderControls input.wideMax100px {
+        max-width: unset;
+        flex: 1 1 0;
+    }
+
+    /* 行4：4个按钮，order:30 */
+    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .move_entry_button,
+    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .duplicate_entry_button,
+    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .delete_entry_button,
+    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .trace_activation_button {
+        display: flex !important;
+        order: 30;
+        flex: 0 0 auto;
+        align-self: center;
     }
 
     #worldInfoScanningCheckboxes {
@@ -360,11 +465,6 @@
     .wi-settings {
         flex-direction: column;
         gap: 5px !important;
-    }
-
-    .WIEntryTitleAndStatus,
-    .WIEntryHeaderControls {
-        width: 100%;
     }
 
     #WIEntryHeaderTitlesPC {
