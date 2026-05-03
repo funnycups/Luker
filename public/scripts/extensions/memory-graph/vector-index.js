@@ -18,13 +18,13 @@ const VECTOR_REQUEST_TIMEOUT_MS = 120_000;
 // Embedding source constants (mirrors backend SOURCES)
 // ---------------------------------------------------------------------------
 
-export const EMBEDDING_SOURCES = [
+const EMBEDDING_SOURCES = [
     'transformers', 'openai', 'openrouter', 'nomicai', 'cohere',
     'jina', 'ollama', 'llamacpp', 'vllm', 'extras', 'makersuite',
     'vertexai', 'mistral', 'chutes', 'nanogpt', 'electronhub',
 ];
 
-export const EMBEDDING_DEFAULT_MODELS = {
+const EMBEDDING_DEFAULT_MODELS = {
     openai: 'text-embedding-3-small',
     openrouter: 'openai/text-embedding-3-large',
     cohere: 'embed-multilingual-v3.0',
@@ -333,23 +333,6 @@ export async function queryVectorCollection(collectionId, config, searchText, to
 }
 
 /**
- * List saved hashes in a collection.
- *
- * @param {string} collectionId
- * @param {object} config
- * @param {AbortSignal} [signal]
- * @returns {Promise<number[]>}
- */
-export async function listSavedHashes(collectionId, config, signal) {
-    const results = await vectorFetch('/api/vector/list', {
-        collectionId,
-        source: config.source,
-        model: config.model,
-    }, signal);
-    return Array.isArray(results) ? results : [];
-}
-
-/**
  * Delete items by hash.
  *
  * @param {string} collectionId
@@ -590,59 +573,6 @@ export async function syncVectorIndex(store, config, chatId, options = {}) {
         deletedCount: plan.toDelete.length,
         stats: plan.stats,
     };
-}
-
-/**
- * Sync a single node to the vector index (called after extraction).
- *
- * @param {object} store
- * @param {object} node
- * @param {object} config
- * @param {string} chatId
- * @param {AbortSignal} [signal]
- * @param {Array} [schema]
- */
-export async function syncSingleNodeToVectorIndex(store, node, config, chatId, signal, schema) {
-    const validation = validateVectorConfig(config);
-    if (!validation.valid) return;
-
-    const state = ensureVectorIndexState(store);
-    const collectionId = state.collectionId || buildCollectionId(chatId);
-    const text = buildNodeVectorText(node, schema);
-    if (!text) return;
-
-    const hash = buildNodeVectorHash(node, config, schema);
-    const currentHash = state.nodeToHash[node.id];
-    if (currentHash === hash) return;
-
-    if (currentHash !== undefined) {
-        await deleteVectorItems(collectionId, config, [currentHash], signal);
-        delete state.hashToNodeId[currentHash];
-    }
-
-    await insertVectorItems(collectionId, config, [{ hash, text, index: Number(node.seqTo) || 0 }], signal);
-    state.nodeToHash[node.id] = hash;
-    state.hashToNodeId[hash] = node.id;
-}
-
-/**
- * Remove a node from the vector index (called on node deletion/rollback).
- *
- * @param {object} store
- * @param {string} nodeId
- * @param {object} config
- * @param {string} chatId
- * @param {AbortSignal} [signal]
- */
-export async function removeNodeFromVectorIndex(store, nodeId, config, chatId, signal) {
-    const state = ensureVectorIndexState(store);
-    const hash = state.nodeToHash[nodeId];
-    if (hash === undefined) return;
-
-    const collectionId = state.collectionId || buildCollectionId(chatId);
-    await deleteVectorItems(collectionId, config, [hash], signal);
-    delete state.nodeToHash[nodeId];
-    delete state.hashToNodeId[hash];
 }
 
 // ---------------------------------------------------------------------------

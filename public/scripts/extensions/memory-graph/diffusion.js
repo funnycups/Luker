@@ -500,47 +500,6 @@ function collectEntityNames(node) {
 // ---------------------------------------------------------------------------
 
 /**
- * Update co-occurrence counts after an extraction batch.
- * Counts how often entity pairs appear together in the same extraction batch.
- *
- * @param {object} store - The graph store (must have cooccurrenceCounts object).
- * @param {string[]} entityNodeIds - Entity node IDs that appeared in this batch.
- */
-export function updateCooccurrence(store, entityNodeIds) {
- if (!store.cooccurrenceCounts || typeof store.cooccurrenceCounts !== 'object') {
- store.cooccurrenceCounts = {};
- }
- const ids = [...new Set(entityNodeIds)].sort();
- for (let i = 0; i < ids.length; i++) {
- for (let j = i + 1; j < ids.length; j++) {
- const key = `${ids[i]}|${ids[j]}`;
- store.cooccurrenceCounts[key] = (store.cooccurrenceCounts[key] || 0) + 1;
- }
- }
-}
-
-/**
- * Apply Long-Term Depression (LTD) decay to co-occurrence counts.
- * Call once per extraction pass to gradually weaken stale co-occurrences.
- *
- * @param {object} store
- * @param {number} [decayFactor=0.95] - Multiplicative decay per extraction pass.
- * @param {number} [minThreshold=0.1] - Remove entries below this threshold.
- */
-export function applyCooccurrenceLTD(store, decayFactor = 0.95, minThreshold = 0.1) {
- if (!store.cooccurrenceCounts || typeof store.cooccurrenceCounts !== 'object') return;
- const keys = Object.keys(store.cooccurrenceCounts);
- for (const key of keys) {
- const decayed = store.cooccurrenceCounts[key] * decayFactor;
- if (decayed < minThreshold) {
- delete store.cooccurrenceCounts[key];
- } else {
- store.cooccurrenceCounts[key] = decayed;
- }
- }
-}
-
-/**
  * Compute co-occurrence boost for a candidate node.
  *
  * @param {object} candidateNode - The candidate graph node.

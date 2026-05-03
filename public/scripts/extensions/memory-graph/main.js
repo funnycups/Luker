@@ -7,10 +7,6 @@ import { i18n, i18nFormat, registerLocaleData } from './i18n.js';
 import {
     configure as configureCharacterOverrides,
     getCurrentAvatar,
-    getCharacterByAvatar,
-    getCharacterIndexByAvatar,
-    getCharacterDisplayNameByAvatar,
-    getCharacterExtensionDataByAvatar,
     getCharacterSchemaOverrideByAvatar,
     getCharacterAdvancedOverrideByAvatar,
     getEffectiveAdvancedSettings,
@@ -1293,23 +1289,8 @@ async function deleteMemoryStoreByTarget(context, target) {
     }
 }
 
-function cancelPendingMutationInvalidation(chatKey) {
-    const key = String(chatKey || '').trim();
-    if (!key) {
-        return;
-    }
-    const pending = pendingMutationInvalidations.get(key);
-    if (pending?.timer) {
-        clearTimeout(pending.timer);
-    }
-    pendingMutationInvalidations.delete(key);
-}
-
 /**
  * Direct overwrite of the floor-state log + data namespaces at a given target.
- * Used for `replace`-style commits (full rebuild, JSON editor apply, import,
- * legacy schema migration) where appending a diff would be incorrect — the
- * caller wants the new store to be the only commit on the log.
  *
  * Bypasses the FloorState public API because that API is append-only. We
  * still serialise against the singleton's in-flight queue via fs.ready() to
@@ -1999,59 +1980,14 @@ function restoreStoreFromRollbackSnapshot(store, snapshot) {
     repairStoreAfterRollback(store);
 }
 
-function buildRollbackEntry(chatKey, beforeSnapshot, store, { seqFrom = 0, seqTo = 0, kind = 'extract' } = {}) {
+function buildRollbackEntry(chatKey, { seqTo = 0, kind = 'extract' } = {}) {
     const key = String(chatKey || '').trim();
-    if (!key || !beforeSnapshot || typeof beforeSnapshot !== 'object' || !store || typeof store !== 'object') {
-        return null;
-    }
-    const afterSnapshot = captureRollbackSnapshot(store);
-    const nodeIds = new Set([
-        ...Object.keys(beforeSnapshot.nodes || {}),
-        ...Object.keys(afterSnapshot.nodes || {}),
-    ]);
-    const nodesBefore = {};
-    let nodeChangeCount = 0;
-    for (const id of nodeIds) {
-        const beforeNode = beforeSnapshot.nodes?.[id] ?? null;
-        const afterNode = afterSnapshot.nodes?.[id] ?? null;
-        if (JSON.stringify(beforeNode) === JSON.stringify(afterNode)) {
-            continue;
-        }
-        nodesBefore[id] = beforeNode ? cloneRollbackNodeSnapshot(beforeNode) : null;
-        nodeChangeCount += 1;
-    }
-    const beforeEdges = Array.isArray(beforeSnapshot.edges) ? beforeSnapshot.edges : [];
-    const afterEdges = Array.isArray(afterSnapshot.edges) ? afterSnapshot.edges : [];
-    const beforeEdgeKeys = new Set(beforeEdges.map(getRollbackEdgeKey).filter(Boolean));
-    const afterEdgeKeys = new Set(afterEdges.map(getRollbackEdgeKey).filter(Boolean));
-    const addedEdges = afterEdges.filter(edge => {
-        const edgeKey = getRollbackEdgeKey(edge);
-        return edgeKey && !beforeEdgeKeys.has(edgeKey);
-    });
-    const removedEdges = beforeEdges.filter(edge => {
-        const edgeKey = getRollbackEdgeKey(edge);
-        return edgeKey && !afterEdgeKeys.has(edgeKey);
-    });
-    const metaChanged = beforeSnapshot.nodeSeq !== afterSnapshot.nodeSeq
-        || beforeSnapshot.seqCounter !== afterSnapshot.seqCounter
-        || beforeSnapshot.appliedSeqTo !== afterSnapshot.appliedSeqTo
-        || beforeSnapshot.loggedSeqTo !== afterSnapshot.loggedSeqTo;
-    if (!metaChanged && nodeChangeCount === 0 && addedEdges.length === 0 && removedEdges.length === 0) {
+    if (!key) {
         return null;
     }
     return {
         kind: String(kind || 'extract'),
-        seqFrom: Math.max(1, Math.floor(Number(seqFrom || 0))),
-        seqTo: Math.max(1, Math.floor(Number(seqTo || seqFrom || 0))),
-        metaBefore: {
-            nodeSeq: beforeSnapshot.nodeSeq,
-            seqCounter: beforeSnapshot.seqCounter,
-            appliedSeqTo: beforeSnapshot.appliedSeqTo,
-            loggedSeqTo: beforeSnapshot.loggedSeqTo,
-        },
-        nodesBefore,
-        addedEdges: addedEdges.map(cloneRollbackEdgeSnapshot).filter(Boolean),
-        removedEdges: removedEdges.map(cloneRollbackEdgeSnapshot).filter(Boolean),
+        seqTo: Math.max(1, Math.floor(Number(seqTo || 0))),
     };
 }
 
@@ -2061,79 +1997,6 @@ function recordRollbackEntry(chatKey, entry) {
         return;
     }
     getRollbackHistory(key).push(entry);
-}
-
-function applyRollbackEntry(store, entry) {
-    if (!store || typeof store !== 'object' || !entry || typeof entry !== 'object') {
-        return;
-    }
-    const nodesBefore = entry.nodesBefore && typeof entry.nodesBefore === 'object' ? entry.nodesBefore : {};
-    for (const [id, nodeBefore] of Object.entries(nodesBefore)) {
-        const nodeId = String(id || '').trim();
-        if (!nodeId) {
-            continue;
-        }
-        if (!nodeBefore) {
-            delete store.nodes[nodeId];
-            continue;
-        }
-        const restored = cloneRollbackNodeSnapshot(nodeBefore);
-        if (restored) {
-            store.nodes[nodeId] = restored;
-        }
-    }
-    const addedEdgeKeys = new Set(
-        (Array.isArray(entry.addedEdges) ? entry.addedEdges : [])
-            .map(getRollbackEdgeKey)
-            .filter(Boolean),
-    );
-    if (addedEdgeKeys.size > 0) {
-        store.edges = (Array.isArray(store.edges) ? store.edges : []).filter(edge => !addedEdgeKeys.has(getRollbackEdgeKey(edge)));
-    }
-    for (const edge of Array.isArray(entry.removedEdges) ? entry.removedEdges : []) {
-        addEdge(store, edge?.from, edge?.to, edge?.type);
-    }
-    store.nodeSeq = Math.max(0, Math.floor(Number(entry?.metaBefore?.nodeSeq || 0)));
-    store.seqCounter = Math.max(0, Math.floor(Number(entry?.metaBefore?.seqCounter || 0)));
-    store.appliedSeqTo = Math.max(0, Math.floor(Number(entry?.metaBefore?.appliedSeqTo || 0)));
-    store.loggedSeqTo = Math.max(0, Math.floor(Number(entry?.metaBefore?.loggedSeqTo || entry?.metaBefore?.appliedSeqTo || 0)));
-}
-
-function rollbackStoreUsingHistory(store, chatKey, fromSeq) {
-    const key = String(chatKey || '').trim();
-    const startSeq = Math.max(1, Math.floor(Number(fromSeq || 0)));
-    if (!key || !Number.isFinite(startSeq) || startSeq <= 0) {
-        return { rolledBack: false, rollbackStartSeq: null };
-    }
-    const history = rollbackHistoryCache.get(key);
-    if (!Array.isArray(history) || history.length === 0) {
-        return { rolledBack: false, rollbackStartSeq: null };
-    }
-    let rolledBack = false;
-    let rollbackStartSeq = null;
-    while (history.length > 0) {
-        const lastEntry = history[history.length - 1];
-        const entrySeqTo = Math.max(0, Math.floor(Number(lastEntry?.seqTo || 0)));
-        if (entrySeqTo < startSeq) {
-            break;
-        }
-        applyRollbackEntry(store, lastEntry);
-        history.pop();
-        rolledBack = true;
-        const entrySeqFrom = Math.max(1, Math.floor(Number(lastEntry?.seqFrom || startSeq)));
-        rollbackStartSeq = rollbackStartSeq === null ? entrySeqFrom : Math.min(rollbackStartSeq, entrySeqFrom);
-    }
-    if (!rolledBack) {
-        return { rolledBack: false, rollbackStartSeq: null };
-    }
-    repairStoreAfterRollback(store);
-    store.pendingFullRebuild = false;
-    if (history.length === 0) {
-        rollbackHistoryCache.delete(key);
-    } else {
-        rollbackHistoryCache.set(key, history);
-    }
-    return { rolledBack: true, rollbackStartSeq };
 }
 
 function findAssistantSeqFromPlayableSeq(context, playableSeqFrom) {
@@ -2178,27 +2041,6 @@ function findAffectedAssistantSeqFromMessageIndex(context, messageIndex) {
         }
     }
     return null;
-}
-
-function getStoreSourceSyncState(store, context) {
-    const sourceState = computeChatSourceState(context);
-    const storedMessageCount = getStoreCoveredSeqTo(store);
-    const currentMessageCount = Math.max(0, Number(sourceState.messageCount || 0));
-    let requiresFullRebuild = false;
-    let reason = '';
-
-    if (currentMessageCount < storedMessageCount) {
-        requiresFullRebuild = true;
-        reason = 'source_count_decreased';
-    }
-
-    return {
-        sourceState,
-        storedMessageCount,
-        currentMessageCount,
-        requiresFullRebuild,
-        reason,
-    };
 }
 
 function getNodeTypeSchemaMap(settings, context = null) {
@@ -2798,17 +2640,13 @@ function finishActiveRecallRequest(state) {
     activeRecallRequestStates.delete(state.id);
 }
 
-function listActiveRecallRequests(runToken) {
+async function abortActiveRecallRequests(runToken, timeoutMs = 400) {
     const normalizedRunToken = Number(runToken);
     if (!Number.isFinite(normalizedRunToken) || normalizedRunToken <= 0) {
-        return [];
+        return;
     }
-    return Array.from(activeRecallRequestStates.values())
+    const requests = Array.from(activeRecallRequestStates.values())
         .filter(state => Number(state?.runToken || 0) === normalizedRunToken);
-}
-
-async function abortActiveRecallRequests(runToken, timeoutMs = 400) {
-    const requests = listActiveRecallRequests(runToken);
     if (requests.length === 0) {
         return;
     }
@@ -3054,26 +2892,6 @@ async function runFunctionCallTask(context, settings, {
     });
 }
 
-function buildEvidenceSeqRange(item, batch) {
-    const seqs = Array.isArray(item?.evidence_seqs)
-        ? item.evidence_seqs.map(value => Number(value)).filter(Number.isFinite)
-        : [];
-    if (seqs.length > 0) {
-        return { seqTo: Math.max(...seqs) };
-    }
-    const fromRaw = Number(item?.evidence_seq_range?.from_seq);
-    const toRaw = Number(item?.evidence_seq_range?.to_seq);
-    if (Number.isFinite(fromRaw) || Number.isFinite(toRaw)) {
-        const to = Number.isFinite(toRaw) ? toRaw : fromRaw;
-        return { seqTo: Number(to) };
-    }
-    const lastSeqInBatch = Number(batch?.[batch.length - 1]?.seq);
-    if (Number.isFinite(lastSeqInBatch)) {
-        return { seqTo: Number(lastSeqInBatch) };
-    }
-    return { seqTo: 0 };
-}
-
 function sanitizeExtractToolNameSuffix(typeId = '') {
     return String(typeId || '')
         .trim()
@@ -3207,18 +3025,6 @@ function buildDynamicExtractTools(schema = [], options = {}) {
         const fieldSet = new Set(filteredFields);
         const createProperties = {
             ref: { type: 'string' },
-            evidence_seqs: {
-                type: 'array',
-                items: { type: 'integer' },
-            },
-            evidence_seq_range: {
-                type: 'object',
-                properties: {
-                    from_seq: { type: 'integer' },
-                    to_seq: { type: 'integer' },
-                },
-                additionalProperties: false,
-            },
             no_link_reason: { type: 'string' },
             links: {
                 type: 'array',
@@ -3382,18 +3188,6 @@ function buildDynamicExtractTools(schema = [], options = {}) {
                             additionalProperties: false,
                         },
                     },
-                    evidence_seqs: {
-                        type: 'array',
-                        items: { type: 'integer' },
-                    },
-                    evidence_seq_range: {
-                        type: 'object',
-                        properties: {
-                            from_seq: { type: 'integer' },
-                            to_seq: { type: 'integer' },
-                        },
-                        additionalProperties: false,
-                    },
                 },
                 required: ['links'],
                 additionalProperties: false,
@@ -3418,9 +3212,7 @@ function buildDynamicExtractTools(schema = [], options = {}) {
             description: 'Signal extraction completion.',
             parameters: {
                 type: 'object',
-                properties: {
-                    note: { type: 'string' },
-                },
+                properties: {},
                 additionalProperties: false,
             },
         },
@@ -3505,10 +3297,6 @@ function buildCreateFromDynamicToolCall(call, spec) {
             links: normalizeExtractLinks(args.links),
             noLinkReason: normalizeText(args.no_link_reason || ''),
             hasLinksProp: Object.prototype.hasOwnProperty.call(args, 'links'),
-            evidence_seqs: Array.isArray(args.evidence_seqs) ? args.evidence_seqs : [],
-            evidence_seq_range: args.evidence_seq_range && typeof args.evidence_seq_range === 'object'
-                ? args.evidence_seq_range
-                : null,
         },
         missingRequired,
     };
@@ -3534,10 +3322,6 @@ function buildLinkUpsertFromToolCall(call) {
             sourceNodeId,
             sourceRef,
             links,
-            evidence_seqs: Array.isArray(args.evidence_seqs) ? args.evidence_seqs : [],
-            evidence_seq_range: args.evidence_seq_range && typeof args.evidence_seq_range === 'object'
-                ? args.evidence_seq_range
-                : null,
         },
         invalidReason: '',
     };
@@ -3622,33 +3406,15 @@ function getSchemaProjectionColumns(spec = null) {
         : [];
 }
 
-function buildProjectedRowValues(node, spec = null, { includeLegacyFallback = false } = {}) {
+function buildProjectedRowValues(node, spec = null) {
     const rowValues = {};
     const columns = getSchemaProjectionColumns(spec);
-    if (columns.length > 0) {
-        for (const column of columns) {
-            const value = toDisplayScalar(getTableCellValueFromNode(node, column));
-            if (!value) {
-                continue;
-            }
-            rowValues[column] = value;
-        }
-        return rowValues;
-    }
-    if (!includeLegacyFallback) {
-        return rowValues;
-    }
-    const structured = getStructuredNodeFields(node);
-    for (const [key, rawValue] of Object.entries(structured)) {
-        const normalizedKey = String(key || '').trim();
-        if (!normalizedKey || normalizedKey.toLowerCase() === 'summary') {
-            continue;
-        }
-        const value = toDisplayScalar(rawValue);
+    for (const column of columns) {
+        const value = toDisplayScalar(getTableCellValueFromNode(node, column));
         if (!value) {
             continue;
         }
-        rowValues[normalizedKey] = value;
+        rowValues[column] = value;
     }
     return rowValues;
 }
@@ -3684,9 +3450,8 @@ function buildProjectedRowText(rowValues = {}) {
         .join('; ');
 }
 
-function buildLlmFriendlyNodeProjection(node, spec = null, options = {}) {
-    const includeLegacyFallback = Boolean(options?.includeLegacyFallback);
-    const rowValues = buildProjectedRowValues(node, spec, { includeLegacyFallback });
+function buildLlmFriendlyNodeProjection(node, spec = null) {
+    const rowValues = buildProjectedRowValues(node, spec);
     const keyValues = buildProjectedKeyValues(node, spec);
     const seqTo = Number.isFinite(Number(node?.seqTo)) ? Number(node.seqTo) : null;
     return {
@@ -4398,7 +4163,7 @@ function resolveExtractNodeId(store, {
     return refNodeId;
 }
 
-function applyExtractedLinks(store, sourceNode, rawLinks, defaultSeqRange = { seqTo: 0 }, options = {}) {
+function applyExtractedLinks(store, sourceNode, rawLinks, options = {}) {
     if (!sourceNode || !Array.isArray(rawLinks) || rawLinks.length === 0) {
         return;
     }
@@ -5020,7 +4785,6 @@ async function processPendingMessageBatchWithLLM(context, store, settings, schem
             const clearFields = Array.isArray(item?.clearFields)
                 ? item.clearFields.map(key => String(key || '').trim()).filter(Boolean)
                 : [];
-            const evidence = buildEvidenceSeqRange(item, extractBatch);
             if (!targetNode.fields || typeof targetNode.fields !== 'object' || Array.isArray(targetNode.fields)) {
                 targetNode.fields = {};
             }
@@ -5039,16 +4803,14 @@ async function processPendingMessageBatchWithLLM(context, store, settings, schem
             for (const key of clearFields) {
                 delete targetNode.fields[key];
             }
-            targetNode.seqTo = Math.max(Number(targetNode.seqTo || 0), Number(evidence.seqTo || 0));
+            targetNode.seqTo = Math.max(Number(targetNode.seqTo || 0), Number(extractionMaxSeq || 0));
             continue;
         }
         if (op === 'link_upsert') {
-            const evidence = buildEvidenceSeqRange(item, extractBatch);
             pendingLinkJobs.push({
                 sourceNodeId: normalizeText(item?.sourceNodeId || ''),
                 sourceRef: normalizeText(item?.sourceRef || ''),
                 links: Array.isArray(item?.links) ? item.links : [],
-                evidence,
             });
             continue;
         }
@@ -5057,13 +4819,12 @@ async function processPendingMessageBatchWithLLM(context, store, settings, schem
         if (!type) {
             continue;
         }
-        const evidence = buildEvidenceSeqRange(item, extractBatch);
         const targetNode = upsertSemanticNode(store, {
             type,
             nodeId: String(item?.nodeId || ''),
             title,
             fields: item?.fields && typeof item.fields === 'object' ? item.fields : {},
-            seqTo: evidence.seqTo,
+            seqTo: extractionMaxSeq,
         }, settings, { maxSeq: extractionMaxSeq });
         if (targetNode) {
             const ref = normalizeText(item?.ref || '');
@@ -5074,7 +4835,6 @@ async function processPendingMessageBatchWithLLM(context, store, settings, schem
                 sourceNodeId: targetNode.id,
                 sourceRef: '',
                 links: Array.isArray(item?.links) ? item.links : [],
-                evidence,
             });
         }
     }
@@ -5095,7 +4855,6 @@ async function processPendingMessageBatchWithLLM(context, store, settings, schem
             store,
             sourceNode,
             Array.isArray(job?.links) ? job.links : [],
-            job?.evidence || { seqTo: 0 },
             { maxSeq: extractionMaxSeq, refIndex: extractionRefIndex },
         );
     }
@@ -5207,9 +4966,8 @@ async function runExtractionForStore(context, store, {
                     store.appliedSeqTo = Math.max(Number(store.appliedSeqTo || 0), Number(endFrame?.seq || 0));
                     if (batchResult?.changed) {
                         extractedAny = true;
-                        const rollbackEntry = buildRollbackEntry(historyChatKey, attemptSnapshot, store, {
+                        const rollbackEntry = buildRollbackEntry(historyChatKey, {
                             kind: 'extract',
-                            seqFrom: Number(startFrame?.seq || 0),
                             seqTo: Number(endFrame?.seq || 0),
                         });
                         if (rollbackEntry) {
@@ -5248,7 +5006,6 @@ async function runExtractionForStore(context, store, {
         }
     }
     if (extractedAny) {
-        const compressionSnapshot = captureRollbackSnapshot(store);
         await runCompressionLoop(context, store, settings, {
             compressionStats,
             maxSeq: latestSeq,
@@ -5265,9 +5022,8 @@ async function runExtractionForStore(context, store, {
                 }
                 : null,
         });
-        const compressionRollbackEntry = buildRollbackEntry(historyChatKey, compressionSnapshot, store, {
+        const compressionRollbackEntry = buildRollbackEntry(historyChatKey, {
             kind: 'compression',
-            seqFrom: beginSeq,
             seqTo: latestSeq,
         });
         if (compressionRollbackEntry) {
@@ -6881,7 +6637,7 @@ async function rebuildStoreFromCurrentChat(context, { abortSignal = null, onBatc
         onBatchApplied: async ({ beginSeq, endSeq }) => {
             if (!hasCommittedBatch) {
                 const currentBatchEntries = getRollbackHistory(chatKey)
-                    .filter(entry => Number(entry?.seqFrom || 0) === Number(beginSeq || 0) && Number(entry?.seqTo || 0) === Number(endSeq || 0));
+                    .filter(entry => Number(entry?.seqTo || 0) === Number(endSeq || 0));
                 clearRollbackHistory(chatKey);
                 for (const entry of currentBatchEntries) {
                     recordRollbackEntry(chatKey, entry);
@@ -8088,10 +7844,7 @@ function getLastRecallCorePacketText(store) {
     if (focusPacket) {
         sections.push(`[FOCUS_PACKET]\n${focusPacket}`);
     }
-    if (sections.length > 0) {
-        return sections.join('\n\n');
-    }
-    return normalizeMultilineText(projection?.corePacket || '');
+    return sections.join('\n\n');
 }
 
 function parseMarkdownTableToHtml(mdTable) {
@@ -8169,7 +7922,6 @@ function buildLastRecallCorePacketHtml(store, options = {}) {
     const renderedAt = Number.isFinite(at) ? new Date(at).toLocaleString() : '';
     const corePacket = normalizeMultilineText(projection?.blocks?.corePacket || '');
     const focusPacket = normalizeMultilineText(projection?.blocks?.focusPacket || '');
-    const legacyPacket = (!corePacket && !focusPacket) ? normalizeMultilineText(projection?.corePacket || '') : '';
 
     const headerHtml = showHeader
         ? `
@@ -8182,7 +7934,7 @@ function buildLastRecallCorePacketHtml(store, options = {}) {
 </div>`
         : '';
 
-    if (!corePacket && !focusPacket && !legacyPacket) {
+    if (!corePacket && !focusPacket) {
         return `
 <div class="luker-injection-shell">
     ${headerHtml}
@@ -8203,15 +7955,10 @@ function buildLastRecallCorePacketHtml(store, options = {}) {
 </section>`;
     };
 
-    const blocksHtml = legacyPacket
-        ? `<section class="luker-injection-block luker-injection-block-core" data-variant="core">
-    <textarea class="luker-injection-block-source" data-variant="core" readonly hidden>${escapeHtml(legacyPacket)}</textarea>
-    <div class="luker-injection-block-body">${renderPacketSectionsAsHtml(legacyPacket)}</div>
-</section>`
-        : [
-            buildBlock('CORE', corePacket, 'core'),
-            buildBlock('FOCUS', focusPacket, 'focus'),
-        ].filter(Boolean).join('');
+    const blocksHtml = [
+        buildBlock('CORE', corePacket, 'core'),
+        buildBlock('FOCUS', focusPacket, 'focus'),
+    ].filter(Boolean).join('');
 
     return `
 <div class="luker-injection-shell">
@@ -13105,7 +12852,7 @@ function bindUi() {
                 onBatchApplied: async ({ beginSeq, endSeq }) => {
                     if (!hasCommittedBatch) {
                         const currentBatchEntries = getRollbackHistory(chatKey)
-                            .filter(entry => Number(entry?.seqFrom || 0) === Number(beginSeq || 0) && Number(entry?.seqTo || 0) === Number(endSeq || 0));
+                            .filter(entry => Number(entry?.seqTo || 0) === Number(endSeq || 0));
                         trimRollbackHistoryFromSeq(chatKey, startSeq);
                         for (const entry of currentBatchEntries) {
                             recordRollbackEntry(chatKey, entry);

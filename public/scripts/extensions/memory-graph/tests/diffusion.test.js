@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {
  buildAdjacencyMap, propagateActivation, diffuseAndRank, extractEntityAnchors,
- isEntityType, buildEntityDecayCache, updateCooccurrence, applyCooccurrenceLTD,
+ isEntityType, buildEntityDecayCache,
  computeCooccurrenceBoost, DIFFUSION_DEFAULTS, EDGE_CONDUCTANCE, TYPE_HALF_LIFE,
 } from '../diffusion.js';
 let passed = 0, failed = 0;
@@ -64,16 +64,6 @@ test('cache: entities', () => { const c = buildEntityDecayCache(bts([{ id: 'c1',
 test('cache: linked seq', () => { const c = buildEntityDecayCache(bts([{ id: 'c1', type: 'character_sheet', fields: { name: 'A' }, seqTo: 50 }, { id: 'e1', type: 'event', seqTo: 80 }], [{ from: 'e1', to: 'c1', type: 'involved_in' }]), S); assert.equal(c.entityLatestSeq.get('c1'), 80); });
 test('cache: mapping', () => { const c = buildEntityDecayCache(bts([{ id: 'c1', type: 'character_sheet', fields: { name: 'A' }, seqTo: 50 }, { id: 'e1', type: 'event', seqTo: 30 }], [{ from: 'e1', to: 'c1', type: 'involved_in' }]), S); assert.ok(c.nodeToEntityIds.get('e1')?.has('c1')); });
 test('cache: empty', () => { const c = buildEntityDecayCache({ nodes: {}, edges: [] }, S); assert.equal(c.entityLatestSeq.size, 0); });
-test('cooc: pairs', () => { const st = {}; updateCooccurrence(st, ['a', 'b', 'c']); assert.equal(st.cooccurrenceCounts['a|b'], 1); assert.equal(st.cooccurrenceCounts['b|c'], 1); });
-test('cooc: sorted', () => { const st = {}; updateCooccurrence(st, ['c', 'a']); assert.ok('a|c' in st.cooccurrenceCounts); assert.ok(!('c|a' in st.cooccurrenceCounts)); });
-test('cooc: dedup', () => { const st = {}; updateCooccurrence(st, ['a', 'a', 'b']); assert.equal(st.cooccurrenceCounts['a|b'], 1); });
-test('cooc: accum', () => { const st = {}; updateCooccurrence(st, ['a', 'b']); updateCooccurrence(st, ['a', 'b']); assert.equal(st.cooccurrenceCounts['a|b'], 2); });
-test('cooc: single', () => { const st = {}; updateCooccurrence(st, ['a']); assert.equal(Object.keys(st.cooccurrenceCounts).length, 0); });
-test('cooc: empty', () => { const st = {}; updateCooccurrence(st, []); assert.equal(Object.keys(st.cooccurrenceCounts).length, 0); });
-test('ltd: decay', () => { const st = { cooccurrenceCounts: { 'a|b': 1.0 } }; applyCooccurrenceLTD(st, 0.5); assert.ok(Math.abs(st.cooccurrenceCounts['a|b'] - 0.5) < 1e-6); });
-test('ltd: remove', () => { const st = { cooccurrenceCounts: { 'a|b': 0.05 } }; applyCooccurrenceLTD(st, 0.95, 0.1); assert.ok(!('a|b' in st.cooccurrenceCounts)); });
-test('ltd: keep', () => { const st = { cooccurrenceCounts: { 'a|b': 2.0 } }; applyCooccurrenceLTD(st, 0.95, 0.1); assert.ok('a|b' in st.cooccurrenceCounts); });
-test('ltd: no crash', () => { applyCooccurrenceLTD({}); applyCooccurrenceLTD({ cooccurrenceCounts: null }); });
 test('boost: with cooc', () => { const st = bts([{ id: 'c1', type: 'character_sheet', fields: { name: 'A' } }, { id: 'c2', type: 'character_sheet', fields: { name: 'B' } }, { id: 'e1', type: 'event' }], [{ from: 'e1', to: 'c1', type: 'involved_in' }]); assert.ok(computeCooccurrenceBoost(st.nodes['e1'], new Set(['c2']), { 'c1|c2': 5 }, st, S) > 0); });
 test('boost: no cooc', () => { const st = bts([{ id: 'c1', type: 'character_sheet', fields: { name: 'A' } }, { id: 'e1', type: 'event' }], [{ from: 'e1', to: 'c1', type: 'involved_in' }]); assert.equal(computeCooccurrenceBoost(st.nodes['e1'], new Set(['c2']), {}, st, S), 0); });
 test('boost: no query', () => { const st = bts([{ id: 'e1', type: 'event' }]); assert.equal(computeCooccurrenceBoost(st.nodes['e1'], new Set(), {}, st, S), 0); assert.equal(computeCooccurrenceBoost(st.nodes['e1'], null, {}, st, S), 0); });
