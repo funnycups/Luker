@@ -8,7 +8,7 @@ let passed = 0, failed = 0;
 function test(name, fn) { try { fn(); console.log('\u2713 ' + name); passed++; } catch (e) { console.log('\u2717 ' + name); console.log('  ' + e.message); failed++; } }
 console.log('Running diffusion.test.js...\n');
 function bts(na, ea) { const n = {}; for (const x of na) n[x.id] = x; return { nodes: n, edges: ea || [] }; }
-const S = [{ id: 'character_sheet', latestOnly: true, tableColumns: ['name', 'traits'] }, { id: 'location_state', latestOnly: true, tableColumns: ['name', 'state'] }, { id: 'event', latestOnly: false, tableColumns: ['title', 'summary'] }, { id: 'rule_constraint', latestOnly: false, tableColumns: ['constraint'] }];
+const S = [{ id: 'character_sheet', latestOnly: true, tableColumns: ['title', 'traits'] }, { id: 'location_state', latestOnly: true, tableColumns: ['title', 'state'] }, { id: 'event', latestOnly: false, tableColumns: ['title', 'summary'] }, { id: 'rule_constraint', latestOnly: false, tableColumns: ['constraint'] }];
 const nf = { enableEntityAwareDecay: false, enableRefractoryPeriod: false, enableInverseDegreeInhibition: false };
 test('isEntityType: char with schema', () => { assert.ok(isEntityType('character_sheet', S)); });
 test('isEntityType: loc with schema', () => { assert.ok(isEntityType('location_state', S)); });

@@ -170,7 +170,7 @@ function computeLexicalScore(node, queryText) {
     if (queryUnits.size === 0) return 0;
 
     const fields = node.fields || {};
-    const primaryTexts = [fields.name, fields.title].filter(Boolean);
+    const primaryTexts = [node.title, fields.title, fields.name].filter(Boolean);
     const secondaryTexts = [fields.summary, fields.state, fields.traits, fields.constraint].filter(Boolean);
     const allText = [...primaryTexts, ...secondaryTexts].join(' ');
     const nodeUnits = buildLexicalUnits(allText);

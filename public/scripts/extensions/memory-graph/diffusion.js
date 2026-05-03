@@ -105,6 +105,7 @@ export function buildAdjacencyMap(store, opts = {}) {
  const to = String(edge.to || '').trim();
  if (!from || !to || from === to) continue;
  if (!nodes[from] || !nodes[to]) continue;
+ if (nodes[from].archived || nodes[to].archived) continue;
 
  const relationType = String(edge.type || 'related').trim().toLowerCase();
  const conductance = EDGE_CONDUCTANCE[relationType] ?? 0.4;
@@ -171,7 +172,7 @@ export function isEntityType(nodeType, schema) {
  const typeSpec = schema.find(s => String(s?.id || '').toLowerCase() === String(nodeType || '').toLowerCase());
  if (typeSpec) {
  return Array.isArray(typeSpec.tableColumns)
- && typeSpec.tableColumns.includes('name')
+ && typeSpec.tableColumns.includes('title')
  && typeSpec.latestOnly === true;
  }
  }
@@ -474,8 +475,8 @@ function collectEntityNames(node) {
  const names = [];
  const fields = node.fields || {};
 
- const name = String(fields.name || '').trim();
- if (name) names.push(name);
+ const primaryName = String(node.title || fields.title || fields.name || '').trim();
+ if (primaryName) names.push(primaryName);
 
  const aliasesRaw = fields.aliases;
  if (typeof aliasesRaw === 'string' && aliasesRaw.trim()) {

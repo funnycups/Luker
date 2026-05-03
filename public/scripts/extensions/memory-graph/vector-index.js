@@ -131,8 +131,8 @@ export function buildCollectionId(chatId, prefix = VECTOR_COLLECTION_PREFIX) {
 // Fallback field priority when schema is not available
 const FALLBACK_FIELD_PRIORITY = {
     event: ['summary', 'key_sentences'],
-    character_sheet: ['name', 'aliases', 'traits', 'identity', 'state', 'goal', 'core_note'],
-    location_state: ['name', 'aliases', 'controller', 'state', 'danger', 'resources'],
+    character_sheet: ['title', 'aliases', 'traits', 'identity', 'state', 'goal', 'core_note'],
+    location_state: ['title', 'aliases', 'controller', 'state', 'danger', 'resources'],
     rule_constraint: ['title', 'constraint', 'scope', 'status'],
 };
 
@@ -175,8 +175,15 @@ export function buildNodeVectorText(node, schema) {
     const priorityFields = resolveEmbeddingFields(nodeType, schema);
     const parts = [];
 
+    const readFieldValue = (key) => {
+        if (key === 'title') {
+            return node.title || fields.title || fields.name || '';
+        }
+        return fields[key];
+    };
+
     for (const key of priorityFields) {
-        const value = fields[key];
+        const value = readFieldValue(key);
         if (value == null || value === '') continue;
         if (Array.isArray(value)) {
             const joined = value.filter(Boolean).join(', ');

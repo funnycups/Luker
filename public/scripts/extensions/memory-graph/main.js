@@ -286,11 +286,11 @@ const defaultNodeTypeSchema = [
         id: 'character_sheet',
         label: 'Character Sheet',
         tableName: 'character_table',
-        tableColumns: ['name', 'aliases', 'traits', 'identity', 'state', 'goal', 'inventory', 'language_sample', 'core_note', 'addressing_user'],
-        embeddingColumns: ['name', 'aliases', 'traits', 'identity', 'state', 'goal', 'core_note'],
+        tableColumns: ['title', 'aliases', 'traits', 'identity', 'state', 'goal', 'inventory', 'language_sample', 'core_note', 'addressing_user'],
+        embeddingColumns: ['title', 'aliases', 'traits', 'identity', 'state', 'goal', 'core_note'],
         columnHints: {
-            name: 'Canonical character name only. Do not include aliases, English names, titles, translations, or any parenthetical/bracketed clarification here.',
-            aliases: 'Nicknames, aliases, titles, English names, translated names, or alternative names used in dialogue. Store them here instead of appending them to name.',
+            title: 'Canonical character name only. Do not include aliases, English names, titles, translations, or any parenthetical/bracketed clarification here.',
+            aliases: 'Nicknames, aliases, titles, English names, translated names, or alternative names used in dialogue. Store them here instead of appending them to title.',
             traits: 'Stable character traits, personality tendencies, and notable appearance/style markers.',
             identity: 'Stable identity/background facts.',
             state: 'Current condition or stance.',
@@ -300,7 +300,7 @@ const defaultNodeTypeSchema = [
             core_note: 'Stable critical notes worth persistent recall.',
             addressing_user: 'How this character addresses the user.',
         },
-        requiredColumns: ['name'],
+        requiredColumns: ['title'],
         forceUpdate: false,
         editable: true,
         level: LEVEL.SEMANTIC,
@@ -308,7 +308,7 @@ const defaultNodeTypeSchema = [
         keywords: ['character', 'alias', 'traits', 'personality', 'status', 'relationship', 'inventory', 'goal', 'core note'],
         alwaysInject: false,
         latestOnly: true,
-        primaryKeyColumns: ['name', 'aliases'],
+        primaryKeyColumns: ['title', 'aliases'],
         compression: {
             mode: 'none',
             threshold: 2,
@@ -322,17 +322,17 @@ const defaultNodeTypeSchema = [
         id: 'location_state',
         label: 'Location State',
         tableName: 'location_table',
-        tableColumns: ['name', 'aliases', 'controller', 'danger', 'resources', 'state'],
-        embeddingColumns: ['name', 'aliases', 'controller', 'state', 'danger'],
+        tableColumns: ['title', 'aliases', 'controller', 'danger', 'resources', 'state'],
+        embeddingColumns: ['title', 'aliases', 'controller', 'state', 'danger'],
         columnHints: {
-            name: 'Canonical location name only. Do not include aliases, English names, translations, or any parenthetical/bracketed clarification here.',
-            aliases: 'Alternative location names, English names, translated names, short names, or colloquial references. Store them here instead of appending them to name.',
+            title: 'Canonical location name only. Do not include aliases, English names, translations, or any parenthetical/bracketed clarification here.',
+            aliases: 'Alternative location names, English names, translated names, short names, or colloquial references. Store them here instead of appending them to title.',
             controller: 'Current owner/controller of the location.',
             danger: 'Current danger level or threat profile.',
             resources: 'Important available resources/services/features.',
             state: 'Current location condition.',
         },
-        requiredColumns: ['name'],
+        requiredColumns: ['title'],
         forceUpdate: false,
         editable: true,
         level: LEVEL.SEMANTIC,
@@ -340,7 +340,7 @@ const defaultNodeTypeSchema = [
         keywords: ['location', 'alias', 'control', 'danger', 'resource', 'region', 'base'],
         alwaysInject: false,
         latestOnly: true,
-        primaryKeyColumns: ['name', 'aliases'],
+        primaryKeyColumns: ['title', 'aliases'],
         compression: {
             mode: 'none',
             threshold: 2,
@@ -2169,12 +2169,57 @@ function getChildren(store, nodeId) {
     return node.childrenIds.map(id => store.nodes[id]).filter(child => Boolean(child) && !child.archived);
 }
 
-function archiveNode(store, nodeId) {
-    const node = store.nodes[nodeId];
+function archiveNode(store, oldId, replacementId = null) {
+    const node = store.nodes[oldId];
     if (!node) {
         return;
     }
     node.archived = true;
+
+    if (!replacementId || replacementId === oldId || !store.nodes[replacementId]) {
+        return;
+    }
+
+    let finalTarget = replacementId;
+    const visited = new Set([oldId]);
+    while (!visited.has(finalTarget)) {
+        visited.add(finalTarget);
+        const next = store.nodes[finalTarget]?.supersededBy;
+        if (!next || !store.nodes[next] || next === finalTarget) {
+            break;
+        }
+        finalTarget = next;
+    }
+    node.supersededBy = finalTarget;
+
+    if (!Array.isArray(store.edges)) {
+        return;
+    }
+    const seen = new Set();
+    const next = [];
+    for (const edge of store.edges) {
+        if (!edge) {
+            continue;
+        }
+        const fromHit = edge.from === oldId;
+        const toHit = edge.to === oldId;
+        const newFrom = fromHit ? finalTarget : edge.from;
+        const newTo = toHit ? finalTarget : edge.to;
+        if (newFrom === newTo) {
+            continue;
+        }
+        const key = `${newFrom}␟${edge.type}␟${newTo}`;
+        if (seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        if (fromHit || toHit) {
+            next.push({ ...edge, from: newFrom, to: newTo });
+        } else {
+            next.push(edge);
+        }
+    }
+    store.edges = next;
 }
 
 function summarizeTextHeuristic(lines) {
@@ -2941,8 +2986,8 @@ function buildDynamicToolDescription(spec = {}, mode = 'create') {
     } else {
         chunks.push('Required columns: none');
     }
-    if (fields.includes('name')) {
-        chunks.push('Name normalization: name must be the canonical primary name only. Never append aliases, English names, translations, titles, or any parenthetical/bracketed clarification to name.');
+    if (fields.includes('title')) {
+        chunks.push('Title normalization: title must be the canonical primary name only. Never append aliases, English names, translations, titles, or any parenthetical/bracketed clarification to title.');
     }
     if (fields.includes('aliases')) {
         chunks.push('Alias normalization: put nicknames, titles, English names, translated names, short names, and alternative spellings in aliases only. Separate multiple aliases with commas or semicolons.');
@@ -3443,13 +3488,6 @@ function buildProjectedKeyValues(node, spec = null) {
     return keyValues;
 }
 
-function buildProjectedRowText(rowValues = {}) {
-    return Object.entries(rowValues)
-        .map(([key, value]) => `${String(key || '').trim()}=${toDisplayScalar(value)}`)
-        .filter(row => !row.endsWith('='))
-        .join('; ');
-}
-
 function buildLlmFriendlyNodeProjection(node, spec = null) {
     const rowValues = buildProjectedRowValues(node, spec);
     const keyValues = buildProjectedKeyValues(node, spec);
@@ -3463,7 +3501,6 @@ function buildLlmFriendlyNodeProjection(node, spec = null) {
         summary: getNodeSummary(node),
         key_values: keyValues,
         row_values: rowValues,
-        row_text: buildProjectedRowText(rowValues),
         to_seq: seqTo,
     };
 }
@@ -3595,7 +3632,7 @@ function buildExtractInputXml(requiredTypes, graphData, messages) {
         '<extract_input>',
         '  <input_guide>Below are the extraction inputs. graph_data is the current semantic memory graph state for extraction.</input_guide>',
         '  <input_guide>graph_data is a full schema-aware projection of the current semantic graph for extraction.</input_guide>',
-        '  <input_guide>Each graph_data.nodes row contains key_values (identity keys), row_values (schema columns), and row_text (compact human-readable row rendering).</input_guide>',
+        '  <input_guide>Each graph_data.nodes row contains key_values (identity keys) and row_values (schema columns).</input_guide>',
         '  <input_guide>graph_data.edges contains the currently projected semantic relations between nodes.</input_guide>',
         '  <input_guide>If graph_data.initialized=false, treat graph as uninitialized and prefer create operations over edit/delete.</input_guide>',
         '  <input_guide>required_types are hard-required types for this batch.</input_guide>',
@@ -4011,11 +4048,8 @@ function upsertSemanticNode(store, item, settings = null, options = {}) {
     const latestOnlyKeyFields = Array.isArray(latestOnlyConfig.keyFields)
         ? latestOnlyConfig.keyFields.map(column => String(column || '').trim()).filter(Boolean)
         : [];
-    const tokenizePrimaryKeyField = (fieldsObject, key) => {
-        const fields = fieldsObject && typeof fieldsObject === 'object' && !Array.isArray(fieldsObject)
-            ? fieldsObject
-            : {};
-        const raw = toDisplayScalar(fields[key]);
+    const tokenizePrimaryKeyField = (nodeLike, key) => {
+        const raw = toDisplayScalar(getTableCellValueFromNode(nodeLike, key));
         if (!raw) {
             return [];
         }
@@ -4024,14 +4058,15 @@ function upsertSemanticNode(store, item, settings = null, options = {}) {
             .map(part => normalizeText(part).toLowerCase())
             .filter(Boolean);
     };
-    const computeLatestOnlyMatchScore = (candidateFields) => {
+    const computeLatestOnlyMatchScore = (candidateNode) => {
         if (latestOnlyKeyFields.length === 0) {
             return 0;
         }
+        const incomingNodeLike = { title, fields: incomingFields };
         let score = 0;
         for (const key of latestOnlyKeyFields) {
-            const incomingTokens = tokenizePrimaryKeyField(incomingFields, key);
-            const candidateTokens = tokenizePrimaryKeyField(candidateFields, key);
+            const incomingTokens = tokenizePrimaryKeyField(incomingNodeLike, key);
+            const candidateTokens = tokenizePrimaryKeyField(candidateNode, key);
             if (incomingTokens.length === 0 || candidateTokens.length === 0) {
                 continue;
             }
@@ -4081,7 +4116,7 @@ function upsertSemanticNode(store, item, settings = null, options = {}) {
         const candidates = Object.values(store.nodes)
             .filter(node => isNodeVisibleAtSeq(node))
             .filter(node => String(node.type || '').toLowerCase() === type)
-            .map(node => ({ node, score: computeLatestOnlyMatchScore(node?.fields) }))
+            .map(node => ({ node, score: computeLatestOnlyMatchScore(node) }))
             .filter(entry => entry.score > 0)
             .sort((a, b) => {
                 if (a.score !== b.score) {
@@ -4096,7 +4131,7 @@ function upsertSemanticNode(store, item, settings = null, options = {}) {
             });
         target = candidates[0]?.node || null;
         for (let i = 1; i < candidates.length; i++) {
-            archiveNode(store, candidates[i]?.node?.id);
+            archiveNode(store, candidates[i]?.node?.id, target?.id);
         }
     } else if (!target) {
         const normalizedKey = `${type}::${title.toLowerCase()}`;

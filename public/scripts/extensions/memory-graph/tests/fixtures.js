@@ -8,8 +8,8 @@
 
 export const SCHEMA = [
     { id: 'event', latestOnly: false, tableColumns: ['summary', 'key_sentences'] },
-    { id: 'character_sheet', latestOnly: true, tableColumns: ['name', 'aliases', 'traits', 'identity', 'state', 'goal', 'inventory', 'language_sample', 'core_note', 'addressing_user'] },
-    { id: 'location_state', latestOnly: true, tableColumns: ['name', 'aliases', 'controller', 'danger', 'resources', 'state'] },
+    { id: 'character_sheet', latestOnly: true, tableColumns: ['title', 'aliases', 'traits', 'identity', 'state', 'goal', 'inventory', 'language_sample', 'core_note', 'addressing_user'] },
+    { id: 'location_state', latestOnly: true, tableColumns: ['title', 'aliases', 'controller', 'danger', 'resources', 'state'] },
     { id: 'rule_constraint', latestOnly: false, tableColumns: ['title', 'constraint', 'scope', 'status'] },
 ];
 
