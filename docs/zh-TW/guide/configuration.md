@@ -146,6 +146,14 @@ whitelistDockerHosts: true
 
 預設啟用白名單模式，僅允許本機存取。如需區域網路存取，將對應 IP 加入 `whitelist` 列表，或關閉 `whitelistMode`。
 
+::: warning 關閉白名單可能導致行程結束
+設定 `whitelistMode: false` 後，Luker 要求至少存在另一種保護機制，否則啟動時會判定為不安全設定並直接終止行程（Docker 下表現為容器反覆重新啟動）。安全暴露服務時，請至少滿足以下任一條件：
+
+- 啟用 `basicAuthMode` 並設定 `basicAuthUser` —— 詳見 [認證](/zh-TW/guide/authentication)
+- 啟用多使用者模式（`enableUserAccounts: true`），**並且**透過 `node recover.js default-user <密碼>` 為所有 admin 使用者設定密碼 —— 詳見 [認證 › 密碼重設](/zh-TW/guide/authentication#密碼重設)。兩步缺一不可：只啟用多使用者但 admin 沒密碼仍會被攔下，只設密碼但沒啟用多使用者同樣會被攔下。
+- 設定 `securityOverride: true`（僅用於除錯，**嚴禁**用於公網部署）
+:::
+
 ### 工作階段與 CSRF
 
 ```yaml
