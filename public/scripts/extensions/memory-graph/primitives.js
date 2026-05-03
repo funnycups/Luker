@@ -72,5 +72,11 @@ export function isExtractableAssistantMessage(message) {
     if (!message || message.is_system || message.is_user) {
         return false;
     }
-    return Boolean(normalizeText(message?.mes || ''));
+    const raw = message.mes;
+    if (typeof raw !== 'string' || raw.length === 0) return false;
+    // Why not normalizeText: that runs `/\s+/g` over the full message body
+    // and allocates a collapsed copy just to test "any non-whitespace char?".
+    // trim() exits without allocating when leading/trailing chars aren't
+    // whitespace, and is semantically equivalent for this truthiness check.
+    return raw.trim().length > 0;
 }
