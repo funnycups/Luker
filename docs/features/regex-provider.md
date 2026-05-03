@@ -20,10 +20,10 @@ Unlike user-created static rules, plugin-registered rules are dynamic — plugin
 
 ## Developer Reference
 
-If you are a plugin developer and want to register regex rules in your own plugin, please refer to [Extension API Reference — Regex Runtime API](/development/extension-api#regex-runtime-api) for complete API documentation and code examples.
+If you are a plugin developer and want to register regex rules in your own plugin, please refer to [Extension API Reference — Regex Runtime API](/development/extension-api/plugin-integration#regex-runtime-api) for complete API documentation and code examples.
 
 ## Related Pages
 
 - [Memory Graph](/features/memory-graph) — The primary user of Plugin Regex Provider
-- [Extension API Reference](/development/extension-api) — Complete extension API documentation
+- [Extension API Reference](/development/extension-api/) — Complete extension API documentation
 - [Frontend Plugin Development](/development/frontend-plugin) — How to develop Luker plugins

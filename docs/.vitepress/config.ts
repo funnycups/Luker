@@ -65,7 +65,18 @@ const zhCNSidebar = [
   items: [
   { text: '前端插件开发', link: '/zh-CN/development/frontend-plugin' },
           { text: '后端插件开发', link: '/zh-CN/development/server-plugin' },
-          { text: 'Extension API 参考', link: '/zh-CN/development/extension-api' },
+          {
+            text: 'Extension API 参考',
+            collapsed: true,
+            items: [
+              { text: '概览', link: '/zh-CN/development/extension-api/' },
+              { text: '聊天与状态', link: '/zh-CN/development/extension-api/chat-and-state' },
+              { text: '预设与提示词', link: '/zh-CN/development/extension-api/presets-and-prompts' },
+              { text: '生成请求', link: '/zh-CN/development/extension-api/generation' },
+              { text: '插件集成', link: '/zh-CN/development/extension-api/plugin-integration' },
+              { text: '底层端点', link: '/zh-CN/development/extension-api/low-level-endpoints' },
+            ],
+          },
           { text: '角色卡开发者指南', link: '/zh-CN/development/card-developers' },
           { text: '贡献指南', link: '/zh-CN/development/contributing' },
   ],
@@ -128,7 +139,18 @@ const zhTWSidebar = [
     items: [
       { text: '前端外掛開發', link: '/zh-TW/development/frontend-plugin' },
               { text: '後端外掛開發', link: '/zh-TW/development/server-plugin' },
-              { text: 'Extension API 參考', link: '/zh-TW/development/extension-api' },
+              {
+                text: 'Extension API 參考',
+                collapsed: true,
+                items: [
+                  { text: '概覽', link: '/zh-TW/development/extension-api/' },
+                  { text: '聊天與狀態', link: '/zh-TW/development/extension-api/chat-and-state' },
+                  { text: '預設與提示詞', link: '/zh-TW/development/extension-api/presets-and-prompts' },
+                  { text: '生成請求', link: '/zh-TW/development/extension-api/generation' },
+                  { text: '外掛整合', link: '/zh-TW/development/extension-api/plugin-integration' },
+                  { text: '底層端點', link: '/zh-TW/development/extension-api/low-level-endpoints' },
+                ],
+              },
               { text: '角色卡開發者指南', link: '/zh-TW/development/card-developers' },
               { text: '貢獻指南', link: '/zh-TW/development/contributing' },
     ],
@@ -191,7 +213,18 @@ const enSidebar = [
     items: [
       { text: 'Frontend Plugin Development', link: '/development/frontend-plugin' },
               { text: 'Server Plugin Development', link: '/development/server-plugin' },
-              { text: 'Extension API Reference', link: '/development/extension-api' },
+              {
+                text: 'Extension API Reference',
+                collapsed: true,
+                items: [
+                  { text: 'Overview', link: '/development/extension-api/' },
+                  { text: 'Chat & State', link: '/development/extension-api/chat-and-state' },
+                  { text: 'Presets & Prompts', link: '/development/extension-api/presets-and-prompts' },
+                  { text: 'Generation', link: '/development/extension-api/generation' },
+                  { text: 'Plugin Integration', link: '/development/extension-api/plugin-integration' },
+                  { text: 'Low-Level Endpoints', link: '/development/extension-api/low-level-endpoints' },
+                ],
+              },
               { text: 'Card Developer Guide', link: '/development/card-developers' },
               { text: 'Contributing', link: '/development/contributing' },
     ],

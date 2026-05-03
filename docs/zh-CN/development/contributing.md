@@ -199,5 +199,5 @@ Luker/
 ## 相关页面
 
 - [前端插件开发](/zh-CN/development/frontend-plugin) — 第三方插件开发入门
-- [扩展 API 参考](/zh-CN/development/extension-api) — 完整的 API 文档
+- [扩展 API 参考](/zh-CN/development/extension-api/) — 完整的 API 文档
 - [角色卡开发](/zh-CN/development/card-developers) — 角色卡扩展功能

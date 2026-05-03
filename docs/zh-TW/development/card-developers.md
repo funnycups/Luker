@@ -272,4 +272,4 @@ Luker 支援將世界書綁定到預設。當使用者切換預設時，關聯�
 - [記憶圖](/zh-TW/features/memory-graph) — 長期記憶系統
 - [編排器](/zh-TW/features/orchestrator) — 提示詞編排工作流
 - [CardApp](/zh-TW/features/cardapp) — 角色卡內嵌應用詳細說明
-- [擴充 API 參考](/zh-TW/development/extension-api) — API 詳細文件
+- [擴充 API 參考](/zh-TW/development/extension-api/) — API 詳細文件

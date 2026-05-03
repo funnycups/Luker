@@ -20,10 +20,10 @@ SillyTavern 的正則系統允許使用者定義文字替換規則，在 AI 回�
 
 ## 開發者參考
 
-如果你是外掛開發者，想要在自己的外掛中註冊正則規則，請參閱 [Extension API 參考 — 正則執行時 API](/zh-TW/development/extension-api#正則執行時-api) 取得完整的 API 文件和程式碼範例。
+如果你是外掛開發者，想要在自己的外掛中註冊正則規則，請參閱 [Extension API 參考 — 正則執行時 API](/zh-TW/development/extension-api/plugin-integration#正則執行時-api) 取得完整的 API 文件和程式碼範例。
 
 ## 相關頁面
 
 - [記憶圖](/zh-TW/features/memory-graph) — 外掛註冊正則的主要使用者
-- [Extension API 參考](/zh-TW/development/extension-api) — 完整的擴充 API 文件
+- [Extension API 參考](/zh-TW/development/extension-api/) — 完整的擴充 API 文件
 - [前端外掛開發](/zh-TW/development/frontend-plugin) — 如何開發 Luker 外掛

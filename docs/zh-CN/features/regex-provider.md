@@ -20,10 +20,10 @@ SillyTavern 的正则系统允许用户定义文本替换规则，在 AI 回复�
 
 ## 开发者参考
 
-如果你是插件开发者，想要在自己的插件中注册正则规则，请参阅 [Extension API 参考 — 正则运行时 API](/zh-CN/development/extension-api#正则运行时-api) 获取完整的 API 文档和代码示例。
+如果你是插件开发者，想要在自己的插件中注册正则规则，请参阅 [Extension API 参考 — 正则运行时 API](/zh-CN/development/extension-api/plugin-integration#正则运行时-api) 获取完整的 API 文档和代码示例。
 
 ## 相关页面
 
 - [记忆图](/zh-CN/features/memory-graph) — 插件注册正则的主要使用者
-- [Extension API 参考](/zh-CN/development/extension-api) — 完整的扩展 API 文档
+- [Extension API 参考](/zh-CN/development/extension-api/) — 完整的扩展 API 文档
 - [前端插件开发](/zh-CN/development/frontend-plugin) — 如何开发 Luker 插件

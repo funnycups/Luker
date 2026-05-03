@@ -78,7 +78,7 @@ Luker 内置了统一的函数调用（Function Calling）运行时，让 AI 角
 搜索插件注册了全局工具：网页搜索（支持 DuckDuckGo、SearXNG、Brave Search 等搜索引擎）和网页访问。其他模块（编辑助手、编排器、预设助手）在各自的独立上下文中使用工具调用机制，不通过全局工具注册表。
 
 ::: info 扩展工具
-第三方扩展可以通过 `context.registerFunctionTool()` 注册自定义工具（由核心的 `ToolManager` 提供）。工具定义遵循统一的 schema 格式，注册后自动适配原生模式和纯文本模式。详见[扩展 API — 工具注册](/zh-CN/development/extension-api#工具注册)文档。
+第三方扩展可以通过 `context.registerFunctionTool()` 注册自定义工具（由核心的 `ToolManager` 提供）。工具定义遵循统一的 schema 格式，注册后自动适配原生模式和纯文本模式。详见[扩展 API — 工具注册](/zh-CN/development/extension-api/generation#工具注册)文档。
 :::
 
 ## 底层实现
@@ -95,10 +95,10 @@ Luker 内置了统一的函数调用（Function Calling）运行时，让 AI 角
 
 **纯文本模式**的流程多了一层：`function-call-runtime.js` 将工具描述注入 System Prompt → 模型输出文本格式的工具调用 → `function-call-runtime.js` 解析文本 → `ToolManager` 执行并注入结果。
 
-需要自行发送带工具调用的 LLM 请求的插件，直接使用 `sendOpenAIRequest` 并传入 `tools` 和 `toolChoice` 参数——这与全局工具注册表是分开的。详见[扩展 API — 发送 LLM 请求](/zh-CN/development/extension-api#发送-llm-请求)文档。
+需要自行发送带工具调用的 LLM 请求的插件，直接使用 `sendOpenAIRequest` 并传入 `tools` 和 `toolChoice` 参数——这与全局工具注册表是分开的。详见[扩展 API — 发送 LLM 请求](/zh-CN/development/extension-api/generation#发送-llm-请求)文档。
 
 ## 相关页面
 
 - [改进总览](/zh-CN/improvements/overview) — 所有技术改进的概述
 - [预设解耦](/zh-CN/improvements/preset-decoupling) — 函数调用开关与连接配置的关系
-- [扩展 API](/zh-CN/development/extension-api) — 插件开发指南，包含工具注册和 LLM 请求 API
+- [扩展 API](/zh-CN/development/extension-api/) — 插件开发指南，包含工具注册和 LLM 请求 API

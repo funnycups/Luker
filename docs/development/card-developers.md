@@ -270,4 +270,4 @@ World Info provides static world settings, while Memory Graph provides dynamic c
 - [Memory Graph](/features/memory-graph) — Long-term memory system
 - [Orchestrator](/features/orchestrator) — Prompt orchestration workflows
 - [CardApp](/features/cardapp) — Detailed CardApp documentation
-- [Extension API Reference](/development/extension-api) — Detailed API documentation
+- [Extension API Reference](/development/extension-api/) — Detailed API documentation

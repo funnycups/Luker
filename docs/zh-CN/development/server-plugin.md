@@ -595,5 +595,5 @@ async function queryLLM(messages) {
 ## 相关页面
 
 - [前端插件开发](/zh-CN/development/frontend-plugin) — 前端扩展开发指南
-- [Extension API 参考](/zh-CN/development/extension-api) — 前端 API 完整列表
+- [Extension API 参考](/zh-CN/development/extension-api/) — 前端 API 完整列表
 - [贡献指南](/zh-CN/development/contributing) — 如何向 Luker 提交代码

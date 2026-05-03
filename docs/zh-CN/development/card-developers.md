@@ -270,4 +270,4 @@ Luker 支持将世界书绑定到预设。当用户切换预设时，关联的�
 - [记忆图](/zh-CN/features/memory-graph) — 长期记忆系统
 - [编排器](/zh-CN/features/orchestrator) — 提示词编排工作流
 - [CardApp](/zh-CN/features/cardapp) — 角色卡内嵌应用详细说明
-- [扩展 API 参考](/zh-CN/development/extension-api) — API 详细文档
+- [扩展 API 参考](/zh-CN/development/extension-api/) — API 详细文档

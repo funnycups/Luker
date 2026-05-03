@@ -657,5 +657,5 @@ Key patterns demonstrated:
 ## See Also
 
 - [Frontend Plugin Development](/development/frontend-plugin) — Building browser-side extensions with UI, events, and settings
-- [Extension API Reference](/development/extension-api) — Complete API list with detailed parameter descriptions
+- [Extension API Reference](/development/extension-api/) — Complete API list with detailed parameter descriptions
 - [Contributing Guide](/development/contributing) — How to submit code to Luker

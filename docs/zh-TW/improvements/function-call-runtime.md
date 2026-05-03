@@ -78,7 +78,7 @@ Luker 內建了統一的函數呼叫（Function Calling）執行時，讓 AI 角
 搜尋外掛註冊了全域工具：網頁搜尋（支援 DuckDuckGo、SearXNG、Brave Search 等搜尋引擎）和網頁存取。其他模組（編輯助手、編排器、預設助手）在各自的獨立上下文中使用工具呼叫機制，不透過全域工具註冊表。
 
 ::: info 擴充工具
-第三方擴充可以透過 `context.registerFunctionTool()` 註冊自訂工具（由核心的 `ToolManager` 提供）。工具定義遵循統一的 schema 格式，註冊後自動適配原生模式和純文字模式。詳見[擴充 API — 工具註冊](/zh-TW/development/extension-api#工具註冊)文件。
+第三方擴充可以透過 `context.registerFunctionTool()` 註冊自訂工具（由核心的 `ToolManager` 提供）。工具定義遵循統一的 schema 格式，註冊後自動適配原生模式和純文字模式。詳見[擴充 API — 工具註冊](/zh-TW/development/extension-api/generation#工具註冊)文件。
 :::
 
 ## 底層實作
@@ -95,10 +95,10 @@ Luker 內建了統一的函數呼叫（Function Calling）執行時，讓 AI 角
 
 **純文字模式**的流程多了一層：`function-call-runtime.js` 將工具描述注入 System Prompt → 模型輸出文字格式的工具呼叫 → `function-call-runtime.js` 解析文字 → `ToolManager` 執行並注入結果。
 
-需要自行發送帶工具呼叫的 LLM 請求的外掛，直接使用 `sendOpenAIRequest` 並傳入 `tools` 和 `toolChoice` 參數——這與全域工具註冊表是分開的。詳見[擴充 API — 發送 LLM 請求](/zh-TW/development/extension-api#發送-llm-請求)文件。
+需要自行發送帶工具呼叫的 LLM 請求的外掛，直接使用 `sendOpenAIRequest` 並傳入 `tools` 和 `toolChoice` 參數——這與全域工具註冊表是分開的。詳見[擴充 API — 發送 LLM 請求](/zh-TW/development/extension-api/generation#發送-llm-請求)文件。
 
 ## 相關頁面
 
 - [改進總覽](/zh-TW/improvements/overview) — 所有技術改進的概述
 - [預設解耦](/zh-TW/improvements/preset-decoupling) — 函數呼叫開關與連線配置的關係
-- [擴充 API](/zh-TW/development/extension-api) — 外掛開發指南，包含工具註冊和 LLM 請求 API
+- [擴充 API](/zh-TW/development/extension-api/) — 外掛開發指南，包含工具註冊和 LLM 請求 API

@@ -151,7 +151,7 @@ The context object includes APIs in the following major categories:
 - **Character State** — `getCharacterState()`, `setCharacterState()`
 - **Inter-Extension Communication** — `registerExtensionApi()`
 
-For the complete API list, see the [Extension API Reference](/development/extension-api).
+For the complete API list, see the [Extension API Reference](/development/extension-api/).
 
 ## Event System
 
@@ -477,6 +477,6 @@ During development, you can trigger a reload by disabling/enabling the plugin th
 
 - [Frontend Plugin Development](/development/frontend-plugin) — Frontend extension development guide
 - [Server Plugin Development](/development/server-plugin) — Server-side plugin development guide (filesystem, API proxy, credential storage)
-- [Extension API Reference](/development/extension-api) — Complete API list with detailed parameter descriptions
+- [Extension API Reference](/development/extension-api/) — Complete API list with detailed parameter descriptions
 - [Character Card Development](/development/card-developers) — Character Card extension fields and CardApp development
 - [Contributing Guide](/development/contributing) — How to submit code to Luker
