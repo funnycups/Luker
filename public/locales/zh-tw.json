@@ -4844,4 +4844,6 @@
     ,"This script will no longer be auto-paused, even if it remains slow.": "此腳本將不再被自動暫停，即使持續緩慢。"
     ,"This script is provided by a plugin and cannot be edited here.": "此腳本由外掛提供，無法在此處編輯。"
     ,"Regex script not found.": "找不到此正則腳本。"
+    ,"Enable CardApp": "啟用 CardApp"
+    ,"Entry file": "入口檔案"
 }

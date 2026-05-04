@@ -5007,4 +5007,6 @@
     ,"This script will no longer be auto-paused, even if it remains slow.": "该脚本将不再被自动暂停，即使持续缓慢。"
     ,"This script is provided by a plugin and cannot be edited here.": "该脚本由插件提供，无法在此处编辑。"
     ,"Regex script not found.": "未找到该正则脚本。"
+    ,"Enable CardApp": "启用 CardApp"
+    ,"Entry file": "入口文件"
 }

@@ -344,6 +344,7 @@ function createCtxCompletionSource(cm) {
         { label: 'ctx.container', type: 'property', info: 'The CardApp container DOM element', detail: 'HTMLElement' },
         { label: 'ctx.charId', type: 'property', info: 'Current character ID', detail: 'string' },
         { label: 'ctx.eventSource', type: 'property', info: 'Luker event bus', detail: 'EventEmitter' },
+        { label: 'ctx.lukerContext', type: 'property', info: 'Escape hatch: full Luker extension API (200+ properties). Use when ctx doesn\'t expose what you need.', detail: 'SillyTavernContext' },
         { label: 'ctx.registerRenderer', type: 'method', info: 'Register custom message renderer', detail: '({ renderMessage, removeMessage }) => void' },
         { label: 'ctx.getChatState', type: 'method', info: 'Get namespaced chat state', detail: '(namespace: string) => object' },
         { label: 'ctx.setChatState', type: 'method', info: 'Set namespaced chat state', detail: '(namespace: string, key: string, value: any) => void' },
@@ -1015,6 +1016,7 @@ function getToolDisplay(name) {
         cardapp_patch_file: { icon: '🩹', label: 'Patch file' },
         cardapp_delete_file: { icon: '🗑️', label: 'Delete file' },
         cardapp_rename_file: { icon: '📝', label: 'Rename file' },
+        cardapp_set_enabled: { icon: '🔌', label: 'Toggle CardApp' },
     };
     return map[name] || { icon: '🔧', label: name };
 }

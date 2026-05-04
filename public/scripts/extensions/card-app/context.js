@@ -34,6 +34,18 @@ export function buildContext(container, charId, config) {
         /** @type {import('../../extensions.js').SillyTavernContext} Luker event bus (direct reference) */
         eventSource,
 
+        /**
+         * Escape hatch: the full Luker/SillyTavern extension API (same object every other
+         * extension gets via getContext()). Use this when ctx doesn't expose what you need.
+         * Re-evaluated on each access so it always reflects current state.
+         *
+         * Examples: ctx.lukerContext.generate(), ctx.lukerContext.SlashCommandParser,
+         * ctx.lukerContext.eventTypes, ctx.lukerContext.callGenericPopup, ...
+         *
+         * Prefer ctx.* methods when one exists - they handle lifecycle/cleanup correctly.
+         */
+        get lukerContext() { return getContext(); },
+
         // ==================== Renderer ====================
 
         /**

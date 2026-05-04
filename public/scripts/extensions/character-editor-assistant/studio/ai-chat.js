@@ -13,8 +13,10 @@ import {
  validateParsedToolCalls,
 } from '../../function-call-runtime.js';
 import { fetchFileList, fetchFileContent, saveFileContent, deleteFile, renameFile } from './studio.js';
-import { characters, this_chid, saveCharacterDebounced } from '../../../../script.js';
+import { characters, this_chid, saveCharacterDebounced, getRequestHeaders } from '../../../../script.js';
 import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, selected_world_info } from '../../../world-info.js';
+import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
+import { getContext } from '../../../st-context.js';
 
 const MODULE_NAME = 'card-app/studio/ai';
 const MAX_TOOL_ROUNDS = 10;
@@ -35,6 +37,13 @@ const TOOL_NAMES = Object.freeze({
  WORLDINFO_CREATE_ENTRY: 'worldinfo_create_entry',
  WORLDINFO_UPDATE_ENTRY: 'worldinfo_update_entry',
  WORLDINFO_DELETE_ENTRY: 'worldinfo_delete_entry',
+ SLASHCMD_LIST: 'slashcmd_list',
+ SLASHCMD_HELP: 'slashcmd_help',
+ LUKER_CTX_LIST_KEYS: 'luker_context_list_keys',
+ LUKER_CTX_DESCRIBE: 'luker_context_describe',
+ DOCS_LIST: 'list_luker_docs',
+ DOCS_READ: 'read_luker_doc',
+ CARDAPP_SET_ENABLED: 'cardapp_set_enabled',
 });
 
 function buildTools() {
@@ -232,6 +241,109 @@ function buildTools() {
  uid: { type: 'number', description: 'Entry UID' },
  },
  required: ['book_name', 'uid'],
+ additionalProperties: false,
+ },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.SLASHCMD_LIST,
+ description: 'List available slash commands. Returns each command with its name, brief help (first line), and aliases. Use slashcmd_help for full details on a specific command. Slash commands cover image generation (/sd, /imagine), TTS, raw LLM calls (/genraw), variable management, Quick Replies, and many more.',
+ parameters: {
+ type: 'object',
+ properties: {
+ filter: { type: 'string', description: 'Optional substring to match command names (case-insensitive)' },
+ },
+ additionalProperties: false,
+ },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.SLASHCMD_HELP,
+ description: 'Get full details on a specific slash command, including named arguments, unnamed arguments, accepted types, enum values, default values, and help text. Aliases also resolve.',
+ parameters: {
+ type: 'object',
+ properties: {
+ name: { type: 'string', description: 'Slash command name (with or without leading /)' },
+ },
+ required: ['name'],
+ additionalProperties: false,
+ },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.LUKER_CTX_LIST_KEYS,
+ description: 'List top-level properties of ctx.lukerContext (the full Luker extension API, ~200+ keys). Each entry is {key, type}. Use luker_context_describe for details on a specific key. Useful when you need a Luker capability not exposed on ctx directly.',
+ parameters: {
+ type: 'object',
+ properties: {
+ filter: { type: 'string', description: 'Optional substring to match keys (case-insensitive)' },
+ },
+ additionalProperties: false,
+ },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.LUKER_CTX_DESCRIBE,
+ description: 'Describe a property or nested path of ctx.lukerContext. Returns its type, function arity (parameter count hint), short source preview for functions, or sub-keys for objects. Supports dot paths like "presets.state.patch" or "swipe.right".',
+ parameters: {
+ type: 'object',
+ properties: {
+ path: { type: 'string', description: 'Dot path, e.g. "generate" or "presets.state.patch"' },
+ },
+ required: ['path'],
+ additionalProperties: false,
+ },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.DOCS_LIST,
+ description: 'List Luker documentation files (markdown) available locally. By default returns only English docs (zh-CN/zh-TW translations are hidden because their content matches English). Returns each file as {path, size}. Useful starting points: development/card-developers.md (CardApp creator guide), features/cardapp.md (CardApp concepts), features/state-system.md (state overview), development/extension-api/chat-and-state.md (Floor State, chat state, character state), development/extension-api/generation.md, development/extension-api/presets-and-prompts.md.',
+ parameters: {
+ type: 'object',
+ properties: {
+ filter: { type: 'string', description: 'Optional substring to match file paths (case-insensitive)' },
+ includeTranslations: { type: 'boolean', description: 'Include zh-CN and zh-TW translation files in results. Default false; translations duplicate English content.' },
+ },
+ additionalProperties: false,
+ },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.DOCS_READ,
+ description: 'Read a Luker documentation markdown file. Use this to look up authoritative guidance on Floor State, state-system, CardApp lifecycle, extension API conventions, etc., before generating code that touches those areas.',
+ parameters: {
+ type: 'object',
+ properties: {
+ path: { type: 'string', description: 'Doc path relative to docs/, e.g. "development/extension-api/chat-and-state.md"' },
+ },
+ required: ['path'],
+ additionalProperties: false,
+ },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.CARDAPP_SET_ENABLED,
+ description: 'Turn CardApp on or off for this character (writes data.extensions.card_app.enabled). The current toggle state is already provided in the system context — you do NOT need a separate read tool. Only call this AFTER the user has explicitly confirmed they want CardApp enabled (or disabled). Do NOT call this unprompted just because you see CardApp-style code. saveCharacterDebounced is invoked for you.',
+ parameters: {
+ type: 'object',
+ properties: {
+ enabled: { type: 'boolean', description: 'true to enable CardApp, false to disable' },
+ },
+ required: ['enabled'],
  additionalProperties: false,
  },
  },
@@ -500,6 +612,194 @@ async function executeTool(charId, toolName, args, options = {}) {
  await saveWorldInfo(args.book_name, data, true);
  return { ok: true, message: `Entry ${args.uid} deleted` };
  }
+ case TOOL_NAMES.SLASHCMD_LIST: {
+ const filter = String(args?.filter || '').toLowerCase();
+ const seen = new Set();
+ const list = [];
+ const allCommands = SlashCommandParser.commands || {};
+ for (const [registeredName, cmd] of Object.entries(allCommands)) {
+ if (!cmd || seen.has(cmd)) continue;
+ seen.add(cmd);
+ const primary = cmd.name || registeredName;
+ if (filter && !primary.toLowerCase().includes(filter)) continue;
+ const helpRaw = String(cmd.helpString || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+ list.push({
+ name: primary,
+ help: helpRaw.length > 160 ? helpRaw.slice(0, 157) + '...' : helpRaw,
+ aliases: Array.isArray(cmd.aliases) ? cmd.aliases : [],
+ });
+ }
+ list.sort((a, b) => a.name.localeCompare(b.name));
+ return { ok: true, count: list.length, commands: list };
+ }
+ case TOOL_NAMES.SLASHCMD_HELP: {
+ const name = String(args?.name || '').replace(/^\//, '').trim();
+ if (!name) return { ok: false, error: 'name is required' };
+ const cmd = SlashCommandParser.commands?.[name];
+ if (!cmd) return { ok: false, error: `Slash command "${name}" not found (try slashcmd_list to see all available commands)` };
+ const summarizeArg = (arg, includeName) => {
+ const enumVals = Array.isArray(arg.enumList) ? arg.enumList.map(e => ({
+ value: e?.value ?? String(e ?? ''),
+ description: String(e?.description || ''),
+ })) : [];
+ const out = {
+ description: String(arg.description || ''),
+ types: Array.isArray(arg.typeList) ? arg.typeList : [],
+ isRequired: !!arg.isRequired,
+ acceptsMultiple: !!arg.acceptsMultiple,
+ defaultValue: typeof arg.defaultValue === 'string' ? arg.defaultValue : null,
+ enumValues: enumVals,
+ forceEnum: !!arg.forceEnum,
+ };
+ if (includeName) {
+ out.name = arg.name || '';
+ out.aliases = Array.isArray(arg.aliasList) ? arg.aliasList : [];
+ }
+ return out;
+ };
+ return {
+ ok: true,
+ name: cmd.name || name,
+ aliases: Array.isArray(cmd.aliases) ? cmd.aliases : [],
+ helpString: String(cmd.helpString || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
+ returns: String(cmd.returns || ''),
+ source: String(cmd.source || ''),
+ isExtension: !!cmd.isExtension,
+ namedArguments: Array.isArray(cmd.namedArgumentList) ? cmd.namedArgumentList.map(a => summarizeArg(a, true)) : [],
+ unnamedArguments: Array.isArray(cmd.unnamedArgumentList) ? cmd.unnamedArgumentList.map(a => summarizeArg(a, false)) : [],
+ };
+ }
+ case TOOL_NAMES.LUKER_CTX_LIST_KEYS: {
+ const filter = String(args?.filter || '').toLowerCase();
+ let lukerCtx;
+ try { lukerCtx = getContext(); } catch (e) { return { ok: false, error: `getContext() failed: ${e?.message || e}` }; }
+ const result = [];
+ for (const key of Object.keys(lukerCtx).sort()) {
+ if (filter && !key.toLowerCase().includes(filter)) continue;
+ const v = lukerCtx[key];
+ let type = typeof v;
+ if (v === null) type = 'null';
+ else if (Array.isArray(v)) type = 'array';
+ result.push({ key, type });
+ }
+ return { ok: true, count: result.length, keys: result };
+ }
+ case TOOL_NAMES.LUKER_CTX_DESCRIBE: {
+ const path = String(args?.path || '').trim();
+ if (!path) return { ok: false, error: 'path is required' };
+ const segments = path.split('.').map(s => s.trim()).filter(Boolean);
+ let value;
+ try { value = getContext(); } catch (e) { return { ok: false, error: `getContext() failed: ${e?.message || e}` }; }
+ let walked = '';
+ for (const seg of segments) {
+ if (value == null) {
+ return { ok: false, error: `Path "${walked}" is null/undefined; cannot descend into "${seg}"` };
+ }
+ if (!(seg in value)) {
+ return { ok: false, error: `Property "${seg}" not found at path "${walked || 'root'}"` };
+ }
+ value = value[seg];
+ walked = walked ? `${walked}.${seg}` : seg;
+ }
+ const out = { ok: true, path };
+ if (value === null) {
+ out.type = 'null';
+ } else if (Array.isArray(value)) {
+ out.type = 'array';
+ out.length = value.length;
+ } else if (typeof value === 'function') {
+ out.type = 'function';
+ out.parameterCount = value.length;
+ out.functionName = value.name || '';
+ try {
+ const src = String(value).replace(/\s+/g, ' ');
+ out.sourcePreview = src.length > 280 ? src.slice(0, 277) + '...' : src;
+ } catch { out.sourcePreview = ''; }
+ } else if (typeof value === 'object') {
+ out.type = 'object';
+ const subKeys = Object.keys(value);
+ out.subKeyCount = subKeys.length;
+ out.subKeys = subKeys.slice(0, 60).map(k => {
+ const v = value[k];
+ let t = typeof v;
+ if (v === null) t = 'null';
+ else if (Array.isArray(v)) t = 'array';
+ return { key: k, type: t };
+ });
+ if (subKeys.length > 60) out.note = `${subKeys.length - 60} more keys not shown; descend further with a more specific path`;
+ } else {
+ out.type = typeof value;
+ try { out.value = JSON.stringify(value); } catch { out.value = String(value); }
+ }
+ return out;
+ }
+ case TOOL_NAMES.DOCS_LIST: {
+ const filter = String(args?.filter || '').toLowerCase();
+ const includeTranslations = !!args?.includeTranslations;
+ try {
+ const resp = await fetch('/api/docs/list', { headers: getRequestHeaders() });
+ if (!resp.ok) return { ok: false, error: `Doc list endpoint returned ${resp.status}` };
+ const data = await resp.json();
+ const all = Array.isArray(data?.files) ? data.files : [];
+ const isTranslation = (p) => /^(zh-CN|zh-TW)\//i.test(String(p || ''));
+ const baseSet = includeTranslations ? all : all.filter(f => !isTranslation(f.path));
+ const files = filter ? baseSet.filter(f => String(f.path || '').toLowerCase().includes(filter)) : baseSet;
+ return {
+ ok: true,
+ count: files.length,
+ totalCount: all.length,
+ hiddenTranslations: includeTranslations ? 0 : all.filter(f => isTranslation(f.path)).length,
+ files,
+ };
+ } catch (e) {
+ return { ok: false, error: `Failed to list docs: ${e?.message || e}` };
+ }
+ }
+ case TOOL_NAMES.DOCS_READ: {
+ const docPath = String(args?.path || '').trim();
+ if (!docPath) return { ok: false, error: 'path is required' };
+ try {
+ const url = `/api/docs/file?path=${encodeURIComponent(docPath)}`;
+ const resp = await fetch(url, { headers: getRequestHeaders() });
+ if (!resp.ok) {
+ let detail = '';
+ try { detail = (await resp.json())?.error || ''; } catch { /* ignore */ }
+ return { ok: false, error: `Doc fetch failed (${resp.status})${detail ? ': ' + detail : ''}` };
+ }
+ const data = await resp.json();
+ return { ok: true, path: data?.path || docPath, size: data?.size || 0, content: String(data?.content || '') };
+ } catch (e) {
+ return { ok: false, error: `Failed to read doc: ${e?.message || e}` };
+ }
+ }
+ case TOOL_NAMES.CARDAPP_SET_ENABLED: {
+ if (this_chid === undefined || this_chid === null) {
+ return { ok: false, error: 'No active character' };
+ }
+ const next = !!args?.enabled;
+ const char = characters[this_chid];
+ if (!char) return { ok: false, error: 'Character not found' };
+ if (!char.data) char.data = {};
+ if (!char.data.extensions) char.data.extensions = {};
+ if (!char.data.extensions.card_app) char.data.extensions.card_app = {};
+ const previous = !!char.data.extensions.card_app.enabled;
+ char.data.extensions.card_app.enabled = next;
+ // Keep the editor checkbox in sync if the popup is currently open.
+ const $checkbox = $('#card_app_enabled');
+ if ($checkbox.length > 0 && $checkbox.prop('checked') !== next) {
+ $checkbox.prop('checked', next);
+ }
+ saveCharacterDebounced();
+ return {
+ ok: true,
+ was_enabled: previous,
+ is_enabled: next,
+ changed: previous !== next,
+ message: previous === next
+ ? `CardApp was already ${next ? 'enabled' : 'disabled'}.`
+ : `CardApp ${next ? 'enabled' : 'disabled'}.`,
+ };
+ }
  default:
  return { ok: false, error: `Unknown tool: ${toolName}` };
  }
@@ -555,8 +855,149 @@ CardApp is Luker's custom UI system for character cards. A CardApp replaces the 
 - ctx.renderText(rawText, messageId?) — Render text through Luker's formatting pipeline
 - ctx.executeSlashCommand(command) — Execute a slash command
 
+## Escape Hatch — Full Luker API
+
+ctx above is a curated, lifecycle-managed subset. For anything not on ctx,
+two routes are available:
+
+- **ctx.lukerContext** — The full Luker/SillyTavern extension API (200+ properties,
+  the same object every Luker extension gets via getContext()). Useful for:
+  prompt generation (generate, generateRaw, generateQuietPrompt), world info
+  (loadWorldInfo, saveWorldInfo), preset management (presets.*), tokenizers
+  (getTokenCountAsync), popups (callGenericPopup, Popup), group chats, character
+  helpers, slash command parser (SlashCommandParser), etc.
+
+- **ctx.executeSlashCommand('/cmd args')** — Run any registered slash command.
+  This is the broadest escape hatch — every feature reachable from the chat input
+  is reachable here. Useful examples:
+  - '/sd <prompt>' or '/imagine <prompt>' — Stable Diffusion image generation
+  - '/tts <text>' — Text-to-speech
+  - '/genraw <prompt>' — Independent LLM call (does NOT save to chat history)
+  - '/sys <text>' — Inject a system message
+  - '/setvar key=name value', '/getvar name' — Chat variables
+  - '/run <Quick Reply>' — Execute a Quick Reply by name
+
+Prefer ctx.* when a method exists — it handles lifecycle/cleanup correctly.
+Fall through to lukerContext or executeSlashCommand for the long tail.
+
+### Discovery tools (use these before guessing)
+
+When the user asks for a feature that probably exists but you're unsure of the
+exact slash command name, argument shape, or lukerContext property:
+
+- **slashcmd_list({filter?})** — Browse all registered slash commands. Pass a
+  filter substring (e.g. "image", "var", "tts") to narrow the list.
+- **slashcmd_help({name})** — Get full schema for one command: named/unnamed
+  args, accepted types, enum values, defaults, help text. Aliases resolve too.
+- **luker_context_list_keys({filter?})** — List top-level lukerContext keys
+  with their types. Use a filter when looking for a known concept.
+- **luker_context_describe({path})** — Inspect a specific path: function arity
+  + source preview, or sub-keys for objects. Supports dot paths like
+  "presets.state.patch" or "swipe.right".
+- **list_luker_docs({filter?})** — List Luker's local markdown docs (the same
+  source as luker.cups.moe). Useful when you need design rationale, not just
+  signatures.
+- **read_luker_doc({path})** — Read a doc by path, e.g.
+  "development/extension-api/chat-and-state.md" for Floor State,
+  "features/state-system.md" for the state system overview, or
+  "development/card-developers.md" for the CardApp creator guide.
+- **cardapp_set_enabled({enabled})** — Flip the CardApp toggle. The current
+  toggle state is already in the system context above — no read tool needed.
+  Only call after the user has explicitly confirmed (see "Enabling CardApp"
+  rules below).
+
+Always discover exact names and signatures with these tools before writing
+ctx.lukerContext.X(...) or ctx.executeSlashCommand('/X ...') calls. Don't guess
+slash command syntax — the help tool tells you whether arguments are named
+(key=value) or unnamed, and which enums are valid.
+
+## Floor State (recommended for CardApp persistent state)
+
+**Use Floor State instead of ctx.setChatState/getChatState for any per-chat
+state that should follow swipes, message deletions, and chat switches
+automatically.** This is the right answer for game progress, trackers,
+counters, inventories, and almost anything a CardApp persists per chat.
+
+Floor State is a thin layer on top of chat state that logs every write at the
+chat tail (floor index + swipe id) and replays surviving commits whenever the
+chat structure changes. So when the user swipes back, deletes a message, or
+switches chats, your state stays consistent with the active conversation path
+without any reconciliation code on your side.
+
+### Quick start
+
+\`\`\`js
+// During init (it's async; create once and reuse the instance):
+const fs = await ctx.lukerContext.createFloorState({ namespace: 'my-cardapp' });
+
+// Reducer-style writes: receive current state, return next. Diff is computed
+// and committed for you.
+await fs.update((current) => ({ ...current, score: (current?.score ?? 0) + 1 }));
+
+// Read current state:
+const state = await fs.get();
+
+// In handlers that fire near CHAT_CHANGED / MESSAGE_SWIPED / MESSAGE_DELETED,
+// await ready() before reading so any in-flight rebuild finishes first:
+await fs.ready();
+const latest = await fs.get();
+\`\`\`
+
+### Hard rules (violating these breaks state)
+
+- One namespace, one owner. Do NOT mix \`ctx.setChatState(ns, ...)\` and
+  \`fs.update(...)\` against the same namespace — the floor rebuild will
+  overwrite the raw write.
+- Reducer must return a plain object. Returning array, primitive, null, or
+  undefined is treated as "no change" (no commit, silent).
+- Each instance owns one namespace. Create separate instances per logical
+  state slice.
+- Namespaces ending in \`__floor_log\` are reserved for private commit logs.
+
+For full API (advanced patch mode, attaching to a non-tail floor with
+\`{floor, swipeId}\`, conventions), call
+\`read_luker_doc({path: "development/extension-api/chat-and-state.md"})\` and
+read the "Floor State" section.
+
 ## CSS Scoping
 All CSS is automatically scoped to #card-app-container. Use body/html/:root selectors and they'll be rewritten.
+
+## Enabling CardApp (proactive check)
+
+The CardApp toggle (\`data.extensions.card_app.enabled\`) controls whether
+your code actually runs. If the toggle is OFF, anything you write to
+index.js / style.css is invisible to the user — the chat falls back to the
+default UI.
+
+The current toggle state is provided in the system context above
+("CardApp toggle status"). On every user request, before doing anything else:
+
+1. Decide whether the request looks like CardApp work. It almost always does
+   when the user asks for:
+   - Custom UI / interface / layout / dashboard / panel
+   - A status tracker, inventory, stats panel, relationship meter, HP bar
+   - A mini-game, Tamagotchi, dating sim, gacha screen, visual novel layer
+   - Anything mentioning "buttons", "tabs", "screens", "the look of the card"
+   - Anything that obviously can't be expressed as plain message text
+   - Continuing/modifying an existing CardApp (files already exist)
+
+2. If the request looks like CardApp work AND the toggle is currently
+   DISABLED → ask the user **once**, in your very first reply for this
+   request, whether they want CardApp enabled. Phrase it briefly, e.g.
+   "Looks like you want a custom UI for this card. CardApp is currently
+   off — want me to turn it on so the code we write actually shows up?"
+   Do NOT silently call cardapp_set_enabled. Wait for an explicit yes.
+
+3. If the user confirms → call \`cardapp_set_enabled({enabled: true})\`,
+   then proceed with the implementation.
+
+4. If the toggle is already ENABLED → don't ask, just work.
+
+5. If the request is clearly NOT CardApp work (e.g. "edit the character's
+   description", "add a world info entry", "rename a file") → don't ask
+   about the toggle.
+
+Only ever flip the toggle off if the user explicitly asks you to.
 
 ## File Structure
 - Entry point: index.js (must export init(ctx) function)
@@ -628,7 +1069,17 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  fileListContext = '\n\nCould not load file list.';
  }
 
- const fullSystemPrompt = systemPrompt + fileListContext;
+ // Build current CardApp toggle state context
+ let cardAppStatusContext = '';
+ try {
+ const cfg = characters[this_chid]?.data?.extensions?.card_app || {};
+ const enabled = !!cfg.enabled;
+ cardAppStatusContext = `\n\nCardApp toggle status: ${enabled ? 'ENABLED' : 'DISABLED'} (data.extensions.card_app.enabled = ${enabled}). ${enabled
+ ? 'The custom UI is active for this character.'
+ : 'The character is using the default chat UI. Code you write will not be visible to the user until they enable CardApp via the editor checkbox or until the cardapp_set_enabled tool is invoked with their consent.'}`;
+ } catch { /* best effort */ }
+
+ const fullSystemPrompt = systemPrompt + fileListContext + cardAppStatusContext;
  let lastAssistantText = '';
 
  // Multi-round tool calling loop
