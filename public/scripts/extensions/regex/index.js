@@ -710,6 +710,14 @@ async function rerenderVisibleRegexChatMessages() {
     const previousTop = firstVisibleMessage.get(0)?.getBoundingClientRect?.().top;
     await redisplayChat({ startIndex, fade: false });
 
+    // redisplayChat is silent; mirror reloadCurrentChat's CHAT_LOADED emission so
+    // extensions that re-process rendered HTML (e.g. JS-Slash-Runner iframe runtime)
+    // get a chance to rebuild after a regex change. Solo-chat path only — group
+    // chats don't receive CHAT_LOADED from getGroupChat either.
+    if (typeof this_chid !== 'undefined' && characters[this_chid]) {
+        eventSource.emit(event_types.CHAT_LOADED, { detail: { id: this_chid, character: characters[this_chid] } });
+    }
+
     if (!Number.isFinite(previousTop)) {
         return true;
     }
