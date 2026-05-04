@@ -8,6 +8,7 @@ import { getRequestHeaders } from '../../../../script.js';
 import { translate } from '../../../i18n.js';
 import { DOMPurify, DiffMatchPatch, showdown } from '../../../../lib.js';
 import { extension_settings, getContext, getExtensionApi, getCharacterState, setCharacterState } from '../../../extensions.js';
+import { resolveChatCompletionRequestProfile } from '../../connection-manager/profile-resolver.js';
 import { sendAIMessage, TOOL_NAMES } from './ai-chat.js';
 
 // Markdown converter for AI messages
@@ -1274,11 +1275,17 @@ async function handleAISend() {
         // Read preset config from CEA settings
         const ceaSettings = extension_settings?.character_editor_assistant || {};
         const llmPresetName = String(ceaSettings.lorebookSyncLlmPresetName || '').trim();
-        const apiPresetName = String(ceaSettings.lorebookSyncApiPresetName || '').trim();
+        const apiProfileName = String(ceaSettings.lorebookSyncApiPresetName || '').trim();
+        const ctx = getContext();
+        const profileResolution = resolveChatCompletionRequestProfile({
+            profileName: apiProfileName,
+            defaultApi: String(ctx?.mainApi || 'openai').trim() || 'openai',
+            defaultSource: String(ctx?.chatCompletionSettings?.chat_completion_source || '').trim(),
+        });
         const result = await sendAIMessage(currentCharId, conversationMessages, userText, {
             abortSignal: controller.signal,
             llmPresetName,
-            apiPresetName,
+            apiSettingsOverride: profileResolution.apiSettingsOverride,
             onToolCall: (name, args, toolResult) => {
                 let detail = '';
                 if (name === TOOL_NAMES.READ_FILE) detail = args.path;

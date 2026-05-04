@@ -606,7 +606,7 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  onAssistantText = null,
  onPendingApproval = null,
  llmPresetName = '',
- apiPresetName = '',
+ apiSettingsOverride = null,
  } = options;
 
  const tools = buildTools();
@@ -650,7 +650,7 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  replaceTools: true,
  requestScope: 'extension_internal',
  llmPresetName,
- apiPresetName,
+ apiSettingsOverride: apiSettingsOverride && typeof apiSettingsOverride === 'object' ? apiSettingsOverride : null,
  functionCallOptions: {
  protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
  },
