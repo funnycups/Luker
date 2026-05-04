@@ -4,6 +4,7 @@ import { t } from '../../i18n.js';
 import { getPresetManager } from '../../preset-manager.js';
 import { regexFromString } from '../../utils.js';
 import { lodash } from '../../../lib.js';
+import { isRegexScriptPaused, recordRegexExecution, resetRegexScriptState } from './redos-reporter.js';
 
 /**
  * @readonly
@@ -246,6 +247,11 @@ function createRuntimeRegexProviderRegistration(ownerId, entry) {
             if (runtimeRegexProviders.get(ownerId) !== entry) {
                 return;
             }
+            if (entry.managedScripts instanceof Map) {
+                for (const scriptId of entry.managedScripts.keys()) {
+                    resetRegexScriptState(scriptId);
+                }
+            }
             runtimeRegexProviders.delete(ownerId);
             notifyRuntimeRegexScriptsChanged({ requestReload: entry.reloadOnChange });
         },
@@ -330,6 +336,7 @@ export function registerManagedRegexProvider(owner, options = {}) {
             }
             const removed = managedScripts.delete(normalizedId);
             if (removed) {
+                resetRegexScriptState(normalizedId);
                 notifyRuntimeRegexScriptsChanged({ requestReload: Boolean(changeOptions?.requestReload) });
             }
             return removed;
@@ -346,6 +353,11 @@ export function registerManagedRegexProvider(owner, options = {}) {
                 }
                 nextManagedScripts.set(normalizedScript.id, normalizedScript);
             }
+            for (const oldId of managedScripts.keys()) {
+                if (!nextManagedScripts.has(oldId)) {
+                    resetRegexScriptState(oldId);
+                }
+            }
             managedScripts.clear();
             for (const [scriptId, normalizedScript] of nextManagedScripts.entries()) {
                 managedScripts.set(scriptId, normalizedScript);
@@ -355,6 +367,9 @@ export function registerManagedRegexProvider(owner, options = {}) {
         clearScripts(changeOptions = {}) {
             if (runtimeRegexProviders.get(ownerId) !== entry || managedScripts.size === 0) {
                 return;
+            }
+            for (const scriptId of managedScripts.keys()) {
+                resetRegexScriptState(scriptId);
             }
             managedScripts.clear();
             notifyRuntimeRegexScriptsChanged({ requestReload: Boolean(changeOptions?.requestReload) });
@@ -483,6 +498,11 @@ export function unregisterRegexProvider(owner) {
     }
     const runtimeProvider = runtimeRegexProviders.get(ownerId);
     const requestReload = Boolean(runtimeProvider?.reloadOnChange);
+    if (runtimeProvider?.managedScripts instanceof Map) {
+        for (const scriptId of runtimeProvider.managedScripts.keys()) {
+            resetRegexScriptState(scriptId);
+        }
+    }
     runtimeRegexProviders.delete(ownerId);
     notifyRuntimeRegexScriptsChanged({ requestReload });
 }
@@ -857,7 +877,13 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
             }
 
             if (placementList.includes(placement)) {
+                if (isRegexScriptPaused(script.id)) {
+                    return;
+                }
+                const __regexStart = performance.now();
                 finalString = runRegexScript(script, finalString, { characterOverride });
+                const __regexElapsed = performance.now() - __regexStart;
+                recordRegexExecution(script, __regexElapsed);
             }
         }
     });

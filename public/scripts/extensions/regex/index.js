@@ -9,6 +9,7 @@ import { SlashCommandEnumValue, enumTypes } from '../../slash-commands/SlashComm
 import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
 import { download, equalsIgnoreCaseAndAccents, escapeHtml, getFileText, getSortableDelay, isFalseBoolean, isTrueBoolean, regexFromString, setInfoBlock, uuidv4 } from '../../utils.js';
 import { allowPresetScripts, allowScopedScripts, disallowPresetScripts, disallowScopedScripts, getCurrentPresetAPI, getCurrentPresetName, getRegexScripts, getRuntimeRegexScripts, getScriptsByType, isPresetScriptsAllowed, isScopedScriptsAllowed, regex_placement, RegexProvider, REGEX_RUNTIME_SCRIPTS_CHANGED_EVENT, runRegexScript, saveScriptsByType, SCRIPT_TYPE_UNKNOWN, SCRIPT_TYPES, substitute_find_regex } from './engine.js';
+import { REGEX_OPEN_SCRIPT_EVENT, resetRegexScriptState } from './redos-reporter.js';
 import { t } from '../../i18n.js';
 import { accountStorage } from '../../util/AccountStorage.js';
 import { getPresetManager } from '../../preset-manager.js';
@@ -851,6 +852,11 @@ async function saveRegexScript(regexScript, existingScriptIndex, scriptType, sav
         array.push(regexScript);
     }
 
+    // The script may have been auto-paused or user-allowed in a previous
+    // session-state. Editing replaces the contract, so wipe its session state
+    // and let it be evaluated freshly on the next execution.
+    resetRegexScriptState(regexScript.id);
+
     console.info('[Regex] saveRegexScript prepared', {
         scriptType: scriptTypeLabel,
         existingScriptIndex,
@@ -906,6 +912,10 @@ async function deleteRegexScript(id, scriptType, saveSettings = true) {
     const existingScriptIndex = array.findIndex(script => script.id === id);
     if (existingScriptIndex !== -1) {
         array.splice(existingScriptIndex, 1);
+
+        // Wipe any session-level state (paused / user-allowed / popup-shown / stats)
+        // so an id reused later cannot inherit stale flags.
+        resetRegexScriptState(id);
 
         switch (scriptType) {
             case SCRIPT_TYPES.GLOBAL:
@@ -2894,6 +2904,32 @@ jQuery(async () => {
         const requestReload = Boolean(event?.detail?.requestReload);
         if (requestReload) {
             void requestRegexChatReload();
+        }
+    });
+
+    window.addEventListener(REGEX_OPEN_SCRIPT_EVENT, async (event) => {
+        const id = event?.detail?.id;
+        if (!id) return;
+        try {
+            for (const type of [SCRIPT_TYPES.GLOBAL, SCRIPT_TYPES.SCOPED, SCRIPT_TYPES.PRESET]) {
+                const scripts = getScriptsByType(type);
+                if (Array.isArray(scripts) && scripts.some(s => s && s.id === id)) {
+                    await onRegexEditorOpenClick(id, type);
+                    return;
+                }
+            }
+            const runtimeScripts = getRuntimeRegexScripts();
+            if (Array.isArray(runtimeScripts) && runtimeScripts.some(s => s && s.id === id)) {
+                if (typeof toastr !== 'undefined') {
+                    toastr.warning(t`This script is provided by a plugin and cannot be edited here.`);
+                }
+                return;
+            }
+            if (typeof toastr !== 'undefined') {
+                toastr.warning(t`Regex script not found.`);
+            }
+        } catch (error) {
+            console.warn('[Regex] Failed to open script editor from popup', { id, error });
         }
     });
     await refreshRegexEditorUi();
