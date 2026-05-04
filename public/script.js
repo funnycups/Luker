@@ -15611,6 +15611,16 @@ export async function swipe(event, direction, { source, repeated, message = chat
                 //Update the chat.
                 await loadFromSwipeId(mesId, chat[mesId].swipe_id);
                 await redisplayChat({ startIndex: mesId });
+
+                // redisplayChat re-renders messages without emitting per-message
+                // events. The earlier animateSwipe()/MESSAGE_SWIPED has already
+                // fired against the now-discarded out-of-bounds state, so notify
+                // listeners that the affected messages were re-rendered to the
+                // clamped state — otherwise iframe-rendering extensions
+                // (e.g. JS-Slash-Runner) keep stale iframes / show raw HTML.
+                for (let i = mesId; i < chat.length; i++) {
+                    await eventSource.emit(event_types.MESSAGE_UPDATED, i);
+                }
             } else {
                 await Popup.show.confirm(
                     t`ERROR: <code>syncSwipeToMes</code> has failed to revert the failed ${direction} swipe on message #${mesId}.`,
