@@ -12616,6 +12616,7 @@ async function getChatResult() {
 
     if (chat.length === 1) {
         const chat_id = (chat.length - 1);
+        extractMessageById(chat_id);
         await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, 'first_message');
         await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, 'first_message');
     }
@@ -12669,6 +12670,7 @@ async function regenerateFirstCharacterMessageIfNeeded({ isNewChat = false } = {
 
     chat.splice(0, chat.length, message);
     const messageId = chat.length - 1;
+    extractMessageById(messageId);
     await eventSource.emit(event_types.MESSAGE_RECEIVED, messageId, 'first_message');
     await clearChat();
     await printMessages();

@@ -12,10 +12,13 @@
  *   • MESSAGE_SWIPED — rebuild (ST already moved the right swipe_info.extra
  *     onto message.extra, so var_ops are correct for the active swipe)
  *   • MESSAGE_SWIPE_DELETED — rebuild
- *   • CHARACTER_FIRST_MESSAGE_SELECTED — extract from chat[0] if chat is fresh
  *
  * The user message path is handled by `extractFromUserMessage()`, called
  * from `sendMessageAsUser()` after the message is pushed to chat.
+ *
+ * The first_mes path also calls `extractMessageById()` before its
+ * MESSAGE_RECEIVED emit (mirrored from saveReply) so macros embedded in
+ * a character's first message / alternate greeting are honored.
  */
 
 import { eventSource, event_types, chat, chat_metadata, name1, name2 } from '../../script.js';
