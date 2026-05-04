@@ -53,21 +53,16 @@ Saves preset content.
 
 ```ts
 presets.resolve(
-  target?: PresetRef,
-  options?: object
-): ConnectionProfile
+  target?: PresetRef | string,
+  options?: { collection?: string, defaultCollection?: string, allowMissingName?: boolean }
+): { collection: string, name: string } | null
 ```
 
-Resolves the connection configuration (API endpoint, model, key, etc.) for a preset. This is the recommended way for plugins to obtain connection information when making independent API calls.
+Normalizes a preset reference into a canonical `{ collection, name }` object. This is purely a name-resolution helper — it does not return connection information. Pass an existing `PresetRef`, a collection name as a string (resolves to that collection's currently selected preset), or `null` (resolves to the current preset of `options.collection`). Returns `null` when the collection or name can't be determined.
 
-The returned `ConnectionProfile` contains:
-
-| Field | Description |
-|------|------|
-| `requestApi` | Normalized API type (e.g., `'openai'`) |
-| `requestModel` | Model name |
-| `requestUrl` | API endpoint URL |
-| `secretId` | Secret key identifier |
+::: tip Looking for connection profile resolution?
+This function does **not** return API endpoint, model, or secret information. To resolve a Connection Manager profile into the connection settings that `sendOpenAIRequest` consumes, use [`context.connectionProfiles.resolve`](/development/extension-api/generation#connection-profile-resolution) instead.
+:::
 
 ### presets.state
 

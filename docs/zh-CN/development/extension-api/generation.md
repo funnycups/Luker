@@ -37,9 +37,9 @@ const result = await sendOpenAIRequest('quiet', messages, signal, {
 
 | 参数 | 用途 |
 |------|------|
-| `llmPresetName` | 加载 LLM 预设来覆盖**生成参数**（温度、top_p、frequency_penalty、max_tokens 等）。不影响连接字段。 |
-| `apiPresetName` | 加载 API 预设来覆盖**连接字段**（chat_completion_source、模型、API URL、reverse_proxy 等）。不影响生成参数。 |
-| `apiSettingsOverride` | 直接用对象覆盖连接设置（通常来自连接管理器的配置解析）。 |
+| `llmPresetName` | 加载 chat completion preset 来覆盖**生成参数**（温度、top_p、frequency_penalty、max_tokens 等）。不影响连接字段。 |
+| `apiPresetName` | 加载 **chat completion preset 的连接字段**（chat_completion_source、模型、API URL、reverse_proxy 等）。**只接受 chat completion preset 名，不接受 connection profile 名**——后者请用下方 `apiSettingsOverride`（配合 [`context.connectionProfiles.resolve`](#连接配置-connection-profile-解析)）。不影响生成参数。 |
+| `apiSettingsOverride` | 直接用对象覆盖连接设置（通常来自 `context.connectionProfiles.resolve(...)`）。 |
 | `requestScope` | 设为 `'extension_internal'` 可跳过主聊天的 CHAT_COMPLETION 钩子。 |
 
 ### 工具调用
@@ -158,20 +158,49 @@ context.unregisterFunctionTool('my_plugin_tool');
 `registerFunctionTool` 将工具添加到**全局注册表**——它们在主聊天中可供模型调用。`sendOpenAIRequest` 的 `tools` 参数仅为**该次请求**提供工具，不影响全局注册表。
 :::
 
-## 连接配置解析
+## 连接配置(Connection Profile)解析
 
-当插件需要使用非当前预设的连接配置时，使用 `presets.resolve()`：
+Connection profile 是 Luker 连接管理器管理的一组**连接配置**（API 类型、模型、密钥、代理等），与 chat completion preset 是**两个独立的东西**——前者描述「连到哪」，后者描述「按什么参数生成」，可自由组合。
 
-```js
-const profile = context.presets.resolve(
-  { collection: 'openai', name: 'My Preset' }
-);
+当插件需要让用户从 connection profile 中挑一个发请求时（例如自带「使用哪个 API 配置」的下拉框），用 `context.connectionProfiles`：
 
-// profile 包含：
-// - requestApi: 'openai'
-// - requestModel: 'gpt-4o'
-// - requestUrl: 'https://api.openai.com/v1'
-// - secretId: '...'
+```ts
+context.connectionProfiles.list(): ConnectionProfile[]
+
+context.connectionProfiles.resolve({
+  profileName?: string,    // 用户挑的 profile 名；空字符串表示不切换
+  defaultApi?: string,     // 当 profile 没指定 api 时的回退，默认 'openai'
+  defaultSource?: string,  // 当无法从 profile.api 推断时，chat_completion_source 的回退值
+}): {
+  profile: object | null,            // 原始 profile，未匹配时为 null
+  requestApi: string,                 // 'openai' / 'kobold' / 'novel' / 'textgenerationwebui'
+  apiSettingsOverride: object | null  // 可直接传给 sendOpenAIRequest
+}
 ```
 
-`secret_id` 请求覆盖：在 chat-completions 请求体中，可以通过 `secret_id` 字段指定使用哪个密钥，覆盖全局选择。这在多 Agent 场景中特别有用——不同的 Agent 可以使用不同的 API 密钥。
+`list()` 用于填充 UI 下拉框。`resolve(...)` 把一个 profile 名解析成 `sendOpenAIRequest` 能吃的 `apiSettingsOverride`——这是把「UI 选的 profile 名」接到「实际请求」的**唯一正确路径**。
+
+### 端到端示例
+
+```js
+import { sendOpenAIRequest } from '../../../openai.js';
+const context = Luker.getContext();
+
+const { apiSettingsOverride } = context.connectionProfiles.resolve({
+    profileName: userSelectedProfileName,                                   // 例如 'claude'
+    defaultApi: context.mainApi || 'openai',
+    defaultSource: context.chatCompletionSettings?.chat_completion_source || '',
+});
+
+const result = await sendOpenAIRequest('quiet', messages, signal, {
+    llmPresetName: userSelectedPresetName,  // 只覆盖生成参数，例如 'Default'
+    apiSettingsOverride,                     // 上一步解析得到，覆盖连接字段
+    requestScope: 'extension_internal',
+});
+```
+
+::: warning 不要把 connection profile 名传给 apiPresetName
+`apiPresetName` 接受的是 chat completion preset 名（查 `openai_setting_names`），**不是** connection profile 名。如果传错，会看到 `Preset 'X' not found` 警告，请求会静默退回到当前 connection 设置——不报错，但路由错了。要走 connection profile，必须先用 `context.connectionProfiles.resolve`。
+:::
+
+`secret_id` 请求覆盖：在 chat-completions 请求体中，可以通过 `secret_id` 字段指定使用哪个密钥，覆盖全局选择。`connectionProfiles.resolve` 返回的 `apiSettingsOverride` 已经包含了 profile 关联的 `secret_id`，通常不需要单独处理。

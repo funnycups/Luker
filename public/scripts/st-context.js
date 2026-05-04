@@ -132,6 +132,7 @@ import { addGlobalVariable, addLocalVariable, decrementGlobalVariable, decrement
 import { convertCharacterBook, getWorldInfoPrompt, loadWorldInfo, loadWorldInfoBatch, reloadEditor, saveWorldInfo, updateWorldInfoList, wi_anchor_position, world_names } from './world-info.js';
 import { ChatCompletionService, TextCompletionService } from './custom-request.js';
 import { ConnectionManagerRequestService } from './extensions/shared.js';
+import { getChatCompletionConnectionProfiles, resolveChatCompletionRequestProfile } from './extensions/connection-manager/profile-resolver.js';
 import { updateReasoningUI, parseReasoningFromString, getReasoningTemplateByName } from './reasoning.js';
 import { IGNORE_SYMBOL, inject_ids } from './constants.js';
 import { macros } from './macros/macro-system.js';
@@ -2211,6 +2212,10 @@ export function getContext() {
                 }),
                 deleteAll: (target = null) => deleteAllPresetState(normalizePresetRef(target)),
             },
+        },
+        connectionProfiles: {
+            list: getChatCompletionConnectionProfiles,
+            resolve: resolveChatCompletionRequestProfile,
         },
         openCharacterChat,
         openGroupChat,

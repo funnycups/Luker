@@ -53,21 +53,16 @@ presets.save(
 
 ```ts
 presets.resolve(
-  target?: PresetRef,
-  options?: object
-): ConnectionProfile
+  target?: PresetRef | string,
+  options?: { collection?: string, defaultCollection?: string, allowMissingName?: boolean }
+): { collection: string, name: string } | null
 ```
 
-解析预设对应的连接配置（API 端点、模型、密钥等）。这是插件进行独立 API 调用时获取连接信息的推荐方式。
+把一个预设引用规范化成 `{ collection, name }`。这是纯粹的名字解析助手，**不会**返回连接信息。可传入 `PresetRef`、表示集合名的字符串（解析成该集合当前选中的预设）、或 `null`（按 `options.collection` 解析当前选中的预设）。无法确定 collection 或 name 时返回 `null`。
 
-返回的 `ConnectionProfile` 包含：
-
-| 字段 | 说明 |
-|------|------|
-| `requestApi` | 规范化的 API 类型（如 `'openai'`） |
-| `requestModel` | 模型名称 |
-| `requestUrl` | API 端点 URL |
-| `secretId` | 密钥标识符 |
+::: tip 想找连接配置解析？
+这个函数**不会**返回 API 端点、模型或密钥信息。要把 connection manager 的 profile 解析成 `sendOpenAIRequest` 能吃的连接配置，请用 [`context.connectionProfiles.resolve`](/zh-CN/development/extension-api/generation#连接配置-connection-profile-解析)。
+:::
 
 ### presets.state
 

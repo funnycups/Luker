@@ -37,9 +37,9 @@ const result = await sendOpenAIRequest('quiet', messages, signal, {
 
 | Parameter | Purpose |
 |-----------|--------|
-| `llmPresetName` | Load an LLM preset to override **generation parameters** (temperature, top_p, frequency_penalty, max_tokens, etc.). Does not affect connection fields. |
-| `apiPresetName` | Load an API preset to override **connection fields** (chat_completion_source, model, API URL, reverse_proxy, etc.). Does not affect generation parameters. |
-| `apiSettingsOverride` | Directly override connection settings with an object (typically from Connection Manager's profile resolution). |
+| `llmPresetName` | Load a chat completion preset to override **generation parameters** (temperature, top_p, frequency_penalty, max_tokens, etc.). Does not affect connection fields. |
+| `apiPresetName` | Load **a chat completion preset's connection fields** (chat_completion_source, model, API URL, reverse_proxy, etc.). **Only accepts chat completion preset names, not connection profile names** — for the latter, use `apiSettingsOverride` below (with [`context.connectionProfiles.resolve`](#connection-profile-resolution)). Does not affect generation parameters. |
+| `apiSettingsOverride` | Directly override connection settings with an object (typically from `context.connectionProfiles.resolve(...)`). |
 | `requestScope` | Set to `'extension_internal'` to skip main chat CHAT_COMPLETION hooks. |
 
 ### Tool Calls
@@ -158,20 +158,49 @@ Utility methods:
 `registerFunctionTool` adds tools to the **global registry** — they are available in the main chat for the model to call. The `tools` parameter in `sendOpenAIRequest` provides tools for **that specific request only** and does not affect the global registry.
 :::
 
-## Connection Configuration Resolution
+## Connection Profile Resolution
 
-When a plugin needs to use a connection configuration other than the current preset, use `presets.resolve()`:
+A connection profile is a bundle of **connection configuration** (API kind, model, secret, proxy, etc.) managed by Luker's Connection Manager. It's a **separate concept** from chat completion presets — profiles describe "where to connect", presets describe "how to generate". The two compose freely.
 
-```js
-const profile = context.presets.resolve(
-  { collection: 'openai', name: 'My Preset' }
-);
+When a plugin needs to let the user pick a connection profile to send a request through (e.g. exposing a "which API config to use" dropdown), use `context.connectionProfiles`:
 
-// profile contains:
-// - requestApi: 'openai'
-// - requestModel: 'gpt-4o'
-// - requestUrl: 'https://api.openai.com/v1'
-// - secretId: '...'
+```ts
+context.connectionProfiles.list(): ConnectionProfile[]
+
+context.connectionProfiles.resolve({
+  profileName?: string,    // The user-selected profile name; empty string means "no override"
+  defaultApi?: string,     // Fallback when the profile doesn't specify an api, defaults to 'openai'
+  defaultSource?: string,  // Fallback chat_completion_source when it can't be inferred from profile.api
+}): {
+  profile: object | null,            // Raw profile object, null if not found
+  requestApi: string,                 // 'openai' / 'kobold' / 'novel' / 'textgenerationwebui'
+  apiSettingsOverride: object | null  // Pass directly to sendOpenAIRequest
+}
 ```
 
-`secret_id` request override: In the chat-completions request body, you can use the `secret_id` field to specify which API key to use, overriding the global selection. This is particularly useful in multi-agent scenarios where different agents may use different API keys.
+Use `list()` to populate UI dropdowns. Use `resolve(...)` to convert a profile name into the `apiSettingsOverride` object that `sendOpenAIRequest` expects — this is the **only correct path** from "user-selected profile name" to "an actual outgoing request".
+
+### End-to-End Example
+
+```js
+import { sendOpenAIRequest } from '../../../openai.js';
+const context = Luker.getContext();
+
+const { apiSettingsOverride } = context.connectionProfiles.resolve({
+    profileName: userSelectedProfileName,                                   // e.g. 'claude'
+    defaultApi: context.mainApi || 'openai',
+    defaultSource: context.chatCompletionSettings?.chat_completion_source || '',
+});
+
+const result = await sendOpenAIRequest('quiet', messages, signal, {
+    llmPresetName: userSelectedPresetName,  // overrides generation params only, e.g. 'Default'
+    apiSettingsOverride,                     // resolved above, overrides connection fields
+    requestScope: 'extension_internal',
+});
+```
+
+::: warning Don't pass connection profile names to apiPresetName
+`apiPresetName` expects a chat completion preset name (looked up in `openai_setting_names`), **not** a connection profile name. Passing a profile name there yields a `Preset 'X' not found` warning and the request silently falls back to the current connection settings — no error, but routed to the wrong destination. To route through a connection profile, you **must** resolve it first via `context.connectionProfiles.resolve`.
+:::
+
+`secret_id` request override: In the chat-completions request body, you can use the `secret_id` field to specify which API key to use, overriding the global selection. The `apiSettingsOverride` returned by `connectionProfiles.resolve` already includes the profile's associated `secret_id`, so you usually don't need to set this manually.
