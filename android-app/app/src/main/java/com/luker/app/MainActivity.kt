@@ -1011,63 +1011,147 @@ class MainActivity : AppCompatActivity() {
               if (window.__lukerAndroidDownloadBridgeInstalled) return;
               window.__lukerAndroidDownloadBridgeInstalled = true;
               if (!window.LukerAndroid || typeof window.LukerAndroid.saveFileFromDataUrl !== 'function') return;
-              const pendingBlobRevocations = new Map();
 
-              const toDataUrl = (blob) => new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = () => resolve(String(reader.result || ''));
-                reader.onerror = reject;
-                reader.readAsDataURL(blob);
-              });
+              const topLukerAndroid = window.LukerAndroid;
 
-              const handoffDownload = async (anchor) => {
+              const applyToWindow = (win) => {
                 try {
-                  const href = String(anchor.href || '');
-                  if (!href.startsWith('blob:') && !href.startsWith('data:')) return false;
-                  const fileName = anchor.getAttribute('download') || 'download';
-                  let dataUrl = href;
-                  let mime = anchor.type || 'application/octet-stream';
-
-                  if (href.startsWith('blob:')) {
-                    const response = await fetch(href);
-                    const blob = await response.blob();
-                    mime = blob.type || mime;
-                    dataUrl = await toDataUrl(blob);
-                  }
-
-                  window.LukerAndroid.saveFileFromDataUrl(dataUrl, fileName, mime);
-                  return true;
-                } catch (error) {
-                  console.error('[LukerAndroid] blob download handoff failed', error);
-                  return false;
-                }
-              };
-
-              const originalClick = HTMLAnchorElement.prototype.click;
-              const originalRevokeObjectURL = URL.revokeObjectURL.bind(URL);
-              HTMLAnchorElement.prototype.click = function () {
-                if (this && this.hasAttribute('download')) {
-                  const href = String(this.href || '');
-                  if (href.startsWith('blob:') || href.startsWith('data:')) {
-                    const pendingHandoff = Promise.resolve(handoffDownload(this))
-                      .finally(() => pendingBlobRevocations.delete(href));
-                    if (href.startsWith('blob:')) {
-                      pendingBlobRevocations.set(href, pendingHandoff);
-                    }
-                    return;
-                  }
-                }
-                return originalClick.call(this);
-              };
-              URL.revokeObjectURL = function (url) {
-                const href = String(url || '');
-                const pendingHandoff = pendingBlobRevocations.get(href);
-                if (pendingHandoff) {
-                  pendingHandoff.finally(() => originalRevokeObjectURL(href));
+                  if (!win || win.__lukerAndroidDownloadBridgeApplied) return;
+                  win.__lukerAndroidDownloadBridgeApplied = true;
+                } catch (_) {
                   return;
                 }
-                return originalRevokeObjectURL(href);
+
+                let HTMLAnchorElementProto, URLObj, FileReaderCtor, fetchFn;
+                try {
+                  HTMLAnchorElementProto = win.HTMLAnchorElement && win.HTMLAnchorElement.prototype;
+                  URLObj = win.URL;
+                  FileReaderCtor = win.FileReader;
+                  fetchFn = win.fetch ? win.fetch.bind(win) : null;
+                  if (!HTMLAnchorElementProto || !URLObj || !FileReaderCtor || !fetchFn) return;
+                } catch (_) {
+                  return;
+                }
+
+                const pendingBlobRevocations = new Map();
+
+                const toDataUrl = (blob) => new Promise((resolve, reject) => {
+                  const reader = new FileReaderCtor();
+                  reader.onload = () => resolve(String(reader.result || ''));
+                  reader.onerror = reject;
+                  reader.readAsDataURL(blob);
+                });
+
+                const handoffDownload = async (anchor) => {
+                  try {
+                    const href = String(anchor.href || '');
+                    if (!href.startsWith('blob:') && !href.startsWith('data:')) return false;
+                    const fileName = anchor.getAttribute('download') || 'download';
+                    let dataUrl = href;
+                    let mime = anchor.type || 'application/octet-stream';
+
+                    if (href.startsWith('blob:')) {
+                      const response = await fetchFn(href);
+                      const blob = await response.blob();
+                      mime = blob.type || mime;
+                      dataUrl = await toDataUrl(blob);
+                    }
+
+                    topLukerAndroid.saveFileFromDataUrl(dataUrl, fileName, mime);
+                    return true;
+                  } catch (error) {
+                    try { console.error('[LukerAndroid] blob download handoff failed', error); } catch (_) {}
+                    return false;
+                  }
+                };
+
+                const originalClick = HTMLAnchorElementProto.click;
+                const originalRevokeObjectURL = URLObj.revokeObjectURL.bind(URLObj);
+
+                HTMLAnchorElementProto.click = function () {
+                  if (this && typeof this.hasAttribute === 'function' && this.hasAttribute('download')) {
+                    const href = String(this.href || '');
+                    if (href.startsWith('blob:') || href.startsWith('data:')) {
+                      const pendingHandoff = Promise.resolve(handoffDownload(this))
+                        .finally(() => pendingBlobRevocations.delete(href));
+                      if (href.startsWith('blob:')) {
+                        pendingBlobRevocations.set(href, pendingHandoff);
+                      }
+                      return;
+                    }
+                  }
+                  return originalClick.call(this);
+                };
+
+                URLObj.revokeObjectURL = function (url) {
+                  const href = String(url || '');
+                  const pendingHandoff = pendingBlobRevocations.get(href);
+                  if (pendingHandoff) {
+                    pendingHandoff.finally(() => originalRevokeObjectURL(href));
+                    return;
+                  }
+                  return originalRevokeObjectURL(href);
+                };
               };
+
+              const tryApplyToIframe = (iframe) => {
+                const apply = () => {
+                  try {
+                    const childWin = iframe.contentWindow;
+                    if (!childWin) return;
+                    applyToWindow(childWin);
+                  } catch (_) {}
+                };
+                apply();
+                try { iframe.addEventListener('load', apply, false); } catch (_) {}
+              };
+
+              const scanAllIframes = (root) => {
+                try {
+                  const iframes = root.querySelectorAll('iframe');
+                  for (let i = 0; i < iframes.length; i++) {
+                    tryApplyToIframe(iframes[i]);
+                  }
+                } catch (_) {}
+              };
+
+              applyToWindow(window);
+              scanAllIframes(document);
+
+              try {
+                const observer = new MutationObserver((mutations) => {
+                  for (const m of mutations) {
+                    if (m.type === 'childList') {
+                      for (const node of m.addedNodes) {
+                        if (!node || node.nodeType !== 1) continue;
+                        if (node.tagName === 'IFRAME') {
+                          tryApplyToIframe(node);
+                        } else if (typeof node.querySelectorAll === 'function') {
+                          const inner = node.querySelectorAll('iframe');
+                          for (let i = 0; i < inner.length; i++) {
+                            tryApplyToIframe(inner[i]);
+                          }
+                        }
+                      }
+                    } else if (m.type === 'attributes' && m.target && m.target.tagName === 'IFRAME') {
+                      const iframe = m.target;
+                      try {
+                        const childWin = iframe.contentWindow;
+                        if (childWin) {
+                          try { delete childWin.__lukerAndroidDownloadBridgeApplied; } catch (_) {}
+                        }
+                      } catch (_) {}
+                      tryApplyToIframe(iframe);
+                    }
+                  }
+                });
+                observer.observe(document.documentElement || document.body || document, {
+                  childList: true,
+                  subtree: true,
+                  attributes: true,
+                  attributeFilter: ['srcdoc', 'src'],
+                });
+              } catch (_) {}
             })();
         """.trimIndent()
         webView.evaluateJavascript(script, null)
