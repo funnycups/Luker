@@ -37,6 +37,7 @@ function tFormat(text, ...values) {
 }
 const STUDIO_PANEL_LEFT_ID = 'card-app-studio-left';
 const STUDIO_PANEL_RIGHT_ID = 'card-app-studio-right';
+const STUDIO_MOBILE_TABS_ID = 'card-app-studio-mobile-tabs';
 
 let isStudioOpen = false;
 let currentCharId = null;
@@ -54,6 +55,9 @@ let conversationMessages = [];
 let isSending = false;
 let activeAbortController = null;
 let currentSessionId = null;
+
+// Mobile tab state — purely UI; CSS @media handles whether the tab bar is shown.
+let mobileActiveTab = 'left';
 
 const SESSION_NAMESPACE = 'cardapp_studio_sessions';
 const MAX_PERSISTED_MESSAGES = 100;
@@ -556,6 +560,49 @@ function buildRightPanelHtml() {
 </div>`;
 }
 
+function buildMobileTabsHtml() {
+    return `
+<div id="${STUDIO_MOBILE_TABS_ID}" class="card-app-studio-mobile-tabs" role="tablist">
+    <button type="button" data-studio-action="mobile-tab-left" class="active" role="tab" aria-selected="true">
+        <span class="mobile-tab-icon">🤖</span><span>${escapeHtml(t('AI'))}</span>
+    </button>
+    <button type="button" data-studio-action="mobile-tab-right" role="tab" aria-selected="false">
+        <span class="mobile-tab-icon">📝</span><span>${escapeHtml(t('Code'))}</span>
+    </button>
+    <button type="button" data-studio-action="mobile-tab-preview" role="tab" aria-selected="false">
+        <span class="mobile-tab-icon">📱</span><span>${escapeHtml(t('Preview'))}</span>
+    </button>
+    <button type="button" data-studio-action="close" class="mobile-tab-close" title="${escapeHtml(t('Close Studio'))}" aria-label="${escapeHtml(t('Close Studio'))}">✕</button>
+</div>`;
+}
+
+/**
+ * Switch the visible mobile panel. Three states:
+ *   left   — AI chat panel
+ *   right  — code editor panel
+ *   preview — both studio panels hidden, host chat shows through
+ * On desktop the body class has no visual effect (CSS rules sit inside @media),
+ * so calling this is harmless regardless of viewport.
+ * @param {'left'|'right'|'preview'} which
+ */
+function setMobileActiveTab(which) {
+    mobileActiveTab = ['left', 'right', 'preview'].includes(which) ? which : 'left';
+    document.body.classList.toggle('card-app-studio-mobile-tab-right', mobileActiveTab === 'right');
+    document.body.classList.toggle('card-app-studio-mobile-tab-preview', mobileActiveTab === 'preview');
+    const tabsEl = document.getElementById(STUDIO_MOBILE_TABS_ID);
+    if (tabsEl) {
+        tabsEl.querySelectorAll('button[data-studio-action^="mobile-tab-"]').forEach(btn => {
+            const isActive = btn.dataset.studioAction === `mobile-tab-${mobileActiveTab}`;
+            btn.classList.toggle('active', isActive);
+            btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        });
+    }
+    // CodeMirror needs a measure refresh after going from hidden → visible.
+    if (mobileActiveTab === 'right' && cmEditor && typeof cmEditor.requestMeasure === 'function') {
+        requestAnimationFrame(() => cmEditor.requestMeasure());
+    }
+}
+
 function renderFileList(container) {
  const files = fileList.filter(f => f.type === 'file');
  container.innerHTML = files.length === 0
@@ -746,6 +793,11 @@ export async function openCardAppStudio(charId) {
  rightPanel.innerHTML = buildRightPanelHtml();
  document.body.appendChild(rightPanel.firstElementChild);
 
+ // Mobile tab bar (CSS @media decides whether it's visible)
+ const mobileTabs = document.createElement('div');
+ mobileTabs.innerHTML = buildMobileTabsHtml();
+ document.body.appendChild(mobileTabs.firstElementChild);
+
  // Add body class for margin adjustment
  document.body.classList.add('card-app-studio-active');
 
@@ -808,9 +860,16 @@ export async function closeCardAppStudio() {
  // Remove panels
  document.getElementById(STUDIO_PANEL_LEFT_ID)?.remove();
  document.getElementById(STUDIO_PANEL_RIGHT_ID)?.remove();
+ document.getElementById(STUDIO_MOBILE_TABS_ID)?.remove();
 
- // Remove body class
- document.body.classList.remove('card-app-studio-active');
+ // Remove body classes
+ document.body.classList.remove(
+     'card-app-studio-active',
+     'card-app-studio-mobile-tab-right',
+     'card-app-studio-mobile-tab-preview',
+ );
+
+ mobileActiveTab = 'left';
 
     // Save conversation before clearing state
     if (currentSessionId && conversationMessages.length > 0) {
@@ -1323,6 +1382,15 @@ async function handleStudioClick(e) {
             if (hash) handleRollback(hash);
             break;
         }
+        case 'mobile-tab-left':
+            setMobileActiveTab('left');
+            break;
+        case 'mobile-tab-right':
+            setMobileActiveTab('right');
+            break;
+        case 'mobile-tab-preview':
+            setMobileActiveTab('preview');
+            break;
     }
 }
 

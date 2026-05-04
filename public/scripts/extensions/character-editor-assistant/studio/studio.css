@@ -8,7 +8,7 @@ body.card-app-studio-active #sheld {
     position: fixed;
     top: 0;
     bottom: 0;
-    z-index: 1000;
+    z-index: 3050;
     background: var(--SmartThemeBlurTintColor, #1a1a2e);
     border: 1px solid var(--SmartThemeBorderColor, #333);
     display: flex;
@@ -199,6 +199,140 @@ body.card-app-studio-active #sheld { transition: margin 0.3s ease; }
     .card-app-studio-panel.left { width: 280px; }
     .card-app-studio-panel.right { width: 300px; }
     body.card-app-studio-active #sheld { margin-left: 280px; margin-right: 300px; }
+}
+
+/* Mobile tab bar (only rendered on small screens) */
+.card-app-studio-mobile-tabs {
+    position: fixed;
+    left: 0;
+    width: 100vw;
+    height: 48px;
+    /* Use viewport-relative top instead of bottom:0 so a transformed ancestor
+       (html/body) doesn't break the position. dvh adapts to mobile browser UI. */
+    top: calc(100dvh - 48px);
+    z-index: 3051;
+    display: none;
+    background: var(--SmartThemeBlurTintColor, #1a1a2e);
+    border-top: 1px solid var(--SmartThemeBorderColor, #333);
+    box-shadow: 0 -2px 8px color-mix(in oklab, #000 25%, transparent);
+}
+.card-app-studio-mobile-tabs button {
+    flex: 1; min-width: 0;
+    background: none; border: none;
+    color: var(--SmartThemeBodyColor, #aaa);
+    font-size: 13px; font-family: inherit;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    cursor: pointer; padding: 0 8px;
+    border-top: 2px solid transparent;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.card-app-studio-mobile-tabs button:active {
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 10%, transparent);
+}
+.card-app-studio-mobile-tabs button.active {
+    color: var(--SmartThemeBodyColor, #fff);
+    border-top-color: var(--SmartThemeQuoteColor, #4a9eff);
+    background: color-mix(in oklab, var(--SmartThemeQuoteColor, #4a9eff) 10%, transparent);
+}
+.card-app-studio-mobile-tabs .mobile-tab-icon { font-size: 16px; }
+.card-app-studio-mobile-tabs .mobile-tab-close {
+    flex: 0 0 44px;
+    color: color-mix(in oklab, var(--SmartThemeBodyColor) 60%, transparent);
+}
+
+/* Mobile layout: full-screen single panel + bottom tab bar.
+   Activates purely on viewport width — no JS body class required to show. */
+@media (max-width: 768px) {
+    /* Hide host app chrome so studio fully owns the screen — except in preview mode */
+    body.card-app-studio-active:not(.card-app-studio-mobile-tab-preview) #sheld,
+    body.card-app-studio-active:not(.card-app-studio-mobile-tab-preview) #top-bar,
+    body.card-app-studio-active:not(.card-app-studio-mobile-tab-preview) #top-settings-holder,
+    body.card-app-studio-active:not(.card-app-studio-mobile-tab-preview) #send_form,
+    body.card-app-studio-active:not(.card-app-studio-mobile-tab-preview) #form_sheld,
+    body.card-app-studio-active:not(.card-app-studio-mobile-tab-preview) #expression-image,
+    body.card-app-studio-active:not(.card-app-studio-mobile-tab-preview) #left-nav-panel,
+    body.card-app-studio-active:not(.card-app-studio-mobile-tab-preview) #right-nav-panel {
+        display: none !important;
+    }
+    body.card-app-studio-active:not(.card-app-studio-mobile-tab-preview) {
+        overflow: hidden;
+    }
+    /* Preview mode: hide both studio panels so the host chat shows through */
+    body.card-app-studio-active.card-app-studio-mobile-tab-preview .card-app-studio-panel {
+        display: none !important;
+    }
+    /* Cancel the desktop side-panel margins so #sheld can use full mobile width */
+    body.card-app-studio-active #sheld {
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+    }
+    /* Reserve 48px at bottom of chat so the input form isn't covered by tab bar */
+    body.card-app-studio-active.card-app-studio-mobile-tab-preview #sheld {
+        padding-bottom: 48px !important;
+    }
+    /* Panels go full-screen above ST chrome.
+       Use viewport units (100vw / dvh) so a transformed ancestor (html has
+       -webkit-transform: translateZ(0) for Chrome blur fix) doesn't shrink
+       the containing block to 0. */
+    body.card-app-studio-active .card-app-studio-panel {
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: auto !important;
+        bottom: auto !important;
+        width: 100vw !important;
+        height: calc(100dvh - 48px) !important;
+        border-left: none;
+        border-right: none;
+        animation: card-app-studio-fade-in 0.2s ease;
+    }
+    body.card-app-studio-active .card-app-studio-panel.left,
+    body.card-app-studio-active .card-app-studio-panel.right {
+        width: 100vw !important;
+    }
+    /* Tab bar on bottom — explicit viewport-anchored top to avoid CB issues */
+    body.card-app-studio-active .card-app-studio-mobile-tabs {
+        display: flex;
+        top: calc(100dvh - 48px) !important;
+        bottom: auto !important;
+        left: 0 !important;
+        right: auto !important;
+        width: 100vw !important;
+    }
+    /* Default: left (AI) panel visible. Toggle to right via body class. */
+    body.card-app-studio-active .card-app-studio-panel.right { display: none; }
+    body.card-app-studio-active.card-app-studio-mobile-tab-right .card-app-studio-panel.left { display: none; }
+    body.card-app-studio-active.card-app-studio-mobile-tab-right .card-app-studio-panel.right { display: flex; }
+
+    /* Squeeze headers; drop heavy shadows */
+    body.card-app-studio-active .card-app-studio-panel-header {
+        padding: 8px 10px;
+        gap: 6px;
+    }
+    body.card-app-studio-active .card-app-studio-title {
+        font-size: 13px;
+        flex: 1; min-width: 0;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    /* Wrap user messages without huge left margin */
+    body.card-app-studio-active .card-app-studio-chat-msg.user { margin-left: 4%; }
+    /* Composer wider, slightly bigger touch target */
+    body.card-app-studio-active .card-app-studio-composer { padding: 8px 10px; }
+    body.card-app-studio-active .card-app-studio-input { font-size: 14px; }
+    body.card-app-studio-active .card-app-studio-btn { padding: 7px 12px; }
+    body.card-app-studio-active .card-app-studio-btn.small { padding: 4px 8px; }
+    /* File tree / history compact on phones */
+    body.card-app-studio-active .card-app-studio-file-tree,
+    body.card-app-studio-active .card-app-studio-history {
+        max-height: 140px;
+    }
+    /* Diff preview narrower line numbers */
+    body.card-app-studio-active .card-app-studio-diff-preview .diff-table { font-size: 10px; }
+    body.card-app-studio-active .card-app-studio-diff-preview .diff-ln { width: 2.5em; font-size: 9px; }
+}
+@keyframes card-app-studio-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 
 /* Approval/Diff UI — DiffMatchPatch powered */
