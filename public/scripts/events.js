@@ -56,6 +56,7 @@ export const event_types = {
     CHAT_DELETED: 'chat_deleted',
     CHAT_CREATED: 'chat_created',
     CHAT_BRANCH_CREATED: 'chat_branch_created',
+    CHAT_RENAMED: 'chat_renamed',
     GROUP_CHAT_DELETED: 'group_chat_deleted',
     GROUP_CHAT_CREATED: 'group_chat_created',
     GENERATE_BEFORE_COMBINE_PROMPTS: 'generate_before_combine_prompts',
@@ -103,9 +104,16 @@ export const event_types = {
     WORLDINFO_SCAN_DONE: 'worldinfo_scan_done',
     MEDIA_ATTACHMENT_DELETED: 'media_attachment_deleted',
     PERSONA_CHANGED: 'persona_changed',
+    PERSONA_CREATED: 'persona_created',
+    PERSONA_UPDATED: 'persona_updated',
+    PERSONA_RENAMED: 'persona_renamed',
+    PERSONA_DELETED: 'persona_deleted',
     TTS_JOB_STARTED: 'tts_job_started',
     TTS_AUDIO_READY: 'tts_audio_ready',
     TTS_JOB_COMPLETE: 'tts_job_complete',
+    ITEMIZED_PROMPTS_LOADED: 'itemized_prompts_loaded',
+    ITEMIZED_PROMPTS_SAVED: 'itemized_prompts_saved',
+    ITEMIZED_PROMPTS_DELETED: 'itemized_prompts_deleted',
 };
 
 export const eventSource = new EventEmitter([event_types.APP_READY, event_types.APP_INITIALIZED]);

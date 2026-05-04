@@ -179,7 +179,8 @@ async function getLocaleData(language, { withFallback = true } = {}) {
 function findLang(language) {
     const supportedLang = langs.find(x => x.lang === language);
 
-    if (!supportedLang && language !== 'en') {
+    const isEn = language.startsWith('en'); // includes 'en', and more specific locales like 'en-us', 'en-au', etc
+    if (!supportedLang && !isEn) {
         console.warn(`Unsupported language: ${language}`);
     }
     return supportedLang;

@@ -13,7 +13,7 @@ import { Jimp, JimpMime } from '../jimp.js';
 import storage from 'node-persist';
 
 import { AVATAR_WIDTH, AVATAR_HEIGHT, DEFAULT_AVATAR_PATH } from '../constants.js';
-import { default as validateAvatarUrlMiddleware, getFileNameValidationFunction } from '../middleware/validateFileName.js';
+import { default as validateAvatarUrlMiddleware, getFileNameValidationFunction, forbiddenRegExp } from '../middleware/validateFileName.js';
 import { deepMerge, humanizedDateTime, tryParse, tryReadFileSync, MemoryLimitedMap, getConfigValue, clientRelativePath, getUniqueName, sanitizeSafeCharacterReplacements } from '../util.js';
 import { TavernCardValidator } from '../validator/TavernCardValidator.js';
 import { parse, read, write } from '../character-card-parser.js';
@@ -665,7 +665,7 @@ function projectRuntimeCharacterFields(char) {
     });
 
     const runtimeName = _.get(char, 'data.name', char.name) || 'Unnamed';
-    char['chat'] = char['chat'] ?? `${runtimeName} - ${humanizedDateTime()}`;
+    char.chat = char.chat ?? `${runtimeName} - ${humanizedDateTime()}`;
 
     return char;
 }
@@ -1035,7 +1035,7 @@ async function importFromCharX(uploadPath, { request }, preservedFileName) {
     // Apply standard character transformations
     let processedCard = getStoredCharaCardV2(card, request.user.directories);
     unsetPrivateFields(processedCard);
-    processedCard['create_date'] = new Date().toISOString();
+    processedCard.create_date = new Date().toISOString();
     _.set(processedCard, 'data.name', sanitize(_.get(processedCard, 'data.name', processedCard.name)));
 
     const processedCardName = _.get(processedCard, 'data.name', 'Unnamed');
@@ -1151,7 +1151,7 @@ async function importFromJson(uploadPath, { request }, preservedFileName) {
         importRisuSprites(request.user.directories, jsonData);
         unsetPrivateFields(jsonData);
         jsonData = getStoredCharaCardV2(jsonData, request.user.directories);
-        jsonData['create_date'] = new Date().toISOString();
+        jsonData.create_date = new Date().toISOString();
         const pngName = preservedFileName || getPngName(jsonData.data?.name || jsonData.name, request.user.directories);
         const char = JSON.stringify(jsonData);
         const result = await writeCharacterData(DEFAULT_AVATAR_PATH, char, pngName, request);
@@ -1227,6 +1227,9 @@ async function importFromPng(uploadPath, { request }, preservedFileName) {
 
     let jsonData = JSON.parse(imgData);
 
+    if (jsonData.data?.name) {
+        jsonData.data.name = sanitize(jsonData.data.name);
+    }
     jsonData.name = sanitize(jsonData.data?.name || jsonData.name);
     const pngName = preservedFileName || getPngName(jsonData.name, request.user.directories);
 
@@ -1235,7 +1238,7 @@ async function importFromPng(uploadPath, { request }, preservedFileName) {
         importRisuSprites(request.user.directories, jsonData);
         unsetPrivateFields(jsonData);
         jsonData = getStoredCharaCardV2(jsonData, request.user.directories);
-        jsonData['create_date'] = new Date().toISOString();
+        jsonData.create_date = new Date().toISOString();
         const char = JSON.stringify(jsonData);
         const result = await writeCharacterData(uploadPath, char, pngName, request);
         fs.unlinkSync(uploadPath);
@@ -1519,18 +1522,172 @@ router.post('/edit-attribute', validateAvatarUrlMiddleware, async function (requ
 });
 
 /**
+ * Sentinel value that signals a field should be completely removed (unset)
+ * from the character card rather than being set to any value. Use this in
+ * the merge payload wherever a key should be deleted.
+ *
+ * Both the server and the frontend share this constant so that callers can
+ * explicitly opt into deletion without overloading `null`.
+ * @type {string}
+ */
+const UNSET_SENTINEL = '__@@UNSET@@__';
+
+/** Maximum number of characters processed in parallel during bulk merge */
+const BULK_MERGE_CONCURRENCY = 10;
+
+/**
+ * Recursively walks `source` and removes any key from `target` whose
+ * corresponding value in `source` equals the {@link UNSET_SENTINEL}.
+ * Called after {@link deepMerge} so that the sentinel gets replaced by
+ * an actual key deletion.
+ * @param {object} target The merged character object to clean up
+ * @param {object} source The original update payload (pre-merge clone)
+ */
+function processUnsetSentinels(target, source) {
+    for (const key of Object.keys(source)) {
+        if (source[key] === UNSET_SENTINEL) {
+            _.unset(target, key);
+        } else if (_.isPlainObject(source[key]) && _.isPlainObject(target[key])) {
+            processUnsetSentinels(target[key], source[key]);
+        }
+    }
+}
+
+/**
+ * Reads a character card, applies a merge update (with sentinel-based
+ * unsetting), validates the result, and writes it back.
+ * @param {string} avatarPath Full path to the character PNG
+ * @param {string} avatar     Avatar filename (e.g. "char.png")
+ * @param {object} updateData The merge payload to apply
+ * @param {import("express").Request} request Express request object
+ * @param {((data: any) => boolean) | null} [shouldSkip] Optional function to determine if a character should be skipped based on its original data (used for bulk merge filtering)
+ * @returns {Promise<{ok: boolean, error?: string, skipped?: boolean}>} Result of the merge operation, including any validation error
+ */
+async function mergeCharacterUpdate(avatarPath, avatar, updateData, request, shouldSkip = null) {
+    const pngStringData = await readCharacterData(avatarPath);
+    if (!pngStringData) {
+        return { ok: false, error: 'Invalid character file' };
+    }
+
+    let character = JSON.parse(pngStringData);
+
+    if (typeof shouldSkip === 'function' && shouldSkip(character)) {
+        return { ok: false, skipped: true };
+    }
+
+    const update = _.cloneDeep(updateData);
+    _.unset(update, 'json_data');
+    _.unset(character, 'json_data');
+
+    character = deepMerge(character, update);
+    processUnsetSentinels(character, update);
+
+    const validator = new TavernCardValidator(character);
+    //Accept either V1 or V2.
+    if (!validator.validate()) {
+        return { ok: false, error: validator.lastValidationError ?? 'Validation failed' };
+    }
+
+    const targetImg = avatar.replace('.png', '');
+    await writeCharacterData(avatarPath, JSON.stringify(character), targetImg, request);
+    return { ok: true };
+}
+
+/**
  * Handle a POST request to edit character properties.
  *
- * Merges the request body with the selected character and
- * validates the result against TavernCard V2 specification.
+ * Operates in two modes depending on the request body:
  *
- * @param {Object} request - The HTTP request object.
- * @param {Object} response - The HTTP response object.
+ * **Single mode** (default behavior) — when `avatar` (string) is present:
+ *   Merges the request body with the selected character and validates the
+ *   result against TavernCard V2 specification.
  *
+ * **Bulk mode** — when `avatars` (array) is present:
+ *   Applies the same merge to multiple characters in parallel. Supports:
+ *   - An explicit list of avatars, or all characters when the array is empty
+ *   - An optional server-side `filter` so only characters where a given
+ *     JSON path exists and is non-null are updated
+ *
+ * In both modes, any value equal to the sentinel `__@@UNSET@@__` will cause
+ * that key to be **deleted** from the character card instead of being set.
+ *
+ * @param {import("express").Request} request - The HTTP request object
+ * @param {import("express").Response} response - The HTTP response object
  * @returns {void}
- * */
+ */
 router.post('/merge-attributes', getFileNameValidationFunction('avatar'), async function (request, response) {
     try {
+        // ── Bulk mode: avatars array is present ──────────────────
+        if (Array.isArray(request.body.avatars)) {
+            const { avatars, data, filter } = request.body;
+
+            if (!_.isPlainObject(data)) {
+                return response.status(400).send({ message: 'No valid update data provided.' });
+            }
+
+            // Determine which avatar files to process
+            let targetAvatars;
+            if (avatars.length > 0) {
+                for (const avatar of avatars) {
+                    if (typeof avatar !== 'string' || forbiddenRegExp.test(avatar) || path.extname(avatar).toLowerCase() !== '.png') {
+                        return response.status(400).send({ message: `Invalid avatar filename: ${avatar}` });
+                    }
+                }
+                targetAvatars = avatars;
+            } else {
+                // Empty array → scan all characters in the directory
+                const files = fs.readdirSync(request.user.directories.characters);
+                targetAvatars = files.filter(file => path.extname(file).toLowerCase() === '.png');
+            }
+
+            const updated = [];
+            const skipped = [];
+            const failed = [];
+
+            /**
+             * Process a single character in bulk: read, filter, merge, validate, write.
+             * @param {string} avatar Avatar filename
+             */
+            const processOne = async (avatar) => {
+                const avatarPath = path.join(request.user.directories.characters, avatar);
+
+                try {
+                    /** @type {(character: object) => boolean} */
+                    let shouldSkip = () => false;
+
+                    // Apply optional server-side filter before updating the card
+                    if (filter && typeof filter.path === 'string') {
+                        shouldSkip = (character) => {
+                            const value = _.get(character, filter.path);
+                            return value === undefined;
+                        };
+                    }
+
+                    const result = await mergeCharacterUpdate(avatarPath, avatar, data, request, shouldSkip);
+                    if (result.ok) {
+                        updated.push(avatar);
+                    } else if (result.skipped) {
+                        skipped.push(avatar);
+                    } else {
+                        console.warn(`Bulk merge failed for ${avatar}:`, result.error);
+                        failed.push(avatar);
+                    }
+                } catch (error) {
+                    console.error(`Bulk merge failed for ${avatar}:`, error);
+                    failed.push(avatar);
+                }
+            };
+
+            // Process in parallel with a concurrency limit
+            for (let i = 0; i < targetAvatars.length; i += BULK_MERGE_CONCURRENCY) {
+                const batch = targetAvatars.slice(i, i + BULK_MERGE_CONCURRENCY);
+                await Promise.allSettled(batch.map(processOne));
+            }
+
+            return response.send({ updated, skipped, failed });
+        }
+
+        // ── Single mode (default behavior) ───────────────────────
         const update = request.body;
         const avatarPath = path.join(request.user.directories.characters, update.avatar);
 
@@ -2075,8 +2232,7 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
                     const exportCharIdJson = sanitize(request.body.avatar_url).replace('.png', '');
                     packCardAppFiles(jsonObject, exportCharIdJson, request.user.directories.cardApps);
                     return response.type('json').send(JSON.stringify(toStoredV2Character(jsonObject), null, 4));
-                }
-                catch {
+                } catch {
                     return response.sendStatus(400);
                 }
             }

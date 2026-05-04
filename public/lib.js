@@ -28,6 +28,7 @@ import coreBundle, {
     chevrotain,
     gzipSync,
     gzip,
+    sha256,
 } from './lib.core.bundle.js';
 
 let optionalBundlePromise = null;
@@ -112,6 +113,7 @@ export default {
     getDiff2Html,
     gzipSync,
     gzip,
+    sha256,
 };
 
 export {
@@ -137,4 +139,5 @@ export {
     chevrotain,
     gzipSync,
     gzip,
+    sha256,
 };

@@ -31,6 +31,8 @@ export async function loadItemizedPrompts(chatId) {
         if (!itemizedPrompts) {
             itemizedPrompts = [];
         }
+
+        await eventSource.emit(event_types.ITEMIZED_PROMPTS_LOADED, { chatId: chatId });
     } catch {
         console.log('Error loading itemized prompts for chat', chatId);
         itemizedPrompts = [];
@@ -52,6 +54,7 @@ export async function saveItemizedPrompts(chatId, prompts = itemizedPrompts) {
             ? structuredClone(nextPrompts)
             : JSON.parse(JSON.stringify(nextPrompts));
         await promptStorage.setItem(chatId, payload);
+        await eventSource.emit(event_types.ITEMIZED_PROMPTS_SAVED, { chatId: chatId });
     } catch {
         console.log('Error saving itemized prompts for chat', chatId);
     }
@@ -94,6 +97,7 @@ export async function deleteItemizedPrompts(chatId) {
         }
 
         await promptStorage.removeItem(chatId);
+        await eventSource.emit(event_types.ITEMIZED_PROMPTS_DELETED, { chatId: chatId, all: false });
     } catch {
         console.log('Error deleting itemized prompts for chat', chatId);
     }
@@ -106,6 +110,7 @@ export async function clearItemizedPrompts() {
     try {
         await promptStorage.clear();
         itemizedPrompts = [];
+        await eventSource.emit(event_types.ITEMIZED_PROMPTS_DELETED, { all: true });
     } catch {
         console.log('Error clearing itemized prompts');
     }

@@ -3,14 +3,24 @@
  * allow access to the endpoint after successful authentication.
  */
 import { Buffer } from 'node:buffer';
+import path from 'node:path';
 import storage from 'node-persist';
+import { RateLimiterMemory, RateLimiterRes } from 'rate-limiter-flexible';
 import { getAllUserHandles, toKey, getPasswordHash } from '../users.js';
 import { getConfigValue, safeReadFileSync } from '../util.js';
 import { LAN_MIGRATION_PATH_PREFIX } from '../lan-migration.js';
+import { getIpAddress, retryAfter } from '../express-common.js';
 
-const PER_USER_BASIC_AUTH = getConfigValue('perUserBasicAuth', false, 'boolean');
-const ENABLE_ACCOUNTS = getConfigValue('enableUserAccounts', false, 'boolean');
+const PER_USER_BASIC_AUTH = !!getConfigValue('perUserBasicAuth', false, 'boolean');
+const ENABLE_ACCOUNTS = !!getConfigValue('enableUserAccounts', false, 'boolean');
+const PREFER_REAL_IP_HEADER = !!getConfigValue('rateLimiting.preferRealIpHeader', false, 'boolean');
+const BASIC_AUTH_ATTEMPTS = getConfigValue('rateLimiting.basicAuthMaxAttempts', 5, 'number');
 const LAN_MIGRATION_TRANSFER_PATH_PATTERN = new RegExp(`^${LAN_MIGRATION_PATH_PREFIX}[a-f0-9]{64}$`, 'i');
+
+const basicAuthLimiter = new RateLimiterMemory({
+    points: BASIC_AUTH_ATTEMPTS > 0 ? BASIC_AUTH_ATTEMPTS : Number.MAX_SAFE_INTEGER,
+    duration: 60,
+});
 
 export function isBasicAuthExemptRequest(request) {
     const method = String(request?.method || '').toUpperCase();
@@ -31,48 +41,70 @@ const basicAuthMiddleware = async function (request, response, callback) {
         return callback();
     }
 
-    const unauthorizedWebpage = safeReadFileSync('./public/error/unauthorized.html') ?? '';
     const unauthorizedResponse = (res, reason = 'no_credentials') => {
         console.warn(`[basicAuth] 401 rejected: ${reason} path=${res.req?.path} ip=${res.req?.ip}`);
+        const unauthorizedWebpage = safeReadFileSync(path.join(globalThis.DATA_ROOT, '_errors', 'unauthorized.html')) ?? '';
         res.set('WWW-Authenticate', 'Basic realm="Luker", charset="UTF-8"');
         return res.status(401).send(unauthorizedWebpage);
     };
 
-    const basicAuthUserName = getConfigValue('basicAuthUser.username');
-    const basicAuthUserPassword = getConfigValue('basicAuthUser.password');
-    const authHeader = request.headers.authorization;
+    try {
+        const ip = getIpAddress(request, PREFER_REAL_IP_HEADER);
 
-    if (!authHeader) {
-        return unauthorizedResponse(response, 'missing_authorization');
-    }
+        const basicAuthUserName = getConfigValue('basicAuthUser.username');
+        const basicAuthUserPassword = getConfigValue('basicAuthUser.password');
+        const authHeader = request.headers.authorization;
 
-    const [scheme, credentials] = authHeader.split(' ');
+        if (!authHeader) {
+            return unauthorizedResponse(response, 'missing_authorization');
+        }
 
-    if (scheme !== 'Basic' || !credentials) {
-        return unauthorizedResponse(response, 'invalid_scheme');
-    }
+        const [scheme, credentials] = authHeader.split(' ');
 
-    const usePerUserAuth = PER_USER_BASIC_AUTH && ENABLE_ACCOUNTS;
-    const [username, ...passwordParts] = Buffer.from(credentials, 'base64')
-        .toString('utf8')
-        .split(':');
-    const password = passwordParts.join(':');
+        if (scheme !== 'Basic' || !credentials) {
+            return unauthorizedResponse(response, 'invalid_scheme');
+        }
 
-    if (!usePerUserAuth && username === basicAuthUserName && password === basicAuthUserPassword) {
-        return callback();
-    } else if (usePerUserAuth) {
-        const userHandles = await getAllUserHandles();
-        for (const userHandle of userHandles) {
-            if (username === userHandle) {
-                const user = await storage.getItem(toKey(userHandle));
-                if (user && user.enabled && (user.password && user.password === getPasswordHash(password, user.salt))) {
-                    return callback();
+        const rateLimit = await basicAuthLimiter.get(ip);
+
+        if (rateLimit !== null && rateLimit.consumedPoints > basicAuthLimiter.points) {
+            throw rateLimit;
+        }
+
+        const usePerUserAuth = PER_USER_BASIC_AUTH && ENABLE_ACCOUNTS;
+        const [username, ...passwordParts] = Buffer.from(credentials, 'base64')
+            .toString('utf8')
+            .split(':');
+        const password = passwordParts.join(':');
+
+        if (!usePerUserAuth && username === basicAuthUserName && password === basicAuthUserPassword) {
+            await basicAuthLimiter.delete(ip);
+            return callback();
+        } else if (usePerUserAuth) {
+            const userHandles = await getAllUserHandles();
+            for (const userHandle of userHandles) {
+                if (username === userHandle) {
+                    const user = await storage.getItem(toKey(userHandle));
+                    if (user && user.enabled && (user.password && user.password === getPasswordHash(password, user.salt))) {
+                        await basicAuthLimiter.delete(ip);
+                        return callback();
+                    }
                 }
             }
+            await basicAuthLimiter.consume(ip);
+            return unauthorizedResponse(response, 'wrong_user_credentials');
         }
-        return unauthorizedResponse(response, 'wrong_user_credentials');
+
+        await basicAuthLimiter.consume(ip);
+        return unauthorizedResponse(response, 'wrong_credentials');
+    } catch (error) {
+        if (error instanceof RateLimiterRes) {
+            console.error('Basic auth failed: Rate limited from', getIpAddress(request, PREFER_REAL_IP_HEADER), request.method, request.originalUrl);
+            return retryAfter(response, error).sendStatus(429);
+        }
+        console.error('Basic auth error:', error);
+        return response.sendStatus(500);
     }
-    return unauthorizedResponse(response, 'wrong_credentials');
 };
 
 export default basicAuthMiddleware;

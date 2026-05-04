@@ -71,6 +71,7 @@ import { setFrontendConsoleDebugLoggingEnabled } from './frontend-log-manager.js
 import { t } from './i18n.js';
 import { getBackgroundPath, isCustomBackgroundUrl } from './backgrounds.js';
 import { downloadCurrentSelfProfileReport, setSelfProfilerPreference, syncSelfProfilerEnabled } from './self-profiler.js';
+import { persona_description_positions as _persona_description_positions } from './personas.js';
 
 export const toastPositionClasses = [
     'toast-top-left',
@@ -113,17 +114,7 @@ export const send_on_enter_options = {
     ENABLED: 1,
 };
 
-export const persona_description_positions = {
-    IN_PROMPT: 0,
-    /**
-     * @deprecated Use persona_description_positions.IN_PROMPT instead.
-     */
-    AFTER_CHAR: 1,
-    TOP_AN: 2,
-    BOTTOM_AN: 3,
-    AT_DEPTH: 4,
-    NONE: 9,
-};
+export const persona_description_positions = _persona_description_positions;
 
 const messageNotificationDetailModes = {
     STATUS: 'status',

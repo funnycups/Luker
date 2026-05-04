@@ -19,6 +19,7 @@ import chalk from 'chalk';
 import yaml from 'yaml';
 import * as chevrotain from 'chevrotain';
 import { gzipSync, gzip } from 'fflate';
+import { sha256 } from 'js-sha256';
 
 const libBundle = {
     lodash,
@@ -43,6 +44,7 @@ const libBundle = {
     chevrotain,
     gzipSync,
     gzip,
+    sha256,
     initialized: true,
 };
 
@@ -69,6 +71,7 @@ export {
     chevrotain,
     gzipSync,
     gzip,
+    sha256,
 };
 
 export default libBundle;

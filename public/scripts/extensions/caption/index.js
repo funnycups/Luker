@@ -1,8 +1,9 @@
 import { ensureImageFormatSupported, getBase64Async, getFileExtension, isTrueBoolean, saveBase64AsFile } from '../../utils.js';
 import { getContext, extension_settings, renderExtensionTemplateAsync } from '../../extensions.js';
-import { appendMediaToMessage, chat_metadata, eventSource, event_types, getRequestHeaders, saveChatConditional, saveSettingsDebounced, substituteParamsExtended } from '../../../script.js';
+import { appendMediaToMessage, chat_metadata, eventSource, event_types, getRequestHeaders, saveChatConditional, saveSettingsDebounced, substituteParams } from '../../../script.js';
 import { getMessageTimeStamp } from '../../RossAscends-mods.js';
 import { SECRET_KEYS, secret_state } from '../../secrets.js';
+import { oai_settings } from '../../openai.js';
 import { getMultimodalCaption } from '../shared.js';
 import { textgen_types, textgenerationwebui_settings } from '../../textgen-settings.js';
 import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
@@ -103,7 +104,7 @@ async function wrapCaptionTemplate(caption) {
         template += ' {{caption}}';
     }
 
-    let messageText = substituteParamsExtended(template, { caption: caption });
+    let messageText = substituteParams(template, { dynamicMacros: { caption: caption } });
 
     if (extension_settings.caption.refine_mode) {
         messageText = await Popup.show.input(
@@ -293,6 +294,8 @@ async function captionMultimodal(base64Img, externalPrompt) {
         prompt = String(customPrompt).trim();
     }
 
+    prompt = substituteParams(prompt);
+
     const caption = await getMultimodalCaption(base64Img, prompt);
     return { caption };
 }
@@ -426,7 +429,7 @@ function isVideoCaptioningAvailable() {
     return ['google', 'vertexai', 'zai'].includes(extension_settings.caption.multimodal_api);
 }
 
-jQuery(async function () {
+export async function init() {
     function addSendPictureButton() {
         const sendButton = $(`
         <div id="send_picture" class="list-group-item flex-container flexGap5">
@@ -475,6 +478,7 @@ jQuery(async function () {
                         'chutes': SECRET_KEYS.CHUTES,
                         'electronhub': SECRET_KEYS.ELECTRONHUB,
                         'pollinations': SECRET_KEYS.POLLINATIONS,
+                        'workers_ai': SECRET_KEYS.WORKERS_AI,
                     };
 
                     if (chatCompletionApis[api] && secret_state[chatCompletionApis[api]]) {
@@ -551,7 +555,7 @@ jQuery(async function () {
     }
 
     async function addRemoteEndpointModels() {
-        async function processEndpoint(api, url) {
+        async function processEndpoint(api, url, additionalParams = {}) {
             const dropdown = document.getElementById('caption_multimodal_model');
             if (!(dropdown instanceof HTMLSelectElement)) {
                 return;
@@ -562,7 +566,8 @@ jQuery(async function () {
             const options = Array.from(dropdown.options);
             const response = await fetch(url, {
                 method: 'POST',
-                headers: getRequestHeaders({ omitContentType: true }),
+                headers: getRequestHeaders(),
+                body: JSON.stringify(additionalParams),
             });
             if (!response.ok) {
                 return;
@@ -591,6 +596,7 @@ jQuery(async function () {
         await processEndpoint('mistral', '/api/backends/chat-completions/multimodal-models/mistral');
         await processEndpoint('xai', '/api/backends/chat-completions/multimodal-models/xai');
         await processEndpoint('moonshot', '/api/backends/chat-completions/multimodal-models/moonshot');
+        await processEndpoint('workers_ai', '/api/backends/chat-completions/multimodal-models/workers_ai', { workers_ai_account_id: oai_settings.workers_ai_account_id });
     }
 
     await addSettings();
@@ -775,4 +781,4 @@ jQuery(async function () {
     }));
 
     document.body.classList.add('caption');
-});
+}

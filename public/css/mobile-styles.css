@@ -683,6 +683,11 @@
         width: calc(100dvw - 16px);
         max-width: calc(100dvw - 16px);
     }
+
+    select[multiple] {
+        max-height: 50px;
+        overflow-y: auto;
+    }
 }
 
 /*landscape mode phones and ipads*/
