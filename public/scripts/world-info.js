@@ -23,7 +23,6 @@ import { renderTemplateAsync } from './templates.js';
 import { t, translate } from './i18n.js';
 import {
     BULK_PATCH_KEEP_SENTINEL,
-    inferCommonValue,
     buildBulkFieldPatchSnapshot,
     applyPatchToEntries,
     restoreEntriesFromSnapshot,
@@ -4198,7 +4197,7 @@ const BULK_EDITABLE_FIELDS = [
  */
 async function applyBulkWorldInfoEntryFieldPatch(name, data, uids, patch, fieldLabel) {
     const normalizedName = String(name || '').trim();
-    if (!normalizedName || !data || typeof data.entries !== 'object') return false;
+    if (!normalizedName || !data || data.entries === null || typeof data.entries !== 'object') return false;
 
     const { changedUids, snapshot } = buildBulkFieldPatchSnapshot(data.entries, uids, patch);
     if (changedUids.length === 0) {
@@ -4206,13 +4205,23 @@ async function applyBulkWorldInfoEntryFieldPatch(name, data, uids, patch, fieldL
         return false;
     }
 
+    // Snapshot originalData entries before mirroring so we can revert on save failure / undo.
+    const originalEntries = Array.isArray(data?.originalData?.entries) ? data.originalData.entries : [];
+    const originalSnapshot = changedUids
+        .map((uid) => {
+            const entry = originalEntries.find((e) => e?.uid === uid || String(e?.uid) === String(uid));
+            return entry ? { uid, clone: structuredClone(entry) } : null;
+        })
+        .filter((s) => s !== null);
+
     applyPatchToEntries(data.entries, changedUids, patch);
 
-    // Mirror to originalData where applicable (silent no-op for fields not present in originalData entries)
+    // Mirror to originalData using the canonical entry-name → dot-path translation.
     for (const uid of changedUids) {
         for (const [fieldKey, value] of Object.entries(patch)) {
             if (value === BULK_PATCH_KEEP_SENTINEL) continue;
-            setWIOriginalDataValue(data, /** @type {any} */ (uid), fieldKey, value);
+            const targetKey = originalWIDataKeyMap[fieldKey] ?? fieldKey;
+            setWIOriginalDataValue(data, /** @type {any} */ (uid), targetKey, value);
         }
     }
 
@@ -4221,6 +4230,7 @@ async function applyBulkWorldInfoEntryFieldPatch(name, data, uids, patch, fieldL
     } catch (error) {
         // Roll back the in-memory change so UI doesn't show a divergent state
         restoreEntriesFromSnapshot(data.entries, snapshot);
+        restoreOriginalDataEntries(data, originalSnapshot);
         console.error('Failed to apply bulk world-info field patch', error);
         toastr.error(t`Failed to update entries`);
         return false;
@@ -4239,6 +4249,7 @@ async function applyBulkWorldInfoEntryFieldPatch(name, data, uids, patch, fieldL
         onUndo: async () => {
             try {
                 restoreEntriesFromSnapshot(data.entries, snapshot);
+                restoreOriginalDataEntries(data, originalSnapshot);
                 await saveWorldInfo(normalizedName, data, true);
                 if (areLookupNamesEqual(getSelectedWorldEditorName(), normalizedName)) {
                     updateEditor(navigation_option.previous, false);
@@ -4252,6 +4263,22 @@ async function applyBulkWorldInfoEntryFieldPatch(name, data, uids, patch, fieldL
     });
 
     return true;
+}
+
+/**
+ * Restore previously-cloned originalData entries by uid. No-op for missing
+ * uids (entry was deleted or replaced between snapshot and restore).
+ *
+ * @param {object} data
+ * @param {Array<{ uid: string, clone: object }>} originalSnapshot
+ */
+function restoreOriginalDataEntries(data, originalSnapshot) {
+    if (!Array.isArray(data?.originalData?.entries) || !Array.isArray(originalSnapshot)) return;
+    for (const { uid, clone } of originalSnapshot) {
+        const idx = data.originalData.entries.findIndex((e) => e?.uid === uid || String(e?.uid) === String(uid));
+        if (idx === -1) continue;
+        data.originalData.entries[idx] = structuredClone(clone);
+    }
 }
 
 async function applyBulkWorldInfoEntryEnabledState(name, data, uids, enabled) {
