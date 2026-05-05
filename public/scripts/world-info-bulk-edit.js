@@ -51,6 +51,9 @@ export function inferCommonValue(entriesByUid, uids, fieldKey) {
     return firstSeen ? { kind: 'common', value: firstValue } : { kind: 'mixed' };
 }
 
+// Compares scalars (via Object.is) and arrays element-wise. Plain objects
+// are intentionally treated as never-equal — the bulk-editable fields are
+// all scalars or arrays today; revisit if an object-valued field is added.
 function sameValue(a, b) {
     if (Object.is(a, b)) return true;
     if (Array.isArray(a) && Array.isArray(b)) {

@@ -39,4 +39,14 @@ describe('inferCommonValue', () => {
     test('exports a unique BULK_PATCH_KEEP_SENTINEL', () => {
         expect(typeof BULK_PATCH_KEEP_SENTINEL).toBe('symbol');
     });
+
+    test('treats arrays with the same elements as common', () => {
+        const e = { '1': { key: ['a', 'b'] }, '2': { key: ['a', 'b'] } };
+        expect(inferCommonValue(e, ['1', '2'], 'key')).toEqual({ kind: 'common', value: ['a', 'b'] });
+    });
+
+    test('treats arrays of different lengths as mixed', () => {
+        const e = { '1': { key: ['a'] }, '2': { key: ['a', 'b'] } };
+        expect(inferCommonValue(e, ['1', '2'], 'key')).toEqual({ kind: 'mixed' });
+    });
 });
