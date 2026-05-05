@@ -7962,6 +7962,7 @@ function buildLastRecallCorePacketHtml(store, options = {}) {
 <section class="luker-injection-block luker-injection-block-${variant}" data-variant="${variant}">
     <header class="luker-injection-block-head">
         <span class="luker-injection-block-badge">${escapeHtml(label)}</span>
+        <button type="button" class="menu_button menu_button_small luker-injection-view-source" data-variant="${variant}" title="${escapeHtml(i18n('View Source'))}"><i class="fa-solid fa-code fa-fw"></i></button>
         <button type="button" class="menu_button menu_button_small luker-injection-copy-block" data-variant="${variant}" title="${escapeHtml(i18n('Copy'))}"><i class="fa-solid fa-copy fa-fw"></i></button>
     </header>
     <textarea class="luker-injection-block-source" data-variant="${variant}" readonly hidden>${escapeHtml(packet)}</textarea>
@@ -8014,6 +8015,30 @@ function ensureInjectionViewerBindings() {
     injectionViewerBindingsInstalled = true;
     const ns = '.luker-injection-viewer';
     jQuery(document).off(ns)
+        .on(`click${ns}`, '.luker-injection-view-source', async function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            const block = jQuery(this).closest('.luker-injection-block');
+            const text = String(block.find('.luker-injection-block-source').val() || '');
+            if (!text) {
+                notifyInfo(i18n('Injection content is empty.'));
+                return;
+            }
+            const variant = String(block.data('variant') || '').toUpperCase();
+            const title = variant
+                ? i18nFormat('${0} Injection Source', variant)
+                : i18n('Injection Source');
+            const ctx = getContext();
+            await ctx.callGenericPopup(
+                `<div class="luker-injection-source-popup">
+                    <h3 class="margin0">${escapeHtml(title)}</h3>
+                    <pre class="luker-injection-source-pre">${escapeHtml(text)}</pre>
+                </div>`,
+                ctx.POPUP_TYPE.TEXT,
+                '',
+                { wide: true, large: true, allowVerticalScrolling: true },
+            );
+        })
         .on(`click${ns}`, '.luker-injection-copy-block', async function (event) {
             event.preventDefault();
             event.stopPropagation();
@@ -11139,6 +11164,12 @@ function ensureStyles() {
     box-sizing: border-box;
 }
 
+.luker-graph-tab-panel .luker-injection-shell {
+    flex: 1 1 0%;
+    min-height: 0;
+    max-height: none;
+}
+
 .luker-injection-header {
     display: flex;
     align-items: center;
@@ -11205,10 +11236,14 @@ function ensureStyles() {
     display: flex;
     flex-direction: column;
     gap: 10px;
-    border: 1px solid rgba(123, 163, 196, 0.22);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(130, 130, 130, 0.32));
     border-radius: 12px;
     padding: 12px;
-    background: linear-gradient(160deg, rgba(20, 24, 33, 0.6), rgba(11, 14, 20, 0.4));
+    background: linear-gradient(155deg, rgba(17, 47, 43, 0.18), rgba(31, 30, 44, 0.12));
+}
+
+.luker-injection-block-source {
+    display: none;
 }
 
 .luker-injection-block-core {
@@ -11272,8 +11307,33 @@ function ensureStyles() {
     gap: 6px;
     padding: 8px 10px;
     border-radius: 10px;
-    background: rgba(0, 0, 0, 0.18);
-    border: 1px solid rgba(123, 163, 196, 0.14);
+    background: rgba(0, 0, 0, 0.06);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(130, 130, 130, 0.22));
+}
+
+.luker-injection-source-popup {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    text-align: left;
+    width: 100%;
+    min-width: 0;
+}
+
+.luker-injection-source-pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    font-size: 12.5px;
+    line-height: 1.5;
+    margin: 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.08);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(130, 130, 130, 0.28));
+    max-height: 68vh;
+    overflow: auto;
+    box-sizing: border-box;
 }
 
 .luker-injection-section-head {
@@ -11340,7 +11400,7 @@ function ensureStyles() {
     font-size: 12.5px;
     margin: 0;
     padding: 8px;
-    background: rgba(0, 0, 0, 0.22);
+    background: rgba(0, 0, 0, 0.08);
     border-radius: 6px;
     line-height: 1.45;
     word-break: break-word;
