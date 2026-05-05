@@ -21,6 +21,13 @@ import { callGenericPopup, Popup, POPUP_RESULT, POPUP_TYPE } from './popup.js';
 import { StructuredCloneMap } from './util/StructuredCloneMap.js';
 import { renderTemplateAsync } from './templates.js';
 import { t, translate } from './i18n.js';
+import {
+    BULK_PATCH_KEEP_SENTINEL,
+    inferCommonValue,
+    buildBulkFieldPatchSnapshot,
+    applyPatchToEntries,
+    restoreEntriesFromSnapshot,
+} from './world-info-bulk-edit.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { getOrCreatePersonaDescriptor, setPersonaDescription, user_avatar } from './personas.js';
 import { initActionableSingleSelect } from './select2-actionable-single.js';
@@ -4145,6 +4152,106 @@ function setWorldInfoEntrySelected(name, uid, selected, data = null) {
     }
 
     syncWorldInfoEntryBulkToolbar(name, data);
+}
+
+// #region Bulk field edit (registry, menu, dialogs, apply/restore)
+
+/**
+ * Registry of fields that the bulk-set-field menu can edit. Each entry
+ * describes how to render a leaf menu item, what control to show in the
+ * single-field dialog, and how to validate the user's input.
+ *
+ * @typedef {Object} BulkEditableField
+ * @property {string} key                                       entry property name
+ * @property {'top'|'placement'|'matching'|'matchedFields'|'recursion'|'group'|'other'} group
+ * @property {string} label                                     English i18n key (used as menu label, popup title fragment)
+ * @property {'number'|'text'|'boolean'|'enum'} control
+ * @property {number} [min]
+ * @property {number} [max]
+ * @property {number} [step]
+ * @property {Array<{ value: any, label: string }>} [options]   for enum
+ * @property {(value: any) => boolean} [validate]
+ */
+
+/** @type {BulkEditableField[]} */
+const BULK_EDITABLE_FIELDS = [
+    {
+        key: 'depth',
+        group: 'top',
+        label: 'Injection Depth',
+        control: 'number',
+        min: 0,
+        step: 1,
+        validate: (v) => Number.isInteger(v) && v >= 0,
+    },
+];
+
+/**
+ * Apply a field patch to selected world-info entries with undo toast.
+ *
+ * @param {string} name              world book name
+ * @param {object} data              loaded world-info data object
+ * @param {string[]} uids            selected uids (already normalized)
+ * @param {Record<string, any>} patch  { fieldKey: newValue }; BULK_PATCH_KEEP_SENTINEL values are skipped
+ * @param {string} fieldLabel        i18n key for the toast message field name
+ * @returns {Promise<boolean>} true when at least one entry was actually changed
+ */
+async function applyBulkWorldInfoEntryFieldPatch(name, data, uids, patch, fieldLabel) {
+    const normalizedName = String(name || '').trim();
+    if (!normalizedName || !data || typeof data.entries !== 'object') return false;
+
+    const { changedUids, snapshot } = buildBulkFieldPatchSnapshot(data.entries, uids, patch);
+    if (changedUids.length === 0) {
+        toastr.info(t`No changes — all selected entries already had this value`);
+        return false;
+    }
+
+    applyPatchToEntries(data.entries, changedUids, patch);
+
+    // Mirror to originalData where applicable (silent no-op for fields not present in originalData entries)
+    for (const uid of changedUids) {
+        for (const [fieldKey, value] of Object.entries(patch)) {
+            if (value === BULK_PATCH_KEEP_SENTINEL) continue;
+            setWIOriginalDataValue(data, /** @type {any} */ (uid), fieldKey, value);
+        }
+    }
+
+    try {
+        await saveWorldInfo(normalizedName, data, true);
+    } catch (error) {
+        // Roll back the in-memory change so UI doesn't show a divergent state
+        restoreEntriesFromSnapshot(data.entries, snapshot);
+        console.error('Failed to apply bulk world-info field patch', error);
+        toastr.error(t`Failed to update entries`);
+        return false;
+    }
+
+    if (areLookupNamesEqual(getSelectedWorldEditorName(), normalizedName)) {
+        syncWorldInfoEntryBulkToolbar(normalizedName, data);
+        updateEditor(navigation_option.previous);
+    }
+
+    const localizedField = translate(fieldLabel);
+    const successMessage = t`Updated ${changedUids.length} entries: ${localizedField}`;
+
+    showUndoToast({
+        message: successMessage,
+        onUndo: async () => {
+            try {
+                restoreEntriesFromSnapshot(data.entries, snapshot);
+                await saveWorldInfo(normalizedName, data, true);
+                if (areLookupNamesEqual(getSelectedWorldEditorName(), normalizedName)) {
+                    updateEditor(navigation_option.previous, false);
+                }
+                toastr.info(t`Reverted ${snapshot.length} entries`);
+            } catch (error) {
+                console.error('Failed to revert bulk world-info field patch', error);
+                toastr.error(t`Failed to update entries`);
+            }
+        },
+    });
+
+    return true;
 }
 
 async function applyBulkWorldInfoEntryEnabledState(name, data, uids, enabled) {
