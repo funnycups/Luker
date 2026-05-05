@@ -4524,6 +4524,95 @@ function readBulkFieldInput(fieldDef, inputEl) {
     }
 }
 
+const TRIGGER_STRATEGY_OPTIONS = [
+    { value: 'constant',   label: 'Constant',   patch: { constant: true,  vectorized: false } },
+    { value: 'selective',  label: 'Selective',  patch: { constant: false, vectorized: false } },
+    { value: 'vectorized', label: 'Vectorized', patch: { constant: false, vectorized: true  } },
+];
+
+function inferTriggerStrategy(entry) {
+    if (!entry || typeof entry !== 'object') return null;
+    if (entry.vectorized) return 'vectorized';
+    if (entry.constant) return 'constant';
+    return 'selective';
+}
+
+async function openBulkSetTriggerStrategyDialog(name, data) {
+    const uids = getSelectedWorldInfoEntryUids(name, data);
+    if (uids.length === 0) return;
+
+    let common = null;
+    let mixed = false;
+    for (const uid of uids) {
+        const entry = data.entries[uid];
+        const strategy = inferTriggerStrategy(entry);
+        if (common === null) {
+            common = strategy;
+        } else if (common !== strategy) {
+            mixed = true;
+            break;
+        }
+    }
+
+    const container = document.createElement('div');
+    container.classList.add('flex-container', 'flexFlowColumn', 'gap5px');
+
+    const headerLine = document.createElement('div');
+    headerLine.textContent = t`${uids.length} entries selected`;
+    container.appendChild(headerLine);
+
+    const titleLine = document.createElement('div');
+    titleLine.textContent = translate('Set Trigger Strategy');
+    titleLine.classList.add('marginTop10');
+    container.appendChild(titleLine);
+
+    let chosen = mixed ? null : common;
+
+    for (const opt of TRIGGER_STRATEGY_OPTIONS) {
+        const labelEl = document.createElement('label');
+        labelEl.classList.add('checkbox_label');
+        const radio = document.createElement('input');
+        radio.type = 'radio';
+        radio.name = 'bulk_trigger_strategy';
+        radio.value = opt.value;
+        if (chosen === opt.value) radio.checked = true;
+        radio.addEventListener('change', () => { chosen = opt.value; });
+        labelEl.appendChild(radio);
+        const span = document.createElement('span');
+        span.textContent = translate(opt.label);
+        labelEl.appendChild(span);
+        container.appendChild(labelEl);
+    }
+
+    if (mixed) {
+        const hint = document.createElement('small');
+        hint.classList.add('opacity50p');
+        hint.textContent = translate('Mixed values across selected entries');
+        container.appendChild(hint);
+    }
+
+    const popup = new Popup(container, POPUP_TYPE.CONFIRM, '', {
+        okButton: false,
+        cancelButton: t`Cancel`,
+        customButtons: [{ text: t`Apply`, result: POPUP_RESULT.AFFIRMATIVE }],
+        onClosing: async (instance) => {
+            if (instance.result !== POPUP_RESULT.AFFIRMATIVE) return true;
+            if (!chosen) {
+                toastr.warning(t`Please choose a value`);
+                return false;
+            }
+            return true;
+        },
+    });
+
+    const result = await popup.show();
+    if (result !== POPUP_RESULT.AFFIRMATIVE || !chosen) return;
+
+    const opt = TRIGGER_STRATEGY_OPTIONS.find((o) => o.value === chosen);
+    if (!opt) return;
+    await applyBulkWorldInfoEntryFieldPatch(name, data, uids, opt.patch, 'Trigger Strategy');
+}
+
 /**
  * Internal: holds the cleanup callback for the currently-open bulk-set-field
  * menu, or null when no menu is open. The callback removes the menu DOM node
@@ -4587,6 +4676,12 @@ function openBulkSetFieldMenu(name, data, anchorEl) {
     for (const item of topItems) {
         menu.appendChild(buildBulkMenuLeaf(item.label, item.onClick));
     }
+
+    // Special composite leaf: Trigger Strategy (writes constant + vectorized atomically)
+    menu.appendChild(buildBulkMenuLeaf('Trigger Strategy', () => {
+        closeBulkSetFieldMenu();
+        void openBulkSetTriggerStrategyDialog(name, data);
+    }));
 
     const groupTitles = {
         placement: 'Placement',
