@@ -23,6 +23,7 @@ import { renderTemplateAsync } from './templates.js';
 import { t, translate } from './i18n.js';
 import {
     BULK_PATCH_KEEP_SENTINEL,
+    inferCommonValue,
     buildBulkFieldPatchSnapshot,
     applyPatchToEntries,
     restoreEntriesFromSnapshot,
@@ -4279,6 +4280,181 @@ function restoreOriginalDataEntries(data, originalSnapshot) {
         if (idx === -1) continue;
         data.originalData.entries[idx] = structuredClone(clone);
     }
+}
+
+/**
+ * Show a single-field input dialog and apply the result to all currently
+ * selected world-info entries. Pre-fills the input with the common value
+ * if all selected entries share it, otherwise leaves it empty and shows a
+ * "mixed values" hint.
+ *
+ * @param {string} name
+ * @param {object} data
+ * @param {BulkEditableField} fieldDef
+ */
+async function openBulkSetFieldDialog(name, data, fieldDef) {
+    const uids = getSelectedWorldInfoEntryUids(name, data);
+    if (uids.length === 0) return;
+
+    const inferred = inferCommonValue(data.entries, uids, fieldDef.key);
+    const fieldLabel = translate(fieldDef.label);
+
+    const container = document.createElement('div');
+    container.classList.add('flex-container', 'flexFlowColumn', 'gap5px');
+
+    const headerLine = document.createElement('div');
+    headerLine.textContent = t`${uids.length} entries selected`;
+    container.appendChild(headerLine);
+
+    const titleLine = document.createElement('div');
+    titleLine.textContent = t`Set ${fieldLabel}`;
+    titleLine.classList.add('marginTop10');
+    container.appendChild(titleLine);
+
+    const valueLabel = document.createElement('label');
+    valueLabel.classList.add('marginTop5');
+    valueLabel.textContent = translate('New value:');
+    container.appendChild(valueLabel);
+
+    const inputEl = createBulkFieldInput(fieldDef, inferred);
+    container.appendChild(inputEl);
+
+    if (inferred.kind === 'mixed') {
+        const hint = document.createElement('small');
+        hint.classList.add('opacity50p');
+        hint.textContent = translate('Mixed values across selected entries');
+        container.appendChild(hint);
+    }
+
+    const popup = new Popup(container, POPUP_TYPE.CONFIRM, '', {
+        cancelButton: t`Cancel`,
+        customButtons: [{ text: t`Apply`, result: POPUP_RESULT.AFFIRMATIVE }],
+    });
+
+    const result = await popup.show();
+    if (result !== POPUP_RESULT.AFFIRMATIVE) return;
+
+    const rawValue = readBulkFieldInput(fieldDef, inputEl);
+    if (rawValue === undefined) {
+        toastr.warning(t`Please enter a value`);
+        return;
+    }
+
+    if (typeof fieldDef.validate === 'function' && !fieldDef.validate(rawValue)) {
+        toastr.warning(t`Invalid value`);
+        return;
+    }
+
+    await applyBulkWorldInfoEntryFieldPatch(name, data, uids, { [fieldDef.key]: rawValue }, fieldDef.label);
+}
+
+/**
+ * Create the appropriate <input>/<select> element for a field, pre-filled
+ * with the common value if available.
+ *
+ * @param {BulkEditableField} fieldDef
+ * @param {{ kind: 'common', value: any } | { kind: 'mixed' }} inferred
+ * @returns {HTMLElement}
+ */
+function createBulkFieldInput(fieldDef, inferred) {
+    const common = inferred.kind === 'common' ? inferred.value : undefined;
+
+    switch (fieldDef.control) {
+        case 'number': {
+            const el = document.createElement('input');
+            el.type = 'number';
+            el.classList.add('text_pole', 'wide100p');
+            if (typeof fieldDef.min === 'number') el.min = String(fieldDef.min);
+            if (typeof fieldDef.max === 'number') el.max = String(fieldDef.max);
+            if (typeof fieldDef.step === 'number') el.step = String(fieldDef.step);
+            if (typeof common === 'number') el.value = String(common);
+            return el;
+        }
+        case 'text': {
+            const el = document.createElement('input');
+            el.type = 'text';
+            el.classList.add('text_pole', 'wide100p');
+            if (typeof common === 'string') el.value = common;
+            return el;
+        }
+        case 'boolean': {
+            const wrapper = document.createElement('div');
+            wrapper.classList.add('flex-container', 'gap10px');
+            for (const value of [true, false]) {
+                const labelEl = document.createElement('label');
+                labelEl.classList.add('checkbox_label');
+                const radio = document.createElement('input');
+                radio.type = 'radio';
+                radio.name = `bulk_field_${fieldDef.key}`;
+                radio.value = value ? '1' : '0';
+                if (common === value) radio.checked = true;
+                labelEl.appendChild(radio);
+                const span = document.createElement('span');
+                span.textContent = value ? translate('On') : translate('Off');
+                labelEl.appendChild(span);
+                wrapper.appendChild(labelEl);
+            }
+            return wrapper;
+        }
+        case 'enum': {
+            const el = document.createElement('select');
+            el.classList.add('text_pole', 'wide100p');
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = `-- ${translate('Select…')} --`;
+            el.appendChild(placeholder);
+            for (const opt of fieldDef.options || []) {
+                const optionEl = document.createElement('option');
+                optionEl.value = JSON.stringify(opt.value);
+                optionEl.textContent = translate(opt.label);
+                if (sameValueShallow(common, opt.value)) optionEl.selected = true;
+                el.appendChild(optionEl);
+            }
+            return el;
+        }
+        default:
+            throw new Error(`Unsupported control type: ${fieldDef.control}`);
+    }
+}
+
+/**
+ * Read the user-entered value out of an input element. Returns undefined
+ * if the user left it empty (caller treats this as "no input").
+ *
+ * @param {BulkEditableField} fieldDef
+ * @param {HTMLElement} inputEl
+ * @returns {any | undefined}
+ */
+function readBulkFieldInput(fieldDef, inputEl) {
+    switch (fieldDef.control) {
+        case 'number': {
+            const raw = /** @type {HTMLInputElement} */ (inputEl).value;
+            if (raw === '') return undefined;
+            const n = Number(raw);
+            return Number.isFinite(n) ? n : undefined;
+        }
+        case 'text': {
+            const raw = /** @type {HTMLInputElement} */ (inputEl).value;
+            return raw;
+        }
+        case 'boolean': {
+            const checked = /** @type {HTMLDivElement} */ (inputEl).querySelector('input[type="radio"]:checked');
+            if (!checked) return undefined;
+            return /** @type {HTMLInputElement} */ (checked).value === '1';
+        }
+        case 'enum': {
+            const raw = /** @type {HTMLSelectElement} */ (inputEl).value;
+            if (raw === '') return undefined;
+            try { return JSON.parse(raw); } catch { return undefined; }
+        }
+        default:
+            return undefined;
+    }
+}
+
+function sameValueShallow(a, b) {
+    if (Object.is(a, b)) return true;
+    return false;
 }
 
 async function applyBulkWorldInfoEntryEnabledState(name, data, uids, enabled) {
