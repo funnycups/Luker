@@ -4846,4 +4846,6 @@
     ,"Regex script not found.": "找不到此正則腳本。"
     ,"Enable CardApp": "啟用 CardApp"
     ,"Entry file": "入口檔案"
+    ,"Bulk Set Field…": "批次設定欄位…"
+    ,"Bulk-edit a field across selected entries": "對選取條目批次設定某個欄位"
 }

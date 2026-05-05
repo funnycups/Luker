@@ -4857,6 +4857,8 @@
     "Enable Selected": "启用已选",
     "Disable Selected": "停用已选",
     "Delete Selected": "删除已选",
+    "Bulk Set Field…": "批量设置字段…",
+    "Bulk-edit a field across selected entries": "对选中条目批量设置某个字段",
     "Page Size": "每页数量",
     "Select this lorebook for bulk actions": "选择此世界书以进行批量操作",
     "Open lorebook in editor": "在编辑器中打开世界书",
