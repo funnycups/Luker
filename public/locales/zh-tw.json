@@ -3577,7 +3577,6 @@
     "Only JSON and JSONL files are supported for chat imports.": "聊天匯入僅支援 JSON 和 JSONL 檔案。",
     "Only Luker's own format is supported for group chat imports. Sorry!": "群聊匯入僅支援 Luker 自有格式。抱歉！",
     "Operation was aborted to prevent data corruption.": "為防止資料損壞，操作已中止。",
-    "Optional modules:": "可選模組：",
     "Outlet": "出口",
     "Outlet Name": "出口名稱",
     "Output Price": "輸出價格",

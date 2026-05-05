@@ -927,34 +927,6 @@ function generateExtensionElement(name, manifest, isActive, isDisabled, isExtern
 
     statusSpan.append(nameSpan, authorSpan, versionSpan);
 
-    if (isActive && Array.isArray(manifest.optional)) {
-        const optional = new Set(manifest.optional);
-        modules.forEach(x => optional.delete(x));
-        if (optional.size > 0) {
-            const modulesDiv = document.createElement('div');
-            modulesDiv.classList.add('extension_modules');
-            const optionalSpan = document.createElement('span');
-            optionalSpan.classList.add('optional');
-            optionalSpan.textContent = [...optional].join(', ');
-            modulesDiv.append(t`Optional modules:`, ' ', optionalSpan);
-            statusSpan.appendChild(modulesDiv);
-        }
-    } else if (!isDisabled) {
-        // Neither active nor disabled
-        const requirements = new Set(manifest.requires);
-        modules.forEach(x => requirements.delete(x));
-        if (requirements.size > 0) {
-            const modulesDiv = document.createElement('div');
-            modulesDiv.classList.add('extension_modules');
-            const failureSpan = document.createElement('span');
-            failureSpan.classList.add('failure');
-            failureSpan.textContent = [...requirements].join(', ');
-            modulesDiv.append(t`Missing modules:`, ' ', failureSpan);
-            statusSpan.appendChild(modulesDiv);
-        }
-    }
-
-
     // if external, wrap the name in a link to the repo
     if (isExternal) {
         const originLink = document.createElement('a');
