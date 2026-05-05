@@ -6,7 +6,7 @@ This guide will help you get Luker up and running in minutes.
 
 | Dependency | Requirement |
 | --- | --- |
-| **Node.js** | >= 20.0 (Git Clone method only) |
+| **Node.js** | >= 24.0 (Git Clone method only) |
 | **Git** | Any version (Git Clone method only) |
 | **Docker** | Any modern version (Docker method only) |
 

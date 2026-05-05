@@ -6,7 +6,7 @@
 
 | 依赖 | 要求 |
 | --- | --- |
-| **Node.js** | >= 20.0（仅 Git Clone 方式需要） |
+| **Node.js** | >= 24.0（仅 Git Clone 方式需要） |
 | **Git** | 任意版本（仅 Git Clone 方式需要） |
 | **Docker** | 任意现代版本（仅 Docker 方式需要） |
 
