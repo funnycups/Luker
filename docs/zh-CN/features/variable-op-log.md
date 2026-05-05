@@ -1,6 +1,6 @@
-# 变量操作日志
+# 逐楼层变量
 
-Luker 在 SillyTavern 原生变量系统之上引入了**逐楼层的变量操作日志**。AI 回复里写的变量赋值会被自动提取、结构化、随消息一起保存，并在聊天历史发生变化时被确定性地重放——删除消息、切换 swipe、重新生成回复后，你的变量自动落到正确状态。
+Luker 在 SillyTavern 原生变量系统之上引入了**逐楼层变量**：AI 回复里写的变量赋值会被自动提取、结构化、随消息一起保存，并在聊天历史发生变化时被确定性地重放——删除消息、切换 swipe、重新生成回复后，你的变量自动落到正确状态。
 
 ## 为什么需要这个
 
@@ -78,7 +78,7 @@ Luker 的解法：在保存 AI / 用户消息时把副作用宏从文本里提�
 
 | 来源 | 行为 |
 |------|------|
-| 世界书 <code v-pre>{{setvar}}</code> | 走 SillyTavern 原生流程，prompt 组装时执行；缓存里这个 key 每轮都会被 WI 的值覆盖。如果想让 WI 充当"初始化"而不是"每轮覆盖"，把这类条目放在高 depth / prompt 最前。 |
+| 世界书 <code v-pre>{{setvar}}</code> | 走 SillyTavern 原生流程，prompt 组装时执行；缓存里这个 key 每轮都会被 WI 的值覆盖。如果想让 WI 充当「初始化」而不是「每轮覆盖」，把这类条目放在高 depth / prompt 最前。 |
 | 预设 <code v-pre>{{setvar}}</code> | 同世界书。 |
 | Slash 命令 `/setvar` | 直接写 `chat_metadata.variables`。下次重放扫到同名 key（即存活的 AI op 提到了这个 key）时会被覆盖。 |
 | Quick Reply 脚本 | 同 slash 命令。给 QR 管理的变量起一个 AI op 不会碰的名字。 |

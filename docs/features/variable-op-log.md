@@ -1,6 +1,6 @@
-# Variable Op-Log
+# Per-Message Variables
 
-Luker introduces a per-message **variable operation log** on top of SillyTavern's existing variable system. AI replies can write variables that are extracted, structured, persisted with the message, and replayed deterministically when chat history changes — so deleting a message, switching swipes, or regenerating a reply leaves your variables in the right state automatically.
+Luker introduces **per-message variables** on top of SillyTavern's existing variable system: AI replies can write variables that are extracted, structured, persisted with the message, and replayed deterministically when chat history changes — so deleting a message, switching swipes, or regenerating a reply leaves your variables in the right state automatically.
 
 ## Why this exists
 
