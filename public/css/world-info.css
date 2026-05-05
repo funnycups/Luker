@@ -1116,3 +1116,11 @@ select.keyselect+span.select2-container .select2-selection--multiple {
     padding-left: 28px;
     font-weight: normal;
 }
+
+.world_bulk_matched_row {
+    align-items: center;
+}
+
+.world_bulk_matched_label {
+    margin-left: 10px;
+}

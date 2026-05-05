@@ -4613,6 +4613,109 @@ async function openBulkSetTriggerStrategyDialog(name, data) {
     await applyBulkWorldInfoEntryFieldPatch(name, data, uids, opt.patch, 'Trigger Strategy');
 }
 
+const MATCHED_FIELDS = [
+    { key: 'matchPersonaDescription',     label: 'Match Persona Description' },
+    { key: 'matchCharacterDescription',   label: 'Match Character Description' },
+    { key: 'matchCharacterPersonality',   label: 'Match Character Personality' },
+    { key: 'matchCharacterDepthPrompt',   label: 'Match Character Depth Prompt' },
+    { key: 'matchScenario',               label: 'Match Scenario' },
+    { key: 'matchCreatorNotes',           label: 'Match Creator Notes' },
+];
+
+async function openBulkSetMatchedFieldsDialog(name, data) {
+    const uids = getSelectedWorldInfoEntryUids(name, data);
+    if (uids.length === 0) return;
+
+    const container = document.createElement('div');
+    container.classList.add('flex-container', 'flexFlowColumn', 'gap10px');
+
+    const headerLine = document.createElement('div');
+    headerLine.textContent = t`${uids.length} entries selected`;
+    container.appendChild(headerLine);
+
+    const titleLine = document.createElement('div');
+    titleLine.textContent = translate('Set Matched Fields');
+    titleLine.classList.add('marginTop5');
+    container.appendChild(titleLine);
+
+    const explainLine = document.createElement('small');
+    explainLine.classList.add('opacity50p');
+    explainLine.textContent = translate('For each option: choose Keep / On / Off');
+    container.appendChild(explainLine);
+
+    /** @type {Record<string, 'keep'|'on'|'off'>} */
+    const choices = {};
+    for (const f of MATCHED_FIELDS) choices[f.key] = 'keep';
+
+    for (const f of MATCHED_FIELDS) {
+        const inferred = inferCommonValue(data.entries, uids, f.key);
+        const row = document.createElement('div');
+        row.classList.add('flex-container', 'gap10px', 'world_bulk_matched_row');
+
+        const groupName = `bulk_matched_${f.key}`;
+        for (const tri of [
+            { v: 'keep', label: 'Keep' },
+            { v: 'on',   label: 'On' },
+            { v: 'off',  label: 'Off' },
+        ]) {
+            const radio = document.createElement('input');
+            radio.type = 'radio';
+            radio.name = groupName;
+            radio.value = tri.v;
+            if (tri.v === 'keep') radio.checked = true;
+            radio.addEventListener('change', () => { choices[f.key] = /** @type {any} */ (tri.v); });
+            const labelEl = document.createElement('label');
+            labelEl.classList.add('checkbox_label');
+            labelEl.appendChild(radio);
+            const span = document.createElement('span');
+            span.textContent = translate(tri.label);
+            labelEl.appendChild(span);
+            row.appendChild(labelEl);
+        }
+
+        const fieldLabel = document.createElement('span');
+        fieldLabel.classList.add('world_bulk_matched_label');
+        fieldLabel.textContent = translate(f.label);
+        if (inferred.kind === 'common') {
+            const badge = document.createElement('small');
+            badge.classList.add('opacity50p', 'marginLeft5');
+            badge.textContent = inferred.value
+                ? `(${translate('currently On')})`
+                : `(${translate('currently Off')})`;
+            fieldLabel.appendChild(badge);
+        }
+        row.appendChild(fieldLabel);
+
+        container.appendChild(row);
+    }
+
+    const popup = new Popup(container, POPUP_TYPE.CONFIRM, '', {
+        okButton: false,
+        cancelButton: t`Cancel`,
+        customButtons: [{ text: t`Apply`, result: POPUP_RESULT.AFFIRMATIVE }],
+    });
+
+    const result = await popup.show();
+    if (result !== POPUP_RESULT.AFFIRMATIVE) return;
+
+    /** @type {Record<string, any>} */
+    const patch = {};
+    for (const f of MATCHED_FIELDS) {
+        switch (choices[f.key]) {
+            case 'on':  patch[f.key] = true;  break;
+            case 'off': patch[f.key] = false; break;
+            default:    /* keep -> omit from patch */ break;
+        }
+    }
+
+    if (Object.keys(patch).length === 0) {
+        toastr.info(t`No changes — all options are set to Keep`);
+        return;
+    }
+
+    await applyBulkWorldInfoEntryFieldPatch(name, data, uids, patch, 'Matched Fields');
+}
+
 /**
  * Internal: holds the cleanup callback for the currently-open bulk-set-field
  * menu, or null when no menu is open. The callback removes the menu DOM node
@@ -4695,6 +4798,12 @@ function openBulkSetFieldMenu(name, data, anchorEl) {
         const groupLabel = groupTitles[groupKey] || groupKey;
         menu.appendChild(buildBulkMenuSubmenu(groupLabel, items));
     }
+
+    // Special composite leaf: Matched Fields (tri-state panel)
+    menu.appendChild(buildBulkMenuLeaf('Matched Fields', () => {
+        closeBulkSetFieldMenu();
+        void openBulkSetMatchedFieldsDialog(name, data);
+    }));
 
     document.body.appendChild(menu);
     const rect = anchorEl.getBoundingClientRect();
