@@ -1676,6 +1676,7 @@ async function inheritMemoryStoreForBranch(context, payload) {
     if (pendingInvalidation?.timer) {
         clearTimeout(pendingInvalidation.timer);
     }
+    pendingInvalidation?.resolveDone?.();
     pendingMutationInvalidations.delete(targetChatKey);
     if (extractionTimers.has(targetChatKey)) {
         clearTimeout(extractionTimers.get(targetChatKey));
@@ -6809,6 +6810,13 @@ function alignStoreCoverageToChat(store, context, settings = null) {
 }
 
 async function ensureStoreSyncedWithChat(context, targetHint = null) {
+    const chatKey = getChatKey(context, targetHint);
+    if (chatKey && chatKey !== 'invalid_target') {
+        const pending = pendingMutationInvalidations.get(chatKey);
+        if (pending?.donePromise) {
+            await pending.donePromise;
+        }
+    }
     const loaded = await ensureMemoryStoreLoaded(context, { targetHint });
     let store = getMemoryStore(context, targetHint) || loaded || null;
     if (!store) {
@@ -13228,69 +13236,79 @@ jQuery(() => {
         const task = {
             fromSeq: normalizedFromSeq,
             scheduleReplay: Boolean(scheduleReplay),
-            timer: setTimeout(async () => {
-                pendingMutationInvalidations.delete(chatKey);
-                const liveContext = getContext();
-                const isCurrentChat = getChatKey(liveContext) === chatKey;
-                const preserveLatestRecallSnapshot = shouldPreserveLatestRecallSnapshotForAssistantMutation(liveContext, task.fromSeq);
-                if (!preserveLatestRecallSnapshot) {
-                    latestRecallSnapshot = null;
-                }
-                if (extractionTimers.has(chatKey)) {
-                    clearTimeout(extractionTimers.get(chatKey));
-                    extractionTimers.delete(chatKey);
-                }
-                if (activeExtractionAbortController && !activeExtractionAbortController.signal.aborted) {
-                    if (isCurrentChat) {
-                        clearRuntimeInfoToast('extraction');
-                    }
-                    activeExtractionAbortController.abort();
-                }
-                let store = null;
-                try {
-                    store = await refreshMemoryStoreCacheFromFloorState(liveContext, chatKey);
-                } catch (error) {
-                    console.warn(`[${MODULE_NAME}] Failed to refresh memory store cache after mutation`, error);
-                }
-                if (!store) {
-                    store = memoryStoreCache.get(chatKey) || null;
-                }
-                if (store) {
-                    updateStoreSourceState(store, liveContext);
-                    store.lastRecallTrace = [];
-                    store.lastRecallProjection = null;
-                    try {
-                        await persistMetaForChatKey(liveContext, chatKey, store);
-                    } catch (error) {
-                        console.warn(`[${MODULE_NAME}] Failed to persist meta after mutation for ${chatKey}`, error);
-                    }
-                    if (isCurrentChat) {
-                        const effectiveSettings = getEffectiveSettings(liveContext, getSettings());
-                        try {
-                            if (!effectiveSettings.enabled) {
-                                await clearAllMemoryLorebookProjection(liveContext, effectiveSettings);
-                            } else {
-                                await clearRuntimeLorebookProjection(liveContext, effectiveSettings);
-                                await syncPersistentLorebookProjection(liveContext, effectiveSettings, store);
-                            }
-                        } catch (error) {
-                            console.warn(`[${MODULE_NAME}] Lorebook projection sync failed after mutation`, error);
-                        }
-                    }
-                }
-                refreshUiStats();
-                if (isCurrentChat) {
-                    updateUiStatus(mutationStatusText);
-                }
-                if (task.scheduleReplay && isCurrentChat) {
-                    setTimeout(() => {
-                        if (!generationInProgress) {
-                            scheduleExtraction(getContext());
-                        }
-                    }, 0);
-                }
-            }, 0),
+            timer: null,
+            donePromise: null,
+            resolveDone: null,
         };
+        task.donePromise = new Promise((resolve) => {
+            task.resolveDone = resolve;
+            task.timer = setTimeout(async () => {
+                try {
+                    pendingMutationInvalidations.delete(chatKey);
+                    const liveContext = getContext();
+                    const isCurrentChat = getChatKey(liveContext) === chatKey;
+                    const preserveLatestRecallSnapshot = shouldPreserveLatestRecallSnapshotForAssistantMutation(liveContext, task.fromSeq);
+                    if (!preserveLatestRecallSnapshot) {
+                        latestRecallSnapshot = null;
+                    }
+                    if (extractionTimers.has(chatKey)) {
+                        clearTimeout(extractionTimers.get(chatKey));
+                        extractionTimers.delete(chatKey);
+                    }
+                    if (activeExtractionAbortController && !activeExtractionAbortController.signal.aborted) {
+                        if (isCurrentChat) {
+                            clearRuntimeInfoToast('extraction');
+                        }
+                        activeExtractionAbortController.abort();
+                    }
+                    let store = null;
+                    try {
+                        store = await refreshMemoryStoreCacheFromFloorState(liveContext, chatKey);
+                    } catch (error) {
+                        console.warn(`[${MODULE_NAME}] Failed to refresh memory store cache after mutation`, error);
+                    }
+                    if (!store) {
+                        store = memoryStoreCache.get(chatKey) || null;
+                    }
+                    if (store) {
+                        updateStoreSourceState(store, liveContext);
+                        store.lastRecallTrace = [];
+                        store.lastRecallProjection = null;
+                        try {
+                            await persistMetaForChatKey(liveContext, chatKey, store);
+                        } catch (error) {
+                            console.warn(`[${MODULE_NAME}] Failed to persist meta after mutation for ${chatKey}`, error);
+                        }
+                        if (isCurrentChat) {
+                            const effectiveSettings = getEffectiveSettings(liveContext, getSettings());
+                            try {
+                                if (!effectiveSettings.enabled) {
+                                    await clearAllMemoryLorebookProjection(liveContext, effectiveSettings);
+                                } else {
+                                    await clearRuntimeLorebookProjection(liveContext, effectiveSettings);
+                                    await syncPersistentLorebookProjection(liveContext, effectiveSettings, store);
+                                }
+                            } catch (error) {
+                                console.warn(`[${MODULE_NAME}] Lorebook projection sync failed after mutation`, error);
+                            }
+                        }
+                    }
+                    refreshUiStats();
+                    if (isCurrentChat) {
+                        updateUiStatus(mutationStatusText);
+                    }
+                    if (task.scheduleReplay && isCurrentChat) {
+                        setTimeout(() => {
+                            if (!generationInProgress) {
+                                scheduleExtraction(getContext());
+                            }
+                        }, 0);
+                    }
+                } finally {
+                    resolve();
+                }
+            }, 0);
+        });
         pendingMutationInvalidations.set(chatKey, task);
     };
     if (context.eventTypes.GENERATION_STARTED) {
