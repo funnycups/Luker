@@ -4805,16 +4805,14 @@ function openBulkSetFieldMenu(name, data, anchorEl) {
         void openBulkSetMatchedFieldsDialog(name, data);
     }));
 
-    // Mount inside #world_popup (the drawer's content) rather than document.body so that
-    // clicks in the menu count as clicks "inside" the world-info drawer for any outer
-    // listeners that close drawers / panels on outside clicks. Fall back to body if the
-    // popup element is missing for any reason.
-    const mountTarget = document.getElementById('world_popup') || document.body;
-    mountTarget.appendChild(menu);
+    // Mount on document.body so the menu escapes any ancestor stacking context
+    // (e.g. the drawer's transform/positioning would otherwise clip or under-layer
+    // the menu). z-index in CSS lifts it above the drawer chrome.
+    document.body.appendChild(menu);
     const rect = anchorEl.getBoundingClientRect();
-    menu.style.position = 'fixed';
-    menu.style.top = `${rect.bottom + 2}px`;
-    menu.style.left = `${rect.left}px`;
+    menu.style.position = 'absolute';
+    menu.style.top = `${window.scrollY + rect.bottom + 2}px`;
+    menu.style.left = `${window.scrollX + rect.left}px`;
 
     // Belt-and-suspenders: stop pointer events from bubbling out of the menu so that no
     // outer listener (drawer close-on-outside-click, focus trackers, etc.) reacts to a
@@ -4824,9 +4822,15 @@ function openBulkSetFieldMenu(name, data, anchorEl) {
     menu.addEventListener('click', stopBubble);
 
     const onOutside = (event) => {
-        if (!menu.contains(event.target)) {
-            closeBulkSetFieldMenu();
+        if (menu.contains(event.target)) {
+            // Click is INSIDE our menu — also stop the event in capture phase so
+            // any other capture-phase listener that runs after us doesn't react
+            // to a click that logically belongs to us. Click events still dispatch
+            // to the leaf's bubble-phase handler, so menu items remain clickable.
+            event.stopPropagation();
+            return;
         }
+        closeBulkSetFieldMenu();
     };
     const onEscape = (event) => {
         if (event.key === 'Escape') {
