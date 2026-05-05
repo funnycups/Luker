@@ -4092,6 +4092,7 @@ function syncWorldInfoEntryBulkToolbar(name = '', data = null) {
     const disableSelectedButton = $('#world_entries_disable_selected');
     const moveSelectedButton = $('#world_entries_move_selected');
     const deleteSelectedButton = $('#world_entries_delete_selected');
+    const bulkSetFieldButton = $('#world_entries_bulk_set_field');
     const status = $('#world_entry_bulk_status');
     const worldEntriesList = $('#world_popup_entries_list');
 
@@ -4120,6 +4121,7 @@ function syncWorldInfoEntryBulkToolbar(name = '', data = null) {
     disableSelectedButton.toggleClass('disabled', selectedCount === 0);
     moveSelectedButton.toggleClass('disabled', selectedCount === 0);
     deleteSelectedButton.toggleClass('disabled', selectedCount === 0);
+    bulkSetFieldButton.toggleClass('disabled', selectedCount === 0);
 
     if (selectedCount > 0) {
         status.text(t`${selectedCount} entries selected`);
@@ -4455,6 +4457,138 @@ function readBulkFieldInput(fieldDef, inputEl) {
         default:
             return undefined;
     }
+}
+
+/**
+ * Open the bulk-set-field dropdown menu near the toolbar button.
+ * Built dynamically from BULK_EDITABLE_FIELDS plus the two special items
+ * (Trigger Strategy, Matched Fields). Closes on outside click or item click.
+ *
+ * @param {string} name
+ * @param {object} data
+ * @param {HTMLElement} anchorEl  the toolbar button
+ */
+function openBulkSetFieldMenu(name, data, anchorEl) {
+    const existing = document.getElementById('world_bulk_set_field_menu');
+    if (existing) {
+        existing.remove();
+        return;
+    }
+
+    const menu = document.createElement('div');
+    menu.id = 'world_bulk_set_field_menu';
+    menu.classList.add('list-group', 'world_bulk_field_menu');
+    menu.tabIndex = 0;
+
+    /** @type {Array<{ label: string, onClick: () => void }>} */
+    const topItems = [];
+    /** @type {Map<string, Array<{ label: string, onClick: () => void }>>} */
+    const submenuItems = new Map();
+
+    for (const fieldDef of BULK_EDITABLE_FIELDS) {
+        const item = {
+            label: fieldDef.label,
+            onClick: () => {
+                menu.remove();
+                void openBulkSetFieldDialog(name, data, fieldDef);
+            },
+        };
+        if (fieldDef.group === 'top') {
+            topItems.push(item);
+        } else {
+            const list = submenuItems.get(fieldDef.group) || [];
+            list.push(item);
+            submenuItems.set(fieldDef.group, list);
+        }
+    }
+
+    for (const item of topItems) {
+        menu.appendChild(buildBulkMenuLeaf(item.label, item.onClick));
+    }
+
+    const groupTitles = {
+        placement: 'Placement',
+        matching: 'Matching Rules',
+        recursion: 'Recursion & Lifecycle',
+        group: 'Group',
+        other: 'Other',
+    };
+
+    for (const [groupKey, items] of submenuItems.entries()) {
+        const groupLabel = groupTitles[groupKey] || groupKey;
+        menu.appendChild(buildBulkMenuSubmenu(groupLabel, items));
+    }
+
+    // Anchor + show
+    document.body.appendChild(menu);
+    const rect = anchorEl.getBoundingClientRect();
+    menu.style.position = 'absolute';
+    menu.style.top = `${window.scrollY + rect.bottom + 2}px`;
+    menu.style.left = `${window.scrollX + rect.left}px`;
+
+    const onOutside = (event) => {
+        if (!menu.contains(event.target)) {
+            menu.remove();
+            document.removeEventListener('mousedown', onOutside, true);
+            document.removeEventListener('keydown', onEscape, true);
+        }
+    };
+    const onEscape = (event) => {
+        if (event.key === 'Escape') {
+            menu.remove();
+            document.removeEventListener('mousedown', onOutside, true);
+            document.removeEventListener('keydown', onEscape, true);
+        }
+    };
+    document.addEventListener('mousedown', onOutside, true);
+    document.addEventListener('keydown', onEscape, true);
+}
+
+function buildBulkMenuLeaf(labelKey, onClick) {
+    const el = document.createElement('div');
+    el.classList.add('list-group-item', 'world_bulk_field_menu_item');
+    el.textContent = translate(labelKey);
+    el.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onClick();
+    });
+    return el;
+}
+
+function buildBulkMenuSubmenu(labelKey, items) {
+    const wrapper = document.createElement('div');
+    wrapper.classList.add('world_bulk_field_menu_submenu', 'collapsed');
+
+    const header = document.createElement('div');
+    header.classList.add('list-group-item', 'world_bulk_field_menu_item', 'world_bulk_field_menu_submenu_header');
+    const caret = document.createElement('i');
+    caret.classList.add('fa-solid', 'fa-caret-right', 'world_bulk_field_menu_caret');
+    header.appendChild(caret);
+    const labelSpan = document.createElement('span');
+    labelSpan.textContent = translate(labelKey);
+    header.appendChild(labelSpan);
+
+    const body = document.createElement('div');
+    body.classList.add('world_bulk_field_menu_submenu_body');
+    body.style.display = 'none';
+
+    for (const item of items) {
+        body.appendChild(buildBulkMenuLeaf(item.label, item.onClick));
+    }
+
+    header.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const expanded = wrapper.classList.toggle('collapsed');
+        body.style.display = expanded ? 'none' : 'block';
+        caret.classList.toggle('fa-caret-right', expanded);
+        caret.classList.toggle('fa-caret-down', !expanded);
+    });
+
+    wrapper.appendChild(header);
+    wrapper.appendChild(body);
+    return wrapper;
 }
 
 async function applyBulkWorldInfoEntryEnabledState(name, data, uids, enabled) {
@@ -5839,6 +5973,11 @@ async function displayWorldEntries(name, data, navigation = navigation_option.no
 
         resetWorldInfoEntrySelection(name);
         syncWorldInfoEntryBulkToolbar(name, data);
+    });
+
+    $('#world_entries_bulk_set_field').off('click').on('click', function () {
+        if ($(this).hasClass('disabled')) return;
+        openBulkSetFieldMenu(name, data, this);
     });
 
     $('#world_entries_delete_selected').off('click').on('click', async function () {

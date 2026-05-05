@@ -1075,3 +1075,44 @@ select.keyselect+span.select2-container .select2-selection--multiple {
     overflow-y: auto;
     overflow-x: hidden;
 }
+
+.world_bulk_field_menu {
+    z-index: 5000;
+    background: var(--SmartThemeBlurTintColor);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 5px;
+    padding: 4px 0;
+    min-width: 220px;
+    max-height: 70vh;
+    overflow-y: auto;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.world_bulk_field_menu_item {
+    padding: 6px 14px;
+    cursor: pointer;
+    user-select: none;
+    background: transparent;
+    border: none;
+}
+
+.world_bulk_field_menu_item:hover {
+    background: var(--SmartThemeQuoteColor);
+}
+
+.world_bulk_field_menu_submenu_header {
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.world_bulk_field_menu_caret {
+    width: 0.8em;
+    text-align: center;
+}
+
+.world_bulk_field_menu_submenu_body .world_bulk_field_menu_item {
+    padding-left: 28px;
+    font-weight: normal;
+}
