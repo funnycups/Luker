@@ -10685,7 +10685,8 @@ function ensureStyles() {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    max-height: 65vh;
+    flex: 1 1 0%;
+    min-height: 0;
     overflow-y: auto;
     padding: 2px;
     width: 100%;
@@ -11092,7 +11093,8 @@ function ensureStyles() {
 }
 
 .luker-rpg-memory-graph-table-wrap {
-    max-height: 38vh;
+    flex: 1 1 0%;
+    min-height: 0;
     overflow: auto;
     border: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.32));
     border-radius: 8px;
@@ -11134,13 +11136,10 @@ function ensureStyles() {
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
-    padding: 10px 12px;
-    border: 1px solid rgba(123, 163, 196, 0.22);
-    border-radius: 12px;
-    background:
-        radial-gradient(circle at 0% 0%, rgba(76, 175, 80, 0.12), transparent 55%),
-        radial-gradient(circle at 100% 0%, rgba(33, 150, 243, 0.10), transparent 55%),
-        linear-gradient(140deg, rgba(20, 24, 33, 0.85), rgba(11, 14, 20, 0.6));
+    padding: 8px 12px;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(130, 130, 130, 0.32));
+    border-radius: 10px;
+    background: linear-gradient(155deg, rgba(17, 47, 43, 0.18), rgba(31, 30, 44, 0.12));
 }
 
 .luker-injection-title {
