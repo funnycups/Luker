@@ -1073,7 +1073,7 @@ class PresetManager {
                 case 'textgenerationwebui':
                     return textgen_settings;
                 case 'openai':
-                    return getChatCompletionPreset(oai_settings);
+                    return getChatCompletionPreset(oai_settings, { includeConnectionFields: false });
                 case 'context': {
                     const context_preset = getContextSettings();
                     context_preset.name = name || power_user.context.preset;

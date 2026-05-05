@@ -38,8 +38,8 @@ const result = await sendOpenAIRequest('quiet', messages, signal, {
 | Parameter | Purpose |
 |-----------|--------|
 | `llmPresetName` | Load a chat completion preset to override **generation parameters** (temperature, top_p, frequency_penalty, max_tokens, etc.). Does not affect connection fields. |
-| `apiPresetName` | Load **a chat completion preset's connection fields** (chat_completion_source, model, API URL, reverse_proxy, etc.). **Only accepts chat completion preset names, not connection profile names** — for the latter, use `apiSettingsOverride` below (with [`context.connectionProfiles.resolve`](#connection-profile-resolution)). Does not affect generation parameters. |
-| `apiSettingsOverride` | Directly override connection settings with an object (typically from `context.connectionProfiles.resolve(...)`). |
+| `apiPresetName` | Connection profile name. Resolved internally to the corresponding connection-field override and applied to the request — equivalent to calling `context.connectionProfiles.resolve(...)` yourself, just terser at the call site. If both this and `apiSettingsOverride` are provided, the explicit override wins. |
+| `apiSettingsOverride` | Directly override connection settings with an object (typically from `context.connectionProfiles.resolve(...)`). Takes precedence over `apiPresetName`. |
 | `requestScope` | Set to `'extension_internal'` to skip main chat CHAT_COMPLETION hooks. |
 
 ### Tool Calls
@@ -198,9 +198,5 @@ const result = await sendOpenAIRequest('quiet', messages, signal, {
     requestScope: 'extension_internal',
 });
 ```
-
-::: warning Don't pass connection profile names to apiPresetName
-`apiPresetName` expects a chat completion preset name (looked up in `openai_setting_names`), **not** a connection profile name. Passing a profile name there yields a `Preset 'X' not found` warning and the request silently falls back to the current connection settings — no error, but routed to the wrong destination. To route through a connection profile, you **must** resolve it first via `context.connectionProfiles.resolve`.
-:::
 
 `secret_id` request override: In the chat-completions request body, you can use the `secret_id` field to specify which API key to use, overriding the global selection. The `apiSettingsOverride` returned by `connectionProfiles.resolve` already includes the profile's associated `secret_id`, so you usually don't need to set this manually.

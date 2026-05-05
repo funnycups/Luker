@@ -87,6 +87,8 @@ import { t } from './i18n.js';
 import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { applyPatch as applyJsonPatch } from './util/fast-json-patch.js';
+import { AbortReason } from './util/AbortReason.js';
+import { resolveChatCompletionRequestProfile } from './extensions/connection-manager/profile-resolver.js';
 import { COMETAPI_IGNORE_PATTERNS, IGNORE_SYMBOL, MEDIA_DISPLAY, MEDIA_TYPE } from './constants.js';
 import { maybeDeleteLinkedLorebookForPresetDeletion } from './world-info.js';
 import { showUndoToast } from './undo-toast.js';
@@ -652,6 +654,18 @@ function isConnectionProfileOnlyPresetField(presetKey) {
     return connectionProfileOnlyPresetKeys.has(String(presetKey || '').trim());
 }
 
+/**
+ * Build the per-request settings, layering chat-completion preset (generation params),
+ * a connection profile resolved from `apiPresetName`, and a direct `apiSettingsOverride`
+ * on top of the live `oai_settings`. Both `apiPresetName` and `apiSettingsOverride`
+ * are connection-side; if both are passed, `apiSettingsOverride` wins (applied last).
+ *
+ * @param {object} [options]
+ * @param {string} [options.llmPresetName] Chat completion preset name — generation parameters only.
+ * @param {string} [options.apiPresetName] Connection profile name. Resolved internally via `resolveChatCompletionRequestProfile`; the resulting connection-field override is applied to the request.
+ * @param {object|null} [options.apiSettingsOverride] Connection fields override, typically pre-resolved from `connectionProfiles.resolve(...).apiSettingsOverride`. Takes precedence over `apiPresetName` when both are provided.
+ * @returns {object} The merged settings used to build a single request.
+ */
 function getSettingsForRequest({ llmPresetName = '', apiPresetName = '', apiSettingsOverride = null } = {}) {
     const settings = structuredClone(oai_settings);
 
@@ -661,11 +675,13 @@ function getSettingsForRequest({ llmPresetName = '', apiPresetName = '', apiSett
         includeGenerationFields: true,
     });
 
-    const apiPreset = getOpenAIPresetByName(apiPresetName);
-    applyOpenAIPresetToSettings(settings, apiPreset, {
-        includeConnectionFields: true,
-        includeGenerationFields: false,
-    });
+    if (apiPresetName) {
+        const resolved = resolveChatCompletionRequestProfile({
+            profileName: apiPresetName,
+            defaultSource: settings.chat_completion_source,
+        });
+        applyOpenAIConnectionSettingsOverride(settings, resolved?.apiSettingsOverride);
+    }
 
     applyOpenAIConnectionSettingsOverride(settings, apiSettingsOverride);
     return settings;
@@ -5791,7 +5807,7 @@ function upsertCharacterBoundRuntimeOption(presetName, presetBody) {
 
 function getCurrentPresetBodyForBinding() {
     if (isCharacterBoundPresetOptionSelected() && characterBoundPresetState.runtimePresetBody) {
-        return getChatCompletionPreset(oai_settings);
+        return getChatCompletionPreset(oai_settings, { includeConnectionFields: false });
     }
 
     const currentPreset = String(oai_settings.preset_settings_openai ?? '').trim();
@@ -5800,7 +5816,7 @@ function getCurrentPresetBodyForBinding() {
         return structuredClone(openai_settings[presetIndex]);
     }
 
-    return getChatCompletionPreset(oai_settings);
+    return getChatCompletionPreset(oai_settings, { includeConnectionFields: false });
 }
 
 async function setCharacterBoundPresetValue(characterId, presetName, presetBody = null) {
@@ -6133,6 +6149,9 @@ async function getStatusOpen() {
             setOnlineStatus(t`Status check bypassed`);
         }
     } catch (error) {
+        if (error instanceof AbortReason) {
+            return resultCheckStatus();
+        }
         console.error(error);
 
         if (!canBypass) {
@@ -6248,7 +6267,7 @@ async function saveOpenAIPresetBody(name, presetBody, triggerUi = true) {
  * @returns {Promise<void>}
  */
 async function saveOpenAIPreset(name, settings, triggerUi = true) {
-    const presetBody = getChatCompletionPreset(settings, { clone: false });
+    const presetBody = getChatCompletionPreset(settings, { clone: false, includeConnectionFields: false });
     await saveOpenAIPresetBody(name, presetBody, triggerUi);
 }
 

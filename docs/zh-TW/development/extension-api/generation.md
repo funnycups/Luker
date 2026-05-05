@@ -38,8 +38,8 @@ const result = await sendOpenAIRequest('quiet', messages, signal, {
 | 參數 | 用途 |
 |------|------|
 | `llmPresetName` | 載入 chat completion preset 來覆寫**生成參數**（溫度、top_p、frequency_penalty、max_tokens 等）。不影響連線欄位。 |
-| `apiPresetName` | 載入 **chat completion preset 的連線欄位**（chat_completion_source、模型、API URL、reverse_proxy 等）。**只接受 chat completion preset 名稱，不接受 connection profile 名稱**——後者請用下方 `apiSettingsOverride`（搭配 [`context.connectionProfiles.resolve`](#連線設定connection-profile解析)）。不影響生成參數。 |
-| `apiSettingsOverride` | 直接用物件覆寫連線設定（通常來自 `context.connectionProfiles.resolve(...)`）。 |
+| `apiPresetName` | 連線設定名稱。內部解析成對應的連線欄位 override 並套用到請求——等同於自己先呼叫一次 `context.connectionProfiles.resolve(...)`，只是呼叫點更簡潔。如果同時傳了 `apiSettingsOverride`，以顯式 override 為準。 |
+| `apiSettingsOverride` | 直接用物件覆寫連線設定（通常來自 `context.connectionProfiles.resolve(...)`）。優先序高於 `apiPresetName`。 |
 | `requestScope` | 設為 `'extension_internal'` 可跳過主聊天的 CHAT_COMPLETION 鉤子。 |
 
 ### 工具呼叫
@@ -198,9 +198,5 @@ const result = await sendOpenAIRequest('quiet', messages, signal, {
     requestScope: 'extension_internal',
 });
 ```
-
-::: warning 不要把 connection profile 名稱傳給 apiPresetName
-`apiPresetName` 接受的是 chat completion preset 名稱（查 `openai_setting_names`），**不是** connection profile 名稱。如果傳錯，會看到 `Preset 'X' not found` 警告，請求會靜默退回到當前 connection 設定——不報錯，但路由錯了。要走 connection profile，必須先用 `context.connectionProfiles.resolve`。
-:::
 
 `secret_id` 請求覆蓋：在 chat-completions 請求體中，可以透過 `secret_id` 欄位指定使用哪個金鑰，覆蓋全域選擇。`connectionProfiles.resolve` 回傳的 `apiSettingsOverride` 已經包含了 profile 關聯的 `secret_id`，通常不需要單獨處理。

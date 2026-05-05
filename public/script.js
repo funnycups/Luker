@@ -6254,7 +6254,7 @@ export function createRawPrompt(prompt, api, instructOverride, quietToLoud, syst
  * @prop {string} [prefill] An optional prefill for the prompt.
  * @prop {JsonSchema} [jsonSchema] JSON schema to use for the structured generation. Usually requires a special instruction.
  * @prop {string} [llmPresetName] Optional OpenAI chat-completion preset name for this request only.
- * @prop {string} [apiPresetName] Optional OpenAI API preset name for connection settings only.
+ * @prop {string} [apiPresetName] Optional connection profile name; resolved internally to the corresponding connection settings override for this request only.
  * @prop {object} [apiSettingsOverride] Optional OpenAI connection settings override object for this request only.
  * @param {GenerateRawParams} params Parameters for generating a message
  * @returns {Promise<string>} Generated message
@@ -8916,7 +8916,7 @@ function setInContextMessages(msgInContextCount, type) {
  * @typedef {object} AdditionalRequestOptions
  * @property {JsonSchema} [jsonSchema]
  * @property {string} [llmPresetName]
- * @property {string} [apiPresetName]
+ * @property {string} [apiPresetName] Connection profile name; resolved internally to the corresponding connection settings override.
  * @property {object} [apiSettingsOverride]
  */
 
