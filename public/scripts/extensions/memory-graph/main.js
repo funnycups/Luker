@@ -1762,6 +1762,141 @@ function getNodeSummary(node) {
     return '';
 }
 
+function isLongFieldValue(value) {
+    if (typeof value !== 'string') {
+        return false;
+    }
+    return value.length > 80 || /[\r\n]/.test(value);
+}
+
+function formatNodeFieldValueHtml(value) {
+    if (value === null || value === undefined || value === '') {
+        return '<span class="luker-node-detail-empty">—</span>';
+    }
+    if (Array.isArray(value)) {
+        if (value.length === 0) {
+            return '<span class="luker-node-detail-empty">—</span>';
+        }
+        const allScalar = value.every(item => item === null || typeof item !== 'object');
+        if (allScalar) {
+            return value
+                .map(item => `<span class="luker-node-detail-tag">${escapeHtml(String(item))}</span>`)
+                .join(' ');
+        }
+        return `<pre class="luker-node-detail-pre">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+    }
+    if (typeof value === 'object') {
+        return `<pre class="luker-node-detail-pre">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+    }
+    if (typeof value === 'boolean') {
+        return value
+            ? `<span class="luker-node-detail-bool is-true"><i class="fa-solid fa-check fa-fw"></i>${escapeHtml(i18n('Yes'))}</span>`
+            : `<span class="luker-node-detail-bool is-false"><i class="fa-solid fa-xmark fa-fw"></i>${escapeHtml(i18n('No'))}</span>`;
+    }
+    const str = String(value);
+    if (isLongFieldValue(str)) {
+        return `<div class="luker-node-detail-text">${escapeHtml(str)}</div>`;
+    }
+    return `<span class="luker-node-detail-scalar">${escapeHtml(str)}</span>`;
+}
+
+function renderNodeDetailHtml(node) {
+    if (!node || typeof node !== 'object') {
+        return '';
+    }
+    const id = String(node.id || '');
+    const title = String(node.title || node.id || '');
+    const type = String(node.type || '');
+    const level = String(node.level || '');
+    const seqFrom = node.seqFrom ?? null;
+    const seqTo = node.seqTo ?? null;
+    const parentId = String(node.parentId || '');
+    const archived = Boolean(node.archived);
+    const childrenIds = Array.isArray(node.childrenIds) ? node.childrenIds : [];
+    const semanticDepthRaw = node.semanticDepth;
+    const semanticDepth = Number.isFinite(Number(semanticDepthRaw)) ? Number(semanticDepthRaw) : null;
+    const semanticRollup = Boolean(node.semanticRollup);
+    const fields = node.fields && typeof node.fields === 'object' && !Array.isArray(node.fields) ? node.fields : {};
+
+    let seqLabel = '';
+    if (seqFrom !== null && seqFrom !== undefined && seqTo !== null && seqTo !== undefined && seqFrom !== seqTo) {
+        seqLabel = `${seqFrom}–${seqTo}`;
+    } else if (seqTo !== null && seqTo !== undefined && seqTo !== '') {
+        seqLabel = String(seqTo);
+    } else if (seqFrom !== null && seqFrom !== undefined && seqFrom !== '') {
+        seqLabel = String(seqFrom);
+    }
+
+    const metaItems = [];
+    if (parentId) {
+        metaItems.push(`<div class="luker-node-detail-meta-item"><span class="luker-node-detail-meta-key">${escapeHtml(i18n('Parent Node'))}</span><span class="luker-node-detail-meta-val">${escapeHtml(parentId)}</span></div>`);
+    }
+    if (childrenIds.length) {
+        metaItems.push(`<div class="luker-node-detail-meta-item"><span class="luker-node-detail-meta-key">${escapeHtml(i18n('Children'))}</span><span class="luker-node-detail-meta-val">${childrenIds.length}</span></div>`);
+    }
+    if (seqLabel) {
+        metaItems.push(`<div class="luker-node-detail-meta-item"><span class="luker-node-detail-meta-key">${escapeHtml(i18n('Sequence'))}</span><span class="luker-node-detail-meta-val">${escapeHtml(seqLabel)}</span></div>`);
+    }
+    if (semanticDepth !== null && semanticDepth > 0) {
+        metaItems.push(`<div class="luker-node-detail-meta-item"><span class="luker-node-detail-meta-key">${escapeHtml(i18n('Semantic Depth'))}</span><span class="luker-node-detail-meta-val">${escapeHtml(String(semanticDepth))}</span></div>`);
+    }
+    if (semanticRollup) {
+        metaItems.push(`<div class="luker-node-detail-meta-item"><span class="luker-node-detail-meta-key">${escapeHtml(i18n('Semantic Rollup'))}</span><span class="luker-node-detail-meta-val">${escapeHtml(i18n('Yes'))}</span></div>`);
+    }
+    if (archived) {
+        metaItems.push(`<div class="luker-node-detail-meta-item is-warn"><span class="luker-node-detail-meta-key">${escapeHtml(i18n('Archived'))}</span><span class="luker-node-detail-meta-val">${escapeHtml(i18n('Yes'))}</span></div>`);
+    }
+
+    const summaryText = getNodeSummary(node);
+
+    const fieldEntries = Object.entries(fields).filter(([key]) => key !== 'summary');
+    const fieldRowsHtml = fieldEntries.map(([key, value]) => {
+        const isLong = (typeof value === 'string' && isLongFieldValue(value))
+            || (Array.isArray(value) && value.some(item => item !== null && typeof item === 'object'))
+            || (value !== null && typeof value === 'object' && !Array.isArray(value));
+        return `
+<div class="luker-node-detail-row${isLong ? ' is-block' : ''}">
+    <div class="luker-node-detail-key">${escapeHtml(String(key))}</div>
+    <div class="luker-node-detail-value">${formatNodeFieldValueHtml(value)}</div>
+</div>`;
+    }).join('');
+
+    const childrenChipsHtml = childrenIds.length
+        ? childrenIds.map(c => `<span class="luker-node-detail-tag">${escapeHtml(String(c))}</span>`).join(' ')
+        : '';
+
+    return `
+<div class="luker-node-detail">
+    <div class="luker-node-detail-header">
+        <div class="luker-node-detail-title-row">
+            <span class="luker-node-detail-title">${escapeHtml(title)}</span>
+            ${type ? `<span class="luker-node-detail-badge is-type">${escapeHtml(type)}</span>` : ''}
+            ${level ? `<span class="luker-node-detail-badge is-level">${escapeHtml(level)}</span>` : ''}
+        </div>
+        <div class="luker-node-detail-id">#${escapeHtml(id)}</div>
+    </div>
+    ${summaryText ? `<div class="luker-node-detail-summary">${escapeHtml(summaryText)}</div>` : ''}
+    ${metaItems.length ? `<div class="luker-node-detail-meta">${metaItems.join('')}</div>` : ''}
+    ${fieldRowsHtml ? `
+    <div class="luker-node-detail-section">
+        <div class="luker-node-detail-section-title">${escapeHtml(i18n('Fields'))}</div>
+        <div class="luker-node-detail-rows">${fieldRowsHtml}</div>
+    </div>` : `
+    <div class="luker-node-detail-section">
+        <div class="luker-node-detail-empty-block">${escapeHtml(i18n('No fields.'))}</div>
+    </div>`}
+    ${childrenChipsHtml ? `
+    <div class="luker-node-detail-section">
+        <div class="luker-node-detail-section-title">${escapeHtml(i18n('Children'))}</div>
+        <div class="luker-node-detail-tags">${childrenChipsHtml}</div>
+    </div>` : ''}
+    <details class="luker-node-detail-raw">
+        <summary>${escapeHtml(i18n('View Raw JSON'))}</summary>
+        <pre>${escapeHtml(JSON.stringify(node, null, 2))}</pre>
+    </details>
+</div>`;
+}
+
 function setNodeSummary(node, summaryText) {
     if (!node || typeof node !== 'object') {
         return;
@@ -9690,7 +9825,7 @@ ${renderEdgeFormEditorHtml(latest, editorId, edge, selectedEdgeIndex)}
             return;
         }
         await context.callGenericPopup(
-            `<pre style="white-space:pre-wrap; max-height:68vh; overflow:auto;">${escapeHtml(JSON.stringify(node, null, 2))}</pre>`,
+            renderNodeDetailHtml(node),
             context.POPUP_TYPE.TEXT,
             '',
             { wide: true, large: true, allowVerticalScrolling: true },
@@ -9713,7 +9848,7 @@ ${renderEdgeFormEditorHtml(latest, editorId, edge, selectedEdgeIndex)}
             return;
         }
         await context.callGenericPopup(
-            `<pre style="white-space:pre-wrap; max-height:68vh; overflow:auto;">${escapeHtml(JSON.stringify(node, null, 2))}</pre>`,
+            renderNodeDetailHtml(node),
             context.POPUP_TYPE.TEXT,
             '',
             { wide: true, large: true, allowVerticalScrolling: true },
@@ -11334,6 +11469,283 @@ function ensureStyles() {
     max-height: 68vh;
     overflow: auto;
     box-sizing: border-box;
+}
+
+.luker-node-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    text-align: left;
+    width: 100%;
+    min-width: 0;
+    max-height: 68vh;
+    overflow: auto;
+    padding-right: 4px;
+    box-sizing: border-box;
+}
+
+.luker-node-detail-header {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(130, 130, 130, 0.28));
+}
+
+.luker-node-detail-title-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.luker-node-detail-title {
+    font-size: 17px;
+    font-weight: 700;
+    line-height: 1.3;
+    word-break: break-word;
+}
+
+.luker-node-detail-id {
+    font-size: 11.5px;
+    opacity: 0.6;
+    font-family: var(--monoFontFamily, monospace);
+    letter-spacing: 0.02em;
+}
+
+.luker-node-detail-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 9px;
+    border-radius: 999px;
+    line-height: 1.6;
+    white-space: nowrap;
+    border: 1px solid transparent;
+}
+
+.luker-node-detail-badge.is-type {
+    background: rgba(120, 160, 220, 0.18);
+    color: var(--SmartThemeBodyColor, inherit);
+    border-color: rgba(120, 160, 220, 0.32);
+}
+
+.luker-node-detail-badge.is-level {
+    background: rgba(168, 137, 220, 0.18);
+    color: var(--SmartThemeBodyColor, inherit);
+    border-color: rgba(168, 137, 220, 0.32);
+}
+
+.luker-node-detail-summary {
+    font-size: 13px;
+    line-height: 1.55;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: rgba(120, 160, 220, 0.08);
+    border-left: 3px solid rgba(120, 160, 220, 0.5);
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+
+.luker-node-detail-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.luker-node-detail-meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.05);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(130, 130, 130, 0.22));
+}
+
+.luker-node-detail-meta-item.is-warn {
+    background: rgba(220, 150, 80, 0.14);
+    border-color: rgba(220, 150, 80, 0.35);
+}
+
+.luker-node-detail-meta-key {
+    opacity: 0.65;
+}
+
+.luker-node-detail-meta-val {
+    font-weight: 600;
+    word-break: break-word;
+}
+
+.luker-node-detail-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.luker-node-detail-section-title {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    opacity: 0.7;
+}
+
+.luker-node-detail-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(130, 130, 130, 0.22));
+    background: var(--SmartThemeBorderColor, rgba(130, 130, 130, 0.18));
+}
+
+.luker-node-detail-row {
+    display: grid;
+    grid-template-columns: minmax(110px, 22%) 1fr;
+    gap: 12px;
+    padding: 8px 12px;
+    background: var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.02));
+    align-items: start;
+}
+
+.luker-node-detail-row.is-block {
+    grid-template-columns: 1fr;
+    gap: 4px;
+}
+
+.luker-node-detail-key {
+    font-size: 12px;
+    font-weight: 600;
+    opacity: 0.75;
+    word-break: break-word;
+    font-family: var(--monoFontFamily, monospace);
+    padding-top: 2px;
+}
+
+.luker-node-detail-value {
+    font-size: 13px;
+    line-height: 1.5;
+    word-break: break-word;
+    min-width: 0;
+}
+
+.luker-node-detail-scalar {
+    word-break: break-word;
+}
+
+.luker-node-detail-text {
+    white-space: pre-wrap;
+    word-break: break-word;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.05);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(130, 130, 130, 0.18));
+    line-height: 1.55;
+}
+
+.luker-node-detail-empty {
+    opacity: 0.45;
+    font-style: italic;
+}
+
+.luker-node-detail-empty-block {
+    font-size: 12.5px;
+    opacity: 0.55;
+    font-style: italic;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.04);
+    border: 1px dashed var(--SmartThemeBorderColor, rgba(130, 130, 130, 0.28));
+    text-align: center;
+}
+
+.luker-node-detail-bool {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-weight: 600;
+}
+
+.luker-node-detail-bool.is-true {
+    background: rgba(120, 200, 130, 0.18);
+    color: rgb(70, 160, 90);
+}
+
+.luker-node-detail-bool.is-false {
+    background: rgba(200, 120, 120, 0.16);
+    opacity: 0.75;
+}
+
+.luker-node-detail-tag {
+    display: inline-flex;
+    align-items: center;
+    margin: 2px 4px 2px 0;
+    padding: 2px 8px;
+    font-size: 11.5px;
+    border-radius: 999px;
+    background: rgba(120, 160, 220, 0.14);
+    border: 1px solid rgba(120, 160, 220, 0.28);
+    word-break: break-word;
+}
+
+.luker-node-detail-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+}
+
+.luker-node-detail-pre {
+    margin: 0;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.06);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(130, 130, 130, 0.22));
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 280px;
+    overflow: auto;
+}
+
+.luker-node-detail-raw {
+    border-top: 1px dashed var(--SmartThemeBorderColor, rgba(130, 130, 130, 0.3));
+    padding-top: 8px;
+    margin-top: 4px;
+}
+
+.luker-node-detail-raw > summary {
+    cursor: pointer;
+    font-size: 12px;
+    opacity: 0.7;
+    user-select: none;
+    padding: 4px 0;
+    list-style: revert;
+}
+
+.luker-node-detail-raw > summary:hover {
+    opacity: 1;
+}
+
+.luker-node-detail-raw > pre {
+    margin: 6px 0 0 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.08);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(130, 130, 130, 0.22));
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 50vh;
+    overflow: auto;
 }
 
 .luker-injection-section-head {
