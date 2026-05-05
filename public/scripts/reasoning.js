@@ -870,7 +870,7 @@ function selectReasoningTemplateCallback(args, name) {
     return foundName;
 }
 
-function registerReasoningSlashCommands() {
+export function registerReasoningSlashCommands() {
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'reasoning-get',
         aliases: ['get-reasoning'],
@@ -1656,7 +1656,6 @@ export async function loadReasoningTemplates(data) {
 export function initReasoning() {
     loadReasoningSettings();
     setReasoningEventHandlers();
-    registerReasoningSlashCommands();
     registerReasoningMacros();
     registerReasoningAppEvents();
 }
