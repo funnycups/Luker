@@ -4053,6 +4053,7 @@ function releaseWorldInfoDrawerHeight(editOutlet) {
 function resetWorldInfoEntrySelection(name = '') {
     selectedWorldInfoEntryBook = String(name || '').trim();
     selectedWorldInfoEntryUids.clear();
+    closeBulkSetFieldMenu();
 }
 
 function ensureWorldInfoEntrySelectionContext(name = '') {
@@ -4460,20 +4461,37 @@ function readBulkFieldInput(fieldDef, inputEl) {
 }
 
 /**
+ * Internal: holds the cleanup callback for the currently-open bulk-set-field
+ * menu, or null when no menu is open. The callback removes the menu DOM node
+ * AND detaches the document-level mousedown / keydown listeners.
+ */
+let _activeBulkMenuTeardown = null;
+
+/**
+ * Close the active bulk-set-field menu, if any. Idempotent — safe to call
+ * when no menu is open. Called when the user dismisses the menu, when a
+ * leaf is clicked, when the user switches world books, etc.
+ */
+function closeBulkSetFieldMenu() {
+    if (typeof _activeBulkMenuTeardown === 'function') {
+        _activeBulkMenuTeardown();
+    }
+    _activeBulkMenuTeardown = null;
+}
+
+/**
  * Open the bulk-set-field dropdown menu near the toolbar button.
  * Built dynamically from BULK_EDITABLE_FIELDS plus the two special items
- * (Trigger Strategy, Matched Fields). Closes on outside click or item click.
+ * (Trigger Strategy, Matched Fields). Closes on outside click, Escape,
+ * leaf click, or world-book switch.
  *
  * @param {string} name
  * @param {object} data
  * @param {HTMLElement} anchorEl  the toolbar button
  */
 function openBulkSetFieldMenu(name, data, anchorEl) {
-    const existing = document.getElementById('world_bulk_set_field_menu');
-    if (existing) {
-        existing.remove();
-        return;
-    }
+    // Always close any prior menu before opening a new one — single-active invariant.
+    closeBulkSetFieldMenu();
 
     const menu = document.createElement('div');
     menu.id = 'world_bulk_set_field_menu';
@@ -4489,7 +4507,7 @@ function openBulkSetFieldMenu(name, data, anchorEl) {
         const item = {
             label: fieldDef.label,
             onClick: () => {
-                menu.remove();
+                closeBulkSetFieldMenu();
                 void openBulkSetFieldDialog(name, data, fieldDef);
             },
         };
@@ -4519,7 +4537,6 @@ function openBulkSetFieldMenu(name, data, anchorEl) {
         menu.appendChild(buildBulkMenuSubmenu(groupLabel, items));
     }
 
-    // Anchor + show
     document.body.appendChild(menu);
     const rect = anchorEl.getBoundingClientRect();
     menu.style.position = 'absolute';
@@ -4528,20 +4545,22 @@ function openBulkSetFieldMenu(name, data, anchorEl) {
 
     const onOutside = (event) => {
         if (!menu.contains(event.target)) {
-            menu.remove();
-            document.removeEventListener('mousedown', onOutside, true);
-            document.removeEventListener('keydown', onEscape, true);
+            closeBulkSetFieldMenu();
         }
     };
     const onEscape = (event) => {
         if (event.key === 'Escape') {
-            menu.remove();
-            document.removeEventListener('mousedown', onOutside, true);
-            document.removeEventListener('keydown', onEscape, true);
+            closeBulkSetFieldMenu();
         }
     };
     document.addEventListener('mousedown', onOutside, true);
     document.addEventListener('keydown', onEscape, true);
+
+    _activeBulkMenuTeardown = () => {
+        menu.remove();
+        document.removeEventListener('mousedown', onOutside, true);
+        document.removeEventListener('keydown', onEscape, true);
+    };
 }
 
 function buildBulkMenuLeaf(labelKey, onClick) {
