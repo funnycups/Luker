@@ -4805,11 +4805,23 @@ function openBulkSetFieldMenu(name, data, anchorEl) {
         void openBulkSetMatchedFieldsDialog(name, data);
     }));
 
-    document.body.appendChild(menu);
+    // Mount inside #world_popup (the drawer's content) rather than document.body so that
+    // clicks in the menu count as clicks "inside" the world-info drawer for any outer
+    // listeners that close drawers / panels on outside clicks. Fall back to body if the
+    // popup element is missing for any reason.
+    const mountTarget = document.getElementById('world_popup') || document.body;
+    mountTarget.appendChild(menu);
     const rect = anchorEl.getBoundingClientRect();
-    menu.style.position = 'absolute';
-    menu.style.top = `${window.scrollY + rect.bottom + 2}px`;
-    menu.style.left = `${window.scrollX + rect.left}px`;
+    menu.style.position = 'fixed';
+    menu.style.top = `${rect.bottom + 2}px`;
+    menu.style.left = `${rect.left}px`;
+
+    // Belt-and-suspenders: stop pointer events from bubbling out of the menu so that no
+    // outer listener (drawer close-on-outside-click, focus trackers, etc.) reacts to a
+    // click that is logically inside our menu.
+    const stopBubble = (event) => { event.stopPropagation(); };
+    menu.addEventListener('mousedown', stopBubble);
+    menu.addEventListener('click', stopBubble);
 
     const onOutside = (event) => {
         if (!menu.contains(event.target)) {
