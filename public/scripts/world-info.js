@@ -4182,16 +4182,19 @@ const BULK_EDITABLE_FIELDS = [
     { key: 'depth', group: 'top', label: 'Injection Depth', control: 'number',
         min: 0, step: 1, validate: (v) => Number.isInteger(v) && v >= 0 },
     { key: 'position', group: 'top', label: 'Insertion Position', control: 'enum',
-        options: [
-            { value: world_info_position.before,    label: '⌀ Before Char' },
-            { value: world_info_position.after,     label: '⌀ After Char' },
-            { value: world_info_position.ANTop,     label: '↑ Author Note Top' },
-            { value: world_info_position.ANBottom,  label: '↓ Author Note Bottom' },
-            { value: world_info_position.atDepth,   label: '@D Custom Depth' },
-            { value: world_info_position.EMTop,     label: '↑ Example Top' },
-            { value: world_info_position.EMBottom,  label: '↓ Example Bottom' },
-            { value: world_info_position.outlet,    label: '⊳ Outlet' },
-        ] },
+      // Labels here reuse the per-entry editor's existing i18n keys (public/index.html:7374-7404)
+      // so locale files don't need re-translation. The atDepth row collapses the editor's three
+      // role-specific entries (System/User/AI) into one — `role` is a separate field in this registry.
+      options: [
+          { value: world_info_position.before,    label: 'Before Char Defs' },
+          { value: world_info_position.after,     label: 'After Char Defs' },
+          { value: world_info_position.ANTop,     label: 'Before AN' },
+          { value: world_info_position.ANBottom,  label: 'After AN' },
+          { value: world_info_position.atDepth,   label: 'at Depth' },
+          { value: world_info_position.EMTop,     label: 'Before EM' },
+          { value: world_info_position.EMBottom,  label: 'After EM' },
+          { value: world_info_position.outlet,    label: 'Outlet' },
+      ]},
     { key: 'probability', group: 'top', label: 'Trigger Probability', control: 'number',
         min: 0, max: 100, step: 1,
         validate: (v) => Number.isFinite(v) && v >= 0 && v <= 100 },
