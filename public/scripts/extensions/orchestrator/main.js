@@ -194,6 +194,7 @@ import {
     getDisplayedScopeLabel,
     getEditorByScope,
     getExplicitScopeFromElement,
+    getIterationDefaultScope,
     getPopupEditingLabel,
     getProfileTitleForScope,
 } from './editor-display.js';
@@ -2141,7 +2142,7 @@ function getAiIterationRollbackStartIndex(messages, messageIndex) {
 function createAiIterationSession(context, settings) {
     if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_AGENDA) {
         syncCharacterEditorWithActiveAvatar(context);
-        const scope = getDisplayedScope(context, settings);
+        const scope = getIterationDefaultScope(context);
         const editor = getAgendaEditorByScope(scope);
         const avatar = String(getCurrentAvatar(context) || '').trim();
         const sourceName = scope === 'character'
@@ -2166,7 +2167,7 @@ function createAiIterationSession(context, settings) {
         };
     }
     syncCharacterEditorWithActiveAvatar(context);
-    const scope = getDisplayedScope(context, settings);
+    const scope = getIterationDefaultScope(context);
     const editor = getEditorByScope(scope);
     const avatar = String(getCurrentAvatar(context) || '').trim();
     const sourceName = scope === 'character'
@@ -4597,8 +4598,7 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
 async function openAiIterationStudio(context, settings, root) {
     ensureStyles(UI_BLOCK_ID);
     const activeAvatar = String(getCurrentAvatar(context) || '').trim();
-    const displayedScope = getDisplayedScope(context, settings);
-    const historyScope = displayedScope === 'character' && activeAvatar ? 'character' : 'global';
+    const historyScope = getIterationDefaultScope(context);
     const enableSessionHistory = true;
     let historyState = createEmptyAiIterationHistoryState();
     try {

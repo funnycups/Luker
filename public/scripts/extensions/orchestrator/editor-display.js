@@ -53,6 +53,10 @@ export function getDisplayedScope(context, settings) {
     return getDisplayedScopeForMode(context, settings, getExecutionMode(settings));
 }
 
+export function getIterationDefaultScope(context) {
+    return String(getCurrentAvatar(context) || '').trim() ? 'character' : 'global';
+}
+
 export function getEditorByScope(scope) {
     return scope === 'character' ? uiState.characterEditor : uiState.globalEditor;
 }
