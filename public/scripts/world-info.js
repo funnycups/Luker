@@ -4178,15 +4178,76 @@ function setWorldInfoEntrySelected(name, uid, selected, data = null) {
 
 /** @type {BulkEditableField[]} */
 const BULK_EDITABLE_FIELDS = [
-    {
-        key: 'depth',
-        group: 'top',
-        label: 'Injection Depth',
-        control: 'number',
-        min: 0,
-        step: 1,
-        validate: (v) => Number.isInteger(v) && v >= 0,
-    },
+    // top-level
+    { key: 'depth', group: 'top', label: 'Injection Depth', control: 'number',
+        min: 0, step: 1, validate: (v) => Number.isInteger(v) && v >= 0 },
+    { key: 'position', group: 'top', label: 'Insertion Position', control: 'enum',
+        options: [
+            { value: world_info_position.before,    label: '⌀ Before Char' },
+            { value: world_info_position.after,     label: '⌀ After Char' },
+            { value: world_info_position.ANTop,     label: '↑ Author Note Top' },
+            { value: world_info_position.ANBottom,  label: '↓ Author Note Bottom' },
+            { value: world_info_position.atDepth,   label: '@D Custom Depth' },
+            { value: world_info_position.EMTop,     label: '↑ Example Top' },
+            { value: world_info_position.EMBottom,  label: '↓ Example Bottom' },
+            { value: world_info_position.outlet,    label: '⊳ Outlet' },
+        ] },
+    { key: 'probability', group: 'top', label: 'Trigger Probability', control: 'number',
+        min: 0, max: 100, step: 1,
+        validate: (v) => Number.isFinite(v) && v >= 0 && v <= 100 },
+
+    // placement
+    { key: 'order', group: 'placement', label: 'Order', control: 'number', step: 1,
+        validate: (v) => Number.isInteger(v) },
+    { key: 'role', group: 'placement', label: 'Role', control: 'enum',
+        options: [
+            { value: 0, label: 'System' },
+            { value: 1, label: 'User' },
+            { value: 2, label: 'Assistant' },
+        ] },
+    { key: 'outletName', group: 'placement', label: 'Outlet Name', control: 'text' },
+    { key: 'ignoreBudget', group: 'placement', label: 'Ignore Budget', control: 'boolean' },
+
+    // matching
+    { key: 'selective', group: 'matching', label: 'Use Secondary Keys', control: 'boolean' },
+    { key: 'selectiveLogic', group: 'matching', label: 'Selective Logic', control: 'enum',
+        options: [
+            { value: 0, label: 'AND ANY' },
+            { value: 1, label: 'NOT ALL' },
+            { value: 2, label: 'NOT ANY' },
+            { value: 3, label: 'AND ALL' },
+        ] },
+    { key: 'scanDepth', group: 'matching', label: 'Scan Depth', control: 'number',
+        min: 0, step: 1, validate: (v) => Number.isInteger(v) && v >= 0 },
+    { key: 'caseSensitive', group: 'matching', label: 'Case Sensitive', control: 'boolean' },
+    { key: 'matchWholeWords', group: 'matching', label: 'Match Whole Words', control: 'boolean' },
+    { key: 'useGroupScoring', group: 'matching', label: 'Use Group Scoring', control: 'boolean' },
+
+    // recursion & lifecycle
+    { key: 'preventRecursion', group: 'recursion', label: 'Prevent Recursion', control: 'boolean' },
+    { key: 'excludeRecursion', group: 'recursion', label: 'Exclude from Recursion', control: 'boolean' },
+    { key: 'delayUntilRecursion', group: 'recursion', label: 'Delay Until Recursion', control: 'number',
+        min: 0, step: 1, validate: (v) => Number.isInteger(v) && v >= 0 },
+    { key: 'sticky', group: 'recursion', label: 'Sticky', control: 'number',
+        min: 0, step: 1, validate: (v) => Number.isInteger(v) && v >= 0 },
+    { key: 'cooldown', group: 'recursion', label: 'Cooldown', control: 'number',
+        min: 0, step: 1, validate: (v) => Number.isInteger(v) && v >= 0 },
+    { key: 'delay', group: 'recursion', label: 'Delay', control: 'number',
+        min: 0, step: 1, validate: (v) => Number.isInteger(v) && v >= 0 },
+
+    // group
+    { key: 'group', group: 'group', label: 'Group', control: 'text' },
+    { key: 'groupOverride', group: 'group', label: 'Group Override', control: 'boolean' },
+    { key: 'groupWeight', group: 'group', label: 'Group Weight', control: 'number',
+        min: 0, step: 1, validate: (v) => Number.isFinite(v) && v >= 0 },
+
+    // other
+    { key: 'useProbability', group: 'other', label: 'Use Probability Trigger', control: 'boolean' },
+    { key: 'automationId', group: 'other', label: 'Automation ID', control: 'text' },
+    { key: 'addMemo', group: 'other', label: 'Add Memo', control: 'boolean' },
+    // Note: `triggers` (generation-type filter array) is intentionally excluded
+    // from this iteration — its multi-select array semantics need a dedicated
+    // UI; out of scope per spec section 2.
 ];
 
 /**
