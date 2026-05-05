@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Luker Documentation",
   "scripts": {
-    "dev": "vitepress dev",
+    "dev": "vitepress dev --host 127.0.0.1",
     "build": "vitepress build",
     "preview": "vitepress preview"
   },
