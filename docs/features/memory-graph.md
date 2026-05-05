@@ -1,283 +1,324 @@
 # Memory Graph
 
-Memory Graph is one of Luker's most core exclusive features, specifically designed to solve the most common pain point in roleplay — **character amnesia**.
+Memory Graph solves one of the most common pain points in long-running roleplay: **character amnesia**.
 
-LLM context windows are limited. After conversations exceed several hundred turns, important early information (character relationships, key events, world settings) gets truncated and lost, causing characters to "forget" what happened before. Memory Graph automatically extracts key information from conversations into structured knowledge nodes and intelligently recalls and injects them into the prompt when needed, enabling characters to consistently remember important relationships, events, and world settings across hundreds of conversation turns.
+LLM context windows are limited. After a few hundred turns, important early information — relationships, key events, world rules — gets truncated and lost. The character "forgets" what happened. Memory Graph automatically extracts key information from your conversation into structured knowledge nodes, and recalls them back into the prompt when they become relevant — so a character can remember the same things you remember, even 500 turns later.
 
-Unlike simple keyword search or vector retrieval, Memory Graph uses graph structures and multi-layer algorithms to ensure recalled memories are both semantically relevant and comprehensively covered, avoiding the pitfall of only remembering the "most similar" content while missing other important information.
+It's not just a simple keyword search or vector retrieval. Memory Graph uses graph structures and multi-layer algorithms to keep recall both *semantically relevant* and *comprehensively covered* — so it doesn't just pull "the most similar five things" while losing the rest.
 
 ## How It Works
 
-Memory Graph's workflow can be summarized in three phases: **Auto-extraction → Intelligent Recall → Hierarchical Compression**.
+Memory Graph runs three things in the background: **automatic extraction**, **smart recall**, and **hierarchical compression**.
 
-### Auto-extraction
+### Automatic extraction
 
-After each AI response, Memory Graph automatically analyzes the latest conversation content and extracts information worth remembering. The extraction process is performed by an LLM, outputting structured knowledge nodes.
+After each AI reply, Memory Graph examines what was said and extracts anything worth remembering. The extraction itself is done by an LLM and produces structured knowledge nodes.
 
-Extracted information is divided into two major tiers and four default types:
+Nodes come in two tiers. The **default schema** ships with three types listed below — but the schema is fully customizable. You can add new node types (a `magic_system` for fantasy, a `faction` for politics, an `inventory_item` for survival, whatever your card needs) and remove any of the defaults. The fields shown here are also defaults; each type's fields can be edited from the Schema Editor (covered below).
 
-**Semantic Layer Nodes** (persistent structured knowledge, merged and updated):
-
-| Type | Description | Example |
-|------|-------------|--------|
-| Character State | Character's name, identity, goals, relationships, current state | "Eileen is a healer, currently injured" |
-| Location State | Location's name, controller, danger level, resources | "Dark Forest is controlled by elves, high danger level" |
-| Rule Constraint | Rules and restrictions in the world setting | "Magic cannot be used in the Holy Domain" |
-
-**Event Layer Nodes** (plot records, new nodes created each extraction, never merged):
+**Semantic-layer nodes** (persistent structured knowledge, merged and updated):
 
 | Type | Description | Example |
-|------|-------------|--------|
-| Event Summary | Important events that occurred in the plot | "The protagonist was ambushed in the forest" |
+|---|---|---|
+| `character_sheet` | A character's name, identity, goals, relationships, current state | "Eileen is a healer, currently injured" |
+| `location_state` | A place's name, controller, danger level, resources | "Dark Forest is controlled by elves, high danger" |
 
-::: info Special Nature of Event Nodes
-Event nodes are fundamentally different from other types:
+**Event-layer nodes** (plot records, new each extraction, never merged):
 
-- **New nodes are created each extraction**: Titles auto-increment and are not merged into existing nodes like character states, because events are independent records on the timeline
-- **Highest-tier timeline is always injected**: Event nodes are treated as core storyline context; the highest-tier timeline summaries are always injected into the prompt, ensuring the AI maintains awareness of the overall plot direction
-- **Compressed lower-tier events are hidden**: When events accumulate too many, old events are compressed into higher-tier summaries. Compressed lower-tier event nodes are no longer permanently injected, but remain in the graph and can be rediscovered through the recall mechanism when needed
+| Type | Description | Example |
+|---|---|---|
+| `event` | An important event that occurred | "The protagonist was ambushed in the forest" |
 
-In simple terms: the AI can always see the "major events" (highest-tier summaries), but specific event details are only recalled and supplemented when the conversation touches on them.
+::: info Event nodes are different
+Event nodes are fundamentally not the same as the others:
+
+- **A new node is created on every extraction.** Titles auto-increment. Events are independent points on a timeline; they don't merge.
+- **The highest-tier timeline is always injected.** Event nodes are treated as core storyline context — top-level summaries are persistent in the prompt, ensuring the AI keeps a sense of the plot.
+- **Compressed lower-tier events are hidden.** When events accumulate too much, old events are compressed upward into higher-tier summaries. The lower-tier events stay in the graph and can be re-discovered through recall when the conversation calls them back, but they aren't injected by default.
+
+In short: the AI always sees the "big picture" (top-level summaries), and specific event details surface only when the conversation makes them relevant.
 :::
 
-You can control extraction frequency through the "Extraction Interval" setting — for example, setting it to `2` means extraction is triggered every 2 AI responses, reducing LLM call overhead.
+You can throttle extraction with the **Extraction Interval** setting — for example, `2` means extraction runs every 2 AI replies, halving the LLM cost.
 
-### Intelligent Recall
+### Smart recall
 
-When you send a new message triggering AI generation, Memory Graph recalls the most relevant content from accumulated memories based on the current conversation context and injects it into the prompt for AI reference.
+When you send a message, Memory Graph looks at the conversation context and recalls the most relevant nodes from accumulated memory, then injects them into the prompt for the AI to use.
 
-Memory Graph supports multiple recall methods:
+| Method | Description |
+|---|---|
+| LLM Recall | The LLM directly picks relevant nodes from the memory store, with multi-round deep exploration |
+| Hybrid | Combines vector retrieval, graph diffusion, lexical match, and other signals into a multi-dimensional score |
+| Hybrid + Reranking | Hybrid, then a reranking model refines the top candidates |
+| Hybrid + LLM | Hybrid, then the LLM does a second-pass filter |
 
-| Recall Method | Description |
-|---------------|-------------|
-| LLM Recall | Let the LLM directly select relevant nodes from the memory store, supporting multi-round deep exploration |
-| Hybrid Recall | Combines vector retrieval, graph diffusion, lexical matching, and other signals for comprehensive scoring |
-| Hybrid + Reranking | Uses a reranking model on top of hybrid recall to further optimize results |
-| Hybrid + LLM | Lets the LLM perform secondary filtering on candidate nodes on top of hybrid recall |
+::: tip Which one?
+**LLM Recall is the default because it's the easiest to configure** — you already have an LLM API set up for chat, and that's all it needs.
 
-LLM Recall is used by default; you can switch recall methods in the Memory Graph settings panel.
+**Hybrid recall is faster and more in line with how production retrieval systems work** (vector search + graph propagation), but it requires you to configure an embedding model first (in the Vector Storage extension settings). For higher-quality results, you can stack on a reranking model (Hybrid+Rerank) or an LLM filter (Hybrid+LLM).
 
-### Hierarchical Compression
+Rule of thumb: stay on LLM Recall while you're trying things out. If you start hitting cost or latency walls — or if you want recall to stay deterministic across model swaps — switch to Hybrid.
+:::
 
-As conversations progress, event memories continuously accumulate. Memory Graph automatically performs hierarchical compression on old event nodes — merging multiple related events into a higher-tier summary node, preserving core information while controlling total memory volume.
+### Hierarchical compression
 
-Compression is recursive: when summary nodes at a certain tier also exceed the threshold, they are further compressed into even higher-tier summaries, recursing upward until node count drops below the threshold. For example, multiple battle events are first compressed into "Forest Campaign," and multiple campaigns may be further compressed into "Northern Expedition." Compressed summary nodes can still be expanded to view the original sub-events.
+As the conversation goes on, event memories pile up. Memory Graph compresses old events upward — multiple related events become a higher-tier summary node, preserving the core information while keeping total memory bounded.
 
-## Getting Started
+Compression is recursive. When summaries at one tier exceed the threshold, they get compressed again, recursing upward until node count drops below the limit. For example, multiple battle events first compress into "Forest Campaign," and multiple campaigns may compress into "Northern Expedition." Compressed summaries can still be expanded back to view the originals.
 
-### Basic Setup
+## What it actually looks like
 
-1. Find "Memory Graph" in Luker's extension settings
-2. Toggle on "Enable Memory Graph"
-3. Start chatting — Memory Graph works automatically
+Most readers want to know: what does an extracted node *look* like? Here's a real example.
 
-### Configuring LLM Presets
+Suppose you and Eileen (a healer NPC) have this exchange:
 
-Memory Graph's extraction and recall require LLM calls, but **can use different models and presets from the main conversation**. This means you can:
+> **You:** I hand the herbal salve I found to Eileen.
+>
+> **Eileen:** ...thank you. But are you sure? This stuff is valuable out there.
+>
+> **You:** You're hurt worse than I am. Besides — we're friends, aren't we?
+>
+> **Eileen:** ...yes. Friends. I'll remember this.
 
-- Use a high-quality model for the main conversation (e.g., Claude Opus) and a more economical model for Memory Graph (e.g., Claude Haiku)
-- Specify different API connections and Chat Completion presets for extraction and recall separately
+After this turn, Memory Graph runs extraction in the background and produces structured nodes like:
 
-Related settings:
+```json
+{
+  "id": "n_eileen",
+  "type": "character_sheet",
+  "level": "semantic",
+  "title": "Eileen",
+  "fields": {
+    "aliases": "",
+    "traits": "Quiet, weighs her words, careful — measured even when grateful",
+    "identity": "Traveling healer met in the Northern Reach",
+    "state": "Wounded; recovering after using the herbal salve",
+    "goal": "Repay the debt; heal enough to walk on her own again",
+    "inventory": "Herbal salve (just received), light pack",
+    "language_sample": "...thank you. But are you sure?",
+    "core_note": "Just acknowledged the friendship explicitly; treats the salve as a debt to remember",
+    "addressing_user": "By name, with deliberate pauses"
+  },
+  "floor": 12
+}
+```
+
+```json
+{
+  "id": "evt_20260505_001",
+  "type": "event",
+  "level": "semantic",
+  "title": "Summary 1",
+  "fields": {
+    "summary": "时间:Day 12, late afternoon; The user offered the herbal salve to wounded Eileen. Eileen accepted and explicitly acknowledged the friendship and the debt."
+  },
+  "floor": 12
+}
+```
+
+::: info These fields are the default schema
+The fields shown above (`aliases / traits / identity / state / goal / inventory / language_sample / core_note / addressing_user` for `character_sheet`, `summary` for `event`) are the real default columns. The Schema Editor lets you rename them, drop some, or add new types entirely.
+:::
+
+You can see all of this in the panel, either as a graph or as a table:
+
+![Memory graph view](/images/memory-graph/memory-graph-view.png)
+
+![Memory table view](/images/memory-graph/memory-table-view.png)
+
+Click any node to see its full detail:
+
+![Single node detail](/images/memory-graph/memory-node-detail.png)
+
+50 turns later, you say *"By the way, Eileen — you said you owed me one earlier..."*. Memory Graph's recall mechanism pulls those nodes (and others) back, injects them into the prompt's `SYSTEM` section before the main model writes:
+
+![Recent injection panel](/images/memory-graph/memory-recent-injection.png)
+
+That's Memory Graph's job — it doesn't let the AI forget the small thing from 50 turns ago that suddenly matters now.
+
+## Quick Start (5 minutes)
+
+### Step 1 — Enable
+
+Open **Extensions** drawer → **Memory** → toggle **Enable** on.
+
+![Memory toggle and presets](/images/memory-graph/memory-toggle.png)
+
+### Step 2 — Pick models for extraction and recall
+
+Memory Graph's extraction and recall both call an LLM, but they **don't have to use the same model as your main chat**. Set them in the same panel:
 
 | Setting | Description |
-|---------|-------------|
-| Extraction API Preset | API connection preset for extraction (empty = use main connection) |
-| Extraction Preset | Chat Completion preset for extraction |
-| Recall API Preset | API connection preset for recall |
-| Recall Preset | Chat Completion preset for recall |
+|---|---|
+| Recall API Preset | API connection for recall |
+| Recall Chat Completion Preset | Chat Completion preset for recall |
+| Extraction (Generate) API Preset | API connection for extraction |
+| Extraction (Generate) Chat Completion Preset | Chat Completion preset for extraction |
 
-### Adjusting Recall Behavior
+A common pattern: main chat on Claude Opus, Memory Graph on Haiku or Gemini Flash. Extraction does structured field-filling, not prose — a small model handles it fine and saves real money.
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| Enable Recall | `true` | Whether to enable recall |
-| Recall Method | `llm` | Recall method: `llm` / `hybrid` / `hybrid_rerank` / `hybrid_llm` |
-| LLM Recall Max Iterations | `3` | Maximum iteration rounds for LLM recall |
-| Recall Query Message Count | `2` | Number of recent messages referenced during recall |
-| Hybrid Recall Max Results | `15` | Maximum results returned by hybrid recall |
+### Step 3 — Chat normally
 
-### Extraction Configuration
+Memory Graph runs automatically. Just write a few turns, including some character/event/location details that should be remembered.
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| Extraction Interval | `1` | Trigger extraction every N AI responses |
-| Rounds Per Batch | `1` | Number of response rounds processed per batch |
-| Extraction Context Rounds | `2` | Number of context rounds included during extraction |
-| Exclude Recent Rounds | `0` | Exclude the most recent N rounds from extraction |
+### Step 4 — See it work
 
-## Injection Methods
+Open the Memory panel after 3–5 turns:
 
-Memory Graph supports two injection methods — choose based on your needs:
+- **Graph** view — node relationship diagram
+- **Nodes** table — structured fields per node, by type
+- **Recall** view — what was injected into the most recent prompt
 
-### Persistent Injection
+If you don't see anything, raise a few characters or events in chat — extraction needs concrete things to grab onto.
 
-You can set certain memory types to persistent injection, making them **always** appear in the prompt regardless of recall triggers. For example, "Rule Constraint" type nodes are persistently injected by default, ensuring world rules are never forgotten.
+## I want…
 
-Persistent injection is implemented by writing nodes as World Info entries, taking effect alongside the World Info system.
+Common questions, in order from "common" to "niche":
 
-### Recall Injection
+### I want my fantasy card to remember magic systems / factions
 
-Other memory types (such as character states, event summaries, etc.) are dynamically injected through the recall mechanism by default — only memories relevant to the current conversation are injected, avoiding excessive context space usage.
+Memory Graph's node types are customizable. Open **Open Schema Editor** in the Memory panel to add new types:
 
-::: info
-Persistent and recall injection are not mutually exclusive. The same node type can have both persistent and recall injection enabled — persistent ensures baseline information is always available, while recall supplements with more details relevant to the current context.
+![Schema editor](/images/memory-graph/memory-schema-editor.png)
+
+For example, add a `magic_system` type with fields like `name / source / restrictions`, or a `faction` type with `name / leader / goals`. Custom types are saved with the character card, so your fantasy world's vocabulary travels with the card.
+
+### I want certain memories *always* in the prompt (not waiting for recall)
+
+That's **persistent injection**. Set certain node types to be persistently injected — they appear in the prompt regardless of recall triggers. A common case: if you add a `rule_constraint` or `world_law` type for inviolable world rules, mark it persistent so the model never forgets the rules.
+
+::: warning Persistent and recall are mutually exclusive per node
+A persistently-injected node is **excluded** from the recall pool — it bypasses recall entirely (it's already in the prompt every turn).
 :::
 
-Recall injection position and role can be configured:
+### I edit / delete a message — what happens to the memory?
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| Recall Injection Position | `atDepth` | Injection position |
-| Recall Injection Depth | `9999` | Injection depth |
-| Recall Injection Role | `SYSTEM` | Injection role (system / user / assistant) |
+Memory Graph has a complete change-rollback mechanism. When you edit a message, delete one, or swipe, it rolls memory back to the state before the affected messages. Memory stays consistent with chat history.
 
-### Configuring Injection Methods
+### I want to use this on another machine / share with someone
 
-In the Memory Graph settings panel, you can configure persistent injection and recall enablement separately for each node type. Both can be enabled simultaneously — persistent ensures baseline information is always available, while recall supplements with context-relevant details.
+Export / Import as JSON.
 
-::: tip How to Choose
-- **Rule Constraints** and other information that doesn't change with conversation are suitable for persistent injection (enabled by default)
-- **Character States, Event Summaries** and other dynamic information are suitable for recall injection (default behavior)
-- If you find certain important information is frequently missed, you can set the corresponding node type to persistent injection in the Memory Graph settings panel
+| Mode | What it does |
+|---|---|
+| Restore | Preserves the floor numbers from export — for restoring data into the same chat |
+| Bind to latest floor | All imported nodes attach to the current latest AI reply floor.<br><br>**Useful trick:** open a fresh chat, import the memory of a previous long-running chat, and start over from floor 0 with all the prior memory intact. Effectively: a fresh save with all the lore, characters, and history still in your protagonist's head — pick up the thread, change the main story, or drop into a different setting. |
+| Bind to specified floor | You manually enter the target floor |
+
+## How memory gets into the prompt
+
+Two channels, mutually exclusive **per node**.
+
+**Persistent injection** — certain node types are always in the prompt. Useful for baselines: world rules, hard character invariants, anything that should never be forgotten regardless of context. Configured per-type in the Schema Editor (the `alwaysInject` flag). Persistent nodes are excluded from the recall pool — they're already there every turn.
+
+**Recall injection** — Other node types are dynamically injected by the recall mechanism. Only memories relevant to the current conversation get injected, so context space isn't wasted.
+
+::: info Under the hood: World Info projection
+Both channels work by **projecting nodes as World Info entries** behind the scenes. Persistent projection writes persistent entries; runtime projection writes temporary ones (cleaned up after generation). Memory entries respect World Info's keyword scanning, depth ordering, and other controls. You don't configure this; it just happens.
 :::
 
-### Result Reuse
+Recall injection has its own placement settings:
 
-When you perform a swipe or regeneration on the same conversation turn, Memory Graph automatically reuses the previous recall results without re-executing the recall process. This saves LLM call costs and ensures memory context consistency within the same conversation turn.
+| Setting | Default | Description |
+|---|---|---|
+| Recall Injection Position | `atDepth` | Where in the prompt to insert |
+| Recall Injection Depth | `9999` | Depth of insertion |
+| Recall Injection Role | `SYSTEM` | `SYSTEM` / `USER` / `ASSISTANT` |
 
-## Viewing Memories
+### Result reuse
 
-You can view the current memory state through Memory Graph's UI panel:
+When you swipe or regenerate on the same floor, Memory Graph reuses the previous recall result instead of re-running. Saves LLM cost and keeps memory context consistent within the same turn.
 
-- **Graph Visualization**: View all memory nodes and their relationships graphically
-- **Table View**: View structured fields of all nodes by type
-- **Search**: Search memory nodes by keyword, with type filtering support
-- **View Recent Injection**: View the memory content most recently injected into the prompt
-
-## Custom Memory Structure
-
-Character cards can customize Memory Graph's node type definitions, tailoring the memory structure for specific characters. In the Memory Graph settings panel, you can add, edit, or delete node types, overriding the default type definitions. For example, a fantasy world character card can define exclusive node types like "Magic" and "Faction," making Memory Graph better fit the character's world setting. Custom node types are saved and exported with the character card.
-
-## World Info Projection
-
-Memory Graph can project memory nodes as [World Info](/basics/world-info) entries, participating in prompt construction through World Info's keyword matching and scan depth mechanisms. Projection comes in two forms:
-
-- **Persistent Projection**: Writes persistently injected nodes as persistent World Info entries
-- **Runtime Projection**: Writes recall results as temporary World Info entries, automatically cleaned up after generation
-
-## Import/Export
-
-Memory Graph data supports import/export as JSON files. Exported data contains all nodes, edges, and metadata.
-
-Three binding modes are available during import:
-
-| Mode | Description |
-|------|-------------|
-| Restore | Preserves the floor numbers from export, used for data recovery in the same chat |
-| Bind to Latest Floor | Binds all imported nodes to the current latest AI response floor |
-| Bind to Specified Floor | Manually enter the target floor number |
-
-## Change Rollback
-
-Memory Graph has a built-in complete change rollback mechanism. When you edit or delete messages or perform swipes, Memory Graph automatically rolls back to the state before the affected messages, ensuring memories remain consistent with conversation history.
-
-## Complete Configuration Reference
+## Configuration Reference
 
 <details>
-<summary>Click to expand the complete configuration list</summary>
+<summary>Full configuration list</summary>
 
-### Basic Configuration
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| Enable Memory Graph | `false` | Master switch for the plugin |
-| Extraction Interval | `1` | Trigger extraction every N AI responses |
-| Max Processing Rounds | `900` | Maximum processing rounds limit |
-
-### Vector and Diffusion Configuration
+### Basic
 
 | Setting | Default | Description |
-|---------|---------|-------------|
-| Embedding Source | `transformers` | Embedding source from Vector Storage extension settings (`vectors.source`) |
-| Embedding Model | (empty) | Embedding model from Vector Storage extension settings (source-specific model field) |
-| Vector Retrieval Top-K | `20` | Top-K count for vector retrieval |
-| Graph Diffusion Steps | `2` | Graph diffusion steps |
-| Graph Diffusion Decay | `0.6` | Graph diffusion decay coefficient |
-| Graph Diffusion Top-K | `100` | Graph diffusion Top-K |
-| Graph Diffusion Teleport Probability | `0.0` | Graph diffusion teleport probability |
+|---|---|---|
+| Enable Memory Graph | `false` | Master switch |
+| Extraction Interval | `1` | Run extraction every N AI replies |
+| Max Processing Rounds | `900` | Hard cap on processing rounds |
 
-### Reranking Configuration
+### Vector and Diffusion
 
 | Setting | Default | Description |
-|---------|---------|-------------|
-| Enable Reranking | `false` | Whether to enable reranking |
-| Reranking Service Source | `cohere` | Reranking service source |
-| Reranking Model | (empty) | Reranking model name |
+|---|---|---|
+| Embedding Source | `transformers` | From Vector Storage extension settings (`vectors.source`) |
+| Embedding Model | (empty) | From Vector Storage extension settings |
+| Vector Top-K | `20` | Top-K for vector retrieval |
+| Graph Diffusion Steps | `2` | Number of diffusion steps |
+| Graph Diffusion Decay | `0.6` | Decay factor |
+| Graph Diffusion Top-K | `100` | Top-K after diffusion |
+| Graph Diffusion Teleport Probability | `0.0` | Teleport probability |
 
-### Other Configuration
+### Reranking
 
 | Setting | Default | Description |
-|---------|---------|-------------|
-| Requests Per Minute Limit | `0` | Requests per minute limit (0 = unlimited) |
-| LLM Visible Recent Messages | `5` | Number of recent messages visible to LLM during generation |
-| Include World Info with Preset | `true` | Whether to include World Info when using presets |
-| Override World Info Name | (empty) | Override World Info name |
-| World Info Entry Sort Base | `9800` | World Info entry sort base value |
-| Tool Call Max Retries | `2` | Maximum retries for failed tool calls |
-| Exclude Recent Rounds' Nodes | `2` | Exclude nodes from the most recent N rounds during recall |
+|---|---|---|
+| Enable Reranking | `false` | Whether to rerank |
+| Reranking Service Source | `cohere` | Source of the reranking service |
+| Reranking Model | (empty) | Reranker model name |
+
+### Other
+
+| Setting | Default | Description |
+|---|---|---|
+| RPM Limit | `0` | Requests per minute (0 = unlimited) |
+| LLM Visible Recent Messages | `5` | Recent messages visible to recall LLM |
+| Include World Info with Preset | `true` | Whether to include World Info |
+| Override World Info Name | (empty) | Override the projection World Info name |
+| World Info Entry Sort Base | `9800` | Base sort order for projected entries |
+| Tool Call Max Retries | `2` | Retry count for failed tool calls |
+| Exclude Recent Rounds' Nodes | `0` | Exclude nodes from the last N turns during recall (0 = no exclusion) |
 
 </details>
 
 ## Technical Deep Dive
 
 <details>
-<summary>Click to expand technical details</summary>
+<summary>For curious readers and contributors</summary>
 
-### Multi-Stage Hybrid Recall Pipeline
+### Multi-stage hybrid recall pipeline
 
-In hybrid recall mode, Memory Graph executes a recall pipeline with 8 stages:
+In hybrid recall mode, Memory Graph runs an 8-stage pipeline:
 
-1. **Vector Pre-filtering**: Retrieve the most semantically similar Top-K nodes from the vector database
-2. **Entity Anchoring**: Match known entity names and aliases from the query text
-3. **Build Seeds**: Merge vector hits and entity anchors as diffusion starting points
-4. **Build Adjacency List**: Construct the graph's dual-layer adjacency list
-5. **PEDSA Graph Diffusion**: Starting from seed nodes, propagate energy through the graph structure to discover indirectly related memories
-6. **Hybrid Scoring**: Merge vector scores, diffusion energy, lexical matching, anchor scores, recency bonuses, and other multi-dimensional signals
-7. **Cognitive Pipeline (NMF / FISTA / DPP)**: Three algorithms ensure recall results are comprehensive and diverse
-8. **Optional Reranking**: Use an external reranking model to further optimize results
+1. **Vector pre-filtering** — retrieve the most semantically similar Top-K nodes from the vector store
+2. **Entity anchoring** — match known entity names and aliases in the query
+3. **Build seeds** — merge vector hits and entity anchors as diffusion starting points
+4. **Build adjacency list** — construct the graph's two-layer adjacency list
+5. **PEDSA graph diffusion** — propagate energy through graph structure to find indirect relations
+6. **Hybrid scoring** — merge vector scores, diffusion energy, lexical match, anchor scores, recency boost, etc.
+7. **Cognitive pipeline (NMF / FISTA / DPP)** — three algorithms ensure recall is both comprehensive and diverse
+8. **Optional reranking** — apply an external reranker for final ordering
 
-### Cognitive Layer Algorithms
+### Cognitive layer algorithms
 
-- **NMF Topic Rebalancing**: Uses Non-negative Matrix Factorization to identify underrepresented topic directions and boost scores of their representative nodes
-- **FISTA Residual Discovery**: Uses the Fast Iterative Shrinkage-Thresholding Algorithm to discover semantic directions in the query not covered by the candidate set, and performs supplementary searches
-- **DPP Diversity Sampling**: Uses Determinantal Point Processes to select a high-quality and mutually diverse subset from candidates, avoiding overly concentrated recall results
+- **NMF topic rebalancing** — Non-negative Matrix Factorization identifies underrepresented topic directions and boosts representative nodes
+- **FISTA residual discovery** — Fast Iterative Shrinkage-Thresholding finds query directions not covered by candidates and runs supplementary searches
+- **DPP diversity sampling** — Determinantal Point Processes select a high-quality, mutually-diverse subset, avoiding overly concentrated recall
 
-### PEDSA Graph Diffusion
+### PEDSA graph diffusion
 
-The PEDSA (Personalized Efficient Diffusion with Sparse Approximation) algorithm enables Memory Graph to discover important memories that have no direct semantic association with the query but are indirectly related through graph structure. Starting from seed nodes, it propagates energy along graph edges over multiple rounds, supporting teleport probability (PageRank-like) and sparse approximation control.
+PEDSA (Personalized Efficient Diffusion with Sparse Approximation) lets Memory Graph find important memories that aren't directly semantically tied to the query but are connected through graph structure. Energy propagates through edges over multiple rounds, with optional teleport probability (PageRank-like) and sparse approximation for efficiency.
 
-### Vector Index
+### Vector index
 
-Memory Graph uses an incremental update strategy to manage vector embeddings — detecting node content changes through hash comparison and only regenerating embedding vectors when content actually changes.
-In hybrid recall, embedding source and model are read from Vector Storage extension settings, so available providers follow Vector Storage capabilities (including Jina).
-If Vector Storage settings are unavailable, Memory Graph falls back to its legacy local source/model fields.
+Memory Graph uses incremental updates to manage vector embeddings — content changes are detected via hash comparison, and only changed nodes get re-embedded. In hybrid recall, the embedding source/model is read from Vector Storage's extension settings, so the available providers follow Vector Storage's capabilities (including Jina). If Vector Storage settings are unavailable, Memory Graph falls back to its legacy local fields.
 
-When inserting vectors, the memory graph includes `nodeId` in the `metadata` field. The Vector Storage backend stores `metadata` as-is. Other plugins can also use the `metadata` field for custom data, which is returned alongside query results. This design allows `hash → nodeId` mapping to bypass the frontend index cache — even if the cache is lost, nodes can be matched directly from query results.
+When inserting vectors, Memory Graph includes `nodeId` in the `metadata` field. The Vector Storage backend stores `metadata` as-is; other plugins can use `metadata` for their own data, returned alongside query results. This design lets the `hash → nodeId` mapping bypass the frontend index cache — even if the cache is lost, nodes can be matched directly from query results.
 
 ### Automatic schema migration
 
-On chat load, memory-graph runs a migration pipeline that translates older
-persisted shapes (v5 raw, v8 opLog) into the current v2 floor-state layout
-(graph payload + `__floor_log` commit log + `__meta` sidecar). The pipeline
-is idempotent, runs only when the input shape isn't already v2, and never
-modifies chat-state if any step fails.
+On chat load, Memory Graph runs a migration pipeline that translates older persisted shapes (v5 raw, v8 opLog) into the current v2 floor-state layout (graph payload + `__floor_log` commit log + `__meta` sidecar). The pipeline is idempotent, runs only when the input shape isn't already v2, and never modifies chat-state if any step fails.
 
-For more technical implementation details, please refer to the source code.
+For more implementation details, see the source.
 
 </details>
 
-## Related Pages
+## Related
 
-- [Function Call Runtime](/improvements/function-call-runtime) — Memory Graph's LLM interaction relies on this framework
-- [World Info Basics](/basics/world-info) — Basic concepts of World Info projection
+- [Function Call Runtime](/improvements/function-call-runtime) — Memory Graph's LLM interactions rely on this framework
+- [World Info Basics](/basics/world-info) — basic concepts of World Info projection

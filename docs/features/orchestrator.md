@@ -1,262 +1,361 @@
 # Multi-Agent Orchestration
 
-Multi-Agent Orchestration (Orchestrator) is one of Luker's core exclusive features, providing a flexible multi-AI Agent collaboration framework. It allows users to define multiple Agents with different responsibilities — distillers, constraint agents, planners, memory analyzers, reviewers, synthesizers, etc. — that collaboratively process each AI response generation according to a preset workflow. The Orchestrator automatically triggers after WorldInfo parsing is complete, injecting the collaborative results of multiple Agents into the final prompt to guide the main model in generating higher-quality responses.
+Have you ever had the AI just... not get it? You set up a careful scene — a tense standoff, a delicate political negotiation, a slow-burn romance — and the reply skips past your last beat, forgets a rule you established two scenes ago, breaks character to summarize, or rushes to a resolution you didn't want. This isn't because the model is dumb. It's because the model can only think about one thing at a time, and you've asked it to do too many in one shot: stay in character, recall context, respect world rules, plan a next beat, *and* write good prose.
 
-The Orchestrator runs entirely on the frontend with no backend code. Character card-level orchestration configurations are saved and exported with the character card.
+The Orchestrator solves this by sending in a small team before the main reply. One agent extracts the important state from your recent chat. Another checks what world rules apply right now. A third drafts a plan for what this turn should accomplish. A fourth reviews their work. A final agent packages everything the team came up with into a single short briefing. By the time the main model writes its reply, it has been handed that briefing (and only that briefing), so it can spend its budget on the prose, not on bookkeeping.
 
-The Orchestrator supports triggering on five generation types: `normal`, `continue`, `regenerate`, `swipe`, and `impersonate`. Other generation types do not trigger the orchestration process.
+You don't have to design any of this yourself. The Orchestrator ships with a working default workflow, and the **AI Iteration Studio** lets you describe what you want in one sentence and watch — diff by diff — as it builds the workflow for you. Five minutes from open to running. The walkthrough below shows you how.
 
-## Three Execution Modes
-
-The Orchestrator provides three execution modes, adapting from simple to complex scenarios:
-
-```
-spec    → Stage→Node DAG, the most flexible static workflow
-single  → Single-node simplified mode
-agenda  → Planner dynamic scheduling, the most flexible dynamic workflow
-```
-
-### Spec Workflow
-
-Spec Workflow is the most flexible static mode, using a **Stage → Node** DAG (Directed Acyclic Graph) structure:
-
-- **Stages**: Top-level organizational units of the workflow; stages execute strictly in serial order
-- **Nodes**: Execution units within a stage; each node references an LLM Preset and is responsible for a specific task
-- **Execution method**: Nodes within a stage support `serial` and `parallel` (using `Promise.all`) execution
-- **Node types**: `worker` (work nodes) and `review` (review nodes)
-
-When each node executes, the system builds a message list (system prompt + user prompt template + context) to call the LLM, with support for node iteration (controlled by "Node Iteration Max Rounds"). Stage outputs are aggregated and automatically passed to the next stage.
-
-The default Spec workflow includes the following 5-stage structure:
-
-1. **Distiller** (serial execution)
-2. **Lorebook Reader** + **Constraint Agent** (parallel execution)
-3. **Planner** + **Memory Analyzer** (parallel execution)
-4. **Reviewer** (serial execution)
-5. **Synthesizer** (serial execution)
-
-#### Template Variables
-
-Node user prompt templates support the following placeholder variables:
-
-| Variable | Description |
-|----------|-------------|
-| <span v-pre>`{{recent_chat}}`</span> | Recent chat messages |
-| <span v-pre>`{{last_user}}`</span> | Last user message |
-| <span v-pre>`{{previous_outputs}}`</span> | Outputs from preceding stages |
-| <span v-pre>`{{distiller}}`</span> | Distiller output |
-| <span v-pre>`{{previous_orchestration}}`</span> | Previous orchestration result (auto-injected, no manual writing needed) |
-
-The <span v-pre>`{{previous_orchestration}}`</span> is an auto-injected variable — the system automatically inserts the previous orchestration result before the template text, without users needing to explicitly reference it in the template.
-
-### Single Agent Mode
-
-Single Agent Mode is a simplified version of the Spec workflow. The system internally auto-builds a Spec containing only a single node, then follows the unified execution flow. Suitable for simple scenarios that don't require multi-Agent collaboration, while retaining all configuration capabilities of Spec mode (such as custom system prompts, API routing, etc.).
-
-### Agenda Planner
-
-Agenda Planner is the most dynamic mode. A Planner Agent dynamically schedules other Agents through Function Calling:
-
-- The Planner maintains a todo list and dynamically decides which Agent to call next based on task progress
-- Each Agent can independently configure system prompts, API routing, and Chat Completion presets
-- Runtime boundaries are limited by three parameters:
-  - Planner Max Rounds: Maximum scheduling rounds for the Planner
-  - Max Concurrent Agents: Upper limit of simultaneously running Agents
-  - Max Total Executions: Upper limit of total executions across all Agents
-
-Agenda mode relies on Luker's [Function Call Runtime](/improvements/function-call-runtime) framework for the Planner's tool calling capabilities.
-
-::: info Agenda ↔ Spec Conversion
-The Orchestrator supports configuration conversion between Agenda and Spec modes:
-
-- Best-effort conversion of Agent sets defined in Agenda mode to Spec workflow structure
-- Copy Spec presets to the Agenda editor
-- Copy Agenda Agents to the Spec editor
-
-Note: Conversion is best-effort and does not guarantee perfect reproduction. For example, Agenda mode's dynamic scheduling logic cannot be fully mapped to Spec's static DAG structure, and manual adjustments may be needed after conversion.
+::: info When does it run?
+The Orchestrator triggers on five generation types: `normal`, `continue`, `regenerate`, `swipe`, and `impersonate`. It runs **after** World Info parsing and **before** the main reply. The runtime trace is kept in memory only — it's cleared when you switch chats.
 :::
 
-## Workflow Editor
+## Quick Start (5 minutes)
 
-The Orchestrator provides a visual workflow editor (supports opening in a standalone popup), where users can:
+This walkthrough uses Iteration Studio because its diff-by-diff approach lets you actually see what the AI is doing — Quick Build is faster but blackboxed. We'll cover Quick Build later.
 
-- Add, delete, and reorder stages
-- Add, delete, and reorder nodes within stages
-- Configure independent LLM presets and API presets for each node
-- Set node system prompts and user prompt templates
-- Configure stage execution method (serial / parallel)
-- Mark nodes as review nodes
+### Step 0 — Prerequisites
 
-Each preset can independently configure API routing, meaning different Agents can use different LLM backends. For example: the distiller uses a low-cost model to reduce overhead, while the synthesizer uses a high-quality model to ensure output quality. Empty API presets fall back to the global orchestration API preset; empty Chat Completion presets fall back to the global orchestration preset.
+- Your main chat already replies normally with a Chat Completion API.
+- The current chat has at least 3 turns of dialogue (so there's something for the workflow to plan against).
 
-Agenda mode also has a corresponding editor panel for managing the Agent list and Planner configuration.
+### Step 1 — Enable Orchestrator
 
-## Review Nodes
+Open the Extensions drawer (top bar) and find the **Multi-Agent Orchestration** section. Toggle **Enable** on.
 
-Review Nodes are a special node type in Spec workflows, used for quality control of preceding work nodes' outputs. Review nodes interact with the workflow engine through two dedicated tools:
+![Orchestrator toggle and presets](/images/orchestrator/orch-toggle.png)
+
+### Step 2 — Pick a model for the agents
+
+Scroll within the same panel to **LLM Node API Preset** and **AI Generation API Preset**. These tell the orchestrator agents which API and which Chat Completion preset to use.
+
+::: tip Save money here
+The orchestrator can call the LLM 5–10 times per turn (one per node). If your main chat uses an expensive model like Claude Opus, point the orchestrator at something cheaper — Haiku, Gemini Flash — and you'll cut 70%+ of the cost. If you need higher quality, route different nodes to different models (each node has its own API/preset override).
+:::
+
+### Step 3 — Open AI Iteration Studio
+
+Scroll past the settings to the action buttons and click **Open AI Iteration Studio**.
+
+![Quick Build and Iteration Studio buttons](/images/orchestrator/orch-quickbuild-button.png)
+
+A new panel opens. The left side is your conversation with the Studio's AI. The right side shows the current orchestration state.
+
+![Iteration Studio main view](/images/orchestrator/orch-iteration-studio.png)
+
+### Step 4 — Describe what you want
+
+In the input box, write one sentence describing what you'd like the orchestration to do. Specific is better than general.
+
+> Example: *"I want the AI to recall recent important events before each reply, keep characters consistent, and not break the fourth wall."*
+
+![Studio input with sample prompt](/images/orchestrator/orch-iter-input.png)
+
+Click **Send to AI**.
+
+### Step 5 — Watch the AI work
+
+The AI replies with a short plan and a diff showing what it intends to change. Each change is a green-add / red-delete / yellow-modify entry. You can approve or reject each one, or wait — the Studio auto-iterates until things stabilize, with each round showing its diff.
+
+![Pending diff review](/images/orchestrator/orch-iter-diff-inline.png)
+
+If a change isn't obvious, click the magnifier icon next to it for a side-by-side comparison.
+
+![Diff side-by-side detail](/images/orchestrator/orch-iter-diff-side.png)
+
+### Step 6 — Apply
+
+When the AI says it has nothing more to suggest, click **Apply to Global** (use everywhere) or **Apply to Character Card** (only for this card).
+
+### Step 7 — See it run (this is the part that matters)
+
+Send a message in the chat. Before the main model replies, the orchestrator runs its workflow. Once your reply lands, scroll to the orchestrator panel and click **View Runtime Trace**.
+
+![Runtime trace overview](/images/orchestrator/orch-runtime-trace.png)
+
+Each node card shows what it produced. The distiller — first stage — extracts a tight summary of the recent chat:
+
+![Distiller node detail](/images/orchestrator/orch-runtime-trace-distiller.png)
+
+**This text is *not* what gets injected into the main model.** It feeds the next stage. The output that becomes the actual briefing comes from the *last* stage:
+
+![Last stage outputs](/images/orchestrator/orch-runtime-trace-laststage.png)
+
+That final output — and only that — is packaged into a single block of text and inserted into the main model's context. Everything upstream is plumbing.
+
+This is the physical meaning of "the AI thinks before replying." If the reply is bad, you can open the trace and see exactly which stage produced the bad signal, and feed that observation back to Iteration Studio.
+
+## Iteration Studio in Depth
+
+Iteration Studio is where you'll spend most of your time once you start tweaking. It's also the most teachable feature — every interaction is visible.
+
+### What it can do
+
+- **Multi-round dialogue.** One sentence of feedback per round, AI proposes a focused change, you review.
+- **Per-change approval.** Each diff entry has its own Approve / Reject. You can take half of a proposal.
+- **Simulation.** Run the workflow against your actual current chat — exactly as if you'd just sent a new message, World Info activation included — but the result only surfaces in the Studio, *not* in the real chat. Ask "will my Constraint Agent really catch the OOC-prone moments?" and the Studio shows you each node's output.
+- **Sessions.** Up to 24 saved sessions per scope. Different cards or different experiments each get their own thread.
+- **Rollback.** Even after Apply, you can revert.
+- **Foldable thinking.** `<thought>` tags from reasoning models are folded by default; messages over ~1200 chars are folded.
+
+### A typical iteration
+
+> **Round 1.** You: *"Don't break the fourth wall."*
+> AI: "Adding a Constraint Agent to Stage 2 with anti-meta checks; enabling Anti-Data Guard." Diff: 1 new node, 1 setting flipped. You approve.
+>
+> **Round 2.** You: *"Make it read the lorebook so it knows the world rules."*
+> AI: "Added a `lorebook_reader` node to Stage 1 so the Constraint Agent can see the active world rules." Diff: 1 new node. Approve.
+>
+> **Round 3.** You: *"Simulate against an obviously-meta input — does it actually catch it?"*
+> AI: Switches to Simulation mode, runs the pipeline against a fake user message that breaks the fourth wall, returns the Constraint Agent's verdict.
+
+![Simulation result](/images/orchestrator/orch-iter-simulation.png)
+
+> **Round 4.** Stable. You click **Apply**.
+
+Every step is visible, interruptible, and reversible. That's the point.
+
+### Sessions
+
+Different cards, different experiments, all keep their own session.
+
+![Session list](/images/orchestrator/orch-iter-sessions.png)
+
+Sessions persist across reloads, scoped to global or to a character card.
+
+### Sidebar — Quick Build
+
+Quick Build is the one-shot version of Iteration Studio. You type a description into the **AI Generation Goal** field at the top of the orchestration editor and click **AI Quick Build**:
+
+![Quick Build button](/images/orchestrator/orch-quickbuild-input.png)
+
+After a single LLM round, you get a complete workflow:
+
+![Quick Build result](/images/orchestrator/orch-quickbuild-result.png)
+
+Use Quick Build when:
+
+1. You've used Iteration Studio enough to know what you want and just need the boilerplate.
+2. You want the simplest possible "make it work" path and don't care how the AI got there.
+
+For most cases, Iteration Studio is a better deal. The 1–2 extra minutes buy you a workflow you understand.
+
+## Common Recipes
+
+| I want… | Do this |
+|---|---|
+| AI to plan its scene before writing | In Iteration Studio, ask for "two stages — first plans the next beat, then writes the prose" |
+| AI to stop breaking character | Enable Anti-Data Guard; in Iteration Studio, ask for "a Constraint Agent that hard-blocks meta-commentary" (see §"A typical iteration" above) |
+| Same workflow across all cards | Apply at global scope (don't bind to a card) |
+| Different workflows per card | Open Iteration Studio with the target card selected, then **Apply to Character Card** |
+| Cheaper / faster | See [Step 2](#step-2-pick-a-model-for-the-agents); also try switching execution mode to Single Agent (one node, one call) |
+| Tweak a workflow I built | Iteration Studio session — they persist |
+| Migrate to another machine | Import / Export, see below |
+| Reset everything | The orchestration editor has a **Reset to Default** button |
+
+## Custom Workflows (the manual route)
+
+This is where the Stage / Node / DAG vocabulary starts mattering. Quick definitions:
+
+- **Stage** — a horizontal slice of the workflow. Stages run strictly serial; Stage 2 cannot start until Stage 1 finishes.
+- **Node** — an execution unit inside a stage. **One node = one LLM call + one prompt template.**
+- **DAG** — directed acyclic graph. In plain English: "a flowchart with order, no loops."
+
+### Three execution modes
+
+| Mode | What it is | When to use |
+|---|---|---|
+| **Spec** (default) | A fixed Stage → Node DAG. Most flexible static workflow. | Default. You want a predictable pipeline. |
+| **Single Agent** | A Spec with exactly one node — runs one LLM call, no orchestration overhead. | Cheap and fast. You don't need multi-agent coordination. |
+| **Agenda** | A Planner agent dynamically dispatches other agents via tool calls. | Most adaptive. The Planner decides what runs based on what's happening, like an agent loop. |
+
+You can convert (best-effort) between Spec and Agenda from the editor's **Copy Spec Agents to Agenda** / **Copy Agenda Agents to Spec** buttons. Conversion is approximate — Agenda's dynamic scheduling can't be fully captured in Spec's static DAG.
+
+### Spec workflow editor
+
+Open it from the orchestrator panel: **Open Orchestration Editor**.
+
+![Spec editor](/images/orchestrator/orch-spec-editor.png)
+
+Left panel is the workflow (stages and their nodes). Right panel is the agent preset library. Each node references one preset, which carries the system prompt, user prompt template, optional API/Chat-Completion preset overrides, and execution flags.
+
+Each stage has an execution mode:
+
+- **Serial** — nodes run one after another within the stage.
+- **Parallel** — nodes run concurrently with `Promise.all`.
+
+Each node is either a **worker** (does work) or a **review** node (validates the previous stage's outputs).
+
+#### Template variables
+
+User prompt templates support these placeholders:
+
+| Variable | Meaning |
+|---|---|
+| <span v-pre>`{{recent_chat}}`</span> | Recent chat messages |
+| <span v-pre>`{{last_user}}`</span> | The most recent user message |
+| <span v-pre>`{{previous_outputs}}`</span> | Outputs from preceding stages |
+| <span v-pre>`{{distiller}}`</span> | The distiller node's output specifically |
+| <span v-pre>`{{previous_orchestration}}`</span> | Previous turn's orchestration result. **Auto-prepended at runtime — you typically don't need to reference it.** |
+
+### Review nodes
+
+A review node checks the previous worker stage's outputs and uses two dedicated tool calls:
 
 | Tool | Purpose |
-|------|--------|
-| `luker_orch_review_approve` | Approve preceding work nodes' output; workflow continues to the next stage |
-| `luker_orch_request_rerun` | Request rerun of specified preceding work nodes, with modification suggestions |
+|---|---|
+| `luker_orch_review_approve` | The work is good; advance to the next stage. |
+| `luker_orch_request_rerun` | One or more nodes need to redo their work; suggests changes. |
 
-Key constraints for review nodes:
+Constraints:
 
-- Can only review nodes from the **directly adjacent preceding work stage**
-- Reruns only the specified node IDs, not the entire stage
-- Rerun count is limited by "Review Rerun Max Rounds" (default 0, max 20)
-- After rerun, the review node runs again, forming an "execute → review → rerun → re-review" loop until approved or round limit is reached
-- Review nodes must output review feedback
+- A review node only sees and re-runs nodes from the **immediately preceding** worker stage.
+- Reruns are scoped to specific node IDs, not the whole stage.
+- Rerun count is bounded by **Review Rerun Max Rounds** (default 2, max 20). When set to 0, the review node decides only "approve or fail" — no reruns.
+- After rerun, the review node runs again, forming an "execute → review → rerun → re-review" loop until approved or the limit is hit.
+- Review nodes must emit review feedback.
 
-The system includes multiple built-in review node prompt engineering rules to ensure consistency and reliability of review behavior. These rules define the check gates that review nodes must include, used as constraints when AI generates review node configurations.
+### Agenda mode
 
-## AI-Generated Configuration
+Agenda replaces the static DAG with a Planner agent that calls other agents through tool calls.
 
-The Orchestrator provides two AI-assisted configuration generation methods, lowering the barrier for manual configuration.
+![Agenda editor](/images/orchestrator/orch-agenda-editor.png)
 
-### AI Quick Build
+The Planner maintains a todo list, reads each agent's output, and decides what to dispatch next. Three runtime bounds:
 
-One-click generation of complete orchestration configuration. Users describe requirements in natural language, and AI automatically generates a complete workflow including stages, nodes, and preset assignments. The generation process considers knowledge book read nodes and Anti-Data Guard nodes, ensuring the generated configuration includes necessary protection mechanisms.
+- **Planner Max Rounds** — how many scheduling rounds the Planner gets.
+- **Max Concurrent Agents** — how many agents can run at once.
+- **Max Total Executions** — total agent invocations across the whole run.
 
-### AI Iteration Studio
+Agenda relies on Luker's [Function Call Runtime](/improvements/function-call-runtime) for the Planner's tool calling.
 
-AI Iteration Studio provides multi-round conversational fine-grained editing capabilities, a more powerful AI-assisted tool than Quick Build:
+## Character Card Binding
 
-- **Session Persistence**: Iteration sessions are saved to the character card or global settings, supporting up to **24 sessions**. Sessions can be loaded, deleted, and managed
-- **Simulation Testing**: Simulate workflow execution without actually running orchestration, verifying configuration correctness. For example, you can input "Please simulate the current user's latest input as 'I walked into the tavern and looked around'" to test orchestration behavior in specific scenarios
-- **Auto-Continue**: Supports AI automatically advancing the iteration process without users manually triggering each step
-- **Diff Approval**: Each AI modification generates a diff; users can approve or reject item by item
-- **Rollback**: Supports undoing applied AI modifications
-- **Regenerate**: Supports regenerating AI responses
-- **`<thought>` Tag Stripping**: Thinking processes in AI responses (`<thought>` tag content) are automatically removed during display
-- **Message Folding**: Long messages exceeding 1200 characters or 18 lines are automatically folded; simulation context is also auto-folded
+Orchestration configurations can be bound to a character card. When bound:
 
-AI Iteration Studio session history is persisted to the character card or global settings. This is a different concept from runtime traces (which are only saved in memory).
+- The configuration exports with the card. Anyone importing the card gets the recommended workflow automatically.
+- Card creators can ship a workflow that's tuned for their character.
+- Switching to the card auto-applies its workflow.
+- The card can specify its own execution mode (Spec/Single/Agenda).
+- Card override can be enabled/disabled independently of the global config.
+- "Clear character override" reverts to the global configuration.
+- You can layer personal tweaks on top of a card-bound configuration.
 
-## Diff Engine
+## Import / Export
 
-The Orchestrator includes a complete built-in Diff engine for modification visualization in AI Iteration Studio:
+Configurations export as JSON.
 
-- **LCS Line-level Diff**: Precise difference calculation based on the Longest Common Subsequence algorithm
-- **Inline View (Inline Diff)**: Displays additions, deletions, and modifications with color markers in the same column
-- **Side-by-Side View (Side-by-Side Diff)**: Left-right comparison showing content before and after modification
-- **Draggable Splitter**: Freely adjustable left-right panel width in side-by-side view
-- **Expand Diff**: Supports expanding collapsed diff blocks to view full context
-- **Rollback Support**: Can undo applied modifications, restoring to the pre-modification state
+| Format | Identifier | For |
+|---|---|---|
+| V1 | `luker_orchestrator_profile_v1` | Spec mode |
+| V2 | `luker_orchestrator_profile_v2` | Agenda mode |
 
-This Diff engine is shared with the [Character Card Editor](/features/card-editor).
+Filenames look like `luker-orchestrator-[agenda-][global|character-{name}].json`. The exporter handles both global and per-card scope.
 
-## Result Injection and Reuse
+On import, the file's mode (Spec/Agenda) must match your current execution mode. You choose whether to apply to the global config or to a specific card.
 
-Orchestration results are automatically injected into SillyTavern's prompt construction pipeline. Injection behavior can be controlled through the following settings:
+## Result Injection
 
-| Setting | Description | Default |
-|---------|-------------|--------|
-| Injection Position | Where orchestration results are inserted in the prompt | `IN_CHAT` |
-| Injection Depth | Injection depth of orchestration results | `1` |
-| Injection Role | Which role identity orchestration results are injected as | `SYSTEM` (also supports `USER` / `ASSISTANT`) |
-| Custom Instruction Prefix | Custom instruction prefix before injected text | `"Follow the orchestration guidance below and prioritize it when drafting the next in-character reply."` |
+The orchestrator's final output (the "capsule") is injected into the prompt sent to the main model. Configuration:
 
-Orchestration results are bound to the user message floor that triggered orchestration. When users perform swipes on the same floor, the system reuses existing orchestration results, avoiding re-execution of the entire workflow. When configuration changes, the system automatically re-applies the latest orchestration results.
+| Setting | Default | Description |
+|---|---|---|
+| Injection Position | `atDepth` | Where in the prompt to insert the capsule |
+| Injection Depth | `0` | Depth at the chosen position |
+| Injection Role | `SYSTEM` | One of `SYSTEM` / `USER` / `ASSISTANT` |
+| Custom Instruction Prefix | (a default sentence) | Prepended to the capsule text |
 
-Runtime traces (each node's input/output, execution time, etc.) are only saved in memory, automatically cleared when switching chats, and not persisted to disk.
+The capsule is bound to the user-message floor that triggered orchestration. When you swipe on the same floor, the orchestrator reuses the existing capsule instead of re-running. When you change the configuration, the system reapplies the latest result.
 
-### Result Event Dispatch
+## Configuration Reference
 
-The Orchestrator dispatches a frontend event after each run outcome so external extensions/scripts can consume orchestration results without reading UI internals.
+The most common settings (covered by Quick Start) are:
 
-- Event name: `luker.orchestrator.result`
-- Dispatch channel: `getContext().eventSource`
-- Trigger timing: emitted when orchestration is `completed`, `reused`, `cancelled`, or `failed`
+| Setting | Default |
+|---|---|
+| Execution Mode | `spec` |
+| Injection Position | `atDepth` |
+| Injection Depth | `0` |
+| Injection Role | `SYSTEM` |
+| Node Iteration Max Rounds | — |
+| Review Rerun Max Rounds | `2` (max 20) |
 
-Event payload fields:
+<details>
+<summary>Full configuration reference</summary>
+
+| Setting | Description |
+|---|---|
+| Execution Mode | Spec / Single Agent / Agenda |
+| Injection Position | Where the capsule is inserted in the main prompt |
+| Injection Depth | Depth of insertion |
+| Injection Role | `SYSTEM` / `USER` / `ASSISTANT` |
+| Custom Instruction Prefix | Prefix prepended to the capsule |
+| Planner Max Rounds | Agenda mode only |
+| Max Concurrent Agents | Agenda mode only |
+| Max Total Executions | Agenda mode only |
+| Requests Per Minute Limit | Throttle for parallel nodes |
+| Agent Timeout | Per-agent timeout, seconds |
+| Tool Call Retries | Retries for failed tool calls |
+| Node Iteration Max Rounds | Iteration cap for a single node |
+| Review Rerun Max Rounds | 0 disables review-driven reruns; max 20 |
+| Global API Preset | Default API connection preset for all nodes |
+| Global Chat Completion Preset | Default Chat Completion preset for all nodes |
+| Include World Info | Whether nodes see World Info |
+| Anti-Data Guard | A built-in node in the default Spec workflow that blocks data-fication / report-style prose (terms like 观察 / 分析 / 评估 / 监测 / observation / analyze / metric / probability that turn RP into stat blocks). Hard-coded ~18-term lexicon. Remove the node from your workflow if you don't want it. |
+| `<thought>` Tag Stripping | Strip thinking tags from agent output |
+| Message Folding Threshold | 1200 chars / 18 lines |
+| Node API Preset | Per-node override; empty = global |
+| Node Chat Completion Preset | Per-node override; empty = global |
+
+Each node can use a different API and Chat Completion preset, so you can route distillers to a cheap model and the synthesizer to a high-quality one.
+
+</details>
+
+## Events and Plugin Integration
+
+<details>
+<summary>For other extensions and scripts</summary>
+
+The Orchestrator dispatches a frontend event after each run, so other code can consume orchestration results without scraping the UI.
+
+- **Event:** `luker.orchestrator.result`
+- **Channel:** `getContext().eventSource`
+- **When:** on `completed`, `reused`, `cancelled`, `failed`
+
+Payload:
 
 | Field | Type | Description |
-|------|------|-------------|
+|---|---|---|
 | `module` | string | Always `orchestrator` |
 | `event` | string | Always `luker.orchestrator.result` |
 | `status` | string | `completed` / `reused` / `cancelled` / `failed` |
-| `generationType` | string | Current generation type (`normal`, `continue`, etc.) |
+| `generationType` | string | The triggering generation type |
 | `chatKey` | string | Current chat key |
 | `at` | string | ISO timestamp |
-| `anchorPlayableFloor` | number | Bound user turn floor (0 when unavailable) |
+| `anchorPlayableFloor` | number | Bound user turn floor (0 if unavailable) |
 | `anchorHash` | string | Anchor hash for validation |
-| `capsuleText` | string | Final injected orchestration guidance text |
-| `stageOutputs` | array | Compact stage outputs (present for `completed` / `reused`) |
+| `capsuleText` | string | Final injected guidance text |
+| `stageOutputs` | array | Compact stage outputs (`completed` / `reused`) |
 | `reviewRerunCount` | number | Review rerun count |
-| `reason` | string | Machine-readable reason for cancellation/failure/skips |
+| `reason` | string | Machine-readable reason for cancellation/failure |
 | `note` | string | Human-readable note |
-| `error` | string | Error message when status is `failed` |
+| `error` | string | Error message when `failed` |
 
-Example subscriber:
+Subscriber example:
 
 ```js
 const context = getContext();
 context.eventSource.on('luker.orchestrator.result', (evt) => {
-  if (evt.status === 'completed' || evt.status === 'reused') {
-    console.log('Orchestrator capsule:', evt.capsuleText);
-  }
+    if (evt.status === 'completed' || evt.status === 'reused') {
+        console.log('Orchestrator capsule:', evt.capsuleText);
+    }
 });
 ```
 
-## Import/Export
+</details>
 
-Orchestration configurations support JSON file import/export, using two format identifiers:
+## Related
 
-| Format | Identifier | Applicable Mode |
-|--------|-----------|----------------|
-| V1 | `luker_orchestrator_profile_v1` | Spec Workflow Mode |
-| V2 | `luker_orchestrator_profile_v2` | Agenda Planner Mode |
-
-Export filename format is `luker-orchestrator-[agenda-][global|character-{name}].json`, supporting both global and character card-level export.
-
-During import, the system automatically detects the file's mode (Spec / Agenda) and requires it to match the current execution mode. Users can choose to apply imported configuration to global or a specific character card.
-
-## Configuration Reference
-
-The following are the Orchestrator's main configuration options:
-
-| Setting | Description | Default / Range |
-|---------|-------------|----------------|
-| Execution Mode | Spec / Single Agent / Agenda | `spec` |
-| Injection Position | Where orchestration results are inserted in the prompt | `IN_CHAT` |
-| Injection Depth | Injection depth of orchestration results | `1` |
-| Injection Role | Which role identity orchestration results are injected as | `SYSTEM` / `USER` / `ASSISTANT` |
-| Custom Instruction Prefix | Custom instruction prefix for orchestration results | See above |
-| Planner Max Rounds | Agenda mode Planner maximum scheduling rounds | — |
-| Max Concurrent Agents | Agenda mode maximum concurrent Agents | — |
-| Max Total Executions | Agenda mode maximum total executions | — |
-| Requests Per Minute Limit | Requests per minute limit (parallel node throttling) | — |
-| Agent Timeout | Single Agent execution timeout (seconds) | — |
-| Tool Call Retries | Retry count for failed LLM tool calls | — |
-| Node Iteration Max Rounds | Iteration round control for a single node | — |
-| Review Rerun Max Rounds | Maximum rerun rounds for review nodes | `0` (max 20) |
-| Global API Preset | Global default API connection preset | — |
-| Global Chat Completion Preset | Global default Chat Completion preset | — |
-| Include World Info | Whether to include World Info in orchestration nodes | — |
-| Anti-Data Guard | Block specific terms (e.g., `OOC`, `meta`, `system note`, `author`) | Enabled |
-| `<thought>` Tag Stripping | Whether to remove thinking tags from AI output | — |
-| Message Folding Threshold | Characters 1200 / Lines 18 | — |
-| Node API Preset | Node-level API preset override | Empty (falls back to global) |
-| Node Chat Completion Preset | Node-level Chat Completion preset override | Empty (falls back to global) |
-
-::: tip
-Each node in the Orchestrator can independently configure API presets and Chat Completion presets, overriding global defaults. This allows you to assign different models and parameters to different Agents — for example, using a low-cost model for distillation and constraint tasks, and a high-quality model for final synthesis.
-:::
-
-## Integration with Character Cards
-
-Orchestration configurations can be bound to character cards and saved with them. After binding:
-
-- Orchestration configurations are exported with the character card; other users automatically get the recommended orchestration workflow when importing the card
-- Card creators can customize the optimal multi-Agent collaboration scheme for their characters
-- Character cards can specify independent execution modes, automatically applied when switching characters
-- Character card overrides can be independently enabled or disabled
-- Supports clearing character card overrides (reverting to global configuration)
-- Users can make personalized adjustments on top of character card-bound configurations
-
-## Related Pages
-
-- [Function Call Runtime](/improvements/function-call-runtime) — Agenda mode's Planner relies on this framework for tool calling
-- [Character Card Editor](/features/card-editor) — Shares the Diff engine with the Orchestrator
-- [Card-Bound Presets and Personas](/improvements/card-bound-presets) — Orchestration configuration's character card binding mechanism
+- [Function Call Runtime](/improvements/function-call-runtime) — Agenda mode's Planner relies on this
+- [Character Card Editor](/features/card-editor) — shares the diff engine with Iteration Studio
+- [Card-Bound Presets and Personas](/improvements/card-bound-presets) — how the orchestration config rides along with character cards
