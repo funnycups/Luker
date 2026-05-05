@@ -4326,26 +4326,31 @@ async function openBulkSetFieldDialog(name, data, fieldDef) {
         container.appendChild(hint);
     }
 
+    let validatedValue;
     const popup = new Popup(container, POPUP_TYPE.CONFIRM, '', {
+        okButton: false,
         cancelButton: t`Cancel`,
         customButtons: [{ text: t`Apply`, result: POPUP_RESULT.AFFIRMATIVE }],
+        onClosing: async (instance) => {
+            if (instance.result !== POPUP_RESULT.AFFIRMATIVE) return true;
+            const rawValue = readBulkFieldInput(fieldDef, inputEl);
+            if (rawValue === undefined) {
+                toastr.warning(t`Please enter a value`);
+                return false;
+            }
+            if (typeof fieldDef.validate === 'function' && !fieldDef.validate(rawValue)) {
+                toastr.warning(t`Invalid value`);
+                return false;
+            }
+            validatedValue = rawValue;
+            return true;
+        },
     });
 
     const result = await popup.show();
-    if (result !== POPUP_RESULT.AFFIRMATIVE) return;
+    if (result !== POPUP_RESULT.AFFIRMATIVE || validatedValue === undefined) return;
 
-    const rawValue = readBulkFieldInput(fieldDef, inputEl);
-    if (rawValue === undefined) {
-        toastr.warning(t`Please enter a value`);
-        return;
-    }
-
-    if (typeof fieldDef.validate === 'function' && !fieldDef.validate(rawValue)) {
-        toastr.warning(t`Invalid value`);
-        return;
-    }
-
-    await applyBulkWorldInfoEntryFieldPatch(name, data, uids, { [fieldDef.key]: rawValue }, fieldDef.label);
+    await applyBulkWorldInfoEntryFieldPatch(name, data, uids, { [fieldDef.key]: validatedValue }, fieldDef.label);
 }
 
 /**
@@ -4407,7 +4412,7 @@ function createBulkFieldInput(fieldDef, inferred) {
                 const optionEl = document.createElement('option');
                 optionEl.value = JSON.stringify(opt.value);
                 optionEl.textContent = translate(opt.label);
-                if (sameValueShallow(common, opt.value)) optionEl.selected = true;
+                if (Object.is(common, opt.value)) optionEl.selected = true;
                 el.appendChild(optionEl);
             }
             return el;
@@ -4450,11 +4455,6 @@ function readBulkFieldInput(fieldDef, inputEl) {
         default:
             return undefined;
     }
-}
-
-function sameValueShallow(a, b) {
-    if (Object.is(a, b)) return true;
-    return false;
 }
 
 async function applyBulkWorldInfoEntryEnabledState(name, data, uids, enabled) {
