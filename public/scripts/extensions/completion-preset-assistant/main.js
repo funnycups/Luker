@@ -3,16 +3,14 @@
 
 import { DOMPurify, lodash } from '../../../lib.js';
 import { saveSettingsDebounced } from '../../../script.js';
-import { areComparableOpenAIPresetBodiesEqual, sendOpenAIRequest } from '../../openai.js';
+import { areComparableOpenAIPresetBodiesEqual } from '../../openai.js';
 import { extension_settings, getContext } from '../../extensions.js';
 import { addLocaleData, translate } from '../../i18n.js';
 import { Popup, POPUP_TYPE } from '../../popup.js';
 import { escapeHtml, uuidv4 } from '../../utils.js';
-import { getChatCompletionConnectionProfiles, resolveChatCompletionRequestProfile } from '../connection-manager/profile-resolver.js';
+import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import {
     TOOL_PROTOCOL_STYLE,
-    extractAllFunctionCalls,
-    getResponseMessageContent,
     validateParsedToolCalls,
 } from '../function-call-runtime.js';
 import {
@@ -1539,50 +1537,6 @@ function rewriteDepthWorldInfoToAfter(payload = {}) {
     return payload;
 }
 
-async function buildPresetAwareMessages(context, systemPrompt, userPrompt, {
-    llmPresetName = '',
-    requestApi = '',
-    historyMessages = null,
-} = {}) {
-    const settings = getSettings();
-    const messages = [
-        ...(Array.isArray(historyMessages) ? historyMessages.map(item => ({ ...item })) : []),
-        { role: 'system', content: String(systemPrompt || '').trim() },
-        { role: 'user', content: String(userPrompt || '').trim() },
-    ].filter(item => item && typeof item === 'object' && item.content);
-
-    const selectedPromptPresetName = String(llmPresetName || '').trim();
-    const envelopeApi = selectedPromptPresetName ? 'openai' : (String(requestApi || context?.mainApi || 'openai').trim() || 'openai');
-
-    try {
-        let resolvedRuntimeWorldInfo = settings.includeWorldInfo ? null : {};
-        if (settings.includeWorldInfo && typeof context?.resolveWorldInfoForMessages === 'function') {
-            resolvedRuntimeWorldInfo = await context.resolveWorldInfoForMessages([], {
-                type: 'quiet',
-                fallbackToCurrentChat: true,
-                postActivationHook: rewriteDepthWorldInfoToAfter,
-            });
-        }
-        const built = context.buildPresetAwarePromptMessages({
-            messages,
-            envelopeOptions: {
-                includeCharacterCard: true,
-                api: envelopeApi,
-                promptPresetName: selectedPromptPresetName,
-            },
-            promptPresetName: selectedPromptPresetName,
-            runtimeWorldInfo: resolvedRuntimeWorldInfo,
-        });
-        if (Array.isArray(built) && built.length > 0) {
-            return built;
-        }
-    } catch (error) {
-        console.warn(`[${MODULE_NAME}] Failed to build preset-aware messages`, error);
-    }
-
-    return messages;
-}
-
 function appendStandardToolRoundMessages(targetMessages, executedCalls, assistantText = '') {
     if (!Array.isArray(targetMessages) || !Array.isArray(executedCalls) || executedCalls.length === 0) {
         return;
@@ -1918,19 +1872,11 @@ function createPresetAssistantSimulateToolApi(dialogState) {
     };
 }
 
-function getRequestPresetOptions(context = getContext()) {
+function getRequestPresetOptions() {
     const settings = getSettings();
-    const profileResolution = resolveChatCompletionRequestProfile({
-        profileName: String(settings.requestApiProfileName || '').trim(),
-        defaultApi: String(context?.mainApi || 'openai').trim() || 'openai',
-        defaultSource: String(context?.chatCompletionSettings?.chat_completion_source || '').trim(),
-    });
     return {
         llmPresetName: String(settings.requestLlmPresetName || '').trim(),
-        requestApi: String(profileResolution?.requestApi || context?.mainApi || 'openai').trim() || 'openai',
-        apiSettingsOverride: profileResolution?.apiSettingsOverride && typeof profileResolution.apiSettingsOverride === 'object'
-            ? profileResolution.apiSettingsOverride
-            : null,
+        apiPresetName: String(settings.requestApiProfileName || '').trim(),
     };
 }
 
@@ -2130,26 +2076,19 @@ async function requestPresetAssistantReply(dialogState, userText, {
 
     for (let round = 1; ; round += 1) {
         throwIfAborted(abortSignal, 'Preset assistant request aborted.');
-        const promptMessages = await buildPresetAwareMessages(
-            dialogState.context,
-            buildModelSystemPrompt({
+        const response = await requestToolCallsWithRetry(dialogState.context, getSettings(), {
+            systemPrompt: buildModelSystemPrompt({
                 hasReference: Boolean(dialogState.referenceSnapshot),
             }),
-            buildUserPrompt(dialogState, userText),
-            {
-                llmPresetName: options.llmPresetName,
-                requestApi: options.requestApi,
-                historyMessages: [
-                    ...(Array.isArray(historyMessages) ? historyMessages.map(item => ({ ...item })) : []),
-                    ...runtimeToolMessages,
-                ],
-            },
-        );
-        const response = await requestToolCallsWithRetry(getSettings(), promptMessages, {
+            userPrompt: buildUserPrompt(dialogState, userText),
+            historyMessages: [
+                ...(Array.isArray(historyMessages) ? historyMessages.map(item => ({ ...item })) : []),
+                ...runtimeToolMessages,
+            ],
+            apiPresetName: options.apiPresetName,
+            promptPresetName: options.llmPresetName,
             tools: modelTools,
             abortSignal,
-            llmPresetName: options.llmPresetName,
-            apiSettingsOverride: options.apiSettingsOverride,
         });
         lastAssistantText = String(response?.assistantText || '').trim();
         const { editCalls, helperCalls } = splitPresetAssistantToolCalls(response?.toolCalls, helperToolApis);
@@ -2210,12 +2149,32 @@ async function requestPresetAssistantReply(dialogState, userText, {
 
 }
 
-async function requestToolCallsWithRetry(settings, promptMessages, {
+async function requestToolCallsWithRetry(context, settings, {
+    systemPrompt = '',
+    userPrompt = '',
+    historyMessages = null,
+    apiPresetName = '',
+    promptPresetName = '',
     tools = [],
     abortSignal = null,
-    llmPresetName = '',
-    apiSettingsOverride = null,
 } = {}) {
+    if (!Array.isArray(tools) || tools.length === 0) {
+        throw new Error('Tools are required.');
+    }
+    if (!context || typeof context.generateTask !== 'function') {
+        throw new Error('context.generateTask is unavailable.');
+    }
+
+    const systemText = String(systemPrompt || '').trim();
+    const userText = String(userPrompt || '').trim();
+    const taskMessages = [
+        ...(Array.isArray(historyMessages) ? historyMessages.map(item => ({ ...item })) : []),
+        { role: 'system', content: systemText },
+        { role: 'user', content: userText },
+    ].filter(item => item && typeof item === 'object' && item.content);
+
+    const worldInfoSource = settings?.includeWorldInfo === false ? 'none' : 'chat';
+
     const retries = Math.max(0, Math.min(TOOL_CALL_RETRY_MAX, toInteger(settings?.toolCallRetryMax, defaultSettings.toolCallRetryMax)));
     const allowedNames = new Set(tools.map(item => String(item?.function?.name || '').trim()).filter(Boolean));
     let lastError = null;
@@ -2223,27 +2182,41 @@ async function requestToolCallsWithRetry(settings, promptMessages, {
     for (let attempt = 0; attempt <= retries; attempt += 1) {
         try {
             throwIfAborted(abortSignal, 'Preset assistant request aborted.');
-            const responseData = await sendOpenAIRequest('quiet', promptMessages, abortSignal, {
+            const result = await context.generateTask({
+                taskMessages,
+                includeCharacterCard: true,
+                worldInfoSource,
+                apiPresetName: String(apiPresetName || '').trim(),
+                llmPresetName: String(promptPresetName || '').trim(),
                 tools,
                 toolChoice: 'auto',
-                replaceTools: true,
-                llmPresetName: String(llmPresetName || '').trim(),
-                apiSettingsOverride: apiSettingsOverride && typeof apiSettingsOverride === 'object' ? apiSettingsOverride : null,
-                requestScope: 'extension_internal',
+                functionCallMode: 'auto',
                 functionCallOptions: {
                     protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
                 },
+                abortSignal: abortSignal || undefined,
             });
             throwIfAborted(abortSignal, 'Preset assistant request aborted.');
-            const assistantText = getResponseMessageContent(responseData);
-            const toolCalls = extractAllFunctionCalls(responseData, allowedNames);
-            const validationError = validateParsedToolCalls(toolCalls, tools);
+            const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
+            const normalizedCalls = rawCalls.map((call) => {
+                const rawId = String(call?.raw?.id || '').trim();
+                return {
+                    id: rawId || makeRuntimeToolCallId(),
+                    name: String(call?.name || '').trim(),
+                    args: call?.args && typeof call.args === 'object' ? call.args : {},
+                    raw: call?.raw || null,
+                };
+            });
+            const filteredCalls = allowedNames.size > 0
+                ? normalizedCalls.filter(call => allowedNames.has(call.name))
+                : normalizedCalls;
+            const validationError = validateParsedToolCalls(filteredCalls, tools);
             if (validationError) {
                 throw new Error(validationError);
             }
             return {
-                assistantText,
-                toolCalls,
+                assistantText: String(result?.assistantText || ''),
+                toolCalls: filteredCalls,
             };
         } catch (error) {
             if (isAbortError(error, abortSignal)) {
@@ -3227,7 +3200,7 @@ async function handleSend(dialogState) {
     await rerenderDialog(dialogState);
 
     try {
-        const requestOptions = getRequestPresetOptions(dialogState.context);
+        const requestOptions = getRequestPresetOptions();
         const response = await requestPresetAssistantReply(dialogState, inputText, {
             requestOptions,
             historyMessages,
