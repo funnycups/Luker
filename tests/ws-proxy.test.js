@@ -1,9 +1,13 @@
 import { describe, it, beforeEach } from '@jest/globals';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import net from 'node:net';
 import { Readable, Writable } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import express from 'express';
+
+import basicAuthMiddleware, { WS_PROXY_AUTH_BYPASS } from '../src/middleware/basicAuth.js';
+import { initWsProxy } from '../src/ws-proxy.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -599,6 +603,141 @@ describe('ws-proxy real HTTP server round-trip', () => {
 
         assert.equal(result.statusCode, 200);
         assert.deepEqual(order, ['auth', 'log', 'handler']);
+    });
+});
+
+// ─── Test Suite: basicAuth bypass for WS-dispatched requests ────────────────
+
+describe('ws-proxy basicAuth bypass', () => {
+
+    let app;
+
+    beforeEach(() => {
+        app = express();
+        app.use(basicAuthMiddleware);
+        app.post('/api/generate', (req, res) => {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true }));
+        });
+    });
+
+    it('reaches the handler when the WS proxy marker is set, even without Authorization header', async () => {
+        const req = createMockRequest({ url: '/api/generate', body: {} });
+        req[WS_PROXY_AUTH_BYPASS] = true;
+
+        const result = await dispatchViaHandle(app, req);
+
+        assert.equal(result.statusCode, 200);
+        assert.deepEqual(JSON.parse(result.body), { ok: true });
+    });
+
+    it('still rejects WS-dispatched requests that omit the marker (parity with HTTP)', async () => {
+        const req = createMockRequest({ url: '/api/generate', body: {} });
+
+        const result = await dispatchViaHandle(app, req);
+
+        assert.equal(result.statusCode, 401);
+    });
+});
+
+// ─── Test Suite: WS upgrade authentication gate ─────────────────────────────
+
+describe('ws-proxy upgrade auth gate', () => {
+
+    /**
+     * Spin up a server with an authenticateUpgrade gate, attempt a real WS
+     * handshake, and resolve to the parsed HTTP response (or 'upgraded' if the
+     * gate accepted us). We do NOT use the `ws` client library here because we
+     * need to inspect the rejected upgrade response, which the client hides.
+     */
+    async function attemptUpgrade({ authenticate, headers = {} } = {}) {
+        const expressApp = express();
+        const server = http.createServer(expressApp);
+
+        await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+        const { port } = server.address();
+        initWsProxy([server], expressApp, authenticate);
+
+        const wsKey = Buffer.from('1234567890123456').toString('base64');
+        const reqLines = [
+            'GET /ws/proxy HTTP/1.1',
+            `Host: 127.0.0.1:${port}`,
+            'Upgrade: websocket',
+            'Connection: Upgrade',
+            `Sec-WebSocket-Key: ${wsKey}`,
+            'Sec-WebSocket-Version: 13',
+        ];
+        for (const [k, v] of Object.entries(headers)) {
+            reqLines.push(`${k}: ${v}`);
+        }
+        reqLines.push('', '');
+        const requestBytes = reqLines.join('\r\n');
+
+        const result = await new Promise((resolve, reject) => {
+            const sock = net.createConnection({ host: '127.0.0.1', port }, () => {
+                sock.write(requestBytes);
+            });
+            let raw = '';
+            let resolved = false;
+            const finish = () => {
+                if (resolved) return;
+                resolved = true;
+                const statusLine = raw.split('\r\n', 1)[0] || '';
+                const m = statusLine.match(/HTTP\/\d\.\d\s+(\d+)/);
+                resolve({ status: m ? parseInt(m[1], 10) : 0, raw });
+                try { sock.destroy(); } catch { /* */ }
+            };
+            sock.on('data', (chunk) => {
+                raw += chunk.toString('utf8');
+                // Once headers are complete we have everything we need; the
+                // server may keep the socket open (101 path) so don't wait
+                // for 'end'.
+                if (raw.includes('\r\n\r\n')) {
+                    finish();
+                }
+            });
+            sock.on('end', finish);
+            sock.on('close', finish);
+            sock.on('error', (err) => {
+                if (!resolved) {
+                    resolved = true;
+                    reject(err);
+                }
+            });
+            // Hard cap so a hung server can't wedge the test runner.
+            setTimeout(finish, 2000);
+        });
+
+        await new Promise(resolve => server.close(resolve));
+        return result;
+    }
+
+    it('accepts the upgrade when the gate resolves ok', async () => {
+        const result = await attemptUpgrade({
+            authenticate: async () => ({ ok: true }),
+        });
+        assert.equal(result.status, 101, `expected 101 Switching Protocols, got: ${result.raw.split('\r\n')[0]}`);
+    });
+
+    it('rejects with 401 when the gate fails and emits WWW-Authenticate', async () => {
+        const result = await attemptUpgrade({
+            authenticate: async () => ({ ok: false, status: 401, reason: 'missing_authorization' }),
+        });
+        assert.equal(result.status, 401);
+        assert.match(result.raw, /WWW-Authenticate:\s*Basic realm="Luker"/i);
+    });
+
+    it('rejects with 429 + Retry-After when the gate signals rate limit', async () => {
+        const result = await attemptUpgrade({
+            authenticate: async () => ({ ok: false, status: 429, retryAfter: 42 }),
+        });
+        assert.equal(result.status, 429);
+        assert.match(result.raw, /Retry-After:\s*42/i);
+    });
+
+    it('skips the gate entirely when no authenticator is provided', async () => {
+        const result = await attemptUpgrade({ authenticate: null });
+        assert.equal(result.status, 101);
     });
 });
 

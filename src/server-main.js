@@ -59,7 +59,7 @@ import {
 } from './users.js';
 
 import getWebpackServeMiddleware from './middleware/webpack-serve.js';
-import basicAuthMiddleware from './middleware/basicAuth.js';
+import basicAuthMiddleware, { tryBasicAuth } from './middleware/basicAuth.js';
 import getWhitelistMiddleware from './middleware/whitelist.js';
 import accessLoggerMiddleware, { getAccessLogPath, migrateAccessLog } from './middleware/accessLogWriter.js';
 import multerMonkeyPatch from './middleware/multerMonkeyPatch.js';
@@ -426,7 +426,14 @@ async function preSetupTasks() {
 async function postSetupTasks(result) {
     // Initialize WebSocket proxy for stable long-running requests
     if (result.servers && result.servers.length > 0) {
-        initWsProxy(result.servers, app);
+        // Mirror the HTTP-layer Basic Auth gate at the WS upgrade so the
+        // tunnel itself is authenticated. Once upgraded, in-process
+        // dispatches mark the request via WS_PROXY_AUTH_BYPASS and skip
+        // the redundant Basic Auth check (see src/ws-proxy.js + basicAuth.js).
+        const basicAuthOnUpgrade = (cliArgs.listen && cliArgs.basicAuthMode)
+            ? async (req) => tryBasicAuth(req)
+            : null;
+        initWsProxy(result.servers, app, basicAuthOnUpgrade);
     }
 
     const browserLaunchHostname = await cliArgs.getBrowserLaunchHostname(result);

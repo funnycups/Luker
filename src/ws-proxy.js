@@ -27,6 +27,7 @@ import { Readable, Writable } from 'node:stream';
 import http from 'node:http';
 import { WebSocketServer } from 'ws';
 import { color } from './util.js';
+import { WS_PROXY_AUTH_BYPASS } from './middleware/basicAuth.js';
 
 /** @type {WebSocketServer|null} */
 let wss = null;
@@ -62,8 +63,14 @@ const JOB_CLEANUP_INTERVAL = 60_000; // check every 60s
  * Initialize the WS proxy on every HTTP(S) server instance.
  * @param {import('http').Server[]} servers
  * @param {import('express').Express} expressApp
+ * @param {(req: import('http').IncomingMessage) => Promise<{ ok: boolean, status?: number, reason?: string, retryAfter?: number }>} [authenticateUpgrade]
+ *   Optional async gate run on every WS upgrade. If it resolves to `{ ok: false }`,
+ *   the upgrade is rejected with the supplied status code instead of being
+ *   handed off to the WebSocket server. This is where Basic Auth lives — the
+ *   WS channel itself is the auth boundary, so internal dispatch can later
+ *   bypass HTTP-layer Basic Auth without weakening the gate.
  */
-export function initWsProxy(servers, expressApp) {
+export function initWsProxy(servers, expressApp, authenticateUpgrade = null) {
     app = expressApp;
     wss = new WebSocketServer({ noServer: true });
 
@@ -72,8 +79,43 @@ export function initWsProxy(servers, expressApp) {
             const url = new URL(req.url, `http://${req.headers.host}`);
             if (url.pathname !== '/ws/proxy') return;
 
-            wss.handleUpgrade(req, socket, head, (ws) => {
-                wss.emit('connection', ws, req);
+            const proceed = () => {
+                wss.handleUpgrade(req, socket, head, (ws) => {
+                    wss.emit('connection', ws, req);
+                });
+            };
+
+            if (typeof authenticateUpgrade !== 'function') {
+                proceed();
+                return;
+            }
+
+            // Run the gate. Reject with a real HTTP/1.1 response so the
+            // browser can surface the auth failure (and the WS-fetch-proxy
+            // client falls back to HTTP, which carries credentials more
+            // reliably than WebSocket upgrades on iOS / WebView / tunneled
+            // setups that strip Authorization on upgrade).
+            Promise.resolve(authenticateUpgrade(req)).then((result) => {
+                if (result && result.ok) {
+                    proceed();
+                    return;
+                }
+                const status = result?.status ?? 401;
+                const lines = [`HTTP/1.1 ${status} Unauthorized`];
+                if (status === 401) {
+                    lines.push('WWW-Authenticate: Basic realm="Luker", charset="UTF-8"');
+                }
+                if (status === 429 && Number.isFinite(result?.retryAfter)) {
+                    lines.push(`Retry-After: ${result.retryAfter}`);
+                }
+                lines.push('Content-Length: 0', 'Connection: close', '', '');
+                console.warn(`[ws-proxy] upgrade rejected: ${result?.reason || 'unauthorized'} status=${status} ip=${req.socket?.remoteAddress}`);
+                try { socket.write(lines.join('\r\n')); } catch { /* socket may already be dead */ }
+                socket.destroy();
+            }).catch((err) => {
+                console.error('[ws-proxy] upgrade auth check failed:', err?.message || err);
+                try { socket.write('HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); } catch { /* */ }
+                socket.destroy();
             });
         });
     }
@@ -354,6 +396,7 @@ async function startJob(ws, msg, ctx) {
         const req = new http.IncomingMessage(mockSocket);
         req.method = method || 'POST';
         req.url = url;
+        req[WS_PROXY_AUTH_BYPASS] = true;
 
         // Build request headers — forward client headers + WS context
         const reqHeaders = { ...clientHeaders };

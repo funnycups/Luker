@@ -29,23 +29,33 @@ AI generation typically uses streaming transmission (SSE), and a single generati
 
 ## Internal Dispatch Mechanism
 
-The WS proxy uses `app.handle()` for internal request dispatch instead of HTTP self-fetch. This is a key architectural decision that affects how requests flow through the server.
+The WS proxy uses `app.handle()` for internal request dispatch instead of HTTP self-fetch. The WS upgrade itself is the auth boundary — Basic Auth is enforced once at the handshake, then dispatched requests are tagged with an internal Symbol so the Basic Auth middleware short-circuits without re-challenging.
+
+### Upgrade-stage authentication
+
+When Basic Auth is enabled (`listen` + `basicAuthMode`), `server.on('upgrade')` calls `tryBasicAuth(req)` against the upgrade request's `Authorization` header. On failure the proxy writes a real `HTTP/1.1 401` (with `WWW-Authenticate: Basic`) and destroys the socket; the browser-side fetch shim falls back to plain HTTP, where the browser attaches the same Basic Auth credentials it stores for the origin. This matters in practice because **WebSocket upgrades from iOS Safari, in-app WebViews, and tunneling reverse proxies (frpc, cloudflared, etc.) frequently strip the `Authorization` header**. By validating at the upgrade, we either confirm the channel is authenticated or fall back gracefully — instead of letting the WS connection succeed and then 401'ing every dispatched request.
 
 ### app.handle() Dispatch
 
 When the WS proxy receives a generation request from a client, it constructs mock `http.IncomingMessage` and `http.ServerResponse` objects and dispatches them directly through Express via `app.handle(req, res, callback)` — no HTTP round-trip is involved.
 
-**Mock IncomingMessage**: Built with a `Readable` stream as the socket (required by Node's internal `_destroy`/`eos` plumbing). The request body is pushed into the stream and then `null` is pushed to signal end-of-body.
+**Mock IncomingMessage**: Built with a `Readable` stream as the socket (required by Node's internal `_destroy`/`eos` plumbing). The request body is pushed into the stream and then `null` is pushed to signal end-of-body. The mock request is also tagged with the `WS_PROXY_AUTH_BYPASS` Symbol exported from `basicAuth.js` — Basic Auth treats this as proof the request crossed the WS auth boundary and skips its credential check. The Symbol is module-private, so headers, query strings, and body fields cannot smuggle it onto a real HTTP request.
 
 **Mock ServerResponse**: Built with a `Writable` stream as the socket. All response output (`writeHead`, `setHeader`, `write`, `end`) is intercepted and forwarded to the WS client as `{ type: "head" }` and `{ type: "chunk" }` messages.
 
 ### Why Not HTTP Self-Fetch
 
-A self-fetch through `localhost` HTTP would pass through all HTTP-level middleware, including Basic Auth. Since WS connections are already authenticated at the upgrade handshake, making the proxy re-authenticate each tunneled request would be redundant and could fail if the auth mechanism differs. `app.handle()` skips all HTTP middleware (including auth) while still running Express routing and app-level middleware, so the request reaches the correct handler without auth interference.
+A self-fetch through `localhost` would force a second `Authorization: Basic` round-trip, which we cannot reliably reproduce because the WS upgrade often arrives without that header (browsers don't let JavaScript set it, and many WebView/proxy setups drop it). `app.handle()` keeps the request inside the process, runs through cookie session, CSRF, and login middleware as normal, and lets Basic Auth honor the WS-validated boundary instead of demanding fresh credentials.
 
 ### Cookie and CSRF Forwarding
 
 Cookies and the CSRF token are extracted from the WS connection context (the upgrade request headers and URL query parameters) and injected into the mock request headers. This ensures the dispatched request carries the same authentication context as the original WS connection, without requiring the client to re-send credentials per request.
+
+### Security boundary
+
+- **WS upgrade still gated by Basic Auth.** When Basic Auth is configured, the upgrade handler runs `tryBasicAuth(req)` and rejects with `401 Unauthorized` (or `429 Too Many Requests` when the rate limiter trips) before allowing the handshake. With Basic Auth disabled, the gate is skipped, mirroring HTTP behavior.
+- **Symbol cannot be forged.** `WS_PROXY_AUTH_BYPASS` is a module-scoped `Symbol`. HTTP headers and query strings cannot create same-Symbol properties on a request object — only code with access to the import sees the Symbol value.
+- **Application-layer middleware still runs.** cookieSession, CSRF, and `requireLoginMiddleware` execute on every dispatched request. Unauthenticated callers (no valid session, no valid CSRF token) are rejected by these gates regardless of the bypass marker.
 
 ### Heartbeat and Keepalive
 

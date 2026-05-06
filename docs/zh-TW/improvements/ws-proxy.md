@@ -45,25 +45,31 @@ WS 代理內建了多項健壯性機制：
 
 ## 內部調度機制
 
-WS代理的伺服器端在轉發生成請求時，使用`app.handle()`直接調度Express路由，而非透過HTTP自請求訪問localhost。這種設計繞過了Basic Auth等HTTP層中介軟體，同時保留了cookie和CSRF令牌的轉發。
+WS 代理的伺服器端在轉發生成請求時，使用 `app.handle()` 直接調度 Express 路由，而非透過 HTTP 自請求存取 localhost。這樣請求依然會經過應用層中介軟體（cookie session、CSRF、登入檢查），但 Basic Auth 這層 HTTP 閘道會在 WS 升級階段一次性完成驗證，派發時不再重複挑戰。
 
 ### 工作原理
 
-1. 從WebSocket訊息中提取請求參數（URL、方法、請求標頭、請求體）
-2. 構造mock `http.IncomingMessage`——使用Readable流作為socket參數，透過`req.push()`注入請求體
-3. 構造mock `http.ServerResponse`——使用Writable流作為socket參數，確保cork/uncork/write/end完整生命週期正常運作
-4. 呼叫`app.handle(req, res, callback)`，請求直接進入Express路由，跳過所有HTTP層中介軟體
-5. 回應資料（狀態碼、回應標頭、串流chunk）透過WebSocket隧道回傳給用戶端
+1. **升級階段鑑權**：當啟用 Basic Auth 時，`server.on('upgrade')` 複用 `tryBasicAuth(req)` 驗證 `Authorization` 標頭。驗證失敗立即寫入 401（帶 `WWW-Authenticate`）並關閉 socket，瀏覽器會回退到 HTTP 走原本的 Basic Auth 流程。
+2. **派發請求**：從 WS 訊息提取 URL/方法/標頭/主體，構造 mock `IncomingMessage`（Readable socket，`req.push()` 注入 body）。
+3. **派發標記**：在 mock 請求上掛 `WS_PROXY_AUTH_BYPASS`（Symbol，無法透過 header 或 query 偽造），表示此請求已透過 WS 通道鑑權。
+4. **`app.handle(req, res)`**：進入 Express 中介軟體鏈——cookieSession 解析 cookie、CSRF 校驗 token、requireLogin 校驗登入狀態都正常運行；basicAuth 中介軟體讀到 Symbol 後直接放行。
+5. **回應回流**：mock `ServerResponse` 把 status/headers/chunk 經 WS 隧道回傳給用戶端。
 
-### 為什麼不用self-fetch
+### 為什麼不用 self-fetch
 
-透過localhost HTTP自請求訪問時，請求會經過所有HTTP層中介軟體，包括Basic Auth。而WS代理的用戶端已經透過WebSocket完成了認證，再次經過Basic Auth會導致鑑權失敗。`app.handle()`直接在行程內調度，跳過了HTTP層但保留了Express應用層邏輯。
+透過 localhost HTTP 自請求會再走一遍完整的 HTTP 接入棧，等於讓 Basic Auth 中介軟體再要一次 `Authorization` 標頭——而 WS 用戶端在瀏覽器/WebView/隧道裡 **常常無法在升級階段附帶這個標頭**（iOS Safari 與套殼 WebView、frpc/cloudflared 之類的反向代理在 WebSocket 升級時會剝掉 `Authorization`），結果就是 401。所以鑑權放在 WS 升級階段集中校驗、派發時跳過重複挑戰，讓 WS 通道本身成為認證邊界。
+
+### 安全邊界
+
+- **WS 升級仍然受 Basic Auth 保護**：升級前需要通過 `tryBasicAuth` 驗證，未配置 Basic Auth 時則跳過這一層。
+- **Symbol 不可偽造**：`WS_PROXY_AUTH_BYPASS` 是模組內部的 Symbol；任何 header、query、body 欄位都無法在 `request` 物件上設定同名 Symbol 屬性。
+- **應用層中介軟體照常生效**：cookieSession、CSRF、requireLogin 在派發時全部運行，未登入或缺少 CSRF token 的請求依然會被拒絕。
 
 ### 連線健壯性
 
 - **心跳保活**：用戶端和伺服器端定期交換心跳訊息，防止中間網路裝置因空閒逾時斷開連線
 - **串流偏移恢復**：生成過程中如果連線短暫中斷，重連後可以從斷點繼續接收內容
-- **作業清理**：使用`lastActivity`時間戳檢測過期作業，而非`createdAt`，確保活躍中的長生成不會被誤清理
+- **作業清理**：使用 `lastActivity` 時間戳檢測過期作業，而非 `createdAt`，確保活躍中的長生成不會被誤清理
 
 ## 使用場景
 
