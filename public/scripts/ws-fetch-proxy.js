@@ -77,9 +77,9 @@
     }
 
     function i18n(text) {
-        const translateFn = /** @type {any} */ (globalThis.translate);
-        if (typeof translateFn === 'function') {
-            return translateFn(text, text);
+        const i18nApi = /** @type {any} */ (globalThis.__i18n);
+        if (i18nApi && typeof i18nApi.translate === 'function') {
+            return i18nApi.translate(text, text);
         }
         return text;
     }

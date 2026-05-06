@@ -128,9 +128,13 @@ export function translate(text, key = null) {
 }
 
 // Expose i18n helpers for early-loaded classic scripts (e.g. ws-fetch-proxy.js)
-// that cannot import ESM modules directly.
-globalThis.t = t;
-globalThis.translate = translate;
+// that cannot import ESM modules directly. Use a namespaced global because
+// `globalThis.translate` is also assigned by the translate extension as a
+// different function (signature `translate(text, lang, provider)`); since the
+// extension loads later, the bare name would always be the extension's, and
+// strings passed by classic scripts would be sent to /api/translate/* as
+// language codes.
+globalThis.__i18n = Object.freeze({ t, translate });
 
 /**
  * Fetches the raw locale data for the given language.
