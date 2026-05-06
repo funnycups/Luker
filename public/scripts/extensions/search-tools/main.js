@@ -4,15 +4,12 @@
 import { eventSource, event_types, extension_prompt_roles, getRequestHeaders, saveSettings, saveSettingsDebounced } from '../../../script.js';
 import { extension_settings, getContext } from '../../extensions.js';
 import { addLocaleData, translate } from '../../i18n.js';
-import { sendOpenAIRequest } from '../../openai.js';
 import { SECRET_KEYS, secret_state } from '../../secrets.js';
 import { escapeHtml, getStringHash } from '../../utils.js';
 import { newWorldInfoEntryTemplate, setGlobalWorldInfoSelection, world_info_position } from '../../world-info.js';
-import { getChatCompletionConnectionProfiles, resolveChatCompletionRequestProfile } from '../connection-manager/profile-resolver.js';
+import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import {
     TOOL_PROTOCOL_STYLE,
-    extractAllFunctionCalls,
-    getResponseMessageContent,
     validateParsedToolCalls,
 } from '../function-call-runtime.js';
 import { createSearchToolsSettingsUi } from './settings-ui.js';
@@ -1114,32 +1111,6 @@ function registerTools(context) {
     }
 }
 
-function normalizeWorldInfoResolverMessages(messages = []) {
-    if (!Array.isArray(messages)) {
-        return [];
-    }
-    return messages.map((message) => {
-        if (!message || typeof message !== 'object') {
-            return message;
-        }
-        const next = { ...message };
-        const rawRole = String(next.role || '').trim().toLowerCase();
-        if (rawRole === 'system' || rawRole === 'user' || rawRole === 'assistant') {
-            next.role = rawRole;
-        } else if (next.is_system) {
-            next.role = 'system';
-        } else if (next.is_user) {
-            next.role = 'user';
-        } else {
-            next.role = 'assistant';
-        }
-        if (next.content === undefined && Object.hasOwn(next, 'mes')) {
-            next.content = String(next.mes ?? '');
-        }
-        return next;
-    });
-}
-
 function rewriteDepthWorldInfoToAfter(payload = {}) {
     if (!payload || typeof payload !== 'object') {
         return payload;
@@ -1271,65 +1242,25 @@ function syncMutableGenerationPayloadState(target, source) {
     }
 }
 
-async function buildPresetAwareMessages(context, settings, systemPrompt, userPrompt, {
-    api = '',
-    promptPresetName = '',
-    historyMessages = null,
-    worldInfoMessages = null,
-    runtimeWorldInfo = null,
-    forceWorldInfoResimulate = false,
-    worldInfoType = 'quiet',
-    abortSignal = null,
-} = {}) {
-    const systemText = String(systemPrompt || '').trim() || 'Use tool calls only.';
-    const userText = String(userPrompt || '').trim() || 'Use tool calls only.';
-    const selectedPromptPresetName = String(promptPresetName || '').trim();
-    const envelopeApi = selectedPromptPresetName ? 'openai' : (api || context.mainApi || 'openai');
+async function buildSearchAgentRuntimeWorldInfo(settings, runtimeWorldInfo) {
     const includeWorldInfoWithPreset = settings?.includeWorldInfoWithPreset !== false;
-    throwIfAborted(abortSignal, 'Search agent aborted.');
-    let resolvedRuntimeWorldInfo = includeWorldInfoWithPreset
-        ? ((!forceWorldInfoResimulate && hasEffectiveRuntimeWorldInfo(runtimeWorldInfo))
-            ? normalizeRuntimeWorldInfo(runtimeWorldInfo)
-            : null)
-        : {};
-    const resolverMessages = normalizeWorldInfoResolverMessages(worldInfoMessages);
-    if (includeWorldInfoWithPreset && !resolvedRuntimeWorldInfo && typeof context?.resolveWorldInfoForMessages === 'function' && resolverMessages.length > 0) {
-        resolvedRuntimeWorldInfo = await context.resolveWorldInfoForMessages(resolverMessages, {
-            type: String(worldInfoType || 'quiet'),
-            fallbackToCurrentChat: false,
-            postActivationHook: rewriteDepthWorldInfoToAfter,
-        });
-        throwIfAborted(abortSignal, 'Search agent aborted.');
-    } else if (includeWorldInfoWithPreset && resolvedRuntimeWorldInfo) {
-        resolvedRuntimeWorldInfo = normalizeRuntimeWorldInfo(rewriteDepthWorldInfoToAfter({
-            ...resolvedRuntimeWorldInfo,
-            worldInfoDepth: Array.isArray(resolvedRuntimeWorldInfo.worldInfoDepth)
-                ? resolvedRuntimeWorldInfo.worldInfoDepth.map(entry => ({
-                    ...entry,
-                    entries: Array.isArray(entry?.entries) ? entry.entries.slice() : [],
-                }))
-                : [],
-        }));
+    if (!includeWorldInfoWithPreset) {
+        return {};
     }
-
-    throwIfAborted(abortSignal, 'Search agent aborted.');
-    const normalizedHistoryMessages = Array.isArray(historyMessages)
-        ? historyMessages.map(message => ({ ...message }))
+    if (!hasEffectiveRuntimeWorldInfo(runtimeWorldInfo)) {
+        return null;
+    }
+    const cloned = normalizeRuntimeWorldInfo(runtimeWorldInfo);
+    const depthCopy = Array.isArray(cloned.worldInfoDepth)
+        ? cloned.worldInfoDepth.map(entry => ({
+            ...entry,
+            entries: Array.isArray(entry?.entries) ? entry.entries.slice() : [],
+        }))
         : [];
-    return context.buildPresetAwarePromptMessages({
-        messages: [
-            ...normalizedHistoryMessages,
-            { role: 'system', content: systemText },
-            { role: 'user', content: userText },
-        ],
-        envelopeOptions: {
-            includeCharacterCard: true,
-            api: envelopeApi,
-            promptPresetName: selectedPromptPresetName,
-        },
-        promptPresetName: selectedPromptPresetName,
-        runtimeWorldInfo: resolvedRuntimeWorldInfo,
-    });
+    return normalizeRuntimeWorldInfo(rewriteDepthWorldInfoToAfter({
+        ...cloned,
+        worldInfoDepth: depthCopy,
+    }));
 }
 
 function isAbortSignalLike(signal) {
@@ -1401,16 +1332,62 @@ function linkAbortSignals(...signals) {
     };
 }
 
-async function requestToolCallsWithRetry(settings, promptMessages, {
+async function requestToolCallsWithRetry(context, settings, {
+    systemPrompt = '',
+    userPrompt = '',
+    historyMessages = null,
+    worldInfoMessages = null,
+    runtimeWorldInfo = null,
+    forceWorldInfoResimulate = false,
+    worldInfoType = 'quiet',
+    apiPresetName = '',
+    promptPresetName = '',
     tools = [],
     allowedNames = null,
-    llmPresetName = '',
-    apiSettingsOverride = null,
     retriesOverride = null,
     abortSignal = null,
 } = {}) {
     if (!Array.isArray(tools) || tools.length === 0) {
         throw new Error('Tools are required.');
+    }
+
+    const systemText = String(systemPrompt || '').trim() || 'Use tool calls only.';
+    const userText = String(userPrompt || '').trim() || 'Use tool calls only.';
+    const taskMessages = [
+        ...(Array.isArray(historyMessages) ? historyMessages.map(message => ({ ...message })) : []),
+        { role: 'system', content: systemText },
+        { role: 'user', content: userText },
+    ].filter(message => message && message.content !== undefined);
+
+    const customMessages = Array.isArray(worldInfoMessages) ? worldInfoMessages : null;
+    const includeWorldInfoWithPreset = settings?.includeWorldInfoWithPreset !== false;
+    let presetRuntimeWorldInfo = await buildSearchAgentRuntimeWorldInfo(settings, runtimeWorldInfo);
+    if (
+        includeWorldInfoWithPreset
+        && presetRuntimeWorldInfo === null
+        && customMessages
+        && customMessages.length > 0
+        && typeof context?.resolveWorldInfoForMessages === 'function'
+    ) {
+        // No effective WI snapshot yet — resolve from coreChat ourselves so we can apply
+        // the depth-to-after rewrite (generateTask has no postActivationHook seam).
+        try {
+            const resolved = await context.resolveWorldInfoForMessages(customMessages, {
+                type: String(worldInfoType || 'quiet'),
+                fallbackToCurrentChat: false,
+                postActivationHook: rewriteDepthWorldInfoToAfter,
+            });
+            presetRuntimeWorldInfo = normalizeRuntimeWorldInfo(resolved);
+        } catch (error) {
+            if (isAbortError(error, abortSignal)) {
+                throw error;
+            }
+            console.warn(`[${MODULE_NAME}] World info pre-resolution failed`, error);
+            presetRuntimeWorldInfo = {};
+        }
+    }
+    if (presetRuntimeWorldInfo === null) {
+        presetRuntimeWorldInfo = {};
     }
 
     const retriesSource = retriesOverride === null || retriesOverride === undefined
@@ -1422,27 +1399,41 @@ async function requestToolCallsWithRetry(settings, promptMessages, {
     for (let attempt = 0; attempt <= retries; attempt += 1) {
         try {
             throwIfAborted(abortSignal, 'Search agent aborted.');
-            const responseData = await sendOpenAIRequest('quiet', promptMessages, isAbortSignalLike(abortSignal) ? abortSignal : null, {
+            const result = await context.generateTask({
+                taskMessages,
+                includeCharacterCard: true,
+                worldInfoSource: 'none',
+                customWorldInfoMessages: null,
+                runtimeWorldInfo: presetRuntimeWorldInfo,
+                forceWorldInfoResimulate,
+                worldInfoType,
+                apiPresetName: String(apiPresetName || '').trim(),
+                llmPresetName: String(promptPresetName || '').trim(),
                 tools,
                 toolChoice: 'auto',
-                replaceTools: true,
-                llmPresetName: String(llmPresetName || '').trim(),
-                apiSettingsOverride: apiSettingsOverride && typeof apiSettingsOverride === 'object' ? apiSettingsOverride : null,
-                requestScope: 'extension_internal',
+                functionCallMode: 'auto',
                 functionCallOptions: {
                     protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
                 },
+                abortSignal: isAbortSignalLike(abortSignal) ? abortSignal : undefined,
             });
             throwIfAborted(abortSignal, 'Search agent aborted.');
-            const assistantText = getResponseMessageContent(responseData);
-            const calls = extractAllFunctionCalls(responseData, allowedNames);
-            const validationError = validateParsedToolCalls(calls, tools);
+            const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
+            const normalizedCalls = rawCalls.map(call => ({
+                name: String(call?.name || ''),
+                args: call?.args && typeof call.args === 'object' ? call.args : {},
+                raw: call?.raw || null,
+            }));
+            const filteredCalls = Array.isArray(allowedNames) && allowedNames.length > 0
+                ? normalizedCalls.filter(call => allowedNames.includes(call.name))
+                : normalizedCalls;
+            const validationError = validateParsedToolCalls(filteredCalls, tools);
             if (validationError) {
                 throw new Error(validationError);
             }
             return {
-                toolCalls: calls,
-                assistantText,
+                toolCalls: filteredCalls,
+                assistantText: String(result?.assistantText || ''),
             };
         } catch (error) {
             if (isAbortError(error, abortSignal)) {
@@ -2263,14 +2254,8 @@ async function flushLorebookChanges(context, payload, bookName, data) {
 
 async function runPreRequestSearchAgent(context, settings, payload) {
     throwIfAborted(payload?.signal, 'Search agent aborted.');
-    const resolvedApiPresetName = String(settings.agentApiPresetName || '').trim();
-    const profileResolution = resolveChatCompletionRequestProfile({
-        profileName: resolvedApiPresetName,
-        defaultApi: String(context?.mainApi || 'openai').trim() || 'openai',
-        defaultSource: String(context?.chatCompletionSettings?.chat_completion_source || ''),
-    });
-    const requestApi = profileResolution.requestApi;
-    const apiSettingsOverride = profileResolution.apiSettingsOverride;
+    const apiPresetName = String(settings.agentApiPresetName || '').trim();
+    const promptPresetName = String(settings.agentPresetName || '').trim();
     const tools = buildAgentTools();
     const searchRoundCount = Math.max(1, Number(settings.agentMaxRounds) || DEFAULT_SETTINGS.agentMaxRounds);
     const finalStageTools = tools.filter((tool) => {
@@ -2300,35 +2285,24 @@ async function runPreRequestSearchAgent(context, settings, payload) {
             lorebookData = lorebook.data && typeof lorebook.data === 'object' ? lorebook.data : null;
         }
         const managedEntries = listManagedEntries(lorebookData);
-        const promptMessages = await buildPresetAwareMessages(
-            context,
-            settings,
-            buildSearchAgentSystemPrompt(settings.agentSystemPrompt, settings.agentFinalStagePrompt, { isFinalStage }),
-            buildSearchAgentUserPrompt(payload, {
+        const response = await requestToolCallsWithRetry(context, settings, {
+            systemPrompt: buildSearchAgentSystemPrompt(settings.agentSystemPrompt, settings.agentFinalStagePrompt, { isFinalStage }),
+            userPrompt: buildSearchAgentUserPrompt(payload, {
                 roundIndex: phaseIndex,
                 maxRounds: searchRoundCount,
                 bookName: lorebookBookName,
                 managedEntries,
                 isFinalStage,
             }),
-            {
-                api: requestApi,
-                promptPresetName: String(settings.agentPresetName || '').trim(),
-                historyMessages: toolHistoryMessages,
-                worldInfoMessages: Array.isArray(payload?.coreChat) ? payload.coreChat : [],
-                runtimeWorldInfo: internalRuntimeWorldInfo,
-                forceWorldInfoResimulate: false,
-                worldInfoType: 'quiet',
-                abortSignal: payload?.signal || null,
-            },
-        );
-        throwIfAborted(payload?.signal, 'Search agent aborted.');
-        const requestMessages = promptMessages;
-        const response = await requestToolCallsWithRetry(settings, requestMessages, {
+            historyMessages: toolHistoryMessages,
+            worldInfoMessages: Array.isArray(payload?.coreChat) ? payload.coreChat : [],
+            runtimeWorldInfo: internalRuntimeWorldInfo,
+            forceWorldInfoResimulate: false,
+            worldInfoType: 'quiet',
+            apiPresetName,
+            promptPresetName,
             tools: isFinalStage ? finalStageTools : tools,
             allowedNames: isFinalStage ? finalStageAllowedNames : allowedNames,
-            llmPresetName: String(settings.agentPresetName || '').trim(),
-            apiSettingsOverride,
             abortSignal: payload?.signal || null,
         });
         throwIfAborted(payload?.signal, 'Search agent aborted.');
