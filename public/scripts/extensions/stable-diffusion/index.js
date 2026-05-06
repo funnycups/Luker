@@ -1521,7 +1521,7 @@ async function onModelChange() {
     if (extension_settings.sd.source === sources.auto || extension_settings.sd.source === sources.vlad) {
         await updateAutoRemoteModel();
     }
-    toastr.success('Model successfully loaded!', 'Image Generation');
+    toastr.success('Model successfully loaded!', t`Image Generation`);
 }
 
 async function getAutoRemoteModel() {
@@ -2105,7 +2105,7 @@ async function loadWorkersAIImageModels() {
     }
 
     if (!oai_settings.workers_ai_account_id) {
-        toastr.warning('Workers AI account ID is required. Save it in the "API Connections" panel.', 'Image Generation');
+        toastr.warning('Workers AI account ID is required. Save it in the "API Connections" panel.', t`Image Generation`);
         return [];
     }
 
@@ -2880,7 +2880,7 @@ function getRawLastMessage() {
             };
         }
 
-        toastr.warning('No usable messages found.', 'Image Generation');
+        toastr.warning('No usable messages found.', t`Image Generation`);
         throw new Error('No usable messages found.');
     };
 
@@ -3154,7 +3154,7 @@ async function generatePicture(initiator, args, trigger, message, callback) {
         // sendGenerationRequest mostly deals with its own errors
         const reason = err.error?.message || err.message || 'Unknown error';
         const errorText = 'SD prompt text generation failed. ' + reason;
-        toastr.error(errorText, 'Image Generation');
+        toastr.error(errorText, t`Image Generation`);
         throw new Error(errorText);
     } finally {
         restoreOriginalDimensions(dimensions);
@@ -3316,7 +3316,7 @@ async function generateMultimodalPrompt(generationType, quietPrompt) {
     }
 
     try {
-        const toast = toastr.info('Generating multimodal caption...', 'Image Generation');
+        const toast = toastr.info('Generating multimodal caption...', t`Image Generation`);
         const response = await fetch(avatarUrl);
 
         if (!response.ok) {
@@ -3336,7 +3336,7 @@ async function generateMultimodalPrompt(generationType, quietPrompt) {
         return caption;
     } catch (error) {
         console.error(error);
-        toastr.error('Multimodal captioning failed. Please try again.', 'Image Generation');
+        toastr.error('Multimodal captioning failed. Please try again.', t`Image Generation`);
         throw new Error('Multimodal captioning failed.');
     }
 }
@@ -3365,13 +3365,13 @@ function getUserAvatarUrl() {
  * @returns {Promise<string>} - A promise that resolves when the prompt generation completes.
  */
 async function generatePrompt(quietPrompt) {
-    const toast = toastr.info('Generating image prompt with an LLM...', 'Image Generation');
+    const toast = toastr.info('Generating image prompt with an LLM...', t`Image Generation`);
     const reply = await generateQuietPrompt({ quietPrompt });
     const processedReply = processReply(reply);
     toastr.clear(toast);
 
     if (!processedReply) {
-        toastr.error('Prompt generation produced no text. Make sure you\'re using a valid instruct template and try again', 'Image Generation');
+        toastr.error('Prompt generation produced no text. Make sure you\'re using a valid instruct template and try again', t`Image Generation`);
         throw new Error('Prompt generation failed.');
     }
 
@@ -3503,13 +3503,13 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
         }
 
         console.error('Image generation request error: ', err);
-        toastr.error('Image generation failed. Please try again.' + '\n\n' + String(err), 'Image Generation');
+        toastr.error('Image generation failed. Please try again.' + '\n\n' + String(err), t`Image Generation`);
         return;
     }
 
     if (currentChatId !== getCurrentChatId()) {
         console.warn('Chat changed, aborting SD result saving');
-        toastr.warning('Chat changed, generated image discarded.', 'Image Generation');
+        toastr.warning('Chat changed, generated image discarded.', t`Image Generation`);
         return;
     }
 
