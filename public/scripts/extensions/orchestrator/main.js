@@ -947,6 +947,7 @@ async function onWorldInfoFinalized(payload) {
         throwIfAborted(orchestrationPayload?.signal, 'Orchestration aborted.');
         injectCapsuleToPayload(payload, capsuleText, settings);
         await storeCompletedOrchestrationSnapshot(context, anchor, capsuleText, finalRun.stageOutputs || []);
+        ensureUi();
         finalizeOrchestrationRuntimeTrace(finalRun?.runtimeTrace || getLatestOrchestrationRuntimeTrace(context), 'completed', {
             capsuleText,
             reviewRerunCount: Number(finalRun?.reviewRerunCount || 0),
