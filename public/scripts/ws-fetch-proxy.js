@@ -96,6 +96,30 @@
         }
     }
 
+    // ── WS Upgrade Ticket ───────────────────────────────────────────
+    //
+    // Native browser `WebSocket` does not let us set HTTP headers, and many
+    // environments (iOS WebView, frpc / cloudflared, some nginx setups)
+    // strip the `Authorization` header from the upgrade request. We mint
+    // a one-shot ticket on the HTTP path — where Basic Auth, login, and
+    // CSRF all gate access — and present it via `Sec-WebSocket-Protocol`,
+    // which browsers DO let us populate via `new WebSocket(url, protocols)`.
+
+    const TICKET_PROTOCOL_PREFIX = 'luker-ws-ticket.';
+
+    async function fetchWsTicket() {
+        const resp = await originalFetch('/api/ws-ticket', {
+            method: 'POST',
+            headers: { 'x-csrf-token': csrfToken },
+        });
+        if (!resp.ok) throw new Error(`ws-ticket HTTP ${resp.status}`);
+        const data = await resp.json();
+        if (!data || typeof data.ticket !== 'string' || !data.ticket) {
+            throw new Error('ws-ticket: malformed response');
+        }
+        return data.ticket;
+    }
+
     // ── WebSocket Connection ────────────────────────────────────────
 
     function getWsUrl() {
@@ -109,8 +133,21 @@
         }
 
         intentionalClose = false;
-        ws = new WebSocket(getWsUrl());
 
+        // Mint a fresh ticket on every (re)connect. Tickets are single-use
+        // and short-lived; if minting fails (e.g. login expired, network
+        // dropped), schedule a retry so we don't burn into a tight loop.
+        fetchWsTicket().then((ticket) => {
+            if (intentionalClose) return;
+            ws = new WebSocket(getWsUrl(), [`${TICKET_PROTOCOL_PREFIX}${ticket}`]);
+            wireSocket();
+        }).catch((err) => {
+            console.warn('[ws-proxy] Ticket fetch failed:', err.message);
+            scheduleReconnect();
+        });
+    }
+
+    function wireSocket() {
         ws.onopen = () => {
             console.log('[ws-proxy] Connected');
             reconnectDelay = RECONNECT_BASE;

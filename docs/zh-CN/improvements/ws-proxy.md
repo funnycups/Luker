@@ -61,23 +61,18 @@ WS 代理内置了多项健壮性机制：
 
 ## 内部调度机制
 
-WS 代理的服务端在转发生成请求时，使用 `app.handle()` 直接调度 Express 路由，而非通过 HTTP 自请求访问 localhost。这样请求依旧经过应用层中间件（cookie session、CSRF、登录检查），但 Basic Auth 这一层 HTTP 网关会在 WS 升级阶段一次性完成验证，派发时不再重复挑战。
+WS 代理由两段构成:**升级阶段用一次性 ticket 完成鉴权**,**派发阶段用 `app.handle()` 直接调度 Express 路由**。这样请求依旧经过应用层中间件(cookie session、CSRF、登录检查),但 Basic Auth 这一层 HTTP 网关只在 ticket 签发时校验一次,WS 通道本身就是认证边界。
 
 ```mermaid
 flowchart TD
-    UP["WS upgrade<br/>携带 Authorization"]
-    GATE["升级阶段执行 tryBasicAuth<br/>失败 → 401 + 关闭 socket"]
+    LOGIN["页面已登录<br/>basicAuth + cookie session 已建立"]
+    TICKET_REQ["客户端 POST /api/ws-ticket<br/>(走完整 HTTP 中间件栈)"]
+    TICKET_RESP["服务端 mintTicket<br/>32 字节随机 hex,30s TTL,单次使用"]
+    UP["new WebSocket(url, [`luker-ws-ticket.${ticket}`])<br/>JS 把 ticket 塞进 Sec-WebSocket-Protocol"]
+    GATE["server.on('upgrade')<br/>parse 子协议 → consumeTicket"]
     WS_MSG["WebSocket 消息<br/>通道已被信任"]
 
-    subgraph BAD[self-fetch 路径 ❌]
-        BAD_FETCH[fetch http://localhost/...]
-        BAD_BASIC[HTTP 层 Basic Auth]
-        BAD_FAIL[Authorization 在 WS 升级时<br/>常被剥离 → 401 missing_authorization]
-        BAD_FETCH --> BAD_BASIC
-        BAD_BASIC --> BAD_FAIL
-    end
-
-    subgraph GOOD[app.handle 路径 ✅]
+    subgraph DISPATCH[派发链路]
         GOOD_MOCK["构造 mock req/res<br/>打上 WS_PROXY_AUTH_BYPASS Symbol"]
         GOOD_HANDLE["app.handle(req, res)"]
         GOOD_BASIC["Basic Auth 中间件<br/>检测到 Symbol → 直接放行"]
@@ -89,39 +84,57 @@ flowchart TD
         GOOD_REST --> GOOD_RES
     end
 
+    LOGIN --> TICKET_REQ
+    TICKET_REQ --> TICKET_RESP
+    TICKET_RESP --> UP
     UP --> GATE
     GATE ==通过==> WS_MSG
-    WS_MSG -.被淘汰的方案.-> BAD_FETCH
-    WS_MSG ==采用==> GOOD_MOCK
+    WS_MSG ==派发请求==> GOOD_MOCK
 
-    style BAD_FAIL fill:#ffebee,stroke:#c62828
     style GOOD_RES fill:#e8f5e9,stroke:#2e7d32
     style GATE fill:#fff3e0,stroke:#ef6c00
+    style TICKET_RESP fill:#fff3e0,stroke:#ef6c00
 ```
+
+### 为什么用 ticket 而不是直接转 Authorization
+
+浏览器原生 `WebSocket` 构造器**不允许 JS 设置任何 HTTP header**,只能依赖底层环境自动从 Basic Auth 缓存里附带——但 iOS Safari、WKWebView 套壳 app、frpc / cloudflared 之类的反向代理**在 WebSocket 升级时常常会剥掉 `Authorization` 头**,即便同源 HTTP 请求是有的。结果就是 WS upgrade 看似成功,后续派发却因为缺 `Authorization` 在 basicAuth 中间件 401。
+
+`Sec-WebSocket-Protocol` 是 WS 协议自身的字段,JS 可以从 `new WebSocket(url, protocols)` 第二参数塞进去,反代和 WebView 都不会动它。所以:**ticket 走 HTTP(在那里 Authorization 是可靠的)发放,鉴权信号通过子协议进入 WS 通道**。绕开了"WebSocket 不能加 header"这个限制。
 
 ### 工作原理
 
-1. **升级阶段鉴权**：当启用 Basic Auth 时，`server.on('upgrade')` 复用 `tryBasicAuth(req)` 验证 `Authorization` 头。验证失败立即写入 401（带 `WWW-Authenticate`）并关闭 socket，浏览器会回落到 HTTP 走原本的 Basic Auth 流程。
-2. **派发请求**：从 WS 消息提取 URL/方法/头/体，构造 mock `IncomingMessage`（Readable socket，`req.push()` 注入 body）。
-3. **派发标记**：在 mock 请求上挂 `WS_PROXY_AUTH_BYPASS`（Symbol，无法通过 header 或 query 伪造），表示此请求已通过 WS 通道鉴权。
-4. **`app.handle(req, res)`**：进入 Express 中间件链——cookieSession 解析 cookie、CSRF 校验 token、requireLogin 校验登录态都正常运行；basicAuth 中间件读到 Symbol 后直接放行。
-5. **响应回流**：mock `ServerResponse` 把 status/headers/chunk 经 WS 隧道返回给客户端。
-
-### 为什么不用 self-fetch
-
-通过 localhost HTTP 自请求会再走一遍完整的 HTTP 接入栈，等于让 Basic Auth 中间件再要一次 `Authorization` 头——而 WS 客户端在浏览器/WebView/隧道里 **常常无法在升级阶段附带这个头**（iOS Safari 与套壳 WebView、frpc/cloudflared 之类的反向代理在 WebSocket 升级时会剥掉 `Authorization`），结果就是 401。所以鉴权放在 WS 升级阶段集中校验、派发时跳过重复挑战，让 WS 通道本身成为认证边界。
+1. **拿 ticket**:客户端 `POST /api/ws-ticket`,该端点挂在 `setupPrivateEndpoints` 里,过完整 HTTP 中间件栈(basicAuth + cookieSession + setUserData + requireLogin + CSRF)。服务端 `crypto.randomBytes(32)` 生成 64 字符 hex,存进进程内 `Map`,返回 `{ ticket }`。
+2. **塞子协议**:客户端 `new WebSocket('/ws/proxy', [`luker-ws-ticket.${ticket}`])`。浏览器把它写进 `Sec-WebSocket-Protocol` 请求头。
+3. **升级阶段验证**:服务端 `server.on('upgrade')` 从该头提取 ticket,调 `consumeTicket(ticket)`。校验通过同时**删除 entry**(单次使用)。失败:写 `HTTP/1.1 401`,关 socket。
+4. **echo 子协议**:`wss.handleUpgrade` 内部调 `handleProtocols`,把同一个 `luker-ws-ticket.<ticket>` 字符串选回去,自动写到 101 响应头,握手完成。
+5. **派发请求**:从 WS 消息提取 URL/方法/头/体,构造 mock `IncomingMessage`(Readable socket,`req.push()` 注入 body)。
+6. **派发标记**:在 mock 请求上挂 `WS_PROXY_AUTH_BYPASS`(模块私有 Symbol,无法通过 header / query / body 伪造)。
+7. **`app.handle(req, res)`**:进入 Express 中间件链——cookieSession 解析 cookie、CSRF 校验 token、setUserData 注入 `request.user`、requireLogin 校验登录态都正常运行;basicAuth 中间件读到 Symbol 后直接放行。
+8. **响应回流**:mock `ServerResponse` 把 status/headers/chunk 经 WS 隧道返回给客户端。
 
 ### 安全边界
 
-- **WS 升级仍然受 Basic Auth 保护**：升级前需要通过 `tryBasicAuth` 验证，未配置 Basic Auth 时则跳过这一层。
-- **Symbol 不可伪造**：`WS_PROXY_AUTH_BYPASS` 是模块内部的 Symbol；任何 header、query、body 字段都无法在 `request` 对象上设置同名 Symbol 属性。
-- **应用层中间件照常生效**：cookieSession、CSRF、requireLogin 在派发时全部运行，未登录或缺少 CSRF token 的请求依然会被拒绝。
+| 攻击面 | 现行 HTTP 路径 | ticket 方案 |
+|---|---|---|
+| 匿名 | basicAuth 拦 | `/api/ws-ticket` 被 basicAuth 拦,拿不到 ticket |
+| 偷 cookie 单独 | basicAuth 拦(无 Auth 头) | `/api/ws-ticket` 被 basicAuth 拦,拿不到 ticket |
+| 偷 basicAuth 单独 | requireLogin 拦(无 session) | `/api/ws-ticket` 被 requireLogin 拦,拿不到 ticket |
+| 两者都偷 | 全套通过 | 全套通过(无新增攻击面) |
+| ticket 中间人窃听 | N/A | 30s TTL + 单次使用,HTTPS 路径下基本不可行 |
+| ticket 重放 | N/A | 单次使用,服务端在 consume 时立即删除 |
+
+- **ticket 不绑用户身份**,只授权"通道接入"。派发请求的用户身份完全由 cookie session 决定(`setUserDataMiddleware` + `requireLoginMiddleware` 在派发链路上每次都跑)。即便 ticket 被偷,攻击者还是要用自己的 cookie 才能派发,得不到任何越权能力。
+- **Symbol 不可伪造**:`WS_PROXY_AUTH_BYPASS` 是模块内部的 Symbol;任何 header、query、body 字段都无法在 `request` 对象上设置同名 Symbol 属性。
+- **应用层中间件照常生效**:cookieSession、CSRF、setUserData、requireLogin 在派发时全部运行,未登录或缺少 CSRF token 的请求依然会被拒绝。
 
 ### 连接健壮性
 
-- **心跳保活**：客户端和服务端定期交换心跳消息，防止中间网络设备因空闲超时断开连接
-- **流偏移恢复**：生成过程中如果连接短暂中断，重连后可以从断点继续接收内容
-- **作业清理**：使用 `lastActivity` 时间戳检测过期作业，而非 `createdAt`，确保活跃中的长生成不会被误清理
+- **心跳保活**:客户端和服务端定期交换心跳消息,防止中间网络设备因空闲超时断开连接
+- **流偏移恢复**:生成过程中如果连接短暂中断,重连后可以从断点继续接收内容
+- **作业清理**:使用 `lastActivity` 时间戳检测过期作业,而非 `createdAt`,确保活跃中的长生成不会被误清理
+- **重连重新发 ticket**:每次断线重连时客户端会先 `POST /api/ws-ticket` 拿新 ticket,旧 ticket 已经被消费掉,无法重用。
+
 
 ## 使用场景
 

@@ -7,7 +7,7 @@ import { EventEmitter } from 'node:events';
 import express from 'express';
 
 import basicAuthMiddleware, { WS_PROXY_AUTH_BYPASS } from '../src/middleware/basicAuth.js';
-import { initWsProxy } from '../src/ws-proxy.js';
+import { initWsProxy, wsTicketRouter, TICKET_PROTOCOL_PREFIX, __wsTicketTestUtils } from '../src/ws-proxy.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -640,23 +640,22 @@ describe('ws-proxy basicAuth bypass', () => {
     });
 });
 
-// ─── Test Suite: WS upgrade authentication gate ─────────────────────────────
+// ─── Test Suite: WS upgrade ticket gate ─────────────────────────────────────
 
-describe('ws-proxy upgrade auth gate', () => {
+describe('ws-proxy upgrade ticket gate', () => {
 
     /**
-     * Spin up a server with an authenticateUpgrade gate, attempt a real WS
-     * handshake, and resolve to the parsed HTTP response (or 'upgraded' if the
-     * gate accepted us). We do NOT use the `ws` client library here because we
-     * need to inspect the rejected upgrade response, which the client hides.
+     * Spin up a server with the WS proxy attached and attempt a real WS
+     * handshake. We bypass the `ws` client library because we need to
+     * inspect the rejection responses, which the client hides.
      */
-    async function attemptUpgrade({ authenticate, headers = {} } = {}) {
+    async function attemptUpgrade({ subprotocol = null } = {}) {
         const expressApp = express();
         const server = http.createServer(expressApp);
 
         await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
         const { port } = server.address();
-        initWsProxy([server], expressApp, authenticate);
+        initWsProxy([server], expressApp);
 
         const wsKey = Buffer.from('1234567890123456').toString('base64');
         const reqLines = [
@@ -667,8 +666,8 @@ describe('ws-proxy upgrade auth gate', () => {
             `Sec-WebSocket-Key: ${wsKey}`,
             'Sec-WebSocket-Version: 13',
         ];
-        for (const [k, v] of Object.entries(headers)) {
-            reqLines.push(`${k}: ${v}`);
+        if (subprotocol) {
+            reqLines.push(`Sec-WebSocket-Protocol: ${subprotocol}`);
         }
         reqLines.push('', '');
         const requestBytes = reqLines.join('\r\n');
@@ -689,12 +688,7 @@ describe('ws-proxy upgrade auth gate', () => {
             };
             sock.on('data', (chunk) => {
                 raw += chunk.toString('utf8');
-                // Once headers are complete we have everything we need; the
-                // server may keep the socket open (101 path) so don't wait
-                // for 'end'.
-                if (raw.includes('\r\n\r\n')) {
-                    finish();
-                }
+                if (raw.includes('\r\n\r\n')) finish();
             });
             sock.on('end', finish);
             sock.on('close', finish);
@@ -704,7 +698,6 @@ describe('ws-proxy upgrade auth gate', () => {
                     reject(err);
                 }
             });
-            // Hard cap so a hung server can't wedge the test runner.
             setTimeout(finish, 2000);
         });
 
@@ -712,32 +705,112 @@ describe('ws-proxy upgrade auth gate', () => {
         return result;
     }
 
-    it('accepts the upgrade when the gate resolves ok', async () => {
-        const result = await attemptUpgrade({
-            authenticate: async () => ({ ok: true }),
-        });
+    beforeEach(() => {
+        __wsTicketTestUtils.clear();
+    });
+
+    it('accepts the upgrade with a valid ticket and echoes the subprotocol', async () => {
+        const ticket = __wsTicketTestUtils.mintTicket();
+        const result = await attemptUpgrade({ subprotocol: `${TICKET_PROTOCOL_PREFIX}${ticket}` });
         assert.equal(result.status, 101, `expected 101 Switching Protocols, got: ${result.raw.split('\r\n')[0]}`);
+        assert.match(result.raw, new RegExp(`Sec-WebSocket-Protocol:\\s*${TICKET_PROTOCOL_PREFIX}${ticket}`, 'i'));
     });
 
-    it('rejects with 401 when the gate fails and emits WWW-Authenticate', async () => {
-        const result = await attemptUpgrade({
-            authenticate: async () => ({ ok: false, status: 401, reason: 'missing_authorization' }),
-        });
+    it('rejects with 401 when no Sec-WebSocket-Protocol is present', async () => {
+        const result = await attemptUpgrade({ subprotocol: null });
         assert.equal(result.status, 401);
-        assert.match(result.raw, /WWW-Authenticate:\s*Basic realm="Luker"/i);
     });
 
-    it('rejects with 429 + Retry-After when the gate signals rate limit', async () => {
-        const result = await attemptUpgrade({
-            authenticate: async () => ({ ok: false, status: 429, retryAfter: 42 }),
+    it('rejects with 401 when the protocol does not carry a ticket prefix', async () => {
+        const result = await attemptUpgrade({ subprotocol: 'some-other.protocol' });
+        assert.equal(result.status, 401);
+    });
+
+    it('rejects with 401 when the ticket is unknown', async () => {
+        const result = await attemptUpgrade({ subprotocol: `${TICKET_PROTOCOL_PREFIX}deadbeef` });
+        assert.equal(result.status, 401);
+    });
+
+    it('rejects with 401 when the ticket is reused (single-use enforcement)', async () => {
+        const ticket = __wsTicketTestUtils.mintTicket();
+        const first = await attemptUpgrade({ subprotocol: `${TICKET_PROTOCOL_PREFIX}${ticket}` });
+        assert.equal(first.status, 101);
+        const second = await attemptUpgrade({ subprotocol: `${TICKET_PROTOCOL_PREFIX}${ticket}` });
+        assert.equal(second.status, 401);
+    });
+
+    it('rejects with 401 when the ticket has expired', async () => {
+        const ticket = __wsTicketTestUtils.mintTicket();
+        __wsTicketTestUtils.forceExpire(ticket);
+        const result = await attemptUpgrade({ subprotocol: `${TICKET_PROTOCOL_PREFIX}${ticket}` });
+        assert.equal(result.status, 401);
+    });
+});
+
+// ─── Test Suite: WS ticket store ────────────────────────────────────────────
+
+describe('ws-proxy ticket store', () => {
+
+    beforeEach(() => {
+        __wsTicketTestUtils.clear();
+    });
+
+    it('mintTicket returns a 64-char hex string and stores it', () => {
+        const ticket = __wsTicketTestUtils.mintTicket();
+        assert.match(ticket, /^[0-9a-f]{64}$/);
+        assert.equal(__wsTicketTestUtils.size(), 1);
+    });
+
+    it('mintTicket returns unique values', () => {
+        const seen = new Set();
+        for (let i = 0; i < 100; i++) seen.add(__wsTicketTestUtils.mintTicket());
+        assert.equal(seen.size, 100);
+        assert.equal(__wsTicketTestUtils.size(), 100);
+    });
+
+    it('consumeTicket succeeds once and fails on second use', () => {
+        const ticket = __wsTicketTestUtils.mintTicket();
+        assert.equal(__wsTicketTestUtils.consumeTicket(ticket), true);
+        assert.equal(__wsTicketTestUtils.consumeTicket(ticket), false);
+    });
+
+    it('consumeTicket fails for unknown ticket', () => {
+        assert.equal(__wsTicketTestUtils.consumeTicket('nope'), false);
+    });
+
+    it('consumeTicket fails when ticket has expired', () => {
+        const ticket = __wsTicketTestUtils.mintTicket();
+        __wsTicketTestUtils.forceExpire(ticket);
+        assert.equal(__wsTicketTestUtils.consumeTicket(ticket), false);
+        // Expired ticket is still removed (single-use semantics).
+        assert.equal(__wsTicketTestUtils.size(), 0);
+    });
+});
+
+// ─── Test Suite: /api/ws-ticket router ──────────────────────────────────────
+
+describe('ws-proxy /api/ws-ticket router', () => {
+
+    beforeEach(() => {
+        __wsTicketTestUtils.clear();
+    });
+
+    it('returns a fresh ticket for authorized callers', async () => {
+        const expressApp = express();
+        expressApp.use('/api/ws-ticket', wsTicketRouter);
+
+        const result = await dispatchViaServer(expressApp, {
+            url: '/api/ws-ticket',
+            method: 'POST',
+            body: {},
         });
-        assert.equal(result.status, 429);
-        assert.match(result.raw, /Retry-After:\s*42/i);
-    });
 
-    it('skips the gate entirely when no authenticator is provided', async () => {
-        const result = await attemptUpgrade({ authenticate: null });
-        assert.equal(result.status, 101);
+        assert.equal(result.statusCode, 200);
+        const parsed = JSON.parse(result.body);
+        assert.match(parsed.ticket, /^[0-9a-f]{64}$/);
+        // Ticket is in the store and ready to be consumed exactly once.
+        assert.equal(__wsTicketTestUtils.consumeTicket(parsed.ticket), true);
+        assert.equal(__wsTicketTestUtils.consumeTicket(parsed.ticket), false);
     });
 });
 

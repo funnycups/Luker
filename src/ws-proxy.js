@@ -25,6 +25,8 @@
 
 import { Readable, Writable } from 'node:stream';
 import http from 'node:http';
+import crypto from 'node:crypto';
+import express from 'express';
 import { WebSocketServer } from 'ws';
 import { color } from './util.js';
 import { WS_PROXY_AUTH_BYPASS } from './middleware/basicAuth.js';
@@ -45,6 +47,77 @@ const jobs = new Map();
 const JOB_ORPHAN_TTL = 5 * 60 * 1000; // 5 min — cleanup orphaned (disconnected + idle) jobs
 const JOB_CLEANUP_INTERVAL = 60_000; // check every 60s
 
+// ── WS upgrade ticket store ─────────────────────────────────────────────────
+//
+// The WS upgrade itself is the auth boundary, but native browser `WebSocket`
+// does not let JavaScript set custom headers, and many environments strip the
+// `Authorization` header from the upgrade request (iOS WebView, frpc /
+// cloudflared, some nginx setups). We therefore mint a one-shot ticket on
+// the HTTP path (where Basic Auth + cookieSession + login + CSRF all gate
+// access) and validate it on upgrade via `Sec-WebSocket-Protocol`, which
+// browsers DO let JS set via `new WebSocket(url, protocols)` and which
+// transparent proxies do not mangle.
+//
+// Tickets: 32-byte random hex (256-bit), 30-second TTL, single-use.
+// Storage is in-process — Luker is single-process, so no shared store needed.
+
+const TICKET_TTL_MS = 30_000;
+const TICKET_CLEANUP_INTERVAL_MS = 60_000;
+export const TICKET_PROTOCOL_PREFIX = 'luker-ws-ticket.';
+
+/** @type {Map<string, { createdAt: number }>} */
+const tickets = new Map();
+
+function mintTicket() {
+    const ticket = crypto.randomBytes(32).toString('hex');
+    tickets.set(ticket, { createdAt: Date.now() });
+    return ticket;
+}
+
+/**
+ * Validate AND consume a ticket atomically. Returns true iff the ticket
+ * exists, is not expired, and has not been used. The entry is deleted in
+ * either case to enforce single-use semantics.
+ */
+function consumeTicket(ticket) {
+    const entry = tickets.get(ticket);
+    if (!entry) return false;
+    tickets.delete(ticket);
+    if (Date.now() - entry.createdAt > TICKET_TTL_MS) return false;
+    return true;
+}
+
+setInterval(() => {
+    const now = Date.now();
+    for (const [t, entry] of tickets) {
+        if (now - entry.createdAt > TICKET_TTL_MS) tickets.delete(t);
+    }
+}, TICKET_CLEANUP_INTERVAL_MS).unref();
+
+/**
+ * Express router exposing `POST /api/ws-ticket`. Mount AFTER basicAuth +
+ * cookieSession + setUserData + requireLogin + CSRF so that only fully
+ * authenticated callers can mint a ticket.
+ */
+export const wsTicketRouter = express.Router();
+
+wsTicketRouter.post('/', (_req, res) => {
+    const ticket = mintTicket();
+    res.json({ ticket });
+});
+
+// Test-only hooks — exported so unit tests can drive the store directly.
+export const __wsTicketTestUtils = {
+    mintTicket,
+    consumeTicket,
+    clear: () => tickets.clear(),
+    size: () => tickets.size,
+    forceExpire: (ticket) => {
+        const entry = tickets.get(ticket);
+        if (entry) entry.createdAt = 0;
+    },
+};
+
 /**
  * @typedef {object} Job
  * @property {string} id
@@ -61,61 +134,57 @@ const JOB_CLEANUP_INTERVAL = 60_000; // check every 60s
 
 /**
  * Initialize the WS proxy on every HTTP(S) server instance.
+ *
+ * Every upgrade to `/ws/proxy` must carry a single-use ticket via
+ * `Sec-WebSocket-Protocol: luker-ws-ticket.<ticket>`. The ticket itself is
+ * minted on `POST /api/ws-ticket` (see `wsTicketRouter`) which is gated by
+ * the full HTTP middleware stack — Basic Auth, cookieSession, setUserData,
+ * requireLogin, CSRF. Once the upgrade is validated the WS channel is
+ * trusted, and dispatched requests bypass HTTP-layer Basic Auth via the
+ * `WS_PROXY_AUTH_BYPASS` Symbol while cookieSession / CSRF / requireLogin
+ * still run for per-user identity.
+ *
  * @param {import('http').Server[]} servers
  * @param {import('express').Express} expressApp
- * @param {(req: import('http').IncomingMessage) => Promise<{ ok: boolean, status?: number, reason?: string, retryAfter?: number }>} [authenticateUpgrade]
- *   Optional async gate run on every WS upgrade. If it resolves to `{ ok: false }`,
- *   the upgrade is rejected with the supplied status code instead of being
- *   handed off to the WebSocket server. This is where Basic Auth lives — the
- *   WS channel itself is the auth boundary, so internal dispatch can later
- *   bypass HTTP-layer Basic Auth without weakening the gate.
  */
-export function initWsProxy(servers, expressApp, authenticateUpgrade = null) {
+export function initWsProxy(servers, expressApp) {
     app = expressApp;
-    wss = new WebSocketServer({ noServer: true });
+    wss = new WebSocketServer({
+        noServer: true,
+        // Picks the same ticket subprotocol back so `ws` writes it into the
+        // 101 response. Validation already happened in `server.on('upgrade')`
+        // below; here we just echo the chosen string.
+        handleProtocols: (protocols) => {
+            for (const p of protocols) {
+                if (typeof p === 'string' && p.startsWith(TICKET_PROTOCOL_PREFIX)) {
+                    return p;
+                }
+            }
+            return false;
+        },
+    });
 
     for (const server of servers) {
         server.on('upgrade', (req, socket, head) => {
             const url = new URL(req.url, `http://${req.headers.host}`);
             if (url.pathname !== '/ws/proxy') return;
 
-            const proceed = () => {
-                wss.handleUpgrade(req, socket, head, (ws) => {
-                    wss.emit('connection', ws, req);
-                });
-            };
+            const protocols = String(req.headers['sec-websocket-protocol'] || '')
+                .split(',').map(s => s.trim()).filter(Boolean);
+            const ticketProto = protocols.find(p => p.startsWith(TICKET_PROTOCOL_PREFIX));
 
-            if (typeof authenticateUpgrade !== 'function') {
-                proceed();
+            if (!ticketProto) {
+                rejectUpgrade(socket, 401, 'missing_ticket', req);
+                return;
+            }
+            const ticket = ticketProto.slice(TICKET_PROTOCOL_PREFIX.length);
+            if (!consumeTicket(ticket)) {
+                rejectUpgrade(socket, 401, 'invalid_or_expired_ticket', req);
                 return;
             }
 
-            // Run the gate. Reject with a real HTTP/1.1 response so the
-            // browser can surface the auth failure (and the WS-fetch-proxy
-            // client falls back to HTTP, which carries credentials more
-            // reliably than WebSocket upgrades on iOS / WebView / tunneled
-            // setups that strip Authorization on upgrade).
-            Promise.resolve(authenticateUpgrade(req)).then((result) => {
-                if (result && result.ok) {
-                    proceed();
-                    return;
-                }
-                const status = result?.status ?? 401;
-                const lines = [`HTTP/1.1 ${status} Unauthorized`];
-                if (status === 401) {
-                    lines.push('WWW-Authenticate: Basic realm="Luker", charset="UTF-8"');
-                }
-                if (status === 429 && Number.isFinite(result?.retryAfter)) {
-                    lines.push(`Retry-After: ${result.retryAfter}`);
-                }
-                lines.push('Content-Length: 0', 'Connection: close', '', '');
-                console.warn(`[ws-proxy] upgrade rejected: ${result?.reason || 'unauthorized'} status=${status} ip=${req.socket?.remoteAddress}`);
-                try { socket.write(lines.join('\r\n')); } catch { /* socket may already be dead */ }
-                socket.destroy();
-            }).catch((err) => {
-                console.error('[ws-proxy] upgrade auth check failed:', err?.message || err);
-                try { socket.write('HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); } catch { /* */ }
-                socket.destroy();
+            wss.handleUpgrade(req, socket, head, (ws) => {
+                wss.emit('connection', ws, req);
             });
         });
     }
@@ -126,6 +195,18 @@ export function initWsProxy(servers, expressApp, authenticateUpgrade = null) {
     setInterval(cleanupJobs, JOB_CLEANUP_INTERVAL);
 
     console.log(color.green('WebSocket proxy initialized on /ws/proxy'));
+}
+
+function rejectUpgrade(socket, status, reason, req) {
+    console.warn(`[ws-proxy] upgrade rejected: ${reason} status=${status} ip=${req?.socket?.remoteAddress}`);
+    const lines = [
+        `HTTP/1.1 ${status} Unauthorized`,
+        'Content-Length: 0',
+        'Connection: close',
+        '', '',
+    ];
+    try { socket.write(lines.join('\r\n')); } catch { /* socket may already be dead */ }
+    socket.destroy();
 }
 
 function cleanupJobs() {
