@@ -7399,7 +7399,13 @@ export async function getWorldEntry(name, data, entry) {
 
     drawerEl.on('inline-drawer-toggle', function () {
         clearDrawerDestroyTimeout();
-        const isOpening = !editOutlet.is(':visible');
+        // Read direction from the icon class instead of `editOutlet.is(':visible')`.
+        // The click handler in script.js triggers this event *before* slideToggle, so
+        // visibility lags the user intent; toggleDrawer() (used by Open/Close all
+        // Entries) mutates display *before* dispatching, so visibility leads it.
+        // Both paths flip the icon class synchronously before dispatch, so the icon
+        // is the only consistent source of truth for the new direction.
+        const isOpening = drawerEl.find('> .inline-drawer-header .inline-drawer-icon').hasClass('up');
 
         if (isOpening) {
             scheduleDrawerBuild();
