@@ -44,8 +44,8 @@ const modes = Object.freeze({
  * @readonly
  */
 const Tokens = Object.freeze({
-/** General capture-all plaintext without macros. Consumes any character that is not the first '{' of a macro opener '{{'. */
-    Plaintext: createToken({ name: 'Plaintext', pattern: /(?:[^{]|\{(?!\{))+/u, line_breaks: true }),
+/** General capture-all plaintext without macros. Consumes any character that is not the first '{' of a macro opener '{{', and treats `\{` / `\}` escape sequences as plaintext so the unescape-braces post-processor can strip the leading backslash and yield literal `{` or `}` to the model — including escaped macro openers like `\{{...}}` which must pass through untouched (no side-effect). */
+    Plaintext: createToken({ name: 'Plaintext', pattern: /(?:\\[{}]|[^{]|\{(?!\{))+/u, line_breaks: true }),
     /** Single literal '{' that appears immediately before a macro opener '{{' */
     PlaintextOpenBrace: createToken({ name: 'Plaintext.OpenBrace', pattern: /\{(?=\{\{)/ }),
 
