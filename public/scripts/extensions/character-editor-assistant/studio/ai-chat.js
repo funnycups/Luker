@@ -1,16 +1,14 @@
 /**
  * CardApp Studio AI Chat - Function-calling based AI assistant for CardApp development.
  *
- * Uses sendOpenAIRequest('quiet') with tool definitions to let AI read/write CardApp files.
- * Reuses function-call-runtime.js for tool call extraction and validation.
+ * Routes requests through Luker.context.generateTask with tool definitions to let AI
+ * read/write CardApp files. Studio is a dev/authoring tool — it never injects character
+ * card or world info into the prompt; the system prompt and conversation messages flow
+ * through verbatim.
  */
 
-import { sendOpenAIRequest } from '../../../openai.js';
 import {
  TOOL_PROTOCOL_STYLE,
- extractToolCallsFromResponse,
- getResponseMessageContent,
- validateParsedToolCalls,
 } from '../../function-call-runtime.js';
 import { fetchFileList, fetchFileContent, saveFileContent, deleteFile, renameFile } from './studio.js';
 import { characters, this_chid, saveCharacterDebounced, getRequestHeaders } from '../../../../script.js';
@@ -1258,12 +1256,17 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  onAssistantText = null,
  onPendingApproval = null,
  llmPresetName = '',
- apiSettingsOverride = null,
+ apiPresetName = '',
  } = options;
 
  const tools = buildTools();
  const allowedNames = new Set(Object.values(TOOL_NAMES));
  const modifiedFiles = [];
+
+ const ctx = getContext();
+ if (!ctx || typeof ctx.generateTask !== 'function') {
+ throw new Error('context.generateTask is unavailable.');
+ }
 
  // Add user message
  conversationMessages.push({ role: 'user', content: userMessage });
@@ -1299,32 +1302,39 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  throw new Error('Request aborted');
  }
 
- // Build messages for the API
- const requestMessages = [
+ // Studio is a dev/authoring tool — pass system + history raw, no character card,
+ // no world info. context.generateTask handles dispatch and response normalization.
+ const result = await ctx.generateTask({
+ taskMessages: [
  { role: 'system', content: fullSystemPrompt },
  ...conversationMessages,
- ];
-
- // Call the LLM
- const responseData = await sendOpenAIRequest('quiet', requestMessages, abortSignal, {
+ ],
+ includeCharacterCard: false,
+ worldInfoSource: 'none',
+ runtimeWorldInfo: {},
+ apiPresetName: String(apiPresetName || '').trim(),
+ llmPresetName: String(llmPresetName || '').trim(),
  tools,
  toolChoice: 'auto',
- replaceTools: true,
- requestScope: 'extension_internal',
- llmPresetName,
- apiSettingsOverride: apiSettingsOverride && typeof apiSettingsOverride === 'object' ? apiSettingsOverride : null,
+ functionCallMode: 'auto',
  functionCallOptions: {
  protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
  },
+ abortSignal: abortSignal || undefined,
  });
 
  if (abortSignal?.aborted) {
  throw new Error('Request aborted');
  }
 
- const assistantText = String(getResponseMessageContent(responseData) || '').trim();
- const rawCalls = extractToolCallsFromResponse(responseData)
- .filter(call => allowedNames.has(String(call?.name || '').trim()));
+ const assistantText = String(result?.assistantText || '').trim();
+ const rawCalls = (Array.isArray(result?.toolCalls) ? result.toolCalls : [])
+ .map(call => ({
+ id: String(call?.raw?.id || '').trim() || makeCallId(),
+ name: String(call?.name || '').trim(),
+ args: call?.args && typeof call.args === 'object' ? call.args : {},
+ }))
+ .filter(call => allowedNames.has(call.name));
 
  lastAssistantText = assistantText;
 

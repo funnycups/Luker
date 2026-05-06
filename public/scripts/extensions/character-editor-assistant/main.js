@@ -14,16 +14,13 @@ import {
     select_selected_character,
 } from '../../../script.js';
 import { DOMPurify } from '../../../lib.js';
-import { sendOpenAIRequest } from '../../openai.js';
 import { extension_settings, getContext, getCharacterState, setCharacterState } from '../../extensions.js';
 import { addLocaleData, translate } from '../../i18n.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../popup.js';
 import { convertCharacterBook, deleteWorldInfo, newWorldInfoEntryTemplate, setWorldInfoButtonClass, updateWorldInfoList } from '../../world-info.js';
-import { getChatCompletionConnectionProfiles, resolveChatCompletionRequestProfile } from '../connection-manager/profile-resolver.js';
+import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import {
     TOOL_PROTOCOL_STYLE,
-    extractToolCallsFromResponse,
-    getResponseMessageContent,
     validateParsedToolCalls,
 } from '../function-call-runtime.js';
 import { createCharacterEditorDiffUi } from './diff-ui.js';
@@ -478,88 +475,12 @@ function getConnectionProfiles() {
     return getChatCompletionConnectionProfiles();
 }
 
-function getLorebookSyncRequestPresetOptions(context = getContext()) {
+function getLorebookSyncRequestPresetOptions() {
     const settings = getSettings();
-    const llmPresetName = String(settings.lorebookSyncLlmPresetName || '').trim();
-    const selectedApiProfileName = String(settings.lorebookSyncApiPresetName || '').trim();
-    const profileResolution = resolveChatCompletionRequestProfile({
-        profileName: selectedApiProfileName,
-        defaultApi: String(context?.mainApi || 'openai').trim() || 'openai',
-        defaultSource: String(context?.chatCompletionSettings?.chat_completion_source || '').trim(),
-    });
-    const apiSettingsOverride = profileResolution.apiSettingsOverride;
-    const requestApi = profileResolution.requestApi;
-
     return {
-        llmPresetName,
-        requestApi,
-        apiSettingsOverride,
-        apiPresetName: '',
+        llmPresetName: String(settings.lorebookSyncLlmPresetName || '').trim(),
+        apiPresetName: String(settings.lorebookSyncApiPresetName || '').trim(),
     };
-}
-
-async function buildPresetAwareLorebookMessages(context, systemPrompt, userPrompt, {
-    llmPresetName = '',
-    requestApi = '',
-    historyMessages = null,
-    worldInfoMessages = null,
-    runtimeWorldInfo = null,
-} = {}) {
-    const normalizedHistoryMessages = Array.isArray(historyMessages)
-        ? historyMessages.map(message => ({ ...message }))
-        : [];
-    const baseMessages = [
-        ...normalizedHistoryMessages,
-        { role: 'system', content: String(systemPrompt || '').trim() },
-        { role: 'user', content: String(userPrompt || '').trim() },
-    ].filter((item) => {
-        if (!item || typeof item !== 'object') {
-            return false;
-        }
-        if (Array.isArray(item.tool_calls) && item.tool_calls.length > 0) {
-            return true;
-        }
-        if (String(item.role || '').trim().toLowerCase() === 'tool' && String(item.tool_call_id || '').trim()) {
-            return true;
-        }
-        return Boolean(item.content);
-    });
-
-    if (typeof context?.buildPresetAwarePromptMessages !== 'function') {
-        return baseMessages;
-    }
-
-    const selectedPromptPresetName = String(llmPresetName || '').trim();
-    const envelopeApi = selectedPromptPresetName ? 'openai' : (String(requestApi || context?.mainApi || 'openai').trim() || 'openai');
-    let resolvedRuntimeWorldInfo = runtimeWorldInfo && typeof runtimeWorldInfo === 'object'
-        ? runtimeWorldInfo
-        : null;
-    if (!resolvedRuntimeWorldInfo && typeof context?.resolveWorldInfoForMessages === 'function' && Array.isArray(worldInfoMessages)) {
-        resolvedRuntimeWorldInfo = await context.resolveWorldInfoForMessages(worldInfoMessages, {
-            type: 'quiet',
-            fallbackToCurrentChat: false,
-            postActivationHook: rewriteDepthWorldInfoToAfterWithNotes,
-        });
-    }
-    try {
-        const built = context.buildPresetAwarePromptMessages({
-            messages: baseMessages,
-            envelopeOptions: {
-                includeCharacterCard: true,
-                api: envelopeApi,
-                promptPresetName: selectedPromptPresetName,
-            },
-            promptPresetName: selectedPromptPresetName,
-            runtimeWorldInfo: resolvedRuntimeWorldInfo,
-        });
-        if (Array.isArray(built) && built.length > 0) {
-            return built;
-        }
-    } catch (error) {
-        console.warn(`[${MODULE_NAME}] Failed to build preset-aware messages`, error);
-    }
-
-    return baseMessages;
 }
 
 function rewriteDepthWorldInfoToAfterWithNotes(payload = {}) {
@@ -3023,10 +2944,14 @@ function renderLorebookSyncHistoryItems(state) {
     }).join('')}`;
 }
 
-async function requestLorebookToolCallsWithRetry(settings, promptMessages, {
+async function requestLorebookToolCallsWithRetry(context, settings, {
+    systemPrompt = '',
+    userPrompt = '',
+    historyMessages = null,
+    apiPresetName = '',
+    promptPresetName = '',
     tools = [],
     allowedNames = null,
-    requestPresetOptions = null,
     abortSignal = null,
 } = {}) {
     if (!Array.isArray(tools) || tools.length === 0) {
@@ -3035,9 +2960,30 @@ async function requestLorebookToolCallsWithRetry(settings, promptMessages, {
             assistantText: '',
         };
     }
-    const options = requestPresetOptions && typeof requestPresetOptions === 'object' ? requestPresetOptions : {};
+    if (!context || typeof context.generateTask !== 'function') {
+        throw new Error('context.generateTask is unavailable.');
+    }
+
+    const systemText = String(systemPrompt || '').trim();
+    const userText = String(userPrompt || '').trim();
+    const taskMessages = [
+        ...(Array.isArray(historyMessages) ? historyMessages.map(message => ({ ...message })) : []),
+        { role: 'system', content: systemText },
+        { role: 'user', content: userText },
+    ].filter((item) => {
+        if (!item || typeof item !== 'object') {
+            return false;
+        }
+        if (Array.isArray(item.tool_calls) && item.tool_calls.length > 0) {
+            return true;
+        }
+        if (String(item.role || '').trim().toLowerCase() === 'tool' && String(item.tool_call_id || '').trim()) {
+            return true;
+        }
+        return Boolean(item.content);
+    });
+
     const retries = Math.max(0, Math.min(10, Math.floor(Number(settings?.toolCallRetryMax || 0) || 0)));
-    const toolChoice = 'auto';
     const allowSet = allowedNames instanceof Set
         ? allowedNames
         : Array.isArray(allowedNames)
@@ -3048,27 +2994,43 @@ async function requestLorebookToolCallsWithRetry(settings, promptMessages, {
     for (let attempt = 0; attempt <= retries; attempt++) {
         throwIfAborted(abortSignal, 'Character editor request aborted.');
         try {
-            const responseData = await sendOpenAIRequest('quiet', promptMessages, abortSignal, {
+            const result = await context.generateTask({
+                taskMessages,
+                includeCharacterCard: true,
+                worldInfoSource: 'none',
+                runtimeWorldInfo: {},
+                apiPresetName: String(apiPresetName || '').trim(),
+                llmPresetName: String(promptPresetName || '').trim(),
                 tools,
-                toolChoice,
-                replaceTools: true,
-                requestScope: 'extension_internal',
-                llmPresetName: options.llmPresetName,
-                apiPresetName: options.apiPresetName,
-                apiSettingsOverride: options.apiSettingsOverride,
+                toolChoice: 'auto',
+                functionCallMode: 'auto',
                 functionCallOptions: {
                     protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
                 },
+                abortSignal: abortSignal || undefined,
             });
-            const rawContent = getResponseMessageContent(responseData);
-            const assistantText = rawContent;
-            const calls = extractToolCallsFromResponse(responseData)
-                .filter(call => !allowSet || allowSet.has(String(call?.name || '').trim()));
-            const validationError = validateParsedToolCalls(calls, tools);
+            throwIfAborted(abortSignal, 'Character editor request aborted.');
+            const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
+            const normalizedCalls = rawCalls.map((call) => {
+                const rawId = String(call?.raw?.id || '').trim();
+                return {
+                    id: rawId || makeRuntimeToolCallId(),
+                    name: String(call?.name || '').trim(),
+                    args: call?.args && typeof call.args === 'object' ? call.args : {},
+                    raw: call?.raw || null,
+                };
+            });
+            const filteredCalls = allowSet
+                ? normalizedCalls.filter(call => allowSet.has(call.name))
+                : normalizedCalls;
+            const validationError = validateParsedToolCalls(filteredCalls, tools);
             if (validationError) {
                 throw new Error(validationError);
             }
-            return { calls, assistantText };
+            return {
+                calls: filteredCalls,
+                assistantText: String(result?.assistantText || ''),
+            };
         } catch (error) {
             lastError = error;
             if (isAbortError(error, abortSignal)) {
@@ -3210,21 +3172,21 @@ async function requestModelLorebookDiffAnalysis(context, plan) {
         'Keep it concise and practical.',
         JSON.stringify(contextPayload),
     ].join('\n\n');
-    const requestPresetOptions = getLorebookSyncRequestPresetOptions(context);
-    const requestMessages = await buildPresetAwareLorebookMessages(context, systemPrompt, userPrompt, {
-        ...requestPresetOptions,
+    const requestPresetOptions = getLorebookSyncRequestPresetOptions();
+    const result = await context.generateTask({
+        taskMessages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+        ],
+        includeCharacterCard: true,
+        worldInfoSource: 'none',
         runtimeWorldInfo: {},
-    });
-
-    const responseData = await sendOpenAIRequest('quiet', requestMessages, null, {
-        requestScope: 'extension_internal',
-        llmPresetName: requestPresetOptions.llmPresetName,
         apiPresetName: requestPresetOptions.apiPresetName,
-        apiSettingsOverride: requestPresetOptions.apiSettingsOverride,
+        llmPresetName: requestPresetOptions.llmPresetName,
     });
 
     return {
-        assistantText: String(responseData?.choices?.[0]?.message?.content || '').trim(),
+        assistantText: String(result?.assistantText || '').trim(),
     };
 }
 
@@ -3278,22 +3240,21 @@ async function requestModelLorebookConversationReply(context, plan, conversation
             final_diff_review: reviewContext,
         }),
     ].join('\n\n');
-    const requestPresetOptions = getLorebookSyncRequestPresetOptions(context);
-    const requestMessages = await buildPresetAwareLorebookMessages(context, systemPrompt, userPrompt, {
-        ...requestPresetOptions,
-        historyMessages: buildPersistentToolHistoryMessages(conversationMessages),
-        runtimeWorldInfo: {},
-    });
+    const requestPresetOptions = getLorebookSyncRequestPresetOptions();
     const settings = getSettings();
     const allowedToolNames = ['lorebook_upsert_entry', 'lorebook_delete_entry'];
 
     const { calls: rawCalls, assistantText } = await requestLorebookToolCallsWithRetry(
+        context,
         settings,
-        requestMessages,
         {
+            systemPrompt,
+            userPrompt,
+            historyMessages: buildPersistentToolHistoryMessages(conversationMessages),
+            apiPresetName: requestPresetOptions.apiPresetName,
+            promptPresetName: requestPresetOptions.llmPresetName,
             tools: buildLorebookSyncModelTools(),
             allowedNames: allowedToolNames,
-            requestPresetOptions,
         },
     );
     const operations = normalizeModelOperationsFromCalls(rawCalls, targetBook);
@@ -4032,7 +3993,7 @@ async function requestModelCharacterEditorConversationReply(context, conversatio
             ].join(' ')
             : 'Search tools are unavailable in this runtime. Do not call web-search tools.',
     ].join('\n');
-    const requestPresetOptions = getLorebookSyncRequestPresetOptions(context);
+    const requestPresetOptions = getLorebookSyncRequestPresetOptions();
     const settings = getSettings();
     const allowedToolNames = new Set(availableToolNames);
     const conversationHistory = history.map(item => ({ role: item.role, content: item.content }));
@@ -4056,19 +4017,17 @@ async function requestModelCharacterEditorConversationReply(context, conversatio
                 tool_round: round,
             }),
         ].join('\n\n');
-        const baseRequestMessages = await buildPresetAwareLorebookMessages(context, systemPrompt, userPrompt, {
-            ...requestPresetOptions,
-            historyMessages: runtimeToolMessages,
-            runtimeWorldInfo: {},
-        });
-        const requestMessages = baseRequestMessages;
         const { calls: rawCalls, assistantText } = await requestLorebookToolCallsWithRetry(
+            context,
             settings,
-            requestMessages,
             {
+                systemPrompt,
+                userPrompt,
+                historyMessages: runtimeToolMessages,
+                apiPresetName: requestPresetOptions.apiPresetName,
+                promptPresetName: requestPresetOptions.llmPresetName,
                 tools: modelTools,
                 allowedNames: allowedToolNames,
-                requestPresetOptions,
                 abortSignal,
             },
         );
