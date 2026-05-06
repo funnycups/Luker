@@ -2944,7 +2944,7 @@ function updateGenerationIndicator() {
         if (!generationToast) {
             generationToast = toastr.info(
                 toastText,
-                'Image Generation',
+                t`Image Generation`,
                 {
                     timeOut: 0,
                     extendedTimeOut: 0,
