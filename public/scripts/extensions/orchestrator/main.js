@@ -851,10 +851,14 @@ function extractNodeInjectionText(nodeOutput) {
     return '';
 }
 
-function buildCapsule(stageOutputs) {
+function buildCapsule(stageOutputs, customInstructionOverride) {
     const finalStage = getFinalStageSnapshot(stageOutputs);
     const settings = extension_settings[MODULE_NAME];
-    const customInstruction = String(settings?.capsuleCustomInstruction || '').trim();
+    const overrideTrimmed = typeof customInstructionOverride === 'string'
+        ? customInstructionOverride.trim()
+        : '';
+    const customInstruction = overrideTrimmed
+        || String(settings?.capsuleCustomInstruction || '').trim();
     const finalTexts = Array.isArray(finalStage?.nodes)
         ? finalStage.nodes
             .map(node => extractNodeInjectionText(node?.output))
@@ -1046,7 +1050,7 @@ async function onWorldInfoFinalized(payload) {
         const finalRun = raced?.finalRun;
         throwIfAborted(orchestrationPayload?.signal, 'Orchestration aborted.');
 
-        const capsuleText = buildCapsule(finalRun.stageOutputs || []);
+        const capsuleText = buildCapsule(finalRun.stageOutputs || [], profile?.capsule_inject?.customInstruction);
         throwIfAborted(orchestrationPayload?.signal, 'Orchestration aborted.');
         injectCapsuleToPayload(payload, capsuleText, settings);
         await storeCompletedOrchestrationSnapshot(context, anchor, capsuleText, finalRun.stageOutputs || []);
