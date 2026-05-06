@@ -29,6 +29,7 @@ import {
     DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE,
     ORCH_ALLOWED_GENERATION_TYPES,
     ORCH_EXECUTION_MODE_AGENDA,
+    ORCH_EXECUTION_MODE_LOOP,
     ORCH_EXECUTION_MODE_SINGLE,
     ORCH_EXECUTION_MODE_SPEC,
     ORCH_NODE_TYPE_REVIEW,
@@ -38,6 +39,7 @@ import {
     PORTABLE_PROFILE_FORMAT_V2,
     defaultAgendaAgents,
     defaultAgendaPlanner,
+    defaultLoopProfile,
     defaultPresets,
     defaultSettings,
     defaultSpec,
@@ -167,6 +169,19 @@ import {
 } from './agenda-profile.js';
 import { runAgendaOrchestration } from './agenda-runtime.js';
 import { runSpecOrchestration } from './spec-runtime.js';
+import { runLoopOrchestration } from './loop-runtime.js';
+// Note: `ORCH_EXECUTION_MODE_LOOP` is canonically defined in defaults.js
+// (alongside the other mode literals) and re-exported by persistence.js
+// for callers that want it bundled with `sanitizeLoopProfile`. We import
+// from defaults.js so character-overrides.js / editor-state.js share one
+// import path; the persistence import here only pulls the sanitizer.
+import {
+    sanitizeLoopProfile,
+} from './persistence.js';
+import {
+    LOOP_ITERATION_CONTRACT_LINES,
+    applyLoopProfilePatchArgs,
+} from './loop-iteration.js';
 import {
     buildAiOrchestrationProfile,
     sanitizeProfileForAiPrompt,
@@ -174,11 +189,13 @@ import {
 import {
     createNewStage,
     ensureEditorIntegrity,
+    ensureLoopEditorIntegrity,
     initializeUiState,
     loadCharacterAgendaEditorState,
     loadCharacterEditorState,
     loadGlobalAgendaEditorState,
     loadGlobalEditorState,
+    loadGlobalLoopEditorState,
     pickDefaultPreset,
     setDisplayedScopeForMode,
     syncCharacterEditorWithActiveAvatar,
@@ -194,6 +211,7 @@ import {
     getEditorByScope,
     getExplicitScopeFromElement,
     getIterationDefaultScope,
+    getLoopEditorByScope,
     getPopupEditingLabel,
     getProfileTitleForScope,
 } from './editor-display.js';
@@ -204,6 +222,7 @@ import {
     persistCharacterEditor,
     persistGlobalAgendaEditorFrom,
     persistGlobalEditorFrom,
+    persistGlobalLoopEditorFrom,
     persistOrchestratorCharacterExtension,
 } from './editor-persist.js';
 
@@ -341,6 +360,14 @@ function ensureSettings() {
     if (!extension_settings[MODULE_NAME].chatOverrides || typeof extension_settings[MODULE_NAME].chatOverrides !== 'object') {
         extension_settings[MODULE_NAME].chatOverrides = {};
     }
+    // Loop trace persistence opt-in: see defaults.js for context.
+    extension_settings[MODULE_NAME].persistTrace = Boolean(extension_settings[MODULE_NAME].persistTrace);
+    // V3 loop profile: route through sanitizer on every load so older
+    // shapes (missing tools.* groups, missing finalize literal, numeric
+    // values out of bounds) are normalized into the runtime contract.
+    extension_settings[MODULE_NAME].loopProfile = sanitizeLoopProfile(
+        extension_settings[MODULE_NAME].loopProfile || defaultLoopProfile,
+    );
 }
 
 function buildOrchestratorResultEventPayload(context, payload, status, options = {}) {
@@ -565,6 +592,20 @@ function abortActiveOrchestratorRun() {
 function getEffectiveProfile(context) {
     const settings = extension_settings[MODULE_NAME];
     const executionMode = getExecutionMode(settings);
+    if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
+        // Loop profile is global-only at MVP — no chat / character override
+        // path. The runtime's `runOrchestration` re-sanitizes via
+        // `sanitizeLoopProfile(profile)` before dispatch, so we pass the
+        // settings copy through directly. Adding a `source` / `key` for
+        // parity with spec/agenda envelope shapes; loop-runtime ignores
+        // these but downstream telemetry surfaces them.
+        const profile = sanitizeLoopProfile(settings.loopProfile || defaultLoopProfile);
+        return {
+            source: 'global',
+            key: 'loop',
+            ...profile,
+        };
+    }
     if (executionMode === ORCH_EXECUTION_MODE_AGENDA) {
         const buildAgendaProfile = (source, key, draft) => {
             const profile = sanitizeAgendaWorkingProfile(draft);
@@ -735,6 +776,32 @@ async function runAiCharacterProfileBuild(context, settings, { abortSignal = nul
 }
 
 async function runOrchestration(context, payload, messages, profile) {
+    if (String(profile?.mode || '') === ORCH_EXECUTION_MODE_LOOP) {
+        // Loop mode: single-agent tool-call loop. The dispatcher sanitizes
+        // here (rather than in the upstream `getEffectiveProfile` pipeline)
+        // because spec/agenda/single profiles all share `sanitizeProfile`,
+        // while V3 loop has its own canonical sanitizer that lives next to
+        // its data. Loop runtime returns its own envelope shape; main.js
+        // adapts it back to the spec-shaped `{ stageOutputs, ... }` so the
+        // post-run capsule path (`buildCapsule` → `injectCapsuleToPayload`
+        // → `storeCompletedOrchestrationSnapshot`) is reused unchanged.
+        const loopProfile = sanitizeLoopProfile(profile);
+        const loopRun = await runLoopOrchestration(context, payload, loopProfile);
+        const capsuleText = String(loopRun?.capsule || '').trim();
+        const stageOutputs = capsuleText
+            ? [{
+                id: 'loop',
+                mode: 'serial',
+                nodes: [{ node: 'finalize', output: capsuleText }],
+            }]
+            : [];
+        return {
+            stageOutputs,
+            previousNodeOutputs: new Map(),
+            runtimeTrace: loopRun?.runtimeTrace || null,
+            reviewRerunCount: 0,
+        };
+    }
     if (String(profile?.mode || '') === ORCH_EXECUTION_MODE_AGENDA || String(profile?.source || '') === 'agenda') {
         return runAgendaOrchestration(context, payload, messages, profile);
     }
@@ -840,13 +907,35 @@ async function onWorldInfoFinalized(payload) {
     const pluginAbortController = new AbortController();
     activeOrchRunAbortController = pluginAbortController;
     const linkedAbort = linkAbortSignals(payload?.signal, pluginAbortController.signal);
+    // Capture the World Info entries activated for this turn so loop mode's
+    // `lorebook.search` can dedup them out of its results — those entries
+    // are already injected into the main model context, so re-surfacing
+    // them in the loop agent would waste a round. Set is keyed by
+    // `${world}.${uid}`, the same shape main-flow World Info uses
+    // internally (`world-info.js` builds it from `allActivatedEntries`).
+    const activatedEntryKeys = new Set();
+    const allActivatedEntries = payload?.allActivatedEntries;
+    if (allActivatedEntries && typeof allActivatedEntries[Symbol.iterator] === 'function') {
+        for (const entry of allActivatedEntries) {
+            if (!entry) continue;
+            const world = String(entry.world || '');
+            const uid = entry.uid;
+            if (uid === undefined || uid === null) continue;
+            activatedEntryKeys.add(`${world}.${uid}`);
+        }
+    }
+    const loopRunMeta = { activatedEntryKeys };
     const orchestrationPayload = linkedAbort.signal && linkedAbort.signal !== payload?.signal
         ? {
             ...payload,
             signal: linkedAbort.signal,
             __lukerOrchGenerationSignal: payload?.signal || null,
+            __lukerLoop: loopRunMeta,
         }
-        : payload;
+        : {
+            ...payload,
+            __lukerLoop: loopRunMeta,
+        };
     let stopRequestedByUser = false;
     let resolveStopRequest = null;
     const stopRequestPromise = new Promise((resolve) => {
@@ -1326,6 +1415,7 @@ function getOrchestratorUiTemplateDeps() {
         DEFAULT_AGENDA_PLANNER_PROMPT,
         DEFAULT_AGENDA_PLANNER_SYSTEM_PROMPT,
         ORCH_EXECUTION_MODE_AGENDA,
+        ORCH_EXECUTION_MODE_LOOP,
         ORCH_EXECUTION_MODE_SINGLE,
         ORCH_EXECUTION_MODE_SPEC,
         UI_BLOCK_ID,
@@ -1342,6 +1432,7 @@ function getOrchestratorUiTemplateDeps() {
         getDisplayedScope,
         getEditorByScope,
         getExecutionMode,
+        getLoopEditorByScope,
         getPopupEditingLabel,
         getProfileTitleForScope,
         hasCharacterAgendaOverride,
@@ -1376,6 +1467,7 @@ function renderDynamicPanels(root, context) {
     const executionMode = getExecutionMode(settings);
     const singleModeEnabled = executionMode === ORCH_EXECUTION_MODE_SINGLE;
     const agendaModeEnabled = executionMode === ORCH_EXECUTION_MODE_AGENDA;
+    const loopModeEnabled = executionMode === ORCH_EXECUTION_MODE_LOOP;
     syncCharacterEditorWithActiveAvatar(context);
     const activeAvatar = String(getCurrentAvatar(context) || '').trim();
     const override = activeAvatar ? getCharacterOverrideByAvatar(context, activeAvatar) : null;
@@ -1404,12 +1496,21 @@ function renderDynamicPanels(root, context) {
     root.find('#luker_orch_agenda_profile_mode').text(
         getDisplayedScopeLabel(isAgendaCharacterScope, hasAgendaCharacterOverride, isAgendaOverrideEnabled),
     );
+    // Loop is always global at MVP — no per-character override slot —
+    // so the displayed label is the global-profile literal.
+    root.find('#luker_orch_loop_profile_target').text(
+        activeAvatar
+            ? (getCharacterDisplayNameByAvatar(context, activeAvatar) || activeAvatar)
+            : i18n('(No character card)'),
+    );
+    root.find('#luker_orch_loop_profile_mode').text(i18n('Global profile'));
     const hasLastRun = Boolean(getLatestOrchestrationEntry(context));
     root.find('[data-luker-action="view-last-run"]').toggleClass('luker_orch_button_disabled', !hasLastRun);
     root.find('#luker_orch_last_run_state').text(buildLatestOrchestrationStateSummary(context));
     root.find('[data-luker-ai-goal-input]').val(String(uiState.aiGoal || ''));
-    root.find('#luker_orch_spec_board').toggle(!singleModeEnabled && !agendaModeEnabled);
+    root.find('#luker_orch_spec_board').toggle(!singleModeEnabled && !agendaModeEnabled && !loopModeEnabled);
     root.find('#luker_orch_agenda_board').toggle(agendaModeEnabled);
+    root.find('#luker_orch_loop_board').toggle(loopModeEnabled);
     root.find('#luker_orch_single_mode_runtime_tools').toggle(singleModeEnabled);
     root.find('#luker_orch_single_mode_hint').toggle(singleModeEnabled);
     root.find('#luker_orch_single_agent_fields').toggle(singleModeEnabled);
@@ -1784,9 +1885,16 @@ function isAgendaIterationSession(session) {
     return String(session?.mode || '') === ORCH_EXECUTION_MODE_AGENDA;
 }
 
+function isLoopIterationSession(session) {
+    return String(session?.mode || '') === ORCH_EXECUTION_MODE_LOOP;
+}
+
 function cloneAiIterationWorkingProfile(mode, workingProfile) {
     if (String(mode || '') === ORCH_EXECUTION_MODE_AGENDA) {
         return sanitizeAgendaWorkingProfile(structuredClone(workingProfile || {}));
+    }
+    if (String(mode || '') === ORCH_EXECUTION_MODE_LOOP) {
+        return sanitizeLoopProfile(structuredClone(workingProfile || {}));
     }
     return {
         spec: sanitizeSpec(structuredClone(workingProfile?.spec || { stages: [] })),
@@ -2140,6 +2248,29 @@ function getAiIterationRollbackStartIndex(messages, messageIndex) {
 }
 
 function createAiIterationSession(context, settings) {
+    if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_LOOP) {
+        // Loop profile is global-only at MVP — there is no character editor
+        // slot, so the iteration source is always the global loop draft.
+        const editor = getLoopEditorByScope('global');
+        const avatar = String(getCurrentAvatar(context) || '').trim();
+        const workingProfile = sanitizeLoopProfile(editor);
+        return {
+            id: `session_${Date.now()}`,
+            mode: ORCH_EXECUTION_MODE_LOOP,
+            chatKey: getChatKey(context),
+            sourceScope: 'global',
+            sourceAvatar: avatar,
+            sourceName: i18n('Global profile'),
+            revision: 1,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            workingProfile,
+            baseWorkingProfile: cloneAiIterationWorkingProfile(ORCH_EXECUTION_MODE_LOOP, workingProfile),
+            messages: [],
+            lastSimulation: null,
+            pendingApproval: null,
+        };
+    }
     if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_AGENDA) {
         syncCharacterEditorWithActiveAvatar(context);
         const scope = getIterationDefaultScope(context);
@@ -2421,6 +2552,7 @@ const AI_ITERATION_EDITABLE_TOOL_NAMES = new Set([
     'luker_orch_remove_agenda_agent',
     'luker_orch_set_agenda_final_agent',
     'luker_orch_set_agenda_limits',
+    'luker_orch_set_loop_profile',
 ]);
 
 function isAiIterationEditableToolCallName(name) {
@@ -2456,6 +2588,7 @@ function summarizeIterationToolCalls(toolCalls) {
         agenda_agent_remove: 0,
         agenda_final_agent: 0,
         agenda_limits: 0,
+        loop_profile: 0,
         other: 0,
     };
     for (const call of Array.isArray(toolCalls) ? toolCalls : []) {
@@ -2471,6 +2604,7 @@ function summarizeIterationToolCalls(toolCalls) {
         else if (name === 'luker_orch_remove_agenda_agent') counts.agenda_agent_remove += 1;
         else if (name === 'luker_orch_set_agenda_final_agent') counts.agenda_final_agent += 1;
         else if (name === 'luker_orch_set_agenda_limits') counts.agenda_limits += 1;
+        else if (name === 'luker_orch_set_loop_profile') counts.loop_profile += 1;
         else counts.other += 1;
     }
     const lines = [];
@@ -2485,6 +2619,7 @@ function summarizeIterationToolCalls(toolCalls) {
     if (counts.agenda_agent_remove > 0) lines.push(`删除 agenda agents ${counts.agenda_agent_remove}`);
     if (counts.agenda_final_agent > 0) lines.push(`更新 agenda final agent ${counts.agenda_final_agent}`);
     if (counts.agenda_limits > 0) lines.push(`更新 agenda 限制 ${counts.agenda_limits}`);
+    if (counts.loop_profile > 0) lines.push(`更新 loop 配置 ${counts.loop_profile}`);
     if (counts.other > 0) lines.push(`其他操作 ${counts.other}`);
     return lines;
 }
@@ -2823,9 +2958,130 @@ function buildAgendaIterationPendingDiffState(session, pending) {
     };
 }
 
+function buildLoopIterationPendingDiffState(session, pending) {
+    const entries = [];
+    let workingProfile = sanitizeLoopProfile(session?.workingProfile);
+
+    for (const call of Array.isArray(pending?.toolCalls) ? pending.toolCalls : []) {
+        const name = String(call?.name || '').trim();
+        if (!isAiIterationEditableToolCallName(name)) {
+            continue;
+        }
+        const args = call?.args && typeof call.args === 'object' ? call.args : {};
+        const item = {
+            name,
+            summary: '',
+            fields: [],
+            rawArgs: args,
+        };
+        if (name === 'luker_orch_set_loop_profile') {
+            const before = workingProfile;
+            const after = applyLoopProfilePatchArgs(before, args);
+            workingProfile = after;
+            item.summary = 'Loop profile updated';
+            const fieldsChanged = [];
+            if (before.system_prompt !== after.system_prompt) {
+                fieldsChanged.push({
+                    label: 'system_prompt',
+                    before: formatDiffValue(before.system_prompt),
+                    after: formatDiffValue(after.system_prompt),
+                });
+            }
+            if (before.apiPresetName !== after.apiPresetName) {
+                fieldsChanged.push({
+                    label: 'apiPresetName',
+                    before: formatDiffValue(before.apiPresetName),
+                    after: formatDiffValue(after.apiPresetName),
+                });
+            }
+            if (before.promptPresetName !== after.promptPresetName) {
+                fieldsChanged.push({
+                    label: 'promptPresetName',
+                    before: formatDiffValue(before.promptPresetName),
+                    after: formatDiffValue(after.promptPresetName),
+                });
+            }
+            if (before.max_rounds !== after.max_rounds) {
+                fieldsChanged.push({
+                    label: 'max_rounds',
+                    before: String(before.max_rounds),
+                    after: String(after.max_rounds),
+                });
+            }
+            if (before.wall_clock_budget_ms !== after.wall_clock_budget_ms) {
+                fieldsChanged.push({
+                    label: 'wall_clock_budget_ms',
+                    before: String(before.wall_clock_budget_ms),
+                    after: String(after.wall_clock_budget_ms),
+                });
+            }
+            const groups = [
+                ['note', ['add']],
+                ['chat', ['read_range', 'search']],
+                ['lorebook', ['search', 'get']],
+                ['memory', ['search', 'list_recent', 'get']],
+            ];
+            for (const [group, keys] of groups) {
+                for (const key of keys) {
+                    const beforeValue = Boolean(before.tools?.[group]?.[key]);
+                    const afterValue = Boolean(after.tools?.[group]?.[key]);
+                    if (beforeValue !== afterValue) {
+                        fieldsChanged.push({
+                            label: `tools.${group}.${key}`,
+                            before: String(beforeValue),
+                            after: String(afterValue),
+                        });
+                    }
+                }
+            }
+            item.fields = fieldsChanged;
+            entries.push(item);
+            continue;
+        }
+        if (name === 'luker_orch_simulate') {
+            item.summary = 'Run simulation';
+            item.fields.push({
+                label: 'simulation_text',
+                before: '',
+                after: formatDiffValue(args.simulation_text || ''),
+            });
+            entries.push(item);
+            continue;
+        }
+        if (name === 'luker_orch_finalize_iteration') {
+            item.summary = 'Finalize iteration';
+            item.fields.push({
+                label: 'summary',
+                before: '',
+                after: formatDiffValue(args.summary || ''),
+            });
+            entries.push(item);
+            continue;
+        }
+        if (name === 'luker_orch_continue_iteration') {
+            item.summary = 'Continue iteration';
+            item.fields.push({
+                label: 'note',
+                before: '',
+                after: formatDiffValue(args.note || ''),
+            });
+            entries.push(item);
+            continue;
+        }
+    }
+
+    return {
+        entries,
+        projectedProfile: workingProfile,
+    };
+}
+
 function buildAiIterationPendingDiffState(session, pending) {
     if (isAgendaIterationSession(session)) {
         return buildAgendaIterationPendingDiffState(session, pending);
+    }
+    if (isLoopIterationSession(session)) {
+        return buildLoopIterationPendingDiffState(session, pending);
     }
     const entries = [];
     const workingProfile = structuredClone(session?.workingProfile || { spec: { stages: [] }, presets: {} });
@@ -3211,9 +3467,49 @@ function renderAgendaIterationWorkingProfile(session, { profileOverride = null, 
 <div class="luker_orch_iter_stage_list">${agentCards || '<div class="luker_orch_iter_empty">(no agents)</div>'}</div>`;
 }
 
+function renderLoopIterationWorkingProfile(session, { profileOverride = null, previewPending = false } = {}) {
+    const profile = sanitizeLoopProfile(
+        profileOverride && typeof profileOverride === 'object'
+            ? profileOverride
+            : session?.workingProfile,
+    );
+    const enabledTools = [];
+    if (profile.tools?.note?.add) enabledTools.push('note.add');
+    if (profile.tools?.chat?.read_range) enabledTools.push('chat.read_range');
+    if (profile.tools?.chat?.search) enabledTools.push('chat.search');
+    if (profile.tools?.lorebook?.search) enabledTools.push('lorebook.search');
+    if (profile.tools?.lorebook?.get) enabledTools.push('lorebook.get');
+    if (profile.tools?.memory?.search) enabledTools.push('memory.search');
+    if (profile.tools?.memory?.list_recent) enabledTools.push('memory.list_recent');
+    if (profile.tools?.memory?.get) enabledTools.push('memory.get');
+    enabledTools.push('finalize');
+    const simulationSummary = session?.lastSimulation
+        ? `${i18n('Simulation')}: ${String(session.lastSimulation.summary || '')}`
+        : '';
+    return `
+<div class="luker_orch_iter_profile_meta">
+    <div><b>${escapeHtml(i18nFormat('Iteration source: ${0}', session?.sourceName || i18n('Global profile')))}</b></div>
+    <div>${escapeHtml(`Revision #${Number(session?.revision || 1)}`)}</div>
+    ${previewPending ? `<div>${escapeHtml(i18n('AI suggested changes are waiting for approval.'))}</div>` : ''}
+    ${simulationSummary ? `<div>${escapeHtml(simulationSummary)}</div>` : ''}
+</div>
+<div class="luker_orch_iter_preset_line"><b>API:</b> ${escapeHtml(profile.apiPresetName || i18n('(Global orchestration API preset)'))}</div>
+<div class="luker_orch_iter_preset_line"><b>Preset:</b> ${escapeHtml(profile.promptPresetName || i18n('(Current preset)'))}</div>
+<div class="luker_orch_iter_preset_line"><b>${escapeHtml(i18n('Loop max rounds'))}:</b> ${escapeHtml(String(profile.max_rounds))}</div>
+<div class="luker_orch_iter_preset_line"><b>${escapeHtml(i18n('Loop wall-clock budget (seconds)'))}:</b> ${escapeHtml(String(Math.floor(profile.wall_clock_budget_ms / 1000)))}</div>
+<div class="luker_orch_iter_preset_line"><b>${escapeHtml(i18n('Loop tools'))}:</b> ${escapeHtml(enabledTools.join(', '))}</div>
+<details class="luker_orch_iter_diff_raw" open>
+    <summary>${escapeHtml(i18n('Loop system prompt'))}</summary>
+    <pre>${escapeHtml(profile.system_prompt || '')}</pre>
+</details>`;
+}
+
 function renderAiIterationWorkingProfile(session, { profileOverride = null, previewPending = false } = {}) {
     if (isAgendaIterationSession(session)) {
         return renderAgendaIterationWorkingProfile(session, { profileOverride, previewPending });
+    }
+    if (isLoopIterationSession(session)) {
+        return renderLoopIterationWorkingProfile(session, { profileOverride, previewPending });
     }
     const profile = profileOverride && typeof profileOverride === 'object'
         ? profileOverride
@@ -3258,6 +3554,9 @@ function renderAiIterationWorkingProfile(session, { profileOverride = null, prev
 
 function buildAiIterationSystemPrompt(settings, session = null) {
     const base = normalizeTemplateForAiPrompt(String(settings.aiSuggestSystemPrompt || '').trim()) || getDefaultAiSuggestSystemPrompt();
+    if (isLoopIterationSession(session)) {
+        return [base, '', ...LOOP_ITERATION_CONTRACT_LINES].join('\n');
+    }
     if (isAgendaIterationSession(session)) {
         return [
             base,
@@ -3318,6 +3617,9 @@ function getGlobalIterationBaselineProfile(settings, session = null) {
     if (isAgendaIterationSession(session)) {
         return cloneAgendaWorkingProfileFromSettings(settings);
     }
+    if (isLoopIterationSession(session)) {
+        return sanitizeLoopProfile(settings?.loopProfile || {});
+    }
     return {
         spec: sanitizeSpec(settings?.orchestrationSpec),
         presets: sanitizePresetMap(settings?.presets),
@@ -3329,6 +3631,64 @@ function buildAiIterationUserPrompt(settings, session, userInputText, {
     sourceScope = '',
     sourceName = '',
 } = {}) {
+    if (isLoopIterationSession(session)) {
+        const recentConversation = (Array.isArray(session?.messages) ? session.messages : [])
+            .map(item => `${String(item?.role || 'assistant').toUpperCase()}: ${String(item?.content || '')}`)
+            .join('\n\n');
+        const workingProfileValue = sanitizeLoopProfile(session?.workingProfile);
+        const globalProfileValue = sanitizeLoopProfile(globalProfile);
+        const latestSimulationText = stringifyIterationSimulationForPrompt(session?.lastSimulation);
+        const latestSnapshotText = toReadableYamlText(normalizeOrchestrationSnapshot(getActiveSnapshot()) || {}, '{}');
+        return [
+            '# iteration_input',
+            'You are in a multi-turn loop-mode orchestration iteration session.',
+            'Apply focused edits through tools only. Keep edits minimal and high-impact.',
+            '',
+            '## source_scope',
+            String(sourceScope || session?.sourceScope || 'global'),
+            '',
+            '## source_name',
+            String(sourceName || session?.sourceName || ''),
+            '',
+            '## global_profile_baseline',
+            '```yaml',
+            toReadableYamlText(globalProfileValue, '{}'),
+            '```',
+            '',
+            '## working_profile',
+            '```yaml',
+            toReadableYamlText(workingProfileValue, '{}'),
+            '```',
+            '',
+            '## agent_api_routing',
+            '```yaml',
+            toReadableYamlText(buildAgentApiRoutingPromptData(settings), '{}'),
+            '```',
+            '',
+            '## agent_prompt_preset_routing',
+            '```yaml',
+            toReadableYamlText(buildAgentPromptPresetRoutingPromptData(getContext(), settings), '{}'),
+            '```',
+            '',
+            '## conversation_history',
+            '```text',
+            recentConversation || '(empty)',
+            '```',
+            '',
+            '## latest_simulation',
+            '```text',
+            latestSimulationText,
+            '```',
+            '',
+            '## latest_orchestration_snapshot',
+            '```yaml',
+            latestSnapshotText,
+            '```',
+            '',
+            '## user_request',
+            String(userInputText || '').trim(),
+        ].join('\n');
+    }
     if (isAgendaIterationSession(session)) {
         const recentConversation = (Array.isArray(session?.messages) ? session.messages : [])
             .map(item => `${String(item?.role || 'assistant').toUpperCase()}: ${String(item?.content || '')}`)
@@ -3469,6 +3829,110 @@ function buildAiIterationUserPrompt(settings, session, userInputText, {
 }
 
 function buildAiIterationToolSet(session = null) {
+    if (isLoopIterationSession(session)) {
+        return [
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_set_loop_profile',
+                    description: 'Patch one or more fields of the loop profile. Pass only the fields you intend to change; omitted fields keep their current value. Numeric inputs are clamped (max_rounds in 1..50, wall_clock_budget_ms >= 10000) and tools.finalize is always coerced to true regardless of input.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            system_prompt: { type: 'string' },
+                            apiPresetName: { type: 'string' },
+                            promptPresetName: { type: 'string' },
+                            max_rounds: { type: 'integer', minimum: 1, maximum: 50 },
+                            wall_clock_budget_ms: { type: 'integer', minimum: 10000 },
+                            tools: {
+                                type: 'object',
+                                properties: {
+                                    note: {
+                                        type: 'object',
+                                        properties: {
+                                            add: { type: 'boolean' },
+                                        },
+                                        additionalProperties: false,
+                                    },
+                                    chat: {
+                                        type: 'object',
+                                        properties: {
+                                            read_range: { type: 'boolean' },
+                                            search: { type: 'boolean' },
+                                        },
+                                        additionalProperties: false,
+                                    },
+                                    lorebook: {
+                                        type: 'object',
+                                        properties: {
+                                            search: { type: 'boolean' },
+                                            get: { type: 'boolean' },
+                                        },
+                                        additionalProperties: false,
+                                    },
+                                    memory: {
+                                        type: 'object',
+                                        properties: {
+                                            search: { type: 'boolean' },
+                                            list_recent: { type: 'boolean' },
+                                            get: { type: 'boolean' },
+                                        },
+                                        additionalProperties: false,
+                                    },
+                                },
+                                additionalProperties: false,
+                            },
+                        },
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_simulate',
+                    description: 'Run loop orchestration simulation against recent chat messages or a custom user message.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            recent_messages_n: { type: 'integer' },
+                            simulation_text: { type: 'string' },
+                            trigger: { type: 'string', enum: ['normal', 'regenerate', 'continue'] },
+                        },
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_continue_iteration',
+                    description: 'Request one automatic follow-up round after current tool execution.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            note: { type: 'string' },
+                        },
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_finalize_iteration',
+                    description: 'Finalize this iteration turn with a concise summary.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            summary: { type: 'string' },
+                        },
+                        additionalProperties: false,
+                    },
+                },
+            },
+        ];
+    }
     if (isAgendaIterationSession(session)) {
         return [
             {
@@ -3778,10 +4242,12 @@ async function runAiIterationSimulation(context, session, args = {}, abortSignal
     }
     const profile = isAgendaIterationSession(session)
         ? buildAgendaProfileForRuntime(session?.workingProfile)
-        : {
-            spec: sanitizeSpec(session?.workingProfile?.spec),
-            presets: sanitizePresetMap(session?.workingProfile?.presets),
-        };
+        : isLoopIterationSession(session)
+            ? sanitizeLoopProfile(session?.workingProfile)
+            : {
+                spec: sanitizeSpec(session?.workingProfile?.spec),
+                presets: sanitizePresetMap(session?.workingProfile?.presets),
+            };
     const payload = {
         type: String(args?.trigger || 'normal').trim().toLowerCase() || 'normal',
         coreChat: simulationMessages,
@@ -3805,6 +4271,26 @@ async function runAiIterationSimulation(context, session, args = {}, abortSignal
                 run_count: Array.isArray(agendaState?.runs) ? agendaState.runs.length : 0,
                 final_guidance: String(agendaState?.finalGuidance || ''),
                 agenda_state: agendaState,
+                input: {
+                    recent_messages_n: Math.max(1, Math.min(60, Math.floor(Number(args?.recent_messages_n) || 12))),
+                    simulation_text_used: Boolean(customText),
+                },
+            },
+        };
+    }
+    if (isLoopIterationSession(session)) {
+        const stageOutputs = compactStageOutputs(run?.stageOutputs || []);
+        const finalStage = getFinalStageSnapshot(run?.stageOutputs || []);
+        const finalNodes = Array.isArray(finalStage?.nodes) ? finalStage.nodes : [];
+        const capsuleText = finalNodes.map(node => String(node?.output || '')).filter(Boolean).join('\n\n');
+        return {
+            ok: true,
+            summary: capsuleText
+                ? `Simulated loop turn produced a finalize capsule (${capsuleText.length} chars).`
+                : 'Simulated loop turn ended without a capsule (agent did not call finalize).',
+            detail: {
+                capsule_text: capsuleText,
+                stage_outputs: stageOutputs,
                 input: {
                     recent_messages_n: Math.max(1, Math.min(60, Math.floor(Number(args?.recent_messages_n) || 12))),
                     simulation_text_used: Boolean(customText),
@@ -4070,9 +4556,119 @@ async function executeAgendaIterationToolCalls(context, session, toolCalls, abor
     };
 }
 
+async function executeLoopIterationToolCalls(context, session, toolCalls, abortSignal = null) {
+    const actions = [];
+    const simulations = [];
+    const toolResults = [];
+    let finalized = false;
+    let finalizeSummary = '';
+    let continueRequested = false;
+    let changed = false;
+    session.workingProfile = sanitizeLoopProfile(session.workingProfile);
+
+    for (const call of Array.isArray(toolCalls) ? toolCalls : []) {
+        const name = String(call?.name || '').trim();
+        const args = call?.args && typeof call.args === 'object' ? call.args : {};
+        const callId = String(call?.id || '').trim() || makeRuntimeToolCallId();
+        const pushToolResult = (payload) => {
+            toolResults.push({
+                tool_call_id: callId,
+                content: serializeToolResultContent(payload),
+            });
+        };
+        if (!name) {
+            continue;
+        }
+        if (name === 'luker_orch_set_loop_profile') {
+            const before = sanitizeLoopProfile(session.workingProfile);
+            const after = applyLoopProfilePatchArgs(before, args);
+            session.workingProfile = after;
+            const beforeSnapshot = JSON.stringify(before);
+            const afterSnapshot = JSON.stringify(after);
+            const profileChanged = beforeSnapshot !== afterSnapshot;
+            const actionText = profileChanged
+                ? 'Loop profile updated.'
+                : 'Loop profile patch produced no changes.';
+            actions.push(actionText);
+            pushToolResult({
+                ok: true,
+                changed: profileChanged,
+                action: actionText,
+                profile: after,
+            });
+            if (profileChanged) {
+                changed = true;
+            }
+            continue;
+        }
+        if (name === 'luker_orch_simulate') {
+            const simulation = await runAiIterationSimulation(context, session, args, abortSignal);
+            simulations.push(simulation);
+            session.lastSimulation = simulation;
+            const actionText = simulation.ok
+                ? `Simulation finished: ${simulation.summary}`
+                : `Simulation failed: ${simulation.summary}`;
+            actions.push(actionText);
+            pushToolResult({
+                ok: Boolean(simulation?.ok),
+                action: actionText,
+                simulation,
+            });
+            continue;
+        }
+        if (name === 'luker_orch_continue_iteration') {
+            continueRequested = true;
+            const note = String(args.note || '').trim();
+            const actionText = `Continue requested.${note ? ` ${note}` : ''}`;
+            actions.push(actionText);
+            pushToolResult({
+                ok: true,
+                action: actionText,
+                continueRequested: true,
+                note,
+            });
+            continue;
+        }
+        if (name === 'luker_orch_finalize_iteration') {
+            finalized = true;
+            finalizeSummary = String(args.summary || '').trim();
+            const actionText = `Iteration finalized.${finalizeSummary ? ` ${finalizeSummary}` : ''}`;
+            actions.push(actionText);
+            pushToolResult({
+                ok: true,
+                action: actionText,
+                finalized: true,
+                summary: finalizeSummary,
+            });
+            continue;
+        }
+        const actionText = `Ignored unknown action: ${name}`;
+        actions.push(actionText);
+        pushToolResult({ ok: false, ignored: true, action: actionText });
+    }
+
+    session.workingProfile = sanitizeLoopProfile(session.workingProfile);
+    session.revision = Number(session.revision || 0) + (changed ? 1 : 0);
+    session.updatedAt = Date.now();
+    trimAiIterationMessages(session);
+
+    return {
+        actions,
+        simulations,
+        toolResults,
+        finalized,
+        finalizeSummary,
+        continueRequested,
+        changed,
+    };
+}
+
 async function executeAiIterationToolCalls(context, session, toolCalls, abortSignal = null) {
     if (isAgendaIterationSession(session)) {
         return executeAgendaIterationToolCalls(context, session, toolCalls, abortSignal);
+    }
+    if (isLoopIterationSession(session)) {
+        return executeLoopIterationToolCalls(context, session, toolCalls, abortSignal);
     }
     const actions = [];
     const simulations = [];
@@ -4510,6 +5106,19 @@ async function runAiIterationTurn(context, settings, session, userText, abortSig
 }
 
 async function applyAiIterationSessionToGlobal(context, settings, session, root) {
+    if (isLoopIterationSession(session)) {
+        const profile = sanitizeLoopProfile(session?.workingProfile);
+        settings.executionMode = ORCH_EXECUTION_MODE_LOOP;
+        settings.singleAgentModeEnabled = false;
+        settings.loopProfile = profile;
+        await saveSettings();
+        uiState.globalLoopEditor = loadGlobalLoopEditorState();
+        ensureLoopEditorIntegrity(uiState.globalLoopEditor);
+        renderDynamicPanels(root, context);
+        notifySuccess(i18n('Iteration session applied to global profile.'));
+        updateUiStatus(i18n('Iteration session applied to global profile.'));
+        return;
+    }
     if (isAgendaIterationSession(session)) {
         const profile = sanitizeAgendaWorkingProfile(session?.workingProfile);
         settings.executionMode = ORCH_EXECUTION_MODE_AGENDA;
@@ -4540,6 +5149,13 @@ async function applyAiIterationSessionToGlobal(context, settings, session, root)
 }
 
 async function applyAiIterationSessionToCharacter(context, settings, session, root) {
+    if (isLoopIterationSession(session)) {
+        // Loop profile is global-only at MVP — there is no character editor
+        // slot to write into. Surface a friendly notice and bail out instead
+        // of silently doing nothing.
+        notifyError(i18n('Loop profile character override is not yet supported. Save the iteration to the global profile instead.'));
+        return;
+    }
     if (isAgendaIterationSession(session)) {
         const avatar = String(getCurrentAvatar(context) || '').trim();
         if (!avatar) {
@@ -5087,6 +5703,7 @@ function bindUi() {
 
     initializeUiState(context);
     root.find('#luker_orch_enabled').prop('checked', Boolean(settings.enabled));
+    root.find('#luker_orch_persist_trace').prop('checked', Boolean(settings.persistTrace));
     root.find('#luker_orch_execution_mode').val(getExecutionMode(settings));
     root.find('#luker_orch_single_agent_system_prompt').val(String(settings.singleAgentSystemPrompt || DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT));
     root.find('#luker_orch_single_agent_user_prompt').val(String(settings.singleAgentUserPromptTemplate || DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE));
@@ -5114,6 +5731,11 @@ function bindUi() {
 
     root.on('input.lukerOrch', '#luker_orch_enabled', function () {
         settings.enabled = Boolean(jQuery(this).prop('checked'));
+        saveSettingsDebounced();
+    });
+
+    root.on('input.lukerOrch', '#luker_orch_persist_trace', function () {
+        settings.persistTrace = Boolean(jQuery(this).prop('checked'));
         saveSettingsDebounced();
     });
 
@@ -5189,6 +5811,70 @@ function bindUi() {
         const editor = getAgendaEditorByScope(scope);
         ensureAgendaEditorIntegrity(editor);
         editor.limits.maxTotalRuns = Math.max(1, Math.min(200, Math.floor(Number(jQuery(this).val()) || 1)));
+    });
+
+    // ─── Loop-mode editor handlers ─────────────────────────────────────
+    // Loop is global-only (see editor-state.js); the data-scope attribute
+    // is rendered as 'global' but kept on every input for symmetry with
+    // spec/agenda. `ensureLoopEditorIntegrity` re-canonicalizes after every
+    // edit so render reads see the V3 shape (`tools.note.add`, etc.) even
+    // if mid-edit numeric clamps trip.
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_api_preset, .luker_orch_editor_popup #luker_orch_loop_api_preset`, function () {
+        const editor = getLoopEditorByScope('global');
+        ensureLoopEditorIntegrity(editor);
+        editor.apiPresetName = sanitizeConnectionProfileName(jQuery(this).val());
+    });
+
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_prompt_preset, .luker_orch_editor_popup #luker_orch_loop_prompt_preset`, function () {
+        const editor = getLoopEditorByScope('global');
+        ensureLoopEditorIntegrity(editor);
+        editor.promptPresetName = sanitizePromptPresetName(jQuery(this).val());
+    });
+
+    jQuery(document).on('input.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_system_prompt, .luker_orch_editor_popup #luker_orch_loop_system_prompt`, function () {
+        const editor = getLoopEditorByScope('global');
+        ensureLoopEditorIntegrity(editor);
+        editor.system_prompt = String(jQuery(this).val() || '');
+    });
+
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_max_rounds, .luker_orch_editor_popup #luker_orch_loop_max_rounds`, function () {
+        const editor = getLoopEditorByScope('global');
+        ensureLoopEditorIntegrity(editor);
+        editor.max_rounds = Math.max(1, Math.min(50, Math.floor(Number(jQuery(this).val()) || 20)));
+        ensureLoopEditorIntegrity(editor);
+    });
+
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_wall_clock, .luker_orch_editor_popup #luker_orch_loop_wall_clock`, function () {
+        // Stored as ms but edited in seconds; the floor (10s) matches
+        // `LOOP_WALL_CLOCK_FLOOR_MS / 1000` in persistence.js.
+        const seconds = Math.max(10, Math.min(3600, Math.floor(Number(jQuery(this).val()) || 300)));
+        const editor = getLoopEditorByScope('global');
+        ensureLoopEditorIntegrity(editor);
+        editor.wall_clock_budget_ms = seconds * 1000;
+        ensureLoopEditorIntegrity(editor);
+    });
+
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-loop-tool], .luker_orch_editor_popup [data-luker-loop-tool]`, function () {
+        // finalize is rendered disabled+checked in the workspace; the
+        // browser still fires a change event if the underlying state is
+        // set programmatically. The sanitizer forces `tools.finalize: true`
+        // unconditionally, so even if a malformed click slipped through,
+        // the persisted profile would land back at `true`.
+        const toolName = String(jQuery(this).attr('data-luker-loop-tool') || '');
+        const checked = Boolean(jQuery(this).prop('checked'));
+        const editor = getLoopEditorByScope('global');
+        ensureLoopEditorIntegrity(editor);
+        if (toolName === 'finalize') {
+            editor.tools.finalize = true;
+            return;
+        }
+        const [namespace, verb] = toolName.split('.');
+        if (!namespace || !verb) return;
+        if (!editor.tools[namespace] || typeof editor.tools[namespace] !== 'object') {
+            editor.tools[namespace] = {};
+        }
+        editor.tools[namespace][verb] = checked;
+        ensureLoopEditorIntegrity(editor);
     });
 
     root.on('change.lukerOrch', '#luker_orch_llm_api_preset', function () {
@@ -5554,6 +6240,16 @@ function bindUi() {
         }
 
         if (action === 'reload-current') {
+            if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_LOOP) {
+                // Loop is global-only — reload-current always rebuilds the
+                // global loop editor draft from settings. This mirrors the
+                // spec/agenda paths but skips the character-override branch.
+                uiState.globalLoopEditor = loadGlobalLoopEditorState();
+                ensureLoopEditorIntegrity(uiState.globalLoopEditor);
+                updateUiStatus(i18n('Reloaded global profile from settings.'));
+                renderDynamicPanels(root, context);
+                return;
+            }
             if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_AGENDA) {
                 syncCharacterEditorWithActiveAvatar(context);
                 const activeAvatar = String(getCurrentAvatar(context) || '').trim();
@@ -5589,6 +6285,19 @@ function bindUi() {
         }
 
         if (action === 'reset-global') {
+            if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_LOOP) {
+                if (!window.confirm(i18n('Reset global orchestration profile to defaults? This will overwrite current global workflow and presets.'))) {
+                    return;
+                }
+                settings.loopProfile = sanitizeLoopProfile(defaultLoopProfile);
+                await saveSettings();
+                uiState.globalLoopEditor = loadGlobalLoopEditorState();
+                ensureLoopEditorIntegrity(uiState.globalLoopEditor);
+                renderDynamicPanels(root, context);
+                notifySuccess(i18n('Global orchestration profile reset to defaults.'));
+                updateUiStatus(i18n('Reset global profile to defaults.'));
+                return;
+            }
             if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_AGENDA) {
                 if (!window.confirm(i18n('Reset global orchestration profile to defaults? This will overwrite current global workflow and presets.'))) {
                     return;
@@ -5627,6 +6336,15 @@ function bindUi() {
         if (action === 'save-global') {
             syncCharacterEditorWithActiveAvatar(context);
             const sourceScope = getDisplayedScope(context, settings);
+            if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_LOOP) {
+                await persistGlobalLoopEditorFrom(settings, uiState.globalLoopEditor);
+                uiState.globalLoopEditor = loadGlobalLoopEditorState();
+                ensureLoopEditorIntegrity(uiState.globalLoopEditor);
+                notifySuccess(i18n('Global orchestration profile saved.'));
+                updateUiStatus(i18n('Saved to global profile.'));
+                renderDynamicPanels(root, context);
+                return;
+            }
             if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_AGENDA) {
                 const sourceEditor = getAgendaEditorByScope(sourceScope);
                 await persistGlobalAgendaEditorFrom(settings, sourceEditor);

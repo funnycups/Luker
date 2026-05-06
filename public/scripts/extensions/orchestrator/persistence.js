@@ -45,6 +45,192 @@ const LEGACY_INDEX_NAMESPACE = 'luker_orchestrator_state';
 const LEGACY_ANCHOR_NAMESPACE_PREFIX = 'luker_orchestrator_anchor_';
 const SCHEMA_VERSION = 1;
 
+/**
+ * Loop execution mode marker (V3 profile schema). Lives next to
+ * `ORCH_EXECUTION_MODE_SPEC` / `ORCH_EXECUTION_MODE_AGENDA` defined in
+ * `defaults.js`; we keep the loop literal here because the loop profile's
+ * canonical sanitizer (`sanitizeLoopProfile`) is colocated with the
+ * floor-state binding it ultimately persists into.
+ */
+export const ORCH_EXECUTION_MODE_LOOP = 'loop';
+
+/**
+ * Frozen V3 default profile. Callers should always run input through
+ * `sanitizeLoopProfile` rather than mutating this object — the freeze is
+ * a guardrail, not the contract.
+ *
+ * Field semantics (full design lives in
+ * `docs/superpowers/specs/2026-05-06-orchestrator-loop-mode-design.md`):
+ *
+ *   - mode                  literal 'loop'; coerced on every sanitize
+ *   - apiPresetName         Connection Manager profile (empty = global)
+ *   - promptPresetName      chat completion preset (empty = global)
+ *   - system_prompt         agent system instruction authored by user
+ *   - tools.note.add        persistent note tool (per-chat, cross-run)
+ *   - tools.chat.{read_range, search}  in-chat history tools
+ *   - tools.lorebook.{search, get}      world-info lookup tools
+ *   - tools.memory.{search, list_recent, get}  memory-graph external-api
+ *                            wrappers; each requires memory-graph enabled
+ *   - tools.finalize        FORCED true; the loop has no other terminator
+ *   - max_rounds            hard upper bound on tool-call rounds [1, 50]
+ *   - wall_clock_budget_ms  loop deadline; floored at 10000ms (10s)
+ *   - capsule_inject        same shape as spec/agenda capsule injection
+ */
+const LOOP_PROFILE_DEFAULTS = Object.freeze({
+    mode: ORCH_EXECUTION_MODE_LOOP,
+    apiPresetName: '',
+    promptPresetName: '',
+    system_prompt: '',
+    tools: Object.freeze({
+        note: Object.freeze({ add: true }),
+        chat: Object.freeze({ read_range: true, search: true }),
+        lorebook: Object.freeze({ search: true, get: true }),
+        memory: Object.freeze({ search: true, list_recent: true, get: true }),
+        finalize: true,
+    }),
+    max_rounds: 20,
+    wall_clock_budget_ms: 300000,
+    capsule_inject: Object.freeze({
+        position: 'atDepth',
+        depth: 0,
+        role: 'system',
+        customInstruction: '',
+    }),
+});
+
+const LOOP_MAX_ROUNDS_FLOOR = 1;
+const LOOP_MAX_ROUNDS_HARD_CAP = 50;
+const LOOP_WALL_CLOCK_FLOOR_MS = 10000;
+
+function clampInteger(value, lo, hi, fallback) {
+    // Treat null / undefined / NaN / non-numeric strings as "missing" and
+    // fall back. Explicit numeric inputs (including 0 and negatives) are
+    // clamped into [lo, hi] so callers cannot accidentally bypass the
+    // floor by passing 0.
+    if (value === null || value === undefined) return fallback;
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(Math.max(Math.floor(n), lo), hi);
+}
+
+function readBooleanFlag(input, defaultValue) {
+    // Treats only an explicit `false` as a disable signal — every other
+    // shape (undefined / true / truthy / falsy non-false / non-boolean)
+    // collapses to the default. This matches the plan's "default-on"
+    // ergonomics: callers pass `{ tools: { chat: { search: false } }}` to
+    // disable, and missing fields stay enabled.
+    if (input === false) return false;
+    if (input === true) return true;
+    return defaultValue;
+}
+
+function sanitizeLoopToolFlags(input) {
+    const tools = input && typeof input === 'object' ? input : {};
+    const noteIn = tools.note && typeof tools.note === 'object' ? tools.note : {};
+    const chatIn = tools.chat && typeof tools.chat === 'object' ? tools.chat : {};
+    const lorebookIn = tools.lorebook && typeof tools.lorebook === 'object' ? tools.lorebook : {};
+    const memoryIn = tools.memory && typeof tools.memory === 'object' ? tools.memory : {};
+    return {
+        note: {
+            add: readBooleanFlag(noteIn.add, true),
+        },
+        chat: {
+            read_range: readBooleanFlag(chatIn.read_range, true),
+            search: readBooleanFlag(chatIn.search, true),
+        },
+        lorebook: {
+            search: readBooleanFlag(lorebookIn.search, true),
+            get: readBooleanFlag(lorebookIn.get, true),
+        },
+        memory: {
+            search: readBooleanFlag(memoryIn.search, true),
+            list_recent: readBooleanFlag(memoryIn.list_recent, true),
+            get: readBooleanFlag(memoryIn.get, true),
+        },
+        // The loop has no other terminator; `finalize` is the only tool the
+        // agent can call to stop. We accept user input here for forward
+        // compatibility but always coerce back to true.
+        finalize: true,
+    };
+}
+
+function sanitizeLoopCapsuleInject(input) {
+    const inject = input && typeof input === 'object' ? input : {};
+    return {
+        position: typeof inject.position === 'string' && inject.position
+            ? inject.position
+            : LOOP_PROFILE_DEFAULTS.capsule_inject.position,
+        depth: Number.isFinite(Number(inject.depth))
+            ? Math.floor(Number(inject.depth))
+            : LOOP_PROFILE_DEFAULTS.capsule_inject.depth,
+        role: typeof inject.role === 'string' && inject.role
+            ? inject.role
+            : LOOP_PROFILE_DEFAULTS.capsule_inject.role,
+        customInstruction: typeof inject.customInstruction === 'string'
+            ? inject.customInstruction
+            : LOOP_PROFILE_DEFAULTS.capsule_inject.customInstruction,
+    };
+}
+
+/**
+ * Canonical V3 loop-profile normalizer. Coerces the input into the
+ * runtime shape, clamps numeric budgets to the hard bounds, forces the
+ * mode literal and `tools.finalize` regardless of caller intent, and
+ * fills missing tool flags with the default-on state.
+ *
+ * Mirrors the role `sanitizeSpec` plays for V1 and `sanitizeAgendaWorkingProfile`
+ * for V2. There is intentionally no top-level dispatcher in this module
+ * (V1 and V2 sanitizers each live next to their data); callers that
+ * need to choose between sanitizers do so by inspecting `input?.mode`
+ * upstream (e.g. `runOrchestration` in main.js).
+ *
+ * @param {object | null | undefined} input
+ * @returns {{
+ *   mode: 'loop',
+ *   apiPresetName: string,
+ *   promptPresetName: string,
+ *   system_prompt: string,
+ *   tools: {
+ *     note: { add: boolean },
+ *     chat: { read_range: boolean, search: boolean },
+ *     lorebook: { search: boolean, get: boolean },
+ *     memory: { search: boolean, list_recent: boolean, get: boolean },
+ *     finalize: true,
+ *   },
+ *   max_rounds: number,
+ *   wall_clock_budget_ms: number,
+ *   capsule_inject: { position: string, depth: number, role: string, customInstruction: string },
+ * }}
+ */
+export function sanitizeLoopProfile(input) {
+    const source = input && typeof input === 'object' ? input : {};
+    return {
+        mode: ORCH_EXECUTION_MODE_LOOP,
+        apiPresetName: source.apiPresetName == null ? '' : String(source.apiPresetName),
+        promptPresetName: source.promptPresetName == null ? '' : String(source.promptPresetName),
+        system_prompt: source.system_prompt == null ? '' : String(source.system_prompt),
+        tools: sanitizeLoopToolFlags(source.tools),
+        max_rounds: clampInteger(
+            source.max_rounds,
+            LOOP_MAX_ROUNDS_FLOOR,
+            LOOP_MAX_ROUNDS_HARD_CAP,
+            LOOP_PROFILE_DEFAULTS.max_rounds,
+        ),
+        wall_clock_budget_ms: (() => {
+            // null/undefined → default; explicit numbers below the floor
+            // get raised to LOOP_WALL_CLOCK_FLOOR_MS rather than silently
+            // adopting the (much larger) default.
+            if (source.wall_clock_budget_ms === null || source.wall_clock_budget_ms === undefined) {
+                return LOOP_PROFILE_DEFAULTS.wall_clock_budget_ms;
+            }
+            const n = Number(source.wall_clock_budget_ms);
+            if (!Number.isFinite(n)) return LOOP_PROFILE_DEFAULTS.wall_clock_budget_ms;
+            return Math.max(LOOP_WALL_CLOCK_FLOOR_MS, Math.floor(n));
+        })(),
+        capsule_inject: sanitizeLoopCapsuleInject(source.capsule_inject),
+    };
+}
+
 let floorStatePromise = null;
 
 /**

@@ -97,6 +97,7 @@ import {
     compareNodesByTimeline,
     getSemanticCoverageSeq,
 } from './graph-ops.js';
+import { __recordInjectedNodeIds } from './external-api.js';
 
 const MODULE_NAME = 'memory_graph';
 const CHAT_STATE_NAMESPACE = MODULE_NAME;
@@ -7040,6 +7041,7 @@ async function injectMemoryPrompts(context, payload) {
     const recallMethod = String(settings.recallMethod || 'llm').trim().toLowerCase();
     let selectedNodes;
     let trace;
+    let alwaysInjectNodes = [];
 
     if (recallMethod === 'hybrid' || recallMethod === 'hybrid_rerank' || recallMethod === 'hybrid_llm') {
         const queryBundle = getRecallQueryBundle(payload, context, settings);
@@ -7073,7 +7075,7 @@ async function injectMemoryPrompts(context, payload) {
         });
         throwIfRecallRunInvalid(recallRunToken, payload?.signal, 'Memory recall aborted.');
 
-        const alwaysInjectNodes = collectAlwaysInjectNodes(store, settings, context);
+        alwaysInjectNodes = collectAlwaysInjectNodes(store, settings, context);
         const alwaysInjectSet = new Set(alwaysInjectNodes.map(n => n?.id).filter(Boolean));
         const latestSeqIndex = getLatestSeqIndex(store);
         const excludeMessages = Math.max(0, Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns));
@@ -7129,10 +7131,20 @@ async function injectMemoryPrompts(context, payload) {
         const llmResult = await runLLMDrivenRecall(context, store, payload);
         selectedNodes = llmResult.selectedNodes;
         trace = llmResult.trace;
+        alwaysInjectNodes = Array.isArray(llmResult.alwaysInjectNodes) ? llmResult.alwaysInjectNodes : [];
     }
 
     throwIfRecallRunInvalid(recallRunToken, payload?.signal, 'Memory recall aborted.');
     store.lastRecallTrace = trace;
+
+    // Publish the two id sets that this turn's main-flow injection has settled
+    // on, so other extensions (orchestrator loop mode et al.) can dedup against
+    // what's already in the main model context. Read via
+    // `getCurrentlyInjectedNodeIds(context)` from external-api.js.
+    __recordInjectedNodeIds({
+        alwaysInjectIds: alwaysInjectNodes.map(node => String(node?.id || '')).filter(Boolean),
+        recallSelectedIds: selectedNodes.map(node => String(node?.id || '')).filter(Boolean),
+    });
 
     const blocks = {
         corePacket,

@@ -41,10 +41,16 @@ export const DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE = [
 export const ORCH_EXECUTION_MODE_SPEC = 'spec';
 export const ORCH_EXECUTION_MODE_SINGLE = 'single';
 export const ORCH_EXECUTION_MODE_AGENDA = 'agenda';
+// Loop mode literal kept canonical here (matches `persistence.js`
+// `ORCH_EXECUTION_MODE_LOOP`). Listed in `ORCH_EXECUTION_MODES` so
+// `normalizeExecutionMode` accepts it; the loop profile schema and
+// sanitizer live in `persistence.js` next to its floor-state binding.
+export const ORCH_EXECUTION_MODE_LOOP = 'loop';
 export const ORCH_EXECUTION_MODES = Object.freeze([
     ORCH_EXECUTION_MODE_SPEC,
     ORCH_EXECUTION_MODE_SINGLE,
     ORCH_EXECUTION_MODE_AGENDA,
+    ORCH_EXECUTION_MODE_LOOP,
 ]);
 export const PORTABLE_PROFILE_FORMAT_V1 = 'luker_orchestrator_profile_v1';
 export const PORTABLE_PROFILE_FORMAT_V2 = 'luker_orchestrator_profile_v2';
@@ -327,6 +333,36 @@ export const defaultAgendaPlanner = {
     promptPresetName: '',
 };
 
+// Default loop profile system prompt — shipped as a starting point for
+// users who switch to loop mode. The runtime sanitizer in
+// `persistence.js::sanitizeLoopProfile` fills in the rest of the V3 shape
+// (tool flags default-on, max_rounds=20, wall_clock=300000ms, finalize
+// forced true). Keeping the default text terse and action-oriented matches
+// the project's prompt-writing convention.
+export const DEFAULT_LOOP_SYSTEM_PROMPT = [
+    'You are a single-agent orchestration loop for roleplay generation.',
+    'Use the available tools to gather only the context you actually need to draft compact orchestration guidance for the next reply.',
+    'Prefer fewer, targeted tool calls over exhaustive exploration.',
+    'Call finalize(capsule_text) with the final guidance text when you have enough — do NOT keep gathering once you can write a good capsule.',
+    'Preserve continuity, character consistency, anti-OOC discipline, and active world-info constraints in the capsule.',
+].join('\n');
+
+export const defaultLoopProfile = {
+    mode: ORCH_EXECUTION_MODE_LOOP,
+    apiPresetName: '',
+    promptPresetName: '',
+    system_prompt: DEFAULT_LOOP_SYSTEM_PROMPT,
+    tools: {
+        note: { add: true },
+        chat: { read_range: true, search: true },
+        lorebook: { search: true, get: true },
+        memory: { search: true, list_recent: true, get: true },
+        finalize: true,
+    },
+    max_rounds: 20,
+    wall_clock_budget_ms: 300000,
+};
+
 export const defaultSettings = {
     enabled: false,
     executionMode: ORCH_EXECUTION_MODE_SPEC,
@@ -353,9 +389,25 @@ export const defaultSettings = {
     agendaPlannerMaxRounds: 6,
     agendaMaxConcurrentAgents: 3,
     agendaMaxTotalRuns: 24,
+    // V3 loop-mode profile. Stored at the global scope only for MVP —
+    // character override of loop profiles will be wired in a follow-up
+    // task once the loop mode itself is validated. The runtime path
+    // (`getEffectiveProfile` in main.js) only reads this when
+    // `executionMode === 'loop'`; spec / agenda continue to use their
+    // own `orchestrationSpec` / `agendaPlanner` settings.
+    loopProfile: defaultLoopProfile,
     chatOverrides: {},
     aiSuggestApiPresetName: '',
     aiSuggestPresetName: '',
     aiSuggestSystemPrompt: getDefaultAiSuggestSystemPrompt(),
     rpmLimit: 0,
+    // Loop / runtime trace persistence opt-in. When true and a finalize
+    // path completes (Task 12), the runtime tries to persist the events
+    // array as a JSONL file under the user's data directory and prune to
+    // the most recent 50 files (LRU). Currently no clean SillyTavern API
+    // exists for arbitrary user-data writes with a listing endpoint, so
+    // the auto-persist sink is a stub — see runtime-trace-export.js
+    // `persistRunTraceToDisk` for the NEEDS_CONTEXT note. The on-demand
+    // JSONL download via `downloadRunTraceAsJsonl` works regardless.
+    persistTrace: false,
 };

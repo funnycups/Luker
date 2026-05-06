@@ -151,6 +151,16 @@ export function clearLatestOrchestrationRuntimeTrace(context = null) {
     }
 }
 
+/**
+ * Append a generic event to a trace's `events` array. Accepts any `type`
+ * string — spec / agenda mode use stage-shaped events (`stage_started`,
+ * `node_started`, `node_finished`, `stage_finished`, `review_finished`),
+ * loop mode (Task 12) uses a flat event stream (`llm_request` /
+ * `llm_response` / `agent_no_tool_call` / `tool_call` / `tool_result` /
+ * `tool_error` / `budget_exhausted`). Unknown types are accepted as-is so
+ * downstream extensions can emit their own taxonomy without modifying this
+ * file. The serialized JSONL export consumes `trace.events` directly.
+ */
 export function recordOrchestrationRuntimeEvent(trace, type, details = {}) {
     if (!trace || typeof trace !== 'object') {
         return null;

@@ -49,6 +49,7 @@ import {
     ensureAgendaEditorIntegrity,
     sanitizeAgendaWorkingProfile,
 } from './agenda-profile.js';
+import { sanitizeLoopProfile } from './persistence.js';
 import { cloneJsonCompatible } from './spec-schema.js';
 import { ensureEditorIntegrity } from './editor-state.js';
 
@@ -73,6 +74,17 @@ export async function persistGlobalAgendaEditorFrom(settings, editor) {
     if (!settings.agendaAgents[settings.agendaFinalAgentId]) {
         settings.agendaFinalAgentId = Object.keys(settings.agendaAgents)[0] || 'finalizer';
     }
+    await saveSettings();
+}
+
+/**
+ * Persist a loop-mode editor draft to global settings. Funnels through
+ * `sanitizeLoopProfile` so the on-disk shape always matches the V3
+ * schema (mode literal, finalize forced true, numeric clamps applied)
+ * regardless of how the editor mutated the draft.
+ */
+export async function persistGlobalLoopEditorFrom(settings, editor) {
+    settings.loopProfile = sanitizeLoopProfile(editor);
     await saveSettings();
 }
 

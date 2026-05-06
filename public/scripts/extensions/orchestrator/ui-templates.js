@@ -131,9 +131,97 @@ export function renderEditorWorkspace(deps, scope, editor, title) {
 </div>`;
 }
 
+/**
+ * Loop-mode editor workspace. Single-column layout (no spec-style
+ * stages/presets boards) — the loop runtime has one agent and one
+ * conversation, so the editor exposes:
+ *
+ *   1. API + prompt preset routing (same dropdowns spec/agenda use)
+ *   2. system_prompt textarea (the agent's main instruction)
+ *   3. Tool-flag checkboxes grouped by namespace; finalize is rendered
+ *      disabled+checked because `sanitizeLoopProfile` forces it on
+ *   4. max_rounds / wall_clock_budget_ms numeric inputs (rendered in
+ *      seconds for wall_clock so users don't hand-author six-digit
+ *      millisecond values)
+ *
+ * Save / reset / reload buttons in the popup actions bar reuse the
+ * existing handlers; only the workspace body switches per mode.
+ */
+export function renderLoopWorkspace(deps, scope, editor, title = '') {
+    const {
+        escapeHtml,
+        getContext,
+        i18n,
+        renderConnectionProfileOptions,
+        renderOpenAIPresetOptions,
+    } = deps;
+    const safeScope = scope === 'character' ? 'character' : 'global';
+    const context = getContext();
+    const tools = editor?.tools || {};
+    const note = tools.note || {};
+    const chat = tools.chat || {};
+    const lorebook = tools.lorebook || {};
+    const memory = tools.memory || {};
+    const wallClockSeconds = Math.max(10, Math.round(Number(editor?.wall_clock_budget_ms || 300000) / 1000));
+    const checkbox = (id, field, label, disabled = false, checked = null) => {
+        const isChecked = checked === null ? Boolean(field) : Boolean(checked);
+        return `<label class="checkbox_label">
+            <input type="checkbox" data-luker-loop-tool="${escapeHtml(id)}" data-scope="${safeScope}" ${isChecked ? 'checked' : ''}${disabled ? ' disabled' : ''} />
+            ${escapeHtml(label)}
+        </label>`;
+    };
+    return `
+<div class="luker-studio-workspace" data-luker-scope-root="${safeScope}">
+    <div class="luker-studio-workspace-title">${escapeHtml(title || i18n('Loop Orchestration'))}</div>
+    <div class="luker-studio-workspace-grid">
+        <div class="luker-studio-workspace-col">
+            <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Loop Agent'))}</div>
+            <label for="luker_orch_loop_api_preset">${escapeHtml(i18n('Loop API preset (Connection profile, empty = global orchestration API preset)'))}</label>
+            <select id="luker_orch_loop_api_preset" data-scope="${safeScope}" class="text_pole">${renderConnectionProfileOptions(editor?.apiPresetName, i18n('(Global orchestration API preset)'))}</select>
+            <label for="luker_orch_loop_prompt_preset">${escapeHtml(i18n('Loop preset (params + prompt, empty = global orchestration preset)'))}</label>
+            <select id="luker_orch_loop_prompt_preset" data-scope="${safeScope}" class="text_pole">${renderOpenAIPresetOptions(context, editor?.promptPresetName)}</select>
+            <label for="luker_orch_loop_system_prompt">${escapeHtml(i18n('Loop system prompt'))}</label>
+            <textarea id="luker_orch_loop_system_prompt" data-scope="${safeScope}" class="text_pole textarea_compact" rows="14">${escapeHtml(String(editor?.system_prompt || ''))}</textarea>
+            <label for="luker_orch_loop_max_rounds">${escapeHtml(i18n('Loop max rounds'))}</label>
+            <input id="luker_orch_loop_max_rounds" data-scope="${safeScope}" class="text_pole" type="number" min="1" max="50" step="1" value="${escapeHtml(String(editor?.max_rounds || 20))}" />
+            <label for="luker_orch_loop_wall_clock">${escapeHtml(i18n('Loop wall-clock budget (seconds)'))}</label>
+            <input id="luker_orch_loop_wall_clock" data-scope="${safeScope}" class="text_pole" type="number" min="10" max="3600" step="1" value="${escapeHtml(String(wallClockSeconds))}" />
+        </div>
+        <div class="luker-studio-workspace-col">
+            <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Loop tools'))}</div>
+            <fieldset class="luker_orch_loop_tools_group">
+                <legend>${escapeHtml(i18n('note (persistent notes)'))}</legend>
+                ${checkbox('note.add', note.add, 'note.add')}
+            </fieldset>
+            <fieldset class="luker_orch_loop_tools_group">
+                <legend>${escapeHtml(i18n('chat (in-chat history)'))}</legend>
+                ${checkbox('chat.read_range', chat.read_range, 'chat.read_range')}
+                ${checkbox('chat.search', chat.search, 'chat.search')}
+            </fieldset>
+            <fieldset class="luker_orch_loop_tools_group">
+                <legend>${escapeHtml(i18n('lorebook (world info)'))}</legend>
+                ${checkbox('lorebook.search', lorebook.search, 'lorebook.search')}
+                ${checkbox('lorebook.get', lorebook.get, 'lorebook.get')}
+            </fieldset>
+            <fieldset class="luker_orch_loop_tools_group">
+                <legend>${escapeHtml(i18n('memory (memory-graph)'))}</legend>
+                ${checkbox('memory.search', memory.search, 'memory.search')}
+                ${checkbox('memory.list_recent', memory.list_recent, 'memory.list_recent')}
+                ${checkbox('memory.get', memory.get, 'memory.get')}
+            </fieldset>
+            <fieldset class="luker_orch_loop_tools_group">
+                <legend>${escapeHtml(i18n('terminator'))}</legend>
+                ${checkbox('finalize', true, `finalize  ${i18n('(forced on)')}`, true, true)}
+            </fieldset>
+        </div>
+    </div>
+</div>`;
+}
+
 export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) {
     const {
         ORCH_EXECUTION_MODE_AGENDA,
+        ORCH_EXECUTION_MODE_LOOP,
         escapeHtml,
         getAgendaEditorByScope,
         getCharacterAgendaOverrideByAvatar,
@@ -142,6 +230,7 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
         getCurrentAvatar,
         getDisplayedScope,
         getEditorByScope,
+        getLoopEditorByScope,
         getPopupEditingLabel,
         getProfileTitleForScope,
         hasCharacterAgendaOverride,
@@ -150,6 +239,43 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
         syncCharacterEditorWithActiveAvatar,
         uiState,
     } = deps;
+
+    if (settings && deps.getExecutionMode && deps.getExecutionMode(settings) === ORCH_EXECUTION_MODE_LOOP) {
+        // Loop mode is global-only at MVP — no character-scope wiring
+        // (no character-overrides slot, no `Save To Character Override`
+        // button) until follow-up. The popup still surfaces the same
+        // top-bar layout so the user gets consistent affordances.
+        syncCharacterEditorWithActiveAvatar(context);
+        const activeAvatar = String(getCurrentAvatar(context) || '').trim();
+        const editor = getLoopEditorByScope('global');
+        const profileTitle = i18n('Global Orchestration Profile');
+        const editingLabel = i18n('Global profile');
+        return `
+<div class="luker-studio luker_orch_editor_popup">
+    <div class="luker-studio-editor-topbar">
+        <div class="luker-studio-editor-topbar-left">
+            <div class="luker-studio-editor-topbar-title">${escapeHtml(i18n('Orchestration Editor'))}</div>
+            <div class="luker-studio-editor-topbar-meta">
+                <span class="luker-studio-editor-chip">${escapeHtml(i18n('Current card:'))} <b>${escapeHtml(activeAvatar ? (getCharacterDisplayNameByAvatar(context, activeAvatar) || activeAvatar) : i18n('(No character card)'))}</b></span>
+                <span class="luker-studio-editor-chip">${escapeHtml(i18n('Editing:'))} <b>${escapeHtml(editingLabel)}</b></span>
+                <span class="luker-studio-editor-chip">${escapeHtml(i18n('Execution mode'))} <b>${escapeHtml(i18n('Loop (single-agent loop)'))}</b></span>
+            </div>
+        </div>
+        <div class="luker-studio-editor-topbar-right">
+            <textarea class="text_pole textarea_compact" rows="1" data-luker-ai-goal-input placeholder="${escapeHtml(i18n('AI build goal (optional)'))}">${escapeHtml(String(uiState.aiGoal || ''))}</textarea>
+            <div class="menu_button menu_button_small" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
+        </div>
+    </div>
+    <div class="luker-studio-actions-bar">
+        <div class="menu_button" data-luker-action="reload-current">${escapeHtml(i18n('Reload Current'))}</div>
+        <div class="menu_button" data-luker-action="reset-global">${escapeHtml(i18n('Reset Global'))}</div>
+        <div class="menu_button" data-luker-action="save-global">${escapeHtml(i18n('Save To Global'))}</div>
+        <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
+        <div class="menu_button" data-luker-action="view-runtime-trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
+    </div>
+    ${renderLoopWorkspace(deps, 'global', editor, profileTitle)}
+</div>`;
+    }
 
     if (settings && deps.getExecutionMode && deps.getExecutionMode(settings) === ORCH_EXECUTION_MODE_AGENDA) {
         syncCharacterEditorWithActiveAvatar(context);
@@ -282,6 +408,7 @@ export function buildOrchestratorSettingsHtml(deps) {
         extension_prompt_roles,
         i18n,
         ORCH_EXECUTION_MODE_AGENDA,
+        ORCH_EXECUTION_MODE_LOOP,
         ORCH_EXECUTION_MODE_SINGLE,
         ORCH_EXECUTION_MODE_SPEC,
         UI_BLOCK_ID,
@@ -301,6 +428,7 @@ export function buildOrchestratorSettingsHtml(deps) {
                 <option value="${ORCH_EXECUTION_MODE_SPEC}">${escapeHtml(i18n('Spec workflow'))}</option>
                 <option value="${ORCH_EXECUTION_MODE_SINGLE}">${escapeHtml(i18n('Single agent'))}</option>
                 <option value="${ORCH_EXECUTION_MODE_AGENDA}">${escapeHtml(i18n('Agenda planner'))}</option>
+                <option value="${ORCH_EXECUTION_MODE_LOOP}">${escapeHtml(i18n('Loop (single-agent loop)'))}</option>
             </select>
             <div id="luker_orch_single_agent_fields">
                 <label for="luker_orch_single_agent_system_prompt">${escapeHtml(i18n('Single-agent system prompt'))}</label>
@@ -396,6 +524,25 @@ export function buildOrchestratorSettingsHtml(deps) {
                     <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
                 </div>
             </div>
+
+            <div id="luker_orch_loop_board" class="luker_orch_board" style="display:none">
+                <div>
+                    <small>${escapeHtml(i18n('Current card:'))} <span id="luker_orch_loop_profile_target">${escapeHtml(i18n('(No character card)'))}</span></small><br />
+                    <small>${escapeHtml(i18n('Editing:'))} <span id="luker_orch_loop_profile_mode">${escapeHtml(i18n('Global profile'))}</span></small>
+                </div>
+                <div class="flex-container">
+                    <div class="menu_button" data-luker-action="open-orch-editor">${escapeHtml(i18n('Open Orchestration Editor'))}</div>
+                    <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
+                    <div class="menu_button" data-luker-action="view-runtime-trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
+                </div>
+                <small class="luker_orch_loop_board_hint">${escapeHtml(i18n('Loop mode runs a single agent that calls tools in a loop and finalizes when ready. Character override for loop profiles is not yet supported.'))}</small>
+            </div>
+
+            <hr>
+            <label class="checkbox_label" title="${escapeHtml(i18n('Experimental: persist runtime trace events to disk after each run. Currently a stub on most setups; on-demand JSONL download from the runtime trace popup is always available.'))}">
+                <input id="luker_orch_persist_trace" type="checkbox" />
+                ${escapeHtml(i18n('Persist runtime trace to disk (experimental, default off)'))}
+            </label>
 
             <small id="luker_orch_last_run_state" class="luker_orch_state_summary"></small>
             <small id="luker_orch_status" style="opacity:0.8"></small>

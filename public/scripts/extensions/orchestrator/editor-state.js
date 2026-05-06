@@ -24,8 +24,10 @@
 import { extension_settings } from '../../extensions.js';
 import {
     ORCH_EXECUTION_MODE_AGENDA,
+    ORCH_EXECUTION_MODE_LOOP,
     ORCH_EXECUTION_MODE_SPEC,
     ORCH_NODE_TYPE_WORKER,
+    defaultLoopProfile,
     defaultSpec,
 } from './defaults.js';
 import {
@@ -47,6 +49,7 @@ import {
     ensureAgendaEditorIntegrity,
     sanitizeAgendaWorkingProfile,
 } from './agenda-profile.js';
+import { sanitizeLoopProfile } from './persistence.js';
 import { getCurrentAvatar } from './snapshot-cache.js';
 
 const MODULE_NAME = 'orchestrator';
@@ -62,8 +65,14 @@ export const uiState = {
     characterEditor: null,
     globalAgendaEditor: null,
     characterAgendaEditor: null,
+    // Loop mode (V3 profile) is currently global-only — character override
+    // for loop profiles is a follow-up. The slot exists alongside the
+    // spec/agenda editor pairs so future character-override wiring slots
+    // in without restructuring `uiState`.
+    globalLoopEditor: null,
     specDisplayedScope: 'global',
     agendaDisplayedScope: 'global',
+    loopDisplayedScope: 'global',
     aiIterationSession: null,
     orchEditorPopupContentId: '',
 };
@@ -153,6 +162,39 @@ export function loadCharacterAgendaEditorState(context, avatar) {
     };
 }
 
+/**
+ * Ensure a loop-mode editor draft has the canonical V3 shape. Called
+ * before render and after every input mutation so renderers can index
+ * into `tools.note.add` etc. without optional-chain fallback noise.
+ */
+export function ensureLoopEditorIntegrity(editor) {
+    if (!editor || typeof editor !== 'object') {
+        return;
+    }
+    const normalized = sanitizeLoopProfile(editor);
+    editor.mode = normalized.mode;
+    editor.apiPresetName = normalized.apiPresetName;
+    editor.promptPresetName = normalized.promptPresetName;
+    editor.system_prompt = normalized.system_prompt;
+    editor.tools = normalized.tools;
+    editor.max_rounds = normalized.max_rounds;
+    editor.wall_clock_budget_ms = normalized.wall_clock_budget_ms;
+    editor.capsule_inject = normalized.capsule_inject;
+}
+
+/**
+ * Load the global loop editor draft from settings. Falls back to
+ * `defaultLoopProfile` when settings has no loopProfile key (fresh
+ * install) so the editor always renders with reasonable defaults.
+ */
+export function loadGlobalLoopEditorState() {
+    const settings = getSettings();
+    const source = settings?.loopProfile && typeof settings.loopProfile === 'object'
+        ? settings.loopProfile
+        : defaultLoopProfile;
+    return sanitizeLoopProfile(source);
+}
+
 export function initializeUiState(context) {
     const activeAvatar = String(getCurrentAvatar(context) || '').trim();
     if (activeAvatar !== uiState.selectedAvatar) {
@@ -163,10 +205,12 @@ export function initializeUiState(context) {
     uiState.characterEditor = loadCharacterEditorState(context, uiState.selectedAvatar);
     uiState.globalAgendaEditor = loadGlobalAgendaEditorState();
     uiState.characterAgendaEditor = loadCharacterAgendaEditorState(context, uiState.selectedAvatar);
+    uiState.globalLoopEditor = loadGlobalLoopEditorState();
     ensureEditorIntegrity(uiState.globalEditor);
     ensureEditorIntegrity(uiState.characterEditor);
     ensureAgendaEditorIntegrity(uiState.globalAgendaEditor);
     ensureAgendaEditorIntegrity(uiState.characterAgendaEditor);
+    ensureLoopEditorIntegrity(uiState.globalLoopEditor);
     syncDisplayedScopesFromStoredState(context, getSettings());
 }
 
@@ -185,15 +229,21 @@ export function syncCharacterEditorWithActiveAvatar(context) {
 }
 
 export function getScopePreferenceStateKey(mode = ORCH_EXECUTION_MODE_SPEC) {
-    return normalizeExecutionMode(mode) === ORCH_EXECUTION_MODE_AGENDA
-        ? 'agendaDisplayedScope'
-        : 'specDisplayedScope';
+    const normalized = normalizeExecutionMode(mode);
+    if (normalized === ORCH_EXECUTION_MODE_AGENDA) return 'agendaDisplayedScope';
+    if (normalized === ORCH_EXECUTION_MODE_LOOP) return 'loopDisplayedScope';
+    return 'specDisplayedScope';
 }
 
 export function getStoredDisplayedScopeForMode(context, settings, mode = ORCH_EXECUTION_MODE_SPEC) {
     const activeAvatar = String(getCurrentAvatar(context) || '').trim();
-    if (normalizeExecutionMode(mode) === ORCH_EXECUTION_MODE_AGENDA) {
+    const normalized = normalizeExecutionMode(mode);
+    if (normalized === ORCH_EXECUTION_MODE_AGENDA) {
         return hasCharacterAgendaOverride(context, activeAvatar) ? 'character' : 'global';
+    }
+    if (normalized === ORCH_EXECUTION_MODE_LOOP) {
+        // Loop mode is global-only at MVP; no character override path yet.
+        return 'global';
     }
     return hasCharacterSpecOverride(context, activeAvatar) ? 'character' : 'global';
 }
@@ -216,4 +266,5 @@ export function setDisplayedScopeForMode(context, settings, mode = ORCH_EXECUTIO
 export function syncDisplayedScopesFromStoredState(context, settings) {
     setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_SPEC);
     setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA);
+    setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP);
 }

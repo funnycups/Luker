@@ -37,6 +37,8 @@ const zhCNSidebar = [
       { text: '预设关联世界书', link: '/zh-CN/improvements/preset-world-info' },
       { text: 'WebSocket 代理', link: '/zh-CN/improvements/ws-proxy' },
       { text: '认证与配额', link: '/zh-CN/improvements/auth-and-quota' },
+  { text: 'Memory Graph 外部 API', link: '/zh-CN/improvements/memory-graph-external-api' },
+  { text: 'Orchestrator Loop 模式', link: '/zh-CN/improvements/orchestrator-loop-mode' },
   { text: '其他改进', link: '/zh-CN/improvements/other' },
   ],
   },

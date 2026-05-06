@@ -65,6 +65,16 @@ export function getAgendaEditorByScope(scope) {
     return scope === 'character' ? uiState.characterAgendaEditor : uiState.globalAgendaEditor;
 }
 
+/**
+ * Loop mode is currently global-only — there is no character-loop editor
+ * slot yet. The helper still takes a scope parameter for symmetry with
+ * `getEditorByScope` / `getAgendaEditorByScope`; future character-override
+ * wiring can extend this without changing call sites.
+ */
+export function getLoopEditorByScope(_scope) {
+    return uiState.globalLoopEditor;
+}
+
 export function getScopeFromElementOrMode(element, context, settings, mode = ORCH_EXECUTION_MODE_SPEC) {
     const scope = String(
         jQuery(element).data('scope')
