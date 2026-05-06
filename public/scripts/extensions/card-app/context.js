@@ -2,7 +2,7 @@
  * CardApp Context - builds the ctx object passed to CardApp's init() function.
  */
 
-import { eventSource, event_types, chat, chat_metadata, this_chid, characters, getRequestHeaders, openCharacterChat, doNewChat, closeCurrentChat, getPastCharacterChats, deleteMessage as lukerDeleteMessage, deleteLastMessage, swipe_right, saveCharacterDebounced } from '../../../script.js';
+import { eventSource, event_types, chat, chat_metadata, this_chid, characters, getRequestHeaders, openCharacterChat, doNewChat, closeCurrentChat, getPastCharacterChats, deleteMessage as lukerDeleteMessage, deleteLastMessage, swipe_right, saveCharacterDebounced, messageFormatting } from '../../../script.js';
 import { getContext, saveMetadataDebounced } from '../../extensions.js';
 import { executeSlashCommandsWithOptions } from '../../slash-commands.js';
 import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, world_names, selected_world_info } from '../../world-info.js';
@@ -468,16 +468,42 @@ export function buildContext(container, charId, config) {
         // ==================== Rendering ====================
 
         /**
-         * Render raw text through Luker's message formatting pipeline.
-         * @param {string} rawText - Raw message text
-         * @param {number} [messageId=-1] - Message ID for context
-         * @returns {Promise<{html: string}>}
+         * Render raw text through SillyTavern's formatting pipeline (markdown,
+         * macro substitution, sanitization). Returns the html string
+         * directly so callers can `el.innerHTML = ctx.renderText(...)`
+         * without awaiting. (Previously this was async and returned
+         * `{html}` — both forms are kept for backward compatibility: the
+         * returned string has an `.html` getter that resolves to itself,
+         * so `(await ctx.renderText(x)).html` still works for any old code
+         * that expected the previous shape.)
+         * @param {string} rawText
+         * @param {number} [messageId=-1]
+         * @returns {string} html
          */
-        async renderText(rawText, messageId = -1) {
-            // Import messageFormatting dynamically to avoid circular deps
-            const { messageFormatting } = await import('../../../script.js');
+        renderText(rawText, messageId = -1) {
             const html = messageFormatting(rawText, '', false, false, messageId, {}, false);
-            return { html };
+            // Wrap in a String subclass that exposes `.html` and is thenable,
+            // preserving backward compatibility with `(await ctx.renderText()).html`.
+            const result = new String(html);
+            Object.defineProperty(result, 'html', { value: html, enumerable: false });
+            Object.defineProperty(result, 'then', {
+                value: (resolve) => resolve({ html }),
+                enumerable: false,
+            });
+            return result;
+        },
+
+        /**
+         * Synchronous alias for renderText that returns a plain html string.
+         * Use this when you want to avoid the String-wrapper compatibility
+         * shim above (e.g. when the `.html` and thenable properties confuse
+         * type checkers or downstream consumers).
+         * @param {string} rawText
+         * @param {number} [messageId=-1]
+         * @returns {string} html
+         */
+        renderTextSync(rawText, messageId = -1) {
+            return messageFormatting(rawText, '', false, false, messageId, {}, false);
         },
     };
 
