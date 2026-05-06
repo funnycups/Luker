@@ -221,7 +221,7 @@ deleteChatState(
 
 ### 工作方式
 
-一个楼层状态实例独占一个聊天状态命名空间（`<ns>`）以及一份私有提交日志（`<ns>__floor_log`）。所有写入都通过实例的 `update` 方法进入：它读取当前状态、运行你的 reducer、计算差异、把差异写入业务命名空间并追加一条提交。实例订阅四个聊天事件：
+一个楼层状态实例独占一个聊天状态命名空间（`<ns>`）以及一份私有提交日志（`<ns>__floor_log`）。所有写入都通过实例的 `update` 方法进入：它读取当前状态、运行你的 reducer、计算差异、把差异写入业务命名空间并追加一条提交。每个实例创建时会注册到 `floor-state.js` 内部的实例表；聊天结构发生变化时，core 代码会先把所有已注册实例同步推平到对应的处理器，**然后**才触发对应的 `eventSource` 事件通知插件订阅者——任何插件在监听器里读取楼层状态都能看到已经 settle 完的数据。四种结构性转换是：
 
 - `CHAT_CHANGED`——切换到新聊天，按这份聊天的日志重建数据
 - `MESSAGE_SWIPED`——用户切换 swipe，按新的活动 swipe 重建数据
@@ -253,10 +253,10 @@ await fs.update((current) => {
 // 读取当前状态：
 const state = await fs.get();
 
-// 在读取之前等待重建完成：
+// 在读取之前等待重建或写入完成：
 await fs.ready();
 
-// 解除事件监听（极少需要，实例通常和页面同寿）：
+// 从注册表里移除（极少需要，实例通常和页面同寿）：
 fs.destroy();
 ```
 
@@ -293,7 +293,9 @@ await fs.update((current) => nextState, { floor: targetFloor, swipeId: 0 });
 
 ### 何时要 `await ready()`
 
-如果你的插件在 `GENERATION_STARTED` 之类紧跟在四个结构事件之后的钩子里读楼层状态，那就先 `await fs.ready()`。没有重建在进行时，这个 Promise 立即解决，开销可以忽略。
+四种结构性转换由 core 在对应 `eventSource` 事件触发**之前**同步推平。所以插件在 `MESSAGE_DELETED` / `MESSAGE_SWIPED` / `MESSAGE_SWIPE_DELETED` / `CHAT_CHANGED` / `CHAT_BRANCH_CREATED` 监听器里读楼层状态时，看到的一定是已 settle 完的数据，**不需要** `ready()`。
+
+`ready()` 现在主要用于跟可能并发的 `update` / `patch` in-flight 写入串行化。没有重建或写入在进行时，这个 Promise 立即解决，开销可以忽略。
 
 ### 约定
 
@@ -308,7 +310,7 @@ await fs.update((current) => nextState, { floor: targetFloor, swipeId: 0 });
 - `instance.patch(operations, options?)`——进阶：追加一条「自己已经算好 patch」的提交。operations 必须是相对 `await instance.get()` 的增量 RFC 6902 diff（`buildObjectPatchOperationsAsync(prev, next)`），不能是整盘覆写式 snapshot。`options` 与 `update` 相同。
 - `instance.get()`——读取业务命名空间。
 - `instance.ready()`——重建结束时解决。
-- `instance.destroy()`——解除事件监听并冻结实例。
+- `instance.destroy()`——从注册表移除实例并冻结它。
 
 ## 角色状态
 

@@ -145,7 +145,7 @@ export function refreshActiveSnapshotFromCache(context) {
  * the in-memory caches that drive UI rendering.
  *
  * Safe to call repeatedly — the migration is idempotent and the
- * floor-state instance shares its rebuild gate so concurrent calls
+ * floor-state instance shares its ready gate so concurrent calls
  * coalesce on the same `fs.ready()` promise.
  */
 export async function loadOrchestratorChatState(context) {

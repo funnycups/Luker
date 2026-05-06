@@ -49,9 +49,9 @@ let floorStatePromise = null;
 
 /**
  * Lazy singleton holding the floor-state instance for orchestrator anchors.
- * The instance lives for the page session and rebinds itself across
- * chat-changes via its own CHAT_CHANGED listener — callers do not need
- * to recreate it.
+ * The instance lives for the page session; its data namespace is kept in
+ * sync with chat structure by core driving `settleXxx` from `floor-state.js`
+ * on every structural transition — callers do not need to recreate it.
  */
 export async function getFloorStateInstance(context) {
     if (!floorStatePromise) {

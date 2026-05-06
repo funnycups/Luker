@@ -221,7 +221,7 @@ Floor State is a thin layer on top of Chat State that tracks every write at the 
 
 ### How it works
 
-A floor state instance owns one chat-state namespace (`<ns>`) and a private commit log (`<ns>__floor_log`). Writes go through the instance's `update` method, which reads the current state, runs your reducer, computes the diff, applies it to the data namespace, and appends a commit. The instance subscribes to four chat events:
+A floor state instance owns one chat-state namespace (`<ns>`) and a private commit log (`<ns>__floor_log`). Writes go through the instance's `update` method, which reads the current state, runs your reducer, computes the diff, applies it to the data namespace, and appends a commit. Each instance is registered into a module-level registry inside `floor-state.js`; whenever the chat structure changes, core code drives every registered instance through the matching handler **before** the corresponding `eventSource` event fires to plugin subscribers, guaranteeing that any plugin handler observes a fully settled floor state. The four structural transitions are:
 
 - `CHAT_CHANGED` — new chat opened; rebuild data from this chat's log
 - `MESSAGE_SWIPED` — user switched swipes; rebuild data with the new active swipe
@@ -254,10 +254,10 @@ await fs.update((current) => {
 // Read current state:
 const state = await fs.get();
 
-// Wait for any in-flight rebuild to finish before reading:
+// Wait for any in-flight rebuild or write to finish before reading:
 await fs.ready();
 
-// Detach event listeners (rarely needed; instances usually live for the page session):
+// Detach from the registry (rarely needed; instances usually live for the page session):
 fs.destroy();
 ```
 
@@ -294,7 +294,9 @@ For everything else, prefer `update` — it computes the right diff for you.
 
 ### When to await `ready()`
 
-If your plugin reads floor-managed state inside an event handler that fires near the four structural events above (for example `GENERATION_STARTED` immediately after `CHAT_CHANGED`), call `await fs.ready()` first. The instance returns its currently-resolved promise when no rebuild is in flight, so the cost is minimal.
+The four structural transitions are settled by core synchronously before the matching `eventSource` event fires, so plugin handlers reading the floor state from inside `MESSAGE_DELETED` / `MESSAGE_SWIPED` / `MESSAGE_SWIPE_DELETED` / `CHAT_CHANGED` / `CHAT_BRANCH_CREATED` listeners always observe a settled state — no `ready()` is needed there.
+
+`ready()` is still useful for serializing against in-flight `update` / `patch` calls when concurrent writes might overlap. The instance returns its currently-resolved promise when no rebuild or write is in flight, so the cost is minimal.
 
 ### Conventions
 
@@ -309,7 +311,7 @@ If your plugin reads floor-managed state inside an event handler that fires near
 - `instance.patch(operations, options?)` — advanced: append a commit whose patches you already computed yourself. Operations must be an incremental RFC 6902 diff (`buildObjectPatchOperationsAsync(prev, next)` against `await instance.get()`); not for snapshot-style overwrites. Same `options` shape as `update`.
 - `instance.get()` — read the current data namespace.
 - `instance.ready()` — resolves when no rebuild is in flight.
-- `instance.destroy()` — detach event listeners and freeze the instance.
+- `instance.destroy()` — remove the instance from the registry and freeze it.
 
 ## Character State
 

@@ -995,11 +995,13 @@ const fs = await ctx.lukerContext.createFloorState({ namespace: 'my-cardapp' });
 // and committed for you.
 await fs.update((current) => ({ ...current, score: (current?.score ?? 0) + 1 }));
 
-// Read current state:
+// Read current state. Floor State is settled by core before any
+// CHAT_CHANGED / MESSAGE_SWIPED / MESSAGE_DELETED listener fires, so
+// reading inside those handlers is safe — no ready() needed there.
 const state = await fs.get();
 
-// In handlers that fire near CHAT_CHANGED / MESSAGE_SWIPED / MESSAGE_DELETED,
-// await ready() before reading so any in-flight rebuild finishes first:
+// fs.ready() is only useful when serializing against possibly concurrent
+// fs.update / fs.patch writes (rare in CardApp UI code).
 await fs.ready();
 const latest = await fs.get();
 \`\`\`

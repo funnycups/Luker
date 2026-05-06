@@ -1006,12 +1006,12 @@ async function onWorldInfoFinalized(payload) {
 }
 
 async function onMessageDeleted(_chatLength, _details) {
-    // Floor-state's MESSAGE_DELETED handler truncates commits whose floor
-    // is past the new chat length, so deletions at the tail naturally drop
-    // their snapshots from the data namespace. For middle deletes (which
-    // shift every higher floor's chat-array index down by one) the
-    // floor-tagged commits come out of sync, but the consume-time check
-    // in `pickLatestValidSnapshot` filters them via anchorHash + is_user.
+    // Floor-state is settled by core before this listener fires (via
+    // settleMessageDeleted). Tail-deletes naturally drop their snapshots
+    // from the data namespace; for middle deletes — which shift every
+    // higher floor's chat-array index down by one — floor-tagged commits
+    // come out of sync, but the consume-time check in
+    // `pickLatestValidSnapshot` filters them via anchorHash + is_user.
     // We just refresh the cache and the UI here.
     const context = getContext();
     const { activeChanged, mapChanged } = await refreshOrchestratorStateAfterStructuralEvent(context);
@@ -1022,12 +1022,12 @@ async function onMessageDeleted(_chatLength, _details) {
 }
 
 async function onMessageEdited(_messageId, _mutationMeta = null) {
-    // Floor-state does not subscribe to MESSAGE_EDITED — edits don't
-    // change the chat structure, only message content. The active
-    // snapshot is content-bound by `anchorHash`, so a stale entry is
-    // detected at consume time and naturally rejected. The data
-    // namespace is left as-is; orphan entries get reaped when the
-    // owning floor is itself deleted or overwritten.
+    // Floor-state has no MESSAGE_EDITED settle path — edits don't change
+    // chat structure, only message content. The active snapshot is
+    // content-bound by `anchorHash`, so a stale entry is detected at
+    // consume time and naturally rejected. The data namespace is left
+    // as-is; orphan entries get reaped when the owning floor is itself
+    // deleted or overwritten.
     const context = getContext();
     const { activeChanged } = await refreshOrchestratorStateAfterStructuralEvent(context);
     if (activeChanged) {
