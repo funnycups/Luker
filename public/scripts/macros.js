@@ -615,6 +615,18 @@ export function evaluateMacros(content, env, postProcessFn) {
     postProcessFn = typeof postProcessFn === 'function' ? postProcessFn : (x => x);
     const rawContent = content;
 
+    // Escape mechanism: `\{{...}}` is treated as a literal `{{...}}` and not
+    // processed as a macro. This lets world info / character fields contain
+    // teaching examples like `\{{setvar::name::N}}` so the model sees the
+    // intended macro syntax in its prompt without those examples being
+    // executed (which would corrupt chat variables every prompt assembly).
+    // We swap escaped openers for a sentinel before substitution and restore
+    // them as literal `{{` at the end.
+    const ESCAPE_SENTINEL = 'ESC_MACRO_OPEN';
+    if (content.includes('\\{{')) {
+        content = content.replace(/\\\{\{/g, ESCAPE_SENTINEL);
+    }
+
     /**
      * Built-ins running before the env variables
      * @type {Macro[]}
@@ -709,6 +721,11 @@ export function evaluateMacros(content, env, postProcessFn) {
         } catch (e) {
             console.warn(`Macro content can't be replaced: ${macro.regex} in ${content}`, e);
         }
+    }
+
+    // Restore escaped macro openers from sentinel back to literal `{{`.
+    if (content.includes(ESCAPE_SENTINEL)) {
+        content = content.split(ESCAPE_SENTINEL).join('{{');
     }
 
     return content;

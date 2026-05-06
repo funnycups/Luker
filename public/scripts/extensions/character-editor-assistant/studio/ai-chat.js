@@ -1147,14 +1147,22 @@ Gold {{getvar::aw_gold}}, Floor {{getvar::aw_floor}}
 Inventory: {{getvar::aw_inventory_text}}
 
 Mutate state by emitting these macros anywhere in your reply (they're removed before the user sees the message and before the next prompt is assembled):
-- {{setvar::aw_hp::N}}      set HP to literal N
-- {{addvar::aw_hp::-N}}     take N damage
-- {{addvar::aw_hp::N}}      heal N
-- {{incvar::aw_floor}}      descend one floor
-- {{addvar::aw_gold::N}}    gain N gold (negative N = spend)
+- \\{{setvar::aw_hp::N}}      set HP to literal N
+- \\{{addvar::aw_hp::-N}}     take N damage
+- \\{{addvar::aw_hp::N}}      heal N
+- \\{{incvar::aw_floor}}      descend one floor
+- \\{{addvar::aw_gold::N}}    gain N gold (negative N = spend)
 
 Values persist; if you don't emit a macro, the value doesn't change.
 \`\`\`
+
+**Why the backslashes in the macro list above:** \`{{setvar::...}}\` and friends are **side-effect macros that fire at prompt-assembly time** — including when the macro engine evaluates a world book entry to inject it into the prompt. If you write them bare in a teaching example, every prompt assembly will execute the example macro and corrupt \`chat_metadata.variables\` (e.g. literally setting \`aw_hp\` to the string \`"N"\`). The \`\\{{...}}\` escape tells the engine "this is literal text, not a macro to execute" — the model still sees \`{{setvar::aw_hp::N}}\` in its prompt (the leading backslash is stripped by the engine's unescape pass), so its training kicks in correctly.
+
+**Rule of thumb when writing world book entries containing macro teaching:**
+
+- **Read-side macros** (\`{{getvar::name}}\`, \`{{user}}\`, \`{{time}}\`, …) — write them bare. They're idempotent reads, evaluating them at injection time is the whole point.
+- **Side-effect macros taught as examples** (\`setvar\` / \`addvar\` / \`incvar\` / \`decvar\` / \`deletevar\`) — **always escape with leading \`\\\`** when the entry is meant to teach the model the syntax. Bare side-effect macros in entry content will fire on every prompt build.
+- **Side-effect macros emitted by the AI in actual replies** — write bare. The op-log scanner extracts them out of message text (not entry text) on the way in, so they don't double-fire.
 
 \`{{getvar::name}}\` is a read — interpolated at prompt assembly. Don't list it among emit-these macros. Only the five side-effect macros above are scanned and stripped. \`{{getvar}}\` works in any world book entry and in slash commands.
 

@@ -51,6 +51,21 @@ export function findNextSideEffectMacro(text, cursor = 0) {
         const openIdx = text.indexOf('{{', i);
         if (openIdx < 0 || openIdx >= len - 3) return null;
 
+        // Honor the `\{{...}}` escape: when the opener is preceded by an odd
+        // number of backslashes, treat it as literal text and skip past it.
+        // (Even backslash counts mean those backslashes are themselves escapes
+        // for literal `\` characters and the `{{` is unescaped.)
+        let backslashes = 0;
+        let scan = openIdx - 1;
+        while (scan >= 0 && text[scan] === '\\') {
+            backslashes++;
+            scan--;
+        }
+        if (backslashes % 2 === 1) {
+            i = openIdx + 2;
+            continue;
+        }
+
         const afterOpen = openIdx + 2;
         const opInfo = matchOpHead(text, afterOpen);
         if (!opInfo) {
