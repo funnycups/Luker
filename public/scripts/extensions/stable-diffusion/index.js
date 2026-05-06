@@ -61,7 +61,6 @@ import { t, translate } from '../../i18n.js';
 import { oai_settings } from '../../openai.js';
 import { power_user } from '/scripts/power-user.js';
 import { MacrosParser } from '/scripts/macros.js';
-import { ActionLoaderHandle, loader } from '/scripts/action-loader.js';
 
 export { MODULE_NAME };
 
@@ -3120,8 +3119,6 @@ async function generatePicture(initiator, args, trigger, message, callback) {
     let imagePath = '';
     const stopListener = () => abortController.abort('Aborted by user');
 
-    let loaderHandle = ActionLoaderHandle.EMPTY;
-
     try {
         const combineNegatives = (prefix) => { negativePromptPrefix = combinePrefixes(negativePromptPrefix, prefix); };
 
@@ -3142,15 +3139,6 @@ async function generatePicture(initiator, args, trigger, message, callback) {
         if (typeof args?._abortController?.addEventListener === 'function') {
             args._abortController.addEventListener('abort', stopListener);
         }
-
-        // Show non-blocking stoppable toast for this generation
-        loaderHandle = loader.show({
-            blocking: false,
-            slug: `${MODULE_NAME}-image-generation`,
-            title: t`Image Generation`,
-            message: t`Generating an image...`,
-            onStop: stopListener,
-        });
 
         // generate the image
         imagePath = await sendGenerationRequest(generationType, prompt, negativePromptPrefix, characterName, callback, initiator, abortController.signal);
@@ -3176,7 +3164,6 @@ async function generatePicture(initiator, args, trigger, message, callback) {
         unregisterAbortController(abortController);
         endGenerationTracking(abortController);
         console.debug(`SD: generatePicture finally — unregistered controller, activeGenerations=${activeGenerations}`);
-        await loaderHandle.hide();
     }
 
     return imagePath;
@@ -5324,8 +5311,6 @@ async function generateMediaSwipe(mediaAttachment, message, onStart, onComplete,
         source: MEDIA_SOURCE.GENERATED,
     };
 
-    let loaderHandle = ActionLoaderHandle.EMPTY;
-
     try {
         registerAbortController(abortController);
         $(stopButton).show();
@@ -5344,15 +5329,6 @@ async function generateMediaSwipe(mediaAttachment, message, onStart, onComplete,
             ? context.groups[Object.keys(context.groups).filter(x => context.groups[x].id === context.groupId)[0]]?.id?.toString()
             : context.characters[context.characterId]?.name;
 
-        // Show non-blocking stoppable toast for this generation
-        loaderHandle = loader.show({
-            blocking: false,
-            slug: `${MODULE_NAME}-image-generation`,
-            title: t`Image Generation`,
-            message: t`Generating an image...`,
-            onStop: stopListener,
-        });
-
         onStart();
         result.url = await sendGenerationRequest(generationType, prompt, refineArgs.negative, characterName, callback, initiators.swipe, abortController.signal);
         result.generation_type = generationType;
@@ -5369,7 +5345,6 @@ async function generateMediaSwipe(mediaAttachment, message, onStart, onComplete,
         restoreOriginalDimensions(dimensions);
         extension_settings.sd.seed = extension_settings.sd.original_seed;
         delete extension_settings.sd.original_seed;
-        await loaderHandle.hide();
     }
 
     if (!result.url) {
