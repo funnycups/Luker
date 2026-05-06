@@ -53,9 +53,9 @@ import {
     ORCH_NODE_TYPE_WORKER,
 } from './defaults.js';
 import {
-    buildPresetAwareMessages,
-    resolveOrchestrationAgentProfileResolution,
+    resolveOrchestrationAgentApiPresetName,
     resolveOrchestrationAgentPromptPresetName,
+    resolveOrchestrationRuntimeWorldInfo,
 } from './agent-resolution.js';
 import {
     buildAgendaAvailableAgentsText,
@@ -330,7 +330,7 @@ export async function runAgendaPlannerStep(context, payload, messages, profile, 
     const previousOrchestration = await getPreviousOrchestrationCapsuleText(context, payload);
     const planner = createAgendaPlannerDraft(profile?.planner);
     const llmPresetName = resolveOrchestrationAgentPromptPresetName(settings, planner);
-    const llmProfileResolution = resolveOrchestrationAgentProfileResolution(context, settings, planner);
+    const apiPresetName = resolveOrchestrationAgentApiPresetName(settings, planner);
     const promptText = [
         '## planner_prompt',
         String(planner?.userPromptTemplate || DEFAULT_AGENDA_PLANNER_PROMPT),
@@ -355,22 +355,25 @@ export async function runAgendaPlannerStep(context, payload, messages, profile, 
             '- Do not include dispatches in the same step that includes finalize.',
         ].join('\n'),
     ].filter(Boolean).join('\n\n');
-    const promptMessages = await buildPresetAwareMessages(
-        context,
-        settings,
-        String(planner?.systemPrompt || DEFAULT_AGENDA_PLANNER_SYSTEM_PROMPT),
-        promptText,
-        {
-            api: llmProfileResolution.requestApi,
-            promptPresetName: llmPresetName,
-            worldInfoMessages: messages,
-            worldInfoType: String(payload?.type || 'quiet'),
-            runtimeWorldInfo: buildRuntimeWorldInfoFromPayload(payload),
-            forceWorldInfoResimulate: Boolean(payload?.forceWorldInfoResimulate),
-            abortSignal,
-        },
-    );
-    return requestToolCallWithRetry(settings, promptMessages, {
+    const runtimeWorldInfo = await resolveOrchestrationRuntimeWorldInfo(context, settings, {
+        worldInfoMessages: messages,
+        worldInfoType: String(payload?.type || 'quiet'),
+        runtimeWorldInfo: buildRuntimeWorldInfoFromPayload(payload),
+        forceWorldInfoResimulate: Boolean(payload?.forceWorldInfoResimulate),
+        abortSignal,
+    });
+    const systemText = String(planner?.systemPrompt || DEFAULT_AGENDA_PLANNER_SYSTEM_PROMPT).trim()
+        || 'Return concise guidance through function-call fields.';
+    const userText = promptText.trim()
+        || 'Use function-call fields only. Do not put JSON strings into summary.';
+    return requestToolCallWithRetry(context, settings, {
+        taskMessages: [
+            { role: 'system', content: systemText },
+            { role: 'user', content: userText },
+        ],
+        runtimeWorldInfo,
+        apiPresetName,
+        llmPresetName,
         functionName: AGENDA_PLANNER_TOOL,
         functionDescription: 'Update agenda todos and dispatch the next agent calls. Use finalize only once on the last planner step, with a concise reason/summary.',
         parameters: {
@@ -420,8 +423,6 @@ export async function runAgendaPlannerStep(context, payload, messages, profile, 
             },
             additionalProperties: false,
         },
-        llmPresetName,
-        apiSettingsOverride: llmProfileResolution.apiSettingsOverride,
         abortSignal,
         applyAgentTimeout: true,
     });
@@ -435,7 +436,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
     const planner = createAgendaPlannerDraft(profile?.planner);
     const preset = profile?.agents?.[dispatch.agent] || {};
     const llmPresetName = resolveOrchestrationAgentPromptPresetName(settings, preset);
-    const llmProfileResolution = resolveOrchestrationAgentProfileResolution(context, settings, preset);
+    const apiPresetName = resolveOrchestrationAgentApiPresetName(settings, preset);
     const systemPrompt = [
         String(preset.systemPrompt || 'You are an orchestration agent. Complete the assigned task carefully and return the full useful result through the required tool.').trim(),
         '',
@@ -492,22 +493,25 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
             '- The text should contain complete useful content, not a summary placeholder.',
         ].join('\n'),
     ].filter(Boolean).join('\n\n');
-    const promptMessages = await buildPresetAwareMessages(
-        context,
-        settings,
-        systemPrompt,
-        promptText,
-        {
-            api: llmProfileResolution.requestApi,
-            promptPresetName: llmPresetName,
-            worldInfoMessages: messages,
-            worldInfoType: String(payload?.type || 'quiet'),
-            runtimeWorldInfo: buildRuntimeWorldInfoFromPayload(payload),
-            forceWorldInfoResimulate: Boolean(payload?.forceWorldInfoResimulate),
-            abortSignal,
-        },
-    );
-    const result = await requestToolCallWithRetry(settings, promptMessages, {
+    const runtimeWorldInfo = await resolveOrchestrationRuntimeWorldInfo(context, settings, {
+        worldInfoMessages: messages,
+        worldInfoType: String(payload?.type || 'quiet'),
+        runtimeWorldInfo: buildRuntimeWorldInfoFromPayload(payload),
+        forceWorldInfoResimulate: Boolean(payload?.forceWorldInfoResimulate),
+        abortSignal,
+    });
+    const systemText = systemPrompt.trim()
+        || 'Return concise guidance through function-call fields.';
+    const userText = promptText.trim()
+        || 'Use function-call fields only. Do not put JSON strings into summary.';
+    const result = await requestToolCallWithRetry(context, settings, {
+        taskMessages: [
+            { role: 'system', content: systemText },
+            { role: 'user', content: userText },
+        ],
+        runtimeWorldInfo,
+        apiPresetName,
+        llmPresetName,
         functionName: AGENDA_RESULT_TOOL,
         functionDescription: 'Submit the full textual result for the assigned orchestration task.',
         parameters: {
@@ -518,8 +522,6 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
             required: ['text'],
             additionalProperties: false,
         },
-        llmPresetName,
-        apiSettingsOverride: llmProfileResolution.apiSettingsOverride,
         abortSignal,
         applyAgentTimeout: true,
     });

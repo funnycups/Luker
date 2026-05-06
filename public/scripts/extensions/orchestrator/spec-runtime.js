@@ -50,9 +50,9 @@ import {
     ORCH_REVIEW_TOOL_RERUN,
 } from './defaults.js';
 import {
-    buildPresetAwareMessages,
-    resolveOrchestrationAgentProfileResolution,
+    resolveOrchestrationAgentApiPresetName,
     resolveOrchestrationAgentPromptPresetName,
+    resolveOrchestrationRuntimeWorldInfo,
 } from './agent-resolution.js';
 import { sanitizeIdentifierToken } from './editable-spec.js';
 import {
@@ -378,16 +378,21 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
     });
 
     const llmPresetName = resolveOrchestrationAgentPromptPresetName(settings, preset);
-    const promptPresetName = llmPresetName;
-    const llmProfileResolution = resolveOrchestrationAgentProfileResolution(context, settings, preset);
-    const api = llmProfileResolution.requestApi || String(context.mainApi || 'openai');
-    const apiSettingsOverride = llmProfileResolution.apiSettingsOverride;
+    const apiPresetName = resolveOrchestrationAgentApiPresetName(settings, preset);
     const tools = buildNodeToolSet(nodeSpec, { isFinalStage });
     const allowedNames = new Set(tools.map(tool => String(tool?.function?.name || '').trim()).filter(Boolean));
     const maxRounds = getNodeIterationMaxRounds(settings);
     const outputToolName = isFinalStage ? 'luker_orch_final_guidance' : 'luker_orch_node_output';
     const runtimeToolMessages = [];
     let lastRound = 0;
+
+    const runtimeWorldInfo = await resolveOrchestrationRuntimeWorldInfo(context, settings, {
+        worldInfoMessages: messages,
+        runtimeWorldInfo: buildRuntimeWorldInfoFromPayload(payload),
+        forceWorldInfoResimulate: Boolean(payload?.forceWorldInfoResimulate),
+        worldInfoType: String(payload?.type || 'quiet'),
+        abortSignal,
+    });
 
     try {
         for (let round = 1; round <= maxRounds; round++) {
@@ -401,30 +406,20 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                 `${round}/${maxRounds}`,
             ].filter(Boolean).join('\n\n');
 
-            const basePromptMessages = await buildPresetAwareMessages(
-                context,
-                settings,
-                String(preset.systemPrompt || '').trim(),
-                iterationPrompt,
-                {
-                    api,
-                    promptPresetName,
-                    historyMessages: runtimeToolMessages,
-                    worldInfoMessages: messages,
-                    worldInfoType: String(payload?.type || 'quiet'),
-                    runtimeWorldInfo: buildRuntimeWorldInfoFromPayload(payload),
-                    forceWorldInfoResimulate: Boolean(payload?.forceWorldInfoResimulate),
-                    abortSignal,
-                },
-            );
-            throwIfAborted(abortSignal, 'Orchestration aborted.');
-            const promptMessages = basePromptMessages;
+            const systemText = String(preset.systemPrompt || '').trim();
+            const taskMessages = [
+                ...(systemText ? [{ role: 'system', content: systemText }] : []),
+                ...runtimeToolMessages,
+                { role: 'user', content: iterationPrompt },
+            ];
 
-            const detailed = await requestToolCallsWithRetry(settings, promptMessages, {
+            const detailed = await requestToolCallsWithRetry(context, settings, {
+                taskMessages,
+                runtimeWorldInfo,
+                apiPresetName,
+                llmPresetName,
                 tools,
                 allowedNames,
-                llmPresetName,
-                apiSettingsOverride,
                 abortSignal,
                 includeAssistantText: true,
                 allowNoToolCalls: false,
@@ -581,15 +576,20 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
     const previousOrchestration = await getPreviousOrchestrationCapsuleText(context, payload);
     const runtimeTemplate = normalizeTemplateForRuntime(nodeSpec.userPromptTemplate || preset.userPromptTemplate || '');
     const llmPresetName = resolveOrchestrationAgentPromptPresetName(settings, preset);
-    const promptPresetName = llmPresetName;
-    const llmProfileResolution = resolveOrchestrationAgentProfileResolution(context, settings, preset);
-    const api = llmProfileResolution.requestApi || String(context.mainApi || 'openai');
-    const apiSettingsOverride = llmProfileResolution.apiSettingsOverride;
+    const apiPresetName = resolveOrchestrationAgentApiPresetName(settings, preset);
     const tools = buildNodeToolSet(nodeSpec);
     const allowedNames = new Set(tools.map(tool => String(tool?.function?.name || '').trim()).filter(Boolean));
     const runtimeToolMessages = [];
     let currentPreviousNodeOutputs = mergeNodeOutputMaps(previousNodeOutputs);
     let currentStageOutputs = mergeNodeOutputMaps(currentStageWorkerOutputs);
+
+    const runtimeWorldInfo = await resolveOrchestrationRuntimeWorldInfo(context, settings, {
+        worldInfoMessages: messages,
+        runtimeWorldInfo: buildRuntimeWorldInfoFromPayload(payload),
+        forceWorldInfoResimulate: Boolean(payload?.forceWorldInfoResimulate),
+        worldInfoType: String(payload?.type || 'quiet'),
+        abortSignal,
+    });
 
     for (let round = 1; round <= maxRounds; round++) {
         const trace = options?.runtime?.trace;
@@ -633,28 +633,19 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
                 `${round}/${maxRounds}`,
             ].filter(Boolean).join('\n\n');
 
-            const basePromptMessages = await buildPresetAwareMessages(
-                context,
-                settings,
-                String(preset.systemPrompt || '').trim(),
-                iterationPrompt,
-                {
-                    api,
-                    promptPresetName,
-                    historyMessages: runtimeToolMessages,
-                    worldInfoMessages: messages,
-                    worldInfoType: String(payload?.type || 'quiet'),
-                    runtimeWorldInfo: buildRuntimeWorldInfoFromPayload(payload),
-                    forceWorldInfoResimulate: Boolean(payload?.forceWorldInfoResimulate),
-                    abortSignal,
-                },
-            );
-            const promptMessages = basePromptMessages;
-            const detailed = await requestToolCallsWithRetry(settings, promptMessages, {
+            const systemText = String(preset.systemPrompt || '').trim();
+            const taskMessages = [
+                ...(systemText ? [{ role: 'system', content: systemText }] : []),
+                ...runtimeToolMessages,
+                { role: 'user', content: iterationPrompt },
+            ];
+            const detailed = await requestToolCallsWithRetry(context, settings, {
+                taskMessages,
+                runtimeWorldInfo,
+                apiPresetName,
+                llmPresetName,
                 tools,
                 allowedNames,
-                llmPresetName,
-                apiSettingsOverride,
                 abortSignal,
                 includeAssistantText: true,
                 allowNoToolCalls: false,

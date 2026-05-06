@@ -34,8 +34,6 @@
  * in via `onStatusUpdate` so this module stays UI-free.
  */
 
-import { resolveChatCompletionRequestProfile } from '../connection-manager/profile-resolver.js';
-import { mergeUserAddendumIntoPromptMessages } from '../function-call-runtime.js';
 import { isAbortError } from './abort-utils.js';
 import { getRecentMessages } from './anchors.js';
 import {
@@ -53,9 +51,9 @@ import {
 import {
     buildAgentApiRoutingPromptData,
     buildAgentPromptPresetRoutingPromptData,
-    buildPresetAwareMessages,
     getPresetApiPresetName,
     getPresetPromptPresetName,
+    resolveOrchestrationRuntimeWorldInfo,
     sanitizeConnectionProfileName,
     sanitizePromptPresetName,
 } from './agent-resolution.js';
@@ -509,32 +507,21 @@ export async function buildAiOrchestrationProfile(context, settings, {
     const suggestSystemPrompt = buildAiOrchestrationSystemPrompt(settings);
     const suggestUserPrompt = buildAiOrchestrationUserPrompt(context, settings, characterCard, overrideGoal, aiVisibleGlobalProfile);
 
-    const aiSuggestApiPresetName = String(settings.aiSuggestApiPresetName || '').trim();
-    const suggestPresetName = String(settings.aiSuggestPresetName || '').trim();
+    const apiPresetName = String(settings.aiSuggestApiPresetName || '').trim();
+    const llmPresetName = String(settings.aiSuggestPresetName || '').trim();
     const worldInfoMessages = normalizeWorldInfoResolverMessages(
         getRecentMessages(Array.isArray(context?.chat) ? context.chat : [], settings.maxRecentMessages),
     );
-    const aiSuggestProfileResolution = resolveChatCompletionRequestProfile({
-        profileName: aiSuggestApiPresetName,
-        defaultApi: String(context?.mainApi || 'openai').trim() || 'openai',
-        defaultSource: String(context?.chatCompletionSettings?.chat_completion_source || ''),
+    const runtimeWorldInfo = await resolveOrchestrationRuntimeWorldInfo(context, settings, {
+        worldInfoMessages,
+        runtimeWorldInfo: null,
+        forceWorldInfoResimulate: false,
+        worldInfoType: 'quiet',
+        abortSignal,
     });
-    const promptMessages = await buildPresetAwareMessages(
-        context,
-        settings,
-        suggestSystemPrompt,
-        suggestUserPrompt,
-        {
-            api: aiSuggestProfileResolution.requestApi,
-            promptPresetName: suggestPresetName,
-            worldInfoMessages,
-            worldInfoType: 'quiet',
-        },
-    );
 
     const tools = buildAiOrchestrationToolSet();
     const allowedNames = new Set(tools.map(tool => String(tool?.function?.name || '').trim()).filter(Boolean));
-    const apiSettingsOverride = aiSuggestProfileResolution.apiSettingsOverride;
 
     const semanticRetries = Math.max(0, Math.min(10, Math.floor(Number(settings?.toolCallRetryMax) || 0)));
     let parsed = null;
@@ -548,16 +535,20 @@ export async function buildAiOrchestrationProfile(context, settings, {
                 `MUST include dedicated nodes: ${REQUIRED_AI_BUILD_NODE_IDS.join(', ')}.`,
             ].join(' ')
             : '';
-        const requestPromptMessages = reminderText
-            ? mergeUserAddendumIntoPromptMessages(promptMessages, reminderText)
-            : promptMessages;
+        const taskMessages = [
+            { role: 'system', content: suggestSystemPrompt },
+            { role: 'user', content: suggestUserPrompt },
+            ...(reminderText ? [{ role: 'user', content: reminderText }] : []),
+        ];
         let toolCalls = [];
         try {
-            toolCalls = await requestToolCallsWithRetry(settings, requestPromptMessages, {
+            toolCalls = await requestToolCallsWithRetry(context, settings, {
+                taskMessages,
+                runtimeWorldInfo,
+                apiPresetName,
+                llmPresetName,
                 tools,
                 allowedNames,
-                llmPresetName: suggestPresetName,
-                apiSettingsOverride,
                 retriesOverride: 0,
                 abortSignal,
                 applyAgentTimeout: false,

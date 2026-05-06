@@ -5,7 +5,6 @@
 import { extension_prompt_roles, saveSettings, saveSettingsDebounced } from '../../../script.js';
 import { extension_settings, getContext, getCharacterState, setCharacterState } from '../../extensions.js';
 import { world_info_position } from '../../world-info.js';
-import { resolveChatCompletionRequestProfile } from '../connection-manager/profile-resolver.js';
 import { renderObjectDiffHtml } from '../object-diff-view.js';
 import { DiffMatchPatch } from '../../../lib.js';
 import { create as createDiffPatcher, reverse as reverseDiffDelta } from '../../vendor/diffpatch/index.js';
@@ -123,12 +122,12 @@ import {
 import {
     buildAgentApiRoutingPromptData,
     buildAgentPromptPresetRoutingPromptData,
-    buildPresetAwareMessages,
     getPresetApiPresetName,
     getPresetPromptPresetName,
     refreshOpenAIPresetSelectors,
     renderConnectionProfileOptions,
     renderOpenAIPresetOptions,
+    resolveOrchestrationRuntimeWorldInfo,
     sanitizeConnectionProfileName,
     sanitizePromptPresetName,
 } from './agent-resolution.js';
@@ -4377,41 +4376,39 @@ async function runAiIterationTurn(context, settings, session, userText, abortSig
         trimAiIterationMessages(session);
     }
 
-    const aiSuggestApiPresetName = String(settings.aiSuggestApiPresetName || '').trim();
-    const suggestPresetName = String(settings.aiSuggestPresetName || '').trim();
-    const aiSuggestProfileResolution = resolveChatCompletionRequestProfile({
-        profileName: aiSuggestApiPresetName,
-        defaultApi: String(context?.mainApi || 'openai').trim() || 'openai',
-        defaultSource: String(context?.chatCompletionSettings?.chat_completion_source || ''),
-    });
-    const api = aiSuggestProfileResolution.requestApi;
-    const apiSettingsOverride = aiSuggestProfileResolution.apiSettingsOverride;
+    const apiPresetName = String(settings.aiSuggestApiPresetName || '').trim();
+    const llmPresetName = String(settings.aiSuggestPresetName || '').trim();
     const tools = buildAiIterationToolSet(session);
     const allowedNames = new Set(tools.map(tool => String(tool?.function?.name || '').trim()).filter(Boolean));
     const globalBaseline = getGlobalIterationBaselineProfile(settings, session);
     const beforeWorkingProfile = cloneAiIterationWorkingProfile(session?.mode, session?.workingProfile);
 
-    const promptMessages = await buildPresetAwareMessages(
-        context,
-        settings,
-        buildAiIterationSystemPrompt(settings, session),
-        buildAiIterationUserPrompt(settings, session, text, {
-            globalProfile: globalBaseline,
-            sourceScope: String(session?.sourceScope || ''),
-            sourceName: String(session?.sourceName || ''),
-        }),
+    const runtimeWorldInfo = await resolveOrchestrationRuntimeWorldInfo(context, settings, {
+        worldInfoMessages: session.messages,
+        runtimeWorldInfo: null,
+        forceWorldInfoResimulate: false,
+        worldInfoType: 'quiet',
+        abortSignal,
+    });
+    const taskMessages = [
+        { role: 'system', content: buildAiIterationSystemPrompt(settings, session) },
+        ...buildPersistentToolHistoryMessages(session.messages),
         {
-            api,
-            promptPresetName: suggestPresetName,
-            worldInfoMessages: session.messages,
-            historyMessages: buildPersistentToolHistoryMessages(session.messages),
+            role: 'user',
+            content: buildAiIterationUserPrompt(settings, session, text, {
+                globalProfile: globalBaseline,
+                sourceScope: String(session?.sourceScope || ''),
+                sourceName: String(session?.sourceName || ''),
+            }),
         },
-    );
-    const detailed = await requestToolCallsWithRetry(settings, promptMessages, {
+    ];
+    const detailed = await requestToolCallsWithRetry(context, settings, {
+        taskMessages,
+        runtimeWorldInfo,
+        apiPresetName,
+        llmPresetName,
         tools,
         allowedNames,
-        llmPresetName: suggestPresetName,
-        apiSettingsOverride,
         abortSignal,
         includeAssistantText: true,
         allowNoToolCalls: true,

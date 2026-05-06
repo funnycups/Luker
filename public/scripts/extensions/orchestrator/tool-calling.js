@@ -5,10 +5,15 @@
  *
  *   1. Outbound requests — `requestToolCallWithRetry` (single forced
  *      function) and `requestToolCallsWithRetry` (multi tool, allowed
- *      names list). Both wrap `sendOpenAIRequest`, apply the per-attempt
- *      timeout via `createAttemptAbortController`, retry on transient
- *      failures up to `settings.toolCallRetryMax`, and gate every call
- *      through `waitForRpmSlot` to enforce `settings.rpmLimit`.
+ *      names list). Both wrap `context.generateTask` from the Luker
+ *      extension API: the helper resolves the connection profile + LLM
+ *      preset internally, so callers pass `apiPresetName` /
+ *      `llmPresetName` strings and a pre-resolved `runtimeWorldInfo`
+ *      snapshot rather than a full `promptMessages` envelope. Both
+ *      apply the per-attempt timeout via `createAttemptAbortController`,
+ *      retry on transient failures up to `settings.toolCallRetryMax`,
+ *      and gate every call through `waitForRpmSlot` to enforce
+ *      `settings.rpmLimit`.
  *
  *   2. Persistent tool-call message construction — the AI iteration
  *      session stores assistant turns with `tool_calls` / `tool_results`
@@ -24,11 +29,8 @@
  * can expose a reset hook the same way `persistence.js` does.
  */
 
-import { sendOpenAIRequest } from '../../openai.js';
 import {
     TOOL_PROTOCOL_STYLE,
-    extractAllFunctionCalls,
-    getResponseMessageContent,
     validateParsedToolCalls,
 } from '../function-call-runtime.js';
 import {
@@ -36,9 +38,10 @@ import {
     getAgentTimeoutMs,
     isAbortError,
     isAbortSignalLike,
-    isNoToolCallExtractionError,
     throwIfAborted,
 } from './abort-utils.js';
+
+const MODULE_NAME = 'orchestrator';
 
 const _rpmTimestamps = [];
 
@@ -63,18 +66,23 @@ export async function waitForRpmSlot(settings, abortSignal = null) {
     }
 }
 
-export async function requestToolCallWithRetry(settings, promptMessages, {
+export async function requestToolCallWithRetry(context, settings, {
+    taskMessages = [],
+    runtimeWorldInfo = null,
+    apiPresetName = '',
+    llmPresetName = '',
     functionName = '',
     functionDescription = '',
     parameters = {},
-    llmPresetName = '',
-    apiSettingsOverride = null,
     abortSignal = null,
     applyAgentTimeout = true,
 } = {}) {
     const fnName = String(functionName || '').trim();
     if (!fnName) {
         throw new Error('Function name is required.');
+    }
+    if (!context || typeof context.generateTask !== 'function') {
+        throw new Error('context.generateTask is unavailable.');
     }
 
     const retries = Math.max(0, Math.min(10, Math.floor(Number(settings?.toolCallRetryMax) || 0)));
@@ -99,24 +107,25 @@ export async function requestToolCallWithRetry(settings, promptMessages, {
         );
         try {
             throwIfAborted(abortSignal, 'Orchestration aborted.');
-            const requestOptions = {
+            await waitForRpmSlot(settings, abortSignal);
+            const result = await context.generateTask({
+                taskMessages,
+                includeCharacterCard: true,
+                worldInfoSource: 'none',
+                runtimeWorldInfo: runtimeWorldInfo || {},
+                apiPresetName: String(apiPresetName || '').trim(),
+                llmPresetName: String(llmPresetName || '').trim(),
                 tools,
                 toolChoice,
-                replaceTools: true,
-                llmPresetName: String(llmPresetName || '').trim(),
-                apiSettingsOverride: apiSettingsOverride && typeof apiSettingsOverride === 'object' ? apiSettingsOverride : null,
-                requestScope: 'extension_internal',
+                functionCallMode: 'auto',
                 functionCallOptions: {
                     requiredFunctionName: fnName,
                     protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
                 },
-            };
-            await waitForRpmSlot(settings, abortSignal);
-            const responseData = await sendOpenAIRequest('quiet', promptMessages, attemptController.signal, {
-                ...requestOptions,
+                abortSignal: attemptController.signal,
             });
             throwIfAborted(abortSignal, 'Orchestration aborted.');
-            const calls = extractAllFunctionCalls(responseData, [fnName]);
+            const calls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
             const validationError = validateParsedToolCalls(calls, tools);
             if (validationError) {
                 throw new Error(validationError);
@@ -125,7 +134,7 @@ export async function requestToolCallWithRetry(settings, promptMessages, {
             if (!matched) {
                 throw new Error(`Model returned tool call, but not '${fnName}'.`);
             }
-            return matched.args;
+            return matched.args && typeof matched.args === 'object' ? matched.args : {};
         } catch (error) {
             const timedOut = attemptController.didTimeout();
             const sourceAborted = isAbortError(error, abortSignal);
@@ -139,7 +148,7 @@ export async function requestToolCallWithRetry(settings, promptMessages, {
             if (attempt >= retries) {
                 throw effectiveError;
             }
-            console.warn(`[orchestrator] Tool call '${fnName}' failed. Retrying (${attempt + 1}/${retries})...`, effectiveError);
+            console.warn(`[${MODULE_NAME}] Tool call '${fnName}' failed. Retrying (${attempt + 1}/${retries})...`, effectiveError);
         } finally {
             attemptController.cleanup();
         }
@@ -148,11 +157,13 @@ export async function requestToolCallWithRetry(settings, promptMessages, {
     throw lastError || new Error(`Tool call '${fnName}' failed.`);
 }
 
-export async function requestToolCallsWithRetry(settings, promptMessages, {
+export async function requestToolCallsWithRetry(context, settings, {
+    taskMessages = [],
+    runtimeWorldInfo = null,
+    apiPresetName = '',
+    llmPresetName = '',
     tools = [],
     allowedNames = null,
-    llmPresetName = '',
-    apiSettingsOverride = null,
     retriesOverride = null,
     abortSignal = null,
     includeAssistantText = false,
@@ -162,13 +173,18 @@ export async function requestToolCallsWithRetry(settings, promptMessages, {
     if (!Array.isArray(tools) || tools.length === 0) {
         throw new Error('Tools are required.');
     }
+    if (!context || typeof context.generateTask !== 'function') {
+        throw new Error('context.generateTask is unavailable.');
+    }
 
     const retriesSource = retriesOverride === null || retriesOverride === undefined
         ? Number(settings?.toolCallRetryMax)
         : Number(retriesOverride);
     const retries = Math.max(0, Math.min(10, Math.floor(retriesSource || 0)));
     const timeoutMs = applyAgentTimeout ? getAgentTimeoutMs(settings) : 0;
-    const toolChoice = 'auto';
+    const allowedSet = Array.isArray(allowedNames)
+        ? new Set(allowedNames.map(name => String(name || '').trim()).filter(Boolean))
+        : (allowedNames instanceof Set ? allowedNames : null);
     let lastError = null;
     for (let attempt = 0; attempt <= retries; attempt++) {
         const attemptController = createAttemptAbortController(
@@ -177,28 +193,35 @@ export async function requestToolCallsWithRetry(settings, promptMessages, {
         );
         try {
             throwIfAborted(abortSignal, 'Orchestration aborted.');
-            const requestOptions = {
-                tools,
-                toolChoice,
-                replaceTools: true,
+            await waitForRpmSlot(settings, abortSignal);
+            const result = await context.generateTask({
+                taskMessages,
+                includeCharacterCard: true,
+                worldInfoSource: 'none',
+                runtimeWorldInfo: runtimeWorldInfo || {},
+                apiPresetName: String(apiPresetName || '').trim(),
                 llmPresetName: String(llmPresetName || '').trim(),
-                apiSettingsOverride: apiSettingsOverride && typeof apiSettingsOverride === 'object' ? apiSettingsOverride : null,
-                requestScope: 'extension_internal',
+                tools,
+                toolChoice: 'auto',
+                functionCallMode: 'auto',
                 functionCallOptions: {
                     protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
                 },
-            };
-            await waitForRpmSlot(settings, abortSignal);
-            const responseData = await sendOpenAIRequest('quiet', promptMessages, attemptController.signal, {
-                ...requestOptions,
+                abortSignal: attemptController.signal,
             });
             throwIfAborted(abortSignal, 'Orchestration aborted.');
-            const assistantText = getResponseMessageContent(responseData);
-            let calls = [];
-            try {
-                calls = extractAllFunctionCalls(responseData, allowedNames);
-            } catch (error) {
-                if (allowNoToolCalls && assistantText && isNoToolCallExtractionError(error)) {
+            const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
+            const normalizedCalls = rawCalls.map(call => ({
+                name: String(call?.name || ''),
+                args: call?.args && typeof call.args === 'object' ? call.args : {},
+                raw: call?.raw || null,
+            }));
+            const filteredCalls = allowedSet && allowedSet.size > 0
+                ? normalizedCalls.filter(call => allowedSet.has(call.name))
+                : normalizedCalls;
+            const assistantText = String(result?.assistantText || '');
+            if (filteredCalls.length === 0) {
+                if (allowNoToolCalls && assistantText) {
                     if (includeAssistantText) {
                         return {
                             toolCalls: [],
@@ -208,20 +231,20 @@ export async function requestToolCallsWithRetry(settings, promptMessages, {
                     }
                     return [];
                 }
-                throw error;
+                throw new Error('Model response did not contain any matching tool calls.');
             }
-            const validationError = validateParsedToolCalls(calls, tools);
+            const validationError = validateParsedToolCalls(filteredCalls, tools);
             if (validationError) {
                 throw new Error(validationError);
             }
             if (includeAssistantText) {
                 return {
-                    toolCalls: calls,
+                    toolCalls: filteredCalls,
                     assistantText,
                     rawAssistantText: assistantText,
                 };
             }
-            return calls;
+            return filteredCalls;
         } catch (error) {
             const timedOut = attemptController.didTimeout();
             const sourceAborted = isAbortError(error, abortSignal);
@@ -235,7 +258,7 @@ export async function requestToolCallsWithRetry(settings, promptMessages, {
             if (attempt >= retries) {
                 throw effectiveError;
             }
-            console.warn(`[orchestrator] Multi tool call request failed. Retrying (${attempt + 1}/${retries})...`, effectiveError);
+            console.warn(`[${MODULE_NAME}] Multi tool call request failed. Retrying (${attempt + 1}/${retries})...`, effectiveError);
         } finally {
             attemptController.cleanup();
         }

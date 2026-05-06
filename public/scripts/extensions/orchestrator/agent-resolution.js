@@ -11,10 +11,12 @@
  *   - OpenAI preset listing (`getOpenAIPresetNames`, `sanitizeOpenAIPresetNamesForAiPrompt`)
  *   - Per-preset name extractors (`getPresetApiPresetName`,
  *     `getPresetPromptPresetName`, plus the matching string sanitizers)
- *   - Resolution entry points (`resolveOrchestrationAgentProfileResolution`,
+ *   - Resolution entry points (`resolveOrchestrationAgentApiPresetName`,
  *     `resolveOrchestrationAgentPromptPresetName`) that fall back to
  *     `settings.llmNodeApiPresetName` / `settings.llmNodePresetName` when
- *     the per-preset values are empty
+ *     the per-preset values are empty. Both return plain strings; callers
+ *     pass them straight into `context.generateTask({ apiPresetName,
+ *     llmPresetName })` which owns connection-profile resolution.
  *   - AI-build routing prompt builders (`buildAgentApiRoutingPromptData`,
  *     `buildAgentPromptPresetRoutingPromptData`) that surface the available
  *     profiles + global defaults to the AI builder so it can pick a route
@@ -23,12 +25,10 @@
  *     DOM helper used by the editor popup to repopulate selects when
  *     settings change
  *
- * The async `buildPresetAwareMessages` lives here too — it is the single
- * call site that constructs the chat-completion message list under a
- * specific preset envelope, optionally resolving runtime world-info on
- * the fly. It is separate from the per-call resolution helpers because
- * it requires `context.buildPresetAwarePromptMessages` and the
- * world-info stack from `world-info.js`.
+ * The async `resolveOrchestrationRuntimeWorldInfo` lives here too — it
+ * pre-resolves the runtime world-info snapshot once per dispatch so
+ * callers can pass the same object to every retry of `generateTask`
+ * without re-simulating world info each attempt.
  *
  * `escapeHtml` is duplicated as a private helper to keep this module
  * portable. main.js owns the canonical copy; both will collapse into a
@@ -36,10 +36,7 @@
  */
 
 import { extension_settings } from '../../extensions.js';
-import {
-    getChatCompletionConnectionProfiles,
-    resolveChatCompletionRequestProfile,
-} from '../connection-manager/profile-resolver.js';
+import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import { throwIfAborted } from './abort-utils.js';
 import { i18n } from './i18n.js';
 import {
@@ -155,13 +152,8 @@ export function buildAgentPromptPresetRoutingPromptData(context, settings = exte
     };
 }
 
-export function resolveOrchestrationAgentProfileResolution(context, settings, preset = null) {
-    const profileName = getPresetApiPresetName(preset) || sanitizeConnectionProfileName(settings?.llmNodeApiPresetName || '');
-    return resolveChatCompletionRequestProfile({
-        profileName,
-        defaultApi: String(context?.mainApi || 'openai').trim() || 'openai',
-        defaultSource: String(context?.chatCompletionSettings?.chat_completion_source || ''),
-    });
+export function resolveOrchestrationAgentApiPresetName(settings, preset = null) {
+    return getPresetApiPresetName(preset) || sanitizeConnectionProfileName(settings?.llmNodeApiPresetName || '');
 }
 
 export function resolveOrchestrationAgentPromptPresetName(settings, preset = null) {
@@ -200,53 +192,30 @@ export function refreshOpenAIPresetSelectors(root, context, settings) {
     }
 }
 
-export async function buildPresetAwareMessages(context, settings, systemPrompt, userPrompt, {
-    api = '',
-    promptPresetName = '',
-    historyMessages = null,
+export async function resolveOrchestrationRuntimeWorldInfo(context, settings, {
     worldInfoMessages = null,
     runtimeWorldInfo = null,
     forceWorldInfoResimulate = false,
     worldInfoType = 'quiet',
     abortSignal = null,
 } = {}) {
-    const systemText = String(systemPrompt || '').trim() || 'Return concise guidance through function-call fields.';
-    const userText = String(userPrompt || '').trim() || 'Use function-call fields only. Do not put JSON strings into summary.';
-    const selectedPromptPresetName = String(promptPresetName || '').trim();
-    const envelopeApi = selectedPromptPresetName ? 'openai' : (api || context.mainApi || 'openai');
     const includeWorldInfoWithPreset = settings?.includeWorldInfoWithPreset !== false;
-    throwIfAborted(abortSignal, 'Orchestration aborted.');
-    let resolvedRuntimeWorldInfo = includeWorldInfoWithPreset
-        ? ((!forceWorldInfoResimulate && hasEffectiveRuntimeWorldInfo(runtimeWorldInfo))
-            ? normalizeRuntimeWorldInfo(runtimeWorldInfo)
-            : null)
-        : {};
-    const resolverMessages = normalizeWorldInfoResolverMessages(worldInfoMessages);
-    if (includeWorldInfoWithPreset && !resolvedRuntimeWorldInfo && typeof context?.resolveWorldInfoForMessages === 'function' && resolverMessages.length > 0) {
-        resolvedRuntimeWorldInfo = await context.resolveWorldInfoForMessages(resolverMessages, {
-            type: String(worldInfoType || 'quiet'),
-            fallbackToCurrentChat: false,
-            postActivationHook: rewriteDepthWorldInfoToAfter,
-        });
-        throwIfAborted(abortSignal, 'Orchestration aborted.');
+    if (!includeWorldInfoWithPreset) {
+        return {};
     }
-
     throwIfAborted(abortSignal, 'Orchestration aborted.');
-    const normalizedHistoryMessages = Array.isArray(historyMessages)
-        ? historyMessages.map(message => ({ ...message }))
-        : [];
-    return context.buildPresetAwarePromptMessages({
-        messages: [
-            ...normalizedHistoryMessages,
-            { role: 'system', content: systemText },
-            { role: 'user', content: userText },
-        ],
-        envelopeOptions: {
-            includeCharacterCard: true,
-            api: envelopeApi,
-            promptPresetName: selectedPromptPresetName,
-        },
-        promptPresetName: selectedPromptPresetName,
-        runtimeWorldInfo: resolvedRuntimeWorldInfo,
+    if (!forceWorldInfoResimulate && hasEffectiveRuntimeWorldInfo(runtimeWorldInfo)) {
+        return normalizeRuntimeWorldInfo(runtimeWorldInfo);
+    }
+    const resolverMessages = normalizeWorldInfoResolverMessages(worldInfoMessages);
+    if (resolverMessages.length === 0 || typeof context?.resolveWorldInfoForMessages !== 'function') {
+        return {};
+    }
+    const resolved = await context.resolveWorldInfoForMessages(resolverMessages, {
+        type: String(worldInfoType || 'quiet'),
+        fallbackToCurrentChat: false,
+        postActivationHook: rewriteDepthWorldInfoToAfter,
     });
+    throwIfAborted(abortSignal, 'Orchestration aborted.');
+    return normalizeRuntimeWorldInfo(resolved);
 }
