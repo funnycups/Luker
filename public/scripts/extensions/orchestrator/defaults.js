@@ -401,13 +401,4 @@ export const defaultSettings = {
     aiSuggestPresetName: '',
     aiSuggestSystemPrompt: getDefaultAiSuggestSystemPrompt(),
     rpmLimit: 0,
-    // Loop / runtime trace persistence opt-in. When true and a finalize
-    // path completes (Task 12), the runtime tries to persist the events
-    // array as a JSONL file under the user's data directory and prune to
-    // the most recent 50 files (LRU). Currently no clean SillyTavern API
-    // exists for arbitrary user-data writes with a listing endpoint, so
-    // the auto-persist sink is a stub — see runtime-trace-export.js
-    // `persistRunTraceToDisk` for the NEEDS_CONTEXT note. The on-demand
-    // JSONL download via `downloadRunTraceAsJsonl` works regardless.
-    persistTrace: false,
 };

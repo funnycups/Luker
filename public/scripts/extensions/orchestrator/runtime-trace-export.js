@@ -15,10 +15,7 @@
  *
  * The browser-only `downloadRunTraceAsJsonl` helper wraps the serializer in a
  * Blob + anchor click, the same pattern `public/scripts/utils.js::download`
- * uses for ad-hoc text exports. Callers that need to write traces to a server
- * path (the future `settings.persistTrace` auto-disk feature) should call
- * `exportRunTraceAsJsonl` directly and route the resulting string through the
- * appropriate filesystem helper themselves.
+ * uses for ad-hoc text exports.
  */
 
 /**
@@ -78,47 +75,6 @@ export function downloadRunTraceAsJsonl(events, filename = 'orch-run.jsonl') {
         URL.revokeObjectURL(url);
     }
     return true;
-}
-
-/**
- * Optional auto-persist sink: write a finalized trace's events to a JSONL
- * file under the user's data directory and prune the directory to the
- * most-recent N runs (LRU). Wired off `extension_settings.orchestrator.
- * persistTrace`.
- *
- * NEEDS_CONTEXT — the sink is currently a no-op because SillyTavern does
- * not expose a public file API that satisfies all three requirements:
- *
- *   1. arbitrary text writes by an extension (the existing
- *      `/api/files/upload` endpoint validates the filename against
- *      `/^[a-zA-Z0-9_\-.]+$/` so subdirectories like `luker-orch-runs/...`
- *      are rejected — the best we could do is a flat namespace such as
- *      `luker-orch-runs-<runId>.jsonl`),
- *   2. a listing endpoint so we can enumerate prior runs and delete the
- *      oldest 50+ — `/api/files/upload` and `/api/files/delete` exist but
- *      no `/api/files/list` companion does, so LRU pruning would have to
- *      track filenames out-of-band in `localStorage` / `extension_settings`
- *      and trust them to stay in sync with the filesystem,
- *   3. graceful degradation when SillyTavern is run via a plain
- *      `index.html` open without the Node backend (the test environment).
- *
- * Until a backend helper lands, the on-demand JSONL download (the
- * `downloadRunTraceAsJsonl` button in the trace popup, Task 13) covers
- * the practical "I want to grep my run later" workflow without any disk
- * writes. This stub stays in place so callers can opt in early — the day
- * an upstream API lands, only this function changes.
- *
- * @param {Array<object>} _events trace events to persist (ignored in stub)
- * @param {object} [_options]
- * @param {string} [_options.runId] used as filename basename when implemented
- * @param {number} [_options.maxRuns=50] LRU keep count when implemented
- * @returns {Promise<{persisted: false, reason: string}>} always not-persisted
- */
-export async function persistRunTraceToDisk(_events, _options = {}) {
-    return {
-        persisted: false,
-        reason: 'NEEDS_CONTEXT: no SillyTavern endpoint supports per-extension JSONL writes with LRU listing yet.',
-    };
 }
 
 function safeStringify(value) {

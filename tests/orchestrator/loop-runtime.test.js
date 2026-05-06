@@ -134,20 +134,28 @@ describe('runLoopOrchestration minimal happy path (Task 5)', () => {
         expect(sendLlm).not.toHaveBeenCalled();
     });
 
-    test('settings.persistTrace=true does not break the run (auto-persist sink is opportunistic)', async () => {
-        // The on-disk sink is currently a NEEDS_CONTEXT stub; what we
-        // verify here is that flipping the flag is a non-destructive
-        // no-op — the run still completes and returns the capsule.
+    test('forwards deps.settings to sendLlm so retries/timeout/rpm are honored', async () => {
+        // Regression: the orchestrator dispatcher must thread `settings`
+        // into the loop runtime so `requestToolCallsWithRetry` reads
+        // `toolCallRetryMax` / `agentTimeoutSeconds` / `rpmLimit`. The
+        // production transport (`defaultSendLlm`) takes `settings` from
+        // the deps and passes it straight through; here we verify the
+        // runtime forwards it on every round, including before finalize.
         const sendLlm = jest.fn().mockResolvedValueOnce({
-            toolCalls: [{ id: 'tc1', name: 'finalize', args: { capsule_text: 'persisted' } }],
+            toolCalls: [{ id: 'tc1', name: 'finalize', args: { capsule_text: 'ok' } }],
             assistantText: '',
         });
-        const result = await runLoopOrchestration(makeContext(), makePayload(), makeProfile(), {
+        const settings = { toolCallRetryMax: 3, agentTimeoutSeconds: 30, rpmLimit: 60 };
+        await runLoopOrchestration(makeContext(), makePayload(), makeProfile(), {
             sendLlm,
-            settings: { persistTrace: true },
+            settings,
         });
-        expect(result.status).toBe('completed');
-        expect(result.capsule).toBe('persisted');
+        expect(sendLlm).toHaveBeenCalledTimes(1);
+        const args = sendLlm.mock.calls[0][0];
+        expect(args.settings).toBe(settings);
+        expect(args.settings.toolCallRetryMax).toBe(3);
+        expect(args.settings.agentTimeoutSeconds).toBe(30);
+        expect(args.settings.rpmLimit).toBe(60);
     });
 });
 

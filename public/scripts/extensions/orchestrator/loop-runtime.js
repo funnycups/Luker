@@ -695,7 +695,6 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
             note: `Loop exhausted (${exhaustReason || 'max_rounds'}).`,
             capsuleText: lastNaturalText || '',
         });
-        await maybePersistTrace(trace, deps);
         return {
             status: 'budget_exhausted',
             capsule: lastNaturalText,
@@ -707,37 +706,7 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
     traceApi.finalize(trace, 'completed', {
         capsuleText: capsule,
     });
-    await maybePersistTrace(trace, deps);
     return { status: 'completed', capsule, total_rounds: totalRounds, runtimeTrace: trace };
-}
-
-/**
- * Best-effort auto-disk persistence of a finalized trace, gated on the
- * orchestrator's `persistTrace` setting (defaults off — see
- * `defaults.js`). Reads `deps.settings?.persistTrace`; when false or
- * settings are missing, this is a no-op. The actual write helper lives in
- * `runtime-trace-export.js` and is currently a NEEDS_CONTEXT stub (no
- * SillyTavern public file API supports per-extension subdirectory JSONL
- * writes with LRU listing) — wiring it in now means the day a backend
- * helper lands the loop runtime gains auto-persist for free.
- *
- * Errors are swallowed so a persistence failure never aborts a successful
- * run. Lazy import keeps the loop runtime importable from Node-based
- * tests that cannot satisfy the build-time `lib.js` dependency.
- */
-async function maybePersistTrace(trace, deps) {
-    if (!deps?.settings || deps.settings.persistTrace !== true) return;
-    if (!trace || !Array.isArray(trace.events) || trace.events.length === 0) return;
-    try {
-        const mod = await import('./runtime-trace-export.js');
-        if (typeof mod?.persistRunTraceToDisk !== 'function') return;
-        await mod.persistRunTraceToDisk(trace.events, {
-            runId: String(trace.runId || ''),
-        });
-    } catch (_error) {
-        // Persistence is opportunistic; swallow failures to keep the run
-        // result deterministic for callers.
-    }
 }
 
 function makeToolCallId() {

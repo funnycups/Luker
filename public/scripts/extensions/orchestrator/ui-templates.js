@@ -226,6 +226,7 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
         getAgendaEditorByScope,
         getCharacterAgendaOverrideByAvatar,
         getCharacterDisplayNameByAvatar,
+        getCharacterLoopOverrideByAvatar,
         getCharacterOverrideByAvatar,
         getCurrentAvatar,
         getDisplayedScope,
@@ -234,6 +235,7 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
         getPopupEditingLabel,
         getProfileTitleForScope,
         hasCharacterAgendaOverride,
+        hasCharacterLoopOverride,
         hasCharacterSpecOverride,
         i18n,
         syncCharacterEditorWithActiveAvatar,
@@ -241,15 +243,16 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
     } = deps;
 
     if (settings && deps.getExecutionMode && deps.getExecutionMode(settings) === ORCH_EXECUTION_MODE_LOOP) {
-        // Loop mode is global-only at MVP — no character-scope wiring
-        // (no character-overrides slot, no `Save To Character Override`
-        // button) until follow-up. The popup still surfaces the same
-        // top-bar layout so the user gets consistent affordances.
         syncCharacterEditorWithActiveAvatar(context);
         const activeAvatar = String(getCurrentAvatar(context) || '').trim();
-        const editor = getLoopEditorByScope('global');
-        const profileTitle = i18n('Global Orchestration Profile');
-        const editingLabel = i18n('Global profile');
+        const hasActiveCharacter = Boolean(activeAvatar);
+        const scope = getDisplayedScope(context, settings);
+        const editor = getLoopEditorByScope(scope);
+        const loopOverride = activeAvatar ? getCharacterLoopOverrideByAvatar(context, activeAvatar) : null;
+        const isCharacterScope = scope === 'character';
+        const hasLoopCharacterOverride = hasCharacterLoopOverride(context, activeAvatar);
+        const editingLabel = getPopupEditingLabel(isCharacterScope, hasLoopCharacterOverride, Boolean(loopOverride?.enabled));
+        const profileTitle = getProfileTitleForScope(context, activeAvatar, isCharacterScope, hasLoopCharacterOverride);
         return `
 <div class="luker-studio luker_orch_editor_popup">
     <div class="luker-studio-editor-topbar">
@@ -270,10 +273,12 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
         <div class="menu_button" data-luker-action="reload-current">${escapeHtml(i18n('Reload Current'))}</div>
         <div class="menu_button" data-luker-action="reset-global">${escapeHtml(i18n('Reset Global'))}</div>
         <div class="menu_button" data-luker-action="save-global">${escapeHtml(i18n('Save To Global'))}</div>
+        ${hasActiveCharacter ? `<div class="menu_button" data-luker-action="save-character">${escapeHtml(i18n('Save To Character Override'))}</div>` : ''}
+        ${hasActiveCharacter && isCharacterScope ? `<div class="menu_button" data-luker-action="clear-character">${escapeHtml(i18n('Clear Character Override'))}</div>` : ''}
         <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
         <div class="menu_button" data-luker-action="view-runtime-trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
     </div>
-    ${renderLoopWorkspace(deps, 'global', editor, profileTitle)}
+    ${renderLoopWorkspace(deps, scope, editor, profileTitle)}
 </div>`;
     }
 
@@ -535,14 +540,8 @@ export function buildOrchestratorSettingsHtml(deps) {
                     <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
                     <div class="menu_button" data-luker-action="view-runtime-trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
                 </div>
-                <small class="luker_orch_loop_board_hint">${escapeHtml(i18n('Loop mode runs a single agent that calls tools in a loop and finalizes when ready. Character override for loop profiles is not yet supported.'))}</small>
+                <small class="luker_orch_loop_board_hint">${escapeHtml(i18n('Loop mode runs a single agent that calls tools in a loop and finalizes when ready.'))}</small>
             </div>
-
-            <hr>
-            <label class="checkbox_label" title="${escapeHtml(i18n('Experimental: persist runtime trace events to disk after each run. Currently a stub on most setups; on-demand JSONL download from the runtime trace popup is always available.'))}">
-                <input id="luker_orch_persist_trace" type="checkbox" />
-                ${escapeHtml(i18n('Persist runtime trace to disk (experimental, default off)'))}
-            </label>
 
             <small id="luker_orch_last_run_state" class="luker_orch_state_summary"></small>
             <small id="luker_orch_status" style="opacity:0.8"></small>

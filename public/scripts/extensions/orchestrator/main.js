@@ -140,9 +140,11 @@ import {
     getCharacterDisplayNameByAvatar,
     getCharacterExtensionDataByAvatar,
     getCharacterIndexByAvatar,
+    getCharacterLoopOverrideByAvatar,
     getCharacterOverrideByAvatar,
     getExecutionMode,
     hasCharacterAgendaOverride,
+    hasCharacterLoopOverride,
     hasCharacterOverride,
     hasCharacterSpecOverride,
     normalizeCharacterOverrideMode,
@@ -193,6 +195,7 @@ import {
     initializeUiState,
     loadCharacterAgendaEditorState,
     loadCharacterEditorState,
+    loadCharacterLoopEditorState,
     loadGlobalAgendaEditorState,
     loadGlobalEditorState,
     loadGlobalLoopEditorState,
@@ -214,12 +217,14 @@ import {
     getLoopEditorByScope,
     getPopupEditingLabel,
     getProfileTitleForScope,
+    getScopeFromElementOrMode,
 } from './editor-display.js';
 import {
     createPortableAgendaProfileFromEditor,
     createPortableProfileFromEditor,
     persistCharacterAgendaEditor,
     persistCharacterEditor,
+    persistCharacterLoopEditor,
     persistGlobalAgendaEditorFrom,
     persistGlobalEditorFrom,
     persistGlobalLoopEditorFrom,
@@ -360,8 +365,6 @@ function ensureSettings() {
     if (!extension_settings[MODULE_NAME].chatOverrides || typeof extension_settings[MODULE_NAME].chatOverrides !== 'object') {
         extension_settings[MODULE_NAME].chatOverrides = {};
     }
-    // Loop trace persistence opt-in: see defaults.js for context.
-    extension_settings[MODULE_NAME].persistTrace = Boolean(extension_settings[MODULE_NAME].persistTrace);
     // V3 loop profile: route through sanitizer on every load so older
     // shapes (missing tools.* groups, missing finalize literal, numeric
     // values out of bounds) are normalized into the runtime contract.
@@ -593,12 +596,21 @@ function getEffectiveProfile(context) {
     const settings = extension_settings[MODULE_NAME];
     const executionMode = getExecutionMode(settings);
     if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
-        // Loop profile is global-only at MVP — no chat / character override
-        // path. The runtime's `runOrchestration` re-sanitizes via
-        // `sanitizeLoopProfile(profile)` before dispatch, so we pass the
-        // settings copy through directly. Adding a `source` / `key` for
-        // parity with spec/agenda envelope shapes; loop-runtime ignores
-        // these but downstream telemetry surfaces them.
+        // Character loop override beats global. Loop runtime re-sanitizes
+        // via `sanitizeLoopProfile(profile)` before dispatch, so we pass
+        // the resolved profile through directly. `source` / `key` are
+        // attached for telemetry parity with spec/agenda; the loop
+        // runtime ignores them.
+        const avatar = getCurrentAvatar(context);
+        const characterLoopOverride = getCharacterLoopOverrideByAvatar(context, avatar);
+        if (characterLoopOverride?.enabled) {
+            const profile = sanitizeLoopProfile(characterLoopOverride);
+            return {
+                source: 'character',
+                key: avatar,
+                ...profile,
+            };
+        }
         const profile = sanitizeLoopProfile(settings.loopProfile || defaultLoopProfile);
         return {
             source: 'global',
@@ -786,7 +798,9 @@ async function runOrchestration(context, payload, messages, profile) {
         // post-run capsule path (`buildCapsule` → `injectCapsuleToPayload`
         // → `storeCompletedOrchestrationSnapshot`) is reused unchanged.
         const loopProfile = sanitizeLoopProfile(profile);
-        const loopRun = await runLoopOrchestration(context, payload, loopProfile);
+        const loopRun = await runLoopOrchestration(context, payload, loopProfile, {
+            settings: extension_settings[MODULE_NAME],
+        });
         const capsuleText = String(loopRun?.capsule || '').trim();
         const stageOutputs = capsuleText
             ? [{
@@ -1426,6 +1440,7 @@ function getOrchestratorUiTemplateDeps() {
         getAgendaEditorByScope,
         getCharacterAgendaOverrideByAvatar,
         getCharacterDisplayNameByAvatar,
+        getCharacterLoopOverrideByAvatar,
         getCharacterOverrideByAvatar,
         getContext,
         getCurrentAvatar,
@@ -1436,6 +1451,7 @@ function getOrchestratorUiTemplateDeps() {
         getPopupEditingLabel,
         getProfileTitleForScope,
         hasCharacterAgendaOverride,
+        hasCharacterLoopOverride,
         hasCharacterSpecOverride,
         i18n,
         renderConnectionProfileOptions,
@@ -1496,14 +1512,19 @@ function renderDynamicPanels(root, context) {
     root.find('#luker_orch_agenda_profile_mode').text(
         getDisplayedScopeLabel(isAgendaCharacterScope, hasAgendaCharacterOverride, isAgendaOverrideEnabled),
     );
-    // Loop is always global at MVP — no per-character override slot —
-    // so the displayed label is the global-profile literal.
+    const loopOverride = activeAvatar ? getCharacterLoopOverrideByAvatar(context, activeAvatar) : null;
+    const loopScope = getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP);
+    const isLoopCharacterScope = loopScope === 'character';
+    const hasLoopCharacterOverride = hasCharacterLoopOverride(context, activeAvatar);
+    const isLoopOverrideEnabled = Boolean(loopOverride?.enabled);
     root.find('#luker_orch_loop_profile_target').text(
         activeAvatar
             ? (getCharacterDisplayNameByAvatar(context, activeAvatar) || activeAvatar)
             : i18n('(No character card)'),
     );
-    root.find('#luker_orch_loop_profile_mode').text(i18n('Global profile'));
+    root.find('#luker_orch_loop_profile_mode').text(
+        getDisplayedScopeLabel(isLoopCharacterScope, hasLoopCharacterOverride, isLoopOverrideEnabled),
+    );
     const hasLastRun = Boolean(getLatestOrchestrationEntry(context));
     root.find('[data-luker-action="view-last-run"]').toggleClass('luker_orch_button_disabled', !hasLastRun);
     root.find('#luker_orch_last_run_state').text(buildLatestOrchestrationStateSummary(context));
@@ -2249,18 +2270,21 @@ function getAiIterationRollbackStartIndex(messages, messageIndex) {
 
 function createAiIterationSession(context, settings) {
     if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_LOOP) {
-        // Loop profile is global-only at MVP — there is no character editor
-        // slot, so the iteration source is always the global loop draft.
-        const editor = getLoopEditorByScope('global');
+        syncCharacterEditorWithActiveAvatar(context);
+        const scope = getIterationDefaultScope(context);
+        const editor = getLoopEditorByScope(scope);
         const avatar = String(getCurrentAvatar(context) || '').trim();
+        const sourceName = scope === 'character'
+            ? (getCharacterDisplayNameByAvatar(context, avatar) || avatar || i18n('(No character card)'))
+            : i18n('Global profile');
         const workingProfile = sanitizeLoopProfile(editor);
         return {
             id: `session_${Date.now()}`,
             mode: ORCH_EXECUTION_MODE_LOOP,
             chatKey: getChatKey(context),
-            sourceScope: 'global',
+            sourceScope: scope,
             sourceAvatar: avatar,
-            sourceName: i18n('Global profile'),
+            sourceName,
             revision: 1,
             createdAt: Date.now(),
             updatedAt: Date.now(),
@@ -5150,10 +5174,33 @@ async function applyAiIterationSessionToGlobal(context, settings, session, root)
 
 async function applyAiIterationSessionToCharacter(context, settings, session, root) {
     if (isLoopIterationSession(session)) {
-        // Loop profile is global-only at MVP — there is no character editor
-        // slot to write into. Surface a friendly notice and bail out instead
-        // of silently doing nothing.
-        notifyError(i18n('Loop profile character override is not yet supported. Save the iteration to the global profile instead.'));
+        const avatar = String(getCurrentAvatar(context) || '').trim();
+        if (!avatar) {
+            notifyError(i18n('No character selected. Cannot apply to character override.'));
+            return;
+        }
+        const profile = sanitizeLoopProfile(session?.workingProfile);
+        const importedEditor = {
+            ...profile,
+            avatar,
+            enabled: true,
+            notes: '',
+        };
+        const ok = await persistCharacterLoopEditor(context, settings, avatar, {
+            editor: importedEditor,
+            forceEnabled: true,
+        });
+        if (!ok) {
+            notifyError(i18n('Failed to persist character override.'));
+            return;
+        }
+        uiState.characterLoopEditor = loadCharacterLoopEditorState(context, avatar);
+        ensureLoopEditorIntegrity(uiState.characterLoopEditor);
+        setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP, 'character');
+        renderDynamicPanels(root, context);
+        const name = getCharacterDisplayNameByAvatar(context, avatar) || avatar;
+        notifySuccess(i18nFormat('Iteration session applied to character override: ${0}.', name));
+        updateUiStatus(i18nFormat('Iteration session applied to character override: ${0}.', name));
         return;
     }
     if (isAgendaIterationSession(session)) {
@@ -5703,7 +5750,6 @@ function bindUi() {
 
     initializeUiState(context);
     root.find('#luker_orch_enabled').prop('checked', Boolean(settings.enabled));
-    root.find('#luker_orch_persist_trace').prop('checked', Boolean(settings.persistTrace));
     root.find('#luker_orch_execution_mode').val(getExecutionMode(settings));
     root.find('#luker_orch_single_agent_system_prompt').val(String(settings.singleAgentSystemPrompt || DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT));
     root.find('#luker_orch_single_agent_user_prompt').val(String(settings.singleAgentUserPromptTemplate || DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE));
@@ -5731,11 +5777,6 @@ function bindUi() {
 
     root.on('input.lukerOrch', '#luker_orch_enabled', function () {
         settings.enabled = Boolean(jQuery(this).prop('checked'));
-        saveSettingsDebounced();
-    });
-
-    root.on('input.lukerOrch', '#luker_orch_persist_trace', function () {
-        settings.persistTrace = Boolean(jQuery(this).prop('checked'));
         saveSettingsDebounced();
     });
 
@@ -5814,31 +5855,35 @@ function bindUi() {
     });
 
     // ─── Loop-mode editor handlers ─────────────────────────────────────
-    // Loop is global-only (see editor-state.js); the data-scope attribute
-    // is rendered as 'global' but kept on every input for symmetry with
-    // spec/agenda. `ensureLoopEditorIntegrity` re-canonicalizes after every
-    // edit so render reads see the V3 shape (`tools.note.add`, etc.) even
-    // if mid-edit numeric clamps trip.
+    // Loop scope follows spec/agenda: data-scope on the input is the
+    // canonical signal, falling back to the displayed-scope preference
+    // when missing. `ensureLoopEditorIntegrity` re-canonicalizes after
+    // every edit so render reads see the V3 shape (`tools.note.add`,
+    // etc.) even if mid-edit numeric clamps trip.
     jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_api_preset, .luker_orch_editor_popup #luker_orch_loop_api_preset`, function () {
-        const editor = getLoopEditorByScope('global');
+        const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_LOOP);
+        const editor = getLoopEditorByScope(scope);
         ensureLoopEditorIntegrity(editor);
         editor.apiPresetName = sanitizeConnectionProfileName(jQuery(this).val());
     });
 
     jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_prompt_preset, .luker_orch_editor_popup #luker_orch_loop_prompt_preset`, function () {
-        const editor = getLoopEditorByScope('global');
+        const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_LOOP);
+        const editor = getLoopEditorByScope(scope);
         ensureLoopEditorIntegrity(editor);
         editor.promptPresetName = sanitizePromptPresetName(jQuery(this).val());
     });
 
     jQuery(document).on('input.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_system_prompt, .luker_orch_editor_popup #luker_orch_loop_system_prompt`, function () {
-        const editor = getLoopEditorByScope('global');
+        const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_LOOP);
+        const editor = getLoopEditorByScope(scope);
         ensureLoopEditorIntegrity(editor);
         editor.system_prompt = String(jQuery(this).val() || '');
     });
 
     jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_max_rounds, .luker_orch_editor_popup #luker_orch_loop_max_rounds`, function () {
-        const editor = getLoopEditorByScope('global');
+        const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_LOOP);
+        const editor = getLoopEditorByScope(scope);
         ensureLoopEditorIntegrity(editor);
         editor.max_rounds = Math.max(1, Math.min(50, Math.floor(Number(jQuery(this).val()) || 20)));
         ensureLoopEditorIntegrity(editor);
@@ -5848,7 +5893,8 @@ function bindUi() {
         // Stored as ms but edited in seconds; the floor (10s) matches
         // `LOOP_WALL_CLOCK_FLOOR_MS / 1000` in persistence.js.
         const seconds = Math.max(10, Math.min(3600, Math.floor(Number(jQuery(this).val()) || 300)));
-        const editor = getLoopEditorByScope('global');
+        const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_LOOP);
+        const editor = getLoopEditorByScope(scope);
         ensureLoopEditorIntegrity(editor);
         editor.wall_clock_budget_ms = seconds * 1000;
         ensureLoopEditorIntegrity(editor);
@@ -5862,7 +5908,8 @@ function bindUi() {
         // the persisted profile would land back at `true`.
         const toolName = String(jQuery(this).attr('data-luker-loop-tool') || '');
         const checked = Boolean(jQuery(this).prop('checked'));
-        const editor = getLoopEditorByScope('global');
+        const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_LOOP);
+        const editor = getLoopEditorByScope(scope);
         ensureLoopEditorIntegrity(editor);
         if (toolName === 'finalize') {
             editor.tools.finalize = true;
@@ -6241,12 +6288,19 @@ function bindUi() {
 
         if (action === 'reload-current') {
             if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_LOOP) {
-                // Loop is global-only — reload-current always rebuilds the
-                // global loop editor draft from settings. This mirrors the
-                // spec/agenda paths but skips the character-override branch.
-                uiState.globalLoopEditor = loadGlobalLoopEditorState();
-                ensureLoopEditorIntegrity(uiState.globalLoopEditor);
-                updateUiStatus(i18n('Reloaded global profile from settings.'));
+                syncCharacterEditorWithActiveAvatar(context);
+                const activeAvatar = String(getCurrentAvatar(context) || '').trim();
+                if (hasCharacterLoopOverride(context, activeAvatar)) {
+                    uiState.characterLoopEditor = loadCharacterLoopEditorState(context, activeAvatar);
+                    ensureLoopEditorIntegrity(uiState.characterLoopEditor);
+                    setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP, 'character');
+                    updateUiStatus(i18nFormat('Reloaded character override for ${0}.', getCharacterDisplayNameByAvatar(context, activeAvatar) || 'N/A'));
+                } else {
+                    uiState.globalLoopEditor = loadGlobalLoopEditorState();
+                    ensureLoopEditorIntegrity(uiState.globalLoopEditor);
+                    setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP, 'global');
+                    updateUiStatus(i18n('Reloaded global profile from settings.'));
+                }
                 renderDynamicPanels(root, context);
                 return;
             }
@@ -6337,7 +6391,8 @@ function bindUi() {
             syncCharacterEditorWithActiveAvatar(context);
             const sourceScope = getDisplayedScope(context, settings);
             if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_LOOP) {
-                await persistGlobalLoopEditorFrom(settings, uiState.globalLoopEditor);
+                const sourceEditor = getLoopEditorByScope(sourceScope);
+                await persistGlobalLoopEditorFrom(settings, sourceEditor);
                 uiState.globalLoopEditor = loadGlobalLoopEditorState();
                 ensureLoopEditorIntegrity(uiState.globalLoopEditor);
                 notifySuccess(i18n('Global orchestration profile saved.'));
@@ -6528,20 +6583,33 @@ function bindUi() {
                 return;
             }
             const sourceScope = getDisplayedScope(context, settings);
-            const ok = getExecutionMode(settings) === ORCH_EXECUTION_MODE_AGENDA
-                ? await persistCharacterAgendaEditor(context, settings, activeAvatar, {
+            const executionMode = getExecutionMode(settings);
+            let ok;
+            if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
+                ok = await persistCharacterLoopEditor(context, settings, activeAvatar, {
+                    editor: getLoopEditorByScope(sourceScope),
+                    forceEnabled: sourceScope === 'character' ? null : true,
+                });
+            } else if (executionMode === ORCH_EXECUTION_MODE_AGENDA) {
+                ok = await persistCharacterAgendaEditor(context, settings, activeAvatar, {
                     editor: getAgendaEditorByScope(sourceScope),
                     forceEnabled: sourceScope === 'character' ? null : true,
-                })
-                : await persistCharacterEditor(context, settings, activeAvatar, {
+                });
+            } else {
+                ok = await persistCharacterEditor(context, settings, activeAvatar, {
                     editor: getEditorByScope(sourceScope),
                     forceEnabled: sourceScope === 'character' ? null : true,
                 });
+            }
             if (!ok) {
                 notifyError(i18n('Failed to persist character override.'));
                 return;
             }
-            if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_AGENDA) {
+            if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
+                uiState.characterLoopEditor = loadCharacterLoopEditorState(context, activeAvatar);
+                ensureLoopEditorIntegrity(uiState.characterLoopEditor);
+                setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP, 'character');
+            } else if (executionMode === ORCH_EXECUTION_MODE_AGENDA) {
                 uiState.characterAgendaEditor = loadCharacterAgendaEditorState(context, activeAvatar);
                 ensureAgendaEditorIntegrity(uiState.characterAgendaEditor);
                 setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA, 'character');
@@ -6573,7 +6641,12 @@ function bindUi() {
             const nextOverride = previous?.override && typeof previous.override === 'object'
                 ? structuredClone(previous.override)
                 : null;
-            if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_AGENDA) {
+            const executionMode = getExecutionMode(settings);
+            if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
+                if (nextOverride) {
+                    delete nextOverride.loop;
+                }
+            } else if (executionMode === ORCH_EXECUTION_MODE_AGENDA) {
                 if (nextOverride) {
                     delete nextOverride.agenda;
                 }
@@ -6592,6 +6665,7 @@ function bindUi() {
                 || (nextOverride.presets && typeof nextOverride.presets === 'object')
                 || (nextOverride.presetPatch && typeof nextOverride.presetPatch === 'object')
                 || (nextOverride.agenda && typeof nextOverride.agenda === 'object')
+                || (nextOverride.loop && typeof nextOverride.loop === 'object')
             )) {
                 nextPayload.override = nextOverride;
             } else {
@@ -6603,7 +6677,11 @@ function bindUi() {
                 return;
             }
             applyCharacterExecutionModeForAvatar(context, settings, avatar);
-            if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_AGENDA) {
+            if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
+                uiState.characterLoopEditor = loadCharacterLoopEditorState(context, avatar);
+                ensureLoopEditorIntegrity(uiState.characterLoopEditor);
+                setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP, 'global');
+            } else if (executionMode === ORCH_EXECUTION_MODE_AGENDA) {
                 uiState.characterAgendaEditor = loadCharacterAgendaEditorState(context, avatar);
                 ensureAgendaEditorIntegrity(uiState.characterAgendaEditor);
                 setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA, 'global');

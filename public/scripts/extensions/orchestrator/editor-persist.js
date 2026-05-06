@@ -6,15 +6,17 @@
  *
  *   1. Global profiles live in `extension_settings.orchestrator` and are
  *      flushed via `saveSettings()`. Handled by
- *      `persistGlobalEditorFrom` (spec mode) and
- *      `persistGlobalAgendaEditorFrom` (agenda mode).
+ *      `persistGlobalEditorFrom` (spec mode),
+ *      `persistGlobalAgendaEditorFrom` (agenda mode), and
+ *      `persistGlobalLoopEditorFrom` (loop mode).
  *
  *   2. Character overrides live on the active character card under
  *      `data.extensions.orchestrator` and are POSTed to
  *      `/api/characters/edit-attribute`. Handled by
- *      `persistCharacterEditor` (spec mode) and
- *      `persistCharacterAgendaEditor` (agenda mode), both of which
- *      delegate the actual character-card write to
+ *      `persistCharacterEditor` (spec mode),
+ *      `persistCharacterAgendaEditor` (agenda mode), and
+ *      `persistCharacterLoopEditor` (loop mode); all delegate the
+ *      actual character-card write to
  *      `persistOrchestratorCharacterExtension`.
  *
  * `createPortableProfileFromEditor` and
@@ -30,6 +32,7 @@
 import { getRequestHeaders, saveSettings } from '../../../script.js';
 import {
     ORCH_EXECUTION_MODE_AGENDA,
+    ORCH_EXECUTION_MODE_LOOP,
     ORCH_EXECUTION_MODE_SPEC,
 } from './defaults.js';
 import {
@@ -165,6 +168,58 @@ export async function persistCharacterAgendaEditor(context, settings, avatar, {
                 maxConcurrentAgents: Math.max(1, Math.min(12, Math.floor(Number(editor?.limits?.maxConcurrentAgents) || 3))),
                 maxTotalRuns: Math.max(1, Math.min(200, Math.floor(Number(editor?.limits?.maxTotalRuns) || 24))),
             },
+            updatedAt: Date.now(),
+            name: getCharacterDisplayNameByAvatar(context, target),
+            notes: sourceNotes,
+        },
+    };
+
+    const nextPayload = {
+        ...previous,
+        override: normalizeCharacterOverrideMode(overridePayload),
+    };
+    return await persistOrchestratorCharacterExtension(context, characterIndex, nextPayload);
+}
+
+/**
+ * Persist a loop-mode editor draft as a character override. Mirrors
+ * `persistCharacterAgendaEditor`: writes to `override.loop` on the
+ * character card, normalizes the active mode, and routes through
+ * `persistOrchestratorCharacterExtension` for the network write.
+ *
+ * The loop sub-payload runs through `sanitizeLoopProfile` so the on-card
+ * shape matches the V3 schema regardless of how the editor mutated the
+ * draft, then carries the editor's `enabled`, `notes`, and `name` fields
+ * alongside the V3 profile fields.
+ */
+export async function persistCharacterLoopEditor(context, settings, avatar, {
+    editor,
+    forceEnabled = null,
+    notes = null,
+} = {}) {
+    void settings;
+    const target = String(avatar || '');
+    if (!target) {
+        return false;
+    }
+    const characterIndex = getCharacterIndexByAvatar(context, target);
+    if (characterIndex < 0) {
+        return false;
+    }
+
+    const sourceEnabled = typeof editor?.enabled === 'boolean' ? editor.enabled : true;
+    const sourceNotes = notes === null ? String(editor?.notes || '') : String(notes || '');
+    const previous = getCharacterExtensionDataByAvatar(context, target);
+    const previousOverride = previous?.override && typeof previous.override === 'object'
+        ? structuredClone(previous.override)
+        : {};
+    const sanitizedProfile = sanitizeLoopProfile(editor);
+    const overridePayload = {
+        ...previousOverride,
+        mode: ORCH_EXECUTION_MODE_LOOP,
+        loop: {
+            ...sanitizedProfile,
+            enabled: forceEnabled === null ? Boolean(sourceEnabled) : Boolean(forceEnabled),
             updatedAt: Date.now(),
             name: getCharacterDisplayNameByAvatar(context, target),
             notes: sourceNotes,

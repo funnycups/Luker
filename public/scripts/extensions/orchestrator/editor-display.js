@@ -66,13 +66,16 @@ export function getAgendaEditorByScope(scope) {
 }
 
 /**
- * Loop mode is currently global-only — there is no character-loop editor
- * slot yet. The helper still takes a scope parameter for symmetry with
- * `getEditorByScope` / `getAgendaEditorByScope`; future character-override
- * wiring can extend this without changing call sites.
+ * Loop-mode editor accessor. Mirrors `getEditorByScope` /
+ * `getAgendaEditorByScope`: the global slot returns the shared global
+ * draft, the character slot returns the per-card draft seeded from the
+ * persisted loop override (or from the global profile when no override
+ * exists). Callers must have called `syncCharacterEditorWithActiveAvatar`
+ * recently enough that `uiState.characterLoopEditor` matches the active
+ * avatar; the editor-state loaders own that invariant.
  */
-export function getLoopEditorByScope(_scope) {
-    return uiState.globalLoopEditor;
+export function getLoopEditorByScope(scope) {
+    return scope === 'character' ? uiState.characterLoopEditor : uiState.globalLoopEditor;
 }
 
 export function getScopeFromElementOrMode(element, context, settings, mode = ORCH_EXECUTION_MODE_SPEC) {

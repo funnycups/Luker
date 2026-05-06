@@ -33,8 +33,10 @@ import {
 import {
     applyCharacterExecutionModeForAvatar,
     getCharacterAgendaOverrideByAvatar,
+    getCharacterLoopOverrideByAvatar,
     getCharacterOverrideByAvatar,
     hasCharacterAgendaOverride,
+    hasCharacterLoopOverride,
     hasCharacterSpecOverride,
     normalizeExecutionMode,
 } from './character-overrides.js';
@@ -65,11 +67,8 @@ export const uiState = {
     characterEditor: null,
     globalAgendaEditor: null,
     characterAgendaEditor: null,
-    // Loop mode (V3 profile) is currently global-only — character override
-    // for loop profiles is a follow-up. The slot exists alongside the
-    // spec/agenda editor pairs so future character-override wiring slots
-    // in without restructuring `uiState`.
     globalLoopEditor: null,
+    characterLoopEditor: null,
     specDisplayedScope: 'global',
     agendaDisplayedScope: 'global',
     loopDisplayedScope: 'global',
@@ -195,6 +194,28 @@ export function loadGlobalLoopEditorState() {
     return sanitizeLoopProfile(source);
 }
 
+/**
+ * Load the per-character loop editor draft. When the character has a
+ * persisted loop override, use it; otherwise seed from the global loop
+ * profile so the editor has a sensible starting point. The returned
+ * draft carries `enabled` + `notes` like the spec/agenda character
+ * editors, so save / clear flows can roundtrip those fields.
+ */
+export function loadCharacterLoopEditorState(context, avatar) {
+    const settings = getSettings();
+    const safeAvatar = String(avatar || '');
+    const loopOverride = getCharacterLoopOverrideByAvatar(context, safeAvatar);
+    const baseProfile = loopOverride
+        ? sanitizeLoopProfile(loopOverride)
+        : sanitizeLoopProfile(settings?.loopProfile || defaultLoopProfile);
+    return {
+        ...baseProfile,
+        avatar: safeAvatar,
+        enabled: Boolean(loopOverride?.enabled),
+        notes: String(loopOverride?.notes || ''),
+    };
+}
+
 export function initializeUiState(context) {
     const activeAvatar = String(getCurrentAvatar(context) || '').trim();
     if (activeAvatar !== uiState.selectedAvatar) {
@@ -206,11 +227,13 @@ export function initializeUiState(context) {
     uiState.globalAgendaEditor = loadGlobalAgendaEditorState();
     uiState.characterAgendaEditor = loadCharacterAgendaEditorState(context, uiState.selectedAvatar);
     uiState.globalLoopEditor = loadGlobalLoopEditorState();
+    uiState.characterLoopEditor = loadCharacterLoopEditorState(context, uiState.selectedAvatar);
     ensureEditorIntegrity(uiState.globalEditor);
     ensureEditorIntegrity(uiState.characterEditor);
     ensureAgendaEditorIntegrity(uiState.globalAgendaEditor);
     ensureAgendaEditorIntegrity(uiState.characterAgendaEditor);
     ensureLoopEditorIntegrity(uiState.globalLoopEditor);
+    ensureLoopEditorIntegrity(uiState.characterLoopEditor);
     syncDisplayedScopesFromStoredState(context, getSettings());
 }
 
@@ -223,8 +246,10 @@ export function syncCharacterEditorWithActiveAvatar(context) {
     uiState.selectedAvatar = activeAvatar;
     uiState.characterEditor = loadCharacterEditorState(context, activeAvatar);
     uiState.characterAgendaEditor = loadCharacterAgendaEditorState(context, activeAvatar);
+    uiState.characterLoopEditor = loadCharacterLoopEditorState(context, activeAvatar);
     ensureEditorIntegrity(uiState.characterEditor);
     ensureAgendaEditorIntegrity(uiState.characterAgendaEditor);
+    ensureLoopEditorIntegrity(uiState.characterLoopEditor);
     syncDisplayedScopesFromStoredState(context, getSettings());
 }
 
@@ -242,8 +267,7 @@ export function getStoredDisplayedScopeForMode(context, settings, mode = ORCH_EX
         return hasCharacterAgendaOverride(context, activeAvatar) ? 'character' : 'global';
     }
     if (normalized === ORCH_EXECUTION_MODE_LOOP) {
-        // Loop mode is global-only at MVP; no character override path yet.
-        return 'global';
+        return hasCharacterLoopOverride(context, activeAvatar) ? 'character' : 'global';
     }
     return hasCharacterSpecOverride(context, activeAvatar) ? 'character' : 'global';
 }

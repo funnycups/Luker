@@ -11,7 +11,6 @@ import { describe, it, expect } from '@jest/globals';
 
 import {
     exportRunTraceAsJsonl,
-    persistRunTraceToDisk,
 } from '../../public/scripts/extensions/orchestrator/runtime-trace-export.js';
 
 describe('exportRunTraceAsJsonl', () => {
@@ -86,21 +85,5 @@ describe('exportRunTraceAsJsonl', () => {
         expect(lines).toHaveLength(2);
         expect(JSON.parse(lines[0]).type).toBe('first');
         expect(JSON.parse(lines[1]).type).toBe('third');
-    });
-});
-
-describe('persistRunTraceToDisk (stub)', () => {
-    it('returns a not-persisted result with NEEDS_CONTEXT explanation', async () => {
-        const result = await persistRunTraceToDisk([{ type: 'whatever' }]);
-        expect(result.persisted).toBe(false);
-        expect(typeof result.reason).toBe('string');
-        expect(result.reason).toMatch(/NEEDS_CONTEXT/);
-    });
-
-    it('is callable with empty events / missing options without throwing', async () => {
-        await expect(persistRunTraceToDisk([])).resolves.toBeTruthy();
-        await expect(persistRunTraceToDisk([], {})).resolves.toBeTruthy();
-        // @ts-ignore intentional bad input
-        await expect(persistRunTraceToDisk(null)).resolves.toBeTruthy();
     });
 });

@@ -1,11 +1,12 @@
 /**
  * Per-character override accessors for the orchestrator.
  *
- * Characters can override the global orchestration spec / agenda / preset
- * map by writing under `character.data.extensions.orchestrator.override`.
- * This module owns the read-side helpers for those overrides plus the
- * execution-mode resolution that decides which override branch (`spec`
- * vs `agenda`) is active for a given character.
+ * Characters can override the global orchestration spec / agenda / loop
+ * profile / preset map by writing under
+ * `character.data.extensions.orchestrator.override`. This module owns
+ * the read-side helpers for those overrides plus the execution-mode
+ * resolution that decides which override branch (`spec` vs `agenda`
+ * vs `loop`) is active for a given character.
  *
  * Three layers of helpers live here:
  *
@@ -13,16 +14,18 @@
  *      `getCharacterDisplayName`, `getCharacterDisplayNameByAvatar`.
  *   2. Override read accessors — `getCharacterExtensionDataByAvatar`,
  *      `getCharacterOverrideByAvatar`, `getCharacterAgendaOverrideByAvatar`,
- *      `hasSpecOverrideData`, `hasAgendaOverrideData`,
+ *      `getCharacterLoopOverrideByAvatar`,
+ *      `hasSpecOverrideData`, `hasAgendaOverrideData`, `hasLoopOverrideData`,
  *      `hasCharacterSpecOverride`, `hasCharacterAgendaOverride`,
- *      `hasCharacterOverride`, `getCharacterCardSnapshot`.
+ *      `hasCharacterLoopOverride`, `hasCharacterOverride`,
+ *      `getCharacterCardSnapshot`.
  *   3. Execution-mode resolution — `normalizeExecutionMode`,
  *      `getExecutionMode`, `getCharacterOverrideExecutionMode`,
  *      `normalizeCharacterOverrideMode`, `getCharacterSavedExecutionModeByAvatar`,
  *      `applyCharacterExecutionModeForAvatar`. The character override can
- *      pin a mode (`override.mode = 'spec' | 'agenda'`); if absent the
- *      mode is inferred from which sub-payload is present, falling back
- *      to whichever updatedAt is newer when both are present.
+ *      pin a mode (`override.mode = 'spec' | 'agenda' | 'loop'`); if absent
+ *      the mode is inferred from which sub-payload is present, falling
+ *      back to whichever updatedAt is newer when multiple are present.
  *
  * Writers (`persist*Editor`, character-extension write paths) stay in
  * the editor-state layer and main.js since they wire into save / event
@@ -34,6 +37,7 @@ import { extension_settings } from '../../extensions.js';
 import {
     ORCH_EXECUTION_MODES,
     ORCH_EXECUTION_MODE_AGENDA,
+    ORCH_EXECUTION_MODE_LOOP,
     ORCH_EXECUTION_MODE_SINGLE,
     ORCH_EXECUTION_MODE_SPEC,
 } from './defaults.js';
@@ -98,6 +102,12 @@ export function getCharacterAgendaOverrideByAvatar(context, avatar) {
     return agenda && typeof agenda === 'object' ? agenda : null;
 }
 
+export function getCharacterLoopOverrideByAvatar(context, avatar) {
+    const override = getCharacterOverrideByAvatar(context, avatar);
+    const loop = override?.loop;
+    return loop && typeof loop === 'object' ? loop : null;
+}
+
 export function hasSpecOverrideData(override) {
     return Boolean(override && (
         (override.spec && typeof override.spec === 'object')
@@ -110,6 +120,10 @@ export function hasAgendaOverrideData(override) {
     return Boolean(override?.agenda && typeof override.agenda === 'object');
 }
 
+export function hasLoopOverrideData(override) {
+    return Boolean(override?.loop && typeof override.loop === 'object');
+}
+
 export function getCharacterOverrideExecutionMode(override) {
     if (!override || typeof override !== 'object') {
         return '';
@@ -117,26 +131,52 @@ export function getCharacterOverrideExecutionMode(override) {
     const explicitMode = normalizeExecutionMode(override.mode);
     const hasSpec = hasSpecOverrideData(override);
     const hasAgenda = hasAgendaOverrideData(override);
+    const hasLoop = hasLoopOverrideData(override);
     if (explicitMode === ORCH_EXECUTION_MODE_SPEC && hasSpec) {
         return explicitMode;
     }
     if (explicitMode === ORCH_EXECUTION_MODE_AGENDA && hasAgenda) {
         return explicitMode;
     }
-    if (hasSpec && !hasAgenda) {
-        return ORCH_EXECUTION_MODE_SPEC;
+    if (explicitMode === ORCH_EXECUTION_MODE_LOOP && hasLoop) {
+        return explicitMode;
     }
-    if (hasAgenda && !hasSpec) {
-        return ORCH_EXECUTION_MODE_AGENDA;
+    const presentBranches = [
+        hasSpec ? ORCH_EXECUTION_MODE_SPEC : null,
+        hasAgenda ? ORCH_EXECUTION_MODE_AGENDA : null,
+        hasLoop ? ORCH_EXECUTION_MODE_LOOP : null,
+    ].filter(Boolean);
+    if (presentBranches.length === 1) {
+        return presentBranches[0];
     }
-    if (hasSpec && hasAgenda) {
-        const specUpdatedAt = Math.max(0, Number(override.updatedAt) || 0);
-        const agendaUpdatedAt = Math.max(0, Number(override.agenda?.updatedAt) || 0);
-        if (agendaUpdatedAt > specUpdatedAt) {
-            return ORCH_EXECUTION_MODE_AGENDA;
+    if (presentBranches.length > 1) {
+        // Pick the most recently updated branch. `override.updatedAt` is
+        // owned by the spec branch (legacy convention). Agenda + loop each
+        // store their own `updatedAt` on the sub-payload.
+        const candidates = [];
+        if (hasSpec) {
+            candidates.push({
+                mode: ORCH_EXECUTION_MODE_SPEC,
+                updatedAt: Math.max(0, Number(override.updatedAt) || 0),
+            });
         }
-        if (specUpdatedAt > agendaUpdatedAt) {
-            return ORCH_EXECUTION_MODE_SPEC;
+        if (hasAgenda) {
+            candidates.push({
+                mode: ORCH_EXECUTION_MODE_AGENDA,
+                updatedAt: Math.max(0, Number(override.agenda?.updatedAt) || 0),
+            });
+        }
+        if (hasLoop) {
+            candidates.push({
+                mode: ORCH_EXECUTION_MODE_LOOP,
+                updatedAt: Math.max(0, Number(override.loop?.updatedAt) || 0),
+            });
+        }
+        candidates.sort((left, right) => right.updatedAt - left.updatedAt);
+        const top = candidates[0];
+        const second = candidates[1];
+        if (top && (!second || top.updatedAt > second.updatedAt)) {
+            return top.mode;
         }
     }
     return '';
@@ -177,6 +217,10 @@ export function hasCharacterSpecOverride(context, avatar) {
 
 export function hasCharacterAgendaOverride(context, avatar) {
     return hasAgendaOverrideData(getCharacterOverrideByAvatar(context, avatar));
+}
+
+export function hasCharacterLoopOverride(context, avatar) {
+    return hasLoopOverrideData(getCharacterOverrideByAvatar(context, avatar));
 }
 
 export function hasCharacterOverride(context, avatar) {

@@ -118,10 +118,6 @@ orchestrator 的 trace 面板会记录 loop 每一轮的事件：
 
 报 bug 给开发者时，可以在 trace 面板点"导出本次 run"下载 jsonl 文件附上。
 
-::: warning persistTrace 是实验性开关
-设置里的 `persistTrace` 可以让所有 run 自动落盘到扩展数据目录。**目前是实验性的**——没有跨平台稳定的写盘 helper，开关默认关。日常用按需导出就够；只有需要持续追踪某个 chat 的 loop 行为时才打开。
-:::
-
 ## 性能 trade-off
 
 loop 模式与 spec / agenda 在性能上有结构性差异：
