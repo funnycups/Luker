@@ -88,6 +88,9 @@ import {
     scrollOnMediaLoad,
     getOneCharacter,
     getCharacterSource,
+    createRawPrompt,
+    getGenerateUrl,
+    amount_gen,
 } from '../script.js';
 import {
     extension_settings,
@@ -110,7 +113,7 @@ import { addLocaleData, getCurrentLocale, t, translate } from './i18n.js';
 import { hideLoader, showLoader } from './loader.js';
 import { loader } from './action-loader.js';
 import { MacrosParser } from './macros.js';
-import { getChatCompletionModel, oai_settings } from './openai.js';
+import { getChatCompletionModel, oai_settings, sendOpenAIRequest } from './openai.js';
 import { callGenericPopup, Popup, POPUP_RESULT, POPUP_TYPE } from './popup.js';
 import { power_user, registerDebugFunction } from './power-user.js';
 import { getPresetManager } from './preset-manager.js';
@@ -123,7 +126,7 @@ import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from '
 import { SlashCommandEnumValue } from './slash-commands/SlashCommandEnumValue.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { tag_map, tags, importTags } from './tags.js';
-import { getTextGenServer, textgenerationwebui_settings } from './textgen-settings.js';
+import { getTextGenServer, getTextGenGenerationData, textgenerationwebui_settings } from './textgen-settings.js';
 import { tokenizers, getTextTokens, getTokenCount, getTokenCountAsync, getTokenizerModel } from './tokenizers.js';
 import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
@@ -139,6 +142,10 @@ import { macros } from './macros/macro-system.js';
 import { getRegexedString, regex_placement } from './extensions/regex/engine.js';
 import { addMessages, updateMessages, deleteMessages, getMessage, getMessageCount } from './messages.js';
 import { createFloorState } from './floor-state.js';
+import { generateTask, GenerateTaskError } from './generate-task.js';
+import { generateHorde } from './horde.js';
+import { getKoboldGenerationData, kai_settings, koboldai_settings, koboldai_setting_names } from './kai-settings.js';
+import { getNovelGenerationData, nai_settings, novelai_settings, novelai_setting_names } from './nai-settings.js';
 
 function safeClone(value, fallback = {}) {
     try {
@@ -2120,6 +2127,32 @@ function buildPresetAwarePromptMessages({
     throw new Error('Prompt preset assembly failed: no valid prompt_order for plugin message construction.');
 }
 
+function buildGenerateTaskSenders() {
+    return {
+        sendOpenAIRequest,
+        generateHorde,
+        getKoboldGenerationData,
+        getNovelGenerationData,
+        getTextGenGenerationData,
+        getGenerateUrl,
+        getRequestHeaders,
+        fetchImpl: globalThis.fetch.bind(globalThis),
+        getKoboldRuntime: () => ({
+            kai_settings,
+            koboldai_settings,
+            koboldai_setting_names,
+            amount_gen,
+            max_context,
+        }),
+        getNovelRuntime: () => ({
+            nai_settings,
+            novelai_settings,
+            novelai_setting_names,
+            amount_gen,
+        }),
+    };
+}
+
 export function getContext() {
     return {
         accountStorage,
@@ -2145,6 +2178,8 @@ export function getContext() {
         streamingProcessor,
         eventSource,
         eventTypes: event_types,
+        generateTask,
+        GenerateTaskError,
         /** @deprecated Use addMessages() instead */
         addOneMessage,
         /** @deprecated Use deleteMessages(chat.length - 1) instead */
@@ -2215,8 +2250,11 @@ export function getContext() {
         },
         connectionProfiles: {
             list: getChatCompletionConnectionProfiles,
+            /** @deprecated Use generateTask({ apiPresetName }) instead. Will be removed in a future release. */
             resolve: resolveChatCompletionRequestProfile,
         },
+        createRawPrompt,
+        get generateTaskSenders() { return buildGenerateTaskSenders(); },
         openCharacterChat,
         openGroupChat,
         saveMetadata,
