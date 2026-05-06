@@ -26,16 +26,13 @@ import {
     clearImportedStoreTransientState,
     bindImportedStoreToAssistantFloor,
 } from './import-export.js';
-import { sendOpenAIRequest } from '../../openai.js';
 import { performFuzzySearch } from '../../power-user.js';
 import { download, getFileText, getStringHash } from '../../utils.js';
 import { newWorldInfoEntryTemplate, setGlobalWorldInfoSelection, world_info_position } from '../../world-info.js';
 import { registerManagedRegexProvider, regex_placement, substitute_find_regex } from '../regex/engine.js';
-import { getChatCompletionConnectionProfiles, resolveChatCompletionRequestProfile } from '../connection-manager/profile-resolver.js';
+import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import {
     TOOL_PROTOCOL_STYLE,
-    extractAllFunctionCalls,
-    mergeUserAddendumIntoPromptMessages,
     validateParsedToolCalls,
 } from '../function-call-runtime.js';
 import {
@@ -2452,58 +2449,33 @@ function appendUniqueWorldInfoEntries(payload, field, incomingEntries = []) {
     return changed;
 }
 
-async function buildPresetAwareLLMMessages(
-    context,
-    settings,
-    {
-        api = '',
-        systemPrompt = '',
-        userPrompt = '',
-        includeCharacterCard = true,
-        promptPresetName = '',
-        worldInfoMessages = null,
-        runtimeWorldInfo = null,
-        forceWorldInfoResimulate = false,
-        worldInfoType = 'quiet',
-        abortSignal = null,
-        recallRunToken = 0,
-    } = {},
-) {
-    const systemText = String(systemPrompt || '').trim();
-    const userText = String(userPrompt || '').trim();
-    const selectedPromptPresetName = String(promptPresetName || '').trim();
-    const envelopeApi = selectedPromptPresetName ? 'openai' : (api || context.mainApi || 'openai');
+async function resolveMemoryGraphWorldInfo(context, settings, {
+    worldInfoMessages = null,
+    runtimeWorldInfo = null,
+    forceWorldInfoResimulate = false,
+    worldInfoType = 'quiet',
+    abortSignal = null,
+    recallRunToken = 0,
+} = {}) {
     const includeWorldInfoWithPreset = settings?.includeWorldInfoWithPreset !== false;
-    throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
-    let resolvedRuntimeWorldInfo = includeWorldInfoWithPreset
-        ? ((!forceWorldInfoResimulate && hasEffectiveRuntimeWorldInfo(runtimeWorldInfo))
-            ? normalizeRuntimeWorldInfo(runtimeWorldInfo)
-            : null)
-        : {};
-    const resolverMessages = normalizeWorldInfoResolverMessages(worldInfoMessages);
-    if (includeWorldInfoWithPreset && !resolvedRuntimeWorldInfo && typeof context?.resolveWorldInfoForMessages === 'function' && resolverMessages.length > 0) {
-        resolvedRuntimeWorldInfo = await context.resolveWorldInfoForMessages(resolverMessages, {
-            type: String(worldInfoType || 'quiet'),
-            fallbackToCurrentChat: false,
-            postActivationHook: rewriteDepthWorldInfoToAfter,
-        });
-        throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
+    if (!includeWorldInfoWithPreset) {
+        return {};
     }
-
+    if (!forceWorldInfoResimulate && hasEffectiveRuntimeWorldInfo(runtimeWorldInfo)) {
+        return normalizeRuntimeWorldInfo(runtimeWorldInfo);
+    }
+    const resolverMessages = normalizeWorldInfoResolverMessages(worldInfoMessages);
+    if (resolverMessages.length === 0 || typeof context?.resolveWorldInfoForMessages !== 'function') {
+        return {};
+    }
     throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
-    return context.buildPresetAwarePromptMessages({
-        messages: [
-            { role: 'system', content: systemText },
-            { role: 'user', content: userText },
-        ],
-        envelopeOptions: {
-            includeCharacterCard,
-            api: envelopeApi,
-            promptPresetName: selectedPromptPresetName,
-        },
-        promptPresetName: selectedPromptPresetName,
-        runtimeWorldInfo: resolvedRuntimeWorldInfo,
+    const resolved = await context.resolveWorldInfoForMessages(resolverMessages, {
+        type: String(worldInfoType || 'quiet'),
+        fallbackToCurrentChat: false,
+        postActivationHook: rewriteDepthWorldInfoToAfter,
     });
+    throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
+    return normalizeRuntimeWorldInfo(resolved);
 }
 
 function normalizeRuntimeWorldInfo(runtimeWorldInfo = null) {
@@ -2838,22 +2810,31 @@ async function waitForRpmSlot(settings, abortSignal = null) {
     }
 }
 
-async function requestToolCallWithRetry(settings, promptMessages, {
+async function requestSingleFunctionCallWithRetry(context, settings, {
+    taskMessages = [],
+    runtimeWorldInfo = null,
+    apiPresetName = '',
+    llmPresetName = '',
     functionName = '',
     functionDescription = '',
     parameters = {},
-    llmPresetName = '',
-    apiSettingsOverride = null,
     abortSignal = null,
     recallRunToken = 0,
     allowPreamble = false,
+    retriesOverride = null,
 } = {}) {
     const fnName = String(functionName || '').trim();
     if (!fnName) {
         throw new Error('Function name is required.');
     }
+    if (!context || typeof context.generateTask !== 'function') {
+        throw new Error('context.generateTask is unavailable.');
+    }
 
-    const retries = Math.max(0, Math.min(10, Math.floor(Number(settings?.toolCallRetryMax) || 0)));
+    const retriesSource = retriesOverride === null || retriesOverride === undefined
+        ? Number(settings?.toolCallRetryMax)
+        : Number(retriesOverride);
+    const retries = Math.max(0, Math.min(10, Math.floor(retriesSource || 0)));
     const tools = [{
         type: 'function',
         function: {
@@ -2878,22 +2859,32 @@ async function requestToolCallWithRetry(settings, promptMessages, {
         try {
             throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
             await waitForRpmSlot(settings, abortSignal);
-            const responseData = await sendOpenAIRequest('quiet', promptMessages, requestController.signal, {
+            const result = await context.generateTask({
+                taskMessages,
+                includeCharacterCard: true,
+                worldInfoSource: 'none',
+                runtimeWorldInfo,
+                apiPresetName: String(apiPresetName || '').trim(),
+                llmPresetName: String(llmPresetName || '').trim(),
                 tools,
                 toolChoice,
-                replaceTools: true,
-                llmPresetName: String(llmPresetName || '').trim(),
-                apiSettingsOverride: apiSettingsOverride && typeof apiSettingsOverride === 'object' ? apiSettingsOverride : null,
-                requestScope: 'extension_internal',
+                functionCallMode: 'auto',
                 functionCallOptions,
+                abortSignal: requestController.signal,
             });
             throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
-            const calls = extractAllFunctionCalls(responseData, [fnName]);
-            const validationError = validateParsedToolCalls(calls, tools);
+            const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
+            const normalizedCalls = rawCalls.map(call => ({
+                name: String(call?.name || ''),
+                args: call?.args && typeof call.args === 'object' ? call.args : {},
+                raw: call?.raw || null,
+            }));
+            const filteredCalls = normalizedCalls.filter(call => call.name === fnName);
+            const validationError = validateParsedToolCalls(filteredCalls, tools);
             if (validationError) {
                 throw new Error(validationError);
             }
-            const matched = calls.find(call => String(call?.name || '') === fnName);
+            const matched = filteredCalls.find(call => call.name === fnName);
             if (!matched) {
                 throw new Error(`Model returned tool call, but not '${fnName}'.`);
             }
@@ -2917,11 +2908,13 @@ async function requestToolCallWithRetry(settings, promptMessages, {
     throw lastError || new Error(`Tool call '${fnName}' failed.`);
 }
 
-async function requestToolCallsWithRetry(settings, promptMessages, {
+async function requestToolCallsWithRetry(context, settings, {
+    taskMessages = [],
+    runtimeWorldInfo = null,
+    apiPresetName = '',
+    llmPresetName = '',
     tools = [],
     allowedNames = null,
-    llmPresetName = '',
-    apiSettingsOverride = null,
     retriesOverride = null,
     abortSignal = null,
     recallRunToken = 0,
@@ -2929,12 +2922,17 @@ async function requestToolCallsWithRetry(settings, promptMessages, {
     if (!Array.isArray(tools) || tools.length === 0) {
         throw new Error('Tools are required.');
     }
+    if (!context || typeof context.generateTask !== 'function') {
+        throw new Error('context.generateTask is unavailable.');
+    }
 
     const retriesSource = retriesOverride === null || retriesOverride === undefined
         ? Number(settings?.toolCallRetryMax)
         : Number(retriesOverride);
     const retries = Math.max(0, Math.min(10, Math.floor(retriesSource || 0)));
-    const toolChoice = 'auto';
+    const allowedSet = Array.isArray(allowedNames)
+        ? new Set(allowedNames.map(name => String(name || '').trim()).filter(Boolean))
+        : (allowedNames instanceof Set ? allowedNames : null);
     let lastError = null;
     for (let attempt = 0; attempt <= retries; attempt++) {
         const requestController = createLinkedAbortController(isAbortSignalLike(abortSignal) ? abortSignal : null);
@@ -2942,24 +2940,36 @@ async function requestToolCallsWithRetry(settings, promptMessages, {
         try {
             throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
             await waitForRpmSlot(settings, abortSignal);
-            const responseData = await sendOpenAIRequest('quiet', promptMessages, requestController.signal, {
-                tools,
-                toolChoice,
-                replaceTools: true,
+            const result = await context.generateTask({
+                taskMessages,
+                includeCharacterCard: true,
+                worldInfoSource: 'none',
+                runtimeWorldInfo,
+                apiPresetName: String(apiPresetName || '').trim(),
                 llmPresetName: String(llmPresetName || '').trim(),
-                apiSettingsOverride: apiSettingsOverride && typeof apiSettingsOverride === 'object' ? apiSettingsOverride : null,
-                requestScope: 'extension_internal',
+                tools,
+                toolChoice: 'auto',
+                functionCallMode: 'auto',
                 functionCallOptions: {
                     protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
                 },
+                abortSignal: requestController.signal,
             });
             throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
-            const calls = extractAllFunctionCalls(responseData, allowedNames);
-            const validationError = validateParsedToolCalls(calls, tools);
+            const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
+            const normalizedCalls = rawCalls.map(call => ({
+                name: String(call?.name || ''),
+                args: call?.args && typeof call.args === 'object' ? call.args : {},
+                raw: call?.raw || null,
+            }));
+            const filteredCalls = allowedSet && allowedSet.size > 0
+                ? normalizedCalls.filter(call => allowedSet.has(call.name))
+                : normalizedCalls;
+            const validationError = validateParsedToolCalls(filteredCalls, tools);
             if (validationError) {
                 throw new Error(validationError);
             }
-            return calls;
+            return filteredCalls;
         } catch (error) {
             if (isAbortError(error, abortSignal)) {
                 throw error;
@@ -3001,19 +3011,7 @@ async function runFunctionCallTask(context, settings, {
     }
     throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
 
-    const resolvedApiPresetName = String(apiPresetName || '').trim();
-    const profileResolution = resolveChatCompletionRequestProfile({
-        profileName: resolvedApiPresetName,
-        defaultApi: String(context?.mainApi || 'openai').trim() || 'openai',
-        defaultSource: String(context?.chatCompletionSettings?.chat_completion_source || ''),
-    });
-    const requestApi = profileResolution.requestApi;
-    const prompt = await buildPresetAwareLLMMessages(context, settings, {
-        api: requestApi,
-        systemPrompt,
-        userPrompt,
-        includeCharacterCard: true,
-        promptPresetName: String(promptPresetName || '').trim(),
+    const resolvedWorldInfo = await resolveMemoryGraphWorldInfo(context, settings, {
         worldInfoMessages,
         runtimeWorldInfo,
         forceWorldInfoResimulate,
@@ -3023,14 +3021,19 @@ async function runFunctionCallTask(context, settings, {
     });
     throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
 
-    const apiSettingsOverride = profileResolution.apiSettingsOverride;
+    const taskMessages = [
+        { role: 'system', content: String(systemPrompt || '').trim() },
+        { role: 'user', content: String(userPrompt || '').trim() },
+    ];
 
-    return await requestToolCallWithRetry(settings, prompt, {
+    return await requestSingleFunctionCallWithRetry(context, settings, {
+        taskMessages,
+        runtimeWorldInfo: resolvedWorldInfo,
+        apiPresetName: String(apiPresetName || '').trim(),
+        llmPresetName: String(promptPresetName || '').trim(),
         functionName: fnName,
         functionDescription,
         parameters,
-        llmPresetName: String(promptPresetName || '').trim(),
-        apiSettingsOverride: apiSettingsOverride && typeof apiSettingsOverride === 'object' ? apiSettingsOverride : null,
         abortSignal,
         recallRunToken,
         allowPreamble,
@@ -3801,13 +3804,7 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
         return [];
     }
 
-    const resolvedApiPresetName = String(settings.extractApiPresetName || '').trim();
-    const profileResolution = resolveChatCompletionRequestProfile({
-        profileName: resolvedApiPresetName,
-        defaultApi: String(context?.mainApi || 'openai').trim() || 'openai',
-        defaultSource: String(context?.chatCompletionSettings?.chat_completion_source || ''),
-    });
-    const requestApi = profileResolution.requestApi;
+    const apiPresetName = String(settings.extractApiPresetName || '').trim();
     const promptPresetName = String(settings.extractPresetName || '').trim();
     const forceUpdateTypes = new Set(
         schema
@@ -3880,28 +3877,25 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
             nodes: graphNodes,
             edges: graphEdges,
         };
-    const promptMessages = await buildPresetAwareLLMMessages(context, settings, {
-        api: requestApi,
-        systemPrompt: String(settings.extractSystemPrompt || '').trim() || DEFAULT_EXTRACT_SYSTEM_PROMPT,
-        userPrompt: buildExtractInputXml(
-            Array.from(forceUpdateTypes),
-            graphDataPayload,
-            messages,
-        ),
-        includeCharacterCard: true,
-        promptPresetName,
+    const extractSystemPrompt = String(settings.extractSystemPrompt || '').trim() || DEFAULT_EXTRACT_SYSTEM_PROMPT;
+    const extractUserPrompt = buildExtractInputXml(
+        Array.from(forceUpdateTypes),
+        graphDataPayload,
+        messages,
+    );
+    const resolvedExtractWorldInfo = await resolveMemoryGraphWorldInfo(context, settings, {
         worldInfoMessages: messages.map(item => ({
             role: item.role,
             content: item.text,
             name: item.name,
         })),
         worldInfoType: 'quiet',
+        abortSignal: options?.abortSignal || null,
     });
     const { tools, specByToolName } = buildDynamicExtractTools(schema, {
         allowEditDelete: !rebuildCreateOnly,
     });
     const allowedNames = new Set(['luker_rpg_extract_done', ...specByToolName.keys()]);
-    const apiSettingsOverride = profileResolution.apiSettingsOverride;
     const semanticRetries = Math.max(0, Math.min(10, Math.floor(Number(settings?.toolCallRetryMax) || 0)));
     const editableNodes = new Map(
         listNodesByLevel(store, LEVEL.SEMANTIC)
@@ -3927,16 +3921,20 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
         const reminderText = attempt > 0
             ? `Previous response was incomplete. Return COMPLETE extraction tool calls in one response: at least one type tool call and exactly one final luker_rpg_extract_done as the last call.${retryReason ? ` Fix: ${retryReason}` : ''}`
             : '';
-        const requestPromptMessages = reminderText
-            ? mergeUserAddendumIntoPromptMessages(promptMessages, reminderText, 'retry_requirements')
-            : promptMessages;
+        const taskMessages = [
+            { role: 'system', content: extractSystemPrompt },
+            { role: 'user', content: extractUserPrompt },
+            ...(reminderText ? [{ role: 'user', content: reminderText }] : []),
+        ];
         let calls = [];
         try {
-            calls = await requestToolCallsWithRetry(settings, requestPromptMessages, {
+            calls = await requestToolCallsWithRetry(context, settings, {
+                taskMessages,
+                runtimeWorldInfo: resolvedExtractWorldInfo,
+                apiPresetName,
+                llmPresetName: promptPresetName,
                 tools,
                 allowedNames,
-                llmPresetName: promptPresetName,
-                apiSettingsOverride: apiSettingsOverride && typeof apiSettingsOverride === 'object' ? apiSettingsOverride : null,
                 retriesOverride: 0,
                 abortSignal: options?.abortSignal || null,
             });
