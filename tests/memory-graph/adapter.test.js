@@ -76,6 +76,14 @@ function makeStore() {
 
 function makeEventSource() {
     const listeners = new Map();
+    // Floor-state no longer self-subscribes to the global event bus —
+    // production driver is core calling `settleXxx(...)` from
+    // `floor-state.js`. The test mock mirrors that contract: instances
+    // bind via `_bindInstance(fs)` (auto-bind happens in
+    // createFloorStateWithDeps when this mock is on `deps.eventSource`),
+    // and emit drives the bound instances on the relevant structural
+    // events BEFORE running listeners registered with `.on()`.
+    const boundInstances = new Set();
     return {
         on(name, fn) {
             if (!listeners.has(name)) listeners.set(name, new Set());
@@ -85,11 +93,36 @@ function makeEventSource() {
             listeners.get(name)?.delete(fn);
         },
         async emit(name, ...args) {
+            for (const inst of boundInstances) {
+                switch (name) {
+                    case event_types.MESSAGE_DELETED:
+                        await inst.__handleMessageDeleted(args[0]);
+                        break;
+                    case event_types.MESSAGE_SWIPED:
+                        await inst.__handleMessageSwiped();
+                        break;
+                    case event_types.MESSAGE_SWIPE_DELETED:
+                        await inst.__handleSwipeDeleted(args[0]);
+                        break;
+                    case event_types.CHAT_CHANGED:
+                        await inst.__handleChatChanged();
+                        break;
+                    case event_types.CHAT_BRANCH_CREATED:
+                        await inst.__handleBranchCreated(args[0]);
+                        break;
+                }
+            }
             const set = listeners.get(name);
             if (!set) return;
             for (const fn of Array.from(set)) {
                 await fn(...args);
             }
+        },
+        _bindInstance(inst) {
+            boundInstances.add(inst);
+        },
+        _unbindInstance(inst) {
+            boundInstances.delete(inst);
         },
     };
 }

@@ -101,6 +101,7 @@ import {
     getCharacterScenario,
     getCharacterTalkativeness,
 } from '../script.js';
+import { settleChatChanged } from './floor-state.js';
 import { printTagList, createTagMapFromList, applyTagsOnCharacterSelect, tag_map, applyTagsOnGroupSelect, printTagFilters, tag_filter_type } from './tags.js';
 import { FILTER_TYPES, FilterHelper } from './filters.js';
 import { isExternalMediaAllowed } from './chats.js';
@@ -342,6 +343,7 @@ export async function getGroupChat(groupId, reload = false) {
         select_group_chats(groupId, true);
     }
 
+    await settleChatChanged();
     await eventSource.emit(event_types.CHAT_CHANGED, getCurrentChatId());
     if (freshChat) await eventSource.emit(event_types.GROUP_CHAT_CREATED);
 }

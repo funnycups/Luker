@@ -26,6 +26,7 @@ import {
 } from '../script.js';
 
 import { deleteItemizedPromptForMessage } from './itemized-prompts.js';
+import { settleMessageDeleted } from './floor-state.js';
 
 /**
  * Adds one or more messages to the chat with full pipeline processing.
@@ -283,6 +284,7 @@ export async function deleteMessages(index, options = {}) {
     const deletedAssistantSeqFrom = deletedAssistantCount > 0 ? (assistantSeqBefore + 1) : null;
     const deletedAssistantSeqTo = deletedAssistantSeqFrom !== null ? (deletedAssistantSeqFrom + deletedAssistantCount - 1) : null;
 
+    await settleMessageDeleted(chat.length);
     await eventSource.emit(event_types.MESSAGE_DELETED, chat.length, {
     kind: 'delete',
     deletedPlayableSeqFrom,

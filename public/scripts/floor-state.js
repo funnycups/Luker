@@ -3,9 +3,15 @@
  *
  * Each instance owns one chat-state namespace (the "data" namespace) and
  * a private commit log stored in a sibling namespace (`<ns>__floor_log`).
- * The instance subscribes to four chat-structure events on the global
- * eventSource and rebuilds its data namespace by replaying its private
- * log against the current chat's swipe map.
+ * Instances no longer subscribe to the global event bus; instead, every
+ * live instance is registered into a module-level `allInstances` set, and
+ * core code calls the `settle*` exports (`settleMessageDeleted`,
+ * `settleMessageSwiped`, `settleMessageSwipeDeleted`, `settleChatChanged`,
+ * `settleBranchCreated`) **before** the corresponding `eventSource.emit(...)`
+ * notifies plugin listeners. This guarantees that any plugin observing a
+ * structural event sees a fully settled floor-state — there is no longer
+ * a race between floor-state's listener and plugin listeners on the
+ * shared event bus.
  *
  * Why per-instance:
  *  - swipe / delete / chat-change semantics are intrinsically per-namespace;
@@ -15,7 +21,7 @@
  *  - tests can mock the deps cleanly
  *
  * Plugins must call `instance.destroy()` if they want to detach from
- * events (rare; typically the instance lives for the page session).
+ * the registry (rare; typically the instance lives for the page session).
  */
 
 import {
@@ -33,21 +39,94 @@ import {
 const LOG_SUFFIX = '__floor_log';
 
 /**
- * Resolve runtime deps from script.js + events.js. Lazy so test files can
+ * Resolve runtime deps from script.js. Lazy so test files can
  * import this module without pulling in the full app bundle.
+ *
+ * Floor-state no longer subscribes to the global event bus; structural
+ * events are driven by core via the settle* exports below. So
+ * eventSource/event_types are not needed here.
  */
 async function makeDefaultDeps() {
     const script = await import('../script.js');
-    const events = await import('./events.js');
     return {
         getChatState: script.getChatState,
         patchChatState: script.patchChatState,
         updateChatState: script.updateChatState,
         buildObjectPatchOperationsAsync: script.buildObjectPatchOperationsAsync,
-        eventSource: events.eventSource,
-        event_types: events.event_types,
         getChat: () => script.chat,
     };
+}
+
+/**
+ * Module-level registry of all live FloorState instances. Each instance
+ * registers itself in `createFloorStateWithDeps` and removes itself in
+ * `destroy()`. Core code calls the `settle*` exports below to drive every
+ * registered instance through a structural event in lock-step BEFORE the
+ * corresponding `eventSource.emit(...)` notifies plugin subscribers — so
+ * plugin handlers always observe a settled floor-state.
+ *
+ * Each plugin still owns its own instance with its own namespace and ready
+ * gate; the registry only enumerates them.
+ */
+const allInstances = new Set();
+
+/**
+ * Drive every live instance through a MESSAGE_DELETED settle.
+ * Call BEFORE `eventSource.emit(MESSAGE_DELETED, ...)` from core.
+ *
+ * Serial loop: instances live in independent namespaces and don't depend
+ * on each other, but the underlying chat-state writer typically serializes
+ * per-chat anyway, so a parallel `Promise.all` would not buy speed.
+ *
+ * @param {number} newChatLength
+ * @returns {Promise<void>}
+ */
+export async function settleMessageDeleted(newChatLength) {
+    for (const inst of allInstances) {
+        await inst.__handleMessageDeleted(newChatLength);
+    }
+}
+
+/**
+ * Drive every live instance through a MESSAGE_SWIPED settle.
+ * Call BEFORE `eventSource.emit(MESSAGE_SWIPED, ...)` from core.
+ */
+export async function settleMessageSwiped() {
+    for (const inst of allInstances) {
+        await inst.__handleMessageSwiped();
+    }
+}
+
+/**
+ * Drive every live instance through a MESSAGE_SWIPE_DELETED settle.
+ * Call BEFORE `eventSource.emit(MESSAGE_SWIPE_DELETED, ...)` from core.
+ *
+ * @param {{messageId: number, swipeId: number}} payload
+ */
+export async function settleMessageSwipeDeleted(payload) {
+    for (const inst of allInstances) {
+        await inst.__handleSwipeDeleted(payload);
+    }
+}
+
+/**
+ * Drive every live instance through a CHAT_CHANGED settle.
+ * Call BEFORE `eventSource.emit(CHAT_CHANGED, ...)` from core.
+ */
+export async function settleChatChanged() {
+    for (const inst of allInstances) {
+        await inst.__handleChatChanged();
+    }
+}
+
+/**
+ * Drive every live instance through a CHAT_BRANCH_CREATED settle.
+ * Call BEFORE `eventSource.emit(CHAT_BRANCH_CREATED, ...)` from core.
+ */
+export async function settleBranchCreated(payload) {
+    for (const inst of allInstances) {
+        await inst.__handleBranchCreated(payload);
+    }
 }
 
 /**
@@ -279,29 +358,21 @@ export function createFloorStateWithDeps(options, deps) {
         }
     }
 
-    // --- event wiring ---
+    // --- structural-event handlers (driven by core via settle* exports) ---
 
-    const onChatChanged = async () => {
+    const __handleChatChanged = async () => {
         beginPending();
         try { await rematerialize(); }
         finally { endPending(); }
     };
-    const onMessageSwiped = async () => {
+    const __handleMessageSwiped = async () => {
         beginPending();
         try { await rematerialize(); }
         finally { endPending(); }
     };
-    const onMessageDeleted = (newChatLength) => handleMessageDeleted(newChatLength);
-    const onMessageSwipeDeleted = (payload) => handleSwipeDeleted(payload);
-    const onBranchCreated = (payload) => handleBranchCreated(payload);
-
-    runtime.eventSource.on(runtime.event_types.CHAT_CHANGED, onChatChanged);
-    runtime.eventSource.on(runtime.event_types.MESSAGE_SWIPED, onMessageSwiped);
-    runtime.eventSource.on(runtime.event_types.MESSAGE_DELETED, onMessageDeleted);
-    runtime.eventSource.on(runtime.event_types.MESSAGE_SWIPE_DELETED, onMessageSwipeDeleted);
-    if (runtime.event_types.CHAT_BRANCH_CREATED) {
-        runtime.eventSource.on(runtime.event_types.CHAT_BRANCH_CREATED, onBranchCreated);
-    }
+    const __handleMessageDeleted = (newChatLength) => handleMessageDeleted(newChatLength);
+    const __handleSwipeDeleted = (payload) => handleSwipeDeleted(payload);
+    const __handleBranchCreated = (payload) => handleBranchCreated(payload);
 
     // --- public API ---
 
@@ -428,18 +499,12 @@ export function createFloorStateWithDeps(options, deps) {
     }
 
     /**
-     * Detach event listeners. Optional — most instances live for the page session.
+     * Detach from the registry. Optional — most instances live for the page session.
      */
     function destroy() {
         if (destroyed) return;
         destroyed = true;
-        runtime.eventSource.removeListener(runtime.event_types.CHAT_CHANGED, onChatChanged);
-        runtime.eventSource.removeListener(runtime.event_types.MESSAGE_SWIPED, onMessageSwiped);
-        runtime.eventSource.removeListener(runtime.event_types.MESSAGE_DELETED, onMessageDeleted);
-        runtime.eventSource.removeListener(runtime.event_types.MESSAGE_SWIPE_DELETED, onMessageSwipeDeleted);
-        if (runtime.event_types.CHAT_BRANCH_CREATED) {
-            runtime.eventSource.removeListener(runtime.event_types.CHAT_BRANCH_CREATED, onBranchCreated);
-        }
+        allInstances.delete(instance);
         // Force-resolve any pending gate so callers awaiting ready() unblock; in-flight
         // work will complete on its own without further side effects on this instance.
         pendingCount = 0;
@@ -457,7 +522,24 @@ export function createFloorStateWithDeps(options, deps) {
         get,
         ready,
         destroy,
+        // Internal handlers driven by floor-state.settle* — not for plugin use.
+        __handleChatChanged,
+        __handleMessageSwiped,
+        __handleMessageDeleted,
+        __handleSwipeDeleted,
+        __handleBranchCreated,
     });
+
+    allInstances.add(instance);
+
+    // Test-only convenience: if the test mock event source exposes
+    // `_bindInstance`, auto-register so existing tests that drive structural
+    // events via `eventSource.emit(...)` continue to work without touching
+    // every test setup. Production deps don't include an eventSource, so
+    // this branch is silently inert in the real app.
+    if (typeof deps?.eventSource?._bindInstance === 'function') {
+        deps.eventSource._bindInstance(instance);
+    }
 
     // Initial rematerialize: catch the data namespace up to the persisted log
     // so `fs.get()` reflects the source of truth even when the instance is

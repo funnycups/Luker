@@ -300,6 +300,13 @@ import { initDataMaid } from './scripts/data-maid.js';
 import { clearItemizedPrompts, deleteItemizedPromptForMessage, deleteItemizedPrompts, findItemizedPromptSet, initItemizedPrompts, itemizedParams, itemizedPrompts, loadItemizedPrompts, promptItemize, replaceItemizedPromptText, saveItemizedPrompts, swapItemizedPrompts } from './scripts/itemized-prompts.js';
 import { getSystemMessageByType, initSystemMessages, SAFETY_CHAT, sendSystemMessage, system_message_types, system_messages } from './scripts/system-messages.js';
 import { event_types, eventSource } from './scripts/events.js';
+import {
+    settleBranchCreated,
+    settleChatChanged,
+    settleMessageDeleted,
+    settleMessageSwipeDeleted,
+    settleMessageSwiped,
+} from './scripts/floor-state.js';
 import { initAccessibility } from './scripts/a11y.js';
 import { applyStreamFadeIn } from './scripts/util/stream-fadein.js';
 import { initDomHandlers } from './scripts/dom-handlers.js';
@@ -3061,6 +3068,7 @@ export async function deleteLastMessage() {
         : null;
     chat.length = chat.length - 1;
     chatElement.children('.mes').last().remove();
+    await settleMessageDeleted(chat.length);
     await eventSource.emit(event_types.MESSAGE_DELETED, chat.length, {
         kind: 'delete',
         deletedPlayableSeqFrom: deletedPlayableSeq,
@@ -3279,6 +3287,7 @@ export async function deleteMessage(id, swipeDeletionIndex = undefined, askConfi
 
     refreshSwipeButtons();
 
+    await settleMessageDeleted(chat.length);
     await eventSource.emit(event_types.MESSAGE_DELETED, chat.length, {
         kind: 'delete',
         deletedPlayableSeqFrom: deletedPlayableSeq,
@@ -3309,6 +3318,7 @@ export async function reloadCurrentChatUnsafe() {
         restoreNeutralChat();
         await getCharacters();
         await printMessages();
+        await settleChatChanged();
         await eventSource.emit(event_types.CHAT_CHANGED, getCurrentChatId());
     }
 
@@ -6903,6 +6913,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             if (!patchedRemove) {
                 await saveChatConditional();
             }
+            await settleMessageDeleted(chat.length);
             await eventSource.emit(event_types.MESSAGE_DELETED, chat.length, {
                 kind: 'delete',
                 deletedPlayableSeqFrom: deletedPlayableSeq,
@@ -12612,6 +12623,7 @@ async function getChatResult() {
     await printMessages();
     select_selected_character(this_chid);
 
+    await settleChatChanged();
     await eventSource.emit(event_types.CHAT_CHANGED, (getCurrentChatId()));
     if (freshChat) await eventSource.emit(event_types.CHAT_CREATED);
 
@@ -14890,6 +14902,7 @@ export async function deleteSwipe(swipeId = null, messageId = chat.length - 1) {
     messageId = Number(messageId);
     swipeId = Number(swipeId);
     message.swipe_id = newSwipeId;
+    await settleMessageSwipeDeleted({ messageId, swipeId, newSwipeId });
     await eventSource.emit(event_types.MESSAGE_SWIPE_DELETED, { messageId, swipeId, newSwipeId });
 
     if (swipeId === currentSwipeId) {
@@ -15857,6 +15870,7 @@ export async function swipe(event, direction, { source, repeated, message = chat
             appendMediaToMessage(chat[mesId], thisMesDiv);
         }
 
+        await settleMessageSwiped();
         await eventSource.emit(event_types.MESSAGE_SWIPED, mesId, {
             pendingGeneration: Boolean(run_generate),
             previousSwipeId: originalSwipeId,
@@ -16338,6 +16352,7 @@ export async function closeCurrentChat() {
         selected_button = 'characters';
         $('#rm_button_selected_ch').children('h2').text('');
         select_rm_characters();
+        await settleChatChanged();
         await eventSource.emit(event_types.CHAT_CHANGED, getCurrentChatId());
         return true;
     } else {
@@ -16595,6 +16610,7 @@ async function removeCharacterFromUI() {
     await getCharacters();
     await printMessages();
     saveSettingsDebounced();
+    await settleChatChanged();
     await eventSource.emit(event_types.CHAT_CHANGED, getCurrentChatId());
 }
 
@@ -18300,6 +18316,7 @@ jQuery(async function () {
             chat_metadata.tainted = true;
             await saveChatConditional();
             chatElement.scrollTop(chatElement[0].scrollHeight);
+            await settleMessageDeleted(chat.length);
             await eventSource.emit(event_types.MESSAGE_DELETED, chat.length, {
                 kind: 'delete',
                 deletedPlayableSeqFrom: deletedPlayableCount > 0 ? deletedPlayablePrefix + 1 : null,

@@ -19,6 +19,7 @@ import {
     isCharacterFavorite,
     getCurrentChatDetails,
 } from '../script.js';
+import { settleBranchCreated } from './floor-state.js';
 import { humanizedDateTime } from './RossAscends-mods.js';
 import {
     DEFAULT_AUTO_MODE_DELAY,
@@ -274,13 +275,15 @@ export async function createBranch(mesId, { swipeId = null } = {}) {
         await saveChat({ chatName: name, withMetadata: newMetadata, mesId, chatData: branchChatSnapshot });
     }
     if (sourceTarget && targetTarget) {
-        await eventSource.emit(event_types.CHAT_BRANCH_CREATED, {
+        const branchPayload = {
             mesId,
             branchName: name,
             assistantMessageCount,
             sourceTarget,
             targetTarget,
-        });
+        };
+        await settleBranchCreated(branchPayload);
+        await eventSource.emit(event_types.CHAT_BRANCH_CREATED, branchPayload);
     }
     // append to branches list if it exists
     // otherwise create it
