@@ -3138,7 +3138,6 @@ async function generatePicture(initiator, args, trigger, message, callback) {
         startGenerationTracking(abortController);
         abortController.signal.addEventListener('abort', () => endGenerationTrackingEarly(abortController), { once: true });
         console.debug(`SD: generatePicture — registered abort controller, activeGenerations=${activeGenerations}`);
-        $(stopButton).show();
 
         if (typeof args?._abortController?.addEventListener === 'function') {
             args._abortController.addEventListener('abort', stopListener);
