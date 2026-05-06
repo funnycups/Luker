@@ -100,3 +100,8 @@
 .var-ops-panel__add-button {
     font-size: 0.9em;
 }
+
+.var-ops-panel__add-button,
+.var-ops-panel__delete {
+    white-space: nowrap;
+}

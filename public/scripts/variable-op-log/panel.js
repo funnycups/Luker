@@ -18,6 +18,7 @@
 
 import { chat, chat_metadata, eventSource, event_types, saveChatConditional } from '../../script.js';
 import { callGenericPopup, POPUP_TYPE } from '../popup.js';
+import { t, translate } from '../i18n.js';
 import { rebuildVariablesFromChat } from './index.js';
 
 const OP_TYPES = ['setvar', 'addvar', 'incvar', 'decvar', 'deletevar'];
@@ -41,15 +42,17 @@ export async function openVarOpsPanel(messageId) {
     if (!Array.isArray(message.extra.var_ops)) message.extra.var_ops = [];
 
     const root = $('<div class="var-ops-panel"></div>');
-    const header = $(`
-        <div class="var-ops-panel__header">
-            <div class="var-ops-panel__title">Variable operations on message #${messageId}</div>
-            <div class="var-ops-panel__hint">Changes apply when you click Save. The variables cache will be rebuilt from all surviving ops.</div>
-        </div>
-    `);
+    const header = $('<div class="var-ops-panel__header"></div>');
+    $('<div class="var-ops-panel__title"></div>')
+        .text(t`Variable operations on message #${messageId}`)
+        .appendTo(header);
+    $('<div class="var-ops-panel__hint"></div>')
+        .text(translate('Changes apply when you click Save. The variables cache will be rebuilt from all surviving ops.'))
+        .appendTo(header);
     const list = $('<div class="var-ops-panel__list"></div>');
     const addBar = $('<div class="var-ops-panel__add-bar"></div>');
-    const addButton = $('<div class="menu_button var-ops-panel__add-button"><i class="fa-solid fa-plus"></i> Add operation</div>');
+    const addButton = $('<div class="menu_button var-ops-panel__add-button"><i class="fa-solid fa-plus"></i> </div>');
+    addButton[0].appendChild(document.createTextNode(translate('Add operation')));
     addBar.append(addButton);
 
     root.append(header).append(list).append(addBar);
@@ -60,7 +63,8 @@ export async function openVarOpsPanel(messageId) {
     function renderList() {
         list.empty();
         if (workingOps.length === 0) {
-            list.append('<div class="var-ops-panel__empty">No variable operations on this message.</div>');
+            list.append($('<div class="var-ops-panel__empty"></div>')
+                .text(translate('No variable operations on this message.')));
             return;
         }
         workingOps.forEach((op, idx) => {
@@ -88,7 +92,8 @@ export async function openVarOpsPanel(messageId) {
             onChange(next);
         });
 
-        const keyInput = $('<input type="text" class="var-ops-panel__key text_pole" placeholder="key"/>')
+        const keyInput = $('<input type="text" class="var-ops-panel__key text_pole"/>')
+            .attr('placeholder', translate('key', 'var_ops_panel.placeholder.key'))
             .val(op.key ?? '');
         keyInput.on('change', function () {
             const next = { ...op, key: String(this.value).trim() };
@@ -96,27 +101,29 @@ export async function openVarOpsPanel(messageId) {
         });
 
         const row1 = $('<div class="var-ops-panel__row-line"></div>')
-            .append('<span class="var-ops-panel__label">op</span>')
+            .append($('<span class="var-ops-panel__label"></span>').text(translate('op', 'var_ops_panel.label.op')))
             .append(opSelect)
-            .append('<span class="var-ops-panel__label">key</span>')
+            .append($('<span class="var-ops-panel__label"></span>').text(translate('key', 'var_ops_panel.label.key')))
             .append(keyInput);
 
         row.append(row1);
 
         if (opHasValue(op.op)) {
-            const valueInput = $('<textarea class="var-ops-panel__value text_pole" rows="1" placeholder="value"></textarea>')
+            const valueInput = $('<textarea class="var-ops-panel__value text_pole" rows="1"></textarea>')
+                .attr('placeholder', translate('value', 'var_ops_panel.placeholder.value'))
                 .val(op.value ?? '');
             valueInput.on('change', function () {
                 const next = { ...op, value: String(this.value) };
                 onChange(next);
             });
             const row2 = $('<div class="var-ops-panel__row-line"></div>')
-                .append('<span class="var-ops-panel__label">value</span>')
+                .append($('<span class="var-ops-panel__label"></span>').text(translate('value', 'var_ops_panel.label.value')))
                 .append(valueInput);
             row.append(row2);
         }
 
-        const delBtn = $('<div class="menu_button var-ops-panel__delete"><i class="fa-solid fa-trash"></i> Remove</div>');
+        const delBtn = $('<div class="menu_button var-ops-panel__delete"><i class="fa-solid fa-trash"></i> </div>');
+        delBtn[0].appendChild(document.createTextNode(translate('Remove')));
         delBtn.on('click', () => onDelete());
         const actions = $('<div class="var-ops-panel__row-actions"></div>').append(delBtn);
         row.append(actions);
@@ -133,7 +140,6 @@ export async function openVarOpsPanel(messageId) {
 
     const result = await callGenericPopup(root, POPUP_TYPE.CONFIRM, '', {
         wide: true,
-        large: true,
         okButton: 'Save',
         cancelButton: 'Cancel',
     });
