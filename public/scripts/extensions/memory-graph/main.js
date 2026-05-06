@@ -581,7 +581,6 @@ const memoryStoreCache = new Map();
 const memoryStoreTargets = new Map();
 const memoryLoadTasks = new Map();
 const rollbackHistoryCache = new Map();
-const pendingMutationInvalidations = new Map();
 const scheduledExtractionSingleFlightStates = new Map();
 let activeExtractionToast = null;
 let activeRecallToast = null;
@@ -1672,12 +1671,6 @@ async function inheritMemoryStoreForBranch(context, payload) {
     memoryStoreCache.delete(targetChatKey);
     clearCachedMeta(targetChatKey);
     clearRollbackHistory(targetChatKey);
-    const pendingInvalidation = pendingMutationInvalidations.get(targetChatKey);
-    if (pendingInvalidation?.timer) {
-        clearTimeout(pendingInvalidation.timer);
-    }
-    pendingInvalidation?.resolveDone?.();
-    pendingMutationInvalidations.delete(targetChatKey);
     if (extractionTimers.has(targetChatKey)) {
         clearTimeout(extractionTimers.get(targetChatKey));
         extractionTimers.delete(targetChatKey);
@@ -6945,13 +6938,10 @@ function alignStoreCoverageToChat(store, context, settings = null) {
 }
 
 async function ensureStoreSyncedWithChat(context, targetHint = null) {
-    const chatKey = getChatKey(context, targetHint);
-    if (chatKey && chatKey !== 'invalid_target') {
-        const pending = pendingMutationInvalidations.get(chatKey);
-        if (pending?.donePromise) {
-            await pending.donePromise;
-        }
-    }
+    // floor-state's settle is driven by core BEFORE this function ever runs
+    // (see settleMessageDeleted/settleMessageSwiped/etc in floor-state.js),
+    // so the data namespace is already current. We just need to load the
+    // runtime store from cache or rebuild it from floor-state.
     const loaded = await ensureMemoryStoreLoaded(context, { targetHint });
     let store = getMemoryStore(context, targetHint) || loaded || null;
     if (!store) {
@@ -13549,17 +13539,17 @@ jQuery(() => {
     ensureUi();
     void syncPersistentProjectionForCurrentChat();
 
-    // ORDER MATTERS for the migration path. Floor-state's CHAT_CHANGED
-    // handler clobbers the data namespace with `{}` whenever the log is
-    // empty (which is the case for legacy chats whose log doesn't exist
-    // yet). If we let floor-state mount first and run its rematerialize,
-    // it would overwrite the legacy `opLog` payload sitting in the main
-    // namespace before our migration could read it.
+    // ORDER MATTERS for the migration path. When core fires settleChatChanged
+    // it walks every floor-state instance through `rematerialize`, which
+    // would clobber the data namespace with `{}` if the log were empty
+    // (the legacy-chat case). Floor-state's defensive skip preserves the
+    // legacy `opLog` payload when its log namespace has never been written,
+    // but we still need our migration to run BEFORE any plugin caches
+    // re-read from the data namespace.
     //
     // We therefore: (a) subscribe memory-graph's CHAT_CHANGED handler
     // BEFORE mounting floor-state — its `migrateLegacyMemoryGraphState`
-    // call runs first on every chat switch, so by the time fs's handler
-    // executes, the new log already exists; (b) run an explicit migration
+    // call runs early on every chat switch; (b) run an explicit migration
     // for the initial chat before mounting the singleton, so the
     // singleton's initial rematerialize sees the migrated log too.
     context.eventSource.on(context.eventTypes.CHAT_CHANGED, async () => {
@@ -13586,8 +13576,9 @@ jQuery(() => {
     // Mount the floor-state singleton AFTER subscribing the migration
     // handler. The initial migration writes the log for the current chat,
     // then mounting the instance runs its initial rematerialize against
-    // the migrated log. From this point onward, fs's CHAT_CHANGED handler
-    // executes after ours on every switch.
+    // the migrated log. From this point onward, our CHAT_CHANGED handler
+    // runs after core's settleChatChanged on every switch, and is followed
+    // by the cache-refresh handler below.
     void (async () => {
         const initialChatKey = getChatKey(context);
         if (initialChatKey && initialChatKey !== 'invalid_target') {
@@ -13615,9 +13606,9 @@ jQuery(() => {
 
     /**
      * Refresh the in-memory runtime store cache for `chatKey` from the
-     * floor-state graph payload + the __meta sidecar. Awaits fs.ready() so
-     * any floor-state-driven rematerialize (CHAT_CHANGED, MESSAGE_DELETED,
-     * MESSAGE_SWIPED, MESSAGE_SWIPE_DELETED) has settled before we read.
+     * floor-state graph payload + the __meta sidecar. Awaits fs.ready()
+     * so any in-flight write (a concurrent fs.patch from extraction) has
+     * landed before we read.
      */
     const refreshMemoryStoreCacheFromFloorState = async (runtimeContext, chatKey) => {
         if (!chatKey || chatKey === 'invalid_target') return null;
@@ -13687,9 +13678,20 @@ jQuery(() => {
      * MESSAGE_SWIPED / MESSAGE_SWIPE_DELETED. Memory-graph's job here is only
      * to flush its read-side caches and reset its non-floor metadata.
      */
-    const queueMutationInvalidation = (fromSeq = null, { scheduleReplay = false } = {}) => {
-        const runtimeContext = getContext();
-        const chatKey = getChatKey(runtimeContext);
+    /**
+     * Apply a mutation invalidation inline. Called from MESSAGE_DELETED /
+     * MESSAGE_SWIPED / MESSAGE_RECEIVED listeners; awaited by `eventSource.emit`,
+     * so the Generate flow waits for cache + lorebook to refresh before
+     * proceeding to world-info scan.
+     *
+     * Floor-state has already settled by the time this runs (core invokes
+     * `settleMessageDeleted/Swiped/SwipeDeleted` before the corresponding
+     * `eventSource.emit`), so `refreshMemoryStoreCacheFromFloorState` reads
+     * the post-truncate / post-swipe data namespace.
+     */
+    const applyMutationInvalidation = async (fromSeq = null, { scheduleReplay = false } = {}) => {
+        const liveContext = getContext();
+        const chatKey = getChatKey(liveContext);
         if (!chatKey || chatKey === 'invalid_target') {
             latestRecallSnapshot = null;
             return;
@@ -13697,91 +13699,60 @@ jQuery(() => {
         const normalizedFromSeq = Number.isFinite(Number(fromSeq)) && Number(fromSeq) > 0
             ? Math.max(1, Math.floor(Number(fromSeq)))
             : null;
-        const existing = pendingMutationInvalidations.get(chatKey);
-        if (existing) {
-            existing.fromSeq = normalizedFromSeq === null
-                ? existing.fromSeq
-                : (existing.fromSeq === null ? normalizedFromSeq : Math.min(existing.fromSeq, normalizedFromSeq));
-            existing.scheduleReplay = Boolean(existing.scheduleReplay || scheduleReplay);
-            return;
+        const isCurrentChat = getChatKey(liveContext) === chatKey;
+        const preserveLatestRecallSnapshot = shouldPreserveLatestRecallSnapshotForAssistantMutation(liveContext, normalizedFromSeq);
+        if (!preserveLatestRecallSnapshot) {
+            latestRecallSnapshot = null;
         }
-        const task = {
-            fromSeq: normalizedFromSeq,
-            scheduleReplay: Boolean(scheduleReplay),
-            timer: null,
-            donePromise: null,
-            resolveDone: null,
-        };
-        task.donePromise = new Promise((resolve) => {
-            task.resolveDone = resolve;
-            task.timer = setTimeout(async () => {
+        if (extractionTimers.has(chatKey)) {
+            clearTimeout(extractionTimers.get(chatKey));
+            extractionTimers.delete(chatKey);
+        }
+        if (activeExtractionAbortController && !activeExtractionAbortController.signal.aborted) {
+            if (isCurrentChat) {
+                clearRuntimeInfoToast('extraction');
+            }
+            activeExtractionAbortController.abort();
+        }
+        let store = null;
+        try {
+            store = await refreshMemoryStoreCacheFromFloorState(liveContext, chatKey);
+        } catch (error) {
+            console.warn(`[${MODULE_NAME}] Failed to refresh memory store cache after mutation`, error);
+        }
+        if (!store) {
+            store = memoryStoreCache.get(chatKey) || null;
+        }
+        if (store) {
+            updateStoreSourceState(store, liveContext);
+            store.lastRecallTrace = [];
+            store.lastRecallProjection = null;
+            try {
+                await persistMetaForChatKey(liveContext, chatKey, store);
+            } catch (error) {
+                console.warn(`[${MODULE_NAME}] Failed to persist meta after mutation for ${chatKey}`, error);
+            }
+            if (isCurrentChat) {
+                const effectiveSettings = getEffectiveSettings(liveContext, getSettings());
                 try {
-                    pendingMutationInvalidations.delete(chatKey);
-                    const liveContext = getContext();
-                    const isCurrentChat = getChatKey(liveContext) === chatKey;
-                    const preserveLatestRecallSnapshot = shouldPreserveLatestRecallSnapshotForAssistantMutation(liveContext, task.fromSeq);
-                    if (!preserveLatestRecallSnapshot) {
-                        latestRecallSnapshot = null;
+                    if (!effectiveSettings.enabled) {
+                        await clearAllMemoryLorebookProjection(liveContext, effectiveSettings);
+                    } else {
+                        await clearRuntimeLorebookProjection(liveContext, effectiveSettings);
+                        await syncPersistentLorebookProjection(liveContext, effectiveSettings, store);
                     }
-                    if (extractionTimers.has(chatKey)) {
-                        clearTimeout(extractionTimers.get(chatKey));
-                        extractionTimers.delete(chatKey);
-                    }
-                    if (activeExtractionAbortController && !activeExtractionAbortController.signal.aborted) {
-                        if (isCurrentChat) {
-                            clearRuntimeInfoToast('extraction');
-                        }
-                        activeExtractionAbortController.abort();
-                    }
-                    let store = null;
-                    try {
-                        store = await refreshMemoryStoreCacheFromFloorState(liveContext, chatKey);
-                    } catch (error) {
-                        console.warn(`[${MODULE_NAME}] Failed to refresh memory store cache after mutation`, error);
-                    }
-                    if (!store) {
-                        store = memoryStoreCache.get(chatKey) || null;
-                    }
-                    if (store) {
-                        updateStoreSourceState(store, liveContext);
-                        store.lastRecallTrace = [];
-                        store.lastRecallProjection = null;
-                        try {
-                            await persistMetaForChatKey(liveContext, chatKey, store);
-                        } catch (error) {
-                            console.warn(`[${MODULE_NAME}] Failed to persist meta after mutation for ${chatKey}`, error);
-                        }
-                        if (isCurrentChat) {
-                            const effectiveSettings = getEffectiveSettings(liveContext, getSettings());
-                            try {
-                                if (!effectiveSettings.enabled) {
-                                    await clearAllMemoryLorebookProjection(liveContext, effectiveSettings);
-                                } else {
-                                    await clearRuntimeLorebookProjection(liveContext, effectiveSettings);
-                                    await syncPersistentLorebookProjection(liveContext, effectiveSettings, store);
-                                }
-                            } catch (error) {
-                                console.warn(`[${MODULE_NAME}] Lorebook projection sync failed after mutation`, error);
-                            }
-                        }
-                    }
-                    refreshUiStats();
-                    if (isCurrentChat) {
-                        updateUiStatus(mutationStatusText);
-                    }
-                    if (task.scheduleReplay && isCurrentChat) {
-                        setTimeout(() => {
-                            if (!generationInProgress) {
-                                scheduleExtraction(getContext());
-                            }
-                        }, 0);
-                    }
-                } finally {
-                    resolve();
+                } catch (error) {
+                    console.warn(`[${MODULE_NAME}] Lorebook projection sync failed after mutation`, error);
                 }
-            }, 0);
-        });
-        pendingMutationInvalidations.set(chatKey, task);
+            }
+        }
+        refreshUiStats();
+        if (isCurrentChat) {
+            updateUiStatus(mutationStatusText);
+        }
+        if (scheduleReplay && isCurrentChat && !generationInProgress) {
+            scheduleExtraction(getContext());
+        }
     };
     if (context.eventTypes.GENERATION_STARTED) {
         context.eventSource.on(context.eventTypes.GENERATION_STARTED, () => {
@@ -13811,10 +13782,11 @@ jQuery(() => {
             }
         });
     }
-    // Floor-state owns the graph payload's response to the four structural
-    // events (CHAT_CHANGED, MESSAGE_DELETED, MESSAGE_SWIPED,
-    // MESSAGE_SWIPE_DELETED). Memory-graph subscribes to a subset of those
-    // for its own non-graph state: cache invalidation + extraction restart.
+    // Floor-state has already settled (driven by core via settleXxx) before
+    // these listeners run. Our work here is the non-graph state: cache
+    // invalidation, lorebook re-projection, extraction restart. We do it
+    // inline (await it as part of emit) so prompt build downstream sees
+    // a consistent runtime store.
     context.eventSource.on(context.eventTypes.MESSAGE_DELETED, async (_messageCount, mutationMeta) => {
         const runtimeContext = getContext();
         const assistantFromSeq = Number(mutationMeta?.deletedAssistantSeqFrom || 0);
@@ -13822,30 +13794,22 @@ jQuery(() => {
         const fromSeq = Number.isFinite(assistantFromSeq) && assistantFromSeq > 0
             ? assistantFromSeq
             : findAssistantSeqFromPlayableSeq(runtimeContext, playableFromSeq);
-        queueMutationInvalidation(fromSeq, { scheduleReplay: true });
+        await applyMutationInvalidation(fromSeq, { scheduleReplay: true });
     });
     if (context.eventTypes.MESSAGE_SWIPED) {
         context.eventSource.on(context.eventTypes.MESSAGE_SWIPED, async (messageId, _meta) => {
-            // Both the pendingGeneration and idle-swipe cases collapse to the
-            // same response now: floor-state filters commits by (floor,
-            // swipeId) on its own MESSAGE_SWIPED handler, so the swipe-cache
-            // gymnastics from the legacy implementation are gone. We only
-            // need to flush our read-side cache + extraction state. The bug
-            // about regenerate getting `swipe_cache_hit` is naturally fixed
-            // because the swipe_tail_cache that misidentified prefixes no
-            // longer exists.
             const fromSeq = findAffectedAssistantSeqFromMessageIndex(getContext(), messageId);
-            queueMutationInvalidation(fromSeq, { scheduleReplay: true });
+            await applyMutationInvalidation(fromSeq, { scheduleReplay: true });
         });
     }
     if (context.eventTypes.MESSAGE_RECEIVED) {
-        context.eventSource.on(context.eventTypes.MESSAGE_RECEIVED, (messageId, generationType) => {
+        context.eventSource.on(context.eventTypes.MESSAGE_RECEIVED, async (messageId, generationType) => {
             const normalizedType = String(generationType || '').trim().toLowerCase();
             if (!['swipe', 'continue', 'append', 'appendfinal'].includes(normalizedType)) {
                 return;
             }
             const fromSeq = findAffectedAssistantSeqFromMessageIndex(getContext(), messageId);
-            queueMutationInvalidation(fromSeq, { scheduleReplay: true });
+            await applyMutationInvalidation(fromSeq, { scheduleReplay: true });
         });
     }
     if (context.eventTypes.PRESET_CHANGED) {
@@ -13867,9 +13831,10 @@ jQuery(() => {
     context.eventSource.on(context.eventTypes.CHAT_CHANGED, async () => {
         // The pre-fs-mount CHAT_CHANGED handler at the top of jQuery init
         // already runs migration; this listener fires after both that one
-        // and floor-state's own rematerialize, so by now fs.get() reflects
-        // the new chat. Our job here is to refresh the runtime store cache
-        // and trigger UI updates.
+        // and core's settleChatChanged (which drives floor-state
+        // instances), so by now fs.get() reflects the new chat. Our job
+        // here is to refresh the runtime store cache and trigger UI
+        // updates.
         const runtimeContext = getContext();
         const newChatKey = getChatKey(runtimeContext);
         if (newChatKey && newChatKey !== 'invalid_target') {

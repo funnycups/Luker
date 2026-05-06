@@ -115,8 +115,9 @@ let floorStatePromise = null;
 /**
  * Lazy singleton — first call kicks off `createFloorState`, subsequent
  * calls reuse the same Promise. The instance lives for the page session;
- * it auto-rebinds to the active chat via its own CHAT_CHANGED listener,
- * so callers don't need to re-create it on chat switches.
+ * its data namespace is kept in sync with chat structure by core driving
+ * `settleXxx` from `floor-state.js` on every structural transition, so
+ * callers don't need to re-create it on chat switches.
  */
 export async function getFloorStateInstance(context) {
     if (!floorStatePromise) {
