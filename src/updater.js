@@ -201,8 +201,17 @@ async function runGitUpdateFlow(runId) {
         appendGitUpdateLog('info', `Branch: ${branch}`);
 
         const status = await repo.status();
-        if (status.files.length > 0) {
-            throw new Error('Working tree has local changes. Commit or stash them before running auto update.');
+        const hasLocalChanges = status.files.length > 0;
+        if (hasLocalChanges) {
+            appendGitUpdateLog('warn', `Working tree has ${status.files.length} local change(s); will auto-stash during update.`);
+            const preview = status.files.slice(0, 20);
+            for (const file of preview) {
+                const flags = `${file.index || ' '}${file.working_dir || ' '}`;
+                appendGitUpdateLog('warn', `  [${flags}] ${file.path}`);
+            }
+            if (status.files.length > preview.length) {
+                appendGitUpdateLog('warn', `  ... and ${status.files.length - preview.length} more file(s)`);
+            }
         }
 
         let trackingBranch = '';
@@ -232,7 +241,10 @@ async function runGitUpdateFlow(runId) {
         }
 
         appendGitUpdateLog('info', 'Pulling latest commits...');
-        await repo.pull(['--ff-only', '--tags']);
+        const pullArgs = hasLocalChanges
+            ? ['--rebase', '--autostash', '--tags']
+            : ['--ff-only', '--tags'];
+        await repo.pull(pullArgs);
 
         const currentHead = (await repo.revparse(['HEAD'])).trim();
         const updated = previousHead !== currentHead;
