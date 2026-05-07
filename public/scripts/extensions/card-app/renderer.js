@@ -75,9 +75,16 @@ function pushToRenderer(messageId, isStreaming = false) {
 /**
  * Handle CHARACTER_MESSAGE_RENDERED event.
  * Fired when a character message is fully rendered (non-streaming) or after streaming ends.
+ * Skipped for type='first_message' — that emit is a post-render notification
+ * from getChat() (so op-log / regex listeners process the freshly created
+ * first_mes), not a "new message arrived" signal. CardApps must seed history
+ * through ctx.getHistory() on init, so forwarding this event would render
+ * first_mes a second time.
  * @param {number} messageId
+ * @param {string} [type]
  */
-function onCharacterMessageRendered(messageId) {
+function onCharacterMessageRendered(messageId, type) {
+    if (type === 'first_message') return;
     pushToRenderer(messageId, false);
 }
 
