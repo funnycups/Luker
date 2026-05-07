@@ -12623,6 +12623,17 @@ async function getChatResult() {
     if (!chatServerState.hasMore) {
         chatServerState.nextOlderIndex = 0;
     }
+
+    // Op-log scan first_mes BEFORE printMessages renders it. messageFormatting
+    // mutates chat[0].mes for messageId === 0 (substituteParams in-place strips
+    // its setvar macros), so extracting after rendering would see a cleaned
+    // mes and produce no var_ops — leaving chat[0].extra.var_ops empty and
+    // making subsequent rebuildVariables calls (e.g. on swipe) lose the
+    // first_mes bootstrap entirely.
+    if (chat.length === 1 && typeof chat[0]?.mes === 'string') {
+        extractMessageById(0);
+    }
+
     await loadItemizedPrompts(getCurrentChatId());
     await printMessages();
     select_selected_character(this_chid);
@@ -12633,7 +12644,6 @@ async function getChatResult() {
 
     if (chat.length === 1) {
         const chat_id = (chat.length - 1);
-        extractMessageById(chat_id);
         await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, 'first_message');
         await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, 'first_message');
     }
