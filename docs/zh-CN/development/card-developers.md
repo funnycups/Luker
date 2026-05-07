@@ -54,11 +54,11 @@ Luker 支持在角色卡中绑定推荐的生成预设和用户人设。当用�
 - **推荐预设**：指定最适合该角色的生成预设（温度、采样参数等）
 - **推荐人设**：指定与角色互动时建议使用的用户人设
 
-这些绑定通过[角色卡编辑助手](/zh-CN/features/card-editor)的「绑定预设」面板进行配置。
+这些绑定通过[角色卡编辑助手](/zh-CN/features/card-editor/)的「绑定预设」面板进行配置。
 
 ## 配置编排工作流
 
-[编排器](/zh-CN/features/orchestrator)允许角色卡创作者定义复杂的提示词编排工作流。通过编排器，你可以：
+[编排器](/zh-CN/features/orchestrator/)允许角色卡创作者定义复杂的提示词编排工作流。通过编排器，你可以：
 
 - 定义多步骤的提示词处理管线
 - 在生成前后插入自定义逻辑
@@ -219,7 +219,7 @@ CardApp 运行在受限环境中：
 
 ### CardApp Studio
 
-[角色卡编辑助手](/zh-CN/features/card-editor)内置了 CardApp Studio，提供基于 CodeMirror 6 的代码编辑器，支持实时预览和调试。建议使用 Studio 进行 CardApp 开发，而非手动编辑 JSON。
+[CardApp Studio](/zh-CN/features/card-editor/studio) 是开发 CardApp 的完整环境，提供基于 CodeMirror 6 的代码编辑器、实时预览、AI 辅助和 Git 版本历史。建议通过 Studio 开发 CardApp，而非手动编辑 JSON。
 
 ## 世界书最佳实践
 
@@ -266,8 +266,9 @@ Luker 支持将世界书绑定到预设。当用户切换预设时，关联的�
 
 ## 相关页面
 
-- [角色卡编辑助手](/zh-CN/features/card-editor) — 角色卡编辑和 CardApp Studio
+- [CardApp Studio](/zh-CN/features/card-editor/studio) — CardApp 的完整开发环境
+- [角色卡编辑助手](/zh-CN/features/card-editor/) — 编辑助手概览（含弹窗 / Studio 两种模式）
 - [记忆图](/zh-CN/features/memory-graph) — 长期记忆系统
-- [编排器](/zh-CN/features/orchestrator) — 提示词编排工作流
+- [编排器](/zh-CN/features/orchestrator/) — 提示词编排工作流
 - [CardApp](/zh-CN/features/cardapp) — 角色卡内嵌应用详细说明
 - [扩展 API 参考](/zh-CN/development/extension-api/) — API 详细文档

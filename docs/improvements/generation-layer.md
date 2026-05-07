@@ -54,17 +54,33 @@ Different backends return errors in various formats. The Unified Generation Laye
 
 ## Architecture Relationship
 
-```
-Frontend Request
-  ↓
-Individual Backend Endpoint Files (chat-completions.js, kobold.js, etc.)
-  ↓
-Unified Generation Layer
-  ├── Token Metering → Request Inspector
-  ├── Streaming Processing → SSE Parsing
-  └── Error Handling → Normalized Response
-  ↓
-Upstream AI Service
+```d2
+direction: down
+
+FE: "Frontend initiates AI generation request"
+EP: "Per-backend endpoint files\nchat-completions.js / kobold.js / ..." {
+  shape: diamond
+}
+UL: "Unified Generation Layer\n/api/backends/luker-generation" {
+  style.fill: "#e1f5ff"
+}
+INSP: "Request Inspector\nToken metering" {
+  style.fill: "#fff3e0"
+}
+SSE: "SSE stream parsing\nUnified stream handling"
+ERR: "Error normalization"
+UPSTREAM: "Upstream AI service\nOpenAI / Anthropic / Google / Kobold ..."
+
+FE -> EP
+EP -> INSP: "startInspection"
+EP -> UL
+UL -> SSE
+UL -> INSP
+UL -> ERR
+UL -> UPSTREAM
+UPSTREAM -> SSE: "streaming response" {style.stroke-dash: 3}
+SSE -> INSP: "completeInspectionFromStream"
+ERR -> INSP: "failInspection"
 ```
 
 > [!NOTE]

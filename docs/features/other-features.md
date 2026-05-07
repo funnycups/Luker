@@ -40,5 +40,5 @@ This is particularly useful for migrating from other instances or quickly restor
 ## Related Features
 
 - [Search Tools](/features/search-tools) — AI web search capabilities
-- [Character Card Editor](/features/card-editor) — Enhanced character card editing experience
+- [Character Card Editor Assistant](/features/card-editor/) — Enhanced character card editing experience
 - [Memory Graph](/features/memory-graph) — Knowledge graph-based memory system

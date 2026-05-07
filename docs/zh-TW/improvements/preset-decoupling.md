@@ -24,6 +24,43 @@ Luker 將預設中的每個欄位標記為「連線欄位」或「生成參數�
 - **連線欄位** — API 來源、自訂 URL、模型名稱、反向代理位址、代理密碼等
 - **生成參數欄位** — Temperature、Top-P、最大 Token 數等
 
+```d2
+direction: right
+
+ST: "SillyTavern：耦合" {
+  ST_PRESET: "聊天補全預設"
+  ST_GEN: "生成參數\nTemperature / Top-P / ..."
+  ST_CONN: "連線欄位\nAPI URL / Key / Model" {
+    style.fill: "#ffebee"
+    style.stroke: "#c62828"
+  }
+  SWITCH1: "切換預設"
+
+  ST_PRESET -> ST_GEN
+  ST_PRESET -> ST_CONN
+  SWITCH1 -> ST_GEN: {style.stroke-dash: 3}
+  SWITCH1 -> ST_CONN: "意外覆蓋" {style.stroke-dash: 3}
+}
+
+LK: "Luker：解耦" {
+  LK_PRESET: "聊天補全預設"
+  LK_CONN: "連線配置"
+  LK_GEN: "只含生成參數"
+  LK_CONN_F: "只含連線欄位" {
+    style.fill: "#e8f5e9"
+    style.stroke: "#2e7d32"
+  }
+  SWITCH2: "切換預設"
+  SWITCH3: "切換連線"
+
+  LK_PRESET -> LK_GEN
+  LK_CONN -> LK_CONN_F
+  SWITCH2 -> LK_GEN: {style.stroke-dash: 3}
+  SWITCH3 -> LK_CONN_F: {style.stroke-dash: 3}
+  SWITCH2 -- LK_CONN_F: "跳過連線欄位" {style.stroke-dash: 3}
+}
+```
+
 這個分類是預設解耦的基礎——所有涉及預設載入的邏輯都會檢查欄位類型來決定是否套用。
 
 ## 切換預設時自動跳過連線欄位

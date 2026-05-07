@@ -8,6 +8,33 @@ In the traditional approach, each AI generation request is an independent HTTP r
 
 The WS proxy transmits these requests through a **persistent WebSocket connection**. Once a WebSocket connection is established, it remains open, and all generation requests and responses communicate bidirectionally through this connection, without the need to repeatedly establish new connections.
 
+```d2
+direction: down
+
+HTTP: "Traditional HTTP: new connection each time" {
+  H_C1: "Client"
+  H_S1: "Server"
+  H_C2: "Client"
+  H_S2: "Server"
+  H_C3: "Client"
+  H_S3: "Server"
+
+  H_C1 -> H_S1: "new TCP+TLS"
+  H_S1 -> H_C1: "respond + close" {style.stroke-dash: 3}
+  H_C2 -> H_S2: "new TCP+TLS"
+  H_S2 -> H_C2: "respond + close" {style.stroke-dash: 3}
+  H_C3 -> H_S3: "new TCP+TLS"
+}
+
+WS: "WS proxy: persistent tunnel" {
+  W_C: "Client"
+  W_S: "Server"
+
+  W_C <-> W_S: "establish WS once"
+  W_S <-> W_C: "heartbeat + multi-request reuse" {style.stroke-dash: 3}
+}
+```
+
 In simple terms:
 
 - **Traditional HTTP mode**: Each generation → Establish connection → Send request → Receive response → Close connection
@@ -27,9 +54,55 @@ In some network environments, firewalls or enterprise proxies may timeout and di
 
 AI generation typically uses streaming transmission (SSE), and a single generation may last tens of seconds. The WS proxy provides a more reliable underlying channel for streaming transmission.
 
+## Reconnection and Recovery Capabilities
+
+The WS proxy has multiple built-in robustness mechanisms:
+
+### Heartbeat Keep-Alive
+
+After the connection is established, the client and server periodically exchange heartbeat messages to ensure the connection remains active. If either side hasn't received a heartbeat for an extended period, it will proactively check the connection status.
+
+### Automatic Reconnection on Disconnect
+
+When the WebSocket connection is unexpectedly disconnected, the client automatically attempts to re-establish the connection without requiring manual user intervention.
+
+### Stream Offset Recovery
+
+If the connection is briefly interrupted during AI generation, the WS proxy supports **stream offset recovery** — after reconnecting, it continues receiving generated content from the breakpoint rather than starting over. This means that even with a brief network interruption, you won't lose content that has already been generated.
+
 ## Internal Dispatch Mechanism
 
 The WS proxy is two-staged: **the upgrade is gated by a single-use ticket**, and **dispatched requests run through `app.handle()` in-process**. Application-layer middleware (cookieSession, CSRF, login checks) still runs on every dispatched request, but Basic Auth — an HTTP-only gate — is verified once at ticket issuance, so the WS channel itself becomes the auth boundary.
+
+```d2
+direction: down
+
+LOGIN: "Page already logged in\nbasicAuth + cookieSession established"
+TICKET_REQ: "Client POST /api/ws-ticket\n(runs full HTTP middleware stack)"
+TICKET_RESP: "Server mintTicket\n32-byte random hex, 30s TTL, single use" {
+  style.fill: "#fff3e0"
+}
+UP: "new WebSocket(url, [luker-ws-ticket.<ticket>])\nJS puts ticket into Sec-WebSocket-Protocol"
+GATE: "server.on('upgrade')\nparse subprotocol → consumeTicket" {
+  style.fill: "#fff3e0"
+}
+WS_MSG: "WebSocket message\nchannel is now trusted"
+
+DISPATCH: "Dispatch path" {
+  GOOD_MOCK: "Build mock req/res\ntag with WS_PROXY_AUTH_BYPASS Symbol"
+  GOOD_HANDLE: "app.handle(req, res)"
+  GOOD_BASIC: "Basic Auth middleware\nsees Symbol → short-circuit"
+  GOOD_REST: "cookieSession / CSRF /\nrequireLogin run normally"
+  GOOD_RES: "Streaming chunks tunneled back over WS" {
+    style.fill: "#e8f5e9"
+  }
+  GOOD_MOCK -> GOOD_HANDLE -> GOOD_BASIC -> GOOD_REST -> GOOD_RES
+}
+
+LOGIN -> TICKET_REQ -> TICKET_RESP -> UP -> GATE
+GATE -> WS_MSG: "pass"
+WS_MSG -> DISPATCH.GOOD_MOCK: "dispatch"
+```
 
 ### Why a ticket and not the `Authorization` header
 
@@ -63,37 +136,13 @@ Native browser `WebSocket` does not let JavaScript set HTTP headers, so the upgr
 - **The Symbol cannot be forged.** `WS_PROXY_AUTH_BYPASS` is a module-private `Symbol`; no header, query parameter, or body field can install a same-key property on the request object.
 - **Application-layer middleware still runs.** cookieSession, CSRF, setUserData, and requireLogin gate every dispatched request regardless of the bypass marker. Unauthenticated callers — even those holding a valid ticket — are still rejected.
 
-### Cookie and CSRF Forwarding
+### Connection Robustness
 
-Cookies and the CSRF token are extracted from the WS connection context (the upgrade request headers and URL query parameters) and injected into the mock request headers. This ensures the dispatched request carries the same authentication context as the original WS connection, without requiring the client to re-send credentials per request.
+- **Heartbeat keepalive**: Client and server periodically exchange heartbeat messages, preventing intermediate network devices from timing out idle connections
+- **Stream offset recovery**: If the connection briefly drops mid-generation, the client can reconnect and resume from the breakpoint
+- **Job cleanup**: Stale jobs are detected via the `lastActivity` timestamp rather than `createdAt`, ensuring active long-running generations are never killed by accident
+- **Re-mint ticket on reconnect**: Each reconnection first calls `POST /api/ws-ticket` for a fresh ticket; the old ticket has already been consumed and cannot be reused.
 
-### Heartbeat and Keepalive
-
-To prevent spurious disconnects (code=1006) caused by NAT timeouts, idle proxies, or network switches, the server sends WebSocket protocol-level pings every 30 seconds. The application-level `ping`/`pong` message pair provides an additional keepalive layer. Both mechanisms ensure dead TCP connections are detected promptly, allowing the client to trigger reconnection before user-visible failures occur.
-
-### Stream Offset Recovery
-
-If a WS connection drops mid-stream, the backend keeps the internal dispatch running and buffers all response chunks. When the client reconnects and sends a `{ type: "resume", id, fromChunk }` message, buffered data starting at the specified offset is replayed and live streaming continues. This means even a brief network interruption does not lose content that has already been generated.
-
-### Job Cleanup
-
-Orphaned jobs (those with no WS connection attached) are cleaned up based on the `lastActivity` timestamp rather than `createdAt`. A job is considered stale if it has been idle (no chunks, no head, no end event) for longer than the orphan TTL, regardless of when it was created. Active jobs with a live WS connection are never killed by the cleanup interval.
-
-## Reconnection and Recovery Capabilities
-
-The WS proxy has multiple built-in robustness mechanisms:
-
-### Heartbeat Keep-Alive
-
-After the connection is established, the client and server periodically exchange heartbeat messages to ensure the connection remains active. If either side hasn't received a heartbeat for an extended period, it will proactively check the connection status.
-
-### Automatic Reconnection on Disconnect
-
-When the WebSocket connection is unexpectedly disconnected, the client automatically attempts to re-establish the connection without requiring manual user intervention.
-
-### Stream Offset Recovery
-
-If the connection is briefly interrupted during AI generation, the WS proxy supports **stream offset recovery** — after reconnecting, it continues receiving generated content from the breakpoint rather than starting over. This means that even with a brief network interruption, you won't lose content that has already been generated.
 
 ## Use Cases
 

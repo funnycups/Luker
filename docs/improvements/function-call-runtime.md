@@ -10,6 +10,41 @@ The Function Call Runtime provides a unified framework for managing tool registr
 - **Protocol-transparent** — Upper-layer tools don't need to care whether the underlying protocol uses native tool calls or text-based protocols
 - **Streaming-compatible** — Supports tool call parsing and normalization in streaming responses
 
+```d2
+direction: down
+
+REG: "Register tool · Unified schema"
+DECIDE: "Model supports native tool call?" {
+  shape: diamond
+}
+
+NATIVE: "Native mode" {
+  style.fill: "#e8f5e9"
+  N_SCHEMA: "Convert to model-required schema"
+  N_REQ: "Attach `tools` field to request"
+  N_RESP: "Model returns structured tool_calls"
+  N_PARSE: "Parse and execute tools"
+  N_SCHEMA -> N_REQ -> N_RESP -> N_PARSE
+}
+
+TEXT: "Plain-text mode" {
+  style.fill: "#fff3e0"
+  T_PROTO: "Inject tool protocol into System Prompt"
+  T_RESP: "Model returns plain text"
+  T_EXTRACT: "Regex-extract tool-call markers"
+  T_EXEC: "Parse and execute tools"
+  T_PROTO -> T_RESP -> T_EXTRACT -> T_EXEC
+}
+
+INJECT: "Inject result into context · Continue generation"
+
+REG -> DECIDE
+DECIDE -> NATIVE.N_SCHEMA: "yes"
+DECIDE -> TEXT.T_PROTO: "no"
+NATIVE.N_PARSE -> INJECT
+TEXT.T_EXEC -> INJECT
+```
+
 ## Native Mode
 
 When the connected model natively supports Function Calling (such as OpenAI, Claude, Gemini), Luker uses the model's native tool call format. The runtime will:

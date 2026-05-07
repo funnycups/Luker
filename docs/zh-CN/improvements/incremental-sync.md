@@ -11,6 +11,27 @@ SillyTavern 的数据保存采用全量传输模式：每次修改（哪怕只�
 - **性能瓶颈** — 大型聊天记录的序列化和传输本身就是性能负担
 - **保存延迟** — 全量写入的 I/O 开销使得保存操作无法做到实时
 
+```d2
+direction: right
+
+LK: "Luker：增量 patch" {
+  style.fill: "#e8f5e9"
+  edit: "用户编辑一字"
+  diff: "diff 出变更字段"
+  patch: "发送 1-2 KB patch"
+  apply: "按行索引修补"
+  edit -> diff -> patch -> apply
+}
+
+ST: "SillyTavern：全量覆盖" {
+  style.fill: "#fff3e0"
+  edit: "用户编辑一字"
+  full: "序列化完整聊天 数百 MB"
+  overwrite: "整文件覆盖写"
+  edit -> full -> overwrite
+}
+```
+
 ## 增量端点
 
 Luker 新增了三个增量端点，覆盖聊天数据的不同修改场景：
@@ -41,6 +62,31 @@ Luker 新增了三个增量端点，覆盖聊天数据的不同修改场景：
 2. **不匹配** — 返回 `409 Conflict`，表示文件在上次操作后已被其他来源修改
 
 这从根本上防止了并发写入冲突——无论是多标签页、多设备还是多用户场景。
+
+```d2
+shape: sequence_diagram
+
+FE: "前端"
+BE: "后端"
+State: "聊天状态文件"
+
+第一次写入：integrity 匹配: {
+  FE -> BE: "PATCH（携带 integrity=A）"
+  BE -> State: "读取当前 integrity=A"
+  BE -> BE: "校验匹配 → 应用 patch"
+  BE -> State: "写入新 integrity=B"
+  BE -> FE: "200 OK + integrity=B"
+}
+
+并发场景：另一来源已修改: {
+  FE -> BE: "PATCH（携带 integrity=B）"
+  BE -> State: "读取当前 integrity=C\n（被其他标签页改过）"
+  BE -> BE: "校验失败 B ≠ C"
+  BE -> FE: "409 Conflict"
+  FE -> FE: "重新拉取最新数据"
+  FE -> BE: "基于最新状态重试\n（携带 integrity=C）"
+}
+```
 
 ::: warning 冲突处理
 收到 `409 Conflict` 时，前端需要重新获取最新数据并基于最新状态重试。这确保了数据一致性，但也意味着在极端并发场景下用户可能需要等待重试完成。

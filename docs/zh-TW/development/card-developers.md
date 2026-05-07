@@ -54,11 +54,11 @@ Luker 支援在角色卡中綁定推薦的生成預設和使用者人設。當�
 - **推薦預設**：指定最適合該角色的生成預設（溫度、取樣參數等）
 - **推薦人設**：指定與角色互動時建議使用的使用者人設
 
-這些綁定透過[角色卡編輯助手](/zh-TW/features/card-editor)的「綁定預設」面板進行設定。
+這些綁定透過[角色卡編輯助手](/zh-TW/features/card-editor/)的「綁定預設」面板進行設定。
 
 ## 設定編排工作流
 
-[編排器](/zh-TW/features/orchestrator)允許角色卡創作者定義複雜的提示詞編排工作流。透過編排器，你可以：
+[編排器](/zh-TW/features/orchestrator/)允許角色卡創作者定義複雜的提示詞編排工作流。透過編排器，你可以：
 
 - 定義多步驟的提示詞處理管線
 - 在生成前後插入自訂邏輯
@@ -162,8 +162,6 @@ CardApp 的上下文物件提供以下 API：
 
 #### 訊息與生成
 
-#### 訊息與生成
-
 | API | 說明 |
 |-----|------|
 | `ctx.container` | 應用的DOM容器元素 |
@@ -221,7 +219,7 @@ CardApp 運行在受限環境中：
 
 ### CardApp Studio
 
-[角色卡編輯助手](/zh-TW/features/card-editor)內建了 CardApp Studio，提供基於 CodeMirror 6 的程式碼編輯器，支援即時預覽和除錯。建議使用 Studio 進行 CardApp 開發，而非手動編輯 JSON。
+[CardApp Studio](/zh-TW/features/card-editor/studio) 是開發 CardApp 的完整環境，提供基於 CodeMirror 6 的程式碼編輯器、即時預覽、AI 輔助和 Git 版本歷史。建議透過 Studio 開發 CardApp，而非手動編輯 JSON。
 
 ## 世界書最佳實踐
 
@@ -268,8 +266,9 @@ Luker 支援將世界書綁定到預設。當使用者切換預設時，關聯�
 
 ## 相關頁面
 
-- [角色卡編輯助手](/zh-TW/features/card-editor) — 角色卡編輯和 CardApp Studio
+- [CardApp Studio](/zh-TW/features/card-editor/studio) — CardApp 的完整開發環境
+- [角色卡編輯助手](/zh-TW/features/card-editor/) — 編輯助手概覽（含彈窗 / Studio 兩種模式）
 - [記憶圖](/zh-TW/features/memory-graph) — 長期記憶系統
-- [編排器](/zh-TW/features/orchestrator) — 提示詞編排工作流
+- [編排器](/zh-TW/features/orchestrator/) — 提示詞編排工作流
 - [CardApp](/zh-TW/features/cardapp) — 角色卡內嵌應用詳細說明
 - [擴充 API 參考](/zh-TW/development/extension-api/) — API 詳細文件

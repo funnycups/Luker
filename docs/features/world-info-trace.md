@@ -25,7 +25,11 @@ For each activated World Info entry, the trace record includes:
 
 ## Usage
 
-View activation trace information in the World Info panel. After the AI generates a response, you can check which entries were activated and why, then optimize your World Info keywords and scan depth configuration accordingly.
+In the World Info editor, each entry has a fa-route icon button at its top-right; clicking it shows the most recent scan's activation trace for that entry:
+
+![World Info activation trace popup](/images/world-info-trace/wi-trace-popup.png)
+
+The popup top shows the entry's scope, last activation time, and reason; below it, recent scans are listed in reverse chronological order — activated scans are marked red, non-activated ones grey. This makes it immediately clear which keyword in which message triggered the entry, and whether the scan depth is sufficient — so you can refine the keywords or scan depth accordingly.
 
 ## Related Pages
 

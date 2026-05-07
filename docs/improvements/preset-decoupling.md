@@ -24,6 +24,43 @@ Luker classifies each field in a preset as either a "connection field" or a "gen
 - **Connection fields** — API source, custom URL, model name, reverse proxy address, proxy password, etc.
 - **Generation parameter fields** — Temperature, Top-P, max tokens, etc.
 
+```d2
+direction: right
+
+ST: "SillyTavern: coupled" {
+  ST_PRESET: "Chat completion preset"
+  ST_GEN: "Generation params\nTemperature / Top-P / ..."
+  ST_CONN: "Connection fields\nAPI URL / Key / Model" {
+    style.fill: "#ffebee"
+    style.stroke: "#c62828"
+  }
+  SWITCH1: "Switch preset"
+
+  ST_PRESET -> ST_GEN
+  ST_PRESET -> ST_CONN
+  SWITCH1 -> ST_GEN: {style.stroke-dash: 3}
+  SWITCH1 -> ST_CONN: "accidentally overwritten" {style.stroke-dash: 3}
+}
+
+LK: "Luker: decoupled" {
+  LK_PRESET: "Chat completion preset"
+  LK_CONN: "Connection profile"
+  LK_GEN: "Generation params only"
+  LK_CONN_F: "Connection fields only" {
+    style.fill: "#e8f5e9"
+    style.stroke: "#2e7d32"
+  }
+  SWITCH2: "Switch preset"
+  SWITCH3: "Switch connection"
+
+  LK_PRESET -> LK_GEN
+  LK_CONN -> LK_CONN_F
+  SWITCH2 -> LK_GEN: {style.stroke-dash: 3}
+  SWITCH3 -> LK_CONN_F: {style.stroke-dash: 3}
+  SWITCH2 -- LK_CONN_F: "skips connection fields" {style.stroke-dash: 3}
+}
+```
+
 This classification is the foundation of preset decoupling — all logic involving preset loading checks the field type to decide whether to apply it.
 
 ## Auto-Skipping Connection Fields When Switching Presets

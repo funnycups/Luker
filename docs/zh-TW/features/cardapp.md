@@ -3,7 +3,11 @@
 CardApp 是 Luker 獨有的角色卡內嵌應用系統。它允許角色卡在 `data.extensions.card_app` 中定義小型應用（包含 HTML、JavaScript 和樣式），這些應用會在聊天介面中載入和渲染，為角色卡賦予互動式的動態能力。
 
 ::: tip 開發 CardApp
-推薦使用[角色卡編輯助手](/zh-TW/features/card-editor)中的 **CardApp Studio** 來開發和除錯 CardApp。Studio 提供了 CodeMirror 6 程式碼編輯器、即時預覽和 AI 輔助開發。完整的 API 參考和開發指南請參閱[角色卡開發者指南](/zh-TW/development/card-developers)。
+推薦使用 [CardApp Studio](/zh-TW/features/card-editor/studio) 來開發和除錯 CardApp。Studio 提供了 CodeMirror 6 程式碼編輯器、即時預覽和 AI 輔助開發。完整的 API 參考和開發指南請參閱[角色卡開發者指南](/zh-TW/development/card-developers)。
+:::
+
+::: tip 想看完整 walkthrough?
+[從零寫一個 CardApp](/zh-TW/features/card-editor/walkthrough) 用一個輕小說西式異世界冒險題材的角色卡，演示從空角色卡到能跑的 CardApp 的全過程，含提示詞實踐小抄和影像生成進階。
 :::
 
 ## 生命週期
@@ -20,6 +24,7 @@ CardApp 是 Luker 獨有的角色卡內嵌應用系統。它允許角色卡在 `
 
 ## 相關頁面
 
-- [角色卡編輯助手](/zh-TW/features/card-editor) — 使用 Studio 開發和除錯 CardApp
+- [角色卡編輯助手](/zh-TW/features/card-editor/) — 含 CardApp 角色卡的編輯入口（自動進入 Studio）
+- [CardApp Studio](/zh-TW/features/card-editor/studio) — 開發和除錯 CardApp 的完整環境
 - [角色卡開發者指南](/zh-TW/development/card-developers) — 完整的 CardApp API 參考和開發文件
 - [狀態系統](/zh-TW/features/state-system) — 角色狀態和聊天狀態

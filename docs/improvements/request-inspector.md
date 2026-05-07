@@ -19,6 +19,39 @@ Each AI generation request goes through the following state transitions:
 3. **Fail** (`failInspection`) — Request errors out, records error information
 4. **Abort** (`abortInspection`) — User actively cancels generation
 
+```d2
+direction: down
+
+start: "" {
+  shape: circle
+  width: 20
+  style.fill: "#222"
+}
+in_progress: "in_progress"
+done: "completed"
+failed: "failed"
+aborted: "aborted"
+end_: "" {
+  shape: circle
+  width: 20
+  style.fill: "#222"
+}
+
+note: "Streaming responses also call completeInspectionFromStream\nto extract usage from the SSE event stream" {
+  shape: text
+  style.fill: "#fff8d4"
+}
+
+start -> in_progress: "startInspection records metadata"
+in_progress -> done: "completeInspection records token usage"
+in_progress -> failed: "failInspection records error message"
+in_progress -> aborted: "abortInspection user cancels"
+done -> end_
+failed -> end_
+aborted -> end_
+in_progress -- note: {style.stroke-dash: 3}
+```
+
 ### Token Usage Statistics
 
 The Request Inspector records detailed token data for each generation:

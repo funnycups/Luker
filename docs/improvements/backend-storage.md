@@ -28,11 +28,53 @@ Each chat file has a corresponding state file stored in the same directory as th
 
 The state file is stored separately from the chat file, avoiding full-file rewrites caused by frequently updating the integrity value within the chat file.
 
+```d2
+direction: right
+
+DIR: "chats/<character>/"
+CHAT: "{chat}.jsonl" {
+  style.fill: "#e1f5ff"
+}
+STATE: "{chat}.luker-state.chat_sync.json" {
+  style.fill: "#fff3e0"
+}
+NS1: "{chat}.luker-state.memory_graph__meta.json"
+NS2: "{chat}.luker-state.luker_orchestrator__schema.json"
+
+DIR -> CHAT
+DIR -> STATE
+DIR -> NS1
+DIR -> NS2
+```
+
+- `{chat}.jsonl` — Chat main file
+- `{chat}.luker-state.chat_sync.json` — integrity + updated_at (sync metadata)
+- `{chat}.luker-state.<namespace>.json` — Per-plugin namespace state (one independent sidecar per plugin)
+
 If the state file doesn't exist (e.g., chats migrated from older versions), the system automatically falls back and creates the state file on the first write.
 
 ## Generation Acknowledge
 
 In AI generation scenarios, Luker's Unified Generation Layer implements a Generation Acknowledge mechanism. When the backend completes a generation and persists the result, it confirms in the response that the generation result has been safely stored on the server side.
+
+```d2
+shape: sequence_diagram
+
+FE: "Frontend"
+BE: "Backend (unified generation layer)"
+LLM: "Upstream LLM"
+Disk: "Disk"
+
+FE -> BE: "Initiate AI generation request"
+BE -> LLM: "Forward request"
+LLM -> BE: "Streaming response"
+BE -> Disk: "Persist generation result in real-time"
+Disk -> BE: "Write complete"
+BE -> FE: "Return response + acknowledge"
+FE -> FE: "Update local integrity state"
+
+BE."Even if the frontend crashes after receiving ack, data is on disk"
+```
 
 This means that even if the frontend crashes immediately after receiving the generation result, data won't be lost — because the backend has already completed persistence before returning the response. After receiving the confirmation, the frontend updates its local integrity state to stay in sync with the server.
 

@@ -11,6 +11,27 @@ SillyTavern's data saving uses a full-transmission model: every modification (ev
 - **Performance bottleneck** — Serialization and transmission of large chat histories is itself a performance burden
 - **Save latency** — The I/O overhead of full writes makes real-time saving impossible
 
+```d2
+direction: right
+
+LK: "Luker: incremental patch" {
+  style.fill: "#e8f5e9"
+  edit: "User edits one char"
+  diff: "Diff changed fields"
+  patch: "Send 1-2 KB patch"
+  apply: "Patch by line index"
+  edit -> diff -> patch -> apply
+}
+
+ST: "SillyTavern: full overwrite" {
+  style.fill: "#fff3e0"
+  edit: "User edits one char"
+  full: "Serialize whole chat (hundreds of MB)"
+  overwrite: "Overwrite full file"
+  edit -> full -> overwrite
+}
+```
+
 ## Incremental Endpoints
 
 Luker introduces three incremental endpoints covering different modification scenarios for chat data:
@@ -41,6 +62,31 @@ After each write operation completes, the backend generates a new UUID, writes i
 2. **Mismatch** — Returns `409 Conflict`, indicating the file has been modified by another source since the last operation
 
 This fundamentally prevents concurrent write conflicts — whether in multi-tab, multi-device, or multi-user scenarios.
+
+```d2
+shape: sequence_diagram
+
+FE: "Frontend"
+BE: "Backend"
+State: "Chat state file"
+
+First write: integrity matches: {
+  FE -> BE: "PATCH (carries integrity=A)"
+  BE -> State: "Read current integrity=A"
+  BE -> BE: "Match → apply patch"
+  BE -> State: "Write new integrity=B"
+  BE -> FE: "200 OK + integrity=B"
+}
+
+Concurrent: another source already wrote: {
+  FE -> BE: "PATCH (carries integrity=B)"
+  BE -> State: "Read current integrity=C\n(modified by another tab)"
+  BE -> BE: "Mismatch B ≠ C"
+  BE -> FE: "409 Conflict"
+  FE -> FE: "Re-fetch latest data"
+  FE -> BE: "Retry based on latest state\n(carries integrity=C)"
+}
+```
 
 ::: warning Conflict Handling
 When receiving a `409 Conflict`, the frontend needs to re-fetch the latest data and retry based on the latest state. This ensures data consistency, but also means that in extreme concurrency scenarios, users may need to wait for the retry to complete.

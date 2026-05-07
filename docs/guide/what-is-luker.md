@@ -34,13 +34,13 @@ A character memory system based on knowledge graph structures. It organizes even
 
 Before the creative LLM generates a response, multiple agents are automatically run for plot analysis and orchestration. Three execution modes are available: Spec Workflow (predefined stages and nodes), Single Agent mode, and Agenda Planner (dynamic scheduling). Orchestration configurations can be bound to character cards and imported/exported along with them.
 
-→ [Orchestrator Documentation](/features/orchestrator)
+→ [Orchestrator Documentation](/features/orchestrator/)
 
 ### Character Card Editing Assistant (CEA / CardApp Studio)
 
-An AI-assisted character card editing tool with an integrated CodeMirror 6 code editor. It supports editing character cards and world info through natural language conversation, with diff-based approval for each batch of changes. When a character card is updated, it automatically detects world info changes and offers intelligent sync options.
+An AI-assisted character card editing tool with an integrated CodeMirror 6 code editor. It supports editing character cards and world info through natural language conversation, with diff-based approval for each batch of changes. When a character card is updated, it automatically detects world info changes and offers intelligent sync options. Regular cards use the popup editor; cards with an embedded CardApp open in the more capable Studio.
 
-→ [Character Card Editing Assistant Documentation](/features/card-editor)
+→ [CEA Overview](/features/card-editor/)　·　[Popup](/features/card-editor/popup)　·　[CardApp Studio](/features/card-editor/studio)
 
 ### Search Tools
 

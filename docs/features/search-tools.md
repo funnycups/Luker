@@ -4,6 +4,48 @@ Search Tools provides AI characters with web search capabilities, allowing chara
 
 ## Two Working Modes
 
+```d2
+direction: right
+
+TOOL: "Tool mode" {
+  T_USER: "User asks"
+  T_LLM: "Creative LLM"
+  T_DECIDE: "LLM decides:\nsearch needed?" {
+    shape: diamond
+  }
+  T_TOOL: "Calls luker_web_search\n/ luker_web_visit" {
+    style.fill: "#e1f5ff"
+  }
+  T_RESULT: "Result returned as tool-call output\ninjected into context"
+  T_FINAL: "LLM produces final reply"
+
+  T_USER -> T_LLM -> T_DECIDE
+  T_DECIDE -> T_TOOL: "yes"
+  T_TOOL -> T_RESULT
+  T_RESULT -> T_LLM
+  T_DECIDE -> T_FINAL: "no"
+}
+
+AGENT: "Pre-request agent mode" {
+  A_USER: "User asks"
+  A_AGENT: "Search agent\nindependent LLM preset"
+  A_DECIDE: "Analyze conversation:\nsearch needed?" {
+    shape: diamond
+  }
+  A_SEARCH: "Run search\nmulti-round if needed"
+  A_WRITE: "Write results to World Info entries" {
+    style.fill: "#fff3e0"
+  }
+  A_LLM: "Creative LLM"
+  A_FINAL: "LLM produces final reply\nWorld Info entries injected as references"
+
+  A_USER -> A_AGENT -> A_DECIDE
+  A_DECIDE -> A_SEARCH: "yes"
+  A_SEARCH -> A_WRITE -> A_LLM -> A_FINAL
+  A_DECIDE -> A_LLM: "no"
+}
+```
+
 ### Tool Mode
 
 Search functionality is registered as a callable tool for the creative LLM in the [Function Call Runtime](/improvements/function-call-runtime). When the AI determines it needs to search for information, it proactively initiates a tool call.
@@ -28,6 +70,14 @@ Before the creative LLM generates a response, an independent search Agent runs a
 
 **Pre-request Agent Mode** automatically executes searches before each AI generation, with the search process completely separated from the main conversation. Suitable for scenarios where you want every response to be backed by the latest information.
 :::
+
+## Settings Panel
+
+All search plugin configuration lives under the "Search Tools" subsection of the extensions panel:
+
+![Search Tools settings panel](/images/search-tools/search-tools-settings.png)
+
+The two top toggles map to the two modes above ("Expose tools to main model" = Tool Mode, "Run search agent before requests" = Pre-request Agent Mode); they can be enabled independently or together. Below them are engine selection, agent-only presets, and World Info entry injection parameters.
 
 ## Supported Search Engines
 
@@ -54,7 +104,7 @@ Search result entries can be set to `constant` (always active) or activated thro
 
 ## Global API
 
-The search plugin provides a global API for integration by other plugins. For example, the [Character Card Editor](/features/card-editor#integration-with-search-tools) has integrated search capabilities, enabling web searches for reference materials in Studio to assist with character card editing.
+The search plugin provides a global API for integration by other plugins. For example, the [Character Card Editor Assistant](/features/card-editor/)'s [popup](/features/card-editor/popup) and [CardApp Studio](/features/card-editor/studio) both integrate the search capability, enabling web searches for reference materials during card / CardApp editing.
 
 ### Properties
 
@@ -126,6 +176,8 @@ The search plugin monitors message deletion and editing events, automatically ma
 | Agent Max Rounds | Maximum search rounds for the pre-request Agent |
 
 ::: info Related Pages
-- [Character Card Editor](/features/card-editor) — Web search capabilities in Studio
+- [Character Card Editor Assistant](/features/card-editor/) — Editor assistant overview (shared capabilities and entry points)
+- [Popup Mode](/features/card-editor/popup) — Web search inside the popup
+- [CardApp Studio](/features/card-editor/studio) — Web search inside Studio
 - [CardApp](/features/cardapp) — Character card application concept
 :::

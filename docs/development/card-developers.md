@@ -54,11 +54,11 @@ Binding information is stored in the character card's state file:
 - **Recommended Preset**: Specifies the preset best suited for this character (temperature, sampling parameters, etc.)
 - **Recommended Persona**: Specifies the suggested user persona for interacting with this character
 
-These bindings are configured through the "Bind Preset" panel in the [Character Card Editor Assistant](/features/card-editor).
+These bindings are configured through the "Bind Preset" panel in the [Character Card Editor Assistant](/features/card-editor/).
 
 ## Configuring Orchestration Workflows
 
-The [Orchestrator](/features/orchestrator) allows character card creators to define complex prompt orchestration workflows. With the orchestrator, you can:
+The [Orchestrator](/features/orchestrator/) allows character card creators to define complex prompt orchestration workflows. With the orchestrator, you can:
 
 - Define multi-step prompt processing pipelines
 - Insert custom logic before and after generation
@@ -164,44 +164,44 @@ The CardApp context object provides the following APIs:
 
 | API | Description |
 |-----|-------------|
-| `ctx.sendMessage(text, options?)` | Send a message. Internally uses `sendTextareaMessage` (writes to the send textarea and triggers the send flow), not `Generate` |
+| `ctx.container` | The application's DOM container element |
+| `ctx.charId` | Current character ID |
+| `ctx.sendMessage(text, options?)` | Send a message (internally calls `sendTextareaMessage`) |
 | `ctx.stopGeneration()` | Stop current generation |
 | `ctx.continueGeneration()` | Continue generation |
-| `ctx.getHistory(limit?, offset?)` | Get chat message history. With `limit`, returns the most recent `limit` messages (offset from the end) |
-| `ctx.editMessage(messageId, newText)` | Edit a message by index and save |
-| `ctx.deleteMessage(messageId)` | Delete a message by index |
-| `ctx.deleteLastMessage()` | Delete the last message in the chat |
-| `ctx.swipe()` | Swipe to the next response variant |
-| `ctx.regenerate()` | Regenerate the last AI message. Internally uses `Generate('regenerate')` |
-
-#### Chat Management
-
-| API | Description |
-|-----|-------------|
-| `ctx.getChatList()` | Get all chats for the current character |
-| `ctx.switchChat(chatName)` | Switch to a different chat |
-| `ctx.newChat()` | Create a new chat |
-| `ctx.closeChat()` | Close the current chat |
+| `ctx.getHistory(limit?, offset?)` | Get chat message history; supports limit and offset |
+| `ctx.editMessage(messageId, newText)` | Edit a specific message |
+| `ctx.deleteMessage(messageId)` | Delete a specific message |
+| `ctx.deleteLastMessage()` | Delete the last message |
+| `ctx.swipe()` | Switch to the next response variant |
+| `ctx.regenerate()` | Regenerate the last AI message (calls `Generate('regenerate')`) |
 
 #### Data & State
 
 | API | Description |
 |-----|-------------|
-| `ctx.container` | The application's DOM container element |
-| `ctx.charId` | Current character ID |
 | `ctx.getCharacterData()` | Get current character data (read-only) |
-| `ctx.updateCharacterFields(fields)` | Update character fields and save. Supports name, description, personality, scenario, first_mes, mes_example, system_prompt, post_history_instructions, creator_notes, creator, character_version, tags (comma-separated string), talkativeness (number), depth_prompt fields |
+| `ctx.updateCharacterFields(fields)` | Update character fields and save. Supports name, description, personality, scenario, first_mes, mes_example, system_prompt, post_history_instructions, creator_notes, creator, character_version, tags (comma-separated string), talkativeness (number), depth_prompt-related fields |
 | `ctx.getChatState(namespace)` | Read chat-bound persisted state |
 | `ctx.setChatState(namespace, key, value)` | Set chat state |
-| `ctx.getVariable(key)` | Get chat variable |
-| `ctx.setVariable(key, value)` | Set chat variable |
+| `ctx.getVariable(key)` | Get a chat variable |
+| `ctx.setVariable(key, value)` | Set a chat variable and persist it |
+
+#### Chat Management
+
+| API | Description |
+|-----|-------------|
+| `ctx.getChatList()` | Get the chat list for the current character |
+| `ctx.switchChat(chatName)` | Switch to the specified chat |
+| `ctx.newChat()` | Create a new chat |
+| `ctx.closeChat()` | Close the current chat |
 
 #### World Info Operations
 
 | API | Description |
 |-----|-------------|
-| `ctx.getWorldBooks()` | Get world book names associated with the current character (character-bound + globally activated) |
-| `ctx.getWorldBookEntries(bookName)` | Get all entries from a world book |
+| `ctx.getWorldBooks()` | Get the list of world book names associated with the current character (character-bound + globally activated) |
+| `ctx.getWorldBookEntries(bookName)` | Get all entries from the specified world book |
 | `ctx.createWorldBookEntry(bookName, fields?)` | Create a world book entry, returns the new entry object (with uid) |
 | `ctx.updateWorldBookEntry(bookName, uid, patch)` | Update a world book entry (shallow merge) |
 | `ctx.deleteWorldBookEntry(bookName, uid)` | Delete a world book entry |
@@ -219,7 +219,7 @@ When developing CardApp, follow these best practices:
 
 ### CardApp Studio
 
-The [Character Card Editor Assistant](/features/card-editor) includes CardApp Studio, featuring a CodeMirror 6-based code editor with live preview and debugging support. It is recommended to use Studio for CardApp development rather than manually editing JSON.
+[CardApp Studio](/features/card-editor/studio) is the full environment for developing CardApps, featuring a CodeMirror 6-based code editor, live preview, AI assistance, and Git version history. It is recommended to use Studio for CardApp development rather than manually editing JSON.
 
 ## World Info Best Practices
 
@@ -266,8 +266,9 @@ World Info provides static world settings, while Memory Graph provides dynamic c
 
 ## Related Pages
 
-- [Character Card Editor Assistant](/features/card-editor) — Card editing and CardApp Studio
+- [CardApp Studio](/features/card-editor/studio) — Full environment for CardApp development
+- [Character Card Editor Assistant](/features/card-editor/) — Editor assistant overview (popup / Studio modes)
 - [Memory Graph](/features/memory-graph) — Long-term memory system
-- [Orchestrator](/features/orchestrator) — Prompt orchestration workflows
+- [Orchestrator](/features/orchestrator/) — Prompt orchestration workflows
 - [CardApp](/features/cardapp) — Detailed CardApp documentation
 - [Extension API Reference](/development/extension-api/) — Detailed API documentation

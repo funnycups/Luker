@@ -67,15 +67,6 @@ const result = getNodeById(store, 'n42', { includeNeighbors: true });
 
 `includeNeighbors` 默认 `true`。store 缺失或 id 不存在返回 `null`。`store.nodes` 既支持普通对象映射（生产形态），也兼容 `Map`（便于测试）。
 
-## 预留接口（不在 MVP 范围）
-
-以下 export 已在文件顶部注释列出，计划在有具体场景需求时再加，目前不实现：
-
-- `searchNodesHybrid(store, query, options)` — 调 `runHybridRecall`，需要向量索引配置
-- `hasNode(store, id) -> boolean` — 存在性检查
-- `findNodesByEntity(store, entityName)` — 按实体浏览
-- `getNeighbors(store, id, {edgeTypes})` — 独立取邻居 + 边类型过滤
-
 ## 调用示例：orchestrator loop 模式
 
 orchestrator 的 loop 模式工具 `memory.search` / `memory.list_recent` / `memory.get` 都是这些 API 的薄壳，关键的 dedup 逻辑就是把"已注入"的两组 id 取并集：

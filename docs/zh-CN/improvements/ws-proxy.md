@@ -8,20 +8,31 @@ Luker 提供了 WebSocket（WS）代理功能，通过持久的 WebSocket 隧道
 
 WS 代理将这些请求通过一条**持久的 WebSocket 连接**进行传输。WebSocket 连接一旦建立，就会保持打开状态，所有的生成请求和响应都通过这条连接进行双向通信，无需反复建立新连接。
 
-```mermaid
-flowchart LR
-    subgraph HTTP[传统 HTTP 模式：每次新连]
-        H_C1[客户端] -->|新建 TCP+TLS| H_S1[服务端]
-        H_S1 -.|响应+断开| H_C1
-        H_C2[客户端] -->|新建 TCP+TLS| H_S2[服务端]
-        H_S2 -.|响应+断开| H_C2
-        H_C3[客户端] -->|新建 TCP+TLS| H_S3[服务端]
-    end
+```d2
+direction: down
 
-    subgraph WS[WS 代理：持久隧道]
-        W_C[客户端] <-->|建立一次 WS 连接| W_S[服务端]
-        W_S <-.|心跳保活 + 多请求复用| W_C
-    end
+HTTP: "传统 HTTP 模式：每次新连" {
+  H_C1: "客户端"
+  H_S1: "服务端"
+  H_C2: "客户端"
+  H_S2: "服务端"
+  H_C3: "客户端"
+  H_S3: "服务端"
+
+  H_C1 -> H_S1: "新建 TCP+TLS"
+  H_S1 -> H_C1: "响应+断开" {style.stroke-dash: 3}
+  H_C2 -> H_S2: "新建 TCP+TLS"
+  H_S2 -> H_C2: "响应+断开" {style.stroke-dash: 3}
+  H_C3 -> H_S3: "新建 TCP+TLS"
+}
+
+WS: "WS 代理：持久隧道" {
+  W_C: "客户端"
+  W_S: "服务端"
+
+  W_C <-> W_S: "建立一次 WS 连接"
+  W_S <-> W_C: "心跳保活 + 多请求复用" {style.stroke-dash: 3}
+}
 ```
 
 简单来说：
@@ -63,37 +74,34 @@ WS 代理内置了多项健壮性机制：
 
 WS 代理由两段构成:**升级阶段用一次性 ticket 完成鉴权**,**派发阶段用 `app.handle()` 直接调度 Express 路由**。这样请求依旧经过应用层中间件(cookie session、CSRF、登录检查),但 Basic Auth 这一层 HTTP 网关只在 ticket 签发时校验一次,WS 通道本身就是认证边界。
 
-```mermaid
-flowchart TD
-    LOGIN["页面已登录<br/>basicAuth + cookie session 已建立"]
-    TICKET_REQ["客户端 POST /api/ws-ticket<br/>(走完整 HTTP 中间件栈)"]
-    TICKET_RESP["服务端 mintTicket<br/>32 字节随机 hex,30s TTL,单次使用"]
-    UP["new WebSocket(url, [`luker-ws-ticket.${ticket}`])<br/>JS 把 ticket 塞进 Sec-WebSocket-Protocol"]
-    GATE["server.on('upgrade')<br/>parse 子协议 → consumeTicket"]
-    WS_MSG["WebSocket 消息<br/>通道已被信任"]
+```d2
+direction: down
 
-    subgraph DISPATCH[派发链路]
-        GOOD_MOCK["构造 mock req/res<br/>打上 WS_PROXY_AUTH_BYPASS Symbol"]
-        GOOD_HANDLE["app.handle(req, res)"]
-        GOOD_BASIC["Basic Auth 中间件<br/>检测到 Symbol → 直接放行"]
-        GOOD_REST["cookieSession / CSRF /<br/>requireLogin 正常执行"]
-        GOOD_RES[流式 chunk 经 WS 隧道回传]
-        GOOD_MOCK --> GOOD_HANDLE
-        GOOD_HANDLE --> GOOD_BASIC
-        GOOD_BASIC --> GOOD_REST
-        GOOD_REST --> GOOD_RES
-    end
+LOGIN: "页面已登录\nbasicAuth + cookie session 已建立"
+TICKET_REQ: "客户端 POST /api/ws-ticket\n(走完整 HTTP 中间件栈)"
+TICKET_RESP: "服务端 mintTicket\n32 字节随机 hex,30s TTL,单次使用" {
+  style.fill: "#fff3e0"
+}
+UP: "new WebSocket(url, [luker-ws-ticket.<ticket>])\nJS 把 ticket 塞进 Sec-WebSocket-Protocol"
+GATE: "server.on('upgrade')\nparse 子协议 → consumeTicket" {
+  style.fill: "#fff3e0"
+}
+WS_MSG: "WebSocket 消息\n通道已被信任"
 
-    LOGIN --> TICKET_REQ
-    TICKET_REQ --> TICKET_RESP
-    TICKET_RESP --> UP
-    UP --> GATE
-    GATE ==通过==> WS_MSG
-    WS_MSG ==派发请求==> GOOD_MOCK
+DISPATCH: "派发链路" {
+  GOOD_MOCK: "构造 mock req/res\n打上 WS_PROXY_AUTH_BYPASS Symbol"
+  GOOD_HANDLE: "app.handle(req, res)"
+  GOOD_BASIC: "Basic Auth 中间件\n检测到 Symbol → 直接放行"
+  GOOD_REST: "cookieSession / CSRF /\nrequireLogin 正常执行"
+  GOOD_RES: "流式 chunk 经 WS 隧道回传" {
+    style.fill: "#e8f5e9"
+  }
+  GOOD_MOCK -> GOOD_HANDLE -> GOOD_BASIC -> GOOD_REST -> GOOD_RES
+}
 
-    style GOOD_RES fill:#e8f5e9,stroke:#2e7d32
-    style GATE fill:#fff3e0,stroke:#ef6c00
-    style TICKET_RESP fill:#fff3e0,stroke:#ef6c00
+LOGIN -> TICKET_REQ -> TICKET_RESP -> UP -> GATE
+GATE -> WS_MSG: "通过"
+WS_MSG -> DISPATCH.GOOD_MOCK: "派发请求"
 ```
 
 ### 为什么用 ticket 而不是直接转 Authorization

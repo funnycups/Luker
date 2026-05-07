@@ -10,6 +10,41 @@ Luker 的解法：在保存 AI / 用户消息时把副作用宏从文本里提�
 
 ## 工作原理
 
+```d2
+direction: down
+
+AI: "AI 回复 / 用户消息保存"
+EXTRACT: "扫描 mes 提取副作用宏\nsetvar / addvar / incvar / decvar / deletevar" {
+  style.fill: "#e1f5ff"
+}
+EVAL: "嵌套展示型宏求值\n{{user}} / {{getvar}} / {{time}} ..."
+APPLY: "前向 apply 到\nchat_metadata.variables"
+LOG: "结构化记录追加到\nmessage.extra.var_ops"
+CLEAN: "字面量从 mes 里删除"
+DISPLAY: "聊天界面看到的是\n干净叙事"
+
+AI -> EXTRACT -> EVAL -> APPLY -> LOG -> CLEAN -> DISPLAY
+
+REPLAY: "聊天结构变化" {
+  shape: diamond
+}
+DEL: "MESSAGE_DELETED"
+SWIPE: "MESSAGE_SWIPED"
+SWIPED: "MESSAGE_SWIPE_DELETED"
+CHANGED: "CHAT_CHANGED"
+EDIT: "MESSAGE_EDITED"
+REBUILD: "从存活 op 重放\n仅动 op 日志里出现的 key" {
+  style.fill: "#fff3e0"
+}
+
+DEL -> REPLAY
+SWIPE -> REPLAY
+SWIPED -> REPLAY
+CHANGED -> REPLAY
+EDIT -> REPLAY
+REPLAY -> REBUILD
+```
+
 ### 提取
 
 消息保存时（AI 回复、续写、重新生成、swipe、用户消息），Luker 扫描 `mes` 寻找下面这些副作用宏：
@@ -65,12 +100,18 @@ Luker 的解法：在保存 AI / 用户消息时把副作用宏从文本里提�
 
 ## 操作面板
 
-任何带有 op 日志的消息按钮排上会出现一个小烧瓶图标。点开能：
+任何带有 op 日志的消息按钮排上会出现一个小烧瓶图标：
 
-- 查看这条消息记录的所有操作。
-- 编辑某个操作的 `op` / `key` / `value`。
-- 删除某个操作。
-- 新增操作。
+![楼层消息上的小烧瓶图标](/images/variable-op-log/var-ops-flask-button.png)
+
+点开能：
+
+- 查看这条消息记录的所有操作
+- 编辑某个操作的 `op` / `key` / `value`
+- 删除某个操作
+- 新增操作
+
+![Variable operations 面板](/images/variable-op-log/var-ops-panel.png)
 
 保存时该消息的 op 数组被你的编辑替换、缓存重建、聊天落盘。**手动调整变量推荐这条路**——它把改动落在时间线上一个具体的消息上，未来的结构性变化（删除、swipe）能正确保留意图。
 

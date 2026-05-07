@@ -10,6 +10,41 @@ Luker fixes this by extracting side-effect macros out of AI / user messages at s
 
 ## How it works
 
+```d2
+direction: down
+
+AI: "AI reply / user message saved"
+EXTRACT: "Scan mes for side-effect macros\nsetvar / addvar / incvar / decvar / deletevar" {
+  style.fill: "#e1f5ff"
+}
+EVAL: "Resolve nested display macros\n{{user}} / {{getvar}} / {{time}} ..."
+APPLY: "Forward-apply to\nchat_metadata.variables"
+LOG: "Append structured record to\nmessage.extra.var_ops"
+CLEAN: "Strip literals from mes"
+DISPLAY: "Chat UI sees\nclean narrative"
+
+AI -> EXTRACT -> EVAL -> APPLY -> LOG -> CLEAN -> DISPLAY
+
+REPLAY: "Chat structure changed" {
+  shape: diamond
+}
+DEL: "MESSAGE_DELETED"
+SWIPE: "MESSAGE_SWIPED"
+SWIPED: "MESSAGE_SWIPE_DELETED"
+CHANGED: "CHAT_CHANGED"
+EDIT: "MESSAGE_EDITED"
+REBUILD: "Replay surviving ops\nonly keys mentioned in op log" {
+  style.fill: "#fff3e0"
+}
+
+DEL -> REPLAY
+SWIPE -> REPLAY
+SWIPED -> REPLAY
+CHANGED -> REPLAY
+EDIT -> REPLAY
+REPLAY -> REBUILD
+```
+
 ### Extraction
 
 When a message is saved (AI reply, continue, regenerate, swipe, or user message), Luker scans `mes` for the recognized side-effect macros:
@@ -65,12 +100,18 @@ A continued reply appends new tokens to the existing `mes`. Because the previous
 
 ## Operation panel
 
-Every message that carries any op-log gets a small flask icon in its button row. Clicking it opens a panel where you can:
+Every message that carries any op-log gets a small flask icon in its button row:
+
+![Flask icon on a message's button row](/images/variable-op-log/var-ops-flask-button.png)
+
+Clicking it opens a panel where you can:
 
 - See every operation recorded for that message.
 - Edit `op`, `key`, or `value` inline.
 - Delete an operation.
 - Add a new operation.
+
+![Variable operations panel](/images/variable-op-log/var-ops-panel.png)
 
 When you save, the message's op array is replaced with your edits, the cache is rebuilt, and the chat is persisted. This is the recommended way to manually adjust variables — it lands the change at a specific message in the timeline so future structural changes (delete, swipe) preserve the intent.
 

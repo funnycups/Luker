@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitepress'
+import { configureDiagramsPlugin } from 'vitepress-plugin-diagrams'
 
 const zhCNSidebar = [
   {
@@ -38,7 +39,6 @@ const zhCNSidebar = [
       { text: 'WebSocket 代理', link: '/zh-CN/improvements/ws-proxy' },
       { text: '认证与配额', link: '/zh-CN/improvements/auth-and-quota' },
   { text: 'Memory Graph 外部 API', link: '/zh-CN/improvements/memory-graph-external-api' },
-  { text: 'Orchestrator Loop 模式', link: '/zh-CN/improvements/orchestrator-loop-mode' },
   { text: '其他改进', link: '/zh-CN/improvements/other' },
   ],
   },
@@ -46,8 +46,28 @@ const zhCNSidebar = [
   text: '独有功能',
   items: [
   { text: '记忆图', link: '/zh-CN/features/memory-graph' },
-  { text: '多Agent编排', link: '/zh-CN/features/orchestrator' },
-  { text: '角色卡编辑助手', link: '/zh-CN/features/card-editor' },
+  {
+    text: '多Agent编排',
+    collapsed: false,
+    items: [
+      { text: '概览', link: '/zh-CN/features/orchestrator/' },
+      { text: 'Spec 模式', link: '/zh-CN/features/orchestrator/spec' },
+      { text: '单 Agent 模式', link: '/zh-CN/features/orchestrator/single' },
+      { text: 'Agenda 模式', link: '/zh-CN/features/orchestrator/agenda' },
+      { text: 'Loop 模式', link: '/zh-CN/features/orchestrator/loop' },
+      { text: 'AI 迭代工作台', link: '/zh-CN/features/orchestrator/iteration-studio' },
+    ],
+  },
+  {
+    text: '角色卡编辑助手',
+    collapsed: false,
+    items: [
+      { text: '概览', link: '/zh-CN/features/card-editor/' },
+      { text: '从零写一个 CardApp', link: '/zh-CN/features/card-editor/walkthrough' },
+      { text: '普通弹窗', link: '/zh-CN/features/card-editor/popup' },
+      { text: 'CardApp Studio', link: '/zh-CN/features/card-editor/studio' },
+    ],
+  },
   { text: '搜索插件', link: '/zh-CN/features/search-tools' },
   { text: '补全预设助手', link: '/zh-CN/features/preset-assistant' },
   { text: '逐楼层变量', link: '/zh-CN/features/variable-op-log' },
@@ -93,6 +113,8 @@ const zhTWSidebar = [
       { text: '快速開始', link: '/zh-TW/guide/getting-started' },
       { text: '從 SillyTavern 遷移', link: '/zh-TW/guide/migration' },
       { text: '基礎配置', link: '/zh-TW/guide/configuration' },
+      { text: '驗證與安全', link: '/zh-TW/guide/authentication' },
+      { text: 'Android App', link: '/zh-TW/guide/android' },
     ],
   },
   {
@@ -116,7 +138,11 @@ const zhTWSidebar = [
       { text: '後端即時儲存', link: '/zh-TW/improvements/backend-storage' },
       { text: '請求檢查器', link: '/zh-TW/improvements/request-inspector' },
       { text: '統一生成層', link: '/zh-TW/improvements/generation-layer' },
+      { text: '效能最佳化', link: '/zh-TW/improvements/performance' },
+      { text: '預設關聯世界書', link: '/zh-TW/improvements/preset-world-info' },
+      { text: 'WebSocket 代理', link: '/zh-TW/improvements/ws-proxy' },
       { text: '認證與配額', link: '/zh-TW/improvements/auth-and-quota' },
+      { text: 'Memory Graph 外部 API', link: '/zh-TW/improvements/memory-graph-external-api' },
       { text: '其他改進', link: '/zh-TW/improvements/other' },
     ],
   },
@@ -124,15 +150,39 @@ const zhTWSidebar = [
     text: '獨有功能',
     items: [
       { text: '記憶圖', link: '/zh-TW/features/memory-graph' },
-      { text: '多Agent編排', link: '/zh-TW/features/orchestrator' },
-      { text: '角色卡編輯助手', link: '/zh-TW/features/card-editor' },
+      {
+        text: '多Agent編排',
+        collapsed: false,
+        items: [
+          { text: '概覽', link: '/zh-TW/features/orchestrator/' },
+          { text: 'Spec 模式', link: '/zh-TW/features/orchestrator/spec' },
+          { text: '單 Agent 模式', link: '/zh-TW/features/orchestrator/single' },
+          { text: 'Agenda 模式', link: '/zh-TW/features/orchestrator/agenda' },
+          { text: 'Loop 模式', link: '/zh-TW/features/orchestrator/loop' },
+          { text: 'AI 迭代工作台', link: '/zh-TW/features/orchestrator/iteration-studio' },
+        ],
+      },
+      {
+        text: '角色卡編輯助手',
+        collapsed: false,
+        items: [
+          { text: '概覽', link: '/zh-TW/features/card-editor/' },
+          { text: '從零寫一個 CardApp', link: '/zh-TW/features/card-editor/walkthrough' },
+          { text: '普通彈窗', link: '/zh-TW/features/card-editor/popup' },
+          { text: 'CardApp Studio', link: '/zh-TW/features/card-editor/studio' },
+        ],
+      },
       { text: '搜尋外掛', link: '/zh-TW/features/search-tools' },
       { text: '補全預設助手', link: '/zh-TW/features/preset-assistant' },
       { text: '逐樓層變數', link: '/zh-TW/features/variable-op-log' },
       { text: 'CardApp', link: '/zh-TW/features/cardapp' },
+      { text: '狀態系統', link: '/zh-TW/features/state-system' },
+      { text: '日誌系統', link: '/zh-TW/features/logging' },
       { text: '提示詞分組', link: '/zh-TW/features/prompt-groups' },
       { text: '預設分組', link: '/zh-TW/features/preset-groups' },
       { text: '鉤子執行排序', link: '/zh-TW/features/hook-order' },
+      { text: '世界書啟動鏈路追蹤', link: '/zh-TW/features/world-info-trace' },
+      { text: '外掛註冊正則', link: '/zh-TW/features/regex-provider' },
       { text: '其他功能', link: '/zh-TW/features/other-features' },
     ],
   },
@@ -167,6 +217,8 @@ const enSidebar = [
       { text: 'Quick Start', link: '/guide/getting-started' },
       { text: 'Migrating from SillyTavern', link: '/guide/migration' },
       { text: 'Configuration', link: '/guide/configuration' },
+      { text: 'Authentication & Security', link: '/guide/authentication' },
+      { text: 'Android App', link: '/guide/android' },
     ],
   },
   {
@@ -190,7 +242,11 @@ const enSidebar = [
       { text: 'Backend Storage', link: '/improvements/backend-storage' },
       { text: 'Request Inspector', link: '/improvements/request-inspector' },
       { text: 'Unified Generation Layer', link: '/improvements/generation-layer' },
+      { text: 'Performance', link: '/improvements/performance' },
+      { text: 'Preset-Associated World Info', link: '/improvements/preset-world-info' },
+      { text: 'WebSocket Proxy', link: '/improvements/ws-proxy' },
       { text: 'Auth & Quotas', link: '/improvements/auth-and-quota' },
+      { text: 'Memory Graph External API', link: '/improvements/memory-graph-external-api' },
       { text: 'Other Improvements', link: '/improvements/other' },
     ],
   },
@@ -198,15 +254,39 @@ const enSidebar = [
     text: 'Unique Features',
     items: [
       { text: 'Memory Graph', link: '/features/memory-graph' },
-      { text: 'Multi-Agent Orchestrator', link: '/features/orchestrator' },
-      { text: 'Card Editor Assistant', link: '/features/card-editor' },
+      {
+        text: 'Multi-Agent Orchestrator',
+        collapsed: false,
+        items: [
+          { text: 'Overview', link: '/features/orchestrator/' },
+          { text: 'Spec Mode', link: '/features/orchestrator/spec' },
+          { text: 'Single Agent Mode', link: '/features/orchestrator/single' },
+          { text: 'Agenda Mode', link: '/features/orchestrator/agenda' },
+          { text: 'Loop Mode', link: '/features/orchestrator/loop' },
+          { text: 'AI Iteration Studio', link: '/features/orchestrator/iteration-studio' },
+        ],
+      },
+      {
+        text: 'Card Editor Assistant',
+        collapsed: false,
+        items: [
+          { text: 'Overview', link: '/features/card-editor/' },
+          { text: 'Build a CardApp from Scratch', link: '/features/card-editor/walkthrough' },
+          { text: 'Popup Mode', link: '/features/card-editor/popup' },
+          { text: 'CardApp Studio', link: '/features/card-editor/studio' },
+        ],
+      },
       { text: 'Search Tools', link: '/features/search-tools' },
       { text: 'Preset Assistant', link: '/features/preset-assistant' },
       { text: 'Per-Message Variables', link: '/features/variable-op-log' },
       { text: 'CardApp', link: '/features/cardapp' },
+      { text: 'State System', link: '/features/state-system' },
+      { text: 'Logging', link: '/features/logging' },
       { text: 'Prompt Groups', link: '/features/prompt-groups' },
       { text: 'Preset Groups', link: '/features/preset-groups' },
       { text: 'Hook Order', link: '/features/hook-order' },
+      { text: 'World Info Activation Trace', link: '/features/world-info-trace' },
+      { text: 'Plugin-Registered Regex', link: '/features/regex-provider' },
       { text: 'Other Features', link: '/features/other-features' },
     ],
   },
@@ -237,6 +317,9 @@ export default defineConfig({
   title: 'Luker',
   description: 'Next-gen Roleplay Chat Platform',
   base: '/',
+
+  // superpowers/ holds working specs and plans that aren't published docs.
+  srcExclude: ['superpowers/**', '**/README.md'],
 
   head: [
     ['meta', { name: 'theme-color', content: '#4F46E5' }],
@@ -309,5 +392,15 @@ export default defineConfig({
     returnToTopLabel: 'Back to top',
     sidebarMenuLabel: 'Menu',
     darkModeSwitchLabel: 'Theme',
+  },
+
+  markdown: {
+    config: (md) => {
+      configureDiagramsPlugin(md, {
+        diagramsDir: 'public/diagrams',
+        publicPath: '/diagrams',
+        krokiServerUrl: 'https://kroki.io',
+      })
+    },
   },
 })

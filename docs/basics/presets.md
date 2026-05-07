@@ -58,7 +58,11 @@ You can enable or disable each entry and edit their content.
 
 The arrangement order of prompt entries directly affects AI behavior. AI models typically pay more attention to content that appears later, so key instructions (such as character behavior guidelines) are usually placed close to the chat history.
 
-You can drag and drop to rearrange entry order.
+You can drag and drop to rearrange entry order:
+
+![Prompt manager: draggable list of entries](/images/presets/prompt-manager.png)
+
+Each entry shows a token count and an enable/disable toggle on the right. Entries marked with a star `*` are added by the current preset; entries like `Main Prompt` / `Char Description` / `World Info (before)` are SillyTavern's built-in standard entries.
 
 ### Prompt Groups
 

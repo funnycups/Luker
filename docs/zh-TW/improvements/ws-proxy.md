@@ -8,6 +8,33 @@ Luker 提供了 WebSocket（WS）代理功能，透過持久的 WebSocket 隧道
 
 WS 代理將這些請求透過一條**持久的 WebSocket 連線**進行傳輸。WebSocket 連線一旦建立，就會保持開啟狀態，所有的生成請求和回應都透過這條連線進行雙向通訊，無需反覆建立新連線。
 
+```d2
+direction: down
+
+HTTP: "傳統 HTTP 模式：每次新連" {
+  H_C1: "用戶端"
+  H_S1: "伺服器端"
+  H_C2: "用戶端"
+  H_S2: "伺服器端"
+  H_C3: "用戶端"
+  H_S3: "伺服器端"
+
+  H_C1 -> H_S1: "新建 TCP+TLS"
+  H_S1 -> H_C1: "回應+斷開" {style.stroke-dash: 3}
+  H_C2 -> H_S2: "新建 TCP+TLS"
+  H_S2 -> H_C2: "回應+斷開" {style.stroke-dash: 3}
+  H_C3 -> H_S3: "新建 TCP+TLS"
+}
+
+WS: "WS 代理：持久隧道" {
+  W_C: "用戶端"
+  W_S: "伺服器端"
+
+  W_C <-> W_S: "建立一次 WS 連線"
+  W_S <-> W_C: "心跳保活 + 多請求複用" {style.stroke-dash: 3}
+}
+```
+
 簡單來說：
 
 - **傳統 HTTP 模式**：每次生成 → 建立連線 → 發送請求 → 接收回應 → 關閉連線
@@ -46,6 +73,36 @@ WS 代理內建了多項健壯性機制：
 ## 內部調度機制
 
 WS 代理由兩段構成:**升級階段用一次性 ticket 完成鑑權**,**派發階段用 `app.handle()` 直接調度 Express 路由**。這樣請求依然會經過應用層中介軟體(cookie session、CSRF、登入檢查),但 Basic Auth 這層 HTTP 閘道只在 ticket 簽發時校驗一次,WS 通道本身就是認證邊界。
+
+```d2
+direction: down
+
+LOGIN: "頁面已登入\nbasicAuth + cookie session 已建立"
+TICKET_REQ: "用戶端 POST /api/ws-ticket\n(走完整 HTTP 中介軟體棧)"
+TICKET_RESP: "伺服器端 mintTicket\n32 位元組隨機 hex,30s TTL,單次使用" {
+  style.fill: "#fff3e0"
+}
+UP: "new WebSocket(url, [luker-ws-ticket.<ticket>])\nJS 把 ticket 塞進 Sec-WebSocket-Protocol"
+GATE: "server.on('upgrade')\nparse 子協議 → consumeTicket" {
+  style.fill: "#fff3e0"
+}
+WS_MSG: "WebSocket 訊息\n通道已被信任"
+
+DISPATCH: "派發鏈路" {
+  GOOD_MOCK: "構造 mock req/res\n打上 WS_PROXY_AUTH_BYPASS Symbol"
+  GOOD_HANDLE: "app.handle(req, res)"
+  GOOD_BASIC: "Basic Auth 中介軟體\n偵測到 Symbol → 直接放行"
+  GOOD_REST: "cookieSession / CSRF /\nrequireLogin 正常執行"
+  GOOD_RES: "串流 chunk 經 WS 隧道回傳" {
+    style.fill: "#e8f5e9"
+  }
+  GOOD_MOCK -> GOOD_HANDLE -> GOOD_BASIC -> GOOD_REST -> GOOD_RES
+}
+
+LOGIN -> TICKET_REQ -> TICKET_RESP -> UP -> GATE
+GATE -> WS_MSG: "通過"
+WS_MSG -> DISPATCH.GOOD_MOCK: "派發請求"
+```
 
 ### 為什麼用 ticket 而不是直接轉 Authorization
 

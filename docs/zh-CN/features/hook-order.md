@@ -12,7 +12,7 @@
 
 - 一个扩展负责翻译用户输入，另一个扩展负责内容过滤——翻译应该在过滤之前执行
 - 一个扩展修改提示词格式，另一个扩展添加额外上下文——格式化应该在添加上下文之后执行
-- [记忆图](/zh-CN/features/memory-graph)需要在[多Agent编排](/zh-CN/features/orchestrator)之前完成记忆检索
+- [记忆图](/zh-CN/features/memory-graph)需要在[多Agent编排](/zh-CN/features/orchestrator/)之前完成记忆检索
 
 如果没有明确的执行顺序控制，扩展之间的交互可能产生不可预期的结果。
 
@@ -22,12 +22,32 @@ Hook Order 支持第三方扩展的 ID 识别，你可以将第三方扩展纳�
 
 ## 上下移动排序界面
 
-Hook Order 提供直观的上下移动排序界面：
+Hook Order 在扩展面板里按事件类型分组展示，每个扩展有上移 / 下移按钮，列表顶部的扩展先执行：
 
-- 列出所有注册了钩子的扩展
-- 通过上移/下移按钮调整扩展的执行顺序
-- 排在列表上方的扩展优先执行
-- 支持按消息事件类型分别配置排序
+![Hook 顺序面板](/images/hook-order/hook-order-panel.png)
+
+```d2
+direction: right
+
+EVT: "generation_after_world_info_scan 触发"
+H1: "memory-graph 完成记忆检索" {
+  style.fill: "#e1f5ff"
+}
+H2: "search-tools 写入搜索结果到世界书" {
+  style.fill: "#fff3e0"
+}
+NEXT: "继续下一阶段"
+
+EVT -> H1 -> H2 -> NEXT
+```
+
+上图就是面板里 `世界书扫描后` 那一组——`memory-graph` 排在 `search-tools` 之前，意味着记忆检索先跑、搜索结果后写入。这一轮的记忆检索看不到 `search-tools` 当轮新写入的世界书条目；如果你希望搜索结果参与本轮的记忆检索，把 `search-tools` 上移到 `memory-graph` 之前即可。
+
+## 排序界面元素
+
+- **事件分组** — 每个事件（如 `generation_before_world_info_scan`、`generation_after_world_info_scan`）独立维护一份排序，互不影响
+- **上移 / 下移** — 调整该事件下扩展的执行顺序
+- **重置为检测到的顺序** — 按代码扫描到的注册顺序恢复
 
 ## 配置持久化
 
@@ -35,5 +55,5 @@ Hook Order 提供直观的上下移动排序界面：
 
 ## 相关功能
 
-- [多Agent编排](/zh-CN/features/orchestrator) — 编排器的多个 Agent 节点也有执行顺序
+- [多Agent编排](/zh-CN/features/orchestrator/) — 编排器的多个 Agent 节点也有执行顺序
 - [记忆图](/zh-CN/features/memory-graph) — 记忆检索的时机受钩子顺序影响

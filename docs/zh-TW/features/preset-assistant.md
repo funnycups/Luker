@@ -22,7 +22,13 @@
 
 ### 對話式互動
 
-補全預設助手以對話框的形式呈現。你可以用自然語言提問，例如：
+補全預設助手以對話框的形式呈現，左側是會話與對話歷史，右側是助手提出的草稿 diff，底部是自然語言輸入框：
+
+![補全預設助手對話框總覽](/images/preset-assistant/cpa-overview.png)
+
+頂部展示當前的目標預設、API 預設、提示詞預設，以及預設路徑的 lodash 語法提示。中部「參考預設」可以與另一個預設進行比較，把差異展示成草稿。
+
+你可以用自然語言提問，例如：
 
 - 「temperature 和 top_p 有什麼區別？」
 - 「我想讓回覆更有創意，應該調整哪些參數？」
@@ -59,4 +65,4 @@
 ## 相關功能
 
 - [預設解耦](/zh-TW/improvements/preset-decoupling) — 補全預設助手使用當前連線配置進行 AI 呼叫
-- [多Agent編排](/zh-TW/features/orchestrator) — 編排器中的節點同樣引用 LLM 預設
+- [多Agent編排](/zh-TW/features/orchestrator/) — 編排器中的節點同樣引用 LLM 預設

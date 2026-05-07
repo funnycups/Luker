@@ -4,6 +4,48 @@
 
 ## 两种工作模式
 
+```d2
+direction: right
+
+TOOL: "工具模式" {
+  T_USER: "用户提问"
+  T_LLM: "创作 LLM"
+  T_DECIDE: "LLM 判断\n需要搜索吗" {
+    shape: diamond
+  }
+  T_TOOL: "调用 luker_web_search\n/ luker_web_visit" {
+    style.fill: "#e1f5ff"
+  }
+  T_RESULT: "结果作为工具调用返回值\n注入对话上下文"
+  T_FINAL: "LLM 生成最终回复"
+
+  T_USER -> T_LLM -> T_DECIDE
+  T_DECIDE -> T_TOOL: "是"
+  T_TOOL -> T_RESULT
+  T_RESULT -> T_LLM
+  T_DECIDE -> T_FINAL: "否"
+}
+
+AGENT: "预请求 Agent 模式" {
+  A_USER: "用户提问"
+  A_AGENT: "搜索 Agent\n独立 LLM 预设"
+  A_DECIDE: "分析对话\n需要搜索吗" {
+    shape: diamond
+  }
+  A_SEARCH: "执行搜索\n多轮可循环"
+  A_WRITE: "结果写入世界书条目" {
+    style.fill: "#fff3e0"
+  }
+  A_LLM: "创作 LLM"
+  A_FINAL: "LLM 生成最终回复\n世界书条目作为参考资料注入"
+
+  A_USER -> A_AGENT -> A_DECIDE
+  A_DECIDE -> A_SEARCH: "是"
+  A_SEARCH -> A_WRITE -> A_LLM -> A_FINAL
+  A_DECIDE -> A_LLM: "否"
+}
+```
+
 ### 工具模式（Tool Mode）
 
 搜索功能作为创作 LLM 的可调用工具注册到[函数调用运行时](/zh-CN/improvements/function-call-runtime)中。当 AI 判断需要搜索信息时，会主动发起工具调用。
@@ -28,6 +70,14 @@
 
 **预请求 Agent 模式**则是在每次 AI 生成前自动执行搜索，搜索过程与主对话完全分离。适合希望每次回复都有最新信息支撑的场景。
 :::
+
+## 设置面板
+
+搜索插件的所有配置在扩展面板的「搜索工具」子项里：
+
+![搜索工具设置面板](/images/search-tools/search-tools-settings.png)
+
+顶部两个开关分别对应上文的两种模式（「暴露工具给主模型」= 工具模式，「请求前运行搜索 Agent」= 预请求 Agent 模式），可以单独或同时启用。下方是引擎选择、Agent 专用预设、世界书条目注入参数等。
 
 ## 支持的搜索引擎
 
@@ -54,7 +104,7 @@
 
 ## 全局 API
 
-搜索插件通过全局 API 供其他插件集成使用。例如[角色卡编辑助手](/zh-CN/features/card-editor#与搜索插件的集成)已集成搜索能力，可以在 Studio 中联网搜索资料辅助角色卡编辑。
+搜索插件通过全局 API 供其他插件集成使用。例如[角色卡编辑助手](/zh-CN/features/card-editor/)的[普通弹窗](/zh-CN/features/card-editor/popup)和 [CardApp Studio](/zh-CN/features/card-editor/studio) 都已集成搜索能力，可以在编辑过程中联网搜索资料辅助角色卡 / CardApp 编辑。
 
 ### 属性
 
@@ -126,6 +176,8 @@ if (api) {
 | Agent 最大轮次 | 预请求 Agent 的最大搜索轮次 |
 
 ::: info 相关页面
-- [角色卡编辑助手](/zh-CN/features/card-editor) — Studio 中的联网搜索能力
+- [角色卡编辑助手](/zh-CN/features/card-editor/) — 编辑助手概览（公共能力与入口）
+- [普通弹窗模式](/zh-CN/features/card-editor/popup) — 弹窗中的联网搜索
+- [CardApp Studio](/zh-CN/features/card-editor/studio) — Studio 中的联网搜索能力
 - [CardApp](/zh-CN/features/cardapp) — 角色卡应用化概念
 :::

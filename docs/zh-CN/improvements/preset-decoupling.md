@@ -24,6 +24,43 @@ Luker 将预设中的每个字段标记为「连接字段」或「生成参数�
 - **连接字段** — API 来源、自定义 URL、模型名称、反向代理地址、代理密码等
 - **生成参数字段** — Temperature、Top-P、最大 Token 数等
 
+```d2
+direction: right
+
+ST: "SillyTavern：耦合" {
+  ST_PRESET: "聊天补全预设"
+  ST_GEN: "生成参数\nTemperature / Top-P / ..."
+  ST_CONN: "连接字段\nAPI URL / Key / Model" {
+    style.fill: "#ffebee"
+    style.stroke: "#c62828"
+  }
+  SWITCH1: "切换预设"
+
+  ST_PRESET -> ST_GEN
+  ST_PRESET -> ST_CONN
+  SWITCH1 -> ST_GEN: {style.stroke-dash: 3}
+  SWITCH1 -> ST_CONN: "意外覆盖" {style.stroke-dash: 3}
+}
+
+LK: "Luker：解耦" {
+  LK_PRESET: "聊天补全预设"
+  LK_CONN: "连接配置"
+  LK_GEN: "只含生成参数"
+  LK_CONN_F: "只含连接字段" {
+    style.fill: "#e8f5e9"
+    style.stroke: "#2e7d32"
+  }
+  SWITCH2: "切换预设"
+  SWITCH3: "切换连接"
+
+  LK_PRESET -> LK_GEN
+  LK_CONN -> LK_CONN_F
+  SWITCH2 -> LK_GEN: {style.stroke-dash: 3}
+  SWITCH3 -> LK_CONN_F: {style.stroke-dash: 3}
+  SWITCH2 -- LK_CONN_F: "跳过连接字段" {style.stroke-dash: 3}
+}
+```
+
 这个分类是预设解耦的基础——所有涉及预设加载的逻辑都会检查字段类型来决定是否应用。
 
 ## 切换预设时自动跳过连接字段

@@ -4,6 +4,48 @@
 
 ## 兩種工作模式
 
+```d2
+direction: right
+
+TOOL: "工具模式" {
+  T_USER: "使用者提問"
+  T_LLM: "創作 LLM"
+  T_DECIDE: "LLM 判斷\n需要搜尋嗎" {
+    shape: diamond
+  }
+  T_TOOL: "呼叫 luker_web_search\n/ luker_web_visit" {
+    style.fill: "#e1f5ff"
+  }
+  T_RESULT: "結果作為工具呼叫回傳值\n注入對話上下文"
+  T_FINAL: "LLM 生成最終回覆"
+
+  T_USER -> T_LLM -> T_DECIDE
+  T_DECIDE -> T_TOOL: "是"
+  T_TOOL -> T_RESULT
+  T_RESULT -> T_LLM
+  T_DECIDE -> T_FINAL: "否"
+}
+
+AGENT: "預請求 Agent 模式" {
+  A_USER: "使用者提問"
+  A_AGENT: "搜尋 Agent\n獨立 LLM 預設"
+  A_DECIDE: "分析對話\n需要搜尋嗎" {
+    shape: diamond
+  }
+  A_SEARCH: "執行搜尋\n多輪可循環"
+  A_WRITE: "結果寫入世界書條目" {
+    style.fill: "#fff3e0"
+  }
+  A_LLM: "創作 LLM"
+  A_FINAL: "LLM 生成最終回覆\n世界書條目作為參考資料注入"
+
+  A_USER -> A_AGENT -> A_DECIDE
+  A_DECIDE -> A_SEARCH: "是"
+  A_SEARCH -> A_WRITE -> A_LLM -> A_FINAL
+  A_DECIDE -> A_LLM: "否"
+}
+```
+
 ### 工具模式（Tool Mode）
 
 搜尋功能作為創作 LLM 的可呼叫工具註冊到[函式呼叫執行時](/zh-TW/improvements/function-call-runtime)中。當 AI 判斷需要搜尋資訊時，會主動發起工具呼叫。
@@ -28,6 +70,14 @@
 
 **預請求 Agent 模式**則是在每次 AI 生成前自動執行搜尋，搜尋過程與主對話完全分離。適合希望每次回覆都有最新資訊支撐的場景。
 :::
+
+## 設定面板
+
+搜尋外掛的所有設定在擴充功能面板的「搜尋工具」子項裡：
+
+![搜尋工具設定面板](/images/search-tools/search-tools-settings.png)
+
+頂部兩個開關分別對應上文的兩種模式（「暴露工具給主模型」= 工具模式，「請求前執行搜尋 Agent」= 預請求 Agent 模式），可以單獨或同時啟用。下方是引擎選擇、Agent 專用預設、世界書條目注入參數等。
 
 ## 支援的搜尋引擎
 
@@ -54,7 +104,7 @@
 
 ## 全域 API
 
-搜尋外掛透過全域 API 供其他外掛整合使用。例如[角色卡編輯助手](/zh-TW/features/card-editor#與搜尋外掛的整合)已整合搜尋能力，可以在 Studio 中聯網搜尋資料輔助角色卡編輯。
+搜尋外掛透過全域 API 供其他外掛整合使用。例如[角色卡編輯助手](/zh-TW/features/card-editor/)的[普通彈窗](/zh-TW/features/card-editor/popup)和 [CardApp Studio](/zh-TW/features/card-editor/studio) 都已整合搜尋能力，可以在編輯過程中聯網搜尋資料輔助角色卡 / CardApp 編輯。
 
 ### 屬性
 
@@ -126,6 +176,8 @@ if (api) {
 | Agent 最大輪次 | 預請求 Agent 的最大搜尋輪次 |
 
 ::: info 相關頁面
-- [角色卡編輯助手](/zh-TW/features/card-editor) — Studio 中的聯網搜尋能力
+- [角色卡編輯助手](/zh-TW/features/card-editor/) — 編輯助手概覽（公共能力與入口）
+- [普通彈窗模式](/zh-TW/features/card-editor/popup) — 彈窗中的聯網搜尋
+- [CardApp Studio](/zh-TW/features/card-editor/studio) — Studio 中的聯網搜尋能力
 - [CardApp](/zh-TW/features/cardapp) — 角色卡應用化概念
 :::

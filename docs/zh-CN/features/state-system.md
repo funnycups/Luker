@@ -53,6 +53,34 @@ Luker 同样支持为预设附加状态数据。预设状态允许扩展在特�
 | 聊天状态 | 聊天同目录 sidecar（`<聊天名>.luker-state.<namespace>.json`） | 首次命名空间写入时创建；随聊天重命名/删除联动 |
 | 预设状态 | 预设同目录 sidecar（`<预设名>.luker-state.<namespace>.json`） | 首次命名空间写入时创建；随预设重命名/删除联动 |
 
+```d2
+direction: right
+
+CHAR: "角色目录" {
+  CHAR_MAIN: "Seraphina.png\n角色卡主文件" {
+    style.fill: "#e1f5ff"
+  }
+  CHAR_S1: "Seraphina.state.memory_graph.json\n记忆图状态"
+  CHAR_S2: "Seraphina.state.cardapp_studio.json\nStudio 会话"
+}
+
+CHAT: "聊天目录" {
+  CHAT_MAIN: "Seraphina-2026.jsonl\n聊天主文件" {
+    style.fill: "#e1f5ff"
+  }
+  CHAT_S1: "Seraphina-2026.luker-state.chat_sync.json\nintegrity / updated_at"
+  CHAT_S2: "Seraphina-2026.luker-state.luker_orchestrator__schema.json\n编排状态"
+  CHAT_S3: "Seraphina-2026.luker-state.memory_graph__meta.json\n记忆图元数据"
+}
+
+PRESET: "预设目录" {
+  P_MAIN: "for_my_athena.json\n预设主文件" {
+    style.fill: "#e1f5ff"
+  }
+  P_S1: "for_my_athena.luker-state.preset_assistant.json\n预设助手会话"
+}
+```
+
 所有状态数据都会持久化到磁盘，不会因为服务重启而丢失。状态文件的清理是自动的——当关联的角色、聊天或预设被删除时，对应的状态文件也会被自动清理。
 
 ## 使用场景

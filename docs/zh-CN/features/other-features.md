@@ -41,5 +41,5 @@ Luker 对图像生成的改进为 ComfyUI WebSocket 连接支持——使用 Web
 ## 相关功能
 
 - [搜索插件](/zh-CN/features/search-tools) — AI 联网搜索能力
-- [角色卡编辑器](/zh-CN/features/card-editor) — 增强的角色卡编辑体验
+- [角色卡编辑器](/zh-CN/features/card-editor/) — 增强的角色卡编辑体验
 - [记忆图谱](/zh-CN/features/memory-graph) — 基于知识图谱的记忆系统

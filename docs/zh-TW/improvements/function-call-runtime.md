@@ -10,6 +10,41 @@ Luker 內建了統一的函數呼叫（Function Calling）執行時，讓 AI 角
 - **協議透明** — 上層工具不需要關心底層使用的是原生 tool call 還是文字協議
 - **串流相容** — 支援串流回應中的工具呼叫解析和規範化
 
+```d2
+direction: down
+
+REG: "註冊工具 · 統一 schema 格式"
+DECIDE: "模型原生支援 tool call?" {
+  shape: diamond
+}
+
+NATIVE: "原生模式" {
+  style.fill: "#e8f5e9"
+  N_SCHEMA: "轉換為模型要求的 schema"
+  N_REQ: "請求中附加 tools 欄位"
+  N_RESP: "模型回傳結構化 tool_calls"
+  N_PARSE: "解析並執行工具"
+  N_SCHEMA -> N_REQ -> N_RESP -> N_PARSE
+}
+
+TEXT: "純文字模式" {
+  style.fill: "#fff3e0"
+  T_PROTO: "向 System Prompt 注入工具協議描述"
+  T_RESP: "模型回傳普通文字"
+  T_EXTRACT: "正則擷取工具呼叫標記"
+  T_EXEC: "解析並執行工具"
+  T_PROTO -> T_RESP -> T_EXTRACT -> T_EXEC
+}
+
+INJECT: "結果注入上下文 · 繼續生成"
+
+REG -> DECIDE
+DECIDE -> NATIVE.N_SCHEMA: "是"
+DECIDE -> TEXT.T_PROTO: "否"
+NATIVE.N_PARSE -> INJECT
+TEXT.T_EXEC -> INJECT
+```
+
 ## 原生模式
 
 當連線的模型原生支援 Function Calling 時（如 OpenAI、Claude、Gemini），Luker 使用模型的原生 tool call 格式。執行時會：

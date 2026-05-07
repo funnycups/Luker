@@ -347,3 +347,15 @@ html {
   color: var(--vp-c-brand-1);
   font-weight: 500;
 }
+
+/* ===== medium-zoom ===== */
+.main img {
+  cursor: zoom-in;
+}
+.medium-zoom-overlay {
+  z-index: 100;
+}
+.medium-zoom-image--opened {
+  z-index: 101;
+  cursor: zoom-out;
+}

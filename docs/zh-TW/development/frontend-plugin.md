@@ -206,6 +206,28 @@ Luker 的事件監聽器按以下優先順序**串行**執行（每個監聽器�
 | `MESSAGE_SWIPED` | 訊息被滑動切換 | `(messageId, meta?)` |
 | `MESSAGE_SWIPE_DELETED` | 滑動選項被刪除 | `({ messageId, swipeId, newSwipeId })` |
 
+#### MESSAGE_RECEIVED 的 type 參數
+
+`MESSAGE_RECEIVED` 的第二個參數 `type` 表示訊息來源類型：
+
+- 標準生成模式：`swipe`、`continue`、`append`、`appendfinal`
+- 非標準來源：`first_message`、`command`、`extension`
+
+#### MESSAGE_EDITED 的 meta 參數
+
+```ts
+(messageId: number, meta?: {
+  messageId: number,
+  playableSeq: number | null,
+  assistantSeq: number | null,
+  isUser: boolean,
+  isAssistant: boolean,
+  isSystem: boolean,
+})
+```
+
+`meta` 參數是向後相容的，可能不存在。當外掛需要根據被編輯訊息的位置或類型做出回應時使用。
+
 #### MESSAGE_DELETED 的 meta
 
 ```ts
@@ -231,7 +253,7 @@ Luker 的事件監聽器按以下優先順序**串行**執行（每個監聽器�
     previousSwipeId: number | null,
     nextSwipeId: number | null,
   },
-})
+)
 ```
 
 #### CHAT_BRANCH_CREATED 的 payload

@@ -54,17 +54,33 @@ Luker 新增了統一生成層端點（`/api/backends/luker-generation`），作
 
 ## 架構關係
 
-```
-前端請求
-  ↓
-各後端端點檔案（chat-completions.js、kobold.js 等）
-  ↓
-統一生成層
-  ├── Token 計量 → 請求檢查器
-  ├── 串流處理 → SSE 解析
-  └── 錯誤處理 → 規範化回應
-  ↓
-上游 AI 服務
+```d2
+direction: down
+
+FE: "前端發起 AI 生成請求"
+EP: "各後端端點檔案\nchat-completions.js / kobold.js / ..." {
+  shape: diamond
+}
+UL: "統一生成層\n/api/backends/luker-generation" {
+  style.fill: "#e1f5ff"
+}
+INSP: "請求檢查器\nToken 計量" {
+  style.fill: "#fff3e0"
+}
+SSE: "SSE 串流解析\n統一串流處理"
+ERR: "錯誤規範化"
+UPSTREAM: "上游 AI 服務\nOpenAI / Anthropic / Google / Kobold ..."
+
+FE -> EP
+EP -> INSP: "startInspection"
+EP -> UL
+UL -> SSE
+UL -> INSP
+UL -> ERR
+UL -> UPSTREAM
+UPSTREAM -> SSE: "串流回應" {style.stroke-dash: 3}
+SSE -> INSP: "completeInspectionFromStream"
+ERR -> INSP: "failInspection"
 ```
 
 > [!NOTE]

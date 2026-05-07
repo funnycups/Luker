@@ -34,13 +34,13 @@ Luker 内置了多个面向角色扮演场景的专业工具——记忆图、�
 
 在创作 LLM 生成回复之前，自动运行多个 Agent 进行剧情分析和编排。提供三种执行模式：Spec 工作流（预定义阶段和节点）、单 Agent 模式和 Agenda 规划器（动态调度）。编排配置可绑定到角色卡并随角色卡导入导出。
 
-→ [多 Agent 编排详细文档](/zh-CN/features/orchestrator)
+→ [多 Agent 编排详细文档](/zh-CN/features/orchestrator/)
 
 ### 角色卡编辑助手（CEA / CardApp Studio）
 
-集成 CodeMirror 6 代码编辑器的 AI 辅助角色卡编辑工具。支持通过自然语言对话编辑角色卡和世界书，每批修改提供 diff 审批。当角色卡更新时，自动检测世界书变更并提供智能同步方案。
+集成 CodeMirror 6 代码编辑器的 AI 辅助角色卡编辑工具。支持通过自然语言对话编辑角色卡和世界书，每批修改提供 diff 审批。当角色卡更新时，自动检测世界书变更并提供智能同步方案。普通角色卡用弹窗版编辑助手，含 CardApp 的角色卡进入功能更完整的 Studio。
 
-→ [角色卡编辑助手详细文档](/zh-CN/features/card-editor)
+→ [角色卡编辑助手概览](/zh-CN/features/card-editor/)　·　[普通弹窗](/zh-CN/features/card-editor/popup)　·　[CardApp Studio](/zh-CN/features/card-editor/studio)
 
 ### 搜索插件（Search Tools）
 

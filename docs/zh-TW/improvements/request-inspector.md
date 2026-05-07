@@ -19,6 +19,39 @@ Luker 實現了一套完整的請求生命週期追蹤系統，涵蓋文字生�
 3. **失敗**（`failInspection`）— 請求出錯，記錄錯誤資訊
 4. **中止**（`abortInspection`）— 使用者主動取消生成
 
+```d2
+direction: down
+
+start: "" {
+  shape: circle
+  width: 20
+  style.fill: "#222"
+}
+in_progress: "進行中"
+done: "完成"
+failed: "失敗"
+aborted: "中止"
+end_: "" {
+  shape: circle
+  width: 20
+  style.fill: "#222"
+}
+
+note: "串流回應額外透過 completeInspectionFromStream\n從 SSE 事件擷取 usage" {
+  shape: text
+  style.fill: "#fff8d4"
+}
+
+start -> in_progress: "startInspection 記錄中繼資料"
+in_progress -> done: "completeInspection 記錄 Token 用量"
+in_progress -> failed: "failInspection 記錄錯誤訊息"
+in_progress -> aborted: "abortInspection 使用者取消"
+done -> end_
+failed -> end_
+aborted -> end_
+in_progress -- note: {style.stroke-dash: 3}
+```
+
 ### Token 用量統計
 
 請求檢查器記錄每次生成的詳細 Token 資料：

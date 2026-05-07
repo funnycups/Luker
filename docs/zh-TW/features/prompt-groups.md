@@ -2,6 +2,10 @@
 
 提示詞分組是 Luker 在 SillyTavern 原有 PromptManager 基礎上新增的組織功能。它允許使用者將多個提示詞條目歸入命名分組，在提示詞管理器的列表中以可折疊的分組形式展示，幫助管理複雜的提示詞結構。
 
+![提示詞分組](/images/presets/prompt-groups.png)
+
+上圖展示了三個分組（角色設定、對話歷史區、尾部破限）展開後的狀態，每個分組 header 帶成員數量標籤和批次啟用開關，下方未分組的提示詞條目（Main Prompt、World Info before）保持在頂層。
+
 ## 資料模型
 
 ### identifiers 欄位

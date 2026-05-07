@@ -30,77 +30,49 @@ The handle returned by `registerManagedRegexProvider` provides `upsertScript`, `
 
 ## Search Tools API
 
-The search plugin exposes its API through the `Luker.searchTools` global object, allowing other plugins to leverage search capabilities:
+The search plugin exposes its API through the `Luker.searchTools` global object so other plugins can leverage search capabilities:
 
 ```js
-// Check if the search plugin is available
+// Check whether the search plugin is available
 if (globalThis?.Luker?.searchTools) {
   // Get the list of available search tool names
   const toolNames = Luker.searchTools.toolNames;
   // Get tool definitions (for function calling)
   const toolDefs = Luker.searchTools.getToolDefs();
-  // Check if a tool name belongs to search tools
+  // Check whether a tool name belongs to search tools
   const isSearchTool = Luker.searchTools.isToolName('web_search');
 }
 ```
 
-`Luker.searchTools` exposes tool definition metadata; actual search execution is performed through the internal tool-calling loop. See [Search Tools](/features/search-tools) for details.
+`Luker.searchTools` exposes tool definition metadata; actual search execution happens via the internal tool-calling loop. See [Search Tools](/features/search-tools) for details.
 
-## Extension API Registry
+## Inter-Extension Communication
 
-Extensions can register public APIs and consume other extensions' APIs through the `registerExtensionApi` / `getExtensionApi` mechanism. This provides a decoupled way for extensions to expose functionality without direct module imports.
-
-### registerExtensionApi(name, api)
-
-Registers a public API object under a unique name. If a name is already registered, a warning is logged to the console and the existing API is overwritten.
+### registerExtensionApi
 
 ```js
-context.registerExtensionApi('my-extension', {
+context.registerExtensionApi('my-plugin', {
   doSomething: () => { /* ... */ },
   getData: () => myData,
-  onEvent: (callback) => { /* ... */ },
 });
 ```
 
-- **name** — A unique string identifier for the API (conventionally matches the extension's package name)
-- **api** — Any object that other extensions will interact with
+Registers an API object under a given name so other extensions can retrieve it via `getExtensionApi`. If the name is already registered, a warning is logged to the console and the existing entry is overwritten.
 
-### getExtensionApi(name)
-
-Retrieves a previously registered API by name. Returns `undefined` if no API has been registered under that name.
+### getExtensionApi
 
 ```js
-const api = context.getExtensionApi('my-extension');
+const api = context.getExtensionApi('other-plugin');
 if (api) {
   api.doSomething();
 }
 ```
 
-Both methods are available on the context object returned by `getContext()`:
-
-```js
-const context = Luker.getContext();
-context.registerExtensionApi('name', apiObj);
-context.getExtensionApi('name');
-```
+Retrieves an API object registered by another extension. Returns `undefined` if no API is registered under that name.
 
 ### Typical Usage
 
-A common pattern is for an extension to register its API during initialization so other extensions can consume it:
-
-```js
-// In extension A's init code:
-context.registerExtensionApi('card-app', {
-  getActiveApp: () => activeApp,
-  sendMessage: (text) => { /* ... */ },
-});
-
-// In extension B's init code:
-const cardApp = context.getExtensionApi('card-app');
-if (cardApp) {
-  const app = cardApp.getActiveApp();
-}
-```
+The most common use case is decoupling: one extension provides a capability, another consumes it, without a hard-coded import dependency. For example, CardApp Studio exposes its editor API via `registerExtensionApi`, and other extensions can call it directly once Studio is ready.
 
 ## Event System
 

@@ -206,16 +206,27 @@ Luker's event listeners execute **serially** in the following priority order (ea
 | `MESSAGE_SWIPED` | Message swiped | `(messageId, meta?)` |
 | `MESSAGE_SWIPE_DELETED` | Swipe option deleted | `({ messageId, swipeId, newSwipeId })` |
 
-### System Events
+#### MESSAGE_RECEIVED type parameter
 
-| Event | Trigger Timing | Callback Arguments |
-|-------|----------------|--------------------|
-| `APP_READY` | Application initialization completed | `(void)` |
-| `SETTINGS_UPDATED` | Settings saved | `(void)` |
-| `CHARACTER_FIRST_MESSAGE_SELECTED` | First message selected | `(payload)` |
-| `WORLDINFO_UPDATED` | World Info updated | `(payload)` |
+The second argument `type` of `MESSAGE_RECEIVED` indicates the source of the message:
 
-### Event Payload Details
+- Standard generation modes: `swipe`, `continue`, `append`, `appendfinal`
+- Non-standard sources: `first_message`, `command`, `extension`
+
+#### MESSAGE_EDITED meta
+
+```ts
+(messageId: number, meta?: {
+  messageId: number,
+  playableSeq: number | null,
+  assistantSeq: number | null,
+  isUser: boolean,
+  isAssistant: boolean,
+  isSystem: boolean,
+})
+```
+
+`meta` is backward-compatible and may be absent. Use it when a plugin needs to react based on the position or type of the edited message.
 
 #### MESSAGE_DELETED meta
 
@@ -242,7 +253,7 @@ Luker's event listeners execute **serially** in the following priority order (ea
     previousSwipeId: number | null,
     nextSwipeId: number | null,
   },
-})
+)
 ```
 
 #### CHAT_BRANCH_CREATED payload
@@ -473,10 +484,7 @@ During development, you can trigger a reload by disabling/enabling the plugin th
 
 ## Related Pages
 
-## See Also
-
-- [Frontend Plugin Development](/development/frontend-plugin) — Frontend extension development guide
 - [Server Plugin Development](/development/server-plugin) — Server-side plugin development guide (filesystem, API proxy, credential storage)
 - [Extension API Reference](/development/extension-api/) — Complete API list with detailed parameter descriptions
-- [Character Card Development](/development/card-developers) — Character Card extension fields and CardApp development
-- [Contributing Guide](/development/contributing) — How to submit code to Luker
+- [Card Developer Guide](/development/card-developers) — Character card extension fields and CardApp development
+- [Contributing](/development/contributing) — How to submit code to Luker

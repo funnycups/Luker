@@ -2,6 +2,10 @@
 
 Preset Groups is a grouping display feature introduced by Luker for the preset selector. When you've accumulated a large number of presets, a flat dropdown list becomes difficult to manage. Preset Groups allow you to organize presets into named groups, displayed in the dropdown selector with a hierarchical structure of group headers and members.
 
+![Preset groups in the dropdown](/images/presets/preset-groups.png)
+
+In the screenshot, ungrouped presets stay at the top of the list, followed by several group headers. Each header carries a member count and a collapse chevron; expanding shows indented members underneath, and the trailing icons let you reassign or delete a preset.
+
 ## Data Model
 
 Each group contains the following fields:

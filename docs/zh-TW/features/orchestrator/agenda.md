@@ -1,0 +1,94 @@
+# Agenda 模式
+
+Agenda 用一個 **Planner Agent** 替換 Spec 的靜態 DAG。Planner 維護 todo 列表,透過工具呼叫動態調度其他 Agent,讀它們的輸出,決定下一步派誰去——本質是一個 Agent loop。
+
+什麼時候用 Agenda 而不是 Spec:
+
+- 流程要根據中間結果決定下一步派誰。比如「先看看使用者輸入有沒有破規傾向,有的話才啟動 Constraint Agent」——這種「有條件觸發」在 Spec 的固定 DAG 裡很彆扭。
+- 你想要更靈活的多 Agent 協作,而不是固定的 stage → node 拓撲。
+- 用 [Function Call Runtime](/zh-TW/improvements/function-call-runtime) 的能力讓 Planner 自己組織調度。
+
+::: tip Agenda 不是 Spec 的替代
+Spec 的可預期性、prompt 緩存友好度、debug 友好度都比 Agenda 強。絕大多數 RP 場景固定 DAG 已經夠用,Agenda 是給確實需要動態調度的場景準備的。
+:::
+
+::: warning 99% 的人不該手撸
+手撸 Planner prompt 之前先看一眼 [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio)——一句話描述需求,AI 給你一份 Planner + Agent 池的方案,逐條審。
+:::
+
+## Agenda 編輯器
+
+切到 Agenda 模式後,從編排器面板點 **打開編排編輯器**。
+
+![Agenda 編輯器](/images/orchestrator/orch-agenda-editor.png)
+
+左邊是 **Planner Prompt** 設定區(API 預設、提示詞預設、System Prompt、Planner Prompt 模板);右邊是可用的 Agenda Agents 列表——Planner 透過工具呼叫從這個池子裡挑 Agent 派任務。
+
+### Planner
+
+Planner 是 Agenda 的核心,它做幾件事:
+
+1. 讀最近聊天 + 使用者訊息
+2. 維護一個 todo 列表(下一步該做什麼)
+3. 調度 Agenda Agent 池裡的 Agent 去做任務
+4. 收集 Agent 輸出
+5. 根據收集到的內容決定下一步,或者認為足夠了就停下,把最後一個 Agent 輸出當 capsule 注入主模型
+
+### Agenda Agents
+
+每個 Agenda Agent 類似 Spec 的 Node:有自己的 System Prompt、User Prompt Template、可選的 API / Chat Completion 預設覆寫。區別在於 Agent 不綁死在某個 stage,**何時被呼叫、被呼叫幾次、是否被呼叫,都由 Planner 決定**。
+
+### 三個運行時上限
+
+Agenda 是動態調度,失控容易,所以有三道閘:
+
+- **Planner 最大輪數** — Planner 調度的輪數上限
+- **最大並發 Agent 數** — 同時跑的 Agent 數量上限(`Promise.all` 的並發度)
+- **總執行次數上限** — 整次跑裡所有 Agent 呼叫次數總和
+
+到任一上限就強制收尾。
+
+## AI 迭代工作台
+
+和 Spec 一樣,Agenda 也有 AI 迭代工作台支援——自然語言描述 Planner 行為 / Agent 池構成,AI 幫你搭。詳見 [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio)。Quick Build 也適用 Agenda。
+
+## 與 Spec 的互轉
+
+編排編輯器裡有 **複製 Spec Agents 到 Agenda** / **複製 Agenda Agents 到 Spec** 按鈕可以快速搬運 Agent 池(盡力而為)。**注意**:
+
+- Spec → Agenda 時,stage 拓撲資訊丟失,需要你重新寫 Planner Prompt 描述調度邏輯
+- Agenda → Spec 時,Planner 的動態調度無法完整對映到固定 DAG,需要你手動決定 stage 劃分
+
+## Function Call Runtime 依賴
+
+Agenda 模式的 Planner 調度透過 OpenAI 工具呼叫實現,依賴 Luker 的 [Function Call Runtime](/zh-TW/improvements/function-call-runtime) 框架。這意味著:
+
+- Planner 用的連接設定必須支援 function calling(OpenAI / Claude / Gemini 都支援)
+- 工具呼叫失敗時的重試由 Function Call Runtime 處理(詳見對應文件)
+
+## Agenda 設定參考
+
+<details>
+<summary>Agenda 專屬設定</summary>
+
+| 設定 | 說明 |
+|---|---|
+| Planner 最大輪數 | Planner 調度的輪數上限 |
+| 最大並發 Agent 數 | 同時跑的 Agent 數量上限 |
+| 總執行次數上限 | 整次跑裡所有 Agent 呼叫次數總和 |
+| Planner API 預設 | Planner 節點用的 Connection profile |
+| Planner Chat Completion 預設 | Planner 節點用的提示詞預設 |
+| Planner System Prompt | Planner 的 system 指令 |
+| Planner Prompt 模板 | Planner 的 user prompt 模板 |
+| Final Agent | 收尾時把哪個 Agent 的輸出當 capsule |
+| Agenda Agent 池 | 各 Agent 的預設 / prompt(可獨立覆寫 API 與 Chat Completion 預設) |
+
+</details>
+
+## 相關頁面
+
+- [編排器概覽](/zh-TW/features/orchestrator/) — 通用設定 / 觸發時機 / 角色卡綁定
+- [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio) — AI 幫你寫 Planner + Agent 池(推薦)
+- [Spec 模式](/zh-TW/features/orchestrator/spec) — 預設的 DAG 模式
+- [Loop 模式](/zh-TW/features/orchestrator/loop) — 單 Agent 工具循環
+- [Function Call Runtime](/zh-TW/improvements/function-call-runtime) — Planner 調度依賴此框架

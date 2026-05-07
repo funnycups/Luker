@@ -153,10 +153,9 @@ Luker/
 │   │   │   └── third-party/  # Third-party plugins
 │   │   └── ...            # Core modules
 │   └── ...                # Static assets
-├── docs/                  # Documentation
-│   ├── zh-CN/             # Chinese documentation
-│   ├── zh-TW/             # Traditional Chinese documentation
-│   └── en/                # English documentation
+├── docs/                  # Documentation (English at root)
+│   ├── zh-CN/             # Simplified Chinese documentation
+│   └── zh-TW/             # Traditional Chinese documentation
 └── config.yaml            # Server configuration
 ```
 
@@ -171,16 +170,16 @@ Luker/
 
 Documentation is located in the `docs/` directory and uses Markdown format:
 
-- Chinese documentation: `docs/zh-CN/`
+- English documentation: `docs/` (root)
+- Simplified Chinese documentation: `docs/zh-CN/`
 - Traditional Chinese documentation: `docs/zh-TW/`
-- English documentation: `docs/en/` (if available)
 
 Documentation contributions follow the same PR workflow described above. When writing documentation, please note:
 
 - Use accurate technical terminology
 - Keep code and API names in English
 - Use code blocks and tables where appropriate
-- Use `/zh-CN/`, `/zh-TW/`, or `/en/` prefixed paths for cross-references
+- For cross-references, English uses unprefixed paths (e.g., `/development/contributing`); Chinese versions use `/zh-CN/` or `/zh-TW/` prefixes
 - All files must use LF line endings
 
 ## Reporting Issues

@@ -22,7 +22,13 @@ Based on your usage goals (such as more creative responses, more stable output, 
 
 ### Conversational Interaction
 
-The Completion Preset Assistant is presented as a dialog. You can ask questions in natural language, for example:
+The Completion Preset Assistant is a dialog with the conversation history on the left, the assistant's draft diffs on the right, and a natural-language input at the bottom:
+
+![Completion Preset Assistant overview](/images/preset-assistant/cpa-overview.png)
+
+The top of the dialog shows the current target preset, API preset, prompt preset, and a hint about the lodash syntax for preset paths. The middle "Reference preset" lets you compare against another preset and renders the diff as a draft.
+
+You can ask questions in natural language, for example:
 
 - "What's the difference between temperature and top_p?"
 - "I want more creative responses — which parameters should I adjust?"
@@ -59,4 +65,4 @@ The Completion Preset Assistant uses the current connection configuration for AI
 ## Related Features
 
 - [Preset Decoupling](/improvements/preset-decoupling) — The Completion Preset Assistant uses the current connection configuration for AI calls
-- [Multi-Agent Orchestration](/features/orchestrator) — Nodes in the Orchestrator also reference LLM presets
+- [Multi-Agent Orchestration](/features/orchestrator/) — Nodes in the Orchestrator also reference LLM presets

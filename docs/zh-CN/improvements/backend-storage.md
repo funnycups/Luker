@@ -28,11 +28,53 @@ Luker 通过后端实时存储彻底解决了这些问题。
 
 状态文件与聊天文件分离存储，避免了在聊天文件中频繁更新 integrity 值导致的全文件重写。
 
+```d2
+direction: right
+
+DIR: "chats/<角色名>/"
+CHAT: "{chat}.jsonl" {
+  style.fill: "#e1f5ff"
+}
+STATE: "{chat}.luker-state.chat_sync.json" {
+  style.fill: "#fff3e0"
+}
+NS1: "{chat}.luker-state.memory_graph__meta.json"
+NS2: "{chat}.luker-state.luker_orchestrator__schema.json"
+
+DIR -> CHAT
+DIR -> STATE
+DIR -> NS1
+DIR -> NS2
+```
+
+- `{chat}.jsonl` — 聊天主文件
+- `{chat}.luker-state.chat_sync.json` — integrity + updated_at(同步元数据)
+- `{chat}.luker-state.<namespace>.json` — 各插件的 namespace 状态(每个插件一份独立 sidecar)
+
 如果状态文件不存在（例如从旧版本迁移的聊天），系统会自动回退处理，并在首次写入时自动创建状态文件。
 
 ## Generation Acknowledge
 
 在 AI 生成场景中，Luker 的统一生成层实现了 Generation Acknowledge 机制。当后端完成一次生成并将结果持久化后，会在响应中确认生成结果已被服务端安全存储。
+
+```d2
+shape: sequence_diagram
+
+FE: "前端"
+BE: "后端（统一生成层）"
+LLM: "上游 LLM"
+Disk: "磁盘"
+
+FE -> BE: "发起 AI 生成请求"
+BE -> LLM: "转发请求"
+LLM -> BE: "流式响应"
+BE -> Disk: "实时持久化生成结果"
+Disk -> BE: "写入完成"
+BE -> FE: "返回响应 + acknowledge"
+FE -> FE: "更新本地 integrity 状态"
+
+BE."即使前端在收到 ack 后崩溃,数据已落盘"
+```
 
 这意味着即使前端在收到生成结果后立即崩溃，数据也不会丢失——因为后端已经在返回响应之前完成了持久化。前端收到确认后更新本地的 integrity 状态，保持与服务端的同步。
 

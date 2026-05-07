@@ -64,6 +64,27 @@ You can set an activation probability (0–100%) for an entry. Even if a keyword
 
 When an entry is activated, its content is also included in the keyword scan range. This means if Entry A's content contains Entry B's keywords, Entry B will also be activated. This chain activation can build complex knowledge association networks.
 
+```d2
+direction: right
+
+MSG: "Recent message:\n\"I'm going to the Elven Forest to find Aestralar\""
+EA: "Entry A: Elven Forest\nKeywords: elf / forest" {
+  style.fill: "#e1f5ff"
+}
+EB: "Entry B: Aestralar\nKeywords: Aestralar" {
+  style.fill: "#fff3e0"
+}
+EC: "Entry C: Ancient Pact\nKeywords: pact" {
+  style.fill: "#fff3e0"
+}
+EA_BODY: "A's content mentions\n\"Aestralar guards the ancient pact\""
+
+MSG -> EA: "matches keyword 'elf'"
+EA -> EA_BODY
+EA_BODY -> EB: "recursive scan hits 'Aestralar'"
+EA_BODY -> EC: "recursive scan hits 'pact'"
+```
+
 ## World Info Binding
 
 World Info can be associated with characters and chats in several ways:

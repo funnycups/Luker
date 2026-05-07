@@ -19,6 +19,39 @@ Luker 实现了一套完整的请求生命周期追踪系统，覆盖文本生�
 3. **失败**（`failInspection`）— 请求出错，记录错误信息
 4. **中止**（`abortInspection`）— 用户主动取消生成
 
+```d2
+direction: down
+
+start: "" {
+  shape: circle
+  width: 20
+  style.fill: "#222"
+}
+in_progress: "进行中"
+done: "完成"
+failed: "失败"
+aborted: "中止"
+end_: "" {
+  shape: circle
+  width: 20
+  style.fill: "#222"
+}
+
+note: "流式响应额外通过 completeInspectionFromStream\n从 SSE 事件提取 usage" {
+  shape: text
+  style.fill: "#fff8d4"
+}
+
+start -> in_progress: "startInspection 记录元数据"
+in_progress -> done: "completeInspection 记录 Token 用量"
+in_progress -> failed: "failInspection 记录错误信息"
+in_progress -> aborted: "abortInspection 用户取消"
+done -> end_
+failed -> end_
+aborted -> end_
+in_progress -- note: {style.stroke-dash: 3}
+```
+
 ### Token 用量统计
 
 请求检查器记录每次生成的详细 Token 数据：
