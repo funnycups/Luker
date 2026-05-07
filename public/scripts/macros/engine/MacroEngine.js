@@ -114,7 +114,7 @@ class MacroEngine {
      *        positioning for macros like {{pick}} that seed on position.
      * @returns {string} The resolved string.
      */
-    evaluate(input, env, { contextOffset = 0 } = {}) {
+    evaluate(input, env, { contextOffset = 0, keepEscapes = false } = {}) {
         if (!input) {
             return '';
         }
@@ -153,7 +153,7 @@ class MacroEngine {
             return input;
         }
 
-        const result = this.#runPostProcessors(evaluated, safeEnv);
+        const result = this.#runPostProcessors(evaluated, safeEnv, { keepEscapes });
 
         return result;
     }
@@ -259,9 +259,10 @@ class MacroEngine {
      * @param {MacroEnv} env - The environment to pass to the macro handler.
      * @returns {string} The processed text.
      */
-    #runPostProcessors(text, env) {
+    #runPostProcessors(text, env, { keepEscapes = false } = {}) {
         let result = text;
-        for (const { handler } of this.#postProcessors) {
+        for (const { handler, source } of this.#postProcessors) {
+            if (keepEscapes && source === 'core:unescape-braces') continue;
             result = handler(result, env);
         }
         return result;
