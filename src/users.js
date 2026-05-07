@@ -187,6 +187,32 @@ function logSecurityAlert(message) {
 }
 
 /**
+ * Generates a random password for each admin user without one, persists it,
+ * and prints the resulting credentials to stderr. Caller is responsible for
+ * deciding when this should run (i.e. no other protection layer is active).
+ * @param {Array<import('./users.js').User>} adminUsers
+ * @returns {Promise<void>}
+ */
+async function provisionRandomAdminPasswords(adminUsers) {
+    const banner = '='.repeat(60);
+    const sep = '-'.repeat(60);
+    for (const user of adminUsers) {
+        const password = crypto.randomBytes(12).toString('base64url');
+        const salt = getPasswordSalt();
+        user.password = getPasswordHash(password, salt);
+        user.salt = salt;
+        await storage.setItem(toKey(user.handle), user);
+        console.error(color.red(banner));
+        console.error(color.red(' Luker generated a random password for an admin account.'));
+        console.error(color.red(' Save it now and change it after first login.'));
+        console.error(color.red(sep));
+        console.error(`   user: ${color.yellow(user.handle)}`);
+        console.error(`   pass: ${color.yellow(password)}`);
+        console.error(color.red(banner));
+    }
+}
+
+/**
  * Verifies the security settings and prints warnings if necessary
  * @returns {Promise<void>}
  */
@@ -214,7 +240,21 @@ export async function verifySecuritySettings() {
         console.log();
 
         if (unprotectedAdminUsers.length > 0) {
-            logSecurityAlert('If you are not using basic authentication or whitelisting, you should set a password for all admin users.');
+            const { basicAuthMode: hasBasicAuth, whitelistMode: hasWhitelist } = globalThis.COMMAND_LINE_ARGS;
+            if (!hasBasicAuth && !hasWhitelist) {
+                if (getConfigValue('securityOverride', false, 'boolean')) {
+                    console.error(color.red('If you are not using basic authentication or whitelisting, you should set a password for all admin users.'));
+                    console.warn(color.red('Security has been overridden. If it\'s not a trusted network, change the settings.'));
+                } else {
+                    try {
+                        await provisionRandomAdminPasswords(unprotectedAdminUsers);
+                    } catch (err) {
+                        console.error(color.red(`Failed to auto-provision admin passwords: ${err.message}`));
+                        console.error(color.red('Refusing to start with unprotected admin accounts.'));
+                        process.exit(1);
+                    }
+                }
+            }
         }
     }
 
