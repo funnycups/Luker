@@ -1,5 +1,12 @@
 import { defineConfig } from 'vitepress'
-import { configureDiagramsPlugin } from 'vitepress-plugin-diagrams'
+import { createBuildTimeDiagramsPlugin } from 'vitepress-plugin-diagrams'
+
+const diagrams = createBuildTimeDiagramsPlugin({
+  diagramsDir: 'public/diagrams',
+  publicPath: '/diagrams',
+  diagramsDistDir: 'diagrams',
+  krokiServerUrl: 'https://kroki.io',
+})
 
 const zhCNSidebar = [
   {
@@ -396,11 +403,11 @@ export default defineConfig({
 
   markdown: {
     config: (md) => {
-      configureDiagramsPlugin(md, {
-        diagramsDir: 'public/diagrams',
-        publicPath: '/diagrams',
-        krokiServerUrl: 'https://kroki.io',
-      })
+      diagrams.configureMarkdown(md)
     },
+  },
+
+  vite: {
+    plugins: [diagrams.vitePlugin()],
   },
 })
