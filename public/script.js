@@ -270,6 +270,7 @@ import { appendFileContent, hasPendingFileAttachment, populateFileAttachment, de
 import { getPresetManager, initPresetManager } from './scripts/preset-manager.js';
 import { evaluateMacros, getLastMessageId, initMacros } from './scripts/macros.js';
 import { initVariableOpLog, extractMessageById } from './scripts/variable-op-log/index.js';
+import { extractFromText as extractSideEffectMacrosFromText } from './scripts/variable-op-log/extractor.js';
 import { initVarOpsPanelHandler } from './scripts/variable-op-log/panel.js';
 import { installFrontendLogCapture, setFrontendConsoleDebugLoggingEnabled } from './scripts/frontend-log-manager.js';
 import { initDebugExportButton } from './scripts/debug-export.js';
@@ -5132,6 +5133,16 @@ export function substituteParams(content, options = {}) {
         return substituteParamsLegacy(content, options.name1Override, options.name2Override, options.original, options.groupOverride, options.replaceCharacterCard, options.dynamicMacros, options.postProcessFn);
     }
 
+    if (options.skipSideEffects) {
+        // Strip setvar/addvar/incvar/decvar/deletevar literals before the macro
+        // engine evaluates them, so prompt-formatting passes (e.g. baseChatReplace
+        // on character.first_mes / alternate_greetings) don't keep re-firing the
+        // bootstrap macros and resetting chat_metadata.variables on every
+        // assembly. The dummy state is discarded — we only want the cleaned text.
+        const { mes } = extractSideEffectMacrosFromText(content, {}, () => ({}));
+        content = mes;
+    }
+
     const ctx = /** @type {import('./scripts/macros/engine/MacroEnvBuilder.js').MacroEnvRawContext} */ ({
         content,
         name1Override: options.name1Override,
@@ -5478,7 +5489,13 @@ export async function getExtensionPrompt(position = extension_prompt_types.IN_PR
  */
 export function baseChatReplace(value, name1Override = null, name2Override = null) {
     if (typeof value === 'string' && value.length > 0) {
-        value = substituteParams(value, { name1Override, name2Override, replaceCharacterCard: false });
+        // skipSideEffects:true — character card fields (first_mes, alternate
+        // greetings, persona blocks) get rendered into prompt templates on every
+        // assembly. Their setvar / addvar / etc. literals are meant to fire ONCE
+        // when first_mes lands in chat[0] and op-log scans it, not every time
+        // the prompt is rebuilt. Without this flag, every generation would reset
+        // chat_metadata.variables back to the first_mes initial values.
+        value = substituteParams(value, { name1Override, name2Override, replaceCharacterCard: false, skipSideEffects: true });
 
         if (power_user.collapse_newlines) {
             value = collapseNewlines(value);
