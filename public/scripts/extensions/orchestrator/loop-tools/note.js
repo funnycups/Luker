@@ -1,9 +1,16 @@
 /**
- * loop-tools/note.js — note.add tool for loop mode (Plan Task 11).
+ * loop-tools/note.js — note tools for loop mode (Plan Task 11).
  *
- * `note.add` lets the agent persist a free-form text note that survives
- * across loop runs and is re-injected into the agent's system prompt at
- * the start of each subsequent run. The mechanism is:
+ * Two tools:
+ *
+ *   - `note.add` appends a free-form note (per-chat, cross-run). Notes
+ *     re-inject at the start of every subsequent loop run as a numbered
+ *     `## Previous Notes` block.
+ *   - `note.delete` removes notes by their 1-based positions in that
+ *     same numbered block, so the agent can prune entries whose role is
+ *     exhausted (foreshadowing fired, setting superseded, etc.).
+ *
+ * The mechanism behind both:
  *
  *   1. Each note is appended to a per-chat floor-state namespace
  *      (`luker_orch_loop_notes`) tagged at a target floor — defaults to
@@ -14,15 +21,19 @@
  *      adapter's `listAcrossFloors()` helper. Loop-runtime calls this
  *      once at run start and stashes the result on `context.__loopNotes`,
  *      which `buildInitialMessages` joins into the system prompt under a
- *      "## Previous Notes" header.
+ *      "## Previous Notes" header — same array, same order, same 1-based
+ *      numbering the agent sees.
  *   3. LRU pruning at 50 notes total — the oldest entries are dropped via
  *      `pruneOldest(n)` whenever an append takes the list past the cap.
  *      The cap exists to bound prompt size; loud failure (rejecting the
  *      append) would surprise the agent more than a silent drop.
  *
  * Validation:
- *   - text empty / whitespace-only → ToolError(NOTE_EMPTY)
- *   - text byte length > 1024 → ToolError(NOTE_TOO_LONG)
+ *   - `note.add` text empty / whitespace-only → ToolError(NOTE_EMPTY)
+ *   - `note.add` text byte length > 1024 → ToolError(NOTE_TOO_LONG)
+ *   - `note.delete` indexes empty / non-array → ToolError(NOTE_DELETE_EMPTY)
+ *   - `note.delete` indexes contain non-integer or < 1 → ToolError(NOTE_INDEX_INVALID)
+ *   - `note.delete` indexes out of range against current count → ToolError(NOTE_INDEX_OUT_OF_RANGE)
  *
  * Adapter contract (`context.__floorStateForNotes` in tests, production
  * wrapper in loop-runtime's `attachNotesFloorState`):
@@ -31,10 +42,12 @@
  *     appendForFloor(floor: number, text: string): Promise<void>
  *     listAcrossFloors(): Promise<string[]>     // chronological order
  *     pruneOldest(n: number): Promise<void>     // optional; drop n oldest
+ *     deleteByIndex(indexes: number[]): Promise<{ removed: number }>
+ *                                                 // 1-based positions
  *   }
  *
  * Production's wrapper sits over a real `floor-state` instance and
- * realizes append / list / prune through `fs.update(reducer, { floor })`
+ * realizes append / list / prune / delete through `fs.update(reducer, { floor })`
  * + `fs.get()`; the test fixture is a plain in-memory array so we don't
  * have to boot floor-state's chat-state stack inside Jest.
  */
@@ -130,6 +143,90 @@ export async function loadAllNotes(context) {
     if (!fs || typeof fs.listAcrossFloors !== 'function') return [];
     const all = await fs.listAcrossFloors();
     return Array.isArray(all) ? all.map(s => String(s ?? '')) : [];
+}
+
+/**
+ * Delete persisted notes by their 1-based positions in the system-prompt
+ * "## Previous Notes" block. The agent calls this to prune notes whose
+ * role is exhausted (foreshadowing fired, character beat already
+ * happened, setting superseded by later events) so the block doesn't
+ * degenerate into noise.
+ *
+ * Validation is strict so the agent gets actionable feedback:
+ *   - empty / non-array → NOTE_DELETE_EMPTY
+ *   - any element non-integer or < 1 → NOTE_INDEX_INVALID
+ *   - any element > current count → NOTE_INDEX_OUT_OF_RANGE
+ *
+ * On success returns `{ ok: true, removed, remaining }` where `removed`
+ * is the count actually dropped and `remaining` is the post-deletion
+ * note count, so the agent can confirm the pruning landed without an
+ * extra round-trip to re-list.
+ *
+ * @param {{ indexes: number[] }} args
+ * @param {object} context
+ * @returns {Promise<{ ok: true, removed: number, remaining: number }>}
+ */
+export async function execNoteDelete(args, context) {
+    const raw = args?.indexes;
+    if (!Array.isArray(raw) || raw.length === 0) {
+        throw new ToolError(
+            'note.delete: indexes must be a non-empty array.',
+            'NOTE_DELETE_EMPTY',
+            'Pass indexes as an array of 1-based positions matching the "## Previous Notes" block, e.g. [1, 3].',
+        );
+    }
+    const cleaned = [];
+    const invalid = [];
+    for (const value of raw) {
+        const n = Number(value);
+        if (!Number.isInteger(n) || n < 1) {
+            invalid.push(value);
+            continue;
+        }
+        cleaned.push(n);
+    }
+    if (invalid.length > 0) {
+        throw new ToolError(
+            `note.delete: indexes must be positive integers (got: ${JSON.stringify(invalid)}).`,
+            'NOTE_INDEX_INVALID',
+            'Each entry must be a 1-based integer matching the system-prompt note numbering. Negative numbers, zero, and fractional values are rejected.',
+        );
+    }
+
+    const fs = pickFloorStateForNotes(context);
+    if (!fs || typeof fs.listAcrossFloors !== 'function' || typeof fs.deleteByIndex !== 'function') {
+        throw new ToolError(
+            'note.delete: notes floor-state not initialized.',
+            'NOTE_FS_UNAVAILABLE',
+            'The loop runtime did not mount the notes floor-state for this run. This is usually a setup issue (missing context.createFloorState) — retry once.',
+        );
+    }
+
+    const before = await fs.listAcrossFloors();
+    const beforeCount = Array.isArray(before) ? before.length : 0;
+    if (beforeCount === 0) {
+        throw new ToolError(
+            'note.delete: no notes to delete.',
+            'NOTE_INDEX_OUT_OF_RANGE',
+            'The "## Previous Notes" block is empty for this chat. Add notes via note.add first; nothing to prune yet.',
+        );
+    }
+    const outOfRange = cleaned.filter(n => n > beforeCount);
+    if (outOfRange.length > 0) {
+        throw new ToolError(
+            `note.delete: indexes out of range (got ${JSON.stringify(outOfRange)}, only ${beforeCount} note(s) exist).`,
+            'NOTE_INDEX_OUT_OF_RANGE',
+            `Use 1-based indexes between 1 and ${beforeCount}. Re-check the system-prompt "## Previous Notes" block for current numbering.`,
+        );
+    }
+
+    const result = await fs.deleteByIndex(cleaned);
+    const removed = Number(result?.removed || 0);
+    return {
+        ok: true,
+        removed,
+        remaining: Math.max(0, beforeCount - removed),
+    };
 }
 
 export const NOTES_NAMESPACE = 'luker_orch_loop_notes';

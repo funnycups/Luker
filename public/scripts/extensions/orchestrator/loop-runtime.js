@@ -366,10 +366,17 @@ export function resetNotesFloorStateInstanceForTesting() {
  *     appendForFloor(floor, text): Promise<void>
  *     listAcrossFloors(): Promise<string[]>
  *     pruneOldest(n): Promise<void>
+ *     deleteByIndex(indexes: number[]): Promise<{ removed: number }>
  *   }
  *
- * Errors propagate up to `attachNotesFloorState`, which catches them and
- * leaves the adapter null so the tool surfaces `ToolError(NOTE_FS_UNAVAILABLE)`.
+ * `deleteByIndex` accepts 1-based positions matching the "## Previous Notes"
+ * numbering injected into the system prompt at run start. It dedupes the
+ * input, drops out-of-range / non-integer entries, and removes the
+ * survivors high-to-low so earlier removals don't shift later positions.
+ * Returns the count actually removed so the tool can echo accurate
+ * feedback to the agent. Errors propagate up to `attachNotesFloorState`,
+ * which catches them and leaves the adapter null so the tool surfaces
+ * `ToolError(NOTE_FS_UNAVAILABLE)`.
  */
 function makeNotesAdapter(fs) {
     return {
@@ -402,6 +409,34 @@ function makeNotesAdapter(fs) {
                 if (drop >= entries.length) return { ...safe, entries: [] };
                 return { ...safe, entries: entries.slice(drop) };
             });
+        },
+        async deleteByIndex(indexes) {
+            const requested = Array.isArray(indexes) ? indexes : [];
+            // Normalize: take only finite integers, dedupe, sort descending so
+            // earlier splices don't shift later targets. Out-of-range values
+            // are filtered out per-update against the live entries array (the
+            // adapter doesn't know the count until it reads).
+            const cleaned = Array.from(new Set(
+                requested
+                    .map(n => Number(n))
+                    .filter(n => Number.isInteger(n) && n >= 1)
+                    .map(n => Math.floor(n)),
+            )).sort((a, b) => b - a);
+            if (cleaned.length === 0) return { removed: 0 };
+
+            let removed = 0;
+            await fs.update((current) => {
+                const safe = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
+                const entries = Array.isArray(safe.entries) ? safe.entries.slice() : [];
+                for (const oneBased of cleaned) {
+                    const idx = oneBased - 1;
+                    if (idx < 0 || idx >= entries.length) continue;
+                    entries.splice(idx, 1);
+                    removed += 1;
+                }
+                return { ...safe, entries };
+            });
+            return { removed };
         },
     };
 }

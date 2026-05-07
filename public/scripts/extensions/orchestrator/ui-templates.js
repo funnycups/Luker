@@ -192,6 +192,7 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
             <fieldset class="luker_orch_loop_tools_group">
                 <legend>${escapeHtml(i18n('note (persistent notes)'))}</legend>
                 ${checkbox('note.add', note.add, 'note.add')}
+                ${checkbox('note.delete', note.delete, 'note.delete')}
             </fieldset>
             <fieldset class="luker_orch_loop_tools_group">
                 <legend>${escapeHtml(i18n('chat (in-chat history)'))}</legend>

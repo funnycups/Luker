@@ -38,6 +38,7 @@ import {
     normalizeAnchorPlayableFloor,
     normalizeOrchestrationSnapshot,
 } from './anchors.js';
+import { DEFAULT_LOOP_SYSTEM_PROMPT } from './loop-default-prompt.js';
 
 const STATE_NAMESPACE = 'luker_orchestrator_anchors';
 const SCHEMA_NAMESPACE = `${STATE_NAMESPACE}__schema`;
@@ -65,8 +66,16 @@ export const ORCH_EXECUTION_MODE_LOOP = 'loop';
  *   - mode                  literal 'loop'; coerced on every sanitize
  *   - apiPresetName         Connection Manager profile (empty = global)
  *   - promptPresetName      chat completion preset (empty = global)
- *   - system_prompt         agent system instruction authored by user
- *   - tools.note.add        persistent note tool (per-chat, cross-run)
+ *   - system_prompt         agent system instruction; missing falls back to
+ *                            `DEFAULT_LOOP_SYSTEM_PROMPT` so fresh installs
+ *                            ship with a usable RP director prompt. Existing
+ *                            user-authored values (including explicit empty
+ *                            string) are preserved verbatim.
+ *   - tools.note.{add, delete}  persistent note tool (per-chat, cross-run);
+ *                            `delete` lets the agent prune notes whose role
+ *                            is exhausted (foreshadowing fired, setting
+ *                            superseded) so the system-prompt note block
+ *                            doesn't degenerate into noise
  *   - tools.chat.{read_range, search}  in-chat history tools
  *   - tools.lorebook.{search, get}      world-info lookup tools
  *   - tools.memory.{search, list_recent, get}  memory-graph external-api
@@ -80,9 +89,9 @@ const LOOP_PROFILE_DEFAULTS = Object.freeze({
     mode: ORCH_EXECUTION_MODE_LOOP,
     apiPresetName: '',
     promptPresetName: '',
-    system_prompt: '',
+    system_prompt: DEFAULT_LOOP_SYSTEM_PROMPT,
     tools: Object.freeze({
-        note: Object.freeze({ add: true }),
+        note: Object.freeze({ add: true, delete: true }),
         chat: Object.freeze({ read_range: true, search: true }),
         lorebook: Object.freeze({ search: true, get: true }),
         memory: Object.freeze({ search: true, list_recent: true, get: true }),
@@ -133,6 +142,7 @@ function sanitizeLoopToolFlags(input) {
     return {
         note: {
             add: readBooleanFlag(noteIn.add, true),
+            delete: readBooleanFlag(noteIn.delete, true),
         },
         chat: {
             read_range: readBooleanFlag(chatIn.read_range, true),
@@ -191,7 +201,7 @@ function sanitizeLoopCapsuleInject(input) {
  *   promptPresetName: string,
  *   system_prompt: string,
  *   tools: {
- *     note: { add: boolean },
+ *     note: { add: boolean, delete: boolean },
  *     chat: { read_range: boolean, search: boolean },
  *     lorebook: { search: boolean, get: boolean },
  *     memory: { search: boolean, list_recent: boolean, get: boolean },
@@ -208,7 +218,13 @@ export function sanitizeLoopProfile(input) {
         mode: ORCH_EXECUTION_MODE_LOOP,
         apiPresetName: source.apiPresetName == null ? '' : String(source.apiPresetName),
         promptPresetName: source.promptPresetName == null ? '' : String(source.promptPresetName),
-        system_prompt: source.system_prompt == null ? '' : String(source.system_prompt),
+        // Missing field (no `system_prompt` key at all) → ship the default RP
+        // director prompt. Existing string values, including '', are kept
+        // verbatim so users who deliberately cleared the textarea aren't
+        // re-overwritten on every sanitize roundtrip.
+        system_prompt: source.system_prompt == null
+            ? LOOP_PROFILE_DEFAULTS.system_prompt
+            : String(source.system_prompt),
         tools: sanitizeLoopToolFlags(source.tools),
         max_rounds: clampInteger(
             source.max_rounds,

@@ -27,6 +27,7 @@ import { describe, test, expect } from '@jest/globals';
 
 import {
     execNoteAdd,
+    execNoteDelete,
     loadAllNotes,
 } from '../../public/scripts/extensions/orchestrator/loop-tools/note.js';
 import {
@@ -45,6 +46,22 @@ function makeFakeFloorState() {
         listAcrossFloors: async () => stored.map(s => s.text),
         pruneOldest: async (n) => {
             if (n > 0) stored.splice(0, Math.min(n, stored.length));
+        },
+        deleteByIndex: async (indexes) => {
+            const cleaned = Array.from(new Set(
+                (Array.isArray(indexes) ? indexes : [])
+                    .map(n => Number(n))
+                    .filter(n => Number.isInteger(n) && n >= 1)
+                    .map(n => Math.floor(n)),
+            )).sort((a, b) => b - a);
+            let removed = 0;
+            for (const oneBased of cleaned) {
+                const idx = oneBased - 1;
+                if (idx < 0 || idx >= stored.length) continue;
+                stored.splice(idx, 1);
+                removed += 1;
+            }
+            return { removed };
         },
     };
 }
@@ -180,6 +197,137 @@ describe('central dispatcher includes note.add (Task 11)', () => {
         });
         const names = schemas.map(s => s?.function?.name);
         expect(names).not.toContain('note.add');
+    });
+});
+
+describe('execNoteDelete', () => {
+    async function seedNotes(ctx, texts) {
+        for (const text of texts) {
+            await execNoteAdd({ text }, ctx);
+        }
+    }
+
+    test('removes a single note by 1-based index and reports counts', async () => {
+        const { ctx, fs } = makeContext({ floor: 0 });
+        await seedNotes(ctx, ['one', 'two', 'three']);
+        const r = await execNoteDelete({ indexes: [2] }, ctx);
+        expect(r).toEqual({ ok: true, removed: 1, remaining: 2 });
+        expect(fs.stored.map(s => s.text)).toEqual(['one', 'three']);
+    });
+
+    test('removes multiple notes in one call without index drift', async () => {
+        // Deleting [1, 3] from ['a','b','c','d'] must yield ['b','d'] — a
+        // naive forward iterate would mis-target after the first splice.
+        const { ctx, fs } = makeContext({ floor: 0 });
+        await seedNotes(ctx, ['a', 'b', 'c', 'd']);
+        const r = await execNoteDelete({ indexes: [1, 3] }, ctx);
+        expect(r).toEqual({ ok: true, removed: 2, remaining: 2 });
+        expect(fs.stored.map(s => s.text)).toEqual(['b', 'd']);
+    });
+
+    test('dedupes repeated indexes (counts each unique once)', async () => {
+        const { ctx, fs } = makeContext({ floor: 0 });
+        await seedNotes(ctx, ['x', 'y', 'z']);
+        const r = await execNoteDelete({ indexes: [2, 2, 2] }, ctx);
+        expect(r).toEqual({ ok: true, removed: 1, remaining: 2 });
+        expect(fs.stored.map(s => s.text)).toEqual(['x', 'z']);
+    });
+
+    test('rejects empty indexes array', async () => {
+        const { ctx } = makeContext({ floor: 0 });
+        await seedNotes(ctx, ['a']);
+        await expect(execNoteDelete({ indexes: [] }, ctx)).rejects.toBeInstanceOf(ToolError);
+        await expect(execNoteDelete({ indexes: [] }, ctx)).rejects.toThrow(/non-empty/i);
+    });
+
+    test('rejects missing / non-array indexes', async () => {
+        const { ctx } = makeContext({ floor: 0 });
+        await seedNotes(ctx, ['a']);
+        await expect(execNoteDelete({}, ctx)).rejects.toThrow(/non-empty/i);
+        await expect(execNoteDelete({ indexes: 'all' }, ctx)).rejects.toThrow(/non-empty/i);
+    });
+
+    test('rejects non-integer / zero / negative indexes with NOTE_INDEX_INVALID', async () => {
+        const { ctx } = makeContext({ floor: 0 });
+        await seedNotes(ctx, ['a', 'b', 'c']);
+        try {
+            await execNoteDelete({ indexes: [1, 0, -2, 1.5, 'x'] }, ctx);
+            throw new Error('expected ToolError');
+        } catch (e) {
+            expect(e).toBeInstanceOf(ToolError);
+            expect(e.code).toBe('NOTE_INDEX_INVALID');
+        }
+    });
+
+    test('rejects out-of-range indexes with NOTE_INDEX_OUT_OF_RANGE', async () => {
+        const { ctx } = makeContext({ floor: 0 });
+        await seedNotes(ctx, ['a', 'b']);
+        try {
+            await execNoteDelete({ indexes: [5] }, ctx);
+            throw new Error('expected ToolError');
+        } catch (e) {
+            expect(e).toBeInstanceOf(ToolError);
+            expect(e.code).toBe('NOTE_INDEX_OUT_OF_RANGE');
+            // Hint message should reference current count so the agent can correct itself.
+            expect(e.hint).toMatch(/2/);
+        }
+    });
+
+    test('rejects when notes list is empty', async () => {
+        const { ctx } = makeContext({ floor: 0 });
+        try {
+            await execNoteDelete({ indexes: [1] }, ctx);
+            throw new Error('expected ToolError');
+        } catch (e) {
+            expect(e).toBeInstanceOf(ToolError);
+            expect(e.code).toBe('NOTE_INDEX_OUT_OF_RANGE');
+        }
+    });
+
+    test('rejects when adapter is missing', async () => {
+        const ctx = { chat: [] }; // no __floorStateForNotes
+        try {
+            await execNoteDelete({ indexes: [1] }, ctx);
+            throw new Error('expected ToolError');
+        } catch (e) {
+            expect(e).toBeInstanceOf(ToolError);
+            expect(e.code).toBe('NOTE_FS_UNAVAILABLE');
+        }
+    });
+});
+
+describe('central dispatcher routes note.delete', () => {
+    test('executeLoopTool dispatches note.delete', async () => {
+        const { ctx, fs } = makeContext({ floor: 0 });
+        await execNoteAdd({ text: 'first' }, ctx);
+        await execNoteAdd({ text: 'second' }, ctx);
+        const r = await executeLoopTool('note.delete', { indexes: [1] }, ctx);
+        expect(r).toEqual({ ok: true, removed: 1, remaining: 1 });
+        expect(fs.stored.map(s => s.text)).toEqual(['second']);
+    });
+
+    test('getEnabledToolSchemas includes note.delete when flagged on', () => {
+        const schemas = getEnabledToolSchemas({
+            tools: {
+                finalize: true,
+                chat: { read_range: false, search: false },
+                lorebook: { search: false, get: false },
+                memory: { search: false, list_recent: false, get: false },
+                note: { add: true, delete: true },
+            },
+        });
+        const names = schemas.map(s => s?.function?.name);
+        expect(names).toContain('note.delete');
+    });
+
+    test('getEnabledToolSchemas omits note.delete when flagged off', () => {
+        const schemas = getEnabledToolSchemas({
+            tools: { finalize: true, note: { add: true, delete: false } },
+        });
+        const names = schemas.map(s => s?.function?.name);
+        expect(names).not.toContain('note.delete');
+        // note.add stays on independently
+        expect(names).toContain('note.add');
     });
 });
 

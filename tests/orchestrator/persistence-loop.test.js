@@ -20,6 +20,7 @@ import {
     ORCH_EXECUTION_MODE_LOOP,
     sanitizeLoopProfile,
 } from '../../public/scripts/extensions/orchestrator/persistence.js';
+import { DEFAULT_LOOP_SYSTEM_PROMPT } from '../../public/scripts/extensions/orchestrator/loop-default-prompt.js';
 
 describe('ORCH_EXECUTION_MODE_LOOP', () => {
     test('exposes the loop mode literal', () => {
@@ -33,8 +34,11 @@ describe('sanitizeLoopProfile defaults', () => {
         expect(out.mode).toBe(ORCH_EXECUTION_MODE_LOOP);
         expect(out.apiPresetName).toBe('');
         expect(out.promptPresetName).toBe('');
-        expect(out.system_prompt).toBe('');
+        // Missing system_prompt falls back to the shipped default prompt so
+        // fresh installs ship with a usable RP director system message.
+        expect(out.system_prompt).toBe(DEFAULT_LOOP_SYSTEM_PROMPT);
         expect(out.tools.note.add).toBe(true);
+        expect(out.tools.note.delete).toBe(true);
         expect(out.tools.chat.read_range).toBe(true);
         expect(out.tools.chat.search).toBe(true);
         expect(out.tools.lorebook.search).toBe(true);
@@ -78,6 +82,17 @@ describe('sanitizeLoopProfile defaults', () => {
         const out = sanitizeLoopProfile({ apiPresetName: 42, promptPresetName: null, system_prompt: undefined });
         expect(out.apiPresetName).toBe('42');
         expect(out.promptPresetName).toBe('');
+        // undefined is treated as "missing" → falls back to default prompt
+        // (same path as input `{}` in the previous test). To keep an
+        // explicitly empty string, callers pass `system_prompt: ''`.
+        expect(out.system_prompt).toBe(DEFAULT_LOOP_SYSTEM_PROMPT);
+    });
+
+    test('preserves an explicit empty string system_prompt (deliberate clear)', () => {
+        // Distinguishing missing-field from explicit-empty matters: users
+        // who deleted the textarea should not have the default re-stamped
+        // back on every sanitize roundtrip.
+        const out = sanitizeLoopProfile({ system_prompt: '' });
         expect(out.system_prompt).toBe('');
     });
 });
@@ -153,7 +168,7 @@ describe('sanitizeLoopProfile tools handling', () => {
     test('respects user-disabled flags for non-finalize tools', () => {
         const out = sanitizeLoopProfile({
             tools: {
-                note: { add: false },
+                note: { add: false, delete: false },
                 chat: { read_range: false, search: false },
                 lorebook: { search: false, get: false },
                 memory: { search: false, list_recent: false, get: false },
@@ -161,6 +176,7 @@ describe('sanitizeLoopProfile tools handling', () => {
             },
         });
         expect(out.tools.note.add).toBe(false);
+        expect(out.tools.note.delete).toBe(false);
         expect(out.tools.chat.read_range).toBe(false);
         expect(out.tools.chat.search).toBe(false);
         expect(out.tools.lorebook.search).toBe(false);
@@ -179,6 +195,7 @@ describe('sanitizeLoopProfile tools handling', () => {
         expect(out.tools.chat.search).toBe(true);
         // unmentioned namespaces default to all-true
         expect(out.tools.note.add).toBe(true);
+        expect(out.tools.note.delete).toBe(true);
         expect(out.tools.lorebook.search).toBe(true);
         expect(out.tools.lorebook.get).toBe(true);
         expect(out.tools.memory.search).toBe(true);

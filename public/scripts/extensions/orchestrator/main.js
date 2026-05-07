@@ -3879,6 +3879,7 @@ function buildAiIterationToolSet(session = null) {
                                         type: 'object',
                                         properties: {
                                             add: { type: 'boolean' },
+                                            delete: { type: 'boolean' },
                                         },
                                         additionalProperties: false,
                                     },

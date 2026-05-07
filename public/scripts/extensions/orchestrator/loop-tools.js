@@ -30,7 +30,7 @@ import { FINALIZE_TOOL_SCHEMA, ToolError } from './loop-runtime.js';
 import { execChatReadRange, execChatSearch } from './loop-tools/chat.js';
 import { execLorebookSearch, execLorebookGet } from './loop-tools/lorebook.js';
 import { execMemorySearch, execMemoryListRecent, execMemoryGet } from './loop-tools/memory.js';
-import { execNoteAdd } from './loop-tools/note.js';
+import { execNoteAdd, execNoteDelete } from './loop-tools/note.js';
 
 /**
  * Map of fully-qualified tool name → async execution function.
@@ -237,6 +237,27 @@ registerTool('note.add', execNoteAdd, {
                 },
             },
             required: ['text'],
+            additionalProperties: false,
+        },
+    },
+});
+
+registerTool('note.delete', execNoteDelete, {
+    type: 'function',
+    function: {
+        name: 'note.delete',
+        description: 'Delete persisted notes by their 1-based positions in the "## Previous Notes" block of your system prompt (the same numbering you see at run start). Use this to prune notes whose role is exhausted: foreshadowing has fired, the character beat has happened, the setting was superseded by later events, or several notes have collapsed into a duplicate. Out-of-range or non-integer indexes are rejected with a structured error so you can correct on the next round.',
+        parameters: {
+            type: 'object',
+            properties: {
+                indexes: {
+                    type: 'array',
+                    description: 'Non-empty array of 1-based positive integers. Each must match a current entry in the "## Previous Notes" block.',
+                    items: { type: 'integer', minimum: 1 },
+                    minItems: 1,
+                },
+            },
+            required: ['indexes'],
             additionalProperties: false,
         },
     },
