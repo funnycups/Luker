@@ -15444,6 +15444,11 @@ export async function createOrEditCharacter(e) {
                 }
             }
 
+            const editingExtensions = characters[this_chid]?.data?.extensions;
+            if (editingExtensions && typeof editingExtensions === 'object') {
+                formData.append('extensions', JSON.stringify(editingExtensions));
+            }
+
             const fetchResult = await fetch(url, {
                 method: 'POST',
                 headers: headers,
