@@ -482,12 +482,14 @@ export function buildContext(container, charId, config) {
          */
         renderText(rawText, messageId = -1) {
             const html = messageFormatting(rawText, '', false, false, messageId, {}, false);
-            // Wrap in a String subclass that exposes `.html` and is thenable,
-            // preserving backward compatibility with `(await ctx.renderText()).html`.
+            // Wrap in a String subclass that exposes `.html` and is thenable.
+            // The thenable resolves to the html string itself (NOT `{ html }`)
+            // so `${await ctx.renderText(...)}` interpolates the html, instead of
+            // stringifying a wrapper object as "[object Object]".
             const result = new String(html);
             Object.defineProperty(result, 'html', { value: html, enumerable: false });
             Object.defineProperty(result, 'then', {
-                value: (resolve) => resolve({ html }),
+                value: (resolve) => resolve(html),
                 enumerable: false,
             });
             return result;
