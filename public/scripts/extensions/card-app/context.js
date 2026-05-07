@@ -5,6 +5,7 @@
 import { eventSource, event_types, chat, chat_metadata, this_chid, characters, getRequestHeaders, openCharacterChat, doNewChat, closeCurrentChat, getPastCharacterChats, deleteMessage as lukerDeleteMessage, deleteLastMessage, swipe_right, saveCharacterDebounced, messageFormatting } from '../../../script.js';
 import { getContext, saveMetadataDebounced } from '../../extensions.js';
 import { executeSlashCommandsWithOptions } from '../../slash-commands.js';
+import { removeReasoningFromString } from '../../reasoning.js';
 import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, world_names, selected_world_info } from '../../world-info.js';
 
 /**
@@ -481,7 +482,11 @@ export function buildContext(container, charId, config) {
          * @returns {string} html
          */
         renderText(rawText, messageId = -1) {
-            const html = messageFormatting(rawText, '', false, false, messageId, {}, false);
+            // Strip reasoning prefix/suffix (auto-parse mode) so CardApp messages
+            // mirror what the main chat shows — otherwise <thought>…</thought>
+            // and similar reasoning blocks leak into the rendered body.
+            const cleaned = removeReasoningFromString(String(rawText ?? ''));
+            const html = messageFormatting(cleaned, '', false, false, messageId, {}, false);
             // Wrap in a String subclass that exposes `.html` and is thenable.
             // The thenable resolves to the html string itself (NOT `{ html }`)
             // so `${await ctx.renderText(...)}` interpolates the html, instead of
@@ -505,7 +510,8 @@ export function buildContext(container, charId, config) {
          * @returns {string} html
          */
         renderTextSync(rawText, messageId = -1) {
-            return messageFormatting(rawText, '', false, false, messageId, {}, false);
+            const cleaned = removeReasoningFromString(String(rawText ?? ''));
+            return messageFormatting(cleaned, '', false, false, messageId, {}, false);
         },
     };
 
