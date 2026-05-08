@@ -43,12 +43,12 @@ export function getSourceSettings(source, request) {
     switch (source) {
         case 'togetherai':
             return {
-                model: String(request.body.model),
+                model: String(request.body.model || ''),
                 ...credentials,
             };
         case 'openai':
             return {
-                model: String(request.body.model),
+                model: String(request.body.model || ''),
                 ...credentials,
             };
         case 'electronhub':
@@ -58,12 +58,12 @@ export function getSourceSettings(source, request) {
             };
         case 'openrouter':
             return {
-                model: String(request.body.model) || 'openai/text-embedding-3-large',
+                model: String(request.body.model || 'openai/text-embedding-3-large'),
                 ...credentials,
             };
         case 'cohere':
             return {
-                model: String(request.body.model),
+                model: String(request.body.model || ''),
                 ...credentials,
             };
         case 'jina':
@@ -87,7 +87,7 @@ export function getSourceSettings(source, request) {
             const apiUrl = credentials.reverseProxy || String(request.body.apiUrl || '');
             return {
                 apiUrl,
-                model: String(request.body.model),
+                model: String(request.body.model || ''),
                 ...credentials,
             };
         }
@@ -95,7 +95,7 @@ export function getSourceSettings(source, request) {
             const apiUrl = credentials.reverseProxy || String(request.body.apiUrl || '');
             return {
                 apiUrl,
-                model: String(request.body.model),
+                model: String(request.body.model || ''),
                 keep: Boolean(request.body.keep),
                 ...credentials,
             };
@@ -135,12 +135,12 @@ export function getSourceSettings(source, request) {
             };
         case 'webllm':
             return {
-                model: String(request.body.model),
+                model: String(request.body.model || ''),
                 embeddings: request.body.embeddings ?? {},
             };
         case 'koboldcpp':
             return {
-                model: String(request.body.model),
+                model: String(request.body.model || ''),
                 embeddings: request.body.embeddings ?? {},
             };
         case 'chutes':
