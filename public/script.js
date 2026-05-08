@@ -13349,8 +13349,13 @@ function rememberSettingsSnapshot(nextSettings = null) {
 }
 
 function getSettingsSnapshot() {
+    // settingsSnapshotCache is always set to a freshly-cloned payload by
+    // rememberSettingsSnapshot — it never aliases live `settings`. Callers
+    // (only saveSettingsInternal) treat the result as read-only, so returning
+    // the cached reference directly is safe and avoids one full deep clone of
+    // the entire settings tree on every save.
     if (isPlainObject(settingsSnapshotCache)) {
-        return cloneJsonValue(settingsSnapshotCache);
+        return settingsSnapshotCache;
     }
     if (isPlainObject(settings)) {
         return normalizeJsonObject(settings);
