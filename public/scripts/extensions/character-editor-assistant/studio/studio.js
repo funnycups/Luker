@@ -1372,6 +1372,7 @@ async function handleStudioClick(e) {
             }
             const chatEl = document.querySelector('[data-studio-chat]');
             if (chatEl) chatEl.innerHTML = '';
+            await renderSessionList();
             break;
         }
         case 'sessions-toggle':
