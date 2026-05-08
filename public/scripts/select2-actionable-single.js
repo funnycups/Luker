@@ -742,10 +742,10 @@ export function initActionableSingleSelect(select, {
             }
         });
 
-    // === Group header click - toggle collapse ===
+    // === Group header pointerup - toggle collapse (pointerup for WebView touch handling) ===
     $(document)
-        .off('click' + namespace + '.groupHeader')
-        .on('click' + namespace + '.groupHeader', '.luker-preset-group-header', function (event) {
+        .off('pointerup' + namespace + '.groupHeader')
+        .on('pointerup' + namespace + '.groupHeader', '.luker-preset-group-header', function (event) {
             const $header = $(this);
             if ($header.data('lukerActionOwner') !== ownerKey) {
                 return;
@@ -771,10 +771,10 @@ export function initActionableSingleSelect(select, {
             applyCollapsedState(selectElement, collapsedGroups);
         });
 
-    // === Group action buttons (rename/delete/create sub-group) ===
+    // === Group action buttons (rename/delete/create sub-group) — pointerup for WebView touch handling ===
     $(document)
-        .off('click' + namespace + '.groupAction')
-        .on('click' + namespace + '.groupAction', '.luker-preset-group-action, .luker-preset-group-subgroup', async function (event) {
+        .off('pointerup' + namespace + '.groupAction')
+        .on('pointerup' + namespace + '.groupAction', '.luker-preset-group-action, .luker-preset-group-subgroup', async function (event) {
             if ($(this).data('lukerActionOwner') !== ownerKey || !presetGroupCallbacks) {
                 return;
             }
