@@ -106,4 +106,31 @@ describe('estimateTotalTokensFromCache', () => {
         expect(estimateTotalTokensFromCache(order, counts)).toBe(20);
         expect(estimateTotalTokensFromCache(reversed, counts)).toBe(20);
     });
+
+    test('handles a group toggle-all flipping multiple prompts at once', () => {
+        // Simulates the prompt-group toggle-all path: several prompts in a group
+        // flip enabled state in one synchronous batch (toggleGroupPrompts loop),
+        // then the header estimate is recomputed once.
+        const order = [
+            { identifier: 'g1', enabled: true },
+            { identifier: 'g2', enabled: true },
+            { identifier: 'g3', enabled: true },
+            { identifier: 'outside', enabled: true },
+        ];
+        const groupIndexes = [0, 1, 2];
+        const counts = { g1: 100, g2: 200, g3: 300, outside: 50 };
+        const flipMembers = (newState) => {
+            for (const i of groupIndexes) {
+                order[i].enabled = newState;
+            }
+        };
+
+        expect(estimateTotalTokensFromCache(order, counts)).toBe(650);
+
+        flipMembers(false);
+        expect(estimateTotalTokensFromCache(order, counts)).toBe(50);
+
+        flipMembers(true);
+        expect(estimateTotalTokensFromCache(order, counts)).toBe(650);
+    });
 });

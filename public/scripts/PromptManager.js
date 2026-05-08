@@ -3984,6 +3984,7 @@ class PromptManager {
                     this.toggleGroupPrompts(groupId);
                     this.renderPromptManagerListItems();
                     this.saveServiceSettings();
+                    this.updateHeaderTotalEstimate();
                     this.updateTokenDisplayDebounced();
                     return;
                 }
