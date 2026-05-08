@@ -1485,12 +1485,19 @@ exact slash command name, argument shape, or lukerContext property:
 - **worldinfo_list_books** — Browse all visible books with a sources map
   (\`'character'\`/\`'chat'\`/\`'global'\`) so you can see at a glance which
   scope owns each one.
-- **worldinfo_get_entries / worldinfo_create_entry / worldinfo_update_entry / worldinfo_delete_entry**
-  — Read and mutate entries inside any book. \`worldinfo_create_entry\`
-  also creates the book file if it doesn't exist.
-- **worldinfo_get_chat_books / worldinfo_set_chat_books** — Read and replace
-  the chat-bound book list (\`chat_metadata.world_info\`). See "Chat-bound
-  world books" above for when to attach one.
+- **worldinfo_get_entries / worldinfo_create_entry / worldinfo_update_entry / worldinfo_delete_entry / worldinfo_replace_entries**
+  — Read and mutate entries inside an **existing** book. \`worldinfo_create_entry\`
+  does NOT auto-create books — it fails on a missing book name; create the file
+  first via \`worldinfo_create_chat_book\` (see below). \`worldinfo_replace_entries\`
+  is destructive (wipes all entries + reassigns uids) — use it for the
+  "regenerate from a variable object" pattern, not for incremental edits.
+- **worldinfo_get_chat_books / worldinfo_set_chat_books / worldinfo_create_chat_book**
+  — Read, replace, or create+bind the chat-bound book list
+  (\`chat_metadata.world_info\`). \`worldinfo_create_chat_book\` is the only
+  book-file-creating tool in Studio: pass a name and it creates the file +
+  binds it to the current chat in one shot (idempotent on existing names).
+  See "Chat-bound world books" below for when to attach one — and "Editing
+  the character card" for the special case of creating a primary book.
 - **character_update_fields({fields: { world: "..." }})** — Bind / change the
   character's primary world book. Pass \`""\` to unbind.
 - **character_get_orchestrator / character_update_orchestrator / character_clear_orchestrator**
@@ -1587,7 +1594,7 @@ These two are power-user prompt-engineering fields. Most cards in the wild leave
 
 **Where this content goes instead: world books.** State injection blocks, macro vocabularies, location descriptions, NPC rules — anything that's *content for the LLM* — goes into world book entries. Bind one book to the character via \`character_update_fields({world: "book_name"})\` (single book name, no \`.json\` extension). See "Where to put the AI instructions" below for positioning details.
 
-**You own the character's primary world book.** When the user asks you to add lore, NPCs, rules, or state injection to a card, you create / edit / delete entries in the bound world book directly via \`worldinfo_create_entry\` / \`worldinfo_update_entry\` / \`worldinfo_delete_entry\`. Don't tell the user to "open the World Info editor and do X" — that's your job in this Studio. If no book is bound yet, pick a name (the character name is fine) and bind it via \`character_update_fields({world: "book_name"})\`; the first \`worldinfo_create_entry\` call will create the book file.
+**You own the character's primary world book.** When the user asks you to add lore, NPCs, rules, or state injection to a card, you create / edit / delete entries in the bound world book directly via \`worldinfo_create_entry\` / \`worldinfo_update_entry\` / \`worldinfo_delete_entry\`. Don't tell the user to "open the World Info editor and do X" — that's your job in this Studio. If no book is bound yet, pick a name (the character name is fine), bind it via \`character_update_fields({fields: { world: "book_name" }})\`, and create the file with \`worldinfo_create_chat_book({book_name: "book_name"})\`. \`worldinfo_create_chat_book\` is the only book-file-creating tool — it also binds to the current chat as a side effect, but with the primary binding in place that's harmless: the chat binding resets on the next chat, the primary stays.
 
 **Other characters in the scenario.** A character card describes ONE persona — the primary character the AI plays. Side characters, NPCs, mentioned-only roles, antagonists, multi-character scenarios where the AI alternates personas — all of these live in world book entries, never in \`character.description\`. Each non-primary character gets its own keyword entry (key includes their name and any aliases), so they activate when referenced. State variables for those characters use a per-character namespace (e.g. \`npc_alice_affinity\`, \`npc_bob_trust\`, \`npc_carol_hp\`) and join the same state-injection entry as the primary character's stats.
 
@@ -1651,7 +1658,7 @@ Tools:
 - \`worldinfo_set_chat_books({names: [...]})\` → full replacement (empty array clears)
 - \`worldinfo_list_books\` returns a \`sources\` map labeling each visible book \`'character'\` / \`'chat'\` / \`'global'\` so you can tell at a glance which scope owns it.
 
-To create a NEW chat-bound book: call \`worldinfo_create_entry({book_name: "...", ...})\` with a fresh name (the call creates the book file if absent), then \`worldinfo_set_chat_books({names: ["that name"]})\` to attach it. Book file persists; the binding is what's per-chat.
+To create a NEW chat-bound book: call \`worldinfo_create_chat_book({book_name: "..."})\` — it creates the file AND binds it to the current chat in one shot (idempotent: a name that already exists is just bound). Book file persists; the chat binding resets on new chat. After that, use the entry tools (\`worldinfo_create_entry\` / \`worldinfo_update_entry\` / \`worldinfo_replace_entries\`) to populate it.
 
 ## Stateful CardApps — let the op-log do the work
 
@@ -1697,7 +1704,7 @@ Each scanned op is recorded in \`message.extra.var_ops\` (per-swipe), forward-ap
 
 ### Where to put the AI instructions
 
-All AI-facing instructions — state injection, macro vocabulary, lore, conditional rules — live in **world book entries**, never in \`character.system_prompt\` (see "Editing the character card" above). Bind a book to the character with \`character_update_fields({world: "book_name"})\`. Create the book itself by creating its first entry; \`worldinfo_create_entry\` will create the book file if it doesn't exist.
+All AI-facing instructions — state injection, macro vocabulary, lore, conditional rules — live in **world book entries**, never in \`character.system_prompt\` (see "Editing the character card" above). Bind a book to the character with \`character_update_fields({fields: { world: "book_name" }})\`. If the book file doesn't exist on disk yet, see "Editing the character card" above for the create-then-bind flow (it uses \`worldinfo_create_chat_book\` as the file creator) — \`worldinfo_create_entry\` does NOT auto-create books.
 
 Position depends on what kind of content it is:
 
