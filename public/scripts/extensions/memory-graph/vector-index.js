@@ -193,14 +193,17 @@ export async function rerankDocuments(query, documents, rerankProfile, topK = 10
  * @param {boolean} [options.force=false]
  * @param {AbortSignal} [options.signal]
  * @param {Array} [options.schema]
+ * @param {(progress: {current: number, total: number}) => void} [options.onProgress]
+ * @param {boolean} [options.tolerateErrors=false] When true, batch failures are logged and their
+ *   nodeIds returned in `failedNodeIds` instead of aborting the whole sync.
  */
 export async function syncVectorIndex(store, profile, chatId, options = {}) {
-    const { purge = false, force = false, signal, schema = null } = options;
+    const { purge = false, force = false, signal, schema = null, onProgress = null, tolerateErrors = false } = options;
     const validation = validateVectorConfig(profile);
     if (!validation.valid) {
         const state = ensureVectorIndexState(store);
         state.lastWarning = validation.error;
-        return { insertedCount: 0, deletedCount: 0, stats: { total: 0, indexed: 0, pending: 0, stale: 0 } };
+        return { insertedCount: 0, deletedCount: 0, stats: { total: 0, indexed: 0, pending: 0, stale: 0 }, failedNodeIds: [] };
     }
 
     const state = ensureVectorIndexState(store);
@@ -221,6 +224,7 @@ export async function syncVectorIndex(store, profile, chatId, options = {}) {
     }
 
     const plan = computeVectorSyncPlan(store, profile, schema);
+    const failedNodeIds = [];
 
     if (plan.toDelete.length > 0) {
         await deleteVectorItems(collectionId, profile, plan.toDelete, signal);
@@ -235,21 +239,36 @@ export async function syncVectorIndex(store, profile, chatId, options = {}) {
 
     if (plan.toInsert.length > 0) {
         const BATCH_SIZE = 50;
-        for (let i = 0; i < plan.toInsert.length; i += BATCH_SIZE) {
+        const total = plan.toInsert.length;
+        let processed = 0;
+        for (let i = 0; i < total; i += BATCH_SIZE) {
             if (signal?.aborted) break;
             const batch = plan.toInsert.slice(i, i + BATCH_SIZE);
-            await insertVectorItems(collectionId, profile, batch, signal);
-            for (const entry of batch) {
-                state.nodeToHash[entry.nodeId] = entry.hash;
-                state.hashToNodeId[entry.hash] = entry.nodeId;
+            try {
+                await insertVectorItems(collectionId, profile, batch, signal);
+                for (const entry of batch) {
+                    state.nodeToHash[entry.nodeId] = entry.hash;
+                    state.hashToNodeId[entry.hash] = entry.nodeId;
+                }
+            } catch (error) {
+                if (!tolerateErrors) throw error;
+                console.error('[memory-graph/vector-index] batch insert failed, skipping batch:', error, batch.map(b => b.nodeId));
+                for (const entry of batch) {
+                    failedNodeIds.push(entry.nodeId);
+                }
+            }
+            processed += batch.length;
+            if (typeof onProgress === 'function') {
+                try { onProgress({ current: processed, total }); } catch (_) { /* noop */ }
             }
         }
     }
 
     return {
-        insertedCount: plan.toInsert.length,
+        insertedCount: plan.toInsert.length - failedNodeIds.length,
         deletedCount: plan.toDelete.length,
         stats: plan.stats,
+        failedNodeIds,
     };
 }
 

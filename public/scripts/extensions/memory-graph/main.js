@@ -13027,17 +13027,50 @@ async function runVectorRecompute(context, settings, store, chatKey, { mode }) {
         purge = true;
     }
 
+    let progressToast = null;
+    const updateProgressToast = (current, total) => {
+        if (typeof toastr === 'undefined') return;
+        const message = i18nFormat('Recomputing vectors: ${0} / ${1}', current, total);
+        if (!progressToast) {
+            progressToast = toastr.info(message, '', {
+                timeOut: 0,
+                extendedTimeOut: 0,
+                tapToDismiss: false,
+                closeButton: false,
+                progressBar: false,
+            });
+        }
+        if (progressToast) {
+            const body = progressToast.find('.toast-message');
+            if (body && body.length) body.text(message);
+        }
+    };
+    const dismissProgressToast = () => {
+        if (progressToast && typeof toastr !== 'undefined') {
+            toastr.clear(progressToast);
+        }
+        progressToast = null;
+    };
+
     notifyInfo(i18n('Starting vector recompute…'));
     try {
-        const result = await syncVectorIndex(store, vectorConfig, chatKey, { schema, purge });
+        const result = await syncVectorIndex(store, vectorConfig, chatKey, {
+            schema,
+            purge,
+            tolerateErrors: true,
+            onProgress: ({ current, total }) => updateProgressToast(current, total),
+        });
         await persistMemoryStoreByChatKey(context, chatKey, store, { syncPersistentProjection: false });
         const total = Number(result?.stats?.total || 0);
         const inserted = Number(result?.insertedCount || 0);
         const deleted = Number(result?.deletedCount || 0);
+        const failed = Array.isArray(result?.failedNodeIds) ? result.failedNodeIds.length : 0;
         if (total === 0) {
             notifyInfo(i18n('No eligible nodes to embed.'));
-        } else if (inserted === 0 && deleted === 0) {
+        } else if (inserted === 0 && deleted === 0 && failed === 0) {
             notifySuccess(i18n('Vector index already up to date.'));
+        } else if (failed > 0) {
+            notifyError(i18nFormat('Vector recompute complete: ${0} indexed, ${1} failed (see console).', inserted, failed));
         } else {
             notifySuccess(i18nFormat('Vector recompute complete: ${0} indexed.', inserted));
         }
@@ -13045,6 +13078,7 @@ async function runVectorRecompute(context, settings, store, chatKey, { mode }) {
         console.error(`[${MODULE_NAME}] Vector recompute (${mode}) failed:`, error);
         notifyError(i18nFormat('Vector recompute failed: ${0}', String(error?.message || error)));
     } finally {
+        dismissProgressToast();
         refreshUiStats();
     }
 }
