@@ -76,12 +76,43 @@ const TC_COMMANDS = [
     'secret-id',
 ];
 
+// Pure-data fields stored on embedding-mode profiles. These are NOT slash commands —
+// embedding profiles are not "applied" globally; consumers look them up by id and
+// hand them to the EmbeddingService. The list is used by normalize / FANCY_NAMES.
+const EMBED_COMMANDS = [
+    'source',
+    'model',
+    'api-url',
+    'proxy-password',
+    'secret-id',
+    // Per-provider knobs:
+    'jina-late-chunking',
+    'jina-dimensions',
+    'jina-task',
+    'ollama-keep',
+    'siliconflow-endpoint',
+    'workers-ai-account-id',
+    'vertexai-region',
+    'vertexai-auth-mode',
+    'vertexai-express-project-id',
+];
+
+// Pure-data fields stored on rerank-mode profiles.
+const RERANK_COMMANDS = [
+    'source',
+    'model',
+    'api-url',
+    'proxy-password',
+    'secret-id',
+];
+
 const FANCY_NAMES = {
     'api': 'API',
     'api-url': 'Server URL',
     'preset': 'Settings Preset',
     'model': 'Model',
     'proxy': 'Proxy Preset',
+    'proxy-password': 'API Key',
     'sysprompt-state': 'Use System Prompt',
     'sysprompt': 'System Prompt Name',
     'instruct-state': 'Instruct Mode',
@@ -99,6 +130,16 @@ const FANCY_NAMES = {
     'custom-exclude-body': 'Exclude Body Parameters',
     'custom-include-headers': 'Include Request Headers',
     'secret-id': 'Secret',
+    'source': 'Source',
+    'jina-late-chunking': 'Jina Late Chunking',
+    'jina-dimensions': 'Jina Dimensions',
+    'jina-task': 'Jina Task',
+    'ollama-keep': 'Ollama Keep Loaded',
+    'siliconflow-endpoint': 'SiliconFlow Endpoint',
+    'workers-ai-account-id': 'Cloudflare Account ID',
+    'vertexai-region': 'Vertex AI Region',
+    'vertexai-auth-mode': 'Vertex AI Auth Mode',
+    'vertexai-express-project-id': 'Vertex AI Express Project',
 };
 
 /**
@@ -165,7 +206,12 @@ function getNamedArguments(args = {}) {
 /** @type {() => SlashCommandEnumValue[]} */
 const profilesProvider = () => [
     new SlashCommandEnumValue(NONE),
-    ...extension_settings.connectionManager.profiles.map(p => new SlashCommandEnumValue(p.name, null, enumTypes.name, enumIcons.server)),
+    ...extension_settings.connectionManager.profiles
+        .filter(p => {
+            const mode = resolveProfileMode(p);
+            return mode === 'cc' || mode === 'tc';
+        })
+        .map(p => new SlashCommandEnumValue(p.name, null, enumTypes.name, enumIcons.server)),
 ];
 
 /**
@@ -201,20 +247,27 @@ const profilesProvider = () => [
  */
 
 /**
- * Finds the best match for the search value.
+ * Finds the best match for the search value among "active connection" profiles
+ * (cc/tc only). Embed/rerank profiles are not exposed via name lookup since
+ * they are not selected through this path.
  * @param {string} value Search value
  * @returns {ConnectionProfile|null} Best match or null
  */
 function findProfileByName(value) {
+    const candidates = extension_settings.connectionManager.profiles.filter(p => {
+        const mode = resolveProfileMode(p);
+        return mode === 'cc' || mode === 'tc';
+    });
+
     // Try to find exact match
-    const profile = extension_settings.connectionManager.profiles.find(p => p.name === value);
+    const profile = candidates.find(p => p.name === value);
 
     if (profile) {
         return profile;
     }
 
     // Try to find fuzzy match
-    const fuse = new Fuse(extension_settings.connectionManager.profiles, { keys: ['name'] });
+    const fuse = new Fuse(candidates, { keys: ['name'] });
     const results = fuse.search(value);
 
     if (results.length === 0) {
@@ -261,12 +314,18 @@ function parseProfileInteger(value) {
 }
 
 function getCommandsForMode(mode) {
-    return mode === 'cc' ? CC_COMMANDS : TC_COMMANDS;
+    switch (mode) {
+        case 'cc': return CC_COMMANDS;
+        case 'tc': return TC_COMMANDS;
+        case 'embed': return EMBED_COMMANDS;
+        case 'rerank': return RERANK_COMMANDS;
+        default: return TC_COMMANDS;
+    }
 }
 
 function resolveProfileMode(profile) {
     const explicitMode = String(profile?.mode || '').trim().toLowerCase();
-    if (explicitMode === 'cc' || explicitMode === 'tc') {
+    if (explicitMode === 'cc' || explicitMode === 'tc' || explicitMode === 'embed' || explicitMode === 'rerank') {
         return explicitMode;
     }
 
@@ -305,12 +364,19 @@ function normalizeConnectionProfile(profile) {
     }
 
     const activeCommands = new Set(getCommandsForMode(nextMode));
-    const opposingCommands = (nextMode === 'cc' ? TC_COMMANDS : CC_COMMANDS)
-        .filter(command => !activeCommands.has(command));
+    // Strip fields belonging to other modes. Use the union of all foreign-mode fields.
+    const allModes = ['cc', 'tc', 'embed', 'rerank'];
+    const foreignFields = new Set();
+    for (const m of allModes) {
+        if (m === nextMode) continue;
+        for (const f of getCommandsForMode(m)) {
+            if (!activeCommands.has(f)) foreignFields.add(f);
+        }
+    }
 
-    for (const command of opposingCommands) {
-        if (Object.hasOwn(profile, command)) {
-            delete profile[command];
+    for (const field of foreignFields) {
+        if (Object.hasOwn(profile, field)) {
+            delete profile[field];
             mutated = true;
         }
     }
@@ -562,10 +628,16 @@ async function applyConnectionProfile(profile) {
         saveSettingsDebounced();
     }
 
+    const mode = resolveProfileMode(profile);
+    // Embedding/rerank profiles are pure data — they're not "applied" globally.
+    // Consumers look them up by id when they need to embed or rerank.
+    if (mode === 'embed' || mode === 'rerank') {
+        return;
+    }
+
     // Abort any ongoing profile application
     ConnectionManagerSpinner.abort();
 
-    const mode = resolveProfileMode(profile);
     const commands = getCommandsForMode(mode);
     const spinner = new ConnectionManagerSpinner();
     spinner.start();
@@ -606,6 +678,12 @@ async function applyConnectionProfile(profile) {
  * @returns {Promise<void>}
  */
 async function updateConnectionProfile(profile) {
+    const currentMode = resolveProfileMode(profile);
+    // Embedding/rerank profiles cannot be "snapshotted" from current global state —
+    // they are edited directly through their dedicated form.
+    if (currentMode === 'embed' || currentMode === 'rerank') {
+        return;
+    }
     profile.mode = main_api === 'openai' ? 'cc' : 'tc';
     await readProfileFromCommands(profile.mode, profile, true);
 }
@@ -623,7 +701,17 @@ function renderConnectionProfiles(profiles) {
     noneOption.selected = !extension_settings.connectionManager.selectedProfile;
     profiles.appendChild(noneOption);
 
-    for (const profile of extension_settings.connectionManager.profiles.sort((a, b) => a.name.localeCompare(b.name))) {
+    // The main API-drawer picker only governs the active chat connection.
+    // Embedding/rerank profiles live in the same registry but are managed by
+    // their consumer plugins (vectors, memory-graph) — keep them out of this list.
+    const visibleProfiles = extension_settings.connectionManager.profiles
+        .filter(p => {
+            const mode = resolveProfileMode(p);
+            return mode === 'cc' || mode === 'tc';
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+    for (const profile of visibleProfiles) {
         const option = document.createElement('option');
         option.value = profile.id;
         option.textContent = profile.name;
@@ -631,7 +719,11 @@ function renderConnectionProfiles(profiles) {
         profiles.appendChild(option);
     }
 
-    profiles.value = extension_settings.connectionManager.selectedProfile || '';
+    // If the persisted selection points at an embed/rerank profile (data drift),
+    // fall back to <None> in the UI without mutating storage.
+    const persistedId = extension_settings.connectionManager.selectedProfile || '';
+    const persistedVisible = visibleProfiles.some(p => p.id === persistedId);
+    profiles.value = persistedVisible ? persistedId : '';
     if ($(profiles).data('select2')) {
         $(profiles).trigger('change.select2');
     }
