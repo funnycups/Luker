@@ -6,8 +6,11 @@
   "description": "Luker Documentation",
   "scripts": {
     "dev": "vitepress dev --host 127.0.0.1",
+    "predev": "node scripts/render-diagrams.mjs",
     "build": "vitepress build",
-    "preview": "vitepress preview"
+    "prebuild": "node scripts/render-diagrams.mjs",
+    "preview": "vitepress preview",
+    "render-diagrams": "node scripts/render-diagrams.mjs"
   },
   "devDependencies": {
     "vitepress": "^1.6.3",
