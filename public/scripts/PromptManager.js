@@ -523,10 +523,24 @@ class PromptManager {
             void this.runDeferredTryGenerate(requestId);
         }, debounce_timeout.standard);
 
-        /** Debounced token-only update (no DOM rebuild) */
+        /**
+         * Debounced token-only update (no DOM rebuild).
+         *
+         * Runs the dry-run Generate (full prompt-assembly pipeline) which is the
+         * largest main-thread cost on toggle for big presets. Two layers defer it:
+         *   1. 2.5s debounce — coalesces rapid toggle bursts into a single run
+         *      after the user pauses.
+         *   2. requestIdleCallback (when available) — yields the actual run to a
+         *      browser-idle slot; the 2s timeout caps the additional wait.
+         */
         this.updateTokenDisplayDebounced = debounce(() => {
-            this.scheduleTokenUpdate();
-        }, debounce_timeout.relaxed);
+            const run = () => this.scheduleTokenUpdate();
+            if (typeof globalThis.requestIdleCallback === 'function') {
+                globalThis.requestIdleCallback(run, { timeout: 2000 });
+            } else {
+                run();
+            }
+        }, 2500);
     }
 
 
