@@ -595,6 +595,43 @@ export function buildContext(container, charId, config) {
             await saveWorldInfo(bookName, data, true);
         },
 
+        /**
+         * Replace ALL entries in a world book with a fresh set. Destructive:
+         * existing entries are wiped and replaced; uids are reassigned by the
+         * system, so any references the caller held to old uids become invalid.
+         * Top-level book metadata (`name`, `display_index`, etc.) is preserved.
+         *
+         * Use this for the "regenerate dynamic entries from a variable object"
+         * pattern — pass the full target set on each call. Caller-supplied
+         * `uid` fields are ignored on purpose (force fresh assignment to keep
+         * uid space clean).
+         *
+         * @param {string} bookName - World book name
+         * @param {Array<object>} entries - Partial entry fields (no uid). Any
+         *   subset of `newWorldInfoEntryDefinition` keys; missing fields fall
+         *   back to template defaults.
+         * @returns {Promise<Array<object>>} the entries actually written, with
+         *   their newly-assigned uids
+         */
+        async replaceWorldBookEntries(bookName, entries) {
+            const data = await loadWorldInfo(bookName);
+            if (!data) throw new Error(`[CardApp] World book "${bookName}" not found`);
+            const list = Array.isArray(entries) ? entries : [];
+            data.entries = {};
+            const created = [];
+            for (const partial of list) {
+                const newEntry = createWorldInfoEntry(bookName, data);
+                if (!newEntry) continue;
+                if (partial && typeof partial === 'object') {
+                    const { uid: _ignoredUid, ...fields } = partial;
+                    Object.assign(newEntry, fields);
+                }
+                created.push(newEntry);
+            }
+            await saveWorldInfo(bookName, data, true);
+            return created;
+        },
+
         // ==================== Regex Scripts ====================
 
         /**
