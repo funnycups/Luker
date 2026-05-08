@@ -3,7 +3,7 @@
  */
 
 import { eventSource, event_types, chat, chat_metadata, this_chid, characters, getRequestHeaders, openCharacterChat, doNewChat, closeCurrentChat, getPastCharacterChats, deleteMessage as lukerDeleteMessage, deleteLastMessage, swipe_right, saveCharacterDebounced, saveMetadata, messageFormatting } from '../../../script.js';
-import { getContext, saveMetadataDebounced } from '../../extensions.js';
+import { getContext, saveMetadataDebounced, extension_settings } from '../../extensions.js';
 import { executeSlashCommandsWithOptions } from '../../slash-commands.js';
 import { removeReasoningFromString } from '../../reasoning.js';
 import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, world_names, selected_world_info, getChatWorldInfoNames, setChatWorldInfoSelection } from '../../world-info.js';
@@ -12,6 +12,7 @@ import {
     getCharacterIndexByAvatar as orchGetCharacterIndexByAvatar,
     getCharacterExtensionDataByAvatar as orchGetCharacterExtensionDataByAvatar,
     normalizeCharacterOverrideMode as orchNormalizeCharacterOverrideMode,
+    applyCharacterExecutionModeForAvatar as orchApplyCharacterExecutionModeForAvatar,
 } from '../orchestrator/character-overrides.js';
 import { persistOrchestratorCharacterExtension } from '../orchestrator/editor-persist.js';
 import {
@@ -604,7 +605,17 @@ export function buildContext(container, charId, config) {
             const previous = orchGetCharacterExtensionDataByAvatar(lukerCtx, avatar);
             const nextOverride = orchNormalizeCharacterOverrideMode({ ...override });
             const nextPayload = { ...previous, override: nextOverride };
-            return await persistOrchestratorCharacterExtension(lukerCtx, characterIndex, nextPayload);
+            const ok = await persistOrchestratorCharacterExtension(lukerCtx, characterIndex, nextPayload);
+            if (ok) {
+                // The orchestrator dispatcher reads the active mode from
+                // extension_settings.orchestrator.executionMode, NOT from the
+                // override directly. Without realigning that flag, an override
+                // that switches modes (e.g. spec → agenda) is silently ignored
+                // by the runtime. This mirrors what the in-app editor does at
+                // orchestrator/main.js:6684.
+                orchApplyCharacterExecutionModeForAvatar(lukerCtx, extension_settings?.orchestrator, avatar);
+            }
+            return ok;
         },
 
         /**
@@ -623,7 +634,18 @@ export function buildContext(container, charId, config) {
             const previous = orchGetCharacterExtensionDataByAvatar(lukerCtx, avatar);
             const nextPayload = { ...previous };
             delete nextPayload.override;
-            return await persistOrchestratorCharacterExtension(lukerCtx, characterIndex, nextPayload);
+            // If the override was the only key on extensions.orchestrator,
+            // pass null so persistOrchestratorCharacterExtension removes the
+            // whole blob server-side instead of leaving an empty {} behind.
+            const finalPayload = Object.keys(nextPayload).length === 0 ? null : nextPayload;
+            const ok = await persistOrchestratorCharacterExtension(lukerCtx, characterIndex, finalPayload);
+            if (ok) {
+                // After clearing, also realign the dispatcher mode — without
+                // this the runtime keeps using whatever mode the prior
+                // override pinned, even though the override is gone.
+                orchApplyCharacterExecutionModeForAvatar(lukerCtx, extension_settings?.orchestrator, avatar);
+            }
+            return ok;
         },
 
         // ==================== Memory Graph (per-character override) ====================

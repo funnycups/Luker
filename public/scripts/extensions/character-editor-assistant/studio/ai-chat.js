@@ -15,11 +15,13 @@ import { characters, this_chid, saveCharacterDebounced, saveMetadata, chat_metad
 import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, selected_world_info, charUpdatePrimaryWorld, getChatWorldInfoNames, setChatWorldInfoSelection } from '../../../world-info.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { getContext } from '../../../st-context.js';
+import { extension_settings } from '../../../extensions.js';
 import {
  getCharacterOverrideByAvatar as orchGetCharacterOverrideByAvatar,
  getCharacterIndexByAvatar as orchGetCharacterIndexByAvatar,
  getCharacterExtensionDataByAvatar as orchGetCharacterExtensionDataByAvatar,
  normalizeCharacterOverrideMode as orchNormalizeCharacterOverrideMode,
+ applyCharacterExecutionModeForAvatar as orchApplyCharacterExecutionModeForAvatar,
 } from '../../orchestrator/character-overrides.js';
 import { persistOrchestratorCharacterExtension } from '../../orchestrator/editor-persist.js';
 import {
@@ -796,6 +798,13 @@ async function executeTool(charId, toolName, args, options = {}) {
  const previous = orchGetCharacterExtensionDataByAvatar(lukerCtx, avatar);
  const nextOverride = orchNormalizeCharacterOverrideMode({ ...override });
  const ok = await persistOrchestratorCharacterExtension(lukerCtx, characterIndex, { ...previous, override: nextOverride });
+ if (ok) {
+ // Realign extension_settings.orchestrator.executionMode so the
+ // dispatcher in main.js picks the override's branch on the next
+ // generation. Without this an override that switches modes is
+ // silently ignored. Mirrors orchestrator/main.js:6684.
+ orchApplyCharacterExecutionModeForAvatar(lukerCtx, extension_settings?.orchestrator, avatar);
+ }
  return ok ? { ok: true, message: 'Orchestrator override updated.', mode: nextOverride.mode || null } : { ok: false, error: 'Failed to persist orchestrator override' };
  }
  case TOOL_NAMES.ORCHESTRATOR_CLEAR_OVERRIDE: {
@@ -811,7 +820,15 @@ async function executeTool(charId, toolName, args, options = {}) {
  const previous = orchGetCharacterExtensionDataByAvatar(lukerCtx, avatar);
  const nextPayload = { ...previous };
  delete nextPayload.override;
- const ok = await persistOrchestratorCharacterExtension(lukerCtx, characterIndex, nextPayload);
+ // Pass null when nothing else is left so the server-side handler
+ // removes the whole extensions.orchestrator blob instead of leaving {}.
+ const finalPayload = Object.keys(nextPayload).length === 0 ? null : nextPayload;
+ const ok = await persistOrchestratorCharacterExtension(lukerCtx, characterIndex, finalPayload);
+ if (ok) {
+ // Realign mode flag — the runtime would otherwise keep the prior
+ // override's pinned mode active even though the override is gone.
+ orchApplyCharacterExecutionModeForAvatar(lukerCtx, extension_settings?.orchestrator, avatar);
+ }
  return ok ? { ok: true, message: 'Orchestrator override cleared (falling back to global).' } : { ok: false, error: 'Failed to clear orchestrator override' };
  }
  // ==================== Memory Graph (per-character override) ====================
