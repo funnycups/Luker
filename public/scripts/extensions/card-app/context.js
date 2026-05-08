@@ -14,6 +14,14 @@ import {
     normalizeCharacterOverrideMode as orchNormalizeCharacterOverrideMode,
 } from '../orchestrator/character-overrides.js';
 import { persistOrchestratorCharacterExtension } from '../orchestrator/editor-persist.js';
+import {
+    getSchemaScopeInfo as mgGetSchemaScopeInfo,
+    getAdvancedScopeInfo as mgGetAdvancedScopeInfo,
+    persistCharacterSchemaOverride as mgPersistCharacterSchemaOverride,
+    removeCharacterSchemaOverride as mgRemoveCharacterSchemaOverride,
+    persistCharacterAdvancedOverride as mgPersistCharacterAdvancedOverride,
+    removeCharacterAdvancedOverride as mgRemoveCharacterAdvancedOverride,
+} from '../memory-graph/character-overrides.js';
 
 /**
  * Build the context object for a CardApp.
@@ -616,6 +624,85 @@ export function buildContext(container, charId, config) {
             const nextPayload = { ...previous };
             delete nextPayload.override;
             return await persistOrchestratorCharacterExtension(lukerCtx, characterIndex, nextPayload);
+        },
+
+        // ==================== Memory Graph (per-character override) ====================
+
+        /**
+         * Get the memory-graph configuration that will be in effect for this
+         * character: the node-type schema (with character override applied
+         * if present) and the advanced settings (global merged with the
+         * character override). The `scope` field on each block reports
+         * whether the value originated from a character-bound override
+         * (`'character'`) or fell back to the global config (`'global'`).
+         *
+         * Always character-scoped — this returns the EFFECTIVE config for
+         * the active card, never mutates the global memory-graph settings.
+         *
+         * @returns {{
+         *   schema: { scope: 'global'|'character', hasOverride: boolean, schema: any[] },
+         *   advanced: { scope: 'global'|'character', hasOverride: boolean, settings: object }
+         * }}
+         */
+        getMemoryGraphSchema() {
+            const lukerCtx = getContext();
+            const schemaInfo = mgGetSchemaScopeInfo(lukerCtx);
+            const advancedInfo = mgGetAdvancedScopeInfo(lukerCtx);
+            return {
+                schema: {
+                    scope: schemaInfo.scope,
+                    hasOverride: !!schemaInfo.hasOverride,
+                    schema: schemaInfo.schema,
+                },
+                advanced: {
+                    scope: advancedInfo.scope,
+                    hasOverride: !!advancedInfo.hasOverride,
+                    settings: advancedInfo.settings,
+                },
+            };
+        },
+
+        /**
+         * Set or clear the memory-graph node-type schema override on the
+         * active character card. Pass `null` to remove the override and
+         * fall back to the global schema. The schema is sanitized through
+         * memory-graph's `normalizeNodeTypeSchema` before write.
+         * Always character-scoped — never touches the global schema.
+         *
+         * @param {Array|null} schema - Node-type descriptor array, or null to clear
+         * @returns {Promise<boolean>}
+         */
+        async setMemoryGraphSchema(schema) {
+            const lukerCtx = getContext();
+            const charData = characters[this_chid];
+            const avatar = String(charData?.avatar || '').trim();
+            if (!avatar) throw new Error('[CardApp] No active character');
+            if (schema === null || schema === undefined) {
+                return await mgRemoveCharacterSchemaOverride(lukerCtx, avatar);
+            }
+            return await mgPersistCharacterSchemaOverride(lukerCtx, avatar, schema);
+        },
+
+        /**
+         * Set or clear the memory-graph advanced-settings override on the
+         * active character card. Pass `null` to remove the override and
+         * fall back to global advanced settings. The patch is normalized
+         * through memory-graph's `normalizeAdvancedSettings` before write.
+         * Always character-scoped — never touches the global advanced
+         * settings.
+         *
+         * @param {object|null} advanced - Advanced settings patch, or null to clear
+         * @returns {Promise<boolean>}
+         */
+        async setMemoryGraphAdvanced(advanced) {
+            const lukerCtx = getContext();
+            const charData = characters[this_chid];
+            const avatar = String(charData?.avatar || '').trim();
+            if (!avatar) throw new Error('[CardApp] No active character');
+            if (advanced === null || advanced === undefined) {
+                return await mgRemoveCharacterAdvancedOverride(lukerCtx, avatar);
+            }
+            return await mgPersistCharacterAdvancedOverride(lukerCtx, avatar, advanced);
         },
 
         // ==================== Rendering ====================
