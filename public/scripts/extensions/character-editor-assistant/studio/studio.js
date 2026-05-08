@@ -1328,6 +1328,7 @@ async function handleAISend() {
         if (currentCharId && currentSessionId && conversationMessages.length > 0) {
             const summary = generateSessionSummary(conversationMessages);
             await saveCurrentSession(currentSessionId, conversationMessages, summary);
+            await renderSessionList();
         }
     }
 }
