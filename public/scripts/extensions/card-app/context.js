@@ -2,11 +2,11 @@
  * CardApp Context - builds the ctx object passed to CardApp's init() function.
  */
 
-import { eventSource, event_types, chat, chat_metadata, this_chid, characters, getRequestHeaders, openCharacterChat, doNewChat, closeCurrentChat, getPastCharacterChats, deleteMessage as lukerDeleteMessage, deleteLastMessage, swipe_right, saveCharacterDebounced, messageFormatting } from '../../../script.js';
+import { eventSource, event_types, chat, chat_metadata, this_chid, characters, getRequestHeaders, openCharacterChat, doNewChat, closeCurrentChat, getPastCharacterChats, deleteMessage as lukerDeleteMessage, deleteLastMessage, swipe_right, saveCharacterDebounced, saveMetadata, messageFormatting } from '../../../script.js';
 import { getContext, saveMetadataDebounced } from '../../extensions.js';
 import { executeSlashCommandsWithOptions } from '../../slash-commands.js';
 import { removeReasoningFromString } from '../../reasoning.js';
-import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, world_names, selected_world_info } from '../../world-info.js';
+import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, world_names, selected_world_info, getChatWorldInfoNames, setChatWorldInfoSelection } from '../../world-info.js';
 
 /**
  * Build the context object for a CardApp.
@@ -388,23 +388,96 @@ export function buildContext(container, charId, config) {
         // ==================== World Info ====================
 
         /**
-         * Get world book names associated with the current character.
-         * Includes character-bound world book + globally activated world books.
-         * @returns {string[]}
+         * Get world book names visible to this character. By default returns
+         * a flat string[] for backward compatibility (character-bound book +
+         * chat-bound books + globally activated books, deduped). Pass
+         * `{ withSource: true }` to get structured entries that distinguish
+         * `'character'` (the card's primary book), `'chat'` (chat-bound
+         * books from `chat_metadata.world_info`), and `'global'` (selected
+         * world info active for every chat).
+         *
+         * @param {{ withSource?: boolean }} [options]
+         * @returns {string[] | Array<{name: string, source: 'character'|'chat'|'global'}>}
          */
-        getWorldBooks() {
-            const books = [];
-            // Character-bound world book
+        getWorldBooks(options = {}) {
+            const withSource = !!options?.withSource;
+            const entries = [];
+            const seen = new Set();
+            const push = (name, source) => {
+                const trimmed = String(name || '').trim();
+                if (!trimmed || seen.has(trimmed)) return;
+                seen.add(trimmed);
+                entries.push({ name: trimmed, source });
+            };
+            // Character-bound primary world book
             const charData = characters[this_chid];
-            const boundBook = String(charData?.data?.extensions?.world || '').trim();
-            if (boundBook) books.push(boundBook);
+            push(charData?.data?.extensions?.world, 'character');
+            // Chat-bound books (chat_metadata.world_info)
+            try {
+                for (const name of getChatWorldInfoNames(chat_metadata)) {
+                    push(name, 'chat');
+                }
+            } catch { /* extension or chat not ready */ }
             // Globally activated world books
             if (Array.isArray(selected_world_info)) {
-                for (const name of selected_world_info) {
-                    if (name && !books.includes(name)) books.push(name);
-                }
+                for (const name of selected_world_info) push(name, 'global');
             }
-            return books;
+            return withSource ? entries : entries.map((e) => e.name);
+        },
+
+        /**
+         * Get the list of world book names bound to the *current chat*
+         * (stored in `chat_metadata.world_info`). Distinct from the
+         * character-bound book — chat-bound books reset when the user
+         * starts a new chat, so they are the right home for per-save
+         * lore/state/NPCs that should not bleed across playthroughs.
+         * @returns {string[]}
+         */
+        getChatWorldBooks() {
+            try {
+                return getChatWorldInfoNames(chat_metadata);
+            } catch {
+                return [];
+            }
+        },
+
+        /**
+         * Replace the chat-bound world book list. Names that don't match an
+         * existing world book are silently dropped (matches Luker's UI
+         * behavior). Pass `[]` (or nothing) to clear.
+         * @param {string[]} [names]
+         * @returns {Promise<string[]>} the resolved list actually written
+         */
+        async setChatWorldBooks(names = []) {
+            const list = Array.isArray(names) ? names : [names];
+            const written = setChatWorldInfoSelection(list, chat_metadata);
+            await saveMetadata();
+            return written;
+        },
+
+        /**
+         * Add a world book to the chat-bound list (no-op if already there).
+         * @param {string} name
+         * @returns {Promise<string[]>}
+         */
+        async addChatWorldBook(name) {
+            const target = String(name || '').trim();
+            if (!target) return this.getChatWorldBooks();
+            const current = this.getChatWorldBooks();
+            if (current.includes(target)) return current;
+            return await this.setChatWorldBooks([...current, target]);
+        },
+
+        /**
+         * Remove a world book from the chat-bound list.
+         * @param {string} name
+         * @returns {Promise<string[]>}
+         */
+        async removeChatWorldBook(name) {
+            const target = String(name || '').trim();
+            if (!target) return this.getChatWorldBooks();
+            const next = this.getChatWorldBooks().filter((n) => n !== target);
+            return await this.setChatWorldBooks(next);
         },
 
         /**
