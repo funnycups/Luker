@@ -10,13 +10,26 @@ import { trimV1 } from '../util.js';
  * @param {string} apiUrl - The API URL
  * @param {string} model - The model to use
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
+ * @param {object} [sourceSettings] - Resolved source settings; may include `secretId`, `reverseProxy`, `proxyPassword`
  * @returns {Promise<number[][]>} - The array of vectors for the texts
  */
-export async function getVllmBatchVector(texts, apiUrl, model, directories) {
-    const url = new URL(urlJoin(trimV1(apiUrl), '/v1/embeddings'));
+export async function getVllmBatchVector(texts, apiUrl, model, directories, sourceSettings = null) {
+    const settings = sourceSettings || {};
+    const reverseProxy = typeof settings.reverseProxy === 'string' ? settings.reverseProxy.trim() : '';
+    const proxyPassword = typeof settings.proxyPassword === 'string' ? settings.proxyPassword : '';
+    const secretId = typeof settings.secretId === 'string' && settings.secretId.trim()
+        ? settings.secretId.trim()
+        : null;
+
+    const baseUrl = reverseProxy || apiUrl;
+    const url = new URL(urlJoin(trimV1(baseUrl), '/v1/embeddings'));
 
     const headers = {};
-    setAdditionalHeadersByType(headers, TEXTGEN_TYPES.VLLM, apiUrl, directories);
+    if (reverseProxy && proxyPassword) {
+        headers['Authorization'] = `Bearer ${proxyPassword}`;
+    } else {
+        setAdditionalHeadersByType(headers, TEXTGEN_TYPES.VLLM, baseUrl, directories, secretId);
+    }
 
     const response = await fetch(url, {
         method: 'POST',
@@ -52,9 +65,10 @@ export async function getVllmBatchVector(texts, apiUrl, model, directories) {
  * @param {string} apiUrl - The API URL
  * @param {string} model - The model to use
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
+ * @param {object} [sourceSettings] - Resolved source settings
  * @returns {Promise<number[]>} - The vector for the text
  */
-export async function getVllmVector(text, apiUrl, model, directories) {
-    const vectors = await getVllmBatchVector([text], apiUrl, model, directories);
+export async function getVllmVector(text, apiUrl, model, directories, sourceSettings = null) {
+    const vectors = await getVllmBatchVector([text], apiUrl, model, directories, sourceSettings);
     return vectors[0];
 }

@@ -494,6 +494,36 @@ export function getAllSecrets(directories) {
 //#endregion
 
 /**
+ * Resolves the secret id requested by the caller from an incoming HTTP request.
+ * Accepts either snake_case `secret_id` or camelCase `secretId`.
+ * @param {import('express').Request} request
+ * @returns {string} Trimmed secret id, or empty string if absent.
+ */
+export function getRequestedSecretId(request) {
+    const raw = request?.body?.secret_id ?? request?.body?.secretId ?? '';
+    return typeof raw === 'string' ? raw.trim() : '';
+}
+
+/**
+ * Reads a provider secret, honoring an optional `secret_id` from the request body.
+ * Falls back to the active secret for the given key if the requested id is missing
+ * or cannot be resolved.
+ * @param {import('express').Request} request
+ * @param {string} key SECRET_KEYS entry to look up
+ * @returns {string} The resolved secret value, or empty string when none is stored.
+ */
+export function readProviderSecret(request, key) {
+    const secretId = getRequestedSecretId(request);
+    if (secretId) {
+        const requested = readSecret(request.user.directories, key, secretId);
+        if (requested) {
+            return requested;
+        }
+    }
+    return readSecret(request.user.directories, key);
+}
+
+/**
  * Migrates legacy flat secrets format to the new format for all user directories
  * @param {import('../users.js').UserDirectoryList[]} directoriesList User directories
  */

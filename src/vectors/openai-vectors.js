@@ -76,10 +76,10 @@ const SOURCES = {
  * @param {string} source - The source of the vector
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
  * @param {string} model - The model to use for the embedding
- * @param {string|null} urlOverride - Optional URL override for the API endpoint
+ * @param {object} [sourceSettings] - Resolved source settings; may include `urlOverride`, `reverseProxy`, `proxyPassword`, `secretId`
  * @returns {Promise<number[][]>} - The array of vectors for the texts
  */
-export async function getOpenAIBatchVector(texts, source, directories, model = '', urlOverride = null) {
+export async function getOpenAIBatchVector(texts, source, directories, model = '', sourceSettings = null) {
     const config = SOURCES[source];
 
     if (!config) {
@@ -87,7 +87,19 @@ export async function getOpenAIBatchVector(texts, source, directories, model = '
         throw new Error('Unknown source');
     }
 
-    const key = readSecret(directories, config.secretKey);
+    const settings = sourceSettings || {};
+    const urlOverride = typeof settings.urlOverride === 'string' && settings.urlOverride.trim()
+        ? settings.urlOverride.trim()
+        : null;
+    const reverseProxy = typeof settings.reverseProxy === 'string' ? settings.reverseProxy.trim() : '';
+    const proxyPassword = typeof settings.proxyPassword === 'string' ? settings.proxyPassword : '';
+    const secretId = typeof settings.secretId === 'string' && settings.secretId.trim()
+        ? settings.secretId.trim()
+        : null;
+
+    const key = reverseProxy
+        ? proxyPassword
+        : readSecret(directories, config.secretKey, secretId);
 
     if (!key) {
         console.warn('No API key found');
@@ -95,7 +107,15 @@ export async function getOpenAIBatchVector(texts, source, directories, model = '
     }
 
     const modelName = model || config.model;
-    const url = urlOverride || config.url?.replace('{{MODEL}}', modelName);
+
+    let url;
+    if (reverseProxy) {
+        url = reverseProxy.replace(/\/+$/, '');
+    } else if (urlOverride) {
+        url = urlOverride.replace(/\/+$/, '');
+    } else {
+        url = config.url?.replace('{{MODEL}}', modelName);
+    }
 
     if (!url) {
         throw new Error(`No API URL configured for source ${source}`);
@@ -147,10 +167,10 @@ export async function getOpenAIBatchVector(texts, source, directories, model = '
  * @param {string} source - The source of the vector
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
  * @param {string} model - The model to use for the embedding
- * @param {string|null} urlOverride - Optional URL override for the API endpoint
+ * @param {object} [sourceSettings] - Resolved source settings; may include `urlOverride`, `reverseProxy`, `proxyPassword`, `secretId`
  * @returns {Promise<number[]>} - The vector for the text
  */
-export async function getOpenAIVector(text, source, directories, model = '', urlOverride = null) {
-    const vectors = await getOpenAIBatchVector([text], source, directories, model, urlOverride);
+export async function getOpenAIVector(text, source, directories, model = '', sourceSettings = null) {
+    const vectors = await getOpenAIBatchVector([text], source, directories, model, sourceSettings);
     return vectors[0];
 }

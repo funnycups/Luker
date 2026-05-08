@@ -1,23 +1,37 @@
 import fetch from 'node-fetch';
 import { SECRET_KEYS, readSecret } from '../endpoints/secrets.js';
 
+const DEFAULT_COHERE_URL = 'https://api.cohere.ai/v2';
+
 /**
- * Gets the vector for the given text batch from an OpenAI compatible endpoint.
+ * Gets the vector for the given text batch from Cohere.
  * @param {string[]} texts - The array of texts to get the vector for
  * @param {boolean} isQuery - If the text is a query for embedding search
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
  * @param {string} model - The model to use for the embedding
+ * @param {object} [sourceSettings] - Resolved source settings; may include `reverseProxy`, `proxyPassword`, `secretId`
  * @returns {Promise<number[][]>} - The array of vectors for the texts
  */
-export async function getCohereBatchVector(texts, isQuery, directories, model) {
-    const key = readSecret(directories, SECRET_KEYS.COHERE);
+export async function getCohereBatchVector(texts, isQuery, directories, model, sourceSettings = null) {
+    const settings = sourceSettings || {};
+    const reverseProxy = typeof settings.reverseProxy === 'string' ? settings.reverseProxy.trim() : '';
+    const proxyPassword = typeof settings.proxyPassword === 'string' ? settings.proxyPassword : '';
+    const secretId = typeof settings.secretId === 'string' && settings.secretId.trim()
+        ? settings.secretId.trim()
+        : null;
+
+    const key = reverseProxy
+        ? proxyPassword
+        : readSecret(directories, SECRET_KEYS.COHERE, secretId);
 
     if (!key) {
         console.warn('No API key found');
         throw new Error('No API key found');
     }
 
-    const response = await fetch('https://api.cohere.ai/v2/embed', {
+    const baseUrl = (reverseProxy || DEFAULT_COHERE_URL).replace(/\/+$/, '');
+
+    const response = await fetch(`${baseUrl}/embed`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -49,15 +63,15 @@ export async function getCohereBatchVector(texts, isQuery, directories, model) {
 }
 
 /**
- * Gets the vector for the given text from an OpenAI compatible endpoint.
+ * Gets the vector for the given text from Cohere.
  * @param {string} text - The text to get the vector for
  * @param {boolean} isQuery - If the text is a query for embedding search
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
  * @param {string} model - The model to use for the embedding
+ * @param {object} [sourceSettings] - Resolved source settings
  * @returns {Promise<number[]>} - The vector for the text
  */
-export async function getCohereVector(text, isQuery, directories, model) {
-    const vectors = await getCohereBatchVector([text], isQuery, directories, model);
+export async function getCohereVector(text, isQuery, directories, model, sourceSettings = null) {
+    const vectors = await getCohereBatchVector([text], isQuery, directories, model, sourceSettings);
     return vectors[0];
 }
-

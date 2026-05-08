@@ -4,19 +4,20 @@ import { SECRET_KEYS, readSecret } from '../endpoints/secrets.js';
 const SOURCES = {
     'nomicai': {
         secretKey: SECRET_KEYS.NOMICAI,
-        url: 'api-atlas.nomic.ai/v1/embedding/text',
+        url: 'https://api-atlas.nomic.ai/v1/embedding/text',
         model: 'nomic-embed-text-v1.5',
     },
 };
 
 /**
- * Gets the vector for the given text batch from an OpenAI compatible endpoint.
+ * Gets the vector for the given text batch from NomicAI.
  * @param {string[]} texts - The array of texts to get the vector for
  * @param {string} source - The source of the vector
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
+ * @param {object} [sourceSettings] - Resolved source settings; may include `reverseProxy`, `proxyPassword`, `secretId`
  * @returns {Promise<number[][]>} - The array of vectors for the texts
  */
-export async function getNomicAIBatchVector(texts, source, directories) {
+export async function getNomicAIBatchVector(texts, source, directories, sourceSettings = null) {
     const config = SOURCES[source];
 
     if (!config) {
@@ -24,16 +25,27 @@ export async function getNomicAIBatchVector(texts, source, directories) {
         throw new Error('Unknown source');
     }
 
-    const key = readSecret(directories, config.secretKey);
+    const settings = sourceSettings || {};
+    const reverseProxy = typeof settings.reverseProxy === 'string' ? settings.reverseProxy.trim() : '';
+    const proxyPassword = typeof settings.proxyPassword === 'string' ? settings.proxyPassword : '';
+    const secretId = typeof settings.secretId === 'string' && settings.secretId.trim()
+        ? settings.secretId.trim()
+        : null;
+
+    const key = reverseProxy
+        ? proxyPassword
+        : readSecret(directories, config.secretKey, secretId);
 
     if (!key) {
         console.warn('No API key found');
         throw new Error('No API key found');
     }
 
-    const url = config.url;
-    let response;
-    response = await fetch(`https://${url}`, {
+    const url = reverseProxy
+        ? reverseProxy.replace(/\/+$/, '')
+        : config.url;
+
+    const response = await fetch(url, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -62,13 +74,14 @@ export async function getNomicAIBatchVector(texts, source, directories) {
 }
 
 /**
- * Gets the vector for the given text from an OpenAI compatible endpoint.
+ * Gets the vector for the given text from NomicAI.
  * @param {string} text - The text to get the vector for
  * @param {string} source - The source of the vector
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
+ * @param {object} [sourceSettings] - Resolved source settings
  * @returns {Promise<number[]>} - The vector for the text
  */
-export async function getNomicAIVector(text, source, directories) {
-    const vectors = await getNomicAIBatchVector([text], source, directories);
+export async function getNomicAIVector(text, source, directories, sourceSettings = null) {
+    const vectors = await getNomicAIBatchVector([text], source, directories, sourceSettings);
     return vectors[0];
 }

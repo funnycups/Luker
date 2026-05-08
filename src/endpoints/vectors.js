@@ -57,15 +57,15 @@ const SOURCES = [
 async function getVector(source, sourceSettings, text, isQuery, directories) {
     switch (source) {
         case 'nomicai':
-            return getNomicAIVector(text, source, directories);
+            return getNomicAIVector(text, source, directories, sourceSettings);
         case 'togetherai':
         case 'mistral':
         case 'openai':
-            return getOpenAIVector(text, source, directories, sourceSettings.model);
+            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings);
         case 'electronhub':
-            return getOpenAIVector(text, source, directories, sourceSettings.model);
+            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings);
         case 'openrouter':
-            return getOpenAIVector(text, source, directories, sourceSettings.model);
+            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings);
         case 'transformers':
             return getTransformersVector(text);
         case 'extras':
@@ -75,27 +75,27 @@ async function getVector(source, sourceSettings, text, isQuery, directories) {
         case 'vertexai':
             return getVertexVector(text, sourceSettings.model, sourceSettings.request);
         case 'cohere':
-            return getCohereVector(text, isQuery, directories, sourceSettings.model);
+            return getCohereVector(text, isQuery, directories, sourceSettings.model, sourceSettings);
         case 'jina':
-            return getJinaVector(text, isQuery, directories, sourceSettings.model, sourceSettings.options);
+            return getJinaVector(text, isQuery, directories, sourceSettings.model, sourceSettings.options, sourceSettings);
         case 'llamacpp':
-            return getLlamaCppVector(text, sourceSettings.apiUrl, directories);
+            return getLlamaCppVector(text, sourceSettings.apiUrl, directories, sourceSettings);
         case 'vllm':
-            return getVllmVector(text, sourceSettings.apiUrl, sourceSettings.model, directories);
+            return getVllmVector(text, sourceSettings.apiUrl, sourceSettings.model, directories, sourceSettings);
         case 'ollama':
-            return getOllamaVector(text, sourceSettings.apiUrl, sourceSettings.model, sourceSettings.keep, directories);
+            return getOllamaVector(text, sourceSettings.apiUrl, sourceSettings.model, sourceSettings.keep, directories, sourceSettings);
         case 'webllm':
             return sourceSettings.embeddings[text];
         case 'koboldcpp':
             return sourceSettings.embeddings[text];
         case 'chutes':
-            return getOpenAIVector(text, source, directories, sourceSettings.model);
+            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings);
         case 'nanogpt':
-            return getOpenAIVector(text, source, directories, sourceSettings.model);
+            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings);
         case 'siliconflow':
-            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings.urlOverride);
+            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings);
         case 'workers_ai':
-            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings.urlOverride);
+            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings);
     }
 
     throw new Error(`Unknown vector source ${source}`);
@@ -118,18 +118,18 @@ async function getBatchVector(source, sourceSettings, texts, isQuery, directorie
     for (let batch of batches) {
         switch (source) {
             case 'nomicai':
-                results.push(...await getNomicAIBatchVector(batch, source, directories));
+                results.push(...await getNomicAIBatchVector(batch, source, directories, sourceSettings));
                 break;
             case 'togetherai':
             case 'mistral':
             case 'openai':
-                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model));
+                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings));
                 break;
             case 'electronhub':
-                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model));
+                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings));
                 break;
             case 'openrouter':
-                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model));
+                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings));
                 break;
             case 'transformers':
                 results.push(...await getTransformersBatchVector(batch));
@@ -144,19 +144,19 @@ async function getBatchVector(source, sourceSettings, texts, isQuery, directorie
                 results.push(...await getVertexBatchVector(batch, sourceSettings.model, sourceSettings.request));
                 break;
             case 'cohere':
-                results.push(...await getCohereBatchVector(batch, isQuery, directories, sourceSettings.model));
+                results.push(...await getCohereBatchVector(batch, isQuery, directories, sourceSettings.model, sourceSettings));
                 break;
             case 'jina':
-                results.push(...await getJinaBatchVector(batch, isQuery, directories, sourceSettings.model, sourceSettings.options));
+                results.push(...await getJinaBatchVector(batch, isQuery, directories, sourceSettings.model, sourceSettings.options, sourceSettings));
                 break;
             case 'llamacpp':
-                results.push(...await getLlamaCppBatchVector(batch, sourceSettings.apiUrl, directories));
+                results.push(...await getLlamaCppBatchVector(batch, sourceSettings.apiUrl, directories, sourceSettings));
                 break;
             case 'vllm':
-                results.push(...await getVllmBatchVector(batch, sourceSettings.apiUrl, sourceSettings.model, directories));
+                results.push(...await getVllmBatchVector(batch, sourceSettings.apiUrl, sourceSettings.model, directories, sourceSettings));
                 break;
             case 'ollama':
-                results.push(...await getOllamaBatchVector(batch, sourceSettings.apiUrl, sourceSettings.model, sourceSettings.keep, directories));
+                results.push(...await getOllamaBatchVector(batch, sourceSettings.apiUrl, sourceSettings.model, sourceSettings.keep, directories, sourceSettings));
                 break;
             case 'webllm':
                 results.push(...texts.map(x => sourceSettings.embeddings[x]));
@@ -165,16 +165,16 @@ async function getBatchVector(source, sourceSettings, texts, isQuery, directorie
                 results.push(...texts.map(x => sourceSettings.embeddings[x]));
                 break;
             case 'chutes':
-                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model));
+                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings));
                 break;
             case 'nanogpt':
-                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model));
+                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings));
                 break;
             case 'siliconflow':
-                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings.urlOverride));
+                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings));
                 break;
             case 'workers_ai':
-                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings.urlOverride));
+                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings));
                 break;
             default:
                 throw new Error(`Unknown vector source ${source}`);
@@ -185,32 +185,56 @@ async function getBatchVector(source, sourceSettings, texts, isQuery, directorie
 }
 
 /**
+ * Reads the chat-completion-style credential triplet from the request body.
+ * @param {object} request - The HTTP request object.
+ * @returns {{secretId: string, reverseProxy: string, proxyPassword: string}}
+ */
+function getCommonCredentials(request) {
+    const secretId = typeof request?.body?.secret_id === 'string'
+        ? request.body.secret_id.trim()
+        : (typeof request?.body?.secretId === 'string' ? request.body.secretId.trim() : '');
+    const reverseProxy = typeof request?.body?.reverse_proxy === 'string'
+        ? request.body.reverse_proxy.trim()
+        : '';
+    const proxyPassword = typeof request?.body?.proxy_password === 'string'
+        ? request.body.proxy_password
+        : '';
+    return { secretId, reverseProxy, proxyPassword };
+}
+
+/**
  * Extracts settings for the vectorization sources from the HTTP request headers.
  * @param {string} source - Which source to extract settings for.
  * @param {object} request - The HTTP request object.
  * @returns {object} - An object that can be used as `sourceSettings` in functions that take that parameter.
  */
 function getSourceSettings(source, request) {
+    const credentials = getCommonCredentials(request);
     switch (source) {
         case 'togetherai':
             return {
                 model: String(request.body.model),
+                ...credentials,
             };
         case 'openai':
             return {
                 model: String(request.body.model),
+                ...credentials,
             };
         case 'electronhub':
             return {
                 model: String(request.body.model || 'text-embedding-3-small'),
+                ...credentials,
             };
         case 'openrouter':
             return {
                 model: String(request.body.model) || 'openai/text-embedding-3-large',
+                ...credentials,
             };
         case 'cohere':
             return {
                 model: String(request.body.model),
+                ...credentials,
             };
         case 'jina':
             return {
@@ -220,27 +244,44 @@ function getSourceSettings(source, request) {
                     dimensions: request.body.jina_dimensions || undefined,
                     task: request.body.jina_task || undefined,
                 },
+                ...credentials,
             };
-        case 'llamacpp':
+        case 'llamacpp': {
+            const apiUrl = credentials.reverseProxy || String(request.body.apiUrl || '');
             return {
-                apiUrl: String(request.body.apiUrl),
+                apiUrl,
+                ...credentials,
             };
-        case 'vllm':
+        }
+        case 'vllm': {
+            const apiUrl = credentials.reverseProxy || String(request.body.apiUrl || '');
             return {
-                apiUrl: String(request.body.apiUrl),
+                apiUrl,
                 model: String(request.body.model),
+                ...credentials,
             };
-        case 'ollama':
+        }
+        case 'ollama': {
+            const apiUrl = credentials.reverseProxy || String(request.body.apiUrl || '');
             return {
-                apiUrl: String(request.body.apiUrl),
+                apiUrl,
                 model: String(request.body.model),
                 keep: Boolean(request.body.keep),
+                ...credentials,
             };
-        case 'extras':
+        }
+        case 'extras': {
+            // Triplet form takes precedence; fall back to legacy `extrasUrl`/`extrasKey` body fields.
+            const apiUrl = credentials.reverseProxy || String(request.body.extrasUrl || '');
+            const apiKey = credentials.reverseProxy
+                ? credentials.proxyPassword
+                : String(request.body.extrasKey || '');
             return {
-                extrasUrl: String(request.body.extrasUrl),
-                extrasKey: String(request.body.extrasKey),
+                extrasUrl: apiUrl,
+                extrasKey: apiKey,
+                ...credentials,
             };
+        }
         case 'transformers':
             return {
                 model: getConfigValue('extensions.models.embedding', ''),
@@ -250,14 +291,17 @@ function getSourceSettings(source, request) {
             return {
                 model: String(request.body.model || 'text-embedding-005'),
                 request: request, // Pass the request object to get API key and URL
+                ...credentials,
             };
         case 'mistral':
             return {
                 model: 'mistral-embed',
+                ...credentials,
             };
         case 'nomicai':
             return {
                 model: 'nomic-embed-text-v1.5',
+                ...credentials,
             };
         case 'webllm':
             return {
@@ -272,16 +316,19 @@ function getSourceSettings(source, request) {
         case 'chutes':
             return {
                 model: String(request.body.model || 'chutes-qwen-qwen3-embedding-8b'),
+                ...credentials,
             };
         case 'nanogpt':
             return {
                 model: String(request.body.model || 'text-embedding-3-small'),
+                ...credentials,
             };
         case 'siliconflow':
             return {
                 model: String(request.body.model || 'Qwen/Qwen3-Embedding-0.6B'),
                 urlOverride: request.body.siliconflow_endpoint === 'cn'
                     ? 'https://api.siliconflow.cn/v1' : null,
+                ...credentials,
             };
         case 'workers_ai': {
             const accountId = String(request.body.workers_ai_account_id || '').trim();
@@ -290,6 +337,7 @@ function getSourceSettings(source, request) {
                 urlOverride: accountId
                     ? `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/v1`
                     : null,
+                ...credentials,
             };
         }
         default:
@@ -579,10 +627,12 @@ router.post('/rerank', async (req, res) => {
         const documents = req.body.documents;
         const topK = Number(req.body.topK) || 5;
         const source = String(req.body.source) || 'cohere';
+        const credentials = getCommonCredentials(req);
         const rerankSettings = {
             model: String(req.body.model || ''),
             apiUrl: String(req.body.apiUrl || ''),
             apiKey: String(req.body.apiKey || ''),
+            ...credentials,
         };
 
         const results = await rerank(source, rerankSettings, query, documents, topK, req.user.directories);

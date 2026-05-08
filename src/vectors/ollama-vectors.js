@@ -9,14 +9,27 @@ import { TEXTGEN_TYPES } from '../constants.js';
  * @param {string} model - The model to use
  * @param {boolean} keep - Keep the model loaded in memory
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
+ * @param {object} [sourceSettings] - Resolved source settings; may include `secretId`, `reverseProxy`, `proxyPassword`
  * @returns {Promise<number[][]>} - The array of vectors for the texts
  */
-export async function getOllamaBatchVector(texts, apiUrl, model, keep, directories) {
-    const url = new URL(apiUrl);
+export async function getOllamaBatchVector(texts, apiUrl, model, keep, directories, sourceSettings = null) {
+    const settings = sourceSettings || {};
+    const reverseProxy = typeof settings.reverseProxy === 'string' ? settings.reverseProxy.trim() : '';
+    const proxyPassword = typeof settings.proxyPassword === 'string' ? settings.proxyPassword : '';
+    const secretId = typeof settings.secretId === 'string' && settings.secretId.trim()
+        ? settings.secretId.trim()
+        : null;
+
+    const baseUrl = reverseProxy || apiUrl;
+    const url = new URL(baseUrl);
     url.pathname = '/api/embed';
 
     const headers = {};
-    setAdditionalHeadersByType(headers, TEXTGEN_TYPES.OLLAMA, apiUrl, directories);
+    if (reverseProxy && proxyPassword) {
+        headers['Authorization'] = `Bearer ${proxyPassword}`;
+    } else {
+        setAdditionalHeadersByType(headers, TEXTGEN_TYPES.OLLAMA, baseUrl, directories, secretId);
+    }
 
     const response = await fetch(url, {
         method: 'POST',
@@ -54,9 +67,10 @@ export async function getOllamaBatchVector(texts, apiUrl, model, keep, directori
  * @param {string} model - The model to use
  * @param {boolean} keep - Keep the model loaded in memory
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
+ * @param {object} [sourceSettings] - Resolved source settings
  * @returns {Promise<number[]>} - The vector for the text
  */
-export async function getOllamaVector(text, apiUrl, model, keep, directories) {
-    const vectors = await getOllamaBatchVector([text], apiUrl, model, keep, directories);
+export async function getOllamaVector(text, apiUrl, model, keep, directories, sourceSettings = null) {
+    const vectors = await getOllamaBatchVector([text], apiUrl, model, keep, directories, sourceSettings);
     return vectors[0];
 }

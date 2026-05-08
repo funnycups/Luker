@@ -65,7 +65,7 @@ import {
     addOpenRouterSignatures,
 } from '../../prompt-converters.js';
 
-import { readSecret, SECRET_KEYS } from '../secrets.js';
+import { readSecret, SECRET_KEYS, readProviderSecret, getRequestedSecretId } from '../secrets.js';
 import {
     getTokenizerModel,
     getSentencepiceTokenizer,
@@ -117,22 +117,6 @@ const API_MINIMAX = 'https://api.minimax.io/v1';
 const API_MINIMAX_CN = 'https://api.minimaxi.com/v1';
 const API_OPENROUTER = 'https://openrouter.ai/api/v1';
 const API_WORKERS_AI = 'https://api.cloudflare.com/client/v4/accounts';
-
-function getRequestedSecretId(request) {
-    const raw = request?.body?.secret_id ?? request?.body?.secretId ?? '';
-    return typeof raw === 'string' ? raw.trim() : '';
-}
-
-function readProviderSecret(request, key) {
-    const secretId = getRequestedSecretId(request);
-    if (secretId) {
-        const requestedSecret = readSecret(request.user.directories, key, secretId);
-        if (requestedSecret) {
-            return requestedSecret;
-        }
-    }
-    return readSecret(request.user.directories, key);
-}
 
 /**
  * Module-scoped Claude caching configuration values.

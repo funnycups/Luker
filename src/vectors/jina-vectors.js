@@ -1,6 +1,8 @@
 import fetch from 'node-fetch';
 import { SECRET_KEYS, readSecret } from '../endpoints/secrets.js';
 
+const DEFAULT_JINA_URL = 'https://api.jina.ai/v1';
+
 /**
  * Gets the vector for the given text batch from Jina AI endpoint.
  * @param {string[]} texts - The array of texts to get the vector for
@@ -8,15 +10,27 @@ import { SECRET_KEYS, readSecret } from '../endpoints/secrets.js';
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
  * @param {string} model - The model to use for the embedding
  * @param {object} options - Additional options (late_chunking, dimensions, task)
+ * @param {object} [sourceSettings] - Resolved source settings; may include `reverseProxy`, `proxyPassword`, `secretId`
  * @returns {Promise<number[][]>} - The array of vectors for the texts
  */
-export async function getJinaBatchVector(texts, isQuery, directories, model, options = {}) {
-    const key = readSecret(directories, SECRET_KEYS.JINA);
+export async function getJinaBatchVector(texts, isQuery, directories, model, options = {}, sourceSettings = null) {
+    const settings = sourceSettings || {};
+    const reverseProxy = typeof settings.reverseProxy === 'string' ? settings.reverseProxy.trim() : '';
+    const proxyPassword = typeof settings.proxyPassword === 'string' ? settings.proxyPassword : '';
+    const secretId = typeof settings.secretId === 'string' && settings.secretId.trim()
+        ? settings.secretId.trim()
+        : null;
+
+    const key = reverseProxy
+        ? proxyPassword
+        : readSecret(directories, SECRET_KEYS.JINA, secretId);
 
     if (!key) {
         console.warn('No API key found');
         throw new Error('No API key found');
     }
+
+    const baseUrl = (reverseProxy || DEFAULT_JINA_URL).replace(/\/+$/, '');
 
     const requestBody = {
         model: model,
@@ -51,7 +65,7 @@ export async function getJinaBatchVector(texts, isQuery, directories, model, opt
         requestBody.embedding_type = options.embedding_type;
     }
 
-    const response = await fetch('https://api.jina.ai/v1/embeddings', {
+    const response = await fetch(`${baseUrl}/embeddings`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -83,9 +97,10 @@ export async function getJinaBatchVector(texts, isQuery, directories, model, opt
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
  * @param {string} model - The model to use for the embedding
  * @param {object} options - Additional options (late_chunking, dimensions, task)
+ * @param {object} [sourceSettings] - Resolved source settings
  * @returns {Promise<number[]>} - The vector for the text
  */
-export async function getJinaVector(text, isQuery, directories, model, options = {}) {
-    const vectors = await getJinaBatchVector([text], isQuery, directories, model, options);
+export async function getJinaVector(text, isQuery, directories, model, options = {}, sourceSettings = null) {
+    const vectors = await getJinaBatchVector([text], isQuery, directories, model, options, sourceSettings);
     return vectors[0];
 }
