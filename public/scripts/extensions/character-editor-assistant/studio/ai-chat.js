@@ -1612,6 +1612,21 @@ These two are power-user prompt-engineering fields. Most cards in the wild leave
 
 **Other characters in the scenario.** A character card describes ONE persona — the primary character the AI plays. Side characters, NPCs, mentioned-only roles, antagonists, multi-character scenarios where the AI alternates personas — all of these live in world book entries, never in \`character.description\`. Each non-primary character gets its own keyword entry (key includes their name and any aliases), so they activate when referenced. State variables for those characters use a per-character namespace (e.g. \`npc_alice_affinity\`, \`npc_bob_trust\`, \`npc_carol_hp\`) and join the same state-injection entry as the primary character's stats.
 
+### Large-world / multi-character cards — where character info lives
+
+There's a class of cards where the assumption above ("a card describes ONE persona") stops applying: cards where **the AI is asked to play an entire world**, not a character. Watch for signals like "扮演整个世界", "多个 POV", "群像", "大型世界观", "RPG 沙盒", "open world", "multi-faction simulation" — at that scale the cast is unbounded, the AI rotates through personas as the scene demands, and there is no single "this card is X" persona to anchor the description on.
+
+For those cards, redistribute character info across surfaces instead of cramming it into one description:
+
+- **\`description\` / \`scenario\`** stop holding "this is who the card is" and instead hold **what the world is and how it works** — the setting's premise, the rules of the simulation, tonal constraints, what the AI's job is as world-runner. That content has to be on the card itself because it's load-bearing for every prompt; nothing else gets injected unconditionally enough to substitute.
+- **Globally activated world books** (or the character-bound primary book) hold the **fixed, canonical cast** — recurring main NPCs, named factions, landmark locations whose guardians/owners are predetermined. One keyed entry per entity (key = name + aliases). These are stable across saves; entries get hand-authored once and edited rarely.
+- **Chat-bound world books** hold the **ephemeral, per-save cast** — NPCs the user invents mid-roleplay, locations they discover through their specific choices, factions born of this run's events. The CardApp can append entries here as the story develops (\`worldinfo_create_entry\` once the book is bound; \`worldinfo_replace_entries\` if you're driving entries from a structured variable per "Variable-driven dynamic world book entries" above).
+- **Memory graph (\`character_sheet\`)** accumulates **discovered/evolving character facts** as the run proceeds — the extractor populates it from dialogue, the recall layer surfaces the relevant slice into the prompt automatically. This complements the world books rather than replacing them: world books are the hand-authored / variable-driven source of truth; the graph is the AI's running notebook.
+
+Orchestrator fit for this shape: \`agenda\` mode often makes sense (a planner agent that picks "which POV / which NPC speaks next" handing off to a writer agent that executes), or \`spec\` mode if the user wants explicit named stages of world simulation (perception → decision → narration). \`loop\` rarely buys much here — the bottleneck isn't reply quality, it's coordinating which slice of the world to render this turn.
+
+Don't push this layout onto cards that aren't this shape. A romance companion card with two named NPCs is not a large-world card — it gets the standard "card = one persona, NPCs in keyword entries" treatment from the section above. Apply this section only when the user's premise is genuinely world-scale.
+
 ## Card portability — use {{user}} and {{char}}, never literal names
 
 Any text you generate that lands in the card or its bound world book — \`description\`, \`personality\`, \`scenario\`, \`first_mes\`, \`mes_example\`, \`alternate_greetings\`, \`system_prompt\`, world book entry bodies, regex replacement templates — must reference the user as \`{{user}}\` and the primary character as \`{{char}}\`. **Don't hardcode literal names for these two roles.**
