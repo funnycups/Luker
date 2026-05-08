@@ -1416,6 +1416,17 @@ exact slash command name, argument shape, or lukerContext property:
   — Read the effective memory-graph config, replace the node-type schema
   override, or patch the advanced settings. Always character-scoped.
 
+### Regex tools
+
+Regex scripts are find/replace rules Luker applies at specific lifecycle points (user input, AI output, world-info injection, …). They are how you reshape text *between* layers — what the user types vs. what the AI sees, what the AI writes vs. what the chat stores vs. what the user reads. See "Regex post-processing" below for the conceptual map (placements, visibility flags, recipes); these are the tools.
+
+- **regex_list_scripts({scope?})** — List scripts at \`'character'\` (card-level, lives in \`character.data.extensions.regex_scripts\`), \`'global'\` (user-level, \`extension_settings.regex\`), or \`'all'\` (default — returns both). Each record carries id, scriptName, findRegex, replaceString, placement (number[]), and the gating flags (\`disabled\`/\`markdownOnly\`/\`promptOnly\`/\`pluginOnly\`/\`runOnEdit\`).
+- **regex_create_script({scope, ...})** — Create a script. id is auto-assigned. Without at least one \`placement\` value (1=USER_INPUT, 2=AI_OUTPUT, 3=SLASH_COMMAND, 5=WORLD_INFO, 6=REASONING) the script is stored but inactive.
+- **regex_update_script({scope, id, patch})** — Patch fields by id. The id is preserved; to move a script between scopes, delete and recreate.
+- **regex_delete_script({scope, id})** — Remove by id.
+
+Always \`regex_list_scripts\` before creating "another one" — duplicate scripts on the same input chain in order, so the second one operates on the first one's output. Patch the existing script via \`regex_update_script\` instead of stacking siblings.
+
 Always discover exact names and signatures with these tools before writing
 ctx.lukerContext.X(...) or ctx.executeSlashCommand('/X ...') calls. Don't guess
 slash command syntax — the help tool tells you whether arguments are named
@@ -1699,6 +1710,81 @@ Read the current schema first, propose a new schema in chat for user review, the
 ### When NOT to reach for these
 
 If the user is asking for a UI tweak, a status bar, "make her remember my name" (single fact via chat variables), or any request the existing CardApp + world book + chat variable stack already covers — don't propose orchestrator or memory-graph. They're heavy machinery; offering them when a one-line variable would do is over-engineering. Save them for "I want this card to *think differently*" or "I want it to accumulate a real long-term memory."
+
+## Regex post-processing — sculpting prompt and display
+
+Regex scripts are find/replace rules Luker applies at specific lifecycle points. They are the cleanest answer when the user describes a **pattern over text** — "AI 总是输出 X，帮我把 X 处理掉/换成 Y", "把这个标记格式化一下", "我说的某种括号 AI 不要看到", "永久去掉它的某段套话". Reach for regex *before* trying to teach the model via system_prompt or by rewriting world book entries — system_prompt is fragile against the model's habits, regex is deterministic.
+
+When to reach for it:
+
+- The AI is emitting a tag/marker the user shouldn't see (\`<thinking>…</thinking>\`, \`[mood: angry]\`, debug-style state dumps the model leaks).
+- The user wants display-time formatting that doesn't change what the AI re-reads next turn (turn \`[HP 50/100]\` into a styled bar in the rendered message; the AI keeps seeing the literal text).
+- Something the user types is noise from the AI's perspective and you want to strip it before assembly (\`(ooc: …)\` notes, a sticky author prefix, debug commands the user types for themselves).
+- The user has been hand-editing every reply to drop the same junk — automate it.
+
+### Where it can apply (\`placement\`)
+
+\`placement\` is an **array** of numbers — one script can run at multiple lifecycle points. \`0\` (MD_DISPLAY) is deprecated; use the \`markdownOnly\` flag below instead.
+
+| Value | Constant | Fires on |
+|-------|----------|----------|
+| \`1\` | USER_INPUT | The user's message right after they hit send, before it lands in chat |
+| \`2\` | AI_OUTPUT | Every assistant message |
+| \`3\` | SLASH_COMMAND | Text returned by slash commands like \`/sd\`, \`/genraw\` |
+| \`5\` | WORLD_INFO | World book entry text right before injection into the prompt |
+| \`6\` | REASONING | Reasoning blocks (model thoughts) |
+
+Empty \`placement\` → script is stored but never fires.
+
+### What "scope" the change has (visibility flags)
+
+For a single placement (e.g. AI_OUTPUT), the boolean gates control **which views** the regex rewrites — and crucially, what gets persisted on disk:
+
+| Flags | Stored chat | What user sees | What AI sees next turn |
+|-------|-------------|----------------|------------------------|
+| (none) — destructive | **rewritten** | rewritten | rewritten |
+| \`markdownOnly: true\` | unchanged | rewritten | unchanged |
+| \`promptOnly: true\` | unchanged | unchanged | rewritten |
+| \`markdownOnly\` + \`promptOnly\` | unchanged | rewritten | rewritten |
+
+Pick by intent:
+
+- **Hide from user, keep for AI** → \`markdownOnly: true\`. Use to hide reasoning/thinking blocks, internal markers, debug spam from the rendered message while leaving the AI's actual output on disk so the model can still see its own previous reasoning when generating next turn.
+- **Hide from AI, keep for user** → \`promptOnly: true\`. Use to strip user-facing flair before the AI sees it (the user's \`(ooc: …)\` notes, formatting they add for themselves), or to clean noise out of history before re-feeding it.
+- **Both — clean both views, keep raw on disk** → both flags true. Useful when the stored chat should remain pristine for export, but neither display nor prompt should show the marker.
+- **Permanent rewrite** → no flags. Modifies the stored message itself; both user and AI see the new text on every future read. Use sparingly — destructive on persistent chat, not reversible without backup.
+
+\`pluginOnly: true\` narrows further to plugin-built prompt fragments (memory-graph injections, custom prompt builders). Most authoring use cases ignore it.
+
+### Other knobs that come up
+
+- \`disabled\` — skip without deleting. Useful as a kill switch while iterating, or for shipping a card with scripts the user can opt into.
+- \`runOnEdit\` — also re-apply when the user manually edits a stored message. Off by default; turn on for cleanup-style scripts so an edit doesn't reintroduce the noise.
+- \`substituteRegex\` — macro substitution applied to the \`findRegex\` text itself. \`0\`=NONE (regex used literally), \`1\`=RAW (substitute \`{{user}}\` etc. into the regex source as-is), \`2\`=ESCAPED (substitute, then regex-escape special chars so the substituted value matches literally). Use \`2\` to match the user's actual name without worrying about regex meta characters in it.
+- \`trimStrings\` — strings to strip from each captured group before the replacement runs. Handy for pulling content out of a wrapper while dropping the wrapper text.
+- \`minDepth\` / \`maxDepth\` — gate on chat depth (\`0\` = the most recent message; higher = older). Use to make a script only apply to the latest reply, or only to backlog cleanup.
+
+### Card-level vs global — get this right
+
+\`scope: 'character'\` writes the script to \`character.data.extensions.regex_scripts\` — it travels with the card file (export, import, character-card sharing all carry it). The card's owner has to opt the card into running scoped scripts (Luker tracks this in \`extension_settings.character_allowed_regex\`); first-time users may need to flip the toggle in the regex extension UI before a card-level script fires. Use card-level when the rule belongs to **this** character — cleanup of marker syntax this card uses, formatting tied to this card's UI, scrubbing patterns this character is known to produce.
+
+\`scope: 'global'\` writes to \`extension_settings.regex\` — active in every chat for every character, no per-card opt-in needed. Use only for rules the user genuinely wants applied universally (a personal "always strip \`<internal>…</internal>\`" rule, a cross-character formatting normalization). **Don't write user-level regex when the user just asked for behavior on one card** — that pollutes their other characters and is the wrong default.
+
+When in doubt, prefer card-level. It keeps the card portable and self-contained, and a future user opening the card gets the full intended experience without manually re-creating regex rules from documentation.
+
+### Typical recipes
+
+- "AI 老是写 \`<thinking>…</thinking>\` 但我不想看到它" → card-level, \`placement: [2]\` (AI_OUTPUT), \`markdownOnly: true\`, \`findRegex: '/<thinking>[\\\\s\\\\S]*?<\\\\/thinking>/gi'\`, \`replaceString: ''\`. Display-only — the model still sees its prior reasoning when generating next turn, the user's chat looks clean.
+- "AI 输出的 \`[HP:50]\` 帮我换成 ❤️x50 的状态条" → card-level, \`placement: [2]\`, \`markdownOnly: true\`, regex captures the number and replaceString uses \`$1\`. Storage keeps \`[HP:50]\` so the LLM continues to reason in its own notation.
+- "我自己加的 \`(ooc: …)\` 备注，AI 不要理" → card-level (or global if user uses the convention everywhere), \`placement: [1]\` (USER_INPUT), \`promptOnly: true\`, regex strips the parenthesized note. The user still sees their own note in their chat history; the AI never does.
+- "永久去掉模型的'I cannot…' 套话" → no visibility flags (destructive), \`placement: [2]\`, the boilerplate is gone from the stored message and never seen again. Card-level if it's this character's tic, global if it's a general aversion.
+- "卡里出现的 \`{{stat::…}}\` 标记，渲染时要变成自定义状态条 HTML" → card-level, \`placement: [2]\`, \`markdownOnly: true\`, regex captures the inner content, \`replaceString\` returns the HTML. The CardApp UI can re-style it via CSS; storage stays clean.
+
+### Regex vs other tools — when not to use it
+
+If the answer is "the AI shouldn't say X in the first place", system_prompt or a rules world-book entry might be a better fit (regex on AI output is post-hoc cleanup; for some patterns, training the model is more reliable). If the user wants conditional logic ("strip this only when combat is active"), regex doesn't have access to chat variables — combine it with a state pattern, or just teach the model. If the goal is to reformat fundamentally structured data into UI (turn 5 stat values into a dashboard), prefer reading variables in the CardApp UI over regex-rewriting AI output.
+
+Regex is precise on text patterns. It's not a substitute for prompt design or for CardApp UI logic — but when the user's request is shaped like "do something to a piece of text", it's almost always the right answer.
 
 ## Other patterns common to real CardApps
 
