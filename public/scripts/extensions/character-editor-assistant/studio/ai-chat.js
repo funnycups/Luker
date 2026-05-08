@@ -12,7 +12,7 @@ import {
 } from '../../function-call-runtime.js';
 import { fetchFileList, fetchFileContent, saveFileContent, deleteFile, renameFile } from './studio.js';
 import { characters, this_chid, saveCharacterDebounced, saveMetadata, chat_metadata, getRequestHeaders } from '../../../../script.js';
-import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, selected_world_info, charUpdatePrimaryWorld, getChatWorldInfoNames, setChatWorldInfoSelection } from '../../../world-info.js';
+import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, createNewWorldInfo, world_names, selected_world_info, charUpdatePrimaryWorld, getChatWorldInfoNames, setChatWorldInfoSelection } from '../../../world-info.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { getContext } from '../../../st-context.js';
 import { extension_settings } from '../../../extensions.js';
@@ -56,6 +56,8 @@ const TOOL_NAMES = Object.freeze({
  WORLDINFO_DELETE_ENTRY: 'worldinfo_delete_entry',
  WORLDINFO_GET_CHAT_BOOKS: 'worldinfo_get_chat_books',
  WORLDINFO_SET_CHAT_BOOKS: 'worldinfo_set_chat_books',
+ WORLDINFO_CREATE_CHAT_BOOK: 'worldinfo_create_chat_book',
+ WORLDINFO_REPLACE_ENTRIES: 'worldinfo_replace_entries',
  REGEX_LIST_SCRIPTS: 'regex_list_scripts',
  REGEX_CREATE_SCRIPT: 'regex_create_script',
  REGEX_UPDATE_SCRIPT: 'regex_update_script',
@@ -294,6 +296,57 @@ function buildTools() {
  names: { type: 'array', items: { type: 'string' }, description: 'Full replacement list of world book names. Empty array = clear.' },
  },
  required: ['names'],
+ additionalProperties: false,
+ },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.WORLDINFO_CREATE_CHAT_BOOK,
+ description: 'Create a world book file and bind it to the CURRENT chat in one call. Idempotent: if a book of that name already exists, skip creation and just bind it. Use this instead of worldinfo_create_entry to start a new chat-bound book — worldinfo_create_entry does NOT auto-create books and will fail on a missing name. Result: chat_metadata.world_info gains the name, and the book file exists on disk (empty entries until you populate it).',
+ parameters: {
+ type: 'object',
+ properties: {
+ book_name: { type: 'string', description: 'World book name to create + bind' },
+ },
+ required: ['book_name'],
+ additionalProperties: false,
+ },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.WORLDINFO_REPLACE_ENTRIES,
+ description: 'DESTRUCTIVE: replace ALL entries in a world book with a fresh set in one call. Existing entries are wiped; uids are reassigned by the system, so any uid you held from a prior call becomes invalid. Top-level book metadata (display_index, etc.) is preserved. Use for "regenerate dynamic entries from a variable object" patterns where you want the whole entry set to mirror caller state each turn. For incremental edits prefer worldinfo_update_entry. Caller-supplied uid fields in entries are ignored.',
+ parameters: {
+ type: 'object',
+ properties: {
+ book_name: { type: 'string', description: 'World book name (must exist — use worldinfo_create_chat_book first if creating from scratch)' },
+ entries: {
+ type: 'array',
+ description: 'Full replacement entry set. Each item is a partial entry; missing fields fall back to template defaults.',
+ items: {
+ type: 'object',
+ properties: {
+ comment: { type: 'string', description: 'Entry title/comment' },
+ content: { type: 'string', description: 'Entry content text' },
+ key: { type: 'array', items: { type: 'string' }, description: 'Trigger keywords' },
+ keysecondary: { type: 'array', items: { type: 'string' }, description: 'Secondary keywords (optional)' },
+ constant: { type: 'boolean', description: 'Always active (default false)' },
+ selective: { type: 'boolean', description: 'Selective triggering (default true)' },
+ disable: { type: 'boolean', description: 'Disabled (default false)' },
+ position: { type: 'number', description: 'Injection position: 0=before char desc, 1=after char desc, 2=ANTop, 3=ANBottom, 4=atDepth (uses depth+role), 5=EMTop, 6=EMBottom' },
+ order: { type: 'number', description: 'Sort order within position bucket. Default 100. Lower=earlier.' },
+ depth: { type: 'number', description: 'Chat depth (only when position=4). 0=tail.' },
+ role: { type: 'number', description: 'Role for atDepth (only when position=4): 0=system, 1=user, 2=assistant.' },
+ },
+ additionalProperties: true,
+ },
+ },
+ },
+ required: ['book_name', 'entries'],
  additionalProperties: false,
  },
  },
@@ -850,6 +903,37 @@ async function executeTool(charId, toolName, args, options = {}) {
  const written = setChatWorldInfoSelection(list, chat_metadata);
  await saveMetadata();
  return { ok: true, books: written, message: `Chat-bound world books updated (${written.length} active).` };
+ }
+ case TOOL_NAMES.WORLDINFO_CREATE_CHAT_BOOK: {
+ const name = String(args?.book_name || '').trim();
+ if (!name) return { ok: false, error: 'book_name required' };
+ if (!world_names.includes(name)) {
+ const created = await createNewWorldInfo(name, { interactive: false });
+ if (!created) return { ok: false, error: `Failed to create world book "${name}"` };
+ }
+ const current = getChatWorldInfoNames(chat_metadata);
+ const next = current.includes(name) ? current : [...current, name];
+ const written = setChatWorldInfoSelection(next, chat_metadata);
+ await saveMetadata();
+ return { ok: true, book_name: name, books: written, message: `Bound chat to world book "${name}".` };
+ }
+ case TOOL_NAMES.WORLDINFO_REPLACE_ENTRIES: {
+ const data = await loadWorldInfo(args?.book_name);
+ if (!data) return { ok: false, error: `World book "${args?.book_name}" not found` };
+ const list = Array.isArray(args?.entries) ? args.entries : [];
+ data.entries = {};
+ const created = [];
+ for (const partial of list) {
+ const newEntry = createWorldInfoEntry(args.book_name, data);
+ if (!newEntry) continue;
+ if (partial && typeof partial === 'object') {
+ const { uid: _ignoredUid, ...fields } = partial;
+ Object.assign(newEntry, fields);
+ }
+ created.push(newEntry);
+ }
+ await saveWorldInfo(args.book_name, data, true);
+ return { ok: true, entries: created, message: `Replaced entries in "${args.book_name}" (${created.length} written).` };
  }
  // ==================== Regex Scripts ====================
  case TOOL_NAMES.REGEX_LIST_SCRIPTS: {
