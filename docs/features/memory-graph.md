@@ -55,7 +55,7 @@ When you send a message, Memory Graph looks at the conversation context and reca
 ::: tip Which one?
 **LLM Recall is the default because it's the easiest to configure** — you already have an LLM API set up for chat, and that's all it needs.
 
-**Hybrid recall is faster and more in line with how production retrieval systems work** (vector search + graph propagation), but it requires you to configure an embedding model first (in the Vector Storage extension settings). For higher-quality results, you can stack on a reranking model (Hybrid+Rerank) or an LLM filter (Hybrid+LLM).
+**Hybrid recall is faster and more in line with how production retrieval systems work** (vector search + graph propagation), but it requires you to configure an **Embedding Profile** first. Embedding profiles live in the Connection Manager next to chat-completion connections, so any plugin (Vector Storage, Memory Graph, future ones) can pick the same provider/model/key triplet from a shared list. For higher-quality results, you can stack on a reranking model (Hybrid+Rerank — also driven by a shared Rerank Profile) or an LLM filter (Hybrid+LLM).
 
 Rule of thumb: stay on LLM Recall while you're trying things out. If you start hitting cost or latency walls — or if you want recall to stay deterministic across model swaps — switch to Hybrid.
 :::
@@ -246,8 +246,7 @@ When you swipe or regenerate on the same floor, Memory Graph reuses the previous
 
 | Setting | Default | Description |
 |---|---|---|
-| Embedding Source | `transformers` | From Vector Storage extension settings (`vectors.source`) |
-| Embedding Model | (empty) | From Vector Storage extension settings |
+| Embedding Profile | (none) | Connection-Manager profile that owns the embedding provider/model/endpoint/key. Created in the Memory Graph UI or in Vector Storage; profiles are shared. |
 | Vector Top-K | `20` | Top-K for vector retrieval |
 | Graph Diffusion Steps | `2` | Number of diffusion steps |
 | Graph Diffusion Decay | `0.6` | Decay factor |
@@ -259,8 +258,7 @@ When you swipe or regenerate on the same floor, Memory Graph reuses the previous
 | Setting | Default | Description |
 |---|---|---|
 | Enable Reranking | `false` | Whether to rerank |
-| Reranking Service Source | `cohere` | Source of the reranking service |
-| Reranking Model | (empty) | Reranker model name |
+| Rerank Profile | (none) | Connection-Manager profile (mode `rerank`) defining the rerank provider/model/endpoint/key. Shared with Vector Storage. |
 
 ### Other
 
@@ -306,9 +304,9 @@ PEDSA (Personalized Efficient Diffusion with Sparse Approximation) lets Memory G
 
 ### Vector index
 
-Memory Graph uses incremental updates to manage vector embeddings — content changes are detected via hash comparison, and only changed nodes get re-embedded. In hybrid recall, the embedding source/model is read from Vector Storage's extension settings, so the available providers follow Vector Storage's capabilities (including Jina). If Vector Storage settings are unavailable, Memory Graph falls back to its legacy local fields.
+Memory Graph uses incremental updates to manage vector embeddings — content changes are detected via hash comparison, and only changed nodes get re-embedded. The active **embedding profile** (selected in Memory Graph settings) is the single source of truth for provider/model/endpoint/secret; the Vector Storage backend reads the same Connection-Manager registry, so two plugins can share or diverge as needed without copying private state.
 
-When inserting vectors, Memory Graph includes `nodeId` in the `metadata` field. The Vector Storage backend stores `metadata` as-is; other plugins can use `metadata` for their own data, returned alongside query results. This design lets the `hash → nodeId` mapping bypass the frontend index cache — even if the cache is lost, nodes can be matched directly from query results.
+When inserting vectors, Memory Graph includes `nodeId` in the `metadata` field. The vector backend stores `metadata` as-is; other plugins can use `metadata` for their own data, returned alongside query results. This design lets the `hash → nodeId` mapping bypass the frontend index cache — even if the cache is lost, nodes can be matched directly from query results.
 
 ### Automatic schema migration
 

@@ -246,8 +246,7 @@ JSON 匯入匯出。
 
 | 設定 | 預設 | 說明 |
 |---|---|---|
-| 嵌入源 | `transformers` | 來自 Vector Storage 擴展設定(`vectors.source`) |
-| 嵌入模型 | (空) | 來自 Vector Storage 擴展設定 |
+| 嵌入檔案 | (空) | Connection Manager 裡的 embed-profile，記錄嵌入 Provider/模型/Endpoint/Key。可在記憶圖設定或向量儲存裡建立，多外掛共享。 |
 | 向量 Top-K | `20` | 向量檢索 Top-K |
 | 圖擴散步數 | `2` | 擴散步數 |
 | 圖擴散衰減 | `0.6` | 衰減係數 |
@@ -259,8 +258,7 @@ JSON 匯入匯出。
 | 設定 | 預設 | 說明 |
 |---|---|---|
 | 啟用重排 | `false` | 是否重排 |
-| 重排服務源 | `cohere` | 重排服務來源 |
-| 重排模型 | (空) | 重排模型名 |
+| 重排檔案 | (空) | Connection Manager 裡的 rerank-profile，定義重排 Provider/模型/Endpoint/Key。與向量儲存共享。 |
 
 ### 其他
 
@@ -306,9 +304,9 @@ PEDSA(Personalized Efficient Diffusion with Sparse Approximation)讓記憶圖能
 
 ### 向量索引
 
-記憶圖用增量更新策略管理向量嵌入——通過雜湊比對檢測節點內容變化,只有內容真的變了才重新生成嵌入向量。Hybrid 召回中,嵌入源和模型從 Vector Storage 擴展設定讀取,所以可用 Provider 跟隨 Vector Storage 能力(包括 Jina)。Vector Storage 設定不可用時,記憶圖回退到舊的本地源 / 模型欄位。
+記憶圖用增量更新策略管理向量嵌入——通過雜湊比對檢測節點內容變化，只有內容真的變了才重新生成嵌入向量。Hybrid 召回裡使用記憶圖設定中選定的**嵌入檔案**作為單一事實源，Provider/模型/Endpoint/Secret 全部從檔案讀取。向量儲存外掛從同一份 Connection-Manager 檔案庫讀取，兩個外掛可以共用一份檔案，也可以各自挑不同的檔案，不再依賴對方的私有 `extension_settings`。
 
-插入向量時,記憶圖把 `nodeId` 放在 `metadata` 欄位裡。Vector Storage 後端原樣存 `metadata`。其他外掛也可以用 `metadata` 欄位存自定義資料,查詢結果會一併返回。這種設計讓 `hash → nodeId` 映射可以繞開前端索引快取——即使快取丟了,也能從查詢結果直接匹配節點。
+插入向量時，記憶圖把 `nodeId` 放在 `metadata` 欄位裡。後端原樣存 `metadata`。其他外掛也可以用 `metadata` 欄位存自定義資料，查詢結果會一併返回。這種設計讓 `hash → nodeId` 映射可以繞開前端索引快取——即使快取丟了，也能從查詢結果直接匹配節點。
 
 ### 自動 schema 遷移
 
