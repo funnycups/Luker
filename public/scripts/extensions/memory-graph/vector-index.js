@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 
-import { getRequestHeaders } from '../../../script.js';
-import { extension_settings } from '../../extensions.js';
 import { getStringHash } from '../../utils.js';
+import { getEmbeddingProfileById, getRerankProfileById } from '../connection-manager/embed-rerank.js';
+import { EmbeddingService } from '../../embedding-service.js';
 
 const VECTOR_COLLECTION_PREFIX = 'mg_';
-const VECTOR_REQUEST_TIMEOUT_MS = 120_000;
 
 /**
  * @typedef {{hash: number, text: string, index: number, nodeId?: string}} VectorInsertItem
@@ -15,97 +14,43 @@ const VECTOR_REQUEST_TIMEOUT_MS = 120_000;
  */
 
 // ---------------------------------------------------------------------------
-// Embedding source constants (mirrors backend SOURCES)
-// ---------------------------------------------------------------------------
-
-const EMBEDDING_SOURCES = [
-    'transformers', 'openai', 'openrouter', 'nomicai', 'cohere',
-    'jina', 'ollama', 'llamacpp', 'vllm', 'extras', 'makersuite',
-    'vertexai', 'mistral', 'chutes', 'nanogpt', 'electronhub',
-];
-
-const EMBEDDING_DEFAULT_MODELS = {
-    openai: 'text-embedding-3-small',
-    openrouter: 'openai/text-embedding-3-large',
-    cohere: 'embed-multilingual-v3.0',
-    jina: 'jina-embeddings-v3',
-    mistral: 'mistral-embed',
-    ollama: 'nomic-embed-text',
-    llamacpp: '',
-    vllm: 'BAAI/bge-m3',
-    chutes: 'chutes-qwen-qwen3-embedding-8b',
-    nanogpt: 'text-embedding-3-small',
-    electronhub: 'text-embedding-3-small',
-    transformers: '',
-    nomicai: '',
-    extras: '',
-    makersuite: 'text-embedding-005',
-    vertexai: '',
-};
-
-// ---------------------------------------------------------------------------
-// Vector config from settings
+// Profile resolution from memory-graph settings
 // ---------------------------------------------------------------------------
 
 /**
- * Source-to-model-key mapping for Vector Storage extension settings.
- * @type {Record<string, string>}
+ * Resolves the embedding profile that memory-graph is configured to use, based
+ * on its own `embeddingProfileId` setting. Returns null if no profile id is set
+ * or the referenced profile does not exist.
+ *
+ * @param {object} settings - Memory-graph settings object.
+ * @returns {object|null} EmbedProfile object or null.
  */
-const VECTOR_EXT_MODEL_KEYS = {
-    openai: 'openai_model',
-    electronhub: 'electronhub_model',
-    openrouter: 'openrouter_model',
-    togetherai: 'togetherai_model',
-    cohere: 'cohere_model',
-    jina: 'jina_model',
-    ollama: 'ollama_model',
-    vllm: 'vllm_model',
-    webllm: 'webllm_model',
-    palm: 'google_model',
-    vertexai: 'google_model',
-    chutes: 'chutes_model',
-    nanogpt: 'nanogpt_model',
-    siliconflow: 'siliconflow_model',
-};
-
-/**
- * Build vector config by reading the Vector Storage extension settings.
- * Falls back to memory-graph's own legacy fields if Vector Storage is not configured.
- * @param {object} [_settings] - Unused (kept for call-site compat).
- * @returns {{source: string, model: string, collectionPrefix: string}}
- */
-export function getVectorConfigFromSettings(_settings) {
-    const vectorExt = extension_settings?.vectors;
-    if (vectorExt && vectorExt.source) {
-        const source = String(vectorExt.source).trim();
-        const modelKey = VECTOR_EXT_MODEL_KEYS[source];
-        const model = modelKey ? String(vectorExt[modelKey] || '').trim() : '';
-        return {
-            source,
-            model: model || EMBEDDING_DEFAULT_MODELS[source] || '',
-            collectionPrefix: VECTOR_COLLECTION_PREFIX,
-        };
-    }
-    // Fallback: legacy memory-graph settings (embeddingSource / embeddingModel)
-    const source = EMBEDDING_SOURCES.includes(_settings?.embeddingSource)
-        ? _settings.embeddingSource
-        : 'transformers';
-    const model = String(_settings?.embeddingModel || EMBEDDING_DEFAULT_MODELS[source] || '').trim();
-    return {
-        source,
-        model,
-        collectionPrefix: VECTOR_COLLECTION_PREFIX,
-    };
+export function getVectorConfigFromSettings(settings) {
+    const id = String(settings?.embeddingProfileId || '').trim();
+    if (!id) return null;
+    return getEmbeddingProfileById(id) || null;
 }
 
 /**
- * Validate that vector config has minimum required fields.
- * @param {object} config
+ * Resolves the rerank profile that memory-graph is configured to use, based on
+ * its own `rerankProfileId` setting.
+ * @param {object} settings
+ * @returns {object|null}
+ */
+export function getRerankProfileFromSettings(settings) {
+    const id = String(settings?.rerankProfileId || '').trim();
+    if (!id) return null;
+    return getRerankProfileById(id) || null;
+}
+
+/**
+ * Validate that an embedding profile is usable for vector operations.
+ * @param {object|null} profile - Profile object returned by getVectorConfigFromSettings.
  * @returns {{valid: boolean, error: string}}
  */
-export function validateVectorConfig(config) {
-    if (!config) return { valid: false, error: 'No vector config' };
-    if (!config.source) return { valid: false, error: 'No embedding source selected' };
+export function validateVectorConfig(profile) {
+    if (!profile) return { valid: false, error: 'No embedding profile selected' };
+    if (!profile.source) return { valid: false, error: 'Embedding profile has no source' };
     return { valid: true, error: '' };
 }
 
@@ -128,7 +73,6 @@ export function buildCollectionId(chatId, prefix = VECTOR_COLLECTION_PREFIX) {
 // Node vector text construction
 // ---------------------------------------------------------------------------
 
-// Fallback field priority when schema is not available
 const FALLBACK_FIELD_PRIORITY = {
     event: ['summary', 'key_sentences'],
     character_sheet: ['title', 'aliases', 'traits', 'identity', 'state', 'goal', 'core_note'],
@@ -136,19 +80,10 @@ const FALLBACK_FIELD_PRIORITY = {
     rule_constraint: ['title', 'constraint', 'scope', 'status'],
 };
 
-/**
- * Resolve the embedding field priority for a node type.
- * Reads from schema's tableColumns if available, falls back to hardcoded defaults.
- *
- * @param {string} nodeType - The node type ID.
- * @param {Array} [schema] - The nodeTypeSchema array from settings.
- * @returns {string[]} Ordered list of field names to use for embedding.
- */
 function resolveEmbeddingFields(nodeType, schema) {
     if (Array.isArray(schema)) {
         const typeSpec = schema.find(s => String(s?.id || '').toLowerCase() === nodeType);
         if (typeSpec) {
-            // Prefer embeddingColumns (user-configured subset), fallback to tableColumns
             if (Array.isArray(typeSpec.embeddingColumns) && typeSpec.embeddingColumns.length > 0) {
                 return typeSpec.embeddingColumns.map(c => String(c || '').trim()).filter(Boolean);
             }
@@ -162,10 +97,8 @@ function resolveEmbeddingFields(nodeType, schema) {
 
 /**
  * Build the text representation of a node for embedding.
- * Uses schema-defined tableColumns for field priority, with fallback defaults.
- *
- * @param {object} node - A graph node.
- * @param {Array} [schema] - The nodeTypeSchema array from settings (optional).
+ * @param {object} node
+ * @param {Array} [schema]
  * @returns {string}
  */
 export function buildNodeVectorText(node, schema) {
@@ -195,7 +128,6 @@ export function buildNodeVectorText(node, schema) {
         }
     }
 
-    // Append remaining fields not in priority list
     for (const [key, value] of Object.entries(fields)) {
         if (priorityFields.includes(key)) continue;
         if (value == null || value === '' || key === 'embedding') continue;
@@ -213,158 +145,142 @@ export function buildNodeVectorText(node, schema) {
 }
 
 /**
- * Compute a stable hash for a node's vector content + config.
+ * Compute a stable hash for a node's vector content + profile.
  * Used to detect when a node needs re-embedding.
  *
  * @param {object} node
- * @param {object} config
+ * @param {object} profile
  * @returns {number}
  */
-export function buildNodeVectorHash(node, config, schema) {
+export function buildNodeVectorHash(node, profile, schema) {
     const text = buildNodeVectorText(node, schema);
     const seqTo = Number(node?.seqTo) || 0;
     const payload = [
         node?.id || '',
         text,
         String(seqTo),
-        config?.source || '',
-        config?.model || '',
+        profile?.source || '',
+        profile?.model || '',
     ].join('::');
     return getStringHash(payload);
 }
 
 // ---------------------------------------------------------------------------
-// Fetch helper with timeout
-// ---------------------------------------------------------------------------
-
-function createAbortWithTimeout(externalSignal, timeoutMs = VECTOR_REQUEST_TIMEOUT_MS) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(new DOMException('Vector request timeout', 'AbortError')), timeoutMs);
-
-    if (externalSignal?.aborted) {
-        clearTimeout(timeout);
-        controller.abort(externalSignal.reason);
-    } else if (externalSignal) {
-        const onAbort = () => {
-            clearTimeout(timeout);
-            controller.abort(externalSignal.reason);
-        };
-        externalSignal.addEventListener('abort', onAbort, { once: true });
-    }
-
-    return { signal: controller.signal, clearTimeout: () => clearTimeout(timeout) };
-}
-
-async function vectorFetch(url, body, signal) {
-    const { signal: fetchSignal, clearTimeout: clearTO } = createAbortWithTimeout(signal);
-    try {
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify(body),
-            signal: fetchSignal,
-        });
-        if (!response.ok) {
-            const text = await response.text().catch(() => response.statusText);
-            throw new Error(`Vector API ${response.status}: ${text}`);
-        }
-        const contentType = response.headers.get('content-type') || '';
-        if (contentType.includes('json')) {
-            return await response.json();
-        }
-        return null;
-    } finally {
-        clearTO();
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Backend API wrappers
+// Backend API wrappers — delegate to EmbeddingService
 // ---------------------------------------------------------------------------
 
 /**
  * Insert items into the vector collection.
- * The backend computes embeddings automatically.
- *
  * @param {string} collectionId
- * @param {object} config - {source, model}
+ * @param {object} profile - Embedding profile
  * @param {VectorInsertItem[]} items
  * @param {AbortSignal} [signal]
  */
-export async function insertVectorItems(collectionId, config, items, signal) {
+export async function insertVectorItems(collectionId, profile, items, signal) {
     if (!items?.length) return;
-    await vectorFetch('/api/vector/insert', {
+    if (!profile) return;
+    await EmbeddingService.insert({
+        profile,
         collectionId,
-        source: config.source,
-        model: config.model,
         items: items.map(item => ({
             hash: item.hash,
             text: item.text,
             index: item.index,
             metadata: { ...(item.metadata || {}), ...(item.nodeId ? { nodeId: item.nodeId } : {}) },
         })),
-    }, signal);
+        signal,
+    });
 }
 
 /**
  * Query the vector collection for similar items.
  *
  * @param {string} collectionId
- * @param {object} config - {source, model}
+ * @param {object} profile - Embedding profile
  * @param {string} searchText
  * @param {number} [topK=10]
  * @param {number} [threshold=0.0]
  * @param {AbortSignal} [signal]
+ * @param {boolean} [includeVectors=false]
  * @returns {Promise<VectorQueryResults>}
  */
-export async function queryVectorCollection(collectionId, config, searchText, topK = 10, threshold = 0.0, signal, includeVectors = false) {
-    const response = await vectorFetch('/api/vector/query', {
+export async function queryVectorCollection(collectionId, profile, searchText, topK = 10, threshold = 0.0, signal, includeVectors = false) {
+    if (!profile) return /** @type {VectorQueryResults} */ ([]);
+    const response = await EmbeddingService.query({
+        profile,
         collectionId,
-        source: config.source,
-        model: config.model,
         searchText,
         topK,
         threshold,
         includeVectors,
-    }, signal);
-    // Backend returns { metadata: [...], hashes: [...], queryVector?: [...] }
+        signal,
+    });
     if (response && Array.isArray(response.metadata)) {
         const result = /** @type {VectorQueryResults} */ (response.metadata);
-        // Attach queryVector to the result array for cognitive pipeline access
         if (includeVectors && Array.isArray(response.queryVector)) {
             result.__queryVector = response.queryVector;
         }
         return result;
     }
-    return Array.isArray(response) ? /** @type {VectorQueryResults} */ (response) : /** @type {VectorQueryResults} */ ([]);
+    return /** @type {VectorQueryResults} */ ([]);
 }
 
 /**
- * Delete items by hash.
+ * Query the vector collection using a raw vector instead of text. Skips
+ * embedding computation on the backend.
  *
  * @param {string} collectionId
- * @param {object} config
+ * @param {object} profile - Embedding profile (kept for collection scoping)
+ * @param {number[]} vector
+ * @param {number} [topK=10]
+ * @param {number} [threshold=0.0]
+ * @param {AbortSignal} [signal]
+ * @param {boolean} [includeVectors=false]
+ * @returns {Promise<VectorQueryHit[]>}
+ */
+export async function queryVectorCollectionByVector(collectionId, profile, vector, topK = 10, threshold = 0.0, signal, includeVectors = false) {
+    if (!profile) return [];
+    const response = await EmbeddingService.queryByVector({
+        profile,
+        collectionId,
+        vector,
+        topK,
+        threshold,
+        includeVectors,
+        signal,
+    });
+    if (response && Array.isArray(response.metadata)) {
+        return response.metadata;
+    }
+    return [];
+}
+
+/**
+ * Delete items from the collection by hash.
+ *
+ * @param {string} collectionId
+ * @param {object} profile
  * @param {number[]} hashes
  * @param {AbortSignal} [signal]
  */
-export async function deleteVectorItems(collectionId, config, hashes, signal) {
+export async function deleteVectorItems(collectionId, profile, hashes, signal) {
     if (!hashes?.length) return;
-    await vectorFetch('/api/vector/delete', {
+    if (!profile) return;
+    await EmbeddingService.deleteByHashes({
+        profile,
         collectionId,
-        source: config.source,
-        model: config.model,
         hashes,
-    }, signal);
+        signal,
+    });
 }
 
 /**
- * Purge entire collection.
- *
+ * Purge a collection across all sources. Profile-agnostic.
  * @param {string} collectionId
  * @param {AbortSignal} [signal]
  */
 export async function purgeVectorCollection(collectionId, signal) {
-    await vectorFetch('/api/vector/purge', { collectionId }, signal);
+    await EmbeddingService.purgeCollection({ collectionId, signal });
 }
 
 /**
@@ -372,51 +288,27 @@ export async function purgeVectorCollection(collectionId, signal) {
  *
  * @param {string} query
  * @param {string[]} documents
- * @param {object} rerankConfig - {source, model, apiUrl?, apiKey?}
+ * @param {object} rerankProfile - Rerank profile from connection-manager
  * @param {number} [topK=10]
  * @param {AbortSignal} [signal]
  * @returns {Promise<Array<{index: number, score: number}>>}
  */
-/**
- * Query the vector collection using a raw vector instead of text.
- * Skips the embedding computation step on the backend.
- *
- * @param {string} collectionId
- * @param {object} config - {source, model}
- * @param {number[]} vector - The raw embedding vector to search with.
- * @param {number} [topK=10]
- * @param {number} [threshold=0.0]
- * @param {AbortSignal} [signal]
- * @param {boolean} [includeVectors=false]
- * @returns {Promise<VectorQueryHit[]>}
- */
-export async function queryVectorCollectionByVector(collectionId, config, vector, topK = 10, threshold = 0.0, signal, includeVectors = false) {
-    const response = await vectorFetch('/api/vector/query-by-vector', {
-        collectionId,
-        source: config.source,
-        model: config.model,
-        vector,
-        topK,
-        threshold,
-        includeVectors,
-    }, signal);
-    if (response && Array.isArray(response.metadata)) {
-        return response.metadata;
-    }
-    return Array.isArray(response) ? response : [];
-}
-
-export async function rerankDocuments(query, documents, rerankConfig, topK = 10, signal) {
-    const results = await vectorFetch('/api/vector/rerank', {
+export async function rerankDocuments(query, documents, rerankProfile, topK = 10, signal) {
+    if (!rerankProfile) return [];
+    const docObjects = (documents || []).map((text, index) => ({ text: String(text || ''), index }));
+    const results = await EmbeddingService.rerank({
+        profile: rerankProfile,
         query,
-        documents,
-        source: rerankConfig?.source || 'cohere',
-        model: rerankConfig?.model || '',
-        apiUrl: rerankConfig?.apiUrl || '',
-        apiKey: rerankConfig?.apiKey || '',
+        documents: docObjects,
         topK,
-    }, signal);
-    return Array.isArray(results) ? results : [];
+        signal,
+    });
+    return Array.isArray(results)
+        ? results.map(r => ({
+            index: typeof r?.index === 'number' ? r.index : -1,
+            score: Number(r?.relevance_score ?? r?.score) || 0,
+        })).filter(r => r.index >= 0)
+        : [];
 }
 
 // ---------------------------------------------------------------------------
@@ -445,12 +337,6 @@ export function ensureVectorIndexState(store) {
     return store.vectorIndexState;
 }
 
-/**
- * Get eligible nodes for vector indexing (non-archived, with content).
- *
- * @param {object} store
- * @returns {Array<object>}
- */
 function getEligibleVectorNodes(store, schema) {
     const nodes = store.nodes || {};
     return Object.values(nodes)
@@ -461,16 +347,16 @@ function getEligibleVectorNodes(store, schema) {
  * Compute what needs to be inserted/deleted to sync the vector index.
  *
  * @param {object} store
- * @param {object} config
+ * @param {object} profile
  * @returns {{toInsert: Array, toDelete: number[], stats: {total: number, indexed: number, pending: number, stale: number}}}
  */
-export function computeVectorSyncPlan(store, config, schema) {
+export function computeVectorSyncPlan(store, profile, schema) {
     const state = ensureVectorIndexState(store);
     const eligible = getEligibleVectorNodes(store, schema);
     const desiredByNodeId = new Map();
 
     for (const node of eligible) {
-        const hash = buildNodeVectorHash(node, config, schema);
+        const hash = buildNodeVectorHash(node, profile, schema);
         const text = buildNodeVectorText(node, schema);
         desiredByNodeId.set(node.id, { nodeId: node.id, hash, text, index: Number(node.seqTo) || 0 });
     }
@@ -495,7 +381,6 @@ export function computeVectorSyncPlan(store, config, schema) {
         }
     }
 
-    // Nodes that were indexed but no longer eligible
     for (const [nodeId, hash] of Object.entries(state.nodeToHash)) {
         if (!desiredByNodeId.has(nodeId)) {
             toDelete.push(hash);
@@ -511,21 +396,21 @@ export function computeVectorSyncPlan(store, config, schema) {
 }
 
 /**
- * Sync the vector index for a store: insert new/changed nodes, delete stale ones.
+ * Sync the vector index for a store.
  *
  * @param {object} store
- * @param {object} config - {source, model}
+ * @param {object} profile - Embedding profile
  * @param {string} chatId
  * @param {object} [options]
- * @param {boolean} [options.purge=false] - Purge and rebuild from scratch.
- * @param {boolean} [options.force=false] - Force re-embed all nodes.
+ * @param {boolean} [options.purge=false]
+ * @param {boolean} [options.force=false]
  * @param {AbortSignal} [options.signal]
  * @param {Array} [options.schema]
  * @returns {Promise<{insertedCount: number, deletedCount: number, stats: object}>}
  */
-export async function syncVectorIndex(store, config, chatId, options = {}) {
+export async function syncVectorIndex(store, profile, chatId, options = {}) {
     const { purge = false, force = false, signal, schema = null } = options;
-    const validation = validateVectorConfig(config);
+    const validation = validateVectorConfig(profile);
     if (!validation.valid) {
         const state = ensureVectorIndexState(store);
         state.lastWarning = validation.error;
@@ -534,14 +419,14 @@ export async function syncVectorIndex(store, config, chatId, options = {}) {
 
     const state = ensureVectorIndexState(store);
     const collectionId = buildCollectionId(chatId);
-    const configChanged = state.source !== config.source
-        || state.model !== config.model
+    const configChanged = state.source !== profile.source
+        || state.model !== (profile.model || '')
         || state.collectionId !== collectionId;
 
     if (purge || force || configChanged || state.dirty) {
         await purgeVectorCollection(collectionId, signal);
-        state.source = config.source;
-        state.model = config.model;
+        state.source = profile.source;
+        state.model = profile.model || '';
         state.collectionId = collectionId;
         state.nodeToHash = {};
         state.hashToNodeId = {};
@@ -549,10 +434,10 @@ export async function syncVectorIndex(store, config, chatId, options = {}) {
         state.lastWarning = '';
     }
 
-    const plan = computeVectorSyncPlan(store, config, schema);
+    const plan = computeVectorSyncPlan(store, profile, schema);
 
     if (plan.toDelete.length > 0) {
-        await deleteVectorItems(collectionId, config, plan.toDelete, signal);
+        await deleteVectorItems(collectionId, profile, plan.toDelete, signal);
         for (const hash of plan.toDelete) {
             const nodeId = state.hashToNodeId[hash];
             if (nodeId) {
@@ -567,7 +452,7 @@ export async function syncVectorIndex(store, config, chatId, options = {}) {
         for (let i = 0; i < plan.toInsert.length; i += BATCH_SIZE) {
             if (signal?.aborted) break;
             const batch = plan.toInsert.slice(i, i + BATCH_SIZE);
-            await insertVectorItems(collectionId, config, batch, signal);
+            await insertVectorItems(collectionId, profile, batch, signal);
             for (const entry of batch) {
                 state.nodeToHash[entry.nodeId] = entry.hash;
                 state.hashToNodeId[entry.hash] = entry.nodeId;
@@ -588,13 +473,10 @@ export async function syncVectorIndex(store, config, chatId, options = {}) {
 
 /**
  * Find graph nodes similar to the given text using vector search.
- * Returns results mapped back to node IDs.
- * When includeVectors=true, each result also carries the embedding vector
- * and the array-level __queryVector property holds the query embedding.
  *
  * @param {string} queryText
  * @param {object} store
- * @param {object} config
+ * @param {object} profile - Embedding profile
  * @param {string} chatId
  * @param {object} [options]
  * @param {number} [options.topK=20]
@@ -603,21 +485,20 @@ export async function syncVectorIndex(store, config, chatId, options = {}) {
  * @param {AbortSignal} [options.signal]
  * @returns {Promise<Array<{nodeId: string, score: number, vector?: number[]}>>}
  */
-export async function findSimilarNodes(queryText, store, config, chatId, options = {}) {
+export async function findSimilarNodes(queryText, store, profile, chatId, options = {}) {
     const { topK = 20, threshold = 0.0, includeVectors = false, signal } = options;
-    const validation = validateVectorConfig(config);
+    const validation = validateVectorConfig(profile);
     if (!validation.valid) return [];
 
     const state = ensureVectorIndexState(store);
     const collectionId = state.collectionId || buildCollectionId(chatId);
 
     const rawResults = /** @type {VectorQueryResults} */ (
-        await queryVectorCollection(collectionId, config, queryText, topK, threshold, signal, includeVectors)
+        await queryVectorCollection(collectionId, profile, queryText, topK, threshold, signal, includeVectors)
     );
 
     const results = [];
     for (const hit of rawResults) {
-        // Prefer nodeId from metadata (stored during insert), fallback to hashToNodeId mapping
         const nodeId = String(hit.nodeId || '').trim() || state.hashToNodeId?.[hit.hash] || '';
         if (!nodeId) continue;
         const node = store.nodes?.[nodeId];
@@ -630,7 +511,6 @@ export async function findSimilarNodes(queryText, store, config, chatId, options
     }
 
     const sorted = results.sort((a, b) => b.score - a.score);
-    // Propagate queryVector from the raw response
     if (includeVectors && Array.isArray(rawResults.__queryVector)) {
         /** @type {Array<{nodeId: string, score: number, vector?: number[]}> & {__queryVector?: number[]}} */ (sorted).__queryVector = rawResults.__queryVector;
     }

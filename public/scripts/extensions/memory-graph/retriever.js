@@ -302,7 +302,7 @@ function buildScoredCandidates(store, sources) {
  * @param {number} [options.maxResults=15] - Max nodes to return.
  * @param {number} [options.vectorTopK=20] - Vector pre-filter top-K.
  * @param {boolean} [options.enableRerank=false] - Use rerank model for final scoring.
- * @param {object} [options.rerankConfig] - Rerank model config.
+ * @param {object} [options.rerankProfile] - Rerank profile (from connection-manager).
  * @param {AbortSignal} [options.signal]
  * @returns {Promise<{candidates: Array, meta: object}>}
  */
@@ -312,7 +312,7 @@ export async function runHybridRecall(store, queryText, chatId, settings, option
         maxResults = 15,
         vectorTopK = 20,
         enableRerank = false,
-        rerankConfig = null,
+        rerankProfile = null,
         signal = null,
     } = options;
 
@@ -327,15 +327,15 @@ export async function runHybridRecall(store, queryText, chatId, settings, option
 
     // ① Vector pre-filter
     let vectorHits = [];
-    const vectorConfig = getVectorConfigFromSettings(settings);
-    const vectorValid = validateVectorConfig(vectorConfig).valid;
+    const embeddingProfile = getVectorConfigFromSettings(settings);
+    const vectorValid = validateVectorConfig(embeddingProfile).valid;
 
     let queryVector = null;
     if (vectorValid) {
         throwIfAborted(signal);
         const tVec = performance.now();
         try {
-            vectorHits = await findSimilarNodes(normalizedQuery, store, vectorConfig, chatId, {
+            vectorHits = await findSimilarNodes(normalizedQuery, store, embeddingProfile, chatId, {
                 topK: vectorTopK,
                 includeVectors: true,
                 signal,
@@ -349,15 +349,15 @@ export async function runHybridRecall(store, queryText, chatId, settings, option
             console.warn(`[${MODULE_NAME}] Vector search failed, continuing without it`, err);
             if (typeof toastr !== 'undefined') {
                 const msg = typeof translate === 'function'
-                    ? await translate('Vector search failed. Hybrid recall may return suboptimal results. Check your embedding API configuration.')
-                    : 'Vector search failed. Hybrid recall may return suboptimal results. Check your embedding API configuration.';
+                    ? await translate('Vector search failed. Hybrid recall may return suboptimal results. Check your embedding profile configuration.')
+                    : 'Vector search failed. Hybrid recall may return suboptimal results. Check your embedding profile configuration.';
                 toastr.warning(msg);
             }
         }
         timings.vectorMs = Math.round((performance.now() - tVec) * 10) / 10;
         meta.vectorHits = vectorHits.length;
     } else {
-        meta.skipReasons.push('Vector config invalid, skipping vector pre-filter');
+        meta.skipReasons.push('No embedding profile selected, skipping vector pre-filter');
     }
 
     // ② Entity anchors
@@ -476,7 +476,7 @@ export async function runHybridRecall(store, queryText, chatId, settings, option
                         const state = ensureVectorIndexState(store);
                         const collectionId = state.collectionId || buildCollectionId(chatId);
                         const suppResults = await queryVectorCollectionByVector(
-                            collectionId, vectorConfig, fistaResult.residualVector,
+                            collectionId, embeddingProfile, fistaResult.residualVector,
                             10, 0.1, signal, false,
                         );
                         throwIfAborted(signal);
@@ -538,7 +538,7 @@ export async function runHybridRecall(store, queryText, chatId, settings, option
     }
 
     // ⑧ Optional rerank
-    if (enableRerank && rerankConfig && candidates.length > 0) {
+    if (enableRerank && rerankProfile && candidates.length > 0) {
         throwIfAborted(signal);
         const tRerank = performance.now();
         try {
@@ -550,7 +550,7 @@ export async function runHybridRecall(store, queryText, chatId, settings, option
             const rerankResults = await rerankDocuments(
                 normalizedQuery,
                 documents,
-                rerankConfig,
+                rerankProfile,
                 Math.min(maxResults * 2, candidates.length),
                 signal,
             );

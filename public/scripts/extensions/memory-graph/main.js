@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 
-import { extension_prompt_roles, extension_prompt_types, resolveChatStateTarget, saveSettings, saveSettingsDebounced } from '../../../script.js';
+import { event_types, eventSource, extension_prompt_roles, extension_prompt_types, resolveChatStateTarget, saveSettings, saveSettingsDebounced } from '../../../script.js';
 import { extension_settings, getContext } from '../../extensions.js';
 import { i18n, i18nFormat, registerLocaleData } from './i18n.js';
 import {
@@ -44,10 +44,22 @@ import {
 import { runHybridRecall } from './retriever.js';
 import {
     getVectorConfigFromSettings,
+    getRerankProfileFromSettings,
     validateVectorConfig,
     syncVectorIndex,
     ensureVectorIndexState,
 } from './vector-index.js';
+import {
+    createEmbeddingProfile,
+    editEmbeddingProfile,
+    deleteEmbeddingProfile,
+    createRerankProfile,
+    editRerankProfile,
+    deleteRerankProfile,
+    renderProfileSelect,
+    upsertEmbeddingProfile,
+    upsertRerankProfile,
+} from '../connection-manager/embed-rerank.js';
 import {
     isEntityType,
 } from './diffusion.js';
@@ -559,8 +571,8 @@ const defaultSettings = {
     lorebookNameOverride: '',
     lorebookEntryOrderBase: 9800,
     nodeTypeSchema: defaultNodeTypeSchema,
-    embeddingSource: 'transformers',
-    embeddingModel: '',
+    embeddingProfileId: '',
+    rerankProfileId: '',
     vectorTopK: 20,
     diffusionSteps: 2,
     diffusionDecay: 0.6,
@@ -568,8 +580,6 @@ const defaultSettings = {
     diffusionTeleportAlpha: 0.0,
     hybridMaxResults: 15,
     enableRerank: false,
-    rerankSource: 'cohere',
-    rerankModel: '',
     rpmLimit: 0,
 };
 
@@ -628,6 +638,65 @@ function syncGenerationVisibleHistoryRuntimeRegexScripts(options = {}) {
 
 function cloneDefault(value) {
     return Array.isArray(value) || typeof value === 'object' ? structuredClone(value) : value;
+}
+
+/**
+ * One-time migration that lifts memory-graph's private `embeddingSource` /
+ * `embeddingModel` / `rerankSource` / `rerankModel` fields into shared
+ * Connection Manager profiles. Subsequent runs short-circuit when the new
+ * `embeddingProfileId` / `rerankProfileId` ids are already present.
+ */
+function migrateLegacyProfileSettings() {
+    const s = extension_settings[MODULE_NAME];
+    if (!s || typeof s !== 'object') return;
+
+    let changed = false;
+
+    if (!s.embeddingProfileId && (s.embeddingSource || s.embeddingModel)) {
+        const source = String(s.embeddingSource || 'transformers').trim();
+        const model = String(s.embeddingModel || '').trim();
+        const baseName = `Memory Graph: ${source}${model ? ' ' + model : ''}`.trim();
+        const profile = {
+            mode: 'embed',
+            name: baseName,
+            source,
+        };
+        if (model) profile.model = model;
+        const stored = upsertEmbeddingProfile(profile);
+        if (stored) {
+            s.embeddingProfileId = stored.id;
+            changed = true;
+        }
+    }
+
+    if (!s.rerankProfileId && s.rerankSource) {
+        const source = String(s.rerankSource).trim();
+        const model = String(s.rerankModel || '').trim();
+        const baseName = `Memory Graph rerank: ${source}${model ? ' ' + model : ''}`.trim();
+        const profile = {
+            mode: 'rerank',
+            name: baseName,
+            source,
+        };
+        if (model) profile.model = model;
+        const stored = upsertRerankProfile(profile);
+        if (stored) {
+            s.rerankProfileId = stored.id;
+            changed = true;
+        }
+    }
+
+    // Drop the now-orphaned legacy fields so they don't drift back into use.
+    if ('embeddingSource' in s) { delete s.embeddingSource; changed = true; }
+    if ('embeddingModel' in s) { delete s.embeddingModel; changed = true; }
+    if ('rerankSource' in s) { delete s.rerankSource; changed = true; }
+    if ('rerankModel' in s) { delete s.rerankModel; changed = true; }
+
+    if (changed) {
+        try {
+            saveSettingsDebounced();
+        } catch { /* settings layer not yet available — caller saves later. */ }
+    }
 }
 
 function normalizeNodeTypeSchema(schema) {
@@ -784,6 +853,11 @@ function ensureSettings() {
             extension_settings[MODULE_NAME][key] = cloneDefault(value);
         }
     }
+
+    // Legacy migration: convert old embeddingSource/embeddingModel + rerankSource/rerankModel
+    // into Connection Manager profiles so memory-graph stops reading the vectors plugin's
+    // private settings.
+    migrateLegacyProfileSettings();
 
     extension_settings[MODULE_NAME].toolCallRetryMax = Math.max(
         0,
@@ -7060,17 +7134,14 @@ async function injectMemoryPrompts(context, payload) {
         }
 
         const enableRerank = recallMethod === 'hybrid_rerank';
-        const rerankConfig = enableRerank ? {
-            source: String(settings.rerankSource || 'cohere'),
-            model: String(settings.rerankModel || ''),
-        } : null;
+        const rerankProfile = enableRerank ? getRerankProfileFromSettings(settings) : null;
 
         const hybridResult = await runHybridRecall(store, queryText, chatKey, settings, {
             currentSeq,
             maxResults: Number(settings.hybridMaxResults) || 15,
             vectorTopK: Number(settings.vectorTopK) || 20,
             enableRerank,
-            rerankConfig,
+            rerankProfile,
             signal: payload?.signal,
         });
         throwIfRecallRunInvalid(recallRunToken, payload?.signal, 'Memory recall aborted.');
@@ -12953,8 +13024,17 @@ function bindUi() {
 
     root.find('#luker_rpg_memory_vector_topk').val(String(settings.vectorTopK || 20));
     root.find('#luker_rpg_memory_hybrid_max_results').val(String(settings.hybridMaxResults || 15));
-    root.find('#luker_rpg_memory_rerank_source').val(String(settings.rerankSource || 'cohere'));
-    root.find('#luker_rpg_memory_rerank_model').val(String(settings.rerankModel || ''));
+
+    function refreshMemoryEmbeddingSelect() {
+        const sel = /** @type {HTMLSelectElement} */ (root.find('#luker_rpg_memory_embedding_profile')[0]);
+        if (sel) renderProfileSelect(sel, 'embed', settings.embeddingProfileId || '');
+    }
+    function refreshMemoryRerankSelect() {
+        const sel = /** @type {HTMLSelectElement} */ (root.find('#luker_rpg_memory_rerank_profile')[0]);
+        if (sel) renderProfileSelect(sel, 'rerank', settings.rerankProfileId || '');
+    }
+    refreshMemoryEmbeddingSelect();
+    refreshMemoryRerankSelect();
 
     function updateHybridSettingsVisibility() {
         const method = String(root.find('#luker_rpg_memory_recall_method').val() || 'llm');
@@ -12981,13 +13061,64 @@ function bindUi() {
         jQuery(this).val(String(settings.hybridMaxResults));
         saveSettingsDebounced();
     });
-    root.find('#luker_rpg_memory_rerank_source').off('change').on('change', function () {
-        settings.rerankSource = String(jQuery(this).val() || 'cohere').trim();
+
+    root.find('#luker_rpg_memory_embedding_profile').off('change').on('change', function () {
+        settings.embeddingProfileId = String(jQuery(this).val() || '');
         saveSettingsDebounced();
     });
-    root.find('#luker_rpg_memory_rerank_model').off('change input').on('change input', function () {
-        settings.rerankModel = String(jQuery(this).val() || '').trim();
+    root.find('#luker_rpg_memory_embedding_profile_create').off('click').on('click', async () => {
+        const profile = await createEmbeddingProfile();
+        if (!profile) return;
+        settings.embeddingProfileId = profile.id;
         saveSettingsDebounced();
+        refreshMemoryEmbeddingSelect();
+    });
+    root.find('#luker_rpg_memory_embedding_profile_edit').off('click').on('click', async () => {
+        if (!settings.embeddingProfileId) return;
+        await editEmbeddingProfile(settings.embeddingProfileId);
+        refreshMemoryEmbeddingSelect();
+    });
+    root.find('#luker_rpg_memory_embedding_profile_delete').off('click').on('click', async () => {
+        if (!settings.embeddingProfileId) return;
+        const ok = await deleteEmbeddingProfile(settings.embeddingProfileId);
+        if (ok) {
+            settings.embeddingProfileId = '';
+            saveSettingsDebounced();
+            refreshMemoryEmbeddingSelect();
+        }
+    });
+
+    root.find('#luker_rpg_memory_rerank_profile').off('change').on('change', function () {
+        settings.rerankProfileId = String(jQuery(this).val() || '');
+        saveSettingsDebounced();
+    });
+    root.find('#luker_rpg_memory_rerank_profile_create').off('click').on('click', async () => {
+        const profile = await createRerankProfile();
+        if (!profile) return;
+        settings.rerankProfileId = profile.id;
+        saveSettingsDebounced();
+        refreshMemoryRerankSelect();
+    });
+    root.find('#luker_rpg_memory_rerank_profile_edit').off('click').on('click', async () => {
+        if (!settings.rerankProfileId) return;
+        await editRerankProfile(settings.rerankProfileId);
+        refreshMemoryRerankSelect();
+    });
+    root.find('#luker_rpg_memory_rerank_profile_delete').off('click').on('click', async () => {
+        if (!settings.rerankProfileId) return;
+        const ok = await deleteRerankProfile(settings.rerankProfileId);
+        if (ok) {
+            settings.rerankProfileId = '';
+            saveSettingsDebounced();
+            refreshMemoryRerankSelect();
+        }
+    });
+
+    [event_types.CONNECTION_PROFILE_CREATED, event_types.CONNECTION_PROFILE_UPDATED, event_types.CONNECTION_PROFILE_DELETED].forEach(evt => {
+        eventSource.on(evt, () => {
+            refreshMemoryEmbeddingSelect();
+            refreshMemoryRerankSelect();
+        });
     });
 
     root.find('#luker_rpg_memory_recall_inject_position').off('change').on('change', function () {
