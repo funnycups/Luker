@@ -20,9 +20,8 @@ import {
     openThirdPartyExtensionMenu,
 } from '../../extensions.js';
 import { collapseNewlines, registerDebugFunction } from '../../power-user.js';
-import { SECRET_KEYS, secret_state } from '../../secrets.js';
 import { getDataBankAttachments, getDataBankAttachmentsForSource, getFileAttachment } from '../../chats.js';
-import { debounce, getStringHash as calculateHash, waitUntilCondition, onlyUnique, splitRecursive, trimToStartSentence, trimToEndSentence, escapeHtml, isTrueBoolean } from '../../utils.js';
+import { debounce, getStringHash as calculateHash, waitUntilCondition, onlyUnique, splitRecursive, trimToStartSentence, trimToEndSentence, escapeHtml, isTrueBoolean, uuidv4 } from '../../utils.js';
 import { debounce_timeout } from '../../constants.js';
 import { getSortedEntries } from '../../world-info.js';
 import { textgen_types, textgenerationwebui_settings } from '../../textgen-settings.js';
@@ -36,6 +35,22 @@ import { generateWebLlmChatPrompt, isWebLlmSupported } from '../shared.js';
 import { WebLlmVectorProvider } from './webllm.js';
 import { removeReasoningFromString } from '../../reasoning.js';
 import { oai_settings } from '../../openai.js';
+import {
+    createEmbeddingProfile,
+    editEmbeddingProfile,
+    deleteEmbeddingProfile,
+    listEmbeddingProfiles,
+    getEmbeddingProfileById,
+    createRerankProfile,
+    editRerankProfile,
+    deleteRerankProfile,
+    listRerankProfiles,
+    getRerankProfileById,
+    upsertEmbeddingProfile,
+    upsertRerankProfile,
+    renderProfileSelect,
+} from '../connection-manager/embed-rerank.js';
+import { EmbeddingService } from '../../embedding-service.js';
 
 /**
  * @typedef {object} HashedMessage
@@ -51,30 +66,20 @@ export const EXTENSION_PROMPT_TAG = '3_vectors';
 export const EXTENSION_PROMPT_TAG_DB = '4_vectors_data_bank';
 
 // Force solo chunks for sources that don't support batching.
-const getBatchSize = () => ['transformers', 'ollama'].includes(settings.source) ? 1 : 5;
+const getBatchSize = () => {
+    const profile = getActiveEmbedProfile();
+    if (!profile) return 5;
+    return ['transformers', 'ollama'].includes(profile.source) ? 1 : 5;
+};
 
 const settings = {
-    // For both
-    source: 'transformers',
-    alt_endpoint_url: '',
-    use_alt_endpoint: false,
+    // Embedding & rerank — shared profiles managed by Connection Manager.
+    embeddingProfileId: '',
+    rerankProfileId: '',
+    rerank_enabled: false,
+
+    // Shared:
     include_wi: false,
-    togetherai_model: 'togethercomputer/m2-bert-80M-32k-retrieval',
-    openai_model: 'text-embedding-ada-002',
-    electronhub_model: 'text-embedding-3-small',
-    openrouter_model: 'openai/text-embedding-3-large',
-    cohere_model: 'embed-english-v3.0',
-    jina_model: 'jina-embeddings-v3',
-    jina_late_chunking: false,
-    jina_dimensions: 0,
-    ollama_model: 'mxbai-embed-large',
-    ollama_keep: false,
-    vllm_model: '',
-    webllm_model: '',
-    google_model: 'text-embedding-005',
-    chutes_model: 'chutes-qwen-qwen3-embedding-8b',
-    nanogpt_model: 'text-embedding-3-small',
-    siliconflow_model: 'Qwen/Qwen3-Embedding-0.6B',
     summarize: false,
     summarize_sent: false,
     summary_source: 'main',
@@ -118,13 +123,6 @@ const settings = {
     enabled_world_info: false,
     enabled_for_all: false,
     max_entries: 5,
-
-    // Rerank
-    rerank_enabled: false,
-    rerank_source: 'cohere',
-    rerank_model: 'rerank-v3.5',
-    rerank_api_url: '',
-    rerank_api_key: '',
 };
 
 const moduleWorker = new ModuleWorkerWrapper(synchronizeChat);
@@ -143,61 +141,35 @@ const skippedHashes = new Set();
  * Error causes treated as fatal — abort Vectorize All rather than skip.
  * @type {Set<string>}
  */
-const FATAL_CAUSES = new Set(['account_id_missing', 'api_key_missing', 'api_url_missing', 'api_model_missing', 'extras_module_missing', 'webllm_not_supported', 'summary_endpoint_invalid']);
-const vectorApiRequiresUrl = ['llamacpp', 'vllm', 'ollama', 'koboldcpp'];
+const FATAL_CAUSES = new Set(['account_id_missing', 'api_key_missing', 'api_url_missing', 'api_model_missing', 'extras_module_missing', 'webllm_not_supported', 'summary_endpoint_invalid', 'profile_missing']);
 
 /**
- * @typedef {object} RemoteEmbeddingEndpointConfig
- * @property {string} url - The API endpoint URL
- * @property {string} settingsKey - The key in settings for the selected model
- * @property {string} selectId - The ID of the select element (without #)
- * @property {string} [valueProperty='id'] - Property name for the option value
- * @property {string} [textProperty] - Property name for the option text. Falls back to valueProperty
- * @property {() => object} [getBody] - Function returning the request body
- * @property {(models: any[]) => any[]} [filter] - Optional post-fetch filter for models
+ * Resolves the currently selected embedding profile, or null when none is selected.
+ * @returns {object|null}
  */
+function getActiveEmbedProfile() {
+    return getEmbeddingProfileById(settings.embeddingProfileId);
+}
 
-/** @type {Record<string, RemoteEmbeddingEndpointConfig>} */
-const remoteEmbeddingEndpoints = {
-    chutes: {
-        url: '/api/openai/chutes/models/embedding',
-        settingsKey: 'chutes_model',
-        selectId: 'vectors_chutes_model',
-        valueProperty: 'slug',
-        textProperty: 'name',
-    },
-    nanogpt: {
-        url: '/api/openai/nanogpt/models/embedding',
-        settingsKey: 'nanogpt_model',
-        selectId: 'vectors_nanogpt_model',
-        textProperty: 'name',
-    },
-    electronhub: {
-        url: '/api/openai/electronhub/models',
-        settingsKey: 'electronhub_model',
-        selectId: 'vectors_electronhub_model',
-        textProperty: 'name',
-        filter: models => models.filter(m => Array.isArray(m?.endpoints) && m.endpoints.includes('/v1/embeddings')),
-    },
-    openrouter: {
-        url: '/api/openrouter/models/embedding',
-        settingsKey: 'openrouter_model',
-        selectId: 'vectors_openrouter_model',
-        textProperty: 'name',
-    },
-    siliconflow: {
-        url: '/api/openai/siliconflow/models/embedding',
-        settingsKey: 'siliconflow_model',
-        selectId: 'vectors_siliconflow_model',
-        getBody: () => ({ siliconflow_endpoint: oai_settings.siliconflow_endpoint }),
-    },
-    workers_ai: {
-        url: '/api/openai/workers-ai/models/embedding',
-        settingsKey: 'workers_ai_model',
-        selectId: 'vectors_workers_ai_model',
-        getBody: () => ({ workers_ai_account_id: oai_settings.workers_ai_account_id }),
-    },
-};
+/**
+ * Resolves the currently selected rerank profile, only when rerank is enabled.
+ * @returns {object|null}
+ */
+function getActiveRerankProfile() {
+    if (!settings.rerank_enabled) return null;
+    return getRerankProfileById(settings.rerankProfileId);
+}
+
+/**
+ * Throws if the active embedding profile is missing or unusable for synchronisation.
+ */
+function throwIfEmbeddingProfileMissing() {
+    const profile = getActiveEmbedProfile();
+    if (!profile) {
+        throw new Error('No embedding profile selected', { cause: 'profile_missing' });
+    }
+    return profile;
+}
 
 /**
  * Gets the Collection ID for a file embedded in the chat.
@@ -221,15 +193,13 @@ async function onVectorizeAllClick() {
             return;
         }
 
-        // Clear all cached summaries to ensure that new ones are created
-        // upon request of a full vectorise
         cachedSummaries.clear();
         skippedHashes.clear();
 
         const batchSize = getBatchSize();
         const elapsedLog = [];
         let finished = false;
-        let initialPending = null; // total items pending at the start of this run — set on first sync return
+        let initialPending = null;
         $('#vectorize_progress').show();
         $('#vectorize_progress_percent').text('0');
         $('#vectorize_progress_eta').text('...');
@@ -245,7 +215,6 @@ async function onVectorizeAllClick() {
             const elapsed = Date.now() - startTime;
 
             if (remaining === null) {
-                // synchronizeChat already surfaced a toast; bail out of the loop.
                 throw new Error('Vectorization aborted');
             }
 
@@ -260,9 +229,9 @@ async function onVectorizeAllClick() {
             const processedPercent = initialPending > 0
                 ? Math.min(100, Math.round((processed / initialPending) * 100))
                 : 100;
-            const lastElapsed = elapsedLog.slice(-5); // last 5 elapsed times
-            const averageElapsed = lastElapsed.reduce((a, b) => a + b, 0) / lastElapsed.length; // average time needed to process one item
-            const pace = averageElapsed / batchSize; // time needed to process one item
+            const lastElapsed = elapsedLog.slice(-5);
+            const averageElapsed = lastElapsed.reduce((a, b) => a + b, 0) / lastElapsed.length;
+            const pace = averageElapsed / batchSize;
             const remainingTime = Math.round(pace * pending / 1000);
 
             $('#vectorize_progress_percent').text(processedPercent);
@@ -366,13 +335,11 @@ async function summarizeOne(element, endpoint) {
 }
 
 /**
- * Summarizes messages using the chosen method. Every returned element has been
- * summarized (via live call or cache). Throws if any element fails after
- * `settings.summary_retries` attempts.
+ * Summarizes messages using the chosen method.
  * @param {HashedMessage[]} hashedMessages Array of hashed messages (mutated in place)
  * @param {string} endpoint Type of endpoint to use
- * @param {Object} [options] Options for summarization behavior
- * @param {boolean} [options.skipOnFailure=false] If true, tags failed elements with `summaryFailed = true` instead of throwing
+ * @param {Object} [options]
+ * @param {boolean} [options.skipOnFailure=false]
  * @returns {Promise<HashedMessage[]>} Summarized messages
  */
 async function summarize(hashedMessages, endpoint = 'main', { skipOnFailure = false } = {}) {
@@ -477,23 +444,20 @@ async function synchronizeChat(batchSize = 5) {
 
         return newVectorItems.length - batchSize;
     } catch (error) {
-        /**
-         * Gets the error message for a given cause
-         * @param {string} cause Error cause key
-         * @returns {string} Error message
-         */
         function getErrorMessage(cause) {
             switch (cause) {
+                case 'profile_missing':
+                    return 'Embedding profile is missing. Pick or create one in the Vector Storage settings.';
                 case 'api_key_missing':
                     return 'API key missing. Save it in the "API Connections" panel.';
                 case 'api_url_missing':
-                    return 'API URL missing. Save it in the "API Connections" panel.';
+                    return 'API URL missing. Save it in the embedding profile settings.';
                 case 'api_model_missing':
-                    return 'Vectorization Source Model is required, but not set.';
+                    return 'Embedding model is required, but not set on the profile.';
                 case 'webllm_not_supported':
                     return 'WebLLM extension is not installed or the model is not set.';
                 case 'account_id_missing':
-                    return 'Workers AI account ID is required. Save it in the "API Connections" panel.';
+                    return 'Workers AI account ID is required. Save it in the embedding profile settings.';
                 case 'summary_endpoint_invalid':
                     return 'Summarization endpoint is not supported.';
                 case 'summary_failed':
@@ -518,31 +482,15 @@ async function synchronizeChat(batchSize = 5) {
  */
 const hashCache = new Map();
 
-/**
- * Gets the hash value for a given string
- * @param {string} str Input string
- * @returns {number} Hash value
- */
 function getStringHash(str) {
-    // Check if the hash is already in the cache
     if (hashCache.has(str)) {
         return hashCache.get(str);
     }
-
-    // Calculate the hash value
     const hash = calculateHash(str);
-
-    // Store the hash in the cache
     hashCache.set(str, hash);
-
     return hash;
 }
 
-/**
- * Retrieves files from the chat and inserts them into the vector index.
- * @param {ChatMessage[]} chat Array of chat messages
- * @returns {Promise<void>}
- */
 async function processFiles(chat) {
     try {
         if (!settings.enabled_files) {
@@ -557,18 +505,14 @@ async function processFiles(chat) {
         }
 
         for (const message of chat) {
-            // Message has no files
             if (!Array.isArray(message?.extra?.files) || !message.extra.files.length) {
                 continue;
             }
 
-            // Trim file inserted by the script
             const allFileText = String(message.mes || '').substring(0, message.extra.fileLength).trim();
 
-            // Convert kilobytes to string length
             const thresholdLength = settings.size_threshold * 1024;
 
-            // File is too small
             if (allFileText.length < thresholdLength) {
                 continue;
             }
@@ -584,7 +528,6 @@ async function processFiles(chat) {
                 const collectionId = getFileCollectionId(fileUrl);
                 const hashesInCollection = await getSavedHashes(collectionId);
 
-                // File is not vectorized yet
                 if (!hashesInCollection.length) {
                     const fileText = file.text || (await getFileAttachment(fileUrl));
                     if (!fileText) {
@@ -606,13 +549,7 @@ async function processFiles(chat) {
     }
 }
 
-/**
- * Ensures that data bank attachments are ingested and inserted into the vector index.
- * @param {string} [source] Optional source filter for data bank attachments.
- * @returns {Promise<string[]>} Collection IDs
- */
 async function ingestDataBankAttachments(source) {
-    // Exclude disabled files
     const dataBank = source ? getDataBankAttachmentsForSource(source, false) : getDataBankAttachments(false);
     const dataBankCollectionIds = [];
 
@@ -621,17 +558,13 @@ async function ingestDataBankAttachments(source) {
         const hashesInCollection = await getSavedHashes(collectionId);
         dataBankCollectionIds.push(collectionId);
 
-        // File is already in the collection
         if (hashesInCollection.length) {
             continue;
         }
 
-        // Download and process the file
         const fileText = await getFileAttachment(file.url);
         console.log(`Vectors: Retrieved file ${file.name} from Data Bank`);
-        // Convert kilobytes to string length
         const thresholdLength = settings.size_threshold_db * 1024;
-        // Use chunk size from settings if file is larger than threshold
         const chunkSize = file.size > thresholdLength ? settings.chunk_size_db : -1;
         await vectorizeFile(fileText, file.name, collectionId, chunkSize, settings.overlap_percent_db);
     }
@@ -639,12 +572,6 @@ async function ingestDataBankAttachments(source) {
     return dataBankCollectionIds;
 }
 
-/**
- * Inserts file chunks from the Data Bank into the prompt.
- * @param {string} queryText Text to query
- * @param {string[]} collectionIds File collection IDs
- * @returns {Promise<void>}
- */
 async function injectDataBankChunks(queryText, collectionIds) {
     try {
         const queryResults = await queryMultipleCollections(collectionIds, queryText, settings.chunk_count_db, settings.score_threshold);
@@ -669,12 +596,6 @@ async function injectDataBankChunks(queryText, collectionIds) {
     }
 }
 
-/**
- * Retrieves file chunks from the vector index and inserts them into the chat.
- * @param {string} queryText Text to query
- * @param {string} collectionId File collection ID
- * @returns {Promise<string>} Retrieved file text
- */
 async function retrieveFileChunks(queryText, collectionId) {
     console.debug(`Vectors: Retrieving file chunks for collection ${collectionId}`, queryText);
     const queryResults = await queryCollection(collectionId, queryText, settings.chunk_count);
@@ -685,15 +606,6 @@ async function retrieveFileChunks(queryText, collectionId) {
     return fileText;
 }
 
-/**
- * Vectorizes a file and inserts it into the vector index.
- * @param {string} fileText File text
- * @param {string} fileName File name
- * @param {string} collectionId File collection ID
- * @param {number} chunkSize Chunk size
- * @param {number} overlapPercent Overlap size (in %)
- * @returns {Promise<boolean>} True if successful, false if not
- */
 async function vectorizeFile(fileText, fileName, collectionId, chunkSize, overlapPercent) {
     let toast = jQuery();
 
@@ -709,7 +621,6 @@ async function vectorizeFile(fileText, fileName, collectionId, chunkSize, overla
         toast = toastr.info(toastBody, `Ingesting file ${escapeHtml(fileName)}`, { closeButton: false, escapeHtml: false, timeOut: 0, extendedTimeOut: 0 });
         const overlapSize = Math.round(chunkSize * overlapPercent / 100);
         const delimiters = getChunkDelimiters();
-        // Overlap should not be included in chunk size. It will be later compensated by overlapChunks
         chunkSize = overlapSize > 0 ? (chunkSize - overlapSize) : chunkSize;
         const applyOverlap = (x, y, z) => overlapSize > 0 ? overlapChunks(x, y, z, overlapSize) : x;
         const chunks = settings.only_custom_boundary && settings.force_chunk_delimiter
@@ -736,13 +647,6 @@ async function vectorizeFile(fileText, fileName, collectionId, chunkSize, overla
     }
 }
 
-/**
- * Removes the most relevant messages from the chat and displays them in the extension prompt
- * @param {ChatMessage[]} chat Array of chat messages
- * @param {number} _contextSize Context size (unused)
- * @param {function} _abort Abort function (unused)
- * @param {string} type Generation type
- */
 async function rearrangeChat(chat, _contextSize, _abort, type) {
     try {
         if (type === 'quiet') {
@@ -750,7 +654,6 @@ async function rearrangeChat(chat, _contextSize, _abort, type) {
             return;
         }
 
-        // Clear the extension prompt
         setExtensionPrompt(EXTENSION_PROMPT_TAG, '', settings.position, settings.depth, settings.include_wi);
         setExtensionPrompt(EXTENSION_PROMPT_TAG_DB, '', settings.file_position_db, settings.file_depth_db, settings.include_wi, settings.file_depth_role_db);
 
@@ -785,7 +688,6 @@ async function rearrangeChat(chat, _contextSize, _abort, type) {
             return;
         }
 
-        // Get the most relevant messages, excluding the last few
         const queryResults = await queryCollection(chatId, queryText, settings.insert);
         const queryHashes = queryResults.hashes.filter(onlyUnique);
         const queriedMessages = [];
@@ -803,11 +705,8 @@ async function rearrangeChat(chat, _contextSize, _abort, type) {
             }
         }
 
-        // Rearrange queried messages to match query order
-        // Order is reversed because more relevant are at the lower indices
         queriedMessages.sort((a, b) => queryHashes.indexOf(getStringHash(substituteParams(b.mes))) - queryHashes.indexOf(getStringHash(substituteParams(a.mes))));
 
-        // Remove queried messages from the original chat array
         for (const message of chat) {
             if (queriedMessages.includes(message)) {
                 chat.splice(chat.indexOf(message), 1);
@@ -819,7 +718,6 @@ async function rearrangeChat(chat, _contextSize, _abort, type) {
             return;
         }
 
-        // Format queried messages into a single string
         const insertedText = getPromptText(queriedMessages);
         setExtensionPrompt(EXTENSION_PROMPT_TAG, insertedText, settings.position, settings.depth, settings.include_wi);
     } catch (error) {
@@ -828,24 +726,12 @@ async function rearrangeChat(chat, _contextSize, _abort, type) {
     }
 }
 
-/**
- * @param {any[]} queriedMessages
- * @returns {string}
- */
 function getPromptText(queriedMessages) {
     const queriedText = queriedMessages.map(x => collapseNewlines(`${x.name}: ${x.mes}`).trim()).join('\n\n');
     console.log('Vectors: relevant past messages found.\n', queriedText);
     return substituteParamsExtended(settings.template, { text: queriedText });
 }
 
-/**
- * Modifies text chunks to include overlap with adjacent chunks.
- * @param {string} chunk Current item
- * @param {number} index Current index
- * @param {string[]} chunks List of chunks
- * @param {number} overlapSize Size of the overlap
- * @returns {string} Overlapped chunks, with overlap trimmed to sentence boundaries
- */
 function overlapChunks(chunk, index, chunks, overlapSize) {
     const halfOverlap = Math.floor(overlapSize / 2);
     const nextChunk = chunks[index + 1];
@@ -862,12 +748,6 @@ globalThis.vectors_rearrangeChat = rearrangeChat;
 
 const onChatEvent = debounce(async () => await moduleWorker.update(), debounce_timeout.relaxed);
 
-/**
- * Gets the text to query from the chat
- * @param {ChatMessage[]} chat Chat messages
- * @param {'file'|'chat'|'world-info'} initiator Initiator of the query
- * @returns {Promise<string>} Text to query
- */
 async function getQueryText(chat, initiator) {
     const getTextWithoutAttachments = (x) => {
         const fileLength = x?.extra?.fileLength || 0;
@@ -893,250 +773,114 @@ async function getQueryText(chat, initiator) {
     return collapseNewlines(queryText).trim();
 }
 
-/**
- * Gets common body parameters for vector requests.
- * @param {object} args Additional arguments
- * @returns {object} Request body
- */
-function getVectorsRequestBody(args = {}) {
-    const body = Object.assign({}, args);
-    switch (settings.source) {
-        case 'electronhub':
-            body.model = extension_settings.vectors.electronhub_model;
-            break;
-        case 'openrouter':
-            body.model = extension_settings.vectors.openrouter_model;
-            break;
-        case 'togetherai':
-            body.model = extension_settings.vectors.togetherai_model;
-            break;
-        case 'openai':
-            body.model = extension_settings.vectors.openai_model;
-            break;
-        case 'cohere':
-            body.model = extension_settings.vectors.cohere_model;
-            break;
-        case 'jina':
-            body.model = extension_settings.vectors.jina_model;
-            body.jina_late_chunking = extension_settings.vectors.jina_late_chunking;
-            body.jina_dimensions = extension_settings.vectors.jina_dimensions || undefined;
-            break;
-        case 'ollama':
-            body.model = extension_settings.vectors.ollama_model;
-            body.apiUrl = settings.use_alt_endpoint ? settings.alt_endpoint_url : textgenerationwebui_settings.server_urls[textgen_types.OLLAMA];
-            body.keep = !!extension_settings.vectors.ollama_keep;
-            break;
-        case 'llamacpp':
-            body.apiUrl = settings.use_alt_endpoint ? settings.alt_endpoint_url : textgenerationwebui_settings.server_urls[textgen_types.LLAMACPP];
-            break;
-        case 'vllm':
-            body.apiUrl = settings.use_alt_endpoint ? settings.alt_endpoint_url : textgenerationwebui_settings.server_urls[textgen_types.VLLM];
-            body.model = extension_settings.vectors.vllm_model;
-            break;
-        case 'webllm':
-            body.model = extension_settings.vectors.webllm_model;
-            break;
-        case 'palm':
-            body.model = extension_settings.vectors.google_model;
-            body.api = 'makersuite';
-            break;
-        case 'vertexai':
-            body.model = extension_settings.vectors.google_model;
-            body.api = 'vertexai';
-            body.vertexai_auth_mode = oai_settings.vertexai_auth_mode;
-            body.vertexai_region = oai_settings.vertexai_region;
-            body.vertexai_express_project_id = oai_settings.vertexai_express_project_id;
-            break;
-        case 'chutes':
-            body.model = extension_settings.vectors.chutes_model;
-            break;
-        case 'nanogpt':
-            body.model = extension_settings.vectors.nanogpt_model;
-            break;
-        case 'siliconflow':
-            body.model = extension_settings.vectors.siliconflow_model;
-            body.siliconflow_endpoint = oai_settings.siliconflow_endpoint;
-            break;
-        case 'workers_ai':
-            body.model = extension_settings.vectors.workers_ai_model || '@cf/baai/bge-m3';
-            body.workers_ai_account_id = oai_settings.workers_ai_account_id;
-            break;
-        default:
-            break;
+// ---------------------------------------------------------------------------
+// Vector backend wrappers — all delegate to EmbeddingService.
+// Special handling for client-side embedding sources (webllm, koboldcpp).
+// ---------------------------------------------------------------------------
+
+async function buildClientSideExtraBody(profile, items) {
+    if (!profile) return null;
+    if (profile.source === 'webllm') {
+        const embeddings = await createWebLlmEmbeddings(items);
+        return embeddings ? { embeddings } : null;
     }
-    return body;
+    if (profile.source === 'koboldcpp') {
+        const result = await createKoboldCppEmbeddings(items, profile);
+        return { embeddings: result.embeddings, model: result.model };
+    }
+    return null;
 }
 
-/**
- * Gets additional arguments for vector requests.
- * @param {string[]} items Items to embed
- * @returns {Promise<object>} Additional arguments
- */
-async function getAdditionalArgs(items) {
-    const args = {};
-    switch (settings.source) {
-        case 'webllm':
-            args.embeddings = await createWebLlmEmbeddings(items);
-            break;
-        case 'koboldcpp': {
-            const { embeddings, model } = await createKoboldCppEmbeddings(items);
-            args.embeddings = embeddings;
-            args.model = model;
-            break;
+async function createWebLlmEmbeddings(items) {
+    if (!Array.isArray(items) || items.length === 0) {
+        return /** @type {Record<string, number[]>} */ ({});
+    }
+    const profile = getActiveEmbedProfile();
+    if (!profile || profile.source !== 'webllm' || !profile.model) {
+        throw new Error('WebLLM is not supported', { cause: 'webllm_not_supported' });
+    }
+    try {
+        const embeddings = await webllmProvider.embedTexts(items, profile.model);
+        const result = /** @type {Record<string, number[]>} */ ({});
+        for (let i = 0; i < items.length; i++) {
+            result[items[i]] = embeddings[i];
         }
+        return result;
+    } catch (error) {
+        console.error('Vectors: Failed to compute WebLLM embeddings', error);
+        switch (error?.cause) {
+            case 'webllm-not-available':
+                toastr.warning('WebLLM is not available. Please install the extension.', 'WebLLM not installed');
+                break;
+            case 'webllm-not-updated':
+                toastr.warning('The installed extension version does not support embeddings.', 'WebLLM update required');
+                break;
+        }
+        throw new Error('WebLLM is not supported', { cause: 'webllm_not_supported' });
     }
-    return args;
 }
 
-/**
- * Gets the saved hashes for a collection
-* @param {string} collectionId
-* @returns {Promise<number[]>} Saved hashes
-*/
+async function createKoboldCppEmbeddings(items, profile) {
+    const server = String(profile?.['api-url'] || '').trim();
+    if (!server) {
+        throw new Error('KoboldCpp URL missing', { cause: 'api_url_missing' });
+    }
+    const response = await fetch('/api/backends/kobold/embed', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({ items: items, server }),
+    });
+
+    if (!response.ok) {
+        throw new Error('Failed to get KoboldCpp embeddings');
+    }
+
+    const data = await response.json();
+    if (!Array.isArray(data.embeddings) || !data.model || data.embeddings.length !== items.length) {
+        throw new Error('Invalid response from KoboldCpp embeddings');
+    }
+
+    const embeddings = /** @type {Record<string, number[]>} */ ({});
+    for (let i = 0; i < data.embeddings.length; i++) {
+        if (!Array.isArray(data.embeddings[i]) || data.embeddings[i].length === 0) {
+            throw new Error('KoboldCpp returned an empty embedding. Reduce the chunk size and/or size threshold and try again.');
+        }
+        embeddings[items[i]] = data.embeddings[i];
+    }
+
+    return { embeddings, model: data.model };
+}
+
 async function getSavedHashes(collectionId) {
-    const args = await getAdditionalArgs([]);
-    const response = await fetch('/api/vector/list', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({
-            ...getVectorsRequestBody(args),
-            collectionId: collectionId,
-            source: settings.source,
-        }),
-    });
-
-    if (!response.ok) {
-        throw new Error(`Failed to get saved hashes for collection ${collectionId}`);
-    }
-
-    const hashes = await response.json();
-    return hashes;
+    const profile = getActiveEmbedProfile();
+    if (!profile) return [];
+    return await EmbeddingService.listHashes({ profile, collectionId });
 }
 
-/**
- * Inserts vector items into a collection
- * @param {string} collectionId - The collection to insert into
- * @param {{ hash: number, text: string }[]} items - The items to insert
- * @returns {Promise<void>}
- */
 async function insertVectorItems(collectionId, items) {
-    throwIfSourceInvalid();
-
-    const args = await getAdditionalArgs(items.map(x => x.text));
-    const response = await fetch('/api/vector/insert', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({
-            ...getVectorsRequestBody(args),
-            collectionId: collectionId,
-            items: items,
-            source: settings.source,
-        }),
-    });
-
-    if (!response.ok) {
-        throw new Error(`Failed to insert vector items for collection ${collectionId}`);
-    }
+    const profile = throwIfEmbeddingProfileMissing();
+    const extraBody = await buildClientSideExtraBody(profile, items.map(x => x.text));
+    await EmbeddingService.insert({ profile, collectionId, items, extraBody });
 }
 
-/**
- * Throws an error if the source is invalid (missing API key or URL, or missing module)
- */
-function throwIfSourceInvalid() {
-    if (settings.source === 'openai' && !secret_state[SECRET_KEYS.OPENAI] ||
-        settings.source === 'electronhub' && !secret_state[SECRET_KEYS.ELECTRONHUB] ||
-        settings.source === 'chutes' && !secret_state[SECRET_KEYS.CHUTES] ||
-        settings.source === 'nanogpt' && !secret_state[SECRET_KEYS.NANOGPT] ||
-        settings.source === 'openrouter' && !secret_state[SECRET_KEYS.OPENROUTER] ||
-        settings.source === 'palm' && !secret_state[SECRET_KEYS.MAKERSUITE] ||
-        settings.source === 'vertexai' && !secret_state[SECRET_KEYS.VERTEXAI] && !secret_state[SECRET_KEYS.VERTEXAI_SERVICE_ACCOUNT] ||
-        settings.source === 'mistral' && !secret_state[SECRET_KEYS.MISTRALAI] ||
-        settings.source === 'togetherai' && !secret_state[SECRET_KEYS.TOGETHERAI] ||
-        settings.source === 'nomicai' && !secret_state[SECRET_KEYS.NOMICAI] ||
-        settings.source === 'cohere' && !secret_state[SECRET_KEYS.COHERE] ||
-        settings.source === 'jina' && !secret_state[SECRET_KEYS.JINA] ||
-        settings.source === 'workers_ai' && !secret_state[SECRET_KEYS.WORKERS_AI] ||
-        settings.source === 'siliconflow' && !secret_state[SECRET_KEYS.SILICONFLOW]) {
-        throw new Error('Vectors: API key missing', { cause: 'api_key_missing' });
-    }
-
-    if (vectorApiRequiresUrl.includes(settings.source) && settings.use_alt_endpoint) {
-        if (!settings.alt_endpoint_url) {
-            throw new Error('Vectors: API URL missing', { cause: 'api_url_missing' });
-        }
-    } else {
-        if (settings.source === 'ollama' && !textgenerationwebui_settings.server_urls[textgen_types.OLLAMA] ||
-            settings.source === 'vllm' && !textgenerationwebui_settings.server_urls[textgen_types.VLLM] ||
-            settings.source === 'koboldcpp' && !textgenerationwebui_settings.server_urls[textgen_types.KOBOLDCPP] ||
-            settings.source === 'llamacpp' && !textgenerationwebui_settings.server_urls[textgen_types.LLAMACPP]) {
-            throw new Error('Vectors: API URL missing', { cause: 'api_url_missing' });
-        }
-    }
-
-    if (settings.source === 'ollama' && !settings.ollama_model || settings.source === 'vllm' && !settings.vllm_model) {
-        throw new Error('Vectors: API model missing', { cause: 'api_model_missing' });
-    }
-
-    if (settings.source === 'webllm' && (!isWebLlmSupported() || !settings.webllm_model)) {
-        throw new Error('Vectors: WebLLM is not supported', { cause: 'webllm_not_supported' });
-    }
-
-    if (settings.source === 'workers_ai' && !oai_settings.workers_ai_account_id) {
-        throw new Error('Vectors: Workers AI account ID missing', { cause: 'account_id_missing' });
-    }
-}
-
-/**
- * Deletes vector items from a collection
- * @param {string} collectionId - The collection to delete from
- * @param {number[]} hashes - The hashes of the items to delete
- * @returns {Promise<void>}
- */
 async function deleteVectorItems(collectionId, hashes) {
-    const args = await getAdditionalArgs([]);
-    const response = await fetch('/api/vector/delete', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({
-            ...getVectorsRequestBody(args),
-            collectionId: collectionId,
-            hashes: hashes,
-            source: settings.source,
-        }),
-    });
-
-    if (!response.ok) {
-        throw new Error(`Failed to delete vector items for collection ${collectionId}`);
-    }
+    const profile = getActiveEmbedProfile();
+    if (!profile) return;
+    await EmbeddingService.deleteByHashes({ profile, collectionId, hashes });
 }
 
-/**
- * @param {string} collectionId - The collection to query
- * @param {string} searchText - The text to query
- * @param {number} topK - The number of results to return
- * @returns {Promise<{ hashes: number[], metadata: object[]}>} - Hashes of the results
- */
 async function queryCollection(collectionId, searchText, topK) {
+    const profile = throwIfEmbeddingProfileMissing();
     const retrieveK = settings.rerank_enabled ? Math.max(topK * 4, 20) : topK;
-    const args = await getAdditionalArgs([searchText]);
-    const response = await fetch('/api/vector/query', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({
-            ...getVectorsRequestBody(args),
-            collectionId: collectionId,
-            searchText: searchText,
-            topK: retrieveK,
-            source: settings.source,
-            threshold: settings.score_threshold,
-        }),
+    const extraBody = await buildClientSideExtraBody(profile, [searchText]);
+    const result = await EmbeddingService.query({
+        profile,
+        collectionId,
+        searchText,
+        topK: retrieveK,
+        threshold: settings.score_threshold,
+        extraBody,
     });
-
-    if (!response.ok) {
-        throw new Error(`Failed to query collection ${collectionId}`);
-    }
-
-    const result = await response.json();
 
     if (settings.rerank_enabled && result.metadata?.length > 0) {
         const reranked = await rerankResults(searchText, result.metadata, topK);
@@ -1149,38 +893,20 @@ async function queryCollection(collectionId, searchText, topK) {
     return result;
 }
 
-/**
- * Queries multiple collections for a given text.
- * @param {string[]} collectionIds - Collection IDs to query
- * @param {string} searchText - Text to query
- * @param {number} topK - Number of results to return
- * @param {number} threshold - Score threshold
- * @returns {Promise<Record<string, { hashes: number[], metadata: object[] }>>} - Results mapped to collection IDs
- */
 async function queryMultipleCollections(collectionIds, searchText, topK, threshold) {
+    const profile = throwIfEmbeddingProfileMissing();
     const retrieveK = settings.rerank_enabled ? Math.max(topK * 4, 20) : topK;
-    const args = await getAdditionalArgs([searchText]);
-    const response = await fetch('/api/vector/query-multi', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({
-            ...getVectorsRequestBody(args),
-            collectionIds: collectionIds,
-            searchText: searchText,
-            topK: retrieveK,
-            source: settings.source,
-            threshold: threshold ?? settings.score_threshold,
-        }),
+    const extraBody = await buildClientSideExtraBody(profile, [searchText]);
+    const result = await EmbeddingService.queryMulti({
+        profile,
+        collectionIds,
+        searchText,
+        topK: retrieveK,
+        threshold: threshold ?? settings.score_threshold,
+        extraBody,
     });
 
-    if (!response.ok) {
-        throw new Error('Failed to query multiple collections');
-    }
-
-    const result = await response.json();
-
     if (settings.rerank_enabled) {
-        // Flatten all results from all collections with collection ID tag
         const allDocs = [];
         for (const [collId, data] of Object.entries(result)) {
             for (const meta of data.metadata) {
@@ -1191,7 +917,6 @@ async function queryMultipleCollections(collectionIds, searchText, topK, thresho
         if (allDocs.length > 0) {
             const reranked = await rerankResults(searchText, allDocs, topK);
 
-            // Re-group by collection ID
             const grouped = {};
             for (const doc of reranked) {
                 const collId = doc._collectionId;
@@ -1209,39 +934,17 @@ async function queryMultipleCollections(collectionIds, searchText, topK, thresho
     return result;
 }
 
-/**
- * Reranks query results using a reranking model for better relevance.
- * @param {string} queryText - The original query text
- * @param {object[]} metadata - The metadata array from query results (must include text and score)
- * @param {number} topK - Number of top results to return after reranking
- * @returns {Promise<object[]>} - Reranked metadata array
- */
 async function rerankResults(queryText, metadata, topK) {
     if (!settings.rerank_enabled || !metadata || metadata.length === 0) {
         return metadata;
     }
-
+    const profile = getActiveRerankProfile();
+    if (!profile) {
+        console.warn('Vectors: Rerank enabled but no rerank profile selected — falling back.');
+        return metadata.slice(0, topK);
+    }
     try {
-        const response = await fetch('/api/vector/rerank', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({
-                query: queryText,
-                documents: metadata,
-                topK: topK,
-                source: settings.rerank_source,
-                model: settings.rerank_model,
-                apiUrl: settings.rerank_api_url,
-                apiKey: settings.rerank_api_key,
-            }),
-        });
-
-        if (!response.ok) {
-            console.warn('Rerank failed, falling back to original order:', response.statusText);
-            return metadata.slice(0, topK);
-        }
-
-        const reranked = await response.json();
+        const reranked = await EmbeddingService.rerank({ profile, query: queryText, documents: metadata, topK });
         console.log(`Vectors: Reranked ${metadata.length} candidates to ${reranked.length} results`);
         return reranked;
     } catch (error) {
@@ -1250,10 +953,6 @@ async function rerankResults(queryText, metadata, topK) {
     }
 }
 
-/**
- * Purges the vector index for a file.
- * @param {string} fileUrl File URL to purge
- */
 async function purgeFileVectorIndex(fileUrl) {
     try {
         if (!settings.enabled_files) {
@@ -1262,50 +961,19 @@ async function purgeFileVectorIndex(fileUrl) {
 
         console.log(`Vectors: Purging file vector index for ${fileUrl}`);
         const collectionId = getFileCollectionId(fileUrl);
-
-        const response = await fetch('/api/vector/purge', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({
-                ...getVectorsRequestBody(),
-                collectionId: collectionId,
-            }),
-        });
-
-        if (!response.ok) {
-            throw new Error(`Could not delete vector index for collection ${collectionId}`);
-        }
-
+        await EmbeddingService.purgeCollection({ collectionId });
         console.log(`Vectors: Purged vector index for collection ${collectionId}`);
     } catch (error) {
         console.error('Vectors: Failed to purge file', error);
     }
 }
 
-/**
- * Purges the vector index for a collection.
- * @param {string} collectionId Collection ID to purge
- * @returns <Promise<boolean>> True if deleted, false if not
- */
 async function purgeVectorIndex(collectionId) {
     try {
         if (!settings.enabled_chats) {
             return true;
         }
-
-        const response = await fetch('/api/vector/purge', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({
-                ...getVectorsRequestBody(),
-                collectionId: collectionId,
-            }),
-        });
-
-        if (!response.ok) {
-            throw new Error(`Could not delete vector index for collection ${collectionId}`);
-        }
-
+        await EmbeddingService.purgeCollection({ collectionId });
         console.log(`Vectors: Purged vector index for collection ${collectionId}`);
         return true;
     } catch (error) {
@@ -1314,17 +982,12 @@ async function purgeVectorIndex(collectionId) {
     }
 }
 
-/**
- * Purges all vector indexes.
- */
 async function purgeAllVectorIndexes() {
     try {
         const response = await fetch('/api/vector/purge-all', {
             method: 'POST',
             headers: getRequestHeaders(),
-            body: JSON.stringify({
-                ...getVectorsRequestBody(),
-            }),
+            body: JSON.stringify({}),
         });
 
         if (!response.ok) {
@@ -1339,230 +1002,150 @@ async function purgeAllVectorIndexes() {
     }
 }
 
-function toggleSettings() {
-    $('#vectors_files_settings').toggle(!!settings.enabled_files);
-    $('#vectors_chats_settings').toggle(!!settings.enabled_chats);
-    $('#vectors_world_info_settings').toggle(!!settings.enabled_world_info);
-    $('#together_vectorsModel').toggle(settings.source === 'togetherai');
-    $('#openai_vectorsModel').toggle(settings.source === 'openai');
-    $('#electronhub_vectorsModel').toggle(settings.source === 'electronhub');
-    $('#chutes_vectorsModel').toggle(settings.source === 'chutes');
-    $('#nanogpt_vectorsModel').toggle(settings.source === 'nanogpt');
-    $('#openrouter_vectorsModel').toggle(settings.source === 'openrouter');
-    $('#cohere_vectorsModel').toggle(settings.source === 'cohere');
-    $('#jina_vectorsModel').toggle(settings.source === 'jina');
-    $('#ollama_vectorsModel').toggle(settings.source === 'ollama');
-    $('#llamacpp_vectorsModel').toggle(settings.source === 'llamacpp');
-    $('#vllm_vectorsModel').toggle(settings.source === 'vllm');
-    $('#nomicai_apiKey').toggle(settings.source === 'nomicai');
-    $('#webllm_vectorsModel').toggle(settings.source === 'webllm');
-    $('#koboldcpp_vectorsModel').toggle(settings.source === 'koboldcpp');
-    $('#google_vectorsModel').toggle(settings.source === 'palm' || settings.source === 'vertexai');
-    $('#siliconflow_vectorsModel').toggle(settings.source === 'siliconflow');
-    $('#workers_ai_vectorsModel').toggle(settings.source === 'workers_ai');
-    $('#vector_altEndpointUrl').toggle(vectorApiRequiresUrl.includes(settings.source));
-    toggleJinaApiKeyVisibility();
-    if (settings.source === 'webllm') {
-        loadWebLlmModels();
-    } else if (settings.source in remoteEmbeddingEndpoints) {
-        loadRemoteEmbeddingModels(settings.source);
+// ---------------------------------------------------------------------------
+// Migration of legacy `extension_settings.vectors.*` fields into shared profiles.
+// ---------------------------------------------------------------------------
+
+function makeUniqueProfileName(prefix) {
+    const existing = new Set([
+        ...listEmbeddingProfiles().map(p => p.name),
+        ...listRerankProfiles().map(p => p.name),
+    ]);
+    if (!existing.has(prefix)) return prefix;
+    let i = 2;
+    while (existing.has(`${prefix} ${i}`)) i += 1;
+    return `${prefix} ${i}`;
+}
+
+const VECTOR_EXT_LEGACY_MODEL_KEYS = {
+    openai: 'openai_model',
+    electronhub: 'electronhub_model',
+    openrouter: 'openrouter_model',
+    togetherai: 'togetherai_model',
+    cohere: 'cohere_model',
+    jina: 'jina_model',
+    ollama: 'ollama_model',
+    vllm: 'vllm_model',
+    webllm: 'webllm_model',
+    palm: 'google_model',
+    vertexai: 'google_model',
+    chutes: 'chutes_model',
+    nanogpt: 'nanogpt_model',
+    siliconflow: 'siliconflow_model',
+};
+
+function migrateLegacySettings() {
+    const v = extension_settings.vectors;
+    if (!v || typeof v !== 'object') return;
+
+    // Already migrated
+    if (v.embeddingProfileId) {
+        return;
     }
-}
-
-function toggleJinaApiKeyVisibility() {
-    const usesJinaEmbedding = settings.source === 'jina';
-    const usesJinaRerank = settings.rerank_enabled && settings.rerank_source === 'jina';
-    $('#jina_apiKey').toggle(usesJinaEmbedding || usesJinaRerank);
-}
-
-function toggleRerankSettings() {
-    $('#vectors_rerank_settings').toggle(settings.rerank_enabled);
-    toggleJinaApiKeyVisibility();
-}
-
-function toggleRerankSourceSettings() {
-    $('#rerank_cohere_model').toggle(settings.rerank_source === 'cohere');
-    $('#rerank_jina_model').toggle(settings.rerank_source === 'jina');
-    $('#rerank_custom_settings').toggle(settings.rerank_source === 'custom');
-    toggleJinaApiKeyVisibility();
-}
-
-function updateRerankModelFromSource() {
-    const defaults = {
-        cohere: 'rerank-v3.5',
-        jina: 'jina-reranker-v2-base-multilingual',
-        custom: '',
-    };
-    settings.rerank_model = defaults[settings.rerank_source] || '';
-}
-
-/**
- * Loads models from a remote embedding endpoint and populates the corresponding select element.
- * @param {string} source - The source key matching a remoteEmbeddingEndpoints entry
- */
-async function loadRemoteEmbeddingModels(source) {
-    const config = remoteEmbeddingEndpoints[source];
-    if (!config) {
+    // Nothing to migrate
+    if (!v.source) {
         return;
     }
 
-    const { url, settingsKey, selectId, getBody, filter } = config;
-    const valueProperty = config.valueProperty || 'id';
-    const textProperty = config.textProperty;
-
-    /**
-     * Populates the select element with the given models.
-     * @param {any[]} models - Array of model objects
-     */
-    function populateSelect(models) {
-        const select = $(`#${selectId}`);
-        select.empty();
-        for (const m of models) {
-            const option = document.createElement('option');
-            option.value = m[valueProperty];
-            option.text = textProperty ? (m[textProperty] || m[valueProperty]) : m[valueProperty];
-            select.append(option);
-        }
-        if (!settings[settingsKey] && models.length) {
-            settings[settingsKey] = models[0][valueProperty];
-            Object.assign(extension_settings.vectors, settings);
-            saveSettingsDebounced();
-        }
-        select.val(settings[settingsKey]);
+    const oldSource = String(v.source);
+    if (oldSource === 'extras' || oldSource === 'local') {
+        // 'extras' was deprecated upstream; treat both as 'transformers' for compat.
+        v.source = 'transformers';
     }
 
-    try {
-        const body = typeof getBody === 'function' ? getBody() : {};
+    const sourceForProfile = (oldSource === 'extras' || oldSource === 'local') ? 'transformers' : oldSource;
 
-        /** @type {RequestInit} */
-        const fetchOptions = {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify(body || {}),
-        };
-
-        const response = await fetch(url, fetchOptions);
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-        }
-
-        /** @type {Array<any>} */
-        const data = await response.json();
-        let models = Array.isArray(data) ? data : [];
-        if (filter) {
-            models = filter(models);
-        }
-
-        populateSelect(models);
-    } catch (err) {
-        console.warn(`${source} models fetch failed`, err);
-        populateSelect([]);
+    let model = '';
+    const modelKey = VECTOR_EXT_LEGACY_MODEL_KEYS[sourceForProfile];
+    if (modelKey) {
+        model = String(v[modelKey] || '').trim();
     }
-}
-
-/**
- * Executes a function with WebLLM error handling.
- * @param {function(): Promise<T>} func Function to execute
- * @returns {Promise<T>}
- * @template T
- */
-async function executeWithWebLlmErrorHandling(func) {
-    try {
-        return await func();
-    } catch (error) {
-        console.log('Vectors: Failed to load WebLLM models', error);
-        if (!(error instanceof Error)) {
-            return;
-        }
-        switch (error.cause) {
-            case 'webllm-not-available':
-                toastr.warning('WebLLM is not available. Please install the extension.', 'WebLLM not installed');
-                break;
-            case 'webllm-not-updated':
-                toastr.warning('The installed extension version does not support embeddings.', 'WebLLM update required');
-                break;
-        }
-    }
-}
-
-/**
- * Loads and displays WebLLM models in the settings.
- * @returns {Promise<void>}
- */
-function loadWebLlmModels() {
-    return executeWithWebLlmErrorHandling(() => {
-        const models = webllmProvider.getModels();
-        $('#vectors_webllm_model').empty();
-        for (const model of models) {
-            $('#vectors_webllm_model').append($('<option>', { value: model.id, text: model.toString() }));
-        }
-        if (!settings.webllm_model || !models.some(x => x.id === settings.webllm_model)) {
-            if (models.length) {
-                settings.webllm_model = models[0].id;
-            }
-        }
-        $('#vectors_webllm_model').val(settings.webllm_model);
-        return Promise.resolve();
-    });
-}
-
-/**
- * Creates WebLLM embeddings for a list of items.
- * @param {string[]} items Items to embed
- * @returns {Promise<Record<string, number[]>>} Calculated embeddings
- */
-async function createWebLlmEmbeddings(items) {
-    if (items.length === 0) {
-        return /** @type {Record<string, number[]>} */ ({});
-    }
-    return executeWithWebLlmErrorHandling(async () => {
-        const embeddings = await webllmProvider.embedTexts(items, settings.webllm_model);
-        const result = /** @type {Record<string, number[]>} */ ({});
-        for (let i = 0; i < items.length; i++) {
-            result[items[i]] = embeddings[i];
-        }
-        return result;
-    });
-}
-
-/**
- * Creates KoboldCpp embeddings for a list of items.
- * @param {string[]} items Items to embed
- * @returns {Promise<{embeddings: Record<string, number[]>, model: string}>} Calculated embeddings
- */
-async function createKoboldCppEmbeddings(items) {
-    const response = await fetch('/api/backends/kobold/embed', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({
-            items: items,
-            server: settings.use_alt_endpoint ? settings.alt_endpoint_url : textgenerationwebui_settings.server_urls[textgen_types.KOBOLDCPP],
-        }),
-    });
-
-    if (!response.ok) {
-        throw new Error('Failed to get KoboldCpp embeddings');
+    if (sourceForProfile === 'workers_ai' && !model) {
+        model = '@cf/baai/bge-m3';
     }
 
-    const data = await response.json();
-    if (!Array.isArray(data.embeddings) || !data.model || data.embeddings.length !== items.length) {
-        throw new Error('Invalid response from KoboldCpp embeddings');
-    }
+    const baseName = `${sourceForProfile}${model ? ' ' + model : ''}`.trim() || sourceForProfile;
+    const profileName = makeUniqueProfileName(baseName);
 
-    const embeddings = /** @type {Record<string, number[]>} */ ({});
-    for (let i = 0; i < data.embeddings.length; i++) {
-        if (!Array.isArray(data.embeddings[i]) || data.embeddings[i].length === 0) {
-            throw new Error('KoboldCpp returned an empty embedding. Reduce the chunk size and/or size threshold and try again.');
-        }
-
-        embeddings[items[i]] = data.embeddings[i];
-    }
-
-    return {
-        embeddings: embeddings,
-        model: data.model,
+    /** @type {any} */
+    const profile = {
+        id: uuidv4(),
+        mode: 'embed',
+        name: profileName,
+        source: sourceForProfile,
     };
+    if (model) profile.model = model;
+    if (sourceForProfile === 'jina') {
+        if (v.jina_late_chunking) profile['jina-late-chunking'] = 'true';
+        if (Number(v.jina_dimensions) > 0) profile['jina-dimensions'] = String(Number(v.jina_dimensions));
+    }
+    if (sourceForProfile === 'ollama') {
+        if (v.ollama_keep) profile['ollama-keep'] = 'true';
+    }
+    if (sourceForProfile === 'siliconflow' && oai_settings?.siliconflow_endpoint) {
+        profile['siliconflow-endpoint'] = String(oai_settings.siliconflow_endpoint);
+    }
+    if (sourceForProfile === 'workers_ai' && oai_settings?.workers_ai_account_id) {
+        profile['workers-ai-account-id'] = String(oai_settings.workers_ai_account_id);
+    }
+    if (sourceForProfile === 'vertexai') {
+        if (oai_settings?.vertexai_region) profile['vertexai-region'] = String(oai_settings.vertexai_region);
+        if (oai_settings?.vertexai_auth_mode) profile['vertexai-auth-mode'] = String(oai_settings.vertexai_auth_mode);
+        if (oai_settings?.vertexai_express_project_id) profile['vertexai-express-project-id'] = String(oai_settings.vertexai_express_project_id);
+    }
+
+    // Local-backend URL: prefer the `alt_endpoint_url` override if it was active,
+    // otherwise pick up the textgen default for the matching backend.
+    const useAlt = v.use_alt_endpoint && v.alt_endpoint_url;
+    const altUrl = useAlt ? String(v.alt_endpoint_url || '').trim() : '';
+    const textgenUrls = textgenerationwebui_settings?.server_urls || {};
+    const localUrlMap = {
+        ollama: textgenUrls?.[textgen_types.OLLAMA] || '',
+        llamacpp: textgenUrls?.[textgen_types.LLAMACPP] || '',
+        vllm: textgenUrls?.[textgen_types.VLLM] || '',
+        koboldcpp: textgenUrls?.[textgen_types.KOBOLDCPP] || '',
+    };
+    if (Object.hasOwn(localUrlMap, sourceForProfile)) {
+        const url = altUrl || String(localUrlMap[sourceForProfile] || '').trim();
+        if (url) profile['api-url'] = url;
+    }
+
+    const stored = upsertEmbeddingProfile(profile);
+    if (stored) {
+        v.embeddingProfileId = stored.id;
+    }
+
+    // Rerank
+    if (v.rerank_enabled && v.rerank_source) {
+        const rerankBase = `${v.rerank_source} rerank${v.rerank_model ? ' ' + v.rerank_model : ''}`.trim();
+        /** @type {any} */
+        const rerankProfile = {
+            id: uuidv4(),
+            mode: 'rerank',
+            name: makeUniqueProfileName(rerankBase),
+            source: String(v.rerank_source),
+        };
+        if (v.rerank_model) rerankProfile.model = String(v.rerank_model);
+        if (v.rerank_source === 'custom') {
+            if (v.rerank_api_url) rerankProfile['api-url'] = String(v.rerank_api_url);
+            if (v.rerank_api_key) rerankProfile['proxy-password'] = String(v.rerank_api_key);
+        }
+        const storedRerank = upsertRerankProfile(rerankProfile);
+        if (storedRerank) {
+            v.rerankProfileId = storedRerank.id;
+        }
+    }
+
+    saveSettingsDebounced();
+    console.log('Vectors: Migrated legacy settings into Connection Manager profiles', {
+        embeddingProfileId: v.embeddingProfileId,
+        rerankProfileId: v.rerankProfileId,
+    });
 }
+
+// ---------------------------------------------------------------------------
+// UI handlers — Vectorize/Purge/Stats buttons & profile picker controls.
+// ---------------------------------------------------------------------------
 
 async function onPurgeClick() {
     const chatId = getCurrentChatId();
@@ -1611,42 +1194,21 @@ async function onVectorizeAllFilesClick() {
         const chatAttachments = getContext().chat.filter(x => Array.isArray(x.extra?.files)).map(x => x.extra.files).flat();
         const allFiles = [...dataBank, ...chatAttachments];
 
-        /**
-         * Gets the chunk size for a file attachment.
-         * @param file {import('../../chats.js').FileAttachment} File attachment
-         * @returns {number} Chunk size for the file
-         */
         function getChunkSize(file) {
             if (chatAttachments.includes(file)) {
-                // Convert kilobytes to string length
                 const thresholdLength = settings.size_threshold * 1024;
                 return file.size > thresholdLength ? settings.chunk_size : -1;
             }
-
             if (dataBank.includes(file)) {
-                // Convert kilobytes to string length
                 const thresholdLength = settings.size_threshold_db * 1024;
-                // Use chunk size from settings if file is larger than threshold
                 return file.size > thresholdLength ? settings.chunk_size_db : -1;
             }
-
             return -1;
         }
 
-        /**
-         * Gets the overlap percent for a file attachment.
-         * @param file {import('../../chats.js').FileAttachment} File attachment
-         * @returns {number} Overlap percent for the file
-         */
         function getOverlapPercent(file) {
-            if (chatAttachments.includes(file)) {
-                return settings.overlap_percent;
-            }
-
-            if (dataBank.includes(file)) {
-                return settings.overlap_percent_db;
-            }
-
+            if (chatAttachments.includes(file)) return settings.overlap_percent;
+            if (dataBank.includes(file)) return settings.overlap_percent_db;
             return 0;
         }
 
@@ -1712,38 +1274,19 @@ async function activateWorldInfo(chat) {
         return;
     }
 
-    // Group entries by "world" field
     const groupedEntries = {};
 
     for (const entry of entries) {
-        // Skip orphaned entries. Is it even possible?
         if (!entry.world) {
             console.debug('Vectors: Skipped orphaned WI entry', entry);
             continue;
         }
-
-        // Skip disabled entries
-        if (entry.disable) {
-            console.debug('Vectors: Skipped disabled WI entry', entry);
-            continue;
-        }
-
-        // Skip entries without content
-        if (!entry.content) {
-            console.debug('Vectors: Skipped WI entry without content', entry);
-            continue;
-        }
-
-        // Skip non-vectorized entries
-        if (!entry.vectorized && !settings.enabled_for_all) {
-            console.debug('Vectors: Skipped non-vectorized WI entry', entry);
-            continue;
-        }
-
+        if (entry.disable) continue;
+        if (!entry.content) continue;
+        if (!entry.vectorized && !settings.enabled_for_all) continue;
         if (!Object.hasOwn(groupedEntries, entry.world)) {
             groupedEntries[entry.world] = [];
         }
-
         groupedEntries[entry.world].push(entry);
     }
 
@@ -1754,7 +1297,6 @@ async function activateWorldInfo(chat) {
         return;
     }
 
-    // Synchronize collections
     for (const world in groupedEntries) {
         const collectionId = `world_${getStringHash(world)}`;
         const hashesInCollection = await getSavedHashes(collectionId);
@@ -1774,7 +1316,6 @@ async function activateWorldInfo(chat) {
         collectionIds.push(collectionId);
     }
 
-    // Perform a multi-query
     const queryText = await getQueryText(chat, 'world-info');
 
     if (queryText.length === 0) {
@@ -1786,13 +1327,9 @@ async function activateWorldInfo(chat) {
     const activatedHashes = Object.values(queryResults).flatMap(x => x.hashes).filter(onlyUnique);
     const activatedEntries = [];
 
-    // Activate entries found in the query results
     for (const entry of entries) {
         const hash = getStringHash(entry.content);
-
-        if (activatedHashes.includes(hash)) {
-            activatedEntries.push(entry);
-        }
+        if (activatedHashes.includes(hash)) activatedEntries.push(entry);
     }
 
     if (activatedEntries.length === 0) {
@@ -1804,162 +1341,174 @@ async function activateWorldInfo(chat) {
     await eventSource.emit(event_types.WORLDINFO_FORCE_ACTIVATE, activatedEntries);
 }
 
+// ---------------------------------------------------------------------------
+// Profile picker UI — embedding & rerank.
+// ---------------------------------------------------------------------------
+
+function refreshEmbeddingProfileSelect() {
+    const sel = /** @type {HTMLSelectElement} */ (document.getElementById('vectors_embedding_profile'));
+    if (!sel) return;
+    renderProfileSelect(sel, 'embed', settings.embeddingProfileId || '');
+    updateProfileButtonStates();
+}
+
+function refreshRerankProfileSelect() {
+    const sel = /** @type {HTMLSelectElement} */ (document.getElementById('vectors_rerank_profile'));
+    if (!sel) return;
+    renderProfileSelect(sel, 'rerank', settings.rerankProfileId || '');
+    updateProfileButtonStates();
+}
+
+function updateProfileButtonStates() {
+    const hasEmbed = !!settings.embeddingProfileId;
+    document.getElementById('vectors_embedding_profile_edit')?.classList.toggle('disabled', !hasEmbed);
+    document.getElementById('vectors_embedding_profile_delete')?.classList.toggle('disabled', !hasEmbed);
+
+    const hasRerank = !!settings.rerankProfileId;
+    document.getElementById('vectors_rerank_profile_edit')?.classList.toggle('disabled', !hasRerank);
+    document.getElementById('vectors_rerank_profile_delete')?.classList.toggle('disabled', !hasRerank);
+
+    $('#vectors_rerank_settings').toggle(!!settings.rerank_enabled);
+}
+
+function persistSettings() {
+    Object.assign(extension_settings.vectors, settings);
+    saveSettingsDebounced();
+}
+
+function toggleSectionVisibility() {
+    $('#vectors_files_settings').toggle(!!settings.enabled_files);
+    $('#vectors_chats_settings').toggle(!!settings.enabled_chats);
+    $('#vectors_world_info_settings').toggle(!!settings.enabled_world_info);
+}
+
 export async function init() {
     if (!extension_settings.vectors) {
-        extension_settings.vectors = settings;
+        extension_settings.vectors = structuredClone(settings);
     }
 
-    // Migrate from old settings
-    if (settings.enabled) {
-        settings.enabled_chats = true;
+    // Legacy field migration: 'enabled' → 'enabled_chats'.
+    if (extension_settings.vectors.enabled) {
+        extension_settings.vectors.enabled_chats = true;
     }
+
+    // Move legacy single-source/model state into a shared embedding profile.
+    migrateLegacySettings();
 
     Object.assign(settings, extension_settings.vectors);
 
-    // Migrate removed/renamed sources to currently supported ones.
-    settings.source = settings.source !== 'local' ? settings.source : 'transformers';
-    settings.source = settings.source !== 'extras' ? settings.source : 'transformers';
-    settings.summary_source = settings.summary_source !== 'extras' ? settings.summary_source : 'main';
+    // Coerce removed/renamed sources, just in case the migration runs again.
+    if (settings.summary_source === 'extras') settings.summary_source = 'main';
+
     const template = await renderExtensionTemplateAsync(MODULE_NAME, 'settings');
     $('#vectors_container').append(template);
+
+    // -- Embedding profile picker --
+    refreshEmbeddingProfileSelect();
+    $('#vectors_embedding_profile').on('change', () => {
+        settings.embeddingProfileId = String($('#vectors_embedding_profile').val() || '');
+        persistSettings();
+        updateProfileButtonStates();
+    });
+    $('#vectors_embedding_profile_create').on('click', async () => {
+        const profile = await createEmbeddingProfile();
+        if (!profile) return;
+        settings.embeddingProfileId = profile.id;
+        persistSettings();
+        refreshEmbeddingProfileSelect();
+    });
+    $('#vectors_embedding_profile_edit').on('click', async () => {
+        if (!settings.embeddingProfileId) return;
+        await editEmbeddingProfile(settings.embeddingProfileId);
+        refreshEmbeddingProfileSelect();
+    });
+    $('#vectors_embedding_profile_delete').on('click', async () => {
+        if (!settings.embeddingProfileId) return;
+        const ok = await deleteEmbeddingProfile(settings.embeddingProfileId);
+        if (ok) {
+            settings.embeddingProfileId = '';
+            persistSettings();
+            refreshEmbeddingProfileSelect();
+        }
+    });
+
+    // -- Rerank profile picker --
+    refreshRerankProfileSelect();
+    $('#vectors_rerank_profile').on('change', () => {
+        settings.rerankProfileId = String($('#vectors_rerank_profile').val() || '');
+        persistSettings();
+        updateProfileButtonStates();
+    });
+    $('#vectors_rerank_profile_create').on('click', async () => {
+        const profile = await createRerankProfile();
+        if (!profile) return;
+        settings.rerankProfileId = profile.id;
+        persistSettings();
+        refreshRerankProfileSelect();
+    });
+    $('#vectors_rerank_profile_edit').on('click', async () => {
+        if (!settings.rerankProfileId) return;
+        await editRerankProfile(settings.rerankProfileId);
+        refreshRerankProfileSelect();
+    });
+    $('#vectors_rerank_profile_delete').on('click', async () => {
+        if (!settings.rerankProfileId) return;
+        const ok = await deleteRerankProfile(settings.rerankProfileId);
+        if (ok) {
+            settings.rerankProfileId = '';
+            persistSettings();
+            refreshRerankProfileSelect();
+        }
+    });
+
+    // Refresh dropdowns when profiles are CRUD'd from any source.
+    [event_types.CONNECTION_PROFILE_CREATED, event_types.CONNECTION_PROFILE_UPDATED, event_types.CONNECTION_PROFILE_DELETED].forEach(evt => {
+        eventSource.on(evt, () => {
+            refreshEmbeddingProfileSelect();
+            refreshRerankProfileSelect();
+        });
+    });
+
+    // -- Business policy controls --
     $('#vectors_enabled_chats').prop('checked', settings.enabled_chats).on('input', () => {
         settings.enabled_chats = $('#vectors_enabled_chats').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-        toggleSettings();
+        persistSettings();
+        toggleSectionVisibility();
     });
     $('#vectors_keep_hidden').prop('checked', settings.keep_hidden).on('input', () => {
         settings.keep_hidden = !!$('#vectors_keep_hidden').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
     $('#vectors_enabled_files').prop('checked', settings.enabled_files).on('input', () => {
         settings.enabled_files = $('#vectors_enabled_files').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-        toggleSettings();
+        persistSettings();
+        toggleSectionVisibility();
     });
-    $('#vectors_source').val(settings.source).on('change', () => {
-        settings.source = String($('#vectors_source').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-        toggleSettings();
-    });
-    $('#vector_altEndpointUrl_enabled').prop('checked', settings.use_alt_endpoint).on('input', () => {
-        settings.use_alt_endpoint = $('#vector_altEndpointUrl_enabled').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-    $('#vector_altEndpoint_address').val(settings.alt_endpoint_url).on('change', () => {
-        settings.alt_endpoint_url = String($('#vector_altEndpoint_address').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-    $('#vectors_togetherai_model').val(settings.togetherai_model).on('change', () => {
-        settings.togetherai_model = String($('#vectors_togetherai_model').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-    $('#vectors_openai_model').val(settings.openai_model).on('change', () => {
-        settings.openai_model = String($('#vectors_openai_model').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-    $('#vectors_electronhub_model').val(settings.electronhub_model).on('change', () => {
-        settings.electronhub_model = String($('#vectors_electronhub_model').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-    $('#vectors_chutes_model').val(settings.chutes_model).on('change', () => {
-        settings.chutes_model = String($('#vectors_chutes_model').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-    $('#vectors_nanogpt_model').val(settings.nanogpt_model).on('change', () => {
-        settings.nanogpt_model = String($('#vectors_nanogpt_model').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-    $('#vectors_siliconflow_model').val(settings.siliconflow_model).on('change', () => {
-        settings.siliconflow_model = String($('#vectors_siliconflow_model').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-    $('#vectors_workers_ai_model').val(settings.workers_ai_model).on('change', () => {
-        settings.workers_ai_model = String($('#vectors_workers_ai_model').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-    $('#vectors_openrouter_model').val(settings.openrouter_model).on('change', () => {
-        settings.openrouter_model = String($('#vectors_openrouter_model').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-    $('#vectors_cohere_model').val(settings.cohere_model).on('change', () => {
-        settings.cohere_model = String($('#vectors_cohere_model').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-    $('#vectors_jina_model').val(settings.jina_model).on('change', () => {
-        settings.jina_model = String($('#vectors_jina_model').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-    $('#vectors_jina_late_chunking').prop('checked', settings.jina_late_chunking).on('change', () => {
-        settings.jina_late_chunking = $('#vectors_jina_late_chunking').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-    $('#vectors_jina_dimensions').val(settings.jina_dimensions || '').on('input', () => {
-        settings.jina_dimensions = Number($('#vectors_jina_dimensions').val()) || 0;
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-    $('#vectors_ollama_model').val(settings.ollama_model).on('input', () => {
-        settings.ollama_model = String($('#vectors_ollama_model').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-    $('#vectors_vllm_model').val(settings.vllm_model).on('input', () => {
-        settings.vllm_model = String($('#vectors_vllm_model').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-    $('#vectors_ollama_keep').prop('checked', settings.ollama_keep).on('input', () => {
-        settings.ollama_keep = $('#vectors_ollama_keep').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
+
     $('#vectors_template').val(settings.template).on('input', () => {
         settings.template = String($('#vectors_template').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
     $('#vectors_depth').val(settings.depth).on('input', () => {
         settings.depth = Number($('#vectors_depth').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
     $('#vectors_protect').val(settings.protect).on('input', () => {
         settings.protect = Number($('#vectors_protect').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
     $('#vectors_insert').val(settings.insert).on('input', () => {
         settings.insert = Number($('#vectors_insert').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
     $('#vectors_query').val(settings.query).on('input', () => {
         settings.query = Number($('#vectors_query').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
     $(`input[name="vectors_position"][value="${settings.position}"]`).prop('checked', true);
     $('input[name="vectors_position"]').on('change', () => {
         settings.position = Number($('input[name="vectors_position"]:checked').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
     $('#vectors_vectorize_all').on('click', onVectorizeAllClick);
     $('#vectors_purge').on('click', onPurgeClick);
@@ -1969,269 +1518,125 @@ export async function init() {
 
     $('#vectors_size_threshold').val(settings.size_threshold).on('input', () => {
         settings.size_threshold = Number($('#vectors_size_threshold').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_chunk_size').val(settings.chunk_size).on('input', () => {
         settings.chunk_size = Number($('#vectors_chunk_size').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_chunk_count').val(settings.chunk_count).on('input', () => {
         settings.chunk_count = Number($('#vectors_chunk_count').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_include_wi').prop('checked', settings.include_wi).on('input', () => {
         settings.include_wi = !!$('#vectors_include_wi').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_summarize').prop('checked', settings.summarize).on('input', () => {
         settings.summarize = !!$('#vectors_summarize').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_summarize_user').prop('checked', settings.summarize_sent).on('input', () => {
         settings.summarize_sent = !!$('#vectors_summarize_user').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_summary_source').val(settings.summary_source).on('change', () => {
         settings.summary_source = String($('#vectors_summary_source').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_summary_prompt').val(settings.summary_prompt).on('input', () => {
         settings.summary_prompt = String($('#vectors_summary_prompt').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_summary_retries').val(settings.summary_retries).on('input', () => {
         const parsed = Number($('#vectors_summary_retries').val());
         settings.summary_retries = Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : 1;
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_summary_threshold').val(settings.summary_threshold).on('input', () => {
         const parsed = Number($('#vectors_summary_threshold').val());
         settings.summary_threshold = Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_message_chunk_size').val(settings.message_chunk_size).on('input', () => {
         settings.message_chunk_size = Number($('#vectors_message_chunk_size').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_size_threshold_db').val(settings.size_threshold_db).on('input', () => {
         settings.size_threshold_db = Number($('#vectors_size_threshold_db').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_chunk_size_db').val(settings.chunk_size_db).on('input', () => {
         settings.chunk_size_db = Number($('#vectors_chunk_size_db').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_chunk_count_db').val(settings.chunk_count_db).on('input', () => {
         settings.chunk_count_db = Number($('#vectors_chunk_count_db').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_overlap_percent').val(settings.overlap_percent).on('input', () => {
         settings.overlap_percent = Number($('#vectors_overlap_percent').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_overlap_percent_db').val(settings.overlap_percent_db).on('input', () => {
         settings.overlap_percent_db = Number($('#vectors_overlap_percent_db').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_file_template_db').val(settings.file_template_db).on('input', () => {
         settings.file_template_db = String($('#vectors_file_template_db').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $(`input[name="vectors_file_position_db"][value="${settings.file_position_db}"]`).prop('checked', true);
     $('input[name="vectors_file_position_db"]').on('change', () => {
         settings.file_position_db = Number($('input[name="vectors_file_position_db"]:checked').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_file_depth_db').val(settings.file_depth_db).on('input', () => {
         settings.file_depth_db = Number($('#vectors_file_depth_db').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_file_depth_role_db').val(settings.file_depth_role_db).on('input', () => {
         settings.file_depth_role_db = Number($('#vectors_file_depth_role_db').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_translate_files').prop('checked', settings.translate_files).on('input', () => {
         settings.translate_files = !!$('#vectors_translate_files').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_enabled_world_info').prop('checked', settings.enabled_world_info).on('input', () => {
         settings.enabled_world_info = !!$('#vectors_enabled_world_info').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-        toggleSettings();
+        persistSettings();
+        toggleSectionVisibility();
     });
-
     $('#vectors_enabled_for_all').prop('checked', settings.enabled_for_all).on('input', () => {
         settings.enabled_for_all = !!$('#vectors_enabled_for_all').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_max_entries').val(settings.max_entries).on('input', () => {
         settings.max_entries = Number($('#vectors_max_entries').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_score_threshold').val(settings.score_threshold).on('input', () => {
         settings.score_threshold = Number($('#vectors_score_threshold').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_force_chunk_delimiter').val(settings.force_chunk_delimiter).on('input', () => {
         settings.force_chunk_delimiter = String($('#vectors_force_chunk_delimiter').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_only_custom_boundary').prop('checked', settings.only_custom_boundary).on('input', () => {
         settings.only_custom_boundary = !!$('#vectors_only_custom_boundary').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
+        persistSettings();
     });
-
     $('#vectors_rerank_enabled').prop('checked', settings.rerank_enabled).on('input', () => {
         settings.rerank_enabled = !!$('#vectors_rerank_enabled').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
-        toggleRerankSettings();
-        saveSettingsDebounced();
+        persistSettings();
+        updateProfileButtonStates();
     });
 
-    $('#vectors_rerank_source').val(settings.rerank_source).on('change', () => {
-        settings.rerank_source = String($('#vectors_rerank_source').val());
-        updateRerankModelFromSource();
-        toggleRerankSourceSettings();
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
+    toggleSectionVisibility();
+    updateProfileButtonStates();
 
-    $('#vectors_rerank_cohere_model').val(settings.rerank_model).on('change', () => {
-        settings.rerank_model = String($('#vectors_rerank_cohere_model').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-
-    $('#vectors_rerank_jina_model').val(settings.rerank_model).on('change', () => {
-        settings.rerank_model = String($('#vectors_rerank_jina_model').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-
-    $('#vectors_rerank_custom_model').val(settings.rerank_model).on('input', () => {
-        settings.rerank_model = String($('#vectors_rerank_custom_model').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-
-    $('#vectors_rerank_api_url').val(settings.rerank_api_url).on('input', () => {
-        settings.rerank_api_url = String($('#vectors_rerank_api_url').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-
-    $('#vectors_rerank_api_key').val(settings.rerank_api_key).on('input', () => {
-        settings.rerank_api_key = String($('#vectors_rerank_api_key').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-
-    toggleRerankSettings();
-    toggleRerankSourceSettings();
-
-    $('#vectors_ollama_pull').on('click', (e) => {
-        const presetModel = extension_settings.vectors.ollama_model || '';
-        e.preventDefault();
-        $('#ollama_download_model').trigger('click');
-        $('#dialogue_popup_input').val(presetModel);
-    });
-
-    $('#vectors_webllm_install').on('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-
-        if (Object.hasOwn(Luker, 'llm')) {
-            toastr.info('WebLLM is already installed');
-            return;
-        }
-
-        openThirdPartyExtensionMenu('https://github.com/SillyTavern/Extension-WebLLM');
-    });
-
-    $('#vectors_webllm_model').on('input', () => {
-        settings.webllm_model = String($('#vectors_webllm_model').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-
-    $('#vectors_webllm_load').on('click', async () => {
-        if (!settings.webllm_model) return;
-        await webllmProvider.loadModel(settings.webllm_model);
-        toastr.success('WebLLM model loaded');
-    });
-
-    $('#vectors_google_model').val(settings.google_model).on('input', () => {
-        settings.google_model = String($('#vectors_google_model').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-
-    const updateSecretButtonStatus = () => {
-        $('#api_key_nomicai').toggleClass('success', !!secret_state[SECRET_KEYS.NOMICAI]);
-        $('#api_key_jina').toggleClass('success', !!secret_state[SECRET_KEYS.JINA]);
-    };
-
-    updateSecretButtonStatus();
-    [event_types.SECRET_WRITTEN, event_types.SECRET_DELETED, event_types.SECRET_ROTATED].forEach(event => {
-        eventSource.on(event, (/** @type {string} */ key) => {
-            if (key !== SECRET_KEYS.NOMICAI && key !== SECRET_KEYS.JINA) return;
-            updateSecretButtonStatus();
-        });
-    });
-
-    toggleSettings();
     eventSource.on(event_types.MESSAGE_DELETED, onChatEvent);
     eventSource.on(event_types.MESSAGE_EDITED, onChatEvent);
     eventSource.on(event_types.MESSAGE_SENT, onChatEvent);
@@ -2240,12 +1645,8 @@ export async function init() {
     eventSource.on(event_types.CHAT_DELETED, purgeVectorIndex);
     eventSource.on(event_types.GROUP_CHAT_DELETED, purgeVectorIndex);
     eventSource.on(event_types.FILE_ATTACHMENT_DELETED, purgeFileVectorIndex);
-    eventSource.on(event_types.EXTENSION_SETTINGS_LOADED, async (manifest) => {
-        if (settings.source === 'webllm' && manifest?.display_name === 'WebLLM') {
-            await loadWebLlmModels();
-        }
-    });
 
+    // ---- Slash commands -----
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'db-ingest',
         callback: async () => {
@@ -2260,11 +1661,9 @@ export async function init() {
         name: 'db-purge',
         callback: async () => {
             const dataBank = getDataBankAttachments();
-
             for (const file of dataBank) {
                 await purgeFileVectorIndex(file.url);
             }
-
             return '';
         },
         aliases: ['databank-purge', 'data-bank-purge'],
@@ -2283,14 +1682,12 @@ export async function init() {
             const collectionIds = await ingestDataBankAttachments(String(source));
             const queryResults = await queryMultipleCollections(collectionIds, String(query), count, threshold);
 
-            // Get URLs
             const urls = Object
                 .keys(queryResults)
                 .map(x => attachments.find(y => getFileCollectionId(y.url) === x))
                 .filter(x => x)
                 .map(x => x.url);
 
-            // Gets the actual text content of chunks
             const getChunksText = () => {
                 let textResult = '';
                 for (const collectionId in queryResults) {
@@ -2342,20 +1739,13 @@ export async function init() {
         ],
         callback: async (_args, value) => {
             const raw = String(value ?? '').trim();
-            if (!raw) {
-                return String(settings.score_threshold);
-            }
-
+            if (!raw) return String(settings.score_threshold);
             const parsed = Number(raw);
             if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
                 toastr.warning('Score threshold must be a number between 0 and 1.');
                 return '';
             }
-
-            $('#vectors_score_threshold')
-                .val(parsed)
-                .trigger('input');
-
+            $('#vectors_score_threshold').val(parsed).trigger('input');
             return String(settings.score_threshold);
         },
     }));
@@ -2372,20 +1762,13 @@ export async function init() {
         ],
         callback: async (_args, value) => {
             const raw = String(value ?? '').trim();
-            if (!raw) {
-                return String(settings.query);
-            }
-
+            if (!raw) return String(settings.query);
             const parsed = Number(raw);
             if (!Number.isFinite(parsed) || parsed <= 0) {
                 toastr.warning('Query messages must be a number greater than 0.');
                 return '';
             }
-
-            $('#vectors_query')
-                .val(parsed)
-                .trigger('input');
-
+            $('#vectors_query').val(parsed).trigger('input');
             return String(settings.query);
         },
     }));
@@ -2402,20 +1785,13 @@ export async function init() {
         ],
         callback: async (_args, value) => {
             const raw = String(value ?? '').trim();
-            if (!raw) {
-                return String(settings.max_entries);
-            }
-
+            if (!raw) return String(settings.max_entries);
             const parsed = Number(raw);
             if (!Number.isFinite(parsed) || parsed <= 0) {
                 toastr.warning('Max entries must be a number greater than 0.');
                 return '';
             }
-
-            $('#vectors_max_entries')
-                .val(parsed)
-                .trigger('input');
-
+            $('#vectors_max_entries').val(parsed).trigger('input');
             return String(settings.max_entries);
         },
     }));
@@ -2433,15 +1809,9 @@ export async function init() {
         ],
         callback: async (_args, value) => {
             const raw = String(value ?? '').trim();
-            if (!raw) {
-                return String(settings.enabled_chats);
-            }
-
+            if (!raw) return String(settings.enabled_chats);
             const parsed = isTrueBoolean(raw);
-            $('#vectors_enabled_chats')
-                .prop('checked', parsed)
-                .trigger('input');
-
+            $('#vectors_enabled_chats').prop('checked', parsed).trigger('input');
             return String(settings.enabled_chats);
         },
     }));
@@ -2459,15 +1829,9 @@ export async function init() {
         ],
         callback: async (_args, value) => {
             const raw = String(value ?? '').trim();
-            if (!raw) {
-                return String(settings.enabled_files);
-            }
-
+            if (!raw) return String(settings.enabled_files);
             const parsed = isTrueBoolean(raw);
-            $('#vectors_enabled_files')
-                .prop('checked', parsed)
-                .trigger('input');
-
+            $('#vectors_enabled_files').prop('checked', parsed).trigger('input');
             return String(settings.enabled_files);
         },
     }));
@@ -2485,23 +1849,15 @@ export async function init() {
         ],
         callback: async (_args, value) => {
             const raw = String(value ?? '').trim();
-            if (!raw) {
-                return String(settings.enabled_world_info);
-            }
-
+            if (!raw) return String(settings.enabled_world_info);
             const parsed = isTrueBoolean(raw);
-            $('#vectors_enabled_world_info')
-                .prop('checked', parsed)
-                .trigger('input');
-
+            $('#vectors_enabled_world_info').prop('checked', parsed).trigger('input');
             return String(settings.enabled_world_info);
         },
     }));
 
     registerDebugFunction('purge-everything', 'Purge all vector indices', 'Obliterate all stored vectors for all sources. No mercy.', async () => {
-        if (!confirm('Are you sure?')) {
-            return;
-        }
+        if (!confirm('Are you sure?')) return;
         await purgeAllVectorIndexes();
     });
 }

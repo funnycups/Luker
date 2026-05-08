@@ -6,250 +6,16 @@
         </div>
         <div class="inline-drawer-content">
             <div class="flex-container flexFlowColumn">
-                <label for="vectors_source" data-i18n="Vectorization Source">
-                    Vectorization Source
-                </label>
-                <select id="vectors_source" class="text_pole">
-                    <option value="chutes">Chutes</option>
-                    <option value="workers_ai">Cloudflare Workers AI</option>
-                    <option value="cohere">Cohere</option>
-                    <option value="electronhub">Electron Hub</option>
-                    <option value="palm">Google AI Studio</option>
-                    <option value="vertexai">Google Vertex AI</option>
-                    <option value="jina">Jina AI</option>
-                    <option value="koboldcpp">KoboldCpp</option>
-                    <option value="llamacpp">llama.cpp</option>
-                    <option value="transformers" data-i18n="Local (Transformers)">Local (Transformers)</option>
-                    <option value="mistral">MistralAI</option>
-                    <option value="nanogpt">NanoGPT</option>
-                    <option value="nomicai">NomicAI</option>
-                    <option value="ollama">Ollama</option>
-                    <option value="openai">OpenAI</option>
-                    <option value="openrouter">OpenRouter</option>
-                    <option value="siliconflow">SiliconFlow</option>
-                    <option value="togetherai">TogetherAI</option>
-                    <option value="vllm">vLLM</option>
-                    <option value="webllm" data-i18n="WebLLM Extension">WebLLM Extension</option>
-                </select>
-            </div>
-            <div class="flex-container flexFlowColumn" id="chutes_vectorsModel">
-                <label for="vectors_chutes_model" data-i18n="Vectorization Model">
-                    Vectorization Model
-                </label>
-                <select id="vectors_chutes_model" class="text_pole"></select>
-                <i data-i18n="Hint: Set your Chutes API key in API Connections.">
-                    Hint: Set your Chutes API key in API Connections.
-                </i>
-            </div>
-            <div class="flex-container flexFlowColumn" id="nanogpt_vectorsModel">
-                <label for="vectors_nanogpt_model" data-i18n="Vectorization Model">
-                    Vectorization Model
-                </label>
-                <select id="vectors_nanogpt_model" class="text_pole"></select>
-                <i data-i18n="Hint: Set your NanoGPT API key in API Connections.">
-                    Hint: Set your NanoGPT API key in API Connections.
-                </i>
-            </div>
-            <div class="flex-container flexFlowColumn" id="electronhub_vectorsModel">
-                <label for="vectors_electronhub_model" data-i18n="Vectorization Model">
-                    Vectorization Model
-                </label>
-                <select id="vectors_electronhub_model" class="text_pole"></select>
-                <i data-i18n="Hint: Set your Electron Hub API key in API Connections.">
-                    Hint: Set your Electron Hub API key in API Connections.
-                </i>
-            </div>
-            <div class="flex-container flexFlowColumn" id="vector_altEndpointUrl">
-                <label class="checkbox_label" for="vector_altEndpointUrl_enabled" title="Enable secondary endpoint URL usage, instead of the main one.">
-                    <input id="vector_altEndpointUrl_enabled" type="checkbox" class="checkbox">
-                    <span data-i18n="Use secondary URL">Use secondary URL</span>
-                </label>
-                <label for="vector_altEndpoint_address" data-i18n="Secondary Embedding endpoint URL">
-                    Secondary Embedding endpoint URL
-                </label>
-                <input id="vector_altEndpoint_address" class="text_pole" type="text" placeholder="e.g. http://localhost:5001" />
-            </div>
-            <div class="flex-container flexFlowColumn" id="webllm_vectorsModel">
-                <label for="vectors_webllm_model" data-i18n="Vectorization Model">
-                    Vectorization Model
-                </label>
-                <div class="flex-container">
-                    <select id="vectors_webllm_model" class="text_pole flex1">
-                    </select>
-                    <div id="vectors_webllm_load" class="menu_button menu_button_icon" title="Verify and load the selected model.">
-                        <i class="fa-solid fa-check-to-slot"></i>
-                    </div>
+                <label data-i18n="Embedding Profile">Embedding Profile</label>
+                <div class="flex-container alignItemsCenter">
+                    <select id="vectors_embedding_profile" class="text_pole flex1"></select>
+                    <i id="vectors_embedding_profile_create" class="menu_button fa-solid fa-file-circle-plus" title="Create a new embedding profile" data-i18n="[title]Create a new embedding profile"></i>
+                    <i id="vectors_embedding_profile_edit" class="menu_button fa-solid fa-pencil" title="Edit embedding profile" data-i18n="[title]Edit embedding profile"></i>
+                    <i id="vectors_embedding_profile_delete" class="menu_button fa-solid fa-trash-can" title="Delete embedding profile" data-i18n="[title]Delete embedding profile"></i>
                 </div>
-                <div>
-                    Requires the WebLLM extension to be installed. Click <a href="#" id="vectors_webllm_install">here</a> to install.
-                </div>
-            </div>
-            <div class="flex-container flexFlowColumn" id="ollama_vectorsModel">
-                <label for="vectors_ollama_model" data-i18n="Vectorization Model">
-                    Vectorization Model
-                </label>
-                <input id="vectors_ollama_model" class="text_pole" type="text" placeholder="Model tag, e.g. llama3" />
-                <label for="vectors_ollama_keep" class="checkbox_label" title="When checked, the model will not be unloaded after use.">
-                    <input id="vectors_ollama_keep" type="checkbox" />
-                    <span data-i18n="Keep model in memory">Keep model in memory</span>
-                </label>
-                <div>
-                    The model must be downloaded first! Do it with the <code>ollama pull</code> command or <a href="#" id="vectors_ollama_pull">click here</a>.
-                </div>
-                <i data-i18n="Hint: Set the URL in the API connection settings.">
-                    Hint: Set the URL in the API connection settings.
-                </i>
-            </div>
-            <div class="flex-container flexFlowColumn" id="koboldcpp_vectorsModel">
-                <span>
-                    Set the KoboldCpp URL in the Text Completion API connection settings.
-                </span>
-                <span>
-                    Must use version 1.87 or higher and have an embedding model loaded.
-                </span>
-            </div>
-            <div class="flex-container flexFlowColumn" id="llamacpp_vectorsModel">
-                <span data-i18n="The server MUST be started with the --embedding flag to use this feature!">
-                    The server MUST be started with the <code>--embedding</code> flag to use this feature!
-                </span>
-                <i data-i18n="Hint: Set the URL in the API connection settings.">
-                    Hint: Set the URL in the API connection settings.
-                </i>
-            </div>
-            <div class="flex-container flexFlowColumn" id="openai_vectorsModel">
-                <label for="vectors_openai_model" data-i18n="Vectorization Model">
-                    Vectorization Model
-                </label>
-                <select id="vectors_openai_model" class="text_pole">
-                    <option value="text-embedding-ada-002">text-embedding-ada-002</option>
-                    <option value="text-embedding-3-small">text-embedding-3-small</option>
-                    <option value="text-embedding-3-large">text-embedding-3-large</option>
-                </select>
-            </div>
-            <div class="flex-container flexFlowColumn" id="cohere_vectorsModel">
-                <label for="vectors_cohere_model" data-i18n="Vectorization Model">
-                    Vectorization Model
-                </label>
-                <select id="vectors_cohere_model" class="text_pole">
-                    <option value="embed-v4.0">embed-v4.0</option>
-                    <option value="embed-english-v3.0">embed-english-v3.0</option>
-                    <option value="embed-multilingual-v3.0">embed-multilingual-v3.0</option>
-                    <option value="embed-english-light-v3.0">embed-english-light-v3.0</option>
-                    <option value="embed-multilingual-light-v3.0">embed-multilingual-light-v3.0</option>
-                    <option value="embed-english-v2.0">embed-english-v2.0</option>
-                    <option value="embed-english-light-v2.0">embed-english-light-v2.0</option>
-                    <option value="embed-multilingual-v2.0">embed-multilingual-v2.0</option>
-                </select>
-            </div>
-            <div class="flex-container flexFlowColumn" id="jina_vectorsModel">
-                <label for="vectors_jina_model" data-i18n="Vectorization Model">
-                    Vectorization Model
-                </label>
-                <select id="vectors_jina_model" class="text_pole">
-                    <option value="jina-embeddings-v3">jina-embeddings-v3 (Multilingual, 8K)</option>
-                    <option value="jina-embeddings-v4">jina-embeddings-v4 (Multimodal, 32K)</option>
-                    <option value="jina-embeddings-v5-text-small">jina-embeddings-v5-text-small (1024-dim, 32K)</option>
-                    <option value="jina-embeddings-v5-text-nano">jina-embeddings-v5-text-nano (768-dim, 8K)</option>
-                    <option value="jina-clip-v2">jina-clip-v2 (Text-Image, 89 langs)</option>
-                </select>
-                <div class="flex-container marginTopBot5">
-                    <label class="checkbox_label flex1" for="vectors_jina_late_chunking">
-                        <input type="checkbox" id="vectors_jina_late_chunking" />
-                        <span data-i18n="Late Chunking">Late Chunking</span>
-                        <i class="fa-solid fa-circle-info opacity50p" title="Preserves cross-chunk context by embedding the entire document first, then extracting chunk embeddings."></i>
-                    </label>
-                </div>
-                <div class="flex-container marginTopBot5">
-                    <div class="flex-container flex1 flexFlowColumn">
-                        <label for="vectors_jina_dimensions">
-                            <small data-i18n="Dimensions (optional)">Dimensions (optional)</small>
-                        </label>
-                        <input type="number" id="vectors_jina_dimensions" class="text_pole" min="1" max="4096" placeholder="Default" />
-                    </div>
-                </div>
-                <div class="flex-container alignItemsCenter" id="jina_apiKey">
-                    <label for="api_key_jina" class="flex1">
-                        <span data-i18n="Jina API Key">Jina API Key</span>
-                    </label>
-                    <div id="api_key_jina" class="menu_button menu_button_icon manage-api-keys" data-key="api_key_jina">
-                        <i class="fa-solid fa-key"></i>
-                        <span data-i18n="Click to set">Click to set</span>
-                    </div>
-                </div>
-            </div>
-            <div class="flex-container flexFlowColumn" id="together_vectorsModel">
-                <label for="vectors_togetherai_model" data-i18n="Vectorization Model">
-                    Vectorization Model
-                </label>
-                <select id="vectors_togetherai_model" class="text_pole">
-                    <option value="togethercomputer/m2-bert-80M-32k-retrieval">M2-BERT-Retrieval-32k</option>
-                    <option value="togethercomputer/m2-bert-80M-8k-retrieval">M2-BERT-Retrieval-8k</option>
-                    <option value="togethercomputer/m2-bert-80M-2k-retrieval">M2-BERT-Retrieval-2K</option>
-                    <option value="WhereIsAI/UAE-Large-V1">UAE-Large-V1</option>
-                    <option value="BAAI/bge-large-en-v1.5">BAAI-Bge-Large-1p5</option>
-                    <option value="BAAI/bge-base-en-v1.5">BAAI-Bge-Base-1p5</option>
-                    <option value="sentence-transformers/msmarco-bert-base-dot-v5">Sentence-BERT</option>
-                    <option value="bert-base-uncased">Bert Base Uncased</option>
-                </select>
-            </div>
-            <div class="flex-container flexFlowColumn" id="vllm_vectorsModel">
-                <label for="vectors_vllm_model" data-i18n="Vectorization Model">
-                    Vectorization Model
-                </label>
-                <input id="vectors_vllm_model" class="text_pole" type="text" placeholder="Model name, e.g. intfloat/e5-mistral-7b-instruct" />
-                <i data-i18n="Hint: Set the URL in the API connection settings.">
-                    Hint: Set the URL in the API connection settings.
-                </i>
-            </div>
-            <div class="flex-container flexFlowColumn" id="google_vectorsModel">
-                <label for="vectors_google_model" data-i18n="Vectorization Model">
-                    Vectorization Model
-                </label>
-                <select id="vectors_google_model" class="text_pole">
-                    <option value="gemini-embedding-001">gemini-embedding-001</option>
-                    <option value="gemini-embedding-2-preview">gemini-embedding-2-preview</option>
-                    <option value="gemini-embedding-exp-03-07">gemini-embedding-exp-03-07</option>
-                    <option value="text-embedding-004">text-embedding-004</option>
-                    <option value="text-embedding-005">text-embedding-005</option>
-                    <option value="embedding-001">embedding-001</option>
-                </select>
-            </div>
-            <div class="flex-container alignItemsCenter" id="nomicai_apiKey">
-                <label for="api_key_nomicai" class="flex1">
-                    <span data-i18n="NomicAI API Key">NomicAI API Key</span>
-                </label>
-                <div id="api_key_nomicai" class="menu_button menu_button_icon manage-api-keys" data-key="api_key_nomicai">
-                    <i class="fa-solid fa-key"></i>
-                    <span data-i18n="Click to set">Click to set</span>
-                </div>
-            </div>
-            <div class="flex-container flexFlowColumn" id="openrouter_vectorsModel">
-                <label for="vectors_openrouter_model" data-i18n="Vectorization Model">
-                    Vectorization Model
-                </label>
-                <select id="vectors_openrouter_model" class="text_pole"></select>
-                <i data-i18n="Hint: Set your OpenRouter API key in API Connections.">
-                    Hint: Set your OpenRouter API key in API Connections.
-                </i>
-            </div>
-            <div class="flex-container flexFlowColumn" id="siliconflow_vectorsModel">
-                <label for="vectors_siliconflow_model" data-i18n="Vectorization Model">
-                    Vectorization Model
-                </label>
-                <select id="vectors_siliconflow_model" class="text_pole"></select>
-                <i data-i18n="Hint: Set your SiliconFlow API key in API Connections.">
-                    Hint: Set your SiliconFlow API key in API Connections.
-                </i>
-            </div>
-
-            <div class="flex-container flexFlowColumn" id="workers_ai_vectorsModel">
-                <label for="vectors_workers_ai_model" data-i18n="Vectorization Model">
-                    Vectorization Model
-                </label>
-                <select id="vectors_workers_ai_model" class="text_pole"></select>
-                <i data-i18n="Hint: Set your Workers AI API key and Account ID in API Connections.">
-                    Hint: Set your Workers AI API key and Account ID in API Connections.
-                </i>
+                <small data-i18n="Profile defines the embedding provider, model, endpoint and API key. Profiles are shared across plugins (e.g. Memory Graph).">
+                    Profile defines the embedding provider, model, endpoint and API key. Profiles are shared across plugins (e.g. Memory Graph).
+                </small>
             </div>
 
             <div class="flex-container marginTopBot5">
@@ -260,7 +26,7 @@
                     <input type="number" id="vectors_query" class="text_pole" min="1" max="99" />
                 </div>
                 <div class="flex-container flex1 flexFlowColumn" title="Cut-off score for relevance. Helps to filter out irrelevant data.">
-                    <label for="vectors_query">
+                    <label for="vectors_score_threshold">
                         <small data-i18n="Score threshold">Score threshold</small>
                     </label>
                     <input type="number" id="vectors_score_threshold" class="text_pole" min="0" max="1" step="0.05" />
@@ -293,53 +59,13 @@
 
             <div id="vectors_rerank_settings" class="marginTopBot5">
                 <div class="flex-container flexFlowColumn">
-                    <label for="vectors_rerank_source" data-i18n="Rerank Source">
-                        Rerank Source
-                    </label>
-                    <select id="vectors_rerank_source" class="text_pole">
-                        <option value="cohere">Cohere</option>
-                        <option value="jina">Jina</option>
-                        <option value="custom">Custom (OpenAI-compatible)</option>
-                    </select>
-                </div>
-                <div class="flex-container flexFlowColumn" id="rerank_cohere_model">
-                    <label for="vectors_rerank_cohere_model" data-i18n="Rerank Model">
-                        Rerank Model
-                    </label>
-                    <select id="vectors_rerank_cohere_model" class="text_pole">
-                        <option value="rerank-v3.5">rerank-v3.5</option>
-                        <option value="rerank-english-v3.0">rerank-english-v3.0</option>
-                        <option value="rerank-multilingual-v3.0">rerank-multilingual-v3.0</option>
-                        <option value="rerank-english-v2.0">rerank-english-v2.0</option>
-                    </select>
-                    <small>
-                        <i data-i18n="Hint: Uses the same Cohere API key from API Connections.">Hint: Uses the same Cohere API key from API Connections.</i>
-                    </small>
-                </div>
-                <div class="flex-container flexFlowColumn" id="rerank_jina_model">
-                    <label for="vectors_rerank_jina_model" data-i18n="Rerank Model">
-                        Rerank Model
-                    </label>
-                    <select id="vectors_rerank_jina_model" class="text_pole">
-                        <option value="jina-reranker-v2-base-multilingual">jina-reranker-v2-base-multilingual</option>
-                        <option value="jina-reranker-v1-base-en">jina-reranker-v1-base-en</option>
-                        <option value="jina-reranker-v1-turbo-en">jina-reranker-v1-turbo-en</option>
-                        <option value="jina-reranker-v1-tiny-en">jina-reranker-v1-tiny-en</option>
-                    </select>
-                </div>
-                <div class="flex-container flexFlowColumn" id="rerank_custom_settings">
-                    <label for="vectors_rerank_custom_model">
-                        <small data-i18n="Rerank Model">Rerank Model</small>
-                    </label>
-                    <input id="vectors_rerank_custom_model" class="text_pole" type="text" placeholder="e.g. BAAI/bge-reranker-v2-m3" />
-                    <label for="vectors_rerank_api_url">
-                        <small data-i18n="Rerank API URL">Rerank API URL</small>
-                    </label>
-                    <input id="vectors_rerank_api_url" class="text_pole" type="text" placeholder="e.g. http://localhost:11434/v1" />
-                    <label for="vectors_rerank_api_key">
-                        <small data-i18n="Rerank API Key">Rerank API Key</small>
-                    </label>
-                    <input id="vectors_rerank_api_key" class="text_pole" type="password" placeholder="(Optional)" />
+                    <label data-i18n="Rerank Profile">Rerank Profile</label>
+                    <div class="flex-container alignItemsCenter">
+                        <select id="vectors_rerank_profile" class="text_pole flex1"></select>
+                        <i id="vectors_rerank_profile_create" class="menu_button fa-solid fa-file-circle-plus" title="Create a new rerank profile" data-i18n="[title]Create a new rerank profile"></i>
+                        <i id="vectors_rerank_profile_edit" class="menu_button fa-solid fa-pencil" title="Edit rerank profile" data-i18n="[title]Edit rerank profile"></i>
+                        <i id="vectors_rerank_profile_delete" class="menu_button fa-solid fa-trash-can" title="Delete rerank profile" data-i18n="[title]Delete rerank profile"></i>
+                    </div>
                 </div>
             </div>
 
