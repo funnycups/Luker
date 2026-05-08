@@ -16,6 +16,8 @@ import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInf
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { getContext } from '../../../st-context.js';
 import { extension_settings } from '../../../extensions.js';
+import { getScriptsByType, saveScriptsByType, SCRIPT_TYPES } from '../../regex/engine.js';
+import { uuidv4 } from '../../../utils.js';
 import {
  getCharacterOverrideByAvatar as orchGetCharacterOverrideByAvatar,
  getCharacterIndexByAvatar as orchGetCharacterIndexByAvatar,
@@ -54,6 +56,10 @@ const TOOL_NAMES = Object.freeze({
  WORLDINFO_DELETE_ENTRY: 'worldinfo_delete_entry',
  WORLDINFO_GET_CHAT_BOOKS: 'worldinfo_get_chat_books',
  WORLDINFO_SET_CHAT_BOOKS: 'worldinfo_set_chat_books',
+ REGEX_LIST_SCRIPTS: 'regex_list_scripts',
+ REGEX_CREATE_SCRIPT: 'regex_create_script',
+ REGEX_UPDATE_SCRIPT: 'regex_update_script',
+ REGEX_DELETE_SCRIPT: 'regex_delete_script',
  ORCHESTRATOR_GET_OVERRIDE: 'character_get_orchestrator',
  ORCHESTRATOR_SET_OVERRIDE: 'character_update_orchestrator',
  ORCHESTRATOR_CLEAR_OVERRIDE: 'character_clear_orchestrator',
@@ -288,6 +294,82 @@ function buildTools() {
  names: { type: 'array', items: { type: 'string' }, description: 'Full replacement list of world book names. Empty array = clear.' },
  },
  required: ['names'],
+ additionalProperties: false,
+ },
+ },
+ },
+ // ==================== Regex Scripts ====================
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.REGEX_LIST_SCRIPTS,
+ description: 'List regex scripts at the requested scope. scope=\'character\' reads character.data.extensions.regex_scripts (card-level — travels with the character file). scope=\'global\' reads extension_settings.regex (user-level — active for every chat). scope=\'all\' (default) returns both as { character: [...], global: [...] }. Each script has id, scriptName, findRegex, replaceString, placement (number[]), trimStrings, plus boolean gates disabled/markdownOnly/promptOnly/pluginOnly/runOnEdit, and substituteRegex/minDepth/maxDepth.',
+ parameters: {
+ type: 'object',
+ properties: {
+ scope: { type: 'string', enum: ['character', 'global', 'all'], description: 'Which storage to read. Defaults to \'all\'.' },
+ },
+ additionalProperties: false,
+ },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.REGEX_CREATE_SCRIPT,
+ description: 'Create a new regex script. scope=\'character\' writes to character.data.extensions.regex_scripts (card-level, travels with the card); scope=\'global\' writes to extension_settings.regex (user-level, every chat). The id is auto-generated; any caller-supplied id is ignored. placement controls where the regex fires — the script does NOT run until at least one placement is set.',
+ parameters: {
+ type: 'object',
+ properties: {
+ scope: { type: 'string', enum: ['character', 'global'], description: 'Storage target. \'character\'=card-level (extensions.regex_scripts), \'global\'=user-level (extension_settings.regex).' },
+ scriptName: { type: 'string', description: 'Display name shown in the regex editor.' },
+ findRegex: { type: 'string', description: 'JavaScript regex literal as a string, with delimiters and flags. Example: "/<thinking>[\\\\s\\\\S]*?<\\\\/thinking>/gi". Use the g flag to replace all matches.' },
+ replaceString: { type: 'string', description: 'Replacement template. Supports $0 (whole match), $1/$2 (numbered groups), $<name> (named groups), and {{match}} (alias for $0). Macros like {{user}}, {{char}}, {{getvar::x}} are evaluated on the result.' },
+ trimStrings: { type: 'array', items: { type: 'string' }, description: 'Strings to remove from each captured group before substitution. Useful for stripping markers like "Thought: " from the kept text.' },
+ placement: { type: 'array', items: { type: 'number' }, description: 'Where this script applies (multi-select). 1=USER_INPUT (the user message after they hit send), 2=AI_OUTPUT (every assistant message), 3=SLASH_COMMAND (text returned by /commands), 5=WORLD_INFO (entry content right before injection), 6=REASONING (reasoning blocks). Empty array = the script is stored but inactive.' },
+ disabled: { type: 'boolean', description: 'Disabled scripts are skipped. Default false.' },
+ markdownOnly: { type: 'boolean', description: 'Apply only when rendering text to the chat UI (display-time). Use this to hide/clean things visually WITHOUT changing the stored message or what the AI sees on next prompt assembly. Default false.' },
+ promptOnly: { type: 'boolean', description: 'Apply only when assembling the prompt sent to the AI. Use this to clean up or strip noise BEFORE the AI sees previous messages, without altering the stored chat or what the user sees in the UI. Default false.' },
+ pluginOnly: { type: 'boolean', description: 'Apply only to plugin-built prompt fragments (e.g. memory-graph injections, custom prompt builders). Most authoring use cases leave this false.' },
+ runOnEdit: { type: 'boolean', description: 'Re-apply when the user edits a stored message. Off (default) means manual edits keep the original text. Turn on for cleanup-style scripts that should normalize edits too.' },
+ substituteRegex: { type: 'number', description: 'Macro substitution mode for findRegex itself. 0=NONE (regex used as-is), 1=RAW (substitute {{user}} etc. into the regex text raw), 2=ESCAPED (substitute then regex-escape special chars so the result is literal). Default 0.' },
+ minDepth: { type: 'number', description: 'Minimum chat depth for the script to fire (0=most recent message). Null/omit = no lower bound. Use to e.g. only run on older messages.' },
+ maxDepth: { type: 'number', description: 'Maximum chat depth. Null/omit = no upper bound. Use to e.g. only run on the latest few messages.' },
+ },
+ required: ['scope'],
+ additionalProperties: false,
+ },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.REGEX_UPDATE_SCRIPT,
+ description: 'Patch fields of an existing regex script (shallow merge). Pass only the fields you want to change. See regex_create_script for the full field list and semantics. The id field in the patch is ignored — id is preserved.',
+ parameters: {
+ type: 'object',
+ properties: {
+ scope: { type: 'string', enum: ['character', 'global'], description: 'Scope of the script being patched.' },
+ id: { type: 'string', description: 'UUID of the script to update.' },
+ patch: { type: 'object', description: 'Fields to merge onto the existing record. Same keys as regex_create_script.', additionalProperties: true },
+ },
+ required: ['scope', 'id', 'patch'],
+ additionalProperties: false,
+ },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.REGEX_DELETE_SCRIPT,
+ description: 'Delete a regex script by id from the requested scope. Errors if no script with that id exists at that scope (so typos do not silently no-op).',
+ parameters: {
+ type: 'object',
+ properties: {
+ scope: { type: 'string', enum: ['character', 'global'], description: 'Where the script is stored.' },
+ id: { type: 'string', description: 'UUID of the script to remove.' },
+ },
+ required: ['scope', 'id'],
  additionalProperties: false,
  },
  },
@@ -768,6 +850,96 @@ async function executeTool(charId, toolName, args, options = {}) {
  const written = setChatWorldInfoSelection(list, chat_metadata);
  await saveMetadata();
  return { ok: true, books: written, message: `Chat-bound world books updated (${written.length} active).` };
+ }
+ // ==================== Regex Scripts ====================
+ case TOOL_NAMES.REGEX_LIST_SCRIPTS: {
+ const scope = String(args?.scope || 'all').toLowerCase();
+ if (scope === 'all') {
+ return {
+ ok: true,
+ character: getScriptsByType(SCRIPT_TYPES.SCOPED),
+ global: getScriptsByType(SCRIPT_TYPES.GLOBAL),
+ };
+ }
+ if (scope === 'character') {
+ return { ok: true, scope, scripts: getScriptsByType(SCRIPT_TYPES.SCOPED) };
+ }
+ if (scope === 'global') {
+ return { ok: true, scope, scripts: getScriptsByType(SCRIPT_TYPES.GLOBAL) };
+ }
+ return { ok: false, error: `Unknown scope "${scope}" — use 'character', 'global', or 'all'` };
+ }
+ case TOOL_NAMES.REGEX_CREATE_SCRIPT: {
+ const scope = String(args?.scope || '').toLowerCase();
+ if (scope !== 'character' && scope !== 'global') {
+ return { ok: false, error: `scope must be 'character' or 'global'` };
+ }
+ if (scope === 'character' && (this_chid === undefined || this_chid === null)) {
+ return { ok: false, error: 'No active character — cannot write card-level regex' };
+ }
+ const scriptType = scope === 'character' ? SCRIPT_TYPES.SCOPED : SCRIPT_TYPES.GLOBAL;
+ const { scope: _scopeArg, id: _ignoredId, ...userFields } = args || {};
+ const newScript = {
+ scriptName: '',
+ findRegex: '',
+ replaceString: '',
+ trimStrings: [],
+ placement: [],
+ disabled: false,
+ markdownOnly: false,
+ promptOnly: false,
+ pluginOnly: false,
+ runOnEdit: false,
+ substituteRegex: 0,
+ minDepth: null,
+ maxDepth: null,
+ ...userFields,
+ id: uuidv4(),
+ };
+ const current = getScriptsByType(scriptType);
+ const next = [...current, newScript];
+ await saveScriptsByType(next, scriptType);
+ return { ok: true, script: newScript };
+ }
+ case TOOL_NAMES.REGEX_UPDATE_SCRIPT: {
+ const scope = String(args?.scope || '').toLowerCase();
+ if (scope !== 'character' && scope !== 'global') {
+ return { ok: false, error: `scope must be 'character' or 'global'` };
+ }
+ if (scope === 'character' && (this_chid === undefined || this_chid === null)) {
+ return { ok: false, error: 'No active character — cannot write card-level regex' };
+ }
+ const scriptType = scope === 'character' ? SCRIPT_TYPES.SCOPED : SCRIPT_TYPES.GLOBAL;
+ const idStr = String(args?.id || '').trim();
+ if (!idStr) return { ok: false, error: 'id is required' };
+ const current = getScriptsByType(scriptType);
+ const idx = current.findIndex((s) => String(s?.id || '') === idStr);
+ if (idx < 0) return { ok: false, error: `Regex script "${idStr}" not found in ${scope} scope` };
+ const patch = (args?.patch && typeof args.patch === 'object') ? args.patch : {};
+ const updated = { ...current[idx], ...patch, id: idStr };
+ const next = current.slice();
+ next[idx] = updated;
+ await saveScriptsByType(next, scriptType);
+ return { ok: true, script: updated };
+ }
+ case TOOL_NAMES.REGEX_DELETE_SCRIPT: {
+ const scope = String(args?.scope || '').toLowerCase();
+ if (scope !== 'character' && scope !== 'global') {
+ return { ok: false, error: `scope must be 'character' or 'global'` };
+ }
+ if (scope === 'character' && (this_chid === undefined || this_chid === null)) {
+ return { ok: false, error: 'No active character — cannot write card-level regex' };
+ }
+ const scriptType = scope === 'character' ? SCRIPT_TYPES.SCOPED : SCRIPT_TYPES.GLOBAL;
+ const idStr = String(args?.id || '').trim();
+ if (!idStr) return { ok: false, error: 'id is required' };
+ const current = getScriptsByType(scriptType);
+ const next = current.filter((s) => String(s?.id || '') !== idStr);
+ if (next.length === current.length) {
+ return { ok: false, error: `Regex script "${idStr}" not found in ${scope} scope` };
+ }
+ await saveScriptsByType(next, scriptType);
+ return { ok: true, message: `Regex script "${idStr}" deleted from ${scope} scope.` };
  }
  // ==================== Orchestrator (per-character override) ====================
  case TOOL_NAMES.ORCHESTRATOR_GET_OVERRIDE: {

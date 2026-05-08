@@ -1289,6 +1289,19 @@ async function handleAISend() {
                 else if (name === TOOL_NAMES.DELETE_FILE) detail = args.path;
                 else if (name === TOOL_NAMES.RENAME_FILE) detail = `${args.from_path} → ${args.to_path}`;
                 else if (name === TOOL_NAMES.LIST_FILES) detail = `${toolResult?.files?.length || 0} files`;
+                else if (name === TOOL_NAMES.REGEX_LIST_SCRIPTS) {
+                    const scope = String(args?.scope || 'all');
+                    if (scope === 'all') {
+                        const cc = toolResult?.character?.length || 0;
+                        const gc = toolResult?.global?.length || 0;
+                        detail = `character: ${cc}, global: ${gc}`;
+                    } else {
+                        detail = `${scope}: ${toolResult?.scripts?.length || 0}`;
+                    }
+                }
+                else if (name === TOOL_NAMES.REGEX_CREATE_SCRIPT) detail = `${args?.scope || '?'} / ${args?.scriptName || '(unnamed)'}`;
+                else if (name === TOOL_NAMES.REGEX_UPDATE_SCRIPT) detail = `${args?.scope || '?'} / ${args?.id || '?'}`;
+                else if (name === TOOL_NAMES.REGEX_DELETE_SCRIPT) detail = `${args?.scope || '?'} / ${args?.id || '?'}`;
                 renderChatMessage('tool', '', { name, detail, ok: toolResult.ok });
             },
             onPendingApproval: async (pendingOp) => {
