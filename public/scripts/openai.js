@@ -106,6 +106,7 @@ import {
     generateRandomTriggerSignal,
     mergeSystemAddendumIntoPromptMessages,
     normalizeToolMessagesForPlainTextFunctionCalling,
+    resolveFunctionCallMode,
     validateParsedToolCalls,
 } from './extensions/function-call-runtime.js';
 import { syncNanoGptProvidersForModel, syncOpenRouterProvidersForModel, updateNanoGptProvidersWarning, updateOpenRouterProvidersWarning } from './textgen-models.js';
@@ -3888,7 +3889,7 @@ async function sendOpenAIRequest(type, messages, signal, {
     apiPresetName = '',
     apiSettingsOverride = null,
     requestScope = 'chat',
-    functionCallMode = 'native',
+    functionCallMode = 'auto',
     functionCallOptions = null,
 } = {}) {
     // Provide default abort signal
@@ -3897,11 +3898,10 @@ async function sendOpenAIRequest(type, messages, signal, {
     }
 
     const requestSettings = getSettingsForRequest({ llmPresetName, apiPresetName, apiSettingsOverride });
-    const requestedFunctionCallMode = String(functionCallMode || 'native');
-    const shouldUsePresetPlainTextFunctionCalling =
-        requestedFunctionCallMode === 'native'
-        && Boolean(requestSettings?.function_calling_plain_text);
-    const resolvedFunctionCallMode = shouldUsePresetPlainTextFunctionCalling ? 'prompt_xml' : requestedFunctionCallMode;
+    const resolvedFunctionCallMode = resolveFunctionCallMode({
+        requestedMode: functionCallMode,
+        plainTextEnabled: Boolean(requestSettings?.function_calling_plain_text),
+    });
     const usePromptXmlFunctionCalls =
         resolvedFunctionCallMode === 'prompt_xml'
         || resolvedFunctionCallMode === 'prompt_json';

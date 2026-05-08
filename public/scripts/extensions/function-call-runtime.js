@@ -1016,6 +1016,28 @@ export function isToolCallMandatory({ toolChoice = 'auto', requiredFunctionName 
     return String(toolChoice || '').trim() === 'required' || Boolean(normalizeToolName(requiredFunctionName));
 }
 
+/**
+ * Resolve the requested function-call mode against the connection's plain-text setting.
+ *
+ * Semantics:
+ *   - 'auto' (default): respect the plain-text setting — switch to 'prompt_xml' when enabled, else 'native'.
+ *   - 'native': force native tool calling, ignoring the setting.
+ *   - 'prompt_xml' / 'prompt_json': force the corresponding plain-text protocol, ignoring the setting.
+ *   - empty / unknown: treated as 'auto'.
+ *
+ * @param {object} [options]
+ * @param {'auto'|'native'|'prompt_xml'|'prompt_json'|string} [options.requestedMode='auto']
+ * @param {boolean} [options.plainTextEnabled=false]
+ * @returns {'native'|'prompt_xml'|'prompt_json'}
+ */
+export function resolveFunctionCallMode({ requestedMode = 'auto', plainTextEnabled = false } = {}) {
+    const mode = String(requestedMode || '').trim().toLowerCase() || 'auto';
+    if (mode === 'native' || mode === 'prompt_xml' || mode === 'prompt_json') {
+        return mode;
+    }
+    return plainTextEnabled ? 'prompt_xml' : 'native';
+}
+
 export function buildPlainTextToolProtocolMessage(
     tools = [],
     {

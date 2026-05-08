@@ -4,6 +4,7 @@ import {
     buildFunctionCallRetryAddendum,
     buildPlainTextToolProtocolMessage,
     isToolCallMandatory,
+    resolveFunctionCallMode,
     TOOL_PROTOCOL_STYLE,
 } from '../public/scripts/extensions/function-call-runtime.js';
 
@@ -87,5 +88,37 @@ describe('isToolCallMandatory', () => {
     test('returns true when tool_choice or required function enforces a call', () => {
         expect(isToolCallMandatory({ toolChoice: 'required' })).toBe(true);
         expect(isToolCallMandatory({ requiredFunctionName: 'lookup_facts' })).toBe(true);
+    });
+});
+
+describe('resolveFunctionCallMode', () => {
+    test('"auto" + plain-text enabled resolves to prompt_xml so extensions honor the setting', () => {
+        expect(resolveFunctionCallMode({ requestedMode: 'auto', plainTextEnabled: true })).toBe('prompt_xml');
+    });
+
+    test('"auto" + plain-text disabled resolves to native', () => {
+        expect(resolveFunctionCallMode({ requestedMode: 'auto', plainTextEnabled: false })).toBe('native');
+    });
+
+    test('"native" forces native even when plain-text setting is enabled', () => {
+        expect(resolveFunctionCallMode({ requestedMode: 'native', plainTextEnabled: true })).toBe('native');
+        expect(resolveFunctionCallMode({ requestedMode: 'native', plainTextEnabled: false })).toBe('native');
+    });
+
+    test('"prompt_xml" forces prompt_xml regardless of setting', () => {
+        expect(resolveFunctionCallMode({ requestedMode: 'prompt_xml', plainTextEnabled: false })).toBe('prompt_xml');
+        expect(resolveFunctionCallMode({ requestedMode: 'prompt_xml', plainTextEnabled: true })).toBe('prompt_xml');
+    });
+
+    test('"prompt_json" forces prompt_json regardless of setting', () => {
+        expect(resolveFunctionCallMode({ requestedMode: 'prompt_json', plainTextEnabled: false })).toBe('prompt_json');
+        expect(resolveFunctionCallMode({ requestedMode: 'prompt_json', plainTextEnabled: true })).toBe('prompt_json');
+    });
+
+    test('missing/empty requestedMode behaves like "auto"', () => {
+        expect(resolveFunctionCallMode({ plainTextEnabled: true })).toBe('prompt_xml');
+        expect(resolveFunctionCallMode({ plainTextEnabled: false })).toBe('native');
+        expect(resolveFunctionCallMode({ requestedMode: '', plainTextEnabled: true })).toBe('prompt_xml');
+        expect(resolveFunctionCallMode()).toBe('native');
     });
 });
