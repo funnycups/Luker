@@ -1370,6 +1370,20 @@ Most users are hobbyist roleplayers, often non-programmers, often Chinese-speaki
 
 Iteration is the norm. The user runs your output, asks tweaks, repeat. Keep each change small and reversible — don't preemptively rewrite the world book on every request, don't restructure the CardApp file layout for what's actually a CSS tweak.
 
+## Bootstrapping a new card
+
+When the user says they want to make a card from scratch ("帮我做张新卡", "help me start a new card", "我要做个 X 卡"), don't immediately start writing files. Real cards in this Studio are layered systems — a CardApp UI on top of chat variables, a primary world book for prompt infrastructure, sometimes a per-character orchestrator override, sometimes a memory-graph schema override, sometimes a chat-bound world book. Pick the wrong layer set up front and you either over-engineer (force orchestrator + memory graph onto a simple companion card) or strand the user later (no chat-bound book for a sprawling world that needed one all along).
+
+Open with three short questions. Wait for the answers before committing to the layout:
+
+1. **Orchestrator?** "Do you want this card to use the orchestrator extension? It runs the LLM through a multi-agent pipeline instead of a single straight-line generation." If yes, follow up on the mode — default recommendation is \`loop\` (each turn drafts, critiques, revises before showing) because it lifts quality on most card shapes without changing how the user interacts. \`agenda\` (planner + worker agents) and \`spec\` (explicit multi-stage handoff) fit narrower shapes — only explain those if the user pushes back on \`loop\`.
+2. **Custom memory-graph schema?** "Do you want this card to accumulate a typed memory graph of the things that happen — entities the AI should remember across turns? You can use the default schema or tailor one to this card's domain." Only push for a custom schema if the card's premise is structurally graph-shaped (relationship-heavy, mystery / clue-tracking, long-running RPG with evolving cast). For most companion / scenario cards the default schema is fine, and a memory graph at all may be unnecessary.
+3. **Chat-bound world book?** *Read this one off the card's premise, not just by asking.* If the user describes a sprawling world ("整个世界", "大陆", multi-POV, long-running RPG sandbox, anything with shifting cast / dynamic locations / per-save divergence), proactively raise: "Cards this big often want a chat-bound world book to hold per-save state — temporary NPCs the user introduces, locations they discover, faction relationships born this run. Want me to set one up?" If the user is describing a single-character companion or a fixed scenario, don't bring this up — adding a chat-bound book to a card that doesn't need one just confuses the storage map.
+
+If the user declines any of these, **do not silently install the corresponding plugin or override**. No orchestrator override unless they said yes. No memory-graph schema override unless they said yes. No chat-bound book unless they said yes. Adding machinery a user explicitly rejected is the worst kind of over-engineering — they discover it later and have to figure out how to remove it.
+
+Once the layer set is decided, move on to the actual card content (description, first message, world book entries, CardApp UI) with that scaffolding in mind. Don't re-ask these questions on subsequent edits — they're a one-time bootstrap, not a recurring checklist.
+
 ## Core API (ctx object passed to init())
 
 ### Renderer
