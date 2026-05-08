@@ -12,6 +12,7 @@ import { renderTemplateAsync } from './templates.js';
 import { Popup } from './popup.js';
 import { t } from './i18n.js';
 import { showUndoToast } from './undo-toast.js';
+import { estimateTotalTokensFromCache } from './util/prompt-token-estimate.js';
 
 function debouncePromise(func, delay) {
     let timeoutId;
@@ -558,9 +559,12 @@ class PromptManager {
 
             const wasEnabled = Boolean(promptOrderEntry.enabled);
             const nowEnabled = !wasEnabled;
-            const counts = this.tokenHandler.getCounts();
 
-            counts[promptID] = null;
+            // The prompt's content has not changed, only its enabled flag — so the
+            // cached per-prompt token count is still accurate. Preserve it so the
+            // immediate header-total estimate below stays close to the real total.
+            // The next dry run (via updateTokenDisplayDebounced) will repopulate
+            // counts and call updateTokenDisplay to correct any drift.
             promptOrderEntry.enabled = nowEnabled;
             this.enqueueToggleUndo(promptID, wasEnabled, nowEnabled);
 
@@ -569,6 +573,7 @@ class PromptManager {
                 // Fallback to full render if element not found
                 this.render();
             } else {
+                this.updateHeaderTotalEstimate();
                 this.updateTokenDisplayDebounced();
             }
             this.saveServiceSettings();
@@ -1200,7 +1205,6 @@ class PromptManager {
         }
 
         const targetCharacter = { id: this.toggleUndoBatch.characterId };
-        const counts = this.tokenHandler.getCounts();
         let allUpdatedInPlace = true;
 
         for (const [promptID, change] of this.toggleUndoBatch.changes.entries()) {
@@ -1209,7 +1213,6 @@ class PromptManager {
                 continue;
             }
             promptOrderEntry.enabled = Boolean(change.before);
-            counts[promptID] = null;
 
             // Try in-place update for each toggled item
             if (!this.updateToggleInPlace(promptID, Boolean(change.before))) {
@@ -1223,6 +1226,7 @@ class PromptManager {
         if (!allUpdatedInPlace) {
             this.render();
         } else {
+            this.updateHeaderTotalEstimate();
             this.updateTokenDisplayDebounced();
         }
         this.saveServiceSettings();
@@ -1514,11 +1518,18 @@ class PromptManager {
             toggleSpan.classList.toggle('fa-toggle-off', !enabled);
         }
 
-        // Clear token display for this item (will be updated by next dry run)
+        // Render token cell from cache: an enabled prompt with a known positive
+        // count shows that count immediately (estimate); otherwise show "-" until
+        // the next dry run populates a real value.
         const tokenCell = li.querySelector('.prompt-manager-tokens-cell');
         if (tokenCell) {
-            tokenCell.dataset.pmTokens = '-';
-            tokenCell.innerHTML = '<span> </span>-';
+            const cached = this.tokenHandler?.getCounts?.()[promptID];
+            const showNumber = enabled && typeof cached === 'number' && Number.isFinite(cached) && cached > 0;
+            const display = showNumber ? String(cached) : '-';
+            if (tokenCell.dataset.pmTokens !== display) {
+                tokenCell.dataset.pmTokens = display;
+                tokenCell.innerHTML = `<span> </span>${display}`;
+            }
         }
 
         return true;
@@ -1809,6 +1820,29 @@ class PromptManager {
             if (match) {
                 headerDiv.textContent = `${match[1]} ${this.tokenUsage}`;
             }
+        }
+    }
+
+    /**
+     * Refresh the header total token count using cached per-prompt counts only,
+     * filtered by current enabled state. Cheap synchronous estimate intended for
+     * the brief window between a toggle and the next dry-run completing — the
+     * dry-run's updateTokenDisplay will overwrite this value with the real total.
+     */
+    updateHeaderTotalEstimate() {
+        const counts = this.tokenHandler?.getCounts();
+        if (!counts) return;
+        const promptOrder = this.getPromptOrderForCharacter(this.activeCharacter);
+        const estimated = estimateTotalTokensFromCache(promptOrder, counts);
+        this.tokenUsage = estimated;
+
+        const { prefix } = this.configuration;
+        const headerDiv = this.containerElement?.querySelector(`.${prefix}prompt_manager_header div:last-child`);
+        if (!headerDiv) return;
+        const totalText = headerDiv.textContent;
+        const match = totalText?.match(/^(.+?)\s*\d+/);
+        if (match) {
+            headerDiv.textContent = `${match[1]} ${estimated}`;
         }
     }
 
@@ -4263,6 +4297,7 @@ class PromptManager {
             }
 
             if (changedCount > 0) {
+                this.updateHeaderTotalEstimate();
                 this.updateTokenDisplayDebounced();
                 this.saveServiceSettings();
                 this.updateGroupEditUI();
