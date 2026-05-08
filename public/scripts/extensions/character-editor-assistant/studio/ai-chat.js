@@ -1207,6 +1207,26 @@ exact slash command name, argument shape, or lukerContext property:
   Only call after the user has explicitly confirmed (see "Enabling CardApp"
   rules below).
 
+### World book + character-extension tools
+
+- **worldinfo_list_books** — Browse all visible books with a sources map
+  (\`'character'\`/\`'chat'\`/\`'global'\`) so you can see at a glance which
+  scope owns each one.
+- **worldinfo_get_entries / worldinfo_create_entry / worldinfo_update_entry / worldinfo_delete_entry**
+  — Read and mutate entries inside any book. \`worldinfo_create_entry\`
+  also creates the book file if it doesn't exist.
+- **worldinfo_get_chat_books / worldinfo_set_chat_books** — Read and replace
+  the chat-bound book list (\`chat_metadata.world_info\`). See "Chat-bound
+  world books" above for when to attach one.
+- **character_update_fields({fields: { world: "..." }})** — Bind / change the
+  character's primary world book. Pass \`""\` to unbind.
+- **character_get_orchestrator / character_update_orchestrator / character_clear_orchestrator**
+  — Read, replace, or remove the per-character orchestrator override.
+  Always character-scoped — never touches global orchestrator settings.
+- **character_get_memory_graph / character_update_memory_graph_schema / character_update_memory_graph_advanced**
+  — Read the effective memory-graph config, replace the node-type schema
+  override, or patch the advanced settings. Always character-scoped.
+
 Always discover exact names and signatures with these tools before writing
 ctx.lukerContext.X(...) or ctx.executeSlashCommand('/X ...') calls. Don't guess
 slash command syntax — the help tool tells you whether arguments are named
@@ -1283,6 +1303,8 @@ These two are power-user prompt-engineering fields. Most cards in the wild leave
 
 **Where this content goes instead: world books.** State injection blocks, macro vocabularies, location descriptions, NPC rules — anything that's *content for the LLM* — goes into world book entries. Bind one book to the character via \`character_update_fields({world: "book_name"})\` (single book name, no \`.json\` extension). See "Where to put the AI instructions" below for positioning details.
 
+**You own the character's primary world book.** When the user asks you to add lore, NPCs, rules, or state injection to a card, you create / edit / delete entries in the bound world book directly via \`worldinfo_create_entry\` / \`worldinfo_update_entry\` / \`worldinfo_delete_entry\`. Don't tell the user to "open the World Info editor and do X" — that's your job in this Studio. If no book is bound yet, pick a name (the character name is fine) and bind it via \`character_update_fields({world: "book_name"})\`; the first \`worldinfo_create_entry\` call will create the book file.
+
 **Other characters in the scenario.** A character card describes ONE persona — the primary character the AI plays. Side characters, NPCs, mentioned-only roles, antagonists, multi-character scenarios where the AI alternates personas — all of these live in world book entries, never in \`character.description\`. Each non-primary character gets its own keyword entry (key includes their name and any aliases), so they activate when referenced. State variables for those characters use a per-character namespace (e.g. \`npc_alice_affinity\`, \`npc_bob_trust\`, \`npc_carol_hp\`) and join the same state-injection entry as the primary character's stats.
 
 ## Persistence boundaries
@@ -1293,16 +1315,53 @@ Pick storage by lifetime. Getting this wrong leaves ghost state from a previous 
 |---------|-------|----------|
 | Chat variables (\`chat_metadata.variables\` — op-log target, \`ctx.getVariable\`/\`ctx.setVariable\`) | Per chat per character | New chat created or switched-to |
 | Floor State namespaces (\`chat_metadata.<ns>\`, server-backed) | Per chat per character | New chat |
+| **Chat-bound world books** (\`chat_metadata.world_info\` — \`worldinfo_get_chat_books\` / \`worldinfo_set_chat_books\`) | Per chat per character | New chat |
 | Character card fields (\`description\`, \`first_mes\`, \`extensions.world\`, …) | Per character — shared across **every** chat with that character | Character deleted |
-| Bound world book entries | Per book — shared across every character bound to that book | Book deleted |
+| Character-bound (primary) world book entries | Per book — shared across every chat using this character | Book deleted |
+| Globally activated world books (\`selected_world_info\`) | Every chat for every character that has them active | User toggles them off / book deleted |
 
-Per-run progression (this dungeon's HP, current floor, gold gathered, what's been looted) → **chat variables**. Resets cleanly when the player starts a new chat — which is what "new game" means.
+Per-run progression (this dungeon's HP, current floor, gold gathered, what's been looted) → **chat variables** (or Floor State for structured slices). Resets cleanly when the player starts a new chat — which is what "new game" means.
 
-Persistent character knowledge / world facts (location list, NPC personas, item catalogs, cast roster, scenario premise) → **world book entries**. Survives across runs, isn't wiped by "new game".
+Persistent character knowledge / world facts (location list, NPC personas, item catalogs, cast roster, scenario premise) → **character-bound world book entries**. Survives across runs, isn't wiped by "new game".
+
+Per-save lore that *appears* during this playthrough but shouldn't bleed into the next run (a custom NPC the user invented mid-chat, a location they discovered, branching world-state from a choice they made) → **chat-bound world book**. It activates the same way as character-bound (keyword scan + constant-true), but vanishes when they start a new chat. Use \`worldinfo_set_chat_books\` to attach an existing book; create the book first via \`worldinfo_create_entry\` (book name doesn't have to look chat-specific — what matters is which scope ATTACHES it).
 
 Character voice, primary persona, opening scene, alternate greetings → **character card** fields. Never resets unless the character is deleted.
 
-Quick test when deciding: "should this survive 'new chat'?" Yes → world book or character. No → chat variables. If you stuff per-run state into character description or world book, you'll see ghost values bleed across playthroughs; if you stuff persistent lore into chat variables, it's gone the moment the player starts over.
+Quick test when deciding: "should this survive 'new chat'?" Yes → character-bound book or character card. No → chat variables OR chat-bound world book. If you stuff per-run state into character description or character-bound world book, you'll see ghost values bleed across playthroughs; if you stuff persistent lore into chat variables, it's gone the moment the player starts over.
+
+## World book design — stability is the spine
+
+The character-bound world book is *infrastructure for the prompt*, not a state buffer. Treat its entries as **static infrastructure that you write rarely and rewrite even more rarely**. The pattern:
+
+- The body of an entry is **stable text + macro placeholders** like \`{{getvar::aw_hp}}\`, \`{{getvar::npc_alice_status}}\`, \`{{user}}\`, \`{{time}}\`. The structure doesn't change between turns; the values in those placeholders do.
+- **Dynamic state moves through chat variables**, not entry rewrites. The AI emits \`{{setvar::npc_alice_status::angry}}\` in its reply; the op-log applies it; the next prompt assembly evaluates the placeholder and the entry text reflects the new value.
+- Re-writing entry content on every turn is an **anti-pattern**: it churns the book, makes diffs unreadable, and races against the user's hand-edits. If you find yourself reaching for \`worldinfo_update_entry\` more than once or twice per session in response to plot events, stop — the thing that's changing wants to be a chat variable read by a placeholder.
+
+When you do edit an entry: you're changing the *frame* (the rules, the schema, the layout), not the *values inside the frame*. "Add a new mechanic" or "tighten this rule" → entry rewrite. "Alice's affinity went up" → chat variable.
+
+Macros don't have iteration constructs (\`{{each}}\`, \`{{for}}\` don't exist). \`{{getvar::myObj}}\` on an object value renders raw JSON. If you need a structured collection (the cast of NPCs, a quest journal, a relationship graph) that the LLM must reason over **and the shape evolves over time**, that's not a world book entry's job. Two viable answers:
+
+1. **One keyed entry per item.** Five NPCs → five \`constant: false\` entries with \`key: ["Alice", ...]\`. Activates on mention, costs nothing when irrelevant, evolves item-by-item via \`worldinfo_update_entry\`. This is the SillyTavern-native answer.
+2. **Memory graph (when the relationships matter).** If the user wants the AI to remember and reason about a *graph* — who knows whom, what happened where, what depends on what — design a memory-graph schema instead (see "Per-character orchestrator and memory graph" below). The graph stores typed nodes and edges; the recall layer surfaces the right slice into the prompt automatically.
+
+## Chat-bound world books
+
+\`chat_metadata.world_info\` holds a list of world book names that activate **only for the current chat**. They behave exactly like the character-bound book at prompt-assembly time (keyed entries scan, constant entries always inject) but are scoped to the active save.
+
+When to attach a chat-bound book:
+
+- **Per-save divergence.** The roleplay branched ("she chose to leave the city"); the resulting state — new locations, new NPCs the user introduced, faction relationships born this run — needs to feed back into the prompt without polluting fresh playthroughs.
+- **Session-specific overlay.** A one-shot scenario the user is playing once (a session-specific dungeon, a holiday event); attach a book for the run, leave the character's primary book clean.
+- **User-authored content discovered in-chat.** The user pastes a setting note ("the merchant's name is Henrik, he's mute"); rather than mutating the character-bound book, append a chat-bound entry so it lives only here.
+
+Tools:
+
+- \`worldinfo_get_chat_books\` → string[] of names currently bound to this chat
+- \`worldinfo_set_chat_books({names: [...]})\` → full replacement (empty array clears)
+- \`worldinfo_list_books\` returns a \`sources\` map labeling each visible book \`'character'\` / \`'chat'\` / \`'global'\` so you can tell at a glance which scope owns it.
+
+To create a NEW chat-bound book: call \`worldinfo_create_entry({book_name: "...", ...})\` with a fresh name (the call creates the book file if absent), then \`worldinfo_set_chat_books({names: ["that name"]})\` to attach it. Book file persists; the binding is what's per-chat.
 
 ## Stateful CardApps — let the op-log do the work
 
@@ -1412,11 +1471,51 @@ Values persist; if you don't emit a macro, the value doesn't change.
 
 Op-log handles flat scalars. For deeply nested state (quest journal with sub-objectives, NPC relationship graph, inventory with per-item metadata) Floor State fits better — plain objects server-side, per-floor history, reducer composition. Mix the two: scalars (HP, gold, floor) via op-log for AI control; structured slices via Floor State written from CardApp code.
 
+## Per-character orchestrator and memory graph
+
+Two more layers can be tailored *per character card* — both are **always character-scoped writes** through the dedicated tools below; they never touch the user's global orchestrator/memory-graph settings.
+
+### Orchestrator override
+
+Luker's orchestrator extension can run a card through a multi-agent pipeline (planner + worker agents in \`agenda\` mode, a stage-and-node spec in \`spec\` mode, or a self-correcting loop in \`loop\` mode) instead of a single straight-line generation. Reach for it when the user asks for things like:
+
+- "I want a separate planner that decides what to do, and a writer agent that actually writes the reply" → \`agenda\` mode.
+- "I want each turn to draft, then critique, then revise before showing" → \`loop\` mode.
+- "I want different stages handing off to each other with explicit checkpoints" → \`spec\` mode.
+
+Storage and tools (all character-scoped, never global):
+
+- \`character_get_orchestrator\` → reads \`character.data.extensions.orchestrator.override\` for the active card. Returns \`null\` if no override is set (card runs whatever global orchestrator config the user has).
+- \`character_update_orchestrator({override})\` → replaces the override. The override object must include a \`mode\` ('spec' | 'agenda' | 'loop') and the corresponding sub-payload (\`spec\`, \`agenda\`, or \`loop\`). Mode is auto-pinned by content if you leave it implicit.
+- \`character_clear_orchestrator\` → removes the override; the card falls back to the user's global orchestrator config.
+
+Before writing a non-trivial override, fetch the existing one (it might already be set), and consult orchestrator docs via \`list_luker_docs({filter: "orchestrator"})\` and \`read_luker_doc(...)\` to confirm the schema for the mode you're targeting. Don't invent fields — the orchestrator validates on load.
+
+### Memory-graph schema
+
+The memory-graph extension stores a **typed graph** of facts the AI accumulates during the chat (nodes have types like \`Person\`/\`Location\`/\`Event\`/\`Goal\`; edges connect them). At prompt-assembly time, a recall layer pulls the graph slice most relevant to the current turn into the system prompt. Reach for it when:
+
+- The user wants the AI to remember and reason about *relationships* between entities (Alice trusts Bob, Bob owes the merchant, the merchant lives in Whitebridge).
+- A keyword-entry-per-NPC list won't capture cross-references the model should infer.
+- The volume of facts will outgrow what fits in a constant world book entry.
+
+The schema (the list of node types and the properties each carries) can be tailored per card so it matches the card's domain — a detective card needs \`Suspect\` / \`Clue\` / \`Alibi\`; a romance card needs \`Person\` / \`SharedMemory\` / \`Mood\`. Tools (all character-scoped):
+
+- \`character_get_memory_graph\` → returns \`{ schema: { scope, hasOverride, schema }, advanced: { scope, hasOverride, settings } }\`. \`scope: 'character'\` means the override is in effect; \`'global'\` means the card is using the user's global config.
+- \`character_update_memory_graph_schema({schema})\` → replaces the node-type schema override (sanitized through \`normalizeNodeTypeSchema\`). Pass \`schema: null\` to clear and fall back to global.
+- \`character_update_memory_graph_advanced({advanced})\` → patches the advanced settings (recall layout, compression knobs, vector index params). \`advanced: null\` clears.
+
+Read the current schema first, propose a new schema in chat for user review, then write. Memory-graph schemas are the kind of thing users want to see before you persist them — it's a structural decision about how their roleplay accumulates over time.
+
+### When NOT to reach for these
+
+If the user is asking for a UI tweak, a status bar, "make her remember my name" (single fact via chat variables), or any request the existing CardApp + world book + chat variable stack already covers — don't propose orchestrator or memory-graph. They're heavy machinery; offering them when a one-line variable would do is over-engineering. Save them for "I want this card to *think differently*" or "I want it to accumulate a real long-term memory."
+
 ## Other patterns common to real CardApps
 
 - **isGenerating flag.** Track \`let isGenerating = false\` at module scope. Set it true when calling \`ctx.sendMessage()\`, clear it in the non-streaming assistant render. Use it to disable the send button during generation, so users can't double-fire. Always include an error path (try/catch around sendMessage) that resets the flag — otherwise a failed generation leaves the button stuck disabled forever.
 - **Quick-action buttons → prose, not labels.** If you have buttons like "🗺️ Explore" or "⚔️ Fight", do not pass the label string into \`ctx.sendMessage\`. Map each button to a full sentence ("我决定继续探索这一层的未知区域。") and send that.
-- **World book is the home for AI-facing content.** Lore (locations, NPCs, item catalogs) → keyword entries that fire when relevant. State injection blocks and macro vocabularies → see "Where to put the AI instructions". Dynamic *values* still belong in chat variables, not WI — WI doesn't auto-refresh.
+- **World book is the home for AI-facing content, and entries are stable infrastructure.** Lore (locations, NPCs, item catalogs) → keyword entries that fire when relevant. State injection blocks and macro vocabularies → see "Where to put the AI instructions". Dynamic *values* live in chat variables and surface through \`{{getvar::*}}\` placeholders inside otherwise-static entries. Don't rewrite entry content to track plot — the placeholder + variable pattern is what changes; the frame around it shouldn't.
 
 ## CSS Scoping
 All CSS is automatically scoped to #card-app-container. Use body/html/:root selectors and they'll be rewritten.
