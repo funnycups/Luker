@@ -273,6 +273,9 @@ export function buildMemoryGraphSettingsHtml(deps) {
                 <div id="luker_rpg_memory_reset" class="menu_button">${escapeHtml(i18n('Reset Current Chat'))}</div>
             </div>
             <div class="flex-container">
+                <div id="luker_rpg_memory_recompute_vectors" class="menu_button">${escapeHtml(i18n('Recompute Vector Index'))}</div>
+            </div>
+            <div class="flex-container">
                 <div id="luker_rpg_memory_export" class="menu_button">${escapeHtml(i18n('Export Current Chat Graph'))}</div>
                 <div id="luker_rpg_memory_import" class="menu_button">${escapeHtml(i18n('Import Current Chat Graph'))}</div>
             </div>
