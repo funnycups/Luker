@@ -6,7 +6,7 @@ import { eventSource, event_types, chat, chat_metadata, this_chid, characters, g
 import { getContext, saveMetadataDebounced, extension_settings } from '../../extensions.js';
 import { executeSlashCommandsWithOptions } from '../../slash-commands.js';
 import { removeReasoningFromString } from '../../reasoning.js';
-import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, world_names, selected_world_info, getChatWorldInfoNames, setChatWorldInfoSelection } from '../../world-info.js';
+import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, createNewWorldInfo, world_names, selected_world_info, getChatWorldInfoNames, setChatWorldInfoSelection } from '../../world-info.js';
 import { getScriptsByType, saveScriptsByType, SCRIPT_TYPES } from '../regex/engine.js';
 import { uuidv4 } from '../../utils.js';
 import {
@@ -510,6 +510,30 @@ export function buildContext(container, charId, config) {
             if (!target) return this.getChatWorldBooks();
             const next = this.getChatWorldBooks().filter((n) => n !== target);
             return await this.setChatWorldBooks(next);
+        },
+
+        /**
+         * Create a world book and bind it to the current chat. Idempotent: if
+         * a book of that name already exists (any scope), skip creation and
+         * just bind it — a CardApp that re-inits on the same chat will hit
+         * the same name and should land on the same book.
+         *
+         * `setChatWorldBooks` silently drops names that don't exist on disk
+         * yet, so create-then-bind order matters; this convenience exists to
+         * make the dynamic-entries pattern hard to get wrong.
+         *
+         * @param {string} name
+         * @returns {Promise<string>} the resolved book name
+         */
+        async createChatWorldBook(name) {
+            const target = String(name || '').trim();
+            if (!target) throw new Error('[CardApp] createChatWorldBook: name required');
+            if (!world_names.includes(target)) {
+                const ok = await createNewWorldInfo(target, { interactive: false });
+                if (!ok) throw new Error(`[CardApp] Failed to create world book "${target}"`);
+            }
+            await this.addChatWorldBook(target);
+            return target;
         },
 
         /**
