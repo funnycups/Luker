@@ -7,6 +7,8 @@ import { getContext, saveMetadataDebounced, extension_settings } from '../../ext
 import { executeSlashCommandsWithOptions } from '../../slash-commands.js';
 import { removeReasoningFromString } from '../../reasoning.js';
 import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, world_names, selected_world_info, getChatWorldInfoNames, setChatWorldInfoSelection } from '../../world-info.js';
+import { getScriptsByType, saveScriptsByType, SCRIPT_TYPES } from '../regex/engine.js';
+import { uuidv4 } from '../../utils.js';
 import {
     getCharacterOverrideByAvatar as orchGetCharacterOverrideByAvatar,
     getCharacterIndexByAvatar as orchGetCharacterIndexByAvatar,
@@ -23,6 +25,20 @@ import {
     persistCharacterAdvancedOverride as mgPersistCharacterAdvancedOverride,
     removeCharacterAdvancedOverride as mgRemoveCharacterAdvancedOverride,
 } from '../memory-graph/character-overrides.js';
+
+/**
+ * Map a friendly regex scope label to the engine's SCRIPT_TYPES enum.
+ * Card-level lives at character.data.extensions.regex_scripts; global at
+ * extension_settings.regex. Throws on unknown scope rather than silently
+ * defaulting — callers should be explicit about which storage they touch.
+ * @param {'character'|'global'} scope
+ * @returns {number}
+ */
+function regexScopeToScriptType(scope) {
+    if (scope === 'character') return SCRIPT_TYPES.SCOPED;
+    if (scope === 'global') return SCRIPT_TYPES.GLOBAL;
+    throw new Error(`[CardApp] Unknown regex scope "${scope}" — use 'character' or 'global'`);
+}
 
 /**
  * Build the context object for a CardApp.
@@ -553,6 +569,129 @@ export function buildContext(container, charId, config) {
             if (!data) throw new Error(`[CardApp] World book "${bookName}" not found`);
             await deleteWorldInfoEntry(data, uid, { silent: true });
             await saveWorldInfo(bookName, data, true);
+        },
+
+        // ==================== Regex Scripts ====================
+
+        /**
+         * List regex scripts in the requested scope.
+         *
+         * - `'character'` reads `character.data.extensions.regex_scripts` for
+         *   the active card (card-level scripts that travel with the
+         *   character file).
+         * - `'global'` reads `extension_settings.regex` (user-level scripts
+         *   active for every chat regardless of character).
+         *
+         * Returns the raw script records — each one has at least `id`,
+         * `scriptName`, `findRegex`, `replaceString`, `placement` (number[]),
+         * plus the boolean gating fields (`disabled`, `markdownOnly`,
+         * `promptOnly`, `pluginOnly`, `runOnEdit`). Empty array if nothing is
+         * stored at that scope.
+         *
+         * @param {'character'|'global'} [scope='character']
+         * @returns {Array<object>}
+         */
+        getRegexScripts(scope = 'character') {
+            const scriptType = regexScopeToScriptType(scope);
+            return getScriptsByType(scriptType);
+        },
+
+        /**
+         * Create a new regex script in the requested scope.
+         *
+         * The new script is appended to that scope's list and persisted.
+         * Card-level writes go through Luker's `writeExtensionField` and
+         * never touch `extension_settings.regex`; global writes go through
+         * `saveSettingsDebounced` and never mutate the active character
+         * card. Pass any subset of script fields in `fields` — anything
+         * omitted falls back to safe defaults.
+         *
+         * Field defaults:
+         * - `id`: auto-generated UUID (any caller-supplied id is ignored)
+         * - `scriptName`/`findRegex`/`replaceString`: empty string
+         * - `trimStrings`: []
+         * - `placement`: [] (script will not fire until at least one
+         *   placement is set — see Luker's `regex_placement` enum:
+         *   1=USER_INPUT, 2=AI_OUTPUT, 3=SLASH_COMMAND, 5=WORLD_INFO,
+         *   6=REASONING)
+         * - `disabled`/`markdownOnly`/`promptOnly`/`pluginOnly`/`runOnEdit`: false
+         * - `substituteRegex`: 0 (NONE; 1=RAW macro substitution, 2=ESCAPED)
+         * - `minDepth`/`maxDepth`: null (no depth gate)
+         *
+         * @param {'character'|'global'} scope
+         * @param {object} [fields] - Field overrides merged on top of defaults
+         * @returns {Promise<object>} The created script (with assigned id)
+         */
+        async createRegexScript(scope, fields = {}) {
+            const scriptType = regexScopeToScriptType(scope);
+            const current = getScriptsByType(scriptType);
+            const { id: _ignoredId, ...userFields } = (fields && typeof fields === 'object') ? fields : {};
+            const newScript = {
+                scriptName: '',
+                findRegex: '',
+                replaceString: '',
+                trimStrings: [],
+                placement: [],
+                disabled: false,
+                markdownOnly: false,
+                promptOnly: false,
+                pluginOnly: false,
+                runOnEdit: false,
+                substituteRegex: 0,
+                minDepth: null,
+                maxDepth: null,
+                ...userFields,
+                id: uuidv4(),
+            };
+            const next = [...current, newScript];
+            await saveScriptsByType(next, scriptType);
+            return newScript;
+        },
+
+        /**
+         * Patch an existing regex script identified by id within the given
+         * scope. The patch is shallow-merged onto the stored record; the id
+         * is preserved even if the patch tries to overwrite it. Throws if
+         * no script with that id exists at the requested scope.
+         *
+         * @param {'character'|'global'} scope
+         * @param {string} id - Script id (UUID)
+         * @param {object} patch - Fields to merge
+         * @returns {Promise<object>} The updated script
+         */
+        async updateRegexScript(scope, id, patch) {
+            const scriptType = regexScopeToScriptType(scope);
+            const idStr = String(id || '').trim();
+            if (!idStr) throw new Error('[CardApp] updateRegexScript requires a script id');
+            const current = getScriptsByType(scriptType);
+            const idx = current.findIndex((s) => String(s?.id || '') === idStr);
+            if (idx < 0) throw new Error(`[CardApp] Regex script "${idStr}" not found in ${scope} scope`);
+            const updated = { ...current[idx], ...(patch || {}), id: idStr };
+            const next = current.slice();
+            next[idx] = updated;
+            await saveScriptsByType(next, scriptType);
+            return updated;
+        },
+
+        /**
+         * Remove a regex script from the requested scope. Throws if no
+         * script with that id exists at the scope (so callers don't
+         * silently no-op on typos).
+         *
+         * @param {'character'|'global'} scope
+         * @param {string} id
+         * @returns {Promise<void>}
+         */
+        async deleteRegexScript(scope, id) {
+            const scriptType = regexScopeToScriptType(scope);
+            const idStr = String(id || '').trim();
+            if (!idStr) throw new Error('[CardApp] deleteRegexScript requires a script id');
+            const current = getScriptsByType(scriptType);
+            const next = current.filter((s) => String(s?.id || '') !== idStr);
+            if (next.length === current.length) {
+                throw new Error(`[CardApp] Regex script "${idStr}" not found in ${scope} scope`);
+            }
+            await saveScriptsByType(next, scriptType);
         },
 
         // ==================== Orchestrator (per-character override) ====================
