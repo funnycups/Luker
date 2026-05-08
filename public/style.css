@@ -5836,8 +5836,8 @@ body:not(.movingUI) .drawer-content.maximized {
 
 .fillLeft,
 .fillRight {
-    width: calc((100vw - var(--sheldWidth) - 2px) /2);
-    width: calc((100dvw - var(--sheldWidth) - 2px) /2);
+    width: max(320px, calc((100vw - var(--sheldWidth) - 2px) /2));
+    width: max(320px, calc((100dvw - var(--sheldWidth) - 2px) /2));
     max-height: calc(100vh - var(--topBarBlockSize));
     max-height: calc(100dvh - var(--topBarBlockSize));
     height: 0;

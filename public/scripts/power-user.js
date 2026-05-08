@@ -1383,7 +1383,8 @@ function shouldForceAndroidFullWidthChatLayout() {
     const hasScreenSize = screenWidth > 0 && screenHeight > 0;
     const minScreenDimension = hasScreenSize ? Math.min(screenWidth, screenHeight) : 0;
     const isLikelyPhoneByScreen = hasScreenSize && minScreenDimension <= 600;
-    const isLikelyPhoneByUA = typeof navigator !== 'undefined' && /Android\s+\d+/i.test(String(navigator.userAgent || ''));
+    // Android phone UAs include "Mobile"; tablet UAs do not. Avoid catching tablets here.
+    const isLikelyPhoneByUA = typeof navigator !== 'undefined' && /Android.*Mobile/i.test(String(navigator.userAgent || ''));
 
     // Some Android WebView builds occasionally report a desktop-sized viewport on phones.
     // In that case, force full-width layout to avoid rendering the app in a narrow desktop column.
