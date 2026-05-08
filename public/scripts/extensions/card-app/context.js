@@ -574,13 +574,17 @@ export function buildContext(container, charId, config) {
         // ==================== Regex Scripts ====================
 
         /**
-         * List regex scripts in the requested scope.
+         * List regex scripts in the requested scope (read-only across both
+         * scopes).
          *
          * - `'character'` reads `character.data.extensions.regex_scripts` for
          *   the active card (card-level scripts that travel with the
          *   character file).
          * - `'global'` reads `extension_settings.regex` (user-level scripts
-         *   active for every chat regardless of character).
+         *   active for every chat regardless of character). Exposed read-only
+         *   so a CardApp can inspect what's already in effect (e.g. avoid
+         *   duplicating a rule the user already has globally) — ctx never
+         *   *writes* to global state.
          *
          * Returns the raw script records — each one has at least `id`,
          * `scriptName`, `findRegex`, `replaceString`, `placement` (number[]),
@@ -597,14 +601,18 @@ export function buildContext(container, charId, config) {
         },
 
         /**
-         * Create a new regex script in the requested scope.
+         * Create a new card-level regex script.
          *
-         * The new script is appended to that scope's list and persisted.
-         * Card-level writes go through Luker's `writeExtensionField` and
-         * never touch `extension_settings.regex`; global writes go through
-         * `saveSettingsDebounced` and never mutate the active character
-         * card. Pass any subset of script fields in `fields` — anything
-         * omitted falls back to safe defaults.
+         * Always writes to `character.data.extensions.regex_scripts` (via
+         * Luker's `writeExtensionField`) — ctx intentionally has no path to
+         * mutate the user's global regex list (`extension_settings.regex`),
+         * matching the same character-scoped boundary applied to the
+         * orchestrator and memory-graph overrides. To create a global
+         * regex script, the user goes through the Regex extension's own UI
+         * (or any tool the user explicitly invokes outside CardApp init).
+         *
+         * Pass any subset of script fields in `fields` — anything omitted
+         * falls back to safe defaults.
          *
          * Field defaults:
          * - `id`: auto-generated UUID (any caller-supplied id is ignored)
@@ -618,12 +626,11 @@ export function buildContext(container, charId, config) {
          * - `substituteRegex`: 0 (NONE; 1=RAW macro substitution, 2=ESCAPED)
          * - `minDepth`/`maxDepth`: null (no depth gate)
          *
-         * @param {'character'|'global'} scope
          * @param {object} [fields] - Field overrides merged on top of defaults
          * @returns {Promise<object>} The created script (with assigned id)
          */
-        async createRegexScript(scope, fields = {}) {
-            const scriptType = regexScopeToScriptType(scope);
+        async createRegexScript(fields = {}) {
+            const scriptType = SCRIPT_TYPES.SCOPED;
             const current = getScriptsByType(scriptType);
             const { id: _ignoredId, ...userFields } = (fields && typeof fields === 'object') ? fields : {};
             const newScript = {
@@ -649,23 +656,23 @@ export function buildContext(container, charId, config) {
         },
 
         /**
-         * Patch an existing regex script identified by id within the given
-         * scope. The patch is shallow-merged onto the stored record; the id
-         * is preserved even if the patch tries to overwrite it. Throws if
-         * no script with that id exists at the requested scope.
+         * Patch an existing card-level regex script by id. The patch is
+         * shallow-merged onto the stored record; the id is preserved even
+         * if the patch tries to overwrite it. Throws if no script with
+         * that id exists on this character. Always character-scoped — see
+         * {@link createRegexScript} for why ctx never writes global regex.
          *
-         * @param {'character'|'global'} scope
          * @param {string} id - Script id (UUID)
          * @param {object} patch - Fields to merge
          * @returns {Promise<object>} The updated script
          */
-        async updateRegexScript(scope, id, patch) {
-            const scriptType = regexScopeToScriptType(scope);
+        async updateRegexScript(id, patch) {
+            const scriptType = SCRIPT_TYPES.SCOPED;
             const idStr = String(id || '').trim();
             if (!idStr) throw new Error('[CardApp] updateRegexScript requires a script id');
             const current = getScriptsByType(scriptType);
             const idx = current.findIndex((s) => String(s?.id || '') === idStr);
-            if (idx < 0) throw new Error(`[CardApp] Regex script "${idStr}" not found in ${scope} scope`);
+            if (idx < 0) throw new Error(`[CardApp] Regex script "${idStr}" not found on this character`);
             const updated = { ...current[idx], ...(patch || {}), id: idStr };
             const next = current.slice();
             next[idx] = updated;
@@ -674,22 +681,21 @@ export function buildContext(container, charId, config) {
         },
 
         /**
-         * Remove a regex script from the requested scope. Throws if no
-         * script with that id exists at the scope (so callers don't
-         * silently no-op on typos).
+         * Remove a card-level regex script by id. Throws if no script with
+         * that id exists on this character (so typos don't silently
+         * no-op). Always character-scoped.
          *
-         * @param {'character'|'global'} scope
          * @param {string} id
          * @returns {Promise<void>}
          */
-        async deleteRegexScript(scope, id) {
-            const scriptType = regexScopeToScriptType(scope);
+        async deleteRegexScript(id) {
+            const scriptType = SCRIPT_TYPES.SCOPED;
             const idStr = String(id || '').trim();
             if (!idStr) throw new Error('[CardApp] deleteRegexScript requires a script id');
             const current = getScriptsByType(scriptType);
             const next = current.filter((s) => String(s?.id || '') !== idStr);
             if (next.length === current.length) {
-                throw new Error(`[CardApp] Regex script "${idStr}" not found in ${scope} scope`);
+                throw new Error(`[CardApp] Regex script "${idStr}" not found on this character`);
             }
             await saveScriptsByType(next, scriptType);
         },
