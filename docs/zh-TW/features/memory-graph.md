@@ -308,6 +308,8 @@ PEDSA(Personalized Efficient Diffusion with Sparse Approximation)讓記憶圖能
 
 插入向量時，記憶圖把 `nodeId` 放在 `metadata` 欄位裡。後端原樣存 `metadata`。其他外掛也可以用 `metadata` 欄位存自定義資料，查詢結果會一併返回。這種設計讓 `hash → nodeId` 映射可以繞開前端索引快取——即使快取丟了，也能從查詢結果直接匹配節點。
 
+如需手動控制，記憶圖設定面板提供**重算向量索引**按鈕。點擊後彈出對話框，提供兩種模式：**增量補全**僅對向量缺失或失效（如節點編輯後）的節點重新生成 embedding；**全部重算**清空集合並對所有可索引節點重新生成 embedding（更換嵌入模型或檔案後用此項）。如果嵌入設定已變更，增量補全會自動升級為全部重算，因為舊向量與新空間不相容。失敗的節點記錄到主控台，不阻斷整體流程。
+
 ### 自動 schema 遷移
 
 載入聊天時,記憶圖運行遷移管道,把舊的持久化形態(v5 raw,v8 opLog)轉換為當前的 v2 樓層狀態佈局(graph payload + `__floor_log` 提交日誌 + `__meta` sidecar)。管道冪等,只在輸入形態不是 v2 時運行,任何步驟失敗時絕不修改 chat-state。
