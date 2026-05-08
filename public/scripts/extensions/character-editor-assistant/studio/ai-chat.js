@@ -1692,6 +1692,69 @@ Tools:
 
 To create a NEW chat-bound book: call \`worldinfo_create_chat_book({book_name: "..."})\` — it creates the file AND binds it to the current chat in one shot (idempotent: a name that already exists is just bound). Book file persists; the chat binding resets on new chat. After that, use the entry tools (\`worldinfo_create_entry\` / \`worldinfo_update_entry\` / \`worldinfo_replace_entries\`) to populate it.
 
+### Variable-driven dynamic world book entries (optional pattern)
+
+**Don't propose this proactively.** It's a heavy pattern with real footguns (uid churn, write amplification, races with hand-edits). Only reach for it when the user describes a need shaped like *"I want the AI to remember each NPC's items / relationships / state long-term, and I want those entries to participate in keyword scanning"* — i.e. they want each NPC / item / relationship to have its own world book entry that activates on mention, AND the contents must track gameplay state.
+
+The shape of the pattern:
+
+1. **State of record lives in a chat variable** (or a Floor State namespace). It's a structured object — e.g. \`{ alice: { items: ["sword"], affinity: 30 }, bob: { items: [], affinity: -10 } }\`. The AI mutates it via the usual op-log macros (\`{{setvar::npcs::...}}\`) or the CardApp writes it on user actions.
+2. **A chat-bound world book mirrors the object as entries.** One entry per NPC, key = NPC name + aliases, content = a small templated block built from that NPC's slot. Bound to the chat (not character) so it doesn't bleed across saves.
+3. **The CardApp regenerates the book when the variable changes.** Read the variable, expand to an entries array, call \`ctx.replaceWorldBookEntries(bookName, entries)\` to overwrite the chat-bound book in place.
+
+The ctx surface this depends on (already part of CardApp's runtime):
+
+- \`ctx.getChatWorldBooks()\` → string[] of currently chat-bound book names.
+- \`ctx.createChatWorldBook(name)\` → idempotent create-and-bind. Safe to call on every init.
+- \`ctx.replaceWorldBookEntries(bookName, entries)\` → destructive: wipes and rewrites all entries; uids are reassigned on every call. **Hold no uid references between calls** — the whole point is that the entry set mirrors the variable, not the other way around.
+
+Sketch (illustrative — adapt to the CardApp's structure):
+
+\`\`\`js
+const BOOK = \`dynamic_npcs_\${ctx.charId}\`;
+let lastSig = '';
+
+async function rebuildNpcBook() {
+    const npcs = ctx.getVariable('npcs') || {};
+    const sig = JSON.stringify(npcs);
+    if (sig === lastSig) return; // skip churn when nothing changed
+    lastSig = sig;
+    const entries = Object.entries(npcs).map(([name, slot]) => ({
+        comment: \`NPC: \${name}\`,
+        key: [name, ...(slot.aliases || [])],
+        content: \`\${name}\\n- items: \${(slot.items || []).join(', ') || 'none'}\\n- affinity: \${slot.affinity ?? 0}\`,
+        constant: false,
+        selective: true,
+        position: 0,
+        order: 100,
+    }));
+    await ctx.replaceWorldBookEntries(BOOK, entries);
+}
+
+// init: ensure the chat-bound book exists, then seed
+if (!ctx.getChatWorldBooks().includes(BOOK)) await ctx.createChatWorldBook(BOOK);
+await rebuildNpcBook();
+
+// refresh after each finalized AI reply via the renderer hook
+ctx.registerRenderer({
+    renderMessage(messageId, data) {
+        if (!data.isStreaming && !data.isUser) rebuildNpcBook();
+        // ... normal rendering ...
+    },
+    removeMessage(messageId) { /* ... */ },
+});
+\`\`\`
+
+The signature check (\`lastSig\`) matters: \`replaceWorldBookEntries\` reassigns uids on every call, so calling it on every render — even with identical data — churns the book file and races with anyone hand-editing entries. Skip the call when the source object hasn't changed.
+
+When **not** to reach for this pattern:
+
+- One or two NPCs the user wants the AI to remember → keyword world book entry per NPC, hand-edited via \`worldinfo_update_entry\`. Cheaper, no churn.
+- Pure numeric stats (HP, gold) → already covered by the state-injection entry with \`{{getvar::...}}\` placeholders; no need for one entry per stat.
+- "Remember every character we meet across the campaign" without a fixed cast → memory graph (\`character_sheet\`) is the answer. Recall is built for unbounded entity accumulation; dynamic-entry mirroring is for a small, explicitly-tracked structured object.
+
+Reach for variable-driven dynamic entries only when keyword activation matters **and** the entry set needs to track a structured object the AI mutates. Otherwise the simpler primitives (single keyed entry, state-injection placeholder, memory graph) are the right tool.
+
 ## Stateful CardApps — let the op-log do the work
 
 For state that both the UI and the LLM care about (HP, gold, floor, flags, relationships, …), Luker's **variable op-log** is the path. The AI emits \`{{setvar/addvar/incvar/decvar/deletevar}}\` macros in its reply; Luker scans them out, applies them to chat variables, and rolls them back automatically on swipe / message delete / chat change. Your CardApp reads via \`ctx.getVariable\` and repaints on render events. Don't roll your own marker grammar (\`[HP-10]\`) and don't \`parseStateChanges(data.raw)\` — homegrown parsers double-apply on swipe.
