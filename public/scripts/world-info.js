@@ -284,7 +284,7 @@ function hasSelectedWorldInfo(name) {
     return selected_world_info.some(entry => areLookupNamesEqual(entry, name));
 }
 
-function getChatWorldInfoNames(metadata = chat_metadata, { resolveNames = true, onlyExisting = true } = {}) {
+export function getChatWorldInfoNames(metadata = chat_metadata, { resolveNames = true, onlyExisting = true } = {}) {
     const rawValue = metadata?.[METADATA_KEY];
     const names = normalizeArray(Array.isArray(rawValue) ? rawValue : [rawValue])
         .map((name) => resolveNames ? resolveWorldInfoName(name) : String(name || '').trim())
@@ -294,15 +294,15 @@ function getChatWorldInfoNames(metadata = chat_metadata, { resolveNames = true, 
     return onlyExisting ? names.filter(hasWorldInfoName) : names;
 }
 
-function getPrimaryChatWorldInfoName(metadata = chat_metadata, options = undefined) {
+export function getPrimaryChatWorldInfoName(metadata = chat_metadata, options = undefined) {
     return getChatWorldInfoNames(metadata, options)[0] ?? '';
 }
 
-function hasChatWorldInfoSelection(metadata = chat_metadata) {
+export function hasChatWorldInfoSelection(metadata = chat_metadata) {
     return getChatWorldInfoNames(metadata).length > 0;
 }
 
-function setChatWorldInfoSelection(names, metadata = chat_metadata) {
+export function setChatWorldInfoSelection(names, metadata = chat_metadata) {
     const normalizedNames = normalizeArray(Array.isArray(names) ? names : [names])
         .map((name) => resolveWorldInfoName(name))
         .filter(Boolean)
