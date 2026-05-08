@@ -313,6 +313,7 @@ import { applyStreamFadeIn } from './scripts/util/stream-fadein.js';
 import { initDomHandlers } from './scripts/dom-handlers.js';
 import { SimpleMutex } from './scripts/util/SimpleMutex.js';
 import { applyPatch as applyJsonPatch, compare as compareJsonPatch } from './scripts/util/fast-json-patch.js';
+import { shouldUseSettingsPatch } from './scripts/util/settings-patch-threshold.js';
 import { AudioPlayer } from './scripts/audio-player.js';
 import { MacroEnvBuilder } from './scripts/macros/engine/MacroEnvBuilder.js';
 import { MacroEngine } from './scripts/macros/engine/MacroEngine.js';
@@ -13459,20 +13460,19 @@ async function saveSettingsInternal(loopCounter = 0, options = {}) {
                 : buildObjectPatchOperations(previousSnapshot, payload, { maxOperations: 4000 });
             if (operations.length === 0) {
                 saved = true;
-            } else {
-                const patchBody = JSON.stringify({ operations });
-                const fullBody = JSON.stringify(payload);
-                // If patch is not meaningfully smaller, prefer legacy full-save path.
-                if (patchBody.length < fullBody.length) {
-                    const patchResult = await fetch('/api/settings/patch', {
-                        method: 'POST',
-                        headers: getRequestHeaders(),
-                        body: patchBody,
-                        cache: 'no-cache',
-                    });
-                    saved = patchResult.ok;
-                }
+            } else if (shouldUseSettingsPatch(operations)) {
+                // Use ops count (not byte comparison) to decide patch vs full save —
+                // avoids JSON.stringify-ing the entire settings payload just to
+                // measure its length when the patch is obviously the smaller body.
+                const patchResult = await fetch('/api/settings/patch', {
+                    method: 'POST',
+                    headers: getRequestHeaders(),
+                    body: JSON.stringify({ operations }),
+                    cache: 'no-cache',
+                });
+                saved = patchResult.ok;
             }
+            // else: too many ops or overflow sentinel — fall through to full save below.
         }
 
         if (!saved) {
