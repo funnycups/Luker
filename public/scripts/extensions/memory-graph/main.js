@@ -12968,6 +12968,87 @@ async function openManualCompressionPopup(context, settings) {
         }
         }
 
+async function openVectorRecomputePopup(context, settings) {
+    await ensureMemoryStoreLoaded(context);
+    const chatKey = getChatKey(context);
+    const store = memoryStoreCache.get(chatKey);
+    if (!store) {
+        notifyError(i18n('No active chat selected.'));
+        return;
+    }
+
+    const vectorConfig = getVectorConfigFromSettings(settings);
+    const validation = validateVectorConfig(vectorConfig);
+    if (!validation.valid) {
+        notifyError(i18n('Embedding profile is not configured. Configure it in the settings above first.'));
+        return;
+    }
+
+    const nodes = store?.nodes || {};
+    const hasAnyNode = Object.values(nodes).some(node => !node?.archived);
+    if (!hasAnyNode) {
+        notifyInfo(i18n('No eligible nodes to embed.'));
+        return;
+    }
+
+    const content = `
+        <div class="flex-container flexFlowColumn" style="gap:6px">
+            <div>${escapeHtml(i18n('Recompute vector embeddings for memory graph nodes.'))}</div>
+            <div style="opacity:0.85">${escapeHtml(i18n('Fill Missing: re-embed only nodes whose vectors are missing or stale (after node edits).'))}</div>
+            <div style="opacity:0.85">${escapeHtml(i18n('Full Rebuild: clear and re-embed all eligible nodes (after changing embedding model/profile).'))}</div>
+        </div>
+    `;
+    const choice = await context.callGenericPopup(content, context.POPUP_TYPE.TEXT, '', {
+        okButton: false,
+        cancelButton: i18n('Cancel'),
+        wider: true,
+        customButtons: [
+            { text: i18n('Fill Missing'), result: context.POPUP_RESULT.CUSTOM1 },
+            { text: i18n('Full Rebuild'), result: context.POPUP_RESULT.CUSTOM2 },
+        ],
+    });
+
+    if (choice === context.POPUP_RESULT.CUSTOM1) {
+        await runVectorRecompute(context, settings, store, chatKey, { mode: 'incremental' });
+    } else if (choice === context.POPUP_RESULT.CUSTOM2) {
+        await runVectorRecompute(context, settings, store, chatKey, { mode: 'full' });
+    }
+}
+
+async function runVectorRecompute(context, settings, store, chatKey, { mode }) {
+    const vectorConfig = getVectorConfigFromSettings(settings);
+    const schema = getEffectiveNodeTypeSchema(context, settings);
+    const vs = ensureVectorIndexState(store);
+    const profileChanged = Boolean(vs.source) && (vs.source !== vectorConfig.source || (vs.model || '') !== (vectorConfig.model || ''));
+
+    let purge = mode === 'full';
+    if (mode === 'incremental' && profileChanged) {
+        notifyInfo(i18n('Embedding configuration changed. Switching to full rebuild automatically.'));
+        purge = true;
+    }
+
+    notifyInfo(i18n('Starting vector recompute…'));
+    try {
+        const result = await syncVectorIndex(store, vectorConfig, chatKey, { schema, purge });
+        await persistMemoryStoreByChatKey(context, chatKey, store, { syncPersistentProjection: false });
+        const total = Number(result?.stats?.total || 0);
+        const inserted = Number(result?.insertedCount || 0);
+        const deleted = Number(result?.deletedCount || 0);
+        if (total === 0) {
+            notifyInfo(i18n('No eligible nodes to embed.'));
+        } else if (inserted === 0 && deleted === 0) {
+            notifySuccess(i18n('Vector index already up to date.'));
+        } else {
+            notifySuccess(i18nFormat('Vector recompute complete: ${0} indexed.', inserted));
+        }
+    } catch (error) {
+        console.error(`[${MODULE_NAME}] Vector recompute (${mode}) failed:`, error);
+        notifyError(i18nFormat('Vector recompute failed: ${0}', String(error?.message || error)));
+    } finally {
+        refreshUiStats();
+    }
+}
+
 function bindUi() {
     const context = getContext();
     const settings = getSettings();
@@ -13572,6 +13653,10 @@ function bindUi() {
         refreshUiStats();
         notifySuccess(i18n('Current chat memory graph reset.'));
         updateUiStatus(i18n('Reset memory graph for current chat.'));
+    });
+
+    root.find('#luker_rpg_memory_recompute_vectors').off('click').on('click', async function () {
+        await openVectorRecomputePopup(context, getEffectiveSettings(context, settings));
     });
 
     const importFileInput = root.find('#luker_rpg_memory_import_file');
