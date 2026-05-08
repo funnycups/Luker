@@ -1818,6 +1818,26 @@ The schema (the list of node types and the properties each carries) can be tailo
 
 Read the current schema first, propose a new schema in chat for user review, then write. Memory-graph schemas are the kind of thing users want to see before you persist them — it's a structural decision about how their roleplay accumulates over time.
 
+### Memory-graph schema design — defaults and discipline
+
+Before proposing a custom schema, you must know what the default already gives the user — touching it without that grounding is how schemas get bloated, redundant, or silently broken. The default schema (\`extension_settings.memory_graph.nodeTypeSchema\`) has exactly three node types:
+
+| Type | Columns | Key flags |
+|------|---------|-----------|
+| \`event\` | \`summary\` | \`alwaysInject: true\`, \`forceUpdate: true\`, \`editable: false\`, \`latestOnly: false\`, hierarchical compression |
+| \`character_sheet\` | \`title, aliases, traits, identity, state, goal, inventory, language_sample, core_note, addressing_user\` | \`alwaysInject: false\`, \`forceUpdate: false\`, \`editable: true\`, \`latestOnly: true\` |
+| \`location_state\` | \`title, aliases, controller, danger, resources, state\` | \`alwaysInject: false\`, \`forceUpdate: false\`, \`editable: true\`, \`latestOnly: true\` |
+
+**Iron rule: \`event\` is the timeline spine. Don't touch it.** Its three flags (\`alwaysInject: true\`, \`forceUpdate: true\`, \`editable: false\`) are what makes the recall layer work end-to-end — every prompt assembly injects the latest event slice, the extractor is forced to write events on every turn, and users can't accidentally edit historical events into incoherence. If a user proposes "let me change the event columns" / "make events editable" / "stop force-updating events" / "remove alwaysInject from event", refuse politely and explain — those settings are load-bearing for the whole memory system, not stylistic preferences. You can **add** new node types alongside \`event\` (derived types for the card's domain), but you don't **modify** \`event\`.
+
+**Granularity discipline.** A memory-graph schema captures entities that meet all three of: (a) get referenced repeatedly across many turns, (b) carry structured fields the AI reasons over, (c) accumulate or evolve in ways the recall layer should surface. Things that fail this test belong elsewhere — putting them in the schema costs prompt tokens on every recall and adds noise the extractor has to filter:
+
+- **Numeric stats** (HP, gold, affinity, hunger, mana) → chat variables. They change every turn, the AI must do arithmetic on them, and they're already covered by the op-log macros — the memory graph can't compete with that loop.
+- **Transient emotion / mood** (current anger level, this-scene fear) → chat variables, or just leave them in the dialogue. They're per-turn weather, not structured facts.
+- **Dialogue / narration flow** → chat history already holds it. The memory graph extracts *what happened*, not *what was said*.
+
+**Don't bring a fixed list of derived-type templates.** If the card's premise legitimately calls for new types (a mystery card might want \`clue\` + \`suspect\` + \`alibi\`; a strategy card might want \`faction\` + \`treaty\`), design them off the user's specific premise — don't paste a generic "common derived types" list. Forced templates produce schemas that don't match the card and that users have to rip out later.
+
 ### When NOT to reach for these
 
 If the user is asking for a UI tweak, a status bar, "make her remember my name" (single fact via chat variables), or any request the existing CardApp + world book + chat variable stack already covers — don't propose orchestrator or memory-graph. They're heavy machinery; offering them when a one-line variable would do is over-engineering. Save them for "I want this card to *think differently*" or "I want it to accumulate a real long-term memory."
