@@ -7,6 +7,13 @@ import { getContext, saveMetadataDebounced } from '../../extensions.js';
 import { executeSlashCommandsWithOptions } from '../../slash-commands.js';
 import { removeReasoningFromString } from '../../reasoning.js';
 import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, world_names, selected_world_info, getChatWorldInfoNames, setChatWorldInfoSelection } from '../../world-info.js';
+import {
+    getCharacterOverrideByAvatar as orchGetCharacterOverrideByAvatar,
+    getCharacterIndexByAvatar as orchGetCharacterIndexByAvatar,
+    getCharacterExtensionDataByAvatar as orchGetCharacterExtensionDataByAvatar,
+    normalizeCharacterOverrideMode as orchNormalizeCharacterOverrideMode,
+} from '../orchestrator/character-overrides.js';
+import { persistOrchestratorCharacterExtension } from '../orchestrator/editor-persist.js';
 
 /**
  * Build the context object for a CardApp.
@@ -537,6 +544,78 @@ export function buildContext(container, charId, config) {
             if (!data) throw new Error(`[CardApp] World book "${bookName}" not found`);
             await deleteWorldInfoEntry(data, uid, { silent: true });
             await saveWorldInfo(bookName, data, true);
+        },
+
+        // ==================== Orchestrator (per-character override) ====================
+
+        /**
+         * Get the orchestrator override stored on the active character card.
+         * Returns the raw payload from `character.data.extensions.orchestrator.override`
+         * (or `null` if none). Always character-scoped — this never reads the
+         * global `extension_settings.orchestrator`.
+         *
+         * Shape: `{ mode: 'spec'|'agenda'|'loop', enabled, spec?, agenda?, loop?, presets?, name?, notes?, updatedAt }`.
+         *
+         * @returns {object|null}
+         */
+        getOrchestratorOverride() {
+            const lukerCtx = getContext();
+            const charData = characters[this_chid];
+            const avatar = String(charData?.avatar || '').trim();
+            if (!avatar) return null;
+            return orchGetCharacterOverrideByAvatar(lukerCtx, avatar);
+        },
+
+        /**
+         * Replace the orchestrator override on the active character card.
+         * The override is sanitized through `normalizeCharacterOverrideMode`
+         * (which pins `mode` based on which sub-payload is present + freshest
+         * `updatedAt`) and persisted via the existing character-extension
+         * write path. Always character-scoped — global orchestrator settings
+         * are never touched.
+         *
+         * Pass the full override object you want stored. Mode-specific
+         * sub-payloads (`spec`, `agenda`, `loop`) should already match the
+         * orchestrator's internal schemas; if you're starting from an
+         * existing override, fetch it via {@link getOrchestratorOverride}
+         * and mutate.
+         *
+         * @param {object} override - The override payload to persist
+         * @returns {Promise<boolean>} true on success
+         */
+        async setOrchestratorOverride(override) {
+            if (!override || typeof override !== 'object') {
+                throw new Error('[CardApp] setOrchestratorOverride requires an override object');
+            }
+            const lukerCtx = getContext();
+            const charData = characters[this_chid];
+            const avatar = String(charData?.avatar || '').trim();
+            if (!avatar) throw new Error('[CardApp] No active character');
+            const characterIndex = orchGetCharacterIndexByAvatar(lukerCtx, avatar);
+            if (characterIndex < 0) throw new Error('[CardApp] Character not found in context');
+            const previous = orchGetCharacterExtensionDataByAvatar(lukerCtx, avatar);
+            const nextOverride = orchNormalizeCharacterOverrideMode({ ...override });
+            const nextPayload = { ...previous, override: nextOverride };
+            return await persistOrchestratorCharacterExtension(lukerCtx, characterIndex, nextPayload);
+        },
+
+        /**
+         * Remove the orchestrator override from the active character card,
+         * letting it fall back to global orchestrator settings. Always
+         * character-scoped.
+         * @returns {Promise<boolean>} true on success
+         */
+        async clearOrchestratorOverride() {
+            const lukerCtx = getContext();
+            const charData = characters[this_chid];
+            const avatar = String(charData?.avatar || '').trim();
+            if (!avatar) throw new Error('[CardApp] No active character');
+            const characterIndex = orchGetCharacterIndexByAvatar(lukerCtx, avatar);
+            if (characterIndex < 0) throw new Error('[CardApp] Character not found in context');
+            const previous = orchGetCharacterExtensionDataByAvatar(lukerCtx, avatar);
+            const nextPayload = { ...previous };
+            delete nextPayload.override;
+            return await persistOrchestratorCharacterExtension(lukerCtx, characterIndex, nextPayload);
         },
 
         // ==================== Rendering ====================
