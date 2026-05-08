@@ -11,10 +11,25 @@ import {
  TOOL_PROTOCOL_STYLE,
 } from '../../function-call-runtime.js';
 import { fetchFileList, fetchFileContent, saveFileContent, deleteFile, renameFile } from './studio.js';
-import { characters, this_chid, saveCharacterDebounced, getRequestHeaders } from '../../../../script.js';
-import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, selected_world_info, charUpdatePrimaryWorld } from '../../../world-info.js';
+import { characters, this_chid, saveCharacterDebounced, saveMetadata, chat_metadata, getRequestHeaders } from '../../../../script.js';
+import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, selected_world_info, charUpdatePrimaryWorld, getChatWorldInfoNames, setChatWorldInfoSelection } from '../../../world-info.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { getContext } from '../../../st-context.js';
+import {
+ getCharacterOverrideByAvatar as orchGetCharacterOverrideByAvatar,
+ getCharacterIndexByAvatar as orchGetCharacterIndexByAvatar,
+ getCharacterExtensionDataByAvatar as orchGetCharacterExtensionDataByAvatar,
+ normalizeCharacterOverrideMode as orchNormalizeCharacterOverrideMode,
+} from '../../orchestrator/character-overrides.js';
+import { persistOrchestratorCharacterExtension } from '../../orchestrator/editor-persist.js';
+import {
+ getSchemaScopeInfo as mgGetSchemaScopeInfo,
+ getAdvancedScopeInfo as mgGetAdvancedScopeInfo,
+ persistCharacterSchemaOverride as mgPersistCharacterSchemaOverride,
+ removeCharacterSchemaOverride as mgRemoveCharacterSchemaOverride,
+ persistCharacterAdvancedOverride as mgPersistCharacterAdvancedOverride,
+ removeCharacterAdvancedOverride as mgRemoveCharacterAdvancedOverride,
+} from '../../memory-graph/character-overrides.js';
 
 const MODULE_NAME = 'card-app/studio/ai';
 const MAX_TOOL_ROUNDS = 10;
@@ -35,6 +50,14 @@ const TOOL_NAMES = Object.freeze({
  WORLDINFO_CREATE_ENTRY: 'worldinfo_create_entry',
  WORLDINFO_UPDATE_ENTRY: 'worldinfo_update_entry',
  WORLDINFO_DELETE_ENTRY: 'worldinfo_delete_entry',
+ WORLDINFO_GET_CHAT_BOOKS: 'worldinfo_get_chat_books',
+ WORLDINFO_SET_CHAT_BOOKS: 'worldinfo_set_chat_books',
+ ORCHESTRATOR_GET_OVERRIDE: 'character_get_orchestrator',
+ ORCHESTRATOR_SET_OVERRIDE: 'character_update_orchestrator',
+ ORCHESTRATOR_CLEAR_OVERRIDE: 'character_clear_orchestrator',
+ MEMORY_GRAPH_GET: 'character_get_memory_graph',
+ MEMORY_GRAPH_SET_SCHEMA: 'character_update_memory_graph_schema',
+ MEMORY_GRAPH_SET_ADVANCED: 'character_update_memory_graph_advanced',
  SLASHCMD_LIST: 'slashcmd_list',
  SLASHCMD_HELP: 'slashcmd_help',
  LUKER_CTX_LIST_KEYS: 'luker_context_list_keys',
@@ -166,7 +189,7 @@ function buildTools() {
  type: 'function',
  function: {
  name: TOOL_NAMES.WORLDINFO_LIST_BOOKS,
- description: 'List world book names associated with the current character (character-bound + globally activated).',
+ description: 'List world book names visible to the current character: character-bound (from character.data.extensions.world — the card\'s primary book), chat-bound (from chat_metadata.world_info — per-save state, resets on new chat), and globally activated (selected_world_info — every chat). Returns { books: string[], sources: { [name]: \'character\'|\'chat\'|\'global\' } } so you can tell which book lives at which scope. For chat-bound-only listing use worldinfo_get_chat_books.',
  parameters: { type: 'object', properties: {}, additionalProperties: false },
  },
  },
@@ -240,6 +263,112 @@ function buildTools() {
  uid: { type: 'number', description: 'Entry UID' },
  },
  required: ['book_name', 'uid'],
+ additionalProperties: false,
+ },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.WORLDINFO_GET_CHAT_BOOKS,
+ description: 'Get the list of world book names bound to the CURRENT chat (from chat_metadata.world_info). Distinct from worldinfo_list_books which mixes character-bound + global. Chat-bound books reset when the user starts a new chat — use them for per-save lore/state that should not bleed across playthroughs.',
+ parameters: { type: 'object', properties: {}, additionalProperties: false },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.WORLDINFO_SET_CHAT_BOOKS,
+ description: 'Replace the chat-bound world book list (writes chat_metadata.world_info and saves chat metadata). Names that do not match an existing world book are silently dropped. Pass an empty array to clear. Always scoped to the active chat — never touches the character card or global selected_world_info.',
+ parameters: {
+ type: 'object',
+ properties: {
+ names: { type: 'array', items: { type: 'string' }, description: 'Full replacement list of world book names. Empty array = clear.' },
+ },
+ required: ['names'],
+ additionalProperties: false,
+ },
+ },
+ },
+ // ==================== Orchestrator (per-character override) ====================
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.ORCHESTRATOR_GET_OVERRIDE,
+ description: 'Read the orchestrator override stored on the active character card (character.data.extensions.orchestrator.override). Always character-scoped — never reads global orchestrator settings. Returns the raw payload or null. Shape: { mode: \'spec\'|\'agenda\'|\'loop\', enabled, spec?, agenda?, loop?, presets?, name?, notes?, updatedAt }. Use this to design multi-agent orchestration tailored to this card.',
+ parameters: { type: 'object', properties: {}, additionalProperties: false },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.ORCHESTRATOR_SET_OVERRIDE,
+ description: 'Replace the entire orchestrator override on the active character card. Mode is auto-pinned by content (mode field reset based on whichever sub-payload is present + freshest updatedAt). Always character-scoped — global orchestrator settings are never touched. The shape must match the orchestrator schema; consult docs (development/extension-api/orchestrator.md if available, or read_luker_doc on orchestrator-related files) and existing override (via character_get_orchestrator) before writing.',
+ parameters: {
+ type: 'object',
+ properties: {
+ override: { type: 'object', description: 'Full override payload to persist. Required keys vary by mode: spec mode needs spec+presets; agenda mode needs agenda; loop mode needs loop. enabled/name/notes/updatedAt are optional metadata.', additionalProperties: true },
+ },
+ required: ['override'],
+ additionalProperties: false,
+ },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.ORCHESTRATOR_CLEAR_OVERRIDE,
+ description: 'Remove the orchestrator override from the active character card so the card falls back to global orchestrator settings. Always character-scoped.',
+ parameters: { type: 'object', properties: {}, additionalProperties: false },
+ },
+ },
+ // ==================== Memory Graph (per-character override) ====================
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.MEMORY_GRAPH_GET,
+ description: 'Get the memory-graph configuration that will be in effect for the active character. Returns { schema: { scope, hasOverride, schema }, advanced: { scope, hasOverride, settings } } where scope is \'character\' if a card-level override is set, else \'global\' (falling back to the global memory-graph config). Use this to design a memory schema tailored to the card\'s domain (e.g. NPC relationships, quest state, location facts) before writing.',
+ parameters: { type: 'object', properties: {}, additionalProperties: false },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.MEMORY_GRAPH_SET_SCHEMA,
+ description: 'Set or clear the memory-graph node-type schema override on the active character card. Pass schema=null to clear and fall back to global schema. The schema is sanitized through normalizeNodeTypeSchema before write. Always character-scoped — never touches the global schema.',
+ parameters: {
+ type: 'object',
+ properties: {
+ schema: {
+ description: 'Array of node-type descriptors, or null to clear the override.',
+ oneOf: [
+ { type: 'array', items: { type: 'object', additionalProperties: true } },
+ { type: 'null' },
+ ],
+ },
+ },
+ required: ['schema'],
+ additionalProperties: false,
+ },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.MEMORY_GRAPH_SET_ADVANCED,
+ description: 'Set or clear the memory-graph advanced-settings override on the active character card. Pass advanced=null to clear and fall back to global advanced settings. The patch is normalized through normalizeAdvancedSettings before write. Always character-scoped — never touches the global advanced settings.',
+ parameters: {
+ type: 'object',
+ properties: {
+ advanced: {
+ description: 'Advanced settings patch object (recall layout, compression knobs, vector index params), or null to clear the override.',
+ oneOf: [
+ { type: 'object', additionalProperties: true },
+ { type: 'null' },
+ ],
+ },
+ },
+ required: ['advanced'],
  additionalProperties: false,
  },
  },
@@ -572,16 +701,24 @@ async function executeTool(charId, toolName, args, options = {}) {
  }
  // ==================== World Info ====================
  case TOOL_NAMES.WORLDINFO_LIST_BOOKS: {
- const books = [];
  const charData = characters[this_chid];
  const boundBook = String(charData?.data?.extensions?.world || '').trim();
- if (boundBook) books.push(boundBook);
- if (Array.isArray(selected_world_info)) {
- for (const name of selected_world_info) {
- if (name && !books.includes(name)) books.push(name);
- }
- }
- return { ok: true, books };
+ const chatBooks = (() => {
+ try { return getChatWorldInfoNames(chat_metadata); } catch { return []; }
+ })();
+ const globalBooks = Array.isArray(selected_world_info) ? selected_world_info : [];
+ const books = [];
+ const sources = {};
+ const push = (name, source) => {
+ const trimmed = String(name || '').trim();
+ if (!trimmed || sources[trimmed]) return;
+ sources[trimmed] = source;
+ books.push(trimmed);
+ };
+ push(boundBook, 'character');
+ for (const n of chatBooks) push(n, 'chat');
+ for (const n of globalBooks) push(n, 'global');
+ return { ok: true, books, sources };
  }
  case TOOL_NAMES.WORLDINFO_GET_ENTRIES: {
  const data = await loadWorldInfo(args.book_name);
@@ -616,6 +753,111 @@ async function executeTool(charId, toolName, args, options = {}) {
  await deleteWorldInfoEntry(data, args.uid, { silent: true });
  await saveWorldInfo(args.book_name, data, true);
  return { ok: true, message: `Entry ${args.uid} deleted` };
+ }
+ case TOOL_NAMES.WORLDINFO_GET_CHAT_BOOKS: {
+ try {
+ return { ok: true, books: getChatWorldInfoNames(chat_metadata) };
+ } catch (e) {
+ return { ok: false, error: `Failed to read chat-bound books: ${e?.message || e}` };
+ }
+ }
+ case TOOL_NAMES.WORLDINFO_SET_CHAT_BOOKS: {
+ const list = Array.isArray(args?.names) ? args.names : [];
+ const written = setChatWorldInfoSelection(list, chat_metadata);
+ await saveMetadata();
+ return { ok: true, books: written, message: `Chat-bound world books updated (${written.length} active).` };
+ }
+ // ==================== Orchestrator (per-character override) ====================
+ case TOOL_NAMES.ORCHESTRATOR_GET_OVERRIDE: {
+ if (this_chid === undefined || this_chid === null) {
+ return { ok: false, error: 'No active character' };
+ }
+ const lukerCtx = getContext();
+ const charData = characters[this_chid];
+ const avatar = String(charData?.avatar || '').trim();
+ if (!avatar) return { ok: false, error: 'Character has no avatar' };
+ const override = orchGetCharacterOverrideByAvatar(lukerCtx, avatar);
+ return { ok: true, override: override || null };
+ }
+ case TOOL_NAMES.ORCHESTRATOR_SET_OVERRIDE: {
+ if (this_chid === undefined || this_chid === null) {
+ return { ok: false, error: 'No active character' };
+ }
+ const override = args?.override;
+ if (!override || typeof override !== 'object') {
+ return { ok: false, error: 'override must be an object' };
+ }
+ const lukerCtx = getContext();
+ const charData = characters[this_chid];
+ const avatar = String(charData?.avatar || '').trim();
+ if (!avatar) return { ok: false, error: 'Character has no avatar' };
+ const characterIndex = orchGetCharacterIndexByAvatar(lukerCtx, avatar);
+ if (characterIndex < 0) return { ok: false, error: 'Character not found in context' };
+ const previous = orchGetCharacterExtensionDataByAvatar(lukerCtx, avatar);
+ const nextOverride = orchNormalizeCharacterOverrideMode({ ...override });
+ const ok = await persistOrchestratorCharacterExtension(lukerCtx, characterIndex, { ...previous, override: nextOverride });
+ return ok ? { ok: true, message: 'Orchestrator override updated.', mode: nextOverride.mode || null } : { ok: false, error: 'Failed to persist orchestrator override' };
+ }
+ case TOOL_NAMES.ORCHESTRATOR_CLEAR_OVERRIDE: {
+ if (this_chid === undefined || this_chid === null) {
+ return { ok: false, error: 'No active character' };
+ }
+ const lukerCtx = getContext();
+ const charData = characters[this_chid];
+ const avatar = String(charData?.avatar || '').trim();
+ if (!avatar) return { ok: false, error: 'Character has no avatar' };
+ const characterIndex = orchGetCharacterIndexByAvatar(lukerCtx, avatar);
+ if (characterIndex < 0) return { ok: false, error: 'Character not found in context' };
+ const previous = orchGetCharacterExtensionDataByAvatar(lukerCtx, avatar);
+ const nextPayload = { ...previous };
+ delete nextPayload.override;
+ const ok = await persistOrchestratorCharacterExtension(lukerCtx, characterIndex, nextPayload);
+ return ok ? { ok: true, message: 'Orchestrator override cleared (falling back to global).' } : { ok: false, error: 'Failed to clear orchestrator override' };
+ }
+ // ==================== Memory Graph (per-character override) ====================
+ case TOOL_NAMES.MEMORY_GRAPH_GET: {
+ const lukerCtx = getContext();
+ const schemaInfo = mgGetSchemaScopeInfo(lukerCtx);
+ const advancedInfo = mgGetAdvancedScopeInfo(lukerCtx);
+ return {
+ ok: true,
+ schema: { scope: schemaInfo.scope, hasOverride: !!schemaInfo.hasOverride, schema: schemaInfo.schema },
+ advanced: { scope: advancedInfo.scope, hasOverride: !!advancedInfo.hasOverride, settings: advancedInfo.settings },
+ };
+ }
+ case TOOL_NAMES.MEMORY_GRAPH_SET_SCHEMA: {
+ if (this_chid === undefined || this_chid === null) {
+ return { ok: false, error: 'No active character' };
+ }
+ const lukerCtx = getContext();
+ const charData = characters[this_chid];
+ const avatar = String(charData?.avatar || '').trim();
+ if (!avatar) return { ok: false, error: 'Character has no avatar' };
+ const schema = args?.schema;
+ const isClear = schema === null || schema === undefined;
+ const ok = isClear
+ ? await mgRemoveCharacterSchemaOverride(lukerCtx, avatar)
+ : await mgPersistCharacterSchemaOverride(lukerCtx, avatar, schema);
+ return ok
+ ? { ok: true, message: isClear ? 'Memory-graph schema override cleared (falling back to global).' : 'Memory-graph schema override updated.' }
+ : { ok: false, error: 'Failed to update memory-graph schema override' };
+ }
+ case TOOL_NAMES.MEMORY_GRAPH_SET_ADVANCED: {
+ if (this_chid === undefined || this_chid === null) {
+ return { ok: false, error: 'No active character' };
+ }
+ const lukerCtx = getContext();
+ const charData = characters[this_chid];
+ const avatar = String(charData?.avatar || '').trim();
+ if (!avatar) return { ok: false, error: 'Character has no avatar' };
+ const advanced = args?.advanced;
+ const isClear = advanced === null || advanced === undefined;
+ const ok = isClear
+ ? await mgRemoveCharacterAdvancedOverride(lukerCtx, avatar)
+ : await mgPersistCharacterAdvancedOverride(lukerCtx, avatar, advanced);
+ return ok
+ ? { ok: true, message: isClear ? 'Memory-graph advanced override cleared (falling back to global).' : 'Memory-graph advanced override updated.' }
+ : { ok: false, error: 'Failed to update memory-graph advanced override' };
  }
  case TOOL_NAMES.SLASHCMD_LIST: {
  const filter = String(args?.filter || '').toLowerCase();
