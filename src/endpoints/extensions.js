@@ -230,17 +230,9 @@ async function checkIfRepoIsUpToDateWithIsomorphic(extensionPath) {
             remoteUrl,
             currentBranchName: '',
             currentCommitHash: '',
+            remoteCommitHash: '',
         };
     }
-
-    await isomorphicGit.fetch({
-        fs,
-        http,
-        dir: extensionPath,
-        remote: 'origin',
-        ref: currentBranch,
-        singleBranch: true,
-    });
 
     const currentCommitHash = await isomorphicGit.resolveRef({
         fs,
@@ -248,59 +240,27 @@ async function checkIfRepoIsUpToDateWithIsomorphic(extensionPath) {
         ref: 'HEAD',
     });
 
-    let remoteCommitHash = '';
-    try {
-        remoteCommitHash = await isomorphicGit.resolveRef({
-            fs,
-            dir: extensionPath,
-            ref: toRemoteRefName(currentBranch),
-        });
-    } catch {
-        remoteCommitHash = '';
-    }
-
-    if (!remoteCommitHash || currentCommitHash === remoteCommitHash) {
+    if (!remoteUrl) {
         return {
             isUpToDate: true,
-            canFastForward: false,
-            hasDiverged: false,
-            remoteUrl,
+            remoteUrl: '',
             currentBranchName: currentBranch,
             currentCommitHash,
-            remoteCommitHash,
+            remoteCommitHash: '',
         };
     }
 
-    let localContainsRemote = false;
-    let remoteContainsLocal = false;
-    try {
-        localContainsRemote = await isomorphicGit.isDescendent({
-            fs,
-            dir: extensionPath,
-            oid: currentCommitHash,
-            ancestor: remoteCommitHash,
-        });
-    } catch {
-        localContainsRemote = false;
-    }
-    try {
-        remoteContainsLocal = await isomorphicGit.isDescendent({
-            fs,
-            dir: extensionPath,
-            oid: remoteCommitHash,
-            ancestor: currentCommitHash,
-        });
-    } catch {
-        remoteContainsLocal = false;
-    }
-
-    const canFastForward = remoteContainsLocal;
-    const hasDiverged = !localContainsRemote && !remoteContainsLocal;
+    const targetRef = `refs/heads/${currentBranch}`;
+    const refs = await isomorphicGit.listServerRefs({
+        http,
+        url: remoteUrl,
+        prefix: targetRef,
+    });
+    const match = refs.find(ref => ref.ref === targetRef);
+    const remoteCommitHash = match ? match.oid : '';
 
     return {
-        isUpToDate: localContainsRemote,
-        canFastForward,
-        hasDiverged,
+        isUpToDate: !remoteCommitHash || currentCommitHash === remoteCommitHash,
         remoteUrl,
         currentBranchName: currentBranch,
         currentCommitHash,
@@ -322,12 +282,12 @@ async function updateWithIsomorphic(extensionPath) {
 
     const status = await checkIfRepoIsUpToDateWithIsomorphic(extensionPath);
 
-    if (status.hasDiverged) {
-        throw createExtensionUpdateConflictError('Local extension branch has diverged from remote. Manual reset or reinstall is required.');
+    if (status.isUpToDate || !status.currentBranchName) {
+        return status;
     }
 
-    if (status.currentBranchName && !status.isUpToDate && status.canFastForward) {
-        const author = await getIsomorphicGitAuthor(extensionPath);
+    const author = await getIsomorphicGitAuthor(extensionPath);
+    try {
         await isomorphicGit.pull({
             fs,
             http,
@@ -339,21 +299,23 @@ async function updateWithIsomorphic(extensionPath) {
             fastForwardOnly: true,
             author,
         });
-        const currentCommitHash = await isomorphicGit.resolveRef({
-            fs,
-            dir: extensionPath,
-            ref: 'HEAD',
-        });
-        return {
-            ...status,
-            isUpToDate: false,
-            canFastForward: false,
-            hasDiverged: false,
-            currentCommitHash,
-        };
+    } catch (error) {
+        if (isExtensionUpdateConflictError(error)) {
+            throw createExtensionUpdateConflictError('Local extension branch has diverged from remote. Manual reset or reinstall is required.');
+        }
+        throw error;
     }
 
-    return status;
+    const currentCommitHash = await isomorphicGit.resolveRef({
+        fs,
+        dir: extensionPath,
+        ref: 'HEAD',
+    });
+    return {
+        ...status,
+        isUpToDate: false,
+        currentCommitHash,
+    };
 }
 
 async function forceUpdateWithIsomorphic(extensionPath) {
@@ -516,6 +478,14 @@ async function getManifest(extensionPath) {
     return manifest;
 }
 
+function parseLsRemoteSha(output) {
+    const text = String(output || '').trim();
+    if (!text) return '';
+    const firstLine = text.split('\n')[0].trim();
+    const sha = firstLine.split(/\s+/)[0];
+    return /^[a-f0-9]{40}$/i.test(sha) ? sha : '';
+}
+
 /**
  * This function checks if the local repository is up-to-date with the remote repository.
  * @param {string} extensionPath - The path of the extension folder
@@ -523,26 +493,35 @@ async function getManifest(extensionPath) {
  */
 async function checkIfRepoIsUpToDate(extensionPath) {
     const git = simpleGit({ baseDir: extensionPath, ...OPTIONS });
-    await git.fetch('origin');
     const currentBranch = await git.branch();
     const currentCommitHash = await git.revparse(['HEAD']);
-    const log = await git.log({
-        from: currentCommitHash,
-        to: `origin/${currentBranch.current}`,
-    });
+    const branchName = currentBranch.current || '';
 
-    // Fetch remote repository information
     const remotes = await git.getRemotes(true);
     if (remotes.length === 0) {
         return {
             isUpToDate: true,
             remoteUrl: '',
+            remoteCommitHash: '',
+        };
+    }
+    const remoteUrl = remotes[0].refs.fetch;
+
+    if (!branchName) {
+        return {
+            isUpToDate: true,
+            remoteUrl,
+            remoteCommitHash: '',
         };
     }
 
+    const lsRemoteOutput = await git.listRemote(['origin', `refs/heads/${branchName}`]);
+    const remoteCommitHash = parseLsRemoteSha(lsRemoteOutput);
+
     return {
-        isUpToDate: log.total === 0,
-        remoteUrl: remotes[0].refs.fetch, // URL of the remote repository
+        isUpToDate: !remoteCommitHash || remoteCommitHash === currentCommitHash,
+        remoteUrl,
+        remoteCommitHash,
     };
 }
 
@@ -718,7 +697,6 @@ router.post('/update', async (request, response) => {
             } else {
                 console.info(`Extension is up to date at ${extensionPath}`);
             }
-            await git.fetch('origin');
             const fullCommitHash = await git.revparse(['HEAD']);
             const shortCommitHash = fullCommitHash.slice(0, 7);
 
@@ -978,16 +956,15 @@ router.post('/version', async (request, response) => {
             const currentBranch = await git.branch();
             // get only the working branch
             const currentBranchName = currentBranch.current;
-            await git.fetch('origin');
             console.debug(extensionName, currentBranchName, currentCommitHash);
-            const { isUpToDate, remoteUrl } = await checkIfRepoIsUpToDate(extensionPath);
+            const { isUpToDate, remoteUrl, remoteCommitHash } = await checkIfRepoIsUpToDate(extensionPath);
 
-            return response.send({ currentBranchName, currentCommitHash, isUpToDate, remoteUrl });
+            return response.send({ currentBranchName, currentCommitHash, isUpToDate, remoteUrl, remoteCommitHash });
         } catch (error) {
             if (!isGitUnavailableError(error)) {
                 // it is not a git repo, or has no commits yet, or is a bare repo
                 // not possible to update it, most likely can't get the branch name either
-                return response.send({ currentBranchName: '', currentCommitHash: '', isUpToDate: true, remoteUrl: '' });
+                return response.send({ currentBranchName: '', currentCommitHash: '', isUpToDate: true, remoteUrl: '', remoteCommitHash: '' });
             }
 
             try {
@@ -997,9 +974,10 @@ router.post('/version', async (request, response) => {
                     currentCommitHash: status.currentCommitHash,
                     isUpToDate: status.isUpToDate,
                     remoteUrl: status.remoteUrl,
+                    remoteCommitHash: status.remoteCommitHash,
                 });
             } catch {
-                return response.send({ currentBranchName: '', currentCommitHash: '', isUpToDate: true, remoteUrl: '' });
+                return response.send({ currentBranchName: '', currentCommitHash: '', isUpToDate: true, remoteUrl: '', remoteCommitHash: '' });
             }
         }
     } catch (error) {
