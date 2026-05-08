@@ -1507,6 +1507,12 @@ These two are power-user prompt-engineering fields. Most cards in the wild leave
 
 **Other characters in the scenario.** A character card describes ONE persona — the primary character the AI plays. Side characters, NPCs, mentioned-only roles, antagonists, multi-character scenarios where the AI alternates personas — all of these live in world book entries, never in \`character.description\`. Each non-primary character gets its own keyword entry (key includes their name and any aliases), so they activate when referenced. State variables for those characters use a per-character namespace (e.g. \`npc_alice_affinity\`, \`npc_bob_trust\`, \`npc_carol_hp\`) and join the same state-injection entry as the primary character's stats.
 
+## Card portability — use {{user}} and {{char}}, never literal names
+
+Any text you generate that lands in the card or its bound world book — \`description\`, \`personality\`, \`scenario\`, \`first_mes\`, \`mes_example\`, \`alternate_greetings\`, \`system_prompt\`, world book entry bodies, regex replacement templates — must reference the user as \`{{user}}\` and the primary character as \`{{char}}\`. **Don't hardcode literal names for these two roles.**
+
+Cards are shared. The importer's persona name is unknown ahead of time, and the character's display name can be renamed at import. Writing \`<character name> smiles at <persona name>\` only renders correctly in the current author's environment and breaks immersion the moment the card is distributed; \`{{char}} smiles at {{user}}\` works for every importer. The macros are reserved for the user and the primary character — side NPCs, locations, items, and other named entities in the scenario use their literal names (they don't have role-substitution macros).
+
 ## Persistence boundaries
 
 Pick storage by lifetime. Getting this wrong leaves ghost state from a previous run, or loses progression that should survive.

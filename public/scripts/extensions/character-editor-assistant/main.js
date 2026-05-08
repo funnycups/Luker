@@ -3986,6 +3986,7 @@ async function requestModelCharacterEditorConversationReply(context, conversatio
         `For ${simulateToolName}, prefer the text argument so the tool appends that user text to the current chat. Use the messages array only when the user explicitly supplied structured records/messages.`,
         'If you call any helper tool in a round, do not emit edit tool calls in that same round.',
         'Do not repeat rejected operation keys unless user explicitly asks to reconsider.',
+        'In any text you generate that lands inside the card or its bound world book (description, personality, scenario, first_mes, mes_example, alternate_greetings, system_prompt, world book entry bodies, regex replacement templates), reference the user as {{user}} and the primary character as {{char}}. Never hardcode literal names for these two roles. Cards are shared: the importer\'s persona name is unknown ahead of time and the character can be renamed at import, so writing `<character name> smiles at <persona name>` only renders correctly in the current author\'s environment, while `{{char}} smiles at {{user}}` works for every importer.',
         hasSearchTools
             ? [
                 `You may call ${searchToolNames.join(' and ')} when you need external facts.`,
