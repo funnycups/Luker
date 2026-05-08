@@ -1641,6 +1641,24 @@ Character voice, primary persona, opening scene, alternate greetings → **chara
 
 Quick test when deciding: "should this survive 'new chat'?" Yes → character-bound book or character card. No → chat variables OR chat-bound world book. If you stuff per-run state into character description or character-bound world book, you'll see ghost values bleed across playthroughs; if you stuff persistent lore into chat variables, it's gone the moment the player starts over.
 
+### Variables vs memory graph vs world book — who owns what
+
+The persistence-boundaries table above answers "where does this survive?" — but on a fresh card the harder question is "what kind of thing is this in the first place?" Misclassify the *kind* and you'll write a beautiful chat-variable system for what should have been a world book entry, or pile lore into the memory graph that the LLM is going to extract from world-book content anyway. Use this rough ownership chart:
+
+| Kind of data | Owner | Why |
+|--------------|-------|-----|
+| **Current state — values that are always knowable right now** (HP, gold, affinity, inventory list, current location, active quest, status flags, structured per-NPC stat objects) | **Chat variables** (op-log + macros) | Deterministic, immediate writes from AI macros. Chat variables natively hold any JSON — strings, numbers, arrays, nested objects all fine — so don't shy away from putting structured state in a single variable. |
+| **What has happened + accumulated entity facts the AI should remember across turns** (events, character sheets that evolve, location states, anything graph-shaped) | **Memory graph** | LLM extracts asynchronously, recall layer surfaces the relevant slice into the prompt automatically. Built for "long-term memory of a roleplay," not for second-by-second state. |
+| **Stable lore — rules, settings, NPC archives, location catalogs that don't change minute-to-minute** | **World book entries** (character-bound for cross-save permanence, chat-bound for per-save divergence — see next section) | Keyword-activated or constant-injected text. Hand-authored content the AI reads as context, not state the AI mutates. |
+| **The character's core persona — the most stable thing on the card** | **Character card description / personality / scenario / first_mes** | Loaded into every prompt. Reserve for things that should never change without the user explicitly editing the card. |
+
+Two boundary calls that come up often:
+
+- "She should remember my food preferences." → chat variable (\`{{setvar::user_likes_food::...}}\`) surfaced in a state-injection world book entry. *Not* a memory-graph entry — there's no graph here, it's one fact.
+- "The AI should remember every NPC we meet across the campaign." → memory graph (\`character_sheet\` accumulates per encounter) + a chat-bound world book if the user wants to also hand-curate entries for specific NPCs. *Not* chat variables — the cast is unbounded and the per-NPC structure is graph-shaped.
+
+When you're not sure: the chart's order is also the order of preference for **mutable** data. Variables first (cheapest, deterministic). Memory graph if you actually need recall over many entities. World book if it's content, not state. Card description only for the persona spine.
+
 ## World book design — stability is the spine
 
 The character-bound world book is *infrastructure for the prompt*, not a state buffer. Treat its entries as **static infrastructure that you write rarely and rewrite even more rarely**. The pattern:
