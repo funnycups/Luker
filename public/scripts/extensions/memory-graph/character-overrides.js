@@ -114,9 +114,15 @@ export function getEffectiveAdvancedSettings(context = null, settings = null) {
 
 export function getEffectiveSettings(context = null, settings = null) {
     const base = settings || deps.getSettings();
+    // Inject the effective nodeTypeSchema so consumers reading
+    // `settings.nodeTypeSchema` directly (retriever.js, fallback paths in
+    // main.js, etc.) see the character override instead of the raw global
+    // schema. Without this, getEffectiveSettings only carried advanced-key
+    // overrides and the schema override was lost on the read path.
     return {
         ...base,
         ...getEffectiveAdvancedSettings(context, base),
+        nodeTypeSchema: getEffectiveNodeTypeSchema(context, base),
     };
 }
 
