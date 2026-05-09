@@ -142,6 +142,7 @@ import {
     getCharacterIndexByAvatar,
     getCharacterLoopOverrideByAvatar,
     getCharacterOverrideByAvatar,
+    getCharacterSavedExecutionModeByAvatar,
     getExecutionMode,
     hasCharacterAgendaOverride,
     hasCharacterLoopOverride,
@@ -594,14 +595,21 @@ function abortActiveOrchestratorRun() {
 
 function getEffectiveProfile(context) {
     const settings = extension_settings[MODULE_NAME];
-    const executionMode = getExecutionMode(settings);
+    const avatar = getCurrentAvatar(context);
+    // Character override's saved mode wins over the global executionMode.
+    // Without this, a character pinned to `loop` (or `agenda`) silently runs
+    // under whatever mode is set globally — e.g. global `spec` swallows a
+    // character `loop` override entirely. The realign on set / delete keeps
+    // settings.executionMode in sync for UI purposes, but dispatch should
+    // not depend on that side effect to read the right branch.
+    const executionMode = getCharacterSavedExecutionModeByAvatar(context, avatar)
+        || getExecutionMode(settings);
     if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
         // Character loop override beats global. Loop runtime re-sanitizes
         // via `sanitizeLoopProfile(profile)` before dispatch, so we pass
         // the resolved profile through directly. `source` / `key` are
         // attached for telemetry parity with spec/agenda; the loop
         // runtime ignores them.
-        const avatar = getCurrentAvatar(context);
         const characterLoopOverride = getCharacterLoopOverrideByAvatar(context, avatar);
         if (characterLoopOverride?.enabled) {
             const profile = sanitizeLoopProfile(characterLoopOverride);
@@ -642,7 +650,6 @@ function getEffectiveProfile(context) {
             return buildAgendaProfile('chat', chatKey, chatOverride.agenda);
         }
 
-        const avatar = getCurrentAvatar(context);
         const characterAgendaOverride = getCharacterAgendaOverrideByAvatar(context, avatar);
         if (characterAgendaOverride?.enabled) {
             return buildAgendaProfile('character', avatar, characterAgendaOverride);
@@ -698,7 +705,6 @@ function getEffectiveProfile(context) {
         };
     }
 
-    const avatar = getCurrentAvatar(context);
     const characterOverride = getCharacterOverrideByAvatar(context, avatar);
     if (characterOverride?.enabled && characterOverride?.spec) {
         const overridePresets = resolveOverridePresetMap(characterOverride, settings.presets);
