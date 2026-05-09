@@ -3,13 +3,18 @@
  */
 
 import { eventSource, event_types, getRequestHeaders } from '../../../script.js';
-import { getContext, registerExtensionApi } from '../../extensions.js';
+import { getContext, registerExtensionApi, getCharacterState, setCharacterState } from '../../extensions.js';
 import { addLocaleData, translate } from '../../i18n.js';
 import { createContainer, destroyContainer, injectScopedCSS, loadEntryModule, showError } from './loader.js';
 import { buildContext } from './context.js';
 import { activateRendererBridge, deactivateRendererBridge } from './renderer.js';
 
 const MODULE_NAME = 'card-app';
+
+// Namespace owned by character-editor-assistant Studio. CardApp init errors are
+// appended here as a system message so the next Studio session can self-diagnose
+// without the user having to read DevTools or paste stack traces.
+const STUDIO_SESSION_NAMESPACE = 'cardapp_studio_sessions';
 
 function t(text) {
     return translate(String(text || ''));
@@ -96,6 +101,14 @@ async function activateCardApp() {
     } catch (err) {
         console.error(`[${MODULE_NAME}] Failed to initialize CardApp:`, err);
         showError(container, err, () => deactivateCardApp());
+        // Record the error so the next CardApp Studio session can read it as a
+        // diagnostic system message and self-correct without the user having to
+        // copy stack traces out of DevTools.
+        try {
+            await recordCardAppInitErrorForStudio(charId, entry, err);
+        } catch (recordErr) {
+            console.warn(`[${MODULE_NAME}] Failed to record CardApp init error for Studio:`, recordErr);
+        }
         // Still mark as active so deactivate can clean up
     }
 
@@ -104,6 +117,76 @@ async function activateCardApp() {
 
     isCardAppActive = true;
     currentCardApp = { charId, config };
+}
+
+/**
+ * Append a diagnostic system message to the latest CardApp Studio session for
+ * this character so the next Studio AI run sees the failure and can fix it
+ * without the user having to inspect DevTools.
+ *
+ * @param {string} charId
+ * @param {string} entry Entry filename that failed (e.g. 'index.js')
+ * @param {Error} err
+ */
+async function recordCardAppInitErrorForStudio(charId, entry, err) {
+    const context = getContext();
+    const character = context?.characters?.[context.characterId];
+    const avatar = String(character?.avatar || '').trim();
+    if (!avatar) return;
+
+    const errorName = String(err?.name || 'Error');
+    const errorMessage = String(err?.message || err || 'Unknown error');
+    const stack = String(err?.stack || '').slice(0, 4000);
+    const timestamp = new Date().toISOString();
+
+    const content = [
+        `CardApp init failed at ${timestamp}.`,
+        `Entry: ${entry}`,
+        `Error: ${errorName}: ${errorMessage}`,
+        '',
+        'Stack:',
+        stack,
+        '',
+        'This is an automatic diagnostic from the CardApp loader. The CardApp on disk does not run as written. Please read the failing file, identify the cause from the stack above, and patch the file so init() completes without throwing.',
+    ].join('\n');
+
+    const diagnosticMessage = {
+        role: 'system',
+        content,
+    };
+
+    const data = await getCharacterState(avatar, STUDIO_SESSION_NAMESPACE);
+    let sessions = [];
+    let nextData = data;
+
+    if (data && Array.isArray(data.sessions)) {
+        sessions = data.sessions;
+    } else if (data && Array.isArray(data.messages)) {
+        // Migrate legacy single-session format inline so we don't lose history.
+        sessions = [{
+            id: `migrated_${Date.now()}`,
+            messages: data.messages,
+            updatedAt: data.updatedAt || Date.now(),
+            summary: 'Migrated session',
+        }];
+    }
+
+    if (sessions.length === 0) {
+        sessions.push({
+            id: `cardapp_error_${Date.now()}`,
+            messages: [diagnosticMessage],
+            updatedAt: Date.now(),
+            summary: 'CardApp init error',
+        });
+    } else {
+        const latest = sessions[sessions.length - 1];
+        if (!Array.isArray(latest.messages)) latest.messages = [];
+        latest.messages.push(diagnosticMessage);
+        latest.updatedAt = Date.now();
+    }
+
+    nextData = { version: 1, sessions };
+    await setCharacterState(avatar, STUDIO_SESSION_NAMESPACE, nextData);
 }
 
 /**
