@@ -1,178 +1,205 @@
 # Build a CardApp from Scratch
 
 ::: tip What this doc solves
-The [CardApp Studio](/features/card-editor/studio) page describes Studio's capabilities. This one walks through a complete character card to show **how to direct it in plain language**.
+The [CardApp Studio](/features/card-editor/studio) page describes Studio's capabilities. This one walks through a real-genre card to show **how to drive Studio end-to-end**: have it design a memory-graph schema, design an orchestrator loop, write the card and a card-specific world book, and finally build a CardApp panel that evolves with the conversation.
 
-By the end you'll have a runnable, immersive RP CardApp built from scratch, without writing a single line of JavaScript yourself.
+By the end you'll see how Studio stacks all these layers onto a single card — without you writing any code or manually opening any editor toggles.
 :::
 
 ## What you'll get
 
-The final result is a single-character immersive RP card called "Isekai Survival Log". Once you send the first message, you'll see this:
+The final result is a detective-genre card called **"Victorian Case File"** (维多利亚案宗). {{char}} is a Holmes-style independent consultant in 1888 London. You play a client (or a visiting Scotland Yard inspector) bringing in a case file, and you investigate together.
 
-![Final result screenshot](/images/cardapp-studio-walkthrough/step-08-end-to-end.png)
+This single card carries all of these at once:
 
-- A 4-cell status bar at the top: Day / Stamina / Hunger / Mood
-- The protagonist arrives in an unfamiliar forest in a Western low-magic isekai setting; the AI plays the environment and narrator
-- A bound World Info book containing state-injection entries + worldview anchors + a few NPC settings
-- Immersive button labels (Halt / Rewrite / Old Volume / New Chapter / Close Volume) covering the required UX
+- **Memory-graph schema derivation** — four domain node types (`suspect` / `clue` / `forensic_site` / `witness`), not the default schema. **This layer is for the LLM's long-term memory** — the AI extracts entities into these types as the conversation goes, so cross-turn recall has structured slices ready to feed back into the prompt.
+- **Orchestrator loop pipeline** — every AI reply runs `draft → critique → revise`, and the critique stage is forced to inspect "missed clues / contradicting suspect testimony / violated period constraints" before the revise stage rewrites.
+- **Card-bound world book** — "维多利亚案宗·伦敦档案" (Victorian Case File · London Archive), with Victorian-London context + detective-procedure rules + **a state-injection entry** (containing `{{getvar::case_*}}` placeholders + macro instructions teaching the AI to emit `{{setvar}}` to advance the case). **Your global world books are untouched.**
+- **"Current Case" CardApp panel** — reads chat variables to surface case state: case name / current phase / suspects / clues / forensic sites. **The variables are advanced by the AI emitting `setvar` macros in its replies**; the CardApp reads via `ctx.getVariable` + `JSON.parse` and renders. One chat turn → AI emits `setvar` → panel updates on the next frame.
 
-The whole process only requires you to describe what you want in natural language — **the AI handles code, Git commits, World Info entries, variable initialization, and field bindings**.
+The whole setup is just 2 rounds of natural-language conversation — Studio proposes, Studio writes the files, Studio binds the fields, Studio creates the world book.
+
+::: info CardApp does not read memory-graph
+The graph (memory-graph) and the panel (CardApp) are **two parallel layers, not directly connected**. Memory-graph is the LLM's internal memory system — the UI doesn't read it (`ctx` deliberately exposes no graph-read API). When the CardApp wants to surface case state, it reads chat variables; the same entities can simultaneously be archived as memory-graph nodes by the AI's extractor, but that's for cross-turn prompt recall, not for panel rendering. See [When to use variable-driven UI](/features/variable-op-log#when-to-use-variable-driven-ui) for the producer-consumer pattern.
+:::
 
 ## Prerequisites
 
-- A working Luker / SillyTavern instance
-- A configured LLM API; a model with strong tool-call support is recommended (Claude / GPT-5 etc.)
-- (For the advanced section) A working Stable Diffusion / ComfyUI backend
+- A working Luker instance
+- A configured LLM API; a tool-use-strong model (Claude / GPT-5 etc.) is recommended — Studio's tool flow leans on the model being willing to call tools
+- The Character Editor Assistant section has "Model request LLM preset" / "Model request API preset" options; that's what Studio uses for its own AI calls
 
-## 1. Create an empty card → Open Studio
+## 1. Create a blank card → open Studio
 
-Open the right-side character management panel, click "New Character", and pick a name (this guide uses "Isekai Survival Log"). **You don't need to fill any fields** — description, first message, World Info bindings are all left for Studio AI to handle.
+Open the right-side character panel, click "Create New Character", name it **"维多利亚案宗"** (Victorian Case File). Leave description / first message / world info binding all empty — Studio will fill those.
 
-Next, open "Extensions" → expand "Character Card Editor Assistant" → click **"&lt;/&gt; CardApp Studio"**:
+Then open the Extensions panel → expand "Character Editor Assistant" → click **"&lt;/&gt; CardApp Studio"**:
 
-![Studio entry location](/images/cardapp-studio-walkthrough/step-01-studio-entry.png)
+![Studio entry](/images/walkthrough/step-01-studio-entry.png)
 
-Studio is the three-panel overlay on top of the main UI: AI chat on the left, live preview in the middle, code editor on the right. The new card hasn't enabled CardApp yet, and Studio will proactively ask if you want to enable it — that's expected.
-
-![Studio initial empty state](/images/cardapp-studio-walkthrough/step-02-studio-empty.png)
-
-::: tip You don't need to read code to follow this
-The right panel will refresh as the AI works, but this guide doesn't ask you to read the code. Just watch the **left chat** and the **center preview** — that's how vibe-coding is supposed to feel.
+::: tip Studio works on cards without CardApp too
+The Character Editor Assistant routes cards-without-CardApp to the [popup mode](/features/card-editor/popup) and cards-with-CardApp into Studio automatically. But **the CardApp Studio button can pull any card into Studio on demand** — and Studio's tool surface is the full set (memory-graph schema / orchestrator override / regex scripts / world info / character fields), unlike popup mode which only covers fields and world-info entries.
 :::
 
-## 2. One prompt, scaffolding + World Info + opening message all at once
+## 2. One genre prompt → Studio proposes the plan
 
-Click into the left input field and **paste the following verbatim**:
+Click into the Studio left-panel input. Describe the genre; let the model figure out how to land it:
 
 ```
-I want to build a light-novel-style Western isekai adventure card.
-The protagonist is dropped into an unfamiliar forest and has to survive alone.
-The AI plays the environment and narrator (third-person view describing what
-the protagonist sees / feels). Avoid Eastern xianxia / cultivation / urban /
-school settings, and avoid post-apocalyptic dark fantasy.
+I want to build a Victorian-London detective-genre character card from scratch.
+This card needs:
 
-Build a minimal viable CardApp first:
-- A 4-cell status bar at the top: Day, Stamina, Hunger, Mood
-- A message rendering area in the middle
-- An input box and a send button below
-- The required quick buttons (stop generation, switch chat, new save, close chat)
-  at the bottom
+1. Custom memory-graph schema (derived node types appropriate to the genre — like
+   suspect, clue, forensic_site, witness), not the default schema.
+2. Orchestrator loop pipeline (draft → critique → revise), configured per your
+   best practice.
+3. A world book bound to this card (lore + Victorian London context + a few
+   detective procedural rules).
+4. A simple CardApp that visualizes the "current case" (suspects / clues /
+   forensic sites) and updates as the conversation evolves — readers should
+   see the panel content change as we chat.
 
-All state variables use the isj_ prefix (isj_day / isj_hp / isj_food / isj_mood).
-Style should match a light-novel Western isekai vibe; you decide the specific
-colors / fonts / layout.
+Please land all of this in whatever order you think best. At each step, propose
+the plan first; I'll nod, then you write.
 ```
 
-![Sending the first prompt](/images/cardapp-studio-walkthrough/step-03-first-prompt.png)
+![Sending the genre prompt](/images/walkthrough/step-02-first-prompt.png)
 
-After you send, Studio AI doesn't dive straight into writing — it first:
+After you send, Studio doesn't dive in writing — it lays out the entire plan first.
 
-1. Calls `list_files` / `character_get_fields` to inspect the current state
-2. Notices CardApp isn't enabled yet, **asks you whether to enable it** (a "yes" is enough)
-3. Walks through its plan so you can review it
+## 3. Studio proposes the memory-graph schema
 
-Once confirmed, it does the following in one go — no need to split prompts across rounds:
+It opens with the data layer, deriving the node types this genre needs. Studio proposes four derived types (`suspect` / `clue` / `forensic_site` / `witness`), spelling out the columns each type needs (suspects have `alibi` / `motive` / `suspicion_level`, clues have `found_at` / `linked_suspects`, etc.) and explaining why it's not adding `victim` or `theory` (avoiding schema bloat — let event chains carry the deduction layer instead).
 
-- Enables the CardApp toggle (`cardapp_set_enabled`)
-- Writes `index.js` / `style.css` (status bar / message area / input area / required UX buttons)
-- Binds a paired World Info book and creates state-injection entries + worldview anchors
-- Rewrites `first_mes` (the protagonist's transition opening, with `setvar` calls to initialize variables)
-- Binds the `world` field to the new World Info book
+::: tip What "derived types" means
+Memory Graph ships with `event` as the core node type (the timeline spine); on top of that you can **define custom node types per card's genre**. The "suspect / clue" concepts a detective card needs are exactly that — derived types — letting the AI store extracted memories in structured form rather than dumping everything into freeform text. See [Memory Graph](/features/memory-graph) for details.
 
-Each tool call **prompts you for approval** with a diff — usually safe to "Approve all" in one click.
-
-![AI working: tool calls + diff approvals](/images/cardapp-studio-walkthrough/step-04-first-round-work.png)
-
-::: tip "AI content goes into World Info, not system_prompt"
-Notice the AI doesn't touch `system_prompt` — this is [Luker's CardApp authoring convention](/development/card-developers#cardapp-content-placement-convention): a card's `system_prompt` overrides the system section your chat-completion preset already designed, so card content needs to live in World Info entries to coexist with the preset. Studio AI follows this by default.
+Note: **this layer is for the LLM's long-term memory.** The CardApp panel **does not read** the graph. In Section 6 below, when Studio writes the CardApp, the data source is chat variables, not graph nodes.
 :::
 
-::: tip Don't be surprised to see <code v-pre>\{{...}}</code> in entries
-The AI teaches the model how to use macros like `setvar` / `addvar` inside entries — those teaching examples must be **backslash-escaped** (<code v-pre>\{{...}}</code>), otherwise the engine executes them on every prompt build and pollutes your variables. Studio AI handles this escaping automatically.
+## 4. Studio proposes the orchestrator loop pipeline
+
+Then the generation layer. It recommends `loop` mode — Luker's loop is a single "research + summarize" agent: before each reply, the agent runs a round of tool calls (searching chat / lorebook / memory slices), compresses what this response should reference into a capsule, and feeds that into the main generation. The system_prompt Studio writes for this research agent acts as an "internal review": before finalizing, the agent must check three things — was any clue missed, does any suspect testimony contradict an `alibi`/`motive` already in the graph, were any Victorian-era constraints violated (etiquette / class / technology).
+
+This is why Studio's [system prompt](/features/card-editor/studio) defaults to recommending loop — most cards benefit from one extra checking layer over a single straight generation, and reasoning-heavy / long-running cards especially.
+
+## 5. After confirmation, Studio lands everything in one round
+
+Reply something like "all confirmed, go with this plan, don't check back, just build", and Studio launches a batch of tool calls:
+
+![Studio landing all the tool calls](/images/walkthrough/step-05-tool-calls.png)
+
+In one round it has done:
+
+- **`character_update_memory_graph_schema`** — write the four derived node types onto the card (this card only — no global pollution)
+- **`character_update_orchestrator`** — write the three-stage `draft / critique / revise` loop config onto the card (also character-scoped)
+- **`worldinfo_create_chat_book`** + **`worldinfo_replace_entries`** — create the card-specific world book and write all entries in one shot (Victorian-London context, detective procedural rules, **state-injection entry** with `{{getvar::case_*}}` placeholders + macro instructions teaching the AI how to emit `{{setvar}}`, Scotland Yard culture, Whitechapel district lore, etc.)
+- **`character_update_fields`** — write description / personality / first_mes / scenario, and bind the `world` field to the new world book
+
+Each tool call **pops up an approval with a full diff** so you can see what's changing — usually safe to "approve all" in one go.
+
+::: tip The state-injection entry is the variable-driven UI hub
+The "state-injection" world book entry contains both `{{getvar::case_*}}` (so the AI sees the current case state every time the prompt is assembled) **and macro-teaching `{{setvar}}` examples** (instructing the AI when to emit `setvar` in its reply to advance the case). AI reads prompt → sees current `case_phase` / suspects list → emits `{{setvar::case_phase::on_scene}}` (or similar) in the next reply → op-log strips the literal from `mes` and writes it into `chat_metadata.variables` → CardApp reads via `ctx.getVariable` and renders. **That's the closed loop.** See [Per-Message Variables](/features/variable-op-log) for the mechanics.
 :::
 
-When the AI finishes, the center preview area auto-reloads and you see a runnable CardApp:
-
-![First round running](/images/cardapp-studio-walkthrough/step-05-first-round-running.png)
-
-## 3. If something's off, just ask the AI
-
-After one round you might decide you want a different palette, a different button order, a different vibe in the AI's narration, or a richer NPC setting — just say so in the left chat. Studio AI continues with the existing context:
-
-::: tip Just ask freely
-- "Reorder the bottom buttons to Send / Rewrite / Old Volume / New Chapter / Close Volume"
-- "Can the status bar font be a bit larger?"
-- "On that NPC keyed entry, hint that the player can give them gifts"
-- "The end of the opening message feels too cold; try a brighter scene"
-
-Don't worry about prompt phrasing — describe what you want and the AI will iterate. If the result is wrong, just keep iterating.
+::: tip Regex scripts work too
+Studio can also write / edit regex scripts (stripping `<thinking>` tags, transforming display formats, etc.) — ask when you need it. This card is simple enough we didn't use any; don't force one if you don't need it.
 :::
 
-## 4. End-to-end run
+## 6. (Continuing) Building the live visualization panel
 
-Send an RP message (anything will do):
-
-![Full conversation + state changes](/images/cardapp-studio-walkthrough/step-08-end-to-end.png)
-
-By this point, with 1–2 natural-language conversations, you've produced a card that has:
-
-- ✓ A working frontend UI (status bar + required UX buttons)
-- ✓ Worldview and NPC settings (the bound World Info book)
-- ✓ An opening message with initialization logic
-- ✓ Real RP immersion when running
-
-Throughout this process you **never read a line of code**, never manually toggled CardApp, never manually created a World Info entry.
-
-## 5. (Advanced) Wire up image generation
-
-::: warning Prerequisite: SD/ComfyUI backend
-This section requires the SillyTavern [Image Generation extension](https://docs.sillytavern.app/extensions/stable-diffusion/) backend (local Stable Diffusion / ComfyUI / remote API — pick one). Without a backend, skip this section.
-:::
+The final prompt:
 
 ```
-I'd like the CardApp to auto-generate images when the AI describes a new scene.
-Don't generate images for player-only dialog or inner monologue.
-Also add a "Draw what's visible" button at the bottom that re-renders the
-scene of the most recent AI message on demand.
+Continue. Now do the last step — the CardApp "current case" visualization panel.
+Read chat variables to surface case state: case name / phase / suspects /
+clues / forensic sites. Layout per your earlier draft; refresh after each AI
+message completes.
 
-For users without an image-generation backend: silently skip / hide the button,
-don't surface errors, and don't break other CardApp features.
+Style: Victorian-fog atmosphere (dark parchment paper, serif fonts, dark red /
+dark amber accents). Styling / palette / detail decisions are yours. I'll
+approve all CardApp file writes.
 ```
 
-![Inline scene illustration](/images/cardapp-studio-walkthrough/step-09-scene-image.png)
+Studio writes the CardApp. It reads chat variables (`case_name` / `case_phase` / `case_suspects` / `case_clues` / `case_sites`); list-shaped variables hold JSON-serialized arrays, which the CardApp parses with `ctx.getVariable + JSON.parse` and then renders. **No memory-graph reads** — the graph is the LLM's long-term-memory layer, not on the UI's data path.
 
-![Triggering "Draw what's visible"](/images/cardapp-studio-walkthrough/step-10-redraw-button.png)
+## 7. End-to-end run
+
+Exit Studio, send a regular RP message. We hand {{char}} a Whitechapel case file:
+
+> "Detective, someone was murdered in Whitechapel last night, found in their own attic. The victim is Monica Wheeler, 35, a tutor; her husband Henry Wheeler reported it. I just transferred from Scotland Yard with the file and need your read."
+
+### a. The chat reply — every layer kicking in
+
+![End-to-end chat reply](/images/walkthrough/step-07a-chat-reply.png)
+
+The reply shows all layers cooperating: deductions backed by evidence (specific physical evidence → inference → next investigative step), Victorian class register, period-tech constraints respected (no fingerprint comparison, no telephone calls), and {{char}}'s own "don't disturb the scene / evidence chain" procedural rules. These come jointly from world-info entries + character fields + the orchestrator capsule.
+
+::: tip The AI also emitted setvar in this reply
+Click the small flask icon (fa-flask) in the message footer to see the `var_ops` recorded for this reply — typically `setvar case_name = Whitechapel attic murder · Monica Wheeler` / `setvar case_phase = on-scene examination` / `setvar case_suspects = [{...Henry Wheeler...}]`. The literal macros are stripped from `mes` before render, so you read clean narrative — but the variables are now updated.
+:::
+
+### b. Inspect what the orchestrator did in the background
+
+Before each reply, the loop pipeline configured on the card runs a "research + summarize" pass — calling chat / lorebook / memory search tools to compress the context this reply needs into a capsule, which is then fed into the main generation. In the Extensions panel → Orchestrator section → "View Runtime Trace", you can see which steps the loop ran, which tools it called, and how it finalized:
+
+![Orchestrator runtime trace](/images/walkthrough/step-07b-stage-output.png)
+
+If the loop fails (misconfigured API preset, timeout, etc.), the failure point is marked here and the system automatically falls back to direct generation without the loop — your end-to-end experience stays continuous, you just lose that layer of internal-review capsule.
+
+### c. Inspect what memory-graph is accumulating long-term
+
+In the Extensions panel → Memory section → "View Graph":
+
+![Memory Graph visualization](/images/walkthrough/step-07c-memory-graph.png)
+
+The nodes are derived per the schema we just designed (`suspect`, `clue`, `forensic_site`, `witness`, `event`); edges record relationships. **But this is for the LLM** — next time cross-turn recall needs context on Henry Wheeler, the graph automatically feeds the relevant slice into the prompt. The CardApp panel **does not read this graph** — its data source is chat variables. Two parallel layers, non-overlapping responsibilities: the graph handles cross-turn long-term memory; the variables handle real-time UI sync.
+
+## 8. Watch the CardApp panel evolve with the conversation
+
+Keep chatting. Each turn the AI emits `{{setvar::case_*::...}}` macros to advance case state, and the "current case" panel refreshes:
+
+![CardApp panel — after two turns: suspects / clues / forensic sites populating](/images/walkthrough/step-06b-cardapp-turn2.png)
+
+After two turns, the AI has emitted `{{setvar::case_suspects::[...]}}` and friends in its replies; op-log stripped the literals from `mes` and wrote them into `chat_metadata.variables`; the CardApp reads them via `ctx.getVariable('case_suspects')` and renders the suspect rows. **That's the standard variable-driven UI shape.**
+
+The state-injection world book entry pastes the same `{{getvar::case_*}}` back into every prompt assembly — so the AI itself always sees "current suspects, current clues" at the next turn and won't contradict its own past `setvar`s.
+
+::: info Division of labor with memory-graph
+- **Chat variables**: real-time case state, panel data, prompt sync — AI emits `setvar`, op-log replaces literals + persists + replays.
+- **Memory-graph**: long-term cross-turn memory, AI cross-turn recall — AI describes "saw what / spoke to whom" in narrative; the extractor archives nodes asynchronously.
+- The two **don't overlap**, and CardApp **only reads variables**.
+:::
 
 ## Prompting cheatsheet
 
-After running through one cycle you'll notice that effective Studio prompts don't need to be long — what matters is making the **direction** clear. A few learnings:
+After a single run-through you'll notice that effective Studio prompts aren't about word count — they're about **clear direction + handing decisions to Studio**:
 
-1. **Describe appearance and behavior, not implementation**
-   - ✓ "A 4-cell status bar at the top: Day / Stamina / Hunger / Mood"
-   - ✗ "Use ctx.registerRenderer to register a renderer that listens for GENERATION_ENDED"
+1. **State the genre and vibe; leave implementation to Studio**
+   - ✓ "Victorian London detective card; needs memory-graph schema derivation + loop pipeline + card-specific world book + visualization panel"
+   - ✗ "In `character.data.extensions.memory_graph.schema` add an object with `type=suspect` whose fields are `alibi`, `motive`..."
 
-2. **Separate constraints from latitude**
-   - "Use the isj_ prefix" is a constraint (direction)
-   - "You decide the colors / fonts / layout" is latitude (left to the AI)
-   - The AI fills in latitude with concrete content (NPC names, palette, button labels) and treats constraints as inviolable — this is the workflow it's best at
+2. **For structural decisions (schema / loop), let Studio propose first**
+   - It does this by default (the system prompt bakes the habit in); you just glance at the proposal, push back if you disagree
+   - Schema feels overspecified: "drop witness, fold it into suspect" — Studio will redo it
+   - Want `agenda` mode instead of loop: "switch to agenda; let the planner decide which thread to chase first" — same deal
 
-3. **AI output not matching your idea is not a bug**
-   - It's part of the loop. When you see drift, describe the gap precisely: "I wanted X (be specific); you gave me something closer to Y (point out where it drifted); fix it."
-   - Don't go back and edit files yourself, and don't rewrite the entire prompt
+3. **Once confirmed, tell it explicitly to stop checking back**
+   - Otherwise approving one tool call at a time is slow
+   - "Go with this plan, I'll approve all tool calls, just land it"
 
-4. **Look at the diff before approving**
-   - Every tool call pops up an approval; that's your safety net when something actually goes wrong
-   - But default to trusting Studio — its system prompt already bakes in [Required UX](/features/cardapp#required-ux), [op-log usage](/features/variable-op-log), [World Info binding](/development/card-developers#cardapp-content-placement-convention), and macro escaping
+4. **Ask for explanations when unsure**
+   - "Why isn't `victim` in the schema?" — it'll explain ("victim is usually one or two fixed pieces of info — better to put that in `first_mes` or a world-info entry; making it a schema type creates redundancy")
 
-5. **Ask for explanations when in doubt**
-   - "Why does this need <code v-pre>\{{...}}</code> instead of <code v-pre>{{...}}</code>?"
-   - It'll explain in plain language and walk you through the context
+5. **CardApp's data source is chat variables, not memory-graph**
+   - Memory-graph is the LLM's long-term memory; the CardApp doesn't read it.
+   - You don't need to spell this out in the prompt — Studio defaults to this shape.
+   - If you accidentally ask "make the CardApp render memory-graph nodes", Studio will push back and explain the variable-driven equivalent.
 
 ## Next steps
 
-- [CardApp Overview](/features/cardapp) — CardApp's core concepts
-- [Card Developer Guide](/development/card-developers) — Full `ctx` API + authoring conventions
-- [Variable Op-Log](/features/variable-op-log) — How macros like <code v-pre>{{setvar}}</code> work
-- [State System](/features/state-system) — Floor State / triggers / global variables
-- [Studio Capability Reference](/features/card-editor/studio) — Editor, Git, AI tools at a glance
+- [CardApp Studio](/features/card-editor/studio) — Studio's full capability list, layout, and tool set
+- [Memory Graph](/features/memory-graph) — Memory Graph concepts, default schema, and derived types
+- [Loop Mode](/features/orchestrator/loop) — Detailed orchestrator loop walkthrough
+- [Per-Message Variables](/features/variable-op-log) — Variable op-log mechanics + variable-driven UI scenario
+- [Card Developer Guide](/development/card-developers) — Complete `ctx` API reference + CardApp authoring conventions

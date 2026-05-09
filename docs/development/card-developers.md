@@ -206,6 +206,34 @@ The CardApp context object provides the following APIs:
 | `ctx.updateWorldBookEntry(bookName, uid, patch)` | Update a world book entry (shallow merge) |
 | `ctx.deleteWorldBookEntry(bookName, uid)` | Delete a world book entry |
 
+#### Events & Lifecycle
+
+| API | Description |
+|-----|-------------|
+| `ctx.eventSource` | Luker's internal event bus. Subscribe with `ctx.eventSource.on(eventName, handler)` and unsubscribe with `ctx.eventSource.off(eventName, handler)`. Event names live on `ctx.lukerContext.eventTypes` (`CHAT_CHANGED`, `MESSAGE_DELETED`, `MESSAGE_SWIPED`, etc.). Pair every `.on()` with `ctx.onDispose(() => ctx.eventSource.off(eventName, handler))` so listeners are removed when the CardApp unmounts. |
+| `ctx.addEventListener(target, event, handler, options?)` | Subscribe to a DOM event on a DOM element. `target` is typically `ctx.container` or a `querySelector` result; use this for in-container UI events like click, keydown, scroll. The listener is removed automatically when the CardApp disposes. |
+| `ctx.setInterval(fn, ms)` | `setInterval` whose handle is cleared automatically on dispose. |
+| `ctx.setTimeout(fn, ms)` | `setTimeout` whose handle is cleared automatically on dispose. |
+| `ctx.onDispose(fn)` | Register a cleanup callback that runs when the CardApp unmounts (chat switch, hot reload, character switch). |
+
+Example — refresh a panel when the chat or active swipe changes:
+
+```javascript
+export async function init(ctx) {
+    const { eventTypes } = ctx.lukerContext;
+    const refresh = () => render(ctx);
+
+    ctx.eventSource.on(eventTypes.CHAT_CHANGED, refresh);
+    ctx.eventSource.on(eventTypes.MESSAGE_SWIPED, refresh);
+    ctx.onDispose(() => {
+        ctx.eventSource.off(eventTypes.CHAT_CHANGED, refresh);
+        ctx.eventSource.off(eventTypes.MESSAGE_SWIPED, refresh);
+    });
+
+    refresh();
+}
+```
+
 ### Security Guidelines
 
 When developing CardApp, follow these best practices:

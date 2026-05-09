@@ -133,6 +133,18 @@ REPLAY -> REBUILD
 
 如果一個變數打算 **每輪 prompt 組裝時按當前情境重算**（比如根據當前位置算天氣），就放世界書；快取被覆蓋是預期行為。
 
+## 何時使用變數驅動 UI
+
+當某些欄位需要隨對話推進而變化、並被某種 UI 消費（CardApp 面板、世界書條目、自定義渲染器等）時，把它們建模成 chat 變數。生產端三種途徑：
+
+1. `first_mes` / alt greetings 裡 setvar 兜底初始值
+2. 世界書條目裡指引 AI 在 reply 中用 setvar 改寫
+3. AI 在 reply 中 emit setvar 直接更新
+
+消費端透過 `getvar` 讀取，UI 在每次 `chat_metadata` 變化時重新渲染。
+
+這種模式適合"敘事 header"類資料——例如當前章節階段、任務進度、地點狀態、案件名等需要隨情節推進而變化的欄位。
+
 ## 儲存結構
 
 ```jsonc

@@ -133,6 +133,18 @@ REPLAY -> REBUILD
 
 如果一个变量打算 **每轮 prompt 组装时按当前情境重算**（比如根据当前位置算天气），就放世界书；缓存被覆盖是预期行为。
 
+## 何时使用变量驱动 UI
+
+当某些字段需要随对话推进而变化、并被某种 UI 消费（CardApp 面板、世界书条目、自定义渲染器等）时，把它们建模成 chat 变量。生产端三种途径：
+
+1. `first_mes` / alt greetings 里 setvar 兜底初始值
+2. 世界书条目里指引 AI 在 reply 中用 setvar 改写
+3. AI 在 reply 中 emit setvar 直接更新
+
+消费端通过 `getvar` 读取，UI 在每次 `chat_metadata` 变化时重新渲染。
+
+这种模式适合"叙事 header"类数据——例如当前章节阶段、任务进度、地点状态、案件名等需要随情节推进而变化的字段。
+
 ## 存储结构
 
 ```jsonc

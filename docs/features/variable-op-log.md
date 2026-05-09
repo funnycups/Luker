@@ -133,6 +133,18 @@ If a variable is meant to be **set up once at the start** of a chat, use the cha
 
 If a variable is meant to be a **per-turn render-time override** (e.g. weather based on current location), keep it in world info; the cache will be overwritten each turn and that is the correct behavior.
 
+## When to use variable-driven UI
+
+When some fields need to change as the conversation advances and some UI consumes them — a CardApp panel, a world book entry, a custom renderer — model them as chat variables. Three production paths:
+
+1. setvar bootstrap in `first_mes` / alt greetings for initial values
+2. world book entries instructing the AI to emit setvar in its replies
+3. the AI emitting setvar directly in replies
+
+Consumers read via `getvar`; the UI re-renders whenever `chat_metadata` changes.
+
+This pattern fits "narrative-header" data — current chapter / phase, active quest progress, location status, the headline of an ongoing case, and similar fields whose values advance with the plot.
+
 ## Storage layout
 
 ```jsonc

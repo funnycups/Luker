@@ -206,6 +206,34 @@ CardApp 的上下文对象提供以下 API：
 | `ctx.updateWorldBookEntry(bookName, uid, patch)` | 更新世界书条目（浅合并） |
 | `ctx.deleteWorldBookEntry(bookName, uid)` | 删除世界书条目 |
 
+#### 事件与生命周期
+
+| API | 说明 |
+|-----|------|
+| `ctx.eventSource` | Luker 的内部事件总线。订阅用 `ctx.eventSource.on(eventName, handler)`，取消订阅用 `ctx.eventSource.off(eventName, handler)`。事件名在 `ctx.lukerContext.eventTypes` 上（`CHAT_CHANGED`、`MESSAGE_DELETED`、`MESSAGE_SWIPED` 等）。每次 `.on()` 都搭配 `ctx.onDispose(() => ctx.eventSource.off(eventName, handler))`，CardApp 卸载时监听器才会被移除干净。 |
+| `ctx.addEventListener(target, event, handler, options?)` | 订阅 DOM 元素上的事件。`target` 通常是 `ctx.container` 或 `querySelector` 的返回值；用于容器内的 UI 事件如 click、keydown、scroll。CardApp 卸载时监听器会自动移除。 |
+| `ctx.setInterval(fn, ms)` | `setInterval` 的封装，卸载时句柄自动清理。 |
+| `ctx.setTimeout(fn, ms)` | `setTimeout` 的封装，卸载时句柄自动清理。 |
+| `ctx.onDispose(fn)` | 注册清理回调，CardApp 卸载（切换聊天、热重载、切换角色）时执行。 |
+
+示例 —— 聊天切换或当前 swipe 改变时刷新面板：
+
+```javascript
+export async function init(ctx) {
+    const { eventTypes } = ctx.lukerContext;
+    const refresh = () => render(ctx);
+
+    ctx.eventSource.on(eventTypes.CHAT_CHANGED, refresh);
+    ctx.eventSource.on(eventTypes.MESSAGE_SWIPED, refresh);
+    ctx.onDispose(() => {
+        ctx.eventSource.off(eventTypes.CHAT_CHANGED, refresh);
+        ctx.eventSource.off(eventTypes.MESSAGE_SWIPED, refresh);
+    });
+
+    refresh();
+}
+```
+
 ### 安全限制
 
 CardApp 运行在受限环境中：
