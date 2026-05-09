@@ -1,4 +1,5 @@
 import { MacroRegistry, MacroCategory, MacroValueType } from '../engine/MacroRegistry.js';
+import { resolveVarPath } from '../util/var-path.js';
 
 /**
  * Registers variable-related {{...}} macros that operate on local and global
@@ -96,21 +97,24 @@ export function registerVariableMacros() {
     });
 
     // {{getvar::name}} -> returns current value
+    // Supports dotted paths: {{getvar::npcs.alice.hp}} parses the JSON in
+    // `npcs` and walks `.alice.hp`. On parse failure, falls back to the
+    // literal flat key so a variable named "a.b" still works.
     MacroRegistry.registerMacro('getvar', {
         category: MacroCategory.VARIABLE,
         unnamedArgs: [
             {
                 name: 'name',
                 type: MacroValueType.STRING,
-                description: 'The name of the local variable to get.',
+                description: 'The name of the local variable to get. Supports dotted paths to read nested fields when the variable holds JSON-stringified data (e.g. "npcs.alice.hp").',
             },
         ],
-        description: 'Gets the value of a local variable.',
-        returns: 'The value of the local variable.',
+        description: 'Gets the value of a local variable. Dotted names walk into JSON-stringified objects/arrays; missing intermediate keys produce empty output.',
+        returns: 'The value of the local variable, or the value at the dotted path if the variable is JSON-stringified.',
         returnType: [MacroValueType.STRING, MacroValueType.NUMBER],
-        exampleUsage: ['{{getvar::myvar}}', '{{getvar myintvar}}'],
+        exampleUsage: ['{{getvar::myvar}}', '{{getvar myintvar}}', '{{getvar::npcs.alice.hp}}', '{{getvar::list.0}}'],
         handler: ({ unnamedArgs: [name], normalize }) => {
-            const result = ctx.variables.local.get(name);
+            const result = resolveVarPath((n) => ctx.variables.local.get(n), name);
             return normalize(result);
         },
     });
@@ -244,21 +248,22 @@ export function registerVariableMacros() {
     });
 
     // {{getglobalvar::name}} -> returns current value
+    // Supports dotted paths the same way {{getvar}} does.
     MacroRegistry.registerMacro('getglobalvar', {
         category: MacroCategory.VARIABLE,
         unnamedArgs: [
             {
                 name: 'name',
                 type: MacroValueType.STRING,
-                description: 'The name of the global variable to get.',
+                description: 'The name of the global variable to get. Supports dotted paths to read nested fields when the variable holds JSON-stringified data (e.g. "npcs.alice.hp").',
             },
         ],
-        description: 'Gets the value of a global variable.',
-        returns: 'The value of the global variable.',
+        description: 'Gets the value of a global variable. Dotted names walk into JSON-stringified objects/arrays; missing intermediate keys produce empty output.',
+        returns: 'The value of the global variable, or the value at the dotted path if the variable is JSON-stringified.',
         returnType: [MacroValueType.STRING, MacroValueType.NUMBER],
-        exampleUsage: ['{{getglobalvar::myvar}}', '{{getglobalvar myintvar}}'],
+        exampleUsage: ['{{getglobalvar::myvar}}', '{{getglobalvar myintvar}}', '{{getglobalvar::flags.debug}}'],
         handler: ({ unnamedArgs: [name], normalize }) => {
-            const result = ctx.variables.global.get(name);
+            const result = resolveVarPath((n) => ctx.variables.global.get(n), name);
             return normalize(result);
         },
     });
