@@ -7,7 +7,7 @@ CardApp 是 Luker 獨有的角色卡內嵌應用系統。它允許角色卡在 `
 :::
 
 ::: tip 想看完整 walkthrough?
-[從零寫一個 CardApp](/zh-TW/features/card-editor/walkthrough) 用一個輕小說西式異世界冒險題材的角色卡，演示從空角色卡到能跑的 CardApp 的全過程，含提示詞實踐小抄和影像生成進階。
+[從零寫一個 CardApp](/zh-TW/features/card-editor/walkthrough/) 用一個輕小說西式異世界冒險題材的角色卡，演示從空角色卡到能跑的 CardApp 的全過程，含提示詞實踐小抄和影像生成進階。
 :::
 
 ## 生命週期

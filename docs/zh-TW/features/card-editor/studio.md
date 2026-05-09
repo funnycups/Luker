@@ -3,7 +3,7 @@
 CardApp Studio 是角色卡編輯助手的完整開發環境,專為內嵌了 [CardApp](/zh-TW/features/cardapp) 的角色卡設計。它提供基於 CodeMirror 6 的程式碼編輯器、即時預覽、AI 輔助開發,以及 Git 版本控制——是開發和除錯 CardApp 的推薦工作台。
 
 ::: tip 第一次用 Studio?
-看[從零寫一個 CardApp](/zh-TW/features/card-editor/walkthrough),用一個範例角色卡完整跑通工作流,含提示詞實踐小抄。本頁是 Studio 的能力清單,walkthrough 是從零跑通的實戰路徑。
+看[從零寫一個 CardApp](/zh-TW/features/card-editor/walkthrough/),用一個範例角色卡完整跑通工作流,含提示詞實踐小抄。本頁是 Studio 的能力清單,walkthrough 是從零跑通的實戰路徑。
 :::
 
 ## 開啟方式

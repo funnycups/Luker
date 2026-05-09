@@ -3,7 +3,7 @@
 CardApp Studio is the editor assistant's full development environment, designed for character cards that embed a [CardApp](/features/cardapp). It provides a CodeMirror 6-based editor, live preview, AI-assisted development, and Git version control — making it the recommended workbench for building and debugging CardApps.
 
 ::: tip First time using Studio?
-See [Build a CardApp from scratch](/features/card-editor/walkthrough) for a full working loop demonstrated end-to-end on a sample card, including a prompting cheatsheet. This page is the capability reference for Studio; the walkthrough is the hands-on path.
+See [Build a CardApp from scratch](/features/card-editor/walkthrough/) for a full working loop demonstrated end-to-end on a sample card, including a prompting cheatsheet. This page is the capability reference for Studio; the walkthrough is the hands-on path.
 :::
 
 ## How to Open

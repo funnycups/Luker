@@ -7,7 +7,7 @@ It is recommended to use [CardApp Studio](/features/card-editor/studio) to devel
 :::
 
 ::: tip Want a complete walkthrough?
-[Build a CardApp from scratch](/features/card-editor/walkthrough) takes you through the full process — from an empty character card to a runnable CardApp — using a light-novel-style Western isekai survival card as the example, with a prompting cheatsheet and an advanced section on image generation.
+[Build a CardApp from scratch](/features/card-editor/walkthrough/) takes you through the full process — from an empty character card to a runnable CardApp — using a light-novel-style Western isekai survival card as the example, with a prompting cheatsheet and an advanced section on image generation.
 :::
 
 ## Lifecycle
