@@ -21,7 +21,7 @@
 
 ## 前置條件
 
-- 一個能跑的 Luker / SillyTavern 例項
+- 一個能跑的 Luker / SillyTavern 執行個體
 - 已配通的 LLM API,推薦有工具呼叫能力的模型(Claude / GPT-5 等)
 - (進階段需要)已配通 Stable Diffusion / ComfyUI 後端
 

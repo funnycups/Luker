@@ -5,7 +5,7 @@
 ## 設計契約
 
 - **唯讀** — 這些 export 不修改 store。需要寫圖請走 memory-graph 的主流程或設定面板。
-- **由呼叫方載入 store** — 函數本身不會觸發儲存載入。呼叫方先透過 memory-graph 的現有路徑取到 store(典型做法:從 floor-state 例項或擴充功能匯出的 helper),再傳入這些查詢函數。
+- **由呼叫方載入 store** — 函數本身不會觸發儲存載入。呼叫方先透過 memory-graph 的現有路徑取到 store(典型做法:從 floor-state 執行個體或擴充功能匯出的 helper),再傳入這些查詢函數。
 - **未啟用時優雅降級** — 當使用者停用 memory-graph 時,store 通常為空或不可用。這些函數對 `null/undefined` store 與空查詢都回傳空結果,而不是拋錯;呼叫方可以照常呼叫,不必預先做存在性判斷。
 
 ## API

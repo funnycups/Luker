@@ -49,7 +49,7 @@ Luker 將預設拆分為兩個獨立的概念：
 - **Example Dialogue**：示例對話
 - **World Info**：世界書注入位置
 - **Chat History**：聊天歷史
-- **Author's Note**：作者注釋，通常用於即時調整 AI 行為
+- **Author's Note**：作者註解，通常用於即時調整 AI 行為
 - **Jailbreak / NSFW**：解除限制的提示詞
 
 你可以啟用或停用每個條目，也可以編輯它們的內容。

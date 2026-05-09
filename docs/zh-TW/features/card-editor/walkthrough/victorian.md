@@ -25,15 +25,15 @@
 
 ## 前置條件
 
-- 一個能跑的 Luker 例項
+- 一個能跑的 Luker 執行個體
 - 已配通的 LLM API，推薦工具呼叫強的模型（Claude / GPT-5 等）。Studio 的工具流非常依賴模型敢於用工具
-- 角色卡編輯助手在擴充套件面板裡有"模型請求 LLM 預設" / "模型請求 API 預設"兩個選項，Studio 自己跑 AI 時用的就是這兩個
+- 角色卡編輯助手在擴充功能面板裡有"模型請求 LLM 預設" / "模型請求 API 預設"兩個選項，Studio 自己跑 AI 時用的就是這兩個
 
 ## 1. 建一張空白卡 → 進 Studio
 
 開啟右側角色管理面板，點「新建角色」，起名「**維多利亞案宗**」 — 描述 / 第一條訊息 / 世界書繫結全部留白，這些都讓 Studio 來填。
 
-接下來開啟「擴充套件」面板 → 拉到「角色卡編輯助手」一節展開 → 點 **「&lt;/&gt; CardApp Studio」**：
+接下來開啟「擴充功能」面板 → 拉到「角色卡編輯助手」一節展開 → 點 **「&lt;/&gt; CardApp Studio」**：
 
 ![Studio 入口](/images/walkthrough/victorian/step-01-studio-entry.png)
 
@@ -131,7 +131,7 @@ Studio 就把 CardApp 寫出來了。它讀的是 chat 變數（`case_name` / `c
 
 ### b. 看 orchestrator 在背後做了什麼
 
-每次回覆之前，卡上配置的 loop 編排會先跑一輪"研究 + 總結" — 呼叫 chat / lorebook / memory 的搜尋工具，把這次回應需要參考的上下文壓縮成一個 capsule，再餵給主生成。點開擴充套件面板裡 Orchestrator 一節的「View Runtime Trace」，能看到這次 loop 跑了哪些步、呼叫了哪些工具、最終如何 finalize：
+每次回覆之前，卡上配置的 loop 編排會先跑一輪"研究 + 總結" — 呼叫 chat / lorebook / memory 的搜尋工具，把這次回應需要參考的上下文壓縮成一個 capsule，再餵給主生成。點開擴充功能面板裡 Orchestrator 一節的「View Runtime Trace」，能看到這次 loop 跑了哪些步、呼叫了哪些工具、最終如何 finalize：
 
 ![Orchestrator 執行軌跡](/images/walkthrough/victorian/step-07b-stage-output.png)
 
@@ -139,7 +139,7 @@ Studio 就把 CardApp 寫出來了。它讀的是 chat 變數（`case_name` / `c
 
 ### c. 看 memory-graph 在長期積累什麼
 
-點擴充套件面板裡 Memory 一節 →「檢視圖」，能看到當前對話攢到的圖：
+點擴充功能面板裡 Memory 一節 →「圖檢視」，能看到當前對話攢到的圖：
 
 ![Memory Graph 檢視](/images/walkthrough/victorian/step-07c-memory-graph.png)
 

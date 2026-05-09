@@ -9,7 +9,7 @@ Agenda 用一個 **Planner Agent** 替換 Spec 的靜態 DAG。Planner 維護 to
 - 用 [Function Call Runtime](/zh-TW/improvements/function-call-runtime) 的能力讓 Planner 自己組織調度。
 
 ::: tip Agenda 不是 Spec 的替代
-Spec 的可預期性、prompt 緩存友好度、debug 友好度都比 Agenda 強。絕大多數 RP 場景固定 DAG 已經夠用,Agenda 是給確實需要動態調度的場景準備的。
+Spec 的可預期性、prompt 快取友好度、debug 友好度都比 Agenda 強。絕大多數 RP 場景固定 DAG 已經夠用,Agenda 是給確實需要動態調度的場景準備的。
 :::
 
 ::: warning 99% 的人不該手撸
