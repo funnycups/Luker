@@ -1685,10 +1685,16 @@ The character-bound world book is *infrastructure for the prompt*, not a state b
 
 When you do edit an entry: you're changing the *frame* (the rules, the schema, the layout), not the *values inside the frame*. "Add a new mechanic" or "tighten this rule" → entry rewrite. "Alice's affinity went up" → chat variable.
 
-Macros don't have iteration constructs (\`{{each}}\`, \`{{for}}\` don't exist). \`{{getvar::myObj}}\` on an object value renders raw JSON. If you need a structured collection (the cast of NPCs, a quest journal, a relationship graph) that the LLM must reason over **and the shape evolves over time**, that's not a world book entry's job. Two viable answers:
+**Macros support both path access and iteration on collections.** Variables can hold JSON-stringified objects or arrays, and the macro engine handles them:
 
-1. **One keyed entry per item.** Five NPCs → five \`constant: false\` entries with \`key: ["Alice", ...]\`. Activates on mention, costs nothing when irrelevant, evolves item-by-item via \`worldinfo_update_entry\`. This is the SillyTavern-native answer.
-2. **Memory graph (when the relationships matter).** If the user wants the AI to remember and reason about a *graph* — who knows whom, what happened where, what depends on what — design a memory-graph schema instead (see "Per-character orchestrator and memory graph" below). The graph stores typed nodes and edges; the recall layer surfaces the right slice into the prompt automatically.
+- **Path access** — \`{{getvar::npcs.alice.hp}}\` parses the JSON stored in \`npcs\` and walks the path. Missing intermediate keys / failed parse / non-iterable head → empty string. Falls back to a literal flat-key lookup if the head segment isn't JSON, so a variable named \`a.b\` still works.
+- **Iteration** — \`{{each::npcs}}{{loop_key}}: {{loop_value::hp}}{{/each}}\` walks the collection (objects → key/value, arrays → string-index/element). \`{{loop_key}}\` is the current key; \`{{loop_value}}\` is the whole value (objects auto-JSON-stringify); \`{{loop_value::path}}\` drills in with the same dotted-path semantics as \`{{getvar}}\`. Both are scoped to the each body and shadow naturally when \`{{each}}\` is nested. (Note: \`{{loop_value::field}}\` uses \`::\` because macro identifiers can't contain dots — the path lives in the argument.)
+
+So a structured collection (the cast of NPCs, a quest journal, a relationship graph) is now a **valid world book entry shape** — store it as a JSON object in a single chat variable and have the entry render it dynamically on each prompt assembly. Three options for "evolving structured data":
+
+1. **Variable + each in one entry.** One chat variable (e.g. \`npcs\`) holds the whole object; one entry's content uses \`{{each::npcs}}…{{/each}}\` to render it. Simplest. Edits via the op-log macros (\`{{setvar}}\` etc.) or hand-written STScript. Atomic — one variable, one entry, no plumbing. The right answer when you just need the structured data **rendered into the prompt**.
+2. **One keyed entry per item.** Five NPCs → five \`constant: false\` entries with \`key: ["Alice", ...]\`. Activates on mention, costs nothing when irrelevant, evolves item-by-item via \`worldinfo_update_entry\`. The SillyTavern-native answer when **keyword activation** is the point — i.e. you want the entry to fire only when its NPC is mentioned, not on every prompt.
+3. **Memory graph (when the relationships matter).** If the user wants the AI to remember and reason about a *graph* — who knows whom, what happened where, what depends on what — design a memory-graph schema instead (see "Per-character orchestrator and memory graph" below). The graph stores typed nodes and edges; the recall layer surfaces the right slice into the prompt automatically.
 
 ## Chat-bound world books
 
@@ -1710,7 +1716,7 @@ To create a NEW chat-bound book: call \`worldinfo_create_chat_book({book_name: "
 
 ### Variable-driven dynamic world book entries (optional pattern)
 
-**Don't propose this proactively.** It's a heavy pattern with real footguns (uid churn, write amplification, races with hand-edits). Only reach for it when the user describes a need shaped like *"I want the AI to remember each NPC's items / relationships / state long-term, and I want those entries to participate in keyword scanning"* — i.e. they want each NPC / item / relationship to have its own world book entry that activates on mention, AND the contents must track gameplay state.
+**Don't propose this proactively. First check whether \`{{each}}\` in a single entry covers the use case** — if the user just wants a structured object rendered into the prompt, the macro is the right answer (see the iteration discussion in "World book design — stability is the spine" above). Reach for the CardApp pattern below only when **per-item keyword activation matters** (each NPC gets its own entry that fires only on mention) or you need **JS-side rebuilding between turns** (computing derived data the macros can't express). It's a heavy pattern with real footguns (uid churn, write amplification, races with hand-edits). The shape: the user describes a need like *"I want the AI to remember each NPC's items / relationships / state long-term, and I want those entries to participate in keyword scanning"* — i.e. each NPC / item / relationship has its own world book entry that activates on mention, AND the contents track gameplay state.
 
 The shape of the pattern:
 
@@ -1765,11 +1771,12 @@ The signature check (\`lastSig\`) matters: \`replaceWorldBookEntries\` reassigns
 
 When **not** to reach for this pattern:
 
+- A structured object the user just wants rendered into the prompt (NPC roster, quest journal, relationship table) → single entry with \`{{each}}\` over the variable. No CardApp needed; activation is governed by the entry's own keys / constant flag.
 - One or two NPCs the user wants the AI to remember → keyword world book entry per NPC, hand-edited via \`worldinfo_update_entry\`. Cheaper, no churn.
 - Pure numeric stats (HP, gold) → already covered by the state-injection entry with \`{{getvar::...}}\` placeholders; no need for one entry per stat.
 - "Remember every character we meet across the campaign" without a fixed cast → memory graph (\`character_sheet\`) is the answer. Recall is built for unbounded entity accumulation; dynamic-entry mirroring is for a small, explicitly-tracked structured object.
 
-Reach for variable-driven dynamic entries only when keyword activation matters **and** the entry set needs to track a structured object the AI mutates. Otherwise the simpler primitives (single keyed entry, state-injection placeholder, memory graph) are the right tool.
+Reach for variable-driven dynamic entries only when keyword activation matters **and** the entry set needs to track a structured object the AI mutates. Otherwise the simpler primitives — single keyed entry, state-injection placeholder, single entry rendering the variable via \`{{each}}\`, memory graph — are the right tool.
 
 ## Stateful CardApps — let the op-log do the work
 
