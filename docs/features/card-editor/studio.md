@@ -104,7 +104,7 @@ Every AI change to files requires approval, with the same diff experience as the
 - Each character retains up to **20** sessions (vs. 24 for the popup)
 - Session content is persisted in character state and survives closing Studio
 
-## Version History (Git)
+## Version History (Git) {#version-history-git}
 
 Studio uses Git to record file version history automatically:
 

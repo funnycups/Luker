@@ -36,7 +36,7 @@
 
 ## 修改历史
 
-修改历史在扩展面板里独立呈现。所有通过 AI 执行并批准的修改都会记录在这里——支持查看 diff、回滚、删除单条或清空全部历史。Studio 模式下文件变更走 Git，每条记录对应一个 commit，详见[CardApp Studio](/zh-CN/features/card-editor/studio#版本历史git)。
+修改历史在扩展面板里独立呈现。所有通过 AI 执行并批准的修改都会记录在这里——支持查看 diff、回滚、删除单条或清空全部历史。Studio 模式下文件变更走 Git，每条记录对应一个 commit，详见[CardApp Studio](/zh-CN/features/card-editor/studio#version-history-git)。
 
 ## 相关页面
 
