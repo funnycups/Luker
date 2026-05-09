@@ -114,20 +114,40 @@ const NO_TOOL_CALL_STREAK_LIMIT = 3;
  *
  * The lazy import keeps the test runner from pulling `lib.js` transitively
  * via `tool-calling.js`'s siblings; tests inject `deps.sendLlm` and
- * never hit this path.
+ * never hit this path. `agent-resolution.js` is loaded with the same
+ * deferral — its transitive imports also pull `lib.js`.
+ *
+ * Empty `apiPresetName` / `llmPresetName` fall back to the global
+ * `llmNodeApiPresetName` / `llmNodePresetName` via
+ * `resolveOrchestrationAgent*PresetName`, mirroring how spec / agenda
+ * runtimes resolve preset names. Without this fallback an empty profile
+ * field passes through to `context.generateTask` and the call drops
+ * straight to whatever request layer treats as default — which in
+ * practice is "no profile selected" for the loop-only path.
  *
  * Returns `{ toolCalls: Array<{id, name, args}>, assistantText: string }`.
  */
 async function defaultSendLlm({ context, settings, messages, tools, runtimeWorldInfo, apiPresetName, llmPresetName, abortSignal }) {
-    const mod = await import('./tool-calling.js');
-    if (typeof mod?.requestToolCallsWithRetry !== 'function') {
+    const [toolCallingMod, agentResolutionMod] = await Promise.all([
+        import('./tool-calling.js'),
+        import('./agent-resolution.js'),
+    ]);
+    if (typeof toolCallingMod?.requestToolCallsWithRetry !== 'function') {
         throw new Error('[orchestrator] loop-runtime: requestToolCallsWithRetry is unavailable.');
     }
-    const result = await mod.requestToolCallsWithRetry(context, settings, {
+    const resolvedApiPresetName = agentResolutionMod.resolveOrchestrationAgentApiPresetName(
+        settings,
+        { apiPresetName },
+    );
+    const resolvedLlmPresetName = agentResolutionMod.resolveOrchestrationAgentPromptPresetName(
+        settings,
+        { promptPresetName: llmPresetName },
+    );
+    const result = await toolCallingMod.requestToolCallsWithRetry(context, settings, {
         taskMessages: messages,
         runtimeWorldInfo: runtimeWorldInfo || {},
-        apiPresetName: String(apiPresetName || ''),
-        llmPresetName: String(llmPresetName || ''),
+        apiPresetName: resolvedApiPresetName,
+        llmPresetName: resolvedLlmPresetName,
         tools,
         allowedNames: null,
         abortSignal,
