@@ -90,6 +90,7 @@ async function activateCardApp() {
 
     // 4. Load entry JS module and call init(ctx)
     const entry = config.entry || 'index.js';
+    let initSucceeded = false;
     try {
         const module = await loadEntryModule(charId, entry);
 
@@ -98,6 +99,7 @@ async function activateCardApp() {
         }
 
         await module.init(ctx);
+        initSucceeded = true;
     } catch (err) {
         console.error(`[${MODULE_NAME}] Failed to initialize CardApp:`, err);
         showError(container, err, () => deactivateCardApp());
@@ -105,11 +107,32 @@ async function activateCardApp() {
         // diagnostic system message and self-correct without the user having to
         // copy stack traces out of DevTools.
         try {
-            await recordCardAppInitErrorForStudio(charId, entry, err);
+            const errorName = String(err?.name || 'Error');
+            const errorMessage = String(err?.message || err || 'Unknown error');
+            const stack = String(err?.stack || '').slice(0, 4000);
+            const content = [
+                `CardApp init failed at ${new Date().toISOString()}.`,
+                `Entry: ${entry}`,
+                `Error: ${errorName}: ${errorMessage}`,
+                '',
+                'Stack:',
+                stack,
+                '',
+                'This is an automatic diagnostic from the CardApp loader. The CardApp on disk does not run as written. Please read the failing file, identify the cause from the stack above, and patch the file so init() completes without throwing.',
+            ].join('\n');
+            await recordCardAppDiagnosticForStudio(content);
         } catch (recordErr) {
             console.warn(`[${MODULE_NAME}] Failed to record CardApp init error for Studio:`, recordErr);
         }
         // Still mark as active so deactivate can clean up
+    }
+
+    // Hook console.error and unhandled rejections so post-init runtime errors
+    // (and AI debug output via console.error) also flow back into the Studio
+    // session. Installed only after init succeeds — init throws are recorded
+    // explicitly above, no need to double-record via the wrapper.
+    if (initSucceeded) {
+        installCardAppRuntimeErrorHooks();
     }
 
     // 5. Activate renderer bridge to push messages to CardApp
@@ -124,40 +147,21 @@ async function activateCardApp() {
  * this character so the next Studio AI run sees the failure and can fix it
  * without the user having to inspect DevTools.
  *
- * @param {string} charId
- * @param {string} entry Entry filename that failed (e.g. 'index.js')
- * @param {Error} err
+ * @param {string} content Pre-formatted diagnostic body
  */
-async function recordCardAppInitErrorForStudio(charId, entry, err) {
+async function recordCardAppDiagnosticForStudio(content) {
     const context = getContext();
     const character = context?.characters?.[context.characterId];
     const avatar = String(character?.avatar || '').trim();
     if (!avatar) return;
 
-    const errorName = String(err?.name || 'Error');
-    const errorMessage = String(err?.message || err || 'Unknown error');
-    const stack = String(err?.stack || '').slice(0, 4000);
-    const timestamp = new Date().toISOString();
-
-    const content = [
-        `CardApp init failed at ${timestamp}.`,
-        `Entry: ${entry}`,
-        `Error: ${errorName}: ${errorMessage}`,
-        '',
-        'Stack:',
-        stack,
-        '',
-        'This is an automatic diagnostic from the CardApp loader. The CardApp on disk does not run as written. Please read the failing file, identify the cause from the stack above, and patch the file so init() completes without throwing.',
-    ].join('\n');
-
     const diagnosticMessage = {
         role: 'system',
-        content,
+        content: String(content || '').slice(0, 16000),
     };
 
     const data = await getCharacterState(avatar, STUDIO_SESSION_NAMESPACE);
     let sessions = [];
-    let nextData = data;
 
     if (data && Array.isArray(data.sessions)) {
         sessions = data.sessions;
@@ -173,10 +177,10 @@ async function recordCardAppInitErrorForStudio(charId, entry, err) {
 
     if (sessions.length === 0) {
         sessions.push({
-            id: `cardapp_error_${Date.now()}`,
+            id: `cardapp_diag_${Date.now()}`,
             messages: [diagnosticMessage],
             updatedAt: Date.now(),
-            summary: 'CardApp init error',
+            summary: 'CardApp diagnostic',
         });
     } else {
         const latest = sessions[sessions.length - 1];
@@ -185,8 +189,103 @@ async function recordCardAppInitErrorForStudio(charId, entry, err) {
         latest.updatedAt = Date.now();
     }
 
-    nextData = { version: 1, sessions };
-    await setCharacterState(avatar, STUDIO_SESSION_NAMESPACE, nextData);
+    await setCharacterState(avatar, STUDIO_SESSION_NAMESPACE, { version: 1, sessions });
+}
+
+/**
+ * Format a console.error argument into a string suitable for diagnostic logs.
+ * Errors get name + message + stack; objects get JSON; primitives stringified.
+ */
+function formatDiagnosticArg(arg) {
+    if (arg instanceof Error) {
+        return `${arg.name || 'Error'}: ${arg.message || ''}\n${arg.stack || ''}`;
+    }
+    if (arg && typeof arg === 'object') {
+        try {
+            return JSON.stringify(arg);
+        } catch {
+            return String(arg);
+        }
+    }
+    return String(arg);
+}
+
+/**
+ * Whether a stack trace string was produced by code running inside a CardApp
+ * (modules served from /api/card-app/<charId>/...). Used to filter out
+ * unrelated console.error / unhandledrejection events from other extensions.
+ */
+function isCardAppOriginatedStack(stack) {
+    if (!stack) return false;
+    return String(stack).includes('/api/card-app/');
+}
+
+let originalConsoleError = null;
+let consoleErrorWrapper = null;
+let cardAppUnhandledRejectionHandler = null;
+
+/**
+ * Install console.error and unhandledrejection hooks that mirror CardApp-
+ * originated diagnostics into the Studio session. Pass-through to the original
+ * console.error so DevTools and other listeners continue to see the message.
+ */
+function installCardAppRuntimeErrorHooks() {
+    if (consoleErrorWrapper) return;
+
+    originalConsoleError = console.error;
+    let recording = false;
+
+    consoleErrorWrapper = function (...args) {
+        try {
+            originalConsoleError.apply(console, args);
+        } catch {
+            // ignore — original console.error should never block recording
+        }
+        if (recording) return;
+
+        const callerStack = (new Error()).stack || '';
+        const argText = args.map(formatDiagnosticArg).join(' ');
+        if (!isCardAppOriginatedStack(callerStack) && !isCardAppOriginatedStack(argText)) {
+            return;
+        }
+
+        recording = true;
+        try {
+            const content = `console.error from CardApp at ${new Date().toISOString()}:\n${argText}`;
+            void recordCardAppDiagnosticForStudio(content).catch(() => { /* swallow */ });
+        } catch {
+            // ignore formatting errors
+        } finally {
+            recording = false;
+        }
+    };
+    console.error = consoleErrorWrapper;
+
+    cardAppUnhandledRejectionHandler = (ev) => {
+        const reason = ev?.reason;
+        const stack = String(reason?.stack || '');
+        const message = String(reason?.message ?? (reason ?? ''));
+        if (!isCardAppOriginatedStack(stack) && !isCardAppOriginatedStack(message)) return;
+        const content = `unhandledrejection from CardApp at ${new Date().toISOString()}:\n${message}\n${stack}`;
+        void recordCardAppDiagnosticForStudio(content).catch(() => { /* swallow */ });
+    };
+    window.addEventListener('unhandledrejection', cardAppUnhandledRejectionHandler);
+}
+
+/**
+ * Remove the console.error wrapper and unhandledrejection handler installed by
+ * installCardAppRuntimeErrorHooks(). Safe to call when nothing was installed.
+ */
+function uninstallCardAppRuntimeErrorHooks() {
+    if (consoleErrorWrapper && console.error === consoleErrorWrapper) {
+        console.error = originalConsoleError;
+    }
+    consoleErrorWrapper = null;
+    originalConsoleError = null;
+    if (cardAppUnhandledRejectionHandler) {
+        window.removeEventListener('unhandledrejection', cardAppUnhandledRejectionHandler);
+        cardAppUnhandledRejectionHandler = null;
+    }
 }
 
 /**
@@ -220,6 +319,10 @@ async function deactivateCardApp() {
     if (!isCardAppActive) return;
 
     console.log(`[${MODULE_NAME}] Deactivating CardApp`);
+
+    // Detach error backflow hooks so global console.error / unhandledrejection
+    // returns to its original behavior when no CardApp is active.
+    uninstallCardAppRuntimeErrorHooks();
 
     // Deactivate renderer bridge
     deactivateRendererBridge();
