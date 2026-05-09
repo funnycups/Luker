@@ -200,7 +200,46 @@ async function runGitUpdateFlow(runId) {
         const branch = (await repo.revparse(['--abbrev-ref', 'HEAD'])).trim();
         appendGitUpdateLog('info', `Branch: ${branch}`);
 
-        const status = await repo.status();
+        let status = await repo.status();
+
+        // A previous interrupted rebase/merge leaves the index with unmerged
+        // paths. `git stash` (and therefore `git pull --autostash`) refuses to
+        // operate while unmerged paths exist, so clear that state first.
+        if (status.conflicted.length > 0) {
+            appendGitUpdateLog('warn', `Detected ${status.conflicted.length} unmerged file(s) from a previous interrupted operation; clearing before continuing.`);
+
+            let cleared = false;
+            try {
+                await repo.raw(['rebase', '--abort']);
+                appendGitUpdateLog('info', 'Aborted in-progress rebase.');
+                cleared = true;
+            } catch {
+                /* no rebase in progress */
+            }
+            if (!cleared) {
+                try {
+                    await repo.raw(['merge', '--abort']);
+                    appendGitUpdateLog('info', 'Aborted in-progress merge.');
+                    cleared = true;
+                } catch {
+                    /* no merge in progress */
+                }
+            }
+            if (!cleared) {
+                try {
+                    await repo.raw(['reset', 'HEAD', '--', ...status.conflicted]);
+                    appendGitUpdateLog('info', 'Cleared conflicted index entries.');
+                } catch (resetErr) {
+                    appendGitUpdateLog('warn', `Could not clear conflicted entries: ${resetErr?.message || resetErr}`);
+                }
+            }
+
+            status = await repo.status();
+            if (status.conflicted.length > 0) {
+                throw new Error(`Could not clear ${status.conflicted.length} unmerged file(s); please resolve them manually before retrying the update.`);
+            }
+        }
+
         const hasLocalChanges = status.files.length > 0;
         if (hasLocalChanges) {
             appendGitUpdateLog('warn', `Working tree has ${status.files.length} local change(s); will auto-stash during update.`);
