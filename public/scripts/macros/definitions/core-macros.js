@@ -7,6 +7,8 @@ import { MacroRegistry, MacroCategory, MacroValueType } from '../engine/MacroReg
 import { MACRO_VARIABLE_SHORTHAND_PATTERN } from '../engine/MacroLexer.js';
 import { MacroParser } from '../engine/MacroParser.js';
 import { MacroCstWalker } from '../engine/MacroCstWalker.js';
+import { MacroEngine } from '../engine/MacroEngine.js';
+import { resolveEachContainer, walkLoopValuePath } from '../util/iteration.js';
 
 /**
  * Marker used by {{else}} to split content in {{if}} blocks.
@@ -222,6 +224,84 @@ export function registerCoreMacros() {
         ],
         returns: 'Invisible marker (consumed by the enclosing {{if}} macro).',
         handler: () => ELSE_MARKER,
+    });
+
+    // {{each::collection}}body{{/each}} -> renders the body once per entry.
+    // Inside the body:
+    //   {{loop_key}}            -> current key (or string index for arrays)
+    //   {{loop_value}}          -> current value (objects auto-JSON-stringified)
+    //   {{loop_value::path}}    -> field at the dotted path inside the value
+    //
+    // Collection resolution order:
+    //   1. JSON literal — {"a":1} / [1,2,3].
+    //   2. Variable name (with dotted-path support) — local first, then global.
+    //
+    // Object iteration order is JS native (insertion order for string keys,
+    // ascending numeric for integer-like keys). Empty / non-iterable
+    // collections render to ''. There is no built-in iteration cap — large
+    // containers and bodies that recursively re-enter {{each}} are the
+    // author's responsibility, matching {{if}}'s no-guard contract.
+    MacroRegistry.registerMacro('each', {
+        category: MacroCategory.UTILITY,
+        description: 'Iterates over a collection (object or array) and renders the body once per entry. Inside the body, {{loop_key}} is the current key, {{loop_value}} is the current value, and {{loop_value::path}} drills into the value with the same dotted-path semantics as {{getvar}}. Nested {{each}} naturally shadows the outer loop_key / loop_value.',
+        unnamedArgs: [
+            {
+                name: 'collection',
+                description: 'Collection to iterate. Accepts a literal JSON object/array, the name of a variable that holds JSON-stringified data, or a nested macro that resolves to one of those.',
+            },
+            {
+                name: 'body',
+                description: 'Template rendered once per item. Typically supplied as scoped content between {{each::...}} and {{/each}}.',
+            },
+        ],
+        displayOverride: '{{each::collection}}body{{/each}}',
+        exampleUsage: [
+            '{{each::npcs}}{{loop_key}}: {{loop_value::hp}}\\n{{/each}}',
+            '{{each::["sword","shield"]}}{{loop_key}}={{loop_value}}\\n{{/each}}',
+            '{{each::{{getvar::roster}}}}- {{loop_value::name}} (lvl {{loop_value::level}}){{/each}}',
+        ],
+        returns: 'The concatenated rendered body, once per entry. Empty string when the collection resolves to nothing iterable.',
+        delayArgResolution: true,
+        handler: ({ unnamedArgs: [rawCollection, rawBody], env, globalOffset, flags, trimContent }) => {
+            const ctx = Luker.getContext();
+
+            // Resolve any nested macros inside the collection arg first. We
+            // can't use the resolve callback because we need to inject our
+            // own loop_key / loop_value via env.dynamicMacros below; calling
+            // MacroEngine directly is the existing way to do that.
+            const resolvedRef = MacroEngine.evaluate(
+                String(rawCollection ?? '').trim(),
+                env,
+                { contextOffset: globalOffset },
+            );
+
+            const container = resolveEachContainer(resolvedRef, {
+                local: (n) => ctx.variables.local.get(n),
+                global: (n) => ctx.variables.global.get(n),
+            });
+
+            if (!container || !rawBody) return '';
+
+            const baseDynamics = env.dynamicMacros || {};
+            const segments = [];
+            for (const [key, value] of Object.entries(container)) {
+                const childEnv = {
+                    ...env,
+                    dynamicMacros: {
+                        ...baseDynamics,
+                        loop_key: String(key),
+                        loop_value: makeLoopValueDef(value),
+                    },
+                };
+                segments.push(MacroEngine.evaluate(rawBody, childEnv, { contextOffset: globalOffset }));
+            }
+
+            let result = segments.join('');
+            if (!flags?.preserveWhitespace) {
+                result = trimContent(result);
+            }
+            return result;
+        },
     });
 
     // {{input}} -> current textarea content
@@ -466,6 +546,35 @@ export function registerCoreMacros() {
             return value || '';
         },
     });
+}
+
+/**
+ * Build a per-iteration `loop_value` dynamic macro definition.
+ *
+ * `{{loop_value}}` returns the value as-is (objects are JSON-stringified by
+ * the engine's normalize step). `{{loop_value::path}}` walks a dotted path
+ * into the live value; missing path produces ''.
+ *
+ * The dotted-syntax `{{loop_value.field}}` would be nicer but the macro
+ * lexer doesn't allow dots inside macro names, so we expose `::path`
+ * instead — same shape as {{getvar::dotted.path}}.
+ *
+ * @param {unknown} value - The current iteration value.
+ * @returns {import('../engine/MacroRegistry.js').MacroDefinitionOptions}
+ */
+function makeLoopValueDef(value) {
+    return {
+        category: 'dynamic',
+        description: 'Current value in the surrounding {{each}} iteration. With no arg, returns the whole value (objects auto-JSON-stringify). With a path arg, drills in via dotted access.',
+        unnamedArgs: [
+            {
+                name: 'path',
+                optional: true,
+                description: 'Optional dotted path into the value (e.g. "hp" or "stats.atk").',
+            },
+        ],
+        handler: ({ unnamedArgs: [path] }) => walkLoopValuePath(value, path ?? ''),
+    };
 }
 
 function getChatIdHash() {
