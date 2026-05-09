@@ -139,6 +139,7 @@ export const power_user = {
     charListGrid: false,
     tokenizer: tokenizers.BEST_MATCH,
     token_padding: 64,
+    fast_token_preview: false,
     collapse_newlines: false,
     pin_examples: false,
     strip_examples: false,
@@ -2027,6 +2028,7 @@ export async function loadPowerUserSettings(settings, data) {
     $('#message_complete_notification_detail_mode').val(power_user.message_complete_notification_detail_mode);
     $('#message_complete_notification_detail_mode').prop('disabled', !power_user.message_complete_notification);
     $('#never_resize_avatars').prop('checked', power_user.never_resize_avatars);
+    $('#fast_token_preview').prop('checked', power_user.fast_token_preview);
     $('#show_card_avatar_urls').prop('checked', power_user.show_card_avatar_urls);
     $('#auto_save_msg_edits').prop('checked', power_user.auto_save_msg_edits);
     $('#allow_name1_display').prop('checked', power_user.allow_name1_display);
@@ -3869,6 +3871,11 @@ jQuery(() => {
 
     $('#never_resize_avatars').on('input', function () {
         power_user.never_resize_avatars = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('#fast_token_preview').on('input', function () {
+        power_user.fast_token_preview = !!$(this).prop('checked');
         saveSettingsDebounced();
     });
 

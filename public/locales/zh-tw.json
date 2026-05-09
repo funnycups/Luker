@@ -4898,4 +4898,6 @@
     ,"var_ops_panel.label.value": "值"
     ,"var_ops_panel.placeholder.key": "鍵"
     ,"var_ops_panel.placeholder.value": "值"
+    ,"Fast token preview": "快速 token 預覽"
+    ,"fast_token_preview_tooltip": "用前端位元組估算替代分詞器介面呼叫。更快但精度降低。logprobs 和 /tokens 斜槓命令的精度會下降。"
 }

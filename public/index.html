@@ -4547,6 +4547,10 @@
                                     <option value="18">DeepSeek V3</option>
                                     <option value="6">API (WebUI / koboldcpp)</option>
                                 </select>
+                                <label class="checkbox_label" for="fast_token_preview" title="Use frontend byte-based estimate instead of calling the tokenizer endpoint. Faster but less accurate. Disables logprobs and /tokens slash command precision." data-i18n="[title]fast_token_preview_tooltip">
+                                    <input id="fast_token_preview" type="checkbox" />
+                                    <small data-i18n="Fast token preview">Fast token preview</small>
+                                </label>
                             </div>
                             <div class="range-block flex-container flexnowrap" name="tokenPaddingBlock">
                                 <div class="range-block-title justifyLeft">

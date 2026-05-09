@@ -384,6 +384,7 @@ function currentRemoteTokenizerAPI() {
  */
 function callTokenizer(type, str) {
     if (type === tokenizers.NONE) return guesstimate(str);
+    if (power_user.fast_token_preview) return guesstimate(str);
 
     switch (type) {
         case tokenizers.API_CURRENT:
@@ -412,6 +413,10 @@ function callTokenizer(type, str) {
 function callTokenizerAsync(type, str) {
     return new Promise(resolve => {
         if (type === tokenizers.NONE) {
+            return resolve(guesstimate(str));
+        }
+
+        if (power_user.fast_token_preview) {
             return resolve(guesstimate(str));
         }
 
