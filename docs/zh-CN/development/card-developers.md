@@ -21,9 +21,7 @@ Luker 使用角色卡 `data.extensions` 中的多个命名空间存储扩展数�
       },
       "card_app": {
         "enabled": true,
-        "html": "string",
-        "script": "string",
-        "style": "string"
+        "entry": "index.js"
       }
     }
   }
@@ -38,9 +36,7 @@ Luker 使用角色卡 `data.extensions` 中的多个命名空间存储扩展数�
 | `luker.memoryGraphSchema.nodeTypes[].label` | string | 节点类型显示名称 |
 | `luker.memoryGraphSchema.nodeTypes[].color` | string | 节点颜色（十六进制色值） |
 | `card_app.enabled` | boolean | 是否启用 CardApp |
-| `card_app.html` | string | 应用的 HTML 模板 |
-| `card_app.script` | string | 应用的 JavaScript 代码 |
-| `card_app.style` | string | 应用的 CSS 样式 |
+| `card_app.entry` | string | CardApp 文件夹下的入口模块文件名,默认 `index.js`。入口文件必须导出 `init(ctx)` 函数。同目录下的 `style.css` 会按约定自动加载。 |
 
 > [!NOTE]
 > 绑定预设和人设的数据存储在角色卡的状态文件中，不在 `data.extensions` 内。这样设计是为了避免修改角色卡本身的 JSON 数据。
@@ -107,7 +103,7 @@ Luker 支持在角色卡中绑定推荐的生成预设和用户人设。当用�
 
 ### 应用定义结构
 
-CardApp 定义在角色卡的 `data.extensions.card_app` 字段中：
+CardApp 定义在角色卡的 `data.extensions.card_app` 字段中。角色卡里只存开关和入口文件名,实际代码以文件形式存放在 CardApp 的角色级目录(由 Studio 管理):
 
 ```json
 {
@@ -115,28 +111,26 @@ CardApp 定义在角色卡的 `data.extensions.card_app` 字段中：
     "extensions": {
       "card_app": {
         "enabled": true,
-        "html": "<div id='fav-tracker'><span id='fav-value'>0</span></div>",
-        "script": "export default function(ctx) { ... }",
-        "style": "#fav-tracker { padding: 10px; }"
+        "entry": "index.js"
       }
     }
   }
 }
 ```
 
+运行时把 `index.js`(或 `entry` 指向的文件)以 ES 模块方式从 `/api/card-app/<charId>/<entry>` 加载,同目录下若有 `style.css` 也会自动注入。推荐用 Studio 编辑/保存/版本管理这些文件。
+
 ### 入口函数
 
-CardApp 的 `script` 字段应导出一个默认函数，该函数接收上下文对象 `ctx`：
+CardApp 的入口模块必须导出 `init(ctx)` 函数,接收上下文对象:
 
 ```javascript
-export default function (ctx) {
+export async function init(ctx) {
   const container = ctx.container;
 
-  // 初始化：读取持久化状态
-  async function init() {
-    const state = ctx.getChatState('my_app');
-    render(state);
-  }
+  // 读取持久化状态 — getChatState 是异步的(server-backed sidecar)
+  const state = await ctx.getChatState('my_app');
+  render(state);
 
   // 渲染 UI
   function render(state) {
@@ -151,8 +145,6 @@ export default function (ctx) {
       </div>
     `;
   }
-
-  init();
 }
 ```
 
@@ -182,8 +174,12 @@ CardApp 的上下文对象提供以下 API：
 |-----|------|
 | `ctx.getCharacterData()` | 获取当前角色数据（只读） |
 | `ctx.updateCharacterFields(fields)` | 更新角色字段并保存。支持name、description、personality、scenario、first_mes、mes_example、system_prompt、post_history_instructions、creator_notes、creator、character_version、tags（逗号分隔字符串）、talkativeness（数字）、depth_prompt相关字段 |
-| `ctx.getChatState(namespace)` | 读取聊天绑定的持久化状态 |
-| `ctx.setChatState(namespace, key, value)` | 设置聊天状态 |
+| `ctx.getChatState(namespace, options?)` | **异步** 读取聊天绑定的 sidecar 状态(server-backed,`/api/chats/state/`)。HP / 金币 / 好感度 / 物品 / 任务标志这类用聊天变量。 |
+| `ctx.updateChatState(namespace, updater, options?)` | **异步** reducer 风格写入聊天 sidecar,返回 `{ ok, state, updated }`。 |
+| `ctx.patchChatState(namespace, operations, options?)` | **异步** 对聊天 sidecar 应用 JSON-patch 操作。 |
+| `ctx.deleteChatState(namespace, options?)` | **异步** 删除一个聊天 sidecar 命名空间。 |
+| `ctx.getCharacterState(namespace)` | **异步** 读取角色绑定的 sidecar(avatar 自动绑定),跨该角色的所有聊天保留。 |
+| `ctx.setCharacterState(namespace, data)` | **异步** 写入角色绑定的 sidecar(avatar 自动绑定),传 `null` 表示删除。 |
 | `ctx.getVariable(key)` | 获取聊天变量 |
 | `ctx.setVariable(key, value)` | 设置聊天变量并持久化 |
 

@@ -345,8 +345,12 @@ function createCtxCompletionSource(cm) {
         { label: 'ctx.eventSource', type: 'property', info: 'Luker event bus', detail: 'EventEmitter' },
         { label: 'ctx.lukerContext', type: 'property', info: 'Escape hatch: full Luker extension API (200+ properties). Use when ctx doesn\'t expose what you need.', detail: 'SillyTavernContext' },
         { label: 'ctx.registerRenderer', type: 'method', info: 'Register custom message renderer', detail: '({ renderMessage, removeMessage }) => void' },
-        { label: 'ctx.getChatState', type: 'method', info: 'Get namespaced chat state', detail: '(namespace: string) => object' },
-        { label: 'ctx.setChatState', type: 'method', info: 'Set namespaced chat state', detail: '(namespace: string, key: string, value: any) => void' },
+        { label: 'ctx.getChatState', type: 'method', info: 'async — Read chat-bound sidecar namespace', detail: '(namespace: string, options?: object) => Promise<object|null>' },
+        { label: 'ctx.updateChatState', type: 'method', info: 'async — Reducer-style write of chat-bound sidecar', detail: '(namespace: string, updater: (current: object) => object|null, options?: object) => Promise<{ok: boolean, state: object|null, updated: boolean}>' },
+        { label: 'ctx.patchChatState', type: 'method', info: 'async — Apply JSON-patch ops to chat-bound sidecar', detail: '(namespace: string, operations: object[], options?: object) => Promise<boolean>' },
+        { label: 'ctx.deleteChatState', type: 'method', info: 'async — Drop a chat-bound sidecar namespace', detail: '(namespace: string, options?: object) => Promise<boolean>' },
+        { label: 'ctx.getCharacterState', type: 'method', info: 'async — Read character-bound sidecar (avatar auto-resolved)', detail: '(namespace: string) => Promise<any>' },
+        { label: 'ctx.setCharacterState', type: 'method', info: 'async — Write character-bound sidecar (avatar auto-resolved). Pass null to delete.', detail: '(namespace: string, data: any) => Promise<void>' },
     ];
 
     return function ctxCompletion(context) {

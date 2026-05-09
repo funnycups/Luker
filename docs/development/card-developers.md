@@ -21,9 +21,7 @@ Luker uses multiple namespaces within `data.extensions` to store extension data.
  },
  "card_app": {
  "enabled": true,
- "html": "string",
- "script": "string",
- "style": "string"
+ "entry": "index.js"
  }
  }
  }
@@ -38,9 +36,7 @@ Luker uses multiple namespaces within `data.extensions` to store extension data.
 | `luker.memoryGraphSchema.nodeTypes[].label` | string | Node type display name |
 | `luker.memoryGraphSchema.nodeTypes[].color` | string | Node color (hex color value) |
 | `card_app.enabled` | boolean | Whether CardApp is enabled |
-| `card_app.html` | string | Application HTML template |
-| `card_app.script` | string | Application JavaScript code |
-| `card_app.style` | string | Application CSS styles |
+| `card_app.entry` | string | Entry module filename relative to the CardApp folder. Defaults to `index.js`. The entry must export an `init(ctx)` function. CSS is auto-loaded by convention from `style.css` in the same folder. |
 
 > [!NOTE]
 > Bound presets and personas are stored in the character card's state file, not within `data.extensions`. This design avoids modifying the character card's own JSON data.
@@ -107,7 +103,7 @@ Custom schemas override the default node type set, making Memory Graph extractio
 
 ### Application Definition Structure
 
-CardApp is defined in the `data.extensions.card_app` field of the character card:
+CardApp is defined in the `data.extensions.card_app` field of the character card. The card stores only the toggle and the entry filename — the actual code lives in files under the CardApp's per-character folder on disk (managed by Studio):
 
 ```json
 {
@@ -115,28 +111,26 @@ CardApp is defined in the `data.extensions.card_app` field of the character card
  "extensions": {
  "card_app": {
  "enabled": true,
- "html": "<div id='fav-tracker'><span id='fav-value'>0</span></div>",
- "script": "export default function(ctx) { ... }",
- "style": "#fav-tracker { padding: 10px; }"
+ "entry": "index.js"
  }
  }
  }
 }
 ```
 
+The runtime loads `index.js` (or whatever `entry` names) as an ES module via `/api/card-app/<charId>/<entry>`, and auto-loads `style.css` from the same folder if it exists. Studio is the recommended way to author / save / version these files.
+
 ### Entry Function
 
-The CardApp `script` field should export a default function that receives a context object `ctx`:
+The CardApp entry module must export an `init(ctx)` function that receives the context object:
 
 ```javascript
-export default function (ctx) {
+export async function init(ctx) {
  const container = ctx.container;
 
- // Initialize: read persisted state
- async function init() {
- const state = ctx.getChatState('my_app');
+ // Read persisted state — getChatState is async (server-backed sidecar)
+ const state = await ctx.getChatState('my_app');
  render(state);
- }
 
  // Render UI
  function render(state) {
@@ -151,8 +145,6 @@ export default function (ctx) {
  </div>
  `;
  }
-
- init();
 }
 ```
 
@@ -182,8 +174,12 @@ The CardApp context object provides the following APIs:
 |-----|-------------|
 | `ctx.getCharacterData()` | Get current character data (read-only) |
 | `ctx.updateCharacterFields(fields)` | Update character fields and save. Supports name, description, personality, scenario, first_mes, mes_example, system_prompt, post_history_instructions, creator_notes, creator, character_version, tags (comma-separated string), talkativeness (number), depth_prompt-related fields |
-| `ctx.getChatState(namespace)` | Read chat-bound persisted state |
-| `ctx.setChatState(namespace, key, value)` | Set chat state |
+| `ctx.getChatState(namespace, options?)` | **async** Read chat-bound sidecar state (server-backed via `/api/chats/state/`). For HP / gold / affinity / inventory / quest flags use chat variables instead. |
+| `ctx.updateChatState(namespace, updater, options?)` | **async** Reducer-style write of chat-bound sidecar. Returns `{ ok, state, updated }`. |
+| `ctx.patchChatState(namespace, operations, options?)` | **async** Apply JSON-patch operations to chat-bound sidecar. |
+| `ctx.deleteChatState(namespace, options?)` | **async** Drop a chat-bound sidecar namespace. |
+| `ctx.getCharacterState(namespace)` | **async** Read character-bound sidecar (avatar auto-resolved). Survives across every chat with this character. |
+| `ctx.setCharacterState(namespace, data)` | **async** Write character-bound sidecar (avatar auto-resolved). Pass `null` to delete. |
 | `ctx.getVariable(key)` | Get a chat variable |
 | `ctx.setVariable(key, value)` | Set a chat variable and persist it |
 

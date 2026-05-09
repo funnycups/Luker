@@ -164,3 +164,17 @@ chat[i] = {
 ```
 
 `chat_metadata.variables` 仍是 SillyTavern 原生缓存，是 <code v-pre>{{getvar}}</code> 的真源。op 日志是我们拥有的那部分值的 *来源*；缓存是所有来源合并后的运行时视图。
+
+## 渲染结构化变量 — `{{each}}` 与 `loop_value`
+
+聊天变量本身能装任意 JSON 可序列化的值，所以一个结构化的集合(NPC 名册、任务日志、物品表)可以装在单个变量里，按需要渲染进 prompt 或世界书条目。
+
+- **路径访问** — <code v-pre>{{getvar::npcs.alice.hp}}</code> 解析存在 `npcs` 里的 JSON 并按路径下钻。中间键缺失 / 解析失败 / 头段不可迭代 → 空字符串。如果头段不是 JSON,会回退到字面 flat-key 查找,所以名为 `a.b` 的变量也能用。
+- **遍历** — <code v-pre>{{each::npcs}}{{loop_key}}: {{loop_value::hp}}{{/each}}</code> 遍历集合(对象 → 键/值,数组 → 字符串索引/元素)。each 体内可用:
+  - <code v-pre>{{loop_key}}</code> — 当前键(数组下标转字符串)
+  - <code v-pre>{{loop_value}}</code> — 当前完整值(对象会自动 JSON.stringify)
+  - <code v-pre>{{loop_value::path}}</code> — 按路径下钻,语义与 <code v-pre>{{getvar}}</code> 一致
+
+  嵌套 <code v-pre>{{each}}</code> 时内层会自然 shadow 外层。集合参数也接受内联 JSON 数组字面量(<code v-pre>{{each::["sword","shield"]}}</code>)和嵌套宏(<code v-pre>{{each::{{getvar::roster}}}}</code>),不必非得先把数据写进命名变量。
+
+这就让"一个变量装 JSON 对象 → 一个世界书条目渲染它"成为完整的模式:AI 用 <code v-pre>{{setvar::npcs::...}}</code> 维护结构,条目内容用 <code v-pre>{{each::npcs}}…{{/each}}</code> 把结构铺到 prompt 里。

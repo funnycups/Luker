@@ -2,8 +2,8 @@
  * CardApp Context - builds the ctx object passed to CardApp's init() function.
  */
 
-import { eventSource, event_types, chat, chat_metadata, this_chid, characters, getRequestHeaders, openCharacterChat, doNewChat, closeCurrentChat, getPastCharacterChats, deleteMessage as lukerDeleteMessage, deleteLastMessage, swipe_right, saveCharacterDebounced, saveMetadata, messageFormatting } from '../../../script.js';
-import { getContext, saveMetadataDebounced, extension_settings } from '../../extensions.js';
+import { eventSource, event_types, chat, chat_metadata, this_chid, characters, getRequestHeaders, openCharacterChat, doNewChat, closeCurrentChat, getPastCharacterChats, deleteMessage as lukerDeleteMessage, deleteLastMessage, swipe_right, saveCharacterDebounced, saveMetadata, messageFormatting, getChatState as lukerGetChatState, updateChatState as lukerUpdateChatState, patchChatState as lukerPatchChatState, deleteChatState as lukerDeleteChatState } from '../../../script.js';
+import { getContext, saveMetadataDebounced, extension_settings, getCharacterState as lukerGetCharacterState, setCharacterState as lukerSetCharacterState } from '../../extensions.js';
 import { executeSlashCommandsWithOptions } from '../../slash-commands.js';
 import { removeReasoningFromString } from '../../reasoning.js';
 import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, createNewWorldInfo, world_names, selected_world_info, getChatWorldInfoNames, setChatWorldInfoSelection } from '../../world-info.js';
@@ -298,25 +298,101 @@ export function buildContext(container, charId, config) {
         },
 
         /**
-         * Get chat state for a namespace.
+         * Read chat-bound sidecar state for a namespace. Same data the rest
+         * of Luker reads via `getContext().getChatState` — chat-state is
+         * persisted server-side under `/api/chats/state/`, NOT in
+         * `chat_metadata`. Use `updateChatState` / `patchChatState` to write.
+         *
+         * For per-chat scalar state (HP, gold, affinity, inventory, quest
+         * flags) prefer `setVariable` instead — chat variables are the right
+         * surface for AI-mutable scalars and are exposed to macros via
+         * `{{getvar::name}}`. Reach for chat-state when you need a
+         * structured namespace not driven by macros (e.g. CardApp UI panels
+         * that own their own settled object).
+         *
          * @param {string} namespace
-         * @returns {object}
+         * @param {object} [options] Optional `target` for cross-chat reads
+         *   (e.g. branching scenarios). See script.js#getChatState.
+         * @returns {Promise<object|null>}
          */
-        getChatState(namespace) {
-            return chat_metadata?.[namespace] || {};
+        async getChatState(namespace, options = {}) {
+            return await lukerGetChatState(namespace, options);
         },
 
         /**
-         * Set chat state for a namespace.
+         * Update chat-bound sidecar state via reducer. The reducer receives
+         * the current namespace value and returns the next one; the diff is
+         * computed and patched server-side.
+         *
          * @param {string} namespace
-         * @param {string} key
-         * @param {*} value
+         * @param {(current: object, meta?: { attempt: number, target: object, namespace: string }) => (object|null|undefined|Promise<object|null|undefined>)} updater
+         *   Return `null`/`undefined` from the reducer to leave state
+         *   unchanged.
+         * @param {object} [options] Optional `target` / `maxOperations` /
+         *   `maxRetries`. See script.js#updateChatState.
+         * @returns {Promise<{ ok: boolean, state: object|null, updated: boolean }>}
          */
-        setChatState(namespace, key, value) {
-            if (!chat_metadata[namespace]) {
-                chat_metadata[namespace] = {};
-            }
-            chat_metadata[namespace][key] = value;
+        async updateChatState(namespace, updater, options = {}) {
+            return await lukerUpdateChatState(namespace, updater, options);
+        },
+
+        /**
+         * Apply incremental JSON patch operations to chat-bound sidecar
+         * state. Use `updateChatState` for the common read-modify-write
+         * case — `patchChatState` is here for when you've already computed
+         * patch ops yourself.
+         *
+         * @param {string} namespace
+         * @param {object[]} operations JSON-Patch-style ops (with optional
+         *   tests; see script.js#patchChatState).
+         * @param {object} [options]
+         * @returns {Promise<boolean>}
+         */
+        async patchChatState(namespace, operations, options = {}) {
+            return await lukerPatchChatState(namespace, operations, options);
+        },
+
+        /**
+         * Delete the entire chat-bound sidecar namespace.
+         * @param {string} namespace
+         * @param {object} [options]
+         * @returns {Promise<boolean>}
+         */
+        async deleteChatState(namespace, options = {}) {
+            return await lukerDeleteChatState(namespace, options);
+        },
+
+        /**
+         * Read character-bound sidecar state for the active character.
+         * Avatar is resolved automatically from `this_chid`; CardApp code
+         * never has to pass it. Same storage as `getContext().getCharacterState(avatar, ns)`.
+         *
+         * Character-state survives across every chat with this character —
+         * use it for plugin config that should follow the card, not the
+         * conversation.
+         *
+         * @param {string} namespace
+         * @returns {Promise<any>}
+         */
+        async getCharacterState(namespace) {
+            const character = characters[this_chid];
+            const avatar = String(character?.avatar || '').trim();
+            if (!avatar) throw new Error('[CardApp] No active character');
+            return await lukerGetCharacterState(avatar, namespace);
+        },
+
+        /**
+         * Write character-bound sidecar state for the active character.
+         * Pass `null` as `data` to delete the namespace.
+         * @param {string} namespace
+         * @param {any} data
+         * @returns {Promise<void>}
+         */
+        async setCharacterState(namespace, data) {
+            const character = characters[this_chid];
+            const avatar = String(character?.avatar || '').trim();
+            if (!avatar) throw new Error('[CardApp] No active character');
+            return await lukerSetCharacterState(avatar, namespace, data);
         },
 
         // ==================== Chat Management ====================

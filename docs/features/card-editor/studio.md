@@ -3,7 +3,7 @@
 CardApp Studio is the editor assistant's full development environment, designed for character cards that embed a [CardApp](/features/cardapp). It provides a CodeMirror 6-based editor, live preview, AI-assisted development, and Git version control — making it the recommended workbench for building and debugging CardApps.
 
 ::: tip First time using Studio?
-See [Build a CardApp from scratch](/features/card-editor/walkthrough) for a full working loop demonstrated on a light-novel-style Western fantasy survival card, including a prompting cheatsheet. This page is the capability reference for Studio; the walkthrough is the hands-on path.
+See [Build a CardApp from scratch](/features/card-editor/walkthrough) for a full working loop demonstrated end-to-end on a sample card, including a prompting cheatsheet. This page is the capability reference for Studio; the walkthrough is the hands-on path.
 :::
 
 ## How to Open
@@ -53,7 +53,7 @@ The right panel combines three sections:
 
 ## Supported Operations
 
-The AI in Studio has a richer toolset than the popup:
+The AI in Studio has a richer toolset than the popup. Tools fall into seven groups:
 
 **CardApp file operations:**
 - List all files
@@ -62,15 +62,24 @@ The AI in Studio has a richer toolset than the popup:
 - Patch files (find and replace)
 - Delete files
 - Rename / move files
+- Toggle the CardApp on/off (`extensions.card_app.enabled`)
 
 **Character card field operations:**
 - Read all editable fields
 - Update one or more fields
 
 **World Info operations:**
-- List bound World Info books
-- Get World Info entries
-- Create, update, delete entries
+- List visible books with their scope (`character` / `chat` / `global`)
+- Get / create / update / delete / replace entries inside a book
+- List, replace, and create-and-bind chat-bound world books (`chat_metadata.world_info`)
+
+**Regex script operations** — list / create / update / delete card-level (`character.data.extensions.regex_scripts`) or global (`extension_settings.regex`) scripts. Studio AI is the only place a card-level regex script gets created in this workflow.
+
+**Per-character orchestrator override** — read, replace, or clear the orchestrator override stored on the active card. Always character-scoped; never touches the global orchestrator settings.
+
+**Per-character memory-graph override** — read the effective memory-graph config (schema + advanced settings, with scope tags), replace the node-type schema, or patch advanced settings. Always character-scoped.
+
+**Discovery / docs** — `slashcmd_list` + `slashcmd_help` for slash commands, `luker_context_list_keys` + `luker_context_describe` for the runtime API surface, and `list_luker_docs` + `read_luker_doc` to read the same Markdown docs as this site. The Studio AI uses these to verify exact names and signatures before generating code, instead of guessing.
 
 ::: tip CardApp authoring convention
 By Luker's CardApp authoring convention, all AI-visible content should live in World Info books bound via `extensions.world`, not in the character card's `system_prompt` / `post_history_instructions` fields. Studio AI follows this convention by default. See the [Card Developer Guide](/development/card-developers) for details.

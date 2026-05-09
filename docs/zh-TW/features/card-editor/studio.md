@@ -3,7 +3,7 @@
 CardApp Studio 是角色卡編輯助手的完整開發環境,專為內嵌了 [CardApp](/zh-TW/features/cardapp) 的角色卡設計。它提供基於 CodeMirror 6 的程式碼編輯器、即時預覽、AI 輔助開發,以及 Git 版本控制——是開發和除錯 CardApp 的推薦工作台。
 
 ::: tip 第一次用 Studio?
-看[從零寫一個 CardApp](/zh-TW/features/card-editor/walkthrough),用一個輕小說西式異世界冒險題材的角色卡演示完整工作循環,含提示詞實踐小抄。本頁是 Studio 的能力清單,walkthrough 是從零跑通的實戰路徑。
+看[從零寫一個 CardApp](/zh-TW/features/card-editor/walkthrough),用一個範例角色卡完整跑通工作流,含提示詞實踐小抄。本頁是 Studio 的能力清單,walkthrough 是從零跑通的實戰路徑。
 :::
 
 ## 開啟方式
@@ -53,7 +53,7 @@ Studio 採用三欄佈局,覆蓋在 Luker 主介面之上:
 
 ## 支援的操作
 
-Studio 中的 AI 擁有比普通彈窗更豐富的工具集:
+Studio 中的 AI 擁有比普通彈窗更豐富的工具集,分七大類:
 
 **CardApp 檔案操作:**
 - 列出所有檔案
@@ -62,15 +62,24 @@ Studio 中的 AI 擁有比普通彈窗更豐富的工具集:
 - 補丁式修改檔案(查找替換)
 - 刪除檔案
 - 重新命名 / 移動檔案
+- 切換 CardApp 啟用開關(`extensions.card_app.enabled`)
 
 **角色卡欄位操作:**
 - 讀取所有可編輯欄位
 - 更新一個或多個欄位
 
 **世界書操作:**
-- 列出關聯的世界書
-- 取得世界書條目
-- 建立、更新、刪除條目
+- 列出可見世界書並標註作用域(`character` / `chat` / `global`)
+- 取得/建立/更新/刪除/全量替換某本書內的條目
+- 列出、替換、建立+繫結 chat-bound 世界書(`chat_metadata.world_info`)
+
+**正則表示式腳本操作** — 列出/建立/更新/刪除卡級(`character.data.extensions.regex_scripts`)或全域(`extension_settings.regex`)正則腳本。Studio AI 是這套流程裡唯一會建立卡級正則腳本的入口。
+
+**角色級編排器(orchestrator)覆蓋** — 讀取、替換、清空當前角色卡上的編排器覆蓋。永遠只作用於當前角色,不會動全域編排器設定。
+
+**角色級記憶圖覆蓋** — 讀取生效的記憶圖設定(schema + 進階設定 + 作用域標籤)、替換節點類型 schema、或對進階設定打補丁。永遠只作用於當前角色。
+
+**發現 / 文件查詢** — `slashcmd_list` + `slashcmd_help` 查斜線指令,`luker_context_list_keys` + `luker_context_describe` 查執行時 API,`list_luker_docs` + `read_luker_doc` 直接讀 Markdown 文件(和本站同源)。Studio AI 用這些工具在生成程式碼前核對名稱和簽名,而不是憑記憶猜。
 
 ::: tip CardApp 創作約定
 按 Luker 的 CardApp 創作約定,所有 AI 可見內容都應放在透過 `extensions.world` 繫結的世界書裡,而非角色卡的 `system_prompt` / `post_history_instructions` 欄位。Studio 預設遵守這一約定。詳見[角色卡開發者指南](/zh-TW/development/card-developers)。

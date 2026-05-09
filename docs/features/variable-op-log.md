@@ -164,3 +164,17 @@ chat[i] = {
 ```
 
 `chat_metadata.variables` remains the SillyTavern-native cache and the source of truth for <code v-pre>{{getvar}}</code>. The op-log is the *origin* of the values that we own; the cache is the runtime view of all sources combined.
+
+## Rendering structured variables — `{{each}}` and `loop_value`
+
+Chat variables hold any JSON-serializable value, so a structured collection (an NPC roster, a quest journal, an inventory map) can live in a single variable and be rendered into the prompt or a world book entry on each pass.
+
+- **Path access** — <code v-pre>{{getvar::npcs.alice.hp}}</code> parses the JSON stored in `npcs` and walks the dotted path. Missing intermediate keys / failed parse / non-iterable head → empty string. Falls back to a literal flat-key lookup when the head segment isn't JSON, so a variable named `a.b` still works.
+- **Iteration** — <code v-pre>{{each::npcs}}{{loop_key}}: {{loop_value::hp}}{{/each}}</code> walks the collection (objects → key/value pairs, arrays → string-index/element pairs). Inside the body:
+  - <code v-pre>{{loop_key}}</code> — the current key (or the array index as a string)
+  - <code v-pre>{{loop_value}}</code> — the whole value (objects auto-JSON-stringify)
+  - <code v-pre>{{loop_value::path}}</code> — drill into the value via dotted path, same semantics as <code v-pre>{{getvar}}</code>
+
+  Both shadow naturally when <code v-pre>{{each}}</code> is nested. The collection argument also accepts an inline JSON-array literal (<code v-pre>{{each::["sword","shield"]}}</code>) and a nested macro that resolves to a collection (<code v-pre>{{each::{{getvar::roster}}}}</code>), so you can iterate without round-tripping through a named variable.
+
+This is what makes "variable holds a JSON object → world book entry renders it" a complete pattern: the AI maintains the structure with <code v-pre>{{setvar::npcs::...}}</code>; an entry's body uses <code v-pre>{{each::npcs}}…{{/each}}</code> to lay it out for the prompt.

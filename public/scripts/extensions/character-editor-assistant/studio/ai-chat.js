@@ -232,9 +232,9 @@ function buildTools() {
  key: { type: 'array', items: { type: 'string' }, description: 'Trigger keywords' },
  keysecondary: { type: 'array', items: { type: 'string' }, description: 'Secondary keywords (optional)' },
  constant: { type: 'boolean', description: 'Always active (default false)' },
- selective: { type: 'boolean', description: 'Selective triggering (default false)' },
+ selective: { type: 'boolean', description: 'Selective triggering (default true)' },
  disable: { type: 'boolean', description: 'Disabled (default false)' },
- position: { type: 'number', description: 'Injection position: 0=before char desc (↑Char), 1=after char desc (↓Char), 2=above author note (↑AT), 3=below author note (↓AT), 4=at chat depth (uses depth+role), 5=top of example messages (↑EM), 6=bottom of example messages (↓EM)' },
+ position: { type: 'number', description: 'Injection position: 0=before char desc (↑Char), 1=after char desc (↓Char), 2=above author note (↑AT), 3=below author note (↓AT), 4=at chat depth (uses depth+role), 5=top of example messages (↑EM), 6=bottom of example messages (↓EM), 7=outlet (post-prompt-assembly hook)' },
  order: { type: 'number', description: 'Sort order within position bucket. Default 100. Lower=earlier in bucket.' },
  depth: { type: 'number', description: 'Chat depth (only used when position=4). 0=right at conversation tail, higher=further back.' },
  role: { type: 'number', description: 'Role for atDepth injection (only used when position=4): 0=system, 1=user, 2=assistant. Default 0.' },
@@ -337,7 +337,7 @@ function buildTools() {
  constant: { type: 'boolean', description: 'Always active (default false)' },
  selective: { type: 'boolean', description: 'Selective triggering (default true)' },
  disable: { type: 'boolean', description: 'Disabled (default false)' },
- position: { type: 'number', description: 'Injection position: 0=before char desc, 1=after char desc, 2=ANTop, 3=ANBottom, 4=atDepth (uses depth+role), 5=EMTop, 6=EMBottom' },
+ position: { type: 'number', description: 'Injection position: 0=before char desc, 1=after char desc, 2=ANTop, 3=ANBottom, 4=atDepth (uses depth+role), 5=EMTop, 6=EMBottom, 7=outlet (post-prompt-assembly hook)' },
  order: { type: 'number', description: 'Sort order within position bucket. Default 100. Lower=earlier.' },
  depth: { type: 'number', description: 'Chat depth (only when position=4). 0=tail.' },
  role: { type: 'number', description: 'Role for atDepth (only when position=4): 0=system, 1=user, 2=assistant.' },
@@ -1404,10 +1404,14 @@ Once the layer set is decided, move on to the actual card content (description, 
 
 ### Data
 - ctx.getCharacterData() — Get character data object
-- ctx.getVariable(key) — Get chat variable
-- ctx.setVariable(key, value) — Set chat variable (persisted)
-- ctx.getChatState(namespace) — Get namespaced chat state
-- ctx.setChatState(namespace, key, value) — Set namespaced chat state
+- ctx.getVariable(key) — Get chat variable (use this for HP / gold / affinity / inventory / quest flags — i.e. anything macro-driven and AI-mutable)
+- ctx.setVariable(key, value) — Set chat variable (persisted via op-log)
+- ctx.getChatState(namespace, options?) async — Read chat-bound sidecar namespace (server-backed via /api/chats/state/, NOT chat_metadata). Use for structured CardApp state that doesn't fit a flat variable.
+- ctx.updateChatState(namespace, updater, options?) async — Reducer-style write of chat-bound sidecar. Returns { ok, state, updated }.
+- ctx.patchChatState(namespace, operations, options?) async — Apply JSON-patch ops to chat-bound sidecar.
+- ctx.deleteChatState(namespace, options?) async — Drop a chat-bound sidecar namespace.
+- ctx.getCharacterState(namespace) async — Read character-bound sidecar (avatar auto-resolved). Survives across every chat with this character — for plugin/CardApp config, not per-run state.
+- ctx.setCharacterState(namespace, data) async — Write character-bound sidecar (avatar auto-resolved). Pass null to delete.
 
 ### Chat Management
 - ctx.getChatList() — List all chats for this character
@@ -1538,20 +1542,17 @@ ctx.lukerContext.X(...) or ctx.executeSlashCommand('/X ...') calls. Don't guess
 slash command syntax — the help tool tells you whether arguments are named
 (key=value) or unnamed, and which enums are valid.
 
-## Floor State (recommended for CardApp persistent state)
+## Chat-state sidecar — and Floor State on top of it
 
-**Use Floor State instead of ctx.setChatState/getChatState for any per-chat
-state that should follow swipes, message deletions, and chat switches
-automatically.** This is the right answer for game progress, trackers,
-counters, inventories, and almost anything a CardApp persists per chat.
+Per-chat state in CardApps lives in one of two places, picked by **what kind of data it is**, not by mechanism:
 
-Floor State is a thin layer on top of chat state that logs every write at the
-chat tail (floor index + swipe id) and replays surviving commits whenever the
-chat structure changes. So when the user swipes back, deletes a message, or
-switches chats, your state stays consistent with the active conversation path
-without any reconciliation code on your side.
+- **Scalars the AI mutates** (HP, gold, affinity, inventory text, quest flags) → \`ctx.setVariable\` / \`ctx.getVariable\`. Driven by op-log macros (\`{{setvar::...}}\`, \`{{addvar::...}}\`) the AI emits inside replies; world books and the CardApp UI read them via \`{{getvar::name}}\` and \`ctx.getVariable\`. Survives swipes / deletes through the op-log replay. **This is the default** — reach for chat-state below only when chat variables genuinely don't fit.
 
-### Quick start
+- **Structured namespaces only the CardApp owns** (UI panel state objects, settled tracker payloads, anything you'd otherwise reach for "a JSON store" for) → \`ctx.getChatState\` / \`ctx.updateChatState\` / \`ctx.patchChatState\`. These hit the chat-state sidecar at \`/api/chats/state/\` — the same store the rest of Luker (memory-graph, orchestrator, search-tools) uses via \`getContext().getChatState\`. Per-chat scope; the data is durable across reloads but resets on a new chat. Don't put AI-mutable scalars here — they belong in chat variables where macros can reach them.
+
+### Floor State
+
+\`Floor State\` is a thin layer on top of the chat-state sidecar that logs every write at the chat tail (floor index + swipe id) and replays surviving commits whenever the chat structure changes. Use it when your structured state needs to **follow swipes, message deletions, and chat switches automatically** — game progress that should rewind when the user swipes back, trackers that should stay consistent with the active conversation path, etc. Without Floor State, \`ctx.updateChatState\` writes the sidecar but doesn't track which floor the write happened on, so swipe-back leaves stale state.
 
 \`\`\`js
 // During init (it's async; create once and reuse the instance):
@@ -1574,13 +1575,9 @@ const latest = await fs.get();
 
 ### Hard rules (violating these breaks state)
 
-- One namespace, one owner. Do NOT mix \`ctx.setChatState(ns, ...)\` and
-  \`fs.update(...)\` against the same namespace — the floor rebuild will
-  overwrite the raw write.
-- Reducer must return a plain object. Returning array, primitive, null, or
-  undefined is treated as "no change" (no commit, silent).
-- Each instance owns one namespace. Create separate instances per logical
-  state slice.
+- One namespace, one owner. Do NOT mix \`ctx.updateChatState(ns, ...)\` / \`ctx.patchChatState(ns, ...)\` and \`fs.update(...)\` against the same namespace — they write the same sidecar object, but Floor State's floor-rebuild replays the commit log and will overwrite any direct write that wasn't logged. Pick one access path per namespace.
+- Reducer must return a plain object. Returning array, primitive, null, or undefined is treated as "no change" (no commit, silent).
+- Each instance owns one namespace. Create separate instances per logical state slice.
 - Namespaces ending in \`__floor_log\` are reserved for private commit logs.
 
 For full API (advanced patch mode, attaching to a non-tail floor with
@@ -1641,9 +1638,10 @@ Pick storage by lifetime. Getting this wrong leaves ghost state from a previous 
 | Surface | Scope | Reset on |
 |---------|-------|----------|
 | Chat variables (\`chat_metadata.variables\` — op-log target, \`ctx.getVariable\`/\`ctx.setVariable\`) | Per chat per character | New chat created or switched-to |
-| Floor State namespaces (\`chat_metadata.<ns>\`, server-backed) | Per chat per character | New chat |
+| Chat-state sidecar namespaces (server-backed via \`/api/chats/state/\`, \`ctx.getChatState\` / \`ctx.updateChatState\` / \`ctx.patchChatState\` / \`ctx.deleteChatState\`; or wrapped by Floor State for swipe/delete replay) | Per chat per character | New chat |
 | **Chat-bound world books** (\`chat_metadata.world_info\` — \`worldinfo_get_chat_books\` / \`worldinfo_set_chat_books\`) | Per chat per character | New chat |
 | Character card fields (\`description\`, \`first_mes\`, \`extensions.world\`, …) | Per character — shared across **every** chat with that character | Character deleted |
+| Character-state sidecar namespaces (server-backed, \`ctx.getCharacterState\` / \`ctx.setCharacterState\`) | Per character — shared across every chat with that character | Character deleted |
 | Character-bound (primary) world book entries | Per book — shared across every chat using this character | Book deleted |
 | Globally activated world books (\`selected_world_info\`) | Every chat for every character that has them active | User toggles them off / book deleted |
 
@@ -1704,7 +1702,7 @@ When you do edit an entry: you're changing the *frame* (the rules, the schema, t
 **Macros support both path access and iteration on collections.** Variables can hold JSON-stringified objects or arrays, and the macro engine handles them:
 
 - **Path access** — \`{{getvar::npcs.alice.hp}}\` parses the JSON stored in \`npcs\` and walks the path. Missing intermediate keys / failed parse / non-iterable head → empty string. Falls back to a literal flat-key lookup if the head segment isn't JSON, so a variable named \`a.b\` still works.
-- **Iteration** — \`{{each::npcs}}{{loop_key}}: {{loop_value::hp}}{{/each}}\` walks the collection (objects → key/value, arrays → string-index/element). \`{{loop_key}}\` is the current key; \`{{loop_value}}\` is the whole value (objects auto-JSON-stringify); \`{{loop_value::path}}\` drills in with the same dotted-path semantics as \`{{getvar}}\`. Both are scoped to the each body and shadow naturally when \`{{each}}\` is nested. (Note: \`{{loop_value::field}}\` uses \`::\` because macro identifiers can't contain dots — the path lives in the argument.)
+- **Iteration** — \`{{each::npcs}}{{loop_key}}: {{loop_value::hp}}{{/each}}\` walks the collection (objects → key/value, arrays → string-index/element). \`{{loop_key}}\` is the current key; \`{{loop_value}}\` is the whole value (objects auto-JSON-stringify); \`{{loop_value::path}}\` drills in with the same dotted-path semantics as \`{{getvar}}\`. Both are scoped to the each body and shadow naturally when \`{{each}}\` is nested. (Note: \`{{loop_value::field}}\` uses \`::\` because macro identifiers can't contain dots — the path lives in the argument.) The collection argument also accepts an inline JSON-array literal (\`{{each::["sword","shield"]}}\`) and a nested macro that resolves to a collection (\`{{each::{{getvar::roster}}}}\`), so you can iterate without round-tripping through a named variable.
 
 So a structured collection (the cast of NPCs, a quest journal, a relationship graph) is now a **valid world book entry shape** — store it as a JSON object in a single chat variable and have the entry render it dynamically on each prompt assembly. Three options for "evolving structured data":
 
@@ -1818,7 +1816,7 @@ These — and only these — are scanned out of every assistant message before i
 {{deletevar::name}}         remove the key
 \`\`\`
 
-\`{{addvar::aw_hp::-15}}\` reads as: subtract 15 from \`aw_hp\` (\`addvar\` does numeric arithmetic when both sides parse as numbers; otherwise string-concats). Other ST macros (\`{{user}}\`, \`{{getvar::name}}\`, \`{{time}}\`, …) work normally inside the value field — evaluated at scan time, so \`{{setvar::last_event::{{time}}}}\` records a timestamp.
+\`{{addvar::aw_hp::-15}}\` reads as: subtract 15 from \`aw_hp\` (\`addvar\` does numeric arithmetic when both sides parse as numbers; if the current value is a JSON-stringified array, the value is pushed onto it and re-stringified; otherwise it falls through to string concat). Other ST macros (\`{{user}}\`, \`{{getvar::name}}\`, \`{{time}}\`, …) work normally inside the value field — evaluated at scan time, so \`{{setvar::last_event::{{time}}}}\` records a timestamp.
 
 Each scanned op is recorded in \`message.extra.var_ops\` (per-swipe), forward-applied into \`chat_metadata.variables\`, and replayed on swipe / delete / chat change. Users can hand-edit ops via the message-toolbar fa-flask button.
 
@@ -1864,7 +1862,7 @@ Always \`worldinfo_get_entries\` first and merge into existing entries when poss
 
 **\`constant: false\`** — the entry is included only when one of its \`key\` strings appears in the recent chat scan window. Default scan window is ~3 most-recent messages, case-insensitive substring match. **Empty \`key\` + \`constant: false\` = orphan, never activates** — this is the most common mistake. If you can't think of trigger keywords, the content probably wants to be constant or doesn't belong in WI at all.
 
-Keys are OR'd by default: any one match activates the entry. For AND logic across two key lists, fill \`keysecondary\` and set \`selective: true\` (default \`selectiveLogic\` AND_ANY — primary match + at least one secondary match). 99% of CardApp use cases don't need this; ignore \`selective\` and \`keysecondary\` unless the user asks for compound logic.
+Keys are OR'd by default: any one match activates the entry. For AND logic across two key lists, fill \`keysecondary\` and set \`selective: true\` (\`selectiveLogic\` defaults to AND_ANY=0 — primary match + at least one secondary match. Other values: AND_ALL=1, NOT_ALL=2, NOT_ANY=3). 99% of CardApp use cases don't need this; ignore \`selective\` and \`keysecondary\` unless the user asks for compound logic.
 
 Other fields you almost never need to set: \`probability\` (100 by default — always fires on match), \`matchWholeWords\` (substring by default), \`scanDepth\` (uses global default), \`vectorized\`, \`sticky\`, \`cooldown\`, \`delay\`. Leave them at defaults unless you have a specific reason.
 
