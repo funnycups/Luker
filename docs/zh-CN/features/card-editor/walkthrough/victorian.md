@@ -19,10 +19,6 @@
 
 整个搭建过程只有 2 轮自然语言对话 — Studio 自己提案、自己写文件、自己绑字段、自己造世界书。
 
-::: info CardApp 不读 memory-graph
-图谱（memory-graph）和面板（CardApp）是**两条平行线，不直接连**。memory-graph 是 LLM 内部记忆系统，UI 不读它（`ctx` 故意没暴露 graph 读接口）。CardApp 想呈现案件状态走 chat 变量；同样的实体可以同时在图谱里被 AI 抽取归档，那是给跨回合 prompt recall 用，不是给面板渲染用的。详见[变量驱动 UI 场景](/zh-CN/features/variable-op-log#何时使用变量驱动-ui)。
-:::
-
 ## 前置条件
 
 - 一个能跑的 Luker 实例

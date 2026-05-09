@@ -19,10 +19,6 @@ This single card carries all of these at once:
 
 The whole setup is just 2 rounds of natural-language conversation — Studio proposes, Studio writes the files, Studio binds the fields, Studio creates the world book.
 
-::: info CardApp does not read memory-graph
-The graph (memory-graph) and the panel (CardApp) are **two parallel layers, not directly connected**. Memory-graph is the LLM's internal memory system — the UI doesn't read it (`ctx` deliberately exposes no graph-read API). When the CardApp wants to surface case state, it reads chat variables; the same entities can simultaneously be archived as memory-graph nodes by the AI's extractor, but that's for cross-turn prompt recall, not for panel rendering. See [When to use variable-driven UI](/features/variable-op-log#when-to-use-variable-driven-ui) for the producer-consumer pattern.
-:::
-
 ## Prerequisites
 
 - A working Luker instance
