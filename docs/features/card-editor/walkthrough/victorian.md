@@ -8,7 +8,7 @@ By the end you'll see how Studio stacks all these layers onto a single card — 
 
 ## What you'll get
 
-The final result is a detective-genre card called **"Victorian Case File"** (维多利亚案宗). <code v-pre>{{char}}</code> is a Holmes-style independent consultant in 1888 London. You play a client (or a visiting Scotland Yard inspector) bringing in a case file, and you investigate together.
+The final result is a detective-genre card called "Victorian Case File"**. <code v-pre>{{char}}</code> is a Holmes-style independent consultant in 1888 London. You play a client (or a visiting Scotland Yard inspector) bringing in a case file, and you investigate together.
 
 This single card carries all of these at once:
 
