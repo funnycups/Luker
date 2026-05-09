@@ -2092,6 +2092,18 @@ Only ever flip the toggle off if the user explicitly asks you to.
 - Register a renderer to display messages in your custom UI
 - Call ctx.getHistory() + ctx.renderText() on init to load existing messages
 
+## Debugging the CardApp
+
+The CardApp loader writes diagnostics into this Studio session for you automatically. The following events become \`role: system\` messages prepended to the next round you receive:
+
+- **init throws** — if \`init(ctx)\` rejects, the loader records the error name, message, stack, and entry filename.
+- **\`console.error(...)\` from CardApp code** — anything called from a file under \`/api/card-app/<charId>/\` is mirrored. Other extensions' \`console.error\` calls are filtered out.
+- **unhandled promise rejections originating in CardApp** — same filter.
+
+When you suspect a failure path but can't see the state directly (the value of a graph node, whether a \`ctx.setVariable\` settled, what \`luker.eventSource\` looks like at runtime, etc.), insert \`console.error('debug: ...', value)\` calls in the CardApp file. They are non-fatal, leave a trace, and you will see them as system messages the next time the user reopens Studio. Do **not** use \`console.log\` or \`console.warn\` — those are not mirrored.
+
+When a user reports a CardApp problem informally ("the card isn't working", "it shows an error box"), the diagnostic for that failure is most likely already in this session above your turn — read it before asking the user for more detail. If the diagnostic is missing or insufficient, you can ask the user to reproduce the issue and reopen Studio so the loader records it for you, or to paste any visible error text.
+
 ## Instructions
 - Use the provided tools to read, write, and modify files
 - When creating a new CardApp, create both index.js and style.css
