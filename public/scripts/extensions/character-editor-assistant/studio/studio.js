@@ -1271,7 +1271,7 @@ async function handleAISend() {
     activeAbortController = controller;
     syncComposerState();
     renderChatMessage('user', userText);
-    const loadingEl = showLoadingMessage();
+    let loadingEl = showLoadingMessage();
     try {
         // Read preset config from CEA settings
         const ceaSettings = extension_settings?.character_editor_assistant || {};
@@ -1281,6 +1281,11 @@ async function handleAISend() {
             abortSignal: controller.signal,
             llmPresetName,
             apiPresetName: apiProfileName,
+            onAssistantText: (text) => {
+                if (loadingEl?.parentNode) loadingEl.remove();
+                renderChatMessage('assistant', text);
+                loadingEl = showLoadingMessage();
+            },
             onToolCall: (name, args, toolResult) => {
                 let detail = '';
                 if (name === TOOL_NAMES.READ_FILE) detail = args.path;
@@ -1309,7 +1314,6 @@ async function handleAISend() {
             },
         });
         if (loadingEl?.parentNode) loadingEl.remove();
-        if (result.assistantText) renderChatMessage('assistant', result.assistantText);
         if (result.modifiedFiles.length > 0) {
             fileList = await fetchFileList(currentCharId);
             const fileListEl = document.querySelector('[data-studio-file-list]');
