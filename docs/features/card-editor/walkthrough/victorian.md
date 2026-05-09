@@ -8,13 +8,13 @@ By the end you'll see how Studio stacks all these layers onto a single card — 
 
 ## What you'll get
 
-The final result is a detective-genre card called **"Victorian Case File"** (维多利亚案宗). {{char}} is a Holmes-style independent consultant in 1888 London. You play a client (or a visiting Scotland Yard inspector) bringing in a case file, and you investigate together.
+The final result is a detective-genre card called **"Victorian Case File"** (维多利亚案宗). <code v-pre>{{char}}</code> is a Holmes-style independent consultant in 1888 London. You play a client (or a visiting Scotland Yard inspector) bringing in a case file, and you investigate together.
 
 This single card carries all of these at once:
 
 - **Memory-graph schema derivation** — four domain node types (`suspect` / `clue` / `forensic_site` / `witness`), not the default schema. **This layer is for the LLM's long-term memory** — the AI extracts entities into these types as the conversation goes, so cross-turn recall has structured slices ready to feed back into the prompt.
 - **Orchestrator loop pipeline** — every AI reply runs `draft → critique → revise`, and the critique stage is forced to inspect "missed clues / contradicting suspect testimony / violated period constraints" before the revise stage rewrites.
-- **Card-bound world book** — "维多利亚案宗·伦敦档案" (Victorian Case File · London Archive), with Victorian-London context + detective-procedure rules + **a state-injection entry** (containing `{{getvar::case_*}}` placeholders + macro instructions teaching the AI to emit `{{setvar}}` to advance the case). **Your global world books are untouched.**
+- **Card-bound world book** — "维多利亚案宗·伦敦档案" (Victorian Case File · London Archive), with Victorian-London context + detective-procedure rules + **a state-injection entry** (containing <code v-pre>{{getvar::case_*}}</code> placeholders + macro instructions teaching the AI to emit <code v-pre>{{setvar}}</code> to advance the case). **Your global world books are untouched.**
 - **"Current Case" CardApp panel** — reads chat variables to surface case state: case name / current phase / suspects / clues / forensic sites. **The variables are advanced by the AI emitting `setvar` macros in its replies**; the CardApp reads via `ctx.getVariable` + `JSON.parse` and renders. One chat turn → AI emits `setvar` → panel updates on the next frame.
 
 The whole setup is just 2 rounds of natural-language conversation — Studio proposes, Studio writes the files, Studio binds the fields, Studio creates the world book.
@@ -35,7 +35,7 @@ Open the right-side character panel, click "Create New Character", name it **"�
 
 Then open the Extensions panel → expand "Character Editor Assistant" → click **"&lt;/&gt; CardApp Studio"**:
 
-![Studio entry](/images/walkthrough/step-01-studio-entry.png)
+![Studio entry](/images/walkthrough/victorian/step-01-studio-entry.png)
 
 ::: tip Studio works on cards without CardApp too
 The Character Editor Assistant routes cards-without-CardApp to the [popup mode](/features/card-editor/popup) and cards-with-CardApp into Studio automatically. But **the CardApp Studio button can pull any card into Studio on demand** — and Studio's tool surface is the full set (memory-graph schema / orchestrator override / regex scripts / world info / character fields), unlike popup mode which only covers fields and world-info entries.
@@ -63,7 +63,7 @@ Please land all of this in whatever order you think best. At each step, propose
 the plan first; I'll nod, then you write.
 ```
 
-![Sending the genre prompt](/images/walkthrough/step-02-first-prompt.png)
+![Sending the genre prompt](/images/walkthrough/victorian/step-02-first-prompt.png)
 
 After you send, Studio doesn't dive in writing — it lays out the entire plan first.
 
@@ -81,25 +81,25 @@ Note: **this layer is for the LLM's long-term memory.** The CardApp panel **does
 
 Then the generation layer. It recommends `loop` mode — Luker's loop is a single "research + summarize" agent: before each reply, the agent runs a round of tool calls (searching chat / lorebook / memory slices), compresses what this response should reference into a capsule, and feeds that into the main generation. The system_prompt Studio writes for this research agent acts as an "internal review": before finalizing, the agent must check three things — was any clue missed, does any suspect testimony contradict an `alibi`/`motive` already in the graph, were any Victorian-era constraints violated (etiquette / class / technology).
 
-This is why Studio's [system prompt](/features/card-editor/studio) defaults to recommending loop — most cards benefit from one extra checking layer over a single straight generation, and reasoning-heavy / long-running cards especially.
+This is why Studio's AI defaults to recommending loop — most cards benefit from one extra checking layer over a single straight generation, and reasoning-heavy / long-running cards especially.
 
 ## 5. After confirmation, Studio lands everything in one round
 
 Reply something like "all confirmed, go with this plan, don't check back, just build", and Studio launches a batch of tool calls:
 
-![Studio landing all the tool calls](/images/walkthrough/step-05-tool-calls.png)
+![Studio landing all the tool calls](/images/walkthrough/victorian/step-05-tool-calls.png)
 
 In one round it has done:
 
 - **`character_update_memory_graph_schema`** — write the four derived node types onto the card (this card only — no global pollution)
 - **`character_update_orchestrator`** — write the three-stage `draft / critique / revise` loop config onto the card (also character-scoped)
-- **`worldinfo_create_chat_book`** + **`worldinfo_replace_entries`** — create the card-specific world book and write all entries in one shot (Victorian-London context, detective procedural rules, **state-injection entry** with `{{getvar::case_*}}` placeholders + macro instructions teaching the AI how to emit `{{setvar}}`, Scotland Yard culture, Whitechapel district lore, etc.)
+- **`worldinfo_create_chat_book`** + **`worldinfo_replace_entries`** — create the card-specific world book and write all entries in one shot (Victorian-London context, detective procedural rules, **state-injection entry** with <code v-pre>{{getvar::case_*}}</code> placeholders + macro instructions teaching the AI how to emit <code v-pre>{{setvar}}</code>, Scotland Yard culture, Whitechapel district lore, etc.)
 - **`character_update_fields`** — write description / personality / first_mes / scenario, and bind the `world` field to the new world book
 
 Each tool call **pops up an approval with a full diff** so you can see what's changing — usually safe to "approve all" in one go.
 
 ::: tip The state-injection entry is the variable-driven UI hub
-The "state-injection" world book entry contains both `{{getvar::case_*}}` (so the AI sees the current case state every time the prompt is assembled) **and macro-teaching `{{setvar}}` examples** (instructing the AI when to emit `setvar` in its reply to advance the case). AI reads prompt → sees current `case_phase` / suspects list → emits `{{setvar::case_phase::on_scene}}` (or similar) in the next reply → op-log strips the literal from `mes` and writes it into `chat_metadata.variables` → CardApp reads via `ctx.getVariable` and renders. **That's the closed loop.** See [Per-Message Variables](/features/variable-op-log) for the mechanics.
+The "state-injection" world book entry contains both <code v-pre>{{getvar::case_*}}</code> (so the AI sees the current case state every time the prompt is assembled) **and macro-teaching <code v-pre>{{setvar}}</code> examples** (instructing the AI when to emit `setvar` in its reply to advance the case). AI reads prompt → sees current `case_phase` / suspects list → emits <code v-pre>{{setvar::case_phase::on_scene}}</code> (or similar) in the next reply → op-log strips the literal from `mes` and writes it into `chat_metadata.variables` → CardApp reads via `ctx.getVariable` and renders. **That's the closed loop.** See [Per-Message Variables](/features/variable-op-log) for the mechanics.
 :::
 
 ::: tip Regex scripts work too
@@ -125,15 +125,15 @@ Studio writes the CardApp. It reads chat variables (`case_name` / `case_phase` /
 
 ## 7. End-to-end run
 
-Exit Studio, send a regular RP message. We hand {{char}} a Whitechapel case file:
+Exit Studio, send a regular RP message. We hand <code v-pre>{{char}}</code> a Whitechapel case file:
 
 > "Detective, someone was murdered in Whitechapel last night, found in their own attic. The victim is Monica Wheeler, 35, a tutor; her husband Henry Wheeler reported it. I just transferred from Scotland Yard with the file and need your read."
 
 ### a. The chat reply — every layer kicking in
 
-![End-to-end chat reply](/images/walkthrough/step-07a-chat-reply.png)
+![End-to-end chat reply](/images/walkthrough/victorian/step-07a-chat-reply.png)
 
-The reply shows all layers cooperating: deductions backed by evidence (specific physical evidence → inference → next investigative step), Victorian class register, period-tech constraints respected (no fingerprint comparison, no telephone calls), and {{char}}'s own "don't disturb the scene / evidence chain" procedural rules. These come jointly from world-info entries + character fields + the orchestrator capsule.
+The reply shows all layers cooperating: deductions backed by evidence (specific physical evidence → inference → next investigative step), Victorian class register, period-tech constraints respected (no fingerprint comparison, no telephone calls), and <code v-pre>{{char}}</code>'s own "don't disturb the scene / evidence chain" procedural rules. These come jointly from world-info entries + character fields + the orchestrator capsule.
 
 ::: tip The AI also emitted setvar in this reply
 Click the small flask icon (fa-flask) in the message footer to see the `var_ops` recorded for this reply — typically `setvar case_name = Whitechapel attic murder · Monica Wheeler` / `setvar case_phase = on-scene examination` / `setvar case_suspects = [{...Henry Wheeler...}]`. The literal macros are stripped from `mes` before render, so you read clean narrative — but the variables are now updated.
@@ -143,7 +143,7 @@ Click the small flask icon (fa-flask) in the message footer to see the `var_ops`
 
 Before each reply, the loop pipeline configured on the card runs a "research + summarize" pass — calling chat / lorebook / memory search tools to compress the context this reply needs into a capsule, which is then fed into the main generation. In the Extensions panel → Orchestrator section → "View Runtime Trace", you can see which steps the loop ran, which tools it called, and how it finalized:
 
-![Orchestrator runtime trace](/images/walkthrough/step-07b-stage-output.png)
+![Orchestrator runtime trace](/images/walkthrough/victorian/step-07b-stage-output.png)
 
 If the loop fails (misconfigured API preset, timeout, etc.), the failure point is marked here and the system automatically falls back to direct generation without the loop — your end-to-end experience stays continuous, you just lose that layer of internal-review capsule.
 
@@ -151,19 +151,19 @@ If the loop fails (misconfigured API preset, timeout, etc.), the failure point i
 
 In the Extensions panel → Memory section → "View Graph":
 
-![Memory Graph visualization](/images/walkthrough/step-07c-memory-graph.png)
+![Memory Graph visualization](/images/walkthrough/victorian/step-07c-memory-graph.png)
 
 The nodes are derived per the schema we just designed (`suspect`, `clue`, `forensic_site`, `witness`, `event`); edges record relationships. **But this is for the LLM** — next time cross-turn recall needs context on Henry Wheeler, the graph automatically feeds the relevant slice into the prompt. The CardApp panel **does not read this graph** — its data source is chat variables. Two parallel layers, non-overlapping responsibilities: the graph handles cross-turn long-term memory; the variables handle real-time UI sync.
 
 ## 8. Watch the CardApp panel evolve with the conversation
 
-Keep chatting. Each turn the AI emits `{{setvar::case_*::...}}` macros to advance case state, and the "current case" panel refreshes:
+Keep chatting. Each turn the AI emits <code v-pre>{{setvar::case_*::...}}</code> macros to advance case state, and the "current case" panel refreshes:
 
-![CardApp panel — after two turns: suspects / clues / forensic sites populating](/images/walkthrough/step-06b-cardapp-turn2.png)
+![CardApp panel — after two turns: suspects / clues / forensic sites populating](/images/walkthrough/victorian/step-06b-cardapp-turn2.png)
 
-After two turns, the AI has emitted `{{setvar::case_suspects::[...]}}` and friends in its replies; op-log stripped the literals from `mes` and wrote them into `chat_metadata.variables`; the CardApp reads them via `ctx.getVariable('case_suspects')` and renders the suspect rows. **That's the standard variable-driven UI shape.**
+After two turns, the AI has emitted <code v-pre>{{setvar::case_suspects::[...]}}</code> and friends in its replies; op-log stripped the literals from `mes` and wrote them into `chat_metadata.variables`; the CardApp reads them via `ctx.getVariable('case_suspects')` and renders the suspect rows. **That's the standard variable-driven UI shape.**
 
-The state-injection world book entry pastes the same `{{getvar::case_*}}` back into every prompt assembly — so the AI itself always sees "current suspects, current clues" at the next turn and won't contradict its own past `setvar`s.
+The state-injection world book entry pastes the same <code v-pre>{{getvar::case_*}}</code> back into every prompt assembly — so the AI itself always sees "current suspects, current clues" at the next turn and won't contradict its own past `setvar`s.
 
 ::: info Division of labor with memory-graph
 - **Chat variables**: real-time case state, panel data, prompt sync — AI emits `setvar`, op-log replaces literals + persists + replays.

@@ -8,13 +8,13 @@
 
 ## 你會得到什麼
 
-最終成品是一張名叫**「維多利亞案宗」**的偵探題材角色卡。{{char}} 是 1888 年倫敦的福爾摩斯式獨立顧問，你扮演一位委託人（或蘇格蘭場來訪的探長）遞上案宗，跟他一起把案件查下去。
+最終成品是一張名叫**「維多利亞案宗」**的偵探題材角色卡。<code v-pre>{{char}}</code> 是 1888 年倫敦的福爾摩斯式獨立顧問，你扮演一位委託人（或蘇格蘭場來訪的探長）遞上案宗，跟他一起把案件查下去。
 
 這張卡身上同時掛著：
 
 - **memory-graph schema 派生** — `suspect` / `clue` / `forensic_site` / `witness` 四類領域節點（不是預設 schema）。**這層是給 LLM 長期記憶用的**：AI 每聊一段就把對應實體抽出來歸檔，跨回合 recall 時圖譜有現成切片可喂回 prompt。
 - **orchestrator loop 編排** — 每次 AI 回覆都跑 `draft → critique → revise` 三階段，critique 階段強制審視"是否遺漏線索 / 嫌疑人陳述是否牴觸 / 時代約束是否被違反"
-- **卡專用世界書** — 「維多利亞案宗·倫敦檔案」，含維多利亞倫敦背景 + 偵探辦案規矩 + **狀態注入條目**（含 `{{getvar::case_*}}` 佔位 + 教 AI 用 `{{setvar}}` 改寫變數的指令），**不動你的全域性世界書**
+- **卡專用世界書** — 「維多利亞案宗·倫敦檔案」，含維多利亞倫敦背景 + 偵探辦案規矩 + **狀態注入條目**（含 <code v-pre>{{getvar::case_*}}</code> 佔位 + 教 AI 用 <code v-pre>{{setvar}}</code> 改寫變數的指令），**不動你的全域性世界書**
 - **「當前案宗」CardApp 面板** — 讀 chat 變數呈現案件狀態：案件名 / 當前階段 / 嫌疑人 / 線索 / 取證地點。**變數由 AI 在 reply 中透過 setvar 推進**；CardApp 讀 `ctx.getVariable` + `JSON.parse` 渲染。聊一句 → AI emit setvar → 面板下一幀就更新。
 
 整個搭建過程只有 2 輪自然語言對話 — Studio 自己提案、自己寫檔案、自己綁欄位、自己造世界書。
@@ -35,7 +35,7 @@
 
 接下來開啟「擴充套件」面板 → 拉到「角色卡編輯助手」一節展開 → 點 **「&lt;/&gt; CardApp Studio」**：
 
-![Studio 入口](/images/walkthrough/step-01-studio-entry.png)
+![Studio 入口](/images/walkthrough/victorian/step-01-studio-entry.png)
 
 ::: tip Studio 也能給沒啟用 CardApp 的卡用
 "角色卡編輯助手"針對沒有 CardApp 的卡走[普通彈窗](/zh-TW/features/card-editor/popup)，含 CardApp 的卡走 Studio。但**這個 Studio 按鈕可以主動把任何卡拉進 Studio**，工具集是完整版（memory-graph schema / orchestrator override / 正則指令碼 / 世界書 / 卡欄位全在），不像普通彈窗只夠改欄位和世界書條目。
@@ -56,7 +56,7 @@
 請按你認為合適的順序逐步落地。每一步先把你的方案告訴我讓我看一下，我點頭你再寫。
 ```
 
-![輸入題材需求](/images/walkthrough/step-02-first-prompt.png)
+![輸入題材需求](/images/walkthrough/victorian/step-02-first-prompt.png)
 
 發出去後，Studio 不會埋頭猛寫 — 它先把整個方案鋪開來給你看一遍。
 
@@ -74,25 +74,25 @@ Memory Graph 預設有 `event` 這個核心型別（時間線脊柱），除此�
 
 接著是生成層：它推薦 `loop` 模式 — Luker 的 loop 是一個"研究 + 總結"型的單 agent：每次回覆前先跑一輪工具呼叫 (搜 chat / lorebook / memory 切片)，把這次回應應該參考什麼壓縮成一個 capsule，再喂進主生成。Studio 給這個研究 agent 寫的 system_prompt 是"內審腦"：強制它在 finalize 之前對照三件事 — 是否遺漏線索、嫌疑人陳述是否牴觸 graph 已存的 alibi/motive、維多利亞時代禮儀 / 階級 / 技術約束有沒有被違反。
 
-這是 Studio [系統提示詞](/zh-TW/features/card-editor/studio)裡預設推薦 loop 的原因 — 多數卡用 loop 比單跑生成多一層把關，推理類 / 長跑類卡尤其受益。
+這是 Studio 的 AI 預設推薦 loop 的原因 — 多數卡用 loop 比單跑生成多一層把關，推理類 / 長跑類卡尤其受益。
 
 ## 5. 同意後，Studio 一次性落地全部產物
 
 回個"全部確認，按你這方案走，直接落地"，Studio 就開始批次發起工具呼叫：
 
-![Studio 落地全部產物的工具呼叫](/images/walkthrough/step-05-tool-calls.png)
+![Studio 落地全部產物的工具呼叫](/images/walkthrough/victorian/step-05-tool-calls.png)
 
 一輪裡它做完了：
 
 - **`character_update_memory_graph_schema`** — 把四類派生節點 schema 寫進卡（只動這張卡，不汙染全域性）
 - **`character_update_orchestrator`** — 把 draft / critique / revise 的三階段 loop 配置寫進卡（同樣 character-scoped）
-- **`worldinfo_create_chat_book`** + **`worldinfo_replace_entries`** — 建立卡專用世界書 + 一次性寫入維多利亞倫敦背景 / 偵探辦案規矩 / **狀態注入條目**（含 `{{getvar::case_*}}` 佔位 + 教 AI 用 `{{setvar}}` 改寫變數的指令）/ 蘇格蘭場文化 / 白教堂區背景等條目
+- **`worldinfo_create_chat_book`** + **`worldinfo_replace_entries`** — 建立卡專用世界書 + 一次性寫入維多利亞倫敦背景 / 偵探辦案規矩 / **狀態注入條目**（含 <code v-pre>{{getvar::case_*}}</code> 佔位 + 教 AI 用 <code v-pre>{{setvar}}</code> 改寫變數的指令）/ 蘇格蘭場文化 / 白教堂區背景等條目
 - **`character_update_fields`** — 寫 description / personality / first_mes / scenario / 把 `world` 欄位繫結到剛建的世界書
 
 每個工具呼叫都會**彈出審批 + 完整 diff**讓你看清楚改了什麼 — 一般可以放心點"批准"全過。
 
 ::: tip 狀態注入條目是變數驅動 UI 的核心樞紐
-"狀態注入"那條世界書條目裡同時含 `{{getvar::case_*}}`（讓 AI 在每次 prompt 裝配時看見當前案件狀態）和**教學用的 `{{setvar}}` 宏**（指引 AI 在它的 reply 裡發 setvar 來推進案件）。AI 讀 prompt → 看見當前 case_phase / 嫌疑人列表 → 在新 reply 裡 emit `{{setvar::case_phase::勘察現場}}` 等宏 → op-log 把字面量從 mes 裡剝掉同時寫進 `chat_metadata.variables` → CardApp 讀 `ctx.getVariable` 渲染。**這是閉環**。詳見[逐樓層變數](/zh-TW/features/variable-op-log)。
+"狀態注入"那條世界書條目裡同時含 <code v-pre>{{getvar::case_*}}</code>（讓 AI 在每次 prompt 裝配時看見當前案件狀態）和**教學用的 <code v-pre>{{setvar}}</code> 宏**（指引 AI 在它的 reply 裡發 setvar 來推進案件）。AI 讀 prompt → 看見當前 case_phase / 嫌疑人列表 → 在新 reply 裡 emit <code v-pre>{{setvar::case_phase::勘察現場}}</code> 等宏 → op-log 把字面量從 mes 裡剝掉同時寫進 `chat_metadata.variables` → CardApp 讀 `ctx.getVariable` 渲染。**這是閉環**。詳見[逐樓層變數](/zh-TW/features/variable-op-log)。
 :::
 
 ::: tip 正則指令碼也能管
@@ -115,15 +115,15 @@ Studio 就把 CardApp 寫出來了。它讀的是 chat 變數（`case_name` / `c
 
 ## 7. 端到端跑一次
 
-退出 Studio，正常發 RP 訊息。我們丟一份倫敦白教堂的案宗給 {{char}}：
+退出 Studio，正常發 RP 訊息。我們丟一份倫敦白教堂的案宗給 <code v-pre>{{char}}</code>：
 
 > "偵探，白教堂有人深夜被害，死在自家閣樓上。死者是 35 歲的私塾教師莫妮卡·惠勒，丈夫亨利·惠勒報的案。我剛從蘇格蘭場調檔過來，需要您一起把脈。"
 
 ### a. 聊天回覆 — 卡設定全部生效
 
-![端到端聊天回覆](/images/walkthrough/step-07a-chat-reply.png)
+![端到端聊天回覆](/images/walkthrough/victorian/step-07a-chat-reply.png)
 
-回覆體現了所有層的協同：推理有據（具體物證 → 推理 → 下一步取證方向）、維多利亞階級氛圍、技術約束（沒有指紋比對、沒有電話）、{{char}} 自帶的"現場不破壞 + 證據鏈"辦案規矩。這些是世界書條目 + character 欄位 + orchestrator capsule 共同把控出來的。
+回覆體現了所有層的協同：推理有據（具體物證 → 推理 → 下一步取證方向）、維多利亞階級氛圍、技術約束（沒有指紋比對、沒有電話）、<code v-pre>{{char}}</code> 自帶的"現場不破壞 + 證據鏈"辦案規矩。這些是世界書條目 + character 欄位 + orchestrator capsule 共同把控出來的。
 
 ::: tip 同時 AI 在這條 reply 裡 emit 了 setvar
 開啟訊息底部的小燒瓶圖示（fa-flask），能看到這條 reply 實際記錄了幾條 var_ops，比如 `setvar case_name = 白教堂閣樓命案 · 莫妮卡·惠勒` / `setvar case_phase = 勘察現場` / `setvar case_suspects = [{...亨利·惠勒...}]`。這些字面量在顯示前就被 op-log 從 mes 裡剝掉了，所以讀者看到的是乾淨敘事，但變數已經更新。
@@ -133,7 +133,7 @@ Studio 就把 CardApp 寫出來了。它讀的是 chat 變數（`case_name` / `c
 
 每次回覆之前，卡上配置的 loop 編排會先跑一輪"研究 + 總結" — 呼叫 chat / lorebook / memory 的搜尋工具，把這次回應需要參考的上下文壓縮成一個 capsule，再餵給主生成。點開擴充套件面板裡 Orchestrator 一節的「View Runtime Trace」，能看到這次 loop 跑了哪些步、呼叫了哪些工具、最終如何 finalize：
 
-![Orchestrator 執行軌跡](/images/walkthrough/step-07b-stage-output.png)
+![Orchestrator 執行軌跡](/images/walkthrough/victorian/step-07b-stage-output.png)
 
 如果 loop 出錯（API 配置不對、超時等），這裡會標紅失敗點，並自動 fallback 到無 loop 的直生成 — 端到端體驗依然連續，你只是少了那一層內審 capsule。
 
@@ -141,19 +141,19 @@ Studio 就把 CardApp 寫出來了。它讀的是 chat 變數（`case_name` / `c
 
 點擴充套件面板裡 Memory 一節 →「檢視圖」，能看到當前對話攢到的圖：
 
-![Memory Graph 檢視](/images/walkthrough/step-07c-memory-graph.png)
+![Memory Graph 檢視](/images/walkthrough/victorian/step-07c-memory-graph.png)
 
 節點是按之前設計的 schema 派生的（`suspect`、`clue`、`forensic_site`、`witness`、`event`），邊記錄關係。**但這是給 LLM 用的**——下次跨回合需要 recall 亨利·惠勒的相關上下文時，圖譜會把存的切片自動喂進 prompt。CardApp 面板**不讀這裡的圖**——面板的資料來源是 chat 變數。兩條平行線，分工互不重疊：圖譜負責跨回合長期記憶，變數負責當下 UI 同步。
 
 ## 8. 看 CardApp 面板隨聊天演進
 
-繼續聊。每發一句，AI 在 reply 裡 emit `{{setvar::case_*::...}}` 等宏推進案件狀態，CardApp 的「當前案宗」面板就會重新整理：
+繼續聊。每發一句，AI 在 reply 裡 emit <code v-pre>{{setvar::case_*::...}}</code> 等宏推進案件狀態，CardApp 的「當前案宗」面板就會重新整理：
 
-![CardApp 面板第二輪後：嫌疑人 / 線索 / 取證地點 逐條浮現](/images/walkthrough/step-06b-cardapp-turn2.png)
+![CardApp 面板第二輪後：嫌疑人 / 線索 / 取證地點 逐條浮現](/images/walkthrough/victorian/step-06b-cardapp-turn2.png)
 
-聊了兩輪之後——AI 在 reply 裡 emit 了 `{{setvar::case_suspects::[...]}}` 等宏，op-log 把 setvar 字面量從 mes 裡剝掉同時寫進 `chat_metadata.variables`，CardApp 透過 `ctx.getVariable('case_suspects')` 讀到 JSON 陣列，渲染成嫌疑人欄的卡片。**這是變數驅動 UI 的標準玩法**。
+聊了兩輪之後——AI 在 reply 裡 emit 了 <code v-pre>{{setvar::case_suspects::[...]}}</code> 等宏，op-log 把 setvar 字面量從 mes 裡剝掉同時寫進 `chat_metadata.variables`，CardApp 透過 `ctx.getVariable('case_suspects')` 讀到 JSON 陣列，渲染成嫌疑人欄的卡片。**這是變數驅動 UI 的標準玩法**。
 
-狀態注入世界書條目把同樣的 `{{getvar::case_*}}` 也往 prompt 裡貼一份——所以 AI 自己也始終看得見"目前嫌疑人有誰、線索有哪些"，下一回合 emit 新 setvar 時不會跟之前矛盾。
+狀態注入世界書條目把同樣的 <code v-pre>{{getvar::case_*}}</code> 也往 prompt 裡貼一份——所以 AI 自己也始終看得見"目前嫌疑人有誰、線索有哪些"，下一回合 emit 新 setvar 時不會跟之前矛盾。
 
 ::: info 跟 memory-graph 怎麼分工？
 - **chat 變數**：當下案件狀態、面板資料、prompt 同步——AI emit setvar，op-log 字面量替換 + 落庫 + replay。

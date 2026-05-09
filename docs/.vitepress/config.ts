@@ -70,7 +70,15 @@ const zhCNSidebar = [
     collapsed: false,
     items: [
       { text: '概览', link: '/zh-CN/features/card-editor/' },
-      { text: '从零写一个 CardApp', link: '/zh-CN/features/card-editor/walkthrough' },
+      {
+        text: '从零写一个 CardApp',
+        collapsed: true,
+        items: [
+          { text: '概览', link: '/zh-CN/features/card-editor/walkthrough/' },
+          { text: '异世界生存日志', link: '/zh-CN/features/card-editor/walkthrough/isekai' },
+          { text: '维多利亚案宗', link: '/zh-CN/features/card-editor/walkthrough/victorian' },
+        ],
+      },
       { text: '普通弹窗', link: '/zh-CN/features/card-editor/popup' },
       { text: 'CardApp Studio', link: '/zh-CN/features/card-editor/studio' },
     ],
@@ -174,7 +182,15 @@ const zhTWSidebar = [
         collapsed: false,
         items: [
           { text: '概覽', link: '/zh-TW/features/card-editor/' },
-          { text: '從零寫一個 CardApp', link: '/zh-TW/features/card-editor/walkthrough' },
+          {
+            text: '從零寫一個 CardApp',
+            collapsed: true,
+            items: [
+              { text: '概覽', link: '/zh-TW/features/card-editor/walkthrough/' },
+              { text: '異世界生存日誌', link: '/zh-TW/features/card-editor/walkthrough/isekai' },
+              { text: '維多利亞案宗', link: '/zh-TW/features/card-editor/walkthrough/victorian' },
+            ],
+          },
           { text: '普通彈窗', link: '/zh-TW/features/card-editor/popup' },
           { text: 'CardApp Studio', link: '/zh-TW/features/card-editor/studio' },
         ],
@@ -278,7 +294,15 @@ const enSidebar = [
         collapsed: false,
         items: [
           { text: 'Overview', link: '/features/card-editor/' },
-          { text: 'Build a CardApp from Scratch', link: '/features/card-editor/walkthrough' },
+          {
+            text: 'Build a CardApp from Scratch',
+            collapsed: true,
+            items: [
+              { text: 'Overview', link: '/features/card-editor/walkthrough/' },
+              { text: 'Isekai Survival Log', link: '/features/card-editor/walkthrough/isekai' },
+              { text: 'Victorian Case File', link: '/features/card-editor/walkthrough/victorian' },
+            ],
+          },
           { text: 'Popup Mode', link: '/features/card-editor/popup' },
           { text: 'CardApp Studio', link: '/features/card-editor/studio' },
         ],
