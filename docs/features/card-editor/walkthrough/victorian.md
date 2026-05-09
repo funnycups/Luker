@@ -69,15 +69,11 @@ It opens with the data layer, deriving the node types this genre needs. Studio p
 
 ::: tip What "derived types" means
 Memory Graph ships with `event` as the core node type (the timeline spine); on top of that you can **define custom node types per card's genre**. The "suspect / clue" concepts a detective card needs are exactly that — derived types — letting the AI store extracted memories in structured form rather than dumping everything into freeform text. See [Memory Graph](/features/memory-graph) for details.
-
-Note: **this layer is for the LLM's long-term memory.** The CardApp panel **does not read** the graph. In Section 6 below, when Studio writes the CardApp, the data source is chat variables, not graph nodes.
 :::
 
 ## 4. Studio proposes the orchestrator loop pipeline
 
-Then the generation layer. It recommends `loop` mode — Luker's loop is a single "research + summarize" agent: before each reply, the agent runs a round of tool calls (searching chat / lorebook / memory slices), compresses what this response should reference into a capsule, and feeds that into the main generation. The system_prompt Studio writes for this research agent acts as an "internal review": before finalizing, the agent must check three things — was any clue missed, does any suspect testimony contradict an `alibi`/`motive` already in the graph, were any Victorian-era constraints violated (etiquette / class / technology).
-
-This is why Studio's AI defaults to recommending loop — most cards benefit from one extra checking layer over a single straight generation, and reasoning-heavy / long-running cards especially.
+Then the generation layer: it recommends `loop` mode — a balance between speed and quality.
 
 ## 5. After confirmation, Studio lands everything in one round
 
@@ -95,7 +91,7 @@ In one round it has done:
 Each tool call **pops up an approval with a full diff** so you can see what's changing — usually safe to "approve all" in one go.
 
 ::: tip The state-injection entry is the variable-driven UI hub
-The "state-injection" world book entry contains both <code v-pre>{{getvar::case_*}}</code> (so the AI sees the current case state every time the prompt is assembled) **and macro-teaching <code v-pre>{{setvar}}</code> examples** (instructing the AI when to emit `setvar` in its reply to advance the case). AI reads prompt → sees current `case_phase` / suspects list → emits <code v-pre>{{setvar::case_phase::on_scene}}</code> (or similar) in the next reply → op-log strips the literal from `mes` and writes it into `chat_metadata.variables` → CardApp reads via `ctx.getVariable` and renders. **That's the closed loop.** See [Per-Message Variables](/features/variable-op-log) for the mechanics.
+The "state-injection" world book entry contains both <code v-pre>{{getvar::case_*}}</code> (so the AI sees the current case state every time the prompt is assembled) **and macro-teaching <code v-pre>{{setvar}}</code> examples** (instructing the AI when to emit `setvar` in its reply to advance the case). See [Per-Message Variables](/features/variable-op-log) for the mechanics.
 :::
 
 ::: tip Regex scripts work too
@@ -117,7 +113,7 @@ dark amber accents). Styling / palette / detail decisions are yours. I'll
 approve all CardApp file writes.
 ```
 
-Studio writes the CardApp. It reads chat variables (`case_name` / `case_phase` / `case_suspects` / `case_clues` / `case_sites`); list-shaped variables hold JSON-serialized arrays, which the CardApp parses with `ctx.getVariable + JSON.parse` and then renders. **No memory-graph reads** — the graph is the LLM's long-term-memory layer, not on the UI's data path.
+Studio writes the CardApp. It reads chat variables (`case_name` / `case_phase` / `case_suspects` / `case_clues` / `case_sites`).
 
 ## 7. End-to-end run
 
@@ -131,17 +127,13 @@ Exit Studio, send a regular RP message. We hand <code v-pre>{{char}}</code> a Wh
 
 The reply shows all layers cooperating: deductions backed by evidence (specific physical evidence → inference → next investigative step), Victorian class register, period-tech constraints respected (no fingerprint comparison, no telephone calls), and <code v-pre>{{char}}</code>'s own "don't disturb the scene / evidence chain" procedural rules. These come jointly from world-info entries + character fields + the orchestrator capsule.
 
-::: tip The AI also emitted setvar in this reply
-Click the small flask icon (fa-flask) in the message footer to see the `var_ops` recorded for this reply — typically `setvar case_name = Whitechapel attic murder · Monica Wheeler` / `setvar case_phase = on-scene examination` / `setvar case_suspects = [{...Henry Wheeler...}]`. The literal macros are stripped from `mes` before render, so you read clean narrative — but the variables are now updated.
-:::
-
 ### b. Inspect what the orchestrator did in the background
 
-Before each reply, the loop pipeline configured on the card runs a "research + summarize" pass — calling chat / lorebook / memory search tools to compress the context this reply needs into a capsule, which is then fed into the main generation. In the Extensions panel → Orchestrator section → "View Runtime Trace", you can see which steps the loop ran, which tools it called, and how it finalized:
+In the Extensions panel → Orchestrator section → "View Runtime Trace", you can see which steps the loop ran, which tools it called, and how it finalized:
 
 ![Orchestrator runtime trace](/images/walkthrough/victorian/step-07b-stage-output.png)
 
-If the loop fails (misconfigured API preset, timeout, etc.), the failure point is marked here and the system automatically falls back to direct generation without the loop — your end-to-end experience stays continuous, you just lose that layer of internal-review capsule.
+If the loop fails (misconfigured API preset, timeout, etc.), the failure point is marked here and the system automatically falls back to direct generation without the loop — your end-to-end experience stays continuous, you just lose that capsule layer.
 
 ### c. Inspect what memory-graph is accumulating long-term
 
@@ -149,23 +141,13 @@ In the Extensions panel → Memory section → "View Graph":
 
 ![Memory Graph visualization](/images/walkthrough/victorian/step-07c-memory-graph.png)
 
-The nodes are derived per the schema we just designed (`suspect`, `clue`, `forensic_site`, `witness`, `event`); edges record relationships. **But this is for the LLM** — next time cross-turn recall needs context on Henry Wheeler, the graph automatically feeds the relevant slice into the prompt. The CardApp panel **does not read this graph** — its data source is chat variables. Two parallel layers, non-overlapping responsibilities: the graph handles cross-turn long-term memory; the variables handle real-time UI sync.
+The nodes are derived per the schema we just designed (`suspect`, `clue`, `forensic_site`, `witness`, `event`); edges record relationships. **But this is for the LLM** — next time cross-turn recall needs context on Henry Wheeler, the graph automatically feeds the relevant slice into the prompt.
 
 ## 8. Watch the CardApp panel evolve with the conversation
 
 Keep chatting. Each turn the AI emits <code v-pre>{{setvar::case_*::...}}</code> macros to advance case state, and the "current case" panel refreshes:
 
 ![CardApp panel — after two turns: suspects / clues / forensic sites populating](/images/walkthrough/victorian/step-06b-cardapp-turn2.png)
-
-After two turns, the AI has emitted <code v-pre>{{setvar::case_suspects::[...]}}</code> and friends in its replies; op-log stripped the literals from `mes` and wrote them into `chat_metadata.variables`; the CardApp reads them via `ctx.getVariable('case_suspects')` and renders the suspect rows. **That's the standard variable-driven UI shape.**
-
-The state-injection world book entry pastes the same <code v-pre>{{getvar::case_*}}</code> back into every prompt assembly — so the AI itself always sees "current suspects, current clues" at the next turn and won't contradict its own past `setvar`s.
-
-::: info Division of labor with memory-graph
-- **Chat variables**: real-time case state, panel data, prompt sync — AI emits `setvar`, op-log replaces literals + persists + replays.
-- **Memory-graph**: long-term cross-turn memory, AI cross-turn recall — AI describes "saw what / spoke to whom" in narrative; the extractor archives nodes asynchronously.
-- The two **don't overlap**, and CardApp **only reads variables**.
-:::
 
 ## Prompting cheatsheet
 
@@ -186,11 +168,6 @@ After a single run-through you'll notice that effective Studio prompts aren't ab
 
 4. **Ask for explanations when unsure**
    - "Why isn't `victim` in the schema?" — it'll explain ("victim is usually one or two fixed pieces of info — better to put that in `first_mes` or a world-info entry; making it a schema type creates redundancy")
-
-5. **CardApp's data source is chat variables, not memory-graph**
-   - Memory-graph is the LLM's long-term memory; the CardApp doesn't read it.
-   - You don't need to spell this out in the prompt — Studio defaults to this shape.
-   - If you accidentally ask "make the CardApp render memory-graph nodes", Studio will push back and explain the variable-driven equivalent.
 
 ## Next steps
 
