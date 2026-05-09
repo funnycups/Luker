@@ -49,7 +49,7 @@ Loop 模式针对这些点做单 agent + 工具循环:同一会话、一套 pres
 
 ## 内置工具
 
-工具走 OpenAI function-calling 协议,结果以 `role: tool` 消息形式回到 Agent 的下一轮上下文。共 8 个可选工具 + 1 个强制 `finalize`:
+工具走 OpenAI function-calling 协议,结果以 `role: tool` 消息形式回到 Agent 的下一轮上下文。共 10 个可选工具 + 1 个强制 `finalize`:
 
 | 工具 | 作用 | 简单示例(RP 场景) |
 |---|---|---|
@@ -61,6 +61,8 @@ Loop 模式针对这些点做单 agent + 工具循环:同一会话、一套 pres
 | `memory.search(query, limit)` | 在记忆图(memory-graph)做 lexical 搜索,**不依赖 vector 配置**。同样默认排除已注入节点。 | `memory.search('家族秘密')` 找历史事件节点。 |
 | `memory.list_recent(limit)` | 时间倒序浏览记忆节点,看看最近发生了什么。 | `memory.list_recent(10)` 取最近 10 个事件节点。 |
 | `memory.get(node_id)` | 按 id 拉节点本身 + 直连邻居 id 列表(不含完整邻居节点)。 | 看完 `memory.search` 拿到一个节点 id,用 `memory.get` 看它和谁相关。 |
+| `search.search(query)` | **联网搜索**,转发给 [Search Tools](/zh-CN/features/search-tools) 插件(DuckDuckGo / SearXNG / Brave)。默认开启,但需要 search-tools 扩展已加载并配好 provider——否则 Agent 会收到 `SEARCH_UNAVAILABLE` / `SEARCH_DISABLED` 并自行改用其他工具。 | `search.search('某某新闻最新进展')` 返回 provider 形态的结果(通常是 `{title, url, snippet}` 列表)。 |
+| `search.visit(url)` | 抓取 `search.search` 命中的某个页面,返回可读正文。 | 拿到搜索结果后,`search.visit('https://example.com/article')` 把整篇正文拉回来。 |
 | `finalize(capsule_text)` | **终止信号**(强制启用)。`capsule_text` 直接注入主模型 prompt。 | `finalize('林晚此刻心情焦虑:刚得知外祖母身世,可能在下一句对白中引出洛阳话题。')` |
 
 ## 失控保护(5 层,按触发优先级)
@@ -147,6 +149,9 @@ A:不会。`note.add` 写入的是**当前 chat** 的 floor-state 命名空间,�
 
 **Q:连续 3 轮不调工具被打断了怎么办?**
 A:检查 system prompt 是否给了 agent 明确的「产出格式」。多数情况是 agent 在「思考」但不知道何时该 finalize;在 prompt 里加一条「当你掌握的信息足以写出 capsule 时,立即调用 finalize」通常能解决。
+
+**Q:勾选了 `search.search`,Agent 却收到 `SEARCH_UNAVAILABLE` / `SEARCH_DISABLED`?**
+A:web 工具是把请求转发给 [Search Tools](/zh-CN/features/search-tools) 插件的。`SEARCH_UNAVAILABLE` 表示插件没加载;`SEARCH_DISABLED` 表示插件加载了但被关掉了。打开 search-tools 设置面板,选好 provider(DuckDuckGo / SearXNG / Brave)、把总开关打开,再重试即可。
 
 ## 性能 trade-off
 

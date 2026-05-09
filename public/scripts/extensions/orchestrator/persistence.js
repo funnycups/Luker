@@ -80,6 +80,15 @@ export const ORCH_EXECUTION_MODE_LOOP = 'loop';
  *   - tools.lorebook.{search, get}      world-info lookup tools
  *   - tools.memory.{search, list_recent, get}  memory-graph external-api
  *                            wrappers; each requires memory-graph enabled
+ *   - tools.search.{search, visit}      web-search tools backed by the
+ *                            search-tools plugin (DuckDuckGo / SearXNG /
+ *                            Brave); default ON like the other tool
+ *                            namespaces. The plugin's own enable flag
+ *                            still gates execution at runtime — when
+ *                            the plugin is missing or disabled the loop
+ *                            tool raises SEARCH_UNAVAILABLE /
+ *                            SEARCH_DISABLED as a structured error so
+ *                            the agent self-corrects.
  *   - tools.finalize        FORCED true; the loop has no other terminator
  *   - max_rounds            hard upper bound on tool-call rounds [1, 50]
  *   - wall_clock_budget_ms  loop deadline; floored at 10000ms (10s)
@@ -95,6 +104,7 @@ const LOOP_PROFILE_DEFAULTS = Object.freeze({
         chat: Object.freeze({ read_range: true, search: true }),
         lorebook: Object.freeze({ search: true, get: true }),
         memory: Object.freeze({ search: true, list_recent: true, get: true }),
+        search: Object.freeze({ search: true, visit: true }),
         finalize: true,
     }),
     max_rounds: 20,
@@ -139,6 +149,7 @@ function sanitizeLoopToolFlags(input) {
     const chatIn = tools.chat && typeof tools.chat === 'object' ? tools.chat : {};
     const lorebookIn = tools.lorebook && typeof tools.lorebook === 'object' ? tools.lorebook : {};
     const memoryIn = tools.memory && typeof tools.memory === 'object' ? tools.memory : {};
+    const searchIn = tools.search && typeof tools.search === 'object' ? tools.search : {};
     return {
         note: {
             add: readBooleanFlag(noteIn.add, true),
@@ -156,6 +167,15 @@ function sanitizeLoopToolFlags(input) {
             search: readBooleanFlag(memoryIn.search, true),
             list_recent: readBooleanFlag(memoryIn.list_recent, true),
             get: readBooleanFlag(memoryIn.get, true),
+        },
+        // Web tools default ON to match the other namespaces. The
+        // underlying search-tools plugin's enable flag still gates
+        // execution: when the plugin is missing or disabled the loop tool
+        // raises SEARCH_UNAVAILABLE / SEARCH_DISABLED so the agent
+        // sees a structured error and pivots.
+        search: {
+            search: readBooleanFlag(searchIn.search, true),
+            visit: readBooleanFlag(searchIn.visit, true),
         },
         // The loop has no other terminator; `finalize` is the only tool the
         // agent can call to stop. We accept user input here for forward
@@ -205,6 +225,7 @@ function sanitizeLoopCapsuleInject(input) {
  *     chat: { read_range: boolean, search: boolean },
  *     lorebook: { search: boolean, get: boolean },
  *     memory: { search: boolean, list_recent: boolean, get: boolean },
+ *     search: { search: boolean, visit: boolean },
  *     finalize: true,
  *   },
  *   max_rounds: number,

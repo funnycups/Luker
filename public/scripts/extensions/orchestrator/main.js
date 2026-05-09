@@ -3516,6 +3516,8 @@ function renderLoopIterationWorkingProfile(session, { profileOverride = null, pr
     if (profile.tools?.memory?.search) enabledTools.push('memory.search');
     if (profile.tools?.memory?.list_recent) enabledTools.push('memory.list_recent');
     if (profile.tools?.memory?.get) enabledTools.push('memory.get');
+    if (profile.tools?.search?.search) enabledTools.push('search.search');
+    if (profile.tools?.search?.visit) enabledTools.push('search.visit');
     enabledTools.push('finalize');
     const simulationSummary = session?.lastSimulation
         ? `${i18n('Simulation')}: ${String(session.lastSimulation.summary || '')}`

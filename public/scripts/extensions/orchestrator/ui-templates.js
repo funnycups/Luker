@@ -162,6 +162,7 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
     const chat = tools.chat || {};
     const lorebook = tools.lorebook || {};
     const memory = tools.memory || {};
+    const search = tools.search || {};
     const wallClockSeconds = Math.max(10, Math.round(Number(editor?.wall_clock_budget_ms || 300000) / 1000));
     const checkbox = (id, field, label, disabled = false, checked = null) => {
         const isChecked = checked === null ? Boolean(field) : Boolean(checked);
@@ -209,6 +210,11 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
                 ${checkbox('memory.search', memory.search, 'memory.search')}
                 ${checkbox('memory.list_recent', memory.list_recent, 'memory.list_recent')}
                 ${checkbox('memory.get', memory.get, 'memory.get')}
+            </fieldset>
+            <fieldset class="luker_orch_loop_tools_group">
+                <legend>${escapeHtml(i18n('search (web search)'))}</legend>
+                ${checkbox('search.search', search.search, 'search.search')}
+                ${checkbox('search.visit', search.visit, 'search.visit')}
             </fieldset>
             <fieldset class="luker_orch_loop_tools_group">
                 <legend>${escapeHtml(i18n('terminator'))}</legend>

@@ -31,6 +31,7 @@ import { execChatReadRange, execChatSearch } from './loop-tools/chat.js';
 import { execLorebookSearch, execLorebookGet } from './loop-tools/lorebook.js';
 import { execMemorySearch, execMemoryListRecent, execMemoryGet } from './loop-tools/memory.js';
 import { execNoteAdd, execNoteDelete } from './loop-tools/note.js';
+import { execSearchSearch, execSearchVisit } from './loop-tools/search.js';
 
 /**
  * Map of fully-qualified tool name → async execution function.
@@ -258,6 +259,72 @@ registerTool('note.delete', execNoteDelete, {
                 },
             },
             required: ['indexes'],
+            additionalProperties: false,
+        },
+    },
+});
+
+// ---- search namespace ---------------------------------------------------
+
+registerTool('search.search', execSearchSearch, {
+    type: 'function',
+    function: {
+        name: 'search.search',
+        description: 'Web search via the search-tools plugin (DuckDuckGo / SearXNG / Brave, depending on plugin settings). Use only when the user asks about current events, fresh facts, or external information not present in chat / lorebook / memory. Returns provider-shaped results (typically a list of {title, url, snippet}). Follow up with search.visit on a specific URL to read full readable text.',
+        parameters: {
+            type: 'object',
+            properties: {
+                query: {
+                    type: 'string',
+                    description: 'Non-empty search query. Whitespace-only is rejected.',
+                },
+                max_results: {
+                    type: 'integer',
+                    description: 'Maximum number of results (1-20). Provider may cap further.',
+                    minimum: 1,
+                    maximum: 20,
+                },
+                safe_search: {
+                    type: 'string',
+                    enum: ['off', 'moderate', 'strict'],
+                    description: 'Safe-search level. Defaults to plugin settings.',
+                },
+                time_range: {
+                    type: 'string',
+                    enum: ['day', 'week', 'month', 'year'],
+                    description: 'Optional time filter. Omit for no filter.',
+                },
+                region: {
+                    type: 'string',
+                    description: 'Optional provider-specific locale or region hint.',
+                },
+            },
+            required: ['query'],
+            additionalProperties: false,
+        },
+    },
+});
+
+registerTool('search.visit', execSearchVisit, {
+    type: 'function',
+    function: {
+        name: 'search.visit',
+        description: 'Fetch one webpage discovered via search.search and return its readable text. Use sparingly: prefer the search snippet when it already answers the question.',
+        parameters: {
+            type: 'object',
+            properties: {
+                url: {
+                    type: 'string',
+                    description: 'HTTP/HTTPS page URL.',
+                },
+                max_chars: {
+                    type: 'integer',
+                    description: 'Maximum output characters (0-50000). 0 means no truncation.',
+                    minimum: 0,
+                    maximum: 50000,
+                },
+            },
+            required: ['url'],
             additionalProperties: false,
         },
     },

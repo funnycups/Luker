@@ -49,7 +49,7 @@ Key fields:
 
 ## Built-in tools
 
-Tools follow the OpenAI function-calling protocol; results come back as `role: tool` messages in the agent's next round. Eight optional tools plus the always-on `finalize`:
+Tools follow the OpenAI function-calling protocol; results come back as `role: tool` messages in the agent's next round. Ten optional tools plus the always-on `finalize`:
 
 | Tool | Purpose | Concrete RP example |
 |---|---|---|
@@ -61,6 +61,8 @@ Tools follow the OpenAI function-calling protocol; results come back as `role: t
 | `memory.search(query, limit)` | Lexical search over the memory graph; **does not depend on vector configuration**. Also excludes already-injected nodes by default. | `memory.search('family secret')` surfaces relevant historical event nodes. |
 | `memory.list_recent(limit)` | Reverse-chronological browse of memory nodes — what happened recently? | `memory.list_recent(10)` returns the 10 most recent event nodes. |
 | `memory.get(node_id)` | Fetch a node by id plus the ids of its direct neighbours (without full neighbour bodies). | After `memory.search` returns a node id, use `memory.get` to see what it's connected to. |
+| `search.search(query)` | **Web search** via the [Search Tools](/features/search-tools) plugin (DuckDuckGo / SearXNG / Brave). Default on, but the search-tools extension must be loaded and have a provider configured — otherwise the agent receives `SEARCH_UNAVAILABLE` / `SEARCH_DISABLED` and pivots. | `search.search('latest news on …')` returns provider-shaped results (typically `{title, url, snippet}`). |
+| `search.visit(url)` | Fetch one page discovered via `search.search` and return its readable text. | After a search hit, `search.visit('https://example.com/article')` pulls the full article body. |
 | `finalize(capsule_text)` | **Terminator** (forced on). `capsule_text` becomes the capsule injected into the main model. | `finalize('Lin Wan is anxious right now: she just learned about her grandmother and may steer the next exchange to Luoyang.')` |
 
 ## Five-layer runaway protection (in priority order)
@@ -147,6 +149,9 @@ A: No. `note.add` writes to the **current chat**'s floor-state namespace; chats 
 
 **Q: My loop got cut off after three rounds without tool calls — what now?**
 A: Check whether the system prompt gives the agent a clear "output shape". Most of the time the agent is "thinking" but not sure when to call `finalize`; adding "as soon as you have enough information to write the capsule, call `finalize` immediately" usually fixes it.
+
+**Q: I enabled `search.search` but the agent gets `SEARCH_UNAVAILABLE` / `SEARCH_DISABLED` — why?**
+A: The web tools forward to the [Search Tools](/features/search-tools) plugin. `SEARCH_UNAVAILABLE` means the plugin isn't loaded; `SEARCH_DISABLED` means it's loaded but disabled in its settings. Open the search-tools panel, pick a provider (DuckDuckGo / SearXNG / Brave), turn the master switch on, then retry.
 
 ## Performance trade-offs
 

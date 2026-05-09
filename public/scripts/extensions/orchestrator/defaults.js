@@ -357,6 +357,7 @@ export const defaultLoopProfile = {
         chat: { read_range: true, search: true },
         lorebook: { search: true, get: true },
         memory: { search: true, list_recent: true, get: true },
+        search: { search: true, visit: true },
         finalize: true,
     },
     max_rounds: 20,
