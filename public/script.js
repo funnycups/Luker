@@ -15339,6 +15339,170 @@ function addAlternateGreeting(template, greeting, index, getArray, popup) {
 }
 
 /**
+ * Apply a value at a (possibly dotted) path inside `target`, creating
+ * intermediate plain objects as needed. Used by `updateCharacterData`
+ * to let callers patch deep fields like `extensions.depth_prompt.depth`
+ * without round-tripping through the form / DOM.
+ * @param {object} target
+ * @param {string} dottedPath
+ * @param {*} value
+ */
+function setDotPath(target, dottedPath, value) {
+    const parts = String(dottedPath).split('.');
+    let cursor = target;
+    for (let i = 0; i < parts.length - 1; i++) {
+        const key = parts[i];
+        if (cursor[key] === undefined || cursor[key] === null || typeof cursor[key] !== 'object' || Array.isArray(cursor[key])) {
+            cursor[key] = {};
+        }
+        cursor = cursor[key];
+    }
+    cursor[parts[parts.length - 1]] = value;
+}
+
+/**
+ * Update one or more fields on a character's `data` object and persist the
+ * change to disk, **without** requiring the character editor popup to be
+ * open. The patch shape is dot-paths into `character.data` — top-level
+ * fields use bare names (`description`, `name`), nested fields use dotted
+ * notation (`extensions.world`, `extensions.depth_prompt.depth`).
+ *
+ * Companion to the existing `saveCharacterDebounced` / form path: that
+ * route is still used when the popup *is* open (the form is the source of
+ * truth in that mode). This function is the data-driven alternative for
+ * AI tools, slash commands, programmatic plugins, and any other caller
+ * that may run while the editor is closed.
+ *
+ * Emits `event_types.CHARACTER_FIELDS_UPDATED` with `{ charId, keys }`
+ * after the in-memory write so views (open popup, CardApp UI) can sync
+ * themselves from the canonical data.
+ *
+ * @param {number|string} charId Index into `characters[]`.
+ * @param {Record<string, any>} patch Map of dotted-path → value.
+ * @param {object} [options]
+ * @param {boolean} [options.persist=true] Whether to schedule a save.
+ *   Pass `false` for transient writes that another caller will persist.
+ * @param {boolean} [options.immediate=false] Persist now instead of
+ *   debouncing. Useful when followup code needs the file already written.
+ * @returns {Promise<void>}
+ */
+export async function updateCharacterData(charId, patch, { persist = true, immediate = false } = {}) {
+    const character = characters[charId];
+    if (!character) {
+        throw new Error(`updateCharacterData: no character at index ${charId}`);
+    }
+    if (!character.data || typeof character.data !== 'object') {
+        character.data = {};
+    }
+
+    const keys = Object.keys(patch || {});
+    for (const key of keys) {
+        setDotPath(character.data, key, patch[key]);
+    }
+
+    await eventSource.emit(event_types.CHARACTER_FIELDS_UPDATED, { charId, keys });
+
+    if (persist) {
+        if (immediate) {
+            await persistCharacterData(charId);
+        } else {
+            persistCharacterDataDebounced(charId);
+        }
+    }
+}
+
+/**
+ * Serialize a character's current in-memory `data` into the multipart
+ * shape `/api/characters/edit` expects (compatible with the legacy
+ * popup-form path), and POST it. The form is **not** consulted — only
+ * `characters[charId]`. Use via `updateCharacterData` for patches; call
+ * directly only when you've already mutated the in-memory object yourself
+ * and want to flush.
+ *
+ * @param {number|string} charId
+ * @returns {Promise<void>}
+ */
+export async function persistCharacterData(charId) {
+    const character = characters[charId];
+    if (!character) {
+        throw new Error(`persistCharacterData: no character at index ${charId}`);
+    }
+    const d = character.data || {};
+    const ext = (d.extensions && typeof d.extensions === 'object') ? d.extensions : {};
+    const depth = (ext.depth_prompt && typeof ext.depth_prompt === 'object') ? ext.depth_prompt : {};
+    const formData = new FormData();
+    formData.set('avatar_url', String(character.avatar || ''));
+    formData.set('ch_name', String(d.name || character.name || ''));
+    formData.set('description', String(d.description || ''));
+    formData.set('personality', String(d.personality || ''));
+    formData.set('scenario', String(d.scenario || ''));
+    formData.set('first_mes', String(d.first_mes || ''));
+    formData.set('mes_example', String(d.mes_example || ''));
+    formData.set('creator_notes', String(d.creator_notes || ''));
+    formData.set('system_prompt', String(d.system_prompt || ''));
+    formData.set('post_history_instructions', String(d.post_history_instructions || ''));
+    formData.set('tags', Array.isArray(d.tags) ? d.tags.join(', ') : String(d.tags || ''));
+    formData.set('creator', String(d.creator || ''));
+    formData.set('character_version', String(d.character_version || ''));
+    formData.set('talkativeness', String(ext.talkativeness ?? 0.5));
+    formData.set('fav', String(ext.fav === true));
+    formData.set('world', String(ext.world || ''));
+    formData.set('depth_prompt_prompt', String(depth.prompt || ''));
+    formData.set('depth_prompt_depth', String(depth.depth ?? 4));
+    formData.set('depth_prompt_role', String(depth.role || 'system'));
+    formData.set('chat', String(character.chat || ''));
+    formData.set('create_date', String(character.create_date || ''));
+    formData.set('json_data', JSON.stringify(character));
+    formData.set('extensions', JSON.stringify(ext));
+    if (Array.isArray(d.alternate_greetings)) {
+        for (const greeting of d.alternate_greetings) {
+            formData.append('alternate_greetings', String(greeting));
+        }
+    }
+
+    const headers = getRequestHeaders({ omitContentType: true });
+    const response = await fetch('/api/characters/edit', {
+        method: 'POST',
+        headers,
+        body: formData,
+        cache: 'no-cache',
+    });
+    if (!response.ok) {
+        throw new Error(`persistCharacterData: HTTP ${response.status}`);
+    }
+}
+
+/**
+ * Per-character debounced persist queue. Each character is flushed
+ * independently so concurrent writes to different cards don't coalesce
+ * into a single (wrong-target) save.
+ * @type {Map<string, ReturnType<typeof debounce>>}
+ */
+const _persistCharacterDebounceMap = new Map();
+
+/**
+ * Schedule a `persistCharacterData` call for the given character on the
+ * standard save-edit timeout. Subsequent calls within the window are
+ * coalesced.
+ * @param {number|string} charId
+ */
+export function persistCharacterDataDebounced(charId) {
+    const key = String(charId);
+    let fn = _persistCharacterDebounceMap.get(key);
+    if (!fn) {
+        fn = debounce(async () => {
+            try {
+                await persistCharacterData(charId);
+            } catch (error) {
+                console.error('[persistCharacterDataDebounced]', error);
+            }
+        }, DEFAULT_SAVE_EDIT_TIMEOUT);
+        _persistCharacterDebounceMap.set(key, fn);
+    }
+    fn();
+}
+
+/**
  * Creates or edits a character based on the form data.
  * @param {Event} [e] Event that triggered the function call.
  */

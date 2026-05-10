@@ -11,7 +11,7 @@ import {
  TOOL_PROTOCOL_STYLE,
 } from '../../function-call-runtime.js';
 import { fetchFileList, fetchFileContent, saveFileContent, deleteFile, renameFile } from './studio.js';
-import { characters, this_chid, saveCharacterDebounced, saveMetadata, chat_metadata, getRequestHeaders } from '../../../../script.js';
+import { characters, this_chid, saveMetadata, chat_metadata, getRequestHeaders } from '../../../../script.js';
 import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, createNewWorldInfo, world_names, selected_world_info, charUpdatePrimaryWorld, getChatWorldInfoNames, getCharaAuxWorlds, importEmbeddedWorldInfo, getCharacterEmbeddedWorld } from '../../../world-info.js';
 import { getCharaFilename } from '../../../utils.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
@@ -607,7 +607,7 @@ function buildTools() {
  type: 'function',
  function: {
  name: TOOL_NAMES.CARDAPP_SET_ENABLED,
- description: 'Turn CardApp on or off for this character (writes data.extensions.card_app.enabled). The current toggle state is already provided in the system context — you do NOT need a separate read tool. Only call this AFTER the user has explicitly confirmed they want CardApp enabled (or disabled). Do NOT call this unprompted just because you see CardApp-style code. saveCharacterDebounced is invoked for you.',
+ description: 'Turn CardApp on or off for this character (writes data.extensions.card_app.enabled). The current toggle state is already provided in the system context — you do NOT need a separate read tool. Only call this AFTER the user has explicitly confirmed they want CardApp enabled (or disabled). Do NOT call this unprompted just because you see CardApp-style code. The character is persisted automatically.',
  parameters: {
  type: 'object',
  properties: {
@@ -805,41 +805,51 @@ async function executeTool(charId, toolName, args, options = {}) {
  if (this_chid === undefined || this_chid === null) {
  return { ok: false, error: 'No active character' };
  }
- const FIELD_MAP = {
- name: '#character_name_pole',
- description: '#description_textarea',
- personality: '#personality_textarea',
- scenario: '#scenario_pole',
- first_mes: '#firstmessage_textarea',
- mes_example: '#mes_example_textarea',
- system_prompt: '#system_prompt_textarea',
- post_history_instructions: '#post_history_instructions_textarea',
- creator_notes: '#creator_notes_textarea',
- creator: '#creator_textarea',
- character_version: '#character_version_textarea',
- tags: '#tags_textarea',
- talkativeness: '#talkativeness_slider',
- depth_prompt_prompt: '#depth_prompt_prompt',
- depth_prompt_depth: '#depth_prompt_depth',
- depth_prompt_role: '#depth_prompt_role',
+ // Tool field name → character.data dot-path. `world` and `tags` get
+ // special handling (world goes through charUpdatePrimaryWorld for the
+ // embedded-book mirror cleanup; tags are exposed as a comma-string but
+ // stored as an array). Everything else is a straight data write that
+ // works whether the editor popup is open or closed.
+ const FIELD_TO_PATH = {
+ name: 'name',
+ description: 'description',
+ personality: 'personality',
+ scenario: 'scenario',
+ first_mes: 'first_mes',
+ mes_example: 'mes_example',
+ system_prompt: 'system_prompt',
+ post_history_instructions: 'post_history_instructions',
+ creator_notes: 'creator_notes',
+ creator: 'creator',
+ character_version: 'character_version',
+ talkativeness: 'extensions.talkativeness',
+ depth_prompt_prompt: 'extensions.depth_prompt.prompt',
+ depth_prompt_depth: 'extensions.depth_prompt.depth',
+ depth_prompt_role: 'extensions.depth_prompt.role',
  };
  const updated = [];
+ const patch = {};
  for (const [key, value] of Object.entries(args.fields || {})) {
  if (key === 'world') {
  await charUpdatePrimaryWorld(String(value || ''));
  updated.push(key);
  continue;
  }
- const selector = FIELD_MAP[key];
- if (!selector) continue;
- const $el = $(selector);
- if ($el.length > 0) {
- $el.val(value);
- $el.trigger('input');
+ if (key === 'tags') {
+ patch.tags = typeof value === 'string'
+ ? value.split(',').map(x => x.trim()).filter(Boolean)
+ : (Array.isArray(value) ? value : []);
+ updated.push(key);
+ continue;
+ }
+ const path = FIELD_TO_PATH[key];
+ if (!path) continue;
+ patch[path] = value;
  updated.push(key);
  }
+ if (Object.keys(patch).length > 0) {
+ await getContext().updateCharacterData(this_chid, patch, { immediate: true });
  }
- saveCharacterDebounced();
  return { ok: true, message: `Updated fields: ${updated.join(', ')}` };
  }
  // ==================== World Info ====================
@@ -1367,17 +1377,13 @@ async function executeTool(charId, toolName, args, options = {}) {
  const next = !!args?.enabled;
  const char = characters[this_chid];
  if (!char) return { ok: false, error: 'Character not found' };
- if (!char.data) char.data = {};
- if (!char.data.extensions) char.data.extensions = {};
- if (!char.data.extensions.card_app) char.data.extensions.card_app = {};
- const previous = !!char.data.extensions.card_app.enabled;
- char.data.extensions.card_app.enabled = next;
+ const previous = !!char?.data?.extensions?.card_app?.enabled;
+ await getContext().updateCharacterData(this_chid, { 'extensions.card_app.enabled': next });
  // Keep the editor checkbox in sync if the popup is currently open.
  const $checkbox = $('#card_app_enabled');
  if ($checkbox.length > 0 && $checkbox.prop('checked') !== next) {
  $checkbox.prop('checked', next);
  }
- saveCharacterDebounced();
  return {
  ok: true,
  was_enabled: previous,

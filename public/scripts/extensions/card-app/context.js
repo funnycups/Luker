@@ -2,7 +2,7 @@
  * CardApp Context - builds the ctx object passed to CardApp's init() function.
  */
 
-import { eventSource, event_types, chat, chat_metadata, this_chid, characters, getRequestHeaders, openCharacterChat, doNewChat, closeCurrentChat, getPastCharacterChats, deleteMessage as lukerDeleteMessage, deleteLastMessage, swipe_right, saveCharacterDebounced, saveMetadata, messageFormatting, getChatState as lukerGetChatState, updateChatState as lukerUpdateChatState, patchChatState as lukerPatchChatState, deleteChatState as lukerDeleteChatState, deleteCharacterChatByName, renameChat as lukerRenameChat } from '../../../script.js';
+import { eventSource, event_types, chat, chat_metadata, this_chid, characters, getRequestHeaders, openCharacterChat, doNewChat, closeCurrentChat, getPastCharacterChats, deleteMessage as lukerDeleteMessage, deleteLastMessage, swipe_right, saveMetadata, messageFormatting, getChatState as lukerGetChatState, updateChatState as lukerUpdateChatState, patchChatState as lukerPatchChatState, deleteChatState as lukerDeleteChatState, deleteCharacterChatByName, renameChat as lukerRenameChat } from '../../../script.js';
 import { getContext, saveMetadataDebounced, extension_settings, getCharacterState as lukerGetCharacterState, setCharacterState as lukerSetCharacterState } from '../../extensions.js';
 import { executeSlashCommandsWithOptions } from '../../slash-commands.js';
 import { removeReasoningFromString } from '../../reasoning.js';
@@ -239,40 +239,48 @@ export function buildContext(container, charId, config) {
                 throw new Error('[CardApp] No active character to update');
             }
 
-            /** @type {Record<string, string>} field name → DOM selector */
-            const FIELD_MAP = {
-                name: '#character_name_pole',
-                description: '#description_textarea',
-                personality: '#personality_textarea',
-                scenario: '#scenario_pole',
-                first_mes: '#firstmessage_textarea',
-                mes_example: '#mes_example_textarea',
-                system_prompt: '#system_prompt_textarea',
-                post_history_instructions: '#post_history_instructions_textarea',
-                creator_notes: '#creator_notes_textarea',
-                creator: '#creator_textarea',
-                character_version: '#character_version_textarea',
-                tags: '#tags_textarea',
-                talkativeness: '#talkativeness_slider',
-                depth_prompt_prompt: '#depth_prompt_prompt',
-                depth_prompt_depth: '#depth_prompt_depth',
-                depth_prompt_role: '#depth_prompt_role',
+            // Tool field name → character.data dot-path. Same shape as the
+            // Studio `character_update_fields` tool: top-level fields use
+            // bare names; nested fields use dotted notation. `tags` is
+            // exposed as a comma-string for caller convenience but stored
+            // as an array in data.
+            const FIELD_TO_PATH = {
+                name: 'name',
+                description: 'description',
+                personality: 'personality',
+                scenario: 'scenario',
+                first_mes: 'first_mes',
+                mes_example: 'mes_example',
+                system_prompt: 'system_prompt',
+                post_history_instructions: 'post_history_instructions',
+                creator_notes: 'creator_notes',
+                creator: 'creator',
+                character_version: 'character_version',
+                talkativeness: 'extensions.talkativeness',
+                depth_prompt_prompt: 'extensions.depth_prompt.prompt',
+                depth_prompt_depth: 'extensions.depth_prompt.depth',
+                depth_prompt_role: 'extensions.depth_prompt.role',
             };
 
+            const patch = {};
             for (const [key, value] of Object.entries(fields)) {
-                const selector = FIELD_MAP[key];
-                if (!selector) {
+                if (key === 'tags') {
+                    patch.tags = typeof value === 'string'
+                        ? value.split(',').map(x => x.trim()).filter(Boolean)
+                        : (Array.isArray(value) ? value : []);
+                    continue;
+                }
+                const path = FIELD_TO_PATH[key];
+                if (!path) {
                     console.warn(`[CardApp] updateCharacterFields: unknown field "${key}", skipping`);
                     continue;
                 }
-                const $el = $(selector);
-                if ($el.length > 0) {
-                    $el.val(value);
-                    $el.trigger('input');
-                }
+                patch[path] = value;
             }
 
-            saveCharacterDebounced();
+            if (Object.keys(patch).length > 0) {
+                await getContext().updateCharacterData(this_chid, patch);
+            }
         },
 
         /**

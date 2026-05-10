@@ -95,6 +95,9 @@ import {
     doNewChat,
     getPastCharacterChats,
     deleteCharacterChatByName,
+    updateCharacterData,
+    persistCharacterData,
+    persistCharacterDataDebounced,
 } from '../script.js';
 import {
     extension_settings,
@@ -2427,6 +2430,9 @@ export function getContext() {
         getExtensionApi,
         getCharacterState,
         setCharacterState,
+        updateCharacterData,
+        persistCharacterData,
+        persistCharacterDataDebounced,
         symbols: {
             ignore: IGNORE_SYMBOL,
         },

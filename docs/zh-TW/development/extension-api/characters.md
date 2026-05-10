@@ -168,6 +168,69 @@ context.createCharacterData: NewCharacterDraft
 
 實時可變的緩衝區，承載進行中的「建立新角色」表單。當 `context.menuType === 'create'` 時可直接讀寫——例如 [`getCharaAuxWorlds`](/zh-TW/development/extension-api/world-info#getcharaauxworlds) 就是從這裡讀 `extra_books`。
 
+### updateCharacterData
+
+```ts
+updateCharacterData(
+    charId: number | string,
+    patch: Record<string, any>,
+    options?: { persist?: boolean, immediate?: boolean }
+): Promise<void>
+```
+
+更新某張卡 `data` 物件上的一個或多個欄位,**不依賴**角色編輯器彈窗開啟。patch 是 `character.data` 的 dot-path 映射 — 頂層欄位用裸名(`description`、`name`),巢狀欄位用點分(`extensions.world`、`extensions.depth_prompt.depth`)。中間物件會自動按需建立。
+
+```js
+const ctx = Luker.getContext();
+// 更新一個頂層欄位
+await ctx.updateCharacterData(ctx.characterId, { description: '新的描述。' });
+// 用 dot-path 更新巢狀欄位
+await ctx.updateCharacterData(ctx.characterId, {
+    'extensions.world': 'my_book',
+    'extensions.depth_prompt.depth': 6,
+});
+```
+
+跟現有的 `saveCharacterDebounced` / 表單路徑互補 — 彈窗打開時仍走表單(那時表單是 source of truth)。`updateCharacterData` 是面向 AI 工具、slash command、以及其他可能在編輯器關閉時執行的程式化呼叫方的資料驅動替代路徑。
+
+寫入 in-memory 後會觸發 [`event_types.CHARACTER_FIELDS_UPDATED`](#character_fields_updated-event),攜帶 `{ charId, keys }`,讓 view(開啟的彈窗、CardApp UI)從權威 data sync。
+
+| 選項 | 預設 | 含義 |
+|---|---|---|
+| `persist` | `true` | 是否排程一次儲存。需要做「另一呼叫方稍後會儲存」的暫時寫入時傳 `false`。 |
+| `immediate` | `false` | 立刻 await 儲存,不走防抖。後續程式碼需要檔案已落盤時使用。 |
+
+### persistCharacterData
+
+```ts
+persistCharacterData(charId: number | string): Promise<void>
+```
+
+把某張卡當前的 in-memory `data` 序列化成 `/api/characters/edit` 期望的 multipart shape 後 POST。表單**不參與** — 只看 `characters[charId]`。HTTP 失敗會擲出例外。
+
+絕大多數呼叫方應該用 `updateCharacterData`(它會替你排程這個)。只有當你已經親自 mutate 過 in-memory 物件、想 flush 時才直接呼叫。
+
+### persistCharacterDataDebounced
+
+```ts
+persistCharacterDataDebounced(charId: number | string): void
+```
+
+在標準 save-edit 超時上排程一次防抖的 `persistCharacterData(charId)` 呼叫(按 character 各自排程 — 同時寫兩張不同的卡不會被合併成單次錯誤目標的儲存)。視窗內的後續呼叫會被合併。
+
+### `character_fields_updated` event
+
+`updateCharacterData` mutate `characters[charId].data` 之後、持久化完成之前觸發。監聽器接收 `{ charId, keys }`,`keys` 是 patch 裡的 dot-path 陣列。用它來 sync view(彈窗表單、CardApp 面板)而無需輪詢。
+
+```js
+const ctx = Luker.getContext();
+ctx.eventSource.on(ctx.eventTypes.CHARACTER_FIELDS_UPDATED, ({ charId, keys }) => {
+    if (charId === ctx.characterId && keys.includes('description')) {
+        // 從 characters[charId].data.description 重新整理你的 UI
+    }
+});
+```
+
 ## 標籤
 
 ### context.tags

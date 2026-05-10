@@ -168,6 +168,69 @@ context.createCharacterData: NewCharacterDraft
 
 Live mutable buffer holding the in-progress "Create New Character" form. Read or mutate this directly while `context.menuType === 'create'` — for example, [`getCharaAuxWorlds`](/development/extension-api/world-info#getcharaauxworlds) reads `extra_books` from here.
 
+### updateCharacterData
+
+```ts
+updateCharacterData(
+    charId: number | string,
+    patch: Record<string, any>,
+    options?: { persist?: boolean, immediate?: boolean }
+): Promise<void>
+```
+
+Update one or more fields on a character's `data` object **without** requiring the character editor popup to be open. The patch shape is dot-paths into `character.data` — top-level fields use bare names (`description`, `name`); nested fields use dotted notation (`extensions.world`, `extensions.depth_prompt.depth`). Intermediate objects are auto-created.
+
+```js
+const ctx = Luker.getContext();
+// Update a top-level field
+await ctx.updateCharacterData(ctx.characterId, { description: 'A new description.' });
+// Update nested fields via dot-path
+await ctx.updateCharacterData(ctx.characterId, {
+    'extensions.world': 'my_book',
+    'extensions.depth_prompt.depth': 6,
+});
+```
+
+Companion to the existing `saveCharacterDebounced` / form path — that route is still used when the popup *is* open (the form is the source of truth in that mode). `updateCharacterData` is the data-driven alternative for AI tools, slash commands, and any other caller that may run while the editor is closed.
+
+Emits [`event_types.CHARACTER_FIELDS_UPDATED`](#character_fields_updated-event) with `{ charId, keys }` after the in-memory write, so views (open popup, CardApp UI) can sync from canonical data.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `persist` | `true` | Schedule a save. Pass `false` for transient writes another caller will persist. |
+| `immediate` | `false` | Persist now (await) instead of debouncing. Use when followup code needs the file already written. |
+
+### persistCharacterData
+
+```ts
+persistCharacterData(charId: number | string): Promise<void>
+```
+
+Flush a character's current in-memory `data` to disk by serializing it into the multipart shape `/api/characters/edit` expects, and POSTing. The form is **not** consulted — only `characters[charId]`. Throws on HTTP failure.
+
+Most callers should use `updateCharacterData` (which schedules this for you). Call directly only when you've already mutated the in-memory object yourself and want to flush.
+
+### persistCharacterDataDebounced
+
+```ts
+persistCharacterDataDebounced(charId: number | string): void
+```
+
+Schedule a debounced `persistCharacterData(charId)` call (per-character — concurrent writes to different cards don't coalesce into a single wrong-target save). Subsequent calls within the debounce window are coalesced.
+
+### `character_fields_updated` event
+
+Fires after `updateCharacterData` mutates `characters[charId].data` and before persistence completes. Listeners receive `{ charId, keys }` where `keys` is the dotted-path array from the patch. Use this to sync views (popup form, CardApp panels) without polling.
+
+```js
+const ctx = Luker.getContext();
+ctx.eventSource.on(ctx.eventTypes.CHARACTER_FIELDS_UPDATED, ({ charId, keys }) => {
+    if (charId === ctx.characterId && keys.includes('description')) {
+        // refresh your UI from characters[charId].data.description
+    }
+});
+```
+
 ## Tags
 
 ### context.tags
