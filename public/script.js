@@ -8748,7 +8748,6 @@ export async function sendMessageAsUser(messageText, messageBias, insertAt = nul
         await eventSource.emit(event_types.USER_MESSAGE_RENDERED, insertAt);
     } else {
         chat.push(message);
-        await saveChatConditional();
         const chat_id = (chat.length - 1);
         extractMessageById(chat_id);
         await eventSource.emit(event_types.MESSAGE_SENT, chat_id);
