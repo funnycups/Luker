@@ -1140,8 +1140,9 @@ async function sendDeepSeekRequest(request, response) {
             addReasoningContentToToolCalls(processedMessages);
         }
 
-        if (request.body.include_reasoning && request.body.reasoning_effort) {
+        if (request.body.reasoning_effort) {
             bodyParams['reasoning_effort'] = request.body.reasoning_effort;
+            bodyParams['thinking'] = { type: 'enabled' };
         }
 
         const requestBody = {
@@ -1155,7 +1156,6 @@ async function sendDeepSeekRequest(request, response) {
             'top_p': request.body.top_p,
             'stop': request.body.stop,
             'seed': request.body.seed,
-            'thinking': { type: request.body.include_reasoning ? 'enabled' : 'disabled' },
             ...bodyParams,
         };
 
@@ -2727,11 +2727,10 @@ router.post('/generate', async function (request, response) {
             apiUrl = new URL(request.body.reverse_proxy || API_MOONSHOT).toString();
             apiKey = request.body.reverse_proxy ? request.body.proxy_password : readProviderSecret(request, SECRET_KEYS.MOONSHOT);
             headers = {};
-            bodyParams = {
-                thinking: {
-                    type: request.body.include_reasoning ? 'enabled' : 'disabled',
-                },
-            };
+            bodyParams = {};
+            if (request.body.reasoning_effort) {
+                bodyParams.thinking = { type: 'enabled' };
+            }
             request.body.json_schema
                 ? setJsonObjectFormat(bodyParams, request.body.messages, request.body.json_schema)
                 : addAssistantPrefix(request.body.messages, [], 'partial');
@@ -2750,11 +2749,10 @@ router.post('/generate', async function (request, response) {
             headers = {
                 'Accept-Language': 'en-US,en',
             };
-            bodyParams = {
-                thinking: {
-                    type: request.body.include_reasoning ? 'enabled' : 'disabled',
-                },
-            };
+            bodyParams = {};
+            if (request.body.reasoning_effort) {
+                bodyParams.thinking = { type: 'enabled' };
+            }
             if (request.body.json_schema) {
                 setJsonObjectFormat(bodyParams, request.body.messages, request.body.json_schema);
             }

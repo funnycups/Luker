@@ -1181,7 +1181,7 @@ export function calculateGoogleBudgetTokens(maxTokens, reasoningEffort, model) {
 
         switch (reasoningEffort) {
             case REASONING_EFFORT.auto:
-                return -1;
+                return null;
             case REASONING_EFFORT.min:
                 return 0;
             case REASONING_EFFORT.low:
@@ -1208,7 +1208,7 @@ export function calculateGoogleBudgetTokens(maxTokens, reasoningEffort, model) {
 
         switch (reasoningEffort) {
             case REASONING_EFFORT.auto:
-                return -1;
+                return null;
             case REASONING_EFFORT.min:
                 return 0;
             case REASONING_EFFORT.low:
@@ -1235,7 +1235,7 @@ export function calculateGoogleBudgetTokens(maxTokens, reasoningEffort, model) {
 
         switch (reasoningEffort) {
             case REASONING_EFFORT.auto:
-                return -1;
+                return null;
             case REASONING_EFFORT.min:
                 budgetTokens = 128;
                 break;
