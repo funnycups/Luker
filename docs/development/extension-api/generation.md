@@ -73,25 +73,25 @@ If you already have a resolved WI snapshot (e.g., cached across retries), pass `
 
 ### Macro Substitution
 
-When `substituteMacros` is `true` (the default), `generateTask` runs `substituteParams` over each task message's string `content` before assembly. This lets plugin requests resolve the same `{{...}}` macros the main chat path resolves — Luker built-ins (`{{user}}`, `{{char}}`, `{{persona}}`, `{{datetime}}`, `{{random:a,b}}`, ...) and any extension-registered macros that flow through the same engine (e.g. MagVarUpdate's `{{getvar::}}` family).
+When `substituteMacros` is `true` (the default), `generateTask` runs `substituteParams` over each task message's string `content` before assembly. This lets plugin requests resolve the same <span v-pre>`{{...}}`</span> macros the main chat path resolves — Luker built-ins (<span v-pre>`{{user}}`</span>, <span v-pre>`{{char}}`</span>, <span v-pre>`{{persona}}`</span>, <span v-pre>`{{datetime}}`</span>, <span v-pre>`{{random:a,b}}`</span>, ...) and any extension-registered macros that flow through the same engine (e.g. MagVarUpdate's <span v-pre>`{{getvar::}}`</span> family).
 
-Side-effect macros (`{{setvar::}}`, `{{addvar::}}`, `{{incvar::}}`, `{{decvar::}}`, `{{deletevar::}}`) are stripped via `skipSideEffects: true`. Without this, every plugin request would re-fire those mutations and corrupt `chat_metadata.variables` on each dispatch.
+Side-effect macros (<span v-pre>`{{setvar::}}`</span>, <span v-pre>`{{addvar::}}`</span>, <span v-pre>`{{incvar::}}`</span>, <span v-pre>`{{decvar::}}`</span>, <span v-pre>`{{deletevar::}}`</span>) are stripped via `skipSideEffects: true`. Without this, every plugin request would re-fire those mutations and corrupt `chat_metadata.variables` on each dispatch.
 
 #### When to opt out
 
-Set `substituteMacros: false` for **authoring flows** where the AI's job is to read or edit text containing literal `{{...}}` placeholders that must remain unrendered. If `{{user}}` is replaced before the model sees it, the model can't reason about, diff, or edit the source template.
+Set `substituteMacros: false` for **authoring flows** where the AI's job is to read or edit text containing literal <span v-pre>`{{...}}`</span> placeholders that must remain unrendered. If <span v-pre>`{{user}}`</span> is replaced before the model sees it, the model can't reason about, diff, or edit the source template.
 
 Concrete examples already in this codebase:
 
-- Character card editor — AI is editing card fields that include `{{user}}` / `{{char}}` placeholders.
-- Lorebook diff analysis — the diff payload contains lorebook entries whose `{{...}}` placeholders are part of the comparison.
-- Preset editor — AI is editing prompt-preset bodies that ship `{{...}}` macros for end-user rendering.
+- Character card editor — AI is editing card fields that include <span v-pre>`{{user}}`</span> / <span v-pre>`{{char}}`</span> placeholders.
+- Lorebook diff analysis — the diff payload contains lorebook entries whose <span v-pre>`{{...}}`</span> placeholders are part of the comparison.
+- Preset editor — AI is editing prompt-preset bodies that ship <span v-pre>`{{...}}`</span> macros for end-user rendering.
 - CardApp Studio AI — conversations may quote source-text fragments that the assistant is asked to modify.
 
 Rule of thumb:
 
 - AI is **producing** content that will be shown to the end user → leave `substituteMacros: true`.
-- AI is **reading or editing** source text that contains `{{...}}` placeholders → set `substituteMacros: false`.
+- AI is **reading or editing** source text that contains <span v-pre>`{{...}}`</span> placeholders → set `substituteMacros: false`.
 
 ### Tool Calls
 
