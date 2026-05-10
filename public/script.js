@@ -15361,6 +15361,91 @@ function setDotPath(target, dottedPath, value) {
 }
 
 /**
+ * Read a value at a (possibly dotted) path inside `target`. Returns
+ * `undefined` when any segment along the way is null/undefined or
+ * non-object. Companion to `setDotPath` for the form-sync layer.
+ * @param {object} target
+ * @param {string} dottedPath
+ * @returns {*}
+ */
+function getDotPath(target, dottedPath) {
+    const parts = String(dottedPath).split('.');
+    let cursor = target;
+    for (const part of parts) {
+        if (cursor === null || cursor === undefined || typeof cursor !== 'object') return undefined;
+        cursor = cursor[part];
+    }
+    return cursor;
+}
+
+/**
+ * Map from `character.data` dotted-path → DOM selector for the editor
+ * popup form fields. Used by `updateCharacterData` to keep the form's
+ * hidden inputs / textareas in sync with the canonical in-memory data,
+ * so a subsequent form-based save (`createOrEditCharacter` reading via
+ * `new FormData($('#form_create'))`) doesn't serialize stale DOM values
+ * and silently roll back data-driven writes.
+ *
+ * Only fields actually exposed in `#form_create` belong here. Deeply
+ * nested data (e.g. `extensions.card_app.enabled`) doesn't have a
+ * dedicated form field — those are round-tripped via the
+ * `extensions` JSON blob and don't need DOM sync.
+ */
+const CHARACTER_DATA_PATH_TO_FORM_DOM = Object.freeze({
+    'name': '#character_name_pole',
+    'description': '#description_textarea',
+    'personality': '#personality_textarea',
+    'scenario': '#scenario_pole',
+    'first_mes': '#firstmessage_textarea',
+    'mes_example': '#mes_example_textarea',
+    'system_prompt': '#system_prompt_textarea',
+    'post_history_instructions': '#post_history_instructions_textarea',
+    'creator_notes': '#creator_notes_textarea',
+    'creator': '#creator_textarea',
+    'character_version': '#character_version_textarea',
+    'tags': '#tags_textarea',
+    'extensions.world': '#character_world',
+    'extensions.talkativeness': '#talkativeness_slider',
+    'extensions.depth_prompt.prompt': '#depth_prompt_prompt',
+    'extensions.depth_prompt.depth': '#depth_prompt_depth',
+    'extensions.depth_prompt.role': '#depth_prompt_role',
+});
+
+/**
+ * Sync the editor popup form's DOM from `characters[charId].data` for
+ * the given dotted-path keys. Only sync the active character — writes
+ * to other characters' data have no DOM to update. Sets `.val(...)`
+ * but **does not** trigger `'input'` or `'change'` events, because the
+ * popup's own handlers re-fire `saveCharacterDebounced` on those
+ * events and would loop back into another save cycle.
+ *
+ * The form-based path (`createOrEditCharacter` → `FormData(#form_create)`)
+ * stays correct after this — its serialization reads `.val()`, which now
+ * reflects the latest data.
+ *
+ * @param {number|string} charId
+ * @param {string[]} keys
+ */
+function syncCharacterFormFromData(charId, keys) {
+    if (charId === undefined || charId === null) return;
+    if (this_chid === undefined || this_chid === null) return;
+    if (String(charId) !== String(this_chid)) return;
+    const character = characters[charId];
+    if (!character || !character.data) return;
+    for (const key of (Array.isArray(keys) ? keys : [])) {
+        const selector = CHARACTER_DATA_PATH_TO_FORM_DOM[key];
+        if (!selector) continue;
+        const $el = $(selector);
+        if ($el.length === 0) continue;
+        let value = getDotPath(character.data, key);
+        if (key === 'tags' && Array.isArray(value)) {
+            value = value.join(', ');
+        }
+        $el.val(value === null || value === undefined ? '' : String(value));
+    }
+}
+
+/**
  * Update one or more fields on a character's `data` object and persist the
  * change to disk, **without** requiring the character editor popup to be
  * open. The patch shape is dot-paths into `character.data` — top-level
@@ -15399,6 +15484,12 @@ export async function updateCharacterData(charId, patch, { persist = true, immed
     for (const key of keys) {
         setDotPath(character.data, key, patch[key]);
     }
+
+    // Keep the editor popup form in sync with the canonical data so a
+    // later form-based save doesn't reserialize stale DOM values and
+    // silently roll the patch back. No-op when this character isn't the
+    // active one (other characters' data has no DOM to update).
+    syncCharacterFormFromData(charId, keys);
 
     await eventSource.emit(event_types.CHARACTER_FIELDS_UPDATED, { charId, keys });
 
