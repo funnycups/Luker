@@ -20,6 +20,10 @@ export let itemizedPrompts = [];
  * @param {string} chatId Chat ID to load
  */
 export async function loadItemizedPrompts(chatId) {
+    // Pending writes target the previous chat — flush so the entry isn't
+    // overwritten with the next chat's prompts after `itemizedPrompts` is
+    // replaced below.
+    await flushItemizedPromptsSave();
     try {
         if (!chatId) {
             itemizedPrompts = [];
@@ -41,6 +45,10 @@ export async function loadItemizedPrompts(chatId) {
 
 /**
  * Saves the itemized prompts for a chat.
+ *
+ * `prompts` defaults to the live module-level `itemizedPrompts`. localforage's
+ * IDB driver structured-clones the value during the put transaction, so any
+ * defensive clone here would be redundant work on the main thread.
  * @param {string} chatId Chat ID to save itemized prompts for
  */
 export async function saveItemizedPrompts(chatId, prompts = itemizedPrompts) {
@@ -50,14 +58,66 @@ export async function saveItemizedPrompts(chatId, prompts = itemizedPrompts) {
         }
 
         const nextPrompts = Array.isArray(prompts) ? prompts : [];
-        const payload = typeof structuredClone === 'function'
-            ? structuredClone(nextPrompts)
-            : JSON.parse(JSON.stringify(nextPrompts));
-        await promptStorage.setItem(chatId, payload);
+        await promptStorage.setItem(chatId, nextPrompts);
         await eventSource.emit(event_types.ITEMIZED_PROMPTS_SAVED, { chatId: chatId });
     } catch {
         console.log('Error saving itemized prompts for chat', chatId);
     }
+}
+
+const ITEMIZED_FLUSH_DELAY_MS = 1000;
+let itemizedFlushTimer = null;
+let itemizedPendingChatId = null;
+
+/**
+ * Coalesces itemized-prompts writes per chat. Each call marks `chatId` as
+ * pending; the IDB put runs at most once per ITEMIZED_FLUSH_DELAY_MS and reads
+ * the current `itemizedPrompts` at flush time. If a different chat becomes
+ * pending while a write is queued, the previous chat's write is flushed
+ * synchronously first — the live `itemizedPrompts` only matches one chat at a
+ * time.
+ * @param {string} chatId
+ */
+export function saveItemizedPromptsDebounced(chatId) {
+    const targetChatId = String(chatId || '').trim();
+    if (!targetChatId) return;
+
+    if (itemizedPendingChatId && itemizedPendingChatId !== targetChatId) {
+        // Different chat now owns `itemizedPrompts` — persist the previous
+        // one's content before it gets overwritten by the new chat's data.
+        flushItemizedPromptsSave();
+    }
+
+    itemizedPendingChatId = targetChatId;
+    if (itemizedFlushTimer) return;
+    itemizedFlushTimer = setTimeout(() => {
+        itemizedFlushTimer = null;
+        const flushChatId = itemizedPendingChatId;
+        itemizedPendingChatId = null;
+        if (!flushChatId) return;
+        saveItemizedPrompts(flushChatId, itemizedPrompts).catch(
+            (e) => console.warn('saveItemizedPromptsDebounced: flush failed', e),
+        );
+    }, ITEMIZED_FLUSH_DELAY_MS);
+}
+
+export async function flushItemizedPromptsSave() {
+    if (itemizedFlushTimer) {
+        clearTimeout(itemizedFlushTimer);
+        itemizedFlushTimer = null;
+    }
+    if (!itemizedPendingChatId) return;
+    const flushChatId = itemizedPendingChatId;
+    itemizedPendingChatId = null;
+    await saveItemizedPrompts(flushChatId, itemizedPrompts);
+}
+
+function cancelItemizedPromptsDebounced() {
+    if (itemizedFlushTimer) {
+        clearTimeout(itemizedFlushTimer);
+        itemizedFlushTimer = null;
+    }
+    itemizedPendingChatId = null;
 }
 
 /**
@@ -96,6 +156,9 @@ export async function deleteItemizedPrompts(chatId) {
             return;
         }
 
+        if (itemizedPendingChatId === String(chatId).trim()) {
+            cancelItemizedPromptsDebounced();
+        }
         await promptStorage.removeItem(chatId);
         await eventSource.emit(event_types.ITEMIZED_PROMPTS_DELETED, { chatId: chatId, all: false });
     } catch {
@@ -108,6 +171,7 @@ export async function deleteItemizedPrompts(chatId) {
  */
 export async function clearItemizedPrompts() {
     try {
+        cancelItemizedPromptsDebounced();
         await promptStorage.clear();
         itemizedPrompts = [];
         await eventSource.emit(event_types.ITEMIZED_PROMPTS_DELETED, { all: true });

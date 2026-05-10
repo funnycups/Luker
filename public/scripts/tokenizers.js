@@ -187,6 +187,37 @@ export async function saveTokenCache() {
     }
 }
 
+const TOKEN_CACHE_FLUSH_DELAY_MS = 1000;
+let tokenCacheFlushTimer = null;
+let tokenCacheDirty = false;
+
+/**
+ * Coalesces token cache writes — every external save trigger only marks the
+ * cache dirty; the actual IndexedDB put happens at most once per
+ * TOKEN_CACHE_FLUSH_DELAY_MS. tokenCache is a display/budget cache; losing a
+ * pending write at unload at worst forces re-tokenizing once on next load.
+ */
+export function saveTokenCacheDebounced() {
+    tokenCacheDirty = true;
+    if (tokenCacheFlushTimer) return;
+    tokenCacheFlushTimer = setTimeout(() => {
+        tokenCacheFlushTimer = null;
+        if (!tokenCacheDirty) return;
+        tokenCacheDirty = false;
+        saveTokenCache().catch((e) => console.warn('saveTokenCacheDebounced: flush failed', e));
+    }, TOKEN_CACHE_FLUSH_DELAY_MS);
+}
+
+export async function flushTokenCacheSave() {
+    if (tokenCacheFlushTimer) {
+        clearTimeout(tokenCacheFlushTimer);
+        tokenCacheFlushTimer = null;
+    }
+    if (!tokenCacheDirty) return;
+    tokenCacheDirty = false;
+    await saveTokenCache();
+}
+
 async function resetTokenCache() {
     try {
         console.debug('Chat Completions: resetting token cache');

@@ -248,7 +248,7 @@ import {
     getInstructStoppingSequences,
 } from './scripts/instruct-mode.js';
 import { initLocales, t } from './scripts/i18n.js';
-import { getFriendlyTokenizerName, getTokenCount, getTokenCountAsync, initTokenizers, saveTokenCache } from './scripts/tokenizers.js';
+import { getFriendlyTokenizerName, getTokenCount, getTokenCountAsync, initTokenizers, saveTokenCacheDebounced, flushTokenCacheSave } from './scripts/tokenizers.js';
 import {
     user_avatar,
     getUserAvatars,
@@ -298,7 +298,7 @@ import { extractReasoningFromData, extractReasoningSignatureFromData, initReason
 import { accountStorage } from './scripts/util/AccountStorage.js';
 import { fetchRecentChatsSnapshot, initWelcomeScreen, openPermanentAssistantChat, openPermanentAssistantCard, getPermanentAssistantAvatar, openWelcomeScreen, primeRecentChatsSnapshotPromise } from './scripts/welcome-screen.js';
 import { initDataMaid } from './scripts/data-maid.js';
-import { clearItemizedPrompts, deleteItemizedPromptForMessage, deleteItemizedPrompts, findItemizedPromptSet, initItemizedPrompts, itemizedParams, itemizedPrompts, loadItemizedPrompts, promptItemize, replaceItemizedPromptText, saveItemizedPrompts, swapItemizedPrompts } from './scripts/itemized-prompts.js';
+import { clearItemizedPrompts, deleteItemizedPromptForMessage, deleteItemizedPrompts, findItemizedPromptSet, flushItemizedPromptsSave, initItemizedPrompts, itemizedParams, itemizedPrompts, loadItemizedPrompts, promptItemize, replaceItemizedPromptText, saveItemizedPrompts, saveItemizedPromptsDebounced, swapItemizedPrompts } from './scripts/itemized-prompts.js';
 import { getSystemMessageByType, initSystemMessages, SAFETY_CHAT, sendSystemMessage, system_message_types, system_messages } from './scripts/system-messages.js';
 import { event_types, eventSource } from './scripts/events.js';
 import {
@@ -12037,7 +12037,7 @@ export async function patchChatMessages(operations, retryCount = 0) {
     return await runSerializedChatWrite(() => patchChatMessagesInternal(queuedOperations, retryCount));
 }
 
-function buildActiveChatSaveContext({ withMetadata = undefined, chatName = undefined, mesId = undefined } = {}) {
+function buildActiveChatSaveContext({ withMetadata = undefined, chatName = undefined, mesId = undefined, withMessages = true } = {}) {
     const activeTarget = resolveChatStateTarget();
     if (!activeTarget) {
         return null;
@@ -12058,10 +12058,9 @@ function buildActiveChatSaveContext({ withMetadata = undefined, chatName = undef
     const endIndex = Number.isInteger(mesId) && Number(mesId) >= 0 && Number(mesId) < chat.length
         ? Number(mesId) + 1
         : chat.length;
-    const messagesSnapshot = cloneJsonValue(chat.slice(0, endIndex)) ?? chat.slice(0, endIndex);
-    const itemizedPromptsSnapshot = Array.isArray(itemizedPrompts)
-        ? (cloneJsonValue(itemizedPrompts) ?? itemizedPrompts)
-        : [];
+    const messagesSnapshot = withMessages
+        ? (cloneJsonValue(chat.slice(0, endIndex)) ?? chat.slice(0, endIndex))
+        : null;
 
     if (activeTarget.is_group) {
         const groupId = String(selected_group || '').trim();
@@ -12077,7 +12076,6 @@ function buildActiveChatSaveContext({ withMetadata = undefined, chatName = undef
             chatIdSnapshot,
             metadataSnapshot,
             messagesSnapshot,
-            itemizedPromptsSnapshot,
         };
     }
 
@@ -12099,7 +12097,6 @@ function buildActiveChatSaveContext({ withMetadata = undefined, chatName = undef
         chatIdSnapshot,
         metadataSnapshot,
         messagesSnapshot,
-        itemizedPromptsSnapshot,
     };
 }
 
@@ -12108,8 +12105,10 @@ function finishActiveChatSaveContext(saveContext) {
         return;
     }
 
-    saveTokenCache();
-    saveItemizedPrompts(saveContext.chatIdSnapshot, saveContext.itemizedPromptsSnapshot);
+    saveTokenCacheDebounced();
+    if (saveContext.chatIdSnapshot) {
+        saveItemizedPromptsDebounced(saveContext.chatIdSnapshot);
+    }
 }
 
 export function shouldBlockChatSwitchWhileSaving() {
@@ -14972,7 +14971,7 @@ export async function saveMetadata(options = {}) {
 
     try {
         cancelDebouncedChatSave();
-        const saveContext = buildActiveChatSaveContext({ withMetadata });
+        const saveContext = buildActiveChatSaveContext({ withMetadata, withMessages: false });
         if (!saveContext) {
             return;
         }
@@ -19593,6 +19592,10 @@ jQuery(async function () {
     await firstLoadInit();
 
     window.addEventListener('beforeunload', (e) => {
+        // Fire-and-forget: flush queues an IDB transaction synchronously,
+        // commit happens off-main-thread before the page tears down.
+        try { flushTokenCacheSave(); } catch { /* best-effort */ }
+        try { flushItemizedPromptsSave(); } catch { /* best-effort */ }
         if (isChatSaving || this_edit_mes_id >= 0) {
             e.preventDefault();
             e.returnValue = true;
