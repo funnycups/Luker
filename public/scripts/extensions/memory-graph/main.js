@@ -50,12 +50,6 @@ import {
     ensureVectorIndexState,
 } from './vector-index.js';
 import {
-    createEmbeddingProfile,
-    editEmbeddingProfile,
-    deleteEmbeddingProfile,
-    createRerankProfile,
-    editRerankProfile,
-    deleteRerankProfile,
     renderProfileSelect,
     upsertEmbeddingProfile,
     upsertRerankProfile,
@@ -13142,11 +13136,23 @@ function bindUi() {
 
     function refreshMemoryEmbeddingSelect() {
         const sel = /** @type {HTMLSelectElement} */ (root.find('#luker_rpg_memory_embedding_profile')[0]);
-        if (sel) renderProfileSelect(sel, 'embed', settings.embeddingProfileId || '');
+        if (!sel) return;
+        renderProfileSelect(sel, 'embed', settings.embeddingProfileId || '');
+        const actual = String(sel.value || '');
+        if (actual !== (settings.embeddingProfileId || '')) {
+            settings.embeddingProfileId = actual;
+            saveSettingsDebounced();
+        }
     }
     function refreshMemoryRerankSelect() {
         const sel = /** @type {HTMLSelectElement} */ (root.find('#luker_rpg_memory_rerank_profile')[0]);
-        if (sel) renderProfileSelect(sel, 'rerank', settings.rerankProfileId || '');
+        if (!sel) return;
+        renderProfileSelect(sel, 'rerank', settings.rerankProfileId || '');
+        const actual = String(sel.value || '');
+        if (actual !== (settings.rerankProfileId || '')) {
+            settings.rerankProfileId = actual;
+            saveSettingsDebounced();
+        }
     }
     refreshMemoryEmbeddingSelect();
     refreshMemoryRerankSelect();
@@ -13181,52 +13187,10 @@ function bindUi() {
         settings.embeddingProfileId = String(jQuery(this).val() || '');
         saveSettingsDebounced();
     });
-    root.find('#luker_rpg_memory_embedding_profile_create').off('click').on('click', async () => {
-        const profile = await createEmbeddingProfile();
-        if (!profile) return;
-        settings.embeddingProfileId = profile.id;
-        saveSettingsDebounced();
-        refreshMemoryEmbeddingSelect();
-    });
-    root.find('#luker_rpg_memory_embedding_profile_edit').off('click').on('click', async () => {
-        if (!settings.embeddingProfileId) return;
-        await editEmbeddingProfile(settings.embeddingProfileId);
-        refreshMemoryEmbeddingSelect();
-    });
-    root.find('#luker_rpg_memory_embedding_profile_delete').off('click').on('click', async () => {
-        if (!settings.embeddingProfileId) return;
-        const ok = await deleteEmbeddingProfile(settings.embeddingProfileId);
-        if (ok) {
-            settings.embeddingProfileId = '';
-            saveSettingsDebounced();
-            refreshMemoryEmbeddingSelect();
-        }
-    });
 
     root.find('#luker_rpg_memory_rerank_profile').off('change').on('change', function () {
         settings.rerankProfileId = String(jQuery(this).val() || '');
         saveSettingsDebounced();
-    });
-    root.find('#luker_rpg_memory_rerank_profile_create').off('click').on('click', async () => {
-        const profile = await createRerankProfile();
-        if (!profile) return;
-        settings.rerankProfileId = profile.id;
-        saveSettingsDebounced();
-        refreshMemoryRerankSelect();
-    });
-    root.find('#luker_rpg_memory_rerank_profile_edit').off('click').on('click', async () => {
-        if (!settings.rerankProfileId) return;
-        await editRerankProfile(settings.rerankProfileId);
-        refreshMemoryRerankSelect();
-    });
-    root.find('#luker_rpg_memory_rerank_profile_delete').off('click').on('click', async () => {
-        if (!settings.rerankProfileId) return;
-        const ok = await deleteRerankProfile(settings.rerankProfileId);
-        if (ok) {
-            settings.rerankProfileId = '';
-            saveSettingsDebounced();
-            refreshMemoryRerankSelect();
-        }
     });
 
     [event_types.CONNECTION_PROFILE_CREATED, event_types.CONNECTION_PROFILE_UPDATED, event_types.CONNECTION_PROFILE_DELETED].forEach(evt => {

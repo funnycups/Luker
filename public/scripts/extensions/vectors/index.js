@@ -36,14 +36,8 @@ import { WebLlmVectorProvider } from './webllm.js';
 import { removeReasoningFromString } from '../../reasoning.js';
 import { oai_settings } from '../../openai.js';
 import {
-    createEmbeddingProfile,
-    editEmbeddingProfile,
-    deleteEmbeddingProfile,
     listEmbeddingProfiles,
     getEmbeddingProfileById,
-    createRerankProfile,
-    editRerankProfile,
-    deleteRerankProfile,
     listRerankProfiles,
     getRerankProfileById,
     upsertEmbeddingProfile,
@@ -1349,6 +1343,13 @@ function refreshEmbeddingProfileSelect() {
     const sel = /** @type {HTMLSelectElement} */ (document.getElementById('vectors_embedding_profile'));
     if (!sel) return;
     renderProfileSelect(sel, 'embed', settings.embeddingProfileId || '');
+    // Sync persisted id with what the dropdown actually shows; the underlying
+    // profile may have been deleted from the Connection Profile drawer.
+    const actual = String(sel.value || '');
+    if (actual !== (settings.embeddingProfileId || '')) {
+        settings.embeddingProfileId = actual;
+        persistSettings();
+    }
     updateProfileButtonStates();
 }
 
@@ -1356,18 +1357,15 @@ function refreshRerankProfileSelect() {
     const sel = /** @type {HTMLSelectElement} */ (document.getElementById('vectors_rerank_profile'));
     if (!sel) return;
     renderProfileSelect(sel, 'rerank', settings.rerankProfileId || '');
+    const actual = String(sel.value || '');
+    if (actual !== (settings.rerankProfileId || '')) {
+        settings.rerankProfileId = actual;
+        persistSettings();
+    }
     updateProfileButtonStates();
 }
 
 function updateProfileButtonStates() {
-    const hasEmbed = !!settings.embeddingProfileId;
-    document.getElementById('vectors_embedding_profile_edit')?.classList.toggle('disabled', !hasEmbed);
-    document.getElementById('vectors_embedding_profile_delete')?.classList.toggle('disabled', !hasEmbed);
-
-    const hasRerank = !!settings.rerankProfileId;
-    document.getElementById('vectors_rerank_profile_edit')?.classList.toggle('disabled', !hasRerank);
-    document.getElementById('vectors_rerank_profile_delete')?.classList.toggle('disabled', !hasRerank);
-
     $('#vectors_rerank_settings').toggle(!!settings.rerank_enabled);
 }
 
@@ -1410,27 +1408,6 @@ export async function init() {
         persistSettings();
         updateProfileButtonStates();
     });
-    $('#vectors_embedding_profile_create').on('click', async () => {
-        const profile = await createEmbeddingProfile();
-        if (!profile) return;
-        settings.embeddingProfileId = profile.id;
-        persistSettings();
-        refreshEmbeddingProfileSelect();
-    });
-    $('#vectors_embedding_profile_edit').on('click', async () => {
-        if (!settings.embeddingProfileId) return;
-        await editEmbeddingProfile(settings.embeddingProfileId);
-        refreshEmbeddingProfileSelect();
-    });
-    $('#vectors_embedding_profile_delete').on('click', async () => {
-        if (!settings.embeddingProfileId) return;
-        const ok = await deleteEmbeddingProfile(settings.embeddingProfileId);
-        if (ok) {
-            settings.embeddingProfileId = '';
-            persistSettings();
-            refreshEmbeddingProfileSelect();
-        }
-    });
 
     // -- Rerank profile picker --
     refreshRerankProfileSelect();
@@ -1438,27 +1415,6 @@ export async function init() {
         settings.rerankProfileId = String($('#vectors_rerank_profile').val() || '');
         persistSettings();
         updateProfileButtonStates();
-    });
-    $('#vectors_rerank_profile_create').on('click', async () => {
-        const profile = await createRerankProfile();
-        if (!profile) return;
-        settings.rerankProfileId = profile.id;
-        persistSettings();
-        refreshRerankProfileSelect();
-    });
-    $('#vectors_rerank_profile_edit').on('click', async () => {
-        if (!settings.rerankProfileId) return;
-        await editRerankProfile(settings.rerankProfileId);
-        refreshRerankProfileSelect();
-    });
-    $('#vectors_rerank_profile_delete').on('click', async () => {
-        if (!settings.rerankProfileId) return;
-        const ok = await deleteRerankProfile(settings.rerankProfileId);
-        if (ok) {
-            settings.rerankProfileId = '';
-            persistSettings();
-            refreshRerankProfileSelect();
-        }
     });
 
     // Refresh dropdowns when profiles are CRUD'd from any source.

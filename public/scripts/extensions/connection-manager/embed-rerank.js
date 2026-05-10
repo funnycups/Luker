@@ -11,8 +11,8 @@
 
 import { event_types, eventSource, saveSettingsDebounced } from '../../../script.js';
 import { extension_settings } from '../../extensions.js';
-import { Popup, POPUP_RESULT, POPUP_TYPE } from '../../popup.js';
-import { uuidv4 } from '../../utils.js';
+import { Popup } from '../../popup.js';
+import { uuidv4, getUniqueName } from '../../utils.js';
 import { t } from '../../i18n.js';
 import { secret_state } from '../../secrets.js';
 import {
@@ -25,7 +25,6 @@ import {
     listEmbeddingSourceDefs,
     listRerankSourceDefs,
     compactProfile,
-    validateProfileFields,
 } from './embed-rerank-core.js';
 
 export {
@@ -316,14 +315,34 @@ function readFormValues($form) {
 }
 
 /**
- * Open the create/edit popup for an embed or rerank profile.
+ * Mount an inline profile editor inside a container element.
+ *
+ * Renders the form for the given profile inline (no popup) and wires every
+ * field to save-on-change directly into the profile in storage. Source
+ * changes update field visibility, refresh the secret picker, and auto-fill
+ * the default model when blank. Name uniqueness is enforced; other validation
+ * is intentionally lenient so that the user can leave the form in a partial
+ * state without nagging — consumers will surface their own errors when they
+ * try to use an incomplete profile.
+ *
+ * @param {HTMLElement} container Container element. Its contents will be replaced.
  * @param {'embed'|'rerank'} mode
- * @param {object} initial Initial field values
- * @returns {Promise<object|null>} The collected field values, or null if cancelled
+ * @param {string} profileId Profile id to edit. If empty/unknown, the container
+ *   is cleared and the function returns.
+ * @param {object} [opts]
+ * @param {(profile: object) => void} [opts.onChange] Called after each saved change.
  */
-async function openProfilePopup(mode, initial = {}) {
-    const html = buildFormHtml(mode, initial);
-    const $form = $(html);
+export function mountInlineProfileEditor(container, mode, profileId, opts = {}) {
+    if (!container) return;
+    container.innerHTML = '';
+    if (!profileId) return;
+
+    const list = ensureProfilesArray();
+    const profile = list.find(p => p && p.id === profileId && String(p.mode || '') === mode);
+    if (!profile) return;
+
+    const $form = $(buildFormHtml(mode, profile));
+    container.appendChild($form[0]);
 
     const $sourceSelect = $form.find('[data-field="source"]');
     const $secretSelect = $form.find('[data-field="secret-id"]');
@@ -332,8 +351,7 @@ async function openProfilePopup(mode, initial = {}) {
         const sourceId = String($sourceSelect.val() || '');
         const def = mode === EMBED_MODE ? getEmbeddingSourceDef(sourceId) : getRerankSourceDef(sourceId);
         applySourceVisibility($form, mode, sourceId);
-        refreshSecretSelect($secretSelect, def, initial['secret-id'] || '');
-        // Auto-fill default model on change if model field is blank
+        refreshSecretSelect($secretSelect, def, profile['secret-id'] || '');
         const $modelInput = $form.find('[data-field="model"]');
         if (def && !String($modelInput.val() || '').trim() && def.defaultModel) {
             $modelInput.val(def.defaultModel);
@@ -342,78 +360,90 @@ async function openProfilePopup(mode, initial = {}) {
     $sourceSelect.on('change', onSourceChange);
     onSourceChange();
 
-    const popup = new Popup($form, POPUP_TYPE.CONFIRM, '', {
-        okButton: t`Save`,
-        cancelButton: t`Cancel`,
-        wide: true,
-        large: false,
-        allowVerticalScrolling: true,
-    });
+    const saveChanges = () => {
+        const values = readFormValues($form);
+        const newName = String(values.name || '').trim();
+        if (!newName) {
+            $form.find('[data-field="name"]').val(profile.name);
+            return;
+        }
+        const conflict = ensureProfilesArray().some(p => p && p.id !== profile.id && p.name === newName);
+        if (conflict) {
+            toastr.error(t`A profile with this name already exists.`);
+            $form.find('[data-field="name"]').val(profile.name);
+            return;
+        }
 
-    const result = await popup.show();
-    if (result !== POPUP_RESULT.AFFIRMATIVE) {
-        return null;
-    }
+        const next = { mode, name: newName, source: String(values.source || '').trim() };
+        const fields = ['model', 'api-url', 'proxy-password', 'secret-id'];
+        if (mode === EMBED_MODE) {
+            fields.push('jina-late-chunking', 'jina-dimensions', 'jina-task',
+                'ollama-keep', 'siliconflow-endpoint', 'workers-ai-account-id',
+                'vertexai-region', 'vertexai-auth-mode', 'vertexai-express-project-id');
+        }
+        for (const f of fields) {
+            if (Object.hasOwn(values, f)) next[f] = values[f];
+        }
+        compactProfile(next, mode);
 
-    return readFormValues($form);
+        const oldProfile = structuredClone(profile);
+        for (const k of Object.keys(profile)) {
+            if (k !== 'id' && k !== 'mode' && !Object.hasOwn(next, k)) {
+                delete profile[k];
+            }
+        }
+        Object.assign(profile, next);
+
+        saveSettingsDebounced();
+        eventSource.emit(event_types.CONNECTION_PROFILE_UPDATED, oldProfile, profile);
+        if (typeof opts.onChange === 'function') opts.onChange(profile);
+    };
+
+    $form.find('[data-field]').on('change', saveChanges);
 }
 
-function validateAndAssemble(mode, values, existingId = '') {
-    const takenNames = ensureProfilesArray()
-        .filter(p => p && p.id !== existingId)
-        .map(p => String(p?.name || ''));
-    const result = validateProfileFields(mode, values, takenNames);
-    if (!result.ok) {
-        toastr.error(result.error);
-        return null;
-    }
-    result.profile.id = existingId || uuidv4();
-    return result.profile;
+function generateUniqueProfileName(baseName) {
+    const list = ensureProfilesArray();
+    return getUniqueName(baseName, (n) => list.some(p => p && p.name === n));
 }
 
 /**
- * Create a new embedding or rerank profile via popup form.
- * @param {'embed'|'rerank'} mode
- * @param {object} [prefill]
- * @returns {Promise<object|null>}
+ * Create a stub embed profile with a unique auto-generated name and the
+ * default Transformers source. Persists, emits CONNECTION_PROFILE_CREATED,
+ * and returns the new profile. The user fills in the rest via the inline
+ * editor.
+ * @returns {object} The created profile.
  */
-async function createProfile(mode, prefill = {}) {
-    const initial = { source: mode === EMBED_MODE ? 'transformers' : 'cohere', ...prefill };
-    const values = await openProfilePopup(mode, initial);
-    if (!values) return null;
-    const profile = validateAndAssemble(mode, values);
-    if (!profile) return null;
-
+export function createEmbeddingProfileStub() {
+    const profile = compactProfile({
+        id: uuidv4(),
+        mode: EMBED_MODE,
+        name: generateUniqueProfileName(t`New embedding profile`),
+        source: 'transformers',
+    }, EMBED_MODE);
     ensureProfilesArray().push(profile);
     saveSettingsDebounced();
-    await eventSource.emit(event_types.CONNECTION_PROFILE_CREATED, profile);
+    eventSource.emit(event_types.CONNECTION_PROFILE_CREATED, profile);
     return profile;
 }
 
 /**
- * Edit an existing embedding or rerank profile via popup form.
- * @param {'embed'|'rerank'} mode
- * @param {string} profileId
- * @returns {Promise<object|null>}
+ * Create a stub rerank profile with a unique auto-generated name and the
+ * default Cohere source. Persists, emits CONNECTION_PROFILE_CREATED, and
+ * returns the new profile.
+ * @returns {object} The created profile.
  */
-async function editProfile(mode, profileId) {
-    const list = ensureProfilesArray();
-    const idx = list.findIndex(p => p && p.id === profileId && String(p.mode || '') === mode);
-    if (idx < 0) {
-        toastr.warning(t`Profile not found.`);
-        return null;
-    }
-    const existing = list[idx];
-    const values = await openProfilePopup(mode, existing);
-    if (!values) return null;
-    const updated = validateAndAssemble(mode, values, existing.id);
-    if (!updated) return null;
-
-    const oldProfile = structuredClone(existing);
-    list[idx] = updated;
+export function createRerankProfileStub() {
+    const profile = compactProfile({
+        id: uuidv4(),
+        mode: RERANK_MODE,
+        name: generateUniqueProfileName(t`New rerank profile`),
+        source: 'cohere',
+    }, RERANK_MODE);
+    ensureProfilesArray().push(profile);
     saveSettingsDebounced();
-    await eventSource.emit(event_types.CONNECTION_PROFILE_UPDATED, oldProfile, updated);
-    return updated;
+    eventSource.emit(event_types.CONNECTION_PROFILE_CREATED, profile);
+    return profile;
 }
 
 /**
@@ -436,12 +466,7 @@ async function deleteProfile(mode, profileId) {
     return true;
 }
 
-export const createEmbeddingProfile = (prefill) => createProfile(EMBED_MODE, prefill);
-export const editEmbeddingProfile = (profileId) => editProfile(EMBED_MODE, profileId);
 export const deleteEmbeddingProfile = (profileId) => deleteProfile(EMBED_MODE, profileId);
-
-export const createRerankProfile = (prefill) => createProfile(RERANK_MODE, prefill);
-export const editRerankProfile = (profileId) => editProfile(RERANK_MODE, profileId);
 export const deleteRerankProfile = (profileId) => deleteProfile(RERANK_MODE, profileId);
 
 /**

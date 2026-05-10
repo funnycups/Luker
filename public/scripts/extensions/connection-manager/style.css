@@ -39,3 +39,64 @@
 #connection_profile_spinner {
     margin-left: 5px;
 }
+
+#rm_api_block .connection_profile_mode_tabs {
+    align-items: stretch;
+    border-bottom: 1px solid var(--SmartThemeBorderColor);
+    display: flex;
+    gap: 2px;
+    margin: 4px 0 6px;
+}
+
+#rm_api_block .connection_profile_mode_tab {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    margin-bottom: -1px;
+    opacity: 0.65;
+    padding: 6px 14px;
+    transition: opacity 0.15s ease, border-color 0.15s ease;
+}
+
+#rm_api_block .connection_profile_mode_tab:hover {
+    opacity: 1;
+}
+
+#rm_api_block .connection_profile_mode_tab.active {
+    border-bottom-color: var(--SmartThemeBodyColor);
+    opacity: 1;
+}
+
+#rm_api_block .connection_profile_tab_panel[hidden] {
+    display: none;
+}
+
+#rm_api_block .connection_profile_inline_editor:not(:empty) {
+    background: rgba(127, 127, 127, 0.06);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 6px;
+    margin: 8px 0;
+    padding: 10px 12px;
+}
+
+#rm_api_block .connection_profile_inline_editor .embed-rerank-profile-form > h3 {
+    display: none;
+}
+
+#rm_api_block .connection_profile_inline_editor .embed-rerank-profile-form label {
+    margin-top: 6px;
+}
+
+/*
+ * On Embed / Rerank tab, hide everything in #rm_api_block except the
+ * connection-manager block itself (the only direct child with .wide100p).
+ * The chat API source/url/key/model controls are not relevant when the user
+ * is editing an embed/rerank profile and would be visually misleading.
+ * !important guards against jQuery .show() calls that may re-set inline display.
+ */
+#rm_api_block.hide-chat-api > *:not(.wide100p) {
+    display: none !important;
+}

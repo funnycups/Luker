@@ -15,7 +15,6 @@ export const RERANK_MODE = 'rerank';
 export const EMBEDDING_SOURCE_DEFS = [
     { id: 'transformers', label: 'Local (Transformers.js)', needsModel: false, needsUrl: false, needsKey: false, secretKey: null, urlOptional: false, defaultModel: '' },
     { id: 'webllm', label: 'WebLLM (in-browser)', needsModel: true, needsUrl: false, needsKey: false, secretKey: null, urlOptional: false, defaultModel: '' },
-    { id: 'extras', label: 'SillyTavern Extras', needsModel: false, needsUrl: true, needsKey: false, secretKey: null, urlOptional: false, defaultModel: '' },
     { id: 'openai', label: 'OpenAI', needsModel: true, needsUrl: false, needsKey: true, secretKey: 'api_key_openai', urlOptional: true, defaultModel: 'text-embedding-3-small' },
     { id: 'cohere', label: 'Cohere', needsModel: true, needsUrl: false, needsKey: true, secretKey: 'api_key_cohere', urlOptional: true, defaultModel: 'embed-multilingual-v3.0' },
     { id: 'jina', label: 'Jina AI', needsModel: true, needsUrl: false, needsKey: true, secretKey: 'api_key_jina', urlOptional: true, defaultModel: 'jina-embeddings-v3' },

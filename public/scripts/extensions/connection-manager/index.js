@@ -21,6 +21,14 @@ import { performFuzzySearch } from '/scripts/power-user.js';
 import { StreamingDisplay } from '/scripts/streaming-display.js';
 import { ConnectionManagerRequestService } from '../shared.js';
 import { formatReasoning } from '/scripts/reasoning.js';
+import {
+    createEmbeddingProfileStub,
+    deleteEmbeddingProfile,
+    createRerankProfileStub,
+    deleteRerankProfile,
+    mountInlineProfileEditor,
+    renderProfileSelect,
+} from './embed-rerank.js';
 
 const MODULE_NAME = 'connection-manager';
 const NONE = '<None>';
@@ -1324,6 +1332,130 @@ export async function init() {
         detailsContent.classList.toggle('hidden');
         await renderDetailsContent(detailsContent);
     });
+
+    // ---- Mode tabs (Chat / Embedding / Rerank) ----
+    const tabButtons = Array.from(document.querySelectorAll('#rm_api_block .connection_profile_mode_tab'));
+    const tabPanels = Array.from(document.querySelectorAll('#rm_api_block .connection_profile_tab_panel'));
+    const rmApiBlock = document.getElementById('rm_api_block');
+    function setActiveMode(mode) {
+        tabButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.mode === mode));
+        tabPanels.forEach(panel => {
+            const matches = panel.dataset.mode === mode;
+            if (matches) panel.removeAttribute('hidden');
+            else panel.setAttribute('hidden', '');
+        });
+        // Embed/Rerank tabs aren't chat connections — hide the chat API panel
+        // siblings inside #rm_api_block so users don't conflate them with the
+        // currently-edited profile. CSS rule lives in style.css.
+        rmApiBlock?.classList.toggle('hide-chat-api', mode !== 'chat');
+    }
+    tabButtons.forEach(btn => {
+        btn.addEventListener('click', () => setActiveMode(btn.dataset.mode));
+    });
+
+    // ---- Embedding & Rerank tab pickers ----
+    // Selection inside these tabs is purely "which profile to edit" — it is
+    // never a globally active connection. Consumer plugins (vectors, memory-graph)
+    // pick their own profile via their own dropdown. Editing happens inline below
+    // the picker; saves persist on field blur.
+    /** @type {HTMLSelectElement} */
+    // @ts-ignore
+    const embedSelect = document.getElementById('connection_profiles_embed');
+    /** @type {HTMLSelectElement} */
+    // @ts-ignore
+    const rerankSelect = document.getElementById('connection_profiles_rerank');
+    const embedEditor = document.getElementById('connection_profile_embed_editor');
+    const rerankEditor = document.getElementById('connection_profile_rerank_editor');
+    let editingEmbedId = '';
+    let editingRerankId = '';
+
+    function updateEmbedActions() {
+        document.getElementById('delete_embedding_profile')?.classList.toggle('disabled', !editingEmbedId);
+    }
+    function updateRerankActions() {
+        document.getElementById('delete_rerank_profile')?.classList.toggle('disabled', !editingRerankId);
+    }
+    function mountEmbedEditor() {
+        mountInlineProfileEditor(embedEditor, 'embed', editingEmbedId, {
+            onChange: () => {
+                if (embedSelect) renderProfileSelect(embedSelect, 'embed', editingEmbedId);
+            },
+        });
+    }
+    function mountRerankEditor() {
+        mountInlineProfileEditor(rerankEditor, 'rerank', editingRerankId, {
+            onChange: () => {
+                if (rerankSelect) renderProfileSelect(rerankSelect, 'rerank', editingRerankId);
+            },
+        });
+    }
+    function refreshEmbedSelect() {
+        if (!embedSelect) return;
+        renderProfileSelect(embedSelect, 'embed', editingEmbedId);
+        editingEmbedId = String(embedSelect.value || '');
+        mountEmbedEditor();
+        updateEmbedActions();
+    }
+    function refreshRerankSelect() {
+        if (!rerankSelect) return;
+        renderProfileSelect(rerankSelect, 'rerank', editingRerankId);
+        editingRerankId = String(rerankSelect.value || '');
+        mountRerankEditor();
+        updateRerankActions();
+    }
+
+    embedSelect?.addEventListener('change', () => {
+        editingEmbedId = String(embedSelect.value || '');
+        mountEmbedEditor();
+        updateEmbedActions();
+    });
+    rerankSelect?.addEventListener('change', () => {
+        editingRerankId = String(rerankSelect.value || '');
+        mountRerankEditor();
+        updateRerankActions();
+    });
+
+    document.getElementById('create_embedding_profile')?.addEventListener('click', () => {
+        const profile = createEmbeddingProfileStub();
+        editingEmbedId = profile.id;
+        refreshEmbedSelect();
+    });
+    document.getElementById('delete_embedding_profile')?.addEventListener('click', async () => {
+        if (!editingEmbedId) return;
+        const ok = await deleteEmbeddingProfile(editingEmbedId);
+        if (ok) {
+            editingEmbedId = '';
+            refreshEmbedSelect();
+        }
+    });
+
+    document.getElementById('create_rerank_profile')?.addEventListener('click', () => {
+        const profile = createRerankProfileStub();
+        editingRerankId = profile.id;
+        refreshRerankSelect();
+    });
+    document.getElementById('delete_rerank_profile')?.addEventListener('click', async () => {
+        if (!editingRerankId) return;
+        const ok = await deleteRerankProfile(editingRerankId);
+        if (ok) {
+            editingRerankId = '';
+            refreshRerankSelect();
+        }
+    });
+
+    // External mutations (chat tab CRUD, slash commands, migrations): refresh
+    // dropdowns to pick up new/deleted/renamed profiles. Don't remount the
+    // inline editor — the user may be mid-edit, and the inline editor itself
+    // emits CONNECTION_PROFILE_UPDATED on every field change.
+    [event_types.CONNECTION_PROFILE_CREATED, event_types.CONNECTION_PROFILE_UPDATED, event_types.CONNECTION_PROFILE_DELETED].forEach(evt => {
+        eventSource.on(evt, () => {
+            if (embedSelect) renderProfileSelect(embedSelect, 'embed', editingEmbedId);
+            if (rerankSelect) renderProfileSelect(rerankSelect, 'rerank', editingRerankId);
+        });
+    });
+
+    refreshEmbedSelect();
+    refreshRerankSelect();
 
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'profile',

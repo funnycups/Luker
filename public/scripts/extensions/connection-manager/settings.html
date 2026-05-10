@@ -8,32 +8,75 @@
         </h3>
         <i id="connection_profile_spinner" class="fa-solid fa-spinner fa-spin hidden"></i>
     </div>
-    <div class="connection_profile_toolbar">
-        <div class="connection_profile_picker">
-            <select class="text_pole flex1" id="connection_profiles"></select>
-        </div>
-        <div class="connection_profile_actions">
-            <i id="view_connection_profile" class="menu_button fa-solid fa-info-circle" title="View connection profile details" data-i18n="[title]View connection profile details"></i>
-            <i id="create_connection_profile" class="menu_button fa-solid fa-file-circle-plus" title="Create a new connection profile" data-i18n="[title]Create a new connection profile"></i>
-            <i id="update_connection_profile" class="menu_button fa-solid fa-save" title="Update a connection profile" data-i18n="[title]Update a connection profile"></i>
-            <i id="edit_connection_profile" class="menu_button fa-solid fa-pencil" title="Edit a connection profile" data-i18n="[title]Edit a connection profile"></i>
-            <i id="reload_connection_profile" class="menu_button fa-solid fa-recycle" title="Reload a connection profile" data-i18n="[title]Reload a connection profile"></i>
-            <i id="delete_connection_profile" class="menu_button fa-solid fa-trash-can" title="Delete a connection profile" data-i18n="[title]Delete a connection profile"></i>
-        </div>
+    <div class="connection_profile_mode_tabs">
+        <button type="button" class="connection_profile_mode_tab active" data-mode="chat">
+            <span data-i18n="Chat">Chat</span>
+        </button>
+        <button type="button" class="connection_profile_mode_tab" data-mode="embed">
+            <span data-i18n="Embedding">Embedding</span>
+        </button>
+        <button type="button" class="connection_profile_mode_tab" data-mode="rerank">
+            <span data-i18n="Rerank">Rerank</span>
+        </button>
     </div>
-    <label class="checkbox_label">
-        <input id="connection_profile_function_calling_plain_text" type="checkbox" />
-        <span data-i18n="Plain-text Function Calling">Plain-text Function Calling</span>
-    </label>
-    <div id="connection_profile_function_calling_plain_text_error_retry_block" class="range-block">
-        <label for="connection_profile_function_calling_plain_text_error_retry" class="checkbox_label widthFreeExpand">
-            <input id="connection_profile_function_calling_plain_text_error_retry" type="checkbox" />
-            <span data-i18n="Retry malformed plain-text tool calls">Retry malformed plain-text tool calls</span>
+    <div class="connection_profile_tab_panel" data-mode="chat">
+        <div class="connection_profile_toolbar">
+            <div class="connection_profile_picker">
+                <select class="text_pole flex1" id="connection_profiles"></select>
+            </div>
+            <div class="connection_profile_actions">
+                <i id="view_connection_profile" class="menu_button fa-solid fa-info-circle" title="View connection profile details" data-i18n="[title]View connection profile details"></i>
+                <i id="create_connection_profile" class="menu_button fa-solid fa-file-circle-plus" title="Create a new connection profile" data-i18n="[title]Create a new connection profile"></i>
+                <i id="update_connection_profile" class="menu_button fa-solid fa-save" title="Update a connection profile" data-i18n="[title]Update a connection profile"></i>
+                <i id="edit_connection_profile" class="menu_button fa-solid fa-pencil" title="Edit a connection profile" data-i18n="[title]Edit a connection profile"></i>
+                <i id="reload_connection_profile" class="menu_button fa-solid fa-recycle" title="Reload a connection profile" data-i18n="[title]Reload a connection profile"></i>
+                <i id="delete_connection_profile" class="menu_button fa-solid fa-trash-can" title="Delete a connection profile" data-i18n="[title]Delete a connection profile"></i>
+            </div>
+        </div>
+        <label class="checkbox_label">
+            <input id="connection_profile_function_calling_plain_text" type="checkbox" />
+            <span data-i18n="Plain-text Function Calling">Plain-text Function Calling</span>
         </label>
+        <div id="connection_profile_function_calling_plain_text_error_retry_block" class="range-block">
+            <label for="connection_profile_function_calling_plain_text_error_retry" class="checkbox_label widthFreeExpand">
+                <input id="connection_profile_function_calling_plain_text_error_retry" type="checkbox" />
+                <span data-i18n="Retry malformed plain-text tool calls">Retry malformed plain-text tool calls</span>
+            </label>
+        </div>
+        <div id="connection_profile_function_calling_plain_text_retry_attempts_block" class="flex-container alignItemsCenter gap10 marginTop10">
+            <label for="connection_profile_function_calling_plain_text_error_retry_max_attempts" data-i18n="Plain-text retry attempts">Plain-text retry attempts</label>
+            <input id="connection_profile_function_calling_plain_text_error_retry_max_attempts" class="text_pole widthUnset" type="number" min="1" max="10" step="1" value="3" />
+        </div>
+        <div id="connection_profile_details_content" class="hidden"></div>
     </div>
-    <div id="connection_profile_function_calling_plain_text_retry_attempts_block" class="flex-container alignItemsCenter gap10 marginTop10">
-        <label for="connection_profile_function_calling_plain_text_error_retry_max_attempts" data-i18n="Plain-text retry attempts">Plain-text retry attempts</label>
-        <input id="connection_profile_function_calling_plain_text_error_retry_max_attempts" class="text_pole widthUnset" type="number" min="1" max="10" step="1" value="3" />
+    <div class="connection_profile_tab_panel" data-mode="embed" hidden>
+        <div class="connection_profile_toolbar">
+            <div class="connection_profile_picker">
+                <select class="text_pole flex1" id="connection_profiles_embed"></select>
+            </div>
+            <div class="connection_profile_actions">
+                <i id="create_embedding_profile" class="menu_button fa-solid fa-file-circle-plus" title="Create a new embedding profile" data-i18n="[title]Create a new embedding profile"></i>
+                <i id="delete_embedding_profile" class="menu_button fa-solid fa-trash-can" title="Delete embedding profile" data-i18n="[title]Delete embedding profile"></i>
+            </div>
+        </div>
+        <div id="connection_profile_embed_editor" class="connection_profile_inline_editor"></div>
+        <small data-i18n="Embedding profiles are used by Vector Storage and Memory Graph for text embeddings. They are not active chat connections.">
+            Embedding profiles are used by Vector Storage and Memory Graph for text embeddings. They are not active chat connections.
+        </small>
     </div>
-    <div id="connection_profile_details_content" class="hidden"></div>
+    <div class="connection_profile_tab_panel" data-mode="rerank" hidden>
+        <div class="connection_profile_toolbar">
+            <div class="connection_profile_picker">
+                <select class="text_pole flex1" id="connection_profiles_rerank"></select>
+            </div>
+            <div class="connection_profile_actions">
+                <i id="create_rerank_profile" class="menu_button fa-solid fa-file-circle-plus" title="Create a new rerank profile" data-i18n="[title]Create a new rerank profile"></i>
+                <i id="delete_rerank_profile" class="menu_button fa-solid fa-trash-can" title="Delete rerank profile" data-i18n="[title]Delete rerank profile"></i>
+            </div>
+        </div>
+        <div id="connection_profile_rerank_editor" class="connection_profile_inline_editor"></div>
+        <small data-i18n="Rerank profiles are used to re-score candidates after vector retrieval. They are not active chat connections.">
+            Rerank profiles are used to re-score candidates after vector retrieval. They are not active chat connections.
+        </small>
+    </div>
 </div>

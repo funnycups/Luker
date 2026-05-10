@@ -192,25 +192,15 @@ export function buildMemoryGraphSettingsHtml(deps) {
                 <option value="hybrid_llm">${escapeHtml(i18n('Hybrid + LLM Rerank'))}</option>
             </select>
             <div id="luker_rpg_memory_hybrid_settings" style="display:none">
-                <small style="opacity:0.85">${escapeHtml(i18n('Embedding profile is shared via the Connection Profile registry — pick or create one below. Vector Storage and other plugins can use the same profile.'))}</small><br>
+                <small style="opacity:0.85">${escapeHtml(i18n('Embedding profile is shared via the Connection Profile registry — pick one below. Manage profiles in the Connection Profile panel (Embedding tab) under API Connections.'))}</small><br>
                 <label>${escapeHtml(i18n('Embedding profile'))}</label>
-                <div class="flex-container alignItemsCenter">
-                    <select id="luker_rpg_memory_embedding_profile" class="text_pole flex1"></select>
-                    <i id="luker_rpg_memory_embedding_profile_create" class="menu_button fa-solid fa-file-circle-plus" title="${escapeHtml(i18n('Create a new embedding profile'))}"></i>
-                    <i id="luker_rpg_memory_embedding_profile_edit" class="menu_button fa-solid fa-pencil" title="${escapeHtml(i18n('Edit embedding profile'))}"></i>
-                    <i id="luker_rpg_memory_embedding_profile_delete" class="menu_button fa-solid fa-trash-can" title="${escapeHtml(i18n('Delete embedding profile'))}"></i>
-                </div>
+                <select id="luker_rpg_memory_embedding_profile" class="text_pole flex1"></select>
                 <label>${escapeHtml(i18n('Vector pre-filter Top-K'))} <input id="luker_rpg_memory_vector_topk" class="text_pole" type="number" min="5" max="100" step="1" /></label>
                 <label>${escapeHtml(i18n('Max recall results'))} <input id="luker_rpg_memory_hybrid_max_results" class="text_pole" type="number" min="3" max="50" step="1" /></label>
             </div>
             <div id="luker_rpg_memory_rerank_settings" style="display:none">
                 <label>${escapeHtml(i18n('Rerank profile'))}</label>
-                <div class="flex-container alignItemsCenter">
-                    <select id="luker_rpg_memory_rerank_profile" class="text_pole flex1"></select>
-                    <i id="luker_rpg_memory_rerank_profile_create" class="menu_button fa-solid fa-file-circle-plus" title="${escapeHtml(i18n('Create a new rerank profile'))}"></i>
-                    <i id="luker_rpg_memory_rerank_profile_edit" class="menu_button fa-solid fa-pencil" title="${escapeHtml(i18n('Edit rerank profile'))}"></i>
-                    <i id="luker_rpg_memory_rerank_profile_delete" class="menu_button fa-solid fa-trash-can" title="${escapeHtml(i18n('Delete rerank profile'))}"></i>
-                </div>
+                <select id="luker_rpg_memory_rerank_profile" class="text_pole flex1"></select>
             </div>
             <label for="luker_rpg_memory_recall_inject_position">${escapeHtml(i18n('Injection position'))}</label>
             <select id="luker_rpg_memory_recall_inject_position" class="text_pole">
