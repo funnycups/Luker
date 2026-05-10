@@ -319,25 +319,27 @@ await fs.update((current) => nextState, { floor: targetFloor, swipeId: 0 });
 ### getCharacterState
 
 ```ts
-getCharacterState(namespace: string): Promise<any | null>
+getCharacterState(avatar: string, namespace: string): Promise<any | null>
 ```
 
-讀取指定命名空間下的角色狀態資料。如果該命名空間沒有儲存過資料，回傳 `null`。
+讀取指定 avatar 與 namespace 下的角色 sidecar 狀態。如果該 namespace 沒有儲存過資料，回傳 `null`。
 
 | 參數 | 說明 |
 |------|------|
-| `namespace` | 儲存命名空間，通常使用外掛名稱（如 `'my-extension'`） |
+| `avatar` | 角色頭像檔案名（例如 `'tavernkeeper.png'`） |
+| `namespace` | 儲存命名空間，通常使用外掛名稱（例如 `'my-extension'`） |
 
 ### setCharacterState
 
 ```ts
-setCharacterState(namespace: string, data: any): Promise<void>
+setCharacterState(avatar: string, namespace: string, data: any): Promise<void>
 ```
 
-寫入指定命名空間下的角色狀態資料。傳入 `null` 作為 `data` 可以刪除該命名空間的狀態。
+在指定 namespace 下寫入角色 sidecar 狀態。傳 `null` 作為 `data` 可以刪除該 namespace 的狀態。
 
 | 參數 | 說明 |
 |------|------|
+| `avatar` | 角色頭像檔案名 |
 | `namespace` | 儲存命名空間 |
 | `data` | 要儲存的資料（任意可序列化物件），傳 `null` 刪除 |
 
@@ -345,19 +347,20 @@ setCharacterState(namespace: string, data: any): Promise<void>
 
 ```js
 const context = Luker.getContext();
+const character = context.characters[context.characterId];
 
 // 讀取角色狀態
-const state = await context.getCharacterState('my-extension');
+const state = await context.getCharacterState(character.avatar, 'my-extension');
 console.log(state); // { someConfig: true } 或 null
 
 // 寫入角色狀態
-await context.setCharacterState('my-extension', {
+await context.setCharacterState(character.avatar, 'my-extension', {
   someConfig: true,
   lastUpdated: Date.now(),
 });
 
 // 刪除角色狀態
-await context.setCharacterState('my-extension', null);
+await context.setCharacterState(character.avatar, 'my-extension', null);
 ```
 
 ### 角色狀態 vs 聊天狀態
@@ -368,3 +371,217 @@ await context.setCharacterState('my-extension', null);
 | 典型用途 | 角色級別的外掛設定、CardApp 應用狀態 | 聊天內的臨時資料、對話上下文 |
 | API | `getCharacterState` / `setCharacterState` | `getChatState` / `getChatStateBatch` / `updateChatState` / `deleteChatState` |
 | 儲存位置 | 角色卡 JSON 檔案 | 聊天中繼資料 |
+
+## 聊天生命週期
+
+### getCurrentChatId
+
+```ts
+getCurrentChatId(): string | undefined
+```
+
+回傳當前聊天的檔名（不含 `.jsonl`）。群組回傳群組的 `chat_id`，單人聊天回傳 `characters[characterId].chat`。沒有選中角色或群組時回傳 `undefined`。
+
+### reloadCurrentChat
+
+```ts
+reloadCurrentChat(): Promise<void>
+```
+
+從硬碟重新載入當前聊天。使用互斥鎖——併發呼叫會被串行化，所以從多個事件處理器中呼叫是安全的。
+
+### renameChat
+
+```ts
+renameChat(oldFileName: string, newName: string): Promise<void>
+```
+
+重新命名聊天檔案。`newName` 應該不帶 `.jsonl` 副檔名。
+
+### openCharacterChat
+
+```ts
+openCharacterChat(fileName: string): Promise<void>
+```
+
+切換到當前角色的另一個聊天。會先清空當前的聊天資料。
+
+### openGroupChat
+
+```ts
+openGroupChat(groupId: string, chatId: string): Promise<void>
+```
+
+切換到某個群組內的特定聊天。
+
+### saveChat
+
+```ts
+saveChat(): Promise<void>
+```
+
+如果當前還沒在儲存，把當前聊天寫到硬碟。會等一個短時間視窗讓進行中的儲存完成，再觸發自己的儲存。多數外掛不需要呼叫這個——[訊息 API](#訊息-api) 會自動持久化。
+
+### printMessages
+
+```ts
+printMessages(options?: { clear?: boolean }): Promise<void>
+```
+
+從記憶體中的 `chat` 陣列重新渲染聊天 DOM。在訊息 API 之外執行了大量聊天突變後使用。
+
+### clearChat
+
+```ts
+clearChat(options?: { clearData?: boolean }): Promise<void>
+```
+
+清空已渲染的訊息。`clearData: true` 還會清空記憶體中的 `chat` 陣列並重置 `extensionPrompts`。
+
+### sendSystemMessage
+
+```ts
+sendSystemMessage(type: string, text?: string, extra?: object): void
+```
+
+把一條系統訊息插入聊天。`type` 必須是系統訊息類型之一（`HELP`、`WELCOME`、`EMPTY`、`GENERIC`、`NARRATOR`、`COMMENT`、`SLASH_COMMANDS`、`FORMATTING`、`HOTKEYS`、`MACROS`、`WELCOME_PROMPT`、`ASSISTANT_NOTE`、`ASSISTANT_MESSAGE`）。
+
+```js
+ctx.sendSystemMessage('GENERIC', 'Plugin loaded successfully.');
+```
+
+## 擴充提示詞（深度注入）
+
+擴充提示詞讓外掛可以在 prompt 的指定位置與深度注入文字。它們在 prompt 組裝期間被求值，並應用於每次生成請求。
+
+### setExtensionPrompt
+
+```ts
+setExtensionPrompt(
+    key: string,
+    value: string,
+    position: number,
+    depth: number,
+    scan?: boolean,
+    role?: number,
+    filter?: () => boolean | Promise<boolean>,
+): void
+```
+
+| 參數 | 說明 |
+|------|------|
+| `key` | 此提示詞 slot 的唯一識別碼。重用同一 key 會覆寫 |
+| `value` | 要注入的文字。傳 `''` 移除 |
+| `position` | `0` = 故事字串之後（BEFORE_PROMPT）、`1` = 在聊天中於 `depth`（IN_CHAT）、`2` = 聊天之後（IN_PROMPT） |
+| `depth` | `position === 1` 時，距離聊天尾端的距離。`0` = 在最後一條訊息之後 |
+| `scan` | 為 `true` 時，提示詞文字會貢獻給世界書掃描 |
+| `role` | 說話者角色（`0` = system、`1` = user、`2` = assistant） |
+| `filter` | 可選 gate；提供且解析為 falsy 時，跳過此提示詞 |
+
+```js
+const ctx = Luker.getContext();
+
+ctx.setExtensionPrompt(
+    'my-plugin-context',
+    'You have access to a calculator tool.',
+    1,                  // IN_CHAT
+    0,                  // depth：插在最後一條訊息之後
+    false,              // 不作為 WI 來源掃描
+    0,                  // SYSTEM 角色
+);
+
+// 移除提示詞
+ctx.setExtensionPrompt('my-plugin-context', '');
+```
+
+### extensionPrompts
+
+```ts
+context.extensionPrompts: Record<string, ExtensionPrompt>
+```
+
+當前已註冊擴充提示詞的唯讀視圖。每次呼叫 `clearChat` 時這個 map 會被重置為 `{}`。
+
+## Swipe API
+
+外掛可以用程式驅動 swipe 導航，並檢視 swipe 狀態。
+
+```ts
+context.swipe.left(event?, options?): Promise<void>
+context.swipe.right(event?, options?): Promise<void>
+context.swipe.to(event, direction, options?): Promise<void>
+context.swipe.show(): void
+context.swipe.hide(options?: { hideCounters?: boolean }): void
+context.swipe.refresh(updateCounters?: boolean, fade?: boolean): void
+context.swipe.isAllowed(): boolean
+context.swipe.state(): SwipeState
+```
+
+| 方法 | 說明 |
+|------|------|
+| `left` / `right` | 在指定方向 swipe（event 引數可選，僅 UI 整合需要） |
+| `to` | 通用 swipe；`direction` 為 `SWIPE_DIRECTION.LEFT` / `RIGHT`。支援 `forceMesId`、`forceSwipeId`、`forceDuration` 覆寫 |
+| `show` / `hide` | 切換 swipe 按鈕顯示 |
+| `refresh` | 重新計算每條訊息的 swipe 控制項 |
+| `isAllowed` | 當前是否允許 swipe（聊天存在、未在生成、未在動畫中） |
+| `state` | 當前的 `SWIPE_STATE`（`NONE` 加上動畫中狀態） |
+
+```js
+const ctx = Luker.getContext();
+
+if (ctx.swipe.isAllowed()) {
+    await ctx.swipe.right();
+}
+```
+
+## 訊息媒體輔助函式
+
+管理訊息上的圖片 / 檔案附件的輔助函式。它們作用於訊息物件的 `extra.media` 與 `extra.files` 陣列。
+
+### appendMediaToMessage
+
+```ts
+appendMediaToMessage(messageObj: ChatMessage, messageElement: JQuery, scrollBehavior?: string): void
+```
+
+把 `messageObj.extra.media[]` 與 `messageObj.extra.files[]` 中的所有媒體渲染到指定的訊息元素中。會遵循 `media_display` 與 `inline_image` 旗標。在重新渲染加入了媒體的訊息時用得到。
+
+### ensureMessageMediaIsArray
+
+```ts
+ensureMessageMediaIsArray(messageObj: ChatMessage): void
+```
+
+就地把舊版的單條 `extra.media` / `extra.image` 屬性遷移成陣列。若需要處理可能由舊程式寫過的訊息，先呼叫此函式再讀 `extra.media`。
+
+### getMediaDisplay
+
+```ts
+getMediaDisplay(messageObj: ChatMessage): string
+```
+
+回傳訊息的 `MEDIA_DISPLAY` 模式（預設取全域設定）。
+
+### getMediaIndex
+
+```ts
+getMediaIndex(messageObj: ChatMessage): number
+```
+
+回傳當前選中的媒體索引，會被夾到有效的 `0..media.length-1` 範圍內。索引超出範圍時回傳 `0`。
+
+### scrollChatToBottom
+
+```ts
+scrollChatToBottom(options?: { waitForFrame?: boolean }): void
+```
+
+把聊天滾動到底部。當使用者已往上滾且 `auto_scroll_chat_to_bottom` 為關時是 no-op。`waitForFrame: true` 會先等 `requestAnimationFrame` 讓 layout 穩定。
+
+### scrollOnMediaLoad
+
+```ts
+scrollOnMediaLoad(): Promise<void>
+```
+
+等所有聊天 `<img>` / `<video>` / `<audio>` 元素的 load 事件（帶 timeout）並在它們確定 layout 後重新錨定捲動位置。在加入媒體後呼叫，這樣聊天不會跳動。

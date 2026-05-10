@@ -219,3 +219,136 @@ const result = await sendOpenAIRequest('quiet', requestMessages, signal, {
 ```
 
 If you don't need character cards or world info, you can skip steps 1-2 and pass messages directly to `sendOpenAIRequest`. See [Generation](/development/extension-api/generation) for `sendOpenAIRequest` details.
+
+## Prompt Envelope Inspection
+
+For diagnostic UIs and "preview what would be sent" tooling, plugins can read the assembled prompt envelope and layout without dispatching a request.
+
+### getActivePromptPresetEnvelope
+
+```ts
+getActivePromptPresetEnvelope(options?: {
+    includeCharacterCard?: boolean,
+    api?: string,
+    promptPresetName?: string,
+    completionPresetName?: string,
+    contextPresetName?: string,
+    instructPresetName?: string,
+    syspromptPresetName?: string,
+    reasoningPresetName?: string,
+}): PromptPresetEnvelope
+```
+
+Returns a snapshot of the resolved prompt configuration including:
+
+- `mainApi` / `completionApi` — active API identifiers
+- `presetRefs` — names of resolved completion / context / instruct / sysprompt / reasoning presets
+- `promptCore` — extracted prompt-affecting fields per preset
+- `promptLayout` — the merged Luker layout (from `extensions.luker.prompt_layout`)
+- `promptCatalog` — map of `prompt.identifier` → `{ name, role, content, marker, systemPrompt }`
+- `characterCard` — current character fields (when `includeCharacterCard !== false`)
+
+This is the same data that `buildPresetAwarePromptMessages` consumes internally. Useful for showing users what their plugin's request will look like before sending.
+
+### getActivePromptLayout
+
+```ts
+getActivePromptLayout(options?: object): PromptLayoutEntry[]
+```
+
+Convenience accessor returning just the merged prompt layout. Each entry has `id`, `enabled`, `order`, `role`, `phase`, `source`, `content`, `path`, `promptIdentifier`, `tags`.
+
+### formatPromptPresetEnvelope
+
+```ts
+formatPromptPresetEnvelope(envelope?: object, options?: { label?: string }): string
+```
+
+Formats an envelope as `[[LABEL]]\n<json>` for embedding into another prompt (e.g., when delegating to a meta-LLM that needs to reason about the user's prompt config). Defaults to the current envelope when none is supplied.
+
+```js
+const ctx = Luker.getContext();
+const envelope = ctx.getActivePromptPresetEnvelope({ includeCharacterCard: true });
+const serialized = ctx.formatPromptPresetEnvelope(envelope);
+console.log(serialized);
+```
+
+## Reasoning
+
+Reasoning helpers parse and render the `<thinking>...</thinking>` style blocks emitted by reasoning models (Claude reasoning, DeepSeek-R1, o1, etc.).
+
+### parseReasoningFromString
+
+```ts
+parseReasoningFromString(
+    text: string,
+    options?: { strict?: boolean },
+    template?: ReasoningTemplate | null,
+): { reasoning: string, content: string } | null
+```
+
+Splits a model output string into `reasoning` and `content` based on the `prefix` and `suffix` of a reasoning template (or the active `power_user.reasoning` template). Returns `null` if the template lacks prefix/suffix or the parse fails.
+
+| Option | Description |
+|------|------|
+| `strict` | When `true` (default), the prefix must appear at the start (after whitespace). When `false`, finds it anywhere |
+
+### getReasoningTemplateByName
+
+```ts
+getReasoningTemplateByName(name: string): ReasoningTemplate
+```
+
+Looks up a reasoning template by name. Throws `Error('Unknown reasoning template name: "<name>"')` when not found. The returned template should be treated as read-only.
+
+### updateReasoningUI
+
+```ts
+updateReasoningUI(
+    messageIdOrElement: number | HTMLElement | JQuery,
+    options?: { reset?: boolean },
+): void
+```
+
+Triggers a UI refresh of the reasoning block on a message. Pass a chat index, a raw DOM element, or a JQuery wrapper. `reset: true` skips reading the message's current reasoning state — used during swipes when the new reasoning hasn't been written yet.
+
+```js
+const ctx = Luker.getContext();
+const parsed = ctx.parseReasoningFromString(modelOutput);
+if (parsed) {
+    console.log('Reasoning:', parsed.reasoning);
+    console.log('Final answer:', parsed.content);
+}
+```
+
+## Settings Views (Read-Only)
+
+The following properties expose live settings objects. They are mutable references — write through them only through their canonical APIs (`presets.save`, `saveSettingsDebounced`, etc.). Direct mutation may not persist correctly.
+
+### chatCompletionSettings
+
+```ts
+context.chatCompletionSettings: object
+```
+
+Reference to `oai_settings`. Read-only views useful for inspecting the active chat completion source, model, and parameters.
+
+### textCompletionSettings
+
+```ts
+context.textCompletionSettings: object
+```
+
+Reference to `textgenerationwebui_settings`. Read-only views for the active text completion backend.
+
+### powerUserSettings
+
+```ts
+context.powerUserSettings: object
+```
+
+Reference to `power_user`. Holds tokenizer choice, reasoning template selection, message-display preferences, and other user-level configuration.
+
+::: warning Mutate via APIs, not directly
+These views are exposed for inspection only. Writing to them directly may bypass debounced save logic. To change connection or model, use the user-facing UI or [`presets.save`](#presets-save). To change generation parameters, use a chat completion preset.
+:::

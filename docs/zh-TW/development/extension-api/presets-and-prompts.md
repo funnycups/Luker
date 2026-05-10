@@ -219,3 +219,136 @@ const result = await sendOpenAIRequest('quiet', requestMessages, signal, {
 ```
 
 如果不需要角色卡和世界書，可以跳過步驟 1-2，直接傳 messages 給 `sendOpenAIRequest`。`sendOpenAIRequest` 詳見 [生成請求](/zh-TW/development/extension-api/generation)。
+
+## 提示詞信封檢視
+
+對於診斷型 UI 和「預覽即將發送內容」工具，外掛可以讀取已組裝的 prompt 信封與排版，而不發起請求。
+
+### getActivePromptPresetEnvelope
+
+```ts
+getActivePromptPresetEnvelope(options?: {
+    includeCharacterCard?: boolean,
+    api?: string,
+    promptPresetName?: string,
+    completionPresetName?: string,
+    contextPresetName?: string,
+    instructPresetName?: string,
+    syspromptPresetName?: string,
+    reasoningPresetName?: string,
+}): PromptPresetEnvelope
+```
+
+回傳已解析 prompt 設定的快照，包含：
+
+- `mainApi` / `completionApi` —— 活躍的 API 識別碼
+- `presetRefs` —— 已解析的 completion / context / instruct / sysprompt / reasoning 預設名稱
+- `promptCore` —— 每個預設中提取出的 prompt 相關欄位
+- `promptLayout` —— 合併後的 Luker 排版（來自 `extensions.luker.prompt_layout`）
+- `promptCatalog` —— `prompt.identifier` → `{ name, role, content, marker, systemPrompt }` 的映射
+- `characterCard` —— 當前角色欄位（當 `includeCharacterCard !== false` 時）
+
+這就是 `buildPresetAwarePromptMessages` 內部使用的同一份資料。在發送前向使用者展示「外掛的請求會長什麼樣」時很有用。
+
+### getActivePromptLayout
+
+```ts
+getActivePromptLayout(options?: object): PromptLayoutEntry[]
+```
+
+便利存取器，僅回傳合併後的 prompt 排版。每個條目包含 `id`、`enabled`、`order`、`role`、`phase`、`source`、`content`、`path`、`promptIdentifier`、`tags`。
+
+### formatPromptPresetEnvelope
+
+```ts
+formatPromptPresetEnvelope(envelope?: object, options?: { label?: string }): string
+```
+
+把信封格式化成 `[[LABEL]]\n<json>` 形式以嵌入到另一個 prompt 中（例如委派給需要對使用者 prompt 設定進行推理的 meta-LLM）。未提供時預設取當前信封。
+
+```js
+const ctx = Luker.getContext();
+const envelope = ctx.getActivePromptPresetEnvelope({ includeCharacterCard: true });
+const serialized = ctx.formatPromptPresetEnvelope(envelope);
+console.log(serialized);
+```
+
+## 推理
+
+推理輔助函式用於解析和渲染推理模型（Claude reasoning、DeepSeek-R1、o1 等）發出的 `<thinking>...</thinking>` 風格區塊。
+
+### parseReasoningFromString
+
+```ts
+parseReasoningFromString(
+    text: string,
+    options?: { strict?: boolean },
+    template?: ReasoningTemplate | null,
+): { reasoning: string, content: string } | null
+```
+
+依照推理範本（或當前活躍的 `power_user.reasoning` 範本）的 `prefix` 與 `suffix`，把模型輸出字串切成 `reasoning` 與 `content`。範本缺 prefix / suffix 或解析失敗時回傳 `null`。
+
+| 選項 | 說明 |
+|------|------|
+| `strict` | 為 `true`（預設）時，prefix 必須出現在開頭（在空白之後）。為 `false` 時，會在任何位置查找 |
+
+### getReasoningTemplateByName
+
+```ts
+getReasoningTemplateByName(name: string): ReasoningTemplate
+```
+
+按名稱查找推理範本。找不到時擲出 `Error('Unknown reasoning template name: "<name>"')`。回傳的範本應視為唯讀。
+
+### updateReasoningUI
+
+```ts
+updateReasoningUI(
+    messageIdOrElement: number | HTMLElement | JQuery,
+    options?: { reset?: boolean },
+): void
+```
+
+觸發某條訊息推理區塊的 UI 重新整理。可傳聊天索引、原始 DOM 元素或 JQuery 包裝物件。`reset: true` 會跳過讀取訊息當前的推理狀態——在 swipe 期間新推理還沒寫入時用得到。
+
+```js
+const ctx = Luker.getContext();
+const parsed = ctx.parseReasoningFromString(modelOutput);
+if (parsed) {
+    console.log('Reasoning:', parsed.reasoning);
+    console.log('Final answer:', parsed.content);
+}
+```
+
+## 設定視圖（唯讀）
+
+下面這些屬性暴露實時設定物件。它們是可變的參照——只能透過正規 API（`presets.save`、`saveSettingsDebounced` 等）寫入。直接突變可能無法正確持久化。
+
+### chatCompletionSettings
+
+```ts
+context.chatCompletionSettings: object
+```
+
+`oai_settings` 的參照。唯讀視圖，用於檢視當前活躍的 chat completion source、模型與參數。
+
+### textCompletionSettings
+
+```ts
+context.textCompletionSettings: object
+```
+
+`textgenerationwebui_settings` 的參照。當前 text completion 後端的唯讀視圖。
+
+### powerUserSettings
+
+```ts
+context.powerUserSettings: object
+```
+
+`power_user` 的參照。持有 tokenizer 選擇、推理範本選擇、訊息顯示偏好和其他使用者級設定。
+
+::: warning 透過 API 寫入而非直接突變
+這些視圖僅為檢視而暴露。直接寫入它們可能繞過防抖儲存邏輯。要更改連線或模型，請使用面向使用者的 UI 或 [`presets.save`](#presets-save)。要更改生成參數，請使用 chat completion 預設。
+:::

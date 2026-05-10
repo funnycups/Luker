@@ -320,25 +320,27 @@ Character state is persistent storage bound to the Character Card itself, shared
 ### getCharacterState
 
 ```ts
-getCharacterState(namespace: string): Promise<any | null>
+getCharacterState(avatar: string, namespace: string): Promise<any | null>
 ```
 
-Reads the character state data under the specified namespace. Returns `null` if no data has been stored for that namespace.
+Reads the character sidecar state for the specified avatar and namespace. Returns `null` if no data has been stored for that namespace.
 
 | Parameter | Description |
 |------|------|
+| `avatar` | Character avatar filename (e.g. `'tavernkeeper.png'`) |
 | `namespace` | Storage namespace, typically the plugin name (e.g., `'my-extension'`) |
 
 ### setCharacterState
 
 ```ts
-setCharacterState(namespace: string, data: any): Promise<void>
+setCharacterState(avatar: string, namespace: string, data: any): Promise<void>
 ```
 
-Writes character state data under the specified namespace. Pass `null` as `data` to delete the state for that namespace.
+Writes character sidecar state under the specified namespace. Pass `null` as `data` to delete the state for that namespace.
 
 | Parameter | Description |
 |------|------|
+| `avatar` | Character avatar filename |
 | `namespace` | Storage namespace |
 | `data` | Data to store (any serializable object); pass `null` to delete |
 
@@ -346,19 +348,20 @@ Writes character state data under the specified namespace. Pass `null` as `data`
 
 ```js
 const context = Luker.getContext();
+const character = context.characters[context.characterId];
 
 // Read character state
-const state = await context.getCharacterState('my-extension');
+const state = await context.getCharacterState(character.avatar, 'my-extension');
 console.log(state); // { someConfig: true } or null
 
 // Write character state
-await context.setCharacterState('my-extension', {
+await context.setCharacterState(character.avatar, 'my-extension', {
   someConfig: true,
   lastUpdated: Date.now(),
 });
 
 // Delete character state
-await context.setCharacterState('my-extension', null);
+await context.setCharacterState(character.avatar, 'my-extension', null);
 ```
 
 ### Character State vs Chat State
@@ -368,4 +371,218 @@ await context.setCharacterState('my-extension', null);
 | Scope | Bound to Character Card, shared across all chats | Bound to a single chat |
 | Typical Use | Character-level plugin config, CardApp application state | Temporary in-chat data, conversation context |
 | API | `getCharacterState` / `setCharacterState` | `getChatState` / `getChatStateBatch` / `updateChatState` / `deleteChatState` |
-| Storage Location | Character Card JSON file | Chat metadata |
+| Storage Location | Character Card sidecar file | Chat metadata |
+
+## Chat Lifecycle
+
+### getCurrentChatId
+
+```ts
+getCurrentChatId(): string | undefined
+```
+
+Returns the current chat's filename (without `.jsonl`). Returns the group's `chat_id` for groups, or `characters[characterId].chat` for solo. `undefined` when no character or group is selected.
+
+### reloadCurrentChat
+
+```ts
+reloadCurrentChat(): Promise<void>
+```
+
+Reloads the current chat from disk. Mutex-bound — concurrent calls serialize, so it's safe to call from multiple event handlers.
+
+### renameChat
+
+```ts
+renameChat(oldFileName: string, newName: string): Promise<void>
+```
+
+Renames the chat file. `newName` should be passed without the `.jsonl` extension.
+
+### openCharacterChat
+
+```ts
+openCharacterChat(fileName: string): Promise<void>
+```
+
+Switches to a different chat for the current character. Clears the current chat data first.
+
+### openGroupChat
+
+```ts
+openGroupChat(groupId: string, chatId: string): Promise<void>
+```
+
+Switches to a specific chat within a group.
+
+### saveChat
+
+```ts
+saveChat(): Promise<void>
+```
+
+Writes the current chat to disk if it's not already being saved. Waits up to a short window for any in-progress save to complete before triggering its own. Most plugins should not need to call this — the [Messages API](#messages-api) persists automatically.
+
+### printMessages
+
+```ts
+printMessages(options?: { clear?: boolean }): Promise<void>
+```
+
+Re-renders the chat DOM from the in-memory `chat` array. Use after large chat mutations performed outside the Messages API.
+
+### clearChat
+
+```ts
+clearChat(options?: { clearData?: boolean }): Promise<void>
+```
+
+Clears the rendered messages. With `clearData: true`, also empties the in-memory `chat` array and resets `extensionPrompts`.
+
+### sendSystemMessage
+
+```ts
+sendSystemMessage(type: string, text?: string, extra?: object): void
+```
+
+Inserts a system message into the chat. `type` must be one of the system message types (`HELP`, `WELCOME`, `EMPTY`, `GENERIC`, `NARRATOR`, `COMMENT`, `SLASH_COMMANDS`, `FORMATTING`, `HOTKEYS`, `MACROS`, `WELCOME_PROMPT`, `ASSISTANT_NOTE`, `ASSISTANT_MESSAGE`).
+
+```js
+ctx.sendSystemMessage('GENERIC', 'Plugin loaded successfully.');
+```
+
+## Extension Prompts (Depth Injection)
+
+Extension prompts let plugins inject text into the prompt at a specific position and depth. These are evaluated during prompt assembly and apply to every generation request.
+
+### setExtensionPrompt
+
+```ts
+setExtensionPrompt(
+    key: string,
+    value: string,
+    position: number,
+    depth: number,
+    scan?: boolean,
+    role?: number,
+    filter?: () => boolean | Promise<boolean>,
+): void
+```
+
+| Parameter | Description |
+|------|------|
+| `key` | Unique identifier for this prompt slot. Re-using the key overwrites |
+| `value` | The text to inject. Pass `''` to remove |
+| `position` | `0` = after story string (BEFORE_PROMPT), `1` = in-chat at `depth` (IN_CHAT), `2` = after chat (IN_PROMPT) |
+| `depth` | When `position === 1`, distance from the chat tail. `0` = after the last message |
+| `scan` | When `true`, the prompt's text contributes to the World Info scan |
+| `role` | Speaker role (`0` = system, `1` = user, `2` = assistant) |
+| `filter` | Optional gate; when present and resolves falsy, the prompt is skipped |
+
+```js
+const ctx = Luker.getContext();
+
+ctx.setExtensionPrompt(
+    'my-plugin-context',
+    'You have access to a calculator tool.',
+    1,                  // IN_CHAT
+    0,                  // depth: insert after the last message
+    false,              // do not scan as WI source
+    0,                  // SYSTEM role
+);
+
+// Remove the prompt
+ctx.setExtensionPrompt('my-plugin-context', '');
+```
+
+### extensionPrompts
+
+```ts
+context.extensionPrompts: Record<string, ExtensionPrompt>
+```
+
+Read-only view of currently registered extension prompts. The map is reset to `{}` on every `clearChat` call.
+
+## Swipe API
+
+Plugins can drive swipe navigation programmatically and inspect swipe state.
+
+```ts
+context.swipe.left(event?, options?): Promise<void>
+context.swipe.right(event?, options?): Promise<void>
+context.swipe.to(event, direction, options?): Promise<void>
+context.swipe.show(): void
+context.swipe.hide(options?: { hideCounters?: boolean }): void
+context.swipe.refresh(updateCounters?: boolean, fade?: boolean): void
+context.swipe.isAllowed(): boolean
+context.swipe.state(): SwipeState
+```
+
+| Method | Description |
+|------|------|
+| `left` / `right` | Swipe in the named direction (event arg is optional and only matters for UI integration) |
+| `to` | General swipe; `direction` is `SWIPE_DIRECTION.LEFT` / `RIGHT`. Supports `forceMesId`, `forceSwipeId`, `forceDuration` overrides |
+| `show` / `hide` | Toggle swipe button visibility |
+| `refresh` | Recompute per-message swipe controls |
+| `isAllowed` | Whether swipes are currently permitted (chat exists, not generating, not animating) |
+| `state` | Current `SWIPE_STATE` (`NONE`, plus animating states) |
+
+```js
+const ctx = Luker.getContext();
+
+if (ctx.swipe.isAllowed()) {
+    await ctx.swipe.right();
+}
+```
+
+## Message Media Helpers
+
+Helpers for managing image/file attachments on messages. These operate on the `extra.media` and `extra.files` arrays of a message object.
+
+### appendMediaToMessage
+
+```ts
+appendMediaToMessage(messageObj: ChatMessage, messageElement: JQuery, scrollBehavior?: string): void
+```
+
+Renders all media referenced in `messageObj.extra.media[]` and `messageObj.extra.files[]` into the given message element. Honors `media_display` and `inline_image` flags. Useful when re-rendering a message that has had media added.
+
+### ensureMessageMediaIsArray
+
+```ts
+ensureMessageMediaIsArray(messageObj: ChatMessage): void
+```
+
+Migrates legacy single-item `extra.media` / `extra.image` properties to arrays in-place. Call before reading `extra.media` if you need to handle messages that may have been written by older code.
+
+### getMediaDisplay
+
+```ts
+getMediaDisplay(messageObj: ChatMessage): string
+```
+
+Returns the active `MEDIA_DISPLAY` mode for the message (defaults to the global setting).
+
+### getMediaIndex
+
+```ts
+getMediaIndex(messageObj: ChatMessage): number
+```
+
+Returns the currently selected media index, clamped to a valid `0..media.length-1` range. Returns `0` when the index is out of range.
+
+### scrollChatToBottom
+
+```ts
+scrollChatToBottom(options?: { waitForFrame?: boolean }): void
+```
+
+Scrolls the chat to the bottom. No-op when the user has scrolled up and `auto_scroll_chat_to_bottom` is off. With `waitForFrame: true`, waits for `requestAnimationFrame` first to let layout settle.
+
+### scrollOnMediaLoad
+
+```ts
+scrollOnMediaLoad(): Promise<void>
+```
+
+Awaits the load events of all chat `<img>`/`<video>`/`<audio>` elements (with a timeout) and re-anchors scroll position once they finalize layout. Call after appending media so the chat doesn't jump.

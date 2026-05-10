@@ -419,3 +419,186 @@ const messages = context.buildPresetAwarePromptMessages({
 ```
 
 It arranges your messages according to the active prompt preset's `prompt_order`, optionally injecting the character card and world info entries. See [Presets & Prompts](/development/extension-api/presets-and-prompts) for assembly details.
+
+### generateRaw
+
+```ts
+generateRaw(params: {
+    prompt?: string,
+    api?: string | null,
+    instructOverride?: boolean,
+    quietToLoud?: boolean,
+    systemPrompt?: string,
+    responseLength?: number | null,
+    trimNames?: boolean,
+    prefill?: string,
+    jsonSchema?: object | null,
+    llmPresetName?: string,
+    apiPresetName?: string,
+    apiSettingsOverride?: object | null,
+}): Promise<string>
+```
+
+Sends a literal `prompt` to the active backend without involving chat history, world info, character card, or extension prompts. Returns the post-processed response text. Use this for utility calls — titling, classification, rewrites — where you want full control over the input.
+
+### generateRawData
+
+Same parameters as `generateRaw` but returns the raw API response object instead of a post-processed string. Use when you need fields like `reasoning` that `generateRaw` collapses away.
+
+### generateQuietPrompt
+
+```ts
+generateQuietPrompt(params: {
+    quietPrompt?: string,
+    quietToLoud?: boolean,
+    skipWIAN?: boolean,
+    quietImage?: string | null,
+    quietName?: string | null,
+    responseLength?: number | null,
+    forceChId?: number | null,
+    jsonSchema?: object | null,
+    removeReasoning?: boolean,
+    trimToSentence?: boolean,
+}): Promise<string>
+```
+
+Runs a "quiet" generation that reuses the live chat context (history, persona, world info, etc.) but injects `quietPrompt` as a final user instruction. Result is returned silently unless `quietToLoud` is set.
+
+| Parameter | Description |
+|------|------|
+| `quietPrompt` | The user-side instruction injected as the final user message |
+| `quietToLoud` | If `true`, the result is shown in the chat instead of returned silently |
+| `skipWIAN` | Skip world info / author's note injection |
+| `quietImage` | Image data URL for multimodal calls |
+| `quietName` | Sender name (defaults to `'System:'`) |
+| `responseLength` | Override max tokens for this call only |
+| `forceChId` | In group chats, bind to a particular member's persona |
+| `jsonSchema` | Structured-output schema; result becomes serialized JSON |
+| `removeReasoning` | Strip reasoning block per current template |
+| `trimToSentence` | Clip to last full sentence |
+
+### generateRaw vs generateQuietPrompt
+
+| | `generateRaw` | `generateQuietPrompt` |
+|------|------|------|
+| Chat context | Bypassed | Reused |
+| World info | Off | Applied (unless `skipWIAN`) |
+| Character card | Off | Applied |
+| Use for | Independent utility (title, classify) | Sidebar / silent in-character generation |
+
+### sendStreamingRequest
+
+```ts
+sendStreamingRequest(type: string, data: object, options?: object): AsyncGenerator
+```
+
+Streaming counterpart to `sendOpenAIRequest`. Throws if the abort signal is already aborted. Fires `event_types.GENERATION_BEFORE_API_REQUEST` with `stream: true` so plugins can mutate the request before send. Returns an async generator.
+
+### sendGenerationRequest
+
+```ts
+sendGenerationRequest(type: string, data: object, options?: object): Promise<object>
+```
+
+Non-streaming low-level dispatcher. Routes by `mainApi` to the appropriate sender (`sendOpenAIRequest`, `generateHorde`, or text-completion backends). Most plugins should not need this — `generateTask` covers the common cases.
+
+### stopGeneration
+
+```ts
+stopGeneration(): boolean
+```
+
+Cancels in-flight generations. Aborts the active controller, dismisses progress notifications, and returns whether anything was actually stopped.
+
+### streamingProcessor
+
+```ts
+context.streamingProcessor: StreamingProcessor | null
+```
+
+Live handle to the in-progress streaming generation. `null` when no stream is active. Read it to detect or inspect ongoing streams; do not mutate it directly.
+
+## Service Classes
+
+Three class-as-namespace helpers expose request lifecycles without going through `Generate`. Use them when you need direct control over a chat-completion or text-completion backend (e.g., custom retry logic, custom token accounting).
+
+### ChatCompletionService
+
+```ts
+ChatCompletionService.createRequestData(custom: object): object
+ChatCompletionService.sendRequest(data: object, extractData?: boolean, signal?: AbortSignal): Promise<{ content, reasoning } | object | AsyncGenerator>
+ChatCompletionService.processRequest(requestData: object, options: object, extractData?: boolean, signal?: AbortSignal): Promise<...>
+```
+
+Wraps the `/api/backends/chat-completions/generate` endpoint. `processRequest` adds named-preset application via `getPresetManager('openai')`.
+
+Non-stream returns `{ content, reasoning }` (or raw JSON when `extractData: false`). Stream returns an async-generator factory yielding `{ text, swipes, state }`.
+
+### TextCompletionService
+
+```ts
+TextCompletionService.createRequestData({ stream, prompt, ... }): object
+TextCompletionService.sendRequest(data, extractData?, signal?): Promise<...>
+TextCompletionService.constructPrompt(prompt: ChatMessage[], instructPreset, instructSettings): string
+TextCompletionService.processRequest(requestData, options, extractData?, signal?): Promise<...>
+```
+
+Mirror of `ChatCompletionService` for text-completion backends. `constructPrompt` formats a chat-message array into a single instruct-formatted string.
+
+### ConnectionManagerRequestService
+
+```ts
+ConnectionManagerRequestService.sendRequest(
+    profileId: string,
+    prompt: string | ChatMessage[],
+    maxTokens: number,
+    custom?: { stream?, signal?, extractData?, includePreset?, includeInstruct?, instructSettings? },
+    overridePayload?: object,
+): Promise<{ content, reasoning } | AsyncGenerator>
+
+ConnectionManagerRequestService.constructPrompt(prompt, profileId, instructSettings?): string
+ConnectionManagerRequestService.getSupportedProfiles(): Profile[]
+ConnectionManagerRequestService.getProfile(profileId): Profile | null
+ConnectionManagerRequestService.getProfileIcon(profileId?): string
+ConnectionManagerRequestService.getAllowedTypes(): { openai, textgenerationwebui }
+```
+
+Sends a generation through a Connection Manager profile by id, regardless of which profile is currently active in the UI. Throws `'Connection Manager is not available'` when the Connection Manager extension is disabled.
+
+```js
+const ctx = Luker.getContext();
+const result = await ctx.ConnectionManagerRequestService.sendRequest(
+    settings.profileId,
+    [
+        { role: 'system', content: 'You are a translator.' },
+        { role: 'user', content: 'Hello, world!' },
+    ],
+    256,
+    { signal: controller.signal },
+);
+console.log(result.content);
+```
+
+::: tip generateTask vs Service classes
+`generateTask` covers profile resolution + envelope assembly + WI activation + family dispatch in a single call. Use a Service class only when you need explicit control over message construction (e.g., raw text-completion strings) or you want to bypass envelope/WI entirely.
+:::
+
+## Response Helpers
+
+### extractMessageFromData
+
+```ts
+extractMessageFromData(data: object | string): string
+```
+
+Extracts the assistant text from a backend response object. Handles the multiple shapes returned by different backends (OpenAI, Anthropic, Cohere, KoboldAI, NovelAI, etc.). Returns the input unchanged when given a string.
+
+Use this when working with `sendGenerationRequest` or service-class outputs that are not pre-extracted.
+
+### getChatCompletionModel
+
+```ts
+getChatCompletionModel(): string
+```
+
+Returns the model identifier currently selected for chat completion (e.g., `'claude-opus-4-7'`, `'gpt-4o'`). Reads from the active connection profile's settings.

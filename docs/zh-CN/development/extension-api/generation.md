@@ -419,3 +419,186 @@ const messages = context.buildPresetAwarePromptMessages({
 ```
 
 它按照当前 prompt 预设的 `prompt_order` 排列消息,可选地注入角色卡和世界书条目。组装详情见 [预设与提示词](/zh-CN/development/extension-api/presets-and-prompts)。
+
+### generateRaw
+
+```ts
+generateRaw(params: {
+    prompt?: string,
+    api?: string | null,
+    instructOverride?: boolean,
+    quietToLoud?: boolean,
+    systemPrompt?: string,
+    responseLength?: number | null,
+    trimNames?: boolean,
+    prefill?: string,
+    jsonSchema?: object | null,
+    llmPresetName?: string,
+    apiPresetName?: string,
+    apiSettingsOverride?: object | null,
+}): Promise<string>
+```
+
+把字面量 `prompt` 直接发给当前后端，不涉及聊天历史、世界书、角色卡或扩展 prompt。返回经过后处理的响应文本。适合工具类调用——拟标题、分类、改写——这种你想完全控制输入的场景。
+
+### generateRawData
+
+参数与 `generateRaw` 相同，但返回原始 API 响应对象而非后处理后的字符串。当你需要 `generateRaw` 折叠掉的 `reasoning` 之类字段时用。
+
+### generateQuietPrompt
+
+```ts
+generateQuietPrompt(params: {
+    quietPrompt?: string,
+    quietToLoud?: boolean,
+    skipWIAN?: boolean,
+    quietImage?: string | null,
+    quietName?: string | null,
+    responseLength?: number | null,
+    forceChId?: number | null,
+    jsonSchema?: object | null,
+    removeReasoning?: boolean,
+    trimToSentence?: boolean,
+}): Promise<string>
+```
+
+执行一次「quiet」生成，复用当前聊天上下文（历史、persona、世界书等），同时把 `quietPrompt` 作为最后一条用户指令注入。结果默认静默返回，除非设置 `quietToLoud`。
+
+| 参数 | 说明 |
+|------|------|
+| `quietPrompt` | 作为最后一条用户消息注入的用户侧指令 |
+| `quietToLoud` | 为 `true` 时把结果显示在聊天里而非静默返回 |
+| `skipWIAN` | 跳过世界书 / Author's Note 注入 |
+| `quietImage` | 多模态调用使用的图片 data URL |
+| `quietName` | 发送者名称（默认 `'System:'`） |
+| `responseLength` | 仅本次调用覆盖最大 token 数 |
+| `forceChId` | 群聊中绑定到特定成员的 persona |
+| `jsonSchema` | 结构化输出 schema；结果变成序列化 JSON |
+| `removeReasoning` | 按当前模板剥离 reasoning 块 |
+| `trimToSentence` | 截到最后一个完整句子 |
+
+### generateRaw vs generateQuietPrompt
+
+| | `generateRaw` | `generateQuietPrompt` |
+|------|------|------|
+| 聊天上下文 | 跳过 | 复用 |
+| 世界书 | 关 | 应用（除非 `skipWIAN`） |
+| 角色卡 | 关 | 应用 |
+| 适用场景 | 独立工具（标题、分类） | 边栏 / 静默的角色内生成 |
+
+### sendStreamingRequest
+
+```ts
+sendStreamingRequest(type: string, data: object, options?: object): AsyncGenerator
+```
+
+`sendOpenAIRequest` 的流式对应版本。中止信号已被中止时会抛错。会触发 `event_types.GENERATION_BEFORE_API_REQUEST`，`stream: true`，让插件在发送前修改请求。返回一个异步 generator。
+
+### sendGenerationRequest
+
+```ts
+sendGenerationRequest(type: string, data: object, options?: object): Promise<object>
+```
+
+非流式底层 dispatcher。按 `mainApi` 路由到对应 sender（`sendOpenAIRequest`、`generateHorde` 或 text-completion 后端）。大多数插件不需要——`generateTask` 已经覆盖了常见场景。
+
+### stopGeneration
+
+```ts
+stopGeneration(): boolean
+```
+
+取消进行中的生成。中止活动 controller、关闭进度通知，返回是否真的停掉了什么。
+
+### streamingProcessor
+
+```ts
+context.streamingProcessor: StreamingProcessor | null
+```
+
+进行中流式生成的活引用。无活动流时为 `null`。可用于探测或检视进行中的流；不要直接修改它。
+
+## Service 类
+
+三个「类即命名空间」的辅助类，暴露请求生命周期，绕开 `Generate`。当你需要直接控制 chat-completion 或 text-completion 后端时使用（例如自定义重试逻辑、自定义 token 计费）。
+
+### ChatCompletionService
+
+```ts
+ChatCompletionService.createRequestData(custom: object): object
+ChatCompletionService.sendRequest(data: object, extractData?: boolean, signal?: AbortSignal): Promise<{ content, reasoning } | object | AsyncGenerator>
+ChatCompletionService.processRequest(requestData: object, options: object, extractData?: boolean, signal?: AbortSignal): Promise<...>
+```
+
+封装 `/api/backends/chat-completions/generate` 端点。`processRequest` 通过 `getPresetManager('openai')` 增加了具名预设的应用。
+
+非流式返回 `{ content, reasoning }`（`extractData: false` 时返回原始 JSON）。流式返回一个产出 `{ text, swipes, state }` 的异步 generator 工厂。
+
+### TextCompletionService
+
+```ts
+TextCompletionService.createRequestData({ stream, prompt, ... }): object
+TextCompletionService.sendRequest(data, extractData?, signal?): Promise<...>
+TextCompletionService.constructPrompt(prompt: ChatMessage[], instructPreset, instructSettings): string
+TextCompletionService.processRequest(requestData, options, extractData?, signal?): Promise<...>
+```
+
+`ChatCompletionService` 的 text-completion 后端版本。`constructPrompt` 把消息数组格式化成单一的 instruct 格式字符串。
+
+### ConnectionManagerRequestService
+
+```ts
+ConnectionManagerRequestService.sendRequest(
+    profileId: string,
+    prompt: string | ChatMessage[],
+    maxTokens: number,
+    custom?: { stream?, signal?, extractData?, includePreset?, includeInstruct?, instructSettings? },
+    overridePayload?: object,
+): Promise<{ content, reasoning } | AsyncGenerator>
+
+ConnectionManagerRequestService.constructPrompt(prompt, profileId, instructSettings?): string
+ConnectionManagerRequestService.getSupportedProfiles(): Profile[]
+ConnectionManagerRequestService.getProfile(profileId): Profile | null
+ConnectionManagerRequestService.getProfileIcon(profileId?): string
+ConnectionManagerRequestService.getAllowedTypes(): { openai, textgenerationwebui }
+```
+
+通过指定 id 的 Connection Manager profile 发起一次生成，与 UI 当前活动的 profile 无关。Connection Manager 扩展未启用时抛出 `'Connection Manager is not available'`。
+
+```js
+const ctx = Luker.getContext();
+const result = await ctx.ConnectionManagerRequestService.sendRequest(
+    settings.profileId,
+    [
+        { role: 'system', content: 'You are a translator.' },
+        { role: 'user', content: 'Hello, world!' },
+    ],
+    256,
+    { signal: controller.signal },
+);
+console.log(result.content);
+```
+
+::: tip generateTask vs Service 类
+`generateTask` 一次调用涵盖 profile 解析 + envelope 组装 + WI 激活 + 家族分发。只有当你需要显式控制消息构建（例如裸 text-completion 字符串）或想完全绕开 envelope / WI 时才用 Service 类。
+:::
+
+## 响应辅助函数
+
+### extractMessageFromData
+
+```ts
+extractMessageFromData(data: object | string): string
+```
+
+从后端响应对象中提取助手文本。处理不同后端（OpenAI、Anthropic、Cohere、KoboldAI、NovelAI 等）返回的多种结构。传入字符串时原样返回。
+
+在使用 `sendGenerationRequest` 或未预先提取的 service 类输出时使用。
+
+### getChatCompletionModel
+
+```ts
+getChatCompletionModel(): string
+```
+
+返回当前为 chat completion 选中的模型标识（例如 `'claude-opus-4-7'`、`'gpt-4o'`）。从当前活动 connection profile 的设置读取。
