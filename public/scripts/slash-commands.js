@@ -2205,7 +2205,7 @@ export function initDefaultSlashCommands() {
                     <pre><code>/echo color=purple This message is purple</code></pre>
                 </li>
                 <li>
-                    <pre><code>/echo onClick={: /echo escapeHtml=false color=transparent cssClass=wider_dialogue_popup &lt;img src="/img/five.png" /&gt; :} timeout=5000 Clicking on this message within 5 seconds will open the image.</code></pre>
+                    <pre><code>/echo onClick={: /echo escapeHtml=false color=transparent cssClass=wider_dialogue_popup &lt;img src="/img/logo.png" /&gt; :} timeout=5000 Clicking on this message within 5 seconds will open the image.</code></pre>
                 </li>
             </ul>
         </div>

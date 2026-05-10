@@ -783,7 +783,7 @@ let primedCharacters = null;
 export let this_chid;
 let saveCharactersPage = 0;
 export const default_avatar = 'img/ai4.png';
-export const system_avatar = 'img/five.png';
+export const system_avatar = 'img/logo.png';
 export const comment_avatar = 'img/quill.png';
 export const default_user_avatar = 'img/user-default.png';
 export let CLIENT_VERSION = 'Luker:UNKNOWN:Cohee#1207'; // For Horde header
