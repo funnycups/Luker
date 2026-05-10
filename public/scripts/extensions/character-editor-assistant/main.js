@@ -17,7 +17,8 @@ import { DOMPurify } from '../../../lib.js';
 import { extension_settings, getContext, getCharacterState, setCharacterState } from '../../extensions.js';
 import { addLocaleData, translate } from '../../i18n.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../popup.js';
-import { convertCharacterBook, deleteWorldInfo, newWorldInfoEntryTemplate, setWorldInfoButtonClass, updateWorldInfoList } from '../../world-info.js';
+import { convertCharacterBook, deleteWorldInfo, newWorldInfoEntryTemplate, setWorldInfoButtonClass, updateWorldInfoList, getCharaAuxWorlds, getChatWorldInfoNames, selected_world_info } from '../../world-info.js';
+import { getCharaFilename } from '../../utils.js';
 import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import {
     TOOL_PROTOCOL_STYLE,
@@ -39,6 +40,7 @@ const TOOL_NAMES = Object.freeze({
     QUERY_ENTRIES: 'luker_card_query_lorebook_entries',
     GET_ENTRIES: 'luker_card_get_lorebook_entries',
     SIMULATE_PROMPT: 'luker_card_simulate_prompt',
+    LIST_WORLD_BOOKS: 'luker_card_list_world_books',
 });
 const CHARACTER_EDITOR_QUERY_LIMIT_DEFAULT = 10;
 const CHARACTER_EDITOR_QUERY_LIMIT_MAX = 20;
@@ -1586,7 +1588,22 @@ async function loadCharacterEditorPrimaryLorebookState(context, { avatar = '' } 
     };
 }
 
-async function queryCharacterEditorLorebookEntries(context, args = {}, { avatar = '' } = {}) {
+async function loadCharacterEditorLorebookByName(context, bookName) {
+    const trimmed = String(bookName || '').trim();
+    if (!trimmed) {
+        throw new Error('book_name is required.');
+    }
+    const allBooks = typeof context?.getWorldInfoNames === 'function'
+        ? context.getWorldInfoNames()
+        : [];
+    if (Array.isArray(allBooks) && allBooks.length > 0 && !allBooks.includes(trimmed)) {
+        throw new Error(`World book "${trimmed}" not found.`);
+    }
+    const lorebookData = await loadLorebookData(context, trimmed);
+    return { bookName: trimmed, lorebookData };
+}
+
+async function queryCharacterEditorLorebookEntries(context, args = {}) {
     const queryText = normalizeText(args?.text ?? '');
     const searchMode = normalizeCharacterEditorSearchMode(args?.search_mode);
     const hasConstantFilter = typeof args?.constant === 'boolean';
@@ -1595,17 +1612,10 @@ async function queryCharacterEditorLorebookEntries(context, args = {}, { avatar 
         throw new Error(`${TOOL_NAMES.QUERY_ENTRIES} requires text, constant, or enabled.`);
     }
     const limit = normalizeCharacterEditorQueryLimit(args?.limit);
-    const state = await loadCharacterEditorPrimaryLorebookState(context, { avatar });
+    const state = await loadCharacterEditorLorebookByName(context, args?.book_name);
     const entries = state?.lorebookData?.entries && typeof state.lorebookData.entries === 'object'
         ? state.lorebookData.entries
         : {};
-    if (!state.bookName) {
-        return {
-            book_name: '',
-            total_hits: 0,
-            entries: [],
-        };
-    }
 
     const hits = [];
     const uids = Array.from(collectLorebookEntryUids(entries).values()).sort((a, b) => a - b);
@@ -1659,21 +1669,12 @@ async function queryCharacterEditorLorebookEntries(context, args = {}, { avatar 
     };
 }
 
-async function listCharacterEditorLorebookEntries(context, args = {}, { avatar = '' } = {}) {
+async function listCharacterEditorLorebookEntries(context, args = {}) {
     const range = normalizeCharacterEditorLorebookUidRange(args?.range);
-    const state = await loadCharacterEditorPrimaryLorebookState(context, { avatar });
+    const state = await loadCharacterEditorLorebookByName(context, args?.book_name);
     const entries = state?.lorebookData?.entries && typeof state.lorebookData.entries === 'object'
         ? state.lorebookData.entries
         : {};
-    if (!state.bookName) {
-        return {
-            book_name: '',
-            total_entries: 0,
-            returned_entries: 0,
-            range: range ? { start_uid: range.start, end_uid: range.end } : null,
-            entries: [],
-        };
-    }
 
     const uids = Array.from(collectLorebookEntryUids(entries).values()).sort((a, b) => a - b);
     const filteredUids = range
@@ -1689,22 +1690,15 @@ async function listCharacterEditorLorebookEntries(context, args = {}, { avatar =
     };
 }
 
-async function getCharacterEditorLorebookEntries(context, args = {}, { avatar = '' } = {}) {
+async function getCharacterEditorLorebookEntries(context, args = {}) {
     const uids = normalizeCharacterEditorDetailUids(args?.uids);
     if (uids.length === 0) {
         throw new Error(`${TOOL_NAMES.GET_ENTRIES} requires one or more valid uids.`);
     }
-    const state = await loadCharacterEditorPrimaryLorebookState(context, { avatar });
+    const state = await loadCharacterEditorLorebookByName(context, args?.book_name);
     const entries = state?.lorebookData?.entries && typeof state.lorebookData.entries === 'object'
         ? state.lorebookData.entries
         : {};
-    if (!state.bookName) {
-        return {
-            book_name: '',
-            entries: [],
-            missing_uids: uids,
-        };
-    }
 
     const output = [];
     const missing = [];
@@ -1740,15 +1734,20 @@ function createCharacterEditorLorebookToolApi(context, { avatar = '' } = {}) {
                 type: 'function',
                 function: {
                     name: toolNames.LIST,
-                    description: 'List compact lorebook entry index rows for the current primary lorebook. Returns only uid, name, and enabled. Optional range narrows the inclusive UID window, for example 0~100. Omit range to list all entries.',
+                    description: `List compact lorebook entry index rows for a world book. Returns only uid, name, and enabled. Call ${TOOL_NAMES.LIST_WORLD_BOOKS} first to know which book names exist. Optional range narrows the inclusive UID window, for example 0~100.`,
                     parameters: {
                         type: 'object',
                         properties: {
+                            book_name: {
+                                type: 'string',
+                                description: 'Required. Target world book. Must match a name returned by list_world_books.',
+                            },
                             range: {
                                 type: 'string',
                                 description: 'Optional inclusive UID range such as 0~100, 50~, ~100, or a single uid like 42.',
                             },
                         },
+                        required: ['book_name'],
                         additionalProperties: false,
                     },
                 },
@@ -1757,10 +1756,14 @@ function createCharacterEditorLorebookToolApi(context, { avatar = '' } = {}) {
                 type: 'function',
                 function: {
                     name: toolNames.QUERY,
-                    description: 'Search the current character primary lorebook and return lightweight matching entries. Use this before requesting full entry content.',
+                    description: `Search a world book and return lightweight matching entries. Call ${TOOL_NAMES.LIST_WORLD_BOOKS} first to know which book names exist. Use this before ${toolNames.GET} to narrow candidates.`,
                     parameters: {
                         type: 'object',
                         properties: {
+                            book_name: {
+                                type: 'string',
+                                description: 'Required. Target world book.',
+                            },
                             text: { type: 'string' },
                             search_mode: {
                                 type: 'string',
@@ -1770,6 +1773,7 @@ function createCharacterEditorLorebookToolApi(context, { avatar = '' } = {}) {
                             enabled: { type: 'boolean' },
                             limit: { type: 'integer', minimum: 1, maximum: CHARACTER_EDITOR_QUERY_LIMIT_MAX },
                         },
+                        required: ['book_name'],
                         additionalProperties: false,
                     },
                 },
@@ -1778,10 +1782,14 @@ function createCharacterEditorLorebookToolApi(context, { avatar = '' } = {}) {
                 type: 'function',
                 function: {
                     name: toolNames.GET,
-                    description: `Fetch full current primary lorebook entries by uid after narrowing candidates with ${toolNames.QUERY}.`,
+                    description: `Fetch full lorebook entries from a world book by uid after narrowing candidates with ${toolNames.QUERY}.`,
                     parameters: {
                         type: 'object',
                         properties: {
+                            book_name: {
+                                type: 'string',
+                                description: 'Required. Target world book.',
+                            },
                             uids: {
                                 type: 'array',
                                 items: { type: 'integer' },
@@ -1789,7 +1797,7 @@ function createCharacterEditorLorebookToolApi(context, { avatar = '' } = {}) {
                                 maxItems: CHARACTER_EDITOR_DETAIL_LIMIT_MAX,
                             },
                         },
-                        required: ['uids'],
+                        required: ['book_name', 'uids'],
                         additionalProperties: false,
                     },
                 },
@@ -1803,13 +1811,13 @@ function createCharacterEditorLorebookToolApi(context, { avatar = '' } = {}) {
             const name = String(call?.name || '').trim();
             const args = call?.args && typeof call.args === 'object' ? call.args : {};
             if (name === toolNames.LIST) {
-                return await listCharacterEditorLorebookEntries(context, args, { avatar });
+                return await listCharacterEditorLorebookEntries(context, args);
             }
             if (name === toolNames.QUERY) {
-                return await queryCharacterEditorLorebookEntries(context, args, { avatar });
+                return await queryCharacterEditorLorebookEntries(context, args);
             }
             if (name === toolNames.GET) {
-                return await getCharacterEditorLorebookEntries(context, args, { avatar });
+                return await getCharacterEditorLorebookEntries(context, args);
             }
             throw new Error(`Unsupported character editor lorebook tool: ${name}`);
         },
@@ -1934,6 +1942,63 @@ function clipLorebookDebugText(value, maxLength = 80) {
         return text;
     }
     return `${text.slice(0, maxLength)}…`;
+}
+
+function createCharacterEditorWorldBookListToolApi(context, { avatar = '' } = {}) {
+    const toolNames = Object.freeze({
+        LIST_WORLD_BOOKS: TOOL_NAMES.LIST_WORLD_BOOKS,
+    });
+    return {
+        toolNames,
+        getToolDefs: () => [
+            {
+                type: 'function',
+                function: {
+                    name: toolNames.LIST_WORLD_BOOKS,
+                    description: 'List world book names visible to the character being edited, tagged with their scope. Sources: \'character\' (the card\'s primary book at character.data.extensions.world), \'character_aux\' (auxiliary books bound via Luker\'s lorebook editor at world_info.charLore[].extraBooks), \'chat\' (chat-bound books from chat_metadata.world_info — only the active chat), and \'global\' (selected_world_info — books active for every chat). Returns { books: string[], sources: { [name]: scope } } so you can tell which scope owns each book without inspecting the card directly.',
+                    parameters: {
+                        type: 'object',
+                        properties: {},
+                        additionalProperties: false,
+                    },
+                },
+            },
+        ],
+        isToolName: (name) => String(name || '').trim() === toolNames.LIST_WORLD_BOOKS,
+        invoke: async () => {
+            const characters = Array.isArray(context?.characters) ? context.characters : [];
+            const preferredAvatar = String(avatar || '').trim();
+            const character = preferredAvatar
+                ? characters.find(item => String(item?.avatar || '').trim() === preferredAvatar)
+                : characters[context?.characterId];
+
+            const books = [];
+            const sources = {};
+            const push = (name, source) => {
+                const trimmed = String(name || '').trim();
+                if (!trimmed || sources[trimmed]) return;
+                sources[trimmed] = source;
+                books.push(trimmed);
+            };
+
+            push(character?.data?.extensions?.world, 'character');
+
+            const fileName = character?.avatar
+                ? getCharaFilename(null, { manualAvatarKey: character.avatar })
+                : '';
+            for (const name of getCharaAuxWorlds(fileName)) push(name, 'character_aux');
+
+            try {
+                for (const name of getChatWorldInfoNames(context?.chatMetadata)) push(name, 'chat');
+            } catch { /* chat metadata may be unavailable */ }
+
+            if (Array.isArray(selected_world_info)) {
+                for (const name of selected_world_info) push(name, 'global');
+            }
+
+            return { books, sources };
+        },
+    };
 }
 
 function summarizeLorebookEntryForDebug(entry) {
@@ -3744,11 +3809,14 @@ function buildCharacterEditorModelTools({ helperToolApis = [] } = {}) {
             type: 'function',
             function: {
                 name: TOOL_NAMES.UPSERT_ENTRY,
-                description: 'Create or update one lorebook entry.',
+                description: `Create or update one lorebook entry in a world book. Call ${TOOL_NAMES.LIST_WORLD_BOOKS} first to know which book names exist.`,
                 parameters: {
                     type: 'object',
                     properties: {
-                        book_name: { type: 'string' },
+                        book_name: {
+                            type: 'string',
+                            description: 'Required. Target world book.',
+                        },
                         create_if_missing: { type: 'boolean' },
                         entry_uid: { type: 'integer' },
                         key_csv: { type: 'string' },
@@ -3763,7 +3831,7 @@ function buildCharacterEditorModelTools({ helperToolApis = [] } = {}) {
                         disable: { type: 'boolean' },
                         constant: { type: 'boolean' },
                     },
-                    required: ['entry_uid'],
+                    required: ['book_name', 'entry_uid'],
                     additionalProperties: false,
                 },
             },
@@ -3772,14 +3840,17 @@ function buildCharacterEditorModelTools({ helperToolApis = [] } = {}) {
             type: 'function',
             function: {
                 name: TOOL_NAMES.DELETE_ENTRY,
-                description: 'Delete one lorebook entry by UID.',
+                description: `Delete one lorebook entry by UID from a world book. Call ${TOOL_NAMES.LIST_WORLD_BOOKS} first to know which book names exist.`,
                 parameters: {
                     type: 'object',
                     properties: {
-                        book_name: { type: 'string' },
+                        book_name: {
+                            type: 'string',
+                            description: 'Required. Target world book.',
+                        },
                         entry_uid: { type: 'integer' },
                     },
-                    required: ['entry_uid'],
+                    required: ['book_name', 'entry_uid'],
                     additionalProperties: false,
                 },
             },
@@ -3833,15 +3904,17 @@ function normalizeCharacterEditorOperationsFromCalls(rawCalls) {
             if (!Number.isInteger(uid) || uid < 0) {
                 continue;
             }
-            const normalizedArgs = { entry_uid: uid };
+            const bookName = String(args.book_name || '').trim();
+            if (!bookName) {
+                continue;
+            }
+            const normalizedArgs = { entry_uid: uid, book_name: bookName };
             let hasPayload = false;
-            const passThrough = ['book_name', 'key_csv', 'secondary_key_csv', 'comment', 'content'];
+            const passThrough = ['key_csv', 'secondary_key_csv', 'comment', 'content'];
             for (const key of passThrough) {
                 if (Object.hasOwn(args, key)) {
                     normalizedArgs[key] = String(args[key] ?? '');
-                    if (key !== 'book_name') {
-                        hasPayload = true;
-                    }
+                    hasPayload = true;
                 }
             }
             const intFields = ['selective_logic', 'order', 'position', 'depth'];
@@ -3875,11 +3948,11 @@ function normalizeCharacterEditorOperationsFromCalls(rawCalls) {
             if (!Number.isInteger(uid) || uid < 0) {
                 continue;
             }
-            const normalizedArgs = { entry_uid: uid };
-            if (Object.hasOwn(args, 'book_name')) {
-                normalizedArgs.book_name = String(args.book_name ?? '');
+            const bookName = String(args.book_name || '').trim();
+            if (!bookName) {
+                continue;
             }
-            output.push({ kind: 'lorebook_delete_entry', args: normalizedArgs });
+            output.push({ kind: 'lorebook_delete_entry', args: { entry_uid: uid, book_name: bookName } });
         }
     }
     return output;
@@ -3955,11 +4028,13 @@ async function requestModelCharacterEditorConversationReply(context, conversatio
         .filter(item => (item.role === 'assistant' || item.role === 'user') && item.content);
     const lorebookToolApi = createCharacterEditorLorebookToolApi(context, { avatar });
     const simulateToolApi = createCharacterEditorSimulateToolApi(context);
+    const worldBookListToolApi = createCharacterEditorWorldBookListToolApi(context, { avatar });
     const searchApi = getCharacterEditorSearchApi();
     const hasSearchTools = Boolean(searchApi);
     const helperToolApis = [
         lorebookToolApi,
         simulateToolApi,
+        worldBookListToolApi,
         ...(searchApi ? [searchApi] : []),
     ];
     const modelTools = buildCharacterEditorModelTools({ helperToolApis });
@@ -3976,12 +4051,15 @@ async function requestModelCharacterEditorConversationReply(context, conversatio
         String(lorebookToolApi?.toolNames?.GET || '').trim(),
     ].filter(Boolean);
     const simulateToolName = String(simulateToolApi?.toolNames?.SIMULATE || '').trim();
+    const worldBookListToolName = String(worldBookListToolApi?.toolNames?.LIST_WORLD_BOOKS || '').trim();
     const systemPrompt = [
-        'You are editing the current character card and its primary lorebook.',
+        'You are editing the current character card and the world books visible to it.',
         'Continue the conversation naturally, and propose edits only when needed.',
         'Use tool calls for concrete edits.',
         `Available tools: ${availableToolNames.join(', ')}`,
-        `The primary lorebook is not included in full. ${lorebookToolNames[0]} returns only uid, name, and enabled as a compact index. Use ${lorebookToolNames[1]} or ${lorebookToolNames[2]} before editing lorebook entries that need entry-level details.`,
+        `World book tools all require a \`book_name\` argument. Call ${worldBookListToolName} first to enumerate the visible books and their scopes (\`character\` = card primary at extensions.world, \`character_aux\` = auxiliary books bound via Luker's lorebook editor, \`chat\` = active chat, \`global\` = every chat). Use the names returned there as \`book_name\` for the read and write tools below.`,
+        `Read tools: ${lorebookToolNames[0]} returns a compact uid/name/enabled index for one book. Use ${lorebookToolNames[1]} to keyword-search a book and ${lorebookToolNames[2]} to fetch full entries by uid after narrowing.`,
+        `Write tools (${TOOL_NAMES.UPSERT_ENTRY} / ${TOOL_NAMES.DELETE_ENTRY}) require \`book_name\` plus \`entry_uid\`. The card's primary book is the one tagged \`character\` in the scope map; you can also edit \`character_aux\` / \`chat\` / \`global\` books directly when the user asks.`,
         `${simulateToolName} can simulate current prompt assembly with world info and character card included.`,
         `For ${simulateToolName}, prefer the text argument so the tool appends that user text to the current chat. Use the messages array only when the user explicitly supplied structured records/messages.`,
         'If you call any helper tool in a round, do not emit edit tool calls in that same round.',
@@ -4013,6 +4091,7 @@ async function requestModelCharacterEditorConversationReply(context, conversatio
                 helper_tools_available: {
                     lorebook_query: true,
                     simulate_prompt: true,
+                    world_book_list: true,
                     web_search: hasSearchTools,
                 },
                 tool_round: round,
@@ -6120,7 +6199,7 @@ function registerTools(context) {
     context.registerFunctionTool({
         name: TOOL_NAMES.UPSERT_ENTRY,
         displayName: 'Upsert Lorebook Entry',
-        description: 'Create or update one lorebook entry in current character primary lorebook (or an explicit lorebook name).',
+        description: 'Create or update one lorebook entry in a named world book.',
         shouldRegister: async () => false,
         parameters: {
             type: 'object',
@@ -6140,6 +6219,7 @@ function registerTools(context) {
                 disable: { type: 'boolean' },
                 constant: { type: 'boolean' },
             },
+            required: ['book_name', 'entry_uid'],
             additionalProperties: false,
         },
         action: async (args) => await handleToolOperation('lorebook_upsert_entry', args),
@@ -6149,7 +6229,7 @@ function registerTools(context) {
     context.registerFunctionTool({
         name: TOOL_NAMES.DELETE_ENTRY,
         displayName: 'Delete Lorebook Entry',
-        description: 'Delete one lorebook entry by UID in current character primary lorebook (or an explicit lorebook name).',
+        description: 'Delete one lorebook entry by UID from a named world book.',
         shouldRegister: async () => false,
         parameters: {
             type: 'object',
@@ -6157,13 +6237,16 @@ function registerTools(context) {
                 book_name: { type: 'string' },
                 entry_uid: { type: 'integer' },
             },
-            required: ['entry_uid'],
+            required: ['book_name', 'entry_uid'],
             additionalProperties: false,
         },
         action: async (args) => {
             const normalizedArgs = args && typeof args === 'object' ? { ...args } : {};
             if (!Number.isInteger(asFiniteInteger(normalizedArgs.entry_uid, null))) {
                 throw new Error('entry_uid is required for deletion.');
+            }
+            if (!String(normalizedArgs.book_name || '').trim()) {
+                throw new Error('book_name is required for deletion.');
             }
             return await handleToolOperation('lorebook_delete_entry', normalizedArgs);
         },

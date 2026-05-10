@@ -12,7 +12,8 @@ import {
 } from '../../function-call-runtime.js';
 import { fetchFileList, fetchFileContent, saveFileContent, deleteFile, renameFile } from './studio.js';
 import { characters, this_chid, saveCharacterDebounced, saveMetadata, chat_metadata, getRequestHeaders } from '../../../../script.js';
-import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, createNewWorldInfo, world_names, selected_world_info, charUpdatePrimaryWorld, getChatWorldInfoNames, setChatWorldInfoSelection } from '../../../world-info.js';
+import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, createNewWorldInfo, world_names, selected_world_info, charUpdatePrimaryWorld, getChatWorldInfoNames, setChatWorldInfoSelection, getCharaAuxWorlds } from '../../../world-info.js';
+import { getCharaFilename } from '../../../utils.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { getContext } from '../../../st-context.js';
 import { extension_settings } from '../../../extensions.js';
@@ -51,6 +52,7 @@ const TOOL_NAMES = Object.freeze({
  CHARACTER_UPDATE_FIELDS: 'character_update_fields',
  WORLDINFO_LIST_BOOKS: 'worldinfo_list_books',
  WORLDINFO_GET_ENTRIES: 'worldinfo_get_entries',
+ WORLDINFO_SEARCH_ENTRIES: 'worldinfo_search_entries',
  WORLDINFO_CREATE_ENTRY: 'worldinfo_create_entry',
  WORLDINFO_UPDATE_ENTRY: 'worldinfo_update_entry',
  WORLDINFO_DELETE_ENTRY: 'worldinfo_delete_entry',
@@ -199,7 +201,7 @@ function buildTools() {
  type: 'function',
  function: {
  name: TOOL_NAMES.WORLDINFO_LIST_BOOKS,
- description: 'List world book names visible to the current character: character-bound (from character.data.extensions.world — the card\'s primary book), chat-bound (from chat_metadata.world_info — per-save state, resets on new chat), and globally activated (selected_world_info — every chat). Returns { books: string[], sources: { [name]: \'character\'|\'chat\'|\'global\' } } so you can tell which book lives at which scope. For chat-bound-only listing use worldinfo_get_chat_books.',
+ description: 'List world book names visible to the current character: character primary (from character.data.extensions.world — the card\'s primary book), character auxiliary (from world_info.charLore[].extraBooks — extra books bound via Luker\'s lorebook editor), chat-bound (from chat_metadata.world_info — per-save state, resets on new chat), and globally activated (selected_world_info — every chat). Returns { books: string[], sources: { [name]: \'character\'|\'character_aux\'|\'chat\'|\'global\' } } so you can tell which book lives at which scope. For chat-bound-only listing use worldinfo_get_chat_books.',
  parameters: { type: 'object', properties: {}, additionalProperties: false },
  },
  },
@@ -207,11 +209,30 @@ function buildTools() {
  type: 'function',
  function: {
  name: TOOL_NAMES.WORLDINFO_GET_ENTRIES,
- description: 'Get all entries from a world book. Returns entries as uid-keyed object.',
+ description: 'Get all entries from a world book. Returns entries as uid-keyed object. Heavy — for large books prefer worldinfo_search_entries to narrow first.',
  parameters: {
  type: 'object',
  properties: {
  book_name: { type: 'string', description: 'World book name' },
+ },
+ required: ['book_name'],
+ additionalProperties: false,
+ },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.WORLDINFO_SEARCH_ENTRIES,
+ description: 'Search entries inside one world book by keyword (case-insensitive substring match against comment, key, keysecondary, and content). Lightweight: returns uid, comment, keys, flags, and a content_preview (first 200 chars). Call worldinfo_get_entries afterwards only if you need full bodies. Optional constant/enabled filters narrow without text. Use worldinfo_list_books first to discover book names.',
+ parameters: {
+ type: 'object',
+ properties: {
+ book_name: { type: 'string', description: 'World book name to search inside.' },
+ text: { type: 'string', description: 'Case-insensitive substring to search for.' },
+ constant: { type: 'boolean', description: 'Filter to entries with constant=true/false.' },
+ enabled: { type: 'boolean', description: 'Filter to enabled (or disabled) entries.' },
+ limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Max hits returned. Default 20.' },
  },
  required: ['book_name'],
  additionalProperties: false,
@@ -840,6 +861,10 @@ async function executeTool(charId, toolName, args, options = {}) {
  case TOOL_NAMES.WORLDINFO_LIST_BOOKS: {
  const charData = characters[this_chid];
  const boundBook = String(charData?.data?.extensions?.world || '').trim();
+ const auxBooks = (() => {
+ const fileName = charData?.avatar ? getCharaFilename(null, { manualAvatarKey: charData.avatar }) : '';
+ return getCharaAuxWorlds(fileName);
+ })();
  const chatBooks = (() => {
  try { return getChatWorldInfoNames(chat_metadata); } catch { return []; }
  })();
@@ -853,6 +878,7 @@ async function executeTool(charId, toolName, args, options = {}) {
  books.push(trimmed);
  };
  push(boundBook, 'character');
+ for (const n of auxBooks) push(n, 'character_aux');
  for (const n of chatBooks) push(n, 'chat');
  for (const n of globalBooks) push(n, 'global');
  return { ok: true, books, sources };
@@ -861,6 +887,47 @@ async function executeTool(charId, toolName, args, options = {}) {
  const data = await loadWorldInfo(args.book_name);
  if (!data) return { ok: false, error: `World book "${args.book_name}" not found` };
  return { ok: true, entries: data.entries || {} };
+ }
+ case TOOL_NAMES.WORLDINFO_SEARCH_ENTRIES: {
+ const bookName = String(args.book_name || '').trim();
+ if (!bookName) return { ok: false, error: 'book_name is required' };
+ const data = await loadWorldInfo(bookName);
+ if (!data) return { ok: false, error: `World book "${bookName}" not found` };
+ const text = String(args.text || '').trim().toLowerCase();
+ const hasConstant = typeof args.constant === 'boolean';
+ const hasEnabled = typeof args.enabled === 'boolean';
+ if (!text && !hasConstant && !hasEnabled) {
+ return { ok: false, error: 'Provide at least one of: text, constant, enabled.' };
+ }
+ const limit = Math.max(1, Math.min(50, Number(args.limit) || 20));
+ const entries = data.entries && typeof data.entries === 'object' ? data.entries : {};
+ const hits = [];
+ for (const [uidStr, entry] of Object.entries(entries)) {
+ if (!entry || typeof entry !== 'object') continue;
+ if (hasConstant && Boolean(entry.constant) !== Boolean(args.constant)) continue;
+ const isEnabled = !entry.disable;
+ if (hasEnabled && isEnabled !== Boolean(args.enabled)) continue;
+ if (text) {
+ const haystack = [
+ String(entry.comment || ''),
+ ...(Array.isArray(entry.key) ? entry.key : []).map(String),
+ ...(Array.isArray(entry.keysecondary) ? entry.keysecondary : []).map(String),
+ String(entry.content || ''),
+ ].join('\n').toLowerCase();
+ if (!haystack.includes(text)) continue;
+ }
+ const content = String(entry.content || '');
+ hits.push({
+ uid: Number(uidStr),
+ comment: String(entry.comment || ''),
+ key: Array.isArray(entry.key) ? entry.key.slice() : [],
+ keysecondary: Array.isArray(entry.keysecondary) ? entry.keysecondary.slice() : [],
+ constant: Boolean(entry.constant),
+ enabled: isEnabled,
+ content_preview: content.length > 200 ? content.slice(0, 200) + '…' : content,
+ });
+ }
+ return { ok: true, book_name: bookName, total_hits: hits.length, returned_hits: Math.min(hits.length, limit), entries: hits.slice(0, limit) };
  }
  case TOOL_NAMES.WORLDINFO_CREATE_ENTRY: {
  const data = await loadWorldInfo(args.book_name);
@@ -1521,8 +1588,11 @@ exact slash command name, argument shape, or lukerContext property:
 ### World book + character-extension tools
 
 - **worldinfo_list_books** — Browse all visible books with a sources map
-  (\`'character'\`/\`'chat'\`/\`'global'\`) so you can see at a glance which
+  (\`'character'\`/\`'character_aux'\`/\`'chat'\`/\`'global'\`) so you can see at a glance which
   scope owns each one.
+- **worldinfo_search_entries** — Keyword-search inside one book by name. Lightweight rows
+  with comment, keys, flags, and a 200-char content_preview. Use this BEFORE \`worldinfo_get_entries\`
+  on any book you suspect is large — it avoids loading every entry.
 - **worldinfo_get_entries / worldinfo_create_entry / worldinfo_update_entry / worldinfo_delete_entry / worldinfo_replace_entries**
   — Read and mutate entries inside an **existing** book. \`worldinfo_create_entry\`
   does NOT auto-create books — it fails on a missing book name; create the file
@@ -1743,7 +1813,7 @@ Tools:
 
 - \`worldinfo_get_chat_books\` → string[] of names currently bound to this chat
 - \`worldinfo_set_chat_books({names: [...]})\` → full replacement (empty array clears)
-- \`worldinfo_list_books\` returns a \`sources\` map labeling each visible book \`'character'\` / \`'chat'\` / \`'global'\` so you can tell at a glance which scope owns it.
+- \`worldinfo_list_books\` returns a \`sources\` map labeling each visible book \`'character'\` / \`'character_aux'\` / \`'chat'\` / \`'global'\` so you can tell at a glance which scope owns it.
 
 To create a NEW chat-bound book: call \`worldinfo_create_chat_book({book_name: "..."})\` — it creates the file AND binds it to the current chat in one shot (idempotent: a name that already exists is just bound). Book file persists; the chat binding resets on new chat. After that, use the entry tools (\`worldinfo_create_entry\` / \`worldinfo_update_entry\` / \`worldinfo_replace_entries\`) to populate it.
 
