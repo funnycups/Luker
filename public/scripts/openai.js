@@ -110,6 +110,7 @@ import {
     validateParsedToolCalls,
 } from './extensions/function-call-runtime.js';
 import { syncNanoGptProvidersForModel, syncOpenRouterProvidersForModel, updateNanoGptProvidersWarning, updateOpenRouterProvidersWarning } from './textgen-models.js';
+import { unescapeMacroBracesInRequestData } from './macros/util/escape.js';
 
 export {
     openai_messages_count,
@@ -3768,7 +3769,7 @@ function applyParsedPlainTextToolCallsToResponse(responseData, inspection) {
 async function postChatCompletionGenerateRequest(requestBody, signal, { quietErrors = false } = {}) {
     const response = await fetch('/api/backends/chat-completions/generate', {
         method: 'POST',
-        body: JSON.stringify(requestBody),
+        body: JSON.stringify(unescapeMacroBracesInRequestData(requestBody)),
         headers: getRequestHeaders(),
         signal,
     });

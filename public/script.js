@@ -5156,7 +5156,7 @@ export function substituteParams(content, options = {}) {
     });
 
     const env = MacroEnvBuilder.buildFromRawEnv(ctx);
-    const result = MacroEngine.evaluate(content, env, { keepEscapes: !!options.keepEscapes });
+    const result = MacroEngine.evaluate(content, env);
     return result;
 }
 
@@ -5469,11 +5469,7 @@ export async function getExtensionPrompt(position = extension_prompt_types.IN_PR
         values = values + separator;
     }
     if (values.length) {
-        // keepEscapes:true preserves `\{{...}}` teaching examples through this
-        // intermediate substitute. The final prompt-assembly substitute downstream
-        // (PromptManager.preparePrompt / similar) is what actually strips the
-        // backslashes so the LLM sees `{{...}}` literal.
-        values = substituteParams(values, { keepEscapes: true });
+        values = substituteParams(values);
     }
     return values;
 }

@@ -22,6 +22,7 @@ import {
 } from './power-user.js';
 import { getEventSourceStream } from './sse-stream.js';
 import { buildPresetNameIndexMap, getOrderedPresetNames, getSortableDelay, versionCompare } from './utils.js';
+import { unescapeMacroBracesInRequestData } from './macros/util/escape.js';
 
 export let koboldai_settings;
 export let koboldai_setting_names;
@@ -231,7 +232,7 @@ function tryParseStreamingError(response, decoded) {
 export async function generateKoboldWithStreaming(generate_data, signal, { onLukerMeta = null } = {}) {
     const response = await fetch('/api/backends/kobold/generate', {
         headers: getRequestHeaders(),
-        body: JSON.stringify(generate_data),
+        body: JSON.stringify(unescapeMacroBracesInRequestData(generate_data)),
         method: 'POST',
         signal: signal,
     });

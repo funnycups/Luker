@@ -4,6 +4,7 @@ import { getTextGenServer, createTextGenGenerationData, setting_names, textgener
 import { extractReasoningFromData } from './reasoning.js';
 import { formatInstructModeChat, formatInstructModePrompt, getInstructStoppingSequences } from './instruct-mode.js';
 import { getStreamingReply, tryParseStreamingError, createGenerationParameters, isOpenAIConnectionPresetField, settingsToUpdate, oai_settings } from './openai.js';
+import { unescapeMacroBracesInRequestData } from './macros/util/escape.js';
 import EventSourceStream from './sse-stream.js';
 
 // #region Type Definitions
@@ -116,12 +117,13 @@ export class TextCompletionService {
      * @throws {Error}
      */
     static async sendRequest(data, extractData = true, signal = null) {
+        const sanitizedData = unescapeMacroBracesInRequestData(data);
         if (!data.stream) {
             const response = await fetch(getGenerateUrl(this.TYPE), {
                 method: 'POST',
                 headers: getRequestHeaders(),
                 cache: 'no-cache',
-                body: JSON.stringify(data),
+                body: JSON.stringify(sanitizedData),
                 signal: signal ?? new AbortController().signal,
             });
 
@@ -148,7 +150,7 @@ export class TextCompletionService {
             method: 'POST',
             headers: getRequestHeaders(),
             cache: 'no-cache',
-            body: JSON.stringify(data),
+            body: JSON.stringify(sanitizedData),
             signal: signal ?? new AbortController().signal,
         });
 
@@ -464,7 +466,7 @@ export class ChatCompletionService {
             method: 'POST',
             headers: getRequestHeaders(),
             cache: 'no-cache',
-            body: JSON.stringify(data),
+            body: JSON.stringify(unescapeMacroBracesInRequestData(data)),
             signal: signal ?? new AbortController().signal,
         });
 

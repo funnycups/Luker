@@ -723,9 +723,14 @@ export function evaluateMacros(content, env, postProcessFn) {
         }
     }
 
-    // Restore escaped macro openers from sentinel back to literal `{{`.
+    // Restore escaped macro openers from sentinel back to literal `\{{`.
+    // The leading backslash is preserved so escape state survives any number
+    // of intermediate substituteParams passes — the single final unescape
+    // happens at the generation request boundary (see
+    // public/scripts/macros/util/escape.js). This matches the new MacroEngine
+    // behavior where `\{` / `\}` are also kept until sink-stage strip.
     if (content.includes(ESCAPE_SENTINEL)) {
-        content = content.split(ESCAPE_SENTINEL).join('{{');
+        content = content.split(ESCAPE_SENTINEL).join('\\{{');
     }
 
     return content;

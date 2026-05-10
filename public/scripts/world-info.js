@@ -9275,11 +9275,14 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
                 continue;
             }
 
-            // Substitute macros inline, for both this checking and also future processing.
-            // Pass keepEscapes:true so `\{{...}}` teaching examples in entry text remain
-            // escaped through this pass and don't fire as side-effect macros when the
-            // injection prompt path substitutes the same content again later.
-            entry.content = substituteParams(entry.content, { keepEscapes: true });
+            // Substitute macros inline, for both this checking and also future
+            // processing. `\{{...}}` teaching examples in entry text survive
+            // intact through all substitute passes (the macro engine's lexer
+            // recognises `\{` / `\}` as plaintext and never unescapes it
+            // mid-pipeline). The single final strip happens at the generation
+            // request boundary, so the LLM sees literal `{{...}}` while
+            // authoring sources keep the backslash.
+            entry.content = substituteParams(entry.content);
             newContent += `${entry.content}\n`;
 
             if (!entry.ignoreBudget && (textToScanTokens + (await getTokenCountAsync(newContent))) >= budget) {

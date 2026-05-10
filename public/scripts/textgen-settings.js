@@ -19,6 +19,7 @@ import { deriveTemplatesFromChatTemplate } from './chat-templates.js';
 import { t } from './i18n.js';
 import { autoSelectInstructPreset, selectContextPreset, selectInstructPreset } from './instruct-mode.js';
 import { BIAS_CACHE, createNewLogitBiasEntry, displayLogitBias, getLogitBiasListResult } from './logit-bias.js';
+import { unescapeMacroBracesInRequestData } from './macros/util/escape.js';
 
 import { power_user, registerDebugFunction } from './power-user.js';
 import { getActiveManualApiSamplers, loadApiSelectedSamplers, isSamplerManualPriorityEnabled } from './samplerSelect.js';
@@ -1317,7 +1318,7 @@ export async function generateTextGenWithStreaming(generate_data, signal, { onLu
         headers: {
             ...getRequestHeaders(),
         },
-        body: JSON.stringify(generate_data),
+        body: JSON.stringify(unescapeMacroBracesInRequestData(generate_data)),
         method: 'POST',
         signal: signal,
     });

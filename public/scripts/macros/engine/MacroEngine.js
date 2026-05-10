@@ -114,7 +114,7 @@ class MacroEngine {
      *        positioning for macros like {{pick}} that seed on position.
      * @returns {string} The resolved string.
      */
-    evaluate(input, env, { contextOffset = 0, keepEscapes = false } = {}) {
+    evaluate(input, env, { contextOffset = 0 } = {}) {
         if (!input) {
             return '';
         }
@@ -153,7 +153,7 @@ class MacroEngine {
             return input;
         }
 
-        const result = this.#runPostProcessors(evaluated, safeEnv, { keepEscapes });
+        const result = this.#runPostProcessors(evaluated, safeEnv);
 
         return result;
     }
@@ -259,10 +259,9 @@ class MacroEngine {
      * @param {MacroEnv} env - The environment to pass to the macro handler.
      * @returns {string} The processed text.
      */
-    #runPostProcessors(text, env, { keepEscapes = false } = {}) {
+    #runPostProcessors(text, env) {
         let result = text;
-        for (const { handler, source } of this.#postProcessors) {
-            if (keepEscapes && source === 'core:unescape-braces') continue;
+        for (const { handler } of this.#postProcessors) {
             result = handler(result, env);
         }
         return result;
@@ -300,13 +299,14 @@ class MacroEngine {
     #registerCorePostProcessors() {
         // Post-processors (priority 0-50 reserved for core)
 
-        // Unescape braces: \{ → { and \} → }
-        // Since \{\{ doesn't match {{ (MacroStart), it passes through as plain text.
-        // We only need to remove the backslashes in post-processing.
-        this.addPostProcessor(
-            text => text.replace(/\\([{}])/g, '$1'),
-            { priority: 10, source: 'core:unescape-braces' },
-        );
+        // Note on `\{` / `\}` escape handling:
+        // The lexer's `Plaintext` token already accepts `\{` / `\}` as plaintext
+        // (see MacroLexer.js), so an escaped `\{{...}}` in source never starts
+        // a macro. Backslashes survive untouched through every substituteParams
+        // pass — that's deliberate. The single, final unescape happens at the
+        // generation request boundary (see public/scripts/macros/util/escape.js)
+        // so the LLM sees literal `{{...}}` while authoring sources keep the
+        // escape state stable across any number of intermediate substitutes.
 
         // The original trim macro is reaching over the boundaries of the defined macro. This is not something the engine supports.
         // To treat {{trim}} as it was before, we won't process it by the engine itself,
