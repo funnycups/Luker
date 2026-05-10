@@ -1,6 +1,6 @@
 import { Fuse } from '../lib.js';
 
-import { saveSettings, substituteParams, getRequestHeaders, chat_metadata, this_chid, characters, saveCharacterDebounced, menu_type, eventSource, event_types, getExtensionPromptByName, saveMetadata, getCurrentChatId, extension_prompt_roles, create_save, createOrEditCharacter, name1, buildObjectPatchOperations, buildObjectPatchOperationsAsync, requestAsyncDiffForNextSettingsSave, getOneCharacter, select_selected_character, updateCharacterData } from '../script.js';
+import { saveSettings, substituteParams, getRequestHeaders, chat_metadata, this_chid, characters, saveCharacterDebounced, menu_type, eventSource, event_types, getExtensionPromptByName, saveMetadata, getCurrentChatId, extension_prompt_roles, create_save, name1, buildObjectPatchOperations, buildObjectPatchOperationsAsync, requestAsyncDiffForNextSettingsSave, getOneCharacter, select_selected_character, updateCharacterData } from '../script.js';
 import { areLookupNamesEqual, download, debounce, findCanonicalIndexInList, findCanonicalNameInList, initScrollHeight, resetScrollHeight, parseJsonFile, extractDataFromPng, getFileBuffer, getCharaFilename, getSortableDelay, escapeRegex, PAGINATION_TEMPLATE, navigation_option, waitUntilCondition, isTrueBoolean, setValueByPath, flashHighlight, select2ModifyOptions, getSelect2OptionId, dynamicSelect2DataViaAjax, highlightRegex, select2ChoiceClickSubscribe, isFalseBoolean, getSanitizedFilename, checkOverwriteExistingData, getStringHash, parseStringArray, cancelDebounce, findChar, onlyUnique, equalsIgnoreCaseAndAccents, uuidv4, normalizeArray, getUniqueName, logSlashCommandWarn, addLongPressEvent, escapeHtml } from './utils.js';
 import { extension_settings, getContext } from './extensions.js';
 import { NOTE_MODULE_NAME, metadata_keys, shouldWIAddPrompt } from './authors-note.js';
@@ -10666,18 +10666,6 @@ export async function charUpdatePrimaryWorld(name) {
 
     if (this_chid === undefined || this_chid === null) {
         return;
-    }
-
-    const character = characters[this_chid];
-    const previousValue = String(character?.data?.extensions?.world || '');
-
-    if (previousValue && !name && character?.data?.character_book) {
-        // Unbinding the primary world clears any leftover embedded book mirror
-        // (the legacy `data.character_book` field is regenerated only when a
-        // bound world is present — leaving the stale mirror would re-trigger
-        // checkEmbeddedWorld's import prompt on the next card switch).
-        delete character.data.character_book;
-        toastr.info(t`Embedded lorebook will be removed from this character.`);
     }
 
     await updateCharacterData(this_chid, { 'extensions.world': String(name || '') }, { immediate: true });

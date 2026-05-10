@@ -881,7 +881,18 @@ function charaFormatData(data, directories) {
     _.set(char, 'data.extensions.depth_prompt.depth', depth_value);
     _.set(char, 'data.extensions.depth_prompt.role', role_value);
 
-    syncCharacterBookFromWorldInfo(char, directories, data.world);
+    // `data.character_book` is the V2/V3 spec slot for an embedded world book.
+    // Mirroring the bound world's content into it on every save is wrong:
+    // the field is meant for export interop (so sharing a card via PNG/JSON
+    // carries its lore along) and for import handoff (third-party cards
+    // arriving with an unimported book). Inside runtime saves the mirror
+    // becomes a ghost — `checkEmbeddedWorld` later sees `character_book`
+    // present, and if the bound world ever drifts out (renamed, deleted,
+    // unbound) it pops the import dialog for content that's already a
+    // stale copy of a world the user already manages directly. The export
+    // endpoints (`/export?format=png` / `format=json`) already invoke
+    // `syncCharacterBookFromWorldInfo` themselves — that's where the
+    // mirror belongs, and only there.
 
     return toStoredV2Character(char);
 }
@@ -1383,6 +1394,18 @@ router.post('/edit', validateAvatarUrlMiddleware, async function (request, respo
             } catch (error) {
                 console.warn('Failed to parse existing character while preserving extension fields in /edit', error);
             }
+        }
+
+        // `data.character_book` is regenerated from the bound world by the
+        // export endpoints (`/export?format=png` / `format=json`). Never
+        // persist a mirror in the runtime save — it would just become a
+        // stale ghost that re-triggers the import-embedded-book dialog
+        // when the bound world drifts. Older versions of luker mirrored
+        // unconditionally inside `charaFormatData`, so existing cards may
+        // have a leftover; the deepMerge above carries that ghost over,
+        // and this strip is what cleans it. New saves never produce one.
+        if (char?.data?.character_book !== undefined) {
+            delete char.data.character_book;
         }
 
         char.chat = request.body.chat;
