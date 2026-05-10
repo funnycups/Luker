@@ -4,7 +4,7 @@ APIs for registering custom macros, evaluating macros in text, and reading/writi
 
 ## Macros
 
-Luker exposes a macro system through the `macros` namespace, plus the legacy `MacrosParser` for backwards compatibility. Built-in macros like `{{user}}`, `{{char}}`, `{{lastMessage}}`, and `{{getvar::name}}` are registered by core; plugins can add their own through `macros.register()`.
+Luker exposes a macro system through the `macros` namespace, plus the legacy `MacrosParser` for backwards compatibility. Built-in macros like <span v-pre>`{{user}}`</span>, <span v-pre>`{{char}}`</span>, <span v-pre>`{{lastMessage}}`</span>, and <span v-pre>`{{getvar::name}}`</span> are registered by core; plugins can add their own through `macros.register()`.
 
 ### macros.register
 
@@ -71,7 +71,7 @@ ctx.macros.register('greet', {
 });
 ```
 
-After registration, both `{{myStatus}}` and `{{greet::Bob}}` work.
+After registration, both <span v-pre>`{{myStatus}}`</span> and <span v-pre>`{{greet::Bob}}`</span> work.
 
 ### macros.registry
 
@@ -89,31 +89,31 @@ A non-exhaustive list of macros registered by core. See the source under `public
 
 | Macro | Returns |
 |------|------|
-| `{{user}}` | Current user / persona name |
-| `{{char}}` | Current character name |
-| `{{persona}}` | Current persona description |
-| `{{charDescription}}` / `{{charPersonality}}` / `{{charScenario}}` | Card fields |
-| `{{charDepthPrompt}}` / `{{charCreatorNotes}}` / `{{charFirstMessage}}` / `{{charVersion}}` | Card fields |
-| `{{mesExamples}}` / `{{mesExamplesRaw}}` | Dialogue examples |
-| `{{group}}` / `{{groupNotMuted}}` | Group member names |
-| `{{lastMessage}}` / `{{lastMessageId}}` / `{{lastUserMessage}}` / `{{lastCharMessage}}` | Recent chat content |
-| `{{firstIncludedMessageId}}` / `{{firstDisplayedMessageId}}` | Visibility window |
-| `{{lastSwipeId}}` / `{{currentSwipeId}}` | Swipe state |
-| `{{model}}` | Active model identifier |
-| `{{maxPrompt}}` / `{{maxContext}}` / `{{maxResponse}}` | Token budgets |
-| `{{time}}` / `{{date}}` / `{{weekday}}` / `{{isotime}}` / `{{isodate}}` | Local clock |
-| `{{datetimeformat::FORMAT}}` | `moment.format(FORMAT)` |
-| `{{idleDuration}}` / `{{timeDiff}}` | Time deltas |
-| `{{getvar::name}}` / `{{setvar::name::value}}` / `{{addvar::name::value}}` | Local variables |
-| `{{incvar::name}}` / `{{decvar::name}}` / `{{hasvar::name}}` / `{{deletevar::name}}` | Local variables |
-| `{{getglobalvar::name}}` / `{{setglobalvar::name::value}}` / ... | Global variables |
-| `{{if::cond::then::else}}` / `{{else::...}}` / `{{each::...}}` | Control flow |
-| `{{trim}}` / `{{newline}}` / `{{space}}` / `{{noop}}` | Whitespace helpers |
-| `{{roll::XdY}}` / `{{random::a,b,c}}` / `{{pick::a,b,c}}` | Randomness |
-| `{{//comment}}` | Comment (ignored output) |
-| `{{outlet::name}}` | Custom WI outlet content |
-| `{{isMobile}}` / `{{hasExtension::name}}` | Environment checks |
-| `{{lastGenerationType}}` / `{{systemPrompt}}` | Pipeline state |
+| <span v-pre>`{{user}}`</span> | Current user / persona name |
+| <span v-pre>`{{char}}`</span> | Current character name |
+| <span v-pre>`{{persona}}`</span> | Current persona description |
+| <span v-pre>`{{charDescription}}`</span> / <span v-pre>`{{charPersonality}}`</span> / <span v-pre>`{{charScenario}}`</span> | Card fields |
+| <span v-pre>`{{charDepthPrompt}}`</span> / <span v-pre>`{{charCreatorNotes}}`</span> / <span v-pre>`{{charFirstMessage}}`</span> / <span v-pre>`{{charVersion}}`</span> | Card fields |
+| <span v-pre>`{{mesExamples}}`</span> / <span v-pre>`{{mesExamplesRaw}}`</span> | Dialogue examples |
+| <span v-pre>`{{group}}`</span> / <span v-pre>`{{groupNotMuted}}`</span> | Group member names |
+| <span v-pre>`{{lastMessage}}`</span> / <span v-pre>`{{lastMessageId}}`</span> / <span v-pre>`{{lastUserMessage}}`</span> / <span v-pre>`{{lastCharMessage}}`</span> | Recent chat content |
+| <span v-pre>`{{firstIncludedMessageId}}`</span> / <span v-pre>`{{firstDisplayedMessageId}}`</span> | Visibility window |
+| <span v-pre>`{{lastSwipeId}}`</span> / <span v-pre>`{{currentSwipeId}}`</span> | Swipe state |
+| <span v-pre>`{{model}}`</span> | Active model identifier |
+| <span v-pre>`{{maxPrompt}}`</span> / <span v-pre>`{{maxContext}}`</span> / <span v-pre>`{{maxResponse}}`</span> | Token budgets |
+| <span v-pre>`{{time}}`</span> / <span v-pre>`{{date}}`</span> / <span v-pre>`{{weekday}}`</span> / <span v-pre>`{{isotime}}`</span> / <span v-pre>`{{isodate}}`</span> | Local clock |
+| <span v-pre>`{{datetimeformat::FORMAT}}`</span> | `moment.format(FORMAT)` |
+| <span v-pre>`{{idleDuration}}`</span> / <span v-pre>`{{timeDiff}}`</span> | Time deltas |
+| <span v-pre>`{{getvar::name}}`</span> / <span v-pre>`{{setvar::name::value}}`</span> / <span v-pre>`{{addvar::name::value}}`</span> | Local variables |
+| <span v-pre>`{{incvar::name}}`</span> / <span v-pre>`{{decvar::name}}`</span> / <span v-pre>`{{hasvar::name}}`</span> / <span v-pre>`{{deletevar::name}}`</span> | Local variables |
+| <span v-pre>`{{getglobalvar::name}}`</span> / <span v-pre>`{{setglobalvar::name::value}}`</span> / ... | Global variables |
+| <span v-pre>`{{if::cond::then::else}}`</span> / <span v-pre>`{{else::...}}`</span> / <span v-pre>`{{each::...}}`</span> | Control flow |
+| <span v-pre>`{{trim}}`</span> / <span v-pre>`{{newline}}`</span> / <span v-pre>`{{space}}`</span> / <span v-pre>`{{noop}}`</span> | Whitespace helpers |
+| <span v-pre>`{{roll::XdY}}`</span> / <span v-pre>`{{random::a,b,c}}`</span> / <span v-pre>`{{pick::a,b,c}}`</span> | Randomness |
+| <span v-pre>`{{//comment}}`</span> | Comment (ignored output) |
+| <span v-pre>`{{outlet::name}}`</span> | Custom WI outlet content |
+| <span v-pre>`{{isMobile}}`</span> / <span v-pre>`{{hasExtension::name}}`</span> | Environment checks |
+| <span v-pre>`{{lastGenerationType}}`</span> / <span v-pre>`{{systemPrompt}}`</span> | Pipeline state |
 
 ### MacrosParser (deprecated)
 

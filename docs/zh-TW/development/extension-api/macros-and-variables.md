@@ -4,7 +4,7 @@
 
 ## 巨集
 
-Luker 透過 `macros` 命名空間暴露巨集系統，並為了向後相容保留了傳統的 `MacrosParser`。`{{user}}`、`{{char}}`、`{{lastMessage}}`、`{{getvar::name}}` 之類的內建巨集由 core 註冊；外掛可以透過 `macros.register()` 加入自己的巨集。
+Luker 透過 `macros` 命名空間暴露巨集系統，並為了向後相容保留了傳統的 `MacrosParser`。<span v-pre>`{{user}}`</span>、<span v-pre>`{{char}}`</span>、<span v-pre>`{{lastMessage}}`</span>、<span v-pre>`{{getvar::name}}`</span> 之類的內建巨集由 core 註冊；外掛可以透過 `macros.register()` 加入自己的巨集。
 
 ### macros.register
 
@@ -71,7 +71,7 @@ ctx.macros.register('greet', {
 });
 ```
 
-註冊後 `{{myStatus}}` 和 `{{greet::Bob}}` 都能正常工作。
+註冊後 <span v-pre>`{{myStatus}}`</span> 和 <span v-pre>`{{greet::Bob}}`</span> 都能正常工作。
 
 ### macros.registry
 
@@ -89,31 +89,31 @@ const def = ctx.macros.registry.getMacro('greet');
 
 | 巨集 | 回傳 |
 |------|------|
-| `{{user}}` | 當前使用者 / persona 名稱 |
-| `{{char}}` | 當前角色名 |
-| `{{persona}}` | 當前 persona 描述 |
-| `{{charDescription}}` / `{{charPersonality}}` / `{{charScenario}}` | 角色卡欄位 |
-| `{{charDepthPrompt}}` / `{{charCreatorNotes}}` / `{{charFirstMessage}}` / `{{charVersion}}` | 角色卡欄位 |
-| `{{mesExamples}}` / `{{mesExamplesRaw}}` | 對話範例 |
-| `{{group}}` / `{{groupNotMuted}}` | 群組成員名稱 |
-| `{{lastMessage}}` / `{{lastMessageId}}` / `{{lastUserMessage}}` / `{{lastCharMessage}}` | 最近的聊天內容 |
-| `{{firstIncludedMessageId}}` / `{{firstDisplayedMessageId}}` | 可見視窗 |
-| `{{lastSwipeId}}` / `{{currentSwipeId}}` | swipe 狀態 |
-| `{{model}}` | 當前模型識別碼 |
-| `{{maxPrompt}}` / `{{maxContext}}` / `{{maxResponse}}` | token 預算 |
-| `{{time}}` / `{{date}}` / `{{weekday}}` / `{{isotime}}` / `{{isodate}}` | 本地時鐘 |
-| `{{datetimeformat::FORMAT}}` | `moment.format(FORMAT)` |
-| `{{idleDuration}}` / `{{timeDiff}}` | 時間差 |
-| `{{getvar::name}}` / `{{setvar::name::value}}` / `{{addvar::name::value}}` | 本地變數 |
-| `{{incvar::name}}` / `{{decvar::name}}` / `{{hasvar::name}}` / `{{deletevar::name}}` | 本地變數 |
-| `{{getglobalvar::name}}` / `{{setglobalvar::name::value}}` / ... | 全域變數 |
-| `{{if::cond::then::else}}` / `{{else::...}}` / `{{each::...}}` | 控制流 |
-| `{{trim}}` / `{{newline}}` / `{{space}}` / `{{noop}}` | 空白輔助 |
-| `{{roll::XdY}}` / `{{random::a,b,c}}` / `{{pick::a,b,c}}` | 隨機 |
-| `{{//comment}}` | 註解（輸出忽略） |
-| `{{outlet::name}}` | 自訂 WI outlet 內容 |
-| `{{isMobile}}` / `{{hasExtension::name}}` | 環境檢查 |
-| `{{lastGenerationType}}` / `{{systemPrompt}}` | 流水線狀態 |
+| <span v-pre>`{{user}}`</span> | 當前使用者 / persona 名稱 |
+| <span v-pre>`{{char}}`</span> | 當前角色名 |
+| <span v-pre>`{{persona}}`</span> | 當前 persona 描述 |
+| <span v-pre>`{{charDescription}}`</span> / <span v-pre>`{{charPersonality}}`</span> / <span v-pre>`{{charScenario}}`</span> | 角色卡欄位 |
+| <span v-pre>`{{charDepthPrompt}}`</span> / <span v-pre>`{{charCreatorNotes}}`</span> / <span v-pre>`{{charFirstMessage}}`</span> / <span v-pre>`{{charVersion}}`</span> | 角色卡欄位 |
+| <span v-pre>`{{mesExamples}}`</span> / <span v-pre>`{{mesExamplesRaw}}`</span> | 對話範例 |
+| <span v-pre>`{{group}}`</span> / <span v-pre>`{{groupNotMuted}}`</span> | 群組成員名稱 |
+| <span v-pre>`{{lastMessage}}`</span> / <span v-pre>`{{lastMessageId}}`</span> / <span v-pre>`{{lastUserMessage}}`</span> / <span v-pre>`{{lastCharMessage}}`</span> | 最近的聊天內容 |
+| <span v-pre>`{{firstIncludedMessageId}}`</span> / <span v-pre>`{{firstDisplayedMessageId}}`</span> | 可見視窗 |
+| <span v-pre>`{{lastSwipeId}}`</span> / <span v-pre>`{{currentSwipeId}}`</span> | swipe 狀態 |
+| <span v-pre>`{{model}}`</span> | 當前模型識別碼 |
+| <span v-pre>`{{maxPrompt}}`</span> / <span v-pre>`{{maxContext}}`</span> / <span v-pre>`{{maxResponse}}`</span> | token 預算 |
+| <span v-pre>`{{time}}`</span> / <span v-pre>`{{date}}`</span> / <span v-pre>`{{weekday}}`</span> / <span v-pre>`{{isotime}}`</span> / <span v-pre>`{{isodate}}`</span> | 本地時鐘 |
+| <span v-pre>`{{datetimeformat::FORMAT}}`</span> | `moment.format(FORMAT)` |
+| <span v-pre>`{{idleDuration}}`</span> / <span v-pre>`{{timeDiff}}`</span> | 時間差 |
+| <span v-pre>`{{getvar::name}}`</span> / <span v-pre>`{{setvar::name::value}}`</span> / <span v-pre>`{{addvar::name::value}}`</span> | 本地變數 |
+| <span v-pre>`{{incvar::name}}`</span> / <span v-pre>`{{decvar::name}}`</span> / <span v-pre>`{{hasvar::name}}`</span> / <span v-pre>`{{deletevar::name}}`</span> | 本地變數 |
+| <span v-pre>`{{getglobalvar::name}}`</span> / <span v-pre>`{{setglobalvar::name::value}}`</span> / ... | 全域變數 |
+| <span v-pre>`{{if::cond::then::else}}`</span> / <span v-pre>`{{else::...}}`</span> / <span v-pre>`{{each::...}}`</span> | 控制流 |
+| <span v-pre>`{{trim}}`</span> / <span v-pre>`{{newline}}`</span> / <span v-pre>`{{space}}`</span> / <span v-pre>`{{noop}}`</span> | 空白輔助 |
+| <span v-pre>`{{roll::XdY}}`</span> / <span v-pre>`{{random::a,b,c}}`</span> / <span v-pre>`{{pick::a,b,c}}`</span> | 隨機 |
+| <span v-pre>`{{//comment}}`</span> | 註解（輸出忽略） |
+| <span v-pre>`{{outlet::name}}`</span> | 自訂 WI outlet 內容 |
+| <span v-pre>`{{isMobile}}`</span> / <span v-pre>`{{hasExtension::name}}`</span> | 環境檢查 |
+| <span v-pre>`{{lastGenerationType}}`</span> / <span v-pre>`{{systemPrompt}}`</span> | 流水線狀態 |
 
 ### MacrosParser（已棄用）
 
