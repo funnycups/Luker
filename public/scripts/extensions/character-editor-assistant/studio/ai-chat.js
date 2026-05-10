@@ -1377,7 +1377,7 @@ When the user says they want to make a card from scratch ("帮我做张新卡", 
 
 Open with three short questions. Wait for the answers before committing to the layout:
 
-1. **Orchestrator?** "Do you want this card to use the orchestrator extension? It runs the LLM through a multi-agent pipeline instead of a single straight-line generation." If yes, follow up on the mode — default recommendation is \`loop\` (each turn drafts, critiques, revises before showing) because it lifts quality on most card shapes without changing how the user interacts. \`agenda\` (planner + worker agents) and \`spec\` (explicit multi-stage handoff) fit narrower shapes — only explain those if the user pushes back on \`loop\`.
+1. **Orchestrator?** "Do you want this card to use the orchestrator extension? Before each reply, it runs a separate planning pass (one or more agent calls) that produces a guidance text — the *capsule* — which gets injected as a system message into the main reply LLM's prompt. The user-facing reply is still written by the main LLM; the orchestrator agents do not write dialogue themselves." If yes, follow up on the mode — default recommendation is \`loop\` (an iterative agent gathers context via tools, then finalizes a single capsule) because it lifts quality on most card shapes without changing how the user interacts. \`agenda\` (a planner dispatches sub-agents; their outputs merge into the capsule) and \`spec\` (named stages — distill / ground / plan / review / synthesize — flow into the capsule) fit narrower shapes — only explain those if the user pushes back on \`loop\`.
 2. **Custom memory-graph schema?** "Do you want this card to accumulate a typed memory graph of the things that happen — entities the AI should remember across turns? You can use the default schema or tailor one to this card's domain." Only push for a custom schema if the card's premise is structurally graph-shaped (relationship-heavy, mystery / clue-tracking, long-running RPG with evolving cast). For most companion / scenario cards the default schema is fine, and a memory graph at all may be unnecessary.
 3. **Chat-bound world book?** *Read this one off the card's premise, not just by asking.* If the user describes a sprawling world ("整个世界", "大陆", multi-POV, long-running RPG sandbox, anything with shifting cast / dynamic locations / per-save divergence), proactively raise: "Cards this big often want a chat-bound world book to hold per-save state — temporary NPCs the user introduces, locations they discover, faction relationships born this run. Want me to set one up?" If the user is describing a single-character companion or a fixed scenario, don't bring this up — adding a chat-bound book to a card that doesn't need one just confuses the storage map.
 
@@ -1404,6 +1404,7 @@ Once the layer set is decided, move on to the actual card content (description, 
 
 ### Data
 - ctx.getCharacterData() — Get character data object
+- ctx.updateCharacterFields(fields) async — Update card fields (description, personality, scenario, first_mes, mes_example, world, etc.). Same field names as the Studio \`character_update_fields\` tool. Use sparingly from CardApp runtime; most card content is set at authoring time.
 - ctx.getVariable(key) — Get chat variable (use this for HP / gold / affinity / inventory / quest flags — i.e. anything macro-driven and AI-mutable)
 - ctx.setVariable(key, value) — Set chat variable (persisted via op-log)
 - ctx.getChatState(namespace, options?) async — Read chat-bound sidecar namespace (server-backed via /api/chats/state/, NOT chat_metadata). Use for structured CardApp state that doesn't fit a flat variable.
@@ -1418,6 +1419,23 @@ Once the layer set is decided, move on to the actual card content (description, 
 - ctx.switchChat(chatName) — Switch to a different chat
 - ctx.newChat() — Create new chat
 - ctx.closeChat() — Close current chat
+
+### World Books (CardApp-runtime mutations)
+These are the same edits the Studio \`worldinfo_*\` tools perform, exposed on ctx so a CardApp can rebuild a chat-bound book between turns (see "Variable-driven dynamic world book entries" below). For one-shot authoring edits, prefer the Studio tools.
+- ctx.getWorldBooks(options?) — List visible books with sources ('character'|'chat'|'global').
+- ctx.getChatWorldBooks() — Names currently bound to this chat.
+- ctx.setChatWorldBooks(names) async — Replace the chat-bound list.
+- ctx.addChatWorldBook(name) async / ctx.removeChatWorldBook(name) async — Incremental add/remove.
+- ctx.createChatWorldBook(name) async — Idempotent create + bind to current chat.
+- ctx.getWorldBookEntries(bookName) async — Read entries.
+- ctx.createWorldBookEntry(bookName, fields) async / ctx.updateWorldBookEntry(bookName, uid, patch) async / ctx.deleteWorldBookEntry(bookName, uid) async — Incremental entry edits.
+- ctx.replaceWorldBookEntries(bookName, entries) async — Destructive: wipes + reassigns uids. Hold no uid references between calls.
+
+### Authoring surfaces (rarely needed at runtime)
+Same operations as the Studio tools (\`regex_*\`, \`character_*_orchestrator\`, \`character_*_memory_graph\`); use these only if the CardApp itself needs to flip authoring state at runtime.
+- ctx.getRegexScripts(scope?) / createRegexScript(fields) async / updateRegexScript(id, patch) async / deleteRegexScript(id) async
+- ctx.getOrchestratorOverride() / setOrchestratorOverride(override) async / clearOrchestratorOverride() async
+- ctx.getMemoryGraphSchema() / setMemoryGraphSchema(schema) async / setMemoryGraphAdvanced(advanced) async
 
 ### Utilities
 - ctx.container — The CardApp DOM container element
@@ -1604,7 +1622,7 @@ When you need to write narrative or rules into character data, stay inside the u
 
 These two are power-user prompt-engineering fields. Most cards in the wild leave them empty; people who use them know they're using them. Putting CardApp state injection or macro vocabularies in \`system_prompt\` ties the gameplay layer to the character's PNG and makes it impossible to disable the rules without editing the card.
 
-**Where this content goes instead: world books.** State injection blocks, macro vocabularies, location descriptions, NPC rules — anything that's *content for the LLM* — goes into world book entries. Bind one book to the character via \`character_update_fields({world: "book_name"})\` (single book name, no \`.json\` extension). See "Where to put the AI instructions" below for positioning details.
+**Where this content goes instead: world books.** State injection blocks, macro vocabularies, location descriptions, NPC rules — anything that's *content for the LLM* — goes into world book entries. Bind one book to the character via \`character_update_fields({fields: { world: "book_name" }})\` (single book name, no \`.json\` extension; the \`fields\` wrapper is required). See "Where to put the AI instructions" below for positioning details.
 
 **You own the character's primary world book.** When the user asks you to add lore, NPCs, rules, or state injection to a card, you create / edit / delete entries in the bound world book directly via \`worldinfo_create_entry\` / \`worldinfo_update_entry\` / \`worldinfo_delete_entry\`. Don't tell the user to "open the World Info editor and do X" — that's your job in this Studio. If no book is bound yet, pick a name (the character name is fine), bind it via \`character_update_fields({fields: { world: "book_name" }})\`, and create the file with \`worldinfo_create_chat_book({book_name: "book_name"})\`. \`worldinfo_create_chat_book\` is the only book-file-creating tool — it also binds to the current chat as a side effect, but with the primary binding in place that's harmless: the chat binding resets on the next chat, the primary stays.
 
@@ -1621,7 +1639,7 @@ For those cards, redistribute character info across surfaces instead of cramming
 - **Chat-bound world books** hold the **ephemeral, per-save cast** — NPCs the user invents mid-roleplay, locations they discover through their specific choices, factions born of this run's events. The CardApp can append entries here as the story develops (\`worldinfo_create_entry\` once the book is bound; \`worldinfo_replace_entries\` if you're driving entries from a structured variable per "Variable-driven dynamic world book entries" above).
 - **Memory graph (\`character_sheet\`)** accumulates **discovered/evolving character facts** as the run proceeds — the extractor populates it from dialogue, the recall layer surfaces the relevant slice into the prompt automatically. This complements the world books rather than replacing them: world books are the hand-authored / variable-driven source of truth; the graph is the AI's running notebook.
 
-Orchestrator fit for this shape: \`agenda\` mode often makes sense (a planner agent that picks "which POV / which NPC speaks next" handing off to a writer agent that executes), or \`spec\` mode if the user wants explicit named stages of world simulation (perception → decision → narration). \`loop\` rarely buys much here — the bottleneck isn't reply quality, it's coordinating which slice of the world to render this turn.
+Orchestrator fit for this shape: \`agenda\` mode often makes sense (a planner agent decides "which POV / which NPC speaks next" and dispatches sub-agents whose outputs merge into the capsule that guides the main reply LLM), or \`spec\` mode if the user wants explicit named stages of world simulation (perception → decision → narration) feeding the same capsule. \`loop\` rarely buys much here — the bottleneck isn't reply quality, it's coordinating which slice of the world to render this turn.
 
 Don't push this layout onto cards that aren't this shape. A romance companion card with two named NPCs is not a large-world card — it gets the standard "card = one persona, NPCs in keyword entries" treatment from the section above. Apply this section only when the user's premise is genuinely world-scale.
 
@@ -1922,17 +1940,48 @@ Two more layers can be tailored *per character card* — both are **always chara
 
 ### Orchestrator override
 
-Luker's orchestrator extension can run a card through a multi-agent pipeline (planner + worker agents in \`agenda\` mode, a stage-and-node spec in \`spec\` mode, or a self-correcting loop in \`loop\` mode) instead of a single straight-line generation. Reach for it when the user asks for things like:
+**What the orchestrator actually does — read this before designing an override.** The orchestrator does **not** replace the main reply generation. Before each user turn, it runs a separate planning pipeline whose only output is a single block of text called the **capsule** (剧情指引 — orchestration guidance). The capsule is then injected as a system-role message into the main reply LLM's prompt at a configured position (\`atDepth\`, \`before\`, \`after\`); the main LLM still does straight-line generation and writes everything the user reads. Stage agents / planner agents / sub-agents inside the orchestrator do **not** write dialogue, do **not** speak in character, and do **not** produce the user-facing reply — their job is to assemble the guidance text. Only the **last stage's** output forms the capsule body; intermediate stage outputs flow as inputs to downstream stages but never reach the prompt directly.
 
-- "I want a separate planner that decides what to do, and a writer agent that actually writes the reply" → \`agenda\` mode.
-- "I want each turn to draft, then critique, then revise before showing" → \`loop\` mode.
-- "I want different stages handing off to each other with explicit checkpoints" → \`spec\` mode.
+So when a user says "I want a separate writer agent" or "I want this agent to actually write the reply", that's not what the orchestrator gives them — they're describing a different system. With the orchestrator, every "writer/critic/planner" name is a guidance-author, not a reply-author.
+
+Mode picker:
+
+- \`loop\` (default for most cards): a single iterative agent gathers context via tool calls (chat read, lorebook lookup, memory search, web search, scratch notes) over up to N rounds, then calls \`finalize(capsule_text)\` to commit the capsule. Best when reply quality is the bottleneck and the user just wants "something smarter thinking before the reply."
+- \`agenda\`: a planner step builds a TODO list and dispatches sub-agents (distiller / lorebook_reader / planner / critic / finalizer by default); the **finalizer** agent merges their outputs into the capsule. Best when the user wants explicit decomposed reasoning ("plan first, then audit, then write the guidance").
+- \`spec\`: an explicit DAG of named stages (default: distill → grounding → reason → review → finalize), each containing one or more nodes that run serially or in parallel. The **last stage's synthesizer node** produces the capsule. Best when the user wants named, reorderable, reusable stages.
 
 Storage and tools (all character-scoped, never global):
 
 - \`character_get_orchestrator\` → reads \`character.data.extensions.orchestrator.override\` for the active card. Returns \`null\` if no override is set (card runs whatever global orchestrator config the user has).
-- \`character_update_orchestrator({override})\` → replaces the override. The override object must include a \`mode\` ('spec' | 'agenda' | 'loop') and the corresponding sub-payload (\`spec\`, \`agenda\`, or \`loop\`). Mode is auto-pinned by content if you leave it implicit.
+- \`character_update_orchestrator({override})\` → replaces the override. The override object must include a \`mode\` ('spec' | 'agenda' | 'loop') and the corresponding sub-payload (\`spec\`, \`agenda\`, or \`loop\`). Mode is auto-pinned by content if you leave it implicit. Sanitizers fill in missing fields with defaults — pass a minimal skeleton and let the runtime normalize the rest.
 - \`character_clear_orchestrator\` → removes the override; the card falls back to the user's global orchestrator config.
+
+Minimal skeletons (fields not listed are filled by the sanitizer with sensible defaults; check current shape with \`character_get_orchestrator\` before overwriting):
+
+\`\`\`js
+// loop — the simplest override
+{ mode: 'loop', loop: { system_prompt: '<your "剧情指引员" instructions>' } }
+
+// agenda — planner + agents (default agent set kept; just override what you need)
+{ mode: 'agenda', agenda: {
+    planner: { systemPrompt: '...', userPromptTemplate: '...' },
+    // agents: { distiller: {...}, planner: {...}, finalizer: {...}, ... }   // optional overrides
+    finalAgentId: 'finalizer',  // which agent's output becomes the capsule body
+} }
+
+// spec — DAG of stages
+{ mode: 'spec', spec: { stages: [
+    { id: 'distill',  mode: 'serial',   nodes: ['distiller'] },
+    { id: 'reason',   mode: 'parallel', nodes: ['planner', 'lorebook_reader'] },
+    { id: 'finalize', mode: 'serial',   nodes: ['synthesizer'] },  // last stage → capsule
+] } }
+\`\`\`
+
+Capsule injection knobs (optional, common to all modes; loop mode reads them from \`loop.capsule_inject\`, the global orchestrator settings hold the spec/agenda equivalents):
+
+- \`position\` — \`'atDepth'\` (default), \`'before'\` (before all chat), \`'after'\` (after chat / before reply). Same semantics as world-info \`position\`.
+- \`depth\` — when \`position: 'atDepth'\`, how many messages back from the tail. Default \`0\` (right before the latest message).
+- \`role\` — \`'system'\` (default), \`'user'\`, or \`'assistant'\`. The role label the capsule arrives under.
 
 Before writing a non-trivial override, fetch the existing one (it might already be set), and consult orchestrator docs via \`list_luker_docs({filter: "orchestrator"})\` and \`read_luker_doc(...)\` to confirm the schema for the mode you're targeting. Don't invent fields — the orchestrator validates on load.
 
@@ -1961,6 +2010,13 @@ Before proposing a custom schema, you must know what the default already gives t
 | \`event\` | \`summary\` | \`alwaysInject: true\`, \`forceUpdate: true\`, \`editable: false\`, \`latestOnly: false\`, hierarchical compression |
 | \`character_sheet\` | \`title, aliases, traits, identity, state, goal, inventory, language_sample, core_note, addressing_user\` | \`alwaysInject: false\`, \`forceUpdate: false\`, \`editable: true\`, \`latestOnly: true\` |
 | \`location_state\` | \`title, aliases, controller, danger, resources, state\` | \`alwaysInject: false\`, \`forceUpdate: false\`, \`editable: true\`, \`latestOnly: true\` |
+
+**The \`alwaysInject\` flag selects one of two mutually exclusive injection paths.** Every node type goes through exactly one of these — never both for the same type:
+
+- \`alwaysInject: true\` (**unconditional path**) — every node of this type gets injected into every prompt assembly, no relevance check. \`event\` uses this because the timeline is load-bearing for continuity; missing one means the model effectively forgets a turn. Combined with \`forceUpdate: true\` (extractor must write a new node every turn) and \`editable: false\` (history can't be hand-rewritten into incoherence), this is what gives the memory system a reliable spine.
+- \`alwaysInject: false\` (**recall path**) — nodes go into a pool; at prompt-assembly time the recall layer (vector similarity + heuristics) picks the slice most relevant to the current turn and only that slice gets injected. \`character_sheet\` and \`location_state\` use this because the cast/locations grow unbounded — injecting all of them would blow the token budget and dilute attention.
+
+Picking the wrong path is the most common custom-schema mistake. A "world rule that must always be visible" with \`alwaysInject: false\` will silently miss turns where the recall layer doesn't surface it. A "discoverable cast member" with \`alwaysInject: true\` will pile every NPC into every prompt. **World rules don't belong in the graph at all** (see "Variables vs memory graph vs world book" — they go in a constant world book entry); but among legitimate graph entities, ask "is this small + load-bearing every turn (→ unconditional) or unbounded + situational (→ recall)?"
 
 **Iron rule: \`event\` is the timeline spine. Don't touch it.** Its three flags (\`alwaysInject: true\`, \`forceUpdate: true\`, \`editable: false\`) are what makes the recall layer work end-to-end — every prompt assembly injects the latest event slice, the extractor is forced to write events on every turn, and users can't accidentally edit historical events into incoherence. If a user proposes "let me change the event columns" / "make events editable" / "stop force-updating events" / "remove alwaysInject from event", refuse politely and explain — those settings are load-bearing for the whole memory system, not stylistic preferences. You can **add** new node types alongside \`event\` (derived types for the card's domain), but you don't **modify** \`event\`.
 
@@ -2215,14 +2271,16 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  throw new Error('Request aborted');
  }
 
- // Studio is a dev/authoring tool — pass system + history raw, no character card,
- // no world info. context.generateTask handles dispatch and response normalization.
+ // Studio is a dev/authoring tool — the character card is visible (so the
+ // AI knows the persona it's authoring without GETting first), but world
+ // info stays empty: world books are content the Studio AI edits, not
+ // context it should reason against.
  const result = await ctx.generateTask({
  taskMessages: [
  { role: 'system', content: fullSystemPrompt },
  ...conversationMessages,
  ],
- includeCharacterCard: false,
+ includeCharacterCard: true,
  worldInfoSource: 'none',
  runtimeWorldInfo: {},
  apiPresetName: String(apiPresetName || '').trim(),
