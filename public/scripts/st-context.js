@@ -91,6 +91,10 @@ import {
     createRawPrompt,
     getGenerateUrl,
     amount_gen,
+    closeCurrentChat,
+    doNewChat,
+    getPastCharacterChats,
+    deleteCharacterChatByName,
 } from '../script.js';
 import {
     extension_settings,
@@ -132,7 +136,7 @@ import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { areLookupNamesEqual, findCanonicalNameInList, timestampToMoment, uuidv4, importFromExternalUrl, getCharaFilename } from './utils.js';
 import { addGlobalVariable, addLocalVariable, decrementGlobalVariable, decrementLocalVariable, deleteGlobalVariable, deleteLocalVariable, existsGlobalVariable, existsLocalVariable, getGlobalVariable, getLocalVariable, incrementGlobalVariable, incrementLocalVariable, setGlobalVariable, setLocalVariable } from './variables.js';
-import { convertCharacterBook, getWorldInfoPrompt, loadWorldInfo, loadWorldInfoBatch, reloadEditor, saveWorldInfo, updateWorldInfoList, wi_anchor_position, world_names, getCharaAuxWorlds } from './world-info.js';
+import { convertCharacterBook, getWorldInfoPrompt, loadWorldInfo, loadWorldInfoBatch, reloadEditor, saveWorldInfo, updateWorldInfoList, wi_anchor_position, world_names, getCharaAuxWorlds, createNewWorldInfo, importEmbeddedWorldInfo, charUpdatePrimaryWorld, getCharacterEmbeddedWorld } from './world-info.js';
 import { ChatCompletionService, TextCompletionService } from './custom-request.js';
 import { ConnectionManagerRequestService } from './extensions/shared.js';
 import { getChatCompletionConnectionProfiles, resolveChatCompletionRequestProfile } from './extensions/connection-manager/profile-resolver.js';
@@ -2170,6 +2174,10 @@ export function getContext() {
         getRequestHeaders,
         reloadCurrentChat,
         renameChat,
+        closeCurrentChat,
+        doNewChat,
+        getPastCharacterChats,
+        deleteCharacterChat: deleteCharacterChatByName,
         saveSettingsDebounced,
         onlineStatus: online_status,
         maxContext: Number(max_context),
@@ -2389,6 +2397,10 @@ export function getContext() {
         getWorldInfoPrompt,
         getWorldInfoNames: () => Array.isArray(world_names) ? [...world_names] : [],
         getCharaAuxWorlds,
+        createWorldBook: createNewWorldInfo,
+        importEmbeddedWorldInfo,
+        charUpdatePrimaryWorld,
+        getCharacterEmbeddedWorld,
         getCharaFilename,
         CONNECT_API_MAP,
         getTextGenServer,

@@ -99,6 +99,47 @@ updateWorldInfoList(): Promise<void>
 
 Refreshes the global `world_names` list from the server. Call after creating, deleting, or renaming a file from outside the editor UI.
 
+### createWorldBook
+
+```ts
+createWorldBook(name: string, options?: { interactive?: boolean }): Promise<boolean>
+```
+
+Create a new empty world book file. Returns `true` on success, `false` on failure (e.g. duplicate name when `interactive` is false). Pass `interactive: false` (default) to skip the duplicate-name confirmation popup, useful for programmatic creation. The created file has zero entries — populate via [`saveWorldInfo`](#saveworldinfo) or via the editor.
+
+### importEmbeddedWorldInfo
+
+```ts
+importEmbeddedWorldInfo(skipPopup?: boolean): Promise<void>
+```
+
+Import the V2/V3 `data.character_book` carried inside a third-party PNG card as a real world book file and bind it as the character's primary world. The character to import for is read from the `#import_character_info` element's `chid` data attribute (the character editor sets this when a card with an embedded book is opened). Pass `skipPopup: true` to bypass the confirmation popup and import unconditionally — used by tooling that's already obtained explicit confirmation. After import, `characters[chid].data.extensions.world` points at the new file and the embedded book is no longer offered for re-import.
+
+### charUpdatePrimaryWorld
+
+```ts
+charUpdatePrimaryWorld(name: string): Promise<void>
+```
+
+Bind the character's primary world book by name (or unbind by passing `''`). Persists via the character editor save path, so it requires an active character context.
+
+### getCharacterEmbeddedWorld
+
+```ts
+getCharacterEmbeddedWorld(charId: number | string): {
+    present: boolean,
+    name: string | null,
+    entryCount: number,
+    bound: boolean,
+}
+```
+
+Read-only inspector for a card's V2/V3 embedded `data.character_book`:
+- `present` — whether the card carries an embedded book.
+- `name` — the embedded book's `name` field.
+- `entryCount` — number of entries inside the embedded book.
+- `bound` — whether the card is already bound to a real world book file (i.e. `data.extensions.world` resolves to a known world). When `present && !bound`, the embedded book has not yet been imported via `importEmbeddedWorldInfo`. When `present && bound`, the embedded book is just a stale mirror of the bound world (a benign post-export artifact) and should be ignored at runtime.
+
 ### reloadWorldInfoEditor
 
 ```ts

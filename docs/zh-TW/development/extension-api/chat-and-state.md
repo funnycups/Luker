@@ -406,6 +406,44 @@ openCharacterChat(fileName: string): Promise<void>
 
 切換到當前角色的另一個聊天。會先清空當前的聊天資料。
 
+### closeCurrentChat
+
+```ts
+closeCurrentChat(): Promise<boolean>
+```
+
+關閉當前聊天,返回角色列表。返回 `true` 表示成功,`false` 表示生成正在進行且使用者拒絕中斷。
+
+### doNewChat
+
+```ts
+doNewChat(options?: { deleteCurrentChat?: boolean }): Promise<void>
+```
+
+為當前角色建立一個全新的聊天。當 `deleteCurrentChat: true` 時會刪除之前活躍的聊天檔案 — 謹慎使用,這是破壞性操作。
+
+### getPastCharacterChats
+
+```ts
+getPastCharacterChats(characterId?: number): Promise<Array<{
+    file_name: string,    // 含 ".jsonl" — 想拿 chat id 用 path.parse(name).name 取
+    file_id: string,      // 不帶 ".jsonl" 的 basename;openCharacterChat 期望這種形式
+    file_size: string,    // 格式化後的大小(如 "12.3 KB")
+    mes: string,          // 第一條訊息預覽
+    last_mes: number,     // 最後修改時間戳(ms)
+}>>
+```
+
+列出某個角色已有的全部聊天。`characterId` 省略時預設為當前角色(`this_chid`)。`file_id` 欄位是應用層 chat 識別符 — 把它傳回 `openCharacterChat` / `deleteCharacterChat` / `renameChat`(這些函式期望不帶 `.jsonl` 後綴的名字)。
+
+### deleteCharacterChat
+
+```ts
+deleteCharacterChat(characterId: string, fileName: string): Promise<void>
+```
+
+永久刪除指定角色的某個歷史聊天。`fileName` 是 chat id(不帶後綴);末尾若帶 `.jsonl` 會被自動剝除。
+
 ### openGroupChat
 
 ```ts

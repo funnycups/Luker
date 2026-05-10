@@ -10190,6 +10190,47 @@ export function checkEmbeddedWorld(chid) {
     return false;
 }
 
+/**
+ * Read-only view of the V2/V3 embedded character book on a character card.
+ *
+ * Cards distributed as PNGs may carry an embedded `data.character_book`
+ * (per `chara_card_v2`/`v3` spec). Luker treats this field as IO-only:
+ * it is consumed when importing third-party cards (offered to the user as a
+ * world book to import via `importEmbeddedWorldInfo`) and produced when
+ * exporting cards for distribution. Runtime code should never *read* the
+ * embedded book to drive prompt assembly — `data.extensions.world` is the
+ * authoritative pointer to the active world book file. This helper gives
+ * extensions and AI tools a stable view of "is there an unimported
+ * embedded book on this card?" without forcing them to walk the spec
+ * fields directly.
+ *
+ * @param {number|string} charId Character index in the `characters` array
+ * @returns {{ present: boolean, name: string|null, entryCount: number, bound: boolean }}
+ *   `present` — whether `data.character_book` exists on the card.
+ *   `name` — the embedded book's `name` field, or null.
+ *   `entryCount` — number of entries inside the embedded book (0 if missing).
+ *   `bound` — whether the card is already bound to a real world book file
+ *     (i.e. `data.extensions.world` resolves to a known world). When this
+ *     is true and `present` is also true, the card is in the post-import
+ *     state where the embedded book is just a stale mirror; runtime code
+ *     should treat it as benign rather than offering a re-import.
+ */
+export function getCharacterEmbeddedWorld(charId) {
+    const character = characters?.[charId];
+    const book = character?.data?.character_book;
+    if (!book) {
+        return { present: false, name: null, entryCount: 0, bound: false };
+    }
+    const boundWorldName = String(character?.data?.extensions?.world || '').trim();
+    const bound = boundWorldName.length > 0 && hasWorldInfoName(boundWorldName);
+    return {
+        present: true,
+        name: String(book.name || '').trim() || null,
+        entryCount: Array.isArray(book.entries) ? book.entries.length : 0,
+        bound,
+    };
+}
+
 export async function importEmbeddedWorldInfo(skipPopup = false) {
     const chid = $('#import_character_info').data('chid');
 

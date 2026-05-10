@@ -20,7 +20,7 @@ It is recommended to use [CardApp Studio](/features/card-editor/studio) to devel
 
 - **In-card interactive elements** — Status panels, mood indicators, custom buttons, etc.
 - **Mini games** — Text-adventure choice interfaces, dice rollers, card-game components, etc.
-- **State tracking** — Persist affection levels, quest progress, item inventories, etc. via chat variables (`ctx.getVariable` / `ctx.setVariable`); reach for the chat-state sidecar (`ctx.getChatState` / `ctx.updateChatState`) only for structured CardApp-owned namespaces that don't fit a flat variable.
+- **State tracking** — Persist affection levels, quest progress, item inventories, etc. via chat variables (`ctx.getVariable` / `ctx.setVariable`); reach for chat state (`ctx.getChatState` / `ctx.updateChatState`) only for structured CardApp-owned namespaces that don't fit a flat variable.
 
 ## Related Pages
 

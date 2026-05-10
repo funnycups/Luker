@@ -99,6 +99,47 @@ updateWorldInfoList(): Promise<void>
 
 从服务器刷新全局 `world_names` 列表。在编辑器 UI 之外创建、删除、重命名文件后调用。
 
+### createWorldBook
+
+```ts
+createWorldBook(name: string, options?: { interactive?: boolean }): Promise<boolean>
+```
+
+创建一个新的空世界书文件。成功返回 `true`,失败返回 `false`(例如 `interactive` 为 false 时遇到重名)。`interactive: false`(默认)会跳过重名确认弹窗,适合程序化创建。新建文件没有任何条目,通过 [`saveWorldInfo`](#saveworldinfo) 或编辑器写入条目。
+
+### importEmbeddedWorldInfo
+
+```ts
+importEmbeddedWorldInfo(skipPopup?: boolean): Promise<void>
+```
+
+把 V2/V3 PNG 卡内嵌的 `data.character_book` 导入为独立的世界书文件并绑定为该角色的 primary world。要导入哪张卡通过 `#import_character_info` 元素的 `chid` data 属性读取(角色编辑器在打开含内嵌书的卡时会设置这个值)。`skipPopup: true` 用来跳过确认弹窗直接导入,适合已经获取过明确确认的工具调用。导入完成后,`characters[chid].data.extensions.world` 指向新文件,内嵌书不再被提示重新导入。
+
+### charUpdatePrimaryWorld
+
+```ts
+charUpdatePrimaryWorld(name: string): Promise<void>
+```
+
+通过名字绑定角色的主世界书(传 `''` 解绑)。走角色编辑器的保存路径,因此需要当前有活跃的角色上下文。
+
+### getCharacterEmbeddedWorld
+
+```ts
+getCharacterEmbeddedWorld(charId: number | string): {
+    present: boolean,
+    name: string | null,
+    entryCount: number,
+    bound: boolean,
+}
+```
+
+只读地查询某张卡的 V2/V3 内嵌 `data.character_book` 状态:
+- `present` — 卡是否携带内嵌书。
+- `name` — 内嵌书的 `name` 字段。
+- `entryCount` — 内嵌书包含的条目数。
+- `bound` — 卡是否已经绑定了一个真实的世界书文件(即 `data.extensions.world` 解析得到一个已知的世界书)。`present && !bound` 表示内嵌书还没通过 `importEmbeddedWorldInfo` 导入。`present && bound` 表示内嵌书只是绑定世界的过期镜像(导出时留下的良性副产物),运行时应忽略。
+
 ### reloadWorldInfoEditor
 
 ```ts

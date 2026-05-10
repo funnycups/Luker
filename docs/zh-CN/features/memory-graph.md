@@ -312,7 +312,7 @@ PEDSA(Personalized Efficient Diffusion with Sparse Approximation)让记忆图能
 
 ### 自动 schema 迁移
 
-加载聊天时,记忆图运行迁移管道,把旧的持久化形态(v5 raw,v8 opLog)转换为当前的 v2 楼层状态布局(graph payload + `__floor_log` 提交日志 + `__meta` sidecar)。管道幂等,只在输入形态不是 v2 时运行,任何步骤失败时绝不修改 chat-state。
+加载聊天时,记忆图运行迁移管道,把旧的持久化形态(v5 raw,v8 opLog)转换为当前的 v2 楼层状态布局(graph payload + `__floor_log` 提交日志 + `__meta` 状态)。管道幂等,只在输入形态不是 v2 时运行,任何步骤失败时绝不修改 chat-state。
 
 更多实现细节请看源码。
 

@@ -312,7 +312,7 @@ For manual control, the memory graph settings panel exposes a **Recompute Vector
 
 ### Automatic schema migration
 
-On chat load, Memory Graph runs a migration pipeline that translates older persisted shapes (v5 raw, v8 opLog) into the current v2 floor-state layout (graph payload + `__floor_log` commit log + `__meta` sidecar). The pipeline is idempotent, runs only when the input shape isn't already v2, and never modifies chat-state if any step fails.
+On chat load, Memory Graph runs a migration pipeline that translates older persisted shapes (v5 raw, v8 opLog) into the current v2 floor-state layout (graph payload + `__floor_log` commit log + `__meta` state). The pipeline is idempotent, runs only when the input shape isn't already v2, and never modifies chat-state if any step fails.
 
 For more implementation details, see the source.
 

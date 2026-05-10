@@ -18,25 +18,25 @@ The lifecycle of character state is bound to the character itself — when a cha
 
 ## Chat State
 
-Luker stores chat state in namespace sidecar files next to each chat file, using the pattern `<chatFileBase>.luker-state.<namespace>.json`.
+Each chat has its own state, isolated by namespace. Luker stores chat state in per-namespace files alongside the chat file, following the pattern `<chatFileBase>.luker-state.<namespace>.json`.
 
 ### State File Characteristics
 
-- Stored as sidecar files in the same directory as the chat file (not a single global state file)
-- One chat can have multiple state sidecars (one per namespace), created lazily on first write
-- Lifecycle is bound to the chat file: when a chat is renamed, bound sidecars are renamed accordingly; when a chat is deleted, bound sidecars are deleted as well
+- One file per namespace, alongside the chat file (not a single global state file)
+- One chat can have multiple state files (one per namespace), created lazily on first write
+- Lifecycle is bound to the chat file: when a chat is renamed, bound state files are renamed accordingly; when a chat is deleted, bound state files are deleted as well
 - Supports incremental updates — no need to write the complete data every time
 
 ### Stored Content
 
-Chat state files can store various auxiliary information related to the chat, such as:
+Chat state can store various auxiliary information related to the chat, such as:
 
 - Confirmation status of generation tasks
 - Custom data saved by extensions for that chat
 - Other metadata not suitable for writing directly into chat history
 
 ::: tip
-Chat state files are automatically managed by Luker — you typically don't need to edit them manually. If you're migrating data from SillyTavern, these files will be created automatically on first use.
+Chat state is automatically managed by Luker — you typically don't need to edit it manually. If you're migrating data from SillyTavern, these files will be created automatically on first use.
 :::
 
 ## Preset State
@@ -49,9 +49,9 @@ The state system follows these principles:
 
 | State Type | Storage Location | Lifecycle |
 | --- | --- | --- |
-| Character State | Sidecar files next to character cards (`<character>.state.<namespace>.json`) | Created on first namespace write; renamed/deleted with the character |
-| Chat State | Sidecar files next to chat files (`<chat>.luker-state.<namespace>.json`) | Created on first namespace write; renamed/deleted with the chat |
-| Preset State | Sidecar files next to preset files (`<preset>.luker-state.<namespace>.json`) | Created on first namespace write; renamed/deleted with the preset |
+| Character State | Per-namespace files next to character cards (`<character>.state.<namespace>.json`) | Created on first namespace write; renamed/deleted with the character |
+| Chat State | Per-namespace files next to chat files (`<chat>.luker-state.<namespace>.json`) | Created on first namespace write; renamed/deleted with the chat |
+| Preset State | Per-namespace files next to preset files (`<preset>.luker-state.<namespace>.json`) | Created on first namespace write; renamed/deleted with the preset |
 
 ```d2
 direction: right

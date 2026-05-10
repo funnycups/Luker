@@ -2,7 +2,7 @@
  * CardApp Context - builds the ctx object passed to CardApp's init() function.
  */
 
-import { eventSource, event_types, chat, chat_metadata, this_chid, characters, getRequestHeaders, openCharacterChat, doNewChat, closeCurrentChat, getPastCharacterChats, deleteMessage as lukerDeleteMessage, deleteLastMessage, swipe_right, saveCharacterDebounced, saveMetadata, messageFormatting, getChatState as lukerGetChatState, updateChatState as lukerUpdateChatState, patchChatState as lukerPatchChatState, deleteChatState as lukerDeleteChatState } from '../../../script.js';
+import { eventSource, event_types, chat, chat_metadata, this_chid, characters, getRequestHeaders, openCharacterChat, doNewChat, closeCurrentChat, getPastCharacterChats, deleteMessage as lukerDeleteMessage, deleteLastMessage, swipe_right, saveCharacterDebounced, saveMetadata, messageFormatting, getChatState as lukerGetChatState, updateChatState as lukerUpdateChatState, patchChatState as lukerPatchChatState, deleteChatState as lukerDeleteChatState, deleteCharacterChatByName, renameChat as lukerRenameChat } from '../../../script.js';
 import { getContext, saveMetadataDebounced, extension_settings, getCharacterState as lukerGetCharacterState, setCharacterState as lukerSetCharacterState } from '../../extensions.js';
 import { executeSlashCommandsWithOptions } from '../../slash-commands.js';
 import { removeReasoningFromString } from '../../reasoning.js';
@@ -398,26 +398,46 @@ export function buildContext(container, charId, config) {
         // ==================== Chat Management ====================
 
         /**
-         * Get list of all chats for the current character.
-         * @returns {Promise<Array<{file_name: string, mes: string, last_mes: string, file_size: number}>>}
+         * List all chats for the current character. Returned items are at
+         * application-level — backend filesystem terms (`.jsonl`, raw
+         * `file_name`) are stripped before they reach CardApp code so the
+         * `chatId` value can flow back into `switchChat` / `deleteChat` /
+         * `renameChat` without any client-side parsing.
+         *
+         * @returns {Promise<Array<{chatId: string, preview: string, lastUpdated: number, size: number|string}>>}
+         *   `chatId` — stable identifier for this chat (no extension).
+         *   `preview` — first message text snippet, suitable for a list cell.
+         *   `lastUpdated` — last-modified timestamp from the server.
+         *   `size` — formatted file size from the server (string like "12.3 KB").
          */
         async getChatList() {
             const context = getContext();
             if (!context.characterId && context.characterId !== 0) return [];
-            return await getPastCharacterChats(context.characterId);
+            const raw = await getPastCharacterChats(context.characterId);
+            return (Array.isArray(raw) ? raw : []).map(item => ({
+                chatId: String(item?.file_id || String(item?.file_name || '').replace(/\.jsonl$/i, '') || ''),
+                preview: String(item?.mes || ''),
+                lastUpdated: Number(item?.last_mes ?? 0),
+                size: item?.file_size ?? 0,
+            }));
         },
 
         /**
-         * Switch to a different chat.
-         * @param {string} chatName - The chat file name to switch to
+         * Switch to a different chat by id. Accepts both the canonical
+         * `chatId` (no extension) returned by `getChatList` and a raw
+         * `*.jsonl` filename — the trailing extension is stripped before
+         * dispatching, matching the server's expectation.
+         * @param {string} chatId
          * @returns {Promise<void>}
          */
-        async switchChat(chatName) {
-            await openCharacterChat(chatName);
+        async switchChat(chatId) {
+            const id = String(chatId || '').replace(/\.jsonl$/i, '');
+            if (!id) return;
+            await openCharacterChat(id);
         },
 
         /**
-         * Create a new chat.
+         * Create a new chat for the current character.
          * @returns {Promise<void>}
          */
         async newChat() {
@@ -430,6 +450,35 @@ export function buildContext(container, charId, config) {
          */
         async closeChat() {
             await closeCurrentChat();
+        },
+
+        /**
+         * Delete a past chat by id. Accepts both the canonical `chatId`
+         * (no extension) and a raw `*.jsonl` filename. Operates on the
+         * currently active character; deletion is permanent.
+         * @param {string} chatId
+         * @returns {Promise<void>}
+         */
+        async deleteChat(chatId) {
+            const id = String(chatId || '').replace(/\.jsonl$/i, '');
+            if (!id) return;
+            const context = getContext();
+            if (context.characterId === undefined || context.characterId === null) return;
+            await deleteCharacterChatByName(String(context.characterId), id);
+        },
+
+        /**
+         * Rename a past chat. Accepts canonical `chatId` (no extension);
+         * `*.jsonl` suffix is tolerated on either argument and stripped.
+         * @param {string} oldChatId
+         * @param {string} newChatId
+         * @returns {Promise<void>}
+         */
+        async renameChat(oldChatId, newChatId) {
+            const oldId = String(oldChatId || '').replace(/\.jsonl$/i, '');
+            const newId = String(newChatId || '').replace(/\.jsonl$/i, '');
+            if (!oldId || !newId) return;
+            await lukerRenameChat(oldId, newId);
         },
 
         // ==================== Slash Commands ====================

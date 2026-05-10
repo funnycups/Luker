@@ -12,7 +12,7 @@ import {
 } from '../../function-call-runtime.js';
 import { fetchFileList, fetchFileContent, saveFileContent, deleteFile, renameFile } from './studio.js';
 import { characters, this_chid, saveCharacterDebounced, saveMetadata, chat_metadata, getRequestHeaders } from '../../../../script.js';
-import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, createNewWorldInfo, world_names, selected_world_info, charUpdatePrimaryWorld, getChatWorldInfoNames, setChatWorldInfoSelection, getCharaAuxWorlds } from '../../../world-info.js';
+import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, createNewWorldInfo, world_names, selected_world_info, charUpdatePrimaryWorld, getChatWorldInfoNames, getCharaAuxWorlds, importEmbeddedWorldInfo, getCharacterEmbeddedWorld } from '../../../world-info.js';
 import { getCharaFilename } from '../../../utils.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { getContext } from '../../../st-context.js';
@@ -56,10 +56,9 @@ const TOOL_NAMES = Object.freeze({
  WORLDINFO_CREATE_ENTRY: 'worldinfo_create_entry',
  WORLDINFO_UPDATE_ENTRY: 'worldinfo_update_entry',
  WORLDINFO_DELETE_ENTRY: 'worldinfo_delete_entry',
- WORLDINFO_GET_CHAT_BOOKS: 'worldinfo_get_chat_books',
- WORLDINFO_SET_CHAT_BOOKS: 'worldinfo_set_chat_books',
- WORLDINFO_CREATE_CHAT_BOOK: 'worldinfo_create_chat_book',
+ WORLDINFO_CREATE_BOOK: 'worldinfo_create_book',
  WORLDINFO_REPLACE_ENTRIES: 'worldinfo_replace_entries',
+ CHARACTER_IMPORT_EMBEDDED_WORLD: 'character_import_embedded_world',
  REGEX_LIST_SCRIPTS: 'regex_list_scripts',
  REGEX_CREATE_SCRIPT: 'regex_create_script',
  REGEX_UPDATE_SCRIPT: 'regex_update_script',
@@ -173,7 +172,7 @@ function buildTools() {
  type: 'function',
  function: {
  name: TOOL_NAMES.CHARACTER_GET_FIELDS,
- description: 'Get all editable fields of the current character card (name, description, personality, scenario, first_mes, mes_example, system_prompt, post_history_instructions, creator_notes, creator, character_version, tags, talkativeness, world (bound world book name), depth_prompt settings).',
+ description: 'Get all editable fields of the current character card (name, description, personality, scenario, first_mes, mes_example, system_prompt, post_history_instructions, creator_notes, creator, character_version, tags, talkativeness, world (bound world book name), depth_prompt settings, embedded_world). The embedded_world field reports the V2/V3 character_book carried inside the card PNG: { present, name, entryCount, bound }. When present=true && bound=false, the card was imported with an embedded book that has not yet been turned into a real world book file — call character_import_embedded_world to import it. When present=true && bound=true, the embedded book is just a stale mirror of the bound world (post-export artifact) and can be ignored.',
  parameters: { type: 'object', properties: {}, additionalProperties: false },
  },
  },
@@ -201,7 +200,7 @@ function buildTools() {
  type: 'function',
  function: {
  name: TOOL_NAMES.WORLDINFO_LIST_BOOKS,
- description: 'List world book names visible to the current character: character primary (from character.data.extensions.world — the card\'s primary book), character auxiliary (from world_info.charLore[].extraBooks — extra books bound via Luker\'s lorebook editor), chat-bound (from chat_metadata.world_info — per-save state, resets on new chat), and globally activated (selected_world_info — every chat). Returns { books: string[], sources: { [name]: \'character\'|\'character_aux\'|\'chat\'|\'global\' } } so you can tell which book lives at which scope. For chat-bound-only listing use worldinfo_get_chat_books.',
+ description: 'List world book names visible to the current character: character primary (from character.data.extensions.world — the card\'s primary book), character auxiliary (from world_info.charLore[].extraBooks — extra books bound via Luker\'s lorebook editor), chat-bound (from chat_metadata.world_info — per-save state, resets on new chat), and globally activated (selected_world_info — every chat). Returns { books: string[], sources: { [name]: \'character\'|\'character_aux\'|\'chat\'|\'global\' } } so you can tell which book lives at which scope. Chat-bound mutation is a CardApp runtime concern (use ctx.setChatWorldBooks in card code) — Studio reads via this tool but never mutates chat-bound bindings.',
  parameters: { type: 'object', properties: {}, additionalProperties: false },
  },
  },
@@ -301,39 +300,24 @@ function buildTools() {
  {
  type: 'function',
  function: {
- name: TOOL_NAMES.WORLDINFO_GET_CHAT_BOOKS,
- description: 'Get the list of world book names bound to the CURRENT chat (from chat_metadata.world_info). Distinct from worldinfo_list_books which mixes character-bound + global. Chat-bound books reset when the user starts a new chat — use them for per-save lore/state that should not bleed across playthroughs.',
- parameters: { type: 'object', properties: {}, additionalProperties: false },
- },
- },
- {
- type: 'function',
- function: {
- name: TOOL_NAMES.WORLDINFO_SET_CHAT_BOOKS,
- description: 'Replace the chat-bound world book list (writes chat_metadata.world_info and saves chat metadata). Names that do not match an existing world book are silently dropped. Pass an empty array to clear. Always scoped to the active chat — never touches the character card or global selected_world_info.',
+ name: TOOL_NAMES.WORLDINFO_CREATE_BOOK,
+ description: 'Create a new empty world book file (no side effects — does NOT bind to character or chat). Use this when you need a book to exist before binding it as the character primary world (via character_update_fields({fields:{world: name}})) or before populating entries. Idempotent on existing names: if a book with that name already exists, returns success without modifying it. The created book has zero entries — populate via worldinfo_create_entry / worldinfo_replace_entries afterwards.',
  parameters: {
  type: 'object',
  properties: {
- names: { type: 'array', items: { type: 'string' }, description: 'Full replacement list of world book names. Empty array = clear.' },
- },
- required: ['names'],
- additionalProperties: false,
- },
- },
- },
- {
- type: 'function',
- function: {
- name: TOOL_NAMES.WORLDINFO_CREATE_CHAT_BOOK,
- description: 'Create a world book file and bind it to the CURRENT chat in one call. Idempotent: if a book of that name already exists, skip creation and just bind it. Use this instead of worldinfo_create_entry to start a new chat-bound book — worldinfo_create_entry does NOT auto-create books and will fail on a missing name. Result: chat_metadata.world_info gains the name, and the book file exists on disk (empty entries until you populate it).',
- parameters: {
- type: 'object',
- properties: {
- book_name: { type: 'string', description: 'World book name to create + bind' },
+ book_name: { type: 'string', description: 'World book name to create.' },
  },
  required: ['book_name'],
  additionalProperties: false,
  },
+ },
+ },
+ {
+ type: 'function',
+ function: {
+ name: TOOL_NAMES.CHARACTER_IMPORT_EMBEDDED_WORLD,
+ description: 'Import the V2/V3 embedded world book (data.character_book) carried by a third-party PNG card and bind it as the character primary world. Use when character_get_fields returns embedded_world.present === true && embedded_world.bound === false — i.e. the card was imported with an embedded book that has not yet been turned into a real world book file. After import, the embedded book becomes a standalone world book file (named after the embedded book) and character.data.extensions.world is set to point at it. Idempotent on already-imported state: when bound is already true this call is a no-op.',
+ parameters: { type: 'object', properties: {}, additionalProperties: false },
  },
  },
  {
@@ -344,7 +328,7 @@ function buildTools() {
  parameters: {
  type: 'object',
  properties: {
- book_name: { type: 'string', description: 'World book name (must exist — use worldinfo_create_chat_book first if creating from scratch)' },
+ book_name: { type: 'string', description: 'World book name (must exist — use worldinfo_create_book first if creating from scratch)' },
  entries: {
  type: 'array',
  description: 'Full replacement entry set. Each item is a partial entry; missing fields fall back to template defaults.',
@@ -813,6 +797,7 @@ async function executeTool(charId, toolName, args, options = {}) {
  depth_prompt_prompt: d.depth_prompt?.prompt || '',
  depth_prompt_depth: d.depth_prompt?.depth ?? 4,
  depth_prompt_role: d.depth_prompt?.role || 'system',
+ embedded_world: getCharacterEmbeddedWorld(this_chid),
  },
  };
  }
@@ -958,31 +943,47 @@ async function executeTool(charId, toolName, args, options = {}) {
  await saveWorldInfo(args.book_name, data, true);
  return { ok: true, message: `Entry ${args.uid} deleted` };
  }
- case TOOL_NAMES.WORLDINFO_GET_CHAT_BOOKS: {
- try {
- return { ok: true, books: getChatWorldInfoNames(chat_metadata) };
- } catch (e) {
- return { ok: false, error: `Failed to read chat-bound books: ${e?.message || e}` };
- }
- }
- case TOOL_NAMES.WORLDINFO_SET_CHAT_BOOKS: {
- const list = Array.isArray(args?.names) ? args.names : [];
- const written = setChatWorldInfoSelection(list, chat_metadata);
- await saveMetadata();
- return { ok: true, books: written, message: `Chat-bound world books updated (${written.length} active).` };
- }
- case TOOL_NAMES.WORLDINFO_CREATE_CHAT_BOOK: {
+ case TOOL_NAMES.WORLDINFO_CREATE_BOOK: {
  const name = String(args?.book_name || '').trim();
  if (!name) return { ok: false, error: 'book_name required' };
- if (!world_names.includes(name)) {
+ if (world_names.includes(name)) {
+ return { ok: true, book_name: name, message: `World book "${name}" already exists.`, created: false };
+ }
  const created = await createNewWorldInfo(name, { interactive: false });
  if (!created) return { ok: false, error: `Failed to create world book "${name}"` };
+ return { ok: true, book_name: name, message: `World book "${name}" created.`, created: true };
  }
- const current = getChatWorldInfoNames(chat_metadata);
- const next = current.includes(name) ? current : [...current, name];
- const written = setChatWorldInfoSelection(next, chat_metadata);
- await saveMetadata();
- return { ok: true, book_name: name, books: written, message: `Bound chat to world book "${name}".` };
+ case TOOL_NAMES.CHARACTER_IMPORT_EMBEDDED_WORLD: {
+ if (this_chid === undefined || this_chid === null) {
+ return { ok: false, error: 'No active character' };
+ }
+ const charData = characters[this_chid];
+ const book = charData?.data?.character_book;
+ if (!book) {
+ return { ok: false, error: 'No embedded world book on this character (data.character_book is empty).' };
+ }
+ const boundName = String(charData?.data?.extensions?.world || '').trim();
+ if (boundName && world_names.includes(boundName)) {
+ return { ok: true, message: `Character is already bound to world "${boundName}"; embedded book skipped.`, imported: false, world: boundName };
+ }
+ // Mirror the UI flow in importEmbeddedWorldInfo: stash the chid on the
+ // hidden #import_character_info element, call the importer, then clear.
+ // The importer reads the chid from there and writes the book file +
+ // sets character.data.extensions.world to the imported name.
+ const $info = $('#import_character_info');
+ const previousChid = $info.data('chid');
+ $info.data('chid', this_chid);
+ try {
+ await importEmbeddedWorldInfo(true);
+ } finally {
+ if (previousChid === undefined) {
+ $info.removeData('chid');
+ } else {
+ $info.data('chid', previousChid);
+ }
+ }
+ const importedName = String(characters[this_chid]?.data?.extensions?.world || '').trim();
+ return { ok: true, message: `Embedded world imported and bound as "${importedName}".`, imported: true, world: importedName };
  }
  case TOOL_NAMES.WORLDINFO_REPLACE_ENTRIES: {
  const data = await loadWorldInfo(args?.book_name);
@@ -1474,12 +1475,12 @@ Once the layer set is decided, move on to the actual card content (description, 
 - ctx.updateCharacterFields(fields) async — Update card fields (description, personality, scenario, first_mes, mes_example, world, etc.). Same field names as the Studio \`character_update_fields\` tool. Use sparingly from CardApp runtime; most card content is set at authoring time.
 - ctx.getVariable(key) — Get chat variable (use this for HP / gold / affinity / inventory / quest flags — i.e. anything macro-driven and AI-mutable)
 - ctx.setVariable(key, value) — Set chat variable (persisted via op-log)
-- ctx.getChatState(namespace, options?) async — Read chat-bound sidecar namespace (server-backed via /api/chats/state/, NOT chat_metadata). Use for structured CardApp state that doesn't fit a flat variable.
-- ctx.updateChatState(namespace, updater, options?) async — Reducer-style write of chat-bound sidecar. Returns { ok, state, updated }.
-- ctx.patchChatState(namespace, operations, options?) async — Apply JSON-patch ops to chat-bound sidecar.
-- ctx.deleteChatState(namespace, options?) async — Drop a chat-bound sidecar namespace.
-- ctx.getCharacterState(namespace) async — Read character-bound sidecar (avatar auto-resolved). Survives across every chat with this character — for plugin/CardApp config, not per-run state.
-- ctx.setCharacterState(namespace, data) async — Write character-bound sidecar (avatar auto-resolved). Pass null to delete.
+- ctx.getChatState(namespace, options?) async — Read a chat-bound state namespace (server-backed via /api/chats/state/, NOT chat_metadata). Use for structured CardApp state that doesn't fit a flat variable.
+- ctx.updateChatState(namespace, updater, options?) async — Reducer-style write of chat-bound state. Returns { ok, state, updated }.
+- ctx.patchChatState(namespace, operations, options?) async — Apply JSON-patch ops to chat-bound state.
+- ctx.deleteChatState(namespace, options?) async — Drop a chat-bound state namespace.
+- ctx.getCharacterState(namespace) async — Read character-bound state (avatar auto-resolved). Survives across every chat with this character — for plugin/CardApp config, not per-run state.
+- ctx.setCharacterState(namespace, data) async — Write character-bound state (avatar auto-resolved). Pass null to delete.
 
 ### Chat Management
 - ctx.getChatList() — List all chats for this character
@@ -1596,16 +1597,21 @@ exact slash command name, argument shape, or lukerContext property:
 - **worldinfo_get_entries / worldinfo_create_entry / worldinfo_update_entry / worldinfo_delete_entry / worldinfo_replace_entries**
   — Read and mutate entries inside an **existing** book. \`worldinfo_create_entry\`
   does NOT auto-create books — it fails on a missing book name; create the file
-  first via \`worldinfo_create_chat_book\` (see below). \`worldinfo_replace_entries\`
-  is destructive (wipes all entries + reassigns uids) — use it for the
-  "regenerate from a variable object" pattern, not for incremental edits.
-- **worldinfo_get_chat_books / worldinfo_set_chat_books / worldinfo_create_chat_book**
-  — Read, replace, or create+bind the chat-bound book list
-  (\`chat_metadata.world_info\`). \`worldinfo_create_chat_book\` is the only
-  book-file-creating tool in Studio: pass a name and it creates the file +
-  binds it to the current chat in one shot (idempotent on existing names).
-  See "Chat-bound world books" below for when to attach one — and "Editing
-  the character card" for the special case of creating a primary book.
+  first via \`worldinfo_create_book\`. \`worldinfo_replace_entries\` is destructive
+  (wipes all entries + reassigns uids) — use it for the "regenerate from a
+  variable object" pattern, not for incremental edits.
+- **worldinfo_create_book({book_name})** — Create an empty world book file with
+  no side effects. Idempotent on existing names. Use this before binding a book
+  as character primary (via \`character_update_fields({fields: {world: name}})\`)
+  or before populating entries. Studio has no chat-binding tool — chat-bound
+  binding is a CardApp runtime concern (use \`ctx.setChatWorldBooks\` /
+  \`ctx.createChatWorldBook\` from card code).
+- **character_import_embedded_world** — Import the V2/V3 \`data.character_book\`
+  carried inside a third-party PNG card as a real world book file and bind it
+  as character primary. Call when \`character_get_fields\` returns
+  \`embedded_world.present === true && embedded_world.bound === false\` (i.e. the
+  card was imported with an embedded book that has not yet been turned into a
+  standalone book). No-op when already bound.
 - **character_update_fields({fields: { world: "..." }})** — Bind / change the
   character's primary world book. Pass \`""\` to unbind.
 - **character_get_orchestrator / character_update_orchestrator / character_clear_orchestrator**
@@ -1631,17 +1637,17 @@ ctx.lukerContext.X(...) or ctx.executeSlashCommand('/X ...') calls. Don't guess
 slash command syntax — the help tool tells you whether arguments are named
 (key=value) or unnamed, and which enums are valid.
 
-## Chat-state sidecar — and Floor State on top of it
+## Chat state — and Floor State on top of it
 
 Per-chat state in CardApps lives in one of two places, picked by **what kind of data it is**, not by mechanism:
 
 - **Scalars the AI mutates** (HP, gold, affinity, inventory text, quest flags) → \`ctx.setVariable\` / \`ctx.getVariable\`. Driven by op-log macros (\`{{setvar::...}}\`, \`{{addvar::...}}\`) the AI emits inside replies; world books and the CardApp UI read them via \`{{getvar::name}}\` and \`ctx.getVariable\`. Survives swipes / deletes through the op-log replay. **This is the default** — reach for chat-state below only when chat variables genuinely don't fit.
 
-- **Structured namespaces only the CardApp owns** (UI panel state objects, settled tracker payloads, anything you'd otherwise reach for "a JSON store" for) → \`ctx.getChatState\` / \`ctx.updateChatState\` / \`ctx.patchChatState\`. These hit the chat-state sidecar at \`/api/chats/state/\` — the same store the rest of Luker (memory-graph, orchestrator, search-tools) uses via \`getContext().getChatState\`. Per-chat scope; the data is durable across reloads but resets on a new chat. Don't put AI-mutable scalars here — they belong in chat variables where macros can reach them.
+- **Structured namespaces only the CardApp owns** (UI panel state objects, settled tracker payloads, anything you'd otherwise reach for "a JSON store" for) → \`ctx.getChatState\` / \`ctx.updateChatState\` / \`ctx.patchChatState\`. These hit the chat state store (server-backed at \`/api/chats/state/\`) — the same store the rest of Luker (memory-graph, orchestrator, search-tools) uses via \`getContext().getChatState\`. Per-chat scope; the data is durable across reloads but resets on a new chat. Don't put AI-mutable scalars here — they belong in chat variables where macros can reach them.
 
 ### Floor State
 
-\`Floor State\` is a thin layer on top of the chat-state sidecar that logs every write at the chat tail (floor index + swipe id) and replays surviving commits whenever the chat structure changes. Use it when your structured state needs to **follow swipes, message deletions, and chat switches automatically** — game progress that should rewind when the user swipes back, trackers that should stay consistent with the active conversation path, etc. Without Floor State, \`ctx.updateChatState\` writes the sidecar but doesn't track which floor the write happened on, so swipe-back leaves stale state.
+\`Floor State\` is a thin layer on top of chat state that logs every write at the chat tail (floor index + swipe id) and replays surviving commits whenever the chat structure changes. Use it when your structured state needs to **follow swipes, message deletions, and chat switches automatically** — game progress that should rewind when the user swipes back, trackers that should stay consistent with the active conversation path, etc. Without Floor State, \`ctx.updateChatState\` writes the underlying namespace but doesn't track which floor the write happened on, so swipe-back leaves stale state.
 
 \`\`\`js
 // During init (it's async; create once and reuse the instance):
@@ -1664,7 +1670,7 @@ const latest = await fs.get();
 
 ### Hard rules (violating these breaks state)
 
-- One namespace, one owner. Do NOT mix \`ctx.updateChatState(ns, ...)\` / \`ctx.patchChatState(ns, ...)\` and \`fs.update(...)\` against the same namespace — they write the same sidecar object, but Floor State's floor-rebuild replays the commit log and will overwrite any direct write that wasn't logged. Pick one access path per namespace.
+- One namespace, one owner. Do NOT mix \`ctx.updateChatState(ns, ...)\` / \`ctx.patchChatState(ns, ...)\` and \`fs.update(...)\` against the same namespace — they write the same backing state object, but Floor State's floor-rebuild replays the commit log and will overwrite any direct write that wasn't logged. Pick one access path per namespace.
 - Reducer must return a plain object. Returning array, primitive, null, or undefined is treated as "no change" (no commit, silent).
 - Each instance owns one namespace. Create separate instances per logical state slice.
 - Namespaces ending in \`__floor_log\` are reserved for private commit logs.
@@ -1695,7 +1701,7 @@ These two are power-user prompt-engineering fields. Most cards in the wild leave
 
 **Where this content goes instead: world books.** State injection blocks, macro vocabularies, location descriptions, NPC rules — anything that's *content for the LLM* — goes into world book entries. Bind one book to the character via \`character_update_fields({fields: { world: "book_name" }})\` (single book name, no \`.json\` extension; the \`fields\` wrapper is required). See "Where to put the AI instructions" below for positioning details.
 
-**You own the character's primary world book.** When the user asks you to add lore, NPCs, rules, or state injection to a card, you create / edit / delete entries in the bound world book directly via \`worldinfo_create_entry\` / \`worldinfo_update_entry\` / \`worldinfo_delete_entry\`. Don't tell the user to "open the World Info editor and do X" — that's your job in this Studio. If no book is bound yet, pick a name (the character name is fine), bind it via \`character_update_fields({fields: { world: "book_name" }})\`, and create the file with \`worldinfo_create_chat_book({book_name: "book_name"})\`. \`worldinfo_create_chat_book\` is the only book-file-creating tool — it also binds to the current chat as a side effect, but with the primary binding in place that's harmless: the chat binding resets on the next chat, the primary stays.
+**You own the character's primary world book.** When the user asks you to add lore, NPCs, rules, or state injection to a card, you create / edit / delete entries in the bound world book directly via \`worldinfo_create_entry\` / \`worldinfo_update_entry\` / \`worldinfo_delete_entry\`. Don't tell the user to "open the World Info editor and do X" — that's your job in this Studio. If no book is bound yet, first check \`character_get_fields\` for \`embedded_world.present === true && bound === false\` — if so, the card carries a V2/V3 embedded book and you should call \`character_import_embedded_world\` to import + bind it in one step. Otherwise pick a name (the character name is fine), create the file with \`worldinfo_create_book({book_name: "book_name"})\`, then bind via \`character_update_fields({fields: { world: "book_name" }})\`. \`worldinfo_create_book\` is the only book-file-creating tool in Studio and has no side effects — it just creates an empty file.
 
 **Other characters in the scenario.** A character card describes ONE persona — the primary character the AI plays. Side characters, NPCs, mentioned-only roles, antagonists, multi-character scenarios where the AI alternates personas — all of these live in world book entries, never in \`character.description\`. Each non-primary character gets its own keyword entry (key includes their name and any aliases), so they activate when referenced. State variables for those characters use a per-character namespace (e.g. \`npc_alice_affinity\`, \`npc_bob_trust\`, \`npc_carol_hp\`) and join the same state-injection entry as the primary character's stats.
 
@@ -1727,10 +1733,10 @@ Pick storage by lifetime. Getting this wrong leaves ghost state from a previous 
 | Surface | Scope | Reset on |
 |---------|-------|----------|
 | Chat variables (\`chat_metadata.variables\` — op-log target, \`ctx.getVariable\`/\`ctx.setVariable\`) | Per chat per character | New chat created or switched-to |
-| Chat-state sidecar namespaces (server-backed via \`/api/chats/state/\`, \`ctx.getChatState\` / \`ctx.updateChatState\` / \`ctx.patchChatState\` / \`ctx.deleteChatState\`; or wrapped by Floor State for swipe/delete replay) | Per chat per character | New chat |
-| **Chat-bound world books** (\`chat_metadata.world_info\` — \`worldinfo_get_chat_books\` / \`worldinfo_set_chat_books\`) | Per chat per character | New chat |
+| Chat state namespaces (server-backed via \`/api/chats/state/\`, \`ctx.getChatState\` / \`ctx.updateChatState\` / \`ctx.patchChatState\` / \`ctx.deleteChatState\`; or wrapped by Floor State for swipe/delete replay) | Per chat per character | New chat |
+| **Chat-bound world books** (\`chat_metadata.world_info\` — read in Studio via \`worldinfo_list_books\` sources map; mutate from CardApp via \`ctx.setChatWorldBooks\` / \`ctx.createChatWorldBook\`) | Per chat per character | New chat |
 | Character card fields (\`description\`, \`first_mes\`, \`extensions.world\`, …) | Per character — shared across **every** chat with that character | Character deleted |
-| Character-state sidecar namespaces (server-backed, \`ctx.getCharacterState\` / \`ctx.setCharacterState\`) | Per character — shared across every chat with that character | Character deleted |
+| Character state namespaces (server-backed, \`ctx.getCharacterState\` / \`ctx.setCharacterState\`) | Per character — shared across every chat with that character | Character deleted |
 | Character-bound (primary) world book entries | Per book — shared across every chat using this character | Book deleted |
 | Globally activated world books (\`selected_world_info\`) | Every chat for every character that has them active | User toggles them off / book deleted |
 
@@ -1738,7 +1744,7 @@ Per-run progression (this dungeon's HP, current floor, gold gathered, what's bee
 
 Persistent character knowledge / world facts (location list, NPC personas, item catalogs, cast roster, scenario premise) → **character-bound world book entries**. Survives across runs, isn't wiped by "new game".
 
-Per-save lore that *appears* during this playthrough but shouldn't bleed into the next run (a custom NPC the user invented mid-chat, a location they discovered, branching world-state from a choice they made) → **chat-bound world book**. It activates the same way as character-bound (keyword scan + constant-true), but vanishes when they start a new chat. Use \`worldinfo_set_chat_books\` to attach an existing book; create the book first via \`worldinfo_create_entry\` (book name doesn't have to look chat-specific — what matters is which scope ATTACHES it).
+Per-save lore that *appears* during this playthrough but shouldn't bleed into the next run (a custom NPC the user invented mid-chat, a location they discovered, branching world-state from a choice they made) → **chat-bound world book**. It activates the same way as character-bound (keyword scan + constant-true), but vanishes when they start a new chat. Studio cannot mutate chat-bound bindings directly — that's runtime state managed by the CardApp at play time (\`ctx.createChatWorldBook(name)\` from card code creates a book and binds it to the active chat in one shot). At Studio time you author the *book* (create the file via \`worldinfo_create_book\`, populate entries) and the CardApp wires up the binding when the player runs the card.
 
 Character voice, primary persona, opening scene, alternate greetings → **character card** fields. Never resets unless the character is deleted.
 
@@ -1809,13 +1815,12 @@ When to attach a chat-bound book:
 - **Session-specific overlay.** A one-shot scenario the user is playing once (a session-specific dungeon, a holiday event); attach a book for the run, leave the character's primary book clean.
 - **User-authored content discovered in-chat.** The user pastes a setting note ("the merchant's name is Henrik, he's mute"); rather than mutating the character-bound book, append a chat-bound entry so it lives only here.
 
-Tools:
+Where authoring vs runtime split:
 
-- \`worldinfo_get_chat_books\` → string[] of names currently bound to this chat
-- \`worldinfo_set_chat_books({names: [...]})\` → full replacement (empty array clears)
-- \`worldinfo_list_books\` returns a \`sources\` map labeling each visible book \`'character'\` / \`'character_aux'\` / \`'chat'\` / \`'global'\` so you can tell at a glance which scope owns it.
+- **Studio (authoring) creates the book file and populates entries.** Use \`worldinfo_create_book({book_name})\` once at design time, then \`worldinfo_create_entry\` / \`worldinfo_update_entry\` / \`worldinfo_replace_entries\` to fill it. Read the visible books map (with \`'chat'\` source flag) via \`worldinfo_list_books\`.
+- **CardApp (runtime) wires up the binding when the player plays the card.** Card code calls \`ctx.createChatWorldBook(name)\` (creates + binds in one shot, idempotent on existing books) or \`ctx.setChatWorldBooks([...])\` to swap the active list. Studio has no chat-binding tool — by design, since chat-bound state belongs to the running game, not the authored card.
 
-To create a NEW chat-bound book: call \`worldinfo_create_chat_book({book_name: "..."})\` — it creates the file AND binds it to the current chat in one shot (idempotent: a name that already exists is just bound). Book file persists; the chat binding resets on new chat. After that, use the entry tools (\`worldinfo_create_entry\` / \`worldinfo_update_entry\` / \`worldinfo_replace_entries\`) to populate it.
+So the typical flow for a "chat-bound book" feature: at Studio time, design the book and create the empty file; in the CardApp's \`init(ctx)\` (or a player-action handler), call \`ctx.createChatWorldBook(name)\` so each fresh chat starts with the book bound. After that the CardApp can populate / replace entries via \`ctx.replaceWorldBookEntries\` / \`ctx.createWorldBookEntry\` etc., per the variable-driven pattern below.
 
 ### Variable-driven dynamic world book entries (optional pattern)
 
@@ -1925,7 +1930,7 @@ Each scanned op is recorded in \`message.extra.var_ops\` (per-swipe), forward-ap
 
 ### Where to put the AI instructions
 
-All AI-facing instructions — state injection, macro vocabulary, lore, conditional rules — live in **world book entries**, never in \`character.system_prompt\` (see "Editing the character card" above). Bind a book to the character with \`character_update_fields({fields: { world: "book_name" }})\`. If the book file doesn't exist on disk yet, see "Editing the character card" above for the create-then-bind flow (it uses \`worldinfo_create_chat_book\` as the file creator) — \`worldinfo_create_entry\` does NOT auto-create books.
+All AI-facing instructions — state injection, macro vocabulary, lore, conditional rules — live in **world book entries**, never in \`character.system_prompt\` (see "Editing the character card" above). Bind a book to the character with \`character_update_fields({fields: { world: "book_name" }})\`. If the book file doesn't exist on disk yet, see "Editing the character card" above for the create-then-bind flow (it uses \`worldinfo_create_book\` as the file creator) — \`worldinfo_create_entry\` does NOT auto-create books.
 
 Position depends on what kind of content it is:
 

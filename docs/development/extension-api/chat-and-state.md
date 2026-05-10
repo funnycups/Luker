@@ -407,6 +407,44 @@ openCharacterChat(fileName: string): Promise<void>
 
 Switches to a different chat for the current character. Clears the current chat data first.
 
+### closeCurrentChat
+
+```ts
+closeCurrentChat(): Promise<boolean>
+```
+
+Closes the active chat and returns the user to the character list. Returns `true` on success, `false` if a generation is in progress and the user declined to stop it.
+
+### doNewChat
+
+```ts
+doNewChat(options?: { deleteCurrentChat?: boolean }): Promise<void>
+```
+
+Creates a fresh chat for the active character. With `deleteCurrentChat: true`, the previously active chat file is removed (use sparingly — destructive).
+
+### getPastCharacterChats
+
+```ts
+getPastCharacterChats(characterId?: number): Promise<Array<{
+    file_name: string,    // includes ".jsonl" — strip via path.parse(name).name if you want the chat id
+    file_id: string,      // basename without ".jsonl"; this is the form openCharacterChat expects
+    file_size: string,    // formatted size (e.g. "12.3 KB")
+    mes: string,          // first message preview
+    last_mes: number,     // last-modified timestamp (ms)
+}>>
+```
+
+List all chats stored for a character. Defaults to the current character (`this_chid`) when `characterId` is omitted. The `file_id` field is the application-level chat identifier — pass it back into `openCharacterChat` / `deleteCharacterChat` / `renameChat` (those expect names without the `.jsonl` extension).
+
+### deleteCharacterChat
+
+```ts
+deleteCharacterChat(characterId: string, fileName: string): Promise<void>
+```
+
+Permanently delete a past chat for the named character. `fileName` is the chat id (no extension); a trailing `.jsonl` is tolerated and stripped.
+
 ### openGroupChat
 
 ```ts
