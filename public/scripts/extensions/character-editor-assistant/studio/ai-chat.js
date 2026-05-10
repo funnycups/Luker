@@ -2356,7 +2356,9 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  // Studio is a dev/authoring tool — the character card is visible (so the
  // AI knows the persona it's authoring without GETting first), but world
  // info stays empty: world books are content the Studio AI edits, not
- // context it should reason against.
+ // context it should reason against. substituteMacros:false keeps
+ // {{user}}/{{char}}/etc. in conversation messages literal so the AI sees
+ // the source text it is asked to edit, not the rendered version.
  const result = await ctx.generateTask({
  taskMessages: [
  { role: 'system', content: fullSystemPrompt },
@@ -2374,6 +2376,7 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
  },
  abortSignal: abortSignal || undefined,
+ substituteMacros: false,
  });
 
  if (abortSignal?.aborted) {

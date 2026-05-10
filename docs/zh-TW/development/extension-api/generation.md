@@ -48,6 +48,7 @@ context.generateTask({
     functionCallMode?: 'auto' | 'native' | 'prompt_xml' | 'prompt_json' = 'auto',
     functionCallOptions?: object | null = null,   // 例如 { protocolStyle, requiredFunctionName }
     abortSignal?: AbortSignal | null = null,
+    substituteMacros?: boolean = true,            // 解析 taskMessages.content 中的 {{...}};編輯器類流程需關閉
 }): Promise<{
     assistantText: string,
     toolCalls: Array<{ name, args, raw }>,
@@ -69,6 +70,28 @@ context.generateTask({
 | `'custom'` | 基於你顯式提供的 `customWorldInfoMessages` 啟用。 |
 
 如果已經有解析好的 WI 快照(例如重試迴圈中快取了一份),直接傳 `runtimeWorldInfo` 並把 `worldInfoSource` 設成 `'none'`,可以跳過重複啟用。
+
+### 巨集替換
+
+`substituteMacros` 預設為 `true`,`generateTask` 會在組裝前對每條 task 訊息的字串 `content` 跑一遍 `substituteParams`。這樣外掛請求裡也能解析跟主聊天路徑一致的 `{{...}}` 巨集 —— 包括 Luker 內建巨集(`{{user}}`、`{{char}}`、`{{persona}}`、`{{datetime}}`、`{{random:a,b}}` 等)和經由同一引擎註冊的擴充巨集(例如 MagVarUpdate 的 `{{getvar::}}` 系列)。
+
+帶副作用的巨集(`{{setvar::}}`、`{{addvar::}}`、`{{incvar::}}`、`{{decvar::}}`、`{{deletevar::}}`)會經由 `skipSideEffects: true` 直接剝除,否則外掛每次請求都會重新觸發這些寫入,並污染 `chat_metadata.variables`。
+
+#### 何時應該關閉
+
+對於**編輯/創作類**流程,把 `substituteMacros` 設為 `false`:這些情境下 AI 的工作是閱讀或編輯含 `{{...}}` 字面量的源文字,如果 `{{user}}` 在 AI 看到之前就被展開,模型就無法對源範本做比對、diff 或修改了。
+
+程式碼庫裡現有的具體例子:
+
+- 角色卡編輯器 —— AI 在改包含 `{{user}}` / `{{char}}` 佔位符的卡欄位。
+- 世界書 diff 分析 —— diff payload 裡的世界書條目所含的 `{{...}}` 本身就是分析對象。
+- 預設編輯器 —— AI 在改給最終使用者使用的提示詞預設正文,正文裡攜帶 `{{...}}` 巨集。
+- CardApp Studio AI —— 對話裡可能引用源文字片段供助手修改。
+
+判斷原則:
+
+- AI 在**生產**最終展示給使用者的內容 → 保持 `substituteMacros: true`。
+- AI 在**閱讀或編輯**含 `{{...}}` 佔位符的源文字 → 顯式 `substituteMacros: false`。
 
 ### 工具呼叫
 

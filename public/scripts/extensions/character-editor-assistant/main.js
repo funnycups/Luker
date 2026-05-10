@@ -3073,6 +3073,10 @@ async function requestLorebookToolCallsWithRetry(context, settings, {
                     protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
                 },
                 abortSignal: abortSignal || undefined,
+                // Authoring scope: AI is editing source text containing literal
+                // {{user}}/{{char}}/{{getvar::}} placeholders that must remain
+                // unrendered for the analysis/diff to be accurate.
+                substituteMacros: false,
             });
             throwIfAborted(abortSignal, 'Character editor request aborted.');
             const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
@@ -3248,6 +3252,10 @@ async function requestModelLorebookDiffAnalysis(context, plan) {
         runtimeWorldInfo: {},
         apiPresetName: requestPresetOptions.apiPresetName,
         llmPresetName: requestPresetOptions.llmPresetName,
+        // Authoring scope: userPrompt embeds the raw lorebook diff payload —
+        // any {{...}} placeholders inside it are part of the source under
+        // analysis and must not be resolved before the model sees them.
+        substituteMacros: false,
     });
 
     return {

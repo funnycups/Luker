@@ -43,6 +43,41 @@ function getDefaultSenders() {
     return ctx.generateTaskSenders || null;
 }
 
+function getDefaultSubstituteParams() {
+    const ctx = typeof globalThis.SillyTavern?.getContext === 'function'
+        ? globalThis.SillyTavern.getContext()
+        : null;
+    return typeof ctx?.substituteParams === 'function' ? ctx.substituteParams : null;
+}
+
+/**
+ * Run substituteParams over each task message's string content. Side-effect
+ * macros ({{setvar/addvar/incvar/decvar/deletevar}}) are stripped via
+ * `skipSideEffects:true` so plugin requests cannot mutate chat_metadata
+ * variables on every dispatch.
+ *
+ * @param {Array} taskMessages
+ * @param {(content: string, options?: object) => string} substituteParamsFn
+ * @returns {Array}
+ */
+export function applyMacroSubstitution(taskMessages, substituteParamsFn) {
+    if (!Array.isArray(taskMessages) || taskMessages.length === 0) {
+        return taskMessages;
+    }
+    if (typeof substituteParamsFn !== 'function') {
+        return taskMessages;
+    }
+    return taskMessages.map(message => {
+        if (!message || typeof message !== 'object') {
+            return message;
+        }
+        if (typeof message.content !== 'string' || !message.content) {
+            return message;
+        }
+        return { ...message, content: substituteParamsFn(message.content, { skipSideEffects: true }) };
+    });
+}
+
 export class GenerateTaskError extends Error {
     constructor(code, message, { cause = null, details = null } = {}) {
         super(message);
@@ -564,6 +599,16 @@ const RESPONSE_MODES = { TEXT: 'text', TOOL: 'tool', JSON: 'json' };
  * @param {'auto'|'native'|'prompt_xml'|'prompt_json'} [params.functionCallMode='auto']
  * @param {object|null} [params.functionCallOptions]
  * @param {AbortSignal} [params.abortSignal]
+ * @param {boolean} [params.substituteMacros=true] - Apply `substituteParams` (with
+ *   `skipSideEffects:true`) to each task message's string `content` before
+ *   assembly so registered macros — Luker built-ins (`{{user}}`, `{{char}}`,
+ *   `{{datetime}}`, `{{random:a,b}}`, …) and any extension-registered macros
+ *   that flow through the same engine (e.g. MagVarUpdate's `{{getvar::}}`) —
+ *   resolve in plugin requests just like in the main chat path. Set to `false`
+ *   for authoring-class flows whose AI must see `{{...}}` literally (preset
+ *   editor, character card editor, lorebook diff analysis); see the
+ *   "When to opt out" section in
+ *   `docs/development/extension-api/generation.md`.
  * @param {object} [internal] - injection seam for tests; do not pass from extension code
  * @returns {Promise<object>} unified result shape (see spec)
  */
@@ -583,6 +628,7 @@ export async function generateTask({
     functionCallMode = 'auto',
     functionCallOptions = null,
     abortSignal = undefined,
+    substituteMacros = true,
 } = {}, { _injected = null } = {}) {
     // ── 1. Input validation ──
     const hasTools = Array.isArray(tools) && tools.length > 0;
@@ -596,6 +642,7 @@ export async function generateTask({
     const builder = _injected?.builder || getDefaultBuilder();
     const rawPromptBuilder = _injected?.rawPromptBuilder || null;
     const senders = _injected?.senders || getDefaultSenders();
+    const substituteParamsFn = _injected?.substituteParams || getDefaultSubstituteParams();
 
     // ── 2. Profile resolution ──
     const profile = resolveProfile(apiPresetName, {
@@ -621,9 +668,20 @@ export async function generateTask({
         worldInfoType,
     }, { worldInfoResolver });
 
+    // ── 4.5 Macro substitution on caller-supplied task messages ──
+    // Preset-supplied prompt entries are substituted later inside
+    // buildPresetAwarePromptMessages, but caller-supplied taskMessages bypass
+    // that path; without this step, plugin requests ship `{{user}}` /
+    // `{{getvar::}}` / etc. as literal text. skipSideEffects:true is mandatory
+    // — otherwise every plugin call would re-fire setvar/addvar macros and
+    // mutate chat_metadata.variables on each dispatch.
+    const effectiveTaskMessages = substituteMacros
+        ? applyMacroSubstitution(taskMessages, substituteParamsFn)
+        : taskMessages;
+
     // ── 5. Assemble messages (envelope-aware, chat-completion shape) ──
     const messages = assembleMessages({
-        taskMessages,
+        taskMessages: effectiveTaskMessages,
         includeCharacterCard,
         llmPresetName: effectiveLlmPresetName,
         requestApi: profile.requestApi,

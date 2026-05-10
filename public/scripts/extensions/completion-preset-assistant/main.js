@@ -2195,6 +2195,10 @@ async function requestToolCallsWithRetry(context, settings, {
                     protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
                 },
                 abortSignal: abortSignal || undefined,
+                // Authoring scope: preset bodies handed to the AI for editing
+                // contain literal {{...}} placeholders that must not resolve
+                // before the AI sees them.
+                substituteMacros: false,
             });
             throwIfAborted(abortSignal, 'Preset assistant request aborted.');
             const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];

@@ -1,5 +1,5 @@
 import { describe, expect, test } from '@jest/globals';
-import { GenerateTaskError, resolveProfile, resolveWorldInfo, assembleMessages, renderForApi, generateTask } from '../../public/scripts/generate-task.js';
+import { GenerateTaskError, resolveProfile, resolveWorldInfo, assembleMessages, renderForApi, generateTask, applyMacroSubstitution } from '../../public/scripts/generate-task.js';
 
 describe('GenerateTaskError', () => {
     test('stores code, message, cause, details', () => {
@@ -298,5 +298,66 @@ describe('module exports', () => {
         expect(typeof mod.renderForApi).toBe('function');
         expect(typeof mod.dispatchToSender).toBe('function');
         expect(typeof mod.normalizeResponse).toBe('function');
+        expect(typeof mod.applyMacroSubstitution).toBe('function');
+    });
+});
+
+describe('applyMacroSubstitution', () => {
+    const fakeSubstitute = (content, options) => {
+        // Mirror the script.js skipSideEffects contract: strip side-effect macros first.
+        const cleaned = options?.skipSideEffects
+            ? content.replace(/\{\{(setvar|addvar|incvar|decvar|deletevar)::[^}]*\}\}/g, '')
+            : content;
+        return cleaned.replace(/\{\{user\}\}/g, 'Alice').replace(/\{\{char\}\}/g, 'Bob');
+    };
+
+    test('substitutes string content of each message', () => {
+        const out = applyMacroSubstitution(
+            [
+                { role: 'system', content: 'You are {{char}}.' },
+                { role: 'user', content: 'Hi {{char}}, I am {{user}}.' },
+            ],
+            fakeSubstitute,
+        );
+        expect(out[0].content).toBe('You are Bob.');
+        expect(out[1].content).toBe('Hi Bob, I am Alice.');
+    });
+
+    test('passes skipSideEffects:true so {{setvar::}} is stripped', () => {
+        const out = applyMacroSubstitution(
+            [{ role: 'user', content: 'before {{setvar::x::1}} after' }],
+            fakeSubstitute,
+        );
+        expect(out[0].content).toBe('before  after');
+    });
+
+    test('preserves non-string content unchanged (e.g. tool_calls)', () => {
+        const toolCallMessage = {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{ id: 'c1', type: 'function', function: { name: 'f', arguments: '{}' } }],
+        };
+        const out = applyMacroSubstitution([toolCallMessage], fakeSubstitute);
+        expect(out[0]).toEqual(toolCallMessage);
+    });
+
+    test('returns input unchanged when substituteParamsFn is not a function', () => {
+        const input = [{ role: 'user', content: 'Hi {{user}}' }];
+        expect(applyMacroSubstitution(input, null)).toBe(input);
+        expect(applyMacroSubstitution(input, undefined)).toBe(input);
+    });
+
+    test('returns input unchanged for empty array or non-array', () => {
+        const empty = [];
+        expect(applyMacroSubstitution(empty, fakeSubstitute)).toBe(empty);
+        expect(applyMacroSubstitution(null, fakeSubstitute)).toBeNull();
+    });
+
+    test('does not mutate input messages', () => {
+        const input = [{ role: 'user', content: '{{user}}' }];
+        const out = applyMacroSubstitution(input, fakeSubstitute);
+        expect(input[0].content).toBe('{{user}}');
+        expect(out[0].content).toBe('Alice');
+        expect(out[0]).not.toBe(input[0]);
     });
 });

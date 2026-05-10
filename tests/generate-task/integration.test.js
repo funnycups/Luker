@@ -139,4 +139,54 @@ describe('generateTask end-to-end', () => {
             expect(e.cause).toBeNull();
         }
     });
+
+    test('substituteMacros default true: builder receives substituted content', async () => {
+        let capturedMessages = null;
+        const fakeSubstitute = (content, options) => {
+            const cleaned = options?.skipSideEffects
+                ? content.replace(/\{\{setvar::[^}]*\}\}/g, '')
+                : content;
+            return cleaned.replace(/\{\{user\}\}/g, 'Alice');
+        };
+        const inj = baseInjected({
+            substituteParams: fakeSubstitute,
+            builder: ({ messages }) => {
+                capturedMessages = messages;
+                return messages;
+            },
+            senders: {
+                sendOpenAIRequest: async () => ({
+                    choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+                }),
+            },
+        });
+        await generateTask({
+            taskMessages: [{ role: 'user', content: 'Hi {{user}} {{setvar::x::1}}' }],
+        }, { _injected: inj });
+        expect(capturedMessages).toEqual([{ role: 'user', content: 'Hi Alice ' }]);
+    });
+
+    test('substituteMacros: false leaves taskMessages content untouched', async () => {
+        let capturedMessages = null;
+        let substituteCalls = 0;
+        const fakeSubstitute = (content) => { substituteCalls += 1; return content.replace(/\{\{user\}\}/g, 'Alice'); };
+        const inj = baseInjected({
+            substituteParams: fakeSubstitute,
+            builder: ({ messages }) => {
+                capturedMessages = messages;
+                return messages;
+            },
+            senders: {
+                sendOpenAIRequest: async () => ({
+                    choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+                }),
+            },
+        });
+        await generateTask({
+            taskMessages: [{ role: 'user', content: 'Hi {{user}}' }],
+            substituteMacros: false,
+        }, { _injected: inj });
+        expect(capturedMessages).toEqual([{ role: 'user', content: 'Hi {{user}}' }]);
+        expect(substituteCalls).toBe(0);
+    });
 });

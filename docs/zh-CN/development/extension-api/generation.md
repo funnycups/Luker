@@ -48,6 +48,7 @@ context.generateTask({
     functionCallMode?: 'auto' | 'native' | 'prompt_xml' | 'prompt_json' = 'auto',
     functionCallOptions?: object | null = null,   // 例如 { protocolStyle, requiredFunctionName }
     abortSignal?: AbortSignal | null = null,
+    substituteMacros?: boolean = true,            // 解析 taskMessages.content 中的 {{...}};编辑器类流程需关闭
 }): Promise<{
     assistantText: string,
     toolCalls: Array<{ name, args, raw }>,
@@ -69,6 +70,28 @@ context.generateTask({
 | `'custom'` | 基于你显式提供的 `customWorldInfoMessages` 激活。 |
 
 如果已经有解析好的 WI 快照(例如重试循环中缓存了一份),直接传 `runtimeWorldInfo` 并把 `worldInfoSource` 设成 `'none'`,可以跳过重复激活。
+
+### 宏替换
+
+`substituteMacros` 默认为 `true`,`generateTask` 会在拼装前对每条 task 消息的字符串 `content` 跑一遍 `substituteParams`。这样插件请求里也能解析跟主聊天路径一致的 `{{...}}` 宏 —— 包括 Luker 内置宏(`{{user}}`、`{{char}}`、`{{persona}}`、`{{datetime}}`、`{{random:a,b}}` 等)和经由同一引擎注册的扩展宏(例如 MagVarUpdate 的 `{{getvar::}}` 系列)。
+
+带副作用的宏(`{{setvar::}}`、`{{addvar::}}`、`{{incvar::}}`、`{{decvar::}}`、`{{deletevar::}}`)会通过 `skipSideEffects: true` 直接剥除,否则插件每次请求都会重新触发这些写入并污染 `chat_metadata.variables`。
+
+#### 何时应该关闭
+
+对于**编辑/创作类**流程,把 `substituteMacros` 设为 `false`:这些场景下 AI 的工作是阅读或编辑含有 `{{...}}` 字面量的源文本,如果 `{{user}}` 在 AI 看到之前就被展开,模型就没办法对源模板做对比、diff 或修改了。
+
+代码库里现有的具体例子:
+
+- 角色卡编辑器 —— AI 在改包含 `{{user}}` / `{{char}}` 占位符的卡字段。
+- 世界书 diff 分析 —— diff payload 里的世界书条目里那些 `{{...}}` 本身就是分析对象。
+- 预设编辑器 —— AI 在改给最终用户使用的提示词预设正文,正文里携带 `{{...}}` 宏。
+- CardApp Studio AI —— 对话里可能引用源文本片段供助手修改。
+
+判断原则:
+
+- AI 在**生产**最终展示给用户的内容 → 保持 `substituteMacros: true`。
+- AI 在**阅读或编辑**含有 `{{...}}` 占位符的源文本 → 显式 `substituteMacros: false`。
 
 ### 工具调用
 
