@@ -162,6 +162,7 @@ function runCommandWithLogs(command, args) {
             cwd: serverDirectory,
             env: process.env,
             stdio: ['ignore', 'pipe', 'pipe'],
+            shell: process.platform === 'win32',
         });
 
         processHandle.stdout?.on('data', data => {
