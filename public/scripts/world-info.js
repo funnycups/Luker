@@ -10662,6 +10662,31 @@ export function charSetAuxWorlds(fileName, books) {
     updateAuxBooks(fileName, _ => Array.isArray(books) ? books : []);
 }
 
+/**
+ * Read the list of auxiliary (non-primary) world books bound to a character.
+ * Read-side mirror of {@link charSetAuxWorlds} / {@link charUpdateAddAuxWorld}.
+ *
+ * During the character-create flow (`menu_type === 'create'`) the auxiliary list
+ * is held in `create_save.extra_books` rather than `world_info.charLore`, so this
+ * getter reads from there to stay consistent with the setters.
+ *
+ * @param {string} fileName - From {@link getCharaFilename}; pass empty/missing to get `[]`.
+ * @returns {string[]} A deduplicated copy of the bound book names; empty array if none.
+ */
+export function getCharaAuxWorlds(fileName) {
+    if (!fileName) return [];
+
+    if (menu_type === 'create') {
+        const current = create_save.extra_books ?? [];
+        return Array.isArray(current) ? current.filter(Boolean).filter(onlyUnique) : [];
+    }
+
+    const entry = (world_info.charLore ?? []).find(e => e.name === fileName);
+    return Array.isArray(entry?.extraBooks)
+        ? entry.extraBooks.filter(Boolean).filter(onlyUnique)
+        : [];
+}
+
 function updateAuxBooks(fileName, computeNext) {
     if (!fileName) return;
 

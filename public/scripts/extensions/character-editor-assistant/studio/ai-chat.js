@@ -1422,7 +1422,8 @@ Once the layer set is decided, move on to the actual card content (description, 
 
 ### World Books (CardApp-runtime mutations)
 These are the same edits the Studio \`worldinfo_*\` tools perform, exposed on ctx so a CardApp can rebuild a chat-bound book between turns (see "Variable-driven dynamic world book entries" below). For one-shot authoring edits, prefer the Studio tools.
-- ctx.getWorldBooks(options?) — List visible books with sources ('character'|'chat'|'global').
+- ctx.getWorldBooks(options?) — List visible books with sources ('character'|'character_aux'|'chat'|'global').
+- ctx.getCharacterAuxWorldBooks() — Auxiliary books bound to the current character (non-primary).
 - ctx.getChatWorldBooks() — Names currently bound to this chat.
 - ctx.setChatWorldBooks(names) async — Replace the chat-bound list.
 - ctx.addChatWorldBook(name) async / ctx.removeChatWorldBook(name) async — Incremental add/remove.

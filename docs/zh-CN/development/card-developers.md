@@ -196,7 +196,8 @@ CardApp 的上下文对象提供以下 API：
 
 | API | 说明 |
 |-----|------|
-| `ctx.getWorldBooks()` | 获取当前角色关联的世界书名称列表（角色绑定+全局激活） |
+| `ctx.getWorldBooks()` | 获取当前角色可见的世界书名称列表（角色主世界书 + 角色附加世界书 + 聊天绑定 + 全局激活，已去重）。传 `{ withSource: true }` 可拿到带 `source: 'character' \| 'character_aux' \| 'chat' \| 'global'` 的标注列表 |
+| `ctx.getCharacterAuxWorldBooks()` | 获取当前角色绑定的附加世界书（非主世界书）。这些与主世界书一同参与提示词组装,但通过 Luker 的世界书编辑器单独管理 |
 | `ctx.getWorldBookEntries(bookName)` | 获取指定世界书的所有条目 |
 | `ctx.createWorldBookEntry(bookName, fields?)` | 创建世界书条目，返回新条目对象（含 uid） |
 | `ctx.updateWorldBookEntry(bookName, uid, patch)` | 更新世界书条目（浅合并） |

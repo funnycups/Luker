@@ -6,9 +6,9 @@ import { eventSource, event_types, chat, chat_metadata, this_chid, characters, g
 import { getContext, saveMetadataDebounced, extension_settings, getCharacterState as lukerGetCharacterState, setCharacterState as lukerSetCharacterState } from '../../extensions.js';
 import { executeSlashCommandsWithOptions } from '../../slash-commands.js';
 import { removeReasoningFromString } from '../../reasoning.js';
-import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, createNewWorldInfo, world_names, selected_world_info, getChatWorldInfoNames, setChatWorldInfoSelection } from '../../world-info.js';
+import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, createNewWorldInfo, world_names, selected_world_info, getChatWorldInfoNames, setChatWorldInfoSelection, getCharaAuxWorlds } from '../../world-info.js';
 import { getScriptsByType, saveScriptsByType, SCRIPT_TYPES } from '../regex/engine.js';
-import { uuidv4 } from '../../utils.js';
+import { uuidv4, getCharaFilename } from '../../utils.js';
 import {
     getCharacterOverrideByAvatar as orchGetCharacterOverrideByAvatar,
     getCharacterIndexByAvatar as orchGetCharacterIndexByAvatar,
@@ -497,15 +497,17 @@ export function buildContext(container, charId, config) {
 
         /**
          * Get world book names visible to this character. By default returns
-         * a flat string[] for backward compatibility (character-bound book +
-         * chat-bound books + globally activated books, deduped). Pass
-         * `{ withSource: true }` to get structured entries that distinguish
-         * `'character'` (the card's primary book), `'chat'` (chat-bound
-         * books from `chat_metadata.world_info`), and `'global'` (selected
-         * world info active for every chat).
+         * a flat string[] for backward compatibility (character-bound primary
+         * book + character-bound auxiliary books + chat-bound books +
+         * globally activated books, deduped). Pass `{ withSource: true }` to
+         * get structured entries that distinguish `'character'` (the card's
+         * primary book), `'character_aux'` (auxiliary books bound to this
+         * character via Luker's lorebook editor), `'chat'` (chat-bound books
+         * from `chat_metadata.world_info`), and `'global'` (selected world
+         * info active for every chat).
          *
          * @param {{ withSource?: boolean }} [options]
-         * @returns {string[] | Array<{name: string, source: 'character'|'chat'|'global'}>}
+         * @returns {string[] | Array<{name: string, source: 'character'|'character_aux'|'chat'|'global'}>}
          */
         getWorldBooks(options = {}) {
             const withSource = !!options?.withSource;
@@ -520,6 +522,10 @@ export function buildContext(container, charId, config) {
             // Character-bound primary world book
             const charData = characters[this_chid];
             push(charData?.data?.extensions?.world, 'character');
+            // Character-bound auxiliary world books (world_info.charLore[].extraBooks)
+            for (const name of this.getCharacterAuxWorldBooks()) {
+                push(name, 'character_aux');
+            }
             // Chat-bound books (chat_metadata.world_info)
             try {
                 for (const name of getChatWorldInfoNames(chat_metadata)) {
@@ -531,6 +537,23 @@ export function buildContext(container, charId, config) {
                 for (const name of selected_world_info) push(name, 'global');
             }
             return withSource ? entries : entries.map((e) => e.name);
+        },
+
+        /**
+         * Get the list of *auxiliary* world book names bound to the current
+         * character. These live alongside the primary book (the one stored at
+         * `character.data.extensions.world`) and are managed via Luker's
+         * lorebook editor — they participate in prompt assembly the same way
+         * the primary book does, so a CardApp that needs to reason about
+         * "what lore does this character pull in?" should consider both.
+         *
+         * Returns `[]` when no character is active, or when the character has
+         * no auxiliary books configured.
+         * @returns {string[]}
+         */
+        getCharacterAuxWorldBooks() {
+            const fileName = getCharaFilename(this_chid);
+            return getCharaAuxWorlds(fileName);
         },
 
         /**

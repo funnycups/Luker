@@ -196,7 +196,8 @@ The CardApp context object provides the following APIs:
 
 | API | Description |
 |-----|-------------|
-| `ctx.getWorldBooks()` | Get the list of world book names associated with the current character (character-bound + globally activated) |
+| `ctx.getWorldBooks()` | Get the list of world book names visible to the current character (character primary + character auxiliary + chat-bound + globally activated, deduped). Pass `{ withSource: true }` to get tagged entries with `source: 'character' \| 'character_aux' \| 'chat' \| 'global'` |
+| `ctx.getCharacterAuxWorldBooks()` | Get the auxiliary (non-primary) world books bound to the current character. These participate in prompt assembly alongside the primary book but are managed separately via Luker's lorebook editor |
 | `ctx.getWorldBookEntries(bookName)` | Get all entries from the specified world book |
 | `ctx.createWorldBookEntry(bookName, fields?)` | Create a world book entry, returns the new entry object (with uid) |
 | `ctx.updateWorldBookEntry(bookName, uid, patch)` | Update a world book entry (shallow merge) |
