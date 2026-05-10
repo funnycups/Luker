@@ -2,6 +2,12 @@
 
 Luker 是 SillyTavern 的下游分支，保持了完整的数据兼容性。从 SillyTavern 迁移到 Luker 只需几个简单步骤，你的所有数据都可以无缝使用。
 
+::: tip 在 Android 上从 Termux 迁移？
+本指南适用于 PC / Linux / Docker → Luker，以及 **Termux(Sillytavern) → Termux(Luker)**，两端共享文件系统，按下面步骤复制 `data/` 即可。
+
+只有 **Termux → Luker APK** 因为 Android 沙盒隔离需要走 `/sdcard` 中转，请参考 [从 Termux 迁移到 Luker APK](/zh-CN/guide/migration-from-termux)。
+:::
+
 ## 迁移步骤
 
 ### 1. 备份现有数据
