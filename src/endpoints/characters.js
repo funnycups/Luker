@@ -856,6 +856,17 @@ function charaFormatData(data, directories) {
     _.set(char, 'data.character_version', data.character_version || '');
     _.set(char, 'data.alternate_greetings', getAlternateGreetings(data));
 
+    // Merge the extensions snapshot first so the dedicated form fields below
+    // can override any stale values that round-tripped through the JSON.
+    if (data.extensions) {
+        try {
+            const extensions = JSON.parse(data.extensions);
+            _.set(char, 'data.extensions', deepMerge(char.data.extensions, extensions));
+        } catch {
+            console.warn(`Failed to parse extensions JSON: ${data.extensions}`);
+        }
+    }
+
     // ST extension fields to V2 object
     _.set(char, 'data.extensions.talkativeness', data.talkativeness || 0.5);
     _.set(char, 'data.extensions.fav', data.fav == 'true');
@@ -871,16 +882,6 @@ function charaFormatData(data, directories) {
     _.set(char, 'data.extensions.depth_prompt.role', role_value);
 
     syncCharacterBookFromWorldInfo(char, directories, data.world);
-
-    if (data.extensions) {
-        try {
-            const extensions = JSON.parse(data.extensions);
-            // Deep merge the extensions object
-            _.set(char, 'data.extensions', deepMerge(char.data.extensions, extensions));
-        } catch {
-            console.warn(`Failed to parse extensions JSON: ${data.extensions}`);
-        }
-    }
 
     return toStoredV2Character(char);
 }
