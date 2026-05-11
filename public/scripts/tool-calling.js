@@ -627,9 +627,9 @@ export class ToolManager {
             return false;
         }
 
-        // Post-processing will forcefully remove past tool calls from the prompt, making them useless
-        const { NONE, MERGE_TOOLS, SEMI_TOOLS, STRICT_TOOLS } = custom_prompt_post_processing_types;
-        const allowedPromptPostProcessing = [NONE, MERGE_TOOLS, SEMI_TOOLS, STRICT_TOOLS];
+        // SINGLE post-processing flattens all roles into a single user message, which destroys tool-call chains
+        const { NONE, MERGE, SEMI, STRICT } = custom_prompt_post_processing_types;
+        const allowedPromptPostProcessing = [NONE, MERGE, SEMI, STRICT];
         if (!allowedPromptPostProcessing.includes(settings.custom_prompt_post_processing)) {
             return false;
         }

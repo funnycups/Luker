@@ -17,11 +17,8 @@ export const PROMPT_PROCESSING_TYPE = {
     /** @deprecated Use MERGE instead. */
     CLAUDE: 'claude',
     MERGE: 'merge',
-    MERGE_TOOLS: 'merge_tools',
     SEMI: 'semi',
-    SEMI_TOOLS: 'semi_tools',
     STRICT: 'strict',
-    STRICT_TOOLS: 'strict_tools',
     SINGLE: 'single',
 };
 
@@ -84,18 +81,16 @@ export function addAssistantPrefix(prompt, tools, property) {
  */
 export function postProcessPrompt(messages, type, names) {
     switch (type) {
-        case PROMPT_PROCESSING_TYPE.MERGE:
         case PROMPT_PROCESSING_TYPE.CLAUDE:
             return mergeMessages(messages, names, { strict: false, placeholders: false, single: false, tools: false });
-        case PROMPT_PROCESSING_TYPE.MERGE_TOOLS:
+        case PROMPT_PROCESSING_TYPE.MERGE:
+        case 'merge_tools':
             return mergeMessages(messages, names, { strict: false, placeholders: false, single: false, tools: true });
         case PROMPT_PROCESSING_TYPE.SEMI:
-            return mergeMessages(messages, names, { strict: true, placeholders: false, single: false, tools: false });
-        case PROMPT_PROCESSING_TYPE.SEMI_TOOLS:
+        case 'semi_tools':
             return mergeMessages(messages, names, { strict: true, placeholders: false, single: false, tools: true });
         case PROMPT_PROCESSING_TYPE.STRICT:
-            return mergeMessages(messages, names, { strict: true, placeholders: true, single: false, tools: false });
-        case PROMPT_PROCESSING_TYPE.STRICT_TOOLS:
+        case 'strict_tools':
             return mergeMessages(messages, names, { strict: true, placeholders: true, single: false, tools: true });
         case PROMPT_PROCESSING_TYPE.SINGLE:
             return mergeMessages(messages, names, { strict: true, placeholders: false, single: true, tools: false });

@@ -370,11 +370,8 @@ export const custom_prompt_post_processing_types = {
     /** @deprecated Use MERGE instead. */
     CLAUDE: 'claude',
     MERGE: 'merge',
-    MERGE_TOOLS: 'merge_tools',
     SEMI: 'semi',
-    SEMI_TOOLS: 'semi_tools',
     STRICT: 'strict',
-    STRICT_TOOLS: 'strict_tools',
     SINGLE: 'single',
 };
 
@@ -5353,6 +5350,9 @@ function migrateChatCompletionSettings(settings) {
         { oldKey: 'names_in_completion', oldValue: true, newKey: 'names_behavior', newValue: character_names_behavior.COMPLETION },
         { oldKey: 'chat_completion_source', oldValue: 'palm', newKey: 'chat_completion_source', newValue: chat_completion_sources.MAKERSUITE },
         { oldKey: 'custom_prompt_post_processing', oldValue: custom_prompt_post_processing_types.CLAUDE, newKey: 'custom_prompt_post_processing', newValue: custom_prompt_post_processing_types.MERGE },
+        { oldKey: 'custom_prompt_post_processing', oldValue: 'merge_tools', newKey: 'custom_prompt_post_processing', newValue: custom_prompt_post_processing_types.MERGE },
+        { oldKey: 'custom_prompt_post_processing', oldValue: 'semi_tools', newKey: 'custom_prompt_post_processing', newValue: custom_prompt_post_processing_types.SEMI },
+        { oldKey: 'custom_prompt_post_processing', oldValue: 'strict_tools', newKey: 'custom_prompt_post_processing', newValue: custom_prompt_post_processing_types.STRICT },
         { oldKey: 'ai21_model', oldValue: /^j2-/, newKey: 'ai21_model', newValue: 'jamba-large' },
         { oldKey: 'image_inlining', oldValue: false, newKey: 'media_inlining', newValue: false },
         { oldKey: 'image_inlining', oldValue: true, newKey: 'media_inlining', newValue: true },

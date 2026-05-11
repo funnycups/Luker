@@ -1133,7 +1133,7 @@ async function sendDeepSeekRequest(request, response) {
         mergeObjectWithYaml(bodyParams, request.body.custom_include_body);
         mergeObjectWithYaml(headers, request.body.custom_include_headers);
 
-        const processedMessages = addAssistantPrefix(postProcessPrompt(request.body.messages, PROMPT_PROCESSING_TYPE.SEMI_TOOLS, getPromptNames(request)), bodyParams.tools, 'prefix');
+        const processedMessages = addAssistantPrefix(postProcessPrompt(request.body.messages, PROMPT_PROCESSING_TYPE.SEMI, getPromptNames(request)), bodyParams.tools, 'prefix');
         addReasoningContentToToolCalls(processedMessages);
 
         if (/deepseek-(reasoner|v4)/.test(request.body.model)) {
@@ -1650,7 +1650,7 @@ async function sendMinimaxRequest(request, response) {
     try {
         // MiniMax does not allow consecutive messages with the same role.
         // Merge them into a single message to avoid "invalid chat setting (2013)".
-        const messages = postProcessPrompt(request.body.messages, PROMPT_PROCESSING_TYPE.MERGE_TOOLS, getPromptNames(request));
+        const messages = postProcessPrompt(request.body.messages, PROMPT_PROCESSING_TYPE.MERGE, getPromptNames(request));
 
         let bodyParams = {};
 
