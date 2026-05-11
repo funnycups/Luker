@@ -2394,11 +2394,17 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
 
  lastAssistantText = assistantText;
 
+ // Surface the assistant's prose BEFORE running tools so the chat shows
+ // text → tool approval/result, matching the AI's actual generation order.
+ // Otherwise the approval dialog pops first with no explanatory context.
+ if (assistantText && onAssistantText) {
+ onAssistantText(assistantText);
+ }
+
  // No tool calls — conversation turn is done
  if (rawCalls.length === 0) {
  if (assistantText) {
  conversationMessages.push({ role: 'assistant', content: assistantText });
- if (onAssistantText) onAssistantText(assistantText);
  }
  break;
  }
@@ -2498,10 +2504,6 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  // Append tool results
  for (const result of toolResults) {
  conversationMessages.push(result);
- }
-
- if (assistantText && onAssistantText) {
- onAssistantText(assistantText);
  }
  }
 
