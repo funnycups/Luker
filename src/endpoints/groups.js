@@ -8,6 +8,7 @@ import { sync as writeFileAtomicSync, default as writeFileAtomic } from 'write-f
 
 import { color, tryParse } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
+import { invalidateRecentChatIndex } from './chats.js';
 
 export const router = express.Router();
 
@@ -224,6 +225,11 @@ router.post('/delete', getFileNameValidationFunction('id'), async (request, resp
                 if (fs.existsSync(pathToFile)) {
                     fs.unlinkSync(pathToFile);
                 }
+            }
+            // Recent-chat cache caches absolute group-chat paths that just got
+            // unlinked; invalidate so the next /api/chats/recent rebuilds clean.
+            if (group.chats.length > 0) {
+                await invalidateRecentChatIndex(request);
             }
         }
     } catch (error) {

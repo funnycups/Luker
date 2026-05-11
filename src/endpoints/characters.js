@@ -26,6 +26,7 @@ import { ByafParser } from '../byaf.js';
 import { CharXParser, persistCharXAssets } from '../charx.js';
 import cacheBuster from '../middleware/cacheBuster.js';
 import { extractCardAppFiles, packCardAppFiles, deleteCardAppFiles } from './card-app.js';
+import { deleteRecentChatIndexEntriesUnderDirectory, invalidateRecentChatIndex } from './chats.js';
 
 // With 100 MB limit it would take roughly 3000 characters to reach this limit
 const memoryCacheCapacity = getConfigValue('performance.memoryCacheCapacity', '100mb');
@@ -1351,6 +1352,10 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
         if (fs.existsSync(oldChatsPath) && !fs.existsSync(newChatsPath)) {
             fs.cpSync(oldChatsPath, newChatsPath, { recursive: true });
             fs.rmSync(oldChatsPath, { recursive: true, force: true });
+            // Recent-chat cache holds entries keyed by the now-removed paths and
+            // tagged with the old avatar; force a rebuild so the renamed chats
+            // resurface under the new avatar.
+            await invalidateRecentChatIndex(request);
         }
 
         renameAllCharacterStateSidecars(oldAvatarPath, newAvatarPath);
@@ -1781,12 +1786,14 @@ router.post('/delete', validateAvatarUrlMiddleware, async function (request, res
     }
 
     if (request.body.delete_chats == true) {
+        const removedChatsDir = path.join(request.user.directories.chats, sanitize(dir_name));
         try {
-            await fs.promises.rm(path.join(request.user.directories.chats, sanitize(dir_name)), { recursive: true, force: true });
+            await fs.promises.rm(removedChatsDir, { recursive: true, force: true });
         } catch (err) {
             console.error(err);
             return response.sendStatus(500);
         }
+        await deleteRecentChatIndexEntriesUnderDirectory(request, removedChatsDir);
     }
 
     // Clean up CardApp files

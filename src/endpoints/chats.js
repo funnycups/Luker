@@ -455,6 +455,64 @@ async function deleteRecentChatIndexEntry(request, filePath) {
     state.entries.delete(path.resolve(String(filePath || '')));
 }
 
+/**
+ * Forces the next /api/chats/recent call to rebuild the index from disk.
+ * Used after bulk file system changes that move entries to new keys
+ * (e.g. character rename copies chats into a new directory) or any
+ * operation where targeted per-file invalidation is impractical.
+ * @param {import('express').Request} request
+ */
+export async function invalidateRecentChatIndex(request) {
+    const state = await getReadyRecentChatIndexState(request);
+    if (state) {
+        state.entries = null;
+    }
+}
+
+/**
+ * Drops every recent-chat index entry whose file lives under `directoryPath`.
+ * Called after bulk filesystem removals (e.g. character deletion with `delete_chats`)
+ * so that the cached index does not surface entries pointing at gone files.
+ * @param {import('express').Request} request
+ * @param {string} directoryPath Absolute path of the removed chats directory.
+ */
+export async function deleteRecentChatIndexEntriesUnderDirectory(request, directoryPath) {
+    const state = await getReadyRecentChatIndexState(request);
+    if (!state?.entries) {
+        return;
+    }
+
+    const normalized = path.resolve(String(directoryPath || ''));
+    if (!normalized) {
+        return;
+    }
+
+    for (const key of state.entries.keys()) {
+        if (isPathUnderDirectory(key, normalized)) {
+            state.entries.delete(key);
+        }
+    }
+}
+
+/**
+ * Returns true if `candidatePath` is the directory itself or any descendant of it.
+ * Uses `path.sep` boundary so `/chats/Alice` does not match `/chats/Alice1/...`.
+ * Both inputs are expected to be already normalized via `path.resolve`.
+ * @param {string} candidatePath
+ * @param {string} directoryPath
+ * @returns {boolean}
+ */
+export function isPathUnderDirectory(candidatePath, directoryPath) {
+    if (!candidatePath || !directoryPath) {
+        return false;
+    }
+    if (candidatePath === directoryPath) {
+        return true;
+    }
+    const prefix = directoryPath.endsWith(path.sep) ? directoryPath : directoryPath + path.sep;
+    return candidatePath.startsWith(prefix);
+}
+
 process.on('exit', () => {
     for (const func of backupFunctions.values()) {
         func.flush();

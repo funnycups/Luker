@@ -10,6 +10,18 @@ import { resolvePathWithinParent } from '../util.js';
 
 export const router = express.Router();
 
+// CardApp files are user-editable hot content (Studio writes + runtime reload).
+// Browser or reverse-proxy caches (Cloudflare, nginx) routinely serve stale .js/.css
+// to subsequent fetches even after PUT, so opt every GET out of caching entirely.
+router.use((request, response, next) => {
+    if (request.method === 'GET') {
+        response.setHeader('Cache-Control', 'no-store, must-revalidate');
+        response.setHeader('Pragma', 'no-cache');
+        response.setHeader('Expires', '0');
+    }
+    next();
+});
+
 // ==================== Git Version Control ====================
 
 const gitClient = createGitClient();
