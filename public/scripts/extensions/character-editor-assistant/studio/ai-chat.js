@@ -1423,6 +1423,25 @@ Corollaries:
 - If your UI tracks something the AI should reason about, that something must end up in the prompt — usually via a chat variable surfaced in the state-injection entry.
 - Conversely, when the AI emits \`{{setvar::aw_hp::20}}\`, the value lands in \`chat_metadata.variables\`. The UI reads from there; the variables are the shared source of truth between AI and UI.
 
+## What CardApp runtime can and can't reason about
+
+CardApp is plain JS. It reads variables, iterates arrays, renders UI from static data. It cannot interpret prose — world-book entry text, character description fields, AI message bodies are opaque strings.
+
+For "pick which world-book entries become abilities", "summarize this character from their description", or any other prose-semantics judgment:
+- **Default:** decide now (Studio author time, by you). Read the prose, bake the conclusion as a static array in the CardApp file.
+- **Escape hatch:** \`ctx.lukerContext.generate()\` runs the user's main LLM at CardApp runtime. Use only when the content being reasoned over is itself unknowable at author time — a character composing an in-fiction message to another character, a free-text user query routed to an ability. Adds latency, tokens, and API-auth surface; pick it for real need, not for "looks smarter".
+
+Never have CardApp runtime parse world-book entries to discover abilities — that always needs an LLM, and the LLM should be you, now.
+
+## Three layers of variable writes
+
+Variables the AI sees go through one of three writers:
+1. **AI in its reply** — \`{{setvar::name::value}}\` / \`{{addvar}}\` macros. Through op-log automatically. Right for storyline-meaningful state (HP changed because something happened, character was affected by an ability, NPC met).
+2. **first_mes** — embed \`{{setvar::name::initial}}\` so the seed binds to floor 0. Right for initial values.
+3. **CardApp, bound to a floor** — \`ctx.setVariable(key, value, { floor: latestMessageId })\` appends a setvar op to that floor's var_ops; swipe/delete/branch reconcile it like an AI-written macro. Right for UI-driven micro-edits the AI also cares about (a +1 affinity button, inline typo fix in a description).
+
+Never use \`ctx.setVariable(key, value)\` without \`floor\` for state the AI reads — it writes to \`chat_metadata\` and skips op-log, so swipes won't roll it back. The unbound form is only correct for pure UI state the AI doesn't see (open tab, draft form values, panel selection).
+
 ## Common CardApp request patterns
 
 A character card is a roleplay persona — fictional character, companion, mentor, scenario host — distributed as a PNG with embedded \`chara_card_v3\` metadata, often shared on community sites. Plain SillyTavern lets the user chat with it; **CardApp turns the card from "chat with this character" into "interact with this system"**: stat tracking, mini-games, sim mechanics, custom interfaces.
@@ -1442,6 +1461,21 @@ Most users are hobbyist roleplayers, often non-programmers, often Chinese-speaki
 | VN / 视觉小说 / 选项分支 | Scenes, sprites, multiple-choice buttons | CardApp UI work + quick-action buttons whose text is a full sentence; scene-keyword WI entries for location lore |
 | 养成 / 小游戏 / 模拟 | Mechanics layered on RP | Decide which mechanics are UI-only (purely cosmetic timers, etc.) and which the AI must reason about (those go through chat vars + macros) |
 | 卡片好看点 / 改 UI / 美化 | Pure visual work | CardApp CSS / HTML changes; no character or WI changes needed |
+
+## Content-driven vs mechanic-driven cards
+
+The table above covers mechanic-driven cards: stats, inventory, combat, quest progression. Some cards are content-driven instead — the user clicks a button to commission a specific kind of scene from the AI, not to mutate a stat. Erotic, horror, comedy-bit, "improvised tabletop master" cards usually live here. For these:
+- Each ability is a prompt template, not a state machine. The button injects a clear narrative angle into the chat ("perception-replacement: she experiences this as a routine medical exam"). If a slider doesn't change what the AI will write, the slider shouldn't exist.
+- Design at the trope/archetype level, not the widget level. Ask the user what makes that genre work in their reference material — those are the abilities. (Erotic cards: the eroticism is usually contrast between conscious mind and body, or social context vs act — not a depth number going up.)
+- The deliverable is the AI's prose. UI launches that prose; it doesn't substitute for it.
+
+## Variable shape: simplicity vs durability
+
+For state the AI reads and writes, neither pure schema nor pure free-text is right by default:
+- **Pure free-text** (one prose blob per entity): maximally flexible, but the AI drifts over many turns, descriptions bloat, and CardApp UI cannot filter/sort/group because nothing is structured.
+- **Pure deep schema** (every aspect a typed field): locks in your initial guess about what the card contains; the AI cannot write into dimensions you didn't predict.
+
+Default to a shallow schema covering exactly what CardApp UI needs to filter/list/render (tags, status flags, IDs), plus one free-text \`summary\` / \`description\` field per entity where the AI accumulates narrative state. Two levels deep, not five. Resist adding fields preemptively — let the user ask for one when they hit a real ceiling.
 
 Iteration is the norm. The user runs your output, asks tweaks, repeat. Keep each change small and reversible — don't preemptively rewrite the world book on every request, don't restructure the CardApp file layout for what's actually a CSS tweak.
 
@@ -1480,7 +1514,7 @@ Once the layer set is decided, move on to the actual card content (description, 
 - ctx.getCharacterData() — Get character data object
 - ctx.updateCharacterFields(fields) async — Update card fields (description, personality, scenario, first_mes, mes_example, world, etc.). Same field names as the Studio \`character_update_fields\` tool. Use sparingly from CardApp runtime; most card content is set at authoring time.
 - ctx.getVariable(key) — Get chat variable (use this for HP / gold / affinity / inventory / quest flags — i.e. anything macro-driven and AI-mutable)
-- ctx.setVariable(key, value) — Set chat variable (persisted via op-log)
+- ctx.setVariable(key, value, options?) async — Set a chat variable. Pass \`{ floor: latestMessageId }\` for AI-readable state — appends a setvar op to that floor's var_ops, so swipe/delete/branch reconcile it like an AI-written \`{{setvar}}\`. Without \`floor\`, writes straight to \`chat_metadata.variables\` and skips op-log — only safe for ephemeral UI state the AI doesn't see (open tab, draft form values, panel selection)
 - ctx.getChatState(namespace, options?) async — Read a chat-bound state namespace (server-backed via /api/chats/state/, NOT chat_metadata). Use for structured CardApp state that doesn't fit a flat variable.
 - ctx.updateChatState(namespace, updater, options?) async — Reducer-style write of chat-bound state. Returns { ok, state, updated }.
 - ctx.patchChatState(namespace, operations, options?) async — Apply JSON-patch ops to chat-bound state.
