@@ -4,7 +4,7 @@
  * Layout: Left panel (AI chat) | Center (real chat/CardApp) | Right panel (code editor)
  */
 
-import { getRequestHeaders } from '../../../../script.js';
+import { getRequestHeaders, saveSettingsDebounced } from '../../../../script.js';
 import { translate } from '../../../i18n.js';
 import { DOMPurify, DiffMatchPatch, showdown } from '../../../../lib.js';
 import { extension_settings, getContext, getExtensionApi, getCharacterState, setCharacterState } from '../../../extensions.js';
@@ -38,6 +38,18 @@ function tFormat(text, ...values) {
 const STUDIO_PANEL_LEFT_ID = 'card-app-studio-left';
 const STUDIO_PANEL_RIGHT_ID = 'card-app-studio-right';
 const STUDIO_MOBILE_TABS_ID = 'card-app-studio-mobile-tabs';
+
+function isAutoApplyEnabled() {
+    return Boolean(extension_settings?.character_editor_assistant?.autoApprove);
+}
+
+function setAutoApplyEnabled(enabled) {
+    if (!extension_settings.character_editor_assistant || typeof extension_settings.character_editor_assistant !== 'object') {
+        extension_settings.character_editor_assistant = {};
+    }
+    extension_settings.character_editor_assistant.autoApprove = Boolean(enabled);
+    saveSettingsDebounced();
+}
 
 let isStudioOpen = false;
 let currentCharId = null;
@@ -527,8 +539,17 @@ function buildLeftPanelHtml() {
  <div class="card-app-studio-composer">
     <textarea class="card-app-studio-input" data-studio-input placeholder="${escapeHtml(t('Describe what you want to build...'))}" rows="3"></textarea>
  <div class="card-app-studio-composer-buttons">
+    <label class="card-app-studio-auto-apply" title="${escapeHtml(t('Skip the manual approve step for file changes. Writes apply immediately.'))}">
+        <span class="card-app-studio-toggle">
+            <input type="checkbox" data-studio-toggle="auto-apply" />
+            <span class="card-app-studio-toggle-slider"></span>
+        </span>
+        <span>${escapeHtml(t('Auto-apply'))}</span>
+    </label>
+    <div class="card-app-studio-composer-actions">
         <button class="card-app-studio-btn primary" data-studio-action="send">${escapeHtml(t('Send'))}</button>
         <button class="card-app-studio-btn" data-studio-action="stop" disabled>${escapeHtml(t('Stop'))}</button>
+    </div>
  </div>
  </div>
 </div>`;
@@ -803,6 +824,10 @@ export async function openCardAppStudio(charId) {
  mobileTabs.innerHTML = buildMobileTabsHtml();
  document.body.appendChild(mobileTabs.firstElementChild);
 
+ // Sync auto-apply checkbox from persisted settings
+ const autoApplyEl = document.querySelector('[data-studio-toggle="auto-apply"]');
+ if (autoApplyEl) autoApplyEl.checked = isAutoApplyEnabled();
+
  // Add body class for margin adjustment
  document.body.classList.add('card-app-studio-active');
 
@@ -905,6 +930,14 @@ function bindStudioEvents() {
 
  // Keyboard shortcuts
  document.addEventListener('keydown', handleStudioKeydown);
+
+ // Auto-apply toggle (persist to extension_settings)
+ const autoApplyEl = document.querySelector('[data-studio-toggle="auto-apply"]');
+ if (autoApplyEl) {
+     autoApplyEl.addEventListener('change', (e) => {
+         setAutoApplyEnabled(Boolean(e.target.checked));
+     });
+ }
 
  // File list click
  const fileListEl = document.querySelector('[data-studio-file-list]');
@@ -1313,7 +1346,7 @@ async function handleAISend() {
                 else if (name === TOOL_NAMES.REGEX_DELETE_SCRIPT) detail = `${args?.scope || '?'} / ${args?.id || '?'}`;
                 renderChatMessage('tool', '', { name, detail, ok: toolResult.ok });
             },
-            onPendingApproval: async (pendingOp) => {
+            onPendingApproval: isAutoApplyEnabled() ? null : async (pendingOp) => {
                 return await renderPendingApproval(pendingOp);
             },
         });
