@@ -180,8 +180,8 @@ CardApp 的上下文物件提供以下 API：
 | `ctx.deleteChatState(namespace, options?)` | **非同步** 刪除一個聊天 sidecar 命名空間。 |
 | `ctx.getCharacterState(namespace)` | **非同步** 讀取角色綁定的 sidecar(avatar 自動繫結),跨該角色的所有聊天保留。 |
 | `ctx.setCharacterState(namespace, data)` | **非同步** 寫入角色綁定的 sidecar(avatar 自動繫結),傳 `null` 表示刪除。 |
-| `ctx.getVariable(key)` | 讀取聊天變數(來自 `chat_metadata.variables`,即 `{{getvar::key}}` 讀的同一個桶)。 |
-| `ctx.setVariable(key, value, options?)` | **非同步** 設定聊天變數。預設寫入 `chat_metadata.variables`(會話級,貫穿整個 chat)。傳 `{ floor: <訊息索引> }` 則改走變數 op-log,把這次寫入繫結到該樓的**當前 swipe**——切 swipe / 切回 / 刪樓 / 建立分支都會經過 rebuilder 重放,效果跟 AI 在訊息裡直接寫 `{{setvar}}` 一致。繫結樓層的路徑會把 value 強制轉成字串(op-log 的儲存格式只承載字串)。如果需要「結構化的逐樓狀態 + 獨立命名空間 + 自己的 commit log」,改用 `ctx.lukerContext.createFloorState({ namespace })`。 |
+| `ctx.getVariable(key)` | 讀取聊天變數(來自 `chat_metadata.variables`,即 <code v-pre>{{getvar::key}}</code> 讀的同一個桶)。 |
+| `ctx.setVariable(key, value, options?)` | **非同步** 設定聊天變數。預設寫入 `chat_metadata.variables`(會話級,貫穿整個 chat)。傳 `{ floor: <訊息索引> }` 則改走變數 op-log,把這次寫入繫結到該樓的**當前 swipe**——切 swipe / 切回 / 刪樓 / 建立分支都會經過 rebuilder 重放,效果跟 AI 在訊息裡直接寫 <code v-pre>{{setvar}}</code> 一致。繫結樓層的路徑會把 value 強制轉成字串(op-log 的儲存格式只承載字串)。如果需要「結構化的逐樓狀態 + 獨立命名空間 + 自己的 commit log」,改用 `ctx.lukerContext.createFloorState({ namespace })`。 |
 
 #### 聊天管理
 
