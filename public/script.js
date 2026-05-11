@@ -11029,22 +11029,6 @@ export async function refreshChatWriteSnapshotsFromServer(target = resolveChatSt
     return snapshot;
 }
 
-async function rebuildChatMessagePatchOperationsFromServer(desiredMessages = chat, target = resolveChatStateTarget()) {
-    const snapshot = await refreshChatWriteSnapshotsFromServer(target);
-    if (!snapshot) {
-        return null;
-    }
-
-    const nextMessages = Array.isArray(desiredMessages)
-        ? cloneJsonValue(desiredMessages)
-        : [];
-
-    return {
-        ...snapshot,
-        operations: buildChatMessagePatchOperations(snapshot.messages, nextMessages),
-    };
-}
-
 /**
  * Builds lightweight mutation metadata for a chat message index.
  * @param {number} messageId Message index in current chat array.
@@ -11807,6 +11791,39 @@ async function resolveChatWriteConflict(response, retryCount = 0) {
     return await resolveChatWriteConflictForTarget(response, resolveChatStateTarget(), chat_metadata, retryCount);
 }
 
+/**
+ * Surfaces a 409 chat-write conflict to the user and broadcasts a diagnostic event.
+ * Called from resolveChatWriteConflictForTarget; never alters resolution semantics.
+ * The toast helps users see when state drift is happening; the event lets tests
+ * and instrumentation assert "no conflicts during this flow" without polling files.
+ */
+function notifyChatWriteConflict({ kind, errorType, target, retryCount, currentIntegrity }) {
+    try {
+        const friendly = kind === 'integrity'
+            ? t`Chat sync: integrity drift detected, auto-recovering.`
+            : t`Chat sync: snapshot conflict detected, auto-recovering.`;
+        toastr.warning(friendly, t`Chat write conflict`, {
+            timeOut: 6000,
+            preventDuplicates: true,
+        });
+    } catch (error) {
+        console.warn('[ChatWriteConflict] toast failed', error);
+    }
+
+    try {
+        console.warn('[ChatWriteConflict]', { kind, errorType, target, retryCount, currentIntegrity });
+        eventSource.emit(event_types.CHAT_WRITE_CONFLICT, {
+            kind,
+            errorType,
+            target,
+            retryCount,
+            currentIntegrity,
+        });
+    } catch (error) {
+        console.warn('[ChatWriteConflict] event emit failed', error);
+    }
+}
+
 export async function resolveChatWriteConflictForTarget(response, target = null, metadata = null, retryCount = 0) {
     if (!response || response.status !== 409 || retryCount > 0) {
         return 'none';
@@ -11829,6 +11846,11 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
         if (isActiveChatStateTarget(target)) {
             syncCurrentChatIntegrityFromMetadata(metadata);
         }
+        // Invalidate the message snapshot too so the caller's saveChatConditional
+        // fallback skips the diff-patch path and writes a full /api/chats/save,
+        // overwriting the server file with the FE chat array (FE-wins).
+        invalidateChatWriteSnapshot(target);
+        notifyChatWriteConflict({ kind: 'integrity', errorType, target, retryCount, currentIntegrity });
         return 'integrity';
     }
 
@@ -11839,6 +11861,7 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
     if (isActiveChatStateTarget(target) && chat_metadata && typeof chat_metadata === 'object') {
         delete chat_metadata.integrity;
     }
+    notifyChatWriteConflict({ kind: 'snapshot', errorType, target, retryCount, currentIntegrity });
     return 'snapshot';
 }
 
@@ -11898,13 +11921,11 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
                 rememberChatMessageSnapshot({ is_group: true, id: groupChatId }, chat);
                 return true;
             }
-            const conflictResolution = await resolveChatWriteConflict(response, retryCount);
-            if (conflictResolution !== 'none') {
-                if (conflictResolution === 'integrity') {
-                    await refreshChatWriteSnapshotsFromServer(target);
-                }
-                return await appendChatMessagesInternal(messages, retryCount + 1);
-            }
+            // Any 409 surfaces via resolveChatWriteConflict (toast + event + snapshot
+            // invalidation + integrity refresh). Returning false lets the caller's
+            // saveChatConditional fallback do a full /api/chats/save and restore
+            // BE = FE (FE-wins).
+            await resolveChatWriteConflict(response, retryCount);
             return false;
         }
 
@@ -11948,13 +11969,9 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
             rememberChatMessageSnapshot({ is_group: false, avatar_url: avatar, file_name: fileName }, chat);
             return true;
         }
-        const conflictResolution = await resolveChatWriteConflict(response, retryCount);
-        if (conflictResolution !== 'none') {
-            if (conflictResolution === 'integrity') {
-                await refreshChatWriteSnapshotsFromServer(target);
-            }
-            return await appendChatMessagesInternal(messages, retryCount + 1);
-        }
+        // See group-branch comment: any 409 → toast/event/snapshot-invalidate via
+        // resolveChatWriteConflict, then return false to let caller full-save.
+        await resolveChatWriteConflict(response, retryCount);
         return false;
     } catch (error) {
         console.warn('Incremental chat append failed', error);
@@ -12012,21 +12029,11 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
                 rememberChatMessageSnapshot({ is_group: true, id: groupChatId }, chat);
                 return true;
             }
-            const conflictResolution = await resolveChatWriteConflict(response, retryCount);
-            if (conflictResolution === 'integrity') {
-                const rebuilt = await rebuildChatMessagePatchOperationsFromServer(chat, target);
-                if (!rebuilt) {
-                    return false;
-                }
-                if (rebuilt.operations.length === 0) {
-                    rememberChatMessageSnapshot(target, chat);
-                    return true;
-                }
-                return await patchChatMessagesInternal(rebuilt.operations, retryCount + 1);
-            }
-            if (conflictResolution === 'snapshot') {
-                return false;
-            }
+            // Any 409 surfaces via resolveChatWriteConflict; returning false lets
+            // the caller's saveChatConditional fallback do a full /api/chats/save.
+            // No rebuild-and-retry: full save is bulletproof and avoids the
+            // "diff itself was wrong" failure mode.
+            await resolveChatWriteConflict(response, retryCount);
             return false;
         }
 
@@ -12058,21 +12065,9 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
             rememberChatMessageSnapshot({ is_group: false, avatar_url: avatar, file_name: fileName }, chat);
             return true;
         }
-        const conflictResolution = await resolveChatWriteConflict(response, retryCount);
-        if (conflictResolution === 'integrity') {
-            const rebuilt = await rebuildChatMessagePatchOperationsFromServer(chat, target);
-            if (!rebuilt) {
-                return false;
-            }
-            if (rebuilt.operations.length === 0) {
-                rememberChatMessageSnapshot(target, chat);
-                return true;
-            }
-            return await patchChatMessagesInternal(rebuilt.operations, retryCount + 1);
-        }
-        if (conflictResolution === 'snapshot') {
-            return false;
-        }
+        // See group-branch comment: full-save fallback via the caller covers all
+        // 409 cases; resolveChatWriteConflict handles toast/event/snapshot.
+        await resolveChatWriteConflict(response, retryCount);
         return false;
     } catch (error) {
         console.warn('Incremental chat patch failed', error);
