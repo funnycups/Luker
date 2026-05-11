@@ -870,22 +870,11 @@ class PresetManager {
         }
 
         const preset = settings ?? this.getPresetSettings(name);
-        const { presets, preset_names } = this.getPresetList();
-        const presetNames = this.isKeyedApi()
-            ? preset_names
-            : Object.keys(preset_names || {});
-        const existingName = findCanonicalNameInList(presetNames, name);
-        const existingIndex = existingName
-            ? (this.isKeyedApi() ? preset_names.indexOf(existingName) : preset_names[existingName])
-            : null;
-        const existingPreset = Number.isInteger(existingIndex) ? presets?.[existingIndex] : null;
 
         const saveResult = await persistPreset({
             apiId: this.apiId,
             name,
             preset,
-            existingPreset,
-            maxOperations: 4000,
         });
 
         if (!saveResult.ok) {

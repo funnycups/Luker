@@ -927,7 +927,6 @@ async function savePresetBody(target, body, options = {}) {
     }
 
     const manager = getPresetManager(ref.collection);
-    const existingPreset = manager?.getStoredPreset?.(ref.name) || null;
     const selectedRef = normalizePresetRef(ref.collection);
     const shouldSelect = typeof options?.select === 'boolean'
         ? options.select
@@ -936,8 +935,6 @@ async function savePresetBody(target, body, options = {}) {
         apiId: ref.collection,
         name: ref.name,
         preset: presetBody,
-        existingPreset,
-        maxOperations: Number.isInteger(options?.maxOperations) && options.maxOperations > 0 ? options.maxOperations : 4000,
     });
 
     if (!saveResult.ok) {

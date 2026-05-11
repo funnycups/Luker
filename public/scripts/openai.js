@@ -86,7 +86,6 @@ import { callGenericPopup, Popup, POPUP_RESULT, POPUP_TYPE } from './popup.js';
 import { t } from './i18n.js';
 import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
-import { applyPatch as applyJsonPatch } from './util/fast-json-patch.js';
 import { AbortReason } from './util/AbortReason.js';
 import { resolveChatCompletionRequestProfile } from './extensions/connection-manager/profile-resolver.js';
 import { COMETAPI_IGNORE_PATTERNS, IGNORE_SYMBOL, MEDIA_DISPLAY, MEDIA_TYPE } from './constants.js';
@@ -6206,15 +6205,10 @@ function mergeStoredOpenAIPreset(targetPreset, presetBody) {
  * @returns {Promise<void>}
  */
 async function saveOpenAIPresetBody(name, presetBody, triggerUi = true) {
-    const existingNameBeforeSave = findCanonicalNameInList(Object.keys(openai_setting_names || {}), name);
-    const existingIndex = existingNameBeforeSave ? openai_setting_names[existingNameBeforeSave] : null;
-    const existingPreset = Number.isInteger(existingIndex) ? openai_settings?.[existingIndex] : null;
     const saveResult = await persistPreset({
         apiId: 'openai',
         name,
         preset: presetBody,
-        existingPreset,
-        maxOperations: 4000,
     });
 
     if (!saveResult.ok) {
@@ -6226,12 +6220,7 @@ async function saveOpenAIPresetBody(name, presetBody, triggerUi = true) {
     const existingName = findCanonicalNameInList(Object.keys(openai_setting_names || {}), data.name);
     if (existingName) {
         const value = openai_setting_names[existingName];
-        if (saveResult.mode === 'patch' && Array.isArray(saveResult.operations) && saveResult.operations.length > 0 && openai_settings[value]) {
-            const patchResult = applyJsonPatch(openai_settings[value], saveResult.operations, true, false);
-            openai_settings[value] = patchResult.newDocument;
-        } else if (saveResult.mode === 'full') {
-            openai_settings[value] = mergeStoredOpenAIPreset(openai_settings[value], structuredClone(presetBody));
-        }
+        openai_settings[value] = mergeStoredOpenAIPreset(openai_settings[value], structuredClone(presetBody));
 
         if (triggerUi) {
             oai_settings.preset_settings_openai = existingName;
