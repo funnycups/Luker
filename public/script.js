@@ -269,7 +269,7 @@ import { initTextGenModels, initTextGenModelSelects } from './scripts/textgen-mo
 import { appendFileContent, hasPendingFileAttachment, populateFileAttachment, decodeStyleTags, encodeStyleTags, hideChatMessageRange, isExternalMediaAllowed, preserveNeutralChat, restoreNeutralChat, formatCreatorNotes, initChatUtilities, addDOMPurifyHooks } from './scripts/chats.js';
 import { getPresetManager, initPresetManager } from './scripts/preset-manager.js';
 import { evaluateMacros, getLastMessageId, initMacros } from './scripts/macros.js';
-import { initVariableOpLog, extractMessageById } from './scripts/variable-op-log/index.js';
+import { initVariableOpLog, extractMessageById, pushFloorVarOp } from './scripts/variable-op-log/index.js';
 import { extractFromText as extractSideEffectMacrosFromText } from './scripts/variable-op-log/extractor.js';
 import { initVarOpsPanelHandler } from './scripts/variable-op-log/panel.js';
 import { installFrontendLogCapture, setFrontendConsoleDebugLoggingEnabled } from './scripts/frontend-log-manager.js';
@@ -11078,6 +11078,55 @@ export function getChatMessageMutationMeta(messageId, messages = chat) {
         isAssistant: Boolean(!message.is_system && !message.is_user),
         isSystem: Boolean(message.is_system),
     };
+}
+
+/**
+ * Set a chat variable, optionally binding the write to a specific floor.
+ *
+ * Default (no `options.floor`): writes `value` straight into
+ * `chat_metadata.variables[name]` — same bucket the `{{getvar}}` macro reads
+ * and the `/setvar` slash command writes to. Chat-scoped, not swipe-aware:
+ * the value sticks for the rest of the chat regardless of structural events.
+ *
+ * With `options.floor` set: appends a synthetic `setvar` op to
+ * `chat[floor].extra.var_ops` and forward-applies it to the chat-metadata
+ * bucket — the same data path the AI walks when it writes a literal
+ * `{{setvar::name::value}}` into a message. Because the op is mirrored to
+ * the floor's CURRENT swipe via `swipe_info[swipe_id].extra`, switching
+ * swipes / deleting the floor / branching the chat all flow through the
+ * variable-op-log rebuilder, so the variable rolls back the same way an
+ * AI-written setvar would.
+ *
+ * The floor-bound path coerces `value` to a string (the var_ops format
+ * stores strings — that's what AI-written setvars carry, and what
+ * `{{getvar}}` returns). The chat-scoped path stores whatever you pass.
+ *
+ * @param {string} name - Variable name (non-empty)
+ * @param {*} value - Value to store. Coerced to string in the floor-bound path.
+ * @param {object} [options]
+ * @param {number} [options.floor] - 0-based message index. Omit for chat-scoped write.
+ * @returns {Promise<*>} The value that was written.
+ */
+export async function setVariable(name, value, options = {}) {
+    if (!name || typeof name !== 'string') {
+        throw new Error('[setVariable] name required (non-empty string)');
+    }
+    const floorOption = options?.floor;
+    if (floorOption === undefined || floorOption === null) {
+        if (!chat_metadata.variables || typeof chat_metadata.variables !== 'object') {
+            chat_metadata.variables = {};
+        }
+        chat_metadata.variables[name] = value;
+        saveMetadataDebounced();
+        return value;
+    }
+    const messageId = Number(floorOption);
+    if (!Number.isInteger(messageId) || messageId < 0 || messageId >= chat.length) {
+        throw new Error(`[setVariable] floor ${floorOption} out of range (chat length ${chat.length})`);
+    }
+    pushFloorVarOp(messageId, { op: 'setvar', key: name, value: String(value ?? '') });
+    await saveChatConditional();
+    return value;
 }
 
 /**

@@ -24,6 +24,7 @@
 import { eventSource, event_types, chat, chat_metadata, name1, name2 } from '../../script.js';
 import { extractFromMessage } from './extractor.js';
 import { rebuildVariables } from './rebuilder.js';
+import { mirrorMessageExtraToCurrentSwipe, pushFloorVarOp as pushFloorVarOpPure } from './floor-ops.js';
 import { getLastMessageId } from '../macros.js';
 import { getLocalVariable } from '../variables.js';
 
@@ -92,27 +93,33 @@ export function extractMessageById(messageId) {
     extractFromMessage(message, chat_metadata.variables, buildResolveEnv);
 
     // Mirror back to swipe_info if this swipe has already been recorded.
-    syncMesAndExtraToCurrentSwipe(message);
+    mirrorMessageExtraToCurrentSwipe(message);
 }
 
 /**
- * After mutating `message.mes` and `message.extra.var_ops`, copy the new
- * values back into the matching `swipe_info[swipe_id]` slot so the change
- * survives the next swipe-out. ST's saveReply already does this for full
- * objects but our extraction may run before or after that step depending
- * on the path; doing it again is idempotent.
+ * Programmatically append a synthetic var_op to a specific floor, mirroring
+ * what extractor.js does when it parses a literal `{{setvar}}` out of message
+ * text. The op is pushed onto `chat[messageId].extra.var_ops`, forward-applied
+ * to `chat_metadata.variables`, and mirrored into `swipe_info[swipe_id].extra`
+ * so it survives swipe-out/swipe-back.
  *
- * @param {any} message
+ * Does NOT persist the chat itself — the caller is expected to follow up
+ * with `saveChatConditional()` (or batch multiple ops then save once).
+ *
+ * The op is bound to the floor's CURRENT swipe by virtue of the swipe-info
+ * mirror — switching swipes will replace `message.extra.var_ops` with the
+ * other swipe's slot, and the rebuilder will replay accordingly.
+ *
+ * @param {number} messageId - Floor index into the chat array
+ * @param {import('./apply.js').VarOp} op - Op record (op/key/value)
+ * @returns {void}
+ * @throws if no message exists at that floor, or if `op` lacks a string key
  */
-function syncMesAndExtraToCurrentSwipe(message) {
-    if (!message || typeof message.swipe_id !== 'number') return;
-    if (!Array.isArray(message.swipes) || !Array.isArray(message.swipe_info)) return;
-    if (message.swipe_id < 0 || message.swipe_id >= message.swipe_info.length) return;
-    message.swipes[message.swipe_id] = message.mes;
-    const slot = message.swipe_info[message.swipe_id];
-    if (slot) {
-        slot.extra = structuredClone(message.extra ?? {});
+export function pushFloorVarOp(messageId, op) {
+    if (!chat_metadata.variables || typeof chat_metadata.variables !== 'object') {
+        chat_metadata.variables = {};
     }
+    pushFloorVarOpPure(chat, chat_metadata.variables, messageId, op);
 }
 
 /**

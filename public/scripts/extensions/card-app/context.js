@@ -2,8 +2,8 @@
  * CardApp Context - builds the ctx object passed to CardApp's init() function.
  */
 
-import { eventSource, event_types, chat, chat_metadata, this_chid, characters, getRequestHeaders, openCharacterChat, doNewChat, closeCurrentChat, getPastCharacterChats, deleteMessage as lukerDeleteMessage, deleteLastMessage, swipe_right, saveMetadata, messageFormatting, getChatState as lukerGetChatState, updateChatState as lukerUpdateChatState, patchChatState as lukerPatchChatState, deleteChatState as lukerDeleteChatState, deleteCharacterChatByName, renameChat as lukerRenameChat } from '../../../script.js';
-import { getContext, saveMetadataDebounced, extension_settings, getCharacterState as lukerGetCharacterState, setCharacterState as lukerSetCharacterState } from '../../extensions.js';
+import { eventSource, event_types, chat, chat_metadata, this_chid, characters, getRequestHeaders, openCharacterChat, doNewChat, closeCurrentChat, getPastCharacterChats, deleteMessage as lukerDeleteMessage, deleteLastMessage, swipe_right, saveMetadata, messageFormatting, getChatState as lukerGetChatState, updateChatState as lukerUpdateChatState, patchChatState as lukerPatchChatState, deleteChatState as lukerDeleteChatState, deleteCharacterChatByName, renameChat as lukerRenameChat, setVariable as lukerSetVariable } from '../../../script.js';
+import { getContext, extension_settings, getCharacterState as lukerGetCharacterState, setCharacterState as lukerSetCharacterState } from '../../extensions.js';
 import { executeSlashCommandsWithOptions } from '../../slash-commands.js';
 import { removeReasoningFromString } from '../../reasoning.js';
 import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, createNewWorldInfo, world_names, selected_world_info, getChatWorldInfoNames, setChatWorldInfoSelection, getCharaAuxWorlds } from '../../world-info.js';
@@ -293,16 +293,30 @@ export function buildContext(container, charId, config) {
         },
 
         /**
-         * Set a chat variable.
+         * Set a chat variable, optionally binding the write to a specific floor.
+         *
+         * Without `options.floor`: writes to `chat_metadata.variables[key]` —
+         * the same bucket `{{getvar::key}}` reads. Chat-scoped, sticks until
+         * something else overwrites it.
+         *
+         * With `options.floor`: appends a synthetic `setvar` op to that
+         * floor's `extra.var_ops`, mirrored to its current swipe. swipe-out /
+         * swipe-back / delete / branch all reconcile through the
+         * variable-op-log rebuilder, so the value rolls back the same way an
+         * AI-written `{{setvar}}` literal would. The value is coerced to a
+         * string because var_ops only carry strings (which is what
+         * `{{getvar}}` returns).
+         *
+         * For per-floor structured state with its own commit log / namespace,
+         * use `ctx.lukerContext.createFloorState({ namespace })` instead.
+         *
          * @param {string} key
          * @param {*} value
+         * @param {{floor?: number}} [options]
+         * @returns {Promise<*>} the value written
          */
-        setVariable(key, value) {
-            if (!chat_metadata.variables) {
-                chat_metadata.variables = {};
-            }
-            chat_metadata.variables[key] = value;
-            saveMetadataDebounced();
+        async setVariable(key, value, options = {}) {
+            return await lukerSetVariable(key, value, options);
         },
 
         /**

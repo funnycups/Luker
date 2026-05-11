@@ -180,8 +180,8 @@ The CardApp context object provides the following APIs:
 | `ctx.deleteChatState(namespace, options?)` | **async** Drop a chat-bound sidecar namespace. |
 | `ctx.getCharacterState(namespace)` | **async** Read character-bound sidecar (avatar auto-resolved). Survives across every chat with this character. |
 | `ctx.setCharacterState(namespace, data)` | **async** Write character-bound sidecar (avatar auto-resolved). Pass `null` to delete. |
-| `ctx.getVariable(key)` | Get a chat variable |
-| `ctx.setVariable(key, value)` | Set a chat variable and persist it |
+| `ctx.getVariable(key)` | Get a chat variable from `chat_metadata.variables` (same bucket `{{getvar::key}}` reads). |
+| `ctx.setVariable(key, value, options?)` | **async** Set a chat variable. Default: writes straight to `chat_metadata.variables` (chat-scoped, persists for the rest of the chat). Pass `{ floor: <messageIndex> }` to bind the write to that floor's current swipe via the variable op-log — swipe-out / swipe-back / deletion / branching all reconcile through the rebuilder so the value rolls back the same way an AI-written `{{setvar}}` literal would. The floor-bound path coerces value to a string (the op-log format only carries strings). For structured per-floor state with its own commit log / namespace, use `ctx.lukerContext.createFloorState({ namespace })` instead. |
 
 #### Chat Management
 
