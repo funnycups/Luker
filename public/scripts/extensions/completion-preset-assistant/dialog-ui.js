@@ -261,9 +261,9 @@ export function createCompletionPresetAssistantDialogUi(deps) {
                 <div id="${CREATE_BUTTON_ID}" class="menu_button">${escapeHtml(i18n('Create New Preset'))}</div>
             </div>
             <div class="cpa_hint">${escapeHtml(i18n('Character-bound runtime presets are not directly editable.'))}</div>
-            <label for="cpa_request_llm_preset">${escapeHtml(i18n('Model request LLM preset name (empty = current)'))}</label>
+            <label for="cpa_request_llm_preset">${escapeHtml(i18n('Model request LLM preset name'))}</label>
             <select id="cpa_request_llm_preset" class="text_pole"></select>
-            <label for="cpa_request_api_profile">${escapeHtml(i18n('Model request API preset name (Connection profile, empty = current)'))}</label>
+            <label for="cpa_request_api_profile">${escapeHtml(i18n('Model request API preset name (Connection profile)'))}</label>
             <select id="cpa_request_api_profile" class="text_pole"></select>
             <label class="checkbox_label"><input id="cpa_include_world_info" type="checkbox"/> ${escapeHtml(i18n('Include world info (simulate current chat)'))}</label>
             <label for="cpa_tool_retries">${escapeHtml(i18n('Tool-call retries on invalid/missing tool call (N)'))}</label>

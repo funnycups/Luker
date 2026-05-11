@@ -447,7 +447,278 @@
     gap: var(--ls-space-sm);
     flex-wrap: wrap;
     justify-content: flex-end;
+    align-items: center;
 }
+
+/* Slide toggle (Auto-apply etc.). Drop-in replacement for SillyTavern's
+   `.checkbox_label`: same hidden-input pattern but with a pill-shaped
+   track + knob so it visually reads as on/off rather than checked/empty.
+   Aligns vertically with `.menu_button` siblings via inline-flex + center.
+*/
+.popup .luker-studio-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+    line-height: 1;
+}
+
+.popup .luker-studio-switch input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+    width: 0;
+    height: 0;
+}
+
+.popup .luker-studio-switch-track {
+    position: relative;
+    display: inline-block;
+    width: 30px;
+    height: 16px;
+    border-radius: 9px;
+    background: rgba(128, 128, 128, 0.35);
+    transition: background-color 0.18s ease;
+    flex-shrink: 0;
+}
+
+.popup .luker-studio-switch-knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    transition: transform 0.18s ease;
+}
+
+.popup .luker-studio-switch input:checked + .luker-studio-switch-track {
+    background: var(--SmartThemeQuoteColor, #3b82f6);
+}
+
+.popup .luker-studio-switch input:checked + .luker-studio-switch-track .luker-studio-switch-knob {
+    transform: translateX(14px);
+}
+
+.popup .luker-studio-switch input:focus-visible + .luker-studio-switch-track {
+    outline: 2px solid var(--SmartThemeBorderColor, currentColor);
+    outline-offset: 1px;
+}
+
+.popup .luker-studio-switch-label {
+    font-size: 0.9em;
+}
+
+/* Default inline text-diff styling (shell-provided fallback when an adapter
+   doesn't override `renderTextDiff`). DiffMatchPatch produces <ins>/<del>
+   tags around the changed runs — we style them as a single flowing block
+   so the user reads "what changed" inline rather than via two side-by-side
+   <pre> walls. */
+.popup .luker-studio-text-diff {
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: var(--monoFontFamily, ui-monospace, monospace);
+    font-size: 0.9em;
+    line-height: 1.45;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: rgba(128, 128, 128, 0.08);
+    overflow-x: auto;
+}
+
+.popup .luker-studio-text-diff ins.luker-studio-text-diff-ins {
+    text-decoration: none;
+    background: rgba(46, 160, 67, 0.28);
+    color: inherit;
+    padding: 1px 0;
+}
+
+.popup .luker-studio-text-diff del.luker-studio-text-diff-del {
+    text-decoration: line-through;
+    background: rgba(248, 81, 73, 0.28);
+    color: inherit;
+    padding: 1px 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Inline text-diff (full table style with line numbers + splitter + zoom)
+   ═══════════════════════════════════════════════════════════════════════════
+
+   Used by the shell as the default `renderTextDiff`. Class names retain the
+   historical `luker_orch_line_diff_*` prefix (the renderer migrated from
+   orchestrator's line-diff.js and the orchestrator runtime-trace consumer
+   still emits this exact markup). Despite the prefix, these styles are now
+   shell-owned and shared across all studios.
+*/
+.luker_orch_line_diff {
+    border: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.3));
+    border-radius: 6px;
+    background: rgba(0,0,0,0.2);
+}
+.luker_orch_line_diff > summary {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    font-size: 0.9rem;
+}
+.luker_orch_line_diff_summary_main {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.luker_orch_line_diff_meta {
+    opacity: 0.78;
+    font-size: 0.88rem;
+}
+.luker_orch_line_diff_expand_btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.2em;
+    width: 2.2em;
+    padding: 0;
+    line-height: 1;
+}
+.luker_orch_line_diff_expand_btn i { pointer-events: none; }
+.luker_orch_line_diff_pre {
+    margin: 0;
+    padding: 6px;
+    border-top: 1px dashed var(--SmartThemeBorderColor, rgba(130,130,130,0.3));
+    max-height: 320px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+}
+.luker_orch_line_diff,
+.luker_orch_line_diff_pre { min-width: 0; max-width: 100%; box-sizing: border-box; }
+.luker_orch_line_diff_dual { --luker-orch-split-left: 50%; --luker-orch-splitter-width: 12px; display: grid; grid-template-columns: minmax(0, var(--luker-orch-split-left)) var(--luker-orch-splitter-width) minmax(0, calc(100% - var(--luker-orch-split-left) - var(--luker-orch-splitter-width))); gap: 0; width: 100%; min-width: 0; align-items: stretch; }
+.luker_orch_line_diff_splitter { position: relative; cursor: col-resize; touch-action: none; user-select: none; background: transparent; }
+.luker_orch_line_diff_splitter::before { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-50%); border-radius: 999px; background: color-mix(in oklab, var(--SmartThemeBodyColor) 20%, transparent); transition: background-color .12s ease; }
+.luker_orch_line_diff_splitter:hover::before,
+.luker_orch_line_diff_splitter.active::before { background: color-mix(in oklab, var(--SmartThemeBodyColor) 38%, transparent); }
+.luker_orch_line_diff_side { border: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.32)); border-radius: 6px; background: rgba(0,0,0,0.12); min-width: 0; overflow: hidden; }
+.luker_orch_line_diff_side_scroll { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; touch-action: auto; }
+.luker_orch_line_diff_table {
+    width: max-content;
+    min-width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 0.82rem;
+}
+.luker_orch_line_diff_pre,
+.luker_orch_line_diff_table,
+.luker_orch_line_diff_row td,
+.luker_orch_line_diff_text,
+.luker_orch_line_diff_text_inner { text-align: left; }
+.luker_orch_line_diff_row td {
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.24));
+    padding: 2px 6px;
+    vertical-align: top;
+}
+.luker_orch_line_diff_row:last-child td { border-bottom: none; }
+.luker_orch_line_diff_ln {
+    width: 3.8em;
+    text-align: right;
+    color: color-mix(in oklab, var(--SmartThemeBodyColor) 72%, transparent);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    position: sticky;
+    left: 0;
+    z-index: 3;
+    background-color: var(--SmartThemeBlurTintColor);
+    box-shadow: 1px 0 0 var(--SmartThemeBorderColor);
+    background-image: none;
+    opacity: 1;
+}
+.luker_orch_line_diff_text {
+    width: auto;
+    min-width: 0;
+}
+.luker_orch_line_diff_text_inner {
+    white-space: pre;
+    word-break: normal;
+    overflow-wrap: normal;
+    user-select: text;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    min-width: max-content;
+}
+.luker_orch_line_diff_word_add {
+    background: color-mix(in oklab, #4caf50 30%, transparent);
+    border-radius: 3px;
+    padding: 0 1px;
+}
+.luker_orch_line_diff_word_del {
+    background: color-mix(in oklab, #d9534f 30%, transparent);
+    border-radius: 3px;
+    padding: 0 1px;
+}
+.luker_orch_line_diff_row_add .luker_orch_line_diff_text.new { background: color-mix(in oklab, #4caf50 12%, transparent); }
+.luker_orch_line_diff_row_del .luker_orch_line_diff_text.old { background: color-mix(in oklab, #d9534f 12%, transparent); }
+.luker_orch_line_diff_row_mod .luker_orch_line_diff_text.old { background: color-mix(in oklab, #d9534f 10%, transparent); }
+.luker_orch_line_diff_row_mod .luker_orch_line_diff_text.new { background: color-mix(in oklab, #4caf50 10%, transparent); }
+.luker_orch_line_diff_zoom_overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10010;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.luker_orch_line_diff_zoom_backdrop {
+    position: absolute;
+    inset: 0;
+    background: color-mix(in oklab, #000 70%, transparent);
+}
+.luker_orch_line_diff_zoom_dialog {
+    position: relative;
+    z-index: 1;
+    width: min(1280px, 95vw);
+    height: min(92vh, 920px);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 10px;
+    background: var(--SmartThemeBlurTintColor);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 12px 36px rgba(0,0,0,0.45);
+}
+.luker_orch_line_diff_zoom_header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.24));
+}
+.luker_orch_line_diff_zoom_title {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.luker_orch_line_diff_zoom_close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.2em;
+    width: 2.2em;
+    padding: 0;
+    line-height: 1;
+}
+.luker_orch_line_diff_zoom_body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 10px;
+}
+.luker_orch_line_diff_zoom_body .luker_orch_line_diff_pre { max-height: none; height: auto; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    13. PENDING APPROVAL BLOCK

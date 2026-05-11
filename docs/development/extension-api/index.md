@@ -12,6 +12,7 @@ This is the complete reference for the Luker Extension API, intended for plugin 
 | [Slash Commands](/development/extension-api/slash-commands) | Registering and executing slash commands, named/unnamed arguments, enums |
 | [Macros & Variables](/development/extension-api/macros-and-variables) | Macro registration, built-in macro reference, `substituteParams`, local & global variables |
 | [UI & Popups](/development/extension-api/ui-and-popups) | Popups, loaders, templates, message formatting |
+| [IterationStudio](/development/extension-api/iteration-studio) | Shared popup framework for AI-driven iterative editing — conversation, sessions, diff preview, approve/reject lifecycle. Adapters supply the artifact shape + tools |
 | [Plugin Integration](/development/extension-api/plugin-integration) | Regex runtime, search tools, extension API registry, event system, i18n, settings storage, debug & scraper registration, tokenization, utilities, symbols & constants |
 | [Low-Level Endpoints](/development/extension-api/low-level-endpoints) | Raw HTTP routes (advanced / debugging only) |
 

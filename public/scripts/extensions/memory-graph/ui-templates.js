@@ -33,6 +33,8 @@ export function buildSchemaEditorPopupHtml(deps, popupId, scopeInfo) {
         <div class="luker-schema-footer-actions">
             <div class="menu_button luker-schema-editor-add">${escapeHtml(i18n('Add Type'))}</div>
             <div class="menu_button luker-schema-editor-reset">${escapeHtml(i18n('Reset to Default Schema'))}</div>
+            <div id="${popupId}_schema_export" class="menu_button">${escapeHtml(i18n('Export Schema'))}</div>
+            <div id="${popupId}_schema_import" class="menu_button">${escapeHtml(i18n('Import Schema'))}</div>
             <div id="${popupId}_schema_save_global" class="menu_button">${escapeHtml(i18n('Save Schema to Global'))}</div>
             <div id="${popupId}_schema_save_character" class="menu_button">${escapeHtml(i18n('Save Schema to Character'))}</div>
             <div id="${popupId}_schema_clear_character_override" class="menu_button">${escapeHtml(i18n('Clear Character Schema Override'))}</div>
@@ -220,14 +222,18 @@ export function buildMemoryGraphSettingsHtml(deps) {
                 <option value="${extension_prompt_roles.USER}">${escapeHtml(i18n('User'))}</option>
                 <option value="${extension_prompt_roles.ASSISTANT}">${escapeHtml(i18n('Assistant'))}</option>
             </select>
-            <label for="luker_rpg_memory_recall_api_preset">${escapeHtml(i18n('Recall API preset (Connection profile, empty = current)'))}</label>
+            <label for="luker_rpg_memory_recall_api_preset">${escapeHtml(i18n('Recall API preset (Connection profile)'))}</label>
             <select id="luker_rpg_memory_recall_api_preset" class="text_pole"></select>
-            <label for="luker_rpg_memory_recall_preset">${escapeHtml(i18n('Recall preset (params + prompt, empty = current)'))}</label>
+            <label for="luker_rpg_memory_recall_preset">${escapeHtml(i18n('Recall preset (params + prompt)'))}</label>
             <select id="luker_rpg_memory_recall_preset" class="text_pole"></select>
-            <label for="luker_rpg_memory_extract_api_preset">${escapeHtml(i18n('Extract API preset (Connection profile, empty = current)'))}</label>
+            <label for="luker_rpg_memory_extract_api_preset">${escapeHtml(i18n('Extract API preset (Connection profile)'))}</label>
             <select id="luker_rpg_memory_extract_api_preset" class="text_pole"></select>
-            <label for="luker_rpg_memory_extract_preset">${escapeHtml(i18n('Extract preset (params + prompt, empty = current)'))}</label>
+            <label for="luker_rpg_memory_extract_preset">${escapeHtml(i18n('Extract preset (params + prompt)'))}</label>
             <select id="luker_rpg_memory_extract_preset" class="text_pole"></select>
+            <label for="luker_rpg_memory_schema_iter_api_preset">${escapeHtml(i18n('Schema iteration API preset (Connection profile)'))}</label>
+            <select id="luker_rpg_memory_schema_iter_api_preset" class="text_pole"></select>
+            <label for="luker_rpg_memory_schema_iter_preset">${escapeHtml(i18n('Schema iteration preset (params + prompt)'))}</label>
+            <select id="luker_rpg_memory_schema_iter_preset" class="text_pole"></select>
             <label class="checkbox_label">
                 <input id="luker_rpg_memory_include_world_info" type="checkbox" />
                 ${escapeHtml(i18n('Include world info'))}
@@ -244,6 +250,7 @@ export function buildMemoryGraphSettingsHtml(deps) {
             <div class="flex-container">
                 <div id="luker_rpg_memory_open_schema_editor" class="menu_button">${escapeHtml(i18n('Open Schema Editor'))}</div>
                 <div id="luker_rpg_memory_open_advanced" class="menu_button">${escapeHtml(i18n('Open Advanced Settings'))}</div>
+                <div id="luker_rpg_memory_open_schema_studio" class="menu_button">${escapeHtml(i18n('AI Iterate Schema'))}</div>
             </div>
             <small id="luker_rpg_memory_advanced_scope" style="opacity:0.85"></small>
             <div class="flex-container">

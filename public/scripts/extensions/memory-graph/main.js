@@ -25,7 +25,12 @@ import {
     getImportedStoreBindingFloor,
     clearImportedStoreTransientState,
     bindImportedStoreToAssistantFloor,
+    getSchemaExportFileName,
+    buildSchemaExportPayload,
+    parseSchemaImportPayload,
 } from './import-export.js';
+import { createSchemaIterationAdapter } from './schema-adapter.js';
+import { open as openIterationStudio } from '../../iteration-studio/index.js';
 import { performFuzzySearch } from '../../power-user.js';
 import { download, getFileText, getStringHash } from '../../utils.js';
 import { newWorldInfoEntryTemplate, setGlobalWorldInfoSelection, world_info_position } from '../../world-info.js';
@@ -555,6 +560,8 @@ const defaultSettings = {
     recallFinalizeSystemPrompt: DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT,
     extractApiPresetName: '',
     extractPresetName: '',
+    schemaIterationApiPresetName: '',
+    schemaIterationPresetName: '',
     extractSystemPrompt: DEFAULT_EXTRACT_SYSTEM_PROMPT,
     extractBatchTurns: 1,
     extractContextTurns: 2,
@@ -693,7 +700,7 @@ function migrateLegacyProfileSettings() {
     }
 }
 
-function normalizeNodeTypeSchema(schema) {
+export function normalizeNodeTypeSchema(schema) {
     const list = Array.isArray(schema) ? schema : defaultNodeTypeSchema;
     const normalizeCompressionMode = (mode) => {
         const value = String(mode || '').trim().toLowerCase();
@@ -1052,6 +1059,8 @@ function refreshOpenAIPresetSelectors(root, context, settings) {
         ['#luker_rpg_memory_recall_preset', settings.recallPresetName],
         ['#luker_rpg_memory_extract_api_preset', settings.extractApiPresetName],
         ['#luker_rpg_memory_extract_preset', settings.extractPresetName],
+        ['#luker_rpg_memory_schema_iter_api_preset', settings.schemaIterationApiPresetName],
+        ['#luker_rpg_memory_schema_iter_preset', settings.schemaIterationPresetName],
     ];
 
     for (const [selector, value] of selectorValues) {
@@ -12550,6 +12559,44 @@ async function openSchemaEditorPopup(context, settings, root) {
         notifySuccess(i18nFormat('Cleared character schema override: ${0}.', nextScopeInfo.characterName || nextScopeInfo.avatar));
         updateUiStatus(i18nFormat('Cleared character schema override: ${0}.', nextScopeInfo.characterName || nextScopeInfo.avatar));
     });
+    jQuery(document).on(`click${namespace}`, `${selector} #${popupId}_schema_export`, function () {
+        const nextSchema = readCurrentSchema();
+        if (!Array.isArray(nextSchema) || nextSchema.length === 0) {
+            notifyError(i18n('Failed to read schema from editor.'));
+            return;
+        }
+        const currentScopeInfo = getSchemaScopeInfo(context, settings);
+        const payload = buildSchemaExportPayload(nextSchema, currentScopeInfo, normalizeNodeTypeSchema);
+        const fileName = getSchemaExportFileName(currentScopeInfo);
+        download(JSON.stringify(payload, null, 2), fileName, 'application/json');
+        notifySuccess(i18nFormat('Downloaded schema file: ${0}', fileName));
+        updateUiStatus(i18nFormat('Downloaded schema file: ${0}', fileName));
+    });
+    jQuery(document).on(`click${namespace}`, `${selector} #${popupId}_schema_import`, function () {
+        // Detached file input — click() works on inputs that are not attached
+        // to the document, so we avoid mutating the DOM and the lifecycle is
+        // tied to the closure: once the change handler runs (or the input is
+        // GC'd if the user cancels), nothing leaks.
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = '.json,application/json';
+        fileInput.addEventListener('change', async () => {
+            const file = fileInput.files?.[0];
+            if (!file) {
+                return;
+            }
+            try {
+                const parsed = JSON.parse(await getFileText(file));
+                const importedSchema = parseSchemaImportPayload(parsed, normalizeNodeTypeSchema);
+                rerender(importedSchema);
+                notifySuccess(i18n('Schema imported into editor. Click a Save button to persist.'));
+                updateUiStatus(i18n('Schema imported into editor. Click a Save button to persist.'));
+            } catch (error) {
+                notifyError(i18nFormat('Failed to import schema: ${0}', i18n(error?.message || String(error))));
+            }
+        }, { once: true });
+        fileInput.click();
+    });
 
     try {
         await popupPromise;
@@ -13095,6 +13142,8 @@ function bindUi() {
     root.find('#luker_rpg_memory_recall_preset').val(String(settings.recallPresetName || ''));
     root.find('#luker_rpg_memory_extract_api_preset').val(String(settings.extractApiPresetName || ''));
     root.find('#luker_rpg_memory_extract_preset').val(String(settings.extractPresetName || ''));
+    root.find('#luker_rpg_memory_schema_iter_api_preset').val(String(settings.schemaIterationApiPresetName || ''));
+    root.find('#luker_rpg_memory_schema_iter_preset').val(String(settings.schemaIterationPresetName || ''));
     root.find('#luker_rpg_memory_include_world_info').prop('checked', Boolean(settings.includeWorldInfoWithPreset));
     root.find('#luker_rpg_memory_update_every').val(String(settings.updateEvery));
     const schemaScopeInfo = getSchemaScopeInfo(context, settings);
@@ -13243,6 +13292,16 @@ function bindUi() {
         saveSettingsDebounced();
     });
 
+    root.find('#luker_rpg_memory_schema_iter_api_preset').off('change').on('change', function () {
+        settings.schemaIterationApiPresetName = String(jQuery(this).val() || '').trim();
+        saveSettingsDebounced();
+    });
+
+    root.find('#luker_rpg_memory_schema_iter_preset').off('change').on('change', function () {
+        settings.schemaIterationPresetName = String(jQuery(this).val() || '').trim();
+        saveSettingsDebounced();
+    });
+
     root.find('#luker_rpg_memory_include_world_info').off('input').on('input', function () {
         settings.includeWorldInfoWithPreset = Boolean(jQuery(this).prop('checked'));
         saveSettingsDebounced();
@@ -13260,6 +13319,25 @@ function bindUi() {
     });
     root.find('#luker_rpg_memory_open_advanced').off('click').on('click', async function () {
         await openAdvancedSettingsPopup(context, settings, root);
+    });
+    root.find('#luker_rpg_memory_open_schema_studio').off('click').on('click', async function () {
+        const adapter = createSchemaIterationAdapter({
+            normalizeNodeTypeSchema,
+            getEffectiveNodeTypeSchema,
+            persistCharacterSchemaOverride,
+            saveSettings,
+            i18n,
+            i18nFormat,
+            refreshRootUi: (uiRoot) => {
+                if (!uiRoot?.length) {
+                    return;
+                }
+                const nextScopeInfo = getSchemaScopeInfo(context, settings);
+                updateSchemaSummary(uiRoot, nextScopeInfo.schema);
+                updateSchemaScopeIndicator(uiRoot, nextScopeInfo);
+            },
+        });
+        await openIterationStudio(adapter, context, settings, root);
     });
     root.find('#luker_rpg_memory_advanced_save_global').off('click').on('click', async function () {
         const info = getAdvancedScopeInfo(context, settings);

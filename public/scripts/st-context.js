@@ -153,6 +153,29 @@ import { generateTask, GenerateTaskError } from './generate-task.js';
 import { generateHorde } from './horde.js';
 import { getKoboldGenerationData, kai_settings, koboldai_settings, koboldai_setting_names } from './kai-settings.js';
 import { getNovelGenerationData, nai_settings, novelai_settings, novelai_setting_names } from './nai-settings.js';
+import {
+    open as openIterationStudio,
+    defineAdapter as defineIterationStudioAdapter,
+    createSettingsBackedHistoryStore as createIterationStudioHistoryStore,
+    buildProfileDelta as buildIterationStudioProfileDelta,
+    renderProfileDeltaHtml as renderIterationStudioProfileDeltaHtml,
+} from './iteration-studio/index.js';
+
+/**
+ * Layer 2 export of the shared IterationStudio shell. Third-party
+ * extensions consume it as `SillyTavern.getContext().iterationStudio` so
+ * they don't need to know the source file path. The same functions are
+ * also importable directly via `/scripts/iteration-studio/index.js` for
+ * in-tree extensions that prefer the static import path. See
+ * `docs/development/extension-api/iteration-studio.md` for the contract.
+ */
+const ITERATION_STUDIO_API = Object.freeze({
+    open: openIterationStudio,
+    defineAdapter: defineIterationStudioAdapter,
+    createSettingsBackedHistoryStore: createIterationStudioHistoryStore,
+    buildProfileDelta: buildIterationStudioProfileDelta,
+    renderProfileDeltaHtml: renderIterationStudioProfileDeltaHtml,
+});
 
 function safeClone(value, fallback = {}) {
     try {
@@ -2182,6 +2205,7 @@ export function getContext() {
         getPastCharacterChats,
         deleteCharacterChat: deleteCharacterChatByName,
         saveSettingsDebounced,
+        iterationStudio: ITERATION_STUDIO_API,
         onlineStatus: online_status,
         maxContext: Number(max_context),
         chatMetadata: chat_metadata,

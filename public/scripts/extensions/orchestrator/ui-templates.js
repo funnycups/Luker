@@ -448,13 +448,13 @@ export function buildOrchestratorSettingsHtml(deps) {
                 <label for="luker_orch_single_agent_user_prompt">${escapeHtml(i18n('Single-agent user prompt template'))}</label>
                 <textarea id="luker_orch_single_agent_user_prompt" class="text_pole textarea_compact" rows="6"></textarea>
             </div>
-            <label for="luker_orch_llm_api_preset">${escapeHtml(i18n('LLM node API preset (Connection profile, empty = current)'))}</label>
+            <label for="luker_orch_llm_api_preset">${escapeHtml(i18n('LLM node API preset (Connection profile)'))}</label>
             <select id="luker_orch_llm_api_preset" class="text_pole"></select>
-            <label for="luker_orch_llm_preset">${escapeHtml(i18n('LLM node preset (params + prompt, empty = current)'))}</label>
+            <label for="luker_orch_llm_preset">${escapeHtml(i18n('LLM node preset (params + prompt)'))}</label>
             <select id="luker_orch_llm_preset" class="text_pole"></select>
-            <label for="luker_orch_ai_suggest_api_preset">${escapeHtml(i18n('AI build API preset (Connection profile, empty = current)'))}</label>
+            <label for="luker_orch_ai_suggest_api_preset">${escapeHtml(i18n('AI build API preset (Connection profile)'))}</label>
             <select id="luker_orch_ai_suggest_api_preset" class="text_pole"></select>
-            <label for="luker_orch_ai_suggest_preset">${escapeHtml(i18n('AI build preset (params + prompt, empty = current)'))}</label>
+            <label for="luker_orch_ai_suggest_preset">${escapeHtml(i18n('AI build preset (params + prompt)'))}</label>
             <select id="luker_orch_ai_suggest_preset" class="text_pole"></select>
             <label class="checkbox_label">
                 <input id="luker_orch_include_world_info" type="checkbox" />
@@ -546,6 +546,7 @@ export function buildOrchestratorSettingsHtml(deps) {
                     <div class="menu_button" data-luker-action="open-orch-editor">${escapeHtml(i18n('Open Orchestration Editor'))}</div>
                     <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
                     <div class="menu_button" data-luker-action="view-runtime-trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
+                    <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
                 </div>
                 <small class="luker_orch_loop_board_hint">${escapeHtml(i18n('Loop mode runs a single agent that calls tools in a loop and finalizes when ready.'))}</small>
             </div>

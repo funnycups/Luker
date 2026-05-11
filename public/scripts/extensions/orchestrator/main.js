@@ -231,6 +231,8 @@ import {
     persistGlobalLoopEditorFrom,
     persistOrchestratorCharacterExtension,
 } from './editor-persist.js';
+import { createOrchestratorIterationAdapter } from './iteration-adapter.js';
+import { open as openIterationStudio } from '../../iteration-studio/index.js';
 
 const MODULE_NAME = 'orchestrator';
 const ORCH_RESULT_EVENT = 'luker.orchestrator.result';
@@ -5270,486 +5272,51 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
 }
 
 async function openAiIterationStudio(context, settings, root) {
-    ensureStyles(UI_BLOCK_ID);
-    const activeAvatar = String(getCurrentAvatar(context) || '').trim();
-    const historyScope = getIterationDefaultScope(context);
-    const enableSessionHistory = true;
-    let historyState = createEmptyAiIterationHistoryState();
-    try {
-        historyState = await loadAiIterationHistoryStateForScope(context, {
-            scope: historyScope,
-            avatar: activeAvatar,
-        });
-    } catch (error) {
-        console.warn(`[${MODULE_NAME}] Failed to load AI iteration history`, error);
-    }
-    const session = ensureAiIterationSession(context, settings, { forceNew: false });
-    const currentIterationMode = normalizeExecutionMode(session?.mode) || getExecutionMode(settings);
-    const latestSession = findLatestAiIterationHistorySessionByMode(historyState, currentIterationMode);
-    if (latestSession) {
-        replaceAiIterationSession(session, latestSession);
-    } else {
-        if (historyScope === 'character') {
-            session.sourceAvatar = activeAvatar;
-        }
-        historyState = upsertAiIterationHistorySession(historyState, session);
-        try {
-            await persistAiIterationHistoryStateForScope(context, historyState, {
-                scope: historyScope,
-                avatar: activeAvatar,
-            });
-        } catch (error) {
-            console.warn(`[${MODULE_NAME}] Failed to initialize AI iteration history`, error);
-        }
-    }
-    uiState.aiIterationSession = session;
-    const popupId = `luker_orch_iter_popup_${Date.now()}`;
-    const namespace = `.lukerOrchIter_${popupId}`;
-    const selector = `#${popupId}`;
-    const popupHtml = buildAiIterationPopupHtml({
-        escapeHtml,
+    // Body migrated to the IterationStudio shell. The orchestrator-specific
+    // mode-branched behavior lives in iteration-adapter.js, which wraps the
+    // mode-aware helpers (buildAiIterationToolSet, executeAiIterationToolCalls,
+    // applyAiIterationSessionToGlobal, etc.) into a ProfileAdapter the shell
+    // can consume. The shell handles popup lifecycle, abort plumbing, session
+    // history, auto-continue, and the per-popup Auto-apply preference.
+    const executionMode = getExecutionMode(settings);
+    const studioMode = executionMode === ORCH_EXECUTION_MODE_LOOP || executionMode === ORCH_EXECUTION_MODE_AGENDA
+        ? executionMode
+        : ORCH_EXECUTION_MODE_SPEC;
+    const adapter = createOrchestratorIterationAdapter(studioMode, {
         i18n,
         i18nFormat,
-    }, popupId, session, {
-        allowCharacterApply: Boolean(activeAvatar),
-        enableSessionHistory,
-    });
-    let isRunning = false;
-
-    const persistSessionHistory = async () => {
-        try {
-            if (historyScope === 'character') {
-                session.sourceAvatar = activeAvatar;
-            }
-            session.updatedAt = Date.now();
-            historyState = upsertAiIterationHistorySession(historyState, session);
-            await persistAiIterationHistoryStateForScope(context, historyState, {
-                scope: historyScope,
-                avatar: activeAvatar,
-            });
-        } catch (error) {
-            console.warn(`[${MODULE_NAME}] Failed to persist AI iteration history`, error);
-        }
-    };
-
-    const rerender = () => {
-        const popupRoot = jQuery(selector);
-        if (!popupRoot.length) {
-            return;
-        }
-        popupRoot.find(`#${popupId}_sub`).text(i18nFormat('Iteration source: ${0}', session?.sourceName || i18n('Global profile')));
-        popupRoot.find(`#${popupId}_conversation`).html(renderAiIterationConversation(session, {
-            loading: isRunning,
-            loadingText: i18n('AI iteration is running...'),
-        }));
-        popupRoot.find(`#${popupId}_pending`).html(renderAiIterationPendingApproval(session, popupId));
-        popupRoot.find(`#${popupId}_profile`).html(renderAiIterationWorkingProfile(session, {
-            profileOverride: null,
-            previewPending: Boolean(session?.pendingApproval),
-        }));
-        popupRoot.find(`#${popupId}_history`).html(renderAiIterationSessionHistory(historyState, session?.id, session?.mode));
-    };
-
-    const setStatus = (text) => {
-        const popupRoot = jQuery(selector);
-        if (!popupRoot.length) {
-            return;
-        }
-        popupRoot.find(`#${popupId}_status`).text(String(text || ''));
-    };
-
-    const resetCurrentSession = async () => {
-        const nextSession = createAiIterationSession(context, settings);
-        if (historyScope === 'character') {
-            nextSession.sourceAvatar = activeAvatar;
-        }
-        replaceAiIterationSession(session, nextSession);
-        uiState.aiIterationSession = session;
-        await persistSessionHistory();
-        rerender();
-    };
-
-    const loadSessionById = async (sessionId) => {
-        const currentMode = normalizeExecutionMode(session?.mode) || getExecutionMode(settings);
-        const stored = findAiIterationHistorySessionByMode(historyState, sessionId, currentMode);
-        if (!stored) {
-            return false;
-        }
-        replaceAiIterationSession(session, stored);
-        uiState.aiIterationSession = session;
-        await persistSessionHistory();
-        rerender();
-        return true;
-    };
-
-    const deleteSessionById = async (sessionId) => {
-        const currentMode = normalizeExecutionMode(session?.mode) || getExecutionMode(settings);
-        const stored = findAiIterationHistorySessionByMode(historyState, sessionId, currentMode);
-        if (!stored) {
-            return false;
-        }
-        historyState = deleteAiIterationHistorySession(historyState, sessionId);
-        try {
-            await persistAiIterationHistoryStateForScope(context, historyState, {
-                scope: historyScope,
-                avatar: activeAvatar,
-            });
-        } catch (error) {
-            console.warn(`[${MODULE_NAME}] Failed to delete AI iteration session`, error);
-        }
-        if (String(session?.id || '') === String(sessionId || '').trim()) {
-            const fallback = findLatestAiIterationHistorySessionByMode(historyState, currentMode)
-                || createAiIterationSession(context, settings);
-            if (historyScope === 'character') {
-                fallback.sourceAvatar = activeAvatar;
-            }
-            replaceAiIterationSession(session, fallback);
-            uiState.aiIterationSession = session;
-            await persistSessionHistory();
-        }
-        rerender();
-    };
-
-    const maybeRunAutoContinue = async (executionResult, controller, source = 'approved') => {
-        if (!executionResult || typeof executionResult !== 'object') {
-            return false;
-        }
-        if (executionResult.finalized) {
-            setStatus(source === 'approved'
-                ? i18n('Changes approved and applied.')
-                : i18n('AI iteration updated.'));
-            rerender();
-            return true;
-        }
-        if (executionResult.continueRequested || (Array.isArray(executionResult.simulations) && executionResult.simulations.length > 0)) {
-            setStatus(i18n('Running auto-continue...'));
-            const autoPrompt = buildAiIterationAutoContinuePrompt(executionResult);
-            const followUp = await runAiIterationTurn(context, settings, session, autoPrompt, controller.signal, {
-                auto: true,
-                appendUserMessage: false,
-            });
-            await persistSessionHistory();
-            setStatus(followUp?.pending ? i18n('AI suggested changes are waiting for approval.') : i18n('AI iteration updated.'));
-            rerender();
-            return true;
-        }
-        return false;
-    };
-
-    const runVisibleIterationTurn = async (text, { appendUserMessage = true, loadingText = '' } = {}) => {
-        const safeText = String(text || '').trim();
-        if (!safeText) {
-            return false;
-        }
-        if (activeAiIterationAbortController && !activeAiIterationAbortController.signal.aborted) {
-            return false;
-        }
-        const popupRoot = jQuery(selector);
-        const input = popupRoot.find(`#${popupId}_input`);
-        const controller = new AbortController();
-        activeAiIterationAbortController = controller;
-        if (appendUserMessage) {
-            session.messages.push({ role: 'user', content: safeText, auto: false, at: Date.now() });
-            trimAiIterationMessages(session);
-            input.val('');
-            await persistSessionHistory();
-        }
-        isRunning = true;
-        rerender();
-        setStatus(loadingText || i18n('AI iteration is running...'));
-        try {
-            const result = await runAiIterationTurn(context, settings, session, safeText, controller.signal, { appendUserMessage: false });
-            await persistSessionHistory();
-            if (result?.pending) {
-                setStatus(i18n('AI suggested changes are waiting for approval.'));
-            } else if (result?.autoApplied) {
-                const didHandle = await maybeRunAutoContinue(result.executionResult, controller, 'auto');
-                if (!didHandle) {
-                    setStatus(i18n('AI iteration updated.'));
-                }
-            } else {
-                setStatus(i18n('AI iteration updated.'));
-            }
-            rerender();
-            return true;
-        } catch (error) {
-            if (isAbortError(error, controller.signal)) {
-                setStatus(i18n('Iteration run cancelled.'));
-            } else {
-                setStatus(i18nFormat('Iteration run failed: ${0}', String(error?.message || error)));
-            }
-            return false;
-        } finally {
-            if (activeAiIterationAbortController === controller) {
-                activeAiIterationAbortController = null;
-            }
-            isRunning = false;
-            rerender();
-        }
-    };
-
-    const popupPromise = context.callGenericPopup(
-        popupHtml,
-        context.POPUP_TYPE.TEXT,
-        i18n('AI Iteration Studio'),
-        {
-            okButton: i18n('Close'),
-            wide: true,
-            large: true,
-            allowVerticalScrolling: true,
+        getIterationDefaultScope,
+        getEditorByScope,
+        getAgendaEditorByScope,
+        getLoopEditorByScope,
+        syncCharacterEditorWithActiveAvatar,
+        cloneWorkingProfileFromEditor,
+        cloneAgendaWorkingProfileFromEditor,
+        sanitizeLoopProfile,
+        sanitizeSpec,
+        sanitizePresetMap,
+        sanitizeAgendaWorkingProfile,
+        cloneAiIterationWorkingProfile,
+        buildAiIterationToolSet,
+        buildAiIterationSystemPrompt,
+        buildAiIterationUserPrompt,
+        buildAiIterationAutoContinuePrompt,
+        executeAiIterationToolCalls,
+        renderAiIterationWorkingProfile,
+        resolveOrchestrationRuntimeWorldInfo,
+        applyAiIterationSessionToGlobal,
+        applyAiIterationSessionToCharacter,
+        ORCH_EXECUTION_MODES: {
+            SPEC: ORCH_EXECUTION_MODE_SPEC,
+            AGENDA: ORCH_EXECUTION_MODE_AGENDA,
+            LOOP: ORCH_EXECUTION_MODE_LOOP,
         },
-    );
-
-    jQuery(document).off(namespace);
-    rerender();
-
-    jQuery(document).on(`click${namespace}`, `${selector} #${popupId}_send`, async function () {
-        const popupRoot = jQuery(selector);
-        if (!popupRoot.length) {
-            return;
-        }
-        const input = popupRoot.find(`#${popupId}_input`);
-        const text = String(input.val() || '').trim();
-        if (!text) {
-            return;
-        }
-        await runVisibleIterationTurn(text, {
-            appendUserMessage: true,
-            loadingText: i18n('AI iteration is running...'),
-        });
+        MODULE_NAME,
+        ORCH_GLOBAL_ITERATION_HISTORY_KEY,
+        ORCH_CHARACTER_ITERATION_HISTORY_NAMESPACE,
+        ORCH_CHARACTER_ITERATION_HISTORY_LIMIT,
     });
-
-    jQuery(document).on(`click${namespace}`, `${selector} #${popupId}_stop`, function () {
-        if (activeAiIterationAbortController && !activeAiIterationAbortController.signal.aborted) {
-            activeAiIterationAbortController.abort();
-        }
-    });
-
-    jQuery(document).on(`click${namespace}`, `${selector} #${popupId}_clear`, function () {
-        void (async () => {
-            await resetCurrentSession();
-            setStatus(i18n('Iteration session reset.'));
-        })();
-    });
-
-    jQuery(document).on(`click${namespace}`, `${selector} [data-luker-orch-action="expand-line-diff"]`, function (event) {
-        event.preventDefault();
-        event.stopPropagation();
-        const rootElement = document.querySelector(selector);
-        openOrchExpandedDiff(rootElement, this);
-    });
-
-    jQuery(document).on(`click${namespace}`, `${selector} [data-luker-orch-action="refresh-message"]`, async function () {
-        if (activeAiIterationAbortController && !activeAiIterationAbortController.signal.aborted) {
-            return;
-        }
-        const messageIndex = asFiniteInteger(this.getAttribute('data-luker-orch-message-index'), -1);
-        if (!Number.isInteger(messageIndex) || messageIndex < 0 || messageIndex >= (session?.messages?.length || 0)) {
-            return;
-        }
-        if (!canRefreshAiIterationAssistantMessage(session, messageIndex)) {
-            return;
-        }
-        const userIndex = findPreviousAiIterationUserMessageIndex(session.messages, messageIndex);
-        if (userIndex < 0) {
-            return;
-        }
-        const userText = String(session.messages[userIndex]?.content || '').trim();
-        session.messages.splice(messageIndex);
-        restoreAiIterationSessionStateFromMessages(session);
-        await persistSessionHistory();
-        rerender();
-        setStatus(i18n('Regenerating message...'));
-        await runVisibleIterationTurn(userText, {
-            appendUserMessage: false,
-            loadingText: i18n('Regenerating message...'),
-        });
-    });
-
-    jQuery(document).on(`click${namespace}`, `${selector} [data-luker-orch-action="rollback-message"]`, async function () {
-        if (activeAiIterationAbortController && !activeAiIterationAbortController.signal.aborted) {
-            return;
-        }
-        const messageIndex = asFiniteInteger(this.getAttribute('data-luker-orch-message-index'), -1);
-        if (!canRollbackAiIterationAssistantMessage(session, messageIndex)) {
-            return;
-        }
-        const removeFrom = getAiIterationRollbackStartIndex(session.messages, messageIndex);
-        if (!Number.isInteger(removeFrom) || removeFrom < 0) {
-            return;
-        }
-        session.messages.splice(removeFrom);
-        restoreAiIterationSessionStateFromMessages(session);
-        await persistSessionHistory();
-        rerender();
-        setStatus(i18n('Rolled back to selected round.'));
-    });
-
-    jQuery(document).on(`click${namespace}`, `${selector} [data-luker-orch-action="close-line-diff-zoom"], ${selector} .luker_orch_line_diff_zoom_backdrop`, function (event) {
-        event.preventDefault();
-        event.stopPropagation();
-        const rootElement = document.querySelector(selector);
-        closeOrchExpandedDiff(rootElement);
-    });
-
-    jQuery(document).on(`keydown${namespace}`, function (event) {
-        if (event.key !== 'Escape') {
-            return;
-        }
-        const rootElement = document.querySelector(selector);
-        const overlay = rootElement?.querySelector?.('.luker_orch_line_diff_zoom_overlay');
-        if (!(overlay instanceof HTMLElement)) {
-            return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        closeOrchExpandedDiff(rootElement);
-    });
-
-    jQuery(document).on(`pointerdown${namespace}`, `${selector} .luker_orch_line_diff_splitter`, function (event) {
-        beginOrchLineDiffResize(this, event.originalEvent || event);
-    });
-
-    jQuery(document).on(`click${namespace}`, `${selector} #${popupId}_approve`, async function () {
-        const pending = session?.pendingApproval;
-        if (!pending) {
-            return;
-        }
-        if (activeAiIterationAbortController && !activeAiIterationAbortController.signal.aborted) {
-            return;
-        }
-        const controller = new AbortController();
-        activeAiIterationAbortController = controller;
-        isRunning = true;
-        rerender();
-        const pendingSnapshot = {
-            messageId: String(pending.messageId || ''),
-            assistantText: String(pending.assistantText || ''),
-            toolCalls: Array.isArray(pending.toolCalls) ? structuredClone(pending.toolCalls) : [],
-            executionToolCalls: Array.isArray(pending.executionToolCalls) ? structuredClone(pending.executionToolCalls) : [],
-            createdAt: Number(pending.createdAt || Date.now()),
-        };
-        session.pendingApproval = null;
-        rerender();
-        setStatus(i18n('Applying approved changes...'));
-        try {
-            const executionToolCalls = pendingSnapshot.executionToolCalls.length > 0
-                ? pendingSnapshot.executionToolCalls
-                : pendingSnapshot.toolCalls;
-            const result = await executeAiIterationToolCalls(context, session, executionToolCalls, controller.signal);
-            const targetMessage = findAiIterationMessageById(session.messages, pendingSnapshot.messageId);
-            if (targetMessage) {
-                const completedDiffPayload = buildAiIterationProfileDeltaPayload(
-                    session?.mode,
-                    targetMessage?.profileSnapshotBefore || session?.baseWorkingProfile || session?.workingProfile,
-                    session?.workingProfile,
-                );
-                targetMessage.tool_results = Array.isArray(result?.toolResults) ? result.toolResults : [];
-                targetMessage.toolSummary = buildFriendlyIterationExecutionSummary(result);
-                targetMessage.toolState = 'completed';
-                targetMessage.profileSnapshotBefore = completedDiffPayload.beforeProfile;
-                targetMessage.profileDelta = completedDiffPayload.delta;
-                targetMessage.reverseProfileDelta = completedDiffPayload.reverseDelta;
-                targetMessage.profileSnapshotAfter = cloneAiIterationWorkingProfile(session?.mode, session?.workingProfile);
-                targetMessage.lastSimulationAfter = session?.lastSimulation ? structuredClone(session.lastSimulation) : null;
-            }
-            trimAiIterationMessages(session);
-            await persistSessionHistory();
-            const didHandle = await maybeRunAutoContinue(result, controller, 'approved');
-            if (!didHandle) {
-                setStatus(i18n('Changes approved and applied. Waiting for your next instruction.'));
-                rerender();
-            }
-        } catch (error) {
-            if (!session.pendingApproval) {
-                session.pendingApproval = pendingSnapshot;
-                rerender();
-            }
-            if (isAbortError(error, controller.signal)) {
-                setStatus(i18n('Iteration run cancelled.'));
-            } else {
-                setStatus(i18nFormat('Iteration run failed: ${0}', String(error?.message || error)));
-            }
-        } finally {
-            if (activeAiIterationAbortController === controller) {
-                activeAiIterationAbortController = null;
-            }
-            isRunning = false;
-            rerender();
-        }
-    });
-
-    jQuery(document).on(`click${namespace}`, `${selector} #${popupId}_reject`, function () {
-        if (!session?.pendingApproval) {
-            return;
-        }
-        const pending = session.pendingApproval;
-        session.pendingApproval = null;
-        const targetMessage = findAiIterationMessageById(session.messages, pending?.messageId);
-        if (targetMessage) {
-            targetMessage.tool_results = buildRejectedToolResults(pending?.executionToolCalls || pending?.toolCalls || [], i18n('Changes rejected.'));
-            targetMessage.toolSummary = i18n('Changes rejected.');
-            targetMessage.toolState = 'rejected';
-        }
-        trimAiIterationMessages(session);
-        void persistSessionHistory();
-        setStatus(i18n('Changes rejected.'));
-        rerender();
-    });
-
-    jQuery(document).on(`click${namespace}`, `${selector} #${popupId}_new_session`, async function () {
-        if (activeAiIterationAbortController && !activeAiIterationAbortController.signal.aborted) {
-            return;
-        }
-        await resetCurrentSession();
-        setStatus(i18n('New session created.'));
-    });
-
-    jQuery(document).on(`click${namespace}`, `${selector} [data-luker-orch-action="load-session"]`, async function () {
-        if (activeAiIterationAbortController && !activeAiIterationAbortController.signal.aborted) {
-            return;
-        }
-        const sessionId = String(this.getAttribute('data-luker-orch-session-id') || '').trim();
-        if (!sessionId) {
-            return;
-        }
-        const loaded = await loadSessionById(sessionId);
-        if (loaded) {
-            setStatus(i18n('Session loaded.'));
-        }
-    });
-
-    jQuery(document).on(`click${namespace}`, `${selector} [data-luker-orch-action="delete-session"]`, async function () {
-        if (activeAiIterationAbortController && !activeAiIterationAbortController.signal.aborted) {
-            return;
-        }
-        const sessionId = String(this.getAttribute('data-luker-orch-session-id') || '').trim();
-        if (!sessionId) {
-            return;
-        }
-        if (!window.confirm(i18n('Delete this saved session?'))) {
-            return;
-        }
-        try {
-            await deleteSessionById(sessionId);
-            setStatus(i18n('Session deleted.'));
-        } catch (error) {
-            setStatus(i18nFormat('Delete session failed: ${0}', String(error?.message || error)));
-        }
-    });
-
-    jQuery(document).on(`click${namespace}`, `${selector} #${popupId}_apply_global`, async function () {
-        await applyAiIterationSessionToGlobal(context, settings, session, root);
-        rerender();
-    });
-
-    jQuery(document).on(`click${namespace}`, `${selector} #${popupId}_apply_character`, async function () {
-        await applyAiIterationSessionToCharacter(context, settings, session, root);
-        rerender();
-    });
-
-    await popupPromise;
-    jQuery(document).off(namespace);
+    await openIterationStudio(adapter, context, settings, root);
 }
 
 function bindUi() {
