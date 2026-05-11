@@ -13944,6 +13944,12 @@ jQuery(() => {
     const wiAfterEvent = context.eventTypes.GENERATION_AFTER_WORLD_INFO_SCAN;
     if (wiAfterEvent) {
         context.eventSource.on(wiAfterEvent, async (payload) => {
+            // Drain any in-flight mutation invalidation before reading the
+            // memory store. Closes the race where a user manually deletes a
+            // message and immediately regenerates: the delete's MESSAGE_DELETED
+            // listener may still be refreshing cache + lorebook when this
+            // recall listener fires from the new Generate() stack.
+            await pendingMutationInvalidation.catch(() => {});
             const runtimeContext = getContext();
             await safeInjectMemoryPrompts(runtimeContext, payload, 'after_world_info_scan');
             if (payload?.signal?.aborted) {
@@ -13969,6 +13975,19 @@ jQuery(() => {
     const mutationStatusText = i18n('Chat mutation detected. Memory graph will re-sync on next generation.');
     const mutationInterruptedToastText = i18n('Chat changes interrupted memory graph update. It will re-sync on next generation.');
     /**
+     * Gate that exposes the in-flight `applyMutationInvalidation` task.
+     * Readers that depend on a settled post-mutation state (currently the
+     * GENERATION_AFTER_WORLD_INFO_SCAN recall listener) await this before
+     * touching memoryStoreCache / lorebook projection.
+     *
+     * Closes the race where a manual delete and an immediate regenerate
+     * run as two separate click handlers: `eventSource.emit(MESSAGE_DELETED)`
+     * only awaits its listeners on its own call stack, so the new Generate()
+     * stack can reach the WI scan while our cache refresh + lorebook re-sync
+     * are still running.
+     */
+    let pendingMutationInvalidation = Promise.resolve();
+    /**
      * Coalesce structural-event reactions into a microtask:
      *  - cancel any in-flight extraction
      *  - wait for floor-state to finish its rematerialize/truncate
@@ -13979,19 +13998,13 @@ jQuery(() => {
      * Floor-state owns the graph payload's response to MESSAGE_DELETED /
      * MESSAGE_SWIPED / MESSAGE_SWIPE_DELETED. Memory-graph's job here is only
      * to flush its read-side caches and reset its non-floor metadata.
-     */
-    /**
-     * Apply a mutation invalidation inline. Called from MESSAGE_DELETED /
-     * MESSAGE_SWIPED / MESSAGE_RECEIVED listeners; awaited by `eventSource.emit`,
-     * so the Generate flow waits for cache + lorebook to refresh before
-     * proceeding to world-info scan.
      *
      * Floor-state has already settled by the time this runs (core invokes
      * `settleMessageDeleted/Swiped/SwipeDeleted` before the corresponding
      * `eventSource.emit`), so `refreshMemoryStoreCacheFromFloorState` reads
      * the post-truncate / post-swipe data namespace.
      */
-    const applyMutationInvalidation = async (fromSeq = null, { scheduleReplay = false } = {}) => {
+    const applyMutationInvalidationImpl = async (fromSeq = null, { scheduleReplay = false } = {}) => {
         const liveContext = getContext();
         const chatKey = getChatKey(liveContext);
         if (!chatKey || chatKey === 'invalid_target') {
@@ -14055,6 +14068,20 @@ jQuery(() => {
         if (scheduleReplay && isCurrentChat && !generationInProgress) {
             scheduleExtraction(getContext());
         }
+    };
+    /**
+     * Public wrapper around `applyMutationInvalidationImpl`. Serializes
+     * concurrent invocations through a Promise chain rooted at
+     * `pendingMutationInvalidation`, and publishes the in-flight task so
+     * the recall listener can gate on it.
+     */
+    const applyMutationInvalidation = (fromSeq = null, opts = {}) => {
+        const previous = pendingMutationInvalidation;
+        const task = previous
+            .catch(() => {})
+            .then(() => applyMutationInvalidationImpl(fromSeq, opts));
+        pendingMutationInvalidation = task;
+        return task;
     };
     if (context.eventTypes.GENERATION_STARTED) {
         context.eventSource.on(context.eventTypes.GENERATION_STARTED, () => {
