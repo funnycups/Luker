@@ -301,6 +301,7 @@ async function findCSSFiles(charId, config) {
     try {
         const response = await fetch(`/api/card-app/${encodeURIComponent(charId)}/style.css`, {
             headers: getRequestHeaders(),
+            cache: 'no-cache',
         });
         if (response.ok) {
             cssFiles.push(await response.text());

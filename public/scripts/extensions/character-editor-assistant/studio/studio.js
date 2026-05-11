@@ -233,6 +233,7 @@ async function clearSession() {
 async function fetchFileList(charId) {
  const response = await fetch(`/api/card-app/${encodeURIComponent(charId)}/files`, {
  headers: getRequestHeaders(),
+ cache: 'no-cache',
  });
  if (!response.ok) throw new Error(`Failed to list files: ${response.status}`);
  const data = await response.json();
@@ -242,6 +243,7 @@ async function fetchFileList(charId) {
 async function fetchFileContent(charId, filePath) {
  const response = await fetch(`/api/card-app/${encodeURIComponent(charId)}/${encodeURIComponent(filePath)}`, {
  headers: getRequestHeaders(),
+ cache: 'no-cache',
  });
  if (!response.ok) throw new Error(`Failed to read file: ${response.status}`);
  return await response.text();
