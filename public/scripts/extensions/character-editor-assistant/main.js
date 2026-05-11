@@ -11,7 +11,6 @@ import {
     getCharacterPersonality,
     getCharacterScenario,
     saveSettingsDebounced,
-    select_selected_character,
 } from '../../../script.js';
 import { DOMPurify } from '../../../lib.js';
 import { extension_settings, getContext, getCharacterState, setCharacterState } from '../../extensions.js';
@@ -976,41 +975,63 @@ function getActiveCharacterRecord(context, { avatar = '' } = {}) {
 }
 
 async function mergeCharacterAttributes(context, avatar, patch) {
-    const payload = {
-        avatar,
-        ...(patch && typeof patch === 'object' ? patch : {}),
-    };
-    const response = await fetch('/api/characters/merge-attributes', {
-        method: 'POST',
-        headers: context.getRequestHeaders(),
-        body: JSON.stringify(payload),
-        cache: 'no-cache',
-    });
-    if (!response.ok) {
-        const detail = await response.text().catch(() => '');
-        throw new Error(`Character merge failed (${response.status}): ${detail || response.statusText}`);
+    const target = String(avatar || '').trim();
+    if (!target) {
+        return;
     }
-    await context.getOneCharacter(avatar);
-    const currentIndex = Number(context?.characterId);
-    const currentCharacter = Number.isInteger(currentIndex) && currentIndex >= 0
-        ? context?.characters?.[currentIndex]
-        : null;
-    if (String(currentCharacter?.avatar || '').trim() === String(avatar || '').trim()) {
-        try {
-            select_selected_character(currentIndex, { switchMenu: false });
-        } catch (error) {
-            console.warn(`[${MODULE_NAME}] Failed to refresh character editor state after merge`, error);
+    const characters = Array.isArray(context?.characters) ? context.characters : [];
+    const characterIndex = characters.findIndex(item =>
+        String(item?.avatar || '').trim() === target);
+    if (characterIndex < 0) {
+        throw new Error(`Character not found: ${target}`);
+    }
+
+    // Flatten the nested patch shape this module historically built for
+    // `/api/characters/merge-attributes` (`{ description, data: { ..., extensions: {...} } }`)
+    // into dot-paths rooted at `character.data` so we can route through
+    // the popup-independent `updateCharacterData` API instead.
+    //
+    // Legacy v1 root fields (description, personality, ...) and v2
+    // `data.*` fields collapse onto the same `data.<key>` target — the
+    // server-side `legacyCharacterStorageFieldSpecs` normalizes both
+    // input forms onto the v2 storage path, and
+    // `projectRuntimeCharacterFields` mirrors v2 back to root on reload.
+    const dotPathPatch = {};
+    if (patch && typeof patch === 'object') {
+        for (const [key, value] of Object.entries(patch)) {
+            if (key === 'avatar') {
+                continue;
+            }
+            if (key === 'data' && value && typeof value === 'object' && !Array.isArray(value)) {
+                for (const [dataKey, dataValue] of Object.entries(value)) {
+                    if (dataKey === 'extensions' && dataValue && typeof dataValue === 'object' && !Array.isArray(dataValue)) {
+                        for (const [extKey, extValue] of Object.entries(dataValue)) {
+                            dotPathPatch[`extensions.${extKey}`] = extValue;
+                        }
+                    } else {
+                        dotPathPatch[dataKey] = dataValue;
+                    }
+                }
+            } else {
+                dotPathPatch[key] = value;
+            }
         }
     }
+
+    if (Object.keys(dotPathPatch).length === 0) {
+        return;
+    }
+
+    await context.updateCharacterData(characterIndex, dotPathPatch, { immediate: true });
 }
 
 async function syncWorldBindingUi(context, worldName = '') {
     const targetWorld = String(worldName || '').trim();
     const chid = Number(context?.characterId);
 
-    if (jQuery('#character_world').length) {
-        jQuery('#character_world').val(targetWorld).trigger('change');
-    }
+    // `#character_world` form sync is handled by `updateCharacterData`'s
+    // built-in `syncCharacterFormFromData` — this function only owns the
+    // surrounding header button state and lorebook-list refresh.
     if (Number.isInteger(chid) && chid >= 0) {
         jQuery('#set_character_world').data('chid', chid);
     }

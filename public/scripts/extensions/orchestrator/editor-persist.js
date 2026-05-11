@@ -11,8 +11,8 @@
  *      `persistGlobalLoopEditorFrom` (loop mode).
  *
  *   2. Character overrides live on the active character card under
- *      `data.extensions.orchestrator` and are POSTed to
- *      `/api/characters/edit-attribute`. Handled by
+ *      `data.extensions.orchestrator` and are persisted via
+ *      `updateCharacterData`. Handled by
  *      `persistCharacterEditor` (spec mode),
  *      `persistCharacterAgendaEditor` (agenda mode), and
  *      `persistCharacterLoopEditor` (loop mode); all delegate the
@@ -29,7 +29,7 @@
  * persist.
  */
 
-import { getRequestHeaders, saveSettings } from '../../../script.js';
+import { saveSettings, updateCharacterData } from '../../../script.js';
 import {
     ORCH_EXECUTION_MODE_AGENDA,
     ORCH_EXECUTION_MODE_LOOP,
@@ -247,36 +247,13 @@ export async function persistOrchestratorCharacterExtension(context, characterIn
         delete nextExtensions[MODULE_NAME];
     }
 
-    character.data = character.data || {};
-    character.data.extensions = nextExtensions;
-
-    if (Number(context?.characterId) === id && character.json_data) {
-        try {
-            const jsonData = JSON.parse(character.json_data);
-            jsonData.data = jsonData.data || {};
-            jsonData.data.extensions = nextExtensions;
-            character.json_data = JSON.stringify(jsonData);
-            jQuery('#character_json_data').val(character.json_data);
-        } catch {
-            // Ignore malformed json_data snapshots.
-        }
+    try {
+        await updateCharacterData(id, { 'extensions': nextExtensions }, { immediate: true });
+        return true;
+    } catch (error) {
+        console.error('Failed to persist orchestrator extension data to character card', error);
+        return false;
     }
-
-    const response = await fetch('/api/characters/edit-attribute', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({
-            ch_name: String(character.name || '').trim() || 'character',
-            avatar_url: character.avatar,
-            field: 'extensions',
-            value: nextExtensions,
-        }),
-    });
-
-    if (!response.ok) {
-        console.error('Failed to persist orchestrator extension data to character card', response.statusText);
-    }
-    return response.ok;
 }
 
 export function createPortableProfileFromEditor(editor) {
