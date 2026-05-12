@@ -10956,7 +10956,7 @@ export function applyIntegrityFromWritePayloadToTarget(payload, target = null, m
  * whatever the server actually has now (without overriding any of the
  * snapshot's other fields).
  */
-function refreshSnapshotIntegrityFromActiveLive(target, metadata) {
+export function refreshSnapshotIntegrityFromActiveLive(target, metadata) {
     if (!isPlainObject(metadata)) {
         return;
     }

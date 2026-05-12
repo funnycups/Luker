@@ -89,6 +89,7 @@ import {
     buildChatMessagePatchOperations,
     applyIntegrityFromWritePayloadToTarget,
     refreshChatWriteSnapshotsFromServer,
+    refreshSnapshotIntegrityFromActiveLive,
     resolveChatWriteConflictForTarget,
     runSerializedChatWrite,
     getCharacterAlternateGreetings,
@@ -683,6 +684,9 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
     if (!force && Array.isArray(previousMessages)) {
         const operations = buildChatMessagePatchOperations(previousMessages, messagesSnapshot);
         if (operations.length > 0) {
+            // Pull live integrity in case a concurrent save advanced it after our
+            // saveContext was captured (see script.js helper jsdoc).
+            refreshSnapshotIntegrityFromActiveLive(target, metadataSnapshot);
             response = await fetch('/api/chats/group/patch', {
                 method: 'POST',
                 headers: getRequestHeaders(),
@@ -700,6 +704,7 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
             if (metadataOperations.length === 0) {
                 response = { ok: true };
             } else {
+                refreshSnapshotIntegrityFromActiveLive(target, metadataSnapshot);
                 response = await fetch('/api/chats/group/meta/patch', {
                     method: 'POST',
                     headers: getRequestHeaders(),
@@ -715,6 +720,10 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
     }
 
     if (!response || !response.ok) {
+        // Refresh + rebuild chatHeader so the embedded chat_metadata.integrity
+        // (which trySaveChat reads from chatData[0]) matches the live token.
+        refreshSnapshotIntegrityFromActiveLive(target, metadataSnapshot);
+        chatHeader.chat_metadata = { ...metadataSnapshot };
         response = await fetch('/api/chats/group/save', {
             method: 'POST',
             headers: getRequestHeaders(),
