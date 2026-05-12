@@ -10943,6 +10943,39 @@ export function applyIntegrityFromWritePayloadToTarget(payload, target = null, m
     }
 }
 
+/**
+ * Refreshes the integrity slug on a snapshotted metadata object from the live
+ * `chat_metadata.integrity` if the snapshot belongs to the currently active chat.
+ *
+ * Save tasks queue via runSerializedChatWrite, but their saveContext (including
+ * metadataSnapshot.integrity) is captured synchronously at call time. If another
+ * save runs first and advances the server integrity, the live `chat_metadata`
+ * is updated but the queued task's snapshot is not — sending the snapshot's
+ * stale integrity then triggers a 409. Calling this just before each fetch
+ * pulls the freshest integrity into the snapshot so the request lines up with
+ * whatever the server actually has now (without overriding any of the
+ * snapshot's other fields).
+ */
+function refreshSnapshotIntegrityFromActiveLive(target, metadata) {
+    if (!isPlainObject(metadata)) {
+        return;
+    }
+    if (!isActiveChatStateTarget(target)) {
+        return;
+    }
+    if (!chat_metadata || typeof chat_metadata !== 'object') {
+        return;
+    }
+    const liveIntegrity = typeof chat_metadata.integrity === 'string'
+        ? chat_metadata.integrity.trim()
+        : '';
+    if (liveIntegrity) {
+        metadata.integrity = liveIntegrity;
+    } else {
+        delete metadata.integrity;
+    }
+}
+
 async function fetchCurrentServerChatSnapshot(target = resolveChatStateTarget()) {
     const resolvedTarget = resolveChatStateTarget(target);
     if (!resolvedTarget) {
@@ -12208,6 +12241,9 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
 
         // Prefer metadata patch route to avoid re-sending huge metadata payloads.
         if (target.is_group) {
+            // Pull freshest integrity from live chat_metadata before sending so a
+            // queued task can't ship the integrity its snapshot captured at queue time.
+            refreshSnapshotIntegrityFromActiveLive(target, metadata);
             const response = await fetch('/api/chats/group/meta/patch', {
                 method: 'POST',
                 cache: 'no-cache',
@@ -12240,6 +12276,7 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
             if (!charName) {
                 return false;
             }
+            refreshSnapshotIntegrityFromActiveLive(target, metadata);
             const response = await fetch('/api/chats/meta/patch', {
                 method: 'POST',
                 cache: 'no-cache',
@@ -12360,6 +12397,7 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
             const operations = buildChatMessagePatchOperations(previousMessages, trimmedChat);
 
             if (operations.length > 0) {
+                refreshSnapshotIntegrityFromActiveLive(writeTarget, metadata);
                 const patchResult = await fetch('/api/chats/patch', {
                     method: 'POST',
                     cache: 'no-cache',
@@ -12402,6 +12440,7 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
             }
         }
 
+        refreshSnapshotIntegrityFromActiveLive(writeTarget, metadata);
         const result = await fetch('/api/chats/save', {
             method: 'POST',
             cache: 'no-cache',
