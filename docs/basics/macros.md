@@ -381,8 +381,8 @@ See the [Variables](#variables) section above for the full list.
 | Macro | Returns |
 |---|---|
 | <span v-pre>`{{roll::1d20}}`</span> | Dice roll using droll syntax (`1d6`, `3d6+4`, …). A plain integer `N` is treated as `1dN`. Re-rolls on every render. |
-| <span v-pre>`{{random::a::b::c}}`</span> | Random element. Re-rolls on every render. |
-| <span v-pre>`{{pick::a::b::c}}`</span> | Random element, **stable** per chat + macro position. Seed = chat hash + content hash + position + reroll seed. Reset with `/reroll-pick`. |
+| <span v-pre>`{{random::red::green::blue}}`</span> | Random element. Re-rolls on every render. |
+| <span v-pre>`{{pick::red::green::blue}}`</span> | Random element, **stable** per chat + macro position. Seed = chat hash + content hash + position + reroll seed. Reset with `/reroll-pick`. |
 
 ### Environment & API
 

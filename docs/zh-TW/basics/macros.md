@@ -381,8 +381,8 @@ Luker 用**逐樓層變數提取**解決這個問題。一條訊息（AI 回覆�
 | 巨集 | 回傳 |
 |---|---|
 | <code v-pre>{{roll::1d20}}</code> | 用 droll 語法擲骰（`1d6`、`3d6+4`……）。只有數字 `N` 時等價 `1dN`。每次繪製都重擲。 |
-| <code v-pre>{{random::a::b::c}}</code> | 隨機一項。每次繪製都重擲。 |
-| <code v-pre>{{pick::a::b::c}}</code> | 隨機一項，但**對同一 chat 同一位置穩定**。Seed = chat hash + content hash + 位置 + reroll seed。用 `/reroll-pick` 重置。 |
+| <code v-pre>{{random::red::green::blue}}</code> | 隨機一項。每次繪製都重擲。 |
+| <code v-pre>{{pick::red::green::blue}}</code> | 隨機一項，但**對同一 chat 同一位置穩定**。Seed = chat hash + content hash + 位置 + reroll seed。用 `/reroll-pick` 重置。 |
 
 ### 環境與 API
 
