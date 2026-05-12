@@ -320,5 +320,5 @@ PEDSA(Personalized Efficient Diffusion with Sparse Approximation)让记忆图能
 
 ## 相关页面
 
-- [Function Call Runtime](/improvements/function-call-runtime) — 记忆图的 LLM 交互依赖此框架
-- [世界书基础](/basics/world-info) — 世界书投射涉及的基础概念
+- [Function Call Runtime](/zh-CN/improvements/function-call-runtime) — 记忆图的 LLM 交互依赖此框架
+- [世界书基础](/zh-CN/basics/world-info) — 世界书投射涉及的基础概念

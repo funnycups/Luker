@@ -8,13 +8,13 @@ By the end you'll see how Studio stacks all these layers onto a single card — 
 
 ## What you'll get
 
-The final result is a detective-genre card called "Victorian Case File"**. <code v-pre>{{char}}</code> is a Holmes-style independent consultant in 1888 London. You play a client (or a visiting Scotland Yard inspector) bringing in a case file, and you investigate together.
+The final result is a detective-genre card called **"Victorian Case File"**. <code v-pre>{{char}}</code> is a Holmes-style independent consultant in 1888 London. You play a client (or a visiting Scotland Yard inspector) bringing in a case file, and you investigate together.
 
 This single card carries all of these at once:
 
 - **Memory-graph schema derivation** — four domain node types (`suspect` / `clue` / `forensic_site` / `witness`), not the default schema. **This layer is for the LLM's long-term memory** — the AI extracts entities into these types as the conversation goes, so cross-turn recall has structured slices ready to feed back into the prompt.
 - **Orchestrator loop pipeline** — every AI reply runs `draft → critique → revise`, and the critique stage is forced to inspect "missed clues / contradicting suspect testimony / violated period constraints" before the revise stage rewrites.
-- **Card-bound world book** — "维多利亚案宗·伦敦档案" (Victorian Case File · London Archive), with Victorian-London context + detective-procedure rules + **a state-injection entry** (containing <code v-pre>{{getvar::case_*}}</code> placeholders + macro instructions teaching the AI to emit <code v-pre>{{setvar}}</code> to advance the case). **Your global world books are untouched.**
+- **Card-bound world book** — "Victorian Case File · London Archive", with Victorian-London context + detective-procedure rules + **a state-injection entry** (containing <code v-pre>{{getvar::case_*}}</code> placeholders + macro instructions teaching the AI to emit <code v-pre>{{setvar}}</code> to advance the case). **Your global world books are untouched.**
 - **"Current Case" CardApp panel** — reads chat variables to surface case state: case name / current phase / suspects / clues / forensic sites. **The variables are advanced by the AI emitting `setvar` macros in its replies**; the CardApp reads via `ctx.getVariable` + `JSON.parse` and renders. One chat turn → AI emits `setvar` → panel updates on the next frame.
 
 The whole setup is just 2 rounds of natural-language conversation — Studio proposes, Studio writes the files, Studio binds the fields, Studio creates the world book.
@@ -27,7 +27,7 @@ The whole setup is just 2 rounds of natural-language conversation — Studio pro
 
 ## 1. Create a blank card → open Studio
 
-Open the right-side character panel, click "Create New Character", name it **"维多利亚案宗"** (Victorian Case File). Leave description / first message / world info binding all empty — Studio will fill those.
+Open the right-side character panel, click "Create New Character", name it **"Victorian Case File"**. Leave description / first message / world info binding all empty — Studio will fill those.
 
 Then open the Extensions panel → expand "Character Editor Assistant" → click **"&lt;/&gt; CardApp Studio"**:
 

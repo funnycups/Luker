@@ -110,7 +110,7 @@ After this turn, Memory Graph runs extraction in the background and produces str
   "level": "semantic",
   "title": "Summary 1",
   "fields": {
-    "summary": "时间:Day 12, late afternoon; The user offered the herbal salve to wounded Eileen. Eileen accepted and explicitly acknowledged the friendship and the debt."
+    "summary": "Time: Day 12, late afternoon; The user offered the herbal salve to wounded Eileen. Eileen accepted and explicitly acknowledged the friendship and the debt."
   },
   "floor": 12
 }

@@ -1,41 +1,41 @@
 # Changelog
 
-> 🚧 完整的更新日志正在整理中。以下是 Luker 主要版本的功能概览。
+> 🚧 A full changelog is still being assembled. The list below is a feature snapshot of the current Luker release.
 
-## 当前版本
+## Current version
 
-### 核心功能
+### Core features
 
-- **记忆图**：基于知识图谱的长期记忆系统，9 层混合召回管线
-- **多Agent编排**：三种执行模式（Spec 工作流、单 Agent、Agenda 规划器）
-- **角色卡编辑助手**：AI 驱动的对话式角色卡编辑，7 个工具
-- **搜索插件**：DuckDuckGo、SearXNG、Brave Search 三引擎支持
-- **补全预设助手**：AI 辅助预设参数理解和优化
-- **CardApp**：角色卡内嵌交互式应用
+- **Memory Graph** — Knowledge-graph long-term memory, 9-layer hybrid recall pipeline
+- **Multi-Agent Orchestrator** — Three execution modes (Spec workflow, Single agent, Agenda planner)
+- **Card Editor Assistant** — AI-driven conversational character-card editing with 7 tools
+- **Search Tools** — Three-engine support: DuckDuckGo, SearXNG, Brave Search
+- **Preset Assistant** — AI-assisted preset parameter understanding and tuning
+- **CardApp** — Interactive applications embedded in character cards
 
-### 架构改进
+### Architecture improvements
 
-- **预设解耦**：连接参数与预设独立管理
-- **增量同步**：RFC 6902 格式的增量数据传输
-- **后端实时存储**：数据变更即时持久化
-- **函数调用运行时**：原生 + 纯文本两种模式
-- **统一生成层**：多后端统一封装
-- **请求检查器**：生成请求全生命周期追踪
-- **认证与配额**：GitHub/Discord OAuth + 存储配额管理
+- **Preset Decoupling** — Connection parameters and presets managed independently
+- **Incremental Sync** — RFC 6902 incremental data transfer
+- **Backend Storage** — Data changes persisted in real time
+- **Function Call Runtime** — Native + plain-text dual modes
+- **Unified Generation Layer** — Single envelope for multiple backends
+- **Request Inspector** — Full-lifecycle generation-request tracing
+- **Auth & Quotas** — GitHub / Discord OAuth + storage quota management
 
-### 用户体验
+### User experience
 
-- 角色卡绑定预设与人设
-- 提示词分组 & 预设分组
-- 钩子执行排序
-- 世界书激活链路追踪
-- 聊天人设锁定
-- 撤销 Toast 系统
-- 动态模型列表
-- 图像生成增强
-- 移动端适配优化
-- 启动性能优化
+- Card-bound presets and personas
+- Prompt groups & preset groups
+- Hook execution order
+- World Info activation trace
+- Chat-persona lock
+- Undo-toast system
+- Dynamic model lists
+- Image generation enhancements
+- Mobile UX refinements
+- Startup performance optimization
 
 ---
 
-详细的逐版本更新日志将在后续补充。如需了解具体功能的详细信息，请参阅对应的文档页面。
+Detailed per-version notes will be added later. For deeper information about a specific feature, see the corresponding documentation page.

@@ -287,7 +287,7 @@ Luker fixes this with **per-message variable extraction**. When a message (AI re
 
 When you delete a message, switch swipes, regenerate, or edit, Luker **replays the surviving op log** so your variables stay consistent with the visible timeline.
 
-This is what the **逐楼层变量** (per-message variables) UI surfaces — a flask icon on every message with extracted ops, opening an editor where you can inspect, edit, delete, or add ops. The result is that the AI can own and mutate state directly through its replies, and that state survives all the chat-structure operations users routinely perform.
+This is what the **Per-Message Variables** UI surfaces — a flask icon on every message with extracted ops, opening an editor where you can inspect, edit, delete, or add ops. The result is that the AI can own and mutate state directly through its replies, and that state survives all the chat-structure operations users routinely perform.
 
 See [Per-Message Variables](/features/variable-op-log) for the full feature page (replay semantics, swipe lifecycle, the op editor, and recommended authoring patterns).
 

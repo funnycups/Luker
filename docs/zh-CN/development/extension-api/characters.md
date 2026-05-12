@@ -191,7 +191,7 @@ await ctx.updateCharacterData(ctx.characterId, {
 });
 ```
 
-跟现有的 `saveCharacterDebounced` / 表单路径互补 — 弹窗打开时仍走表单(那时表单是 source of truth)。`updateCharacterData` 是面向 AI 工具、slash command、以及其他可能在编辑器关闭时运行的程式化调用方的数据驱动替代路径。
+跟现有的 `saveCharacterDebounced` / 表单路径互补 — 弹窗打开时仍走表单(那时表单是 source of truth)。`updateCharacterData` 是面向 AI 工具、slash command、以及其他可能在编辑器关闭时运行的程序化调用方的数据驱动替代路径。
 
 写入 in-memory 后会触发 [`event_types.CHARACTER_FIELDS_UPDATED`](#character_fields_updated-event),携带 `{ charId, keys }`,让 view (打开的弹窗、CardApp UI) 从权威 data sync。
 

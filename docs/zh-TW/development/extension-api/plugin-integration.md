@@ -13,7 +13,7 @@ const handle = registerManagedRegexProvider('my-plugin', {
   reloadOnChange: true,
 });
 
-// 添加正则脚本
+// 添加正則腳本
 handle.upsertScript({
   id: 'my-rule-1',
   scriptName: 'My Regex Rule',
@@ -22,7 +22,7 @@ handle.upsertScript({
   // ...其他正則腳本欄位
 });
 
-// 卸载时取消註冊
+// 卸載時取消註冊
 handle.unregister();
 ```
 
