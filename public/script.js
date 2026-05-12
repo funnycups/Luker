@@ -11825,6 +11825,64 @@ async function resolveChatWriteConflict(response, retryCount = 0, requestContext
 }
 
 /**
+ * Compares two message arrays and returns a compact human-readable summary of
+ * where they differ. Used on 409 to surface which positions / fields are out
+ * of sync — far more actionable than the generic "Chat patch conflict" string.
+ *
+ * Output examples:
+ *   /3 client+[variables_initialized,is_ejs_processed]
+ *   /5 mutated:mes; +2 more position(s)
+ */
+function summarizeChatStateDivergence(clientMessages, serverMessages, maxDivergences = 2) {
+    if (!Array.isArray(clientMessages) || !Array.isArray(serverMessages)) {
+        return null;
+    }
+    const length = Math.max(clientMessages.length, serverMessages.length);
+    /** @type {string[]} */
+    const lines = [];
+    let extraCount = 0;
+    for (let i = 0; i < length; i++) {
+        const c = clientMessages[i];
+        const s = serverMessages[i];
+        if (lodash.isEqual(c, s)) continue;
+
+        if (lines.length >= maxDivergences) {
+            extraCount++;
+            continue;
+        }
+
+        if (c === undefined || s === undefined) {
+            lines.push(`/${i} ${c === undefined ? 'missing-on-client' : 'missing-on-server'}`);
+            continue;
+        }
+        if (!isPlainObject(c) || !isPlainObject(s)) {
+            lines.push(`/${i} type-mismatch`);
+            continue;
+        }
+
+        const cKeys = Object.keys(c);
+        const sKeys = Object.keys(s);
+        const onlyInClient = cKeys.filter(k => !(k in s));
+        const onlyInServer = sKeys.filter(k => !(k in c));
+        const sharedDiffered = cKeys.filter(k => (k in s) && !lodash.isEqual(c[k], s[k]));
+
+        const parts = [];
+        if (onlyInClient.length) parts.push(`client+[${onlyInClient.join(',')}]`);
+        if (onlyInServer.length) parts.push(`server+[${onlyInServer.join(',')}]`);
+        if (sharedDiffered.length) parts.push(`mutated:[${sharedDiffered.join(',')}]`);
+        lines.push(`/${i} ${parts.length ? parts.join(' ') : 'differs'}`);
+    }
+
+    if (lines.length === 0) {
+        return null;
+    }
+    if (extraCount > 0) {
+        lines.push(`+${extraCount} more position(s)`);
+    }
+    return lines.join('; ');
+}
+
+/**
  * Builds a short, human-readable summary of a JSON Patch operations array.
  * Caps at 3 ops so the toast doesn't blow up. Used as `opSummary` in the 409
  * diagnostic — tells the user (and us, when triaging) which path the patch
@@ -11869,7 +11927,7 @@ function summarizeAppendedMessages(messages) {
  * `requestContext.endpoint` and `requestContext.opSummary` shape the surfaced
  * detail line. Anyone debugging a 409 needs to know which path triggered it.
  */
-function notifyChatWriteConflict({ kind, errorType, target, retryCount, currentIntegrity, requestContext = null }) {
+function notifyChatWriteConflict({ kind, errorType, target, retryCount, currentIntegrity, requestContext = null, divergence = null }) {
     const endpoint = requestContext?.endpoint ? String(requestContext.endpoint) : '';
     const opSummary = requestContext?.opSummary ? String(requestContext.opSummary) : '';
     const sentIntegrity = requestContext?.sentIntegrity ? String(requestContext.sentIntegrity) : '';
@@ -11885,11 +11943,14 @@ function notifyChatWriteConflict({ kind, errorType, target, retryCount, currentI
         if (endpoint) detailParts.push(escape(endpoint));
         if (opSummary) detailParts.push(escape(opSummary));
         if (errorType) detailParts.push(`server: ${escape(errorType)}`);
-        const detail = detailParts.length > 0
+        const detailLine = detailParts.length > 0
             ? `<br/><small>${detailParts.join(' · ')}</small>`
             : '';
-        toastr.warning(`${friendly}${detail}`, t`Chat write conflict`, {
-            timeOut: 10000,
+        const divergenceLine = divergence
+            ? `<br/><small>diverge: ${escape(divergence)}</small>`
+            : '';
+        toastr.warning(`${friendly}${detailLine}${divergenceLine}`, t`Chat write conflict`, {
+            timeOut: 12000,
             preventDuplicates: true,
             escapeHtml: false,
         });
@@ -11907,6 +11968,7 @@ function notifyChatWriteConflict({ kind, errorType, target, retryCount, currentI
             retryCount,
             sentIntegrity,
             currentIntegrity,
+            divergence,
         });
         eventSource.emit(event_types.CHAT_WRITE_CONFLICT, {
             kind,
@@ -11917,6 +11979,7 @@ function notifyChatWriteConflict({ kind, errorType, target, retryCount, currentI
             retryCount,
             sentIntegrity,
             currentIntegrity,
+            divergence,
         });
     } catch (error) {
         console.warn('[ChatWriteConflict] event emit failed', error);
@@ -11953,6 +12016,27 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
         return 'integrity';
     }
 
+    // Non-integrity 409 (JSON Patch test failed): the integrity token matched
+    // but at least one position's stored value diverges from our snapshot. Pull
+    // the server's current state and diff against our snapshot to surface the
+    // exact divergent fields — turns a generic "Chat patch conflict" into
+    // "client+[variables_initialized,is_ejs_processed] at /3", which points
+    // straight at the offending extension or runtime hook.
+    const snapshotKey = target ? getChatMessageSnapshotKey(target) : null;
+    const clientSnapshot = snapshotKey ? chatMessageSnapshotCache.get(snapshotKey) : null;
+    let divergenceSummary = null;
+    if (Array.isArray(clientSnapshot)) {
+        try {
+            const serverSnapshot = await fetchCurrentServerChatSnapshot(target);
+            if (Array.isArray(serverSnapshot?.messages)) {
+                divergenceSummary = summarizeChatStateDivergence(clientSnapshot, serverSnapshot.messages);
+            }
+        } catch (error) {
+            // Diagnostic refresh is best-effort; never fail conflict resolution because of it.
+            console.warn('[ChatWriteConflict] server snapshot refresh failed', error);
+        }
+    }
+
     // Keep local in-memory edits/generation state intact. Reloading chat here can
     // overwrite current local mutations (e.g. regenerate/edit-in-progress) and
     // make behavior look like random refresh or duplicate replies.
@@ -11960,7 +12044,15 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
     if (isActiveChatStateTarget(target) && chat_metadata && typeof chat_metadata === 'object') {
         delete chat_metadata.integrity;
     }
-    notifyChatWriteConflict({ kind: 'snapshot', errorType, target, retryCount, currentIntegrity, requestContext });
+    notifyChatWriteConflict({
+        kind: 'snapshot',
+        errorType,
+        target,
+        retryCount,
+        currentIntegrity,
+        requestContext,
+        divergence: divergenceSummary,
+    });
     return 'snapshot';
 }
 
