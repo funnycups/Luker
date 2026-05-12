@@ -680,6 +680,8 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
     const target = saveContext?.target || { is_group: true, id: chatId };
     const previousMessages = getChatMessageSnapshot(target);
     let response = null;
+    /** @type {{endpoint: string, opSummary: string|null} | null} */
+    let requestSummary = null;
 
     if (!force && Array.isArray(previousMessages)) {
         const operations = buildChatMessagePatchOperations(previousMessages, messagesSnapshot);
@@ -687,6 +689,9 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
             // Pull live integrity in case a concurrent save advanced it after our
             // saveContext was captured (see script.js helper jsdoc).
             refreshSnapshotIntegrityFromActiveLive(target, metadataSnapshot);
+            const opPreview = operations.slice(0, 3).map(op => `${op?.op ?? '?'} ${op?.path ?? ''}`.trim()).join(', ')
+                + (operations.length > 3 ? `, +${operations.length - 3} more` : '');
+            requestSummary = { endpoint: 'chats/group/patch', opSummary: opPreview };
             response = await fetch('/api/chats/group/patch', {
                 method: 'POST',
                 headers: getRequestHeaders(),
@@ -705,6 +710,9 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
                 response = { ok: true };
             } else {
                 refreshSnapshotIntegrityFromActiveLive(target, metadataSnapshot);
+                const opPreview = metadataOperations.slice(0, 3).map(op => `${op?.op ?? '?'} ${op?.path ?? ''}`.trim()).join(', ')
+                    + (metadataOperations.length > 3 ? `, +${metadataOperations.length - 3} more` : '');
+                requestSummary = { endpoint: 'chats/group/meta/patch', opSummary: opPreview };
                 response = await fetch('/api/chats/group/meta/patch', {
                     method: 'POST',
                     headers: getRequestHeaders(),
@@ -724,6 +732,10 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
         // (which trySaveChat reads from chatData[0]) matches the live token.
         refreshSnapshotIntegrityFromActiveLive(target, metadataSnapshot);
         chatHeader.chat_metadata = { ...metadataSnapshot };
+        requestSummary = {
+            endpoint: 'chats/group/save (full)',
+            opSummary: `full ${Array.isArray(messagesSnapshot) ? messagesSnapshot.length : 0} msgs`,
+        };
         response = await fetch('/api/chats/group/save', {
             method: 'POST',
             headers: getRequestHeaders(),
@@ -740,7 +752,11 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
 
     if (!response.ok) {
         const conflictResolution = !force
-            ? await resolveChatWriteConflictForTarget(response, target, metadataSnapshot, retryAttempt)
+            ? await resolveChatWriteConflictForTarget(response, target, metadataSnapshot, retryAttempt, {
+                endpoint: requestSummary?.endpoint ?? 'group save',
+                opSummary: requestSummary?.opSummary ?? null,
+                sentIntegrity: metadataSnapshot?.integrity,
+            })
             : 'none';
         if (conflictResolution !== 'none') {
             if (conflictResolution === 'integrity' || conflictResolution === 'snapshot') {

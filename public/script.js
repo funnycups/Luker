@@ -11820,8 +11820,44 @@ async function readChatWriteConflictPayload(response) {
     }
 }
 
-async function resolveChatWriteConflict(response, retryCount = 0) {
-    return await resolveChatWriteConflictForTarget(response, resolveChatStateTarget(), chat_metadata, retryCount);
+async function resolveChatWriteConflict(response, retryCount = 0, requestContext = null) {
+    return await resolveChatWriteConflictForTarget(response, resolveChatStateTarget(), chat_metadata, retryCount, requestContext);
+}
+
+/**
+ * Builds a short, human-readable summary of a JSON Patch operations array.
+ * Caps at 3 ops so the toast doesn't blow up. Used as `opSummary` in the 409
+ * diagnostic — tells the user (and us, when triaging) which path the patch
+ * was working on when the test guard failed.
+ */
+function summarizeJsonPatchOperations(operations) {
+    if (!Array.isArray(operations) || operations.length === 0) {
+        return null;
+    }
+    const previewed = operations.slice(0, 3).map(op => {
+        if (!op || typeof op !== 'object') return '?';
+        const opName = String(op.op || '?');
+        const path = String(op.path || '');
+        return `${opName} ${path}`.trim();
+    });
+    if (operations.length > 3) {
+        previewed.push(`+${operations.length - 3} more`);
+    }
+    return previewed.join(', ');
+}
+
+/**
+ * Builds a short summary of a chat-message array being appended. Includes
+ * message count and the role of the first message — enough to identify the
+ * append path without dumping full payloads.
+ */
+function summarizeAppendedMessages(messages) {
+    if (!Array.isArray(messages) || messages.length === 0) {
+        return null;
+    }
+    const first = messages[0];
+    const role = first?.is_user ? 'user' : first?.is_system ? 'system' : 'assistant';
+    return `append ${messages.length}× (first: ${role})`;
 }
 
 /**
@@ -11829,27 +11865,57 @@ async function resolveChatWriteConflict(response, retryCount = 0) {
  * Called from resolveChatWriteConflictForTarget; never alters resolution semantics.
  * The toast helps users see when state drift is happening; the event lets tests
  * and instrumentation assert "no conflicts during this flow" without polling files.
+ *
+ * `requestContext.endpoint` and `requestContext.opSummary` shape the surfaced
+ * detail line. Anyone debugging a 409 needs to know which path triggered it.
  */
-function notifyChatWriteConflict({ kind, errorType, target, retryCount, currentIntegrity }) {
+function notifyChatWriteConflict({ kind, errorType, target, retryCount, currentIntegrity, requestContext = null }) {
+    const endpoint = requestContext?.endpoint ? String(requestContext.endpoint) : '';
+    const opSummary = requestContext?.opSummary ? String(requestContext.opSummary) : '';
+    const sentIntegrity = requestContext?.sentIntegrity ? String(requestContext.sentIntegrity) : '';
+
     try {
         const friendly = kind === 'integrity'
             ? t`Chat sync: integrity drift detected, auto-recovering.`
             : t`Chat sync: snapshot conflict detected, auto-recovering.`;
-        toastr.warning(friendly, t`Chat write conflict`, {
-            timeOut: 6000,
+        const escape = (s) => String(s).replace(/[<>&"']/g, ch => ({
+            '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;',
+        })[ch] || ch);
+        const detailParts = [];
+        if (endpoint) detailParts.push(escape(endpoint));
+        if (opSummary) detailParts.push(escape(opSummary));
+        if (errorType) detailParts.push(`server: ${escape(errorType)}`);
+        const detail = detailParts.length > 0
+            ? `<br/><small>${detailParts.join(' · ')}</small>`
+            : '';
+        toastr.warning(`${friendly}${detail}`, t`Chat write conflict`, {
+            timeOut: 10000,
             preventDuplicates: true,
+            escapeHtml: false,
         });
     } catch (error) {
         console.warn('[ChatWriteConflict] toast failed', error);
     }
 
     try {
-        console.warn('[ChatWriteConflict]', { kind, errorType, target, retryCount, currentIntegrity });
+        console.warn('[ChatWriteConflict]', {
+            kind,
+            errorType,
+            endpoint,
+            opSummary,
+            target,
+            retryCount,
+            sentIntegrity,
+            currentIntegrity,
+        });
         eventSource.emit(event_types.CHAT_WRITE_CONFLICT, {
             kind,
             errorType,
+            endpoint,
+            opSummary,
             target,
             retryCount,
+            sentIntegrity,
             currentIntegrity,
         });
     } catch (error) {
@@ -11857,7 +11923,7 @@ function notifyChatWriteConflict({ kind, errorType, target, retryCount, currentI
     }
 }
 
-export async function resolveChatWriteConflictForTarget(response, target = null, metadata = null, retryCount = 0) {
+export async function resolveChatWriteConflictForTarget(response, target = null, metadata = null, retryCount = 0, requestContext = null) {
     if (!response || response.status !== 409 || retryCount > 0) {
         return 'none';
     }
@@ -11883,7 +11949,7 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
         // fallback skips the diff-patch path and writes a full /api/chats/save,
         // overwriting the server file with the FE chat array (FE-wins).
         invalidateChatWriteSnapshot(target);
-        notifyChatWriteConflict({ kind: 'integrity', errorType, target, retryCount, currentIntegrity });
+        notifyChatWriteConflict({ kind: 'integrity', errorType, target, retryCount, currentIntegrity, requestContext });
         return 'integrity';
     }
 
@@ -11894,7 +11960,7 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
     if (isActiveChatStateTarget(target) && chat_metadata && typeof chat_metadata === 'object') {
         delete chat_metadata.integrity;
     }
-    notifyChatWriteConflict({ kind: 'snapshot', errorType, target, retryCount, currentIntegrity });
+    notifyChatWriteConflict({ kind: 'snapshot', errorType, target, retryCount, currentIntegrity, requestContext });
     return 'snapshot';
 }
 
@@ -11958,7 +12024,11 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
             // invalidation + integrity refresh). Returning false lets the caller's
             // saveChatConditional fallback do a full /api/chats/save and restore
             // BE = FE (FE-wins).
-            await resolveChatWriteConflict(response, retryCount);
+            await resolveChatWriteConflict(response, retryCount, {
+                endpoint: 'chats/group/append',
+                opSummary: summarizeAppendedMessages(messages),
+                sentIntegrity: chat_metadata?.integrity,
+            });
             return false;
         }
 
@@ -12004,7 +12074,11 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
         }
         // See group-branch comment: any 409 → toast/event/snapshot-invalidate via
         // resolveChatWriteConflict, then return false to let caller full-save.
-        await resolveChatWriteConflict(response, retryCount);
+        await resolveChatWriteConflict(response, retryCount, {
+            endpoint: 'chats/append',
+            opSummary: summarizeAppendedMessages(messages),
+            sentIntegrity: chat_metadata?.integrity,
+        });
         return false;
     } catch (error) {
         console.warn('Incremental chat append failed', error);
@@ -12066,7 +12140,11 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
             // the caller's saveChatConditional fallback do a full /api/chats/save.
             // No rebuild-and-retry: full save is bulletproof and avoids the
             // "diff itself was wrong" failure mode.
-            await resolveChatWriteConflict(response, retryCount);
+            await resolveChatWriteConflict(response, retryCount, {
+                endpoint: 'chats/group/patch',
+                opSummary: summarizeJsonPatchOperations(guardedOperations),
+                sentIntegrity: chat_metadata?.integrity,
+            });
             return false;
         }
 
@@ -12100,7 +12178,11 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
         }
         // See group-branch comment: full-save fallback via the caller covers all
         // 409 cases; resolveChatWriteConflict handles toast/event/snapshot.
-        await resolveChatWriteConflict(response, retryCount);
+        await resolveChatWriteConflict(response, retryCount, {
+            endpoint: 'chats/patch',
+            opSummary: summarizeJsonPatchOperations(guardedOperations),
+            sentIntegrity: chat_metadata?.integrity,
+        });
         return false;
     } catch (error) {
         console.warn('Incremental chat patch failed', error);
@@ -12261,7 +12343,11 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
                 rememberChatMetadataSnapshot(target, metadata);
                 return true;
             }
-            const conflictResolution = await resolveChatWriteConflictForTarget(response, target, metadata, retryCount);
+            const conflictResolution = await resolveChatWriteConflictForTarget(response, target, metadata, retryCount, {
+                endpoint: 'chats/group/meta/patch',
+                opSummary: summarizeJsonPatchOperations(operations),
+                sentIntegrity: metadata?.integrity,
+            });
             if (conflictResolution !== 'none') {
                 if (conflictResolution === 'integrity' || conflictResolution === 'snapshot') {
                     await refreshChatWriteSnapshotsFromServer(target);
@@ -12296,7 +12382,11 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
                 rememberChatMetadataSnapshot(target, metadata);
                 return true;
             }
-            const conflictResolution = await resolveChatWriteConflictForTarget(response, target, metadata, retryCount);
+            const conflictResolution = await resolveChatWriteConflictForTarget(response, target, metadata, retryCount, {
+                endpoint: 'chats/meta/patch',
+                opSummary: summarizeJsonPatchOperations(operations),
+                sentIntegrity: metadata?.integrity,
+            });
             if (conflictResolution !== 'none') {
                 if (conflictResolution === 'integrity' || conflictResolution === 'snapshot') {
                     await refreshChatWriteSnapshotsFromServer(target);
@@ -12422,7 +12512,11 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
                 }
 
                 if (!force) {
-                    const conflictResolution = await resolveChatWriteConflictForTarget(patchResult, writeTarget, metadata, _retryAttempt);
+                    const conflictResolution = await resolveChatWriteConflictForTarget(patchResult, writeTarget, metadata, _retryAttempt, {
+                        endpoint: 'chats/patch (save-internal)',
+                        opSummary: summarizeJsonPatchOperations(operations),
+                        sentIntegrity: metadata?.integrity,
+                    });
                     if (conflictResolution !== 'none') {
                         if (conflictResolution === 'integrity' || conflictResolution === 'snapshot') {
                             await refreshChatWriteSnapshotsFromServer(writeTarget);
@@ -12463,7 +12557,11 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
         }
 
         if (!force) {
-            const conflictResolution = await resolveChatWriteConflictForTarget(result, writeTarget, metadata, _retryAttempt);
+            const conflictResolution = await resolveChatWriteConflictForTarget(result, writeTarget, metadata, _retryAttempt, {
+                endpoint: 'chats/save (full)',
+                opSummary: `full ${Array.isArray(trimmedChat) ? trimmedChat.length : 0} msgs`,
+                sentIntegrity: metadata?.integrity,
+            });
             if (conflictResolution !== 'none') {
                 if (conflictResolution === 'integrity' || conflictResolution === 'snapshot') {
                     await refreshChatWriteSnapshotsFromServer(writeTarget);
