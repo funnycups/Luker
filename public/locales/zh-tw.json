@@ -3145,6 +3145,8 @@
     "Chat sync: integrity drift detected, auto-recovering.": "聊天同步:偵測到完整性漂移,正在自動還原。",
     "Chat sync: snapshot conflict detected, auto-recovering.": "聊天同步:偵測到快照衝突,正在自動還原。",
     "Chat write conflict": "聊天寫入衝突",
+    "server: ${0}": "伺服端:${0}",
+    "diverge: ${0}": "差異:${0}",
     "Chat deleted.": "聊天已刪除。",
     "Chat files associated with deleted characters.": "與已刪除角色相關聯的聊天檔案。",
     "Chat files associated with deleted groups.": "與已刪除群組相關聯的聊天檔案。",

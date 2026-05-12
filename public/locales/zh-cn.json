@@ -1532,6 +1532,8 @@
     "Chat sync: integrity drift detected, auto-recovering.": "聊天同步:检测到完整性漂移,正在自动恢复。",
     "Chat sync: snapshot conflict detected, auto-recovering.": "聊天同步:检测到快照冲突,正在自动恢复。",
     "Chat write conflict": "聊天写入冲突",
+    "server: ${0}": "服务端:${0}",
+    "diverge: ${0}": "差异:${0}",
     "Your messages will now be sent as ${0}": "你的消息现在将以 ${0} 发送",
     "Persona Changed": "用户设定已更改",
     "Settings could not be loaded after multiple attempts. Please try again later.": "多次尝试后仍无法加载设置。请稍后再试。",

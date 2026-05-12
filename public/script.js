@@ -11942,12 +11942,12 @@ function notifyChatWriteConflict({ kind, errorType, target, retryCount, currentI
         const detailParts = [];
         if (endpoint) detailParts.push(escape(endpoint));
         if (opSummary) detailParts.push(escape(opSummary));
-        if (errorType) detailParts.push(`server: ${escape(errorType)}`);
+        if (errorType) detailParts.push(t`server: ${escape(errorType)}`);
         const detailLine = detailParts.length > 0
             ? `<br/><small>${detailParts.join(' · ')}</small>`
             : '';
         const divergenceLine = divergence
-            ? `<br/><small>diverge: ${escape(divergence)}</small>`
+            ? `<br/><small>${t`diverge: ${escape(divergence)}`}</small>`
             : '';
         toastr.warning(`${friendly}${detailLine}${divergenceLine}`, t`Chat write conflict`, {
             timeOut: 12000,
