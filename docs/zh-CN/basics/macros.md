@@ -130,7 +130,7 @@
 | <code v-pre>{{.name < 5}}</code> | 数值 `<` | `"true"` / `"false"` |
 | <code v-pre>{{.name <= 5}}</code> | 数值 `<=` | `"true"` / `"false"` |
 
-`.` 永远指 chat 局部变量，`$` 永远指全局变量。两个作用域 不共享命名。
+`.` 永远指 chat 局部变量，`$` 永远指全局变量。两个作用域不共享命名。
 
 变量表达式可以和控制流组合：
 
@@ -190,7 +190,7 @@ body 里：
 | 宏 | 含义 |
 |---|---|
 | <code v-pre>{{loop_key}}</code> | 当前 key（数组时是字符串形式的索引） |
-| <code v-pre>{{loop_value}}</code> | 当前值整体（对象会自动 JSON JSON 字符串化） |
+| <code v-pre>{{loop_value}}</code> | 当前值整体（对象会自动 JSON 字符串化） |
 | <code v-pre>{{loop_value::field}}</code> | 用点号路径深入值，语义同 <code v-pre>{{getvar}}</code> |
 
 嵌套 <code v-pre>{{each}}</code> 会自然屏蔽外层的 `loop_key` / `loop_value`。对象的迭代顺序遵循 JavaScript 原生规则——字符串 key 走插入顺序，整数样 key 走升序。
@@ -254,7 +254,7 @@ body 里：
 
 ### 结构化值的点号路径
 
-变量可以存任何 JSON-可串行化的值。当变量存的是 JSON JSON JSON 字符串化的对象 / 数组时，点号路径直接生效：
+变量可以存任何 JSON 可序列化的值。当变量存的是 JSON 字符串化的对象 / 数组时，点号路径直接生效：
 
 ```text
 {{setvar::npcs::{"alice":{"hp":40},"bob":{"hp":30}}}}
