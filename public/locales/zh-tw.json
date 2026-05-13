@@ -5014,4 +5014,8 @@
     ,"new_preset_id": "new_preset_id"
     ,"No presets yet.": "尚無預設。"
     ,"No tools active. This agent runs as a single LLM call.": "不啟用工具,該 agent 會直接出結果(單次 LLM 呼叫)。"
+    ,"Requests per minute (0 = unlimited)": "每分鐘請求數(0 = 不限制)"
+    ,"Requests per minute": "每分鐘請求數"
+    ,"API rate limit": "API 速率限制"
+    ,"Profile ${0} · queued ${1} · next in ${2}s": "設定檔 ${0} · 佇列 ${1} · ${2} 秒後發出"
 }

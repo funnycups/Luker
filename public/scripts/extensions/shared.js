@@ -6,6 +6,7 @@ import { SECRET_KEYS, secret_state } from '../secrets.js';
 import { textgen_types, textgenerationwebui_settings } from '../textgen-settings.js';
 import { getTokenCountAsync } from '../tokenizers.js';
 import { createThumbnail, isValidUrl } from '../utils.js';
+import { acquire as acquireRequestSlot } from './connection-manager/request-throttler.js';
 
 function parseProfileBoolean(value) {
     if (typeof value === 'boolean') {
@@ -456,6 +457,11 @@ export class ConnectionManagerRequestService {
 
         const profile = this.getProfile(profileId);
         const selectedApiMap = this.validateProfile(profile);
+
+        const rpmLimit = Number(profile['rpm-limit']) || 0;
+        if (rpmLimit > 0) {
+            await acquireRequestSlot(profileId, rpmLimit, { signal, label: profile.name || profileId });
+        }
 
         try {
             switch (selectedApiMap.selected) {

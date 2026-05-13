@@ -47,6 +47,8 @@ import {
 
 import { forceCharacterEditorTokenize, getCustomStoppingStrings, persona_description_positions, power_user } from './power-user.js';
 import { SECRET_KEYS, secret_state, writeSecret } from './secrets.js';
+import { extension_settings } from './extensions.js';
+import { acquire as acquireRequestSlot } from './extensions/connection-manager/request-throttler.js';
 
 import { getEventSourceStream } from './sse-stream.js';
 import {
@@ -3967,6 +3969,21 @@ async function sendOpenAIRequest(type, messages, signal, {
     // Provide default abort signal
     if (!signal) {
         signal = new AbortController().signal;
+    }
+
+    // RPM throttle gate. Bucket keyed by the currently-selected connection profile;
+    // skipped when no profile is selected or rpm-limit is unset/zero.
+    const cmSettings = extension_settings?.connectionManager;
+    const activeProfileId = cmSettings?.selectedProfile;
+    if (activeProfileId) {
+        const activeProfile = cmSettings.profiles?.find(p => p.id === activeProfileId);
+        const activeRpm = Number(activeProfile?.['rpm-limit']) || 0;
+        if (activeRpm > 0) {
+            await acquireRequestSlot(activeProfileId, activeRpm, {
+                signal,
+                label: activeProfile?.name || activeProfileId,
+            });
+        }
     }
 
     const requestSettings = getSettingsForRequest({ llmPresetName, apiPresetName, apiSettingsOverride });

@@ -5176,4 +5176,8 @@
     ,"new_preset_id": "new_preset_id"
     ,"No presets yet.": "尚无预设。"
     ,"No tools active. This agent runs as a single LLM call.": "不启用工具,该 agent 会直接出结果(单次 LLM 调用)。"
+    ,"Requests per minute (0 = unlimited)": "每分钟请求数(0 = 不限制)"
+    ,"Requests per minute": "每分钟请求数"
+    ,"API rate limit": "API 速率限制"
+    ,"Profile ${0} · queued ${1} · next in ${2}s": "配置 ${0} · 队列 ${1} · ${2} 秒后发出"
 }

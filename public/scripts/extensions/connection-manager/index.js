@@ -150,6 +150,7 @@ const FANCY_NAMES = {
     'vertexai-region': 'Vertex AI Region',
     'vertexai-auth-mode': 'Vertex AI Auth Mode',
     'vertexai-express-project-id': 'Vertex AI Express Project',
+    'rpm-limit': 'Requests per minute',
 };
 
 /**
@@ -253,6 +254,7 @@ const profilesProvider = () => [
  * @property {string} [sysprompt-state] Use System Prompt
  * @property {string} [api-url] Server URL
  * @property {string} [secret-id] Secret ID
+ * @property {number} [rpm-limit] Requests-per-minute limit. 0/missing = no limit.
  * @property {string[]} [exclude] Commands to exclude
  */
 
@@ -420,6 +422,17 @@ function getCommandsForProfile(profile) {
 function clampPlainTextRetryAttempts(value) {
     const parsed = parseProfileInteger(value);
     return parsed ?? 3;
+}
+
+/**
+ * Clamps the RPM-limit value. Non-numeric / negative / NaN -> 0 (disabled).
+ * @param {unknown} value
+ * @returns {number}
+ */
+function clampRpmLimit(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    return Math.floor(n);
 }
 
 /**
@@ -1130,6 +1143,7 @@ export async function init() {
     const plainTextFunctionCallingToggle = document.getElementById('connection_profile_function_calling_plain_text');
     const plainTextFunctionCallingErrorRetryToggle = document.getElementById('connection_profile_function_calling_plain_text_error_retry');
     const plainTextFunctionCallingRetryAttemptsInput = document.getElementById('connection_profile_function_calling_plain_text_error_retry_max_attempts');
+    const rpmLimitInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_rpm_limit'));
     renderConnectionProfiles(profiles);
     initActionableSingleSelect(profiles, {
         searchInputPlaceholder: t`Search...`,
@@ -1160,7 +1174,7 @@ export async function init() {
         return extension_settings.connectionManager.profiles.find(p => p.id === selectedProfileId) || null;
     }
 
-    function syncPlainTextFunctionCallingControls() {
+    function syncProfileEditorControls() {
         if (!plainTextFunctionCallingToggle || !plainTextFunctionCallingErrorRetryToggle || !plainTextFunctionCallingRetryAttemptsInput) {
             return;
         }
@@ -1188,12 +1202,21 @@ export async function init() {
         plainTextFunctionCallingErrorRetryToggle.checked = retryEnabled;
         plainTextFunctionCallingRetryAttemptsInput.disabled = !supported || !plainTextEnabled || !retryEnabled;
         plainTextFunctionCallingRetryAttemptsInput.value = String(parsedRetryAttempts ?? globalRetryAttempts);
+
+        if (rpmLimitInput) {
+            const supportedForRpm = !!profile && (profileMode === 'cc' || profileMode === 'tc');
+            const rpmValue = profile ? clampRpmLimit(profile['rpm-limit']) : 0;
+            rpmLimitInput.disabled = !supportedForRpm;
+            if (document.activeElement !== rpmLimitInput) {
+                rpmLimitInput.value = String(rpmValue);
+            }
+        }
     }
 
     async function applySelectedProfileMutation(mutator) {
         const profile = getSelectedProfile();
         if (!profile || resolveProfileMode(profile) !== 'cc') {
-            syncPlainTextFunctionCallingControls();
+            syncProfileEditorControls();
             return false;
         }
 
@@ -1210,7 +1233,7 @@ export async function init() {
         await renderDetailsContent(detailsContent);
         await eventSource.emit(event_types.CONNECTION_PROFILE_UPDATED, oldProfile, profile);
         await eventSource.emit(event_types.CONNECTION_PROFILE_LOADED, profile.name);
-        syncPlainTextFunctionCallingControls();
+        syncProfileEditorControls();
         return true;
     }
 
@@ -1218,7 +1241,7 @@ export async function init() {
         const profileId = extension_settings.connectionManager.selectedProfile;
         const profileSpecificButtons = ['update_connection_profile', 'reload_connection_profile', 'delete_connection_profile'];
         profileSpecificButtons.forEach(id => document.getElementById(id).classList.toggle('disabled', !profileId));
-        syncPlainTextFunctionCallingControls();
+        syncProfileEditorControls();
     }
     toggleProfileSpecificButtons();
 
@@ -1228,11 +1251,11 @@ export async function init() {
             if (!profile) {
                 oai_settings.function_calling_plain_text = !!plainTextFunctionCallingToggle.checked;
                 saveSettingsDebounced();
-                syncPlainTextFunctionCallingControls();
+                syncProfileEditorControls();
                 return;
             }
             if (resolveProfileMode(profile) !== 'cc') {
-                syncPlainTextFunctionCallingControls();
+                syncProfileEditorControls();
                 return;
             }
 
@@ -1246,11 +1269,11 @@ export async function init() {
             if (!profile) {
                 oai_settings.function_calling_plain_text_error_retry = !!plainTextFunctionCallingErrorRetryToggle.checked;
                 saveSettingsDebounced();
-                syncPlainTextFunctionCallingControls();
+                syncProfileEditorControls();
                 return;
             }
             if (resolveProfileMode(profile) !== 'cc') {
-                syncPlainTextFunctionCallingControls();
+                syncProfileEditorControls();
                 return;
             }
 
@@ -1267,11 +1290,11 @@ export async function init() {
             if (!profile) {
                 oai_settings.function_calling_plain_text_error_retry_max_attempts = value;
                 saveSettingsDebounced();
-                syncPlainTextFunctionCallingControls();
+                syncProfileEditorControls();
                 return;
             }
             if (resolveProfileMode(profile) !== 'cc') {
-                syncPlainTextFunctionCallingControls();
+                syncProfileEditorControls();
                 return;
             }
 
@@ -1281,9 +1304,38 @@ export async function init() {
         });
     }
 
+    if (rpmLimitInput) {
+        rpmLimitInput.addEventListener('change', async () => {
+            const value = clampRpmLimit(rpmLimitInput.value);
+            rpmLimitInput.value = String(value);
+
+            const profile = getSelectedProfile();
+            if (!profile) {
+                syncProfileEditorControls();
+                return;
+            }
+            const mode = resolveProfileMode(profile);
+            if (mode !== 'cc' && mode !== 'tc') {
+                syncProfileEditorControls();
+                return;
+            }
+
+            const oldProfile = structuredClone(profile);
+            if (value <= 0) {
+                delete profile['rpm-limit'];
+            } else {
+                profile['rpm-limit'] = value;
+            }
+            saveSettingsDebounced();
+            await renderDetailsContent(detailsContent);
+            await eventSource.emit(event_types.CONNECTION_PROFILE_UPDATED, oldProfile, profile);
+            syncProfileEditorControls();
+        });
+    }
+
     // Refresh function calling controls when main API changes (cc <-> tc)
     eventSource.on(event_types.MAIN_API_CHANGED, () => {
-        syncPlainTextFunctionCallingControls();
+        syncProfileEditorControls();
     });
 
     $(profiles).on('change', async function () {
