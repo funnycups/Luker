@@ -11840,6 +11840,8 @@ function summarizeChatStateDivergence(clientMessages, serverMessages, maxDiverge
     const length = Math.max(clientMessages.length, serverMessages.length);
     /** @type {string[]} */
     const lines = [];
+    /** @type {Array<{index:number, client:any, server:any, kind:string}>} */
+    const details = [];
     let extraCount = 0;
     for (let i = 0; i < length; i++) {
         const c = clientMessages[i];
@@ -11853,10 +11855,12 @@ function summarizeChatStateDivergence(clientMessages, serverMessages, maxDiverge
 
         if (c === undefined || s === undefined) {
             lines.push(`/${i} ${c === undefined ? 'missing-on-client' : 'missing-on-server'}`);
+            details.push({ index: i, client: c, server: s, kind: c === undefined ? 'missing-on-client' : 'missing-on-server' });
             continue;
         }
         if (!isPlainObject(c) || !isPlainObject(s)) {
             lines.push(`/${i} type-mismatch`);
+            details.push({ index: i, client: c, server: s, kind: 'type-mismatch' });
             continue;
         }
 
@@ -11871,6 +11875,7 @@ function summarizeChatStateDivergence(clientMessages, serverMessages, maxDiverge
         if (onlyInServer.length) parts.push(`server+[${onlyInServer.join(',')}]`);
         if (sharedDiffered.length) parts.push(`mutated:[${sharedDiffered.join(',')}]`);
         lines.push(`/${i} ${parts.length ? parts.join(' ') : 'differs'}`);
+        details.push({ index: i, client: c, server: s, kind: parts.length ? parts.join(' ') : 'differs' });
     }
 
     if (lines.length === 0) {
@@ -11879,7 +11884,7 @@ function summarizeChatStateDivergence(clientMessages, serverMessages, maxDiverge
     if (extraCount > 0) {
         lines.push(`+${extraCount} more position(s)`);
     }
-    return lines.join('; ');
+    return { summary: lines.join('; '), details };
 }
 
 /**
@@ -11927,7 +11932,7 @@ function summarizeAppendedMessages(messages) {
  * `requestContext.endpoint` and `requestContext.opSummary` shape the surfaced
  * detail line. Anyone debugging a 409 needs to know which path triggered it.
  */
-function notifyChatWriteConflict({ kind, errorType, target, retryCount, currentIntegrity, requestContext = null, divergence = null }) {
+function notifyChatWriteConflict({ kind, errorType, target, retryCount, currentIntegrity, requestContext = null, divergence = null, divergenceDetails = null }) {
     const endpoint = requestContext?.endpoint ? String(requestContext.endpoint) : '';
     const opSummary = requestContext?.opSummary ? String(requestContext.opSummary) : '';
     const sentIntegrity = requestContext?.sentIntegrity ? String(requestContext.sentIntegrity) : '';
@@ -11959,6 +11964,14 @@ function notifyChatWriteConflict({ kind, errorType, target, retryCount, currentI
     }
 
     try {
+        // Console gets the rich payload: full client/server message objects at
+        // each divergent index, plus a side reference to live chat at the same
+        // index (so we can compare what compare() actually saw vs what's in
+        // memory now). Toast keeps the short summary; this is the copy-paste
+        // payload for issue triage.
+        const liveChatAtIndices = Array.isArray(divergenceDetails)
+            ? divergenceDetails.map(d => ({ index: d.index, live: chat[d.index] }))
+            : null;
         console.warn('[ChatWriteConflict]', {
             kind,
             errorType,
@@ -11969,6 +11982,8 @@ function notifyChatWriteConflict({ kind, errorType, target, retryCount, currentI
             sentIntegrity,
             currentIntegrity,
             divergence,
+            divergenceDetails,
+            liveChatAtIndices,
         });
         eventSource.emit(event_types.CHAT_WRITE_CONFLICT, {
             kind,
@@ -11980,6 +11995,7 @@ function notifyChatWriteConflict({ kind, errorType, target, retryCount, currentI
             sentIntegrity,
             currentIntegrity,
             divergence,
+            divergenceDetails,
         });
     } catch (error) {
         console.warn('[ChatWriteConflict] event emit failed', error);
@@ -12025,11 +12041,16 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
     const snapshotKey = target ? getChatMessageSnapshotKey(target) : null;
     const clientSnapshot = snapshotKey ? chatMessageSnapshotCache.get(snapshotKey) : null;
     let divergenceSummary = null;
+    let divergenceDetails = null;
     if (Array.isArray(clientSnapshot)) {
         try {
             const serverSnapshot = await fetchCurrentServerChatSnapshot(target);
             if (Array.isArray(serverSnapshot?.messages)) {
-                divergenceSummary = summarizeChatStateDivergence(clientSnapshot, serverSnapshot.messages);
+                const result = summarizeChatStateDivergence(clientSnapshot, serverSnapshot.messages);
+                if (result) {
+                    divergenceSummary = result.summary;
+                    divergenceDetails = result.details;
+                }
             }
         } catch (error) {
             // Diagnostic refresh is best-effort; never fail conflict resolution because of it.
@@ -12052,6 +12073,7 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
         currentIntegrity,
         requestContext,
         divergence: divergenceSummary,
+        divergenceDetails,
     });
     return 'snapshot';
 }
