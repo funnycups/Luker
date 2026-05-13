@@ -7,7 +7,7 @@ import util from 'node:util';
 import urlJoin from 'url-join';
 import lodash from 'lodash';
 
-import { readSecret, SECRET_KEYS } from './secrets.js';
+import { readSecret, SECRET_KEYS, readProviderSecret } from './secrets.js';
 import { GEMINI_SAFETY, VERTEX_SAFETY } from '../constants.js';
 import { delay, getConfigValue, trimTrailingSlash } from '../util.js';
 
@@ -218,8 +218,8 @@ export async function getGoogleApiConfig(request, model, endpoint = 'generateCon
         }
     } else {
         // Google AI Studio
-        const apiKey = request.body.reverse_proxy ? request.body.proxy_password : readSecret(request.user.directories, SECRET_KEYS.MAKERSUITE);
-        const apiUrl = trimTrailingSlash(request.body.reverse_proxy || API_MAKERSUITE);
+        const apiKey = readProviderSecret(request, SECRET_KEYS.MAKERSUITE) || request.body.proxy_password || '';
+        const apiUrl = trimTrailingSlash(request.body.base_url || request.body.reverse_proxy || API_MAKERSUITE);
         const apiVersion = getConfigValue('gemini.apiVersion', 'v1beta');
         baseUrl = `${apiUrl}/${apiVersion}`;
         url = `${baseUrl}/models/${model}:${endpoint}`;

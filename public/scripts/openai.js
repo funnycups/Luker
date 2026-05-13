@@ -427,6 +427,7 @@ export const MINIMAX_ENDPOINT = {
 const sensitiveFields = [
     'reverse_proxy',
     'proxy_password',
+    'base_url',
     'custom_url',
     'custom_include_body',
     'custom_exclude_body',
@@ -508,6 +509,7 @@ export const settingsToUpdate = {
     continue_nudge_prompt: ['#continue_nudge_prompt_textarea', 'continue_nudge_prompt', false, false],
     bias_preset_selected: ['#openai_logit_bias_preset', 'bias_preset_selected', false, false],
     reverse_proxy: ['#openai_reverse_proxy', 'reverse_proxy', false, true],
+    base_url: ['#openai_base_url', 'base_url', false, true],
     wi_format: ['#wi_format_textarea', 'wi_format', false, false],
     scenario_format: ['#scenario_format_textarea', 'scenario_format', false, false],
     personality_format: ['#personality_format_textarea', 'personality_format', false, false],
@@ -760,6 +762,7 @@ const default_settings = {
     openrouter_middleout: openrouter_middleout_types.ON,
     tool_reasoning_mode: tool_reasoning_modes.DISABLED,
     reverse_proxy: '',
+    base_url: '',
     chat_completion_source: chat_completion_sources.OPENAI,
     max_context_unlocked: false,
     show_external_models: false,
@@ -3402,6 +3405,10 @@ export async function createGenerationParameters(settings, model, type, messages
         delete generate_data.stop;
     }
 
+    if (settings.base_url && proxySupportedSources.includes(settings.chat_completion_source)) {
+        generate_data.base_url = settings.base_url;
+    }
+
     if (settings.reverse_proxy && proxySupportedSources.includes(settings.chat_completion_source)) {
         await validateReverseProxy();
         generate_data.reverse_proxy = settings.reverse_proxy;
@@ -5452,7 +5459,7 @@ function loadOpenAISettings(data, settings) {
     lastOpenAIPresetSelectValue = String($('#settings_preset_openai').val() ?? selectedOpenAIPresetValue ?? '');
     updateCharacterBoundPresetBadge(false);
     $('#openai_external_category').toggle(oai_settings.show_external_models);
-    $('.reverse_proxy_warning').toggle(oai_settings.reverse_proxy !== '');
+    $('.reverse_proxy_warning').toggle(oai_settings.reverse_proxy !== '' || oai_settings.base_url !== '');
 
     // Don't display Service Account JSON in textarea - it's stored in backend secrets
     $('#vertexai_service_account_json').val('');
@@ -6064,6 +6071,7 @@ async function getStatusOpen() {
     let data = {
         reverse_proxy: oai_settings.reverse_proxy,
         proxy_password: oai_settings.proxy_password,
+        base_url: oai_settings.base_url,
         chat_completion_source: oai_settings.chat_completion_source,
     };
 
@@ -7836,7 +7844,7 @@ async function onNewPresetClick() {
 
 function onReverseProxyInput() {
     oai_settings.reverse_proxy = String($(this).val());
-    $('.reverse_proxy_warning').toggle(oai_settings.reverse_proxy != '');
+    $('.reverse_proxy_warning').toggle(oai_settings.reverse_proxy != '' || oai_settings.base_url != '');
     saveSettingsDebounced();
 }
 
@@ -9123,6 +9131,13 @@ export function initOpenAI() {
     $('#openai_proxy_password').on('input', function () {
         oai_settings.proxy_password = String($(this).val());
         saveSettingsDebounced();
+    });
+
+    $('#openai_base_url').on('input', function () {
+        oai_settings.base_url = String($(this).val()).trim();
+        $('.reverse_proxy_warning').toggle(oai_settings.reverse_proxy != '' || oai_settings.base_url != '');
+        saveSettingsDebounced();
+        reconnectOpenAi();
     });
 
     $('#claude_assistant_prefill').on('input', function () {

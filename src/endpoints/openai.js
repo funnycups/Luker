@@ -7,7 +7,7 @@ import express from 'express';
 
 import { getConfigValue, mergeObjectWithYaml, excludeKeysByYaml, trimV1, delay } from '../util.js';
 import { setAdditionalHeaders } from '../additional-headers.js';
-import { readSecret, SECRET_KEYS } from './secrets.js';
+import { readSecret, SECRET_KEYS, readProviderSecret } from './secrets.js';
 import { AIMLAPI_HEADERS, OPENROUTER_HEADERS, SILICONFLOW_ENDPOINT, ZAI_ENDPOINT } from '../constants.js';
 
 export const router = express.Router();
@@ -17,20 +17,21 @@ router.post('/caption-image', async (request, response) => {
         let key = '';
         let headers = {};
         let bodyParams = {};
+        const customBaseUrl = request.body.base_url || request.body.reverse_proxy || '';
 
-        if (request.body.api === 'openai' && !request.body.reverse_proxy) {
-            key = readSecret(request.user.directories, SECRET_KEYS.OPENAI);
+        if (request.body.api === 'openai' && !customBaseUrl) {
+            key = readProviderSecret(request, SECRET_KEYS.OPENAI);
         }
 
-        if (request.body.api === 'xai' && !request.body.reverse_proxy) {
-            key = readSecret(request.user.directories, SECRET_KEYS.XAI);
+        if (request.body.api === 'xai' && !customBaseUrl) {
+            key = readProviderSecret(request, SECRET_KEYS.XAI);
         }
 
-        if (request.body.api === 'mistral' && !request.body.reverse_proxy) {
-            key = readSecret(request.user.directories, SECRET_KEYS.MISTRALAI);
+        if (request.body.api === 'mistral' && !customBaseUrl) {
+            key = readProviderSecret(request, SECRET_KEYS.MISTRALAI);
         }
 
-        if (request.body.reverse_proxy && request.body.proxy_password) {
+        if (customBaseUrl && request.body.proxy_password) {
             key = request.body.proxy_password;
         }
 
@@ -73,8 +74,8 @@ router.post('/caption-image', async (request, response) => {
             key = readSecret(request.user.directories, SECRET_KEYS.COHERE);
         }
 
-        if (request.body.api === 'moonshot' && !request.body.reverse_proxy) {
-            key = readSecret(request.user.directories, SECRET_KEYS.MOONSHOT);
+        if (request.body.api === 'moonshot' && !customBaseUrl) {
+            key = readProviderSecret(request, SECRET_KEYS.MOONSHOT);
         }
 
         if (request.body.api === 'nanogpt') {
@@ -89,8 +90,8 @@ router.post('/caption-image', async (request, response) => {
             key = readSecret(request.user.directories, SECRET_KEYS.ELECTRONHUB);
         }
 
-        if (request.body.api === 'zai' && !request.body.reverse_proxy) {
-            key = readSecret(request.user.directories, SECRET_KEYS.ZAI);
+        if (request.body.api === 'zai' && !customBaseUrl) {
+            key = readProviderSecret(request, SECRET_KEYS.ZAI);
         }
 
         if (request.body.api === 'zai') {
@@ -107,7 +108,7 @@ router.post('/caption-image', async (request, response) => {
         }
 
         const noKeyTypes = ['custom', 'ooba', 'koboldcpp', 'vllm', 'llamacpp'];
-        if (!key && !request.body.reverse_proxy && !noKeyTypes.includes(request.body.api)) {
+        if (!key && !customBaseUrl && !noKeyTypes.includes(request.body.api)) {
             console.warn('No key found for API', request.body.api);
             return response.sendStatus(400);
         }
@@ -149,8 +150,8 @@ router.post('/caption-image', async (request, response) => {
             apiUrl = 'https://api.openai.com/v1/chat/completions';
         }
 
-        if (request.body.reverse_proxy) {
-            apiUrl = `${request.body.reverse_proxy}/chat/completions`;
+        if (customBaseUrl) {
+            apiUrl = `${customBaseUrl}/chat/completions`;
         }
 
         if (request.body.api === 'custom') {
@@ -185,7 +186,7 @@ router.post('/caption-image', async (request, response) => {
             apiUrl = 'https://gen.pollinations.ai/v1/chat/completions';
         }
 
-        if (request.body.api === 'moonshot' && !request.body.reverse_proxy) {
+        if (request.body.api === 'moonshot' && !customBaseUrl) {
             apiUrl = 'https://api.moonshot.ai/v1/chat/completions';
         }
 
@@ -201,7 +202,7 @@ router.post('/caption-image', async (request, response) => {
             apiUrl = 'https://api.electronhub.ai/v1/chat/completions';
         }
 
-        if (request.body.api === 'zai' && !request.body.reverse_proxy) {
+        if (request.body.api === 'zai' && !customBaseUrl) {
             apiUrl = request.body.zai_endpoint === ZAI_ENDPOINT.CODING
                 ? 'https://api.z.ai/api/coding/paas/v4/chat/completions'
                 : 'https://api.z.ai/api/paas/v4/chat/completions';

@@ -2940,65 +2940,90 @@
                         </select>
                         <div class="inline-drawer wide100p" data-source="openai,claude,mistralai,makersuite,vertexai,deepseek,xai,zai,moonshot">
                             <div class="inline-drawer-toggle inline-drawer-header">
-                                <b data-i18n="Reverse Proxy">Reverse Proxy</b>
-                                <div class="fa-solid fa-circle-chevron-down inline-drawer-icon down"></div>
+                                <b data-i18n="API Endpoint">API Endpoint</b>
+                                <div class="fa-solid fa-circle-chevron-up inline-drawer-icon up"></div>
                             </div>
-                            <div class="inline-drawer-content">
-                                <div class="range-block-title justifyLeft" data-i18n="Proxy Presets">
-                                    Proxy Presets
-                                </div>
-                                <div class="toggle-description justifyLeft">
-                                    <span data-i18n="Saved addresses and passwords.">
-                                        Saved addresses and passwords.
-                                    </span>
-                                    <br>
-                                </div>
-                                <div class="openai_logit_bias_preset_form">
-                                    <select id="openai_proxy_preset">
-                                    </select>
-                                    <i id="save_proxy" class="menu_button fa-solid fa-save" title="Save Proxy" data-i18n="[title]Save Proxy"></i>
-                                    <i id="delete_proxy" class="menu_button fa-solid fa-trash" title="Delete Proxy" data-i18n="[title]Delete Proxy"></i>
-                                </div>
-                                <div class="range-block-title justifyLeft" data-i18n="Proxy Name">
-                                    Proxy Name
-                                </div>
-                                <div class="toggle-description justifyLeft">
-                                    <span data-i18n="This will show up as your saved preset.">
-                                        This will show up as your saved preset.
-                                    </span>
-                                    <br>
-                                </div>
-                                <div class="wide100p">
-                                    <input id="openai_reverse_proxy_name" type="text" class="text_pole" placeholder="..." />
-                                </div>
-                                <div class="range-block-title justifyLeft" data-i18n="Proxy Server URL">
-                                    Proxy Server URL
+                            <div class="inline-drawer-content" style="display: block;">
+                                <div class="range-block-title justifyLeft" data-i18n="Base URL">
+                                    Base URL
                                 </div>
                                 <div class="toggle-description justifyLeft wide100p">
-                                    <span data-i18n="Alternative server URL (leave empty to use the default value).">
-                                        Alternative server URL (leave empty to use the default value).
+                                    <span data-i18n="Leave empty to use the official endpoint. Fill with a compatible server URL to route through it. The API key from the section above is used as-is.">
+                                        Leave empty to use the official endpoint. Fill with a compatible server URL to route through it. The API key from the section above is used as-is.
                                     </span>
-                                    <br>
                                 </div>
                                 <div class="wide100p">
-                                    <input id="openai_reverse_proxy" type="text" class="text_pole" placeholder="https://api.openai.com/v1" />
-                                    <small class="reverse_proxy_warning">
-                                        <span data-i18n="Doesn't work? Try adding">Doesn't work? Try adding</span> <code>/v1</code> <span data-i18n="at the end!">at the end!</span>
-                                        <span data-i18n="completions note prefix"></span><code>/chat/completions</code> <b data-i18n="suffix will be added automatically.">suffix will be added automatically.</b>
-                                    </small>
+                                    <input id="openai_base_url" type="text" class="text_pole" placeholder="https://api.openai.com/v1" />
                                 </div>
-                                <div class="range-block-title justifyLeft" data-i18n="Proxy Password">
-                                    Proxy Password
-                                </div>
-                                <div class="toggle-description justifyLeft">
-                                    <span data-i18n="Will be used as a password for the proxy instead of API key.">
-                                        Will be used as a password for the proxy instead of API key.
-                                    </span>
-                                    <br>
-                                </div>
-                                <div class="flex-container width100p">
-                                    <input id="openai_proxy_password" type="password" class="text_pole flex1" placeholder="" form="openai_form" autocomplete="off" />
-                                    <div id="openai_proxy_password_show" title="Peek a password" data-i18n="[title]Peek a password" class="menu_button fa-solid fa-eye-slash fa-fw"></div>
+                                <div class="inline-drawer wide100p marginTop10">
+                                    <div class="inline-drawer-toggle inline-drawer-header">
+                                        <b data-i18n="Legacy Proxy Presets (Deprecated)">Legacy Proxy Presets (Deprecated)</b>
+                                        <div class="fa-solid fa-circle-chevron-down inline-drawer-icon down"></div>
+                                    </div>
+                                    <div class="inline-drawer-content">
+                                        <div class="toggle-description justifyLeft">
+                                            <span data-i18n="Older proxy presets are kept for migration. New configurations should use the Base URL field above.">
+                                                Older proxy presets are kept for migration. New configurations should use the Base URL field above.
+                                            </span>
+                                            <br>
+                                        </div>
+                                        <div class="range-block-title justifyLeft" data-i18n="Proxy Presets">
+                                            Proxy Presets
+                                        </div>
+                                        <div class="toggle-description justifyLeft">
+                                            <span data-i18n="Saved addresses and passwords.">
+                                                Saved addresses and passwords.
+                                            </span>
+                                            <br>
+                                        </div>
+                                        <div class="openai_logit_bias_preset_form">
+                                            <select id="openai_proxy_preset">
+                                            </select>
+                                            <i id="save_proxy" class="menu_button fa-solid fa-save" title="Save Proxy" data-i18n="[title]Save Proxy"></i>
+                                            <i id="delete_proxy" class="menu_button fa-solid fa-trash" title="Delete Proxy" data-i18n="[title]Delete Proxy"></i>
+                                        </div>
+                                        <div class="range-block-title justifyLeft" data-i18n="Proxy Name">
+                                            Proxy Name
+                                        </div>
+                                        <div class="toggle-description justifyLeft">
+                                            <span data-i18n="This will show up as your saved preset.">
+                                                This will show up as your saved preset.
+                                            </span>
+                                            <br>
+                                        </div>
+                                        <div class="wide100p">
+                                            <input id="openai_reverse_proxy_name" type="text" class="text_pole" placeholder="..." />
+                                        </div>
+                                        <div class="range-block-title justifyLeft" data-i18n="Proxy Server URL">
+                                            Proxy Server URL
+                                        </div>
+                                        <div class="toggle-description justifyLeft wide100p">
+                                            <span data-i18n="Alternative server URL (leave empty to use the default value).">
+                                                Alternative server URL (leave empty to use the default value).
+                                            </span>
+                                            <br>
+                                        </div>
+                                        <div class="wide100p">
+                                            <input id="openai_reverse_proxy" type="text" class="text_pole" placeholder="https://api.openai.com/v1" />
+                                            <small class="reverse_proxy_warning">
+                                                <span data-i18n="Doesn't work? Try adding">Doesn't work? Try adding</span> <code>/v1</code> <span data-i18n="at the end!">at the end!</span>
+                                                <span data-i18n="completions note prefix"></span><code>/chat/completions</code> <b data-i18n="suffix will be added automatically.">suffix will be added automatically.</b>
+                                            </small>
+                                        </div>
+                                        <div class="range-block-title justifyLeft" data-i18n="Proxy Password">
+                                            Proxy Password
+                                        </div>
+                                        <div class="toggle-description justifyLeft">
+                                            <span data-i18n="Will be used as a password for the proxy instead of API key.">
+                                                Will be used as a password for the proxy instead of API key.
+                                            </span>
+                                            <br>
+                                        </div>
+                                        <div class="flex-container width100p">
+                                            <input id="openai_proxy_password" type="password" class="text_pole flex1" placeholder="" form="openai_form" autocomplete="off" />
+                                            <div id="openai_proxy_password_show" title="Peek a password" data-i18n="[title]Peek a password" class="menu_button fa-solid fa-eye-slash fa-fw"></div>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>

@@ -260,8 +260,8 @@ async function finalizePayloadWithJob(request, response, payload, rawApiResponse
  * @param {express.Response} response Express response
  */
 async function sendClaudeRequest(request, response) {
-    const apiUrl = new URL(request.body.reverse_proxy || API_CLAUDE).toString();
-    const apiKey = request.body.reverse_proxy ? request.body.proxy_password : readProviderSecret(request, SECRET_KEYS.CLAUDE);
+    const apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_CLAUDE).toString();
+    const apiKey = readProviderSecret(request, SECRET_KEYS.CLAUDE) || request.body.proxy_password || '';
     const divider = '-'.repeat(process.stdout.columns);
 
     if (!apiKey) {
@@ -493,7 +493,7 @@ async function sendMakerSuiteRequest(request, response) {
     let authType;
 
     if (useVertexAi) {
-        apiUrl = new URL(request.body.reverse_proxy || API_VERTEX_AI);
+        apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_VERTEX_AI);
 
         try {
             const auth = await getVertexAIAuth(request);
@@ -505,10 +505,10 @@ async function sendMakerSuiteRequest(request, response) {
             return response.status(400).send({ error: true, message: error.message });
         }
     } else {
-        apiUrl = new URL(request.body.reverse_proxy || API_MAKERSUITE);
-        apiKey = request.body.reverse_proxy ? request.body.proxy_password : readProviderSecret(request, SECRET_KEYS.MAKERSUITE);
+        apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_MAKERSUITE);
+        apiKey = readProviderSecret(request, SECRET_KEYS.MAKERSUITE) || request.body.proxy_password || '';
 
-        if (!request.body.reverse_proxy && !apiKey) {
+        if (!request.body.base_url && !request.body.reverse_proxy && !apiKey) {
             console.warn(`${apiName} API key is missing.`);
             return response.status(400).send({ error: true });
         }
@@ -895,8 +895,8 @@ async function sendAI21Request(request, response) {
  * @param {express.Response} response Express response
  */
 async function sendMistralAIRequest(request, response) {
-    const apiUrl = new URL(request.body.reverse_proxy || API_MISTRAL).toString();
-    const apiKey = request.body.reverse_proxy ? request.body.proxy_password : readProviderSecret(request, SECRET_KEYS.MISTRALAI);
+    const apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_MISTRAL).toString();
+    const apiKey = readProviderSecret(request, SECRET_KEYS.MISTRALAI) || request.body.proxy_password || '';
 
     if (!apiKey) {
         console.warn('MistralAI API key is missing.');
@@ -1085,10 +1085,10 @@ async function sendCohereRequest(request, response) {
  * @param {express.Response} response Express response
  */
 async function sendDeepSeekRequest(request, response) {
-    const apiUrl = new URL(request.body.reverse_proxy || API_DEEPSEEK).toString();
-    const apiKey = request.body.reverse_proxy ? request.body.proxy_password : readProviderSecret(request, SECRET_KEYS.DEEPSEEK);
+    const apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_DEEPSEEK).toString();
+    const apiKey = readProviderSecret(request, SECRET_KEYS.DEEPSEEK) || request.body.proxy_password || '';
 
-    if (!apiKey && !request.body.reverse_proxy) {
+    if (!apiKey && !request.body.base_url && !request.body.reverse_proxy) {
         console.warn('DeepSeek API key is missing.');
         return response.status(400).send({ error: true });
     }
@@ -1208,10 +1208,10 @@ async function sendDeepSeekRequest(request, response) {
  * @param {express.Response} response Express response
  */
 async function sendXaiRequest(request, response) {
-    const apiUrl = new URL(request.body.reverse_proxy || API_XAI).toString();
-    const apiKey = request.body.reverse_proxy ? request.body.proxy_password : readProviderSecret(request, SECRET_KEYS.XAI);
+    const apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_XAI).toString();
+    const apiKey = readProviderSecret(request, SECRET_KEYS.XAI) || request.body.proxy_password || '';
 
-    if (!apiKey && !request.body.reverse_proxy) {
+    if (!apiKey && !request.body.base_url && !request.body.reverse_proxy) {
         console.warn('xAI API key is missing.');
         return response.status(400).send({ error: true });
     }
@@ -1905,8 +1905,8 @@ router.post('/status', async function (request, statusResponse) {
         let queryParams = {};
 
         if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.OPENAI) {
-            apiUrl = normalizeOpenAIBaseUrl(request.body.reverse_proxy || API_OPENAI);
-            apiKey = request.body.reverse_proxy ? request.body.proxy_password : readProviderSecret(request, SECRET_KEYS.OPENAI);
+            apiUrl = normalizeOpenAIBaseUrl(request.body.base_url || request.body.reverse_proxy || API_OPENAI);
+            apiKey = readProviderSecret(request, SECRET_KEYS.OPENAI) || request.body.proxy_password || '';
             headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.OPENROUTER) {
             apiUrl = 'https://openrouter.ai/api/v1';
@@ -1914,8 +1914,8 @@ router.post('/status', async function (request, statusResponse) {
             // OpenRouter needs to pass the Referer and X-Title: https://openrouter.ai/docs#requests
             headers = { ...OPENROUTER_HEADERS };
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.MISTRALAI) {
-            apiUrl = new URL(request.body.reverse_proxy || API_MISTRAL).toString();
-            apiKey = request.body.reverse_proxy ? request.body.proxy_password : readProviderSecret(request, SECRET_KEYS.MISTRALAI);
+            apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_MISTRAL).toString();
+            apiKey = readProviderSecret(request, SECRET_KEYS.MISTRALAI) || request.body.proxy_password || '';
             headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.CUSTOM) {
             apiUrl = normalizeOpenAIBaseUrl(request.body.custom_url);
@@ -1940,13 +1940,13 @@ router.post('/status', async function (request, statusResponse) {
             headers = {};
             queryParams = { detailed: true };
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.DEEPSEEK) {
-            apiUrl = new URL(request.body.reverse_proxy || API_DEEPSEEK.replace('/beta', '')).toString();
-            apiKey = request.body.reverse_proxy ? request.body.proxy_password : readProviderSecret(request, SECRET_KEYS.DEEPSEEK);
+            apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_DEEPSEEK.replace('/beta', '')).toString();
+            apiKey = readProviderSecret(request, SECRET_KEYS.DEEPSEEK) || request.body.proxy_password || '';
             headers = {};
             mergeObjectWithYaml(headers, request.body.custom_include_headers);
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.XAI) {
-            apiUrl = new URL(request.body.reverse_proxy || API_XAI).toString();
-            apiKey = request.body.reverse_proxy ? request.body.proxy_password : readProviderSecret(request, SECRET_KEYS.XAI);
+            apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_XAI).toString();
+            apiKey = readProviderSecret(request, SECRET_KEYS.XAI) || request.body.proxy_password || '';
             headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.AIMLAPI) {
             apiUrl = API_AIMLAPI;
@@ -1966,20 +1966,20 @@ router.post('/status', async function (request, statusResponse) {
             headers = {};
             throw new Error('This provider is temporarily disabled.');
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.MOONSHOT) {
-            apiUrl = new URL(request.body.reverse_proxy || API_MOONSHOT).toString();
-            apiKey = request.body.reverse_proxy ? request.body.proxy_password : readProviderSecret(request, SECRET_KEYS.MOONSHOT);
+            apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_MOONSHOT).toString();
+            apiKey = readProviderSecret(request, SECRET_KEYS.MOONSHOT) || request.body.proxy_password || '';
             headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.FIREWORKS) {
             apiUrl = API_FIREWORKS;
             apiKey = readProviderSecret(request, SECRET_KEYS.FIREWORKS);
             headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.CLAUDE) {
-            apiUrl = new URL(request.body.reverse_proxy || API_CLAUDE).toString();
-            apiKey = request.body.reverse_proxy ? request.body.proxy_password : readProviderSecret(request, SECRET_KEYS.CLAUDE);
+            apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_CLAUDE).toString();
+            apiKey = readProviderSecret(request, SECRET_KEYS.CLAUDE) || request.body.proxy_password || '';
             headers = {};
             mergeObjectWithYaml(headers, request.body.custom_include_headers);
 
-            if (!apiKey && !request.body.reverse_proxy) {
+            if (!apiKey && !request.body.base_url && !request.body.reverse_proxy) {
                 console.warn('Claude API key is missing.');
                 return statusResponse.status(400).send({ error: true });
             }
@@ -2053,7 +2053,7 @@ router.post('/status', async function (request, statusResponse) {
                         : `https://${region}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${region}/publishers/google/models`;
                     modelHeaders['Authorization'] = authHeader;
                 } else {
-                    apiUrl = trimTrailingSlash(request.body.reverse_proxy || API_VERTEX_AI);
+                    apiUrl = trimTrailingSlash(request.body.base_url || request.body.reverse_proxy || API_VERTEX_AI);
                     modelsUrl = `${apiUrl}/v1/publishers/google/models`;
                     modelHeaders['Authorization'] = authHeader;
                 }
@@ -2098,14 +2098,14 @@ router.post('/status', async function (request, statusResponse) {
                 return statusResponse.send({ error: true, bypass: true, data: { data: [] } });
             }
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.MAKERSUITE) {
-            apiKey = request.body.reverse_proxy ? request.body.proxy_password : readProviderSecret(request, SECRET_KEYS.MAKERSUITE);
-            apiUrl = trimTrailingSlash(request.body.reverse_proxy || API_MAKERSUITE);
+            apiKey = readProviderSecret(request, SECRET_KEYS.MAKERSUITE) || request.body.proxy_password || '';
+            apiUrl = trimTrailingSlash(request.body.base_url || request.body.reverse_proxy || API_MAKERSUITE);
             const apiVersion = getConfigValue('gemini.apiVersion', 'v1beta');
-            const modelsUrl = !apiKey && request.body.reverse_proxy
+            const modelsUrl = !apiKey && (request.body.base_url || request.body.reverse_proxy)
                 ? `${apiUrl}/${apiVersion}/models`
                 : `${apiUrl}/${apiVersion}/models?key=${apiKey}`;
 
-            if (!apiKey && !request.body.reverse_proxy) {
+            if (!apiKey && !request.body.base_url && !request.body.reverse_proxy) {
                 console.warn('Google AI Studio API key is missing.');
                 return statusResponse.status(400).send({ error: true });
             }
@@ -2267,7 +2267,7 @@ router.post('/status', async function (request, statusResponse) {
             return statusResponse.status(400).send({ error: true });
         }
 
-        if (!apiKey && !request.body.reverse_proxy && request.body.chat_completion_source !== CHAT_COMPLETION_SOURCES.CUSTOM) {
+        if (!apiKey && !request.body.base_url && !request.body.reverse_proxy && request.body.chat_completion_source !== CHAT_COMPLETION_SOURCES.CUSTOM) {
             console.warn('Chat Completion API key is missing.');
             return statusResponse.status(400).send({ error: true });
         }
@@ -2488,8 +2488,8 @@ router.post('/generate', async function (request, response) {
         const isTextCompletion = Boolean(request.body.model && TEXT_COMPLETION_MODELS.includes(request.body.model)) || typeof request.body.messages === 'string';
 
         if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.OPENAI) {
-            apiUrl = normalizeOpenAIBaseUrl(request.body.reverse_proxy || API_OPENAI);
-            apiKey = request.body.reverse_proxy ? request.body.proxy_password : readProviderSecret(request, SECRET_KEYS.OPENAI);
+            apiUrl = normalizeOpenAIBaseUrl(request.body.base_url || request.body.reverse_proxy || API_OPENAI);
+            apiKey = readProviderSecret(request, SECRET_KEYS.OPENAI) || request.body.proxy_password || '';
             headers = {};
             bodyParams = {
                 logprobs: request.body.logprobs,
@@ -2724,8 +2724,8 @@ router.post('/generate', async function (request, response) {
                 };
             }
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.MOONSHOT) {
-            apiUrl = new URL(request.body.reverse_proxy || API_MOONSHOT).toString();
-            apiKey = request.body.reverse_proxy ? request.body.proxy_password : readProviderSecret(request, SECRET_KEYS.MOONSHOT);
+            apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_MOONSHOT).toString();
+            apiKey = readProviderSecret(request, SECRET_KEYS.MOONSHOT) || request.body.proxy_password || '';
             headers = {};
             bodyParams = {};
             if (request.body.reasoning_effort) {
@@ -2744,8 +2744,8 @@ router.post('/generate', async function (request, response) {
             throw new Error('This provider is temporarily disabled.');
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.ZAI) {
             const defaultApiUrl = request.body.zai_endpoint === ZAI_ENDPOINT.CODING ? API_ZAI_CODING : API_ZAI_COMMON;
-            apiUrl = new URL(request.body.reverse_proxy || defaultApiUrl).toString();
-            apiKey = request.body.reverse_proxy ? request.body.proxy_password : readProviderSecret(request, SECRET_KEYS.ZAI);
+            apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || defaultApiUrl).toString();
+            apiKey = readProviderSecret(request, SECRET_KEYS.ZAI) || request.body.proxy_password || '';
             headers = {
                 'Accept-Language': 'en-US,en',
             };
@@ -2805,7 +2805,7 @@ router.post('/generate', async function (request, response) {
             }
         }
 
-        if (!apiKey && !request.body.reverse_proxy && request.body.chat_completion_source !== CHAT_COMPLETION_SOURCES.CUSTOM) {
+        if (!apiKey && !request.body.base_url && !request.body.reverse_proxy && request.body.chat_completion_source !== CHAT_COMPLETION_SOURCES.CUSTOM) {
             console.warn('OpenAI API key is missing.');
             return response.status(400).send({ error: true });
         }
