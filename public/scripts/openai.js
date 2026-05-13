@@ -456,8 +456,8 @@ export const settingsToUpdate = {
     max_context_unlocked: ['#oai_max_context_unlocked', 'max_context_unlocked', true, false],
     group_models: ['#cc_group_models', 'group_models', true, true],
     sort_models: ['#cc_sort_models', 'sort_models', false, true],
-    openai_model: ['#model_openai_select', 'openai_model', false, true],
-    claude_model: ['#model_claude_select', 'claude_model', false, true],
+    openai_model: ['#openai_model_id', 'openai_model', false, true],
+    claude_model: ['#claude_model_id', 'claude_model', false, true],
     openrouter_model: ['#model_openrouter_select', 'openrouter_model', false, true],
     openrouter_use_fallback: ['#openrouter_use_fallback', 'openrouter_use_fallback', true, true],
     openrouter_providers: ['#openrouter_providers_chat', 'openrouter_providers', false, true],
@@ -466,7 +466,7 @@ export const settingsToUpdate = {
     openrouter_middleout: ['#openrouter_middleout', 'openrouter_middleout', false, true],
     tool_reasoning_mode: ['#tool_reasoning_mode', 'tool_reasoning_mode', false, false],
     ai21_model: ['#model_ai21_select', 'ai21_model', false, true],
-    mistralai_model: ['#model_mistralai_select', 'mistralai_model', false, true],
+    mistralai_model: ['#mistralai_model_id', 'mistralai_model', false, true],
     cohere_model: ['#model_cohere_select', 'cohere_model', false, true],
     perplexity_model: ['#model_perplexity_select', 'perplexity_model', false, true],
     groq_model: ['#model_groq_select', 'groq_model', false, true],
@@ -479,11 +479,11 @@ export const settingsToUpdate = {
     nanogpt_model: ['#model_nanogpt_select', 'nanogpt_model', false, true],
     nanogpt_provider: ['#nanogpt_provider', 'nanogpt_provider', false, true],
     nanogpt_payg_override: ['#nanogpt_payg_override', 'nanogpt_payg_override', true, true],
-    deepseek_model: ['#model_deepseek_select', 'deepseek_model', false, true],
+    deepseek_model: ['#deepseek_model_id', 'deepseek_model', false, true],
     aimlapi_model: ['#model_aimlapi_select', 'aimlapi_model', false, true],
-    xai_model: ['#model_xai_select', 'xai_model', false, true],
+    xai_model: ['#xai_model_id', 'xai_model', false, true],
     pollinations_model: ['#model_pollinations_select', 'pollinations_model', false, true],
-    moonshot_model: ['#model_moonshot_select', 'moonshot_model', false, true],
+    moonshot_model: ['#moonshot_model_id', 'moonshot_model', false, true],
     fireworks_model: ['#model_fireworks_select', 'fireworks_model', false, true],
     cometapi_model: ['#model_cometapi_select', 'cometapi_model', false, true],
     custom_model: ['#custom_model_id', 'custom_model', false, true],
@@ -492,9 +492,9 @@ export const settingsToUpdate = {
     custom_exclude_body: ['#custom_exclude_body', 'custom_exclude_body', false, true],
     custom_include_headers: ['#custom_include_headers', 'custom_include_headers', false, true],
     custom_prompt_post_processing: ['#custom_prompt_post_processing', 'custom_prompt_post_processing', false, true],
-    google_model: ['#model_google_select', 'google_model', false, true],
-    vertexai_model: ['#model_vertexai_select', 'vertexai_model', false, true],
-    zai_model: ['#model_zai_select', 'zai_model', false, true],
+    google_model: ['#google_model_id', 'google_model', false, true],
+    vertexai_model: ['#vertexai_model_id', 'vertexai_model', false, true],
+    zai_model: ['#zai_model_id', 'zai_model', false, true],
     zai_endpoint: ['#zai_endpoint', 'zai_endpoint', false, true],
     workers_ai_model: ['#model_workers_ai_select', 'workers_ai_model', false, true],
     workers_ai_account_id: ['#workers_ai_account_id', 'workers_ai_account_id', false, true],
@@ -2316,13 +2316,15 @@ function calculateChutesCost() {
 }
 
 const sourceModelBindings = {
-    [chat_completion_sources.OPENAI]: { settingKey: 'openai_model', selector: '#model_openai_select' },
-    [chat_completion_sources.CLAUDE]: { settingKey: 'claude_model', selector: '#model_claude_select' },
-    [chat_completion_sources.MAKERSUITE]: { settingKey: 'google_model', selector: '#model_google_select' },
-    [chat_completion_sources.VERTEXAI]: { settingKey: 'vertexai_model', selector: '#model_vertexai_select' },
+    [chat_completion_sources.OPENAI]: { settingKey: 'openai_model', selector: '#openai_model_id', extraSelectors: ['#model_openai_select_fill', '#model_openai_select'] },
+    // Claude binds the text input as its source-of-truth; the `Available Models`
+    // select is a separate one-shot picker.
+    [chat_completion_sources.CLAUDE]: { settingKey: 'claude_model', selector: '#claude_model_id', extraSelectors: ['#model_claude_select_fill', '#model_claude_select'] },
+    [chat_completion_sources.MAKERSUITE]: { settingKey: 'google_model', selector: '#google_model_id', extraSelectors: ['#model_google_select_fill', '#model_google_select'] },
+    [chat_completion_sources.VERTEXAI]: { settingKey: 'vertexai_model', selector: '#vertexai_model_id', extraSelectors: ['#model_vertexai_select_fill', '#model_vertexai_select'] },
     [chat_completion_sources.OPENROUTER]: { settingKey: 'openrouter_model', selector: '#model_openrouter_select' },
     [chat_completion_sources.AI21]: { settingKey: 'ai21_model', selector: '#model_ai21_select' },
-    [chat_completion_sources.MISTRALAI]: { settingKey: 'mistralai_model', selector: '#model_mistralai_select' },
+    [chat_completion_sources.MISTRALAI]: { settingKey: 'mistralai_model', selector: '#mistralai_model_id', extraSelectors: ['#model_mistralai_select_fill', '#model_mistralai_select'] },
     [chat_completion_sources.COHERE]: { settingKey: 'cohere_model', selector: '#model_cohere_select' },
     [chat_completion_sources.PERPLEXITY]: { settingKey: 'perplexity_model', selector: '#model_perplexity_select' },
     [chat_completion_sources.GROQ]: { settingKey: 'groq_model', selector: '#model_groq_select' },
@@ -2330,16 +2332,16 @@ const sourceModelBindings = {
     [chat_completion_sources.SILICONFLOW]: { settingKey: 'siliconflow_model', selector: '#model_siliconflow_select' },
     [chat_completion_sources.ELECTRONHUB]: { settingKey: 'electronhub_model', selector: '#model_electronhub_select' },
     [chat_completion_sources.NANOGPT]: { settingKey: 'nanogpt_model', selector: '#model_nanogpt_select' },
-    [chat_completion_sources.DEEPSEEK]: { settingKey: 'deepseek_model', selector: '#model_deepseek_select' },
+    [chat_completion_sources.DEEPSEEK]: { settingKey: 'deepseek_model', selector: '#deepseek_model_id', extraSelectors: ['#model_deepseek_select_fill', '#model_deepseek_select'] },
     [chat_completion_sources.AIMLAPI]: { settingKey: 'aimlapi_model', selector: '#model_aimlapi_select' },
     [chat_completion_sources.CUSTOM]: { settingKey: 'custom_model', selector: '#model_custom_select', extraSelectors: ['#model_custom_select_fill'] },
-    [chat_completion_sources.XAI]: { settingKey: 'xai_model', selector: '#model_xai_select' },
+    [chat_completion_sources.XAI]: { settingKey: 'xai_model', selector: '#xai_model_id', extraSelectors: ['#model_xai_select_fill', '#model_xai_select'] },
     [chat_completion_sources.POLLINATIONS]: { settingKey: 'pollinations_model', selector: '#model_pollinations_select' },
     [chat_completion_sources.COMETAPI]: { settingKey: 'cometapi_model', selector: '#model_cometapi_select' },
-    [chat_completion_sources.MOONSHOT]: { settingKey: 'moonshot_model', selector: '#model_moonshot_select' },
+    [chat_completion_sources.MOONSHOT]: { settingKey: 'moonshot_model', selector: '#moonshot_model_id', extraSelectors: ['#model_moonshot_select_fill', '#model_moonshot_select'] },
     [chat_completion_sources.FIREWORKS]: { settingKey: 'fireworks_model', selector: '#model_fireworks_select' },
     [chat_completion_sources.AZURE_OPENAI]: { settingKey: 'azure_openai_model', selector: '#azure_openai_model' },
-    [chat_completion_sources.ZAI]: { settingKey: 'zai_model', selector: '#model_zai_select' },
+    [chat_completion_sources.ZAI]: { settingKey: 'zai_model', selector: '#zai_model_id', extraSelectors: ['#model_zai_select_fill', '#model_zai_select'] },
 };
 
 function getModelBindingForSource(source = oai_settings.chat_completion_source) {
@@ -2560,8 +2562,126 @@ function getAimlapiModelTemplate(option) {
     `));
 }
 
-function saveModelList(data) {
-    model_list = mergeModelRecordsWithCustom(data, oai_settings.chat_completion_source);
+/**
+ * Reconcile a saved model id against a freshly fetched model list.
+ * - Non-empty saved id missing from the list: append it as a "(custom)" option
+ *   so the select keeps the user's chosen id intact.
+ * - Empty saved id: fall back to the first list entry.
+ * - Otherwise: leave the saved id intact.
+ *
+ * @param {string} selectSelector jQuery selector for the model `<select>`
+ * @param {Array<{id?: string}>} modelList Fetched models
+ * @param {string} savedModelId Currently saved model id
+ * @returns {string} The model id that should be applied to oai_settings + DOM
+ */
+function reconcileModelSelection(selectSelector, modelList, savedModelId) {
+    const safeList = Array.isArray(modelList) ? modelList : [];
+    if (safeList.length === 0) {
+        return savedModelId;
+    }
+    const id = String(savedModelId || '');
+    const matches = safeList.some(model => model?.id === id);
+    if (id && !matches) {
+        const $select = $(selectSelector);
+        if ($select.length && $select.find(`option[value="${CSS.escape(id)}"]`).length === 0) {
+            $select.append($('<option>', { value: id, text: `${id} (custom)` }));
+        }
+        return id;
+    }
+    if (!id) {
+        return safeList[0].id;
+    }
+    return id;
+}
+
+/**
+ * Keep the "Available Models" `<select>` and its sibling `<datalist>` mutually
+ * consistent for reverse-proxy capable sources.
+ *
+ * - On first call: mirror whatever side carries the HTML-declared baseline
+ *   into the other side (Claude declares it in the datalist; the rest declare
+ *   it in the select).
+ * - On every call: append fetched `modelList` entries to both sides if absent,
+ *   and reflect `savedModelId` on the select via `.val()` so it visually tracks
+ *   the source-of-truth text input.
+ *
+ * @param {{ selectSelector: string, datalistSelector: string, modelList?: Array<{id?: string}>, savedModelId?: string }} params
+ */
+function syncSourceModelInputs({ selectSelector, datalistSelector, modelList = [], savedModelId = '' }) {
+    const $select = $(selectSelector);
+    const $datalist = $(datalistSelector);
+    if (!$select.length || !$datalist.length) {
+        return;
+    }
+
+    // Drop stale dynamic entries from a previous fetch so changing base_url
+    // (or switching reverse proxies) doesn't accumulate model ids over time.
+    $select.find('option[data-dynamic="1"]').remove();
+    $datalist.find('option[data-dynamic="1"]').remove();
+
+    const datalistIds = new Set($datalist.find('option').map(function () { return String($(this).attr('value') || ''); }).get());
+    const selectIds = new Set($select.find('option').map(function () { return String($(this).attr('value') || ''); }).get());
+
+    // One-way mirror datalist → select if select is still empty (Claude shape).
+    if ($select.find('option').length === 0) {
+        for (const id of datalistIds) {
+            if (id) {
+                $select.append($('<option>', { value: id, text: id, 'data-mirror': '1' }));
+                selectIds.add(id);
+            }
+        }
+    }
+    // Mirror select baseline into datalist exactly once (other sources' shape).
+    if ($datalist.find('option[data-mirror="1"]').length === 0 && datalistIds.size === 0) {
+        for (const id of selectIds) {
+            if (id) {
+                $datalist.append($('<option>', { value: id, 'data-mirror': '1' }));
+                datalistIds.add(id);
+            }
+        }
+    }
+
+    // Append dynamically fetched models if absent on either side.
+    const safeList = Array.isArray(modelList) ? modelList : [];
+    for (const model of safeList) {
+        const id = String(model?.id || '').trim();
+        if (!id) continue;
+        if (!selectIds.has(id)) {
+            $select.append($('<option>', { value: id, text: id, 'data-dynamic': '1' }));
+            selectIds.add(id);
+        }
+        if (!datalistIds.has(id)) {
+            $datalist.append($('<option>', { value: id, 'data-dynamic': '1' }));
+            datalistIds.add(id);
+        }
+    }
+
+    // Reflect the saved id onto the picker so it tracks the text input.
+    const savedId = String(savedModelId || '');
+    if (savedId && $select.find(`option[value="${CSS.escape(savedId)}"]`).length > 0) {
+        $select.val(savedId);
+    } else {
+        $select.val('');
+    }
+}
+
+// All chat-completion sources where the model id is a free-form text input
+// backed by a sibling <select> picker + <datalist> for suggestions.
+// Used to register input/select handlers and to seed the picker on settings load.
+const INPUT_BASED_MODEL_BINDINGS = [
+    { input: '#openai_model_id', select: '#model_openai_select', datalist: '#model_openai_select_fill', key: 'openai_model' },
+    { input: '#claude_model_id', select: '#model_claude_select', datalist: '#model_claude_select_fill', key: 'claude_model' },
+    { input: '#google_model_id', select: '#model_google_select', datalist: '#model_google_select_fill', key: 'google_model' },
+    { input: '#vertexai_model_id', select: '#model_vertexai_select', datalist: '#model_vertexai_select_fill', key: 'vertexai_model' },
+    { input: '#mistralai_model_id', select: '#model_mistralai_select', datalist: '#model_mistralai_select_fill', key: 'mistralai_model' },
+    { input: '#deepseek_model_id', select: '#model_deepseek_select', datalist: '#model_deepseek_select_fill', key: 'deepseek_model' },
+    { input: '#xai_model_id', select: '#model_xai_select', datalist: '#model_xai_select_fill', key: 'xai_model' },
+    { input: '#moonshot_model_id', select: '#model_moonshot_select', datalist: '#model_moonshot_select_fill', key: 'moonshot_model' },
+    { input: '#zai_model_id', select: '#model_zai_select', datalist: '#model_zai_select_fill', key: 'zai_model' },
+    { input: '#custom_model_id', select: '#model_custom_select', datalist: '#model_custom_select_fill', key: 'custom_model' },
+];
+
+function saveModelList(data) {    model_list = mergeModelRecordsWithCustom(data, oai_settings.chat_completion_source);
     model_list.sort((a, b) => a?.id && b?.id && a.id.localeCompare(b.id));
 
     if (oai_settings.chat_completion_source == chat_completion_sources.OPENROUTER) {
@@ -2595,63 +2715,53 @@ function saveModelList(data) {
                     text: model.id,
                 }));
         });
-        // If the selected model is not in the list, revert to default
         if (oai_settings.show_external_models) {
-            const model = model_list.findIndex((model) => model.id == oai_settings.openai_model) !== -1 ? oai_settings.openai_model : default_settings.openai_model;
-            $('#model_openai_select').val(model).trigger('change');
+            syncSourceModelInputs({
+                selectSelector: '#model_openai_select',
+                datalistSelector: '#model_openai_select_fill',
+                modelList: model_list,
+                savedModelId: oai_settings.openai_model,
+            });
         }
     }
 
     if (oai_settings.chat_completion_source == chat_completion_sources.CLAUDE && model_list.length > 0) {
-        $('#model_claude_select').empty();
-        model_list.forEach((model) => {
-            $('#model_claude_select').append(
-                $('<option>', {
-                    value: model.id,
-                    text: model.id,
-                }));
+        syncSourceModelInputs({
+            selectSelector: '#model_claude_select',
+            datalistSelector: '#model_claude_select_fill',
+            modelList: model_list,
+            savedModelId: oai_settings.claude_model,
         });
 
-        const selectedModel = model_list.find(model => model.id === oai_settings.claude_model);
-        if (!selectedModel || !oai_settings.claude_model) {
+        if (!oai_settings.claude_model) {
             oai_settings.claude_model = model_list[0].id;
+            $('#claude_model_id').val(oai_settings.claude_model).trigger('input');
         }
-
-        $('#model_claude_select').val(oai_settings.claude_model).trigger('change');
     }
 
     if (oai_settings.chat_completion_source == chat_completion_sources.VERTEXAI && model_list.length > 0) {
-        $('#model_vertexai_select').empty();
-        model_list.forEach((model) => {
-            $('#model_vertexai_select').append(
-                $('<option>', {
-                    value: model.id,
-                    text: model.id,
-                }));
+        syncSourceModelInputs({
+            selectSelector: '#model_vertexai_select',
+            datalistSelector: '#model_vertexai_select_fill',
+            modelList: model_list,
+            savedModelId: oai_settings.vertexai_model,
         });
-
-        const selectedModel = model_list.find(model => model.id === oai_settings.vertexai_model);
-        if (!selectedModel || !oai_settings.vertexai_model) {
+        if (!oai_settings.vertexai_model) {
             oai_settings.vertexai_model = model_list[0].id;
+            $('#vertexai_model_id').val(oai_settings.vertexai_model).trigger('input');
         }
-
-        $('#model_vertexai_select').val(oai_settings.vertexai_model).trigger('change');
     }
 
     if (oai_settings.chat_completion_source == chat_completion_sources.CUSTOM) {
-        $('.model_custom_select').empty();
-        $('.model_custom_select').append('<option value="">None</option>');
-        model_list.forEach((model) => {
-            $('.model_custom_select').append(
-                $('<option>', {
-                    value: model.id,
-                    text: model.id,
-                    selected: model.id == oai_settings.custom_model,
-                }));
+        syncSourceModelInputs({
+            selectSelector: '#model_custom_select',
+            datalistSelector: '#model_custom_select_fill',
+            modelList: model_list,
+            savedModelId: oai_settings.custom_model,
         });
-
         if (!oai_settings.custom_model && model_list.length > 0) {
-            $('#model_custom_select').val(model_list[0].id).trigger('change');
+            oai_settings.custom_model = model_list[0].id;
+            $('#custom_model_id').val(oai_settings.custom_model).trigger('input');
         }
     }
 
@@ -2674,26 +2784,23 @@ function saveModelList(data) {
             });
         }
 
-        if (!oai_settings.aimlapi_model && model_list.length > 0) {
-            oai_settings.aimlapi_model = model_list[0].id;
-        }
+        oai_settings.aimlapi_model = reconcileModelSelection('#model_aimlapi_select', model_list, oai_settings.aimlapi_model);
 
         $('#model_aimlapi_select').val(oai_settings.aimlapi_model).trigger('change');
     }
 
     if (oai_settings.chat_completion_source == chat_completion_sources.MISTRALAI) {
-        $('#model_mistralai_select').empty();
-
-        for (const model of model_list.filter(model => model?.capabilities?.completion_chat)) {
-            $('#model_mistralai_select').append(new Option(model.id, model.id));
+        const completionList = model_list.filter(model => model?.capabilities?.completion_chat);
+        syncSourceModelInputs({
+            selectSelector: '#model_mistralai_select',
+            datalistSelector: '#model_mistralai_select_fill',
+            modelList: completionList,
+            savedModelId: oai_settings.mistralai_model,
+        });
+        if (!oai_settings.mistralai_model && completionList.length > 0) {
+            oai_settings.mistralai_model = completionList[0].id;
+            $('#mistralai_model_id').val(oai_settings.mistralai_model).trigger('input');
         }
-
-        const selectedModel = model_list.find(model => model.id === oai_settings.mistralai_model);
-        if (!selectedModel) {
-            oai_settings.mistralai_model = model_list.find(model => model?.capabilities?.completion_chat)?.id;
-        }
-
-        $('#model_mistralai_select').val(oai_settings.mistralai_model).trigger('change');
     }
 
     if (oai_settings.chat_completion_source == chat_completion_sources.ELECTRONHUB) {
@@ -2715,11 +2822,7 @@ function saveModelList(data) {
             });
         }
 
-        const selectedModel = model_list.find(model => model.id === oai_settings.electronhub_model);
-        if (model_list.length > 0 && (!selectedModel || !oai_settings.electronhub_model)) {
-            oai_settings.electronhub_model = model_list[0].id;
-        }
-
+        oai_settings.electronhub_model = reconcileModelSelection('#model_electronhub_select', model_list, oai_settings.electronhub_model);
         $('#model_electronhub_select').val(oai_settings.electronhub_model).trigger('change');
     }
 
@@ -2742,11 +2845,7 @@ function saveModelList(data) {
             });
         }
 
-        const selectedModel = model_list.find(model => model.id === oai_settings.chutes_model);
-        if (model_list.length > 0 && (!selectedModel || !oai_settings.chutes_model)) {
-            oai_settings.chutes_model = model_list[0].id;
-        }
-
+        oai_settings.chutes_model = reconcileModelSelection('#model_chutes_select', model_list, oai_settings.chutes_model);
         $('#model_chutes_select').val(oai_settings.chutes_model).trigger('change');
     }
 
@@ -2768,26 +2867,21 @@ function saveModelList(data) {
             });
         }
 
-        const selectedModel = model_list.find(model => model.id === oai_settings.nanogpt_model);
-        if (model_list.length > 0 && (!selectedModel || !oai_settings.nanogpt_model)) {
-            oai_settings.nanogpt_model = model_list[0].id;
-        }
-
+        oai_settings.nanogpt_model = reconcileModelSelection('#model_nanogpt_select', model_list, oai_settings.nanogpt_model);
         $('#model_nanogpt_select').val(oai_settings.nanogpt_model).trigger('change');
     }
 
     if (oai_settings.chat_completion_source == chat_completion_sources.DEEPSEEK) {
-        $('#model_deepseek_select').empty();
-        model_list.forEach((model) => {
-            $('#model_deepseek_select').append($('<option>', { value: model.id, text: model.id }));
+        syncSourceModelInputs({
+            selectSelector: '#model_deepseek_select',
+            datalistSelector: '#model_deepseek_select_fill',
+            modelList: model_list,
+            savedModelId: oai_settings.deepseek_model,
         });
-
-        const selectedModel = model_list.find(model => model.id === oai_settings.deepseek_model);
-        if (model_list.length > 0 && (!selectedModel || !oai_settings.deepseek_model)) {
+        if (!oai_settings.deepseek_model && model_list.length > 0) {
             oai_settings.deepseek_model = model_list[0].id;
+            $('#deepseek_model_id').val(oai_settings.deepseek_model).trigger('input');
         }
-
-        $('#model_deepseek_select').val(oai_settings.deepseek_model).trigger('change');
     }
 
     if (oai_settings.chat_completion_source === chat_completion_sources.POLLINATIONS) {
@@ -2796,11 +2890,7 @@ function saveModelList(data) {
             $('#model_pollinations_select').append($('<option>', { value: model.id, text: model.id }));
         });
 
-        const selectedModel = model_list.find(model => model.id === oai_settings.pollinations_model);
-        if (model_list.length > 0 && (!selectedModel || !oai_settings.pollinations_model)) {
-            oai_settings.pollinations_model = model_list[0].id;
-        }
-
+        oai_settings.pollinations_model = reconcileModelSelection('#model_pollinations_select', model_list, oai_settings.pollinations_model);
         $('#model_pollinations_select').val(oai_settings.pollinations_model).trigger('change');
     }
 
@@ -2833,12 +2923,16 @@ function saveModelList(data) {
             }
         });
 
-        const selectedModel = model_list.find(model => model.id === oai_settings.google_model);
-        if (model_list.length > 0 && (!selectedModel || !oai_settings.google_model)) {
+        syncSourceModelInputs({
+            selectSelector: '#model_google_select',
+            datalistSelector: '#model_google_select_fill',
+            modelList: model_list,
+            savedModelId: oai_settings.google_model,
+        });
+        if (!oai_settings.google_model && model_list.length > 0) {
             oai_settings.google_model = model_list[0].id;
+            $('#google_model_id').val(oai_settings.google_model).trigger('input');
         }
-
-        $('#model_google_select').val(oai_settings.google_model).trigger('change');
     }
 
     if (oai_settings.chat_completion_source === chat_completion_sources.GROQ) {
@@ -2851,11 +2945,7 @@ function saveModelList(data) {
                 }));
         });
 
-        const selectedModel = model_list.find(model => model.id === oai_settings.groq_model);
-        if (model_list.length > 0 && (!selectedModel || !oai_settings.groq_model)) {
-            oai_settings.groq_model = model_list[0].id;
-        }
-
+        oai_settings.groq_model = reconcileModelSelection('#model_groq_select', model_list, oai_settings.groq_model);
         $('#model_groq_select').val(oai_settings.groq_model).trigger('change');
     }
 
@@ -2869,11 +2959,7 @@ function saveModelList(data) {
                 }));
         });
 
-        const selectedModel = model_list.find(model => model.id === oai_settings.siliconflow_model);
-        if (model_list.length > 0 && (!selectedModel || !oai_settings.siliconflow_model)) {
-            oai_settings.siliconflow_model = model_list[0].id;
-        }
-
+        oai_settings.siliconflow_model = reconcileModelSelection('#model_siliconflow_select', model_list, oai_settings.siliconflow_model);
         $('#model_siliconflow_select').val(oai_settings.siliconflow_model).trigger('change');
     }
 
@@ -2890,11 +2976,7 @@ function saveModelList(data) {
                 }));
         });
 
-        const selectedModel = model_list.find(model => model.id === oai_settings.fireworks_model);
-        if (model_list.length > 0 && (!selectedModel || !oai_settings.fireworks_model)) {
-            oai_settings.fireworks_model = model_list[0].id;
-        }
-
+        oai_settings.fireworks_model = reconcileModelSelection('#model_fireworks_select', model_list, oai_settings.fireworks_model);
         $('#model_fireworks_select').val(oai_settings.fireworks_model).trigger('change');
     }
 
@@ -2908,11 +2990,7 @@ function saveModelList(data) {
                 }));
         });
 
-        const selectedModel = model_list.find(model => model.id === oai_settings.workers_ai_model);
-        if (model_list.length > 0 && (!selectedModel || !oai_settings.workers_ai_model)) {
-            oai_settings.workers_ai_model = model_list[0].id;
-        }
-
+        oai_settings.workers_ai_model = reconcileModelSelection('#model_workers_ai_select', model_list, oai_settings.workers_ai_model);
         $('#model_workers_ai_select').val(oai_settings.workers_ai_model).trigger('change');
     }
 
@@ -2930,9 +3008,9 @@ function saveModelList(data) {
             $('#model_cometapi_select').append(new Option(model.id, model.id));
         });
 
-        const selectedModel = model_list.find(model => model.id === oai_settings.cometapi_model);
-        if (model_list.length > 0 && (!selectedModel || !oai_settings.cometapi_model)) {
-            oai_settings.cometapi_model = model_list[0].id;
+        const reconciledCometApi = reconcileModelSelection('#model_cometapi_select', model_list, oai_settings.cometapi_model);
+        if (reconciledCometApi !== oai_settings.cometapi_model) {
+            oai_settings.cometapi_model = reconciledCometApi;
             saveSettingsDebounced();
         }
 
@@ -2950,35 +3028,29 @@ function saveModelList(data) {
     }
 
     if (oai_settings.chat_completion_source == chat_completion_sources.XAI) {
-        $('#model_xai_select').empty();
-        model_list.forEach((model) => {
-            $('#model_xai_select').append(
-                $('<option>', {
-                    value: model.id,
-                    text: model.id,
-                }));
+        syncSourceModelInputs({
+            selectSelector: '#model_xai_select',
+            datalistSelector: '#model_xai_select_fill',
+            modelList: model_list,
+            savedModelId: oai_settings.xai_model,
         });
-
-        const selectedModel = model_list.find(model => model.id === oai_settings.xai_model);
-        if (model_list.length > 0 && (!selectedModel || !oai_settings.xai_model)) {
+        if (!oai_settings.xai_model && model_list.length > 0) {
             oai_settings.xai_model = model_list[0].id;
+            $('#xai_model_id').val(oai_settings.xai_model).trigger('input');
         }
-
-        $('#model_xai_select').val(oai_settings.xai_model).trigger('change');
     }
 
     if (oai_settings.chat_completion_source == chat_completion_sources.MOONSHOT) {
-        $('#model_moonshot_select').empty();
-        model_list.forEach((model) => {
-            $('#model_moonshot_select').append(new Option(model.id, model.id));
+        syncSourceModelInputs({
+            selectSelector: '#model_moonshot_select',
+            datalistSelector: '#model_moonshot_select_fill',
+            modelList: model_list,
+            savedModelId: oai_settings.moonshot_model,
         });
-
-        const selectedModel = model_list.find(model => model.id === oai_settings.moonshot_model);
-        if (model_list.length > 0 && (!selectedModel || !oai_settings.moonshot_model)) {
+        if (!oai_settings.moonshot_model && model_list.length > 0) {
             oai_settings.moonshot_model = model_list[0].id;
+            $('#moonshot_model_id').val(oai_settings.moonshot_model).trigger('input');
         }
-
-        $('#model_moonshot_select').val(oai_settings.moonshot_model).trigger('change');
     }
 
     applyCustomModelsToCurrentSource({ triggerModelChange: true });
@@ -5488,6 +5560,17 @@ function loadOpenAISettings(data, settings) {
     setToolReasoningControls();
     ToolManager.RECURSE_LIMIT = oai_settings.tool_call_recurse_limit;
 
+    // Mirror the HTML-declared model options between each input-driven source's
+    // <select> and <datalist>, and reflect the saved id back to the picker.
+    for (const binding of INPUT_BASED_MODEL_BINDINGS) {
+        syncSourceModelInputs({
+            selectSelector: binding.select,
+            datalistSelector: binding.datalist,
+            modelList: [],
+            savedModelId: oai_settings[binding.key],
+        });
+    }
+
     $('#openrouter_providers_chat').trigger('change');
     $('#openrouter_quantizations_chat').trigger('change');
     $('#nanogpt_provider').trigger('change');
@@ -6091,7 +6174,6 @@ async function getStatusOpen() {
     }
 
     if (oai_settings.chat_completion_source === chat_completion_sources.CUSTOM) {
-        $('.model_custom_select').empty();
         data.custom_url = oai_settings.custom_url;
     }
 
@@ -7293,18 +7375,11 @@ async function onModelChange() {
     // Skip setting the context size for sources that get it from external APIs
     const hasModelsLoaded = Array.isArray(model_list) && model_list.length > 0;
 
-    if ($(this).is('#model_claude_select')) {
-        if (value === '') {
-            value = default_settings.claude_model;
-        }
-        console.log('Claude model changed to', value);
-        oai_settings.claude_model = value;
-        $('#model_claude_select').val(oai_settings.claude_model);
-    }
-
     if ($(this).is('#model_openai_select')) {
-        console.log('OpenAI model changed to', value);
-        oai_settings.openai_model = value;
+        console.log('OpenAI model picked from list:', value);
+        if (value) {
+            $('#openai_model_id').val(value).trigger('input');
+        }
     }
 
     if ($(this).is('#model_openrouter_select')) {
@@ -7334,13 +7409,17 @@ async function onModelChange() {
             return;
         }
 
-        console.log('Google model changed to', value);
-        oai_settings.google_model = value;
+        console.log('Google model picked from list:', value);
+        $('#google_model_id').val(value).trigger('input');
     }
 
     if ($(this).is('#model_vertexai_select')) {
-        console.log('Vertex AI model changed to', value);
-        oai_settings.vertexai_model = value;
+        if (!value) {
+            console.debug('Null Vertex AI model selected. Ignoring.');
+            return;
+        }
+        console.log('Vertex AI model picked from list:', value);
+        $('#vertexai_model_id').val(value).trigger('input');
     }
 
     if ($(this).is('#model_mistralai_select')) {
@@ -7348,9 +7427,8 @@ async function onModelChange() {
             console.debug('Null MistralAI model selected. Ignoring.');
             return;
         }
-        console.log('MistralAI model changed to', value);
-        oai_settings.mistralai_model = value;
-        $('#model_mistralai_select').val(oai_settings.mistralai_model);
+        console.log('MistralAI model picked from list:', value);
+        $('#mistralai_model_id').val(value).trigger('input');
     }
 
     if ($(this).is('#model_cohere_select')) {
@@ -7425,14 +7503,18 @@ async function onModelChange() {
             return;
         }
 
-        console.log('DeepSeek model changed to', value);
-        oai_settings.deepseek_model = value;
+        console.log('DeepSeek model picked from list:', value);
+        $('#deepseek_model_id').val(value).trigger('input');
     }
 
     if (value && $(this).is('#model_custom_select')) {
-        console.log('Custom model changed to', value);
-        oai_settings.custom_model = value;
+        console.log('Custom model picked from list:', value);
         $('#custom_model_id').val(value).trigger('input');
+    }
+
+    if (value && $(this).is('#model_claude_select')) {
+        console.log('Claude model picked from list:', value);
+        $('#claude_model_id').val(value).trigger('input');
     }
 
     if (value && $(this).is('#model_pollinations_select')) {
@@ -7454,8 +7536,8 @@ async function onModelChange() {
             console.debug('Null XAI model selected. Ignoring.');
             return;
         }
-        console.log('XAI model changed to', value);
-        oai_settings.xai_model = value;
+        console.log('XAI model picked from list:', value);
+        $('#xai_model_id').val(value).trigger('input');
     }
 
     if ($(this).is('#model_moonshot_select')) {
@@ -7463,8 +7545,8 @@ async function onModelChange() {
             console.debug('Null Moonshot model selected. Ignoring.');
             return;
         }
-        console.log('Moonshot model changed to', value);
-        oai_settings.moonshot_model = value;
+        console.log('Moonshot model picked from list:', value);
+        $('#moonshot_model_id').val(value).trigger('input');
     }
 
     if ($(this).is('#model_fireworks_select')) {
@@ -7494,8 +7576,12 @@ async function onModelChange() {
     }
 
     if ($(this).is('#model_zai_select')) {
-        console.log('ZAI model changed to', value);
-        oai_settings.zai_model = value;
+        if (!value) {
+            console.debug('Null ZAI model selected. Ignoring.');
+            return;
+        }
+        console.log('ZAI model picked from list:', value);
+        $('#zai_model_id').val(value).trigger('input');
     }
 
     if ($(this).is('#model_workers_ai_select')) {
@@ -7914,17 +8000,12 @@ async function onConnectButtonClick(e) {
 
 function toggleChatCompletionForms() {
     if (oai_settings.chat_completion_source == chat_completion_sources.CLAUDE) {
-        $('#model_claude_select').trigger('change');
+        // Claude model id is a free-form text input, no select to re-trigger.
     } else if (oai_settings.chat_completion_source == chat_completion_sources.OPENAI) {
-        if (oai_settings.show_external_models && (!Array.isArray(model_list) || model_list.length == 0)) {
-            // Wait until the models list is loaded so that we could show a proper saved model
-        } else {
-            $('#model_openai_select').trigger('change');
-        }
+        // OpenAI uses an input + datalist; the picker is not the source of truth.
     } else if (oai_settings.chat_completion_source == chat_completion_sources.MAKERSUITE) {
-        $('#model_google_select').trigger('change');
+        // input-driven, no trigger.
     } else if (oai_settings.chat_completion_source == chat_completion_sources.VERTEXAI) {
-        $('#model_vertexai_select').trigger('change');
         // Update UI based on authentication mode
         onVertexAIAuthModeChange.call($('#vertexai_auth_mode')[0]);
     } else if (oai_settings.chat_completion_source == chat_completion_sources.OPENROUTER) {
@@ -7932,7 +8013,7 @@ function toggleChatCompletionForms() {
     } else if (oai_settings.chat_completion_source == chat_completion_sources.AI21) {
         $('#model_ai21_select').trigger('change');
     } else if (oai_settings.chat_completion_source == chat_completion_sources.MISTRALAI) {
-        $('#model_mistralai_select').trigger('change');
+        // input-driven, no trigger.
     } else if (oai_settings.chat_completion_source == chat_completion_sources.COHERE) {
         $('#model_cohere_select').trigger('change');
     } else if (oai_settings.chat_completion_source == chat_completion_sources.PERPLEXITY) {
@@ -7950,17 +8031,17 @@ function toggleChatCompletionForms() {
     } else if (oai_settings.chat_completion_source == chat_completion_sources.NANOGPT) {
         $('#model_nanogpt_select').trigger('change');
     } else if (oai_settings.chat_completion_source == chat_completion_sources.CUSTOM) {
-        $('#model_custom_select').trigger('change');
+        // input-driven, no trigger.
     } else if (oai_settings.chat_completion_source == chat_completion_sources.DEEPSEEK) {
-        $('#model_deepseek_select').trigger('change');
+        // input-driven, no trigger.
     } else if (oai_settings.chat_completion_source == chat_completion_sources.AIMLAPI) {
         $('#model_aimlapi_select').trigger('change');
     } else if (oai_settings.chat_completion_source == chat_completion_sources.XAI) {
-        $('#model_xai_select').trigger('change');
+        // input-driven, no trigger.
     } else if (oai_settings.chat_completion_source == chat_completion_sources.POLLINATIONS) {
         $('#model_pollinations_select').trigger('change');
     } else if (oai_settings.chat_completion_source == chat_completion_sources.MOONSHOT) {
-        $('#model_moonshot_select').trigger('change');
+        // input-driven, no trigger.
     } else if (oai_settings.chat_completion_source == chat_completion_sources.FIREWORKS) {
         $('#model_fireworks_select').trigger('change');
     } else if (oai_settings.chat_completion_source == chat_completion_sources.COMETAPI) {
@@ -7968,7 +8049,7 @@ function toggleChatCompletionForms() {
     } else if (oai_settings.chat_completion_source == chat_completion_sources.AZURE_OPENAI) {
         $('#azure_openai_model').trigger('change');
     } else if (oai_settings.chat_completion_source == chat_completion_sources.ZAI) {
-        $('#model_zai_select').trigger('change');
+        // input-driven, no trigger.
     } else if (oai_settings.chat_completion_source == chat_completion_sources.WORKERS_AI) {
         $('#model_workers_ai_select').trigger('change');
     }
@@ -9223,11 +9304,6 @@ export function initOpenAI() {
         saveSettingsDebounced();
     });
 
-    $('#custom_model_id').on('input', function () {
-        oai_settings.custom_model = String($(this).val());
-        saveSettingsDebounced();
-    });
-
     $('#custom_prompt_post_processing').on('change', function () {
         oai_settings.custom_prompt_post_processing = String($(this).val());
         updateFeatureSupportFlags();
@@ -9456,10 +9532,24 @@ export function initOpenAI() {
 
     $('#api_button_openai').on('click', onConnectButtonClick);
     $('#openai_reverse_proxy').on('input', onReverseProxyInput);
-    $('#model_openai_select').on('change', onModelChange);
-    $('#model_claude_select').on('change', onModelChange);
-    $('#model_google_select').on('change', onModelChange);
-    $('#model_vertexai_select').on('change', onModelChange);
+
+    // Input-driven sources all share the same "input is source of truth, select
+    // is a picker that mirrors it" wiring (Claude/OpenAI/etc + Custom).
+    for (const { input, select, key } of INPUT_BASED_MODEL_BINDINGS) {
+        $(input).on('input', function () {
+            const value = String($(this).val() || '').trim();
+            oai_settings[key] = value;
+            const $picker = $(select);
+            if (value && $picker.find(`option[value="${CSS.escape(value)}"]`).length > 0) {
+                $picker.val(value);
+            } else {
+                $picker.val('');
+            }
+            saveSettingsDebounced();
+        });
+        $(select).on('change', onModelChange);
+    }
+
     $('#vertexai_auth_mode').on('change', onVertexAIAuthModeChange);
     $('#vertexai_region').on('input', function () {
         oai_settings.vertexai_region = String($(this).val());
@@ -9490,7 +9580,6 @@ export function initOpenAI() {
     $('#vertexai_clear_service_account').on('click', onVertexAIClearServiceAccount);
     $('#model_openrouter_select').on('change', onModelChange);
     $('#model_ai21_select').on('change', onModelChange);
-    $('#model_mistralai_select').on('change', onModelChange);
     $('#model_cohere_select').on('change', onModelChange);
     $('#model_perplexity_select').on('change', onModelChange);
     $('#model_groq_select').on('change', onModelChange);
@@ -9499,16 +9588,11 @@ export function initOpenAI() {
     $('#model_minimax_select').on('change', onModelChange);
     $('#model_electronhub_select').on('change', onModelChange);
     $('#model_nanogpt_select').on('change', onModelChange);
-    $('#model_deepseek_select').on('change', onModelChange);
     $('#model_aimlapi_select').on('change', onModelChange);
-    $('#model_custom_select').on('change', onModelChange);
-    $('#model_xai_select').on('change', onModelChange);
     $('#model_pollinations_select').on('change', onModelChange);
     $('#model_cometapi_select').on('change', onModelChange);
-    $('#model_moonshot_select').on('change', onModelChange);
     $('#model_fireworks_select').on('change', onModelChange);
     $('#azure_openai_model').on('change', onModelChange);
-    $('#model_zai_select').on('change', onModelChange);
     $('#model_workers_ai_select').on('change', onModelChange);
     $('#settings_preset_openai').on('change', onSettingsPresetChange);
     $('#new_oai_preset').on('click', onNewPresetClick);

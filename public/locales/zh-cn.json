@@ -528,6 +528,7 @@
     "Enter a Model ID": "输入模型名",
     "Example: gpt-4o": "例如：gpt-4o",
     "Available Models": "可用模型",
+    "-- Select a model --": "—— 选择一个模型 ——",
     "xAI API Key": "xAI API 密钥",
     "xAI Model": "xAI 模型",
     "AI/ML API Key": "AI/ML API 密钥",
