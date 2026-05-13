@@ -75,6 +75,40 @@ Spec 是編排器的預設模式,也是其他模式的「基準」。它把工�
 | 換電腦用 | 見[概覽 → 匯入匯出](/zh-TW/features/orchestrator/#匯入匯出) |
 | 全部重置 | 編排編輯器有 **重置全域** 按鈕 |
 
+## Trace 面板
+
+主回覆出來後在編排器面板點 **查看運行態軌跡**,Spec 的 trace 彈窗會按幾塊鋪出整次 run——頂部元資訊 + 流程圖、執行時間線、流程事件、對話與原始資料。
+
+### 面板概覽 + 流程圖
+
+頂部狀態摘要裡 Spec 模式相關的幾項:**節點執行次數**(所有 worker 跑了多少次)、**REVIEW 重跑次數**(審查節點驅動的重跑次數,預設上限 2 次,可在設定參考裡調到 0 關閉或 20 上限)。
+
+緊跟在下面的「流程圖」視覺化整條 DAG:每個 stage 是一個色塊,內部按節點 id 排出 worker 卡片。點擊某張卡片可以在右側「執行時間線」裡跳到對應 worker 的詳情。
+
+![Spec trace 面板:元資訊 + 流程圖 + 執行時間線右側展示 worker 詳情](/images/orchestrator/real-spec-meta.png)
+
+### 執行時間線
+
+「執行時間線」是右側詳情面板,展示選中 worker 的完整輸出。Spec 節點的輸出形態由節點的 prompt 模板決定——此例裡 distiller 節點輸出了一段 `summary` + 一段 `xml_guidance`(帶 `<story_state>` / `<location>` / `<key_items>` 這類 XML 標籤),後續 stage 可以解析它取出結構化欄位。
+
+![Spec 執行時間線:展開 worker 詳情查看 summary 與 xml_guidance](/images/orchestrator/real-spec-timeline.png)
+
+### 流程事件
+
+「流程事件」按時間序號鋪出整條 DAG 的執行節奏:`Run started` → 每個 stage 的 `stage_started` → 各 worker 的 `worker_started` / `worker_completed`(同 stage 內並行的 worker 時間戳會很接近)→ `stage_completed` → 下一個 stage,最後 `Run completed`。
+
+![Spec 流程事件:stage_started → worker_started/completed → stage_completed,串行展開整條 DAG](/images/orchestrator/real-spec-events.png)
+
+如果某個 stage 觸發了審查重跑,事件流裡會看到該 worker 多次 `worker_started` / `worker_completed`——拿這個數和頂部 **REVIEW 重跑次數** 對一下就知道審查節點駁回了幾次。
+
+### 原始軌跡
+
+面板最底下「最新注入文本」是最後一個 stage 的輸出——也就是注入主模型的 capsule。再往下「原始運行態軌跡」是整次 run 的 JSON 形態,頂層欄位包含 `runId`、`chatKey`、`generationType`、`capsuleText` 等。
+
+![Spec 原始軌跡 JSON 與最新注入文本](/images/orchestrator/real-spec-rawtrace.png)
+
+報 bug 時點「匯出本次 run」會下載這份 JSON 的 jsonl 形式,直接附給開發者。
+
 ## Spec 設定參考
 
 <details>
