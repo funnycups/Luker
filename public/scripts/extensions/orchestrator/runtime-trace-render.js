@@ -31,6 +31,7 @@ import { renderIterationLineDiffHtml } from './line-diff.js';
 import { toReadableYamlText } from './output-formatting.js';
 import {
     getLatestOrchestrationRuntimeTrace,
+    sanitizeOrchestrationRuntimeConversation,
     truncateOrchestrationRuntimePreview,
 } from './runtime-trace.js';
 
@@ -516,7 +517,12 @@ function renderAgendaModePanelsHtml(trace) {
 }
 
 function renderLoopModePanelHtml(trace) {
-    const conversation = trace?.loop?.conversation;
+    // `trace.loop.conversation` is a live alias of the loop runtime's running
+    // messages array (see attachOrchestrationRuntimeLoopConversation). Sanitize
+    // here at render time so assistant tool_calls in raw OpenAI shape
+    // (`function.name` / `function.arguments`) get flattened into the
+    // `{ name, args }` shape the renderer expects.
+    const conversation = sanitizeOrchestrationRuntimeConversation(trace?.loop?.conversation);
     return `
 <div class="luker-studio-panel">
     <div class="luker-studio-panel-title">${escapeHtml(i18n('Agent Conversation'))}</div>

@@ -419,13 +419,19 @@ function sanitizeOrchestrationRuntimeToolCall(call) {
  * does not produce node attempts (single agent, no stages/nodes), so the
  * full message history lives directly under `trace.loop.conversation`.
  *
- * Idempotent — calling repeatedly overwrites the previous payload, which
- * is what we want for live updates as the loop progresses.
+ * **Live-alias semantics**: this stores the caller's `conversation` object
+ * by reference, not a sanitized snapshot. Loop-runtime calls this once
+ * before the round loop with a reference to the running `messages` array,
+ * and the popup picks up later rounds because both sides point at the same
+ * array. Sanitization happens at render time (see
+ * `renderLoopModePanelHtml`) so we don't pay an O(N) clone per round on
+ * long loops.
+ *
+ * Idempotent — calling repeatedly replaces the previous reference.
  */
 export function attachOrchestrationRuntimeLoopConversation(trace, conversation) {
     if (!trace || typeof trace !== 'object') return;
-    const sanitized = sanitizeOrchestrationRuntimeConversation(conversation);
-    if (!sanitized) {
+    if (!conversation || typeof conversation !== 'object' || !Array.isArray(conversation.messages)) {
         if (trace.loop && typeof trace.loop === 'object') {
             delete trace.loop.conversation;
         }
@@ -434,5 +440,5 @@ export function attachOrchestrationRuntimeLoopConversation(trace, conversation) 
     if (!trace.loop || typeof trace.loop !== 'object') {
         trace.loop = {};
     }
-    trace.loop.conversation = sanitized;
+    trace.loop.conversation = conversation;
 }
