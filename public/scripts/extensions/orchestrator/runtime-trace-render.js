@@ -59,6 +59,111 @@ function formatReadableTimestamp(value) {
     }
 }
 
+/**
+ * Translate a tool-call args / tool-result blob into a human-readable
+ * pre-formatted block. JSON-shaped objects use the readable YAML helper
+ * so deeply nested args (which is most of them) render legibly; strings
+ * pass through unchanged.
+ */
+function renderTraceJsonBlock(value) {
+    if (value === null || value === undefined) {
+        return `<pre class="luker-studio-attempt-pre">${escapeHtml('(empty)')}</pre>`;
+    }
+    if (typeof value === 'string') {
+        // tool result content is serialized JSON — pretty-print if it
+        // parses, otherwise show as-is.
+        const trimmed = value.trim();
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            try {
+                const parsed = JSON.parse(trimmed);
+                return `<pre class="luker-studio-attempt-pre">${escapeHtml(toReadableYamlText(parsed, '{}'))}</pre>`;
+            } catch {
+                // Fall through.
+            }
+        }
+        return `<pre class="luker-studio-attempt-pre">${escapeHtml(value)}</pre>`;
+    }
+    return `<pre class="luker-studio-attempt-pre">${escapeHtml(toReadableYamlText(value, '{}'))}</pre>`;
+}
+
+function formatTraceRoleLabel(role) {
+    switch (String(role || '').trim().toLowerCase()) {
+        case 'system': return i18n('System');
+        case 'user': return i18n('User');
+        case 'assistant': return i18n('Assistant');
+        case 'tool': return i18n('Tool Result');
+        default: return String(role || 'message');
+    }
+}
+
+function renderTraceMessageHtml(message) {
+    const role = String(message?.role || '').trim().toLowerCase();
+    const roleLabel = formatTraceRoleLabel(role);
+    const roundBadge = Number.isFinite(Number(message?._round))
+        ? `<span class="luker-studio-convo-round">${escapeHtml(i18nFormat('round ${0}', Number(message._round)))}</span>`
+        : '';
+
+    const headerParts = [
+        `<span class="luker-studio-convo-role luker-studio-convo-role-${escapeHtml(role || 'message')}">${escapeHtml(roleLabel)}</span>`,
+        message?.name ? `<span class="luker-studio-convo-name">${escapeHtml(String(message.name))}</span>` : '',
+        roundBadge,
+    ].filter(Boolean).join(' ');
+
+    if (role === 'tool') {
+        // Tool result message — show name + content, collapsed by default.
+        return `
+<details class="luker-studio-convo-msg luker-studio-convo-msg-tool">
+    <summary>${headerParts}</summary>
+    ${renderTraceJsonBlock(message?.content || '')}
+</details>`;
+    }
+
+    const toolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
+    const hasToolCalls = toolCalls.length > 0;
+    const contentText = String(message?.content || '').trim();
+
+    if (!hasToolCalls && !contentText) {
+        return `
+<div class="luker-studio-convo-msg luker-studio-convo-msg-${escapeHtml(role || 'message')}">
+    <div class="luker-studio-convo-head">${headerParts}</div>
+    <div class="luker-studio-convo-empty">${escapeHtml(i18n('(empty)'))}</div>
+</div>`;
+    }
+
+    const toolCallsHtml = hasToolCalls
+        ? `<div class="luker-studio-convo-toolcalls">${toolCalls.map((call) => {
+            const callName = String(call?.name || '');
+            return `
+<details class="luker-studio-convo-toolcall">
+    <summary><span class="luker-studio-convo-toolname">${escapeHtml(callName || 'tool_call')}</span>${call?.id ? `<span class="luker-studio-convo-callid">#${escapeHtml(String(call.id))}</span>` : ''}</summary>
+    ${renderTraceJsonBlock(call?.args ?? {})}
+</details>`;
+        }).join('')}</div>`
+        : '';
+
+    return `
+<div class="luker-studio-convo-msg luker-studio-convo-msg-${escapeHtml(role || 'message')}">
+    <div class="luker-studio-convo-head">${headerParts}</div>
+    ${contentText ? `<pre class="luker-studio-attempt-pre">${escapeHtml(contentText)}</pre>` : ''}
+    ${toolCallsHtml}
+</div>`;
+}
+
+/**
+ * Render a `{ messages: [...] }` conversation envelope as a scrollable
+ * sequence of role-styled message blocks. Tool-calls and tool results
+ * each get their own collapsible block so the conversation stays
+ * readable even when the agent did dozens of rounds.
+ *
+ * Returns an empty string for null / empty conversations so callers can
+ * conditionally wrap the result.
+ */
+function renderTraceConversationHtml(conversation) {
+    const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
+    if (messages.length === 0) return '';
+    return `<div class="luker-studio-convo">${messages.map(renderTraceMessageHtml).join('')}</div>`;
+}
+
 export function renderLastOrchestrationResultHtml(entry) {
     if (!entry || typeof entry !== 'object') {
         return `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No recent orchestration result available for this chat.'))}</div>`;
@@ -233,6 +338,12 @@ function renderOrchestrationRuntimeAttemptHtml(attempt, previousOutputText = '',
             </div>
         </div>` : ''}
     ${outputText ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Output'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(outputText)}</pre>` : ''}
+    ${Array.isArray(attempt?.conversation?.messages) && attempt.conversation.messages.length > 0
+        ? `<details class="luker-studio-attempt-convo">
+            <summary>${escapeHtml(i18n('Conversation'))} <span class="luker-studio-convo-count">(${escapeHtml(String(attempt.conversation.messages.length))})</span></summary>
+            ${renderTraceConversationHtml(attempt.conversation)}
+        </details>`
+        : ''}
 </details>`;
 }
 
@@ -255,6 +366,166 @@ function renderOrchestrationRuntimeTraceAttemptsHtml(trace) {
     }).join('')}</div>`;
 }
 
+function formatAgendaTodoStatusLabel(status) {
+    switch (String(status || '').trim().toLowerCase()) {
+        case 'todo': return i18n('todo');
+        case 'doing': return i18n('doing');
+        case 'done': return i18n('done');
+        case 'blocked': return i18n('blocked');
+        case 'dropped': return i18n('dropped');
+        default: return i18n('todo');
+    }
+}
+
+const AGENDA_TODO_BOARD_COLUMNS = ['todo', 'doing', 'done', 'blocked', 'dropped'];
+
+function renderAgendaTodoBoardHtml(agenda) {
+    const todos = Array.isArray(agenda?.todos) ? agenda.todos : [];
+    if (todos.length === 0) {
+        return `<div class="luker-studio-empty-hint">${escapeHtml(i18n('Todo board is empty.'))}</div>`;
+    }
+    const byStatus = new Map();
+    for (const col of AGENDA_TODO_BOARD_COLUMNS) byStatus.set(col, []);
+    for (const todo of todos) {
+        const status = String(todo?.status || 'todo').trim().toLowerCase();
+        const bucket = byStatus.has(status) ? status : 'todo';
+        byStatus.get(bucket).push(todo);
+    }
+    return `<div class="luker-studio-kanban">${AGENDA_TODO_BOARD_COLUMNS.map((col) => {
+        const items = byStatus.get(col) || [];
+        return `
+<div class="luker-studio-kanban-col luker-studio-kanban-col-${escapeHtml(col)}">
+    <div class="luker-studio-kanban-head">
+        <span class="luker-studio-kanban-title">${escapeHtml(formatAgendaTodoStatusLabel(col))}</span>
+        <span class="luker-studio-kanban-count">${escapeHtml(String(items.length))}</span>
+    </div>
+    <div class="luker-studio-kanban-cards">${items.map(item => `
+        <div class="luker-studio-kanban-card">
+            <div class="luker-studio-kanban-card-id">${escapeHtml(String(item?.id || ''))}</div>
+            <div class="luker-studio-kanban-card-goal">${escapeHtml(String(item?.goal || ''))}</div>
+        </div>`).join('') || `<div class="luker-studio-empty-hint">${escapeHtml(i18n('(none)'))}</div>`}</div>
+</div>`;
+    }).join('')}</div>`;
+}
+
+/**
+ * Group attempts into agenda-mode "rounds". Each planner attempt anchors
+ * a round; the matching `agenda_agents_round_N` worker attempts hang off
+ * the same round number. The single `agenda_finalize` attempt is its own
+ * trailing round so the visual mirrors the runtime semantics.
+ */
+function groupAgendaAttemptsByRound(trace) {
+    const attempts = Array.isArray(trace?.attempts) ? trace.attempts : [];
+    const rounds = new Map();
+    let finalAttempt = null;
+    for (const attempt of attempts) {
+        const stageId = String(attempt?.stageId || '');
+        if (stageId === 'agenda_finalize') {
+            finalAttempt = attempt;
+            continue;
+        }
+        const plannerMatch = /^agenda_planner_round_(\d+)$/.exec(stageId);
+        const agentMatch = /^agenda_agents_round_(\d+)$/.exec(stageId);
+        const roundNum = plannerMatch
+            ? Number(plannerMatch[1])
+            : (agentMatch ? Number(agentMatch[1]) : Number(attempt?.stageIndex || 0) + 1);
+        if (!rounds.has(roundNum)) rounds.set(roundNum, { planner: null, agents: [] });
+        if (plannerMatch || attempt?.runKind === 'planner') {
+            rounds.get(roundNum).planner = attempt;
+        } else {
+            rounds.get(roundNum).agents.push(attempt);
+        }
+    }
+    return {
+        rounds: [...rounds.entries()].sort((a, b) => a[0] - b[0]),
+        finalAttempt,
+    };
+}
+
+function renderAgendaAttemptCardHtml(attempt, kind) {
+    if (!attempt) return '';
+    const statusKey = String(attempt?.status || 'idle').trim().toLowerCase() || 'idle';
+    const statusLabel = formatOrchestrationRuntimeStatusLabel(attempt?.status || '');
+    const outputText = String(attempt?.outputText || '');
+    const previewText = truncateOrchestrationRuntimePreview(outputText, 240);
+    const hasConversation = Array.isArray(attempt?.conversation?.messages) && attempt.conversation.messages.length > 0;
+    return `
+<details class="luker-studio-agenda-attempt luker-studio-agenda-attempt-${escapeHtml(kind)}"${statusKey === 'failed' || statusKey === 'running' ? ' open' : ''}>
+    <summary>
+        <span class="luker-studio-agenda-attempt-title">${escapeHtml(String(attempt?.nodeId || kind))}</span>
+        <span class="luker-studio-badge luker-studio-badge-${escapeHtml(statusKey)}">${escapeHtml(statusLabel)}</span>
+    </summary>
+    ${attempt?.error ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Failed'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(String(attempt.error || ''))}</pre>` : ''}
+    ${previewText ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Output'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(outputText)}</pre>` : ''}
+    ${hasConversation ? `<details class="luker-studio-attempt-convo">
+        <summary>${escapeHtml(i18n('Conversation'))} <span class="luker-studio-convo-count">(${escapeHtml(String(attempt.conversation.messages.length))})</span></summary>
+        ${renderTraceConversationHtml(attempt.conversation)}
+    </details>` : ''}
+</details>`;
+}
+
+function renderAgendaRoundsHtml(trace) {
+    const { rounds, finalAttempt } = groupAgendaAttemptsByRound(trace);
+    if (rounds.length === 0 && !finalAttempt) {
+        return `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No planner rounds recorded.'))}</div>`;
+    }
+    const roundsHtml = rounds.map(([roundNum, bundle]) => {
+        const plannerCard = bundle.planner
+            ? renderAgendaAttemptCardHtml(bundle.planner, 'planner')
+            : `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No planner step recorded.'))}</div>`;
+        const agentsHtml = bundle.agents.length === 0
+            ? `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No agents dispatched this round.'))}</div>`
+            : bundle.agents.map(a => renderAgendaAttemptCardHtml(a, 'agent')).join('');
+        return `
+<div class="luker-studio-agenda-round">
+    <div class="luker-studio-agenda-round-head">
+        <span class="luker-studio-agenda-round-title">${escapeHtml(i18nFormat('Round ${0}', roundNum))}</span>
+    </div>
+    <div class="luker-studio-agenda-round-body">
+        <div class="luker-studio-agenda-round-planner">
+            <div class="luker-studio-panel-title">${escapeHtml(i18n('Planner Step'))}</div>
+            ${plannerCard}
+        </div>
+        <div class="luker-studio-agenda-round-agents">
+            <div class="luker-studio-panel-title">${escapeHtml(i18n('Dispatched Agents'))}</div>
+            ${agentsHtml}
+        </div>
+    </div>
+</div>`;
+    }).join('');
+    const finalHtml = finalAttempt
+        ? `<div class="luker-studio-agenda-final">
+            <div class="luker-studio-panel-title">${escapeHtml(i18n('Final Agent'))}</div>
+            ${renderAgendaAttemptCardHtml(finalAttempt, 'final')}
+        </div>`
+        : '';
+    return `<div class="luker-studio-agenda-rounds">${roundsHtml}${finalHtml}</div>`;
+}
+
+function renderAgendaModePanelsHtml(trace) {
+    const agenda = trace?.agenda && typeof trace.agenda === 'object' ? trace.agenda : null;
+    return `
+<div class="luker-studio-panel">
+    <div class="luker-studio-panel-title">${escapeHtml(i18n('Todo Board'))}</div>
+    ${renderAgendaTodoBoardHtml(agenda)}
+</div>
+<div class="luker-studio-panel">
+    <div class="luker-studio-panel-title">${escapeHtml(i18n('Planner Rounds'))}</div>
+    ${renderAgendaRoundsHtml(trace)}
+</div>`;
+}
+
+function renderLoopModePanelHtml(trace) {
+    const conversation = trace?.loop?.conversation;
+    return `
+<div class="luker-studio-panel">
+    <div class="luker-studio-panel-title">${escapeHtml(i18n('Agent Conversation'))}</div>
+    ${Array.isArray(conversation?.messages) && conversation.messages.length > 0
+        ? renderTraceConversationHtml(conversation)
+        : `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No agent messages recorded yet.'))}</div>`}
+</div>`;
+}
+
 export function renderOrchestrationRuntimeTraceHtml(context) {
     const trace = getLatestOrchestrationRuntimeTrace(context);
     if (!trace || typeof trace !== 'object') {
@@ -267,29 +538,48 @@ export function renderOrchestrationRuntimeTraceHtml(context) {
         String(trace.note || ''),
     ].filter(Boolean);
 
+    const mode = String(trace?.mode || '').trim().toLowerCase();
+    const isLoopMode = mode === 'loop';
+    const isAgendaMode = mode === 'agenda' || (trace?.agenda && typeof trace.agenda === 'object');
+
+    let modeSpecificHtml;
+    if (isLoopMode) {
+        modeSpecificHtml = renderLoopModePanelHtml(trace);
+    } else if (isAgendaMode) {
+        modeSpecificHtml = renderAgendaModePanelsHtml(trace);
+    } else {
+        modeSpecificHtml = `
+<div class="luker-studio-columns">
+    <div class="luker-studio-panel">
+        <div class="luker-studio-panel-title">${escapeHtml(i18n('Flow Graph'))}</div>
+        <div class="luker-studio-flow">${renderOrchestrationRuntimeTraceGraphHtml(trace)}</div>
+        <div class="luker-studio-panel-title">${escapeHtml(i18n('Flow Events'))}</div>
+        ${renderOrchestrationRuntimeTraceEventsHtml(trace)}
+    </div>
+    <div class="luker-studio-panel">
+        <div class="luker-studio-panel-title">${escapeHtml(i18n('Execution Timeline'))}</div>
+        ${renderOrchestrationRuntimeTraceAttemptsHtml(trace)}
+    </div>
+</div>`;
+    }
+
     return `
 <div class="luker-studio luker_orch_runtime_popup">
     <div class="luker-studio-notice">${notices.map(item => escapeHtml(String(item || ''))).join('<br />')}</div>
     <div class="luker-studio-meta-grid">
         <div class="luker-studio-meta-card"><b>${escapeHtml(i18n('Status'))}</b><span>${escapeHtml(formatOrchestrationRuntimeStatusLabel(trace.status))}</span></div>
+        <div class="luker-studio-meta-card"><b>${escapeHtml(i18n('Mode'))}</b><span>${escapeHtml(mode || 'spec')}</span></div>
         <div class="luker-studio-meta-card"><b>${escapeHtml(i18n('Generation Type'))}</b><span>${escapeHtml(String(trace.generationType || 'normal'))}</span></div>
         <div class="luker-studio-meta-card"><b>${escapeHtml(i18n('Target Layer'))}</b><span>${escapeHtml(String(trace.targetLayer || 0))}</span></div>
         <div class="luker-studio-meta-card"><b>${escapeHtml(i18n('Node Attempts'))}</b><span>${escapeHtml(String(Array.isArray(trace.attempts) ? trace.attempts.length : 0))}</span></div>
         <div class="luker-studio-meta-card"><b>${escapeHtml(i18n('Review Reruns'))}</b><span>${escapeHtml(String(trace.reviewRerunCount || 0))}</span></div>
         <div class="luker-studio-meta-card"><b>${escapeHtml(i18n('Updated At'))}</b><span>${escapeHtml(formatReadableTimestamp(trace.updatedAt))}</span></div>
     </div>
-    <div class="luker-studio-columns">
-        <div class="luker-studio-panel">
-            <div class="luker-studio-panel-title">${escapeHtml(i18n('Flow Graph'))}</div>
-            <div class="luker-studio-flow">${renderOrchestrationRuntimeTraceGraphHtml(trace)}</div>
-            <div class="luker-studio-panel-title">${escapeHtml(i18n('Flow Events'))}</div>
-            ${renderOrchestrationRuntimeTraceEventsHtml(trace)}
-        </div>
-        <div class="luker-studio-panel">
-            <div class="luker-studio-panel-title">${escapeHtml(i18n('Execution Timeline'))}</div>
-            ${renderOrchestrationRuntimeTraceAttemptsHtml(trace)}
-        </div>
-    </div>
+    ${modeSpecificHtml}
+    ${!isLoopMode && !isAgendaMode ? '' : `<details class="luker-studio-raw">
+        <summary>${escapeHtml(i18n('Flow Events'))}</summary>
+        ${renderOrchestrationRuntimeTraceEventsHtml(trace)}
+    </details>`}
     ${String(trace?.capsuleText || '').trim() ? `
         <details class="luker-studio-raw">
             <summary>${escapeHtml(i18n('Latest capsule text'))}</summary>

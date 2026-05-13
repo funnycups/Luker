@@ -1886,6 +1886,301 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   27b. CONVERSATION (per-attempt + loop trace conversation panels)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.popup .luker-studio-attempt-convo {
+    margin-top: var(--ls-space-sm);
+}
+
+.popup .luker-studio-attempt-convo > summary {
+    cursor: pointer;
+    font-weight: 600;
+    padding: 4px 0;
+}
+
+.popup .luker-studio-convo-count {
+    opacity: var(--ls-muted);
+    font-weight: normal;
+    font-size: 0.85em;
+    margin-left: 4px;
+}
+
+.popup .luker-studio-convo {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+    padding-left: 8px;
+    border-left: 2px solid color-mix(in oklab, var(--SmartThemeBodyColor) 12%, transparent);
+}
+
+.popup .luker-studio-convo-msg {
+    border: 1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 12%, transparent);
+    border-radius: 8px;
+    padding: 6px 8px;
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 4%, transparent);
+}
+
+.popup .luker-studio-convo-msg-system {
+    background: color-mix(in oklab, #6b7280 9%, transparent);
+    border-color: color-mix(in oklab, #6b7280 22%, transparent);
+}
+
+.popup .luker-studio-convo-msg-user {
+    background: color-mix(in oklab, #38bdf8 8%, transparent);
+    border-color: color-mix(in oklab, #38bdf8 22%, transparent);
+}
+
+.popup .luker-studio-convo-msg-assistant {
+    background: color-mix(in oklab, #a78bfa 8%, transparent);
+    border-color: color-mix(in oklab, #a78bfa 22%, transparent);
+}
+
+.popup .luker-studio-convo-msg-tool {
+    background: color-mix(in oklab, #f59e0b 7%, transparent);
+    border-color: color-mix(in oklab, #f59e0b 22%, transparent);
+}
+
+.popup .luker-studio-convo-msg-tool > summary {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.popup .luker-studio-convo-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 4px;
+}
+
+.popup .luker-studio-convo-role {
+    font-weight: 700;
+    font-size: 0.82rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 14%, transparent);
+}
+
+.popup .luker-studio-convo-role-system {
+    background: color-mix(in oklab, #6b7280 30%, transparent);
+}
+
+.popup .luker-studio-convo-role-user {
+    background: color-mix(in oklab, #0ea5e9 28%, transparent);
+}
+
+.popup .luker-studio-convo-role-assistant {
+    background: color-mix(in oklab, #8b5cf6 28%, transparent);
+}
+
+.popup .luker-studio-convo-role-tool {
+    background: color-mix(in oklab, #f59e0b 28%, transparent);
+}
+
+.popup .luker-studio-convo-name {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.82rem;
+    opacity: 0.85;
+}
+
+.popup .luker-studio-convo-round {
+    opacity: var(--ls-muted);
+    font-size: 0.78rem;
+    margin-left: auto;
+}
+
+.popup .luker-studio-convo-empty {
+    opacity: var(--ls-muted);
+    font-style: italic;
+    font-size: 0.85rem;
+}
+
+.popup .luker-studio-convo-toolcalls {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 6px;
+}
+
+.popup .luker-studio-convo-toolcall {
+    border: 1px dashed color-mix(in oklab, var(--SmartThemeBodyColor) 18%, transparent);
+    border-radius: 6px;
+    padding: 4px 6px;
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 3%, transparent);
+}
+
+.popup .luker-studio-convo-toolcall > summary {
+    cursor: pointer;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.popup .luker-studio-convo-toolname {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+
+.popup .luker-studio-convo-callid {
+    opacity: var(--ls-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   27c. AGENDA-MODE PANELS (todo kanban + per-round dispatch cards)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.popup .luker-studio-kanban {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: var(--ls-space-sm);
+}
+
+.popup .luker-studio-kanban-col {
+    border: var(--ls-card-border);
+    border-radius: 8px;
+    background: var(--ls-card-bg);
+    padding: var(--ls-space-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.popup .luker-studio-kanban-col-todo { border-top: 3px solid #6b7280; }
+.popup .luker-studio-kanban-col-doing { border-top: 3px solid #f59e0b; }
+.popup .luker-studio-kanban-col-done { border-top: 3px solid #22c55e; }
+.popup .luker-studio-kanban-col-blocked { border-top: 3px solid #ef4444; }
+.popup .luker-studio-kanban-col-dropped { border-top: 3px solid #94a3b8; opacity: 0.7; }
+
+.popup .luker-studio-kanban-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.85rem;
+}
+
+.popup .luker-studio-kanban-title {
+    font-weight: 700;
+    text-transform: lowercase;
+}
+
+.popup .luker-studio-kanban-count {
+    opacity: var(--ls-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.8rem;
+}
+
+.popup .luker-studio-kanban-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.popup .luker-studio-kanban-card {
+    border-radius: 6px;
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 8%, transparent);
+    padding: 6px 8px;
+    font-size: 0.85rem;
+}
+
+.popup .luker-studio-kanban-card-id {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+    opacity: var(--ls-muted);
+}
+
+.popup .luker-studio-kanban-card-goal {
+    word-break: break-word;
+}
+
+.popup .luker-studio-agenda-rounds {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ls-space-md);
+}
+
+.popup .luker-studio-agenda-round {
+    border: var(--ls-card-border);
+    border-radius: var(--ls-card-radius);
+    background: var(--ls-card-bg);
+    padding: var(--ls-space-sm);
+}
+
+.popup .luker-studio-agenda-round-head {
+    padding-bottom: 6px;
+    margin-bottom: var(--ls-space-sm);
+    border-bottom: 1px dashed color-mix(in oklab, var(--SmartThemeBodyColor) 14%, transparent);
+}
+
+.popup .luker-studio-agenda-round-title {
+    font-weight: 700;
+    font-size: 1rem;
+}
+
+.popup .luker-studio-agenda-round-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+    gap: var(--ls-space-sm);
+}
+
+.popup .luker-studio-agenda-round-planner,
+.popup .luker-studio-agenda-round-agents {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.popup .luker-studio-agenda-final {
+    border: var(--ls-card-border);
+    border-radius: var(--ls-card-radius);
+    background: color-mix(in oklab, #22c55e 6%, transparent);
+    padding: var(--ls-space-sm);
+}
+
+.popup .luker-studio-agenda-attempt {
+    border: 1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 12%, transparent);
+    border-radius: 8px;
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 4%, transparent);
+    padding: 4px 8px;
+}
+
+.popup .luker-studio-agenda-attempt > summary {
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0;
+}
+
+.popup .luker-studio-agenda-attempt-title {
+    font-weight: 600;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.88rem;
+}
+
+.popup .luker-studio-agenda-attempt-planner > summary {
+    background: color-mix(in oklab, #a78bfa 8%, transparent);
+    border-radius: 6px;
+    padding: 4px 6px;
+}
+
+@media (max-width: 720px) {
+    .popup .luker-studio-agenda-round-body {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    28. COLLAPSIBLE RAW SECTION
    ═══════════════════════════════════════════════════════════════════════════ */
 

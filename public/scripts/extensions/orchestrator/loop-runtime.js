@@ -271,6 +271,7 @@ async function resolveTraceApi(deps) {
                 create: mod.createOrchestrationRuntimeTrace,
                 record: mod.recordOrchestrationRuntimeEvent,
                 finalize: mod.finalizeOrchestrationRuntimeTrace,
+                attachLoopConversation: mod.attachOrchestrationRuntimeLoopConversation,
             };
         }
     } catch (_error) {
@@ -280,7 +281,20 @@ async function resolveTraceApi(deps) {
         create: (context, payload, _stages, extra) => makeInMemoryTraceFallback(context, payload, extra),
         record: recordToTraceFallback,
         finalize: finalizeTraceFallback,
+        attachLoopConversation: attachLoopConversationFallback,
     };
+}
+
+function attachLoopConversationFallback(trace, conversation) {
+    if (!trace || typeof trace !== 'object') return;
+    if (!conversation || typeof conversation !== 'object') {
+        if (trace.loop) delete trace.loop.conversation;
+        return;
+    }
+    if (!trace.loop || typeof trace.loop !== 'object') {
+        trace.loop = {};
+    }
+    trace.loop.conversation = conversation;
 }
 
 function buildInitialMessages(context, _payload, profile) {
@@ -649,6 +663,17 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
     const maxRounds = Math.max(1, Math.floor(Number(profile?.max_rounds) || 1));
     const wallClockBudgetMs = Math.max(0, Math.floor(Number(profile?.wall_clock_budget_ms) || 0));
     const deadline = wallClockBudgetMs > 0 ? Date.now() + wallClockBudgetMs : null;
+
+    // Alias the running messages array onto the trace so the popup's
+    // loop-conversation panel reflects the agent's history as it grows.
+    // sanitization happens at render time; here we just point at the
+    // live array (no clone — avoids per-round O(N) cost for long loops).
+    if (typeof traceApi.attachLoopConversation === 'function') {
+        traceApi.attachLoopConversation(trace, { messages });
+    } else {
+        if (!trace.loop || typeof trace.loop !== 'object') trace.loop = {};
+        trace.loop.conversation = { messages };
+    }
 
     let capsule = null;
     let totalRounds = 0;

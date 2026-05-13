@@ -105,6 +105,10 @@ export function createOrchestrationRuntimeTrace(context, payload, stages = [], e
         note: String(extra?.note || ''),
         capsuleText: String(extra?.capsuleText || ''),
         error: String(extra?.error || ''),
+        // Runtime mode marker — propagated from the extra bag so the trace
+        // popup can pick a mode-specific layout. Spec mode passes nothing
+        // and stays mode-less.
+        mode: String(extra?.mode || ''),
         stages: buildOrchestrationRuntimeStageLayout(stages),
         attempts: [],
         events: [],
@@ -267,6 +271,12 @@ export function beginOrchestrationRuntimeNodeAttempt(trace, meta = {}) {
         reason: '',
         replayResult: null,
         error: '',
+        // Full conversation captured at attempt finish. Shape:
+        //   { messages: Array<{role, content, tool_calls?, tool_call_id?, name?, _round?}> }
+        // Attached only when the runtime opts in via finishOrchestrationRuntimeNodeAttempt
+        // details.conversation. Used by the trace popup's per-attempt
+        // conversation panel.
+        conversation: null,
     };
     trace.nextAttemptId = Number(trace.nextAttemptId || 1) + 1;
     trace.attempts.push(attempt);
@@ -310,6 +320,9 @@ export function finishOrchestrationRuntimeNodeAttempt(trace, attempt, details = 
         attempt.outputText = serializeOrchestrationRuntimeValue(details?.output);
         attempt.previewText = truncateOrchestrationRuntimePreview(attempt.outputText);
     }
+    if (Object.prototype.hasOwnProperty.call(details || {}, 'conversation')) {
+        attempt.conversation = sanitizeOrchestrationRuntimeConversation(details?.conversation);
+    }
     const eventType = attempt.nodeType === ORCH_NODE_TYPE_REVIEW ? 'review_finished' : 'node_finished';
     recordOrchestrationRuntimeEvent(trace, eventType, {
         attemptId: attempt.attemptId,
@@ -330,4 +343,96 @@ export function finishOrchestrationRuntimeNodeAttempt(trace, attempt, details = 
         error: attempt.error,
         replayResult: cloneOrchestrationTraceValue(attempt.replayResult),
     });
+}
+
+/**
+ * Normalize a conversation payload before it lands on the trace. The
+ * runtime hands us a plain `{ messages: [...] }` envelope; we clone and
+ * coerce each entry to the renderer-friendly shape:
+ *   { role, content, tool_calls?, tool_call_id?, name?, _round? }
+ *
+ * Anything else is dropped so a malformed runtime cannot corrupt the
+ * popup. Returns null for a missing / empty conversation so the renderer
+ * can short-circuit on truthiness.
+ */
+export function sanitizeOrchestrationRuntimeConversation(conversation) {
+    if (!conversation || typeof conversation !== 'object') {
+        return null;
+    }
+    const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
+    const out = [];
+    for (const message of messages) {
+        if (!message || typeof message !== 'object') continue;
+        const role = String(message.role || '').trim().toLowerCase();
+        if (!role) continue;
+        const entry = { role };
+        if (typeof message.content === 'string') {
+            entry.content = message.content;
+        } else if (message.content !== undefined && message.content !== null) {
+            entry.content = serializeOrchestrationRuntimeValue(message.content);
+        } else {
+            entry.content = '';
+        }
+        if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+            entry.tool_calls = message.tool_calls
+                .map(call => sanitizeOrchestrationRuntimeToolCall(call))
+                .filter(Boolean);
+        }
+        if (typeof message.tool_call_id === 'string' && message.tool_call_id) {
+            entry.tool_call_id = message.tool_call_id;
+        }
+        if (typeof message.name === 'string' && message.name) {
+            entry.name = message.name;
+        }
+        if (Number.isFinite(Number(message._round))) {
+            entry._round = Number(message._round);
+        }
+        out.push(entry);
+    }
+    if (out.length === 0) return null;
+    return { messages: out };
+}
+
+function sanitizeOrchestrationRuntimeToolCall(call) {
+    if (!call || typeof call !== 'object') return null;
+    const id = String(call.id || '').trim();
+    const name = String(call.name || call?.function?.name || '').trim();
+    if (!name) return null;
+    let args;
+    if (call.args && typeof call.args === 'object') {
+        args = structuredClone(call.args);
+    } else if (typeof call?.function?.arguments === 'string') {
+        try {
+            const parsed = JSON.parse(call.function.arguments);
+            args = parsed && typeof parsed === 'object' ? parsed : {};
+        } catch {
+            args = {};
+        }
+    } else {
+        args = {};
+    }
+    return { id, name, args };
+}
+
+/**
+ * Attach a conversation payload to the loop slot on a trace. Loop mode
+ * does not produce node attempts (single agent, no stages/nodes), so the
+ * full message history lives directly under `trace.loop.conversation`.
+ *
+ * Idempotent — calling repeatedly overwrites the previous payload, which
+ * is what we want for live updates as the loop progresses.
+ */
+export function attachOrchestrationRuntimeLoopConversation(trace, conversation) {
+    if (!trace || typeof trace !== 'object') return;
+    const sanitized = sanitizeOrchestrationRuntimeConversation(conversation);
+    if (!sanitized) {
+        if (trace.loop && typeof trace.loop === 'object') {
+            delete trace.loop.conversation;
+        }
+        return;
+    }
+    if (!trace.loop || typeof trace.loop !== 'object') {
+        trace.loop = {};
+    }
+    trace.loop.conversation = sanitized;
 }

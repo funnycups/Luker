@@ -416,6 +416,17 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
     const runtimeToolMessages = [];
     let lastRound = 0;
 
+    // Trace conversation log. Aliased onto the trace attempt at finalize
+    // so the runtime-trace popup can render the per-attempt message thread.
+    // We push system once, then each round's user prompt + assistant
+    // response (with any tool_calls) + tool result messages. Aliased
+    // rather than cloned so callers reading mid-run see live state.
+    const conversation = { messages: [] };
+    const systemTextForTrace = String(preset.systemPrompt || '').trim();
+    if (systemTextForTrace) {
+        conversation.messages.push({ role: 'system', content: systemTextForTrace });
+    }
+
     // The loop tools (chat/lorebook/memory/note/search) need a per-run
     // dispatch context with the floor-state adapter, memory store and
     // activated-entry set attached. Build it once at node start so each
@@ -450,6 +461,7 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                 ...runtimeToolMessages,
                 { role: 'user', content: iterationPrompt },
             ];
+            conversation.messages.push({ role: 'user', content: iterationPrompt, _round: round });
 
             const detailed = await requestToolCallsWithRetry(context, settings, {
                 taskMessages,
@@ -486,6 +498,16 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
             }
 
             if (finalizedOutput !== null) {
+                // Record the terminal assistant turn carrying the output
+                // tool call so the trace popup can see what was emitted.
+                conversation.messages.push({
+                    role: 'assistant',
+                    content: String(detailed?.assistantText || ''),
+                    tool_calls: calls
+                        .filter(c => String(c?.name || '').trim() === outputToolName)
+                        .map(c => ({ id: c?.id || '', name: String(c?.name || ''), args: c?.args || {} })),
+                    _round: round,
+                });
                 if (isFinalStage) {
                     const finalText = String(finalizedOutput?.text ?? '');
                     if (!finalText.trim()) {
@@ -494,6 +516,7 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                     finishOrchestrationRuntimeNodeAttempt(trace, traceAttempt, {
                         status: 'completed',
                         output: finalText,
+                        conversation,
                     });
                     return finalText;
                 }
@@ -501,6 +524,7 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                     finishOrchestrationRuntimeNodeAttempt(trace, traceAttempt, {
                         status: 'completed',
                         output: finalizedOutput,
+                        conversation,
                     });
                     return finalizedOutput;
                 }
@@ -524,6 +548,16 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                     role: 'assistant',
                     content: String(detailed?.assistantText || ''),
                     tool_calls: assistantToolCallEntries,
+                });
+                conversation.messages.push({
+                    role: 'assistant',
+                    content: String(detailed?.assistantText || ''),
+                    tool_calls: loopToolCalls.map((tc, i) => ({
+                        id: assistantToolCallEntries[i].id,
+                        name: String(tc?.name || ''),
+                        args: tc?.args || {},
+                    })),
+                    _round: round,
                 });
                 for (let i = 0; i < loopToolCalls.length; i += 1) {
                     const tc = loopToolCalls[i];
@@ -551,10 +585,18 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                             throw toolError;
                         }
                     }
+                    const serialized = serializeToolResultContent(toolResult);
                     runtimeToolMessages.push({
                         role: 'tool',
                         tool_call_id: callId,
-                        content: serializeToolResultContent(toolResult),
+                        content: serialized,
+                    });
+                    conversation.messages.push({
+                        role: 'tool',
+                        tool_call_id: callId,
+                        name: String(tc?.name || ''),
+                        content: serialized,
+                        _round: round,
                     });
                 }
                 continue;
@@ -570,6 +612,7 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
             error: String(error?.message || error),
             rerunReason: String(options?.rerunReason || ''),
             round: lastRound,
+            conversation,
         });
         throw error;
     }
@@ -698,6 +741,10 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
             runKind: 'review',
             round,
         });
+        // Per-attempt conversation log for the trace popup. Review attempts
+        // are single-round inside this loop body, so the log just captures
+        // system + user + assistant-with-tool-call.
+        const conversation = { messages: [] };
         try {
             throwIfAborted(abortSignal, 'Orchestration aborted.');
             const availableOutputs = mergeNodeOutputMaps(currentPreviousNodeOutputs, currentStageOutputs);
@@ -734,6 +781,13 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
                 ...runtimeToolMessages,
                 { role: 'user', content: iterationPrompt },
             ];
+            if (systemText) conversation.messages.push({ role: 'system', content: systemText });
+            // Carry forward any prior runtimeToolMessages from earlier
+            // review rounds (e.g. previous rerun → assistant turn).
+            for (const carried of runtimeToolMessages) {
+                conversation.messages.push({ ...carried });
+            }
+            conversation.messages.push({ role: 'user', content: iterationPrompt, _round: round });
             const detailed = await requestToolCallsWithRetry(context, settings, {
                 taskMessages,
                 runtimeWorldInfo,
@@ -747,6 +801,14 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
                 applyAgentTimeout: true,
             });
             const decision = extractReviewDecision(detailed?.toolCalls || [], nodeSpec.id);
+            // Record the assistant turn with the review decision tool call.
+            conversation.messages.push({
+                role: 'assistant',
+                content: String(detailed?.assistantText || ''),
+                tool_calls: (Array.isArray(detailed?.toolCalls) ? detailed.toolCalls : [])
+                    .map(c => ({ id: c?.id || '', name: String(c?.name || ''), args: c?.args || {} })),
+                _round: round,
+            });
             if (decision.action === 'approve') {
                 upsertRuntimeApprovedReviewFeedbackEntry(options?.runtime, {
                     stageIndex: Number(options?.stageIndex || 0),
@@ -759,6 +821,7 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
                     status: 'completed',
                     action: 'approve',
                     reason: String(decision.reason || ''),
+                    conversation,
                 });
                 return {
                     previousNodeOutputs: currentPreviousNodeOutputs,
@@ -795,6 +858,7 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
                 reason: String(decision.reason || ''),
                 targetNodeIds: targetEntries.map(entry => entry.nodeId),
                 replayResult: replay.result,
+                conversation,
             });
             appendStandardToolRoundMessages(runtimeToolMessages, [{
                 name: ORCH_REVIEW_TOOL_RERUN,
@@ -808,6 +872,7 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
             finishOrchestrationRuntimeNodeAttempt(trace, traceAttempt, {
                 status: 'failed',
                 error: String(error?.message || error),
+                conversation,
             });
             throw error;
         }

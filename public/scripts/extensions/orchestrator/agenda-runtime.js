@@ -380,7 +380,7 @@ export async function runAgendaPlannerStep(context, payload, messages, profile, 
         || 'Return concise guidance through function-call fields.';
     const userText = promptText.trim()
         || 'Use function-call fields only. Do not put JSON strings into summary.';
-    return requestToolCallWithRetry(context, settings, {
+    const plannerStep = await requestToolCallWithRetry(context, settings, {
         taskMessages: [
             { role: 'system', content: systemText },
             { role: 'user', content: userText },
@@ -440,6 +440,18 @@ export async function runAgendaPlannerStep(context, payload, messages, profile, 
         abortSignal,
         applyAgentTimeout: true,
     });
+    const conversation = {
+        messages: [
+            { role: 'system', content: systemText },
+            { role: 'user', content: userText },
+            {
+                role: 'assistant',
+                content: '',
+                tool_calls: [{ id: '', name: AGENDA_PLANNER_TOOL, args: plannerStep || {} }],
+            },
+        ],
+    };
+    return { plannerStep, conversation };
 }
 
 export async function runAgendaTextAgent(context, payload, messages, profile, state, dispatch, {
@@ -561,6 +573,17 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
             abortSignal,
             applyAgentTimeout: true,
         });
+        const conversation = {
+            messages: [
+                { role: 'system', content: systemText },
+                { role: 'user', content: userText },
+                {
+                    role: 'assistant',
+                    content: '',
+                    tool_calls: [{ id: '', name: AGENDA_RESULT_TOOL, args: { text: String(result?.text || '') } }],
+                },
+            ],
+        };
         return {
             runId: createAgendaRunId(),
             todoId: String(dispatch?.todoId || ''),
@@ -569,6 +592,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
             inputRunIds: Array.isArray(dispatch?.inputRunIds) ? dispatch.inputRunIds.slice() : [],
             outputText: String(result?.text || '').trim(),
             kind: String(kind || 'agent'),
+            conversation,
         };
     }
 
@@ -583,6 +607,12 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
     const maxRounds = Math.max(1, getNodeIterationMaxRounds(settings));
     const runtimeToolMessages = [];
     let outputText = '';
+    const conversation = {
+        messages: [
+            { role: 'system', content: systemText },
+            { role: 'user', content: userText },
+        ],
+    };
 
     for (let round = 1; round <= maxRounds; round += 1) {
         throwIfAborted(abortSignal, 'Orchestration aborted.');
@@ -612,6 +642,12 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
         const terminator = calls.find(c => String(c?.name || '') === AGENDA_RESULT_TOOL);
         if (terminator) {
             outputText = String(terminator?.args?.text || '').trim();
+            conversation.messages.push({
+                role: 'assistant',
+                content: String(detailed?.assistantText || ''),
+                tool_calls: [{ id: terminator?.id || '', name: AGENDA_RESULT_TOOL, args: terminator?.args || {} }],
+                _round: round,
+            });
             break;
         }
 
@@ -629,6 +665,16 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
             role: 'assistant',
             content: String(detailed?.assistantText || ''),
             tool_calls: assistantToolCallEntries,
+        });
+        conversation.messages.push({
+            role: 'assistant',
+            content: String(detailed?.assistantText || ''),
+            tool_calls: calls.map((tc, i) => ({
+                id: assistantToolCallEntries[i].id,
+                name: String(tc?.name || ''),
+                args: tc?.args || {},
+            })),
+            _round: round,
         });
         for (let i = 0; i < calls.length; i += 1) {
             const tc = calls[i];
@@ -653,10 +699,18 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
                     throw toolError;
                 }
             }
+            const serialized = serializeToolResultContent(toolResult);
             runtimeToolMessages.push({
                 role: 'tool',
                 tool_call_id: callId,
-                content: serializeToolResultContent(toolResult),
+                content: serialized,
+            });
+            conversation.messages.push({
+                role: 'tool',
+                tool_call_id: callId,
+                name: String(tc?.name || ''),
+                content: serialized,
+                _round: round,
             });
         }
     }
@@ -673,6 +727,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
         inputRunIds: Array.isArray(dispatch?.inputRunIds) ? dispatch.inputRunIds.slice() : [],
         outputText,
         kind: String(kind || 'agent'),
+        conversation,
     };
 }
 
@@ -710,10 +765,11 @@ export async function runAgendaOrchestration(context, payload, messages, profile
             runKind: 'planner',
             slotKey: buildOrchestrationRuntimeSlotKey(round - 1, 0, `agenda_planner_${round}`),
         });
-        const plannerStep = await runAgendaPlannerStep(context, payload, messages, profile, state, abortSignal);
+        const { plannerStep, conversation: plannerConversation } = await runAgendaPlannerStep(context, payload, messages, profile, state, abortSignal);
         finishOrchestrationRuntimeNodeAttempt(trace, plannerAttempt, {
             status: 'completed',
             output: plannerStep,
+            conversation: plannerConversation,
         });
         applyAgendaPlannerOps(state, plannerStep);
         const dispatches = normalizeAgendaDispatches(state, plannerStep, profile, settings);
@@ -756,6 +812,7 @@ export async function runAgendaOrchestration(context, payload, messages, profile
                 finishOrchestrationRuntimeNodeAttempt(trace, attempt, {
                     status: 'completed',
                     output: result.outputText,
+                    conversation: result.conversation,
                 });
                 return result;
             } catch (error) {
@@ -802,12 +859,14 @@ export async function runAgendaOrchestration(context, payload, messages, profile
         finishOrchestrationRuntimeNodeAttempt(trace, finalAttempt, {
             status: 'failed',
             error: 'Agenda final agent returned empty guidance text.',
+            conversation: finalRun?.conversation,
         });
         throw new Error('Agenda final agent returned empty guidance text.');
     }
     finishOrchestrationRuntimeNodeAttempt(trace, finalAttempt, {
         status: 'completed',
         output: finalRun.outputText,
+        conversation: finalRun.conversation,
     });
     state.finalGuidance = String(finalRun.outputText || '').trim();
     state.runs.push(finalRun);
