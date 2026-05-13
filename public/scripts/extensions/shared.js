@@ -483,6 +483,7 @@ export class ConnectionManagerRequestService {
                         model: profile.model,
                         chat_completion_source: selectedApiMap.source,
                         secret_id: profile['secret-id'],
+                        base_url: profile['base-url'],
                         custom_url: profile['api-url'],
                         vertexai_region: profile['api-url'],
                         zai_endpoint: profile['api-url'],
@@ -494,7 +495,6 @@ export class ConnectionManagerRequestService {
                         ...(plainTextFunctionCalling !== null ? { function_calling_plain_text: plainTextFunctionCalling } : {}),
                         ...(plainTextFunctionCallingErrorRetry !== null ? { function_calling_plain_text_error_retry: plainTextFunctionCallingErrorRetry } : {}),
                         ...(plainTextFunctionCallingErrorRetryMaxAttempts !== null ? { function_calling_plain_text_error_retry_max_attempts: plainTextFunctionCallingErrorRetryMaxAttempts } : {}),
-                        secret_id: profile['secret-id'],
                         ...overridePayload,
                     }, {
                         presetName: includePreset ? profile.preset : undefined,
