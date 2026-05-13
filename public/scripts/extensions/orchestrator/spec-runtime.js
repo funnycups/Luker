@@ -94,8 +94,19 @@ import {
 import {
     appendStandardToolRoundMessages,
     requestToolCallsWithRetry,
+    serializeToolResultContent,
+    makeRuntimeToolCallId,
 } from './tool-calling.js';
 import { buildRuntimeWorldInfoFromPayload } from './world-info.js';
+import {
+    hasAnyToolEnabled,
+    resolveAgentToolFlags,
+} from './persistence.js';
+import {
+    executeLoopTool,
+    getEnabledToolSchemas,
+} from './loop-tools.js';
+import { attachToolContext, ToolError } from './loop-runtime.js';
 
 const MODULE_NAME = 'orchestrator';
 
@@ -379,12 +390,39 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
 
     const llmPresetName = resolveOrchestrationAgentPromptPresetName(settings, preset);
     const apiPresetName = resolveOrchestrationAgentApiPresetName(settings, preset);
-    const tools = buildNodeToolSet(nodeSpec, { isFinalStage });
+    const outputToolSchemas = buildNodeToolSet(nodeSpec, { isFinalStage });
+
+    // Tool-cascade resolution: node.tools overrides profile default, which
+    // overrides built-in null. Spec mode's built-in default is "no loop
+    // tools" — current behavior — so the multi-round path activates only
+    // when the user explicitly opts in via per-node `tools` or via the
+    // profile-root `defaultTools`.
+    const resolvedToolFlags = resolveAgentToolFlags(
+        nodeSpec?.tools,
+        options?.defaultTools || null,
+        null,
+    );
+    const enableLoopTools = hasAnyToolEnabled(resolvedToolFlags);
+    const loopToolSchemas = enableLoopTools
+        ? getEnabledToolSchemas({ tools: resolvedToolFlags })
+            .filter(s => String(s?.function?.name || '') !== 'finalize')
+        : [];
+    const tools = enableLoopTools
+        ? [...loopToolSchemas, ...outputToolSchemas]
+        : outputToolSchemas;
     const allowedNames = new Set(tools.map(tool => String(tool?.function?.name || '').trim()).filter(Boolean));
     const maxRounds = getNodeIterationMaxRounds(settings);
     const outputToolName = isFinalStage ? 'luker_orch_final_guidance' : 'luker_orch_node_output';
     const runtimeToolMessages = [];
     let lastRound = 0;
+
+    // The loop tools (chat/lorebook/memory/note/search) need a per-run
+    // dispatch context with the floor-state adapter, memory store and
+    // activated-entry set attached. Build it once at node start so each
+    // round's `executeLoopTool` calls share the same handle.
+    const toolContext = enableLoopTools
+        ? await attachToolContext(context, payload)
+        : null;
 
     const runtimeWorldInfo = await resolveOrchestrationRuntimeWorldInfo(context, settings, {
         worldInfoMessages: messages,
@@ -432,6 +470,7 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
             }
 
             let finalizedOutput = null;
+            const loopToolCalls = [];
             for (const call of calls) {
                 const name = String(call?.name || '').trim();
                 if (!name) {
@@ -440,6 +479,9 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                 if (name === outputToolName && finalizedOutput === null) {
                     finalizedOutput = call?.args && typeof call.args === 'object' ? call.args : {};
                     continue;
+                }
+                if (enableLoopTools) {
+                    loopToolCalls.push(call);
                 }
             }
 
@@ -463,6 +505,59 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                     return finalizedOutput;
                 }
                 throw new Error(`Node '${nodeSpec.id}' returned invalid tool call payload.`);
+            }
+
+            // No output tool this round. If loop tools were used, dispatch
+            // them and feed results back so the agent can continue in the
+            // next round. Otherwise the model failed to satisfy the
+            // contract — bail out.
+            if (enableLoopTools && loopToolCalls.length > 0) {
+                const assistantToolCallEntries = loopToolCalls.map(tc => ({
+                    id: String(tc?.id || makeRuntimeToolCallId()),
+                    type: 'function',
+                    function: {
+                        name: String(tc?.name || '').replace(/\./g, '_'),
+                        arguments: JSON.stringify(tc?.args && typeof tc.args === 'object' ? tc.args : {}),
+                    },
+                }));
+                runtimeToolMessages.push({
+                    role: 'assistant',
+                    content: String(detailed?.assistantText || ''),
+                    tool_calls: assistantToolCallEntries,
+                });
+                for (let i = 0; i < loopToolCalls.length; i += 1) {
+                    const tc = loopToolCalls[i];
+                    const callId = assistantToolCallEntries[i].id;
+                    let toolResult;
+                    try {
+                        toolResult = await executeLoopTool(
+                            String(tc?.name || ''),
+                            tc?.args && typeof tc.args === 'object' ? tc.args : {},
+                            toolContext,
+                        );
+                        toolResult = {
+                            ok: true,
+                            data: toolResult,
+                        };
+                    } catch (toolError) {
+                        if (toolError instanceof ToolError) {
+                            toolResult = {
+                                ok: false,
+                                error: String(toolError.message || ''),
+                                code: String(toolError.code || 'TOOL_ERROR'),
+                                hint: String(toolError.hint || ''),
+                            };
+                        } else {
+                            throw toolError;
+                        }
+                    }
+                    runtimeToolMessages.push({
+                        role: 'tool',
+                        tool_call_id: callId,
+                        content: serializeToolResultContent(toolResult),
+                    });
+                }
+                continue;
             }
 
             throw new Error(`Node '${nodeSpec.id}' did not return the required output tool '${outputToolName}'.`);
@@ -784,6 +879,7 @@ export async function executeStage(context, payload, messages, profile, runtime,
                             stageId,
                             nodeIndex,
                             runtime,
+                            defaultTools: runtime?.specDefaultTools || null,
                         }),
                     ];
                 }));
@@ -843,6 +939,7 @@ export async function executeStage(context, payload, messages, profile, runtime,
                 stageId,
                 nodeIndex,
                 runtime,
+                defaultTools: runtime?.specDefaultTools || null,
             });
             currentStageWorkerOutputs.set(nodeSpec.id, output);
             traceStageWorkerOutputs = mergeNodeOutputMaps(currentStageWorkerOutputs);
@@ -876,6 +973,10 @@ export async function runSpecOrchestration(context, payload, messages, profile) 
         reviewRerunCount: 0,
         approvedReviewFeedbackEntries: [],
         trace: createOrchestrationRuntimeTrace(context, payload, stages),
+        // Profile-root tool defaults applied to every node whose own
+        // `tools` is null. Node-level override still takes precedence in
+        // the resolver inside runWorkerNode.
+        specDefaultTools: spec.defaultTools || null,
     };
     let previousNodeOutputs = new Map();
     const abortSignal = isAbortSignalLike(payload?.signal) ? payload.signal : null;

@@ -84,8 +84,22 @@ import {
     normalizeTemplateForRuntime,
     renderTemplate,
 } from './template-vars.js';
-import { requestToolCallWithRetry } from './tool-calling.js';
+import {
+    requestToolCallWithRetry,
+    requestToolCallsWithRetry,
+    serializeToolResultContent,
+    makeRuntimeToolCallId,
+} from './tool-calling.js';
 import { buildRuntimeWorldInfoFromPayload } from './world-info.js';
+import {
+    hasAnyToolEnabled,
+    resolveAgentToolFlags,
+} from './persistence.js';
+import {
+    executeLoopTool,
+    getEnabledToolSchemas,
+} from './loop-tools.js';
+import { attachToolContext, ToolError } from './loop-runtime.js';
 
 const MODULE_NAME = 'orchestrator';
 
@@ -504,34 +518,160 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
         || 'Return concise guidance through function-call fields.';
     const userText = promptText.trim()
         || 'Use function-call fields only. Do not put JSON strings into summary.';
-    const result = await requestToolCallWithRetry(context, settings, {
-        taskMessages: [
-            { role: 'system', content: systemText },
-            { role: 'user', content: userText },
-        ],
-        runtimeWorldInfo,
-        apiPresetName,
-        llmPresetName,
-        functionName: AGENDA_RESULT_TOOL,
-        functionDescription: 'Submit the full textual result for the assigned orchestration task.',
-        parameters: {
-            type: 'object',
-            properties: {
-                text: { type: 'string' },
+
+    // Tool-cascade: preset.tools overrides profile.defaultTools, which
+    // overrides the built-in (null = no tools, the historical agenda
+    // behaviour). When the resolved set has any loop tool enabled, run
+    // the multi-round tool loop instead of a single forced function call.
+    const resolvedToolFlags = resolveAgentToolFlags(
+        preset?.tools,
+        profile?.defaultTools || null,
+        null,
+    );
+    const enableLoopTools = hasAnyToolEnabled(resolvedToolFlags);
+
+    const resultToolSchema = {
+        type: 'function',
+        function: {
+            name: AGENDA_RESULT_TOOL,
+            description: 'Submit the full textual result for the assigned orchestration task.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    text: { type: 'string' },
+                },
+                required: ['text'],
+                additionalProperties: false,
             },
-            required: ['text'],
-            additionalProperties: false,
         },
-        abortSignal,
-        applyAgentTimeout: true,
-    });
+    };
+
+    if (!enableLoopTools) {
+        const result = await requestToolCallWithRetry(context, settings, {
+            taskMessages: [
+                { role: 'system', content: systemText },
+                { role: 'user', content: userText },
+            ],
+            runtimeWorldInfo,
+            apiPresetName,
+            llmPresetName,
+            functionName: AGENDA_RESULT_TOOL,
+            functionDescription: resultToolSchema.function.description,
+            parameters: resultToolSchema.function.parameters,
+            abortSignal,
+            applyAgentTimeout: true,
+        });
+        return {
+            runId: createAgendaRunId(),
+            todoId: String(dispatch?.todoId || ''),
+            agent: String(dispatch?.agent || ''),
+            taskBrief: String(dispatch?.taskBrief || ''),
+            inputRunIds: Array.isArray(dispatch?.inputRunIds) ? dispatch.inputRunIds.slice() : [],
+            outputText: String(result?.text || '').trim(),
+            kind: String(kind || 'agent'),
+        };
+    }
+
+    // Multi-round path: agent can interleave loop tool calls with the
+    // terminator. We reuse the loop-tool dispatch context (memory store,
+    // notes adapter, activated lorebook keys) per attachToolContext.
+    const loopToolSchemas = getEnabledToolSchemas({ tools: resolvedToolFlags })
+        .filter(s => String(s?.function?.name || '') !== 'finalize');
+    const tools = [...loopToolSchemas, resultToolSchema];
+    const allowedNames = new Set(tools.map(t => String(t?.function?.name || '').trim()).filter(Boolean));
+    const toolContext = await attachToolContext(context, payload);
+    const maxRounds = Math.max(1, getNodeIterationMaxRounds(settings));
+    const runtimeToolMessages = [];
+    let outputText = '';
+
+    for (let round = 1; round <= maxRounds; round += 1) {
+        throwIfAborted(abortSignal, 'Orchestration aborted.');
+        const taskMessages = [
+            { role: 'system', content: systemText },
+            ...runtimeToolMessages,
+            { role: 'user', content: userText },
+        ];
+        const detailed = await requestToolCallsWithRetry(context, settings, {
+            taskMessages,
+            runtimeWorldInfo,
+            apiPresetName,
+            llmPresetName,
+            tools,
+            allowedNames,
+            abortSignal,
+            includeAssistantText: true,
+            allowNoToolCalls: false,
+            applyAgentTimeout: true,
+        });
+        throwIfAborted(abortSignal, 'Orchestration aborted.');
+        const calls = Array.isArray(detailed?.toolCalls) ? detailed.toolCalls : [];
+        if (calls.length === 0) {
+            throw new Error(`Agenda agent '${dispatch?.agent}' did not return tool calls.`);
+        }
+
+        const terminator = calls.find(c => String(c?.name || '') === AGENDA_RESULT_TOOL);
+        if (terminator) {
+            outputText = String(terminator?.args?.text || '').trim();
+            break;
+        }
+
+        // Dispatch loop-tool calls and feed results back so the agent can
+        // refine on the next round.
+        const assistantToolCallEntries = calls.map(tc => ({
+            id: String(tc?.id || makeRuntimeToolCallId()),
+            type: 'function',
+            function: {
+                name: String(tc?.name || '').replace(/\./g, '_'),
+                arguments: JSON.stringify(tc?.args && typeof tc.args === 'object' ? tc.args : {}),
+            },
+        }));
+        runtimeToolMessages.push({
+            role: 'assistant',
+            content: String(detailed?.assistantText || ''),
+            tool_calls: assistantToolCallEntries,
+        });
+        for (let i = 0; i < calls.length; i += 1) {
+            const tc = calls[i];
+            const callId = assistantToolCallEntries[i].id;
+            let toolResult;
+            try {
+                const raw = await executeLoopTool(
+                    String(tc?.name || ''),
+                    tc?.args && typeof tc.args === 'object' ? tc.args : {},
+                    toolContext,
+                );
+                toolResult = { ok: true, data: raw };
+            } catch (toolError) {
+                if (toolError instanceof ToolError) {
+                    toolResult = {
+                        ok: false,
+                        error: String(toolError.message || ''),
+                        code: String(toolError.code || 'TOOL_ERROR'),
+                        hint: String(toolError.hint || ''),
+                    };
+                } else {
+                    throw toolError;
+                }
+            }
+            runtimeToolMessages.push({
+                role: 'tool',
+                tool_call_id: callId,
+                content: serializeToolResultContent(toolResult),
+            });
+        }
+    }
+
+    if (!outputText) {
+        throw new Error(`Agenda agent '${dispatch?.agent}' exhausted rounds without calling ${AGENDA_RESULT_TOOL}.`);
+    }
+
     return {
         runId: createAgendaRunId(),
         todoId: String(dispatch?.todoId || ''),
         agent: String(dispatch?.agent || ''),
         taskBrief: String(dispatch?.taskBrief || ''),
         inputRunIds: Array.isArray(dispatch?.inputRunIds) ? dispatch.inputRunIds.slice() : [],
-        outputText: String(result?.text || '').trim(),
+        outputText,
         kind: String(kind || 'agent'),
     };
 }
