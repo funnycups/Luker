@@ -186,6 +186,14 @@ function buildApiSettingsOverrideFromProfile(profile, fallbackSource = '') {
         }
     }
 
+    // Always overwrite cross-source connection fields so a sibling source's
+    // main-API value can't leak into this profile's request. Without this,
+    // getSettingsForRequest's structuredClone(oai_settings) would carry the
+    // main API's base_url / reverse_proxy into the override-merged settings —
+    // e.g. a Claude main API with `https://proxy/v1` would bleed into a
+    // plugin-side Gemini recall and produce `/v1/v1beta/models/...:generateContent`.
+    overrides.base_url = String(profile['base-url'] || '');
+
     const promptPostProcessing = String(profile['prompt-post-processing'] || '').trim();
     if (promptPostProcessing) {
         overrides.custom_prompt_post_processing = promptPostProcessing;
@@ -230,26 +238,18 @@ function buildApiSettingsOverrideFromProfile(profile, fallbackSource = '') {
     }
 
     const proxyName = String(profile.proxy || '').trim();
-    if (proxyName && Array.isArray(proxies)) {
-        const proxyPreset = proxies.find(item => String(item?.name || '') === proxyName);
-        if (proxyPreset) {
-            overrides.reverse_proxy = String(proxyPreset.url || '');
-            overrides.proxy_password = String(proxyPreset.password || '');
-        } else {
-            const proxyUrl = String(profile['proxy-url'] || '').trim();
-            const proxyPassword = String(profile['proxy-password'] || '');
-            if (proxyUrl || proxyPassword) {
-                overrides.reverse_proxy = proxyUrl;
-                overrides.proxy_password = proxyPassword;
-            }
-        }
+    const proxyPreset = proxyName && Array.isArray(proxies)
+        ? proxies.find(item => String(item?.name || '') === proxyName)
+        : null;
+    if (proxyPreset) {
+        overrides.reverse_proxy = String(proxyPreset.url || '');
+        overrides.proxy_password = String(proxyPreset.password || '');
     } else {
-        const proxyUrl = String(profile['proxy-url'] || '').trim();
-        const proxyPassword = String(profile['proxy-password'] || '');
-        if (proxyUrl || proxyPassword) {
-            overrides.reverse_proxy = proxyUrl;
-            overrides.proxy_password = proxyPassword;
-        }
+        // Same anti-bleed rationale as base_url above: always write these
+        // (possibly to empty string) so the main API's proxy doesn't carry
+        // over when this profile didn't pick a proxy preset.
+        overrides.reverse_proxy = String(profile['proxy-url'] || '');
+        overrides.proxy_password = String(profile['proxy-password'] || '');
     }
 
     return Object.keys(overrides).length > 0 ? overrides : null;
