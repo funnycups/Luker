@@ -12,6 +12,7 @@ import {
     buildAiIterationPopupHtml,
     buildOrchestrationEditorPopupPanelHtml,
     buildOrchestratorSettingsHtml,
+    renderInheritOrOverridePanel,
 } from './ui-templates.js';
 import {
     buildLastUserAnchor,
@@ -180,6 +181,7 @@ import { runLoopOrchestration } from './loop-runtime.js';
 // import path; the persistence import here only pulls the sanitizer.
 import {
     sanitizeLoopProfile,
+    sanitizeAgentToolFlags,
 } from './persistence.js';
 import {
     LOOP_ITERATION_CONTRACT_LINES,
@@ -1369,6 +1371,16 @@ function renderWorkflowBoard(scope, editor) {
         </select>
         <label>${escapeHtml(i18n('Node Prompt Template (optional)'))}</label>
         <textarea class="text_pole textarea_compact" rows="4" data-luker-field="node-template" data-scope="${scope}" data-stage-index="${stageIndex}" data-node-index="${nodeIndex}" placeholder="${escapeHtml(i18n('Use {{recent_chat}}, {{last_user}}, {{distiller}}, {{previous_outputs}}. Previous orchestration result and approved review feedback are auto-injected.'))}">${escapeHtml(node.userPromptTemplate)}</textarea>
+        <details class="luker_orch_tools_section">
+            <summary>${escapeHtml(i18n('Tools (override profile default)'))}</summary>
+            ${renderInheritOrOverridePanel({ escapeHtml, i18n }, scope, node.tools, {
+        dataAttrName: 'luker-spec-node-tool',
+        extraAttrs: { 'stage-index': stageIndex, 'node-index': nodeIndex },
+        overrideAction: 'spec-node-tools-override',
+        resetAction: 'spec-node-tools-reset',
+        inheritedTools: editor?.spec?.defaultTools || null,
+    })}
+        </details>
     </div>
 </details>`).join('');
 
@@ -5504,6 +5516,89 @@ function bindUi() {
         ensureLoopEditorIntegrity(editor);
     });
 
+    // Spec-mode profile-root defaultTools checkbox: toggles
+    // `editor.spec.defaultTools[ns][verb]`. The grid only renders when
+    // defaultTools is non-null, so we can assume the field exists.
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-spec-default-tool], .luker_orch_editor_popup [data-luker-spec-default-tool]`, function () {
+        const toolName = String(jQuery(this).attr('data-luker-spec-default-tool') || '');
+        const checked = Boolean(jQuery(this).prop('checked'));
+        const scope = String(jQuery(this).data('scope') || 'global');
+        const specEditor = getEditorByScope(scope);
+        ensureEditorIntegrity(specEditor);
+        if (!specEditor.spec.defaultTools || typeof specEditor.spec.defaultTools !== 'object') {
+            specEditor.spec.defaultTools = sanitizeAgentToolFlags({});
+        }
+        const [namespace, verb] = toolName.split('.');
+        if (!namespace || !verb) return;
+        if (!specEditor.spec.defaultTools[namespace] || typeof specEditor.spec.defaultTools[namespace] !== 'object') {
+            specEditor.spec.defaultTools[namespace] = {};
+        }
+        specEditor.spec.defaultTools[namespace][verb] = checked;
+    });
+
+    // Spec-mode per-node tools override checkbox.
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-spec-node-tool], .luker_orch_editor_popup [data-luker-spec-node-tool]`, function () {
+        const toolName = String(jQuery(this).attr('data-luker-spec-node-tool') || '');
+        const checked = Boolean(jQuery(this).prop('checked'));
+        const scope = String(jQuery(this).data('scope') || 'global');
+        const stageIndex = Number(jQuery(this).data('stage-index'));
+        const nodeIndex = Number(jQuery(this).data('node-index'));
+        if (!Number.isInteger(stageIndex) || !Number.isInteger(nodeIndex)) return;
+        const specEditor = getEditorByScope(scope);
+        ensureEditorIntegrity(specEditor);
+        const node = specEditor.spec?.stages?.[stageIndex]?.nodes?.[nodeIndex];
+        if (!node || typeof node !== 'object') return;
+        if (!node.tools || typeof node.tools !== 'object') {
+            node.tools = sanitizeAgentToolFlags({});
+        }
+        const [namespace, verb] = toolName.split('.');
+        if (!namespace || !verb) return;
+        if (!node.tools[namespace] || typeof node.tools[namespace] !== 'object') {
+            node.tools[namespace] = {};
+        }
+        node.tools[namespace][verb] = checked;
+    });
+
+    // Agenda-mode profile-root defaultTools checkbox.
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-agenda-default-tool], .luker_orch_editor_popup [data-luker-agenda-default-tool]`, function () {
+        const toolName = String(jQuery(this).attr('data-luker-agenda-default-tool') || '');
+        const checked = Boolean(jQuery(this).prop('checked'));
+        const scope = String(jQuery(this).data('scope') || 'global');
+        const agendaEditor = getAgendaEditorByScope(scope);
+        ensureAgendaEditorIntegrity(agendaEditor);
+        if (!agendaEditor.defaultTools || typeof agendaEditor.defaultTools !== 'object') {
+            agendaEditor.defaultTools = sanitizeAgentToolFlags({});
+        }
+        const [namespace, verb] = toolName.split('.');
+        if (!namespace || !verb) return;
+        if (!agendaEditor.defaultTools[namespace] || typeof agendaEditor.defaultTools[namespace] !== 'object') {
+            agendaEditor.defaultTools[namespace] = {};
+        }
+        agendaEditor.defaultTools[namespace][verb] = checked;
+    });
+
+    // Agenda-mode per-agent tools override checkbox.
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-agenda-agent-tool], .luker_orch_editor_popup [data-luker-agenda-agent-tool]`, function () {
+        const toolName = String(jQuery(this).attr('data-luker-agenda-agent-tool') || '');
+        const checked = Boolean(jQuery(this).prop('checked'));
+        const scope = String(jQuery(this).data('scope') || 'global');
+        const agentId = sanitizeIdentifierToken(jQuery(this).data('agent-id'), '');
+        if (!agentId) return;
+        const agendaEditor = getAgendaEditorByScope(scope);
+        ensureAgendaEditorIntegrity(agendaEditor);
+        const preset = agendaEditor.agents?.[agentId];
+        if (!preset || typeof preset !== 'object') return;
+        if (!preset.tools || typeof preset.tools !== 'object') {
+            preset.tools = sanitizeAgentToolFlags({});
+        }
+        const [namespace, verb] = toolName.split('.');
+        if (!namespace || !verb) return;
+        if (!preset.tools[namespace] || typeof preset.tools[namespace] !== 'object') {
+            preset.tools[namespace] = {};
+        }
+        preset.tools[namespace][verb] = checked;
+    });
+
     root.on('change.lukerOrch', '#luker_orch_llm_api_preset', function () {
         settings.llmNodeApiPresetName = sanitizeConnectionProfileName(jQuery(this).val());
         saveSettingsDebounced();
@@ -5752,6 +5847,108 @@ function bindUi() {
                 agendaEditor.finalAgentId = Object.keys(agendaEditor.agents)[0] || '';
             }
             renderDynamicPanels(root, context);
+            return;
+        }
+
+        if (action === 'spec-default-tools-enable-all') {
+            ensureEditorIntegrity(editor);
+            editor.spec.defaultTools = sanitizeAgentToolFlags({}, { defaultAllOn: true });
+            renderDynamicPanels(root, context);
+            return;
+        }
+
+        if (action === 'spec-default-tools-disable-all') {
+            ensureEditorIntegrity(editor);
+            editor.spec.defaultTools = null;
+            // Also clear per-node overrides so the cascade collapses to
+            // the (no-tools) built-in default everywhere. Users who want
+            // to keep a per-node override can re-set it explicitly.
+            for (const stage of Array.isArray(editor.spec?.stages) ? editor.spec.stages : []) {
+                for (const node of Array.isArray(stage?.nodes) ? stage.nodes : []) {
+                    if (node && typeof node === 'object') {
+                        node.tools = null;
+                    }
+                }
+            }
+            renderDynamicPanels(root, context);
+            return;
+        }
+
+        if (action === 'spec-node-tools-override' && Number.isInteger(stageIndex) && Number.isInteger(nodeIndex)) {
+            ensureEditorIntegrity(editor);
+            const node = editor.spec?.stages?.[stageIndex]?.nodes?.[nodeIndex];
+            if (node && typeof node === 'object') {
+                // Seed from current cascade defaults so the user starts
+                // with what the node would have used anyway (visible state =
+                // effective state) and can tweak from there.
+                const seed = editor.spec?.defaultTools && typeof editor.spec.defaultTools === 'object'
+                    ? structuredClone(editor.spec.defaultTools)
+                    : sanitizeAgentToolFlags({});
+                node.tools = seed;
+                renderDynamicPanels(root, context);
+            }
+            return;
+        }
+
+        if (action === 'spec-node-tools-reset' && Number.isInteger(stageIndex) && Number.isInteger(nodeIndex)) {
+            ensureEditorIntegrity(editor);
+            const node = editor.spec?.stages?.[stageIndex]?.nodes?.[nodeIndex];
+            if (node && typeof node === 'object') {
+                node.tools = null;
+                renderDynamicPanels(root, context);
+            }
+            return;
+        }
+
+        if (action === 'agenda-default-tools-enable-all') {
+            const agendaScope = getAgendaScopeFromElement(this, context, settings);
+            const agendaEditor = getAgendaEditorByScope(agendaScope);
+            ensureAgendaEditorIntegrity(agendaEditor);
+            agendaEditor.defaultTools = sanitizeAgentToolFlags({}, { defaultAllOn: true });
+            renderDynamicPanels(root, context);
+            return;
+        }
+
+        if (action === 'agenda-default-tools-disable-all') {
+            const agendaScope = getAgendaScopeFromElement(this, context, settings);
+            const agendaEditor = getAgendaEditorByScope(agendaScope);
+            ensureAgendaEditorIntegrity(agendaEditor);
+            agendaEditor.defaultTools = null;
+            for (const preset of Object.values(agendaEditor?.agents || {})) {
+                if (preset && typeof preset === 'object') {
+                    preset.tools = null;
+                }
+            }
+            renderDynamicPanels(root, context);
+            return;
+        }
+
+        if (action === 'agenda-agent-tools-override') {
+            const agendaScope = getAgendaScopeFromElement(this, context, settings);
+            const agendaEditor = getAgendaEditorByScope(agendaScope);
+            ensureAgendaEditorIntegrity(agendaEditor);
+            const agentId = sanitizeIdentifierToken(jQuery(this).data('agent-id'), '');
+            const preset = agentId ? agendaEditor.agents?.[agentId] : null;
+            if (preset && typeof preset === 'object') {
+                const seed = agendaEditor?.defaultTools && typeof agendaEditor.defaultTools === 'object'
+                    ? structuredClone(agendaEditor.defaultTools)
+                    : sanitizeAgentToolFlags({});
+                preset.tools = seed;
+                renderDynamicPanels(root, context);
+            }
+            return;
+        }
+
+        if (action === 'agenda-agent-tools-reset') {
+            const agendaScope = getAgendaScopeFromElement(this, context, settings);
+            const agendaEditor = getAgendaEditorByScope(agendaScope);
+            ensureAgendaEditorIntegrity(agendaEditor);
+            const agentId = sanitizeIdentifierToken(jQuery(this).data('agent-id'), '');
+            const preset = agentId ? agendaEditor.agents?.[agentId] : null;
+            if (preset && typeof preset === 'object') {
+                preset.tools = null;
+                renderDynamicPanels(root, context);
+            }
             return;
         }
 

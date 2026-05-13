@@ -1,3 +1,110 @@
+/**
+ * Shared checkbox-grid for the orchestration loop tool flags. Used by
+ * the loop editor (single canonical tool set), spec / agenda profile-root
+ * `defaultTools` panels, and per-node / per-agent override panels.
+ *
+ * `tools` is a sanitized flag object — same shape `sanitizeAgentToolFlags`
+ * produces — OR `null` for the inherit case (override panels render the
+ * empty state instead of checkboxes).
+ *
+ * `dataAttrName` is the html data-attribute the click handler looks for,
+ * e.g. `luker-loop-tool`, `luker-spec-default-tool`, `luker-spec-node-tool`,
+ * `luker-agenda-default-tool`, `luker-agenda-agent-tool`. Each value
+ * carries a tool path like `chat.read_range` so the handler can split
+ * into namespace + verb regardless of which surface called.
+ *
+ * `extraAttrs` is a flat object of additional html data-attrs the panel
+ * stamps on every checkbox. Per-node / per-agent panels use this to pass
+ * the stage/node/agent identifier so the handler can target the right
+ * profile location.
+ */
+function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}) {
+    const { escapeHtml, i18n } = deps;
+    const safeScope = scope === 'character' ? 'character' : 'global';
+    const safe = tools && typeof tools === 'object' ? tools : {};
+    const note = safe.note || {};
+    const chat = safe.chat || {};
+    const lorebook = safe.lorebook || {};
+    const memory = safe.memory || {};
+    const search = safe.search || {};
+    const extraAttrParts = Object.entries(extraAttrs)
+        .map(([key, value]) => `data-${key}="${escapeHtml(String(value))}"`)
+        .join(' ');
+    const cb = (id, field, label, { disabled = false, checked = null } = {}) => {
+        const isChecked = checked === null ? Boolean(field) : Boolean(checked);
+        return `<label class="checkbox_label">
+            <input type="checkbox" data-${dataAttrName}="${escapeHtml(id)}" data-scope="${safeScope}" ${extraAttrParts} ${isChecked ? 'checked' : ''}${disabled ? ' disabled' : ''} />
+            ${escapeHtml(label)}
+        </label>`;
+    };
+    return `
+<fieldset class="luker_orch_loop_tools_group">
+    <legend>${escapeHtml(i18n('note (persistent notes)'))}</legend>
+    ${cb('note.add', note.add, 'note_add')}
+    ${cb('note.delete', note.delete, 'note_delete')}
+</fieldset>
+<fieldset class="luker_orch_loop_tools_group">
+    <legend>${escapeHtml(i18n('chat (in-chat history)'))}</legend>
+    ${cb('chat.read_range', chat.read_range, 'chat_read_range')}
+    ${cb('chat.search', chat.search, 'chat_search')}
+</fieldset>
+<fieldset class="luker_orch_loop_tools_group">
+    <legend>${escapeHtml(i18n('lorebook (world info)'))}</legend>
+    ${cb('lorebook.search', lorebook.search, 'lorebook_search')}
+    ${cb('lorebook.get', lorebook.get, 'lorebook_get')}
+</fieldset>
+<fieldset class="luker_orch_loop_tools_group">
+    <legend>${escapeHtml(i18n('memory (memory-graph)'))}</legend>
+    ${cb('memory.search', memory.search, 'memory_search')}
+    ${cb('memory.list_recent', memory.list_recent, 'memory_list_recent')}
+    ${cb('memory.get', memory.get, 'memory_get')}
+</fieldset>
+<fieldset class="luker_orch_loop_tools_group">
+    <legend>${escapeHtml(i18n('search (web search)'))}</legend>
+    ${cb('search.search', search.search, 'search_search')}
+    ${cb('search.visit', search.visit, 'search_visit')}
+</fieldset>`;
+}
+
+/**
+ * Render the inherit / override toggle + tools grid for a single node
+ * or agent. When `tools` is null we show the inherit hint and an
+ * "Override" action; when it's an object we show the grid plus a
+ * "Reset to inherit" action.
+ *
+ * `actionName` is the data-luker-action that toggles override/inherit
+ * (e.g. `spec-node-tools-override`); `actionExtraAttrs` mirrors the
+ * checkbox extraAttrs so the click handler can find the same target.
+ */
+export function renderInheritOrOverridePanel(deps, scope, tools, {
+    dataAttrName,
+    extraAttrs = {},
+    overrideAction,
+    resetAction,
+    inheritedTools = null,
+}) {
+    const { escapeHtml, i18n } = deps;
+    const safeScope = scope === 'character' ? 'character' : 'global';
+    const extraAttrParts = Object.entries(extraAttrs)
+        .map(([key, value]) => `data-${key}="${escapeHtml(String(value))}"`)
+        .join(' ');
+    if (!tools || typeof tools !== 'object') {
+        const inheritNote = inheritedTools
+            ? i18n('Inherits the profile\'s default tool flags.')
+            : i18n('No tools (inherits the no-tools default — node will run as a single forced-function call).');
+        return `
+<div class="luker_orch_tools_inherit_block">
+    <div class="luker-studio-empty-hint">${escapeHtml(inheritNote)}</div>
+    <div class="menu_button menu_button_small" data-luker-action="${escapeHtml(overrideAction)}" data-scope="${safeScope}" ${extraAttrParts}>${escapeHtml(i18n('Override for this'))}</div>
+</div>`;
+    }
+    return `
+<div class="luker_orch_tools_override_block">
+    ${renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs)}
+    <div class="menu_button menu_button_small" data-luker-action="${escapeHtml(resetAction)}" data-scope="${safeScope}" ${extraAttrParts}>${escapeHtml(i18n('Reset to inherit'))}</div>
+</div>`;
+}
+
 function renderAgendaAgentSelectOptions(deps, editor, selectedAgentId = '') {
     const {
         escapeHtml,
@@ -54,6 +161,16 @@ function renderAgendaAgentBoard(deps, scope, editor) {
     <textarea class="text_pole textarea_compact" rows="4" data-luker-agenda-agent-field="systemPrompt" data-scope="${safeScope}" data-agent-id="${escapeHtml(agentId)}">${escapeHtml(preset.systemPrompt)}</textarea>
     <label>${escapeHtml(i18n('User Prompt Template'))}</label>
     <textarea class="text_pole textarea_compact" rows="5" data-luker-agenda-agent-field="userPromptTemplate" data-scope="${safeScope}" data-agent-id="${escapeHtml(agentId)}">${escapeHtml(preset.userPromptTemplate)}</textarea>
+    <details class="luker_orch_tools_section">
+        <summary>${escapeHtml(i18n('Tools (override profile default)'))}</summary>
+        ${renderInheritOrOverridePanel(deps, safeScope, preset.tools, {
+        dataAttrName: 'luker-agenda-agent-tool',
+        extraAttrs: { 'agent-id': agentId },
+        overrideAction: 'agenda-agent-tools-override',
+        resetAction: 'agenda-agent-tools-reset',
+        inheritedTools: editor?.defaultTools || null,
+    })}
+    </details>
 </div>`).join('');
 }
 
@@ -98,6 +215,17 @@ export function renderAgendaWorkspace(deps, scope, editor, title = '') {
         </div>
         <div class="luker-studio-workspace-col">
             <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Agenda Agents'))}</div>
+            <details class="luker_orch_tools_section">
+                <summary>${escapeHtml(i18n('Default tools for all agents (cascade base)'))}</summary>
+                <div class="luker-studio-empty-hint">${escapeHtml(i18n('Per-agent overrides take precedence over these defaults. Leave empty to disable tools by default.'))}</div>
+                ${editor?.defaultTools
+        ? `${renderToolFlagsGrid(deps, safeScope, editor.defaultTools, 'luker-agenda-default-tool')}
+                <div class="luker-studio-actions-row">
+                    <div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable all'))}</div>
+                    <div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear all (back to no defaults)'))}</div>
+                </div>`
+        : `<div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable defaults (all on)'))}</div>`}
+            </details>
             <div>${renderAgendaAgentBoard(deps, safeScope, editor)}</div>
             <div class="luker-studio-add-row">
                 <input class="text_pole" data-luker-agenda-new-agent="${safeScope}" placeholder="${escapeHtml(i18n('new_preset_id'))}" />
@@ -110,12 +238,25 @@ export function renderAgendaWorkspace(deps, scope, editor, title = '') {
 
 export function renderEditorWorkspace(deps, scope, editor, title) {
     const { escapeHtml, i18n, renderPresetBoard, renderWorkflowBoard } = deps;
+    const safeScope = scope === 'character' ? 'character' : 'global';
+    const specDefaultTools = editor?.spec?.defaultTools || null;
     return `
 <div class="luker-studio-workspace" data-luker-scope-root="${scope}">
     <div class="luker-studio-workspace-title">${escapeHtml(title)}</div>
     <div class="luker-studio-workspace-grid">
         <div class="luker-studio-workspace-col">
             <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Workflow'))}</div>
+            <details class="luker_orch_tools_section">
+                <summary>${escapeHtml(i18n('Default tools for all nodes (cascade base)'))}</summary>
+                <div class="luker-studio-empty-hint">${escapeHtml(i18n('Per-node overrides take precedence. Leave empty to keep nodes on the single-forced-function code path.'))}</div>
+                ${specDefaultTools
+        ? `${renderToolFlagsGrid(deps, safeScope, specDefaultTools, 'luker-spec-default-tool')}
+                <div class="luker-studio-actions-row">
+                    <div class="menu_button menu_button_small" data-luker-action="spec-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable all'))}</div>
+                    <div class="menu_button menu_button_small" data-luker-action="spec-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear all (back to no defaults)'))}</div>
+                </div>`
+        : `<div class="menu_button menu_button_small" data-luker-action="spec-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable defaults (all on)'))}</div>`}
+            </details>
             <div>${renderWorkflowBoard(scope, editor)}</div>
             <div class="menu_button menu_button_small" data-luker-action="stage-add" data-scope="${scope}">${escapeHtml(i18n('Add Stage'))}</div>
         </div>
