@@ -950,17 +950,17 @@ async function onWorldInfoFinalized(payload) {
             activatedEntryKeys.add(`${world}.${uid}`);
         }
     }
-    const loopRunMeta = { activatedEntryKeys };
+    const runMeta = { activatedEntryKeys };
     const orchestrationPayload = linkedAbort.signal && linkedAbort.signal !== payload?.signal
         ? {
             ...payload,
             signal: linkedAbort.signal,
             __lukerOrchGenerationSignal: payload?.signal || null,
-            __lukerLoop: loopRunMeta,
+            __lukerRun: runMeta,
         }
         : {
             ...payload,
-            __lukerLoop: loopRunMeta,
+            __lukerRun: runMeta,
         };
     let stopRequestedByUser = false;
     let resolveStopRequest = null;

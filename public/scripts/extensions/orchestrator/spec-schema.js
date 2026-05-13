@@ -32,6 +32,7 @@ import {
     ORCH_NODE_TYPE_WORKER,
     defaultSpec,
 } from './defaults.js';
+import { sanitizeOptionalAgentToolFlags } from './persistence.js';
 
 const MODULE_NAME = 'orchestrator';
 
@@ -65,6 +66,7 @@ export function normalizeNodeSpec(node) {
             preset: node,
             type: ORCH_NODE_TYPE_WORKER,
             userPromptTemplate: undefined,
+            tools: null,
         };
     }
 
@@ -75,6 +77,10 @@ export function normalizeNodeSpec(node) {
         preset,
         type: normalizeNodeType(node?.type),
         userPromptTemplate: typeof node?.userPromptTemplate === 'string' ? node.userPromptTemplate : undefined,
+        // null = "inherit from profile defaultTools"; an object = explicit
+        // per-node override. Sanitizer below normalizes the object shape so
+        // missing flags fall to their default-off disposition.
+        tools: sanitizeOptionalAgentToolFlags(node?.tools),
     };
 }
 
@@ -97,6 +103,7 @@ export function sanitizeSpec(spec) {
                         preset: String(node.preset || node.id || node.node || '').trim(),
                         type: normalizeNodeType(node.type),
                         userPromptTemplate: typeof node.userPromptTemplate === 'string' ? node.userPromptTemplate : undefined,
+                        tools: sanitizeOptionalAgentToolFlags(node.tools),
                     };
                     if (!compact.id && compact.preset) {
                         compact.id = compact.preset;
@@ -119,6 +126,11 @@ export function sanitizeSpec(spec) {
 
     return {
         stages: normalizedStages.length > 0 ? normalizedStages : structuredClone(defaultSpec.stages),
+        // null = no profile-level default. An object = canonical tool
+        // flags applied to any node whose own `tools` is null. The runtime
+        // resolver picks node.tools first, then this, then mode's all-off
+        // built-in default.
+        defaultTools: sanitizeOptionalAgentToolFlags(spec.defaultTools),
     };
 }
 

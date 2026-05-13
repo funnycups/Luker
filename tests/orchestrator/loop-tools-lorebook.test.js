@@ -7,7 +7,7 @@
  *     (content + key list both contribute to the haystack) and excludes
  *     entries already activated this turn so the agent does not waste
  *     rounds rediscovering what main-flow World Info already injected.
- *     The activated set lives at `context.__lukerLoop.activatedEntryKeys`
+ *     The activated set lives at `context.__lukerRun.activatedEntryKeys`
  *     as a `Set<${world}.${uid}>` populated by the orchestrator's
  *     `onWorldInfoFinalized` hook.
  *   - lorebook_get fetches a specific entry by key. It does NOT dedup
@@ -36,7 +36,7 @@ import { ToolError } from '../../public/scripts/extensions/orchestrator/loop-run
 function makeFixture(entries, opts = {}) {
     return {
         __getSortedEntriesFn: async () => entries,
-        __lukerLoop: opts.activated
+        __lukerRun: opts.activated
             ? { activatedEntryKeys: new Set(opts.activated) }
             : undefined,
     };
@@ -103,7 +103,7 @@ describe('execLorebookSearch (Task 9)', () => {
     });
 
     test('handles missing activatedEntryKeys gracefully', async () => {
-        const ctx = makeFixture(SAMPLE_ENTRIES); // no activated set in __lukerLoop
+        const ctx = makeFixture(SAMPLE_ENTRIES); // no activated set in __lukerRun
         const result = await execLorebookSearch({ query: 'autumn', limit: 5 }, ctx);
         expect(result.entries.length).toBe(2);
         expect(result.excluded_active_count).toBe(0);
@@ -198,7 +198,7 @@ describe('central dispatcher includes lorebook tools (Task 9)', () => {
     });
 });
 
-describe('runLoopOrchestration propagates payload.__lukerLoop into tool context (Task 9)', () => {
+describe('runLoopOrchestration propagates payload.__lukerRun into tool context (Task 9)', () => {
     test('lorebook_search invoked through the runtime sees activatedEntryKeys from payload', async () => {
         const { runLoopOrchestration } = await import(
             '../../public/scripts/extensions/orchestrator/loop-runtime.js'
@@ -244,7 +244,7 @@ describe('runLoopOrchestration propagates payload.__lukerLoop into tool context 
         };
 
         // Top-level context exposes the world-info loader fixture; payload
-        // carries `__lukerLoop.activatedEntryKeys` exactly as main.js sets it.
+        // carries `__lukerRun.activatedEntryKeys` exactly as main.js sets it.
         const fakeEntries = SAMPLE_ENTRIES;
         const context = {
             chat: [],
@@ -253,7 +253,7 @@ describe('runLoopOrchestration propagates payload.__lukerLoop into tool context 
         const payload = {
             signal: new AbortController().signal,
             coreChat: [],
-            __lukerLoop: { activatedEntryKeys: new Set(['global.3']) },
+            __lukerRun: { activatedEntryKeys: new Set(['global.3']) },
         };
 
         const result = await runLoopOrchestration(context, payload, profile, { sendLlm });

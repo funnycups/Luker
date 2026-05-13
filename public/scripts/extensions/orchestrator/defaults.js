@@ -270,6 +270,7 @@ export const defaultSpec = {
         { id: 'review', mode: 'serial', nodes: [{ id: 'critic', preset: 'critic', type: ORCH_NODE_TYPE_REVIEW }] },
         { id: 'finalize', mode: 'serial', nodes: ['synthesizer'] },
     ],
+    defaultTools: null,
 };
 
 export const defaultPresets = {

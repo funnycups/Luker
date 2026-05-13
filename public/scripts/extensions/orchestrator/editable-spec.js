@@ -53,6 +53,7 @@ import {
     normalizeNodeType,
     sanitizeSpec,
 } from './spec-schema.js';
+import { sanitizeOptionalAgentToolFlags } from './persistence.js';
 
 export function sanitizeIdentifierToken(value, fallback = '') {
     const normalized = String(value || '')
@@ -68,6 +69,11 @@ export function createPresetDraft(seed = {}) {
         userPromptTemplate: String(seed.userPromptTemplate || '').trim(),
         apiPresetName: getPresetApiPresetName(seed),
         promptPresetName: getPresetPromptPresetName(seed),
+        // null = inherit from profile.defaultTools at runtime; an object =
+        // per-preset override (spec node / agenda agent / loop). The
+        // sanitizer canonicalizes the shape (missing flags default OFF in
+        // this opt-in path; loop mode does its own all-on layering).
+        tools: sanitizeOptionalAgentToolFlags(seed.tools),
     };
 }
 

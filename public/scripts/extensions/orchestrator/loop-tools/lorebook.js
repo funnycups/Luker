@@ -9,7 +9,7 @@
  *     activated this turn** (those have already been injected into the
  *     main model via main-flow World Info, so the agent rediscovering
  *     them wastes a round). The activated set rides on the run context
- *     at `context.__lukerLoop.activatedEntryKeys`, populated by the
+ *     at `context.__lukerRun.activatedEntryKeys`, populated by the
  *     orchestrator's `onWorldInfoFinalized` hook.
  *   - lorebook_get({ entry_key, book? }) fetches a single entry by key
  *     with full content. Does NOT dedup against the activated set: the
@@ -60,7 +60,7 @@ async function loadAllEnabledEntries(context) {
  * the main model context.
  *
  * @param {{ query: string, limit?: number }} args
- * @param {object} context — run context (carries `__lukerLoop` + loader hook)
+ * @param {object} context — run context (carries `__lukerRun` + loader hook)
  * @returns {Promise<{entries: Array<{book: string, key: string[], preview: string}>, excluded_active_count: number}>}
  */
 export async function execLorebookSearch(args, context) {
@@ -76,8 +76,8 @@ export async function execLorebookSearch(args, context) {
     const q = queryRaw.toLowerCase();
 
     const entries = await loadAllEnabledEntries(context);
-    const activated = context?.__lukerLoop?.activatedEntryKeys instanceof Set
-        ? context.__lukerLoop.activatedEntryKeys
+    const activated = context?.__lukerRun?.activatedEntryKeys instanceof Set
+        ? context.__lukerRun.activatedEntryKeys
         : new Set();
 
     let excluded = 0;

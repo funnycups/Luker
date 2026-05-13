@@ -144,6 +144,36 @@ function readBooleanFlag(input, defaultValue) {
 }
 
 function sanitizeLoopToolFlags(input) {
+    // Loop mode defaults every flag ON — the agent has the full tool set
+    // unless the user explicitly disables a flag. `sanitizeAgentToolFlags`
+    // below is the shared sanitizer; for spec / agenda nodes it defaults
+    // OFF (no tools) when no input was provided. Loop's all-on policy
+    // stays the standalone outlier because loop has no "inherit"
+    // semantics — its profile root *is* the tools spec.
+    return sanitizeAgentToolFlags(input, { defaultAllOn: true, forceFinalize: true });
+}
+
+/**
+ * Canonical tool-flag sanitizer used by spec node / agenda agent /
+ * profile defaultTools / loop profile. Caller picks the default disposition:
+ *
+ *   - `defaultAllOn: true`  → missing fields default to enabled. Used by
+ *                              loop mode where the agent always has tools.
+ *   - `defaultAllOn: false` → missing fields default to disabled. Used by
+ *                              spec / agenda where tools are opt-in.
+ *
+ * `forceFinalize: true` forces `finalize: true` regardless of input. Loop
+ * needs it (the agent has no other terminator); spec / agenda nodes don't,
+ * since their wrapping driver provides its own finalize when the cascade
+ * resolves to a non-empty tool set.
+ *
+ * Returns the canonical flag object. The cascade is performed elsewhere
+ * (`resolveAgentToolFlags`) — this function never returns null; it always
+ * builds a complete shape. Callers wanting "inherit" semantics pass
+ * `null` / `undefined` to the cascade resolver directly.
+ */
+export function sanitizeAgentToolFlags(input, { defaultAllOn = false, forceFinalize = false } = {}) {
+    const def = Boolean(defaultAllOn);
     const tools = input && typeof input === 'object' ? input : {};
     const noteIn = tools.note && typeof tools.note === 'object' ? tools.note : {};
     const chatIn = tools.chat && typeof tools.chat === 'object' ? tools.chat : {};
@@ -152,36 +182,85 @@ function sanitizeLoopToolFlags(input) {
     const searchIn = tools.search && typeof tools.search === 'object' ? tools.search : {};
     return {
         note: {
-            add: readBooleanFlag(noteIn.add, true),
-            delete: readBooleanFlag(noteIn.delete, true),
+            add: readBooleanFlag(noteIn.add, def),
+            delete: readBooleanFlag(noteIn.delete, def),
         },
         chat: {
-            read_range: readBooleanFlag(chatIn.read_range, true),
-            search: readBooleanFlag(chatIn.search, true),
+            read_range: readBooleanFlag(chatIn.read_range, def),
+            search: readBooleanFlag(chatIn.search, def),
         },
         lorebook: {
-            search: readBooleanFlag(lorebookIn.search, true),
-            get: readBooleanFlag(lorebookIn.get, true),
+            search: readBooleanFlag(lorebookIn.search, def),
+            get: readBooleanFlag(lorebookIn.get, def),
         },
         memory: {
-            search: readBooleanFlag(memoryIn.search, true),
-            list_recent: readBooleanFlag(memoryIn.list_recent, true),
-            get: readBooleanFlag(memoryIn.get, true),
+            search: readBooleanFlag(memoryIn.search, def),
+            list_recent: readBooleanFlag(memoryIn.list_recent, def),
+            get: readBooleanFlag(memoryIn.get, def),
         },
-        // Web tools default ON to match the other namespaces. The
-        // underlying search-tools plugin's enable flag still gates
-        // execution: when the plugin is missing or disabled the loop tool
-        // raises SEARCH_UNAVAILABLE / SEARCH_DISABLED so the agent
-        // sees a structured error and pivots.
         search: {
-            search: readBooleanFlag(searchIn.search, true),
-            visit: readBooleanFlag(searchIn.visit, true),
+            search: readBooleanFlag(searchIn.search, def),
+            visit: readBooleanFlag(searchIn.visit, def),
         },
-        // The loop has no other terminator; `finalize` is the only tool the
-        // agent can call to stop. We accept user input here for forward
-        // compatibility but always coerce back to true.
-        finalize: true,
+        // `finalize` is the only tool the agent can use to stop a tool
+        // loop. Loop mode (and spec/agenda nodes that opt into tools)
+        // need it forced true so the wrapper driver has a known
+        // terminator. Pure-default callers (no `forceFinalize`) still
+        // get the default disposition.
+        finalize: forceFinalize ? true : readBooleanFlag(tools.finalize, def),
     };
+}
+
+/**
+ * Optional-input variant: `null` / `undefined` mean "inherit from upstream"
+ * and pass through unchanged. Otherwise delegates to
+ * `sanitizeAgentToolFlags` with the caller's defaults. Used by spec node
+ * and agenda agent sanitizers where the persisted shape is `null | object`.
+ */
+export function sanitizeOptionalAgentToolFlags(input, opts = {}) {
+    if (input === null || input === undefined) return null;
+    return sanitizeAgentToolFlags(input, opts);
+}
+
+/**
+ * Cascade resolver for an agent invocation. Returns the canonical flag
+ * object to apply at runtime:
+ *
+ *   1. If the node / agent has its own `tools` field set (object), use it.
+ *   2. Otherwise, fall back to the profile's `defaultTools` (object).
+ *   3. Otherwise, return the built-in fallback (`builtinDefault`, which
+ *      callers can pass as either an all-off shape — spec / agenda — or
+ *      an all-on shape — single mode if it ever opts in).
+ *
+ * All three layers should already be sanitized; this helper just picks
+ * the highest-priority non-null one.
+ */
+export function resolveAgentToolFlags(nodeTools, profileDefaultTools, builtinDefault = null) {
+    if (nodeTools && typeof nodeTools === 'object') return nodeTools;
+    if (profileDefaultTools && typeof profileDefaultTools === 'object') return profileDefaultTools;
+    if (builtinDefault && typeof builtinDefault === 'object') return builtinDefault;
+    return null;
+}
+
+/**
+ * Returns true when any flag in the canonical shape is enabled. Used
+ * by spec / agenda runtime to decide whether a node needs the
+ * multi-round tool-loop driver instead of the single-forced-function
+ * code path. `finalize` alone doesn't count as "enabled tools" — the
+ * tool loop is pointless without at least one non-terminator tool.
+ */
+export function hasAnyToolEnabled(flags) {
+    if (!flags || typeof flags !== 'object') return false;
+    const groups = ['note', 'chat', 'lorebook', 'memory', 'search'];
+    for (const group of groups) {
+        const bag = flags[group];
+        if (bag && typeof bag === 'object') {
+            for (const key of Object.keys(bag)) {
+                if (bag[key] === true) return true;
+            }
+        }
+    }
+    return false;
 }
 
 function sanitizeLoopCapsuleInject(input) {

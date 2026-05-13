@@ -550,6 +550,57 @@ async function attachNotesFloorState(context) {
 }
 
 /**
+ * Build a per-run tool dispatch context bundling the run-scoped metadata
+ * every loop-tool family depends on:
+ *
+ *   - `__lukerRun.activatedEntryKeys` — World Info entries already
+ *     injected for this turn, populated by the orchestrator's
+ *     `onWorldInfoFinalized` hook and forwarded by `main.js` on the
+ *     generation payload. `lorebook_search` reads this to dedup.
+ *   - `__memoryStore` (+ optional `__memoryDeps`) — chat-scoped
+ *     memory-graph handle; `memory_*` tools surface
+ *     `ToolError(MEMORY_DISABLED)` when this is null.
+ *   - `__floorStateForNotes` adapter + `__loopNotes` + `__noteIdSnapshot`
+ *     — per-chat persistent notes; `note_add` / `note_delete` plus the
+ *     system-prompt builder all read this.
+ *
+ * The returned object is created via `Object.create(context)` so caller
+ * sees a fresh frame whose unset fields fall through to the upstream
+ * extension context. Tests pre-populate the relevant `__memoryStore` /
+ * `__floorStateForNotes` / `__loopNotes` fields on the upstream context
+ * to skip the production loaders — that "undefined means not-set, load
+ * it" gate per attachment is preserved here.
+ *
+ * Used by `runLoopOrchestration` directly and exported so spec / agenda
+ * runtimes can reuse the same context shape when their nodes / agents
+ * opt into loop tools through the `tools` cascade.
+ *
+ * @param {object} context — extension context (chat lives here)
+ * @param {object} payload — generation payload (carries `__lukerRun`)
+ * @returns {Promise<object>} the tool dispatch context (mutated copy)
+ */
+export async function attachToolContext(context, payload) {
+    const toolContext = context && typeof context === 'object'
+        ? Object.create(context)
+        : {};
+    if (payload && typeof payload === 'object' && payload.__lukerRun && typeof payload.__lukerRun === 'object') {
+        toolContext.__lukerRun = payload.__lukerRun;
+    } else if (!toolContext.__lukerRun) {
+        toolContext.__lukerRun = { activatedEntryKeys: new Set() };
+    }
+
+    if (toolContext.__memoryStore === undefined) {
+        await attachMemoryStore(toolContext);
+    }
+
+    if (toolContext.__floorStateForNotes === undefined && toolContext.__loopNotes === undefined) {
+        await attachNotesFloorState(toolContext);
+    }
+
+    return toolContext;
+}
+
+/**
  * Single-agent loop driver. Returns:
  *
  *   {
@@ -588,46 +639,7 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
     const abortSignal = isAbortSignalLike(payload?.signal) ? payload.signal : null;
     throwIfAborted(abortSignal, 'Orchestration aborted.');
 
-    // Tool dispatch context: extends SillyTavern's context with run-scoped
-    // metadata the loop tools rely on. Currently carries
-    // `__lukerLoop.activatedEntryKeys` (the World Info entries already
-    // injected this turn — used by lorebook.search to dedup) and the
-    // memory-graph store handle (`__memoryStore` + optional `__memoryDeps`,
-    // populated by `attachMemoryStore` for production or pre-set on the
-    // upstream context by tests). Built as a fresh object so the upstream
-    // context is never mutated. Falls through to a tests-friendly empty
-    // `__lukerLoop` when payload didn't carry one (e.g. non-orchestration
-    // callers, integration fixtures).
-    const toolContext = context && typeof context === 'object'
-        ? Object.create(context)
-        : {};
-    if (payload && typeof payload === 'object' && payload.__lukerLoop && typeof payload.__lukerLoop === 'object') {
-        toolContext.__lukerLoop = payload.__lukerLoop;
-    } else if (!toolContext.__lukerLoop) {
-        toolContext.__lukerLoop = { activatedEntryKeys: new Set() };
-    }
-
-    // Memory tools (Task 10) need a chat-scoped memory-graph store. Tests
-    // pre-set `__memoryStore` (and optionally `__memoryDeps`) on the
-    // upstream context; production wiring delegates to
-    // `attachMemoryStore(toolContext)` which loads the store via
-    // memory-graph's floor-state instance and falls back to null on any
-    // failure (memory-graph disabled, missing API, race during chat
-    // switch). The tools then surface `ToolError(MEMORY_DISABLED)` so the
-    // agent sees a structured failure rather than a stack trace.
-    if (toolContext.__memoryStore === undefined) {
-        await attachMemoryStore(toolContext);
-    }
-
-    // note.add (Task 11) needs a per-chat floor-state namespace and the
-    // historical notes loaded into `__loopNotes` so the system prompt
-    // builder can re-inject them. Tests pre-set both fields directly to
-    // skip the floor-state mount; production calls `attachNotesFloorState`
-    // which silently degrades (adapter null, notes []) when
-    // `createFloorState` isn't available.
-    if (toolContext.__floorStateForNotes === undefined && toolContext.__loopNotes === undefined) {
-        await attachNotesFloorState(toolContext);
-    }
+    const toolContext = await attachToolContext(context, payload);
 
     const traceApi = await resolveTraceApi(deps);
     const trace = traceApi.create(context, payload, [], { mode: 'loop' });

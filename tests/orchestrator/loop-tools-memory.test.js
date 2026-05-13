@@ -317,7 +317,7 @@ describe('runtime propagates __memoryStore / __memoryDeps into toolContext (Task
         const payload = {
             signal: new AbortController().signal,
             coreChat: [],
-            __lukerLoop: { activatedEntryKeys: new Set() },
+            __lukerRun: { activatedEntryKeys: new Set() },
         };
 
         const result = await runLoopOrchestration(context, payload, profile, { sendLlm });

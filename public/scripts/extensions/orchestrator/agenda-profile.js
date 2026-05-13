@@ -41,6 +41,7 @@ import {
     sanitizeIdentifierToken,
     sanitizePresetMap,
 } from './editable-spec.js';
+import { sanitizeOptionalAgentToolFlags } from './persistence.js';
 import { toReadableYamlText } from './output-formatting.js';
 
 const MODULE_NAME = 'orchestrator';
@@ -109,6 +110,12 @@ export function sanitizeAgendaWorkingProfile(workingProfile = null) {
             maxConcurrentAgents: Math.max(1, Math.min(12, Math.floor(Number(limitsSource?.maxConcurrentAgents) || 3))),
             maxTotalRuns: Math.max(1, Math.min(200, Math.floor(Number(limitsSource?.maxTotalRuns) || 24))),
         },
+        // null = no profile-level default (every agent inherits the
+        // mode's all-off built-in unless they set their own `tools`).
+        // An object = "use these flags as the fallback for any agent
+        // that doesn't override". Per-agent `tools` lives on
+        // `agents[id].tools` and takes precedence.
+        defaultTools: sanitizeOptionalAgentToolFlags(source?.defaultTools),
     };
 }
 
@@ -121,6 +128,7 @@ export function ensureAgendaEditorIntegrity(editor) {
     editor.agents = normalized.agents;
     editor.finalAgentId = normalized.finalAgentId;
     editor.limits = normalized.limits;
+    editor.defaultTools = normalized.defaultTools;
     if ('avatar' in editor) {
         editor.avatar = String(editor.avatar || '');
     }
@@ -166,5 +174,6 @@ export function buildAgendaProfileForRuntime(workingProfile = null) {
             maxConcurrentAgents: profile.limits.maxConcurrentAgents,
             maxTotalRuns: profile.limits.maxTotalRuns,
         },
+        defaultTools: profile.defaultTools,
     };
 }
