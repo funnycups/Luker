@@ -66,6 +66,42 @@ Agenda 模式的 Planner 調度透過 OpenAI 工具呼叫實現,依賴 Luker 的
 - Planner 用的連接設定必須支援 function calling(OpenAI / Claude / Gemini 都支援)
 - 工具呼叫失敗時的重試由 Function Call Runtime 處理(詳見對應文件)
 
+## Trace 面板
+
+主回覆出來後在編排器面板點 **查看運行態軌跡**,Agenda 的 trace 彈窗會按幾塊鋪出整次 run——頂部元資訊 + 任務看板、Planner 每一輪的輸入輸出、流程事件時間線、原始 JSON。
+
+### 面板概覽 + 任務看板
+
+頂部狀態摘要裡 Agenda 模式獨有的一項是 **節點執行次數**——所有 worker 被調度的總次數,觸發「總執行次數上限」那道閘時看的就是這個。REVIEW 重跑次數對 Agenda 不適用,會一直是 0。
+
+緊跟在下面的「任務看板」是 4 列 Kanban:**待辦 / 進行中 / 完成 / 阻塞**,每張卡片顯示 todo id、目標 agent 與 goal 描述。看板逐輪更新,run 結束後保留終態——看完成列裡 todo 的先後順序就能知道 Planner 實際派活的節奏。
+
+![Agenda trace 面板:元資訊 + 任務看板四列狀態](/images/orchestrator/real-agenda-meta.png)
+
+### Planner 輪次
+
+「Planner 輪次」是 Agenda 最有價值的排錯視圖。每一輪裡左側是 Planner agent 本輪的輸出(`todo_ops` 列表:`set_status` / `add` / `set_goal` 等),右側是該輪被派發的 worker 們及它們各自的輸出。Planner 的「會話」也在這裡:`系統` 塊 + `使用者` 塊就是 Planner 收到的完整 prompt。
+
+![Agenda Planner 輪次:第 1 輪的 Planner 輸出 + dispatch 出的 worker](/images/orchestrator/real-agenda-planner-rounds.png)
+
+發現 Planner 派錯 agent / 漏掉某步 / 死循環時,直接對照這裡的 `todo_ops` 與 worker 輸出找根因。
+
+### 流程事件
+
+「流程事件」按時間序號鋪出每個事件:`Run started` → 多組 `worker started` / `worker completed`(每次 Planner 調度都是一對),最後 `Run completed`。
+
+![Agenda 流程事件:Run started → 多組 worker_started/completed → Run completed](/images/orchestrator/real-agenda-events.png)
+
+事件密度比 spec 高:Agenda 一次 run 通常會有 20+ 事件,Planner 輪次 + 各 agent 調度都會留下記錄。事件末尾出現的 `finalizer` 就是預設的 **Final Agent**,在設定參考裡能換成其他 agent id。
+
+### 原始軌跡
+
+面板最底下「最新注入文本」是 Final Agent 的輸出——也就是注入主模型的 capsule。再往下「原始運行態軌跡」是整次 run 的 JSON 形態,包含 `runId`、`chatKey`、`generationType`、`capsuleText`、`note` 等頂層欄位。
+
+![Agenda 原始軌跡 JSON 與最新注入文本](/images/orchestrator/real-agenda-rawtrace.png)
+
+報 bug 時點「匯出本次 run」會下載這份 JSON 的 jsonl 形式,直接附給開發者。
+
 ## Agenda 設定參考
 
 <details>

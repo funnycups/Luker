@@ -66,6 +66,42 @@ Agenda's Planner dispatch is implemented via OpenAI tool calls and depends on Lu
 - The Planner's connection profile must support function calling (OpenAI / Claude / Gemini all do)
 - Tool-call retry on failure is handled by Function Call Runtime (see that page for details)
 
+## Trace panel
+
+Once the main reply lands, click **View runtime trace** in the orchestrator panel. Agenda's trace popup splits the run into a few blocks — meta header + task board, per-round Planner inputs and outputs, the event timeline, and raw JSON.
+
+### Panel overview + task board
+
+The status header has one Agenda-specific field worth calling out: **Node execution count** — the total number of worker dispatches across the run, used to gate the "Max Total Executions" cap. The REVIEW rerun counter doesn't apply to Agenda and stays at 0.
+
+Below the header is a four-column "Task board" Kanban: **Todo / In progress / Done / Blocked**. Each card shows a todo id, the target agent, and the goal. The board updates round by round and keeps its final shape after the run — read the Done column top-to-bottom to see the order in which the Planner actually dispatched work.
+
+![Agenda trace panel: meta header + four-column task board](/images/orchestrator/real-agenda-meta.png)
+
+### Planner rounds
+
+"Planner rounds" is Agenda's most useful debugging view. For each round the left side shows that round's Planner output (a `todo_ops` list with `set_status` / `add` / `set_goal` and friends); the right side shows the workers it dispatched, with their outputs. The Planner's own conversation lives here too: `System` block + `User` block is the full prompt the Planner received this round.
+
+![Agenda Planner rounds: round 1's Planner output + the workers it dispatched](/images/orchestrator/real-agenda-planner-rounds.png)
+
+When the Planner sends to the wrong agent / skips a step / falls into a loop, cross-reference the `todo_ops` and worker output here to find the root cause.
+
+### Event timeline
+
+The event timeline lists every event in order: `Run started` → many `worker started` / `worker completed` pairs (one pair per dispatch), and finally `Run completed`.
+
+![Agenda event timeline: Run started → many worker_started/completed pairs → Run completed](/images/orchestrator/real-agenda-events.png)
+
+Event density is higher than Spec — a typical Agenda run produces 20+ events because Planner rounds and every agent dispatch are recorded. The `finalizer` worker at the end is the default **Final Agent**; the configuration reference shows how to swap it for a different agent id.
+
+### Raw trace
+
+At the bottom, "Latest injected text" is the Final Agent's output — the capsule actually injected into the main model. The "Raw runtime trace" beneath it is the full run as JSON, including top-level `runId`, `chatKey`, `generationType`, `capsuleText`, `note` and other fields.
+
+![Agenda raw trace JSON and latest injected text](/images/orchestrator/real-agenda-rawtrace.png)
+
+When filing a bug, **Export this run** downloads this JSON as a JSONL file you can hand to the developer.
+
 ## Agenda configuration reference
 
 <details>
