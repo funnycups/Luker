@@ -82,6 +82,7 @@ export function renderInheritOrOverridePanel(deps, scope, tools, {
     overrideAction,
     resetAction,
     inheritedTools = null,
+    kind = 'agent',
 }) {
     const { escapeHtml, i18n } = deps;
     const safeScope = scope === 'character' ? 'character' : 'global';
@@ -89,13 +90,14 @@ export function renderInheritOrOverridePanel(deps, scope, tools, {
         .map(([key, value]) => `data-${key}="${escapeHtml(String(value))}"`)
         .join(' ');
     if (!tools || typeof tools !== 'object') {
-        const inheritNote = inheritedTools
-            ? i18n('Inherits the profile\'s default tool flags.')
-            : i18n('No tools (inherits the no-tools default — node will run as a single forced-function call).');
+        const noToolsText = kind === 'node'
+            ? i18n('No tools active. This node runs as a single LLM call.')
+            : i18n('No tools active. This agent runs as a single LLM call.');
+        const inheritNote = inheritedTools ? i18n('Using the profile default.') : noToolsText;
         return `
 <div class="luker_orch_tools_inherit_block">
     <div class="luker-studio-empty-hint">${escapeHtml(inheritNote)}</div>
-    <div class="menu_button menu_button_small" data-luker-action="${escapeHtml(overrideAction)}" data-scope="${safeScope}" ${extraAttrParts}>${escapeHtml(i18n('Override for this'))}</div>
+    <div class="menu_button menu_button_small" data-luker-action="${escapeHtml(overrideAction)}" data-scope="${safeScope}" ${extraAttrParts}>${escapeHtml(i18n('Override'))}</div>
 </div>`;
     }
     return `
@@ -162,13 +164,14 @@ function renderAgendaAgentBoard(deps, scope, editor) {
     <label>${escapeHtml(i18n('User Prompt Template'))}</label>
     <textarea class="text_pole textarea_compact" rows="5" data-luker-agenda-agent-field="userPromptTemplate" data-scope="${safeScope}" data-agent-id="${escapeHtml(agentId)}">${escapeHtml(preset.userPromptTemplate)}</textarea>
     <details class="luker_orch_tools_section">
-        <summary>${escapeHtml(i18n('Tools (override profile default)'))}</summary>
+        <summary>${escapeHtml(i18n('Tools'))}</summary>
         ${renderInheritOrOverridePanel(deps, safeScope, preset.tools, {
         dataAttrName: 'luker-agenda-agent-tool',
         extraAttrs: { 'agent-id': agentId },
         overrideAction: 'agenda-agent-tools-override',
         resetAction: 'agenda-agent-tools-reset',
         inheritedTools: editor?.defaultTools || null,
+        kind: 'agent',
     })}
     </details>
 </div>`).join('');
@@ -216,15 +219,15 @@ export function renderAgendaWorkspace(deps, scope, editor, title = '') {
         <div class="luker-studio-workspace-col">
             <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Agenda Agents'))}</div>
             <details class="luker_orch_tools_section">
-                <summary>${escapeHtml(i18n('Default tools for all agents (cascade base)'))}</summary>
-                <div class="luker-studio-empty-hint">${escapeHtml(i18n('Per-agent overrides take precedence over these defaults. Leave empty to disable tools by default.'))}</div>
+                <summary>${escapeHtml(i18n('Default tools for all agents'))}</summary>
+                <div class="luker-studio-empty-hint">${escapeHtml(i18n('Each agent can override these defaults below. Leave empty to keep tools off for all agents.'))}</div>
                 ${editor?.defaultTools
         ? `${renderToolFlagsGrid(deps, safeScope, editor.defaultTools, 'luker-agenda-default-tool')}
                 <div class="luker-studio-actions-row">
                     <div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable all'))}</div>
-                    <div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear all (back to no defaults)'))}</div>
+                    <div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear'))}</div>
                 </div>`
-        : `<div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable defaults (all on)'))}</div>`}
+        : `<div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable defaults'))}</div>`}
             </details>
             <div>${renderAgendaAgentBoard(deps, safeScope, editor)}</div>
             <div class="luker-studio-add-row">
@@ -247,15 +250,15 @@ export function renderEditorWorkspace(deps, scope, editor, title) {
         <div class="luker-studio-workspace-col">
             <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Workflow'))}</div>
             <details class="luker_orch_tools_section">
-                <summary>${escapeHtml(i18n('Default tools for all nodes (cascade base)'))}</summary>
-                <div class="luker-studio-empty-hint">${escapeHtml(i18n('Per-node overrides take precedence. Leave empty to keep nodes on the single-forced-function code path.'))}</div>
+                <summary>${escapeHtml(i18n('Default tools for all nodes'))}</summary>
+                <div class="luker-studio-empty-hint">${escapeHtml(i18n('Each node can override these defaults below. Leave empty to keep tools off for all nodes.'))}</div>
                 ${specDefaultTools
         ? `${renderToolFlagsGrid(deps, safeScope, specDefaultTools, 'luker-spec-default-tool')}
                 <div class="luker-studio-actions-row">
                     <div class="menu_button menu_button_small" data-luker-action="spec-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable all'))}</div>
-                    <div class="menu_button menu_button_small" data-luker-action="spec-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear all (back to no defaults)'))}</div>
+                    <div class="menu_button menu_button_small" data-luker-action="spec-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear'))}</div>
                 </div>`
-        : `<div class="menu_button menu_button_small" data-luker-action="spec-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable defaults (all on)'))}</div>`}
+        : `<div class="menu_button menu_button_small" data-luker-action="spec-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable defaults'))}</div>`}
             </details>
             <div>${renderWorkflowBoard(scope, editor)}</div>
             <div class="menu_button menu_button_small" data-luker-action="stage-add" data-scope="${scope}">${escapeHtml(i18n('Add Stage'))}</div>

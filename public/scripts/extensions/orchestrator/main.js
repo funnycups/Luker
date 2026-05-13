@@ -1372,13 +1372,14 @@ function renderWorkflowBoard(scope, editor) {
         <label>${escapeHtml(i18n('Node Prompt Template (optional)'))}</label>
         <textarea class="text_pole textarea_compact" rows="4" data-luker-field="node-template" data-scope="${scope}" data-stage-index="${stageIndex}" data-node-index="${nodeIndex}" placeholder="${escapeHtml(i18n('Use {{recent_chat}}, {{last_user}}, {{distiller}}, {{previous_outputs}}. Previous orchestration result and approved review feedback are auto-injected.'))}">${escapeHtml(node.userPromptTemplate)}</textarea>
         <details class="luker_orch_tools_section">
-            <summary>${escapeHtml(i18n('Tools (override profile default)'))}</summary>
+            <summary>${escapeHtml(i18n('Tools'))}</summary>
             ${renderInheritOrOverridePanel({ escapeHtml, i18n }, scope, node.tools, {
         dataAttrName: 'luker-spec-node-tool',
         extraAttrs: { 'stage-index': stageIndex, 'node-index': nodeIndex },
         overrideAction: 'spec-node-tools-override',
         resetAction: 'spec-node-tools-reset',
         inheritedTools: editor?.spec?.defaultTools || null,
+        kind: 'node',
     })}
         </details>
     </div>
