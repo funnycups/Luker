@@ -70,7 +70,7 @@ const result = getNodeById(store, 'n42', { includeNeighbors: true });
 
 ## Call Example: Orchestrator Loop Mode
 
-The orchestrator's loop-mode tools `memory.search` / `memory.list_recent` / `memory.get` are thin shells around these APIs; the key dedup logic is taking the union of the two "already-injected" id groups:
+The orchestrator's loop-mode tools `memory_search` / `memory_list_recent` / `memory_get` are thin shells around these APIs; the key dedup logic is taking the union of the two "already-injected" id groups:
 
 ```js
 // orchestrator/loop-tools/memory.js

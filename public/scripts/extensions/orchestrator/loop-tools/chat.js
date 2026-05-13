@@ -5,14 +5,14 @@
  * conversation" use cases without leaking SillyTavern internals into the
  * agent's prompt:
  *
- *   - chat.read_range({ start, end }) returns a contiguous slice of
+ *   - chat_read_range({ start, end }) returns a contiguous slice of
  *     `context.chat` floors normalized to `{ floor, role, content }`.
  *     Negative indices count from the end (Pythonic). The slice is hard
  *     capped at MAX_RANGE floors so a hallucinated `end: 9999` cannot
  *     blow up token budget; over-wide ranges raise a structured
  *     `ToolError(CHAT_RANGE_TOO_LARGE)` so the agent reads the failure
  *     and retries with a saner window.
- *   - chat.search({ query, limit }) is a case-insensitive substring scan
+ *   - chat_search({ query, limit }) is a case-insensitive substring scan
  *     over `mes` text. Results carry `content_preview` truncated to
  *     PREVIEW_LEN to keep the tool result small. Empty queries are
  *     rejected — without that guard `''.includes('')` matches every
@@ -71,7 +71,7 @@ export async function execChatReadRange(args, context) {
     if (start < 0 || end < 0) return [];
     if (end < start) {
         throw new ToolError(
-            `chat.read_range: end (${end}) must be >= start (${start}).`,
+            `chat_read_range: end (${end}) must be >= start (${start}).`,
             'CHAT_RANGE_INVALID',
             'Pass start <= end. Negative indices count from the end of the chat.',
         );
@@ -79,9 +79,9 @@ export async function execChatReadRange(args, context) {
     const span = end - start + 1;
     if (span > MAX_RANGE) {
         throw new ToolError(
-            `chat.read_range: range too large (${span} floors), max ${MAX_RANGE}.`,
+            `chat_read_range: range too large (${span} floors), max ${MAX_RANGE}.`,
             'CHAT_RANGE_TOO_LARGE',
-            `Reduce the range so end - start + 1 <= ${MAX_RANGE}. Use chat.search to locate specific floors first.`,
+            `Reduce the range so end - start + 1 <= ${MAX_RANGE}. Use chat_search to locate specific floors first.`,
         );
     }
 
@@ -109,7 +109,7 @@ export async function execChatSearch(args, context) {
     const queryRaw = String(args?.query ?? '');
     if (!queryRaw.trim()) {
         throw new ToolError(
-            'chat.search: query must be non-empty.',
+            'chat_search: query must be non-empty.',
             'CHAT_QUERY_EMPTY',
             'Provide a non-empty query string. Use whole words for best results.',
         );

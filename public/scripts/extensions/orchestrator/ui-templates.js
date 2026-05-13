@@ -192,29 +192,29 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
             <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Loop tools'))}</div>
             <fieldset class="luker_orch_loop_tools_group">
                 <legend>${escapeHtml(i18n('note (persistent notes)'))}</legend>
-                ${checkbox('note.add', note.add, 'note.add')}
-                ${checkbox('note.delete', note.delete, 'note.delete')}
+                ${checkbox('note.add', note.add, 'note_add')}
+                ${checkbox('note.delete', note.delete, 'note_delete')}
             </fieldset>
             <fieldset class="luker_orch_loop_tools_group">
                 <legend>${escapeHtml(i18n('chat (in-chat history)'))}</legend>
-                ${checkbox('chat.read_range', chat.read_range, 'chat.read_range')}
-                ${checkbox('chat.search', chat.search, 'chat.search')}
+                ${checkbox('chat.read_range', chat.read_range, 'chat_read_range')}
+                ${checkbox('chat.search', chat.search, 'chat_search')}
             </fieldset>
             <fieldset class="luker_orch_loop_tools_group">
                 <legend>${escapeHtml(i18n('lorebook (world info)'))}</legend>
-                ${checkbox('lorebook.search', lorebook.search, 'lorebook.search')}
-                ${checkbox('lorebook.get', lorebook.get, 'lorebook.get')}
+                ${checkbox('lorebook.search', lorebook.search, 'lorebook_search')}
+                ${checkbox('lorebook.get', lorebook.get, 'lorebook_get')}
             </fieldset>
             <fieldset class="luker_orch_loop_tools_group">
                 <legend>${escapeHtml(i18n('memory (memory-graph)'))}</legend>
-                ${checkbox('memory.search', memory.search, 'memory.search')}
-                ${checkbox('memory.list_recent', memory.list_recent, 'memory.list_recent')}
-                ${checkbox('memory.get', memory.get, 'memory.get')}
+                ${checkbox('memory.search', memory.search, 'memory_search')}
+                ${checkbox('memory.list_recent', memory.list_recent, 'memory_list_recent')}
+                ${checkbox('memory.get', memory.get, 'memory_get')}
             </fieldset>
             <fieldset class="luker_orch_loop_tools_group">
                 <legend>${escapeHtml(i18n('search (web search)'))}</legend>
-                ${checkbox('search.search', search.search, 'search.search')}
-                ${checkbox('search.visit', search.visit, 'search.visit')}
+                ${checkbox('search.search', search.search, 'search_search')}
+                ${checkbox('search.visit', search.visit, 'search_visit')}
             </fieldset>
             <fieldset class="luker_orch_loop_tools_group">
                 <legend>${escapeHtml(i18n('terminator'))}</legend>

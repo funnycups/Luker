@@ -22,8 +22,14 @@
  *      everything else respects the profile flag.
  *
  * Task 8 introduces the dispatcher with chat tools wired in. Task 9
- * appends `lorebook.search` / `lorebook.get`. Task 10 adds memory tools.
- * Task 11 adds `note.add`.
+ * appends `lorebook_search` / `lorebook_get`. Task 10 adds memory tools.
+ * Task 11 adds `note_add`.
+ *
+ * Tool names use `<namespace>_<verb>` (e.g. `chat_read_range`) because
+ * Anthropic's tool-name regex `^[a-zA-Z0-9_-]{1,128}$` rejects dots.
+ * The profile flag tree still nests as `tools.<ns>.<verb>` — only the
+ * LLM-visible name is flat. See `createPersistentToolCallPayload` and
+ * `executeLoopTool` for the legacy-`<ns>.<verb>` migration shim.
  */
 
 import { FINALIZE_TOOL_SCHEMA, ToolError } from './loop-runtime.js';
@@ -58,10 +64,10 @@ function registerTool(name, exec, schema) {
 
 // ---- chat namespace ------------------------------------------------------
 
-registerTool('chat.read_range', execChatReadRange, {
+registerTool('chat_read_range', execChatReadRange, {
     type: 'function',
     function: {
-        name: 'chat.read_range',
+        name: 'chat_read_range',
         description: 'Read a contiguous range of chat floors. Negative indices count from the end (e.g. start=-5, end=-1 reads the last 5 floors). Maximum 50 floors per call.',
         parameters: {
             type: 'object',
@@ -81,11 +87,11 @@ registerTool('chat.read_range', execChatReadRange, {
     },
 });
 
-registerTool('chat.search', execChatSearch, {
+registerTool('chat_search', execChatSearch, {
     type: 'function',
     function: {
-        name: 'chat.search',
-        description: 'Substring search across all chat floors. Case-insensitive. Returns matching floors with truncated previews; use chat.read_range to read full content for a specific floor.',
+        name: 'chat_search',
+        description: 'Substring search across all chat floors. Case-insensitive. Returns matching floors with truncated previews; use chat_read_range to read full content for a specific floor.',
         parameters: {
             type: 'object',
             properties: {
@@ -108,10 +114,10 @@ registerTool('chat.search', execChatSearch, {
 
 // ---- lorebook namespace -------------------------------------------------
 
-registerTool('lorebook.search', execLorebookSearch, {
+registerTool('lorebook_search', execLorebookSearch, {
     type: 'function',
     function: {
-        name: 'lorebook.search',
+        name: 'lorebook_search',
         description: 'Substring search across all enabled lorebooks (World Info entries). Excludes entries already activated this turn so the agent does not rediscover what main-flow World Info already injected. Returns book + key + truncated preview per match.',
         parameters: {
             type: 'object',
@@ -133,10 +139,10 @@ registerTool('lorebook.search', execLorebookSearch, {
     },
 });
 
-registerTool('lorebook.get', execLorebookGet, {
+registerTool('lorebook_get', execLorebookGet, {
     type: 'function',
     function: {
-        name: 'lorebook.get',
+        name: 'lorebook_get',
         description: 'Fetch a lorebook entry by key. Returns full content. Does NOT dedup against activated entries — use this when you need to quote an injected entry verbatim.',
         parameters: {
             type: 'object',
@@ -158,10 +164,10 @@ registerTool('lorebook.get', execLorebookGet, {
 
 // ---- memory namespace ---------------------------------------------------
 
-registerTool('memory.search', execMemorySearch, {
+registerTool('memory_search', execMemorySearch, {
     type: 'function',
     function: {
-        name: 'memory.search',
+        name: 'memory_search',
         description: 'Lexical (substring) search over memory-graph nodes for the current chat. Excludes nodes already injected into the main model context this turn (always-inject + recall-selected). Returns id + preview + optional type/time per match.',
         parameters: {
             type: 'object',
@@ -183,11 +189,11 @@ registerTool('memory.search', execMemorySearch, {
     },
 });
 
-registerTool('memory.list_recent', execMemoryListRecent, {
+registerTool('memory_list_recent', execMemoryListRecent, {
     type: 'function',
     function: {
-        name: 'memory.list_recent',
-        description: 'Browse the most recent memory-graph nodes in time-descending order. Excludes already-injected nodes (same union as memory.search). Use this to scan timeline-recent context the model has not yet seen.',
+        name: 'memory_list_recent',
+        description: 'Browse the most recent memory-graph nodes in time-descending order. Excludes already-injected nodes (same union as memory_search). Use this to scan timeline-recent context the model has not yet seen.',
         parameters: {
             type: 'object',
             properties: {
@@ -203,17 +209,17 @@ registerTool('memory.list_recent', execMemoryListRecent, {
     },
 });
 
-registerTool('memory.get', execMemoryGet, {
+registerTool('memory_get', execMemoryGet, {
     type: 'function',
     function: {
-        name: 'memory.get',
+        name: 'memory_get',
         description: 'Fetch a memory-graph node by id, with direct neighbor ids and edge metadata. Does NOT dedup against the injected set — use this to inspect an injected node\'s neighbors.',
         parameters: {
             type: 'object',
             properties: {
                 node_id: {
                     type: 'string',
-                    description: 'Node id from memory.search / memory.list_recent.',
+                    description: 'Node id from memory_search / memory_list_recent.',
                 },
             },
             required: ['node_id'],
@@ -224,10 +230,10 @@ registerTool('memory.get', execMemoryGet, {
 
 // ---- note namespace -----------------------------------------------------
 
-registerTool('note.add', execNoteAdd, {
+registerTool('note_add', execNoteAdd, {
     type: 'function',
     function: {
-        name: 'note.add',
+        name: 'note_add',
         description: 'Append a persistent note (bound to the current chat) that survives across loop runs and is re-injected into your system prompt at the start of the next run. Use sparingly: for short reminders, intent commitments, or "I should ask the user about X next turn." Long-form context belongs in lorebook / memory-graph. Limit: 1KB UTF-8 per note, 50 notes total per chat (oldest pruned automatically).',
         parameters: {
             type: 'object',
@@ -243,10 +249,10 @@ registerTool('note.add', execNoteAdd, {
     },
 });
 
-registerTool('note.delete', execNoteDelete, {
+registerTool('note_delete', execNoteDelete, {
     type: 'function',
     function: {
-        name: 'note.delete',
+        name: 'note_delete',
         description: 'Delete persisted notes by their 1-based positions in the "## Previous Notes" block of your system prompt (the same numbering you see at run start). Use this to prune notes whose role is exhausted: foreshadowing has fired, the character beat has happened, the setting was superseded by later events, or several notes have collapsed into a duplicate. Out-of-range or non-integer indexes are rejected with a structured error so you can correct on the next round.',
         parameters: {
             type: 'object',
@@ -266,11 +272,11 @@ registerTool('note.delete', execNoteDelete, {
 
 // ---- search namespace ---------------------------------------------------
 
-registerTool('search.search', execSearchSearch, {
+registerTool('search_search', execSearchSearch, {
     type: 'function',
     function: {
-        name: 'search.search',
-        description: 'Web search via the search-tools plugin (DuckDuckGo / SearXNG / Brave, depending on plugin settings). Use only when the user asks about current events, fresh facts, or external information not present in chat / lorebook / memory. Returns provider-shaped results (typically a list of {title, url, snippet}). Follow up with search.visit on a specific URL to read full readable text.',
+        name: 'search_search',
+        description: 'Web search via the search-tools plugin (DuckDuckGo / SearXNG / Brave, depending on plugin settings). Use only when the user asks about current events, fresh facts, or external information not present in chat / lorebook / memory. Returns provider-shaped results (typically a list of {title, url, snippet}). Follow up with search_visit on a specific URL to read full readable text.',
         parameters: {
             type: 'object',
             properties: {
@@ -305,11 +311,11 @@ registerTool('search.search', execSearchSearch, {
     },
 });
 
-registerTool('search.visit', execSearchVisit, {
+registerTool('search_visit', execSearchVisit, {
     type: 'function',
     function: {
-        name: 'search.visit',
-        description: 'Fetch one webpage discovered via search.search and return its readable text. Use sparingly: prefer the search snippet when it already answers the question.',
+        name: 'search_visit',
+        description: 'Fetch one webpage discovered via search_search and return its readable text. Use sparingly: prefer the search snippet when it already answers the question.',
         parameters: {
             type: 'object',
             properties: {
@@ -344,13 +350,17 @@ export { FINALIZE_TOOL_SCHEMA };
  * unknown tools surface as `ToolError(NOT_IMPLEMENTED)` so the agent
  * can pivot rather than the whole run aborting.
  *
- * @param {string} name — fully qualified tool name (e.g. 'chat.search')
+ * @param {string} name — fully qualified tool name (e.g. 'chat_search').
+ *                        Legacy `chat.search` names from pre-rename
+ *                        persisted history are normalized to `_` form
+ *                        before dispatch so old chats keep replaying.
  * @param {object} args — tool arguments
  * @param {object} context — extension context (chat, run-scoped state)
  * @returns {Promise<unknown>} JSON-serializable result for the tool message
  */
 export async function executeLoopTool(name, args, context) {
-    const exec = REGISTRY.get(String(name || ''));
+    const normalized = String(name || '').replace(/\./g, '_');
+    const exec = REGISTRY.get(normalized);
     if (typeof exec !== 'function') {
         throw new ToolError(
             `Tool '${name}' is not implemented in this build.`,
@@ -364,8 +374,11 @@ export async function executeLoopTool(name, args, context) {
 /**
  * Build the OpenAI-style tools array from a sanitized loop profile.
  * `finalize` is always included; chat / lorebook / memory / note tools
- * follow `profile.tools.<namespace>.<verb>` flags. Unknown namespaces
- * are ignored (forward compatibility with future task adds).
+ * follow `profile.tools.<namespace>.<verb>` flags. The schema's flat
+ * `<ns>_<verb>` tool name is split on the **first** underscore to
+ * recover the profile path (so `memory_list_recent` reads
+ * `flags.memory.list_recent`). Unknown namespaces are ignored
+ * (forward compatibility with future task adds).
  */
 export function getEnabledToolSchemas(profile) {
     const flags = profile && typeof profile === 'object' ? (profile.tools || {}) : {};
@@ -373,15 +386,15 @@ export function getEnabledToolSchemas(profile) {
     for (const schema of TOOL_SCHEMAS) {
         const fullName = String(schema?.function?.name || '');
         if (!fullName) continue;
-        const dot = fullName.indexOf('.');
-        if (dot < 0) {
-            // Top-level tool flag (e.g. note.add lives under flags.note.add,
-            // but a hypothetical bare name would read flags[name] === true).
+        const sep = fullName.indexOf('_');
+        if (sep < 0) {
+            // Top-level tool flag (e.g. a hypothetical bare name reads
+            // flags[name] === true).
             if (flags?.[fullName]) out.push(schema);
             continue;
         }
-        const ns = fullName.slice(0, dot);
-        const verb = fullName.slice(dot + 1);
+        const ns = fullName.slice(0, sep);
+        const verb = fullName.slice(sep + 1);
         if (flags?.[ns]?.[verb]) out.push(schema);
     }
     return out;

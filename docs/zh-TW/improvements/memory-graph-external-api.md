@@ -69,7 +69,7 @@ const result = getNodeById(store, 'n42', { includeNeighbors: true });
 
 ## 呼叫範例:orchestrator loop 模式
 
-orchestrator 的 loop 模式工具 `memory.search` / `memory.list_recent` / `memory.get` 都是這些 API 的薄殼,關鍵的 dedup 邏輯就是把"已注入"的兩組 id 取聯集:
+orchestrator 的 loop 模式工具 `memory_search` / `memory_list_recent` / `memory_get` 都是這些 API 的薄殼,關鍵的 dedup 邏輯就是把"已注入"的兩組 id 取聯集:
 
 ```js
 // orchestrator/loop-tools/memory.js

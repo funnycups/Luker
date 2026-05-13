@@ -1,7 +1,7 @@
 /**
  * loop-tools/note tests (Plan Task 11).
  *
- * note.add persists per-chat notes through floor-state with namespace
+ * note_add persists per-chat notes through floor-state with namespace
  * `luker_orch_loop_notes`. Notes survive across loop runs and are
  * re-injected into the agent's system prompt at the start of each run
  * (so the agent can see what it told itself last turn).
@@ -169,15 +169,15 @@ describe('loadAllNotes (Task 11)', () => {
     });
 });
 
-describe('central dispatcher includes note.add (Task 11)', () => {
-    test('executeLoopTool dispatches note.add', async () => {
+describe('central dispatcher includes note_add (Task 11)', () => {
+    test('executeLoopTool dispatches note_add', async () => {
         const { ctx, fs } = makeContext({ floor: 0 });
-        const r = await executeLoopTool('note.add', { text: 'a routed note' }, ctx);
+        const r = await executeLoopTool('note_add', { text: 'a routed note' }, ctx);
         expect(r).toEqual({ ok: true });
         expect(fs.stored[0].text).toBe('a routed note');
     });
 
-    test('getEnabledToolSchemas includes note.add when flagged on', () => {
+    test('getEnabledToolSchemas includes note_add when flagged on', () => {
         const schemas = getEnabledToolSchemas({
             tools: {
                 finalize: true,
@@ -188,15 +188,15 @@ describe('central dispatcher includes note.add (Task 11)', () => {
             },
         });
         const names = schemas.map(s => s?.function?.name);
-        expect(names).toContain('note.add');
+        expect(names).toContain('note_add');
     });
 
-    test('getEnabledToolSchemas omits note.add when flagged off', () => {
+    test('getEnabledToolSchemas omits note_add when flagged off', () => {
         const schemas = getEnabledToolSchemas({
             tools: { finalize: true, note: { add: false } },
         });
         const names = schemas.map(s => s?.function?.name);
-        expect(names).not.toContain('note.add');
+        expect(names).not.toContain('note_add');
     });
 });
 
@@ -296,17 +296,17 @@ describe('execNoteDelete', () => {
     });
 });
 
-describe('central dispatcher routes note.delete', () => {
-    test('executeLoopTool dispatches note.delete', async () => {
+describe('central dispatcher routes note_delete', () => {
+    test('executeLoopTool dispatches note_delete', async () => {
         const { ctx, fs } = makeContext({ floor: 0 });
         await execNoteAdd({ text: 'first' }, ctx);
         await execNoteAdd({ text: 'second' }, ctx);
-        const r = await executeLoopTool('note.delete', { indexes: [1] }, ctx);
+        const r = await executeLoopTool('note_delete', { indexes: [1] }, ctx);
         expect(r).toEqual({ ok: true, removed: 1, remaining: 1 });
         expect(fs.stored.map(s => s.text)).toEqual(['second']);
     });
 
-    test('getEnabledToolSchemas includes note.delete when flagged on', () => {
+    test('getEnabledToolSchemas includes note_delete when flagged on', () => {
         const schemas = getEnabledToolSchemas({
             tools: {
                 finalize: true,
@@ -317,17 +317,17 @@ describe('central dispatcher routes note.delete', () => {
             },
         });
         const names = schemas.map(s => s?.function?.name);
-        expect(names).toContain('note.delete');
+        expect(names).toContain('note_delete');
     });
 
-    test('getEnabledToolSchemas omits note.delete when flagged off', () => {
+    test('getEnabledToolSchemas omits note_delete when flagged off', () => {
         const schemas = getEnabledToolSchemas({
             tools: { finalize: true, note: { add: true, delete: false } },
         });
         const names = schemas.map(s => s?.function?.name);
-        expect(names).not.toContain('note.delete');
-        // note.add stays on independently
-        expect(names).toContain('note.add');
+        expect(names).not.toContain('note_delete');
+        // note_add stays on independently
+        expect(names).toContain('note_add');
     });
 });
 

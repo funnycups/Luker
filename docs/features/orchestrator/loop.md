@@ -53,16 +53,16 @@ Tools follow the OpenAI function-calling protocol; results come back as `role: t
 
 | Tool | Purpose | Concrete RP example |
 |---|---|---|
-| `note.add(text)` | Write a **persistent note** bound to the current chat. Auto-injected into the system prompt the next time loop starts. 1 KB per entry, LRU-capped at 50. | The agent learns "Lin Wan mentioned her grandmother in Luoyang" and calls `note.add('Lin Wan family lead: grandmother → Luoyang')`; the note resurfaces in the system prompt next session. |
-| `chat.read_range(start, end)` | Read a range of chat floors. Negatives count from the tail; ≤ 50 floors per call. | `chat.read_range(-10, -1)` reviews the last 10 floors for context. |
-| `chat.search(query, limit)` | Substring search across the entire chat (case-insensitive); returns matching floors with previews. | `chat.search('Qingming Sword')` surfaces every prior mention of "Qingming Sword". |
-| `lorebook.search(query, limit)` | Substring search across all enabled lorebooks. **Excludes entries activated this turn by default** — they're already injected into the main context, returning them again wastes tokens. Returns `entries` plus `excluded_active_count`. | `lorebook.search('Luoyan City')` surfaces non-activated lore on Luoyan City. |
-| `lorebook.get(entry_key)` | Pull an entry by key, full text. **Does not deduplicate** — the agent can quote an already-activated entry verbatim to keep terminology consistent. | `lorebook.get('Luoyan-MainCity')` retrieves the full entry for direct quotation. |
-| `memory.search(query, limit)` | Lexical search over the memory graph; **does not depend on vector configuration**. Also excludes already-injected nodes by default. | `memory.search('family secret')` surfaces relevant historical event nodes. |
-| `memory.list_recent(limit)` | Reverse-chronological browse of memory nodes — what happened recently? | `memory.list_recent(10)` returns the 10 most recent event nodes. |
-| `memory.get(node_id)` | Fetch a node by id plus the ids of its direct neighbours (without full neighbour bodies). | After `memory.search` returns a node id, use `memory.get` to see what it's connected to. |
-| `search.search(query)` | **Web search** via the [Search Tools](/features/search-tools) plugin (DuckDuckGo / SearXNG / Brave). Default on, but the search-tools extension must be loaded and have a provider configured — otherwise the agent receives `SEARCH_UNAVAILABLE` / `SEARCH_DISABLED` and pivots. | `search.search('latest news on …')` returns provider-shaped results (typically `{title, url, snippet}`). |
-| `search.visit(url)` | Fetch one page discovered via `search.search` and return its readable text. | After a search hit, `search.visit('https://example.com/article')` pulls the full article body. |
+| `note_add(text)` | Write a **persistent note** bound to the current chat. Auto-injected into the system prompt the next time loop starts. 1 KB per entry, LRU-capped at 50. | The agent learns "Lin Wan mentioned her grandmother in Luoyang" and calls `note_add('Lin Wan family lead: grandmother → Luoyang')`; the note resurfaces in the system prompt next session. |
+| `chat_read_range(start, end)` | Read a range of chat floors. Negatives count from the tail; ≤ 50 floors per call. | `chat_read_range(-10, -1)` reviews the last 10 floors for context. |
+| `chat_search(query, limit)` | Substring search across the entire chat (case-insensitive); returns matching floors with previews. | `chat_search('Qingming Sword')` surfaces every prior mention of "Qingming Sword". |
+| `lorebook_search(query, limit)` | Substring search across all enabled lorebooks. **Excludes entries activated this turn by default** — they're already injected into the main context, returning them again wastes tokens. Returns `entries` plus `excluded_active_count`. | `lorebook_search('Luoyan City')` surfaces non-activated lore on Luoyan City. |
+| `lorebook_get(entry_key)` | Pull an entry by key, full text. **Does not deduplicate** — the agent can quote an already-activated entry verbatim to keep terminology consistent. | `lorebook_get('Luoyan-MainCity')` retrieves the full entry for direct quotation. |
+| `memory_search(query, limit)` | Lexical search over the memory graph; **does not depend on vector configuration**. Also excludes already-injected nodes by default. | `memory_search('family secret')` surfaces relevant historical event nodes. |
+| `memory_list_recent(limit)` | Reverse-chronological browse of memory nodes — what happened recently? | `memory_list_recent(10)` returns the 10 most recent event nodes. |
+| `memory_get(node_id)` | Fetch a node by id plus the ids of its direct neighbours (without full neighbour bodies). | After `memory_search` returns a node id, use `memory_get` to see what it's connected to. |
+| `search_search(query)` | **Web search** via the [Search Tools](/features/search-tools) plugin (DuckDuckGo / SearXNG / Brave). Default on, but the search-tools extension must be loaded and have a provider configured — otherwise the agent receives `SEARCH_UNAVAILABLE` / `SEARCH_DISABLED` and pivots. | `search_search('latest news on …')` returns provider-shaped results (typically `{title, url, snippet}`). |
+| `search_visit(url)` | Fetch one page discovered via `search_search` and return its readable text. | After a search hit, `search_visit('https://example.com/article')` pulls the full article body. |
 | `finalize(capsule_text)` | **Terminator** (forced on). `capsule_text` becomes the capsule injected into the main model. | `finalize('Lin Wan is anxious right now: she just learned about her grandmother and may steer the next exchange to Luoyang.')` |
 
 ## Five-layer runaway protection (in priority order)
@@ -135,22 +135,22 @@ The Loop popup currently has no **Export Profile** / **Import Profile** buttons.
 
 ## FAQ
 
-**Q: `memory.search` returned empty — what should I do?**
-A: First confirm the memory-graph extension is enabled and the chat has memory nodes. Empty can also mean the query was too narrow; try `memory.list_recent` to scan the timeline before deciding the next move.
+**Q: `memory_search` returned empty — what should I do?**
+A: First confirm the memory-graph extension is enabled and the chat has memory nodes. Empty can also mean the query was too narrow; try `memory_list_recent` to scan the timeline before deciding the next move.
 
-**Q: Why does `lorebook.search` exclude already-activated entries?**
-A: Those entries are already injected into the main model via the worldInfo path, so returning them inside the loop just wastes tokens. **Use `lorebook.get` if you need an already-activated entry verbatim** — for example, to quote terminology consistently.
+**Q: Why does `lorebook_search` exclude already-activated entries?**
+A: Those entries are already injected into the main model via the worldInfo path, so returning them inside the loop just wastes tokens. **Use `lorebook_get` if you need an already-activated entry verbatim** — for example, to quote terminology consistently.
 
 **Q: How do I stop a loop mid-run?**
 A: Click the toolbar's stop button (same as for spec / agenda). The loop runtime checks the abort signal at the top of every round and stops immediately; the trace records `cancelled` and no half-baked capsule is injected.
 
 **Q: Are notes shared across chats?**
-A: No. `note.add` writes to the **current chat**'s floor-state namespace; chats don't see each other's notes. When floors are deleted / swiped, floor-state's settle mechanism kicks in — notes bound to a removed floor disappear automatically.
+A: No. `note_add` writes to the **current chat**'s floor-state namespace; chats don't see each other's notes. When floors are deleted / swiped, floor-state's settle mechanism kicks in — notes bound to a removed floor disappear automatically.
 
 **Q: My loop got cut off after three rounds without tool calls — what now?**
 A: Check whether the system prompt gives the agent a clear "output shape". Most of the time the agent is "thinking" but not sure when to call `finalize`; adding "as soon as you have enough information to write the capsule, call `finalize` immediately" usually fixes it.
 
-**Q: I enabled `search.search` but the agent gets `SEARCH_UNAVAILABLE` / `SEARCH_DISABLED` — why?**
+**Q: I enabled `search_search` but the agent gets `SEARCH_UNAVAILABLE` / `SEARCH_DISABLED` — why?**
 A: The web tools forward to the [Search Tools](/features/search-tools) plugin. `SEARCH_UNAVAILABLE` means the plugin isn't loaded; `SEARCH_DISABLED` means it's loaded but disabled in its settings. Open the search-tools panel, pick a provider (DuckDuckGo / SearXNG / Brave), turn the master switch on, then retry.
 
 ## Performance trade-offs
@@ -173,4 +173,4 @@ Concrete latency deltas, capsule-quality preferences, and total-token usage acro
 - [Single Agent mode](/features/orchestrator/single) — degenerate Spec
 - [Agenda mode](/features/orchestrator/agenda) — Planner-driven dynamic dispatch
 - [Function Call Runtime](/improvements/function-call-runtime) — the runtime tool calls go through
-- [Memory Graph](/features/memory-graph) — data source behind the `memory.*` tools
+- [Memory Graph](/features/memory-graph) — data source behind the `memory_*` tools

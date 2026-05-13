@@ -3,14 +3,14 @@
  *
  * Layered against Plan Task 9:
  *
- *   - lorebook.search runs a substring scan over enabled lorebook entries
+ *   - lorebook_search runs a substring scan over enabled lorebook entries
  *     (content + key list both contribute to the haystack) and excludes
  *     entries already activated this turn so the agent does not waste
  *     rounds rediscovering what main-flow World Info already injected.
  *     The activated set lives at `context.__lukerLoop.activatedEntryKeys`
  *     as a `Set<${world}.${uid}>` populated by the orchestrator's
  *     `onWorldInfoFinalized` hook.
- *   - lorebook.get fetches a specific entry by key. It does NOT dedup
+ *   - lorebook_get fetches a specific entry by key. It does NOT dedup
  *     against the activated set — the agent may legitimately want to
  *     quote an injected entry verbatim for terminology consistency.
  *   - Both tools surface structured `ToolError`s for empty inputs and
@@ -119,7 +119,7 @@ describe('execLorebookSearch (Task 9)', () => {
 
 describe('execLorebookGet (Task 9)', () => {
     test('fetches by key without dedup', async () => {
-        // Mark the entry as activated; lorebook.get must still return it.
+        // Mark the entry as activated; lorebook_get must still return it.
         const ctx = makeFixture(SAMPLE_ENTRIES, { activated: ['global.1'] });
         const result = await execLorebookGet({ entry_key: 'autumn' }, ctx);
         expect(result.book).toBe('global');
@@ -162,15 +162,15 @@ describe('execLorebookGet (Task 9)', () => {
 });
 
 describe('central dispatcher includes lorebook tools (Task 9)', () => {
-    test('executeLoopTool dispatches lorebook.search', async () => {
+    test('executeLoopTool dispatches lorebook_search', async () => {
         const ctx = makeFixture(SAMPLE_ENTRIES);
-        const result = await executeLoopTool('lorebook.search', { query: 'autumn' }, ctx);
+        const result = await executeLoopTool('lorebook_search', { query: 'autumn' }, ctx);
         expect(result.entries.length).toBeGreaterThan(0);
     });
 
-    test('executeLoopTool dispatches lorebook.get', async () => {
+    test('executeLoopTool dispatches lorebook_get', async () => {
         const ctx = makeFixture(SAMPLE_ENTRIES);
-        const result = await executeLoopTool('lorebook.get', { entry_key: 'winter' }, ctx);
+        const result = await executeLoopTool('lorebook_get', { entry_key: 'winter' }, ctx);
         expect(result.content).toBe('Winter is snowy.');
     });
 
@@ -185,7 +185,7 @@ describe('central dispatcher includes lorebook tools (Task 9)', () => {
             },
         });
         const names = schemas.map(s => s?.function?.name);
-        expect(names).toEqual(expect.arrayContaining(['lorebook.search', 'lorebook.get']));
+        expect(names).toEqual(expect.arrayContaining(['lorebook_search', 'lorebook_get']));
     });
 
     test('getEnabledToolSchemas omits lorebook tools when flagged off', () => {
@@ -193,26 +193,26 @@ describe('central dispatcher includes lorebook tools (Task 9)', () => {
             tools: { finalize: true, lorebook: { search: false, get: false } },
         });
         const names = schemas.map(s => s?.function?.name);
-        expect(names).not.toContain('lorebook.search');
-        expect(names).not.toContain('lorebook.get');
+        expect(names).not.toContain('lorebook_search');
+        expect(names).not.toContain('lorebook_get');
     });
 });
 
 describe('runLoopOrchestration propagates payload.__lukerLoop into tool context (Task 9)', () => {
-    test('lorebook.search invoked through the runtime sees activatedEntryKeys from payload', async () => {
+    test('lorebook_search invoked through the runtime sees activatedEntryKeys from payload', async () => {
         const { runLoopOrchestration } = await import(
             '../../public/scripts/extensions/orchestrator/loop-runtime.js'
         );
         const { jest } = await import('@jest/globals');
 
-        // Round 1: agent calls lorebook.search; tool result rides into round 2.
+        // Round 1: agent calls lorebook_search; tool result rides into round 2.
         // Round 2: agent calls finalize. Tool result content carries the
         // dedup-aware result from execLorebookSearch.
         let secondRoundMessages = null;
         const sendLlm = jest.fn()
             .mockImplementationOnce(async () => ({
                 toolCalls: [
-                    { id: 'tc1', name: 'lorebook.search', args: { query: 'autumn' } },
+                    { id: 'tc1', name: 'lorebook_search', args: { query: 'autumn' } },
                 ],
                 assistantText: '',
             }))

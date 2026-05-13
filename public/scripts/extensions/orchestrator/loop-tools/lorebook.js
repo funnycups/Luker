@@ -4,14 +4,14 @@
  * Two tools cover discovery and verbatim retrieval over the chat's
  * enabled lorebooks:
  *
- *   - lorebook.search({ query, limit }) substring-scans content + key
+ *   - lorebook_search({ query, limit }) substring-scans content + key
  *     lists across all enabled entries, **excluding entries already
  *     activated this turn** (those have already been injected into the
  *     main model via main-flow World Info, so the agent rediscovering
  *     them wastes a round). The activated set rides on the run context
  *     at `context.__lukerLoop.activatedEntryKeys`, populated by the
  *     orchestrator's `onWorldInfoFinalized` hook.
- *   - lorebook.get({ entry_key, book? }) fetches a single entry by key
+ *   - lorebook_get({ entry_key, book? }) fetches a single entry by key
  *     with full content. Does NOT dedup against the activated set: the
  *     agent may want to quote an injected entry verbatim for
  *     terminology consistency.
@@ -67,7 +67,7 @@ export async function execLorebookSearch(args, context) {
     const queryRaw = String(args?.query ?? '');
     if (!queryRaw.trim()) {
         throw new ToolError(
-            'lorebook.search: query must be non-empty.',
+            'lorebook_search: query must be non-empty.',
             'LOREBOOK_QUERY_EMPTY',
             'Provide a non-empty query. Try a content keyword or part of an entry key.',
         );
@@ -116,7 +116,7 @@ export async function execLorebookGet(args, context) {
     const entryKeyRaw = String(args?.entry_key ?? '');
     if (!entryKeyRaw.trim()) {
         throw new ToolError(
-            'lorebook.get: entry_key must be non-empty.',
+            'lorebook_get: entry_key must be non-empty.',
             'LOREBOOK_KEY_EMPTY',
             'Pass a key string that appears in some entry\'s key array.',
         );
@@ -134,9 +134,9 @@ export async function execLorebookGet(args, context) {
     });
     if (!target) {
         throw new ToolError(
-            `lorebook.get: entry '${entryKey}' not found${book ? ` in book '${book}'` : ''}.`,
+            `lorebook_get: entry '${entryKey}' not found${book ? ` in book '${book}'` : ''}.`,
             'LOREBOOK_NOT_FOUND',
-            'Verify the entry key (case-sensitive) and that the lorebook is enabled. Try lorebook.search to discover available keys.',
+            'Verify the entry key (case-sensitive) and that the lorebook is enabled. Try lorebook_search to discover available keys.',
         );
     }
     return {

@@ -934,7 +934,7 @@ async function onWorldInfoFinalized(payload) {
     activeOrchRunAbortController = pluginAbortController;
     const linkedAbort = linkAbortSignals(payload?.signal, pluginAbortController.signal);
     // Capture the World Info entries activated for this turn so loop mode's
-    // `lorebook.search` can dedup them out of its results — those entries
+    // `lorebook_search` can dedup them out of its results — those entries
     // are already injected into the main model context, so re-surfacing
     // them in the loop agent would waste a round. Set is keyed by
     // `${world}.${uid}`, the same shape main-flow World Info uses
@@ -3510,16 +3510,16 @@ function renderLoopIterationWorkingProfile(session, { profileOverride = null, pr
             : session?.workingProfile,
     );
     const enabledTools = [];
-    if (profile.tools?.note?.add) enabledTools.push('note.add');
-    if (profile.tools?.chat?.read_range) enabledTools.push('chat.read_range');
-    if (profile.tools?.chat?.search) enabledTools.push('chat.search');
-    if (profile.tools?.lorebook?.search) enabledTools.push('lorebook.search');
-    if (profile.tools?.lorebook?.get) enabledTools.push('lorebook.get');
-    if (profile.tools?.memory?.search) enabledTools.push('memory.search');
-    if (profile.tools?.memory?.list_recent) enabledTools.push('memory.list_recent');
-    if (profile.tools?.memory?.get) enabledTools.push('memory.get');
-    if (profile.tools?.search?.search) enabledTools.push('search.search');
-    if (profile.tools?.search?.visit) enabledTools.push('search.visit');
+    if (profile.tools?.note?.add) enabledTools.push('note_add');
+    if (profile.tools?.chat?.read_range) enabledTools.push('chat_read_range');
+    if (profile.tools?.chat?.search) enabledTools.push('chat_search');
+    if (profile.tools?.lorebook?.search) enabledTools.push('lorebook_search');
+    if (profile.tools?.lorebook?.get) enabledTools.push('lorebook_get');
+    if (profile.tools?.memory?.search) enabledTools.push('memory_search');
+    if (profile.tools?.memory?.list_recent) enabledTools.push('memory_list_recent');
+    if (profile.tools?.memory?.get) enabledTools.push('memory_get');
+    if (profile.tools?.search?.search) enabledTools.push('search_search');
+    if (profile.tools?.search?.visit) enabledTools.push('search_visit');
     enabledTools.push('finalize');
     const simulationSummary = session?.lastSimulation
         ? `${i18n('Simulation')}: ${String(session.lastSimulation.summary || '')}`

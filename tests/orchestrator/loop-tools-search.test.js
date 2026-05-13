@@ -172,18 +172,18 @@ describe('execSearchVisit', () => {
 });
 
 describe('central dispatcher routes search.* tools', () => {
-    test('executeLoopTool dispatches search.search', async () => {
+    test('executeLoopTool dispatches search_search', async () => {
         const adapter = makeFakeSearchAdapter();
         const ctx = { __searchAdapter: adapter };
-        const r = await executeLoopTool('search.search', { query: 'routed' }, ctx);
+        const r = await executeLoopTool('search_search', { query: 'routed' }, ctx);
         expect(adapter.calls.search).toHaveLength(1);
         expect(r.results).toBeDefined();
     });
 
-    test('executeLoopTool dispatches search.visit', async () => {
+    test('executeLoopTool dispatches search_visit', async () => {
         const adapter = makeFakeSearchAdapter();
         const ctx = { __searchAdapter: adapter };
-        const r = await executeLoopTool('search.visit', { url: 'https://example.com' }, ctx);
+        const r = await executeLoopTool('search_visit', { url: 'https://example.com' }, ctx);
         expect(adapter.calls.visit).toHaveLength(1);
         expect(r.content).toBeDefined();
     });
@@ -200,8 +200,8 @@ describe('central dispatcher routes search.* tools', () => {
             },
         });
         const names = schemas.map(s => s?.function?.name);
-        expect(names).toContain('search.search');
-        expect(names).toContain('search.visit');
+        expect(names).toContain('search_search');
+        expect(names).toContain('search_visit');
     });
 
     test('getEnabledToolSchemas omits search.* when flagged off', () => {
@@ -212,8 +212,8 @@ describe('central dispatcher routes search.* tools', () => {
             },
         });
         const names = schemas.map(s => s?.function?.name);
-        expect(names).not.toContain('search.search');
-        expect(names).not.toContain('search.visit');
+        expect(names).not.toContain('search_search');
+        expect(names).not.toContain('search_visit');
     });
 });
 

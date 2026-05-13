@@ -3,12 +3,12 @@
  *
  * Layered against Plan Task 8:
  *
- *   - chat.read_range supports positive and negative indices (negative
+ *   - chat_read_range supports positive and negative indices (negative
  *     counts from the end), returns one entry per chat floor with
  *     `{ floor, role, content }`. Caps the slice at MAX_RANGE floors and
  *     surfaces a `ToolError` when the requested range is too wide so the
  *     agent can self-correct on the next round.
- *   - chat.search is a case-insensitive substring scan that returns up to
+ *   - chat_search is a case-insensitive substring scan that returns up to
  *     `limit` results with `content_preview`. Empty queries surface a
  *     `ToolError` so the agent can retry with a non-empty query — empty
  *     strings would otherwise match every chat message and waste a round.
@@ -138,18 +138,18 @@ describe('central dispatcher (Task 8)', () => {
         expect(FINALIZE_TOOL_SCHEMA?.function?.name).toBe('finalize');
     });
 
-    test('executeLoopTool dispatches chat.read_range to execChatReadRange', async () => {
+    test('executeLoopTool dispatches chat_read_range to execChatReadRange', async () => {
         const ctx = makeChatContext([
             { mes: 'a', is_user: true },
             { mes: 'b', is_user: false },
         ]);
-        const result = await executeLoopTool('chat.read_range', { start: 0, end: 1 }, ctx);
+        const result = await executeLoopTool('chat_read_range', { start: 0, end: 1 }, ctx);
         expect(result).toHaveLength(2);
     });
 
-    test('executeLoopTool dispatches chat.search to execChatSearch', async () => {
+    test('executeLoopTool dispatches chat_search to execChatSearch', async () => {
         const ctx = makeChatContext([{ mes: 'hello world', is_user: true }]);
-        const result = await executeLoopTool('chat.search', { query: 'hello' }, ctx);
+        const result = await executeLoopTool('chat_search', { query: 'hello' }, ctx);
         expect(result).toHaveLength(1);
     });
 
@@ -161,7 +161,7 @@ describe('central dispatcher (Task 8)', () => {
 
     test('executeLoopTool propagates ToolError from underlying tool', async () => {
         const ctx = makeChatContext([{ mes: 'x', is_user: true }]);
-        await expect(executeLoopTool('chat.search', { query: '' }, ctx))
+        await expect(executeLoopTool('chat_search', { query: '' }, ctx))
             .rejects.toBeInstanceOf(ToolError);
     });
 
@@ -182,7 +182,7 @@ describe('central dispatcher (Task 8)', () => {
             },
         });
         const names = schemas.map(s => s?.function?.name).sort();
-        expect(names).toEqual(expect.arrayContaining(['chat.read_range', 'chat.search', 'finalize']));
+        expect(names).toEqual(expect.arrayContaining(['chat_read_range', 'chat_search', 'finalize']));
     });
 
     test('getEnabledToolSchemas omits chat tools when flagged off', () => {
@@ -193,7 +193,7 @@ describe('central dispatcher (Task 8)', () => {
             },
         });
         const names = schemas.map(s => s?.function?.name);
-        expect(names).not.toContain('chat.read_range');
-        expect(names).not.toContain('chat.search');
+        expect(names).not.toContain('chat_read_range');
+        expect(names).not.toContain('chat_search');
     });
 });

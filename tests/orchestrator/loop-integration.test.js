@@ -48,7 +48,7 @@ function makeFakeFloorStateNotes(initialEntries = []) {
     // Mirrors the in-memory shape exposed by `loop-tools-note.test.js`'s
     // fixture; production `makeNotesAdapter` exposes the same call names so
     // the tool itself doesn't know which path it's on. Keeping this mock
-    // close to the production adapter lets us exercise note.add through the
+    // close to the production adapter lets us exercise note_add through the
     // real registry without touching floor-state.
     const stored = initialEntries.map(text => ({ floor: 0, text: String(text) }));
     return {
@@ -105,7 +105,7 @@ function eventTypes(trace) {
 }
 
 describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
-    test('model -> note.add -> lorebook.search -> lorebook.get -> memory.search -> finalize', async () => {
+    test('model -> note_add -> lorebook_search -> lorebook_get -> memory_search -> finalize', async () => {
         // Scripted six-round trajectory. Each `mockImplementationOnce` reads
         // the messages array we observed at that round so we can assert
         // tool-result threading at the boundary; the final round commits
@@ -118,7 +118,7 @@ describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
                 observedRounds.push({ round: 1, messageCount: messages.length });
                 return {
                     toolCalls: [
-                        { id: 'tc1', name: 'note.add', args: { text: 'Lyra mentioned the festival opens at dusk.' } },
+                        { id: 'tc1', name: 'note_add', args: { text: 'Lyra mentioned the festival opens at dusk.' } },
                     ],
                     assistantText: 'I will start by recording the festival timing.',
                 };
@@ -127,7 +127,7 @@ describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
                 observedRounds.push({ round: 2, messageCount: messages.length });
                 return {
                     toolCalls: [
-                        { id: 'tc2', name: 'lorebook.search', args: { query: 'festival', limit: 3 } },
+                        { id: 'tc2', name: 'lorebook_search', args: { query: 'festival', limit: 3 } },
                     ],
                     assistantText: '',
                 };
@@ -136,7 +136,7 @@ describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
                 observedRounds.push({ round: 3, messageCount: messages.length });
                 return {
                     toolCalls: [
-                        { id: 'tc3', name: 'lorebook.get', args: { entry_key: 'autumn-fest' } },
+                        { id: 'tc3', name: 'lorebook_get', args: { entry_key: 'autumn-fest' } },
                     ],
                     assistantText: '',
                 };
@@ -145,7 +145,7 @@ describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
                 observedRounds.push({ round: 4, messageCount: messages.length });
                 return {
                     toolCalls: [
-                        { id: 'tc4', name: 'memory.search', args: { query: 'Lyra', limit: 3 } },
+                        { id: 'tc4', name: 'memory_search', args: { query: 'Lyra', limit: 3 } },
                     ],
                     assistantText: '',
                 };
@@ -154,7 +154,7 @@ describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
                 observedRounds.push({ round: 5, messageCount: messages.length });
                 return {
                     toolCalls: [
-                        { id: 'tc5', name: 'memory.get', args: { node_id: 'lyra-vow' } },
+                        { id: 'tc5', name: 'memory_get', args: { node_id: 'lyra-vow' } },
                     ],
                     assistantText: '',
                 };
@@ -238,18 +238,18 @@ describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
         const toolCallEvents = result.runtimeTrace.events.filter(e => e.type === 'tool_call');
         expect(toolCallEvents).toHaveLength(6);
         expect(toolCallEvents.map(e => e.name)).toEqual([
-            'note.add', 'lorebook.search', 'lorebook.get', 'memory.search', 'memory.get', 'finalize',
+            'note_add', 'lorebook_search', 'lorebook_get', 'memory_search', 'memory_get', 'finalize',
         ]);
     });
 });
 
 describe('loop mode end-to-end: tool failure -> agent self-correction (Task 15b)', () => {
-    test('first lorebook.search has empty query -> ToolError -> agent retries with non-empty query and finalizes', async () => {
+    test('first lorebook_search has empty query -> ToolError -> agent retries with non-empty query and finalizes', async () => {
         let secondRoundMessages = null;
         const sendLlm = jest.fn()
             .mockImplementationOnce(async () => ({
                 toolCalls: [
-                    { id: 'tc1', name: 'lorebook.search', args: { query: '' } },
+                    { id: 'tc1', name: 'lorebook_search', args: { query: '' } },
                 ],
                 assistantText: '',
             }))
@@ -260,7 +260,7 @@ describe('loop mode end-to-end: tool failure -> agent self-correction (Task 15b)
                 secondRoundMessages = JSON.parse(JSON.stringify(messages));
                 return {
                     toolCalls: [
-                        { id: 'tc2', name: 'lorebook.search', args: { query: 'autumn', limit: 3 } },
+                        { id: 'tc2', name: 'lorebook_search', args: { query: 'autumn', limit: 3 } },
                     ],
                     assistantText: '',
                 };
@@ -311,22 +311,22 @@ describe('loop mode end-to-end: tool failure -> agent self-correction (Task 15b)
         expect(okMsg).toBeUndefined();
         const errorEvents = result.runtimeTrace.events.filter(e => e.type === 'tool_error');
         expect(errorEvents).toHaveLength(1);
-        expect(errorEvents[0].name).toBe('lorebook.search');
+        expect(errorEvents[0].name).toBe('lorebook_search');
     });
 });
 
 describe('loop mode end-to-end: lorebook activated-entry dedup (Task 15c)', () => {
-    test('payload.__lukerLoop.activatedEntryKeys propagates to lorebook.search and excludes pre-injected entries', async () => {
+    test('payload.__lukerLoop.activatedEntryKeys propagates to lorebook_search and excludes pre-injected entries', async () => {
         // The orchestrator main.js seeds payload.__lukerLoop with the World
         // Info entries already activated for this turn; the runtime forwards
-        // those into toolContext so lorebook.search can dedup. Here we
+        // those into toolContext so lorebook_search can dedup. Here we
         // simulate that by passing the activated set on the payload and
         // letting the runtime hand it to the tool.
         let toolResultObserved = null;
         const sendLlm = jest.fn()
             .mockImplementationOnce(async () => ({
                 toolCalls: [
-                    { id: 'tc1', name: 'lorebook.search', args: { query: 'autumn', limit: 5 } },
+                    { id: 'tc1', name: 'lorebook_search', args: { query: 'autumn', limit: 5 } },
                 ],
                 assistantText: '',
             }))
@@ -373,7 +373,7 @@ describe('loop mode end-to-end: lorebook activated-entry dedup (Task 15c)', () =
         expect(result.status).toBe('completed');
         expect(toolResultObserved).toBeTruthy();
         // Tool results land under `data` when normalizeToolOk wraps a non-{ok}
-        // payload (lorebook.search returns { entries, excluded_active_count }).
+        // payload (lorebook_search returns { entries, excluded_active_count }).
         const payload = toolResultObserved.data || toolResultObserved;
         expect(payload.excluded_active_count).toBe(2);
         expect(payload.entries).toHaveLength(1);
@@ -395,7 +395,7 @@ describe('loop mode end-to-end: note persistence across runs (Task 15d)', () => 
         const sendLlm1 = jest.fn()
             .mockImplementationOnce(async () => ({
                 toolCalls: [
-                    { id: 'tc1', name: 'note.add', args: { text: 'Lyra wears the crimson sash to the rite.' } },
+                    { id: 'tc1', name: 'note_add', args: { text: 'Lyra wears the crimson sash to the rite.' } },
                 ],
                 assistantText: '',
             }))
@@ -486,7 +486,7 @@ describe('loop mode end-to-end: abort path (Task 15e)', () => {
                 queueMicrotask(() => aborter.abort());
                 return {
                     toolCalls: [
-                        { id: 'tc1', name: 'note.add', args: { text: 'first' } },
+                        { id: 'tc1', name: 'note_add', args: { text: 'first' } },
                     ],
                     assistantText: '',
                 };

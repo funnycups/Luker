@@ -471,7 +471,7 @@ function makeNotesAdapter(fs) {
  *
  * Failures degrade silently: the adapter stays null and `__loopNotes`
  * stays `[]`, so the agent simply doesn't get a "Previous Notes" block
- * this run (and any `note.add` call surfaces `NOTE_FS_UNAVAILABLE`).
+ * this run (and any `note_add` call surfaces `NOTE_FS_UNAVAILABLE`).
  *
  * @param {object} context — toolContext (mutated in place)
  */
@@ -654,12 +654,14 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
             // Append the assistant message that produced these tool calls so
             // the next round sees a well-formed messages array (per OpenAI's
             // tool-calling convention: assistant turn first, then matching
-            // role:tool results in order).
+            // role:tool results in order). Names are normalized `.` → `_`
+            // so a hallucinated dotted name doesn't drift the next round's
+            // history out of sync with the (underscore-only) tools list.
             const assistantToolCallEntries = toolCalls.map(tc => ({
                 id: String(tc?.id || makeToolCallId()),
                 type: 'function',
                 function: {
-                    name: String(tc?.name || ''),
+                    name: String(tc?.name || '').replace(/\./g, '_'),
                     arguments: safeStringifyArgs(tc?.args),
                 },
             }));

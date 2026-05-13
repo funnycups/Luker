@@ -3,15 +3,15 @@
  *
  * Three thin wrappers over `memory-graph/external-api.js`:
  *
- *   - memory.search → searchNodesLexical(store, query, { limit, excludeIds })
- *   - memory.list_recent → listRecentNodes(store, { limit, excludeIds })
- *   - memory.get → getNodeById(store, id, { includeNeighbors: true })
+ *   - memory_search → searchNodesLexical(store, query, { limit, excludeIds })
+ *   - memory_list_recent → listRecentNodes(store, { limit, excludeIds })
+ *   - memory_get → getNodeById(store, id, { includeNeighbors: true })
  *
  * Dedup contract: every search / list call passes `excludeIds = union(
  *     getCurrentlyInjectedNodeIds(context).alwaysInjectIds,
  *     getCurrentlyInjectedNodeIds(context).recallSelectedIds)` so the agent
  * never re-surfaces nodes already injected into the main model context for
- * this turn. `memory.get` does NOT dedup — the agent may legitimately want
+ * this turn. `memory_get` does NOT dedup — the agent may legitimately want
  * to inspect an already-injected node's neighbors.
  *
  * Store + dependency wiring:
@@ -82,7 +82,7 @@ function requireStore(context) {
         throw new ToolError(
             'memory-graph not enabled or store unavailable.',
             'MEMORY_DISABLED',
-            'Enable memory-graph in extension settings, or skip memory.* tools and rely on chat / lorebook context.',
+            'Enable memory-graph in extension settings, or skip memory_* tools and rely on chat / lorebook context.',
         );
     }
     return store;
@@ -101,7 +101,7 @@ export async function execMemorySearch(args, context) {
     const queryRaw = String(args?.query ?? '');
     if (!queryRaw.trim()) {
         throw new ToolError(
-            'memory.search: query must be non-empty.',
+            'memory_search: query must be non-empty.',
             'MEMORY_QUERY_EMPTY',
             'Provide a non-empty query. Use whole words for best results.',
         );
@@ -116,7 +116,7 @@ export async function execMemorySearch(args, context) {
 
 /**
  * Browse most-recent nodes in time-descending order. Excludes already-
- * injected nodes (same union as memory.search).
+ * injected nodes (same union as memory_search).
  *
  * @param {{ limit?: number }} args
  * @param {object} context
@@ -144,9 +144,9 @@ export async function execMemoryGet(args, context) {
     const idRaw = String(args?.node_id ?? '');
     if (!idRaw.trim()) {
         throw new ToolError(
-            'memory.get: node_id must be non-empty.',
+            'memory_get: node_id must be non-empty.',
             'MEMORY_ID_EMPTY',
-            'Pass the id string returned by memory.search or memory.list_recent.',
+            'Pass the id string returned by memory_search or memory_list_recent.',
         );
     }
     const store = requireStore(context);
@@ -154,9 +154,9 @@ export async function execMemoryGet(args, context) {
     const result = deps.getNodeById(store, idRaw.trim(), { includeNeighbors: true });
     if (!result) {
         throw new ToolError(
-            `memory.get: node '${idRaw.trim()}' not found.`,
+            `memory_get: node '${idRaw.trim()}' not found.`,
             'MEMORY_NOT_FOUND',
-            'Verify the id with memory.search or memory.list_recent first.',
+            'Verify the id with memory_search or memory_list_recent first.',
         );
     }
     return result;

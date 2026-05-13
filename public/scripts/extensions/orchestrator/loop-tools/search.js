@@ -4,10 +4,10 @@
  * Bridges the loop agent to the search-tools plugin's exposed
  * `globalThis.Luker.searchTools` API:
  *
- *   - search.search({ query, max_results?, safe_search?, time_range?, region? })
+ *   - search_search({ query, max_results?, safe_search?, time_range?, region? })
  *     forwards to the plugin's `searchWeb`, returning whatever shape the
  *     active provider (DuckDuckGo / SearXNG / Brave) emits.
- *   - search.visit({ url, max_chars? }) forwards to the plugin's
+ *   - search_visit({ url, max_chars? }) forwards to the plugin's
  *     `visitWebPage`, returning a readable text excerpt.
  *
  * Adapter resolution prefers `context.__searchAdapter` (test injection
@@ -71,7 +71,7 @@ export async function execSearchSearch(args, context) {
     const queryRaw = String(args?.query ?? '');
     if (!queryRaw.trim()) {
         throw new ToolError(
-            'search.search: query must be non-empty.',
+            'search_search: query must be non-empty.',
             'SEARCH_QUERY_EMPTY',
             'Provide a non-empty query string.',
         );
@@ -80,7 +80,7 @@ export async function execSearchSearch(args, context) {
     assertAdapterReady(adapter);
     if (typeof adapter.search !== 'function') {
         throw new ToolError(
-            'search.search: search-tools adapter is missing a `search` function.',
+            'search_search: search-tools adapter is missing a `search` function.',
             'SEARCH_UNAVAILABLE',
             'Ensure the search-tools extension is up to date.',
         );
@@ -90,7 +90,7 @@ export async function execSearchSearch(args, context) {
     } catch (error) {
         if (error instanceof ToolError) throw error;
         throw new ToolError(
-            `search.search failed: ${String(error?.message || error)}`,
+            `search_search failed: ${String(error?.message || error)}`,
             'SEARCH_FAILED',
             'The search provider returned an error. Try a different query, or pivot to a non-web tool.',
         );
@@ -109,16 +109,16 @@ export async function execSearchVisit(args, context) {
     const urlRaw = String(args?.url ?? '');
     if (!urlRaw.trim()) {
         throw new ToolError(
-            'search.visit: url must be a non-empty HTTP/HTTPS URL.',
+            'search_visit: url must be a non-empty HTTP/HTTPS URL.',
             'SEARCH_URL_INVALID',
-            'Pass an http:// or https:// URL discovered via search.search.',
+            'Pass an http:// or https:// URL discovered via search_search.',
         );
     }
     const adapter = resolveAdapter(context);
     assertAdapterReady(adapter);
     if (typeof adapter.visit !== 'function') {
         throw new ToolError(
-            'search.visit: search-tools adapter is missing a `visit` function.',
+            'search_visit: search-tools adapter is missing a `visit` function.',
             'SEARCH_UNAVAILABLE',
             'Ensure the search-tools extension is up to date.',
         );
@@ -128,7 +128,7 @@ export async function execSearchVisit(args, context) {
     } catch (error) {
         if (error instanceof ToolError) throw error;
         throw new ToolError(
-            `search.visit failed: ${String(error?.message || error)}`,
+            `search_visit failed: ${String(error?.message || error)}`,
             'SEARCH_FAILED',
             'The page could not be fetched. Try a different URL, or fall back to the search summary.',
         );

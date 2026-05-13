@@ -3,10 +3,10 @@
  *
  * Two tools:
  *
- *   - `note.add` appends a free-form note (per-chat, cross-run). Notes
+ *   - `note_add` appends a free-form note (per-chat, cross-run). Notes
  *     re-inject at the start of every subsequent loop run as a numbered
  *     `## Previous Notes` block.
- *   - `note.delete` removes notes by their 1-based positions in that
+ *   - `note_delete` removes notes by their 1-based positions in that
  *     same numbered block, so the agent can prune entries whose role is
  *     exhausted (foreshadowing fired, setting superseded, etc.).
  *
@@ -29,11 +29,11 @@
  *      append) would surprise the agent more than a silent drop.
  *
  * Validation:
- *   - `note.add` text empty / whitespace-only → ToolError(NOTE_EMPTY)
- *   - `note.add` text byte length > 1024 → ToolError(NOTE_TOO_LONG)
- *   - `note.delete` indexes empty / non-array → ToolError(NOTE_DELETE_EMPTY)
- *   - `note.delete` indexes contain non-integer or < 1 → ToolError(NOTE_INDEX_INVALID)
- *   - `note.delete` indexes out of range against current count → ToolError(NOTE_INDEX_OUT_OF_RANGE)
+ *   - `note_add` text empty / whitespace-only → ToolError(NOTE_EMPTY)
+ *   - `note_add` text byte length > 1024 → ToolError(NOTE_TOO_LONG)
+ *   - `note_delete` indexes empty / non-array → ToolError(NOTE_DELETE_EMPTY)
+ *   - `note_delete` indexes contain non-integer or < 1 → ToolError(NOTE_INDEX_INVALID)
+ *   - `note_delete` indexes out of range against current count → ToolError(NOTE_INDEX_OUT_OF_RANGE)
  *
  * Adapter contract (`context.__floorStateForNotes` in tests, production
  * wrapper in loop-runtime's `attachNotesFloorState`):
@@ -95,14 +95,14 @@ export async function execNoteAdd(args, context) {
     const trimmed = String(args?.text ?? '').trim();
     if (!trimmed) {
         throw new ToolError(
-            'note.add: text must be non-empty.',
+            'note_add: text must be non-empty.',
             'NOTE_EMPTY',
             'Provide a non-empty note. Whitespace-only is rejected so the agent doesn\'t accumulate blank entries.',
         );
     }
     if (utf8ByteLength(trimmed) > MAX_NOTE_BYTES) {
         throw new ToolError(
-            `note.add: text too long (max ${MAX_NOTE_BYTES} UTF-8 bytes).`,
+            `note_add: text too long (max ${MAX_NOTE_BYTES} UTF-8 bytes).`,
             'NOTE_TOO_LONG',
             `Trim the note to <= ${MAX_NOTE_BYTES} bytes. Long-form context belongs in memory-graph or lorebook entries; notes are short reminders.`,
         );
@@ -110,7 +110,7 @@ export async function execNoteAdd(args, context) {
     const fs = pickFloorStateForNotes(context);
     if (!fs || typeof fs.appendForFloor !== 'function') {
         throw new ToolError(
-            'note.add: notes floor-state not initialized.',
+            'note_add: notes floor-state not initialized.',
             'NOTE_FS_UNAVAILABLE',
             'The loop runtime did not mount the notes floor-state for this run. This is usually a setup issue (missing context.createFloorState) — retry once.',
         );
@@ -170,7 +170,7 @@ export async function execNoteDelete(args, context) {
     const raw = args?.indexes;
     if (!Array.isArray(raw) || raw.length === 0) {
         throw new ToolError(
-            'note.delete: indexes must be a non-empty array.',
+            'note_delete: indexes must be a non-empty array.',
             'NOTE_DELETE_EMPTY',
             'Pass indexes as an array of 1-based positions matching the "## Previous Notes" block, e.g. [1, 3].',
         );
@@ -187,7 +187,7 @@ export async function execNoteDelete(args, context) {
     }
     if (invalid.length > 0) {
         throw new ToolError(
-            `note.delete: indexes must be positive integers (got: ${JSON.stringify(invalid)}).`,
+            `note_delete: indexes must be positive integers (got: ${JSON.stringify(invalid)}).`,
             'NOTE_INDEX_INVALID',
             'Each entry must be a 1-based integer matching the system-prompt note numbering. Negative numbers, zero, and fractional values are rejected.',
         );
@@ -196,7 +196,7 @@ export async function execNoteDelete(args, context) {
     const fs = pickFloorStateForNotes(context);
     if (!fs || typeof fs.listAcrossFloors !== 'function' || typeof fs.deleteByIndex !== 'function') {
         throw new ToolError(
-            'note.delete: notes floor-state not initialized.',
+            'note_delete: notes floor-state not initialized.',
             'NOTE_FS_UNAVAILABLE',
             'The loop runtime did not mount the notes floor-state for this run. This is usually a setup issue (missing context.createFloorState) — retry once.',
         );
@@ -206,15 +206,15 @@ export async function execNoteDelete(args, context) {
     const beforeCount = Array.isArray(before) ? before.length : 0;
     if (beforeCount === 0) {
         throw new ToolError(
-            'note.delete: no notes to delete.',
+            'note_delete: no notes to delete.',
             'NOTE_INDEX_OUT_OF_RANGE',
-            'The "## Previous Notes" block is empty for this chat. Add notes via note.add first; nothing to prune yet.',
+            'The "## Previous Notes" block is empty for this chat. Add notes via note_add first; nothing to prune yet.',
         );
     }
     const outOfRange = cleaned.filter(n => n > beforeCount);
     if (outOfRange.length > 0) {
         throw new ToolError(
-            `note.delete: indexes out of range (got ${JSON.stringify(outOfRange)}, only ${beforeCount} note(s) exist).`,
+            `note_delete: indexes out of range (got ${JSON.stringify(outOfRange)}, only ${beforeCount} note(s) exist).`,
             'NOTE_INDEX_OUT_OF_RANGE',
             `Use 1-based indexes between 1 and ${beforeCount}. Re-check the system-prompt "## Previous Notes" block for current numbering.`,
         );

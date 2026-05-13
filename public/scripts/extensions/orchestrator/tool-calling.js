@@ -289,10 +289,17 @@ export function serializeToolResultContent(result) {
 }
 
 export function createPersistentToolCallPayload(name, args = {}, id = '') {
-    const toolName = String(name || '').trim();
-    if (!toolName) {
+    const rawName = String(name || '').trim();
+    if (!rawName) {
         return null;
     }
+    // Legacy migration: loop tool names used to be `<ns>.<verb>` (e.g.
+    // `chat.read_range`). Anthropic's tool-name regex
+    // `^[a-zA-Z0-9_-]{1,128}$` rejects dots, so the dispatcher and
+    // schemas now use `<ns>_<verb>`. Persisted history from before the
+    // rename still carries dot names; normalize here so replays send
+    // Claude-compatible names AND the dispatcher REGISTRY lookup hits.
+    const toolName = rawName.replace(/\./g, '_');
     const safeArgs = args && typeof args === 'object' ? structuredClone(args) : {};
     return {
         id: String(id || '').trim() || makeRuntimeToolCallId(),
@@ -469,7 +476,7 @@ export function appendStandardToolRoundMessages(targetMessages, executedCalls, a
 
     const toolCalls = executedCalls.map((call) => {
         const id = String(call?.id || '').trim() || makeRuntimeToolCallId();
-        const name = String(call?.name || '').trim();
+        const name = String(call?.name || '').trim().replace(/\./g, '_');
         const args = call?.args && typeof call.args === 'object' ? call.args : {};
         return {
             id,

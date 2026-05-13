@@ -53,16 +53,16 @@ Loop 模式针对这些点做单 agent + 工具循环:同一会话、一套 pres
 
 | 工具 | 作用 | 简单示例(RP 场景) |
 |---|---|---|
-| `note.add(text)` | 写一条**持久化笔记**,绑定当前 chat。下一次 loop 启动时,这些笔记会自动注入 system prompt。单条上限 1KB,最多保留 50 条 LRU。 | agent 在「林晚提到她的外祖母在洛阳」那一轮调 `note.add('林晚的家族线索:外祖母→洛阳')`,几次对话后再启 loop 时仍能看到这条笔记。 |
-| `chat.read_range(start, end)` | 读 chat 楼层范围。负数从末尾倒数,单次最多 50 楼。 | `chat.read_range(-10, -1)` 读最近 10 楼复习上下文。 |
-| `chat.search(query, limit)` | 全聊天 substring 搜索(大小写不敏感),返回楼层 + 内容预览。 | `chat.search('青冥剑')` 找出之前所有提到「青冥剑」的楼层。 |
-| `lorebook.search(query, limit)` | 在所有启用的世界书里 substring 搜索条目。**默认排除本回合已激活的条目**(那些已经被注入主上下文,再返回会浪费 token)。返回 `entries` + `excluded_active_count`。 | `lorebook.search('落雁城')` 翻出未激活的「落雁城」相关设定。 |
-| `lorebook.get(entry_key)` | 按 key 拉取条目全文。**不去重**——允许 agent 精确引用某条已激活条目以保持术语一致。 | `lorebook.get('落雁城-主城')` 把这一条全文调出来引用。 |
-| `memory.search(query, limit)` | 在记忆图(memory-graph)做 lexical 搜索,**不依赖 vector 配置**。同样默认排除已注入节点。 | `memory.search('家族秘密')` 找历史事件节点。 |
-| `memory.list_recent(limit)` | 时间倒序浏览记忆节点,看看最近发生了什么。 | `memory.list_recent(10)` 取最近 10 个事件节点。 |
-| `memory.get(node_id)` | 按 id 拉节点本身 + 直连邻居 id 列表(不含完整邻居节点)。 | 看完 `memory.search` 拿到一个节点 id,用 `memory.get` 看它和谁相关。 |
-| `search.search(query)` | **联网搜索**,转发给 [Search Tools](/zh-CN/features/search-tools) 插件(DuckDuckGo / SearXNG / Brave)。默认开启,但需要 search-tools 扩展已加载并配好 provider——否则 Agent 会收到 `SEARCH_UNAVAILABLE` / `SEARCH_DISABLED` 并自行改用其他工具。 | `search.search('某某新闻最新进展')` 返回 provider 形态的结果(通常是 `{title, url, snippet}` 列表)。 |
-| `search.visit(url)` | 抓取 `search.search` 命中的某个页面,返回可读正文。 | 拿到搜索结果后,`search.visit('https://example.com/article')` 把整篇正文拉回来。 |
+| `note_add(text)` | 写一条**持久化笔记**,绑定当前 chat。下一次 loop 启动时,这些笔记会自动注入 system prompt。单条上限 1KB,最多保留 50 条 LRU。 | agent 在「林晚提到她的外祖母在洛阳」那一轮调 `note_add('林晚的家族线索:外祖母→洛阳')`,几次对话后再启 loop 时仍能看到这条笔记。 |
+| `chat_read_range(start, end)` | 读 chat 楼层范围。负数从末尾倒数,单次最多 50 楼。 | `chat_read_range(-10, -1)` 读最近 10 楼复习上下文。 |
+| `chat_search(query, limit)` | 全聊天 substring 搜索(大小写不敏感),返回楼层 + 内容预览。 | `chat_search('青冥剑')` 找出之前所有提到「青冥剑」的楼层。 |
+| `lorebook_search(query, limit)` | 在所有启用的世界书里 substring 搜索条目。**默认排除本回合已激活的条目**(那些已经被注入主上下文,再返回会浪费 token)。返回 `entries` + `excluded_active_count`。 | `lorebook_search('落雁城')` 翻出未激活的「落雁城」相关设定。 |
+| `lorebook_get(entry_key)` | 按 key 拉取条目全文。**不去重**——允许 agent 精确引用某条已激活条目以保持术语一致。 | `lorebook_get('落雁城-主城')` 把这一条全文调出来引用。 |
+| `memory_search(query, limit)` | 在记忆图(memory-graph)做 lexical 搜索,**不依赖 vector 配置**。同样默认排除已注入节点。 | `memory_search('家族秘密')` 找历史事件节点。 |
+| `memory_list_recent(limit)` | 时间倒序浏览记忆节点,看看最近发生了什么。 | `memory_list_recent(10)` 取最近 10 个事件节点。 |
+| `memory_get(node_id)` | 按 id 拉节点本身 + 直连邻居 id 列表(不含完整邻居节点)。 | 看完 `memory_search` 拿到一个节点 id,用 `memory_get` 看它和谁相关。 |
+| `search_search(query)` | **联网搜索**,转发给 [Search Tools](/zh-CN/features/search-tools) 插件(DuckDuckGo / SearXNG / Brave)。默认开启,但需要 search-tools 扩展已加载并配好 provider——否则 Agent 会收到 `SEARCH_UNAVAILABLE` / `SEARCH_DISABLED` 并自行改用其他工具。 | `search_search('某某新闻最新进展')` 返回 provider 形态的结果(通常是 `{title, url, snippet}` 列表)。 |
+| `search_visit(url)` | 抓取 `search_search` 命中的某个页面,返回可读正文。 | 拿到搜索结果后,`search_visit('https://example.com/article')` 把整篇正文拉回来。 |
 | `finalize(capsule_text)` | **终止信号**(强制启用)。`capsule_text` 直接注入主模型 prompt。 | `finalize('林晚此刻心情焦虑:刚得知外祖母身世,可能在下一句对白中引出洛阳话题。')` |
 
 ## 失控保护(5 层,按触发优先级)
@@ -135,22 +135,22 @@ Loop popup 当前没有 **导出 Profile** / **导入 Profile** 按钮,跨电脑
 
 ## 常见问题
 
-**Q:`memory.search` 返回空怎么办?**
-A:先确认 memory-graph 扩展是否启用、当前 chat 是否真的有记忆节点。返回空也可能是查询词太具体;试试 `memory.list_recent` 看时间线,再决定下一步。
+**Q:`memory_search` 返回空怎么办?**
+A:先确认 memory-graph 扩展是否启用、当前 chat 是否真的有记忆节点。返回空也可能是查询词太具体;试试 `memory_list_recent` 看时间线,再决定下一步。
 
-**Q:`lorebook.search` 为什么排除已激活条目?**
-A:那些条目已经通过 worldInfo 主流程注入了主模型上下文,loop agent 再把它们返回到自己的循环里只是浪费 token。**用 `lorebook.get` 才能精确引用已激活条目原文**,比如保持术语一致。
+**Q:`lorebook_search` 为什么排除已激活条目?**
+A:那些条目已经通过 worldInfo 主流程注入了主模型上下文,loop agent 再把它们返回到自己的循环里只是浪费 token。**用 `lorebook_get` 才能精确引用已激活条目原文**,比如保持术语一致。
 
 **Q:loop 跑到一半我想停下来怎么办?**
 A:点工具栏的 stop 按钮(与 spec / agenda 一致)。loop runtime 在每轮顶部检查 abort signal,立即中止;trace 写 `cancelled`,不会注入半成品 capsule。
 
 **Q:笔记会跨 chat 共享吗?**
-A:不会。`note.add` 写入的是**当前 chat** 的 floor-state 命名空间,跨 chat 之间互不可见。删除楼层 / swipe 走 floor-state 的 settle 机制——绑定到该楼的笔记会自动消失。
+A:不会。`note_add` 写入的是**当前 chat** 的 floor-state 命名空间,跨 chat 之间互不可见。删除楼层 / swipe 走 floor-state 的 settle 机制——绑定到该楼的笔记会自动消失。
 
 **Q:连续 3 轮不调工具被打断了怎么办?**
 A:检查 system prompt 是否给了 agent 明确的「产出格式」。多数情况是 agent 在「思考」但不知道何时该 finalize;在 prompt 里加一条「当你掌握的信息足以写出 capsule 时,立即调用 finalize」通常能解决。
 
-**Q:勾选了 `search.search`,Agent 却收到 `SEARCH_UNAVAILABLE` / `SEARCH_DISABLED`?**
+**Q:勾选了 `search_search`,Agent 却收到 `SEARCH_UNAVAILABLE` / `SEARCH_DISABLED`?**
 A:web 工具是把请求转发给 [Search Tools](/zh-CN/features/search-tools) 插件的。`SEARCH_UNAVAILABLE` 表示插件没加载;`SEARCH_DISABLED` 表示插件加载了但被关掉了。打开 search-tools 设置面板,选好 provider(DuckDuckGo / SearXNG / Brave)、把总开关打开,再重试即可。
 
 ## 性能 trade-off

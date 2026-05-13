@@ -1,11 +1,11 @@
 /**
  * loop-tools/memory tests (Plan Task 10).
  *
- * The memory.* tools are thin wrappers over memory-graph's external-api:
+ * The memory_* tools are thin wrappers over memory-graph's external-api:
  *
- *   - memory.search → searchNodesLexical(store, q, { limit, excludeIds })
- *   - memory.list_recent → listRecentNodes(store, { limit, excludeIds })
- *   - memory.get → getNodeById(store, id, { includeNeighbors: true })
+ *   - memory_search → searchNodesLexical(store, q, { limit, excludeIds })
+ *   - memory_list_recent → listRecentNodes(store, { limit, excludeIds })
+ *   - memory_get → getNodeById(store, id, { includeNeighbors: true })
  *
  * Dedup contract: excludeIds must be the union of `alwaysInjectIds` +
  * `recallSelectedIds` from `getCurrentlyInjectedNodeIds(context)` so the
@@ -198,37 +198,48 @@ describe('execMemoryGet (Task 10)', () => {
 });
 
 describe('central dispatcher includes memory tools (Task 10)', () => {
-    test('executeLoopTool dispatches memory.search', async () => {
+    test('executeLoopTool dispatches memory_search', async () => {
         const ctx = {
             __memoryStore: { nodes: {} },
             __memoryDeps: makeDeps({
                 searchNodesLexical: () => ({ nodes: [{ id: 'n1' }] }),
             }),
         };
-        const result = await executeLoopTool('memory.search', { query: 'autumn' }, ctx);
+        const result = await executeLoopTool('memory_search', { query: 'autumn' }, ctx);
         expect(result.nodes[0].id).toBe('n1');
     });
 
-    test('executeLoopTool dispatches memory.list_recent', async () => {
+    test('executeLoopTool dispatches memory_list_recent', async () => {
         const ctx = {
             __memoryStore: { nodes: {} },
             __memoryDeps: makeDeps({
                 listRecentNodes: () => ({ nodes: [{ id: 'n2' }] }),
             }),
         };
-        const result = await executeLoopTool('memory.list_recent', {}, ctx);
+        const result = await executeLoopTool('memory_list_recent', {}, ctx);
         expect(result.nodes[0].id).toBe('n2');
     });
 
-    test('executeLoopTool dispatches memory.get', async () => {
+    test('executeLoopTool dispatches memory_get', async () => {
         const ctx = {
             __memoryStore: { nodes: {} },
             __memoryDeps: makeDeps({
                 getNodeById: (_s, id) => ({ node: { id }, neighbors: [] }),
             }),
         };
-        const result = await executeLoopTool('memory.get', { node_id: 'n3' }, ctx);
+        const result = await executeLoopTool('memory_get', { node_id: 'n3' }, ctx);
         expect(result.node.id).toBe('n3');
+    });
+
+    test('executeLoopTool migrates legacy `memory.search` dotted name to underscore form', async () => {
+        const ctx = {
+            __memoryStore: { nodes: {} },
+            __memoryDeps: makeDeps({
+                searchNodesLexical: () => ({ nodes: [{ id: 'legacy' }] }),
+            }),
+        };
+        const result = await executeLoopTool('memory.search', { query: 'autumn' }, ctx);
+        expect(result.nodes[0].id).toBe('legacy');
     });
 
     test('getEnabledToolSchemas includes memory tools when flagged on', () => {
@@ -242,7 +253,7 @@ describe('central dispatcher includes memory tools (Task 10)', () => {
             },
         });
         const names = schemas.map(s => s?.function?.name);
-        expect(names).toEqual(expect.arrayContaining(['memory.search', 'memory.list_recent', 'memory.get']));
+        expect(names).toEqual(expect.arrayContaining(['memory_search', 'memory_list_recent', 'memory_get']));
     });
 
     test('getEnabledToolSchemas omits memory tools when flagged off', () => {
@@ -250,14 +261,14 @@ describe('central dispatcher includes memory tools (Task 10)', () => {
             tools: { finalize: true, memory: { search: false, list_recent: false, get: false } },
         });
         const names = schemas.map(s => s?.function?.name);
-        expect(names).not.toContain('memory.search');
-        expect(names).not.toContain('memory.list_recent');
-        expect(names).not.toContain('memory.get');
+        expect(names).not.toContain('memory_search');
+        expect(names).not.toContain('memory_list_recent');
+        expect(names).not.toContain('memory_get');
     });
 });
 
 describe('runtime propagates __memoryStore / __memoryDeps into toolContext (Task 10)', () => {
-    test('memory.search invoked through the runtime sees both fields from the upstream context', async () => {
+    test('memory_search invoked through the runtime sees both fields from the upstream context', async () => {
         const { runLoopOrchestration } = await import(
             '../../public/scripts/extensions/orchestrator/loop-runtime.js'
         );
@@ -267,7 +278,7 @@ describe('runtime propagates __memoryStore / __memoryDeps into toolContext (Task
         const sendLlm = jest.fn()
             .mockImplementationOnce(async () => ({
                 toolCalls: [
-                    { id: 'tc1', name: 'memory.search', args: { query: 'recall me' } },
+                    { id: 'tc1', name: 'memory_search', args: { query: 'recall me' } },
                 ],
                 assistantText: '',
             }))
