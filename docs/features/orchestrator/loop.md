@@ -65,6 +65,10 @@ Tools follow the OpenAI function-calling protocol; results come back as `role: t
 | `search_visit(url)` | Fetch one page discovered via `search_search` and return its readable text. | After a search hit, `search_visit('https://example.com/article')` pulls the full article body. |
 | `finalize(capsule_text)` | **Terminator** (forced on). `capsule_text` becomes the capsule injected into the main model. | `finalize('Lin Wan is anxious right now: she just learned about her grandmother and may steer the next exchange to Luoyang.')` |
 
+Once a tool call returns, its result lands in the conversation as a light-yellow `Tool result` block; the agent's next `Assistant` block reasons directly off it. This "call a tool → read the result → continue → finalize when ready" rhythm is exactly where loop pulls ahead of spec / agenda: the entire context stays in `messages`, no stage-boundary stream breaks.
+
+![Loop conversation: tool result feeds straight into the agent's next thought](/images/orchestrator/real-loop-conversation-tool.png)
+
 ## Five-layer runaway protection (in priority order)
 
 1. **Abort signal** — user clicks Stop / upper-layer cancel → loop aborts immediately; trace records `cancelled` and **no** half-baked capsule is injected.
@@ -75,9 +79,33 @@ Tools follow the OpenAI function-calling protocol; results come back as `role: t
 
 When any safeguard fires, the loop falls back to the agent's last natural-language reply as the capsule so the main model still gets *something*.
 
-## Trace troubleshooting
+## Trace panel
 
-The orchestrator's trace panel records each round of the loop:
+Once the main reply lands, click **View runtime trace** in the orchestrator panel to open the loop run's trace popup. It splits the run into a few blocks — meta header, Agent conversation, event timeline, raw data — walked through in panel order below.
+
+### Panel overview
+
+The top row is the status summary: status (completed / cancelled / budget exhausted), mode (`loop`), generation type (`normal` / `continue` / `regenerate` / `swipe` / `impersonate`), target floor, node-execution count, REVIEW rerun count, last-updated time.
+
+![Loop trace panel: meta header](/images/orchestrator/real-loop-meta.png)
+
+### Agent conversation
+
+The "Agent conversation" column lays out the loop's full `messages` array in order — `System` blocks for the system prompt, `Assistant` blocks for the agent's per-round reasoning and tool calls (arguments expanded inline, no need to crack open raw JSON), followed by `Tool result` blocks. Every bit of context in the loop is right here; cross-reference against the system prompt to find where the agent went off-track.
+
+![Agent conversation: system prompt + first round's thinking + chat_read_range tool call](/images/orchestrator/real-loop-conversation-system.png)
+
+In the next round the agent takes the previous tool's return, adds another thought, and calls `finalize`. `finalize` rides the same tool-call channel; its `capsule_text` is expanded inline as structured text — that's the exact string injected into the main model.
+
+![Agent conversation: finalize call with the full capsule_text](/images/orchestrator/real-loop-conversation-assistant.png)
+
+### Event timeline
+
+The "Event timeline" column lists every trace event in order with ISO timestamps. Run start/finish, each round's llm_request / llm_response, every tool_call / tool_result / tool_error — one line each. When a safeguard fires, a `budget_exhausted` row shows up with the specific reason.
+
+![Loop event timeline: run_started → llm_request/response → tool_call/result → Run completed](/images/orchestrator/real-loop-events.png)
+
+Event types at a glance:
 
 - `run_started` / `run_finished` — run start / end (with status: `completed` / `budget_exhausted` / `cancelled`)
 - `llm_request` / `llm_response` — per-round request / response (includes `message_count`, `tool_call_count`)
@@ -85,7 +113,11 @@ The orchestrator's trace panel records each round of the loop:
 - `agent_no_tool_call` — agent didn't call any tool this round (with consecutive count)
 - `budget_exhausted` — specific reason when a safeguard fired (`max_rounds` / `wall_clock` / `no_tool_call_streak`)
 
-When filing a bug, click **Export this run** in the trace panel to download a JSONL file you can attach.
+### Raw trace / export
+
+At the bottom, "Latest injected text" is the final capsule; the "Raw runtime trace" block beneath it dumps the whole run as JSON — `runId`, `chatKey`, `generationType`, `capsuleText` and other top-level fields are all there. When filing a bug, **Export this run** downloads this JSON as a JSONL file you can hand to the developer.
+
+![Loop raw trace JSON and latest injected text](/images/orchestrator/real-loop-rawtrace.png)
 
 ::: warning persistTrace is experimental
 The settings panel's `persistTrace` toggle auto-persists every run's trace events to the extension data directory. **It's experimental right now** — there's no cross-platform-stable on-disk helper and the toggle defaults off. On-demand JSONL export from the trace popup is enough for everyday work; only flip `persistTrace` on when you specifically want to keep monitoring a chat's loop behaviour over time.
