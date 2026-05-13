@@ -298,6 +298,7 @@ function buildAiOrchestrationSystemPrompt(settings) {
         'Never create consecutive review-only stages or back-to-back critics with no worker layer between them.',
         ...getCriticPromptReminderLines(),
         `Review nodes do not emit synthesis. Downstream stages continue from passthrough worker outputs plus approved \`${ORCH_REVIEW_FEEDBACK_FIELD}\`.`,
+        'Spec nodes optionally accept a `tools` block enabling loop-mode tools (chat/lorebook/memory/note/search) for that node — leave it unset by default. Only set tools when the user explicitly asks for tool-using behavior at a node, in which case the runtime will switch that node into a multi-round tool loop terminated by its node-output tool.',
         'When deviating, explicitly optimize for this character card while preserving hard gates and final function-call text contract.',
     ].join('\n');
 }

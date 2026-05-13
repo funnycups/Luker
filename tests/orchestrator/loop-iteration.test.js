@@ -43,6 +43,7 @@ describe('LOOP_ITERATION_CONTRACT_LINES', () => {
 
     test('mentions every tool flag by its dotted path so the AI can target them', () => {
         expect(text).toMatch(/tools\.note\.add/);
+        expect(text).toMatch(/tools\.note\.delete/);
         expect(text).toMatch(/tools\.chat\.read_range/);
         expect(text).toMatch(/tools\.chat\.search/);
         expect(text).toMatch(/tools\.lorebook\.search/);
@@ -50,6 +51,8 @@ describe('LOOP_ITERATION_CONTRACT_LINES', () => {
         expect(text).toMatch(/tools\.memory\.search/);
         expect(text).toMatch(/tools\.memory\.list_recent/);
         expect(text).toMatch(/tools\.memory\.get/);
+        expect(text).toMatch(/tools\.search\.search/);
+        expect(text).toMatch(/tools\.search\.visit/);
     });
 
     test('forbids disabling the finalize terminator', () => {
