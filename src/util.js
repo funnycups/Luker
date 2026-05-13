@@ -1095,6 +1095,7 @@ export function trimV1(str) {
  *   https://api.example.com/v1/       → https://api.example.com/v1
  *   https://api.example.com/v1/chat/completions → https://api.example.com/v1
  *   https://api.example.com/api/v1    → https://api.example.com/api/v1
+ *   https://qianfan.baidubce.com/v2/coding → https://qianfan.baidubce.com/v2/coding
  *
  * @param {string} str Input URL string
  * @returns {string} Normalized base URL ending with /v1 (or similar versioned path)
@@ -1103,8 +1104,10 @@ export function normalizeOpenAIBaseUrl(str) {
     let url = String(str ?? '').replace(/\/$/, '');
     // Strip known endpoint suffixes that users might paste by mistake
     url = url.replace(/\/(chat\/completions|completions|models|embeddings|moderations|images\/generations)$/, '');
-    // If the path doesn't already end with a version segment like /v1, /v2, etc., append /v1
-    if (!/\/v\d+$/.test(url)) {
+    // If the path doesn't already contain a version segment like /v1, /v2, etc., append /v1.
+    // Checking anywhere in the path (not just the end) lets vendors that nest a category
+    // after the version — e.g. Baidu Qianfan's /v2/coding — pass through untouched.
+    if (!/\/v\d+(?:\/|$)/.test(url)) {
         url += '/v1';
     }
     return url;
