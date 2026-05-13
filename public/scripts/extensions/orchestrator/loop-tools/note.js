@@ -39,12 +39,20 @@
  * wrapper in loop-runtime's `attachNotesFloorState`):
  *
  *   {
- *     appendForFloor(floor: number, text: string): Promise<void>
- *     listAcrossFloors(): Promise<string[]>     // chronological order
- *     pruneOldest(n: number): Promise<void>     // optional; drop n oldest
- *     deleteByIndex(indexes: number[]): Promise<{ removed: number }>
- *                                                 // 1-based positions
+ *     appendForFloor(floor: number, text: string): Promise<string>  // returns new id
+ *     listAcrossFloors(): Promise<Array<{id, text}>>                // chronological
+ *     pruneOldest(n: number): Promise<void>                         // optional; drop n oldest
+ *     deleteByIds(ids: string[]): Promise<{ removed, missing }>
  *   }
+ *
+ * Stable IDs let `note_delete` work safely under multi-agent concurrency.
+ * The LLM-facing schema still takes `indexes: int[]` (1-based positions
+ * in the "## Previous Notes" block); this module resolves those positions
+ * through `context.__noteIdSnapshot` — the id sequence the agent's prompt
+ * was built with — into the underlying ids. If another agent has deleted
+ * a target id since the snapshot was taken, the adapter reports it via
+ * `missing`; the tool surfaces this as `already_gone` so the calling
+ * agent knows the intent landed (or didn't) without retrying blindly.
  *
  * Production's wrapper sits over a real `floor-state` instance and
  * realizes append / list / prune / delete through `fs.update(reducer, { floor })`
@@ -85,7 +93,9 @@ function pickTargetFloor(context) {
 /**
  * Append a persistent note tagged at the chat tail (or
  * `context.__targetFloorForNote` if provided). LRU caps at 50 notes
- * total; older entries are pruned silently.
+ * total; older entries are pruned silently. On success, the new note's
+ * id is pushed onto `context.__noteIdSnapshot` so subsequent
+ * `note_delete` calls in the same agent see their own writes.
  *
  * @param {{ text: string }} args
  * @param {object} context
@@ -117,12 +127,23 @@ export async function execNoteAdd(args, context) {
     }
 
     const floor = pickTargetFloor(context);
-    await fs.appendForFloor(floor, trimmed);
+    const newId = await fs.appendForFloor(floor, trimmed);
+
+    if (context && Array.isArray(context.__noteIdSnapshot) && typeof newId === 'string' && newId) {
+        context.__noteIdSnapshot.push(newId);
+    }
 
     if (typeof fs.listAcrossFloors === 'function' && typeof fs.pruneOldest === 'function') {
         const all = await fs.listAcrossFloors();
         if (Array.isArray(all) && all.length > MAX_NOTES_TOTAL) {
-            await fs.pruneOldest(all.length - MAX_NOTES_TOTAL);
+            const drop = all.length - MAX_NOTES_TOTAL;
+            await fs.pruneOldest(drop);
+            // Trim the snapshot's head to match — pruneOldest drops the
+            // oldest entries first, so the first `drop` ids in the snapshot
+            // are the ones that just got reaped.
+            if (context && Array.isArray(context.__noteIdSnapshot)) {
+                context.__noteIdSnapshot.splice(0, drop);
+            }
         }
     }
 
@@ -136,35 +157,47 @@ export async function execNoteAdd(args, context) {
  * empty list simply means no historical context to bring forward.
  *
  * @param {object} context
- * @returns {Promise<string[]>}
+ * @returns {Promise<Array<{id: string, text: string}>>}
  */
 export async function loadAllNotes(context) {
     const fs = pickFloorStateForNotes(context);
     if (!fs || typeof fs.listAcrossFloors !== 'function') return [];
     const all = await fs.listAcrossFloors();
-    return Array.isArray(all) ? all.map(s => String(s ?? '')) : [];
+    if (!Array.isArray(all)) return [];
+    return all
+        .map(entry => {
+            if (entry && typeof entry === 'object' && typeof entry.text === 'string') {
+                return { id: String(entry.id || ''), text: entry.text };
+            }
+            // Legacy adapter that still returns bare strings — synthesize an
+            // empty id so callers can read .text safely. Shouldn't happen
+            // post-migration but keeps the contract defensive.
+            return { id: '', text: String(entry ?? '') };
+        });
 }
 
 /**
  * Delete persisted notes by their 1-based positions in the system-prompt
- * "## Previous Notes" block. The agent calls this to prune notes whose
- * role is exhausted (foreshadowing fired, character beat already
- * happened, setting superseded by later events) so the block doesn't
- * degenerate into noise.
+ * "## Previous Notes" block. Positions resolve through
+ * `context.__noteIdSnapshot` — the id sequence the agent saw at prompt
+ * build time — into stable ids the adapter deletes by. This makes the
+ * tool safe under concurrent multi-agent operation: two agents that
+ * observed the same snapshot can independently delete different
+ * positions without their indexes shifting under each other.
  *
  * Validation is strict so the agent gets actionable feedback:
  *   - empty / non-array → NOTE_DELETE_EMPTY
  *   - any element non-integer or < 1 → NOTE_INDEX_INVALID
- *   - any element > current count → NOTE_INDEX_OUT_OF_RANGE
+ *   - any element > snapshot length → NOTE_INDEX_OUT_OF_RANGE
  *
- * On success returns `{ ok: true, removed, remaining }` where `removed`
- * is the count actually dropped and `remaining` is the post-deletion
- * note count, so the agent can confirm the pruning landed without an
- * extra round-trip to re-list.
+ * Returns `{ ok: true, removed, remaining, already_gone? }`. `already_gone`
+ * is included only when a target id was deleted by another agent since
+ * this agent's snapshot was taken — informational, the agent's intent
+ * still landed for whichever ids remained.
  *
  * @param {{ indexes: number[] }} args
  * @param {object} context
- * @returns {Promise<{ ok: true, removed: number, remaining: number }>}
+ * @returns {Promise<{ ok: true, removed: number, remaining: number, already_gone?: number[] }>}
  */
 export async function execNoteDelete(args, context) {
     const raw = args?.indexes;
@@ -194,7 +227,7 @@ export async function execNoteDelete(args, context) {
     }
 
     const fs = pickFloorStateForNotes(context);
-    if (!fs || typeof fs.listAcrossFloors !== 'function' || typeof fs.deleteByIndex !== 'function') {
+    if (!fs || typeof fs.deleteByIds !== 'function') {
         throw new ToolError(
             'note_delete: notes floor-state not initialized.',
             'NOTE_FS_UNAVAILABLE',
@@ -202,31 +235,69 @@ export async function execNoteDelete(args, context) {
         );
     }
 
-    const before = await fs.listAcrossFloors();
-    const beforeCount = Array.isArray(before) ? before.length : 0;
-    if (beforeCount === 0) {
+    // Resolve indexes → ids via the agent's snapshot. If no snapshot was
+    // staged (test fixture, legacy caller), fall back to reading the
+    // current adapter state — same semantics as the old index-based path
+    // for the single-agent case.
+    let snapshot = Array.isArray(context?.__noteIdSnapshot) ? context.__noteIdSnapshot : null;
+    if (!snapshot) {
+        const live = typeof fs.listAcrossFloors === 'function' ? await fs.listAcrossFloors() : [];
+        snapshot = (Array.isArray(live) ? live : []).map(e => (e && typeof e === 'object') ? String(e.id || '') : '');
+    }
+    const snapshotLen = snapshot.length;
+    if (snapshotLen === 0) {
         throw new ToolError(
             'note_delete: no notes to delete.',
             'NOTE_INDEX_OUT_OF_RANGE',
             'The "## Previous Notes" block is empty for this chat. Add notes via note_add first; nothing to prune yet.',
         );
     }
-    const outOfRange = cleaned.filter(n => n > beforeCount);
+    const outOfRange = cleaned.filter(n => n > snapshotLen);
     if (outOfRange.length > 0) {
         throw new ToolError(
-            `note_delete: indexes out of range (got ${JSON.stringify(outOfRange)}, only ${beforeCount} note(s) exist).`,
+            `note_delete: indexes out of range (got ${JSON.stringify(outOfRange)}, only ${snapshotLen} note(s) exist).`,
             'NOTE_INDEX_OUT_OF_RANGE',
-            `Use 1-based indexes between 1 and ${beforeCount}. Re-check the system-prompt "## Previous Notes" block for current numbering.`,
+            `Use 1-based indexes between 1 and ${snapshotLen}. Re-check the system-prompt "## Previous Notes" block for current numbering.`,
         );
     }
 
-    const result = await fs.deleteByIndex(cleaned);
+    const uniqueIndexes = Array.from(new Set(cleaned));
+    const idsByIndex = new Map();
+    for (const oneBased of uniqueIndexes) {
+        const id = snapshot[oneBased - 1];
+        if (id) idsByIndex.set(oneBased, id);
+    }
+    const ids = Array.from(idsByIndex.values());
+
+    const result = await fs.deleteByIds(ids);
     const removed = Number(result?.removed || 0);
-    return {
+    const missingIds = new Set(Array.isArray(result?.missing) ? result.missing : []);
+
+    // Drop deleted ids from the agent's snapshot so subsequent positional
+    // calls in the same run reflect the new state. Skip ones that came
+    // back as `missing` (they're already absent from upstream state).
+    if (context && Array.isArray(context.__noteIdSnapshot)) {
+        for (const id of ids) {
+            const at = context.__noteIdSnapshot.indexOf(id);
+            if (at >= 0) context.__noteIdSnapshot.splice(at, 1);
+        }
+    }
+
+    const alreadyGone = [];
+    for (const [oneBased, id] of idsByIndex) {
+        if (missingIds.has(id)) alreadyGone.push(oneBased);
+    }
+
+    const response = {
         ok: true,
         removed,
-        remaining: Math.max(0, beforeCount - removed),
+        remaining: Math.max(0, snapshotLen - removed),
     };
+    if (alreadyGone.length > 0) {
+        alreadyGone.sort((a, b) => a - b);
+        response.already_gone = alreadyGone;
+    }
+    return response;
 }
 
 export const NOTES_NAMESPACE = 'luker_orch_loop_notes';

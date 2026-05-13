@@ -11,10 +11,11 @@
  *     run start to mount the floor-state namespace + populate
  *     `context.__loopNotes`.
  *   - Tests: inject through `context.__floorStateForNotes`, an adapter
- *     exposing `appendForFloor(floor, text)` /
- *     `listAcrossFloors(): string[]` / `pruneOldest(n)`. The production
- *     adapter wraps the real floor-state instance behind these same call
- *     names so the tool doesn't have to care which path it's on.
+ *     exposing `appendForFloor(floor, text): Promise<id>` /
+ *     `listAcrossFloors(): Array<{id, text}>` / `pruneOldest(n)` /
+ *     `deleteByIds(ids)`. The production adapter wraps the real
+ *     floor-state instance behind these same call names so the tool
+ *     doesn't have to care which path it's on.
  *
  * Constraints:
  *   - Empty / whitespace-only text → ToolError(NOTE_EMPTY)
@@ -37,45 +38,48 @@ import {
 import { ToolError } from '../../public/scripts/extensions/orchestrator/loop-runtime.js';
 
 function makeFakeFloorState() {
-    const stored = []; // { floor, text }
+    const stored = []; // { floor, id, text }
+    let counter = 0;
+    const mintId = () => `t_${++counter}`;
     return {
         stored,
         appendForFloor: async (floor, text) => {
-            stored.push({ floor, text });
+            const id = mintId();
+            stored.push({ floor, id, text });
+            return id;
         },
-        listAcrossFloors: async () => stored.map(s => s.text),
+        listAcrossFloors: async () => stored.map(s => ({ id: s.id, text: s.text })),
         pruneOldest: async (n) => {
             if (n > 0) stored.splice(0, Math.min(n, stored.length));
         },
-        deleteByIndex: async (indexes) => {
-            const cleaned = Array.from(new Set(
-                (Array.isArray(indexes) ? indexes : [])
-                    .map(n => Number(n))
-                    .filter(n => Number.isInteger(n) && n >= 1)
-                    .map(n => Math.floor(n)),
-            )).sort((a, b) => b - a);
+        deleteByIds: async (ids) => {
+            const target = new Set(Array.isArray(ids) ? ids.map(s => String(s)) : []);
+            const present = new Set(stored.map(s => s.id));
             let removed = 0;
-            for (const oneBased of cleaned) {
-                const idx = oneBased - 1;
-                if (idx < 0 || idx >= stored.length) continue;
-                stored.splice(idx, 1);
-                removed += 1;
+            for (let i = stored.length - 1; i >= 0; i -= 1) {
+                if (target.has(stored[i].id)) {
+                    stored.splice(i, 1);
+                    removed += 1;
+                }
             }
-            return { removed };
+            const missing = [];
+            for (const id of target) {
+                if (!present.has(id)) missing.push(id);
+            }
+            return { removed, missing };
         },
     };
 }
 
-function makeContext({ floor, chat = [] } = {}) {
+function makeContext({ floor, chat = [], snapshot = null } = {}) {
     const fs = makeFakeFloorState();
-    return {
-        ctx: {
-            chat,
-            __targetFloorForNote: floor,
-            __floorStateForNotes: fs,
-        },
-        fs,
+    const ctx = {
+        chat,
+        __targetFloorForNote: floor,
+        __floorStateForNotes: fs,
+        __noteIdSnapshot: Array.isArray(snapshot) ? snapshot.slice() : [],
     };
+    return { ctx, fs };
 }
 
 describe('execNoteAdd (Task 11)', () => {
@@ -83,13 +87,13 @@ describe('execNoteAdd (Task 11)', () => {
         const { ctx, fs } = makeContext({ floor: 5 });
         const r = await execNoteAdd({ text: 'remember the lighthouse' }, ctx);
         expect(r).toEqual({ ok: true });
-        expect(fs.stored).toEqual([{ floor: 5, text: 'remember the lighthouse' }]);
+        expect(fs.stored).toEqual([expect.objectContaining({ floor: 5, text: 'remember the lighthouse' })]);
     });
 
     test('default target floor = max(0, chat.length-1) when __targetFloorForNote missing', async () => {
         const { ctx, fs } = makeContext({ chat: [{ mes: 'a' }, { mes: 'b' }, { mes: 'c' }] });
         await execNoteAdd({ text: 'note A' }, ctx);
-        expect(fs.stored).toEqual([{ floor: 2, text: 'note A' }]);
+        expect(fs.stored).toEqual([expect.objectContaining({ floor: 2, text: 'note A' })]);
     });
 
     test('empty chat falls back to floor 0', async () => {
@@ -158,8 +162,12 @@ describe('loadAllNotes (Task 11)', () => {
         await execNoteAdd({ text: 'second' }, ctx);
         await execNoteAdd({ text: 'third' }, ctx);
         const all = await loadAllNotes(ctx);
-        expect(all).toEqual(['first', 'second', 'third']);
-        expect(fs.stored.map(s => s.text)).toEqual(all);
+        expect(all).toEqual([
+            expect.objectContaining({ text: 'first' }),
+            expect.objectContaining({ text: 'second' }),
+            expect.objectContaining({ text: 'third' }),
+        ]);
+        expect(fs.stored.map(s => s.text)).toEqual(all.map(n => n.text));
     });
 
     test('returns [] when floor-state is unavailable (graceful)', async () => {
@@ -293,6 +301,63 @@ describe('execNoteDelete', () => {
             expect(e).toBeInstanceOf(ToolError);
             expect(e.code).toBe('NOTE_FS_UNAVAILABLE');
         }
+    });
+
+    test('snapshot binding: two agents see same list, delete different positions, both land correctly', async () => {
+        // Single shared adapter (= the underlying floor-state); two agent
+        // contexts that observed the same initial snapshot. This is the
+        // multi-agent concurrent-delete scenario the ID refactor is for.
+        const fs = makeFakeFloorState();
+        // Seed 4 notes through fs directly so both agent contexts can
+        // snapshot from a known state.
+        const id1 = await fs.appendForFloor(0, 'A');
+        const id2 = await fs.appendForFloor(0, 'B');
+        const id3 = await fs.appendForFloor(0, 'C');
+        const id4 = await fs.appendForFloor(0, 'D');
+
+        const baseSnapshot = [id1, id2, id3, id4];
+        const ctxX = {
+            chat: [],
+            __floorStateForNotes: fs,
+            __noteIdSnapshot: baseSnapshot.slice(),
+        };
+        const ctxY = {
+            chat: [],
+            __floorStateForNotes: fs,
+            __noteIdSnapshot: baseSnapshot.slice(),
+        };
+
+        // Agent X deletes its index 2 (= B, id2)
+        const rX = await execNoteDelete({ indexes: [2] }, ctxX);
+        expect(rX).toEqual({ ok: true, removed: 1, remaining: 3 });
+
+        // Agent Y, still holding the original snapshot, deletes index 3
+        // (which was C in the snapshot, id3). The naive index-based path
+        // would mis-target D after X's removal; ID resolution lands the
+        // correct note.
+        const rY = await execNoteDelete({ indexes: [3] }, ctxY);
+        expect(rY.ok).toBe(true);
+        expect(rY.removed).toBe(1);
+
+        // Underlying state has A and D left; B and C both deleted.
+        expect(fs.stored.map(s => s.text).sort()).toEqual(['A', 'D']);
+    });
+
+    test('snapshot binding: target already deleted by another agent reports already_gone', async () => {
+        const fs = makeFakeFloorState();
+        const id1 = await fs.appendForFloor(0, 'A');
+        const id2 = await fs.appendForFloor(0, 'B');
+
+        const ctxX = { chat: [], __floorStateForNotes: fs, __noteIdSnapshot: [id1, id2] };
+        const ctxY = { chat: [], __floorStateForNotes: fs, __noteIdSnapshot: [id1, id2] };
+
+        // X deletes B
+        await execNoteDelete({ indexes: [2] }, ctxX);
+        // Y also tries to delete B (index 2 in its snapshot) — already gone.
+        const rY = await execNoteDelete({ indexes: [2] }, ctxY);
+        expect(rY.ok).toBe(true);
+        expect(rY.removed).toBe(0);
+        expect(rY.already_gone).toEqual([2]);
     });
 });
 

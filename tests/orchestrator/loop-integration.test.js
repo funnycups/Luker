@@ -50,15 +50,35 @@ function makeFakeFloorStateNotes(initialEntries = []) {
     // the tool itself doesn't know which path it's on. Keeping this mock
     // close to the production adapter lets us exercise note_add through the
     // real registry without touching floor-state.
-    const stored = initialEntries.map(text => ({ floor: 0, text: String(text) }));
+    let counter = 0;
+    const mintId = () => `t_${++counter}`;
+    const stored = initialEntries.map(text => ({ floor: 0, id: mintId(), text: String(text) }));
     return {
         stored,
         appendForFloor: async (floor, text) => {
-            stored.push({ floor, text: String(text) });
+            const id = mintId();
+            stored.push({ floor, id, text: String(text) });
+            return id;
         },
-        listAcrossFloors: async () => stored.map(s => s.text),
+        listAcrossFloors: async () => stored.map(s => ({ id: s.id, text: s.text })),
         pruneOldest: async (n) => {
             if (n > 0) stored.splice(0, Math.min(n, stored.length));
+        },
+        deleteByIds: async (ids) => {
+            const target = new Set(Array.isArray(ids) ? ids.map(s => String(s)) : []);
+            const present = new Set(stored.map(s => s.id));
+            let removed = 0;
+            for (let i = stored.length - 1; i >= 0; i -= 1) {
+                if (target.has(stored[i].id)) {
+                    stored.splice(i, 1);
+                    removed += 1;
+                }
+            }
+            const missing = [];
+            for (const id of target) {
+                if (!present.has(id)) missing.push(id);
+            }
+            return { removed, missing };
         },
     };
 }
@@ -73,6 +93,9 @@ function makeChatContext({ chat = [], notesAdapter = null, sortedEntries = null,
         // Pre-populate the loaded notes so buildInitialMessages sees them
         // (production attachNotesFloorState does the same eager load).
         ctx.__loopNotes = [];
+        // Snapshot starts empty too — note_add / note_delete keep it in sync
+        // as the test progresses. Matches production attachNotesFloorState.
+        ctx.__noteIdSnapshot = [];
     }
     if (sortedEntries !== null) {
         ctx.__getSortedEntriesFn = async () => sortedEntries;
@@ -223,7 +246,7 @@ describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
         // is what would be injected into the next run's system prompt.
         const persistedNotes = await notesAdapter.listAcrossFloors();
         expect(persistedNotes).toHaveLength(1);
-        expect(persistedNotes[0]).toMatch(/Lyra mentioned the festival opens at dusk/);
+        expect(persistedNotes[0].text).toMatch(/Lyra mentioned the festival opens at dusk/);
 
         // Trace coverage: every key event type fired in order.
         const types = eventTypes(result.runtimeTrace);
@@ -423,7 +446,7 @@ describe('loop mode end-to-end: note persistence across runs (Task 15d)', () => 
         }), { sendLlm: sendLlm1 });
 
         expect(result1.status).toBe('completed');
-        expect((await notesAdapter.listAcrossFloors())[0]).toMatch(/crimson sash/);
+        expect((await notesAdapter.listAcrossFloors())[0].text).toMatch(/crimson sash/);
 
         // ---- Run 2 (floor F+1): observe round-1 messages array; system
         // prompt should already contain the note from run 1.
@@ -523,7 +546,7 @@ describe('loop mode end-to-end: abort path (Task 15e)', () => {
         // sendLlm and the post-loop finalize never executed.
         expect(sendLlm).toHaveBeenCalledTimes(1);
         const persisted = await notesAdapter.listAcrossFloors();
-        expect(persisted).toEqual(['first']);
+        expect(persisted.map(n => n.text)).toEqual(['first']);
     });
 
     test('pre-aborted signal raises before the first sendLlm call', async () => {

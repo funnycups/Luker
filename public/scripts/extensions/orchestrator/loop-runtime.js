@@ -285,12 +285,15 @@ async function resolveTraceApi(deps) {
 
 function buildInitialMessages(context, _payload, profile) {
     const systemContent = String(profile?.system_prompt || '').trim();
-    const notes = Array.isArray(context?.__loopNotes) ? context.__loopNotes.filter(s => String(s ?? '').trim()) : [];
+    const rawNotes = Array.isArray(context?.__loopNotes) ? context.__loopNotes : [];
+    const notes = rawNotes
+        .map(n => (n && typeof n === 'object' && typeof n.text === 'string') ? n.text : String(n ?? ''))
+        .filter(s => s.trim());
 
     let body = systemContent;
     if (notes.length > 0) {
         const block = '## Previous Notes (persistent, written by you in earlier runs)\n'
-            + notes.map((note, i) => `${i + 1}. ${String(note)}`).join('\n');
+            + notes.map((note, i) => `${i + 1}. ${note}`).join('\n');
         body = body ? `${body}\n\n${block}` : block;
     }
     return body
@@ -383,39 +386,84 @@ export function resetNotesFloorStateInstanceForTesting() {
  * Adapter shape (matches the test fixture in `loop-tools-note.test.js`):
  *
  *   {
- *     appendForFloor(floor, text): Promise<void>
- *     listAcrossFloors(): Promise<string[]>
+ *     appendForFloor(floor, text): Promise<string>      // returns new id
+ *     listAcrossFloors(): Promise<Array<{id, text}>>
  *     pruneOldest(n): Promise<void>
- *     deleteByIndex(indexes: number[]): Promise<{ removed: number }>
+ *     deleteByIds(ids: string[]): Promise<{ removed, missing }>
  *   }
  *
- * `deleteByIndex` accepts 1-based positions matching the "## Previous Notes"
- * numbering injected into the system prompt at run start. It dedupes the
- * input, drops out-of-range / non-integer entries, and removes the
- * survivors high-to-low so earlier removals don't shift later positions.
- * Returns the count actually removed so the tool can echo accurate
- * feedback to the agent. Errors propagate up to `attachNotesFloorState`,
- * which catches them and leaves the adapter null so the tool surfaces
- * `ToolError(NOTE_FS_UNAVAILABLE)`.
+ * Each note carries a stable id assigned at append time. The id is opaque
+ * to the LLM (it still sees 1-based positions in the "## Previous Notes"
+ * block) — `loop-tools/note.js` keeps a per-agent index→id snapshot and
+ * resolves `note_delete([2, 3])` through it, so two agents that observed
+ * the same snapshot can both delete their intended notes without one's
+ * positional indexes shifting under the other.
+ *
+ * Legacy entries stored as bare strings (pre-ID) are migrated lazily: on
+ * first read after the upgrade, an `fs.update` rewrites them as
+ * `{id, text}` rows. Subsequent reads see the migrated shape directly.
+ *
+ * A simple promise-chain mutex serializes append / prune / deleteByIds
+ * so a concurrent multi-agent caller can't observe a partial LRU prune.
+ * Reads are not gated — they may snapshot mid-operation but each
+ * individual `fs.update` is atomic.
  */
 function makeNotesAdapter(fs) {
+    let chain = Promise.resolve();
+    const lock = (fn) => {
+        const next = chain.then(fn, fn);
+        chain = next.catch(() => {});
+        return next;
+    };
+
+    const mintId = () => `n_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+
+    const normalizeEntries = (raw) => {
+        const arr = Array.isArray(raw) ? raw : [];
+        const out = [];
+        let dirty = false;
+        for (const entry of arr) {
+            if (entry && typeof entry === 'object' && typeof entry.id === 'string' && typeof entry.text === 'string') {
+                out.push(entry);
+            } else if (typeof entry === 'string') {
+                out.push({ id: mintId(), text: entry });
+                dirty = true;
+            }
+            // Anything else (null, number, malformed object) is dropped — the
+            // floor-state shouldn't have it, but defending here keeps a single
+            // corrupt write from poisoning the whole list.
+        }
+        return { entries: out, dirty };
+    };
+
     return {
         async appendForFloor(floor, text) {
             const targetFloor = Math.max(0, Math.floor(Number(floor) || 0));
-            await fs.update((current) => {
+            const id = mintId();
+            await lock(() => fs.update((current) => {
                 const safe = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
-                const entries = Array.isArray(safe.entries) ? safe.entries.slice() : [];
-                entries.push(String(text));
+                const { entries } = normalizeEntries(safe.entries);
+                entries.push({ id, text: String(text) });
                 return { ...safe, entries };
-            }, { floor: targetFloor });
+            }, { floor: targetFloor }));
+            return id;
         },
         async listAcrossFloors() {
             await fs.ready();
             const data = await fs.get();
-            const entries = (data && typeof data === 'object' && Array.isArray(data.entries))
-                ? data.entries.map(s => String(s ?? ''))
-                : [];
-            return entries;
+            const safe = (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
+            const { entries, dirty } = normalizeEntries(safe.entries);
+            // Lazy migration: if any legacy string entries were upgraded,
+            // commit the new shape back so subsequent reads (and any later
+            // `deleteByIds` call) see stable ids.
+            if (dirty) {
+                await lock(() => fs.update((current) => {
+                    const inner = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
+                    const { entries: migrated } = normalizeEntries(inner.entries);
+                    return { ...inner, entries: migrated };
+                }));
+            }
+            return entries.map(e => ({ id: e.id, text: e.text }));
         },
         async pruneOldest(n) {
             const drop = Math.max(0, Math.floor(Number(n) || 0));
@@ -423,40 +471,40 @@ function makeNotesAdapter(fs) {
             // The pruning commit attaches at the chat tail (no override) so
             // it travels with subsequent activity — pruning is a maintenance
             // op rather than a per-floor record.
-            await fs.update((current) => {
+            await lock(() => fs.update((current) => {
                 const safe = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
-                const entries = Array.isArray(safe.entries) ? safe.entries.slice() : [];
+                const { entries } = normalizeEntries(safe.entries);
                 if (drop >= entries.length) return { ...safe, entries: [] };
                 return { ...safe, entries: entries.slice(drop) };
-            });
+            }));
         },
-        async deleteByIndex(indexes) {
-            const requested = Array.isArray(indexes) ? indexes : [];
-            // Normalize: take only finite integers, dedupe, sort descending so
-            // earlier splices don't shift later targets. Out-of-range values
-            // are filtered out per-update against the live entries array (the
-            // adapter doesn't know the count until it reads).
-            const cleaned = Array.from(new Set(
-                requested
-                    .map(n => Number(n))
-                    .filter(n => Number.isInteger(n) && n >= 1)
-                    .map(n => Math.floor(n)),
-            )).sort((a, b) => b - a);
-            if (cleaned.length === 0) return { removed: 0 };
+        async deleteByIds(ids) {
+            const requested = new Set((Array.isArray(ids) ? ids : [])
+                .map(v => String(v || '').trim())
+                .filter(Boolean));
+            if (requested.size === 0) return { removed: 0, missing: [] };
 
             let removed = 0;
-            await fs.update((current) => {
+            const seen = new Set();
+            await lock(() => fs.update((current) => {
                 const safe = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
-                const entries = Array.isArray(safe.entries) ? safe.entries.slice() : [];
-                for (const oneBased of cleaned) {
-                    const idx = oneBased - 1;
-                    if (idx < 0 || idx >= entries.length) continue;
-                    entries.splice(idx, 1);
-                    removed += 1;
+                const { entries } = normalizeEntries(safe.entries);
+                const kept = [];
+                for (const entry of entries) {
+                    seen.add(entry.id);
+                    if (requested.has(entry.id)) {
+                        removed += 1;
+                        continue;
+                    }
+                    kept.push(entry);
                 }
-                return { ...safe, entries };
-            });
-            return { removed };
+                return { ...safe, entries: kept };
+            }));
+            const missing = [];
+            for (const id of requested) {
+                if (!seen.has(id)) missing.push(id);
+            }
+            return { removed, missing };
         },
     };
 }
@@ -464,14 +512,18 @@ function makeNotesAdapter(fs) {
 /**
  * Production wiring for note.add (Task 11). Mounts the
  * `luker_orch_loop_notes` floor-state namespace, exposes an
- * `appendForFloor` / `listAcrossFloors` / `pruneOldest` adapter on
- * `context.__floorStateForNotes`, and pre-populates `context.__loopNotes`
- * with the historical notes for this chat so `buildInitialMessages` can
- * inject them into the system prompt before the first round.
+ * `appendForFloor` / `listAcrossFloors` / `pruneOldest` / `deleteByIds`
+ * adapter on `context.__floorStateForNotes`, pre-populates
+ * `context.__loopNotes` with `{id, text}[]` so `buildInitialMessages`
+ * can render them, and seeds `context.__noteIdSnapshot` with the same
+ * id sequence so `note_delete` can resolve agent-supplied 1-based
+ * positions to stable ids regardless of concurrent deletes by other
+ * agents (relevant once tools are exposed beyond single-agent loop mode).
  *
- * Failures degrade silently: the adapter stays null and `__loopNotes`
- * stays `[]`, so the agent simply doesn't get a "Previous Notes" block
- * this run (and any `note_add` call surfaces `NOTE_FS_UNAVAILABLE`).
+ * Failures degrade silently: the adapter stays null and both
+ * `__loopNotes` / `__noteIdSnapshot` stay `[]`, so the agent simply
+ * doesn't get a "Previous Notes" block this run (and any `note_add`
+ * call surfaces `NOTE_FS_UNAVAILABLE`).
  *
  * @param {object} context — toolContext (mutated in place)
  */
@@ -482,14 +534,18 @@ async function attachNotesFloorState(context) {
         if (!fs || typeof fs.ready !== 'function' || typeof fs.get !== 'function' || typeof fs.update !== 'function') {
             context.__floorStateForNotes = null;
             context.__loopNotes = [];
+            context.__noteIdSnapshot = [];
             return;
         }
         const adapter = makeNotesAdapter(fs);
         context.__floorStateForNotes = adapter;
-        context.__loopNotes = await adapter.listAcrossFloors();
+        const initial = await adapter.listAcrossFloors();
+        context.__loopNotes = initial;
+        context.__noteIdSnapshot = initial.map(n => n.id);
     } catch (_error) {
         context.__floorStateForNotes = null;
         context.__loopNotes = [];
+        context.__noteIdSnapshot = [];
     }
 }
 
