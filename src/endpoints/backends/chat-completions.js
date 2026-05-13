@@ -254,6 +254,173 @@ async function finalizePayloadWithJob(request, response, payload, rawApiResponse
     response.setHeader('x-luker-server-persisted', persisted ? '1' : '0');
 }
 
+const CLAUDE_STOP_REASON_TO_OAI = {
+    end_turn: 'stop',
+    max_tokens: 'length',
+    stop_sequence: 'stop',
+    tool_use: 'tool_calls',
+    pause_turn: 'stop',
+    refusal: 'content_filter',
+};
+
+/**
+ * Normalize a non-streaming Claude Messages API response into OAI chat-completion shape.
+ * Preserves the original `content` array on the reply for callers that still need it.
+ * @param {any} raw Claude response JSON
+ * @returns {object} OAI chat-completion shaped reply
+ */
+function normalizeClaudeResponseToOAI(raw) {
+    const content = Array.isArray(raw?.content) ? raw.content : [];
+    let text = '';
+    let thinking = '';
+    const toolCalls = [];
+
+    for (const block of content) {
+        if (!block || typeof block !== 'object') continue;
+        const type = String(block.type || '');
+        if (type === 'text') {
+            text += String(block.text || '');
+        } else if (type === 'thinking') {
+            thinking += String(block.thinking || '');
+        } else if (type === 'tool_use') {
+            toolCalls.push({
+                id: String(block.id || ''),
+                type: 'function',
+                function: {
+                    name: String(block.name || ''),
+                    arguments: JSON.stringify(block.input ?? {}),
+                },
+            });
+        }
+        // tool_result / redacted_thinking / server_tool_use stay accessible via reply.content.
+    }
+
+    const message = { role: 'assistant', content: text };
+    if (thinking) message.reasoning_content = thinking;
+    if (toolCalls.length) message.tool_calls = toolCalls;
+
+    const finishReason = CLAUDE_STOP_REASON_TO_OAI[String(raw?.stop_reason || '')] ?? 'stop';
+
+    return {
+        choices: [{ message, finish_reason: finishReason, index: 0 }],
+        usage: raw?.usage,
+        content,
+    };
+}
+
+const GEMINI_FINISH_REASON_TO_OAI = {
+    STOP: 'stop',
+    MAX_TOKENS: 'length',
+    SAFETY: 'content_filter',
+    RECITATION: 'content_filter',
+    PROHIBITED_CONTENT: 'content_filter',
+    BLOCKLIST: 'content_filter',
+    SPII: 'content_filter',
+    MALFORMED_FUNCTION_CALL: 'stop',
+    OTHER: 'stop',
+};
+
+/**
+ * Normalize a non-streaming Google generateContent response into OAI chat-completion shape.
+ * Preserves the original candidate `content` object on the reply as `responseContent`
+ * so existing readers (thought signatures, inlineData images) keep working.
+ * @param {any} raw Google response JSON
+ * @returns {object} OAI chat-completion shaped reply
+ */
+function normalizeGeminiResponseToOAI(raw) {
+    const candidate = Array.isArray(raw?.candidates) ? raw.candidates[0] : null;
+    const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
+    let text = '';
+    let thinking = '';
+    const toolCalls = [];
+    let hasFunctionCall = false;
+
+    for (const part of parts) {
+        if (!part || typeof part !== 'object') continue;
+        const fc = part.functionCall ?? part.function_call;
+        if (fc) {
+            hasFunctionCall = true;
+            const args = fc.args ?? fc.arguments ?? {};
+            toolCalls.push({
+                id: String(fc.id || `call_${uuidv4().replaceAll('-', '')}`),
+                type: 'function',
+                function: {
+                    name: String(fc.name || ''),
+                    arguments: typeof args === 'string' ? args : JSON.stringify(args ?? {}),
+                },
+            });
+        } else if (part.thought && typeof part.text === 'string') {
+            thinking += part.text;
+        } else if (typeof part.text === 'string') {
+            text += part.text;
+        }
+        // inlineData / fileData / thoughtSignature stay accessible via reply.responseContent.
+    }
+
+    const message = { role: 'assistant', content: text };
+    if (thinking) message.reasoning_content = thinking;
+    if (toolCalls.length) message.tool_calls = toolCalls;
+
+    const rawReason = String(candidate?.finishReason || '').toUpperCase();
+    let finishReason = GEMINI_FINISH_REASON_TO_OAI[rawReason] ?? 'stop';
+    if (hasFunctionCall) finishReason = 'tool_calls';
+
+    return {
+        choices: [{ message, finish_reason: finishReason, index: 0 }],
+        usage: raw?.usageMetadata,
+        responseContent: candidate?.content,
+    };
+}
+
+const COHERE_FINISH_REASON_TO_OAI = {
+    complete: 'stop',
+    max_tokens: 'length',
+    stop_sequence: 'stop',
+    tool_call: 'tool_calls',
+    error: 'stop',
+    timeout: 'stop',
+};
+
+/**
+ * Normalize a non-streaming Cohere v2 chat response into OAI chat-completion shape.
+ * Cohere `tool_calls` are already OAI-shaped (function.name + arguments string);
+ * the only restructuring is lifting `message` + `finish_reason` into `choices[0]`.
+ * @param {any} raw Cohere response JSON
+ * @returns {object} OAI chat-completion shaped reply
+ */
+function normalizeCohereResponseToOAI(raw) {
+    const rawMessage = raw?.message ?? {};
+    const content = typeof rawMessage.content === 'string'
+        ? rawMessage.content
+        : Array.isArray(rawMessage.content)
+            ? rawMessage.content.filter(c => c?.type === 'text').map(c => String(c?.text || '')).join('')
+            : '';
+    const toolCalls = Array.isArray(rawMessage.tool_calls)
+        ? rawMessage.tool_calls.map(call => ({
+            id: String(call?.id || ''),
+            type: 'function',
+            function: {
+                name: String(call?.function?.name || ''),
+                arguments: String(call?.function?.arguments ?? ''),
+            },
+        }))
+        : [];
+
+    const message = { role: 'assistant', content };
+    if (typeof rawMessage.tool_plan === 'string' && rawMessage.tool_plan) {
+        message.reasoning_content = rawMessage.tool_plan;
+    }
+    if (toolCalls.length) message.tool_calls = toolCalls;
+
+    const finishReason = COHERE_FINISH_REASON_TO_OAI[String(raw?.finish_reason || '').toLowerCase()] ?? 'stop';
+
+    return {
+        id: raw?.id,
+        choices: [{ message, finish_reason: finishReason, index: 0 }],
+        usage: raw?.usage,
+    };
+}
+
 /**
  * Sends a request to Claude API.
  * @param {express.Request} request Express request
@@ -461,11 +628,9 @@ async function sendClaudeRequest(request, response) {
 
             /** @type {any} */
             const generateResponseJson = await generateResponse.json();
-            const responseText = generateResponseJson?.content?.[0]?.text || '';
             console.debug('Claude response:', generateResponseJson);
 
-            // Wrap it back to OAI format + save the original content
-            const reply = { choices: [{ 'message': { 'content': responseText } }], content: generateResponseJson.content };
+            const reply = normalizeClaudeResponseToOAI(generateResponseJson);
             await finalizePayloadWithJob(request, response, reply, generateResponseJson);
             return response.send(reply);
         }
@@ -783,7 +948,7 @@ async function sendMakerSuiteRequest(request, response) {
             }
 
             const responseContent = candidates[0].content ?? candidates[0].output;
-            const functionCall = (candidates?.[0]?.content?.parts ?? []).some(part => part.functionCall);
+            const functionCall = (candidates?.[0]?.content?.parts ?? []).some(part => part.functionCall || part.function_call);
             const inlineData = (candidates?.[0]?.content?.parts ?? []).some(part => part.inlineData);
             console.debug(`${apiName} response:`, util.inspect(generateResponseJson, { depth: 5, colors: true }));
 
@@ -794,8 +959,7 @@ async function sendMakerSuiteRequest(request, response) {
                 return response.send({ error: { message } });
             }
 
-            // Wrap it back to OAI format (responseContent includes thought signatures in parts array)
-            const reply = { choices: [{ 'message': { 'content': responseText } }], responseContent };
+            const reply = normalizeGeminiResponseToOAI(generateResponseJson);
             await finalizePayloadWithJob(request, response, reply, generateResponseJson);
             return response.send(reply);
         }
@@ -1064,8 +1228,9 @@ async function sendCohereRequest(request, response) {
             }
             const generateResponseJson = await generateResponse.json();
             console.debug('Cohere response:', generateResponseJson);
-            await finalizePayloadWithJob(request, response, generateResponseJson);
-            return response.send(generateResponseJson);
+            const reply = normalizeCohereResponseToOAI(generateResponseJson);
+            await finalizePayloadWithJob(request, response, reply, generateResponseJson);
+            return response.send(reply);
         }
     } catch (error) {
         console.error('Error communicating with Cohere API: ', error);
