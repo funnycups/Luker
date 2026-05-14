@@ -1336,6 +1336,17 @@ async function applyDirectLorebookReplace(context, previousSnapshot, currentSnap
         throw new Error('No target lorebook data available for direct replacement.');
     }
 
+    // Refuse the destructive shape "save empty new book + delete non-empty
+    // old book" — that would leave the character bound to an empty world
+    // and wipe their existing lore. Happens when the snapshot selection
+    // picks an empty fetched snapshot over a usable embedded one, or when
+    // the embedded book itself parsed to zero entries.
+    const targetEntryCount = Object.keys(targetData.entries).length;
+    const previousEntryCount = Object.keys(previousSnapshot?.entries || {}).length;
+    if (targetEntryCount === 0 && previousEntryCount > 0) {
+        throw new Error(`Refusing direct replace: target lorebook '${targetBook}' has no entries while previous '${previousBook}' has ${previousEntryCount}. Aborting to prevent data loss.`);
+    }
+
     // Write target first, then delete old one to avoid destructive half-success state.
     await context.saveWorldInfo(targetBook, targetData, true);
 
@@ -2113,7 +2124,7 @@ function buildLorebookSyncDialogHtml(plan) {
     const safePlan = plan && typeof plan === 'object' ? plan : {};
 
     return `
-<div class="cea_sync_popup">
+<div class="luker-studio cea_sync_popup">
     <div class="cea_sync_intro">${escapeHtml(i18n('Review model analysis and optionally add requirements. Save will apply model edits; cancel will restore the previous lorebook.'))}</div>
     <div class="cea_sync_meta">
         <div class="cea_sync_meta_item"><b>${escapeHtml(i18n('Old lorebook'))}:</b> ${escapeHtml(String(safePlan.sourceBook || i18n('(empty)')))}</div>
@@ -2854,7 +2865,7 @@ function renderLorebookSyncChatMessages(messages, { loading = false, loadingText
 function buildLorebookSyncModeChoiceHtml(plan) {
     const safePlan = plan && typeof plan === 'object' ? plan : {};
     return `
-<div class="cea_sync_popup">
+<div class="luker-studio cea_sync_popup">
     <div class="cea_sync_intro">${escapeHtml(i18n('Choose how to handle lorebook update'))}</div>
     <div class="cea_sync_meta">
         <div class="cea_sync_meta_item"><b>${escapeHtml(i18n('Old lorebook'))}:</b> ${escapeHtml(String(safePlan.sourceBook || i18n('(empty)')))}</div>
@@ -3366,6 +3377,23 @@ async function finalizeLorebookSyncReplacement(context, previousSnapshot, curren
     const previousBook = String(previousSnapshot?.bookName || '').trim();
     const targetBook = String(currentSnapshot?.bookName || '').trim();
     const avatar = String(currentSnapshot?.avatar || currentCharacter?.avatar || '').trim();
+
+    // Caller saved targetBook with the baseline snapshot just before calling
+    // us. If that baseline was empty (snapshot selection fell through to
+    // a missing-from-disk fetched snapshot, or the embedded book parsed to
+    // zero entries), the disk now has an empty target. Refuse to delete
+    // the previous book in that state — it would discard real lore in
+    // exchange for an empty rebind.
+    if (previousBook && targetBook && previousBook !== targetBook) {
+        const targetData = await context.loadWorldInfo(targetBook).catch(() => null);
+        const targetEntries = targetData && typeof targetData === 'object' && targetData.entries && typeof targetData.entries === 'object'
+            ? Object.keys(targetData.entries).length
+            : 0;
+        const previousEntryCount = Object.keys(previousSnapshot?.entries || {}).length;
+        if (targetEntries === 0 && previousEntryCount > 0) {
+            throw new Error(`Refusing to delete previous lorebook '${previousBook}' (${previousEntryCount} entries): target '${targetBook}' has no entries. Aborting to prevent data loss.`);
+        }
+    }
 
     if (avatar && targetBook) {
         await mergeCharacterAttributes(context, avatar, {
@@ -5517,6 +5545,19 @@ async function handleCharacterReplacedLorebookSync(context, event) {
         return;
     }
     currentCandidates.sort((a, b) => {
+        // Prefer candidates whose entries are non-empty. An empty snapshot
+        // means the world file doesn't exist on disk yet (or hasn't been
+        // imported), not that "all entries were deleted". If embedded has
+        // the same content as the previously-bound world, its diffCount
+        // is low, while the empty fetched snapshot's diffCount equals
+        // every previous entry counted as "missing" — letting that win
+        // by raw diffCount makes the next save write an empty world and
+        // delete the old one, wiping the character's lore.
+        const aHasEntries = Object.keys(a.snapshot?.entries || {}).length > 0;
+        const bHasEntries = Object.keys(b.snapshot?.entries || {}).length > 0;
+        if (aHasEntries !== bHasEntries) {
+            return aHasEntries ? -1 : 1;
+        }
         if (b.diffCount !== a.diffCount) {
             return b.diffCount - a.diffCount;
         }
