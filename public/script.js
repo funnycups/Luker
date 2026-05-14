@@ -11829,10 +11829,33 @@ async function resolveChatWriteConflict(response, retryCount = 0, requestContext
  * where they differ. Used on 409 to surface which positions / fields are out
  * of sync — far more actionable than the generic "Chat patch conflict" string.
  *
+ * Equality uses plain `JSON.stringify` to match the server's fast-json-patch
+ * `test` op semantics exactly (server compares via JSON.stringify literal
+ * equality). This means:
+ *   - Date object vs ISO string with same value → reported as equal
+ *     (both stringify to the same `"...Z"` literal)
+ *   - Same fields in different insertion order → reported as different
+ *     (server sees them as different too — this is the actual cause when
+ *     it happens)
+ *
  * Output examples:
  *   /3 client+[variables_initialized,is_ejs_processed]
- *   /5 mutated:mes; +2 more position(s)
+ *   /5 mutated:[mes,extra]; +2 more position(s)
  */
+function serverEqJsonString(value) {
+    try {
+        return JSON.stringify(value);
+    } catch {
+        return undefined;
+    }
+}
+
+function isServerEqJsonShape(a, b) {
+    const sa = serverEqJsonString(a);
+    const sb = serverEqJsonString(b);
+    return sa !== undefined && sa === sb;
+}
+
 function summarizeChatStateDivergence(clientMessages, serverMessages, maxDivergences = 2) {
     if (!Array.isArray(clientMessages) || !Array.isArray(serverMessages)) {
         return null;
@@ -11846,7 +11869,7 @@ function summarizeChatStateDivergence(clientMessages, serverMessages, maxDiverge
     for (let i = 0; i < length; i++) {
         const c = clientMessages[i];
         const s = serverMessages[i];
-        if (lodash.isEqual(c, s)) continue;
+        if (isServerEqJsonShape(c, s)) continue;
 
         if (lines.length >= maxDivergences) {
             extraCount++;
@@ -11868,14 +11891,20 @@ function summarizeChatStateDivergence(clientMessages, serverMessages, maxDiverge
         const sKeys = Object.keys(s);
         const onlyInClient = cKeys.filter(k => !(k in s));
         const onlyInServer = sKeys.filter(k => !(k in c));
-        const sharedDiffered = cKeys.filter(k => (k in s) && !lodash.isEqual(c[k], s[k]));
+        const sharedDiffered = cKeys.filter(k => (k in s) && !isServerEqJsonShape(c[k], s[k]));
+        // If both sides have the same field names but server's JSON differs,
+        // it's almost certainly an insertion-order issue (since JSON.stringify
+        // is order-sensitive). Surface that explicitly so we don't have to
+        // hunt for a content diff that doesn't exist.
+        const sameFields = onlyInClient.length === 0 && onlyInServer.length === 0 && sharedDiffered.length === 0;
 
         const parts = [];
         if (onlyInClient.length) parts.push(`client+[${onlyInClient.join(',')}]`);
         if (onlyInServer.length) parts.push(`server+[${onlyInServer.join(',')}]`);
         if (sharedDiffered.length) parts.push(`mutated:[${sharedDiffered.join(',')}]`);
-        lines.push(`/${i} ${parts.length ? parts.join(' ') : 'differs'}`);
-        details.push({ index: i, client: c, server: s, kind: parts.length ? parts.join(' ') : 'differs' });
+        if (sameFields) parts.push('key-order-only');
+        lines.push(`/${i} ${parts.join(' ')}`);
+        details.push({ index: i, client: c, server: s, kind: parts.join(' ') });
     }
 
     if (lines.length === 0) {
