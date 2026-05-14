@@ -6598,4 +6598,19 @@ jQuery(() => {
         clearCapsulePrompt(liveContext);
         void loadOrchestratorChatState(liveContext).finally(() => ensureUi());
     });
+
+    // The panel reads per-character overrides from
+    // `character.data.extensions.orchestrator.override`. CHAT_CHANGED covers
+    // chat switches, but a card replace/update or AI-driven field write
+    // mutates the override branch in place — without these listeners the
+    // override-source label and disabled-state cues stay stuck on the
+    // previous character's data until something else triggers ensureUi.
+    const characterRefreshEvents = [
+        context.eventTypes?.CHARACTER_REPLACED,
+        context.eventTypes?.CHARACTER_FIELDS_UPDATED,
+        context.eventTypes?.CHARACTER_EDITED,
+    ].filter(Boolean);
+    for (const eventName of characterRefreshEvents) {
+        context.eventSource.on(eventName, () => ensureUi());
+    }
 });
