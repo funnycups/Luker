@@ -609,10 +609,10 @@ async function activateExtensions() {
         if (meetsExtensionDeps && meetsClientMinimumVersion && !isDisabled) {
             try {
                 console.debug('Activating extension', name);
-                const promise = addExtensionLocale(name, manifest).finally(() =>
-                    Promise.all([addExtensionScript(name, manifest), addExtensionStyle(name, manifest)]),
-                );
-                await promise
+                const promise = addExtensionLocale(name, manifest)
+                    .finally(() =>
+                        Promise.all([addExtensionScript(name, manifest), addExtensionStyle(name, manifest)]),
+                    )
                     .then(() => {
                         activeExtensions.add(name);
                         return callExtensionHook(name, 'activate');
