@@ -766,6 +766,42 @@ function writeChatSyncState(chatFilePath, state) {
     tryWriteFileSync(sidecarPath, JSON.stringify(state));
 }
 
+/**
+ * Returns the last generation id this file's sync sidecar saw. Used for
+ * retry-dedup at append time — see writeLastChatGenerationId for the
+ * write side. Distinct from "the gen id of the last message in the file"
+ * (which is what the old design used): persisting the field IN the
+ * message body forced it onto disk forever and polluted every snapshot
+ * diff. Tracking it in the sidecar keeps the protocol-layer token off
+ * the data and lets us strip it from messages.
+ */
+function readLastChatGenerationId(chatFilePath) {
+    const state = readChatSyncState(chatFilePath);
+    return typeof state?.last_generation_id === 'string' ? state.last_generation_id.trim() : '';
+}
+
+function writeLastChatGenerationId(chatFilePath, generationId) {
+    const safeId = typeof generationId === 'string' ? generationId.trim() : '';
+    if (!safeId) {
+        return;
+    }
+    const state = readChatSyncState(chatFilePath);
+    writeChatSyncState(chatFilePath, { ...state, last_generation_id: safeId, updated_at: Date.now() });
+}
+
+/**
+ * Removes the protocol-layer luker_generation_id from a message's extra
+ * before persisting / returning it. The field is a one-shot ack/dedup
+ * token; the data layer never needs to carry it. Mutates the message in
+ * place (callers pass freshly parsed or deep-cloned values).
+ */
+function stripLukerGenerationIdFromMessage(message) {
+    if (_.isObjectLike(message) && _.isObjectLike(message.extra) && 'luker_generation_id' in message.extra) {
+        delete message.extra.luker_generation_id;
+    }
+    return message;
+}
+
 function getCurrentChatIntegrity(chatFilePath) {
     const syncState = readChatSyncState(chatFilePath);
     const stateIntegrity = typeof syncState.integrity === 'string' ? syncState.integrity.trim() : '';
@@ -1419,9 +1455,12 @@ function buildIdempotentMessagePatchOperations(currentMessages, operations) {
  * @param {object} [args.chatMetadata] Metadata used only when creating a new file.
  * @param {string} [args.integritySlug] Integrity slug to validate before appending.
  * @param {boolean} [args.force] Skip integrity mismatch error if true.
+ * @param {string} [args.incomingGenerationId] Protocol-layer gen id from the
+ *   request body. Used to dedup retries against the sidecar's last_generation_id;
+ *   the field is intentionally NOT taken from the messages themselves anymore.
  * @returns {Promise<{appended:number, created:boolean}>}
  */
-export async function appendMessagesToChatFile({ filePath, messages, chatMetadata = {}, integritySlug, force = false }) {
+export async function appendMessagesToChatFile({ filePath, messages, chatMetadata = {}, integritySlug, force = false, incomingGenerationId = '' }) {
     if (!Array.isArray(messages) || messages.length === 0) {
         return { appended: 0, created: false, integrity: getCurrentChatIntegrity(filePath) };
     }
@@ -1432,7 +1471,12 @@ export async function appendMessagesToChatFile({ filePath, messages, chatMetadat
         throw createIntegrityMismatchError(filePath, integritySlug);
     }
 
-    const serializedMessages = messages.map(message => JSON.stringify(message)).join('\n');
+    // Strip the protocol-layer field from every message before any further
+    // processing — sidecar carries the gen id now, not the message data.
+    const cleanedMessages = messages.map(m => stripLukerGenerationIdFromMessage(_.cloneDeep(m)));
+    const incomingId = String(incomingGenerationId || '').trim();
+
+    const serializedMessages = cleanedMessages.map(message => JSON.stringify(message)).join('\n');
     const fileExists = fs.existsSync(filePath);
     const fileStats = fileExists ? fs.statSync(filePath) : null;
     const hasContent = fileExists && fileStats && fileStats.size > 0;
@@ -1443,21 +1487,31 @@ export async function appendMessagesToChatFile({ filePath, messages, chatMetadat
         const initialData = `${header}\n${serializedMessages}`;
         tryWriteFileSync(filePath, initialData);
         writeChatSyncState(filePath, { integrity: nextIntegrity, updated_at: Date.now() });
-        return { appended: messages.length, created: true, integrity: nextIntegrity };
+        if (incomingId) {
+            writeLastChatGenerationId(filePath, incomingId);
+        }
+        return { appended: cleanedMessages.length, created: true, integrity: nextIntegrity };
     }
 
-    const dedupedMessages = messages.slice();
+    const dedupedMessages = cleanedMessages.slice();
     const lastStoredMessage = getLastChatMessage(filePath);
-    const lastGenerationId = String(lastStoredMessage?.extra?.luker_generation_id || '');
+    const sidecarLastGenerationId = readLastChatGenerationId(filePath);
     let matchedExistingGenerationId = false;
     while (dedupedMessages.length > 0) {
-        if (isChatMessageLike(lastStoredMessage) && isChatMessageLike(dedupedMessages[0]) && _.isEqual(lastStoredMessage, dedupedMessages[0])) {
+        // Content dedup: if the file's last message is byte-identical (post-strip)
+        // to the first incoming message, the previous attempt already landed.
+        const lastStoredStripped = isChatMessageLike(lastStoredMessage)
+            ? stripLukerGenerationIdFromMessage(_.cloneDeep(lastStoredMessage))
+            : null;
+        if (lastStoredStripped && isChatMessageLike(dedupedMessages[0]) && _.isEqual(lastStoredStripped, dedupedMessages[0])) {
             dedupedMessages.shift();
             continue;
         }
 
-        const incomingGenerationId = String(dedupedMessages[0]?.extra?.luker_generation_id || '');
-        if (!lastGenerationId || !incomingGenerationId || incomingGenerationId !== lastGenerationId) {
+        // Gen-id dedup: server's sidecar remembers the last write's gen id; if
+        // the incoming write carries the same id (passed via request body now,
+        // not extracted from extras), it's a retry of an already-acked write.
+        if (!sidecarLastGenerationId || !incomingId || incomingId !== sidecarLastGenerationId) {
             break;
         }
         matchedExistingGenerationId = true;
@@ -1468,7 +1522,7 @@ export async function appendMessagesToChatFile({ filePath, messages, chatMetadat
         return {
             appended: 0,
             created: false,
-            skipped: messages.length,
+            skipped: cleanedMessages.length,
             matched_existing_generation_id: matchedExistingGenerationId,
             integrity: getCurrentChatIntegrity(filePath),
         };
@@ -1477,10 +1531,13 @@ export async function appendMessagesToChatFile({ filePath, messages, chatMetadat
     const dedupedSerializedMessages = dedupedMessages.map(message => JSON.stringify(message)).join('\n');
     fs.appendFileSync(filePath, `\n${dedupedSerializedMessages}`, 'utf8');
     const nextIntegrity = rotateChatIntegrity(filePath);
+    if (incomingId) {
+        writeLastChatGenerationId(filePath, incomingId);
+    }
     return {
         appended: dedupedMessages.length,
         created: false,
-        skipped: messages.length - dedupedMessages.length,
+        skipped: cleanedMessages.length - dedupedMessages.length,
         matched_existing_generation_id: matchedExistingGenerationId,
         integrity: nextIntegrity,
     };
@@ -1494,9 +1551,11 @@ export async function appendMessagesToChatFile({ filePath, messages, chatMetadat
  * @param {object} [args.chatMetadata] Optional metadata merge for header.
  * @param {string} [args.integritySlug] Integrity slug to validate before patching.
  * @param {boolean} [args.force] Skip integrity mismatch error if true.
+ * @param {string} [args.incomingGenerationId] Protocol-layer gen id for ack
+ *   tracking. Recorded to the sync sidecar after a successful patch.
  * @returns {Promise<{applied:number,total_messages:number}>}
  */
-export async function patchChatMessagesInFile({ filePath, operations, chatMetadata = {}, integritySlug, force = false }) {
+export async function patchChatMessagesInFile({ filePath, operations, chatMetadata = {}, integritySlug, force = false, incomingGenerationId = '' }) {
     const normalizedOperations = Array.isArray(operations)
         ? operations
         : (_.isObjectLike(operations) ? [operations] : []);
@@ -1508,6 +1567,18 @@ export async function patchChatMessagesInFile({ filePath, operations, chatMetada
 
     if (integritySlug && !force && !await checkChatIntegrity(filePath, integritySlug)) {
         throw createIntegrityMismatchError(filePath, integritySlug);
+    }
+
+    // Drop any op that targets the protocol-layer luker_generation_id path,
+    // and strip the field from message-shaped values inside add/replace ops.
+    // Old clients embedding it shouldn't be able to put it back on disk.
+    const sanitizedOperations = sanitizeOperationsAgainstLukerGenerationId(normalizedOperations);
+    if (sanitizedOperations.length === 0) {
+        // All ops were lukgenid bookkeeping; nothing left to do. Still update
+        // the sidecar so the ack tracking moves forward.
+        const incomingId = String(incomingGenerationId || '').trim();
+        if (incomingId) writeLastChatGenerationId(filePath, incomingId);
+        return { applied: 0, total_messages: 0, integrity: getCurrentChatIntegrity(filePath) };
     }
 
     /** @type {object[]} */
@@ -1532,7 +1603,7 @@ export async function patchChatMessagesInFile({ filePath, operations, chatMetada
     }
 
     const currentMessages = chatData.slice(1);
-    const idempotentOperations = buildIdempotentMessagePatchOperations(currentMessages, normalizedOperations);
+    const idempotentOperations = buildIdempotentMessagePatchOperations(currentMessages, sanitizedOperations);
     const patchResult = applyJsonPatch(currentMessages, idempotentOperations, true, false);
     const patchedMessages = patchResult.newDocument;
     if (!Array.isArray(patchedMessages)) {
@@ -1545,12 +1616,51 @@ export async function patchChatMessagesInFile({ filePath, operations, chatMetada
     const serialized = [header, ...patchedMessages].map(entry => JSON.stringify(entry)).join('\n');
     tryWriteFileSync(filePath, serialized);
     writeChatSyncState(filePath, { integrity: nextIntegrity, updated_at: Date.now() });
+    const incomingId = String(incomingGenerationId || '').trim();
+    if (incomingId) writeLastChatGenerationId(filePath, incomingId);
 
     return {
         applied: idempotentOperations.length,
         total_messages: patchedMessages.length,
         integrity: nextIntegrity,
     };
+}
+
+/**
+ * Drops or sanitizes any patch op that touches the protocol-layer
+ * luker_generation_id field. Specifically:
+ * - Ops whose path ends in `/extra/luker_generation_id` are removed entirely
+ *   (no client should be writing this to disk).
+ * - For add/replace ops whose value is a full message or an `extra` object,
+ *   the lukgenid is stripped from value before the op gets applied.
+ */
+function sanitizeOperationsAgainstLukerGenerationId(operations) {
+    /** @type {object[]} */
+    const result = [];
+    for (const op of operations) {
+        if (!_.isObjectLike(op) || typeof op.path !== 'string') {
+            result.push(op);
+            continue;
+        }
+        if (op.path.endsWith('/extra/luker_generation_id')) {
+            continue;
+        }
+        const opName = String(op.op || '').trim().toLowerCase();
+        if ((opName === 'add' || opName === 'replace') && _.isObjectLike(op.value)) {
+            const cloned = _.cloneDeep(op);
+            // Either it's a whole message at /N, or it's an `extra` blob at /N/extra.
+            if (cloned.value && _.isObjectLike(cloned.value.extra) && 'luker_generation_id' in cloned.value.extra) {
+                delete cloned.value.extra.luker_generation_id;
+            }
+            if (op.path.endsWith('/extra') && _.isObjectLike(cloned.value) && 'luker_generation_id' in cloned.value) {
+                delete cloned.value.luker_generation_id;
+            }
+            result.push(cloned);
+        } else {
+            result.push(op);
+        }
+    }
+    return result;
 }
 
 /**
@@ -1786,6 +1896,7 @@ router.post('/append', validateAvatarUrlMiddleware, async function (request, res
             chatMetadata,
             integritySlug,
             force,
+            incomingGenerationId: typeof request.body.luker_generation_id === 'string' ? request.body.luker_generation_id : '',
         });
 
         await refreshRecentChatIndexEntry(request, chatFilePath, { avatar: String(request.body.avatar_url || '') });
@@ -1826,6 +1937,7 @@ router.post('/patch', validateAvatarUrlMiddleware, async function (request, resp
                 chatMetadata,
                 integritySlug,
                 force,
+                incomingGenerationId: typeof request.body.luker_generation_id === 'string' ? request.body.luker_generation_id : '',
             });
         } catch (error) {
             if (isChatStatePatchConflictError(error)) {
@@ -1957,6 +2069,14 @@ export function getChatData(chatFilePath) {
     if (chatData.length === 0) {
         console.warn(`Chat file has no valid JSON lines (corrupted): ${chatFilePath}`);
         return { corrupted: true };
+    }
+
+    // Strip the protocol-layer luker_generation_id from each message before
+    // returning. Old chat files may have it baked into extra; new writes
+    // never put it there. Stripping here means clients (and server-internal
+    // callers) get a consistent, gen-id-free view regardless of file age.
+    for (let i = 1; i < chatData.length; i++) {
+        stripLukerGenerationIdFromMessage(chatData[i]);
     }
 
     return attachCurrentIntegrityToChatData(chatData, chatFilePath);
@@ -2535,6 +2655,7 @@ router.post('/group/append', async function (request, response) {
             chatMetadata,
             integritySlug,
             force,
+            incomingGenerationId: typeof request.body.luker_generation_id === 'string' ? request.body.luker_generation_id : '',
         });
 
         await refreshRecentChatIndexEntry(request, chatFilePath);
@@ -2578,6 +2699,7 @@ router.post('/group/patch', async function (request, response) {
                 chatMetadata,
                 integritySlug,
                 force,
+                incomingGenerationId: typeof request.body.luker_generation_id === 'string' ? request.body.luker_generation_id : '',
             });
         } catch (error) {
             if (isChatStatePatchConflictError(error)) {

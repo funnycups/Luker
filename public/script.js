@@ -552,7 +552,7 @@ function applyLukerGenerationMetaFromHeaders(api, response) {
     }
 }
 
-function getLastLukerGenerationIdForApi(api = main_api) {
+export function getLastLukerGenerationIdForApi(api = main_api) {
     if (api === 'openai') {
         return getLastOpenAIGenerationId();
     }
@@ -6072,10 +6072,9 @@ class StreamingProcessor {
         if (!isAborted && power_user.auto_swipe && generatedTextFiltered(text)) {
             return await swipe(null, SWIPE_DIRECTION.RIGHT, { source: SWIPE_SOURCE.AUTO_SWIPE, repeated: true, forceMesId: chat.length - 1 });
         }
-        if (shouldUseLukerServerPersistenceForType(this.type) && this.messageId >= 0 && chat[this.messageId]) {
-            chat[this.messageId].extra = chat[this.messageId].extra || {};
-            chat[this.messageId].extra.luker_generation_id = getLastLukerGenerationIdForApi() || chat[this.messageId].extra.luker_generation_id;
-        }
+        // luker_generation_id is a protocol-layer ack/dedup token; it travels in
+        // the request body of append/patch, not embedded in chat[i].extra. Keeping
+        // it off the message keeps it off disk and out of snapshot diffs.
         const serverPersistedReply = isLastLukerReplyPersistedByServerForApi();
         const canUseIncrementalAppend = !isAborted
             && this.type === 'normal'
@@ -8331,10 +8330,8 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         }
 
         console.debug('/api/chats/save called by /Generate');
-        if (shouldUseLukerServerPersistenceForType(type) && chat.length > 0 && !chat[chat.length - 1]?.is_user) {
-            chat[chat.length - 1].extra = chat[chat.length - 1].extra || {};
-            chat[chat.length - 1].extra.luker_generation_id = getLastLukerGenerationIdForApi() || chat[chat.length - 1].extra.luker_generation_id;
-        }
+        // luker_generation_id is a protocol-layer ack/dedup token now — passed
+        // as a separate request body field, never glued to chat[i].extra.
         const serverPersistedReply = isLastLukerReplyPersistedByServerForApi();
         const canUseIncrementalAppend = !isImpersonate
             && type === 'normal'
@@ -12191,6 +12188,7 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
                     messages: messages,
                     chat_metadata: { ...chat_metadata },
                     integrity: chat_metadata?.integrity,
+                    luker_generation_id: getLastLukerGenerationIdForApi(),
                 }),
             });
 
@@ -12243,6 +12241,7 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
                 avatar_url: avatar,
                 chat_metadata: { ...chat_metadata },
                 integrity: chat_metadata?.integrity,
+                luker_generation_id: getLastLukerGenerationIdForApi(),
             }),
         });
 
@@ -12319,6 +12318,7 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
                     operations: guardedOperations,
                     chat_metadata: { ...chat_metadata },
                     integrity: chat_metadata?.integrity,
+                    luker_generation_id: getLastLukerGenerationIdForApi(),
                 }),
             });
 
@@ -12359,6 +12359,7 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
                 avatar_url: avatar,
                 chat_metadata: { ...chat_metadata },
                 integrity: chat_metadata?.integrity,
+                luker_generation_id: getLastLukerGenerationIdForApi(),
             }),
         });
 
@@ -12692,6 +12693,7 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
                         chat_metadata: metadata,
                         integrity: metadata?.integrity,
                         force: force,
+                        luker_generation_id: getLastLukerGenerationIdForApi(),
                     }),
                 });
 
