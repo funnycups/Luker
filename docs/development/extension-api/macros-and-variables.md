@@ -233,3 +233,47 @@ ctx.variables.local.set('inventory', 'shield', { index: 1, as: 'string' });
 | Storage | `chat_metadata.variables` | `extension_settings.variables.global` |
 | Save trigger | `saveMetadataDebounced` | `saveSettingsDebounced` |
 | Use for | Chat-specific counters, in-progress state | Plugin config, cross-chat data |
+
+### Floor-bound writes
+
+Beyond the seven-method `local` / `global` CRUD, luker also exports a top-level `setVariable` that can bind a single write to a specific floor — the code-side equivalent of writing <span v-pre>`{{setvar::name::value}}`</span> inside that floor's text.
+
+```ts
+context.setVariable(
+    name: string,
+    value: any,
+    options?: { floor?: number },
+): Promise<any>
+```
+
+| Call form | Effect |
+|---|---|
+| `await ctx.setVariable(k, v)` | Writes `chat_metadata.variables[k] = v` directly. Same bucket as `ctx.variables.local.set(k, v)`; useful when you want an awaitable shortcut |
+| `await ctx.setVariable(k, v, { floor: N })` | Appends a `setvar` op to floor N's `extra.var_ops`, bound to that floor's current swipe. On swipe switches / message deletions / branch creates, the variable-op-log replays in lockstep with the floors |
+
+Details when `floor` is set:
+
+- **The value is coerced to a string** — `extra.var_ops` entries only carry strings (since <span v-pre>`{{getvar}}`</span> also returns strings). For structured state, use `createFloorState` instead (see [floor-bound structured state](./chat-and-state.md#createfloorstate)).
+- **It's a replay, not an overwrite** — on swipe / delete / branch, the rebuilder walks every surviving var_op in write order and replays the keys those ops touch onto `chat_metadata.variables`. Keys that no surviving var_op writes (world-info side effects, slash commands, third-party extension writes) are left untouched. A floor write doesn't mutate storage directly; it contributes one instruction to every future replay.
+- **`floor` must be a valid floor index** (`0 <= floor < chat.length`); out-of-range throws.
+
+```js
+const ctx = Luker.getContext();
+
+// Immediate write — same bucket as ctx.variables.local.set
+await ctx.setVariable('quest_stage', 'intro');
+
+// Bound to the last floor; replays alongside swipe / delete / branch
+await ctx.setVariable('hp', 42, { floor: ctx.chat.length - 1 });
+```
+
+#### Floor writes vs `createFloorState`
+
+| | Floor write | `createFloorState` |
+|---|---|---|
+| Data shape | Scalar (string / number) | Structured object |
+| Bucket | Shares `chat_metadata.variables` with <span v-pre>`{{getvar::k}}`</span> | Independent namespace, never reaches macros |
+| Commit log | variable-op-log (floor `extra.var_ops`) | Floor structured commit log (`__floor_log`) |
+| Use for | Rollback-friendly scalars co-owned with AI-written <span v-pre>`{{setvar}}`</span> | Plugin- or CardApp-managed rollback-friendly structured state |
+
+The two mechanisms have independent commit logs. **Don't write the same key from both** — replay order isn't guaranteed across them, and you'll see one clobber the other.

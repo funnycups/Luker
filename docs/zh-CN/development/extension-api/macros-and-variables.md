@@ -233,3 +233,47 @@ ctx.variables.local.set('inventory', 'shield', { index: 1, as: 'string' });
 | 存储 | `chat_metadata.variables` | `extension_settings.variables.global` |
 | 保存触发 | `saveMetadataDebounced` | `saveSettingsDebounced` |
 | 适用场景 | 聊天专属计数器、阶段性状态 | 插件配置、跨聊天数据 |
+
+### 楼层级写入
+
+`local` / `global` 七件套之外,luker 在顶层还导出一个 `setVariable`,支持把单次写入挂到某一楼——这是 <span v-pre>`{{setvar::name::value}}`</span> 在文本里写出来效果的代码版等价物。
+
+```ts
+context.setVariable(
+    name: string,
+    value: any,
+    options?: { floor?: number },
+): Promise<any>
+```
+
+| 调用方式 | 效果 |
+|---|---|
+| `await ctx.setVariable(k, v)` | 直接写 `chat_metadata.variables[k] = v`,跟 `ctx.variables.local.set(k, v)` 落到同一个桶,适合在异步代码里使用 |
+| `await ctx.setVariable(k, v, { floor: N })` | 在第 N 楼的 `extra.var_ops` 末尾挂一条 `setvar`,绑在该楼的当前 swipe 上——后续 swipe 切换 / 删楼 / 建分支时,跟楼层一起被 variable-op-log 重放或回滚 |
+
+带 `floor` 时的几点细节:
+
+- **值会被强转字符串**——`extra.var_ops` 的格式只承载字符串(<span v-pre>`{{getvar}}`</span> 取回的也是字符串)。需要存结构化对象请改用 `createFloorState`(见 [楼层级结构化 state](./chat-and-state.md#createfloorstate))。
+- **是重放,不是覆盖**——swipe / 删楼 / 建分支时,rebuilder 会按当前活动 swipe 上所有 var_ops 的写入顺序,把它们触碰过的 key 在 `chat_metadata.variables` 上重放一遍;没被任何 var_op 写过的 key(world-info 副作用、slash 命令、其他扩展写的值)原样保留。所以一次 floor 写入并不直接修改存储,而是为后续每次重放贡献一条指令。
+- **`floor` 必须是有效楼层索引**(`0 <= floor < chat.length`),越界会抛错。
+
+```js
+const ctx = Luker.getContext();
+
+// 立即写,跟 ctx.variables.local.set 落到同一个桶
+await ctx.setVariable('quest_stage', 'intro');
+
+// 绑定到最后一楼,跟着 swipe / 删楼 / 建分支一起重放
+await ctx.setVariable('hp', 42, { floor: ctx.chat.length - 1 });
+```
+
+#### floor 写入 vs `createFloorState`
+
+| | floor 写入 | `createFloorState` |
+|---|---|---|
+| 数据形状 | 标量(字符串 / 数字) | 结构化对象 |
+| 桶 | 跟 <span v-pre>`{{getvar::k}}`</span> 共用 `chat_metadata.variables` | 独立 namespace,不进 macro 系统 |
+| 提交日志 | variable-op-log(楼层 `extra.var_ops`) | 楼层结构化提交日志(`__floor_log`) |
+| 适合 | 跟 AI 写的 <span v-pre>`{{setvar}}`</span> 共享存储的可回滚标量 | CardApp / 插件自己管理的可回滚结构化状态 |
+
+两个机制走的是各自独立的提交日志,**同一个 key 不要两边都写**——重建顺序无保证,容易互相覆盖。
