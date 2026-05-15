@@ -143,7 +143,6 @@ import {
     getCharacterIndexByAvatar,
     getCharacterLoopOverrideByAvatar,
     getCharacterOverrideByAvatar,
-    getCharacterSavedExecutionModeByAvatar,
     getExecutionMode,
     hasCharacterAgendaOverride,
     hasCharacterLoopOverride,
@@ -600,14 +599,17 @@ function abortActiveOrchestratorRun() {
 function getEffectiveProfile(context) {
     const settings = extension_settings[MODULE_NAME];
     const avatar = getCurrentAvatar(context);
-    // Character override's saved mode wins over the global executionMode.
-    // Without this, a character pinned to `loop` (or `agenda`) silently runs
-    // under whatever mode is set globally — e.g. global `spec` swallows a
-    // character `loop` override entirely. The realign on set / delete keeps
-    // settings.executionMode in sync for UI purposes, but dispatch should
-    // not depend on that side effect to read the right branch.
-    const executionMode = getCharacterSavedExecutionModeByAvatar(context, avatar)
-        || getExecutionMode(settings);
+    // Global executionMode is the source of truth for which branch runs.
+    // `applyCharacterExecutionModeForAvatar` syncs global to the character's
+    // saved mode on every avatar change, so picking up the character's branch
+    // out of dispatch (instead of from settings) would override the user's
+    // explicit mode-selector click after selection — e.g. char has only a
+    // spec override, user picks `loop` in the dropdown, panel shows "global
+    // loop", but dispatch would still run the spec override. The UI scope
+    // resolver (`getStoredDisplayedScopeForMode`) already keys off global
+    // mode and falls back to global when the character has no data for that
+    // branch; this matches that contract.
+    const executionMode = getExecutionMode(settings);
     if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
         // Character loop override beats global. Loop runtime re-sanitizes
         // via `sanitizeLoopProfile(profile)` before dispatch, so we pass
