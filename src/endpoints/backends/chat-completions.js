@@ -87,6 +87,7 @@ import {
     getActiveGenerationJobsForRequest,
     getGenerationJobForRequest,
     getJobFromRequest,
+    subscribeToJob,
 } from './luker-generation.js';
 
 const API_OPENAI = 'https://api.openai.com/v1';
@@ -2040,6 +2041,103 @@ router.post('/jobs/active', async function (request, response) {
     } catch (error) {
         console.error(error);
         return response.sendStatus(500);
+    }
+});
+
+/**
+ * SSE stream for an in-flight generation job. GET so EventSource can subscribe.
+ * Emits replay events past `after_seq` (catch-up), then live `data:` frames
+ * as the upstream LLM delivers them, plus typed `status` frames on state
+ * changes. Closes the connection when the job reaches a terminal status.
+ *
+ * Replaces the FE-side 1Hz poll on /jobs/status with a single long-lived
+ * connection, so recovery UI updates at the same cadence the original
+ * client would have seen during streaming.
+ */
+router.get('/jobs/events-stream', function (request, response) {
+    try {
+        const jobId = String(request.query?.id || '');
+        const afterSeq = Math.max(0, Number(request.query?.after_seq) || 0);
+        if (!jobId) {
+            response.sendStatus(400);
+            return;
+        }
+
+        const job = getGenerationJobForRequest(request, jobId);
+        if (!job) {
+            response.sendStatus(404);
+            return;
+        }
+
+        response.set({
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache, no-transform',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        });
+        response.flushHeaders?.();
+
+        const writeFrame = (eventName, payload) => {
+            if (response.writableEnded) return false;
+            try {
+                if (eventName) response.write(`event: ${eventName}\n`);
+                response.write(`data: ${JSON.stringify(payload)}\n\n`);
+                return true;
+            } catch {
+                return false;
+            }
+        };
+
+        // Catch-up: replay buffered events the client hasn't seen yet.
+        const replayEvents = Array.isArray(job.events)
+            ? job.events.filter(event => Number(event.seq) > afterSeq)
+            : [];
+        for (const event of replayEvents) {
+            if (!writeFrame('event', event)) break;
+        }
+
+        // Initial status snapshot so the client immediately has full text + status.
+        writeFrame('status', {
+            status: job.status,
+            text: job.text,
+            last_seq: job.lastSeq,
+            error: job.error || '',
+            finished_at: job.finishedAt || null,
+        });
+
+        const terminalStatuses = new Set(['completed', 'failed', 'cancelled']);
+        if (terminalStatuses.has(String(job.status || ''))) {
+            try { response.end(); } catch { /* already closed */ }
+            return;
+        }
+
+        let unsubscribed = false;
+        const unsubscribe = subscribeToJob(jobId, (payload) => {
+            if (unsubscribed) return;
+            if (payload?.type === 'status') {
+                writeFrame('status', payload);
+                if (terminalStatuses.has(String(payload.status || ''))) {
+                    unsubscribed = true;
+                    unsubscribe();
+                    try { response.end(); } catch { /* already closed */ }
+                }
+            } else if (payload?.type === 'event') {
+                writeFrame('event', payload.entry);
+            }
+        });
+
+        const cleanup = () => {
+            if (!unsubscribed) {
+                unsubscribed = true;
+                unsubscribe();
+            }
+        };
+        request.on('aborted', cleanup);
+        request.on('close', cleanup);
+        response.on('close', cleanup);
+    } catch (error) {
+        console.error(error);
+        try { response.sendStatus(500); } catch { /* response may be partially written */ }
     }
 });
 

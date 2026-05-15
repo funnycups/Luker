@@ -460,6 +460,8 @@ let lukerRecoveryPollTimer = null;
 let lukerRecoveryPollBusy = false;
 let lukerRecoveryJobId = '';
 let lukerRecoveryChatId = '';
+let lukerRecoveryEventSource = null;
+let lukerRecoveryLastSeq = 0;
 const LUKER_RECOVERY_PREVIEW_ID = 'luker_generation_recovery_preview';
 const LUKER_SERVER_PERSISTENCE_APIS = new Set(['openai', 'textgenerationwebui', 'kobold', 'novel']);
 let lastLukerGenerationId = '';
@@ -645,9 +647,14 @@ function stopLukerGenerationRecovery() {
         clearInterval(lukerRecoveryPollTimer);
         lukerRecoveryPollTimer = null;
     }
+    if (lukerRecoveryEventSource) {
+        try { lukerRecoveryEventSource.close(); } catch { /* already closed */ }
+        lukerRecoveryEventSource = null;
+    }
     lukerRecoveryPollBusy = false;
     lukerRecoveryJobId = '';
     lukerRecoveryChatId = '';
+    lukerRecoveryLastSeq = 0;
     removeLukerRecoveryPreview();
 }
 
@@ -655,17 +662,42 @@ function renderLukerRecoveryPreview(text, status = 'running') {
     let preview = chatElement.find(`#${LUKER_RECOVERY_PREVIEW_ID}`);
 
     if (!preview.length) {
+        // Render as an inline assistant-message-style bubble at the end of the
+        // chat, not a separate banner. Doesn't touch chat[] — purely DOM. On
+        // completion we remove the node and let reloadCurrentChat() draw the
+        // real persisted message in its place.
+        const charName = name2 || (characters[this_chid]?.name) || '';
+        const charAvatar = characters[this_chid]?.avatar
+            ? getThumbnailUrl('avatar', characters[this_chid].avatar)
+            : 'img/ai4.png';
+        const escapeAttr = (s) => String(s).replace(/[<>&"']/g, c => ({
+            '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;',
+        })[c] || c);
         preview = $(`
-            <div id="${LUKER_RECOVERY_PREVIEW_ID}" class="wide100p" style="padding: 8px 12px; border: 1px dashed var(--SmartThemeBorderColor); border-radius: 8px; margin: 10px 0;">
-                <div class="flex-container justifyCenter alignitemscenter" style="gap: 8px;">
-                    <i class="fa-solid fa-link"></i>
-                    <strong>Luker recovery stream</strong>
+            <div id="${LUKER_RECOVERY_PREVIEW_ID}" class="mes luker-recovery-mes" is_user="false" is_system="false" style="opacity: 0.85;">
+                <div class="mesAvatarWrapper">
+                    <div class="avatar" title="${escapeAttr(charName)}">
+                        <img src="${escapeAttr(charAvatar)}" alt="${escapeAttr(charName)}"/>
+                    </div>
                 </div>
-                <div class="luker_preview_status" style="margin-top: 6px; opacity: 0.85; font-size: 0.9em;"></div>
-                <div class="luker_preview_text" style="margin-top: 8px; white-space: pre-wrap;"></div>
+                <div class="mes_block">
+                    <div class="ch_name flex-container justifySpaceBetween">
+                        <div class="flex-container alignitemscenter" style="gap: 6px;">
+                            <span class="name_text">${escapeAttr(charName)}</span>
+                            <span class="luker_preview_status" style="font-size: 0.85em; opacity: 0.7; border: 1px dashed var(--SmartThemeBorderColor); border-radius: 4px; padding: 1px 6px;"></span>
+                        </div>
+                    </div>
+                    <div class="mes_text luker_preview_text" style="white-space: pre-wrap;"></div>
+                </div>
             </div>
         `);
         chatElement.append(preview);
+        // Scroll into view so the user sees it on chat open.
+        try {
+            preview[0]?.scrollIntoView({ block: 'end', behavior: 'instant' });
+        } catch {
+            // Older browsers: just leave at current scroll.
+        }
     }
 
     const statusText = status === 'failed'
@@ -676,7 +708,7 @@ function renderLukerRecoveryPreview(text, status = 'running') {
                 ? t`Waiting for client save confirmation`
                 : status === 'persisting'
                     ? t`Persisting generation on server`
-                    : t`Generation in progress on server`;
+                    : t`Resuming server stream`;
     preview.find('.luker_preview_status').text(statusText);
     preview.find('.luker_preview_text').text(String(text || ''));
 }
@@ -711,53 +743,124 @@ async function startLukerGenerationRecovery() {
 
         lukerRecoveryJobId = String(activeJob.id);
         lukerRecoveryChatId = chatIdSnapshot;
+        lukerRecoveryLastSeq = Number(activeJob.last_seq || 0);
         renderLukerRecoveryPreview(activeJob.text || '', activeJob.status || 'running');
 
-        lukerRecoveryPollTimer = setInterval(async () => {
-            if (lukerRecoveryPollBusy) {
-                return;
-            }
+        // Prefer SSE for live updates; fall back to 1Hz polling if EventSource
+        // isn't available (older browsers, restrictive proxies, etc).
+        if (typeof EventSource === 'function') {
+            startLukerRecoverySseStream(chatIdSnapshot);
+        } else {
+            startLukerRecoveryPollFallback(chatIdSnapshot);
+        }
+    } catch (error) {
+        console.warn('Failed to query active generation jobs', error);
+    }
+}
 
-            if (lukerRecoveryChatId !== getCurrentChatId()) {
+function startLukerRecoverySseStream(chatIdSnapshot) {
+    const url = `/api/backends/chat-completions/jobs/events-stream?id=${encodeURIComponent(lukerRecoveryJobId)}&after_seq=${lukerRecoveryLastSeq}`;
+    let source;
+    try {
+        source = new EventSource(url, { withCredentials: true });
+    } catch (error) {
+        console.warn('Failed to open SSE for recovery; falling back to poll', error);
+        startLukerRecoveryPollFallback(chatIdSnapshot);
+        return;
+    }
+    lukerRecoveryEventSource = source;
+    let liveText = '';
+
+    const handleStatus = (event) => {
+        if (lukerRecoveryChatId !== getCurrentChatId()) {
+            stopLukerGenerationRecovery();
+            return;
+        }
+        let payload;
+        try { payload = JSON.parse(event.data); } catch { return; }
+        if (typeof payload?.text === 'string') {
+            liveText = payload.text;
+        }
+        renderLukerRecoveryPreview(liveText, payload?.status || 'running');
+        if (payload?.status === 'failed') {
+            stopLukerGenerationRecovery();
+        } else if (payload?.status === 'completed') {
+            stopLukerGenerationRecovery();
+            void reloadCurrentChat();
+        }
+    };
+
+    const handleEvent = (event) => {
+        // We don't reconstruct text from raw SSE frames here — the next status
+        // frame carries authoritative `text`. Tracking last_seq lets us
+        // reconnect with after_seq if the connection drops.
+        let payload;
+        try { payload = JSON.parse(event.data); } catch { return; }
+        if (typeof payload?.seq === 'number' && payload.seq > lukerRecoveryLastSeq) {
+            lukerRecoveryLastSeq = payload.seq;
+        }
+    };
+
+    source.addEventListener('status', handleStatus);
+    source.addEventListener('event', handleEvent);
+    source.onerror = () => {
+        if (!lukerRecoveryEventSource) return;
+        // EventSource auto-reconnects on transient errors; only fall back to
+        // polling if the connection truly closed (readyState === CLOSED).
+        if (source.readyState === EventSource.CLOSED) {
+            lukerRecoveryEventSource = null;
+            // Job may have completed and the server closed the stream cleanly —
+            // refresh chat to pick up the persisted message either way.
+            const stillHere = lukerRecoveryChatId === getCurrentChatId();
+            stopLukerGenerationRecovery();
+            if (stillHere) void reloadCurrentChat();
+        }
+    };
+}
+
+function startLukerRecoveryPollFallback(chatIdSnapshot) {
+    lukerRecoveryPollTimer = setInterval(async () => {
+        if (lukerRecoveryPollBusy) {
+            return;
+        }
+
+        if (lukerRecoveryChatId !== getCurrentChatId()) {
+            stopLukerGenerationRecovery();
+            return;
+        }
+
+        lukerRecoveryPollBusy = true;
+        try {
+            const statusResponse = await fetch('/api/backends/chat-completions/jobs/status', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({ id: lukerRecoveryJobId }),
+                cache: 'no-cache',
+            });
+
+            if (!statusResponse.ok) {
                 stopLukerGenerationRecovery();
                 return;
             }
 
-            lukerRecoveryPollBusy = true;
-            try {
-                const statusResponse = await fetch('/api/backends/chat-completions/jobs/status', {
-                    method: 'POST',
-                    headers: getRequestHeaders(),
-                    body: JSON.stringify({ id: lukerRecoveryJobId }),
-                    cache: 'no-cache',
-                });
+            const statusData = await statusResponse.json();
+            renderLukerRecoveryPreview(statusData?.text || '', statusData?.status || 'running');
 
-                if (!statusResponse.ok) {
-                    stopLukerGenerationRecovery();
-                    return;
-                }
-
-                const statusData = await statusResponse.json();
-                renderLukerRecoveryPreview(statusData?.text || '', statusData?.status || 'running');
-
-                if (statusData?.status === 'failed') {
-                    stopLukerGenerationRecovery();
-                    return;
-                }
-
-                if (statusData?.status === 'completed') {
-                    stopLukerGenerationRecovery();
-                    await reloadCurrentChat();
-                }
-            } catch (error) {
-                console.warn('Failed to poll recovered generation status', error);
-            } finally {
-                lukerRecoveryPollBusy = false;
+            if (statusData?.status === 'failed') {
+                stopLukerGenerationRecovery();
+                return;
             }
-        }, 1000);
-    } catch (error) {
-        console.warn('Failed to query active generation jobs', error);
-    }
+
+            if (statusData?.status === 'completed') {
+                stopLukerGenerationRecovery();
+                await reloadCurrentChat();
+            }
+        } catch (error) {
+            console.warn('Failed to poll recovered generation status', error);
+        } finally {
+            lukerRecoveryPollBusy = false;
+        }
+    }, 1000);
 }
 
 /**

@@ -381,7 +381,8 @@ export function appendGenerationEvent(job, rawData) {
 
     const nextSeq = Number(job.lastSeq || 0) + 1;
     job.lastSeq = nextSeq;
-    job.events.push({ seq: nextSeq, data: rawData, ts: Date.now() });
+    const entry = { seq: nextSeq, data: rawData, ts: Date.now() };
+    job.events.push(entry);
     if (job.events.length > LUKER_GENERATION_JOB_MAX_EVENTS) {
         job.events.splice(0, job.events.length - LUKER_GENERATION_JOB_MAX_EVENTS);
     }
@@ -391,6 +392,57 @@ export function appendGenerationEvent(job, rawData) {
     if (deltaText) {
         job.text += deltaText;
     }
+
+    notifyJobSubscribers(job, { type: 'event', entry });
+}
+
+/**
+ * In-memory subscribers (typically SSE response writers) per job id. Used by
+ * the /jobs/events-stream endpoint to push events without polling. Job
+ * completion/failure flushes a terminal status and clears the set.
+ */
+const jobSubscribers = new Map();
+
+export function subscribeToJob(jobId, callback) {
+    const id = String(jobId || '');
+    if (!id || typeof callback !== 'function') {
+        return () => {};
+    }
+    let set = jobSubscribers.get(id);
+    if (!set) {
+        set = new Set();
+        jobSubscribers.set(id, set);
+    }
+    set.add(callback);
+    return () => {
+        const current = jobSubscribers.get(id);
+        if (current) {
+            current.delete(callback);
+            if (current.size === 0) jobSubscribers.delete(id);
+        }
+    };
+}
+
+function notifyJobSubscribers(job, payload) {
+    if (!job) return;
+    const set = jobSubscribers.get(String(job.id));
+    if (!set || set.size === 0) return;
+    for (const cb of Array.from(set)) {
+        try { cb(payload); } catch (error) {
+            console.warn('[LukerGeneration] subscriber threw', error);
+        }
+    }
+}
+
+function notifyJobStatus(job) {
+    notifyJobSubscribers(job, {
+        type: 'status',
+        status: job.status,
+        text: job.text,
+        last_seq: job.lastSeq,
+        error: job.error || '',
+        finished_at: job.finishedAt || null,
+    });
 }
 
 export function failGenerationJob(job, errorMessage = 'Unknown error occurred') {
@@ -407,6 +459,7 @@ export function failGenerationJob(job, errorMessage = 'Unknown error occurred') 
     job.updatedAt = Date.now();
     job.finishedAt = Date.now();
     job.abortController = null;
+    notifyJobStatus(job);
 }
 
 async function persistGeneratedReply(job, text, generationId = '', modelName = '') {
@@ -507,6 +560,7 @@ export async function completeGenerationJobFromText(request, job, text, modelNam
     job.persistenceTimer = setTimeout(() => {
         void persistGenerationJobIfUnacked(job);
     }, LUKER_GENERATION_ACK_GRACE_MS);
+    notifyJobStatus(job);
     return false;
 }
 
@@ -610,6 +664,7 @@ export function cancelGenerationJobForRequest(request, jobId, reason = 'Cancelle
         }
     }
     job.abortController = null;
+    notifyJobStatus(job);
 
     return { ok: true, status: 200, cancelled: true, job };
 }
@@ -625,12 +680,14 @@ async function persistGenerationJobIfUnacked(job) {
         job.status = 'completed';
         job.updatedAt = Date.now();
         job.finishedAt = Date.now();
+        notifyJobStatus(job);
         return false;
     }
 
     job.status = 'persisting';
     job.persistenceInFlight = true;
     job.updatedAt = Date.now();
+    notifyJobStatus(job);
 
     try {
         const persisted = await persistGeneratedReply(job, job.text, job.id, job.modelName);
@@ -639,6 +696,7 @@ async function persistGenerationJobIfUnacked(job) {
         job.error = persisted ? '' : 'Generation could not be persisted on server.';
         job.updatedAt = Date.now();
         job.finishedAt = Date.now();
+        notifyJobStatus(job);
         return Boolean(job.persisted);
     } catch (error) {
         job.persisted = false;
@@ -646,6 +704,7 @@ async function persistGenerationJobIfUnacked(job) {
         job.error = String(error?.message || 'Generation could not be persisted on server.');
         job.updatedAt = Date.now();
         job.finishedAt = Date.now();
+        notifyJobStatus(job);
         return false;
     } finally {
         job.persistenceInFlight = false;

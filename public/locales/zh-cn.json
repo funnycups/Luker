@@ -4281,6 +4281,7 @@
     "Generation completed on server": "服务器端生成已完成",
     "Generation failed on server": "服务器端生成失败",
     "Generation in progress on server": "服务器端正在生成",
+    "Resuming server stream": "正在恢复服务器端生成",
     "Global extensions imported: ${result?.importedCount ?? 0} files.": "全局扩展已导入：${result?.importedCount ?? 0} 个文件。",
     "If this lorebook is shared by other chats or characters, they will lose that binding too.": "如果此世界书被其他聊天或角色共享，它们也会失去该绑定。",
     "Import failed": "导入失败",

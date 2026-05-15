@@ -3406,6 +3406,7 @@
     "Generation completed on server": "伺服器端生成已完成",
     "Generation failed on server": "伺服器端生成失敗",
     "Generation in progress on server": "伺服器端正在生成",
+    "Resuming server stream": "正在恢復伺服器端生成",
     "Generation in progress...": "正在生成中...",
     "Get the contents of a reasoning block of a message. Returns an empty string if the message does not have a reasoning block.": "獲取訊息中推理塊的內容。如果訊息沒有推理塊，則返回空字串。",
     "Global Rules": "全域性規則",
