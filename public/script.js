@@ -11898,10 +11898,19 @@ function summarizeChatStateDivergence(clientMessages, serverMessages, maxDiverge
         // hunt for a content diff that doesn't exist.
         const sameFields = onlyInClient.length === 0 && onlyInServer.length === 0 && sharedDiffered.length === 0;
 
+        // For each top-level mutated field, look one level deeper to identify
+        // which nested key actually differs. `mutated:[extra.luker_generation_id]`
+        // is dramatically more useful than `mutated:[extra]` when extra is a
+        // big bag of optional metadata fields.
+        const mutatedDetailed = sharedDiffered.map(k => {
+            const nested = describeNestedDivergence(c[k], s[k]);
+            return nested ? `${k}.${nested}` : k;
+        });
+
         const parts = [];
         if (onlyInClient.length) parts.push(`client+[${onlyInClient.join(',')}]`);
         if (onlyInServer.length) parts.push(`server+[${onlyInServer.join(',')}]`);
-        if (sharedDiffered.length) parts.push(`mutated:[${sharedDiffered.join(',')}]`);
+        if (mutatedDetailed.length) parts.push(`mutated:[${mutatedDetailed.join(',')}]`);
         if (sameFields) parts.push('key-order-only');
         lines.push(`/${i} ${parts.join(' ')}`);
         details.push({ index: i, client: c, server: s, kind: parts.join(' ') });
@@ -11914,6 +11923,37 @@ function summarizeChatStateDivergence(clientMessages, serverMessages, maxDiverge
         lines.push(`+${extraCount} more position(s)`);
     }
     return { summary: lines.join('; '), details };
+}
+
+/**
+ * Given two values known to differ, return a short string identifying the
+ * nested location of the difference. Recurses through plain objects only;
+ * arrays and primitives are treated as leaves (the answer at that point is
+ * "this whole thing differs", which is what the caller already knows).
+ *
+ * Returns the first divergent path it finds. Multiple nested differences
+ * collapse to one — keeping the toast short is intentional.
+ */
+function describeNestedDivergence(c, s, depth = 0) {
+    if (depth >= 3) return null;
+    if (!isPlainObject(c) || !isPlainObject(s)) return null;
+
+    const cKeys = Object.keys(c);
+    const sKeys = Object.keys(s);
+
+    for (const k of cKeys) {
+        if (!(k in s)) return `${k}(client-only)`;
+    }
+    for (const k of sKeys) {
+        if (!(k in c)) return `${k}(server-only)`;
+    }
+    for (const k of cKeys) {
+        if (!isServerEqJsonShape(c[k], s[k])) {
+            const deeper = describeNestedDivergence(c[k], s[k], depth + 1);
+            return deeper ? `${k}.${deeper}` : k;
+        }
+    }
+    return null;
 }
 
 /**
@@ -12042,31 +12082,10 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
         ? payload.current_integrity.trim()
         : '';
 
-    if (errorType === 'integrity') {
-        if (metadata && typeof metadata === 'object') {
-            if (currentIntegrity) {
-                metadata.integrity = currentIntegrity;
-            } else {
-                delete metadata.integrity;
-            }
-        }
-        if (isActiveChatStateTarget(target)) {
-            syncCurrentChatIntegrityFromMetadata(metadata);
-        }
-        // Invalidate the message snapshot too so the caller's saveChatConditional
-        // fallback skips the diff-patch path and writes a full /api/chats/save,
-        // overwriting the server file with the FE chat array (FE-wins).
-        invalidateChatWriteSnapshot(target);
-        notifyChatWriteConflict({ kind: 'integrity', errorType, target, retryCount, currentIntegrity, requestContext });
-        return 'integrity';
-    }
-
-    // Non-integrity 409 (JSON Patch test failed): the integrity token matched
-    // but at least one position's stored value diverges from our snapshot. Pull
-    // the server's current state and diff against our snapshot to surface the
-    // exact divergent fields — turns a generic "Chat patch conflict" into
-    // "client+[variables_initialized,is_ejs_processed] at /3", which points
-    // straight at the offending extension or runtime hook.
+    // Pull server's current state and diff against our snapshot for both kinds
+    // of 409. Integrity drift on the surface often means content changed too —
+    // skipping the diff in that branch loses real signal about which message
+    // a concurrent writer touched.
     const snapshotKey = target ? getChatMessageSnapshotKey(target) : null;
     const clientSnapshot = snapshotKey ? chatMessageSnapshotCache.get(snapshotKey) : null;
     let divergenceSummary = null;
@@ -12087,6 +12106,36 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
         }
     }
 
+    if (errorType === 'integrity') {
+        if (metadata && typeof metadata === 'object') {
+            if (currentIntegrity) {
+                metadata.integrity = currentIntegrity;
+            } else {
+                delete metadata.integrity;
+            }
+        }
+        if (isActiveChatStateTarget(target)) {
+            syncCurrentChatIntegrityFromMetadata(metadata);
+        }
+        // Invalidate the message snapshot too so the caller's saveChatConditional
+        // fallback skips the diff-patch path and writes a full /api/chats/save,
+        // overwriting the server file with the FE chat array (FE-wins).
+        invalidateChatWriteSnapshot(target);
+        notifyChatWriteConflict({
+            kind: 'integrity',
+            errorType,
+            target,
+            retryCount,
+            currentIntegrity,
+            requestContext,
+            divergence: divergenceSummary,
+            divergenceDetails,
+        });
+        return 'integrity';
+    }
+
+    // Non-integrity 409 (JSON Patch test failed): the integrity token matched
+    // but at least one position's stored value diverges from our snapshot.
     // Keep local in-memory edits/generation state intact. Reloading chat here can
     // overwrite current local mutations (e.g. regenerate/edit-in-progress) and
     // make behavior look like random refresh or duplicate replies.
