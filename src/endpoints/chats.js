@@ -767,26 +767,29 @@ function writeChatSyncState(chatFilePath, state) {
 }
 
 /**
- * Returns the last generation id this file's sync sidecar saw. Used for
- * retry-dedup at append time — see writeLastChatGenerationId for the
- * write side. Distinct from "the gen id of the last message in the file"
- * (which is what the old design used): persisting the field IN the
- * message body forced it onto disk forever and polluted every snapshot
- * diff. Tracking it in the sidecar keeps the protocol-layer token off
- * the data and lets us strip it from messages.
+ * In-memory map of "last seen generation id" per chat file. Used for
+ * retry-dedup at append time without ever touching disk. The token is a
+ * protocol-layer concern (request correlation for retries) — persisting
+ * it across server restarts buys nothing the content-based dedup
+ * (`_.isEqual` on the last stored message) doesn't already cover for
+ * the rare cross-restart retry. Bounded: every write to a file replaces
+ * its entry, so memory cost is one short string per active chat.
  */
+const lastChatGenerationIdByPath = new Map();
+
 function readLastChatGenerationId(chatFilePath) {
-    const state = readChatSyncState(chatFilePath);
-    return typeof state?.last_generation_id === 'string' ? state.last_generation_id.trim() : '';
+    const key = path.resolve(String(chatFilePath || ''));
+    if (!key) return '';
+    const value = lastChatGenerationIdByPath.get(key);
+    return typeof value === 'string' ? value : '';
 }
 
 function writeLastChatGenerationId(chatFilePath, generationId) {
     const safeId = typeof generationId === 'string' ? generationId.trim() : '';
-    if (!safeId) {
-        return;
-    }
-    const state = readChatSyncState(chatFilePath);
-    writeChatSyncState(chatFilePath, { ...state, last_generation_id: safeId, updated_at: Date.now() });
+    if (!safeId) return;
+    const key = path.resolve(String(chatFilePath || ''));
+    if (!key) return;
+    lastChatGenerationIdByPath.set(key, safeId);
 }
 
 /**
