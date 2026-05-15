@@ -18,17 +18,36 @@ import responseTime from 'response-time';
 import helmet from 'helmet';
 import bodyParser from 'body-parser';
 
-// Timestamp all console output and capture to circular log buffer
+// Timestamp all console output and capture to circular log buffer.
+// JSON.stringify throws on circular references / BigInt — if the wrapper ever
+// throws, callers see a TypeError from console.error and (worst case) the
+// uncaughtException handler re-enters the same wrapper, re-throws, and Node
+// aborts with an empty stderr. So: serialize defensively, and never let buffer
+// bookkeeping interfere with the underlying console call.
 const BACKEND_LOG_MAX = 500;
 export const backendLogBuffer = [];
 let backendLogCounter = 0;
+function serializeLogArg(value) {
+    if (typeof value === 'string') return value;
+    try {
+        const serialized = JSON.stringify(value);
+        if (serialized !== undefined) return serialized;
+    } catch { /* fall through */ }
+    try {
+        return util.inspect(value, { depth: 4, maxArrayLength: 100, breakLength: 140 });
+    } catch {
+        return String(value);
+    }
+}
 ['log', 'warn', 'error'].forEach((level) => {
     const original = console[level].bind(console);
     console[level] = (...args) => {
         const ts = new Date().toISOString();
-        const entry = { id: ++backendLogCounter, ts, level, message: args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ') };
-        if (backendLogBuffer.length >= BACKEND_LOG_MAX) backendLogBuffer.shift();
-        backendLogBuffer.push(entry);
+        try {
+            const entry = { id: ++backendLogCounter, ts, level, message: args.map(serializeLogArg).join(' ') };
+            if (backendLogBuffer.length >= BACKEND_LOG_MAX) backendLogBuffer.shift();
+            backendLogBuffer.push(entry);
+        } catch { /* never let log capture wreck the underlying console call */ }
         original(`[${ts}]`, ...args);
     };
 });
@@ -397,6 +416,14 @@ async function preSetupTasks() {
     process.on('uncaughtException', (err) => {
         console.error('Uncaught exception:', err);
         exitProcess();
+    });
+    // Express 4 does not forward async route handler rejections to
+    // `next(err)`, so any unhandled rejection inside an `async` route would,
+    // by Node defaults, transition to `uncaughtException` and tear the
+    // process down. Log them and keep the server alive instead — a single
+    // failing request should never take the whole server with it.
+    process.on('unhandledRejection', (reason) => {
+        console.error('Unhandled promise rejection:', reason);
     });
 
     // Add private request filter.
