@@ -237,6 +237,10 @@ export function createCharacterEditorUi(deps) {
                 <div class="menu_button" id="cea_open_cardapp_studio"><i class="fa-solid fa-code"></i> ${escapeHtml(i18n('CardApp Studio'))}</div>
             </div>
             <label class="checkbox_label"><input id="cea_replace_sync" type="checkbox"/> ${escapeHtml(i18n('Enable lorebook sync popup after Replace/Update'))}</label>
+            <label class="checkbox_label">
+                <input id="cea_use_streaming_transport" type="checkbox" />
+                ${escapeHtml(i18n('Use streaming transport (avoid timeout on slow APIs)'))}
+            </label>
             <label for="cea_sync_llm_preset">${escapeHtml(i18n('Model request LLM preset name'))}</label>
             <select id="cea_sync_llm_preset" class="text_pole"></select>
             <label for="cea_sync_api_preset">${escapeHtml(i18n('Model request API preset name'))}</label>
@@ -271,6 +275,7 @@ export function createCharacterEditorUi(deps) {
         }
         const settings = getSettings();
         root.find('#cea_replace_sync').prop('checked', Boolean(settings.replaceLorebookSyncEnabled));
+        root.find('#cea_use_streaming_transport').prop('checked', Boolean(settings.useStreamingTransport));
         root.find('#cea_tool_retries').val(String(settings.toolCallRetryMax ?? defaultSettings.toolCallRetryMax));
         refreshPresetSelectors(root, context, settings);
 
@@ -324,6 +329,12 @@ export function createCharacterEditorUi(deps) {
         root.on('change.cea', '#cea_replace_sync', function () {
             const settings = getSettings();
             settings.replaceLorebookSyncEnabled = Boolean(jQuery(this).prop('checked'));
+            saveSettingsDebounced();
+        });
+
+        root.on('change.cea', '#cea_use_streaming_transport', function () {
+            const settings = getSettings();
+            settings.useStreamingTransport = Boolean(jQuery(this).prop('checked'));
             saveSettingsDebounced();
         });
 

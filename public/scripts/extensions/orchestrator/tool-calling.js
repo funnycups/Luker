@@ -108,7 +108,7 @@ export async function requestToolCallWithRetry(context, settings, {
         try {
             throwIfAborted(abortSignal, 'Orchestration aborted.');
             await waitForRpmSlot(settings, abortSignal);
-            const result = await context.generateTask({
+            const generateTaskOpts = {
                 taskMessages,
                 includeCharacterCard: true,
                 worldInfoSource: 'none',
@@ -123,7 +123,10 @@ export async function requestToolCallWithRetry(context, settings, {
                     protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
                 },
                 abortSignal: attemptController.signal,
-            });
+            };
+            const result = settings?.useStreamingTransport
+                ? await context.generateTaskStream(generateTaskOpts).result
+                : await context.generateTask(generateTaskOpts);
             throwIfAborted(abortSignal, 'Orchestration aborted.');
             const calls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
             const validationError = validateParsedToolCalls(calls, tools);
@@ -194,7 +197,7 @@ export async function requestToolCallsWithRetry(context, settings, {
         try {
             throwIfAborted(abortSignal, 'Orchestration aborted.');
             await waitForRpmSlot(settings, abortSignal);
-            const result = await context.generateTask({
+            const generateTaskOpts = {
                 taskMessages,
                 includeCharacterCard: true,
                 worldInfoSource: 'none',
@@ -208,7 +211,10 @@ export async function requestToolCallsWithRetry(context, settings, {
                     protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
                 },
                 abortSignal: attemptController.signal,
-            });
+            };
+            const result = settings?.useStreamingTransport
+                ? await context.generateTaskStream(generateTaskOpts).result
+                : await context.generateTask(generateTaskOpts);
             throwIfAborted(abortSignal, 'Orchestration aborted.');
             const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
             const normalizedCalls = rawCalls.map(call => ({

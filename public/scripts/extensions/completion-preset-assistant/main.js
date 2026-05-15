@@ -59,6 +59,7 @@ const defaultSettings = {
     includeWorldInfo: false,
     toolCallRetryMax: 2,
     sessionMessageLimit: 24,
+    useStreamingTransport: false,
 };
 
 let activeDialogState = null;
@@ -133,6 +134,7 @@ function ensureSettings() {
     settings.requestLlmPresetName = String(settings.requestLlmPresetName || '').trim();
     settings.requestApiProfileName = String(settings.requestApiProfileName || '').trim();
     settings.includeWorldInfo = settings.includeWorldInfo === true;
+    settings.useStreamingTransport = settings.useStreamingTransport === true;
     settings.toolCallRetryMax = Math.max(0, Math.min(TOOL_CALL_RETRY_MAX, toInteger(settings.toolCallRetryMax, defaultSettings.toolCallRetryMax)));
     settings.sessionMessageLimit = Math.max(
         SESSION_MESSAGE_LIMIT_MIN,
@@ -2182,7 +2184,7 @@ async function requestToolCallsWithRetry(context, settings, {
     for (let attempt = 0; attempt <= retries; attempt += 1) {
         try {
             throwIfAborted(abortSignal, 'Preset assistant request aborted.');
-            const result = await context.generateTask({
+            const generateTaskOpts = {
                 taskMessages,
                 includeCharacterCard: true,
                 worldInfoSource,
@@ -2199,7 +2201,10 @@ async function requestToolCallsWithRetry(context, settings, {
                 // contain literal {{...}} placeholders that must not resolve
                 // before the AI sees them.
                 substituteMacros: false,
-            });
+            };
+            const result = settings?.useStreamingTransport
+                ? await context.generateTaskStream(generateTaskOpts).result
+                : await context.generateTask(generateTaskOpts);
             throwIfAborted(abortSignal, 'Preset assistant request aborted.');
             const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
             const normalizedCalls = rawCalls.map((call) => {

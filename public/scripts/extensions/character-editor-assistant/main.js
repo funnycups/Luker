@@ -62,6 +62,7 @@ const defaultSettings = {
     lorebookSyncApiPresetName: '',
     toolCallRetryMax: 2,
     maxJournalEntries: 120,
+    useStreamingTransport: false,
 };
 const CHARACTER_EDITOR_SESSION_NAMESPACE = 'character_editor_assistant_sessions';
 const CHARACTER_EDITOR_SESSION_VERSION = 1;
@@ -469,6 +470,7 @@ function ensureSettings() {
     delete settings.plainTextFunctionCallMode;
     settings.toolCallRetryMax = Math.max(0, Math.min(10, Math.floor(Number(settings.toolCallRetryMax || defaultSettings.toolCallRetryMax) || 0)));
     settings.maxJournalEntries = Math.max(20, Math.min(500, Number(settings.maxJournalEntries || defaultSettings.maxJournalEntries)));
+    settings.useStreamingTransport = Boolean(settings.useStreamingTransport);
 }
 
 function getSettings() {
@@ -3095,7 +3097,7 @@ async function requestLorebookToolCallsWithRetry(context, settings, {
     for (let attempt = 0; attempt <= retries; attempt++) {
         throwIfAborted(abortSignal, 'Character editor request aborted.');
         try {
-            const result = await context.generateTask({
+            const generateTaskOpts = {
                 taskMessages,
                 includeCharacterCard: true,
                 worldInfoSource: 'none',
@@ -3113,7 +3115,10 @@ async function requestLorebookToolCallsWithRetry(context, settings, {
                 // {{user}}/{{char}}/{{getvar::}} placeholders that must remain
                 // unrendered for the analysis/diff to be accurate.
                 substituteMacros: false,
-            });
+            };
+            const result = settings?.useStreamingTransport
+                ? await context.generateTaskStream(generateTaskOpts).result
+                : await context.generateTask(generateTaskOpts);
             throwIfAborted(abortSignal, 'Character editor request aborted.');
             const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
             const normalizedCalls = rawCalls.map((call) => {
@@ -3278,7 +3283,8 @@ async function requestModelLorebookDiffAnalysis(context, plan) {
         JSON.stringify(contextPayload),
     ].join('\n\n');
     const requestPresetOptions = getLorebookSyncRequestPresetOptions();
-    const result = await context.generateTask({
+    const settings = getSettings();
+    const generateTaskOpts = {
         taskMessages: [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt },
@@ -3292,7 +3298,10 @@ async function requestModelLorebookDiffAnalysis(context, plan) {
         // any {{...}} placeholders inside it are part of the source under
         // analysis and must not be resolved before the model sees them.
         substituteMacros: false,
-    });
+    };
+    const result = settings?.useStreamingTransport
+        ? await context.generateTaskStream(generateTaskOpts).result
+        : await context.generateTask(generateTaskOpts);
 
     return {
         assistantText: String(result?.assistantText || '').trim(),

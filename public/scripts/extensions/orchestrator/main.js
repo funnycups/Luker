@@ -305,6 +305,7 @@ function ensureSettings() {
         extension_settings[MODULE_NAME].llmNodePresetName = String(extension_settings[MODULE_NAME].llmNodePromptPresetName || '').trim();
     }
     extension_settings[MODULE_NAME].includeWorldInfoWithPreset = extension_settings[MODULE_NAME].includeWorldInfoWithPreset !== false;
+    extension_settings[MODULE_NAME].useStreamingTransport = Boolean(extension_settings[MODULE_NAME].useStreamingTransport);
     extension_settings[MODULE_NAME].aiSuggestApiPresetName = sanitizeConnectionProfileName(extension_settings[MODULE_NAME].aiSuggestApiPresetName || '');
     if (!String(extension_settings[MODULE_NAME].aiSuggestPresetName || '').trim()) {
         extension_settings[MODULE_NAME].aiSuggestPresetName = String(extension_settings[MODULE_NAME].aiSuggestPromptPresetName || '').trim();
@@ -5351,6 +5352,7 @@ function bindUi() {
     root.find('#luker_orch_llm_api_preset').val(String(settings.llmNodeApiPresetName || ''));
     root.find('#luker_orch_llm_preset').val(String(settings.llmNodePresetName || ''));
     root.find('#luker_orch_include_world_info').prop('checked', Boolean(settings.includeWorldInfoWithPreset));
+    root.find('#luker_orch_use_streaming_transport').prop('checked', Boolean(settings.useStreamingTransport));
     root.find('#luker_orch_ai_suggest_api_preset').val(String(settings.aiSuggestApiPresetName || ''));
     root.find('#luker_orch_ai_suggest_preset').val(String(settings.aiSuggestPresetName || ''));
     root.find('#luker_orch_ai_suggest_system_prompt').val(String(settings.aiSuggestSystemPrompt || ''));
@@ -5614,6 +5616,11 @@ function bindUi() {
 
     root.on('input.lukerOrch', '#luker_orch_include_world_info', function () {
         settings.includeWorldInfoWithPreset = Boolean(jQuery(this).prop('checked'));
+        saveSettingsDebounced();
+    });
+
+    root.on('input.lukerOrch', '#luker_orch_use_streaming_transport', function () {
+        settings.useStreamingTransport = Boolean(jQuery(this).prop('checked'));
         saveSettingsDebounced();
     });
 

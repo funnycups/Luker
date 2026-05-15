@@ -582,6 +582,7 @@ const defaultSettings = {
     hybridMaxResults: 15,
     enableRerank: false,
     rpmLimit: 0,
+    useStreamingTransport: false,
 };
 
 
@@ -2937,7 +2938,7 @@ async function requestSingleFunctionCallWithRetry(context, settings, {
         try {
             throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
             await waitForRpmSlot(settings, abortSignal);
-            const result = await context.generateTask({
+            const generateTaskOpts = {
                 taskMessages,
                 includeCharacterCard: true,
                 worldInfoSource: 'none',
@@ -2949,7 +2950,10 @@ async function requestSingleFunctionCallWithRetry(context, settings, {
                 functionCallMode: 'auto',
                 functionCallOptions,
                 abortSignal: requestController.signal,
-            });
+            };
+            const result = settings?.useStreamingTransport
+                ? await context.generateTaskStream(generateTaskOpts).result
+                : await context.generateTask(generateTaskOpts);
             throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
             const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
             const normalizedCalls = rawCalls.map(call => ({
@@ -3018,7 +3022,7 @@ async function requestToolCallsWithRetry(context, settings, {
         try {
             throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
             await waitForRpmSlot(settings, abortSignal);
-            const result = await context.generateTask({
+            const generateTaskOpts = {
                 taskMessages,
                 includeCharacterCard: true,
                 worldInfoSource: 'none',
@@ -3032,7 +3036,10 @@ async function requestToolCallsWithRetry(context, settings, {
                     protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
                 },
                 abortSignal: requestController.signal,
-            });
+            };
+            const result = settings?.useStreamingTransport
+                ? await context.generateTaskStream(generateTaskOpts).result
+                : await context.generateTask(generateTaskOpts);
             throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
             const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
             const normalizedCalls = rawCalls.map(call => ({
@@ -13145,6 +13152,7 @@ function bindUi() {
     root.find('#luker_rpg_memory_schema_iter_api_preset').val(String(settings.schemaIterationApiPresetName || ''));
     root.find('#luker_rpg_memory_schema_iter_preset').val(String(settings.schemaIterationPresetName || ''));
     root.find('#luker_rpg_memory_include_world_info').prop('checked', Boolean(settings.includeWorldInfoWithPreset));
+    root.find('#luker_rpg_memory_use_streaming_transport').prop('checked', Boolean(settings.useStreamingTransport));
     root.find('#luker_rpg_memory_update_every').val(String(settings.updateEvery));
     const schemaScopeInfo = getSchemaScopeInfo(context, settings);
     updateSchemaSummary(root, schemaScopeInfo.schema);
@@ -13304,6 +13312,11 @@ function bindUi() {
 
     root.find('#luker_rpg_memory_include_world_info').off('input').on('input', function () {
         settings.includeWorldInfoWithPreset = Boolean(jQuery(this).prop('checked'));
+        saveSettingsDebounced();
+    });
+
+    root.find('#luker_rpg_memory_use_streaming_transport').off('input').on('input', function () {
+        settings.useStreamingTransport = Boolean(jQuery(this).prop('checked'));
         saveSettingsDebounced();
     });
 

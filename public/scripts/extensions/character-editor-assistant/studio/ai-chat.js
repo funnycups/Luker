@@ -2393,7 +2393,8 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  // context it should reason against. substituteMacros:false keeps
  // {{user}}/{{char}}/etc. in conversation messages literal so the AI sees
  // the source text it is asked to edit, not the rendered version.
- const result = await ctx.generateTask({
+ const ceaSettings = extension_settings?.character_editor_assistant || {};
+ const generateTaskOpts = {
  taskMessages: [
  { role: 'system', content: fullSystemPrompt },
  ...conversationMessages,
@@ -2411,7 +2412,10 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  },
  abortSignal: abortSignal || undefined,
  substituteMacros: false,
- });
+ };
+ const result = ceaSettings?.useStreamingTransport
+ ? await ctx.generateTaskStream(generateTaskOpts).result
+ : await ctx.generateTask(generateTaskOpts);
 
  if (abortSignal?.aborted) {
  throw new Error('Request aborted');

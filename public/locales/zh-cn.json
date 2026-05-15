@@ -1,4 +1,5 @@
 {
+    "Use streaming transport (avoid timeout on slow APIs)": "使用流式传输 (避免慢速 API 超时)",
     "Favorite": "星标",
     "Tag": "标签",
     "Duplicate": "复制",

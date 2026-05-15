@@ -604,6 +604,10 @@ export function buildOrchestratorSettingsHtml(deps) {
                 <input id="luker_orch_include_world_info" type="checkbox" />
                 ${escapeHtml(i18n('Include world info'))}
             </label>
+            <label class="checkbox_label">
+                <input id="luker_orch_use_streaming_transport" type="checkbox" />
+                ${escapeHtml(i18n('Use streaming transport (avoid timeout on slow APIs)'))}
+            </label>
             <label for="luker_orch_ai_suggest_system_prompt">${escapeHtml(i18n('AI build system prompt'))}</label>
             <textarea id="luker_orch_ai_suggest_system_prompt" class="text_pole textarea_compact" rows="6"></textarea>
             <div class="flex-container">

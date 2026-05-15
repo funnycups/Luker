@@ -185,6 +185,7 @@ export function createCompletionPresetAssistantDialogUi(deps) {
         root.find('#cpa_request_llm_preset').html(renderSelectOptions(getOpenAIPresetNames(context), settings.requestLlmPresetName, true, '(current)'));
         root.find('#cpa_request_api_profile').html(renderSelectOptions(getConnectionProfileNames(), settings.requestApiProfileName, true, '(current)'));
         root.find('#cpa_include_world_info').prop('checked', settings.includeWorldInfo === true);
+        root.find('#cpa_use_streaming_transport').prop('checked', Boolean(settings.useStreamingTransport));
         root.find('#cpa_tool_retries').val(String(settings.toolCallRetryMax));
         root.find('#cpa_session_message_limit').val(String(settings.sessionMessageLimit));
     }
@@ -214,6 +215,10 @@ export function createCompletionPresetAssistantDialogUi(deps) {
         });
         root.on('change.cpa', '#cpa_include_world_info', function () {
             getSettings().includeWorldInfo = jQuery(this).prop('checked') === true;
+            saveSettingsDebounced();
+        });
+        root.on('change.cpa', '#cpa_use_streaming_transport', function () {
+            getSettings().useStreamingTransport = Boolean(jQuery(this).prop('checked'));
             saveSettingsDebounced();
         });
         root.on('change.cpa', '#cpa_tool_retries', function () {
@@ -266,6 +271,10 @@ export function createCompletionPresetAssistantDialogUi(deps) {
             <label for="cpa_request_api_profile">${escapeHtml(i18n('Model request API preset name (Connection profile)'))}</label>
             <select id="cpa_request_api_profile" class="text_pole"></select>
             <label class="checkbox_label"><input id="cpa_include_world_info" type="checkbox"/> ${escapeHtml(i18n('Include world info (simulate current chat)'))}</label>
+            <label class="checkbox_label">
+                <input id="cpa_use_streaming_transport" type="checkbox" />
+                ${escapeHtml(i18n('Use streaming transport (avoid timeout on slow APIs)'))}
+            </label>
             <label for="cpa_tool_retries">${escapeHtml(i18n('Tool-call retries on invalid/missing tool call (N)'))}</label>
             <input id="cpa_tool_retries" class="text_pole" type="number" min="0" max="${TOOL_CALL_RETRY_MAX}" step="1"/>
             <label for="cpa_session_message_limit">${escapeHtml(i18n('Stored session messages per preset'))}</label>

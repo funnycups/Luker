@@ -403,4 +403,5 @@ export const defaultSettings = {
     aiSuggestPresetName: '',
     aiSuggestSystemPrompt: getDefaultAiSuggestSystemPrompt(),
     rpmLimit: 0,
+    useStreamingTransport: false,
 };

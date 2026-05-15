@@ -1,4 +1,5 @@
 {
+    "Use streaming transport (avoid timeout on slow APIs)": "使用串流傳輸 (避免慢速 API 逾時)",
     "Favorite": "我的最愛",
     "Tag": "標籤",
     "Duplicate": "複製",
