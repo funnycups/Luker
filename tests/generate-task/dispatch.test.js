@@ -266,3 +266,64 @@ describe('normalizeResponse — non-openai', () => {
             .toThrow(expect.objectContaining({ name: 'GenerateTaskError', code: 'no_response' }));
     });
 });
+
+import { dispatchToSenderStreaming } from '../../public/scripts/generate-task.js';
+
+describe('dispatchToSenderStreaming — openai', () => {
+    test('yields text deltas and resolves rawTerminal with assembled openai shape', async () => {
+        const senders = {
+            sendOpenAIRequest: async (type, messages, signal, opts) => {
+                // mirror openai.js streaming sender: returns a generator factory
+                async function* gen() {
+                    yield { text: 'Hello', toolCalls: [], state: { reasoning: '', signature: '', images: [], toolSignatures: {} } };
+                    yield { text: 'Hello world', toolCalls: [], state: { reasoning: '', signature: '', images: [], toolSignatures: {} } };
+                }
+                return gen;
+            },
+        };
+        const out = dispatchToSenderStreaming({
+            requestApi: 'openai',
+            payload: [{ role: 'user', content: 'hi' }],
+        }, { senders });
+
+        const chunks = [];
+        for await (const c of out.stream) chunks.push(c);
+        expect(chunks).toEqual([
+            { type: 'text', delta: 'Hello' },
+            { type: 'text', delta: ' world' },
+        ]);
+
+        const raw = await out.rawTerminal;
+        expect(raw.choices[0].message.content).toBe('Hello world');
+        expect(raw.choices[0].message.tool_calls).toEqual([]);
+        expect(raw.choices[0].finish_reason).toBe('stop');
+        expect(raw.usage).toBeNull();
+    });
+
+    test('yields reasoning deltas separately from text', async () => {
+        const senders = {
+            sendOpenAIRequest: async () => {
+                async function* gen() {
+                    yield { text: '', toolCalls: [], state: { reasoning: 'thinking…', signature: '', images: [], toolSignatures: {} } };
+                    yield { text: 'A', toolCalls: [], state: { reasoning: 'thinking… done', signature: '', images: [], toolSignatures: {} } };
+                }
+                return gen;
+            },
+        };
+        const out = dispatchToSenderStreaming({ requestApi: 'openai', payload: [] }, { senders });
+        const chunks = [];
+        for await (const c of out.stream) chunks.push(c);
+        expect(chunks).toEqual([
+            { type: 'reasoning', delta: 'thinking…' },
+            { type: 'reasoning', delta: ' done' },
+            { type: 'text',      delta: 'A' },
+        ]);
+        const raw = await out.rawTerminal;
+        expect(raw.choices[0].message.reasoning_content).toBe('thinking… done');
+    });
+
+    test('non-openai requestApi throws stream_unavailable synchronously', () => {
+        expect(() => dispatchToSenderStreaming({ requestApi: 'kobold', payload: '' }, { senders: {} }))
+            .toThrow(expect.objectContaining({ name: 'GenerateTaskError', code: 'stream_unavailable' }));
+    });
+});

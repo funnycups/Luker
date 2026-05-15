@@ -197,6 +197,7 @@ try {
 | `rate_limit` | 触发限流(429)。 |
 | `invalid_input` | 选项不合法(例如同时传了 `tools` 和 `jsonSchema`,或 `worldInfoSource:'custom'` 但未传 `customWorldInfoMessages`)。 |
 | `unsupported_api` | 解析出的请求 API 在运行时不支持。 |
+| `stream_unavailable` | 解析后的请求 API 不支持通过 `generateTaskStream` 流式输出(kobold / koboldhorde / novel / textgenerationwebui)。 |
 | `tool_call_parse` | 模型返回的 tool call `arguments` 无法 `JSON.parse`。 |
 | `json_schema_violation` | `jsonSchema` 模式校验失败。 |
 | `no_response` | 发送方没返回可用内容。 |
@@ -234,6 +235,63 @@ return {
     calls: result.toolCalls.map(c => ({ name: c.name, args: c.args })),
 };
 ```
+
+### 流式响应
+
+对于希望在模型生成过程中实时渲染 token 的交互式场景,`context.generateTaskStream` 返回一对 split-stream:一个用于消费 delta 增量的 `AsyncIterable`,以及一个 `Promise` 拿到与 `generateTask` 相同形态的终态结果。
+
+```js
+const { stream, result } = context.generateTaskStream({
+    taskMessages: [
+        { role: 'system', content: 'You are a translator.' },
+        { role: 'user', content: 'Translate this text into French: hello world.' },
+    ],
+    apiPresetName: settings.connectionProfileName,
+    abortSignal: controller.signal,
+});
+
+// 可选:消费增量 chunk
+for await (const chunk of stream) {
+    if (chunk.type === 'text')      ui.appendAnswer(chunk.delta);
+    if (chunk.type === 'reasoning') ui.appendThinking(chunk.delta);
+}
+
+// 终态 result —— 形态与 generateTask 完全一致
+const final = await result;
+console.log(final.assistantText, final.toolCalls);
+```
+
+#### Chunk 类型
+
+```ts
+type StreamChunk =
+    | { type: 'text';      delta: string }
+    | { type: 'reasoning'; delta: string };
+```
+
+- `text` —— assistant 文本增量。按到达顺序拼接所有 `text.delta` 等于 `final.assistantText`。
+- `reasoning` —— 推理/思考增量(Claude thinking 块、OpenAI o 系列 reasoning、Gemini thought summaries)。拼接所有 `reasoning.delta` 等于 `final.reasoning`。
+
+`type` 是一个开放的判别字段。请用 `switch (chunk.type)` 配合 `default` 分支静默忽略未知类型,这样未来扩展(如 `citation_added`)不会破坏现有消费方。
+
+#### 兼容矩阵
+
+| 模式 | 流式行为 |
+|------|----------|
+| 纯文本 | 完全支持。text 与 reasoning delta 通过 `stream` 到达,终态 `result` 同样持有归一化后的完整内容。 |
+| `tools` | 支持。模型直接输出工具调用时 `stream` 通常不会 yield 任何 chunk;终态 `result.toolCalls` 携带解析后的结构。 |
+| `jsonSchema` | 支持。`stream` 以 text delta 形式输出 JSON 文本(partial JSON,中途不可 parse);终态 `result.jsonData` 拿到解析后的对象。适用于只需要最终结构化结果,但又想用流式传输保持长连接活跃以避免超时的场景。 |
+| `requestApi !== 'openai'` | 抛 `GenerateTaskError({ code: 'stream_unavailable' })`。 |
+
+#### 取消与错误传播
+
+`abortSignal` 用于取消请求。signal 触发时,**同一个 `GenerateTaskError({ code: 'aborted' })` 实例**会同时拒绝 `stream`(终止进行中的 `for await`)和 `result`。网络、鉴权及其他运行时错误同样遵循"同实例"约定 —— 在任一侧 catch 即可。
+
+从 `for await (const chunk of stream)` 中 `break` **不会**取消底层 HTTP 请求,只是停止本地消费。如需中止上游模型调用,请触发 `abortSignal`。
+
+#### 不消费 stream 的情况
+
+直接 `await result` 也是合法的。在任何消费方挂接之前到达的增量会被丢弃(不为延迟消费缓存),但内部累加器仍会构造出完整的终态 `result`。当你只想拿响应形态、不需要逐 token 渲染时使用这种模式。
 
 ## 迁移手册
 

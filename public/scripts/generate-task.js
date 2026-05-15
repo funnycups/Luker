@@ -78,6 +78,77 @@ export function applyMacroSubstitution(taskMessages, substituteParamsFn) {
     });
 }
 
+/**
+ * Create a push/pull async channel for streaming chunks.
+ *
+ * - `push(chunk)`: produce a chunk. Dropped if no consumer has ever attached
+ *   (spec: "Increments arriving with no consumer are not buffered for late
+ *   delivery"). Once a consumer attaches via `for await`, subsequent pushes
+ *   are delivered to waiters or queued for the next pull.
+ * - `close()`: close the channel cleanly; pending `next()` calls resolve `{done:true}`.
+ * - `fail(err)`: close the channel with an error; pending and subsequent `next()`
+ *   calls reject with the same error instance.
+ * - `iterable`: the consumer-facing `AsyncIterable`. Calling `Symbol.asyncIterator`
+ *   marks the channel as consumed; the iterator implements both `next()` and
+ *   `return()` (the latter so `break` from `for await` closes cleanly).
+ *
+ * @returns {{
+ *   push: (chunk: any) => void,
+ *   close: () => void,
+ *   fail: (err: Error) => void,
+ *   iterable: AsyncIterable<any>,
+ * }}
+ */
+function _createAsyncChunkChannel() {
+    const queue = [];
+    const waiters = [];
+    let closed = false;
+    let errored = null;
+    let hasConsumer = false;
+
+    const push = (chunk) => {
+        if (closed) return;
+        if (!hasConsumer) return; // spec: drop chunks if no consumer ever attached
+        if (waiters.length > 0) {
+            waiters.shift()({ value: chunk, done: false });
+        } else {
+            queue.push(chunk);
+        }
+    };
+
+    const close = () => {
+        closed = true;
+        while (waiters.length > 0) waiters.shift()({ value: undefined, done: true });
+    };
+
+    const fail = (err) => {
+        closed = true;
+        errored = err;
+        while (waiters.length > 0) waiters.shift()(Promise.reject(err));
+    };
+
+    const iterable = {
+        [Symbol.asyncIterator]() {
+            hasConsumer = true;
+            return {
+                next() {
+                    if (errored) return Promise.reject(errored);
+                    if (queue.length > 0) return Promise.resolve({ value: queue.shift(), done: false });
+                    if (closed) return Promise.resolve({ value: undefined, done: true });
+                    return new Promise((resolve) => { waiters.push(resolve); });
+                },
+                return() {
+                    closed = true;
+                    while (waiters.length > 0) waiters.shift()({ value: undefined, done: true });
+                    return Promise.resolve({ value: undefined, done: true });
+                },
+            };
+        },
+    };
+
+    return { push, close, fail, iterable };
+}
+
 export class GenerateTaskError extends Error {
     constructor(code, message, { cause = null, details = null } = {}) {
         super(message);
@@ -407,6 +478,116 @@ export async function dispatchToSender({
     return await response.json();
 }
 
+/**
+ * Streaming variant of dispatchToSender. Consumes the openai.js streaming
+ * sender (which returns a generator factory yielding cumulative
+ * `{ text, toolCalls, state }` frames), computes per-frame text/reasoning
+ * deltas, and exposes them through an AsyncIterable. The accumulated final
+ * frame is re-shaped into a non-streaming openai response object so
+ * `normalizeResponse` can ingest it unchanged.
+ *
+ * @returns {{ stream: AsyncIterable<{type:'text'|'reasoning',delta:string}>, rawTerminal: Promise<object> }}
+ */
+export function dispatchToSenderStreaming({
+    requestApi,
+    payload,
+    tools = null,
+    toolChoice = 'auto',
+    jsonSchema = null,
+    llmPresetName = '',
+    apiSettingsOverride = null,
+    functionCallMode = 'auto',
+    functionCallOptions = null,
+    abortSignal = undefined,
+} = {}, { senders = null } = {}) {
+    if (requestApi !== 'openai') {
+        throw new GenerateTaskError(
+            'stream_unavailable',
+            `streaming is not available for requestApi '${requestApi}'`,
+        );
+    }
+    const s = senders && typeof senders === 'object' ? senders : {};
+    if (typeof s.sendOpenAIRequest !== 'function') {
+        throw new GenerateTaskError('unknown', 'dispatchToSenderStreaming requires senders.sendOpenAIRequest');
+    }
+    const hasTools = Array.isArray(tools) && tools.length > 0;
+
+    // Push/pull channel: producer pushes chunks, consumer pulls via async iterator.
+    const channel = _createAsyncChunkChannel();
+    const stream = channel.iterable;
+
+    let resolveTerminal, rejectTerminal;
+    const rawTerminal = new Promise((res, rej) => { resolveTerminal = res; rejectTerminal = rej; });
+    // Caller may consume `stream` and ignore `rawTerminal`; suppress unhandled
+    // rejection. The caller's `await rawTerminal` still observes the rejection.
+    rawTerminal.catch(() => {});
+
+    (async () => {
+        try {
+            const genFactory = await s.sendOpenAIRequest('quiet', payload, abortSignal, {
+                tools: hasTools ? tools : null,
+                toolChoice,
+                replaceTools: hasTools,
+                jsonSchema,
+                llmPresetName: String(llmPresetName || '').trim(),
+                apiSettingsOverride: apiSettingsOverride && typeof apiSettingsOverride === 'object' ? apiSettingsOverride : null,
+                requestScope: 'extension_internal',
+                functionCallMode: String(functionCallMode || 'auto'),
+                functionCallOptions: functionCallOptions || null,
+                allowStreamingForQuiet: true,
+            });
+            if (typeof genFactory !== 'function') {
+                throw new GenerateTaskError('no_response', 'openai streaming sender did not return a generator factory');
+            }
+            let lastText = '';
+            let lastReasoning = '';
+            let lastFrame = null;
+            for await (const frame of genFactory()) {
+                lastFrame = frame;
+                const curText = String(frame?.text || '');
+                const curReasoning = String(frame?.state?.reasoning || '');
+                if (curReasoning.length > lastReasoning.length && curReasoning.startsWith(lastReasoning)) {
+                    channel.push({ type: 'reasoning', delta: curReasoning.slice(lastReasoning.length) });
+                }
+                lastReasoning = curReasoning;
+                // openai.js usually appends to `text`, but the plain-text function-call retry
+                // path (openai.js attemptPlainTextFunctionCallRetry) REPLACES `text` with the
+                // post-retry display string. Detect replacement via `startsWith` and emit the
+                // whole new string as one delta in that case so callers receive correct text.
+                if (curText !== lastText) {
+                    if (curText.startsWith(lastText)) {
+                        channel.push({ type: 'text', delta: curText.slice(lastText.length) });
+                    } else {
+                        channel.push({ type: 'text', delta: curText });
+                    }
+                }
+                lastText = curText;
+            }
+            channel.close();
+
+            const finalText = lastText;
+            const finalReasoning = lastReasoning;
+            const finalToolCalls = Array.isArray(lastFrame?.toolCalls) ? lastFrame.toolCalls : [];
+            resolveTerminal({
+                choices: [{
+                    message: {
+                        content: finalText,
+                        ...(finalReasoning ? { reasoning_content: finalReasoning } : {}),
+                        tool_calls: finalToolCalls,
+                    },
+                    finish_reason: lastFrame?.state?.finishReason || 'stop',
+                }],
+                usage: lastFrame?.state?.usage || null,
+            });
+        } catch (e) {
+            channel.fail(e);
+            rejectTerminal(e);
+        }
+    })();
+
+    return { stream, rawTerminal };
+}
+
 const VALID_FINISH_REASONS = new Set(['stop', 'length', 'tool_calls', 'content_filter', 'abort', 'error']);
 
 function emptyResultShape(raw) {
@@ -713,4 +894,148 @@ export async function generateTask({
 
     // ── 8. Normalize response ──
     return normalizeResponse({ requestApi: profile.requestApi, mode, raw });
+}
+
+/**
+ * Streaming companion to generateTask. Returns { stream, result }: stream is
+ * an AsyncIterable of text/reasoning delta chunks; result is a Promise of the
+ * same normalized shape generateTask returns. openai-family only.
+ *
+ * @param {object} params  same shape as generateTask (jsonSchema is rejected)
+ * @returns {{ stream: AsyncIterable<{type:'text'|'reasoning',delta:string}>, result: Promise<object> }}
+ */
+export function generateTaskStream({
+    taskMessages = [],
+    includeCharacterCard = true,
+    worldInfoSource = 'none',
+    customWorldInfoMessages = null,
+    runtimeWorldInfo = null,
+    forceWorldInfoResimulate = false,
+    worldInfoType = 'quiet',
+    llmPresetName = '',
+    apiPresetName = '',
+    tools = null,
+    toolChoice = 'auto',
+    jsonSchema = null,
+    functionCallMode = 'auto',
+    functionCallOptions = null,
+    abortSignal = undefined,
+    substituteMacros = true,
+} = {}, { _injected = null } = {}) {
+    // ── 1. Input validation ──
+    const hasTools = Array.isArray(tools) && tools.length > 0;
+    const hasJsonSchema = jsonSchema && typeof jsonSchema === 'object';
+    if (hasTools && hasJsonSchema) {
+        throw new GenerateTaskError('invalid_input', 'tools and jsonSchema are mutually exclusive');
+    }
+
+    const profileResolver = _injected?.profileResolver || null;
+    const worldInfoResolver = _injected?.worldInfoResolver || getDefaultWorldInfoResolver();
+    const builder = _injected?.builder || getDefaultBuilder();
+    const rawPromptBuilder = _injected?.rawPromptBuilder || null;
+    const senders = _injected?.senders || getDefaultSenders();
+    const substituteParamsFn = _injected?.substituteParams || getDefaultSubstituteParams();
+
+    // ── 2. Profile resolution (and stream_unavailable for non-openai) ──
+    const profile = resolveProfile(apiPresetName, {
+        resolver: profileResolver,
+        defaultApi: _injected?.defaultApi || 'openai',
+        defaultSource: _injected?.defaultSource || '',
+    });
+    if (profile.requestApi !== 'openai') {
+        throw new GenerateTaskError('stream_unavailable', `streaming is not available for requestApi '${profile.requestApi}'`);
+    }
+
+    // ── 3. llmPresetName trim ──
+    const effectiveLlmPresetName = String(llmPresetName || '').trim();
+
+    const mode = hasJsonSchema ? RESPONSE_MODES.JSON : (hasTools ? RESPONSE_MODES.TOOL : RESPONSE_MODES.TEXT);
+
+    // Build the user-facing promise eagerly so caller can `await result`
+    // without first consuming the stream. The async pipeline below pushes
+    // chunks into the stream channel and resolves/rejects `result` at the end.
+    let resolveResult, rejectResult;
+    const result = new Promise((res, rej) => { resolveResult = res; rejectResult = rej; });
+    result.catch(() => {}); // suppress unhandled rejection if caller ignores it
+
+    // Inner-stream forwarding queue (consumer-facing AsyncIterable).
+    const channel = _createAsyncChunkChannel();
+    const stream = channel.iterable;
+
+    (async () => {
+        try {
+            // ── 4. World info ──
+            const wi = await resolveWorldInfo({
+                worldInfoSource,
+                taskMessages,
+                customWorldInfoMessages,
+                runtimeWorldInfo,
+                forceWorldInfoResimulate,
+                worldInfoType,
+            }, { worldInfoResolver });
+
+            // ── 4.5 Macro substitution ──
+            const effectiveTaskMessages = substituteMacros
+                ? applyMacroSubstitution(taskMessages, substituteParamsFn)
+                : taskMessages;
+
+            // ── 5. Assemble messages ──
+            const messages = assembleMessages({
+                taskMessages: effectiveTaskMessages,
+                includeCharacterCard,
+                llmPresetName: effectiveLlmPresetName,
+                requestApi: profile.requestApi,
+                runtimeWorldInfo: wi,
+            }, { builder });
+
+            // ── 6. Render per-family ──
+            const payload = renderForApi(profile.requestApi, messages, { rawPromptBuilder });
+
+            // ── 7. Dispatch (streaming) ──
+            const { stream: innerStream, rawTerminal } = dispatchToSenderStreaming({
+                requestApi: profile.requestApi,
+                payload,
+                tools,
+                toolChoice,
+                jsonSchema,
+                llmPresetName: effectiveLlmPresetName,
+                apiSettingsOverride: profile.apiSettingsOverride,
+                functionCallMode,
+                functionCallOptions,
+                abortSignal,
+            }, { senders });
+
+            // Forward inner chunks to outer stream.
+            (async () => {
+                try {
+                    for await (const c of innerStream) channel.push(c);
+                } catch { /* error already surfaced via rawTerminal rejection */ }
+            })();
+
+            let raw;
+            try {
+                raw = await rawTerminal;
+            } catch (e) {
+                const wrapped = _wrapSenderError(e, abortSignal);
+                channel.fail(wrapped);
+                rejectResult(wrapped);
+                return;
+            }
+            channel.close();
+
+            // ── 8. Normalize ──
+            try {
+                const normalized = normalizeResponse({ requestApi: profile.requestApi, mode, raw });
+                resolveResult(normalized);
+            } catch (e) {
+                rejectResult(e);
+            }
+        } catch (e) {
+            const wrapped = _wrapSenderError(e, abortSignal);
+            channel.fail(wrapped);
+            rejectResult(wrapped);
+        }
+    })();
+
+    return { stream, result };
 }

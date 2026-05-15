@@ -190,3 +190,121 @@ describe('generateTask end-to-end', () => {
         expect(substituteCalls).toBe(0);
     });
 });
+
+import { generateTaskStream } from '../../public/scripts/generate-task.js';
+
+describe('generateTaskStream — input validation', () => {
+    test('rejects tools + jsonSchema combination with invalid_input', () => {
+        expect(() => generateTaskStream({
+            taskMessages: [{ role: 'user', content: 'x' }],
+            tools: [{ type: 'function', function: { name: 'f' } }],
+            jsonSchema: { type: 'object' },
+        }, { _injected: baseInjected() })).toThrow(expect.objectContaining({
+            name: 'GenerateTaskError',
+            code: 'invalid_input',
+        }));
+    });
+
+    test('rejects non-openai resolved api with stream_unavailable', () => {
+        const injected = baseInjected({
+            profileResolver: () => ({ requestApi: 'kobold', apiSettingsOverride: null }),
+        });
+        expect(() => generateTaskStream({
+            taskMessages: [{ role: 'user', content: 'x' }],
+        }, { _injected: injected })).toThrow(expect.objectContaining({
+            name: 'GenerateTaskError',
+            code: 'stream_unavailable',
+        }));
+    });
+});
+
+describe('generateTaskStream — openai happy path', () => {
+    test('yields text deltas and resolves result with terminal shape', async () => {
+        const fakeStreamingOpenAI = async () => {
+            return async function* gen() {
+                yield { text: 'Hello', toolCalls: [], state: { reasoning: '', signature: '', images: [], toolSignatures: {} } };
+                yield { text: 'Hello, world!', toolCalls: [], state: { reasoning: '', signature: '', images: [], toolSignatures: {} } };
+            };
+        };
+        const { stream, result } = generateTaskStream({
+            taskMessages: [{ role: 'user', content: 'hi' }],
+        }, { _injected: baseInjected({ senders: { sendOpenAIRequest: fakeStreamingOpenAI } }) });
+
+        const collected = [];
+        for await (const chunk of stream) collected.push(chunk);
+        expect(collected).toEqual([
+            { type: 'text', delta: 'Hello' },
+            { type: 'text', delta: ', world!' },
+        ]);
+
+        const final = await result;
+        expect(final.assistantText).toBe('Hello, world!');
+        expect(final.toolCalls).toEqual([]);
+        expect(final.jsonData).toBeNull();
+        expect(final.reasoning).toBeNull();
+    });
+
+    test('not consuming stream still resolves result with full content', async () => {
+        const fakeStreamingOpenAI = async () => {
+            return async function* gen() {
+                yield { text: 'partial', toolCalls: [], state: { reasoning: '', signature: '', images: [], toolSignatures: {} } };
+                yield { text: 'partial-final', toolCalls: [], state: { reasoning: '', signature: '', images: [], toolSignatures: {} } };
+            };
+        };
+        const { result } = generateTaskStream({
+            taskMessages: [{ role: 'user', content: 'hi' }],
+        }, { _injected: baseInjected({ senders: { sendOpenAIRequest: fakeStreamingOpenAI } }) });
+
+        const final = await result;
+        expect(final.assistantText).toBe('partial-final');
+    });
+
+    test('jsonSchema mode parses streamed content into result.jsonData', async () => {
+        let capturedJsonSchema = null;
+        const fakeStreamingOpenAI = async (type, msgs, signal, opts) => {
+            capturedJsonSchema = opts.jsonSchema;
+            return async function* gen() {
+                yield { text: '{"name":', toolCalls: [], state: { reasoning: '', signature: '', images: [], toolSignatures: {} } };
+                yield { text: '{"name": "Alice"}', toolCalls: [], state: { reasoning: '', signature: '', images: [], toolSignatures: {} } };
+            };
+        };
+        const schema = { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] };
+        const { result } = generateTaskStream({
+            taskMessages: [{ role: 'user', content: 'hi' }],
+            jsonSchema: schema,
+        }, { _injected: baseInjected({ senders: { sendOpenAIRequest: fakeStreamingOpenAI } }) });
+
+        const final = await result;
+        expect(final.jsonData).toEqual({ name: 'Alice' });
+        expect(final.finishReason).toBe('stop');
+        expect(capturedJsonSchema).toEqual(schema);  // confirm passthrough to sender
+    });
+});
+
+describe('generateTaskStream — error propagation', () => {
+    test('AbortError surfaces as same GenerateTaskError on both stream and result', async () => {
+        const fakeStreamingOpenAI = async () => {
+            return async function* gen() {
+                const e = new Error('aborted');
+                e.name = 'AbortError';
+                throw e;
+            };
+        };
+        const { stream, result } = generateTaskStream({
+            taskMessages: [{ role: 'user', content: 'hi' }],
+        }, { _injected: baseInjected({ senders: { sendOpenAIRequest: fakeStreamingOpenAI } }) });
+
+        let streamErr = null;
+        try {
+            for await (const _ of stream) { /* drain */ }
+        } catch (e) { streamErr = e; }
+
+        let resultErr = null;
+        try { await result; } catch (e) { resultErr = e; }
+
+        expect(streamErr).toBeTruthy();
+        expect(streamErr.name).toBe('GenerateTaskError');
+        expect(streamErr.code).toBe('aborted');
+        expect(resultErr).toBe(streamErr);  // same instance
+    });
+});

@@ -197,6 +197,7 @@ try {
 | `rate_limit` | Rate limited (429). |
 | `invalid_input` | The options object is malformed (e.g., `tools` and `jsonSchema` both set, `worldInfoSource:'custom'` without `customWorldInfoMessages`). |
 | `unsupported_api` | The resolved request API isn't supported by the runtime. |
+| `stream_unavailable` | The resolved request API does not support streaming through `generateTaskStream` (kobold / koboldhorde / novel / textgenerationwebui). |
 | `tool_call_parse` | Model returned a tool call whose `arguments` failed `JSON.parse`. |
 | `json_schema_violation` | `jsonSchema` mode failed validation. |
 | `no_response` | Sender returned no usable content. |
@@ -234,6 +235,63 @@ return {
     calls: result.toolCalls.map(c => ({ name: c.name, args: c.args })),
 };
 ```
+
+### Streaming
+
+For interactive flows that want to render tokens as the model produces them, `context.generateTaskStream` returns a split-stream pair: an `AsyncIterable` of delta chunks plus a `Promise` of the same normalized terminal result `generateTask` returns.
+
+```js
+const { stream, result } = context.generateTaskStream({
+    taskMessages: [
+        { role: 'system', content: 'You are a translator.' },
+        { role: 'user', content: 'Translate this text into French: hello world.' },
+    ],
+    apiPresetName: settings.connectionProfileName,
+    abortSignal: controller.signal,
+});
+
+// Optional: consume incremental chunks
+for await (const chunk of stream) {
+    if (chunk.type === 'text')      ui.appendAnswer(chunk.delta);
+    if (chunk.type === 'reasoning') ui.appendThinking(chunk.delta);
+}
+
+// Terminal result — same shape as generateTask returns
+const final = await result;
+console.log(final.assistantText, final.toolCalls);
+```
+
+#### Chunk types
+
+```ts
+type StreamChunk =
+    | { type: 'text';      delta: string }
+    | { type: 'reasoning'; delta: string };
+```
+
+- `text` — assistant text increment. Concatenating every `text.delta` in arrival order equals `final.assistantText`.
+- `reasoning` — extended-thinking increment (Claude thinking blocks, OpenAI o-series reasoning, Gemini thought summaries). Concatenating every `reasoning.delta` equals `final.reasoning`.
+
+Treat `type` as an open discriminator. Use `switch (chunk.type)` with a `default` branch that silently ignores unknown types so future additions (e.g. `citation_added`) are non-breaking.
+
+#### Compatibility matrix
+
+| Mode | Streaming behavior |
+|------|--------------------|
+| Plain text | Fully supported. Text and reasoning deltas arrive on `stream`; terminal `result` carries the same content in normalized form. |
+| `tools` | Supported. `stream` typically yields nothing when the model emits tool calls directly; terminal `result.toolCalls` carries the parsed structure. |
+| `jsonSchema` | Supported. `stream` yields the JSON content as text deltas (partial JSON, not parseable mid-stream); terminal `result.jsonData` carries the parsed object. Use this mode when you only need the final structured value and want streaming transport to keep the HTTP connection alive on long generations. |
+| `requestApi !== 'openai'` | Throws `GenerateTaskError({ code: 'stream_unavailable' })`. |
+
+#### Cancellation and error propagation
+
+`abortSignal` cancels the request. When the signal triggers, **the same `GenerateTaskError({ code: 'aborted' })` instance** rejects both `stream` (terminating any in-flight `for await`) and `result`. The same instance-sharing guarantee holds for network, auth, and other runtime errors — catching on either side is sufficient.
+
+Breaking out of `for await (const chunk of stream)` does **not** cancel the underlying HTTP request; it only stops local consumption. To halt the upstream model call, trigger `abortSignal`.
+
+#### Not consuming the stream
+
+`await result` works on its own. Increments arriving before any consumer attaches are dropped (not buffered for late delivery); the internal accumulator still builds the complete terminal `result`. Use this when you want the response shape without per-token rendering.
 
 ## Migration Cookbook
 

@@ -150,7 +150,7 @@ import { macros } from './macros/macro-system.js';
 import { getRegexedString, regex_placement } from './extensions/regex/engine.js';
 import { addMessages, updateMessages, deleteMessages, getMessage, getMessageCount } from './messages.js';
 import { createFloorState } from './floor-state.js';
-import { generateTask, GenerateTaskError } from './generate-task.js';
+import { generateTask, generateTaskStream, GenerateTaskError } from './generate-task.js';
 import { generateHorde } from './horde.js';
 import { getKoboldGenerationData, kai_settings, koboldai_settings, koboldai_setting_names } from './kai-settings.js';
 import { getNovelGenerationData, nai_settings, novelai_settings, novelai_setting_names } from './nai-settings.js';
@@ -2212,6 +2212,7 @@ export function getContext() {
         eventSource,
         eventTypes: event_types,
         generateTask,
+        generateTaskStream,
         GenerateTaskError,
         /** @deprecated Use addMessages() instead */
         addOneMessage,
