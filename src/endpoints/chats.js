@@ -772,16 +772,21 @@ function writeChatSyncState(chatFilePath, state) {
  * protocol-layer concern (request correlation for retries) — persisting
  * it across server restarts buys nothing the content-based dedup
  * (`_.isEqual` on the last stored message) doesn't already cover for
- * the rare cross-restart retry. Bounded: every write to a file replaces
- * its entry, so memory cost is one short string per active chat.
+ * the rare cross-restart retry.
+ *
+ * Entries self-expire after LAST_GENERATION_ID_TTL_MS via setTimeout, so
+ * one-shot chats don't accumulate forever. Every write replaces the
+ * entry and resets the timer; reads do not extend the TTL (the retry
+ * window starts ticking from the write, not from each lookup).
  */
+const LAST_GENERATION_ID_TTL_MS = 60_000;
 const lastChatGenerationIdByPath = new Map();
 
 function readLastChatGenerationId(chatFilePath) {
     const key = path.resolve(String(chatFilePath || ''));
     if (!key) return '';
-    const value = lastChatGenerationIdByPath.get(key);
-    return typeof value === 'string' ? value : '';
+    const entry = lastChatGenerationIdByPath.get(key);
+    return entry && typeof entry.value === 'string' ? entry.value : '';
 }
 
 function writeLastChatGenerationId(chatFilePath, generationId) {
@@ -789,7 +794,22 @@ function writeLastChatGenerationId(chatFilePath, generationId) {
     if (!safeId) return;
     const key = path.resolve(String(chatFilePath || ''));
     if (!key) return;
-    lastChatGenerationIdByPath.set(key, safeId);
+    const previous = lastChatGenerationIdByPath.get(key);
+    if (previous?.timer) {
+        clearTimeout(previous.timer);
+    }
+    const timer = setTimeout(() => {
+        const current = lastChatGenerationIdByPath.get(key);
+        // Only delete if this is still the same entry (a later write may have
+        // already replaced it; that newer write owns its own timer).
+        if (current && current.timer === timer) {
+            lastChatGenerationIdByPath.delete(key);
+        }
+    }, LAST_GENERATION_ID_TTL_MS);
+    // Node's setTimeout returns a Timeout object; .unref() so a stale entry
+    // does not keep the process alive past its actual work.
+    if (typeof timer.unref === 'function') timer.unref();
+    lastChatGenerationIdByPath.set(key, { value: safeId, timer });
 }
 
 /**
