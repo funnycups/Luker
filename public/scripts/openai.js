@@ -2446,7 +2446,7 @@ function appendMissingModelOptions($select, modelIds) {
     }
 }
 
-function applyCustomModelsToCurrentSource({ triggerModelChange = false } = {}) {
+function applyCustomModelsToCurrentSource({ triggerModelChange = false, includeSelected = true } = {}) {
     const source = oai_settings.chat_completion_source;
     const binding = getModelBindingForSource(source);
     if (!binding) {
@@ -2455,14 +2455,14 @@ function applyCustomModelsToCurrentSource({ triggerModelChange = false } = {}) {
 
     const customModels = getCustomModelsForSource(source);
     const selectedModel = String(oai_settings[binding.settingKey] || '').trim();
-    const allModels = selectedModel ? [...customModels, selectedModel] : customModels;
+    const allModels = (includeSelected && selectedModel) ? [...customModels, selectedModel] : customModels;
 
     const targets = [binding.selector, ...(binding.extraSelectors || [])];
     for (const selector of targets) {
         appendMissingModelOptions($(selector), allModels);
     }
 
-    if (selectedModel) {
+    if (includeSelected && selectedModel) {
         const $select = $(binding.selector);
         $select.val(selectedModel);
         if (triggerModelChange) {
@@ -3055,7 +3055,7 @@ function saveModelList(data) {    model_list = mergeModelRecordsWithCustom(data,
         }
     }
 
-    applyCustomModelsToCurrentSource({ triggerModelChange: true });
+    applyCustomModelsToCurrentSource({ includeSelected: false });
 }
 
 /**
