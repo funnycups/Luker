@@ -419,6 +419,43 @@ async function analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, target
     return { targetByNormalizedEntry, report };
 }
 
+async function discardRestoreSnapshots(snapshots) {
+    for (const snap of snapshots) {
+        try {
+            if (snap.type === 'file') {
+                await fsPromises.rm(snap.snapshot, { force: true });
+            } else {
+                await fsPromises.rm(snap.snapshot, { recursive: true, force: true });
+            }
+        } catch (error) {
+            console.warn(`Failed to remove restore snapshot ${snap.snapshot}:`, error);
+        }
+    }
+}
+
+async function rollbackRestoreSnapshots(snapshots) {
+    const orphaned = [];
+    for (const snap of snapshots) {
+        try {
+            if (snap.type === 'file') {
+                await fsPromises.rm(snap.original, { force: true });
+            } else {
+                await fsPromises.rm(snap.original, { recursive: true, force: true });
+            }
+        } catch (error) {
+            console.warn(`Failed to clear partial restore at ${snap.original} before rollback:`, error);
+        }
+
+        try {
+            await fsPromises.rename(snap.snapshot, snap.original);
+        } catch (error) {
+            console.error(`Failed to roll back snapshot ${snap.snapshot} -> ${snap.original}:`, error);
+            orphaned.push(snap);
+        }
+    }
+    return orphaned;
+}
+
 async function restoreUserBackupArchive(uploadPath, directories, selection, mode, options = {}) {
     const backupTargets = getUserBackupTargets(directories, selection, options);
     const targetRoot = path.resolve(directories.root);
@@ -436,14 +473,38 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
         throw new Error('Archive does not match selected restore categories. Overwrite was cancelled to protect existing data.');
     }
 
-    if (mode === 'overwrite') {
-        for (const filePath of targetFiles) {
-            await fsPromises.rm(filePath, { force: true });
-        }
+    /** @type {{type: 'file'|'directory', original: string, snapshot: string}[]} */
+    const snapshots = [];
 
-        for (const directoryPath of targetDirectories) {
-            await fsPromises.rm(directoryPath, { recursive: true, force: true });
-            ensureDirectory(directoryPath);
+    if (mode === 'overwrite') {
+        const snapshotSuffix = `.restore-snapshot-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+
+        try {
+            for (const filePath of targetFiles) {
+                if (!fs.existsSync(filePath)) {
+                    continue;
+                }
+                const snapshot = filePath + snapshotSuffix;
+                await fsPromises.rename(filePath, snapshot);
+                snapshots.push({ type: 'file', original: filePath, snapshot });
+            }
+
+            for (const directoryPath of targetDirectories) {
+                if (fs.existsSync(directoryPath)) {
+                    const snapshot = directoryPath + snapshotSuffix;
+                    await fsPromises.rename(directoryPath, snapshot);
+                    snapshots.push({ type: 'directory', original: directoryPath, snapshot });
+                }
+                ensureDirectory(directoryPath);
+            }
+        } catch (snapshotError) {
+            const orphaned = await rollbackRestoreSnapshots(snapshots);
+            const baseMessage = snapshotError instanceof Error ? snapshotError.message : String(snapshotError);
+            if (orphaned.length > 0) {
+                const paths = orphaned.map(snap => snap.snapshot).join(', ');
+                throw new Error(`Failed to snapshot existing data before overwrite: ${baseMessage}. Manual recovery required for: ${paths}`);
+            }
+            throw new Error(`Failed to snapshot existing data before overwrite: ${baseMessage}`);
         }
     }
 
@@ -455,96 +516,113 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
         preflight: analysis.report,
     };
 
-    await new Promise((resolve, reject) => {
-        yauzl.open(uploadPath, { lazyEntries: true, decodeStrings: true }, (openError, zipfile) => {
-            if (openError) {
-                reject(openError);
-                return;
-            }
-
-            let finished = false;
-            const finish = (error) => {
-                if (finished) {
+    try {
+        await new Promise((resolve, reject) => {
+            yauzl.open(uploadPath, { lazyEntries: true, decodeStrings: true }, (openError, zipfile) => {
+                if (openError) {
+                    reject(openError);
                     return;
                 }
-                finished = true;
-                if (error) {
-                    reject(error);
-                } else {
-                    resolve();
-                }
-            };
 
-            zipfile.readEntry();
-
-            zipfile.on('entry', (entry) => {
-                (async () => {
-                    const normalized = normalizeRestoreArchiveEntryPath(entry.fileName);
-                    if (!normalized) {
-                        zipfile.readEntry();
+                let finished = false;
+                const finish = (error) => {
+                    if (finished) {
                         return;
                     }
-
-                    if (entry.fileName.endsWith('/')) {
-                        zipfile.readEntry();
-                        return;
+                    finished = true;
+                    if (error) {
+                        reject(error);
+                    } else {
+                        resolve();
                     }
+                };
 
-                    const unixFileType = (entry.externalFileAttributes >> 16) & 0o170000;
-                    if (unixFileType === 0o120000) {
-                        zipfile.readEntry();
-                        return;
-                    }
+                zipfile.readEntry();
 
-                    const targetMapping = analysis.targetByNormalizedEntry.get(normalized);
-                    if (!targetMapping) {
-                        zipfile.readEntry();
-                        return;
-                    }
-
-                    const targetPath = targetMapping.targetPath;
-                    ensureDirectory(path.dirname(targetPath));
-
-                    zipfile.openReadStream(entry, async (streamError, readStream) => {
-                        if (streamError) {
-                            finish(streamError);
+                zipfile.on('entry', (entry) => {
+                    (async () => {
+                        const normalized = normalizeRestoreArchiveEntryPath(entry.fileName);
+                        if (!normalized) {
+                            zipfile.readEntry();
                             return;
                         }
 
-                        try {
-                            await pipeline(readStream, fs.createWriteStream(targetPath, { mode: 0o644 }));
-                            const zipLastModified = typeof entry.getLastModDate === 'function'
-                                ? entry.getLastModDate()
-                                : null;
-                            if (zipLastModified instanceof Date && !Number.isNaN(zipLastModified.getTime())) {
-                                try {
-                                    await fsPromises.utimes(targetPath, zipLastModified, zipLastModified);
-                                } catch {
-                                    // Non-fatal: keep restored content even if timestamp restore fails.
-                                }
-                            }
-                            result.restoredCount += 1;
-                            if (targetMapping.category && result.preflight.categoryStats[targetMapping.category]) {
-                                result.preflight.categoryStats[targetMapping.category].restoredEntries += 1;
-                            }
+                        if (entry.fileName.endsWith('/')) {
                             zipfile.readEntry();
-                        } catch (error) {
-                            result.failedCount += 1;
-                            if (targetMapping.category && result.preflight.categoryStats[targetMapping.category]) {
-                                result.preflight.categoryStats[targetMapping.category].failedEntries += 1;
-                            }
-                            addRestoreReportSample(result.preflight, normalized, `write_failed:${error instanceof Error ? error.message : String(error)}`);
-                            finish(error);
+                            return;
                         }
-                    });
-                })().catch(finish);
-            });
 
-            zipfile.on('end', () => finish());
-            zipfile.on('close', () => finish());
-            zipfile.on('error', finish);
+                        const unixFileType = (entry.externalFileAttributes >> 16) & 0o170000;
+                        if (unixFileType === 0o120000) {
+                            zipfile.readEntry();
+                            return;
+                        }
+
+                        const targetMapping = analysis.targetByNormalizedEntry.get(normalized);
+                        if (!targetMapping) {
+                            zipfile.readEntry();
+                            return;
+                        }
+
+                        const targetPath = targetMapping.targetPath;
+                        ensureDirectory(path.dirname(targetPath));
+
+                        zipfile.openReadStream(entry, async (streamError, readStream) => {
+                            if (streamError) {
+                                finish(streamError);
+                                return;
+                            }
+
+                            try {
+                                await pipeline(readStream, fs.createWriteStream(targetPath, { mode: 0o644 }));
+                                const zipLastModified = typeof entry.getLastModDate === 'function'
+                                    ? entry.getLastModDate()
+                                    : null;
+                                if (zipLastModified instanceof Date && !Number.isNaN(zipLastModified.getTime())) {
+                                    try {
+                                        await fsPromises.utimes(targetPath, zipLastModified, zipLastModified);
+                                    } catch {
+                                        // Non-fatal: keep restored content even if timestamp restore fails.
+                                    }
+                                }
+                                result.restoredCount += 1;
+                                if (targetMapping.category && result.preflight.categoryStats[targetMapping.category]) {
+                                    result.preflight.categoryStats[targetMapping.category].restoredEntries += 1;
+                                }
+                                zipfile.readEntry();
+                            } catch (error) {
+                                result.failedCount += 1;
+                                if (targetMapping.category && result.preflight.categoryStats[targetMapping.category]) {
+                                    result.preflight.categoryStats[targetMapping.category].failedEntries += 1;
+                                }
+                                addRestoreReportSample(result.preflight, normalized, `write_failed:${error instanceof Error ? error.message : String(error)}`);
+                                finish(error);
+                            }
+                        });
+                    })().catch(finish);
+                });
+
+                zipfile.on('end', () => finish());
+                zipfile.on('close', () => finish());
+                zipfile.on('error', finish);
+            });
         });
-    });
+
+        if (mode === 'overwrite') {
+            await discardRestoreSnapshots(snapshots);
+        }
+    } catch (extractError) {
+        if (mode === 'overwrite' && snapshots.length > 0) {
+            const orphaned = await rollbackRestoreSnapshots(snapshots);
+            const baseMessage = extractError instanceof Error ? extractError.message : String(extractError);
+            if (orphaned.length > 0) {
+                const paths = orphaned.map(snap => snap.snapshot).join(', ');
+                throw new Error(`Restore failed; previous data partially rolled back from snapshot. Manual recovery required for: ${paths}. Original error: ${baseMessage}`);
+            }
+            throw new Error(`Restore failed; previous data restored from snapshot. Original error: ${baseMessage}`);
+        }
+        throw extractError;
+    }
 
     if (result.preflight.targetableEntries === 0 && mode !== 'overwrite') {
         addRestoreReportSample(result.preflight, '(archive)', 'no_restorable_entries_detected');
