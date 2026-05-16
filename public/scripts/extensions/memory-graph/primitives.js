@@ -61,15 +61,20 @@ export function ensureNodeFieldsObject(node) {
 
 /**
  * Returns true when an assistant chat message has actual content worth
- * extracting. Filters out system messages, user messages, and empty
- * assistant turns. Used everywhere we walk `chat[]` to map between
- * playable floors and assistant-seq indices.
+ * extracting. Filters out user messages and empty assistant turns. Used
+ * everywhere we walk `chat[]` to map between playable floors and assistant-
+ * seq indices.
  *
- * @param {{is_system?: boolean, is_user?: boolean, mes?: string}|null|undefined} message
+ * Deliberately ignores `is_system`. That flag is flipped by `/hide` (which
+ * the community uses to hide a message from the prompt without losing its
+ * memory), so treating it as an extractability predicate would shift the
+ * seq coordinate system on every hide/unhide and drift stored node seqs.
+ *
+ * @param {{is_user?: boolean, mes?: string}|null|undefined} message
  * @returns {boolean}
  */
 export function isExtractableAssistantMessage(message) {
-    if (!message || message.is_system || message.is_user) {
+    if (!message || message.is_user) {
         return false;
     }
     const raw = message.mes;

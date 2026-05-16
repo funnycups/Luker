@@ -2040,7 +2040,7 @@ function getAssistantChatMessages(sourceOrContext) {
     const result = [];
     let lastUser = null;
     for (const message of source) {
-        if (!message || message.is_system) {
+        if (!message) {
             continue;
         }
         if (message.is_user) {
@@ -2196,10 +2196,16 @@ function findAssistantSeqFromPlayableSeq(context, playableSeqFrom) {
     let playableSeq = 0;
     let assistantSeq = 0;
     for (const message of source) {
-        if (!message || message.is_system) {
+        if (!message) {
             continue;
         }
-        playableSeq += 1;
+        // playable rank still tracks SillyTavern's prompt-visible view (hidden
+        // messages excluded), to stay aligned with `mutationMeta.*PlayableSeq`
+        // values supplied by core. Extractable rank is hide-independent so
+        // stored node seqs don't drift on /hide.
+        if (!message.is_system) {
+            playableSeq += 1;
+        }
         if (!isExtractableAssistantMessage(message)) {
             continue;
         }
