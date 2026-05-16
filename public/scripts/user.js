@@ -43,10 +43,6 @@ const BACKUP_DEFAULT_SELECTION = Object.freeze({
     globalExtensions: false,
     vectors: false,
 });
-const BACKUP_FULL_SELECTION = Object.freeze({
-    ...Object.fromEntries(BACKUP_CATEGORY_KEYS.map((key) => [key, true])),
-    globalExtensions: false,
-});
 const DEFAULT_LOG_VIEW_LIMIT = 300;
 const MAX_LOG_VIEW_LIMIT = 5000;
 const MAX_LOG_VIEW_CHARS = 250000;
@@ -914,7 +910,6 @@ async function openBackupManager(handle, callback) {
     const selectedFileText = template.find('.backupSelectedFileName');
     const restoreButton = template.find('.backupRestoreButton');
     const restoreSelectButton = template.find('.backupRestoreSelectButton');
-    const importDataButton = template.find('.backupImportDataButton');
     const downloadButton = template.find('.backupDownloadButton');
     const checkboxes = template.find('input[name="backupCategory"]');
     const summaryText = template.find('.backupCategorySummary');
@@ -948,7 +943,6 @@ async function openBackupManager(handle, callback) {
     const updateRestoreState = () => {
         const hasFile = Boolean(fileInput[0]?.files?.[0]);
         restoreButton.toggleClass('disabled', !hasFile);
-        importDataButton.toggleClass('disabled', !hasFile);
     };
 
     const updateLanState = () => {
@@ -962,7 +956,6 @@ async function openBackupManager(handle, callback) {
         [
             restoreButton,
             restoreSelectButton,
-            importDataButton,
             downloadButton,
             lanCreateLinkButton,
             lanCopyLinkButton,
@@ -975,12 +968,12 @@ async function openBackupManager(handle, callback) {
         }
     };
 
-    const runRestore = async (file, selectionOverride = null) => {
+    const runRestore = async (file) => {
         if (!file) {
             return;
         }
 
-        const selection = selectionOverride ?? collectBackupSelection(template, activeCategoryKeys);
+        const selection = collectBackupSelection(template, activeCategoryKeys);
         if (!Object.values(selection).some(Boolean)) {
             toastr.warning(t`Select at least one data category.`, t`Nothing selected`);
             return;
@@ -1082,15 +1075,6 @@ async function openBackupManager(handle, callback) {
         }
         const file = fileInput[0]?.files?.[0];
         await runRestore(file);
-    });
-
-    importDataButton.on('click', async function () {
-        if ($(this).hasClass('disabled')) {
-            return;
-        }
-
-        const file = fileInput[0]?.files?.[0];
-        await runRestore(file, BACKUP_FULL_SELECTION);
     });
 
     fileInput.on('change', function () {

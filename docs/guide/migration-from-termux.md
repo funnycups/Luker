@@ -81,8 +81,10 @@ If you closed the wizard, or have already used Luker for a while and now want to
 
 1. Open **User Settings** → click **Account**
 2. Find the **Backup and Restore** button on your user card
-3. In the panel, click **Import Data ZIP** and pick the ZIP
-4. In the confirmation dialog, choose **Incremental Update** (overlay-by-path, doesn't wipe other files) or **Overwrite Update** (clear the selected categories first, then restore)
+3. In the panel, click **Select All** to include every data category (or hand-pick only the ones you want)
+4. Click **Select ZIP** and choose the migration ZIP
+5. Pick the restore mode — **Incremental Update** (overlay-by-path, doesn't wipe other files) or **Overwrite Update** (clear the selected categories first, then restore)
+6. Click **Restore Backup**
 
 The same panel also exposes LAN Migration, Download Backup ZIP, and per-category restore — see below.
 
@@ -191,9 +193,9 @@ If your file manager can't enter `Android/data/com.luker.app/`, options:
 
 **No Welcome dialog on first launch**
 
-The wizard only appears the first time a fresh data directory is opened. If Luker has been opened before, run the same import from the user-management panel's **Backup and Restore** entry — the result is identical to the wizard's button.
+The wizard only appears the first time a fresh data directory is opened. If Luker has been opened before, use the **Backup and Restore** entry on the user-management panel to do the same import — click **Select All**, pick the ZIP, choose **Incremental Update**, and hit **Restore Backup**.
 
-**Import Data ZIP says "Archive does not match selected restore categories"**
+**Restore says "Archive does not match selected restore categories"**
 
 The ZIP doesn't contain any of `characters/`, `chats/`, `worlds/`, etc. anywhere inside. Check what you packed: `zip -r ... default-user` from inside `~/SillyTavern/data` is correct; `zip -r ... data` from inside `~/SillyTavern` works too; but `zip -r ... SillyTavern` from `~/` packs the whole source tree and fails.
 
