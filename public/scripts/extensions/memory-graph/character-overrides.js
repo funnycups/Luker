@@ -136,7 +136,7 @@ export function getEffectiveNodeTypeSchema(context = null, settings = null) {
     const avatar = getCurrentAvatar(ctx);
     const overrideSchema = getCharacterSchemaOverrideByAvatar(ctx, avatar);
     if (overrideSchema && overrideSchema.length > 0) {
-        return overrideSchema;
+        return deps.normalizeNodeTypeSchema(overrideSchema);
     }
     return deps.normalizeNodeTypeSchema(currentSettings?.nodeTypeSchema);
 }

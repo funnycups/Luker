@@ -5,6 +5,12 @@ import { event_types, eventSource, extension_prompt_roles, extension_prompt_type
 import { extension_settings, getContext } from '../../extensions.js';
 import { i18n, i18nFormat, registerLocaleData } from './i18n.js';
 import {
+    DEFAULT_PER_TYPE_INSTRUCTIONS,
+    computeActiveExtractionTypes,
+    assembleExtractionSystemPrompt,
+} from './extraction-schedule.js';
+export { DEFAULT_PER_TYPE_INSTRUCTIONS, computeActiveExtractionTypes, assembleExtractionSystemPrompt };
+import {
     configure as configureCharacterOverrides,
     getCurrentAvatar,
     getCharacterSchemaOverrideByAvatar,
@@ -292,6 +298,8 @@ const defaultNodeTypeSchema = [
         editable: false,
         level: LEVEL.SEMANTIC,
         extractHint: DEFAULT_EVENT_EXTRACT_HINT,
+        extractionInstructions: DEFAULT_PER_TYPE_INSTRUCTIONS.event,
+        extractEveryN: 1,
         keywords: ['battle', 'reveal', 'deal', 'betrayal', 'event', 'outcome'],
         alwaysInject: true,
         latestOnly: false,
@@ -328,6 +336,8 @@ const defaultNodeTypeSchema = [
         editable: true,
         level: LEVEL.SEMANTIC,
         extractHint: 'Stable character facts and evolving state. Prefer structured JSON-like content: aliases/traits/identity/status/goal/inventory/core notes.',
+        extractionInstructions: DEFAULT_PER_TYPE_INSTRUCTIONS.character_sheet,
+        extractEveryN: 1,
         keywords: ['character', 'alias', 'traits', 'personality', 'status', 'relationship', 'inventory', 'goal', 'core note'],
         alwaysInject: false,
         latestOnly: true,
@@ -360,6 +370,8 @@ const defaultNodeTypeSchema = [
         editable: true,
         level: LEVEL.SEMANTIC,
         extractHint: 'Location status, aliases, ownership/control, danger level, and environmental/resource changes. Prefer structured JSON-like content.',
+        extractionInstructions: DEFAULT_PER_TYPE_INSTRUCTIONS.location_state,
+        extractEveryN: 1,
         keywords: ['location', 'alias', 'control', 'danger', 'resource', 'region', 'base'],
         alwaysInject: false,
         latestOnly: true,
@@ -469,16 +481,13 @@ const DEFAULT_EXTRACT_SYSTEM_PROMPT = [
     'Hard output format for <thought> (must follow exactly this order):',
     '<thought>',
     '[0] Batch scope and chronology: this batch covered seq range, what changed vs previous memory.',
-    '[1] Event decision (event/event_table): create or skip, and why.',
-    '[2] Character decision (character_sheet/character_table): create/edit/delete/skip with evidence.',
-    '[3] Location decision (location_state/location_table): create/edit/delete/skip with evidence.',
+    '[1..N] Per-type decisions: for each active type listed in the per-type rules appendix at the end of this prompt, output one section (decision, evidence seq(s), field-level update plan).',
     '[4] Link plan: exact relation edges to add (from -> relation -> target), locator method per edge (target_node_id vs target_ref), or explicit no-link reason.',
     '[5] Planned tool calls: full call list in execution order (done last), including ref declarations before any link that depends on them.',
     '</thought>',
     'If <thought> misses any required section above, treat your own response as invalid and regenerate fully.',
     'Thought depth rule: each section must include (a) decision, (b) evidence seq(s), (c) field-level update plan.',
     'Thought anti-lazy rule: no one-line vague claims like "no update needed" without evidence.',
-    'If the active schema contains additional custom types, append extra per-type analysis after section [3].',
     'For each type, explicitly check whether optional columns can be updated from evidence in this batch.',
     'Tool set is dynamic. Semantic types expose create/edit/delete tools as needed; some types can be create-only. Treat tool descriptions as the source of truth.',
     'Call type tools to emit concrete updates, then call luker_rpg_extract_done as the final call.',
@@ -501,14 +510,10 @@ const DEFAULT_EXTRACT_SYSTEM_PROMPT = [
     'Fill optional columns whenever evidence is present; if unknown, omit conservatively.',
     'Respect required columns and force-update types declared in tool descriptions.',
     'If a type is marked force-update, emit at least one grounded node for it in this batch.',
-    'Character consistency hard rule: for any mentioned character grounded by card/world-info baseline, if no character_sheet node exists, create one; if an existing character_sheet conflicts with baseline facts, emit edit to align it.',
     'Grounding rule: do not hallucinate. Every field should be inferable from the batch or stable continuity.',
     'Coverage rule: avoid event-only outputs when other schema types have clear evidence; update them in the same batch.',
     'State quality rule: keep state/status fields updated when progression changes (e.g. ongoing/resolved/blocked).',
     'Editability rule: only types listed in graph_data.editable_type_ids may use edit/delete tools. For non-editable types, use create tools only.',
-    'Event strict policy: each extraction batch may create AT MOST ONE event node.',
-    'If multiple sub-events happened in one batch, merge them into one coherent event summary instead of creating multiple event rows.',
-    'If no meaningful event progression occurred, do not fabricate an event; explain the skip clearly in section [1].',
     ...EVENT_SUMMARY_TIME_EXTRACT_PROMPT_LINES,
     'Relation modeling rule: encode cross-node relations (who/where linkage) via links, not by stuffing relation lists into node row columns.',
     'Never store relationship linkage text inside node fields when links can represent it.',
@@ -541,6 +546,7 @@ const DEFAULT_EXTRACT_SYSTEM_PROMPT = [
     'After function call output, stop immediately.',
 ].join('\n');
 
+export { DEFAULT_EXTRACT_SYSTEM_PROMPT };
 
 const defaultSettings = {
     enabled: false,
@@ -759,6 +765,8 @@ export function normalizeNodeTypeSchema(schema) {
                 embeddingColumns,
                 level: String(item.level || LEVEL.SEMANTIC),
                 extractHint: String(item.extractHint || '').trim(),
+                extractionInstructions: String(item.extractionInstructions ?? DEFAULT_PER_TYPE_INSTRUCTIONS[rawId] ?? '').trim(),
+                extractEveryN: Math.max(1, Math.floor(Number.isFinite(Number(item.extractEveryN)) ? Number(item.extractEveryN) : 1) || 1),
                 keywords: Array.isArray(item.keywords) ? item.keywords.map(x => String(x || '').trim()).filter(Boolean) : [],
                 columnHints,
                 requiredColumns,
@@ -3201,11 +3209,14 @@ function buildDynamicToolDescription(spec = {}, mode = 'create') {
     return chunks.join(' ');
 }
 
+export { buildDynamicExtractTools };
+
 function buildDynamicExtractTools(schema = [], options = {}) {
     const tools = [];
     const specByToolName = new Map();
     const usedNames = new Set();
     const allowEditDelete = options?.allowEditDelete !== false;
+    const activeTypes = options?.activeTypes instanceof Set ? options.activeTypes : null;
 
     for (const rawSpec of Array.isArray(schema) ? schema : []) {
         const spec = rawSpec && typeof rawSpec === 'object' ? rawSpec : null;
@@ -3214,6 +3225,9 @@ function buildDynamicExtractTools(schema = [], options = {}) {
         }
         const typeId = String(spec.id || '').trim().toLowerCase();
         if (!typeId) {
+            continue;
+        }
+        if (activeTypes && !activeTypes.has(typeId)) {
             continue;
         }
         const baseName = `luker_rpg_extract_${sanitizeExtractToolNameSuffix(typeId)}`;
@@ -3968,7 +3982,19 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
             nodes: graphNodes,
             edges: graphEdges,
         };
-    const extractSystemPrompt = String(settings.extractSystemPrompt || '').trim() || DEFAULT_EXTRACT_SYSTEM_PROMPT;
+    const baseExtractSystemPrompt = String(settings.extractSystemPrompt || '').trim() || DEFAULT_EXTRACT_SYSTEM_PROMPT;
+    const cadenceSeq = Number.isFinite(Number(extractionMaxSeq)) ? Number(extractionMaxSeq) : 0;
+    const activeTypes = computeActiveExtractionTypes(schema, cadenceSeq);
+    if (activeTypes.size === 0) {
+        store.lastExtractionDebug = {
+            ...(store.lastExtractionDebug || {}),
+            extracted: false,
+            reason: 'no_active_types',
+            at: Date.now(),
+        };
+        return [];
+    }
+    const extractSystemPrompt = assembleExtractionSystemPrompt(baseExtractSystemPrompt, schema, activeTypes);
     const extractUserPrompt = buildExtractInputXml(
         Array.from(forceUpdateTypes),
         graphDataPayload,
@@ -3985,6 +4011,7 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
     });
     const { tools, specByToolName } = buildDynamicExtractTools(schema, {
         allowEditDelete: !rebuildCreateOnly,
+        activeTypes,
     });
     const allowedNames = new Set(['luker_rpg_extract_done', ...specByToolName.keys()]);
     const semanticRetries = Math.max(0, Math.min(10, Math.floor(Number(settings?.toolCallRetryMax) || 0)));
@@ -10386,6 +10413,8 @@ function getSchemaTypeTemplate(index = 1) {
         tableColumns: ['title'],
         level: LEVEL.SEMANTIC,
         extractHint: '',
+        extractionInstructions: '',
+        extractEveryN: 1,
         keywords: [],
         columnHints: {},
         requiredColumns: [],
@@ -12243,6 +12272,14 @@ function renderNodeTypeSchemaCard(spec, index) {
     <label>${escapeHtml(i18n('Extract Hint'))}
         <textarea data-field="extractHint" class="text_pole textarea_compact" rows="2">${escapeHtml(spec.extractHint || '')}</textarea>
     </label>
+    <label>${escapeHtml(i18n('Extraction Instructions'))}
+        <small style="opacity:0.7">${escapeHtml(i18n('Per-type rules appended to the extraction system prompt when this type is active this round.'))}</small>
+        <textarea data-field="extractionInstructions" class="text_pole textarea_compact" rows="5">${escapeHtml(spec.extractionInstructions || '')}</textarea>
+    </label>
+    <label>${escapeHtml(i18n('Extract Every N Floors'))}
+        <small style="opacity:0.7">${escapeHtml(i18n('1 = every extraction pass (default). Larger N reduces frequency for slow-changing tables.'))}</small>
+        <input data-field="extractEveryN" class="text_pole" type="number" min="1" step="1" value="${Number(spec.extractEveryN || 1)}" />
+    </label>
     <label class="checkbox_label luker-schema-checkbox"><input data-field="compression.enabled" type="checkbox" ${mode === 'hierarchical' ? 'checked' : ''} />${escapeHtml(i18n('Enable Hierarchical Compression'))}
     </label>
     <div class="luker-schema-grid-2 luker-schema-compression-hier" style="${mode === 'hierarchical' ? '' : 'display:none;'}">
@@ -12294,6 +12331,8 @@ function readSchemaCard(card) {
         columnHints: parseKeyValueLines(root.find('[data-field="columnHints"]').val()),
         level: LEVEL.SEMANTIC,
         extractHint: String(root.find('[data-field="extractHint"]').val() || '').trim(),
+        extractionInstructions: String(root.find('[data-field="extractionInstructions"]').val() || '').trim(),
+        extractEveryN: Math.max(1, Math.floor(Number(root.find('[data-field="extractEveryN"]').val()) || 1)),
         keywords: splitCommaList(root.find('[data-field="keywords"]').val()),
         forceUpdate: Boolean(root.find('[data-field="forceUpdate"]').prop('checked')),
         editable: Boolean(root.find('[data-field="editable"]').prop('checked')),

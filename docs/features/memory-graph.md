@@ -183,6 +183,11 @@ Memory Graph's node types are customizable. Open **Open Schema Editor** in the M
 
 For example, add a `magic_system` type with fields like `name / source / restrictions`, or a `faction` type with `name / leader / goals`. Custom types are saved with the character card, so your fantasy world's vocabulary travels with the card.
 
+Each type also carries two extraction-control fields:
+
+- **Extraction Instructions** — a free-form text block appended to the extraction system prompt **only when this type is active for the current round**. Put type-specific rules here ("at most one event per batch", "always fill aliases"), not in the base prompt. Empty string = no type-specific appendix.
+- **Extract Every N Floors** — cadence control. `1` (default) means the type participates in every extraction pass. Larger values (`2`, `3`, `5`, ...) make the type participate only when `currentSeq % N == 0`, so slow-changing tables like `location_state` can update less frequently and save LLM calls. When a type is inactive for the current pass, its create/edit/delete tools are not exposed to the LLM and its instructions are not in the prompt — the model literally cannot output that table this round.
+
 ### I want certain memories *always* in the prompt (not waiting for recall)
 
 That's **persistent injection**. Set certain node types to be persistently injected — they appear in the prompt regardless of recall triggers. A common case: if you add a `rule_constraint` or `world_law` type for inviolable world rules, mark it persistent so the model never forgets the rules.
