@@ -2016,7 +2016,14 @@ export function setWorldInfoSettings(settings, data) {
 export function reloadEditor(file, loadIfNotSelected = false) {
     const currentIndex = getWorldEditorSelectedIndex();
     const selectedIndex = resolveWorldInfoIndex(file);
-    if (selectedIndex !== -1 && (loadIfNotSelected || currentIndex === selectedIndex)) {
+    if (selectedIndex === -1) {
+        return;
+    }
+    if (currentIndex === selectedIndex) {
+        // Same-book reload: bypass change handler so active search/filter survives.
+        const worldName = world_names[selectedIndex];
+        void showWorldEditor(worldName);
+    } else if (loadIfNotSelected) {
         $('#world_editor_select').val(selectedIndex).trigger('change');
     }
 }
@@ -8294,8 +8301,15 @@ export async function deleteWorldInfo(worldInfoName) {
         }
     }
 
+    const editorIndexBefore = getWorldEditorSelectedIndex();
+    const editorNameBefore = editorIndexBefore !== -1 ? world_names[editorIndexBefore] : '';
     await updateWorldInfoList();
-    $('#world_editor_select').trigger('change');
+    const editorIndexAfter = getWorldEditorSelectedIndex();
+    const editorNameAfter = editorIndexAfter !== -1 ? world_names[editorIndexAfter] : '';
+    // Skip change unless the edited book actually changed; otherwise we'd wipe the active search.
+    if (editorNameBefore !== editorNameAfter) {
+        $('#world_editor_select').trigger('change');
+    }
 
     if (areLookupNamesEqual($('#character_world').val(), resolvedWorldInfoName)) {
         $('#character_world').val('').trigger('change');
