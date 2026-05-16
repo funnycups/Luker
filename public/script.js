@@ -12106,30 +12106,39 @@ function notifyChatWriteConflict({ kind, errorType, target, retryCount, currentI
     const opSummary = requestContext?.opSummary ? String(requestContext.opSummary) : '';
     const sentIntegrity = requestContext?.sentIntegrity ? String(requestContext.sentIntegrity) : '';
 
-    try {
-        const friendly = kind === 'integrity'
-            ? t`Chat sync: integrity drift detected, auto-recovering.`
-            : t`Chat sync: snapshot conflict detected, auto-recovering.`;
-        const escape = (s) => String(s).replace(/[<>&"']/g, ch => ({
-            '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;',
-        })[ch] || ch);
-        const detailParts = [];
-        if (endpoint) detailParts.push(escape(endpoint));
-        if (opSummary) detailParts.push(escape(opSummary));
-        if (errorType) detailParts.push(t`server: ${escape(errorType)}`);
-        const detailLine = detailParts.length > 0
-            ? `<br/><small>${detailParts.join(' · ')}</small>`
-            : '';
-        const divergenceLine = divergence
-            ? `<br/><small>${t`diverge: ${escape(divergence)}`}</small>`
-            : '';
-        toastr.warning(`${friendly}${detailLine}${divergenceLine}`, t`Chat write conflict`, {
-            timeOut: 12000,
-            preventDuplicates: true,
-            escapeHtml: false,
-        });
-    } catch (error) {
-        console.warn('[ChatWriteConflict] toast failed', error);
+    // Snapshot conflict where post-fetch shows BE ≡ snapshot is the
+    // abort→quick-regenerate race: FE sent `remove /N` for an AI stub BE
+    // never received. Fallback full save still corrects things; suppressing
+    // the toast keeps noise off the user but preserves console + event for
+    // diagnostics. Integrity conflicts and real divergences still toast.
+    const isBenignSnapshotRace = kind === 'snapshot' && divergence === null;
+
+    if (!isBenignSnapshotRace) {
+        try {
+            const friendly = kind === 'integrity'
+                ? t`Chat sync: integrity drift detected, auto-recovering.`
+                : t`Chat sync: snapshot conflict detected, auto-recovering.`;
+            const escape = (s) => String(s).replace(/[<>&"']/g, ch => ({
+                '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;',
+            })[ch] || ch);
+            const detailParts = [];
+            if (endpoint) detailParts.push(escape(endpoint));
+            if (opSummary) detailParts.push(escape(opSummary));
+            if (errorType) detailParts.push(t`server: ${escape(errorType)}`);
+            const detailLine = detailParts.length > 0
+                ? `<br/><small>${detailParts.join(' · ')}</small>`
+                : '';
+            const divergenceLine = divergence
+                ? `<br/><small>${t`diverge: ${escape(divergence)}`}</small>`
+                : '';
+            toastr.warning(`${friendly}${detailLine}${divergenceLine}`, t`Chat write conflict`, {
+                timeOut: 12000,
+                preventDuplicates: true,
+                escapeHtml: false,
+            });
+        } catch (error) {
+            console.warn('[ChatWriteConflict] toast failed', error);
+        }
     }
 
     try {
