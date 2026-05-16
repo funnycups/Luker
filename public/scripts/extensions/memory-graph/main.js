@@ -8871,7 +8871,7 @@ function getEdgeNodeOptionsHtml(store, selectedNodeId = '') {
 
 function getEdgeTypeOptionsHtml(store, selectedType = 'related') {
     const selected = String(selectedType || 'related').trim() || 'related';
-    const presets = ['contains', 'related', 'mentions', 'involves', 'located_at', 'caused_by', 'follows', 'depends_on'];
+    const presets = [...CANONICAL_EXTRACT_RELATION_TYPES, 'contains'];
     const known = new Set(presets);
     for (const edge of store.edges || []) {
         const type = String(edge?.type || '').trim();
@@ -9500,6 +9500,7 @@ ${renderEdgeFormEditorHtml(latest, editorId, edge, selectedEdgeIndex)}
             sourceEdge || { from: '', to: '', type: 'related' },
             isEdit ? edgeIndex : -1,
         );
+        let capturedValues = null;
         const result = await context.callGenericPopup(
             editorHtml,
             context.POPUP_TYPE.CONFIRM,
@@ -9512,6 +9513,21 @@ ${renderEdgeFormEditorHtml(latest, editorId, edge, selectedEdgeIndex)}
                 large: false,
                 allowVerticalScrolling: true,
                 allowHorizontalScrolling: true,
+                onClosing: (popup) => {
+                    if (popup.result !== context.POPUP_RESULT.AFFIRMATIVE) {
+                        return true;
+                    }
+                    const editorRoot = jQuery(popup.dlg).find(`#${editorId}`);
+                    if (!editorRoot.length) {
+                        return true;
+                    }
+                    capturedValues = {
+                        from: String(editorRoot.find('[data-field="from"]').val() || '').trim(),
+                        to: String(editorRoot.find('[data-field="to"]').val() || '').trim(),
+                        type: String(editorRoot.find('[data-field="type"]').val() || 'related').trim() || 'related',
+                    };
+                    return true;
+                },
             },
         );
         if (result !== context.POPUP_RESULT.AFFIRMATIVE) {
@@ -9519,13 +9535,10 @@ ${renderEdgeFormEditorHtml(latest, editorId, edge, selectedEdgeIndex)}
         }
 
         try {
-            const editorRoot = jQuery(`#${editorId}`);
-            if (!editorRoot.length) {
+            if (!capturedValues) {
                 throw new Error(i18n('Edge form not found'));
             }
-            const from = String(editorRoot.find('[data-field="from"]').val() || '').trim();
-            const to = String(editorRoot.find('[data-field="to"]').val() || '').trim();
-            const type = String(editorRoot.find('[data-field="type"]').val() || 'related').trim() || 'related';
+            const { from, to, type } = capturedValues;
 
             if (!from || !to) {
                 throw new Error(i18n('From/To node is required'));
