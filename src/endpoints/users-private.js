@@ -15,6 +15,7 @@ import yauzl from 'yauzl';
 import { getUserAvatar, toKey, getPasswordHash, getPasswordSalt, createBackupArchive, ensurePublicDirectoriesExist, toAvatarKey, getAccountVersion, getUserDirectories, getUserBackupTargets, normalizeUserBackupSelection } from '../users.js';
 import { SETTINGS_FILE, PUBLIC_DIRECTORIES, UPLOADS_DIRECTORY } from '../constants.js';
 import { checkForNewContent, CONTENT_TYPES } from './content-manager.js';
+import { invalidateRecentChatIndex } from './chats.js';
 import { color, Cache, getConfigValue, ensureDirectory, isValidUrl, normalizeZipEntryPath, trimTrailingSlash } from '../util.js';
 import { createLanMigrationOffer, LAN_MIGRATION_PATH_PREFIX } from '../lan-migration.js';
 
@@ -901,6 +902,7 @@ router.post('/restore-backup', async (request, response) => {
 
         const directories = handle === request.user.profile.handle ? request.user.directories : getUserDirectories(handle);
         const restoreResult = await restoreUserBackupArchive(uploadPath, directories, selection, mode, { includeGlobalExtensions: isAdminUser });
+        await invalidateRecentChatIndex(request);
 
         return response.json({
             mode,
@@ -952,6 +954,7 @@ router.post('/lan-migration/import', async (request, response) => {
 
         const directories = handle === request.user.profile.handle ? request.user.directories : getUserDirectories(handle);
         const restoreResult = await restoreUserBackupArchive(downloadPath, directories, selection, mode, { includeGlobalExtensions: isAdminUser });
+        await invalidateRecentChatIndex(request);
 
         return response.json({
             mode,
@@ -994,6 +997,7 @@ router.post('/import/data-zip', async (request, response) => {
         uploadPath = request.file.path;
         const mode = String(request.body.mode || 'merge').toLowerCase() === 'overwrite' ? 'overwrite' : 'merge';
         const restoreResult = await restoreUserBackupArchive(uploadPath, request.user.directories, FULL_IMPORT_SELECTION, mode, { includeGlobalExtensions: false });
+        await invalidateRecentChatIndex(request);
 
         return response.json({
             mode,
