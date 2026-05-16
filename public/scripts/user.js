@@ -1004,6 +1004,8 @@ async function openBackupManager(handle, callback) {
             );
             setActionBusy(true);
             const result = await restoreUserData(handle, file, selection, mode);
+            toastr.clear(progressToast);
+            progressToast = null;
             const diagnosticReport = buildRestoreDiagnosticReport({ handle, file, mode, selection, result });
             console.info('BACKUP_RESTORE_REPORT', diagnosticReport);
             toastr.success(
@@ -1187,6 +1189,8 @@ async function openBackupManager(handle, callback) {
             );
             setActionBusy(true);
             const result = await importLanMigrationLink(handle, link, selection, mode);
+            toastr.clear(progressToast);
+            progressToast = null;
             const diagnosticReport = buildRestoreDiagnosticReport({
                 handle,
                 file: { name: link, size: 0, type: 'lan-migration-link' },
