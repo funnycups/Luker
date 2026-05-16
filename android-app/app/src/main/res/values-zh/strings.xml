@@ -15,6 +15,9 @@
     <string name="runtime_error_copy_done">诊断信息已复制</string>
     <string name="runtime_error_report_saved">诊断报告已保存到：%1$s</string>
     <string name="runtime_error_share_subject">Luker 运行时启动报告</string>
+    <string name="crash_report_dialog_title">检测到上次异常退出</string>
+    <string name="crash_report_dialog_intro">应用在上次运行时异常退出。以下诊断信息由系统记录，请复制并反馈给开发者。</string>
+    <string name="crash_report_share_subject">Luker 上次崩溃报告</string>
     <string name="runtime_notification_channel_name">Luker 后台服务</string>
     <string name="runtime_notification_channel_description">保持本地 Luker 服务在后台运行</string>
     <string name="runtime_notification_title">Luker</string>

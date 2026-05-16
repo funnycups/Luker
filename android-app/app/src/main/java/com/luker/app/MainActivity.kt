@@ -389,6 +389,24 @@ class MainActivity : AppCompatActivity() {
         bootstrapConfiguredEndpoint()
         handleLaunchIntent(intent)
         maybePromptForCustomEndpointOnLaunch(savedInstanceState, launchAction)
+        maybeShowPreviousCrashReport()
+    }
+
+    private fun maybeShowPreviousCrashReport() {
+        val crash = LukerCrashCapture.pollUnhandledCrash(applicationContext) ?: return
+        Log.w(tag, "Detected abnormal exit from previous session: ${crash.report.lineSequence().firstOrNull()}")
+        window.decorView.post {
+            if (isFinishing || isDestroyed) {
+                return@post
+            }
+            showReportDialog(
+                titleRes = R.string.crash_report_dialog_title,
+                introRes = R.string.crash_report_dialog_intro,
+                shareSubjectRes = R.string.crash_report_share_subject,
+                report = crash.report,
+                reportFile = crash.reportFile,
+            )
+        }
     }
 
     private fun buildFileChooserIntent(fileChooserParams: WebChromeClient.FileChooserParams?): Intent {
@@ -1738,6 +1756,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showRuntimeFailureDialog(report: String, reportFile: File?) {
+        showReportDialog(
+            titleRes = R.string.runtime_error_dialog_title,
+            introRes = R.string.runtime_error_dialog_intro,
+            shareSubjectRes = R.string.runtime_error_share_subject,
+            report = report,
+            reportFile = reportFile,
+        )
+    }
+
+    private fun showReportDialog(
+        titleRes: Int,
+        introRes: Int,
+        shareSubjectRes: Int,
+        report: String,
+        reportFile: File?,
+    ) {
         val reportView = TextView(this).apply {
             text = report
             setTextIsSelectable(true)
@@ -1749,14 +1783,14 @@ class MainActivity : AppCompatActivity() {
         }
 
         val intro = buildString {
-            append(getString(R.string.runtime_error_dialog_intro))
+            append(getString(introRes))
             if (reportFile != null) {
                 append('\n').append(getString(R.string.runtime_error_report_saved, reportFile.absolutePath))
             }
         }
 
         AlertDialog.Builder(this)
-            .setTitle(R.string.runtime_error_dialog_title)
+            .setTitle(titleRes)
             .setMessage(intro)
             .setView(scrollView)
             .setPositiveButton(android.R.string.ok, null)
@@ -1768,7 +1802,7 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton(R.string.runtime_error_share) { _, _ ->
                 val shareIntent = Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
-                    putExtra(Intent.EXTRA_SUBJECT, getString(R.string.runtime_error_share_subject))
+                    putExtra(Intent.EXTRA_SUBJECT, getString(shareSubjectRes))
                     putExtra(Intent.EXTRA_TEXT, report)
                 }
                 runCatching {

@@ -15,6 +15,9 @@
     <string name="runtime_error_copy_done">Diagnostics copied</string>
     <string name="runtime_error_report_saved">Diagnostic report saved to: %1$s</string>
     <string name="runtime_error_share_subject">Luker runtime startup report</string>
+    <string name="crash_report_dialog_title">Previous Crash Detected</string>
+    <string name="crash_report_dialog_intro">The app exited unexpectedly during the previous session. The diagnostics below were captured by the system; copy them and send to the developer.</string>
+    <string name="crash_report_share_subject">Luker previous crash report</string>
     <string name="runtime_notification_channel_name">Luker Background Service</string>
     <string name="runtime_notification_channel_description">Keep the local Luker service running in the background</string>
     <string name="runtime_notification_title">Luker</string>
