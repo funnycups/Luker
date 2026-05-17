@@ -4949,6 +4949,8 @@
     "(empty)": "(空)",
     "Search source / model / messages / response...": "搜索 来源 / 模型 / 消息 / 响应…",
     "Search in this request...": "在此请求内搜索…",
+    "Function Call": "函数调用",
+    "function calls": "次函数调用",
     "Failed to load request details.": "加载请求详情失败。",
     "Type": "类型",
     "Image": "图像",

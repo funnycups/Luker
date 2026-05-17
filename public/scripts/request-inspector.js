@@ -266,6 +266,46 @@ function buildListHtml(items) {
  return buildFilterBar() + `<div class="ri-list-body">${buildTableHtml(items)}</div>`;
 }
 
+function formatToolCallArgsJson(args) {
+ if (args == null) return '{}';
+ if (typeof args === 'string') return args;
+ try { return JSON.stringify(args, null, 2); }
+ catch { return String(args); }
+}
+
+function buildResponseBodyHtml(detail, q) {
+ const parts = Array.isArray(detail.responseParts) ? detail.responseParts : [];
+
+ if (!parts.length) {
+ // Legacy entry without parts: render plain responseText.
+ return `<pre class="ri-msg-content ri-response-body">${highlightHtml(detail.responseText || t`(empty)`, q)}</pre>`;
+ }
+
+ const blocks = [];
+ for (const part of parts) {
+ if (part?.type === 'tool_call') {
+ const argsJson = formatToolCallArgsJson(part.args);
+ const idLine = part.id ? `<span class="ri-tool-call-id" title="${escapeHtml(part.id)}">${escapeHtml(part.id)}</span>` : '';
+ blocks.push(`
+ <div class="ri-tool-call">
+ <div class="ri-tool-call-header">
+ <span class="ri-tool-call-badge">${t`Function Call`}</span>
+ <span class="ri-tool-call-name">${highlightHtml(part.name || '?', q)}</span>
+ ${idLine}
+ </div>
+ <pre class="ri-tool-call-args">${highlightHtml(argsJson, q)}</pre>
+ </div>`);
+ } else if (part?.type === 'text' && part.text) {
+ blocks.push(`<pre class="ri-msg-content ri-response-body">${highlightHtml(part.text, q)}</pre>`);
+ }
+ }
+
+ if (!blocks.length) {
+ return `<pre class="ri-msg-content ri-response-body">${escapeHtml(t`(empty)`)}</pre>`;
+ }
+ return blocks.join('\n');
+}
+
 function buildChatDetailBody(detail) {
  const q = currentDetailSearch;
  let messagesHtml = '';
@@ -288,10 +328,18 @@ function buildChatDetailBody(detail) {
  }
  }
 
+ const partCount = Array.isArray(detail.responseParts) ? detail.responseParts.length : 0;
+ const toolCallCount = Array.isArray(detail.responseParts)
+ ? detail.responseParts.filter(p => p?.type === 'tool_call').length
+ : 0;
+ const responseHeader = toolCallCount > 0
+ ? `${t`Response Body`} (${(detail.responseText || '').length.toLocaleString()} ${t`chars`}, ${toolCallCount} ${t`function calls`})`
+ : `${t`Response Body`} (${(detail.responseText || '').length.toLocaleString()} ${t`chars`})`;
+
  return `
  <div class="ri-detail-section">
- <h4>${t`Response Body`} (${(detail.responseText || '').length.toLocaleString()} ${t`chars`})</h4>
- <pre class="ri-msg-content ri-response-body">${highlightHtml(detail.responseText || t`(empty)`, q)}</pre>
+ <h4>${responseHeader}</h4>
+ ${buildResponseBodyHtml(detail, q)}
  </div>
 
  <div class="ri-detail-section">

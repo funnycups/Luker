@@ -4784,6 +4784,8 @@
     "(empty)": "(空)",
     "Search source / model / messages / response...": "搜尋 來源 / 模型 / 訊息 / 回應…",
     "Search in this request...": "在此請求內搜尋…",
+    "Function Call": "函式呼叫",
+    "function calls": "次函式呼叫",
     "Failed to load request details.": "載入請求詳情失敗。",
     "Type": "類型",
     "Image": "圖像",

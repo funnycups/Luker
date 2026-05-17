@@ -74,6 +74,7 @@ export function startInspection(request) {
  }
  })(),
  responseText: '',
+ responseParts: [],
  usage: {
  prompt_tokens: null,
  completion_tokens: null,
@@ -109,6 +110,18 @@ function findEntry(request) {
 }
 
 // ---- Usage extraction helpers ----
+
+/**
+ * SSE events come in two shapes depending on the caller:
+ *   - inspector stream tap pushes plain strings (the SSE data line)
+ *   - luker-generation jobs push { seq, data, ts } objects
+ * Normalize to the string data line.
+ */
+function normalizeEvent(e) {
+ if (typeof e === 'string') return e;
+ if (e && typeof e.data === 'string') return e.data;
+ return '';
+}
 
 function extractUsageFromOAI(payload) {
  const usage = payload?.usage;
@@ -161,7 +174,7 @@ export function extractUsageFromStreamEvents(events, source) {
  if (!Array.isArray(events) || events.length === 0) return {};
 
  for (let i = events.length - 1; i >= 0; i--) {
- const raw = events[i];
+ const raw = normalizeEvent(events[i]);
  if (!raw || raw === '[DONE]') continue;
 
  let parsed;
@@ -206,7 +219,8 @@ export function extractUsageFromStreamEvents(events, source) {
 function extractTextFromStreamEvents(events, source) {
  if (!Array.isArray(events) || events.length === 0) return '';
  const out = [];
- for (const raw of events) {
+ for (const ev of events) {
+ const raw = normalizeEvent(ev);
  if (!raw || raw === '[DONE]') continue;
  let parsed;
  try { parsed = JSON.parse(raw); } catch { continue; }
@@ -235,6 +249,146 @@ function extractTextFromStreamEvents(events, source) {
  }
  }
  return out.join('');
+}
+
+/**
+ * Extract ordered response parts from SSE stream events.
+ * Each part is either {type:'text', text} or
+ * {type:'tool_call', id, name, args}.
+ *
+ * Handles three streaming dialects:
+ *   - Claude: content_block_start / content_block_delta with index-keyed
+ *     blocks of either text_delta or input_json_delta
+ *   - Gemini: candidates[0].content.parts containing text or functionCall
+ *   - OpenAI (and OpenAI-compatible): delta.content text + index-keyed
+ *     delta.tool_calls increments whose function.arguments is appended as
+ *     a JSON string
+ */
+function extractPartsFromStreamEvents(events, source) {
+ if (!Array.isArray(events) || events.length === 0) return [];
+
+ if (source === 'claude') {
+ /** @type {Map<number, {type:string,text:string,name:string,id:string,inputJson:string}>} */
+ const blocks = new Map();
+ const order = [];
+ const ensureBlock = (idx) => {
+ let b = blocks.get(idx);
+ if (!b) {
+ b = { type: 'text', text: '', name: '', id: '', inputJson: '' };
+ blocks.set(idx, b);
+ order.push(idx);
+ }
+ return b;
+ };
+ for (const ev of events) {
+ const raw = normalizeEvent(ev);
+ if (!raw || raw === '[DONE]') continue;
+ let parsed;
+ try { parsed = JSON.parse(raw); } catch { continue; }
+ if (parsed?.luker) continue;
+
+ if (parsed?.type === 'content_block_start') {
+ const idx = parsed.index ?? 0;
+ const cb = parsed.content_block || {};
+ const b = ensureBlock(idx);
+ b.type = cb.type || 'text';
+ if (cb.type === 'text' && typeof cb.text === 'string') b.text = cb.text;
+ if (cb.name) b.name = cb.name;
+ if (cb.id) b.id = cb.id;
+ } else if (parsed?.type === 'content_block_delta') {
+ const idx = parsed.index ?? 0;
+ const b = ensureBlock(idx);
+ const d = parsed.delta;
+ if (d?.type === 'text_delta' && typeof d.text === 'string') b.text += d.text;
+ else if (d?.type === 'input_json_delta' && typeof d.partial_json === 'string') b.inputJson += d.partial_json;
+ }
+ }
+
+ const parts = [];
+ for (const idx of order) {
+ const b = blocks.get(idx);
+ if (!b) continue;
+ if (b.type === 'text') {
+ if (b.text) parts.push({ type: 'text', text: b.text });
+ } else if (b.type === 'tool_use') {
+ parts.push({ type: 'tool_call', id: b.id, name: b.name, args: coerceToolArgs(b.inputJson) });
+ }
+ }
+ return parts;
+ }
+
+ if (source === 'makersuite' || source === 'vertexai') {
+ const parts = [];
+ let textAccum = '';
+ const flushText = () => {
+ if (textAccum) { parts.push({ type: 'text', text: textAccum }); textAccum = ''; }
+ };
+ for (const ev of events) {
+ const raw = normalizeEvent(ev);
+ if (!raw || raw === '[DONE]') continue;
+ let parsed;
+ try { parsed = JSON.parse(raw); } catch { continue; }
+ if (parsed?.luker) continue;
+ const geminiParts = parsed?.candidates?.[0]?.content?.parts;
+ if (!Array.isArray(geminiParts)) continue;
+ for (const p of geminiParts) {
+ if (typeof p?.text === 'string') {
+ textAccum += p.text;
+ } else if (p?.functionCall) {
+ flushText();
+ parts.push({ type: 'tool_call', id: '', name: p.functionCall.name || '', args: p.functionCall.args ?? {} });
+ }
+ }
+ }
+ flushText();
+ return parts;
+ }
+
+ // OpenAI / OpenAI-compatible
+ let textAccum = '';
+ /** @type {Map<number, {id:string,name:string,argsStr:string}>} */
+ const toolCalls = new Map();
+ const toolOrder = [];
+ const ensureToolCall = (idx) => {
+ let t = toolCalls.get(idx);
+ if (!t) {
+ t = { id: '', name: '', argsStr: '' };
+ toolCalls.set(idx, t);
+ toolOrder.push(idx);
+ }
+ return t;
+ };
+ for (const ev of events) {
+ const raw = normalizeEvent(ev);
+ if (!raw || raw === '[DONE]') continue;
+ let parsed;
+ try { parsed = JSON.parse(raw); } catch { continue; }
+ if (parsed?.luker) continue;
+ const delta = parsed?.choices?.[0]?.delta;
+ if (!delta) continue;
+ const content = delta.content;
+ if (typeof content === 'string') textAccum += content;
+ else if (Array.isArray(content)) {
+ for (const p of content) if (p?.type === 'text' && typeof p.text === 'string') textAccum += p.text;
+ }
+ if (Array.isArray(delta.tool_calls)) {
+ for (const tc of delta.tool_calls) {
+ const idx = tc?.index ?? 0;
+ const t = ensureToolCall(idx);
+ if (tc?.id) t.id = tc.id;
+ if (tc?.function?.name) t.name = tc.function.name;
+ if (typeof tc?.function?.arguments === 'string') t.argsStr += tc.function.arguments;
+ }
+ }
+ }
+
+ const parts = [];
+ if (textAccum) parts.push({ type: 'text', text: textAccum });
+ for (const idx of toolOrder) {
+ const t = toolCalls.get(idx);
+ parts.push({ type: 'tool_call', id: t.id, name: t.name, args: coerceToolArgs(t.argsStr) });
+ }
+ return parts;
 }
 
 /**
@@ -272,6 +426,83 @@ function extractTextFromPayload(payload, source, rawApiResponse) {
 }
 
 /**
+ * Coerce a tool-call args field into a plain object (parsing JSON strings).
+ * Falls back to the original value if parsing fails.
+ */
+function coerceToolArgs(raw) {
+ if (raw == null) return {};
+ if (typeof raw === 'string') {
+ try { return JSON.parse(raw); } catch { return raw; }
+ }
+ return raw;
+}
+
+/**
+ * Extract ordered response parts from a non-streaming payload.
+ * Each part is either {type:'text', text} or
+ * {type:'tool_call', id, name, args}.
+ */
+function extractPartsFromPayload(payload, source, rawApiResponse) {
+ const parts = [];
+
+ if (rawApiResponse) {
+ if (source === 'claude' && Array.isArray(rawApiResponse.content)) {
+ for (const p of rawApiResponse.content) {
+ if (p?.type === 'text' && typeof p.text === 'string') {
+ if (p.text) parts.push({ type: 'text', text: p.text });
+ } else if (p?.type === 'tool_use') {
+ parts.push({ type: 'tool_call', id: p.id || '', name: p.name || '', args: p.input ?? {} });
+ }
+ }
+ return parts;
+ }
+ if ((source === 'makersuite' || source === 'vertexai') && Array.isArray(rawApiResponse.candidates)) {
+ const geminiParts = rawApiResponse.candidates[0]?.content?.parts;
+ if (Array.isArray(geminiParts)) {
+ for (const p of geminiParts) {
+ if (typeof p?.text === 'string') {
+ if (p.text) parts.push({ type: 'text', text: p.text });
+ } else if (p?.functionCall) {
+ parts.push({ type: 'tool_call', id: '', name: p.functionCall.name || '', args: p.functionCall.args ?? {} });
+ }
+ }
+ return parts;
+ }
+ }
+ }
+
+ const choice = payload?.choices?.[0];
+ if (choice) {
+ const msgContent = choice?.message?.content ?? choice?.text;
+ if (typeof msgContent === 'string' && msgContent) {
+ parts.push({ type: 'text', text: msgContent });
+ } else if (Array.isArray(msgContent)) {
+ for (const p of msgContent) {
+ if (p?.type === 'text' && typeof p.text === 'string' && p.text) {
+ parts.push({ type: 'text', text: p.text });
+ }
+ }
+ }
+ const tcs = choice?.message?.tool_calls;
+ if (Array.isArray(tcs)) {
+ for (const tc of tcs) {
+ parts.push({
+ type: 'tool_call',
+ id: tc?.id || '',
+ name: tc?.function?.name || tc?.name || '',
+ args: coerceToolArgs(tc?.function?.arguments ?? tc?.arguments),
+ });
+ }
+ }
+ const fc = choice?.message?.function_call;
+ if (fc) {
+ parts.push({ type: 'tool_call', id: '', name: fc.name || '', args: coerceToolArgs(fc.arguments) });
+ }
+ }
+ return parts;
+}
+
+/**
  * Complete an inspection with success + usage data from a non-streaming response.
  * @param {import('express').Request} request
  * @param {object} payload
@@ -305,6 +536,7 @@ export function completeInspection(request, payload, rawApiResponse) {
 
  Object.assign(entry.usage, usage);
  entry.responseText = extractTextFromPayload(payload, source, rawApiResponse);
+ entry.responseParts = extractPartsFromPayload(payload, source, rawApiResponse);
 }
 
 /**
@@ -324,10 +556,15 @@ export function completeInspectionFromStream(request, events, accumulatedText) {
  const usage = extractUsageFromStreamEvents(events, entry.source);
  Object.assign(entry.usage, usage);
 
+ entry.responseParts = extractPartsFromStreamEvents(events, entry.source);
+
  if (typeof accumulatedText === 'string' && accumulatedText.length) {
  entry.responseText = accumulatedText;
  } else {
- entry.responseText = extractTextFromStreamEvents(events, entry.source);
+ entry.responseText = entry.responseParts
+ .filter(p => p.type === 'text')
+ .map(p => p.text)
+ .join('') || extractTextFromStreamEvents(events, entry.source);
  }
 }
 

@@ -303,6 +303,61 @@
     background: color-mix(in srgb, var(--SmartThemeQuoteColor, #ffd54f) 18%, transparent);
 }
 
+.ri-tool-call {
+    margin: 6px 0;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #557) 50%, transparent);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #335) 8%, transparent);
+    overflow: hidden;
+}
+
+.ri-tool-call-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #335) 18%, transparent);
+    font-size: 0.85em;
+}
+
+.ri-tool-call-badge {
+    font-size: 0.75em;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: var(--SmartThemeQuoteColor, #557);
+    color: var(--SmartThemeBodyColor, #fff);
+    opacity: 0.85;
+}
+
+.ri-tool-call-name {
+    font-family: var(--monoFontFamily, ui-monospace, monospace);
+    font-weight: 600;
+}
+
+.ri-tool-call-id {
+    font-family: var(--monoFontFamily, ui-monospace, monospace);
+    font-size: 0.75em;
+    opacity: 0.6;
+    margin-left: auto;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ri-tool-call-args {
+    margin: 0;
+    padding: 6px 8px;
+    font-size: 0.85em;
+    background: transparent;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 300px;
+    overflow: auto;
+}
+
 .ri-filter-btn {
     padding: 4px 12px;
     font-size: 0.85em;
