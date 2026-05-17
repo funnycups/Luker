@@ -430,7 +430,7 @@ function normalizeCohereResponseToOAI(raw) {
  */
 async function sendClaudeRequest(request, response) {
     const apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_CLAUDE).toString();
-    const apiKey = readProviderSecret(request, SECRET_KEYS.CLAUDE) || request.body.proxy_password || '';
+    const apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.CLAUDE) || '';
     const divider = '-'.repeat(process.stdout.columns);
 
     if (!apiKey) {
@@ -673,7 +673,7 @@ async function sendMakerSuiteRequest(request, response) {
         }
     } else {
         apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_MAKERSUITE);
-        apiKey = readProviderSecret(request, SECRET_KEYS.MAKERSUITE) || request.body.proxy_password || '';
+        apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.MAKERSUITE) || '';
 
         if (!request.body.base_url && !request.body.reverse_proxy && !apiKey) {
             console.warn(`${apiName} API key is missing.`);
@@ -1062,7 +1062,7 @@ async function sendAI21Request(request, response) {
  */
 async function sendMistralAIRequest(request, response) {
     const apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_MISTRAL).toString();
-    const apiKey = readProviderSecret(request, SECRET_KEYS.MISTRALAI) || request.body.proxy_password || '';
+    const apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.MISTRALAI) || '';
 
     if (!apiKey) {
         console.warn('MistralAI API key is missing.');
@@ -1253,7 +1253,7 @@ async function sendCohereRequest(request, response) {
  */
 async function sendDeepSeekRequest(request, response) {
     const apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_DEEPSEEK).toString();
-    const apiKey = readProviderSecret(request, SECRET_KEYS.DEEPSEEK) || request.body.proxy_password || '';
+    const apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.DEEPSEEK) || '';
 
     if (!apiKey && !request.body.base_url && !request.body.reverse_proxy) {
         console.warn('DeepSeek API key is missing.');
@@ -1376,7 +1376,7 @@ async function sendDeepSeekRequest(request, response) {
  */
 async function sendXaiRequest(request, response) {
     const apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_XAI).toString();
-    const apiKey = readProviderSecret(request, SECRET_KEYS.XAI) || request.body.proxy_password || '';
+    const apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.XAI) || '';
 
     if (!apiKey && !request.body.base_url && !request.body.reverse_proxy) {
         console.warn('xAI API key is missing.');
@@ -2170,7 +2170,7 @@ router.post('/status', async function (request, statusResponse) {
 
         if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.OPENAI) {
             apiUrl = normalizeOpenAIBaseUrl(request.body.base_url || request.body.reverse_proxy || API_OPENAI);
-            apiKey = readProviderSecret(request, SECRET_KEYS.OPENAI) || request.body.proxy_password || '';
+            apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.OPENAI) || '';
             headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.OPENROUTER) {
             apiUrl = 'https://openrouter.ai/api/v1';
@@ -2179,7 +2179,7 @@ router.post('/status', async function (request, statusResponse) {
             headers = { ...OPENROUTER_HEADERS };
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.MISTRALAI) {
             apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_MISTRAL).toString();
-            apiKey = readProviderSecret(request, SECRET_KEYS.MISTRALAI) || request.body.proxy_password || '';
+            apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.MISTRALAI) || '';
             headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.CUSTOM) {
             apiUrl = normalizeOpenAIBaseUrl(request.body.custom_url);
@@ -2205,12 +2205,12 @@ router.post('/status', async function (request, statusResponse) {
             queryParams = { detailed: true };
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.DEEPSEEK) {
             apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_DEEPSEEK.replace('/beta', '')).toString();
-            apiKey = readProviderSecret(request, SECRET_KEYS.DEEPSEEK) || request.body.proxy_password || '';
+            apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.DEEPSEEK) || '';
             headers = {};
             mergeObjectWithYaml(headers, request.body.custom_include_headers);
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.XAI) {
             apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_XAI).toString();
-            apiKey = readProviderSecret(request, SECRET_KEYS.XAI) || request.body.proxy_password || '';
+            apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.XAI) || '';
             headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.AIMLAPI) {
             apiUrl = API_AIMLAPI;
@@ -2231,7 +2231,7 @@ router.post('/status', async function (request, statusResponse) {
             throw new Error('This provider is temporarily disabled.');
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.MOONSHOT) {
             apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_MOONSHOT).toString();
-            apiKey = readProviderSecret(request, SECRET_KEYS.MOONSHOT) || request.body.proxy_password || '';
+            apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.MOONSHOT) || '';
             headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.FIREWORKS) {
             apiUrl = API_FIREWORKS;
@@ -2239,7 +2239,7 @@ router.post('/status', async function (request, statusResponse) {
             headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.CLAUDE) {
             apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_CLAUDE).toString();
-            apiKey = readProviderSecret(request, SECRET_KEYS.CLAUDE) || request.body.proxy_password || '';
+            apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.CLAUDE) || '';
             headers = {};
             mergeObjectWithYaml(headers, request.body.custom_include_headers);
 
@@ -2362,7 +2362,7 @@ router.post('/status', async function (request, statusResponse) {
                 return statusResponse.send({ error: true, bypass: true, data: { data: [] } });
             }
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.MAKERSUITE) {
-            apiKey = readProviderSecret(request, SECRET_KEYS.MAKERSUITE) || request.body.proxy_password || '';
+            apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.MAKERSUITE) || '';
             apiUrl = trimTrailingSlash(request.body.base_url || request.body.reverse_proxy || API_MAKERSUITE);
             const apiVersion = getConfigValue('gemini.apiVersion', 'v1beta');
             const modelsUrl = !apiKey && (request.body.base_url || request.body.reverse_proxy)
@@ -2753,7 +2753,7 @@ router.post('/generate', async function (request, response) {
 
         if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.OPENAI) {
             apiUrl = normalizeOpenAIBaseUrl(request.body.base_url || request.body.reverse_proxy || API_OPENAI);
-            apiKey = readProviderSecret(request, SECRET_KEYS.OPENAI) || request.body.proxy_password || '';
+            apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.OPENAI) || '';
             headers = {};
             bodyParams = {
                 logprobs: request.body.logprobs,
@@ -2989,7 +2989,7 @@ router.post('/generate', async function (request, response) {
             }
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.MOONSHOT) {
             apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || API_MOONSHOT).toString();
-            apiKey = readProviderSecret(request, SECRET_KEYS.MOONSHOT) || request.body.proxy_password || '';
+            apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.MOONSHOT) || '';
             headers = {};
             bodyParams = {};
             if (request.body.reasoning_effort) {
@@ -3009,7 +3009,7 @@ router.post('/generate', async function (request, response) {
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.ZAI) {
             const defaultApiUrl = request.body.zai_endpoint === ZAI_ENDPOINT.CODING ? API_ZAI_CODING : API_ZAI_COMMON;
             apiUrl = new URL(request.body.base_url || request.body.reverse_proxy || defaultApiUrl).toString();
-            apiKey = readProviderSecret(request, SECRET_KEYS.ZAI) || request.body.proxy_password || '';
+            apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.ZAI) || '';
             headers = {
                 'Accept-Language': 'en-US,en',
             };

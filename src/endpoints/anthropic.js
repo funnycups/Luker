@@ -39,7 +39,7 @@ router.post('/caption-image', async (request, response) => {
             headers: {
                 'Content-Type': 'application/json',
                 'anthropic-version': '2023-06-01',
-                'x-api-key': readProviderSecret(request, SECRET_KEYS.CLAUDE) || request.body.proxy_password || '',
+                'x-api-key': request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.CLAUDE) || '',
             },
         });
 
