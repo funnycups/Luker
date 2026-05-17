@@ -188,28 +188,21 @@ The Chat Completion preset the main agent uses is **not the same preset you use 
 
 ### Recommended OFF
 
-All four reasons are the same: ST's main path already injects these into the chat context the main agent sees. Re-injecting via a preset placeholder is duplicate content.
+Turn these off — all for the same reason, **duplicate injection**: ST's main path already writes them into the chat context the main agent sees.
 
-| Prompt item | Why off |
-|---|---|
-| **Character card fields** (description / personality / scenario / first message / example messages) | Duplicate injection — already in the chat context. |
-| **User persona** | Duplicate injection — already in the chat context. |
-| **Example messages** | Duplicate injection — already in the chat context. |
-| **Worldbook placeholders** (any explicit worldInfo splice nodes in the preset) | Duplicate injection — ST's main path already inserts lorebook entries. |
+- **Character card fields** (description / personality / scenario / first message / example messages)
+- **User persona**
+- **Example messages**
+- **Worldbook placeholders** (any explicit worldInfo splice nodes in the preset)
 
 ### Recommended ON
 
-The main agent uses these to write task briefs for sub-agents and to draft the final prose. Without them it has nothing to brief from and nothing to write toward.
-
 | Prompt item | Why on |
 |---|---|
-| **Chat history** | The main agent's only window into "what's happening this turn". It reads chat to write task briefs for scouts / critics and to draft prose. Keep it complete. |
+| **Chat history** | The injection slot through which the main agent's prompt actually reaches the LLM. Turn it off and the agent gets nothing. |
 | **Writing style instructions** | Read by the main agent when drafting via `write_message` and when briefing `voice_critic`. |
 | **Jailbreak / bypass instructions** | A mid-loop refusal stalls the whole scout → draft → critique chain before `finalize` can fire. |
 | **Anti-cliché instructions** | Same channel as writing style — main agent drafting and critic briefs both read them. |
-| **JSON / function-calling support** | Director is built entirely on Chat Completion tool calls — **must be on**, otherwise the mode does not run. |
-
-In short: **keep only the items the main agent reads to brief sub-agents and draft prose; everything character / user / world-related is already in chat context, drop it.**
 
 ## Advanced: using director as a single-agent iterative writer
 
