@@ -138,14 +138,28 @@ writeExtensionField(
 ): Promise<void>
 ```
 
-写入角色卡的 `data.extensions[key]` 并持久化。传 `value: context.constants.unset`（即 `UNSET_VALUE` 哨兵值）可删除该 key。这是写插件扩展字段的**安全路径**——它完全绕过 `context.characters` Proxy。
+写入角色卡的 `data.extensions[key]` 并持久化。
+
+**替换语义。** 完整的 `value` 会成为磁盘上新的 `data.extensions[key]`。先前磁盘值中存在的兄弟子键**不会**被保留——希望做局部更新的调用方必须自行读取旧值、展开并叠加变更。`data.extensions.*` 下的其他扩展 key（其他插件的数据）则永远不会被触碰。
+
+传 `value: context.constants.unset`（即 `UNSET_VALUE` 哨兵值）可彻底删除该 key。传裸 `null` 写入的是字面量 `null`（key 仍然保留）。
 
 ```js
 const ctx = Luker.getContext();
+
+// 把 data.extensions.my_plugin_state 整体替换为 { level: 5 }。
+// my_plugin_state 之前的任何其他子键都会被清除。
 await ctx.writeExtensionField(ctx.characterId, 'my_plugin_state', { level: 5 });
-// 删除：
+
+// 局部更新：读取旧值、叠加、写回。
+const prev = ctx.characters[ctx.characterId]?.data?.extensions?.my_plugin_state ?? {};
+await ctx.writeExtensionField(ctx.characterId, 'my_plugin_state', { ...prev, level: 5 });
+
+// 彻底删除该 key。
 await ctx.writeExtensionField(ctx.characterId, 'my_plugin_state', ctx.constants.unset);
 ```
+
+这是写插件扩展字段的**安全路径**——它完全绕过 `context.characters` Proxy。
 
 ### writeExtensionFieldBulk
 
@@ -158,7 +172,7 @@ writeExtensionFieldBulk(
 ): Promise<{ updated: string[], skipped: string[], failed: string[] }>
 ```
 
-跨多个角色的单次批量写入。`avatars: null` 或 `[]` 表示作用于所有角色。当 `value` 是 `unset` 哨兵且未提供 `filterPath` 时，自动将 `filterPath` 默认设为 `data.extensions.<key>`，从而跳过没有该字段的卡片。
+跨多个角色的单次批量写入，每张卡都套用与 `writeExtensionField` 相同的替换语义。`avatars: null` 或 `[]` 表示作用于所有角色。当 `value` 是 `unset` 哨兵且未提供 `filterPath` 时，自动将 `filterPath` 默认设为 `data.extensions.<key>`，从而跳过没有该字段的卡片。
 
 ### createCharacterData
 
@@ -178,17 +192,19 @@ updateCharacterData(
 ): Promise<void>
 ```
 
-更新某张卡 `data` 对象上的一个或多个字段,**不依赖**角色编辑器弹窗打开。patch 是 `character.data` 的 dot-path 映射 — 顶层字段用裸名(`description`、`name`),嵌套字段用点分(`extensions.world`、`extensions.depth_prompt.depth`)。中间对象会自动按需创建。
+更新某张卡 `data` 对象上的一个或多个**表单层**字段，**不依赖**角色编辑器弹窗打开。patch 形态是 `character.data` 的 dot-path 映射，用于表单层字段（`description`、`name`、`personality`……）。中间对象会自动按需创建。
 
 ```js
 const ctx = Luker.getContext();
 // 更新一个顶层字段
 await ctx.updateCharacterData(ctx.characterId, { description: '新的描述。' });
-// 用 dot-path 更新嵌套字段
-await ctx.updateCharacterData(ctx.characterId, {
-    'extensions.world': 'my_book',
-    'extensions.depth_prompt.depth': 6,
-});
+```
+
+**限制：** 以 `extensions.` 开头的 dot-path（或裸 key `extensions`）会被**拒绝**——扩展数据请改用 `writeExtensionField`，它对插件数据块采用正确的替换语义。
+
+```js
+// 抛错——请改用 writeExtensionField。
+await ctx.updateCharacterData(ctx.characterId, { 'extensions.world': 'my_book' });
 ```
 
 跟现有的 `saveCharacterDebounced` / 表单路径互补 — 弹窗打开时仍走表单(那时表单是 source of truth)。`updateCharacterData` 是面向 AI 工具、slash command、以及其他可能在编辑器关闭时运行的程序化调用方的数据驱动替代路径。
@@ -206,7 +222,9 @@ await ctx.updateCharacterData(ctx.characterId, {
 persistCharacterData(charId: number | string): Promise<void>
 ```
 
-把某张卡当前的 in-memory `data` 序列化成 `/api/characters/edit` 期望的 multipart shape 后 POST。表单**不参与** — 只看 `characters[charId]`。HTTP 失败抛错。
+把某张卡当前的 in-memory `data` 序列化成 `/api/characters/edit` 期望的 multipart shape 后 POST 落盘。表单**不参与** — 只看 `characters[charId]`。服务器会把 payload 与磁盘上现有的 JSON 深合并，这对表单层字段是正确行为（保留了表单从未触及的未知扩展数据）。
+
+HTTP 失败时抛错。扩展数据**不会**走这条路径——它有自己的 `/api/characters/merge-attributes` 路径，采用替换语义（[`writeExtensionField`](#writeextensionfield)）。
 
 绝大多数调用方应该用 `updateCharacterData`(它会替你调度这个)。只有当你已经亲自 mutate 过 in-memory 对象、想 flush 时才直接调用。
 
@@ -383,5 +401,5 @@ character.fav === true;             // true——自动镜像
 ### 实战要点
 
 - 读取任何字段，根级或嵌套——都没问题。
-- 写任何字段——都能工作。用 `data.*` 路径可以消除弃用警告。
-- 插件扩展数据——一律走 `writeExtensionField` / `writeExtensionFieldBulk`。
+- 写**表单层**字段——用 `updateCharacterData`（或者，当你直接 mutate `data.*` 时，紧跟一个 `persistCharacterData`）。
+- 写**扩展数据**——用 `writeExtensionField` / `writeExtensionFieldBulk`。替换语义：调用方完整控制 `data.extensions.<key>` 的值；兄弟子键不会被保留。

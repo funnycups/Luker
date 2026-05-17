@@ -138,14 +138,28 @@ writeExtensionField(
 ): Promise<void>
 ```
 
-Writes `data.extensions[key]` on a character card and persists. Pass `value: context.constants.unset` (the `UNSET_VALUE` sentinel) to delete the key. This is the **safe path** for plugin extension fields — it bypasses the `context.characters` Proxy entirely.
+Writes `data.extensions[key]` on a character card and persists.
+
+**Replace semantics.** The full `value` becomes the new `data.extensions[key]` on disk. Sibling subkeys present in the previous on-disk value are **not** preserved — callers wanting a partial update must read the previous value, spread it, and overlay changes themselves. Other extension keys under `data.extensions.*` (other plugins' data) are never touched.
+
+Pass `value: context.constants.unset` (the `UNSET_VALUE` sentinel) to delete the key entirely. Plain `null` writes a literal `null` (the key remains).
 
 ```js
 const ctx = Luker.getContext();
+
+// Replace data.extensions.my_plugin_state with exactly { level: 5 }.
+// Any other keys previously under my_plugin_state are wiped.
 await ctx.writeExtensionField(ctx.characterId, 'my_plugin_state', { level: 5 });
-// Delete:
+
+// Partial update: read previous, overlay, write back.
+const prev = ctx.characters[ctx.characterId]?.data?.extensions?.my_plugin_state ?? {};
+await ctx.writeExtensionField(ctx.characterId, 'my_plugin_state', { ...prev, level: 5 });
+
+// Delete the key entirely.
 await ctx.writeExtensionField(ctx.characterId, 'my_plugin_state', ctx.constants.unset);
 ```
+
+This is the **safe path** for plugin extension fields — it bypasses the `context.characters` Proxy entirely.
 
 ### writeExtensionFieldBulk
 
@@ -158,7 +172,7 @@ writeExtensionFieldBulk(
 ): Promise<{ updated: string[], skipped: string[], failed: string[] }>
 ```
 
-Single batched write across many characters. `avatars: null` or `[]` targets every character. When `value` is the `unset` sentinel and no `filterPath` is supplied, automatically defaults `filterPath` to `data.extensions.<key>` so cards without that field are skipped.
+Single batched write across many characters, same replace semantics as `writeExtensionField` applied per card. `avatars: null` or `[]` targets every character. When `value` is the `unset` sentinel and no `filterPath` is supplied, automatically defaults `filterPath` to `data.extensions.<key>` so cards without that field are skipped.
 
 ### createCharacterData
 
@@ -178,17 +192,19 @@ updateCharacterData(
 ): Promise<void>
 ```
 
-Update one or more fields on a character's `data` object **without** requiring the character editor popup to be open. The patch shape is dot-paths into `character.data` — top-level fields use bare names (`description`, `name`); nested fields use dotted notation (`extensions.world`, `extensions.depth_prompt.depth`). Intermediate objects are auto-created.
+Update one or more **form-level** fields on a character's `data` object without requiring the character editor popup to be open. The patch shape is dot-paths into `character.data` for form-level fields (`description`, `name`, `personality`, ...). Intermediate objects are auto-created.
 
 ```js
 const ctx = Luker.getContext();
 // Update a top-level field
 await ctx.updateCharacterData(ctx.characterId, { description: 'A new description.' });
-// Update nested fields via dot-path
-await ctx.updateCharacterData(ctx.characterId, {
-    'extensions.world': 'my_book',
-    'extensions.depth_prompt.depth': 6,
-});
+```
+
+**Restriction:** dot-paths starting with `extensions.` (or the bare key `extensions`) are **rejected** — use `writeExtensionField` for extension data, which has the correct replace semantics for plugin blobs.
+
+```js
+// Throws — use writeExtensionField instead.
+await ctx.updateCharacterData(ctx.characterId, { 'extensions.world': 'my_book' });
 ```
 
 Companion to the existing `saveCharacterDebounced` / form path — that route is still used when the popup *is* open (the form is the source of truth in that mode). `updateCharacterData` is the data-driven alternative for AI tools, slash commands, and any other caller that may run while the editor is closed.
@@ -206,7 +222,9 @@ Emits [`event_types.CHARACTER_FIELDS_UPDATED`](#character_fields_updated-event) 
 persistCharacterData(charId: number | string): Promise<void>
 ```
 
-Flush a character's current in-memory `data` to disk by serializing it into the multipart shape `/api/characters/edit` expects, and POSTing. The form is **not** consulted — only `characters[charId]`. Throws on HTTP failure.
+Flush a character's current in-memory `data` to disk by serializing it into the multipart shape `/api/characters/edit` expects, and POSTing. The form is **not** consulted — only `characters[charId]`. The server deep-merges the payload with the existing on-disk JSON, which is the correct behavior for form-level fields (it preserves unknown extension data the form never touches).
+
+Throws on HTTP failure. Extension data does **not** flow through here — it has its own `/api/characters/merge-attributes` path with replace semantics ([`writeExtensionField`](#writeextensionfield)).
 
 Most callers should use `updateCharacterData` (which schedules this for you). Call directly only when you've already mutated the in-memory object yourself and want to flush.
 
@@ -383,5 +401,5 @@ Field normalization is applied during writes:
 ### Practical takeaways
 
 - Reading any field, root or nested — fine.
-- Writing any field — works. Use `data.*` paths to silence the deprecation warning.
-- Plugin extension data — always go through `writeExtensionField` / `writeExtensionFieldBulk`.
+- Writing **form-level** fields — use `updateCharacterData` (or, when mutating `data.*` directly, follow up with `persistCharacterData`).
+- Writing **extension data** — use `writeExtensionField` / `writeExtensionFieldBulk`. Replace semantics: the caller controls the full value of `data.extensions.<key>`; sibling subkeys are not preserved.

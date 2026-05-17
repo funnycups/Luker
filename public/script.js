@@ -16240,9 +16240,11 @@ function syncCharacterFormFromData(charId, keys) {
 /**
  * Update one or more fields on a character's `data` object and persist the
  * change to disk, **without** requiring the character editor popup to be
- * open. The patch shape is dot-paths into `character.data` — top-level
- * fields use bare names (`description`, `name`), nested fields use dotted
- * notation (`extensions.world`, `extensions.depth_prompt.depth`).
+ * open. The patch shape is dot-paths into `character.data` for form-level
+ * fields (`description`, `name`, `personality`, ...). Dot-paths starting
+ * with `extensions.` (or the bare key `extensions`) are REJECTED — use
+ * `writeExtensionField` / `writeExtensionFieldBulk` for extension data,
+ * which have the correct replace semantics for plugin blobs.
  *
  * Companion to the existing `saveCharacterDebounced` / form path: that
  * route is still used when the popup *is* open (the form is the source of
@@ -16273,6 +16275,19 @@ export async function updateCharacterData(charId, patch, { persist = true, immed
     }
 
     const keys = Object.keys(patch || {});
+    // Refuse extension-blob writes. Extensions have their own replace-semantics
+    // write path (writeExtensionField / writeExtensionFieldBulk). Letting them
+    // through here would route them via /api/characters/edit's deep-merge,
+    // re-introducing the silent-merge bug this rejection is here to prevent.
+    for (const key of keys) {
+        if (key === 'extensions' || key.startsWith('extensions.')) {
+            throw new Error(
+                `updateCharacterData: refuses to write '${key}' — use ` +
+                `writeExtensionField/writeExtensionFieldBulk for extension data ` +
+                `(per-extension replace semantics).`,
+            );
+        }
+    }
     for (const key of keys) {
         setDotPath(character.data, key, patch[key]);
     }

@@ -1583,6 +1583,83 @@ function processUnsetSentinels(target, source) {
 }
 
 /**
+ * Validate a `replacePaths` array supplied to /api/characters/merge-attributes.
+ *
+ * Every entry must be a string that starts with `data.extensions.` and has
+ * at least one non-empty segment after that prefix. The prefix lock-in
+ * prevents callers from sneaking replace semantics into root character
+ * fields or other plugins' extension blobs.
+ *
+ * Non-array input is treated as "no replace paths" (ok with empty list)
+ * rather than a hard error — the field is optional on the wire.
+ *
+ * @param {unknown} replacePaths
+ * @returns {{ ok: true, paths: string[] } | { ok: false, error: string }}
+ */
+export function validateReplacePaths(replacePaths) {
+    if (!Array.isArray(replacePaths)) {
+        return { ok: true, paths: [] };
+    }
+    const ROOT = 'data.extensions';
+    const PREFIX = 'data.extensions.';
+    const out = [];
+    for (const entry of replacePaths) {
+        if (typeof entry !== 'string') {
+            return { ok: false, error: `replacePaths entry must be a string, got ${typeof entry}` };
+        }
+        // The entry must extend `data.extensions` — either with the dotted
+        // prefix `data.extensions.<segment>` or exactly the bare root (which
+        // is rejected below for lacking a trailing segment).
+        if (entry !== ROOT && !entry.startsWith(PREFIX)) {
+            return { ok: false, error: `replacePaths entry must start with "data.extensions.": ${entry}` };
+        }
+        const tail = entry.slice(PREFIX.length);
+        if (entry === ROOT || tail.length === 0) {
+            return { ok: false, error: `replacePaths entry must have a non-empty segment after "data.extensions.": ${entry}` };
+        }
+        const segments = tail.split('.');
+        if (segments.some(seg => seg.length === 0)) {
+            return { ok: false, error: `replacePaths entry has an empty path segment: ${entry}` };
+        }
+        out.push(entry);
+    }
+    return { ok: true, paths: out };
+}
+
+/**
+ * Apply replacePaths to the merged-character target before deepMerge runs.
+ *
+ * For each validated path:
+ *  1. Read the value at that dot-path in `update`.
+ *  2. If absent (`undefined`), skip — no-op preserves on-disk state.
+ *  3. If equal to the UNSET sentinel, delete that path from `target`.
+ *  4. Otherwise set the path on `target` to the value (wholesale).
+ *  5. Unset the path from `update` so the subsequent `deepMerge(character, update)`
+ *     does not re-introduce stale siblings via recursive merge.
+ *
+ * The function mutates both `target` and `update`. The remaining (non-replace)
+ * keys in `update` continue to flow through `deepMerge` and `processUnsetSentinels`
+ * with byte-identical semantics to today.
+ *
+ * @param {object} target  Character object loaded from disk (mutated)
+ * @param {object} update  Update payload (mutated — paths are lifted out)
+ * @param {string[]} replacePaths  Validated dot-paths to apply wholesale
+ */
+export function applyReplacePaths(target, update, replacePaths) {
+    if (!Array.isArray(replacePaths) || replacePaths.length === 0) return;
+    for (const dotPath of replacePaths) {
+        const value = _.get(update, dotPath);
+        if (value === undefined) continue;
+        if (value === UNSET_SENTINEL) {
+            _.unset(target, dotPath);
+        } else {
+            _.set(target, dotPath, value);
+        }
+        _.unset(update, dotPath);
+    }
+}
+
+/**
  * Reads a character card, applies a merge update (with sentinel-based
  * unsetting), validates the result, and writes it back.
  * @param {string} avatarPath Full path to the character PNG
@@ -1590,9 +1667,10 @@ function processUnsetSentinels(target, source) {
  * @param {object} updateData The merge payload to apply
  * @param {import("express").Request} request Express request object
  * @param {((data: any) => boolean) | null} [shouldSkip] Optional function to determine if a character should be skipped based on its original data (used for bulk merge filtering)
+ * @param {string[]} [replacePaths] Validated dot-paths under `data.extensions.*` to apply wholesale (replace, not merge) before deepMerge
  * @returns {Promise<{ok: boolean, error?: string, skipped?: boolean}>} Result of the merge operation, including any validation error
  */
-async function mergeCharacterUpdate(avatarPath, avatar, updateData, request, shouldSkip = null) {
+async function mergeCharacterUpdate(avatarPath, avatar, updateData, request, shouldSkip = null, replacePaths = []) {
     const pngStringData = await readCharacterData(avatarPath);
     if (!pngStringData) {
         return { ok: false, error: 'Invalid character file' };
@@ -1607,6 +1685,8 @@ async function mergeCharacterUpdate(avatarPath, avatar, updateData, request, sho
     const update = _.cloneDeep(updateData);
     _.unset(update, 'json_data');
     _.unset(character, 'json_data');
+
+    applyReplacePaths(character, update, replacePaths);
 
     character = deepMerge(character, update);
     processUnsetSentinels(character, update);
@@ -1654,6 +1734,11 @@ router.post('/merge-attributes', getFileNameValidationFunction('avatar'), async 
                 return response.status(400).send({ message: 'No valid update data provided.' });
             }
 
+            const validation = validateReplacePaths(request.body.replacePaths);
+            if (!validation.ok) {
+                return response.status(400).send({ message: `Invalid replacePaths: ${validation.error}` });
+            }
+
             // Determine which avatar files to process
             let targetAvatars;
             if (avatars.length > 0) {
@@ -1692,7 +1777,7 @@ router.post('/merge-attributes', getFileNameValidationFunction('avatar'), async 
                         };
                     }
 
-                    const result = await mergeCharacterUpdate(avatarPath, avatar, data, request, shouldSkip);
+                    const result = await mergeCharacterUpdate(avatarPath, avatar, data, request, shouldSkip, validation.paths);
                     if (result.ok) {
                         updated.push(avatar);
                     } else if (result.skipped) {
@@ -1727,12 +1812,23 @@ router.post('/merge-attributes', getFileNameValidationFunction('avatar'), async 
             return response.status(400).send('Error: invalid character file.');
         }
 
+        const validation = validateReplacePaths(update.replacePaths);
+        if (!validation.ok) {
+            return response.status(400).send({ message: `Invalid replacePaths: ${validation.error}` });
+        }
+
         let character = JSON.parse(pngStringData);
 
         _.unset(update, 'json_data');
+        _.unset(update, 'replacePaths');
         _.unset(character, 'json_data');
 
+        applyReplacePaths(character, update, validation.paths);
+
         character = getStoredCharaCardV2(deepMerge(character, update), request.user.directories, false);
+        // processUnsetSentinels still sweeps UNSET values nested inside a
+        // replace payload (caller built blob from spread-previous + UNSET).
+        processUnsetSentinels(character, update);
 
         const validator = new TavernCardValidator(character);
         const targetImg = (update.avatar).replace('.png', '');

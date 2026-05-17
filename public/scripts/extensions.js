@@ -2037,10 +2037,23 @@ export async function runGenerationInterceptors(chat, contextSize, type) {
 export const UNSET_VALUE = '__@@UNSET@@__';
 
 /**
- * Writes a field to the character's data extensions object.
+ * Writes `data.extensions[key]` on a character card and persists.
+ *
+ * Replace semantics: the full `value` argument becomes the new
+ * `data.extensions[key]` on disk. Sibling subkeys present in the previous
+ * on-disk value are NOT preserved — callers wanting a partial update must
+ * read the previous value, spread it, and overlay changes before calling.
+ *
+ * Other extension keys under `data.extensions.*` (other plugins' data) are
+ * never touched: the server scopes the replace to exactly the requested
+ * key.
+ *
+ * Pass {@link UNSET_VALUE} as `value` to delete the key entirely.
+ * Plain `null` writes a literal `null` (the key remains).
+ *
  * @param {number|string} characterId Index in the character array
  * @param {string} key Field name
- * @param {any} value Field value
+ * @param {any} value Field value, or {@link UNSET_VALUE} to delete
  * @returns {Promise<void>} When the field is written
  */
 export async function writeExtensionField(characterId, key, value) {
@@ -2113,6 +2126,7 @@ export async function writeExtensionField(characterId, key, value) {
                 [key]: value,
             },
         },
+        replacePaths: [`data.extensions.${key}`],
     };
     const mergeResponse = await fetch('/api/characters/merge-attributes', {
         method: 'POST',
@@ -2186,13 +2200,15 @@ export async function setCharacterState(avatar, namespace, data) {
  */
 
 /**
- * Writes (or deletes) an extension field for multiple characters in a single
- * bulk request. Unlike {@link writeExtensionField}, this sends one API call
- * for all characters, and the server processes them in parallel.
+ * Writes (or deletes) an extension field for multiple characters in a
+ * single bulk request. Like {@link writeExtensionField}, this uses
+ * replace semantics — the `value` argument becomes the full
+ * `data.extensions[key]` on each matching card, with no preservation
+ * of stale sibling subkeys.
  *
- * When `value` is {@link UNSET_VALUE} the extension key is **deleted** from
- * each matching character card. Passing `null` sets the field to `null`
- * (the key is preserved).
+ * When `value` is {@link UNSET_VALUE} the extension key is **deleted**
+ * from each matching character card. Passing `null` sets the field to
+ * `null` (the key is preserved).
  *
  * @param {string[]|null} avatars Avatar filenames to update. Pass `null` or an
  *   empty array to target **all** characters in the user's character directory.
@@ -2223,6 +2239,7 @@ export async function writeExtensionFieldBulk(avatars, key, value, { filterPath 
                 },
             },
         },
+        replacePaths: [`data.extensions.${key}`],
     };
 
     // Default filter: when unsetting, only touch characters that have the field
