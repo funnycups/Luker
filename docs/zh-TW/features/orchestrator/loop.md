@@ -25,6 +25,52 @@ Spec / Single / Agenda 三種模式都是「多 agent 協作生成單條主回�
 
 Loop 模式針對這些點做單 agent + 工具循環:同一會話、一套 preset、訊息陣列持續累加,agent 根據上一輪工具結果決定下一步呼叫什麼工具,主動呼叫 `finalize(capsule_text)` 時停下。core benefit 是上下文連續性——工具呼叫與結果天然在 messages 裡,不需要手工傳變數。
 
+## 預設編排流程
+
+Loop 模式只跑一個 Agent。它讀一眼手頭已有的資訊,決定是再去取點上下文,還是直接落筆寫 capsule,如此往復直到主動 `finalize`。
+
+```d2
+direction: down
+
+start: "新一回合開始\n(為下一句回覆準備編排指引)" {
+  shape: oval
+  style.fill: "#e8f5e9"
+}
+
+loop: "一個 Agent 單幹" {
+  style.fill: "#e1f5ff"
+
+  think: "看一眼到目前為止已收集到的資訊,\n決定下一步動作" {
+    style.fill: "#fffde7"
+  }
+
+  decide: "可以下筆寫 capsule 了嗎?" {
+    shape: diamond
+  }
+
+  tool: "呼叫一個工具\n翻聊天 · 查世界書 · 翻記憶圖 ·\n記便箋 · 聯網搜尋\n—— 結果直接落進會話裡" {
+    style.fill: "#fff3e0"
+  }
+
+  finalize: "寫下編排指引 capsule\n並 finalize 收尾" {
+    style.fill: "#c8e6c9"
+  }
+
+  think -> decide
+  decide -> tool: "還不行 —— 再取點上下文"
+  decide -> finalize: "可以"
+  tool -> think: "下一步"
+}
+
+out: "capsule 注入下一句主回覆" {
+  shape: oval
+  style.fill: "#f3e5f5"
+}
+
+start -> loop.think
+loop.finalize -> out
+```
+
 ## 切到 Loop
 
 擴展抽屜裡把執行模式選成 **單 Agent 循環 (loop)**。spec / agenda 的 board 自動收起,出現一個獨立的 Loop board。

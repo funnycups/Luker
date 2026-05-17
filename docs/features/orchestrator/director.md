@@ -63,6 +63,69 @@ The default main-agent system prompt is **tightly coupled** to the five default 
 
 ## Workflow outline
 
+```d2
+direction: down
+
+start: "A new turn arrives\n(the main LLM is NOT called this turn —\nthe orchestrator writes the body itself)" {
+  shape: oval
+  style.fill: "#e8f5e9"
+}
+
+loop: "Main agent at the writing desk" {
+  style.fill: "#e1f5ff"
+
+  think: "Read the draft so far,\ndecide the next move" {
+    style.fill: "#fffde7"
+  }
+
+  decide: "What does the\nmain agent need?" {
+    shape: diamond
+  }
+
+  consult: "Consult a specialist (default profile, 8 sub-agents)" {
+    style.fill: "#fff3e0"
+    pre: "Pre-draft scouts\nchat_scout · memory_scout ·\nlorebook_scout · epistemic_scout ·\ncanon_scout (on-demand)" {
+      style.fill: "#fffde7"
+    }
+    mid: "plot_brainstormer\nstructural sketch — dispatch several\nin parallel for diverse angles" {
+      style.fill: "#fffde7"
+    }
+    post: "Post-draft critics\nvoice_critic · continuity_critic" {
+      style.fill: "#fffde7"
+    }
+  }
+
+  research: "Look something up\nrecent chat · memory · lorebook ·\nweb · notes" {
+    style.fill: "#fffde7"
+  }
+
+  write: "Write or revise the body\nextend the prose · patch problem lines ·\nreread the draft" {
+    style.fill: "#fffde7"
+  }
+
+  finalize: "Wrap up · finalize the body" {
+    style.fill: "#c8e6c9"
+  }
+
+  think -> decide
+  decide -> consult: "consult"
+  decide -> research: "look up"
+  decide -> write: "write"
+  decide -> finalize: "finalize"
+  consult -> think: "specialist returns"
+  research -> think: "next move"
+  write -> think: "next move"
+}
+
+out: "Finished message body posted to chat\n(no capsule — the prose IS the output)" {
+  shape: oval
+  style.fill: "#f3e5f5"
+}
+
+start -> loop.think
+loop.finalize -> out
+```
+
 1. **The main agent runs in a tool-calling loop.** Each round it can call any of the tools available to it, until it calls `finalize`, hits the round cap, or the user aborts.
 
 2. **Tool groups available to the main agent:**

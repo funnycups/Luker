@@ -48,6 +48,59 @@ Agenda is dynamic dispatch, so runaway is easy. Three guards:
 
 Hitting any one forces the run to wrap up.
 
+## Default orchestration flow
+
+Agenda hands the wheel to a Planner agent that schedules a pool of workers per turn. The default profile ships the Planner plus five workers — `distiller`, `lorebook_reader`, `planner`, `critic`, and `finalizer`. Each round the Planner picks one or more workers from the pool, reads their results back, and replans if needed; once the board is resolved, `finalizer` writes the capsule.
+
+```d2
+direction: down
+
+start: "A new turn arrives" {
+  shape: oval
+  style.fill: "#e8f5e9"
+}
+
+loop: "Planner-driven dispatch" {
+  style.fill: "#e1f5ff"
+
+  driver: "Planner\nreads what's done · updates the todo board ·\ndispatches workers · decides when to wrap up" {
+    style.fill: "#fffde7"
+  }
+
+  pool: "Default worker pool — Planner picks per todo" {
+    style.fill: "#fff3e0"
+    distiller: "distiller\ncompact state read" {
+      style.fill: "#fffde7"
+    }
+    lorebook_reader: "lorebook_reader\nactive lorebook constraints" {
+      style.fill: "#fffde7"
+    }
+    planner: "planner\nnext-step progression" {
+      style.fill: "#fffde7"
+    }
+    critic: "critic\naudit assigned material" {
+      style.fill: "#fffde7"
+    }
+  }
+
+  driver -> pool: "dispatch one or more (parallel)"
+  pool -> driver: "results back · replan if needed"
+}
+
+finalizer: "finalizer\nread the resolved board · write the guidance capsule" {
+  style.fill: "#c8e6c9"
+}
+
+out: "Capsule injected into the next reply" {
+  shape: oval
+  style.fill: "#f3e5f5"
+}
+
+start -> loop.driver
+loop.driver -> finalizer: "wrap up"
+finalizer -> out
+```
+
 ## AI Iteration Studio
 
 Like Spec, Agenda is supported by the AI Iteration Studio — describe Planner behaviour and agent pool composition in natural language, let the AI assemble it. See [AI Iteration Studio](/features/orchestrator/iteration-studio). Quick Build is available in Agenda too.

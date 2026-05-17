@@ -25,6 +25,76 @@ Spec 是编排器的默认模式,也是其他模式的"基准"。它把工作流
 
 每个节点要么是 **worker**(干活),要么是 **review**(审查上一阶段的输出)。
 
+## 默认编排流程
+
+Spec 是一条固定流水线。默认 profile 自带 5 个 stage、7 个 worker —— `distiller` 读懂场景,接着 `lorebook_reader` + `anti_data_guard` 并行锁定硬约束,然后 `planner` + `recall_relevance` 并行规划下一拍,`critic` 评审(并可把上一阶段打回重做),最后 `synthesizer` 落笔写 capsule。
+
+```d2
+direction: right
+
+start: "新一回合开始" {
+  shape: oval
+  style.fill: "#e8f5e9"
+}
+
+s1: "Stage 1 · distill(serial)" {
+  style.fill: "#e1f5ff"
+  distiller: "distiller\n读懂本回合\n场景状态" {
+    style.fill: "#fffde7"
+  }
+}
+
+s2: "Stage 2 · grounding(parallel)" {
+  style.fill: "#e1f5ff"
+  lorebook_reader: "lorebook_reader\n锁定当前世界书\n硬约束" {
+    style.fill: "#fffde7"
+  }
+  anti_data_guard: "anti_data_guard\n拦截播报体 /\n观察体文笔" {
+    style.fill: "#fffde7"
+  }
+}
+
+s3: "Stage 3 · reason(parallel)" {
+  style.fill: "#e1f5ff"
+  planner: "planner\n规划下一拍" {
+    style.fill: "#fffde7"
+  }
+  recall_relevance: "recall_relevance\n召回相关\n记忆线索" {
+    style.fill: "#fffde7"
+  }
+}
+
+s4: "Stage 4 · review(serial)" {
+  style.fill: "#e1f5ff"
+  critic: "critic\n审查\n上一阶段" {
+    shape: diamond
+    style.fill: "#fff3e0"
+  }
+}
+
+s5: "Stage 5 · finalize(serial)" {
+  style.fill: "#e1f5ff"
+  synthesizer: "synthesizer\n落笔写编排\n指引 capsule" {
+    style.fill: "#c8e6c9"
+  }
+}
+
+out: "capsule 注入\n下一句主回复" {
+  shape: oval
+  style.fill: "#f3e5f5"
+}
+
+start -> s1
+s1 -> s2
+s2 -> s3
+s3 -> s4
+s4 -> s5: "通过"
+s4 -> s3: "打回重跑(带反馈)" {
+  style.stroke-dash: 3
+}
+s5 -> out
+```
+
 ## 手搓:Spec 工作流编辑器
 
 工作台搞不定的极致定制场景,直接动 stage / node。从编排器面板打开:**打开编排编辑器**。

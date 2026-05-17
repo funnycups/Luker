@@ -25,6 +25,76 @@ Each stage has one of two execution modes:
 
 Each node is either a **worker** (does work) or a **review** node (validates the previous stage's outputs).
 
+## Default orchestration flow
+
+Spec is a fixed pipeline. The default ships with five stages and seven workers — `distiller` reads the scene, then `lorebook_reader` + `anti_data_guard` lock in constraints in parallel, then `planner` + `recall_relevance` plan the next beat in parallel, then `critic` reviews (and can send the previous stage back for another pass), and finally `synthesizer` writes the capsule.
+
+```d2
+direction: right
+
+start: "A new turn arrives" {
+  shape: oval
+  style.fill: "#e8f5e9"
+}
+
+s1: "Stage 1 · distill (serial)" {
+  style.fill: "#e1f5ff"
+  distiller: "distiller\nread the scene\nstate this turn" {
+    style.fill: "#fffde7"
+  }
+}
+
+s2: "Stage 2 · grounding (parallel)" {
+  style.fill: "#e1f5ff"
+  lorebook_reader: "lorebook_reader\npull active\nlorebook constraints" {
+    style.fill: "#fffde7"
+  }
+  anti_data_guard: "anti_data_guard\nblock report /\nobservation-style prose" {
+    style.fill: "#fffde7"
+  }
+}
+
+s3: "Stage 3 · reason (parallel)" {
+  style.fill: "#e1f5ff"
+  planner: "planner\nplan the next beat" {
+    style.fill: "#fffde7"
+  }
+  recall_relevance: "recall_relevance\nsurface relevant\nmemory cues" {
+    style.fill: "#fffde7"
+  }
+}
+
+s4: "Stage 4 · review (serial)" {
+  style.fill: "#e1f5ff"
+  critic: "critic\naudit the\nprevious stage" {
+    shape: diamond
+    style.fill: "#fff3e0"
+  }
+}
+
+s5: "Stage 5 · finalize (serial)" {
+  style.fill: "#e1f5ff"
+  synthesizer: "synthesizer\nwrite the guidance\ncapsule" {
+    style.fill: "#c8e6c9"
+  }
+}
+
+out: "Capsule injected\ninto the next reply" {
+  shape: oval
+  style.fill: "#f3e5f5"
+}
+
+start -> s1
+s1 -> s2
+s2 -> s3
+s3 -> s4
+s4 -> s5: "approve"
+s4 -> s3: "rerun with feedback" {
+  style.stroke-dash: 3
+}
+s5 -> out
+```
+
 ## Manual: Spec workflow editor
 
 For fine-grained customization that the Studio can't reach, edit stages and nodes directly. From the orchestrator panel: **Open Orchestration Editor**.

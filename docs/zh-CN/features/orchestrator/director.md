@@ -63,6 +63,69 @@ Director 是编排器里唯一一种**接管(takeover)模式** —— 这一回�
 
 ## 工作流梗概
 
+```d2
+direction: down
+
+start: "新一回合开始\n(本回合主 LLM 不参与 ——\n编排器自己写正文)" {
+  shape: oval
+  style.fill: "#e8f5e9"
+}
+
+loop: "主代理坐在写作台前" {
+  style.fill: "#e1f5ff"
+
+  think: "看一眼当前草稿,\n决定下一步动作" {
+    style.fill: "#fffde7"
+  }
+
+  decide: "主代理\n下一步要做什么?" {
+    shape: diamond
+  }
+
+  consult: "找位顾问(默认 profile 自带 8 个子代理)" {
+    style.fill: "#fff3e0"
+    pre: "起草前侦察\nchat_scout · memory_scout ·\nlorebook_scout · epistemic_scout ·\ncanon_scout(按需)" {
+      style.fill: "#fffde7"
+    }
+    mid: "plot_brainstormer\n结构草图 —— 可按不同角度\n并行派出多份" {
+      style.fill: "#fffde7"
+    }
+    post: "起草后评审\nvoice_critic · continuity_critic" {
+      style.fill: "#fffde7"
+    }
+  }
+
+  research: "查点东西\n翻聊天 · 翻记忆 · 查世界书 ·\n联网 · 记笔记" {
+    style.fill: "#fffde7"
+  }
+
+  write: "动笔写或改正文\n续写 · 定点打补丁 ·\n回读自己的草稿" {
+    style.fill: "#fffde7"
+  }
+
+  finalize: "收笔 · finalize 正文" {
+    style.fill: "#c8e6c9"
+  }
+
+  think -> decide
+  decide -> consult: "找顾问"
+  decide -> research: "查资料"
+  decide -> write: "下笔"
+  decide -> finalize: "finalize"
+  consult -> think: "顾问返稿"
+  research -> think: "下一步"
+  write -> think: "下一步"
+}
+
+out: "成稿正文发到聊天\n(没有 capsule —— 正文就是输出)" {
+  shape: oval
+  style.fill: "#f3e5f5"
+}
+
+start -> loop.think
+loop.finalize -> out
+```
+
 1. **主代理在一个工具循环里跑**。每一轮它可以调若干工具,直到主动调 `finalize`、到达轮次上限、或被用户中止。
 
 2. **主代理能用的工具组**:

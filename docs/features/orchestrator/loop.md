@@ -25,6 +25,52 @@ Spec / Single / Agenda all model "multiple agents collaborate to produce a singl
 
 Loop mode addresses these with a single agent + tool loop: same conversation, one preset, the messages array keeps growing, and the agent decides what to call next from the previous round's results. It calls `finalize(capsule_text)` to stop. The core benefit is context continuity — tool calls and their results live naturally in messages, no manual variable threading.
 
+## Default orchestration flow
+
+Loop runs a single agent. The agent reads what it already has, decides whether to fetch more context or write the capsule, and repeats until it calls `finalize`.
+
+```d2
+direction: down
+
+start: "A new turn arrives\n(prepare guidance for the next reply)" {
+  shape: oval
+  style.fill: "#e8f5e9"
+}
+
+loop: "One agent on the job" {
+  style.fill: "#e1f5ff"
+
+  think: "Read what's been gathered so far,\ndecide the next move" {
+    style.fill: "#fffde7"
+  }
+
+  decide: "Ready to write the capsule?" {
+    shape: diamond
+  }
+
+  tool: "Call a tool\nread recent chat · search the lorebook ·\nbrowse memory · jot notes · web search\n— result joins the conversation" {
+    style.fill: "#fff3e0"
+  }
+
+  finalize: "Write the guidance capsule\nand finalize" {
+    style.fill: "#c8e6c9"
+  }
+
+  think -> decide
+  decide -> tool: "no — need more context"
+  decide -> finalize: "yes"
+  tool -> think: "next move"
+}
+
+out: "Capsule injected into the next reply" {
+  shape: oval
+  style.fill: "#f3e5f5"
+}
+
+start -> loop.think
+loop.finalize -> out
+```
+
 ## Switch to Loop
 
 Pick **Single-agent loop (loop)** from the execution mode dropdown in the extension drawer. The spec / agenda boards collapse and a dedicated Loop board appears.

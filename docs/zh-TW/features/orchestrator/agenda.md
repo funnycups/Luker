@@ -48,6 +48,59 @@ Agenda 是動態調度,失控容易,所以有三道閘:
 
 到任一上限就強制收尾。
 
+## 預設編排流程
+
+Agenda 把節奏交給 Planner Agent 來定,Planner 每輪從一個 worker 池裡挑人派活。預設 profile 自帶 Planner + 5 個 worker(`distiller`、`lorebook_reader`、`planner`、`critic`、`finalizer`);每輪 Planner 派出一個或多個 worker、讀回結果、必要時重新規劃,看板搞定後由 `finalizer` 落筆寫 capsule。
+
+```d2
+direction: down
+
+start: "新一回合開始" {
+  shape: oval
+  style.fill: "#e8f5e9"
+}
+
+loop: "Planner 主導的動態調度" {
+  style.fill: "#e1f5ff"
+
+  driver: "Planner\n看一眼已完成的工作 · 更新 todo 看板 ·\n派 worker 處理任務 · 判斷何時收尾" {
+    style.fill: "#fffde7"
+  }
+
+  pool: "預設 worker 池 —— Planner 按 todo 挑人派" {
+    style.fill: "#fff3e0"
+    distiller: "distiller\n緊湊的狀態讀取" {
+      style.fill: "#fffde7"
+    }
+    lorebook_reader: "lorebook_reader\n當前世界書硬約束" {
+      style.fill: "#fffde7"
+    }
+    planner: "planner\n下一拍進程規劃" {
+      style.fill: "#fffde7"
+    }
+    critic: "critic\n審計指定材料" {
+      style.fill: "#fffde7"
+    }
+  }
+
+  driver -> pool: "平行派一個或多個"
+  pool -> driver: "結果回收 · 必要時重新規劃"
+}
+
+finalizer: "finalizer\n讀完最終的看板 · 落筆寫編排指引 capsule" {
+  style.fill: "#c8e6c9"
+}
+
+out: "capsule 注入下一句主回覆" {
+  shape: oval
+  style.fill: "#f3e5f5"
+}
+
+start -> loop.driver
+loop.driver -> finalizer: "收尾"
+finalizer -> out
+```
+
 ## AI 迭代工作台
 
 和 Spec 一樣,Agenda 也有 AI 迭代工作台支援——自然語言描述 Planner 行為 / Agent 池構成,AI 幫你搭。詳見 [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio)。Quick Build 也適用 Agenda。
