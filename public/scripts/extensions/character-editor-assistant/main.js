@@ -988,17 +988,20 @@ async function mergeCharacterAttributes(context, avatar, patch) {
         throw new Error(`Character not found: ${target}`);
     }
 
-    // Flatten the nested patch shape this module historically built for
-    // `/api/characters/merge-attributes` (`{ description, data: { ..., extensions: {...} } }`)
-    // into dot-paths rooted at `character.data` so we can route through
-    // the popup-independent `updateCharacterData` API instead.
+    // Route the (historically hybrid) patch shape onto two persistence paths:
+    //  - form-level fields collapse into a dot-path patch routed through
+    //    `updateCharacterData` (which feeds `/api/characters/edit` with the
+    //    server's form-friendly deep-merge behavior).
+    //  - extension-level keys are written one-per-top-key via
+    //    `writeExtensionField`, matching the replace-semantics contract.
     //
-    // Legacy v1 root fields (description, personality, ...) and v2
+    // The legacy v1 root fields (description, personality, ...) and the v2
     // `data.*` fields collapse onto the same `data.<key>` target — the
-    // server-side `legacyCharacterStorageFieldSpecs` normalizes both
-    // input forms onto the v2 storage path, and
-    // `projectRuntimeCharacterFields` mirrors v2 back to root on reload.
-    const dotPathPatch = {};
+    // server normalizes both input forms onto the v2 storage path on the
+    // form path, and `projectRuntimeCharacterFields` mirrors v2 back to
+    // root on reload.
+    const formPatch = {};
+    const extPatchesByTopKey = {};
     if (patch && typeof patch === 'object') {
         for (const [key, value] of Object.entries(patch)) {
             if (key === 'avatar') {
@@ -1008,23 +1011,35 @@ async function mergeCharacterAttributes(context, avatar, patch) {
                 for (const [dataKey, dataValue] of Object.entries(value)) {
                     if (dataKey === 'extensions' && dataValue && typeof dataValue === 'object' && !Array.isArray(dataValue)) {
                         for (const [extKey, extValue] of Object.entries(dataValue)) {
-                            dotPathPatch[`extensions.${extKey}`] = extValue;
+                            // Replace semantics on each top-level extension key.
+                            // For top-level scalars (world, talkativeness, fav) this is
+                            // byte-identical to the previous deep-merge. For nested
+                            // objects (depth_prompt, …) it wipes previous siblings —
+                            // existing call sites all pass whole-blob updates, so this
+                            // matches their intent. Callers wanting partial-blob overlay
+                            // must build the merged value themselves before calling.
+                            extPatchesByTopKey[extKey] = extValue;
                         }
                     } else {
-                        dotPathPatch[dataKey] = dataValue;
+                        formPatch[dataKey] = dataValue;
                     }
                 }
             } else {
-                dotPathPatch[key] = value;
+                formPatch[key] = value;
             }
         }
     }
 
-    if (Object.keys(dotPathPatch).length === 0) {
+    if (Object.keys(formPatch).length === 0 && Object.keys(extPatchesByTopKey).length === 0) {
         return;
     }
 
-    await context.updateCharacterData(characterIndex, dotPathPatch, { immediate: true });
+    if (Object.keys(formPatch).length > 0) {
+        await context.updateCharacterData(characterIndex, formPatch, { immediate: true });
+    }
+    for (const [topKey, value] of Object.entries(extPatchesByTopKey)) {
+        await context.writeExtensionField(characterIndex, topKey, value);
+    }
 }
 
 async function syncWorldBindingUi(context, worldName = '') {

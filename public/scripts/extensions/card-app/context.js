@@ -239,12 +239,9 @@ export function buildContext(container, charId, config) {
                 throw new Error('[CardApp] No active character to update');
             }
 
-            // Tool field name → character.data dot-path. Same shape as the
-            // Studio `character_update_fields` tool: top-level fields use
-            // bare names; nested fields use dotted notation. `tags` is
-            // exposed as a comma-string for caller convenience but stored
-            // as an array in data.
-            const FIELD_TO_PATH = {
+            // Form-level fields go through updateCharacterData (which feeds
+            // /api/characters/edit and respects the form's deep-merge).
+            const FORM_FIELD_TO_PATH = {
                 name: 'name',
                 description: 'description',
                 personality: 'personality',
@@ -256,30 +253,85 @@ export function buildContext(container, charId, config) {
                 creator_notes: 'creator_notes',
                 creator: 'creator',
                 character_version: 'character_version',
-                talkativeness: 'extensions.talkativeness',
-                depth_prompt_prompt: 'extensions.depth_prompt.prompt',
-                depth_prompt_depth: 'extensions.depth_prompt.depth',
-                depth_prompt_role: 'extensions.depth_prompt.role',
             };
 
-            const patch = {};
+            // Extension-level fields live under data.extensions.<topKey>.<rest...>.
+            // We group by topKey, read the previous blob, overlay the new
+            // values, and writeExtensionField the merged blob — preserving
+            // the per-extension replace contract.
+            const EXT_FIELD_TO_PATH = {
+                talkativeness: ['talkativeness'],
+                depth_prompt_prompt: ['depth_prompt', 'prompt'],
+                depth_prompt_depth: ['depth_prompt', 'depth'],
+                depth_prompt_role: ['depth_prompt', 'role'],
+            };
+
+            const lukerCtx = getContext();
+            const character = lukerCtx.characters[this_chid];
+            const prevExt = (character?.data?.extensions && typeof character.data.extensions === 'object')
+                ? character.data.extensions
+                : {};
+
+            const formPatch = {};
+            /** @type {Record<string, any>} */
+            const extPatchesByTopKey = {};
+
             for (const [key, value] of Object.entries(fields)) {
                 if (key === 'tags') {
-                    patch.tags = typeof value === 'string'
+                    formPatch.tags = typeof value === 'string'
                         ? value.split(',').map(x => x.trim()).filter(Boolean)
                         : (Array.isArray(value) ? value : []);
                     continue;
                 }
-                const path = FIELD_TO_PATH[key];
-                if (!path) {
-                    console.warn(`[CardApp] updateCharacterFields: unknown field "${key}", skipping`);
+                if (FORM_FIELD_TO_PATH[key]) {
+                    formPatch[FORM_FIELD_TO_PATH[key]] = value;
                     continue;
                 }
-                patch[path] = value;
+                const extPath = EXT_FIELD_TO_PATH[key];
+                if (extPath) {
+                    const [topKey, ...rest] = extPath;
+                    if (!Object.prototype.hasOwnProperty.call(extPatchesByTopKey, topKey)) {
+                        // Clone the previous top-level extension value so we
+                        // can mutate without touching live state. writeExtensionField
+                        // will replace this whole key wholesale, so we MUST
+                        // carry over previous sibling subkeys.
+                        const prev = prevExt[topKey];
+                        if (rest.length === 0) {
+                            // scalar/leaf at the top — initialize with prev (may be replaced)
+                            extPatchesByTopKey[topKey] = prev;
+                        } else {
+                            extPatchesByTopKey[topKey] = (prev && typeof prev === 'object' && !Array.isArray(prev))
+                                ? { ...prev }
+                                : {};
+                        }
+                    }
+                    if (rest.length === 0) {
+                        // Top-level scalar (e.g. extensions.talkativeness).
+                        extPatchesByTopKey[topKey] = value;
+                    } else {
+                        let cursor = extPatchesByTopKey[topKey];
+                        for (let i = 0; i < rest.length - 1; i++) {
+                            const seg = rest[i];
+                            if (!cursor[seg] || typeof cursor[seg] !== 'object' || Array.isArray(cursor[seg])) {
+                                cursor[seg] = {};
+                            }
+                            cursor = cursor[seg];
+                        }
+                        cursor[rest[rest.length - 1]] = value;
+                    }
+                    continue;
+                }
+                console.warn(`[CardApp] updateCharacterFields: unknown field "${key}", skipping`);
             }
 
-            if (Object.keys(patch).length > 0) {
-                await getContext().updateCharacterData(this_chid, patch);
+            // Apply form-level changes (deep-merge path) first so they're
+            // in memory before the extension writes flush.
+            if (Object.keys(formPatch).length > 0) {
+                await lukerCtx.updateCharacterData(this_chid, formPatch);
+            }
+            // Apply each extension blob via writeExtensionField (replace semantics).
+            for (const [topKey, value] of Object.entries(extPatchesByTopKey)) {
+                await lukerCtx.writeExtensionField(this_chid, topKey, value);
             }
         },
 

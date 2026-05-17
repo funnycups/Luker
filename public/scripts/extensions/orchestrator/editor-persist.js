@@ -12,7 +12,8 @@
  *
  *   2. Character overrides live on the active character card under
  *      `data.extensions.orchestrator` and are persisted via
- *      `updateCharacterData`. Handled by
+ *      `context.writeExtensionField` (which scopes the write to this
+ *      plugin's key only). Handled by
  *      `persistCharacterEditor` (spec mode),
  *      `persistCharacterAgendaEditor` (agenda mode), and
  *      `persistCharacterLoopEditor` (loop mode); all delegate the
@@ -29,7 +30,8 @@
  * persist.
  */
 
-import { saveSettings, updateCharacterData } from '../../../script.js';
+import { saveSettings } from '../../../script.js';
+import { UNSET_VALUE } from '../../extensions.js';
 import {
     ORCH_EXECUTION_MODE_AGENDA,
     ORCH_EXECUTION_MODE_DIRECTOR,
@@ -55,7 +57,6 @@ import {
     sanitizeAgendaWorkingProfile,
 } from './agenda-profile.js';
 import { sanitizeLoopProfile } from './persistence.js';
-import { cloneJsonCompatible } from './spec-schema.js';
 import { ensureDirectorEditorIntegrity, ensureEditorIntegrity } from './editor-state.js';
 
 const MODULE_NAME = 'orchestrator';
@@ -308,19 +309,12 @@ export async function persistCharacterDirectorEditor(context, settings, avatar, 
 export async function persistOrchestratorCharacterExtension(context, characterIndex, modulePayload) {
     const id = Number(characterIndex);
     const character = Number.isInteger(id) ? context?.characters?.[id] : null;
-    if (!character) {
-        return false;
-    }
-
-    const nextExtensions = cloneJsonCompatible(character?.data?.extensions ?? {});
-    if (modulePayload && typeof modulePayload === 'object') {
-        nextExtensions[MODULE_NAME] = modulePayload;
-    } else {
-        delete nextExtensions[MODULE_NAME];
-    }
-
+    if (!character) return false;
     try {
-        await updateCharacterData(id, { 'extensions': nextExtensions }, { immediate: true });
+        const value = (modulePayload && typeof modulePayload === 'object')
+            ? modulePayload
+            : UNSET_VALUE;
+        await context.writeExtensionField(id, MODULE_NAME, value);
         return true;
     } catch (error) {
         console.error('Failed to persist orchestrator extension data to character card', error);

@@ -16,7 +16,7 @@ import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInf
 import { getCharaFilename } from '../../../utils.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { getContext } from '../../../st-context.js';
-import { extension_settings } from '../../../extensions.js';
+import { extension_settings, writeExtensionField } from '../../../extensions.js';
 import { getScriptsByType, saveScriptsByType, SCRIPT_TYPES } from '../../regex/engine.js';
 import { uuidv4 } from '../../../utils.js';
 import {
@@ -805,12 +805,15 @@ async function executeTool(charId, toolName, args, options = {}) {
  if (this_chid === undefined || this_chid === null) {
  return { ok: false, error: 'No active character' };
  }
- // Tool field name → character.data dot-path. `world` and `tags` get
- // special handling (world goes through charUpdatePrimaryWorld for the
- // embedded-book mirror cleanup; tags are exposed as a comma-string but
- // stored as an array). Everything else is a straight data write that
- // works whether the editor popup is open or closed.
- const FIELD_TO_PATH = {
+ // Form-level fields go through updateCharacterData (which feeds
+ // /api/characters/edit and respects the form's deep-merge). Extension
+ // fields are grouped by their top-level extension key, overlaid onto
+ // the previous blob (so unspecified subkeys survive), and written via
+ // writeExtensionField for the replace-semantics contract. `world` and
+ // `tags` get special handling (world goes through charUpdatePrimaryWorld
+ // for the embedded-book mirror cleanup; tags are exposed as a
+ // comma-string but stored as an array).
+ const FORM_FIELD_TO_PATH = {
  name: 'name',
  description: 'description',
  personality: 'personality',
@@ -822,13 +825,21 @@ async function executeTool(charId, toolName, args, options = {}) {
  creator_notes: 'creator_notes',
  creator: 'creator',
  character_version: 'character_version',
- talkativeness: 'extensions.talkativeness',
- depth_prompt_prompt: 'extensions.depth_prompt.prompt',
- depth_prompt_depth: 'extensions.depth_prompt.depth',
- depth_prompt_role: 'extensions.depth_prompt.role',
+ };
+ const EXT_FIELD_TO_PATH = {
+ talkativeness: ['talkativeness'],
+ depth_prompt_prompt: ['depth_prompt', 'prompt'],
+ depth_prompt_depth: ['depth_prompt', 'depth'],
+ depth_prompt_role: ['depth_prompt', 'role'],
  };
  const updated = [];
- const patch = {};
+ const formPatch = {};
+ /** @type {Record<string, any>} */
+ const extPatchesByTopKey = {};
+ const char = characters[this_chid];
+ const prevExt = (char?.data?.extensions && typeof char.data.extensions === 'object')
+ ? char.data.extensions
+ : {};
  for (const [key, value] of Object.entries(args.fields || {})) {
  if (key === 'world') {
  await charUpdatePrimaryWorld(String(value || ''));
@@ -836,19 +847,51 @@ async function executeTool(charId, toolName, args, options = {}) {
  continue;
  }
  if (key === 'tags') {
- patch.tags = typeof value === 'string'
+ formPatch.tags = typeof value === 'string'
  ? value.split(',').map(x => x.trim()).filter(Boolean)
  : (Array.isArray(value) ? value : []);
  updated.push(key);
  continue;
  }
- const path = FIELD_TO_PATH[key];
- if (!path) continue;
- patch[path] = value;
+ if (FORM_FIELD_TO_PATH[key]) {
+ formPatch[FORM_FIELD_TO_PATH[key]] = value;
+ updated.push(key);
+ continue;
+ }
+ const extPath = EXT_FIELD_TO_PATH[key];
+ if (extPath) {
+ const [topKey, ...rest] = extPath;
+ if (!Object.prototype.hasOwnProperty.call(extPatchesByTopKey, topKey)) {
+ const prev = prevExt[topKey];
+ if (rest.length === 0) {
+ extPatchesByTopKey[topKey] = prev;
+ } else {
+ extPatchesByTopKey[topKey] = (prev && typeof prev === 'object' && !Array.isArray(prev))
+ ? { ...prev }
+ : {};
+ }
+ }
+ if (rest.length === 0) {
+ extPatchesByTopKey[topKey] = value;
+ } else {
+ let cursor = extPatchesByTopKey[topKey];
+ for (let i = 0; i < rest.length - 1; i++) {
+ const seg = rest[i];
+ if (!cursor[seg] || typeof cursor[seg] !== 'object' || Array.isArray(cursor[seg])) {
+ cursor[seg] = {};
+ }
+ cursor = cursor[seg];
+ }
+ cursor[rest[rest.length - 1]] = value;
+ }
  updated.push(key);
  }
- if (Object.keys(patch).length > 0) {
- await getContext().updateCharacterData(this_chid, patch, { immediate: true });
+ }
+ if (Object.keys(formPatch).length > 0) {
+ await getContext().updateCharacterData(this_chid, formPatch, { immediate: true });
+ }
+ for (const [topKey, value] of Object.entries(extPatchesByTopKey)) {
+ await writeExtensionField(this_chid, topKey, value);
  }
  return { ok: true, message: `Updated fields: ${updated.join(', ')}` };
  }
@@ -1378,7 +1421,10 @@ async function executeTool(charId, toolName, args, options = {}) {
  const char = characters[this_chid];
  if (!char) return { ok: false, error: 'Character not found' };
  const previous = !!char?.data?.extensions?.card_app?.enabled;
- await getContext().updateCharacterData(this_chid, { 'extensions.card_app.enabled': next });
+ const prevCardApp = (char?.data?.extensions?.card_app && typeof char.data.extensions.card_app === 'object')
+ ? char.data.extensions.card_app
+ : {};
+ await writeExtensionField(this_chid, 'card_app', { ...prevCardApp, enabled: next });
  // Keep the editor checkbox in sync if the popup is currently open.
  const $checkbox = $('#card_app_enabled');
  if ($checkbox.length > 0 && $checkbox.prop('checked') !== next) {

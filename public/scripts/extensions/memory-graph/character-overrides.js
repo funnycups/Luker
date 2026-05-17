@@ -13,14 +13,17 @@
  *
  * Reading goes through `extension_settings[MODULE_NAME]` first and then
  * applies the per-character override on top via `getEffective*`. Writing
- * goes through `context.writeExtensionField`.
+ * goes through `context.writeExtensionField`, which replaces the whole
+ * `data.extensions.memory_graph` value on disk. The persist helpers below
+ * read the previous blob and spread it before overlaying the new key, so
+ * sibling overrides (e.g. schemaOverride when writing advancedOverride)
+ * survive the round-trip.
  *
- * Removal is implemented via the `UNSET_VALUE` sentinel rather than key
- * deletion or a plain `null`. `writeExtensionField` persists via merge-
- * attributes (server-side deep merge), so omitted keys are silently kept
- * and a literal `null` would just set the field to null without removing
- * it. The sentinel is the only way to actually delete the key from the
- * character card on disk.
+ * Removal is implemented via the `UNSET_VALUE` sentinel. Since
+ * `writeExtensionField` is replace-mode, omitting a subkey on the new
+ * blob already drops it — but `UNSET_VALUE` is still the way to remove
+ * a key from the blob's payload without changing the rest of the shape
+ * (the server's `processUnsetSentinels` sweep deletes it post-merge).
  *
  * To keep this module decoupled from main.js, callers wire an explicit
  * `deps` object once at module bootstrap (`configure({...})`) carrying:
@@ -215,10 +218,9 @@ export async function removeCharacterSchemaOverride(context, avatar) {
         return true;
     }
     const next = { ...previous };
-    // writeExtensionField persists via merge-attributes (deep merge on the
-    // server). To actually DELETE the key from the character card we must
-    // send the UNSET_VALUE sentinel; sending plain `null` would only set
-    // the field to null and leave a stale key on disk.
+    // Use UNSET_VALUE so the server's processUnsetSentinels sweep deletes
+    // the key from the on-disk blob. Plain `null` would only set the field
+    // to null and leave the key in place.
     next[CHARACTER_SCHEMA_OVERRIDE_KEY] = UNSET_VALUE;
     await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next);
     return true;
@@ -257,7 +259,7 @@ export async function removeCharacterAdvancedOverride(context, avatar) {
     }
     const next = { ...previous };
     // Same reasoning as removeCharacterSchemaOverride: use UNSET_VALUE so
-    // the merge layer actually deletes the key instead of writing null.
+    // the server actually deletes the key instead of leaving a null value.
     next[CHARACTER_ADVANCED_OVERRIDE_KEY] = UNSET_VALUE;
     await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next);
     return true;
