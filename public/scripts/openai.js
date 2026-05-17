@@ -4224,7 +4224,7 @@ async function sendOpenAIRequest(type, messages, signal, {
                     }
                 }
 
-                ToolManager.parseToolCalls(toolCalls, parsed, state.toolSignatures);
+                ToolManager.parseToolCalls(toolCalls, parsed, state.toolSignatures, { force: normalizedTools.length > 0 });
 
                 yield { text, swipes: swipes, logprobs: parseChatCompletionLogprobs(parsed), toolCalls: toolCalls, state: state };
             }
