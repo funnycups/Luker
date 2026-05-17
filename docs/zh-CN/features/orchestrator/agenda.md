@@ -101,6 +101,17 @@ loop.driver -> finalizer: "收尾"
 finalizer -> out
 ```
 
+默认 agent 在编排里各自负责什么:
+
+| Agent | 作用 | 简单示例(RP 场景) |
+|---|---|---|
+| `Planner`(循环驾驶员,非 worker) | 读聊天和用户消息,维护 todo 看板(`add` / `set_status` / `drop`),每轮从下面的 worker 池里挑一个或多个派活,读回结果,决定是继续规划还是交给 `finalizer`。 | 第 1 轮:并行派 `distiller` + `lorebook_reader`。第 2 轮:读完输出,判断还需要 `planner` 与 `critic`。第 3 轮:交给 `finalizer`。 |
+| `distiller` | 紧凑、有据可查的场景状态读取(用户意图、当前张力、即时方向);写给 Planner 与下游 agent 看,不直接面向玩家。 | 「林晚在试探用户对洛阳话题的态度;如果用户绕开,她会彻底换话题。」 |
+| `lorebook_reader` | 只挑出本回合**真的有影响**的世界书 / world-info 约束,写成可执行的写作 / 行为约束,不抄世界书原文。 | 「洛阳被围 —— 林晚不可能离开。文风:别用现代词,她会说『不知怎的』而非『somehow』。」 |
+| `planner` | 场景进程分析师 —— 提下一拍该走哪些 beat / 决策点,保留因果、不让世界围着用户转。 | 节拍:「用户追问 → 她躲闪 → 换个角度再问 → 她漏出一个洛阳细节 → 回复停在那」。 |
+| `critic` | 审 Planner 派过来的材料(连续性断裂、OOC 漂移、缺失硬约束、anti-data、不合理的因果),给审计结论;不亲自改写指引。 | 「这个计划里林晚说『没什么大不了』—— 现代腔调,这角色 OOC。其它通过。」 |
+| `finalizer`(Final Agent —— 整个流程的最后一站,只跑一次) | 读完最终的 todo 状态和选定的历次 run,合成一段简洁、可直接拿来起稿下一回合的编排指引文本 —— 就是最后注入主回复的那段 capsule。 | capsule:「林晚:躲闪 → 被追问 → 漏出一个洛阳姑姑的细节。用词保持古朴;她还在被围的洛阳城内。」 |
+
 ## AI 迭代工作台
 
 和 Spec 一样,Agenda 也有 AI 迭代工作台支持——自然语言描述 Planner 行为 / Agent 池构成,AI 帮你搭。详见 [AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio)。Quick Build 也适用 Agenda。

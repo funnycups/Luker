@@ -95,6 +95,18 @@ s4 -> s3: "rerun with feedback" {
 s5 -> out
 ```
 
+The default agents at a glance:
+
+| Agent | Purpose | Concrete RP example |
+|---|---|---|
+| `distiller` | Compact, evidence-grounded scene-state snapshot (user intent, active tensions, likely direction); everything downstream reads it. | Returns "Lin Wan asked about Luoyang for the first time since msg 12; she's deciding whether to trust the user with her family story". |
+| `lorebook_reader` | Extracts the hard constraints from active lorebook entries that must affect *this* turn (style bans, narration boundaries, role / taboo rules, continuity anchors), phrased as actionable writing directives. | Returns "Luoyan-MainCity is besieged this season — Lin Wan can't have left it casually; narration must not break the siege tension". |
+| `anti_data_guard` | Blocks report / observation / metric / weather-broadcast prose; flags violations as BLOCKERs with concrete rewrite directives. | Catches "Lin Wan's anxiety: 7/10" — BLOCKER. Rewrite directive: "show it in clenched fingers, not a number". |
+| `planner` | Proposes the next-step progression beats with clear causality, preserving character independence and world autonomy; doesn't bend the world around the user. | Beats: "Lin Wan deflects → user presses → she lets one detail slip → main reply ends on that detail". |
+| `recall_relevance` | Picks which recalled memory cues should actually influence this turn, ordered by immediate relevance; never invents unseen facts. | "msg-18 grandmother memory: HIGH relevance; msg-3 weather note: skip". |
+| `critic` *(review node)* | Audits the previous worker stage against the full review checklist (continuity, OOC, lorebook compliance, anti-data, world autonomy, …) and either **approves** or **requests rerun** of specific upstream workers. Never rewrites — only judges. | "Approve grounding; reject reason — `planner` had Lin Wan leaving besieged Luoyan, contradicts lorebook. Rerun `planner`: she stays in the city." |
+| `synthesizer` *(finalize node)* | Merges the approved worker outputs and the critic's feedback into the single guidance capsule that ends up injected into the next reply. | Capsule: "Lin Wan is anxious about the Luoyang topic; she'll deflect but let one family detail slip. Keep her in the besieged city. No data-style narration." |
+
 ## Manual: Spec workflow editor
 
 For fine-grained customization that the Studio can't reach, edit stages and nodes directly. From the orchestrator panel: **Open Orchestration Editor**.

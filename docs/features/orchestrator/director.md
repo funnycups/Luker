@@ -136,12 +136,19 @@ loop.finalize -> out
 3. **Sub-agents are one-shot consultants.** At dispatch time each one gets the chat snapshot, the main agent's task brief, its own system prompt, the enabled loop tools, and `get_draft()`. They don't see each other's existence, don't see the main agent's reasoning, **cannot dispatch deeper sub-agents**, and **cannot write into the message body** — they only return text, and the main agent decides what to do with it.
 
 4. **The default profile ships with 8 RP-tuned sub-agents:**
-   - Single-source pre-draft scouts (parallel-friendly, one source each): `chat_scout` (recent chat), `memory_scout` (memory graph), `lorebook_scout` (lorebook).
-   - Cross-source pre-draft scout: `epistemic_scout` joins chat (what each character has been exposed to) against lorebook / memory (what could be known in-world) and produces a per-character Knows / Doesn't-know / Omniscience-traps inventory — so the draft doesn't accidentally let a character "know" something they have no in-story way to know.
-   - On-demand external scout: `canon_scout` — dispatch only when the turn touches fanfiction / public-IP canon facts; skip for original-fiction sessions.
-   - Mid-stage brainstormer: `plot_brainstormer` — produces one structural sketch per angle; dispatch several in parallel with diverse angles to get genuinely different choices.
-   - Post-draft critics (parallel-friendly after the draft lands): `voice_critic` (voice / character consistency), `continuity_critic` (continuity).
-   - The default main-agent system prompt is **tightly coupled** to these 8 ids — it dispatches by id and writes task-brief templates for each. If you change the sub-agents, the main-agent prompt has to change to match.
+
+   | Sub-agent | Purpose | Concrete RP example |
+   |---|---|---|
+   | `chat_scout` | Pre-draft single-source scout — sweeps recent chat for load-bearing state. | Returns 5 `Item / Source / Why` lines, e.g. "Lin Wan's anxiety / msg 42 / will steer dialogue back to family". |
+   | `memory_scout` | Pre-draft single-source scout — surveys the memory graph for nodes relevant to this turn. | "msg-18 grandmother arc is the active emotional thread; msg-3 tea ceremony dormant." |
+   | `lorebook_scout` | Pre-draft single-source scout — pulls additional lorebook entries beyond what's already injected. | "`Luoyan-MainCity` entry not yet in context; relevant — Lin Wan's grandmother is there." |
+   | `epistemic_scout` | Cross-source pre-draft scout — joins chat (what characters have been exposed to) against lorebook / memory (what could be known in-world), producing a per-character Knows / Doesn't-know / Omniscience-traps inventory. | "Lin Wan does NOT know the user is the besieging general's son — she's only met him twice and the rumour-bearer hasn't appeared yet." |
+   | `canon_scout` | On-demand external scout for fanfiction / public-IP canon facts. Skip for original-fiction sessions. | When the scene touches Naruto canon: "jōnin promotion is by recommendation, not exam — relevant if Lin Wan claims to be a candidate." |
+   | `plot_brainstormer` | Mid-stage brainstormer — one structural sketch per angle. Dispatch several in parallel with diverse angles for genuinely different choices. | Angle A "direct confrontation" / Angle B "silence becomes the beat" / Angle C "she pivots to Luoyang to dodge". |
+   | `voice_critic` | Post-draft critic — voice / character consistency. Flags off-character lines. | "Draft has Lin Wan saying 'Hey buddy' — out-of-voice; she never uses casual address. Suggest: '公子' (formal) or silence." |
+   | `continuity_critic` | Post-draft critic — continuity against chat / memory / lorebook. Flags contradictions. | "Draft has Lin Wan setting down her teacup, but she's been holding a sword since msg 38." |
+
+   The default main-agent system prompt is **tightly coupled** to these 8 ids — it dispatches by id and writes task-brief templates for each. If you change the sub-agents, the main-agent prompt has to change to match.
 
 5. **The main agent's view of each sub-agent is just `id` + `description`** — the user-authored `systemPrompt` is **not** leaked into the main agent's prompt. The description is the only signal it has when "picking from the menu", so the defaults follow a three-part shape (role / what it does NOT know / what to put in each task brief). The Studio's iteration system prompt teaches this convention to the AI editing profiles, so new sub-agents come out with descriptions the main agent can actually use.
 

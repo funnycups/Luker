@@ -101,6 +101,17 @@ loop.driver -> finalizer: "wrap up"
 finalizer -> out
 ```
 
+The default agents at a glance:
+
+| Agent | Purpose | Concrete RP example |
+|---|---|---|
+| `Planner` *(loop driver, not a worker)* | Reads the chat and user message, maintains the todo board (`add` / `set_status` / `drop`), picks one or more workers from the pool each round to dispatch, reads their results, and decides whether to keep planning or hand off to `finalizer`. | Round 1: dispatches `distiller` + `lorebook_reader` in parallel. Round 2: outputs read; decides the scene also needs `planner` + `critic`. Round 3: hands off to `finalizer`. |
+| `distiller` | Compact, evidence-grounded scene-state read (user intent, active tensions, immediate direction); written for the Planner and downstream agents, not for the player-facing reply. | "Lin Wan probing user's stance on the Luoyang topic; will change subject completely if user redirects." |
+| `lorebook_reader` | Extracts only the lorebook / world-info constraints that materially matter this turn — phrased as practical writing / behaviour constraints, not lorebook summary. | "Luoyan is besieged — Lin Wan cannot have left. Style: archaic register; she'd say '不知怎的' not 'somehow'." |
+| `planner` | Scene-progression analyst — proposes what next-step beats or decision points matter, with causality preserved and the world not bent around the user. | Beats: "user presses → she deflects → he tries a different angle → she lets one Luoyang detail slip → reply ends there". |
+| `critic` | Audits the material the Planner hands it (continuity breaks, OOC drift, missing hard constraints, anti-data, implausible causality); returns the audit, never rewrites the guidance itself. | "Plan has Lin Wan saying 'no big deal' — modern register, OOC for this character. Rest is OK." |
+| `finalizer` *(Final Agent — runs once at the end)* | Reads the resolved todo state and the selected prior runs and merges them into one concise orchestration guidance text. That text becomes the capsule injected into the next reply. | Capsule: "Lin Wan: deflect → press → slip-of-tongue about her aunt in Luoyang. Archaic diction. She's still inside besieged Luoyan." |
+
 ## AI Iteration Studio
 
 Like Spec, Agenda is supported by the AI Iteration Studio — describe Planner behaviour and agent pool composition in natural language, let the AI assemble it. See [AI Iteration Studio](/features/orchestrator/iteration-studio). Quick Build is available in Agenda too.
