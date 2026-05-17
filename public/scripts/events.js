@@ -63,6 +63,7 @@ export const event_types = {
     GENERATE_BEFORE_COMBINE_PROMPTS: 'generate_before_combine_prompts',
     GENERATE_AFTER_COMBINE_PROMPTS: 'generate_after_combine_prompts',
     GENERATE_AFTER_DATA: 'generate_after_data',
+    GENERATE_TAKEOVER_DISPATCH: 'generate_takeover_dispatch',
     GROUP_MEMBER_DRAFTED: 'group_member_drafted',
     GROUP_WRAPPER_STARTED: 'group_wrapper_started',
     GROUP_WRAPPER_FINISHED: 'group_wrapper_finished',

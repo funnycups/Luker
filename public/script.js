@@ -8240,6 +8240,160 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
         console.debug(`pushed prompt bits to itemizedPrompts array. Length is now: ${itemizedPrompts.length}`);
 
+        // ── Plugin takeover hook ──
+        // Allow extensions to claim message production before the LLM is
+        // dispatched. The plugin returns a buffer-only `MessageEditorHandle`
+        // (see public/scripts/message-takeover.js); the kernel owns chat
+        // mutation, redraw, persistence, and rollback. The plugin only
+        // writes text/reasoning into the handle and calls commit/discard.
+        if (type !== 'quiet' && type !== 'impersonate') {
+            const dispatchEvent = {
+                type,
+                isContinue,
+                forceName2: force_name2,
+                isStreamingEnabled: isStreamingEnabled(),
+                finalPrompt,
+                generateData: generate_data,
+                takeoverHandle: null,
+                abortSignal: abortController.signal,
+            };
+            await eventSource.emit(event_types.GENERATE_TAKEOVER_DISPATCH, dispatchEvent);
+
+            if (dispatchEvent.takeoverHandle) {
+                const handle = dispatchEvent.takeoverHandle;
+                const gen_started = new Date();
+                hideSwipeButtons();
+
+                // ── 1. Acquire/push placeholder per type ──
+                const placeholderId = await acquireTakeoverPlaceholder(type);
+                const originalText = String(chat[placeholderId]?.mes ?? '');
+                const originalReasoning = String(chat[placeholderId]?.extra?.reasoning ?? '');
+
+                // ── 2. Wire onUpdate → live redraw + chat mutation ──
+                handle.setOnUpdate?.((text, reasoning) => {
+                    if (!chat[placeholderId]) return;
+                    chat[placeholderId].mes = String(text ?? '');
+                    if (!chat[placeholderId].extra) chat[placeholderId].extra = {};
+                    chat[placeholderId].extra.reasoning = String(reasoning ?? '');
+                    redrawMessageBubble(placeholderId);
+                    eventSource.emit(event_types.MESSAGE_UPDATED, placeholderId);
+                });
+
+                // ── 3. Wait for plugin handle to settle ──
+                // No time-based watchdog: per project policy the kernel does
+                // not time-trigger aborts. Abort is user-driven (stop button
+                // → abortController.abort() → plugin honors the signal and
+                // calls handle.discard in its catch path). If a plugin
+                // never settles the handle, that is a plugin bug, not
+                // something the kernel papers over with a timeout.
+                const outcome = await handle.complete;
+                try { handle.setOnUpdate?.(null); } catch { /* idempotent */ }
+                showSwipeButtons();
+
+                // ── 4. Route by outcome ──
+                if (outcome.status === 'committed') {
+                    const cleanedText = applyPostGenerationText(outcome.finalText, isImpersonate, isContinue);
+                    const finalReasoning = String(outcome.finalReasoning ?? '');
+                    const slot = chat[placeholderId];
+
+                    // Mutate the canonical slot directly. The placeholder
+                    // for `normal`/`regenerate` was already pushed by
+                    // `saveReply(fromStreaming:true)` in
+                    // `acquireTakeoverPlaceholder`, so the slot is the
+                    // canonical chat entry — no second saveReply needed.
+                    // (Mirrors the streaming pattern: saveReply once at
+                    // start, then mutate-and-emit on finish.)
+                    if (slot) {
+                        slot.mes = cleanedText;
+                        if (!slot.extra) slot.extra = {};
+                        slot.extra.reasoning = finalReasoning;
+                        slot.extra.reasoning_duration = null;
+                        slot.extra.api = getGeneratingApi();
+                        slot.extra.model = getGeneratingModel();
+                        slot.gen_started = gen_started;
+                        slot.gen_finished = new Date();
+                        slot.send_date = getMessageTimeStamp();
+                        if (power_user.message_token_count_enabled) {
+                            const tokenCountText = (finalReasoning || '') + cleanedText;
+                            slot.extra.token_count = await getTokenCountAsync(tokenCountText, 0);
+                        }
+                        // Sync mes into the active swipe slot (saveReply
+                        // initialised `swipes`/`swipe_info` at placeholder
+                        // push time for `normal`/`regenerate`; for `swipe`
+                        // the swipe-create logic did it; for `continue`
+                        // the existing assistant slot already has them).
+                        if (Array.isArray(slot.swipes) && typeof slot.swipe_id === 'number') {
+                            slot.swipes[slot.swipe_id] = slot.mes;
+                            if (Array.isArray(slot.swipe_info) && slot.swipe_info[slot.swipe_id]) {
+                                slot.swipe_info[slot.swipe_id] = {
+                                    send_date: slot.send_date,
+                                    gen_started: slot.gen_started,
+                                    gen_finished: slot.gen_finished,
+                                    extra: structuredClone(slot.extra),
+                                };
+                            }
+                        }
+                    }
+
+                    extractMessageById(placeholderId);
+                    redrawMessageBubble(placeholderId);
+
+                    await eventSource.emit(event_types.MESSAGE_RECEIVED, placeholderId, type);
+                    await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, placeholderId, type);
+
+                    // Persist (mirrors onFinishStreaming's strategy).
+                    const isAborted = abortController && abortController.signal.aborted;
+                    const serverPersistedReply = isLastLukerReplyPersistedByServerForApi();
+                    const canUseIncrementalAppend = !isAborted
+                        && type === 'normal'
+                        && placeholderId === chat.length - 1
+                        && chat[placeholderId]
+                        && !chat[placeholderId].is_user
+                        && !serverPersistedReply;
+                    if (serverPersistedReply) {
+                        // Server already has it; nothing to do.
+                    } else if (canUseIncrementalAppend) {
+                        const appended = await appendChatMessages([chat[placeholderId]]);
+                        if (!appended) await saveChatConditional();
+                    } else {
+                        await saveChatConditional();
+                    }
+
+                    // Note: `statMesProcess` was already called inside the
+                    // `saveReply({ fromStreaming: true })` placeholder push
+                    // in `acquireTakeoverPlaceholder`. We deliberately don't
+                    // re-run it here — matching the streaming pattern
+                    // (`onStartStreaming` runs stats once, `onFinishStreaming`
+                    // does not). Word counts therefore reflect the message
+                    // existence, not its final length, which is consistent
+                    // with streaming. For `swipe`/`continue` (no
+                    // placeholder push), stats were already updated by
+                    // the prior bookkeeping that created the slot.
+
+                    triggerAutoContinue?.(cleanedText, false);
+                    unblockGeneration(type);
+                    // Wrap with `fromTakeover` so onSuccess short-circuits
+                    // (otherwise it would re-run saveReply on the returned
+                    // text and duplicate the entry).
+                    return Object.defineProperties(new String(cleanedText), {
+                        'fromTakeover': { value: true },
+                    });
+                }
+
+                // status === 'discarded'
+                try {
+                    await rollbackTakeoverPlaceholder(placeholderId, type, originalText, originalReasoning);
+                } catch (rollbackErr) {
+                    console.error('[takeover] rollback failed', rollbackErr);
+                }
+                try { await eventSource.emit(event_types.GENERATION_STOPPED); } catch { /* best-effort */ }
+                unblockGeneration(type);
+                return Object.defineProperties(new String(''), {
+                    'fromTakeover': { value: true },
+                });
+            }
+        }
+
         if (isStreamingEnabled() && type !== 'quiet') {
             continue_mag = promptReasoning.removePrefix(continue_mag);
             streamingProcessor = new StreamingProcessor(type, force_name2, generation_started, continue_mag, promptReasoning);
@@ -8324,6 +8478,14 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         if (!data) return;
 
         if (data?.fromStream) {
+            return data;
+        }
+
+        // Plugin takeover path already saved the assistant message via the
+        // editor handle; the marker tells us not to re-run extraction +
+        // saveReply (which would push a second, duplicate chat entry).
+        if (data?.fromTakeover) {
+            unblockGeneration(type);
             return data;
         }
 
@@ -8626,9 +8788,26 @@ function unblockGeneration(type) {
     setGenerationProgress(0);
     flushEphemeralStoppingStrings();
     flushWIInjections();
+    // Clear the "reply being generated" desktop / Android notification
+    // flag. Most generation paths reach a `notifyMessageComplete` or
+    // `notifyMessageFailure` call (each of which already clears the
+    // flag internally) before they get here, but plugin-takeover paths
+    // (e.g. orchestrator director mode) bypass those notify entry
+    // points and would otherwise leave the flag set — the in-page
+    // "X: reply being generated" notification kept firing on every
+    // focus loss until the next generate cycle. Idempotent for paths
+    // that already cleared.
+    clearMessageProgressNotification();
 }
 
 function forceUnblockGenerationUi() {
+    // Mirror `unblockGeneration`'s `is_send_press = false`. The user-driven
+    // stop path (`stopGeneration`) aborts the in-flight request and calls
+    // this immediately so the send button reactivates, but if we don't
+    // also clear `is_send_press` the takeover-discard cleanup can race
+    // with the next user click — the click sees the still-true flag and
+    // gets swallowed.
+    is_send_press = false;
     activateSendButtons();
     setGenerationProgress(0);
     flushEphemeralStoppingStrings();
@@ -9631,6 +9810,132 @@ async function processImageAttachment(message, { imageUrls }) {
  * @property {string} type Type of generation
  * @property {string} getMessage Generated message
  */
+
+// ── Takeover-branch helpers ──────────────────────────────────────────────
+// These are owned by the kernel takeover branch in Generate(). They live
+// next to saveReply because the commit path delegates persistence to it.
+
+/**
+ * Acquire (or reuse) the chat slot that the takeover handle will drive.
+ *
+ * - For `normal` / `regenerate`: delegate the push to `saveReply` with
+ *   `fromStreaming: true` (mirroring how `StreamingProcessor.onStartStreaming`
+ *   sets up its placeholder). That gives us swipe/swipe_info init, token
+ *   counting, group avatar handling, and incremental persistence for free,
+ *   while suppressing the `MESSAGE_RECEIVED` / `CHARACTER_MESSAGE_RENDERED`
+ *   emits we don't want yet. (For `regenerate`, Generate() has already
+ *   removed the previous assistant message before this point.)
+ * - For `swipe` / `continue`: the previous Generate() bookkeeping has
+ *   already left the canonical slot at `chat.length - 1`. We return that
+ *   index unchanged so the live-redraw mutates the existing slot.
+ *
+ * @param {string} type Generation type ('normal' | 'regenerate' | 'swipe' | 'continue')
+ * @returns {Promise<number>} The id of the placeholder slot in `chat[]`.
+ */
+async function acquireTakeoverPlaceholder(type) {
+    if (type === 'continue' || type === 'swipe') {
+        return chat.length - 1;
+    }
+    // normal / regenerate: have saveReply push an empty placeholder for us.
+    await saveReply({ type, getMessage: '', fromStreaming: true });
+    return chat.length - 1;
+}
+
+/**
+ * Roll back the placeholder slot when the takeover handle is discarded or
+ * watchdog-aborted.
+ *
+ * - For `normal` / `regenerate`: splice the placeholder out of `chat[]`,
+ *   patch-remove it on the server, and `reloadCurrentChat()` to repaint.
+ *   (`regenerate` already lost its prior assistant message in Generate()
+ *   pre-emission; the rollback here removes only the takeover placeholder
+ *   we pushed, leaving the chat shorter than before the regenerate.)
+ * - For `swipe` / `continue`: restore the original `mes` / `reasoning`
+ *   on the existing slot and patch-replace those fields. (We don't blow
+ *   the slot away because pre-takeover bookkeeping created it.)
+ *
+ * @param {number} messageId Index of the placeholder slot.
+ * @param {string} type Generation type.
+ * @param {string} origText Original `mes` value (pre-takeover snapshot).
+ * @param {string} origReasoning Original `extra.reasoning` value.
+ */
+async function rollbackTakeoverPlaceholder(messageId, type, origText, origReasoning) {
+    if (type === 'normal' || type === 'regenerate') {
+        chat.splice(messageId, 1);
+        const patched = await patchChatMessages([{ op: 'remove', path: `/${messageId}` }]);
+        if (!patched) await saveChatConditional();
+        await reloadCurrentChat();
+        return;
+    }
+    // swipe / continue — restore original content on the slot.
+    if (chat[messageId]) {
+        chat[messageId].mes = origText;
+        if (!chat[messageId].extra) chat[messageId].extra = {};
+        chat[messageId].extra.reasoning = origReasoning;
+    }
+    const ops = [{ op: 'replace', path: `/${messageId}/mes`, value: origText }];
+    if (chat[messageId]?.extra) {
+        ops.push({ op: 'replace', path: `/${messageId}/extra/reasoning`, value: origReasoning });
+    }
+    const patched = await patchChatMessages(ops);
+    if (!patched) await saveChatConditional();
+    redrawMessageBubble(messageId);
+}
+
+/**
+ * Re-render the message bubble for `messageId` from the current `chat[i]`
+ * state. Used by both the live-update onUpdate path and the rollback path.
+ *
+ * @param {number} messageId
+ */
+function redrawMessageBubble(messageId) {
+    const msg = chat[messageId];
+    if (!msg) return;
+    const block = $(`#chat .mes[mesid="${messageId}"] .mes_text`);
+    if (block.length) {
+        block.empty().append(
+            messageFormatting(
+                String(msg.mes ?? ''),
+                msg.name ?? '',
+                msg.is_system,
+                msg.is_user,
+                Number(messageId),
+                {},
+                false,
+            ),
+        );
+    }
+    try {
+        const mesEl = $(`#chat .mes[mesid="${messageId}"]`).get(0);
+        if (mesEl && typeof updateReasoningUI === 'function') updateReasoningUI(mesEl);
+    } catch { /* tolerate missing DOM in edge transitions */ }
+}
+
+/**
+ * Apply the same post-generation text pipeline that `onSuccess` runs for
+ * non-streaming responses (regex, stopping strings, cleanup, trim). The
+ * takeover handle hands us a "raw" final string from the plugin; this
+ * normalises it before it lands in `chat[]`.
+ *
+ * @param {string} text Raw takeover output.
+ * @param {boolean} isImpersonate Whether the parent generate is an impersonation.
+ * @param {boolean} isContinue Whether the parent generate is a continuation.
+ * @returns {string} Cleaned text ready for persistence.
+ */
+function applyPostGenerationText(text, isImpersonate, isContinue) {
+    let out = String(text ?? '');
+    out = cleanUpMessage({
+        getMessage: out,
+        isImpersonate,
+        isContinue,
+        displayIncompleteSentences: false,
+    });
+    if (power_user.trim_spaces) {
+        out = out.trim();
+    }
+    return out;
+}
+
 export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null }) {
     // Backward compatibility
     if (arguments.length > 1 && typeof arguments[0] !== 'object') {

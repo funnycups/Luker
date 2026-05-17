@@ -151,6 +151,7 @@ import { getRegexedString, regex_placement } from './extensions/regex/engine.js'
 import { addMessages, updateMessages, deleteMessages, getMessage, getMessageCount } from './messages.js';
 import { createFloorState } from './floor-state.js';
 import { generateTask, generateTaskStream, GenerateTaskError } from './generate-task.js';
+import { createMessageEditorHandle, TakeoverError } from './message-takeover.js';
 import { generateHorde } from './horde.js';
 import { getKoboldGenerationData, kai_settings, koboldai_settings, koboldai_setting_names } from './kai-settings.js';
 import { getNovelGenerationData, nai_settings, novelai_settings, novelai_setting_names } from './nai-settings.js';
@@ -2214,6 +2215,8 @@ export function getContext() {
         generateTask,
         generateTaskStream,
         GenerateTaskError,
+        createMessageEditorHandle,
+        TakeoverError,
         /** @deprecated Use addMessages() instead */
         addOneMessage,
         /** @deprecated Use deleteMessages(chat.length - 1) instead */

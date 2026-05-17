@@ -293,6 +293,10 @@ Breaking out of `for await (const chunk of stream)` does **not** cancel the unde
 
 `await result` works on its own. Increments arriving before any consumer attaches are dropped (not buffered for late delivery); the internal accumulator still builds the complete terminal `result`. Use this when you want the response shape without per-token rendering.
 
+## Message Takeover
+
+For flows that want to produce the assistant message directly instead of guiding the main LLM, see **[Message Takeover](./message-takeover.md)**. That API lets a plugin own message production end to end while the main LLM call is skipped.
+
 ## Migration Cookbook
 
 If your extension was previously calling `sendOpenAIRequest` directly, here's how to translate.
