@@ -532,6 +532,110 @@ function renderLoopModePanelHtml(trace) {
 </div>`;
 }
 
+/**
+ * Director-mode trace panels. Mirrors agenda's two-section layout:
+ *   - left: Main Agent — per-round records + the running conversation
+ *   - right: Sub-agent Dispatches — each dispatch as an expandable card
+ *     (handleId, role, status badge, task brief, output preview, full
+ *     mini-loop conversation in a collapsed details element).
+ *
+ * Both panels read from `trace.director` (attached by
+ * `attachOrchestrationRuntimeDirectorState`). The conversation alias is
+ * live — mutations during the run show up here on popup open.
+ */
+function renderDirectorSubagentCardHtml(entry) {
+    if (!entry || typeof entry !== 'object') return '';
+    const statusKey = String(entry?.status || 'idle').trim().toLowerCase() || 'idle';
+    const statusLabel = formatOrchestrationRuntimeStatusLabel(entry?.status || '');
+    const handleId = String(entry?.handleId || '');
+    const subagentId = String(entry?.subagentId || '');
+    const isInline = Boolean(entry?.isInline);
+    const task = String(entry?.task || '');
+    const outputText = String(entry?.outputText || '');
+    const previewText = truncateOrchestrationRuntimePreview(outputText, 240);
+    const conversation = entry?.conversation && typeof entry.conversation === 'object'
+        ? sanitizeOrchestrationRuntimeConversation(entry.conversation)
+        : null;
+    const hasConversation = Array.isArray(conversation?.messages) && conversation.messages.length > 0;
+    const inlineBadge = isInline
+        ? ` <span class="luker-studio-badge">${escapeHtml(i18n('inline'))}</span>`
+        : '';
+    const systemPromptPreview = isInline ? String(entry?.systemPromptPreview || '') : '';
+    return `
+<details class="luker-studio-agenda-attempt luker-studio-agenda-attempt-agent"${statusKey === 'failed' || statusKey === 'running' || statusKey === 'cancelled' ? ' open' : ''}>
+    <summary>
+        <span class="luker-studio-agenda-attempt-title">${escapeHtml(handleId)}${escapeHtml(subagentId ? `: ${subagentId}` : '')}</span>
+        <span class="luker-studio-badge luker-studio-badge-${escapeHtml(statusKey)}">${escapeHtml(statusLabel)}</span>${inlineBadge}
+    </summary>
+    ${task ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Task brief'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(task)}</pre>` : ''}
+    ${systemPromptPreview ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Inline system prompt (preview)'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(systemPromptPreview)}</pre>` : ''}
+    ${entry?.error ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Failed'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(String(entry.error || ''))}</pre>` : ''}
+    ${previewText ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Output'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(outputText)}</pre>` : ''}
+    ${hasConversation ? `<details class="luker-studio-attempt-convo">
+        <summary>${escapeHtml(i18n('Conversation'))} <span class="luker-studio-convo-count">(${escapeHtml(String(conversation.messages.length))})</span></summary>
+        ${renderTraceConversationHtml(conversation)}
+    </details>` : ''}
+</details>`;
+}
+
+function renderDirectorMainAgentRoundsHtml(trace) {
+    const rounds = Array.isArray(trace?.director?.mainAgent?.rounds) ? trace.director.mainAgent.rounds : [];
+    if (rounds.length === 0) {
+        return `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No main-agent rounds recorded.'))}</div>`;
+    }
+    return rounds.map((r) => {
+        const round = Number(r?.round ?? 0);
+        const text = String(r?.assistantText || '');
+        const preview = truncateOrchestrationRuntimePreview(text, 240);
+        const calls = Array.isArray(r?.toolCalls) ? r.toolCalls : [];
+        const callsSummary = calls.length === 0
+            ? `<div class="luker-studio-empty-hint">${escapeHtml(i18n('(no tool calls — reasoning-only round)'))}</div>`
+            : `<ul class="luker-studio-attempt-tool-list">${
+                calls.map(c => `<li><b>${escapeHtml(String(c?.name || ''))}</b>${c?.args ? `<pre class="luker-studio-attempt-pre">${escapeHtml(toReadableYamlText(c.args, '{}'))}</pre>` : ''}</li>`).join('')
+            }</ul>`;
+        return `
+<details class="luker-studio-agenda-attempt luker-studio-agenda-attempt-planner"${calls.length === 0 ? '' : ' open'}>
+    <summary>
+        <span class="luker-studio-agenda-attempt-title">${escapeHtml(i18nFormat('Round ${0}', round))}</span>
+        <span class="luker-studio-badge">${escapeHtml(i18nFormat('${0} tool call(s)', calls.length))}</span>
+    </summary>
+    ${preview ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Reasoning / assistant text'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(text)}</pre>` : ''}
+    <div class="luker-studio-attempt-label">${escapeHtml(i18n('Tool calls'))}</div>
+    ${callsSummary}
+</details>`;
+    }).join('');
+}
+
+function renderDirectorModePanelsHtml(trace) {
+    const director = trace?.director && typeof trace.director === 'object' ? trace.director : null;
+    const mainConversation = director?.mainAgent?.conversation
+        ? sanitizeOrchestrationRuntimeConversation(director.mainAgent.conversation)
+        : null;
+    const subagents = Array.isArray(director?.subagents) ? director.subagents : [];
+
+    const subagentsHtml = subagents.length === 0
+        ? `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No sub-agents dispatched.'))}</div>`
+        : subagents.map(renderDirectorSubagentCardHtml).join('');
+
+    const conversationHtml = Array.isArray(mainConversation?.messages) && mainConversation.messages.length > 0
+        ? renderTraceConversationHtml(mainConversation)
+        : `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No main-agent messages recorded yet.'))}</div>`;
+
+    return `
+<div class="luker-studio-panel">
+    <div class="luker-studio-panel-title">${escapeHtml(i18n('Main Agent Rounds'))}</div>
+    ${renderDirectorMainAgentRoundsHtml(trace)}
+</div>
+<div class="luker-studio-panel">
+    <div class="luker-studio-panel-title">${escapeHtml(i18n('Sub-agent Dispatches'))}</div>
+    <div class="luker-studio-agenda-rounds">${subagentsHtml}</div>
+</div>
+<div class="luker-studio-panel">
+    <div class="luker-studio-panel-title">${escapeHtml(i18n('Main Agent Conversation'))}</div>
+    ${conversationHtml}
+</div>`;
+}
+
 export function renderOrchestrationRuntimeTraceHtml(context) {
     const trace = getLatestOrchestrationRuntimeTrace(context);
     if (!trace || typeof trace !== 'object') {
@@ -547,12 +651,15 @@ export function renderOrchestrationRuntimeTraceHtml(context) {
     const mode = String(trace?.mode || '').trim().toLowerCase();
     const isLoopMode = mode === 'loop';
     const isAgendaMode = mode === 'agenda' || (trace?.agenda && typeof trace.agenda === 'object');
+    const isDirectorMode = mode === 'director' || (trace?.director && typeof trace.director === 'object');
 
     let modeSpecificHtml;
     if (isLoopMode) {
         modeSpecificHtml = renderLoopModePanelHtml(trace);
     } else if (isAgendaMode) {
         modeSpecificHtml = renderAgendaModePanelsHtml(trace);
+    } else if (isDirectorMode) {
+        modeSpecificHtml = renderDirectorModePanelsHtml(trace);
     } else {
         modeSpecificHtml = `
 <div class="luker-studio-columns">
@@ -582,7 +689,7 @@ export function renderOrchestrationRuntimeTraceHtml(context) {
         <div class="luker-studio-meta-card"><b>${escapeHtml(i18n('Updated At'))}</b><span>${escapeHtml(formatReadableTimestamp(trace.updatedAt))}</span></div>
     </div>
     ${modeSpecificHtml}
-    ${!isLoopMode && !isAgendaMode ? '' : `<details class="luker-studio-raw">
+    ${!isLoopMode && !isAgendaMode && !isDirectorMode ? '' : `<details class="luker-studio-raw">
         <summary>${escapeHtml(i18n('Flow Events'))}</summary>
         ${renderOrchestrationRuntimeTraceEventsHtml(trace)}
     </details>`}

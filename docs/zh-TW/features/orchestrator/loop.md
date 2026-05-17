@@ -74,8 +74,7 @@ Loop 模式針對這些點做單 agent + 工具循環:同一會話、一套 pres
 1. **abort signal**:使用者點「停止」 / 上層取消 → 立即中止;trace 記 `cancelled`,**不**注入半成品 capsule。
 2. **wall_clock_budget_ms**:到點立即 break。
 3. **max_rounds**:硬輪次上限(預設 20,最多 50)。
-4. **單工具呼叫 timeout**:複用 orchestrator 的 `agentTimeoutSeconds`;逾時即 `ToolError` 注回 agent。
-5. **Agent 不呼叫工具**:連續 3 輪沒呼叫任何工具 → 提前 break(防止 agent「光說話不動手」耗光預算)。任意一輪呼叫到工具,streak 歸零。
+4. **Agent 不呼叫工具**:連續 3 輪沒呼叫任何工具 → 提前 break(防止 agent「光說話不動手」耗光預算)。任意一輪呼叫到工具,streak 歸零。
 
 觸發任一兜底時,loop 會把最後一次 agent 的自然文字作為 capsule 兜底,保證至少有產出送給主模型。
 

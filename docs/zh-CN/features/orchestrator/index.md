@@ -150,7 +150,6 @@ Loop 模式当前还没接入文件级的 Profile 导入导出按钮,改用 [AI 
 | 注入角色 | `SYSTEM` / `USER` / `ASSISTANT` |
 | 自定义指令前缀 | 加在 capsule 前的前缀文字 |
 | RPM 限制 | 并行节点的速率限制 |
-| Agent 超时 | 单 Agent 超时秒数 |
 | 工具调用重试次数 | 工具调用失败的重试次数 |
 | 全局 API 预设 | 默认 API 连接预设 |
 | 全局 Chat Completion 预设 | 默认 Chat Completion 预设 |

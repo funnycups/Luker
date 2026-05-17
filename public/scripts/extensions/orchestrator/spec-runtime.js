@@ -473,7 +473,6 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                 abortSignal,
                 includeAssistantText: true,
                 allowNoToolCalls: false,
-                applyAgentTimeout: true,
             });
             throwIfAborted(abortSignal, 'Orchestration aborted.');
             const calls = Array.isArray(detailed?.toolCalls) ? detailed.toolCalls : [];
@@ -798,7 +797,6 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
                 abortSignal,
                 includeAssistantText: true,
                 allowNoToolCalls: false,
-                applyAgentTimeout: true,
             });
             const decision = extractReviewDecision(detailed?.toolCalls || [], nodeSpec.id);
             // Record the assistant turn with the review decision tool call.

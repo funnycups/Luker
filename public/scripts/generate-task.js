@@ -567,7 +567,36 @@ export function dispatchToSenderStreaming({
 
             const finalText = lastText;
             const finalReasoning = lastReasoning;
-            const finalToolCalls = Array.isArray(lastFrame?.toolCalls) ? lastFrame.toolCalls : [];
+            // openai.js's streamData accumulates tool calls as a 2D array
+            // shaped `toolCalls[choiceIndex][toolCallIndex]`. The
+            // non-streaming response shape (which `normalizeResponse`
+            // consumes downstream) expects `message.tool_calls` to be
+            // 1D — the tool calls for choice 0. Without this flatten,
+            // `normalizeResponse` reads `call?.function?.name` on what
+            // is actually a sub-array, getting `undefined`, and every
+            // tool call ends up with `name: ''`.
+            const rawToolCalls = lastFrame?.toolCalls;
+            const choiceToolCalls = Array.isArray(rawToolCalls?.[0])
+                ? rawToolCalls[0]
+                : (Array.isArray(rawToolCalls) ? rawToolCalls : []);
+            // Provider-agnostic OpenAI tool_call normalization. ST's
+            // `ToolManager.parseToolCalls` accumulates each provider's
+            // native streaming shape — Anthropic's `content_block`,
+            // Gemini's `part.functionCall`, Cohere's `tool-call-*`
+            // events — and historically left the merged tool call in
+            // that native shape. Downstream consumers (this file's
+            // `normalizeResponse`, every assistant turn echoed back to
+            // the API on the next round of a tool-call loop, etc.) all
+            // expect the OpenAI shape `{id, type: 'function', function:
+            // {name, arguments}}`. Anthropic's path was patched in
+            // `parseToolCalls` to fill that view incrementally; this
+            // pass is the cross-provider safety net: it normalizes
+            // Gemini/Cohere/etc. (and is a no-op when the call is
+            // already OpenAI-shaped), and drops sparse holes /
+            // unnameable entries before publishing the final result.
+            const finalToolCalls = choiceToolCalls
+                .map(tc => _normalizeToolCallToOpenAiShape(tc))
+                .filter(tc => tc && typeof tc?.function?.name === 'string' && tc.function.name.length > 0);
             resolveTerminal({
                 choices: [{
                     message: {
@@ -586,6 +615,60 @@ export function dispatchToSenderStreaming({
     })();
 
     return { stream, rawTerminal };
+}
+
+/**
+ * Coerce a tool-call object from any provider's streaming-native shape
+ * into the OpenAI tool_call shape `{id, type: 'function', function:
+ * {name, arguments}}`. Used by the streaming pipeline to give downstream
+ * normalizers and the next tool-call-loop round a single uniform shape
+ * regardless of which provider streamed the call.
+ *
+ * Provider shapes we may see in input:
+ *   - OpenAI:    `{id, type: 'function', function: {name, arguments}}`
+ *                (already correct; fast-path returns unchanged)
+ *   - Anthropic: `{type: 'tool_use', id, name, input, caller}` — and
+ *                `parseToolCalls`'s Anthropic path pre-fills the
+ *                OpenAI `function.*` view, so most of these land on
+ *                the fast-path too.
+ *   - Gemini:    `{name, args, thoughtSignature?}` (args is an object)
+ *   - Cohere:    accumulated from `tool-call-*` events; structure
+ *                varies — we read whichever name/args fields exist.
+ *
+ * Returns `null` for sparse holes / un-nameable entries; the caller
+ * filters those out before publishing.
+ *
+ * @param {object|null|undefined} tc
+ * @returns {{id: string, type: 'function', function: {name: string, arguments: string}}|null}
+ */
+function _normalizeToolCallToOpenAiShape(tc) {
+    if (!tc || typeof tc !== 'object') return null;
+    // Fast path: already OpenAI-shaped.
+    if (tc.function && typeof tc.function === 'object'
+        && typeof tc.function.name === 'string' && tc.function.name.length > 0) {
+        return tc;
+    }
+    const name = tc?.function?.name || tc?.name || '';
+    if (!name) return null;
+    const argsCandidate = tc?.function?.arguments ?? tc?.input ?? tc?.args ?? null;
+    let argsStr;
+    if (typeof argsCandidate === 'string') {
+        argsStr = argsCandidate;
+    } else if (argsCandidate && typeof argsCandidate === 'object') {
+        try { argsStr = JSON.stringify(argsCandidate); }
+        catch { argsStr = ''; }
+    } else {
+        argsStr = '';
+    }
+    return {
+        ...tc,
+        id: tc.id || `call_${Math.random().toString(36).slice(2, 12)}`,
+        type: 'function',
+        function: {
+            name: String(name),
+            arguments: argsStr,
+        },
+    };
 }
 
 const VALID_FINISH_REASONS = new Set(['stop', 'length', 'tool_calls', 'content_filter', 'abort', 'error']);

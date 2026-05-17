@@ -10,10 +10,11 @@
  *      preset internally, so callers pass `apiPresetName` /
  *      `llmPresetName` strings and a pre-resolved `runtimeWorldInfo`
  *      snapshot rather than a full `promptMessages` envelope. Both
- *      apply the per-attempt timeout via `createAttemptAbortController`,
  *      retry on transient failures up to `settings.toolCallRetryMax`,
  *      and gate every call through `waitForRpmSlot` to enforce
- *      `settings.rpmLimit`.
+ *      `settings.rpmLimit`. Aborts are wired through whatever signal
+ *      the caller passes (typically the user's stop-generation button);
+ *      no time-triggered deadline.
  *
  *   2. Persistent tool-call message construction — the AI iteration
  *      session stores assistant turns with `tool_calls` / `tool_results`
@@ -34,8 +35,6 @@ import {
     validateParsedToolCalls,
 } from '../function-call-runtime.js';
 import {
-    createAttemptAbortController,
-    getAgentTimeoutMs,
     isAbortError,
     isAbortSignalLike,
     throwIfAborted,
@@ -75,7 +74,6 @@ export async function requestToolCallWithRetry(context, settings, {
     functionDescription = '',
     parameters = {},
     abortSignal = null,
-    applyAgentTimeout = true,
 } = {}) {
     const fnName = String(functionName || '').trim();
     if (!fnName) {
@@ -86,7 +84,6 @@ export async function requestToolCallWithRetry(context, settings, {
     }
 
     const retries = Math.max(0, Math.min(10, Math.floor(Number(settings?.toolCallRetryMax) || 0)));
-    const timeoutMs = applyAgentTimeout ? getAgentTimeoutMs(settings) : 0;
     const tools = [{
         type: 'function',
         function: {
@@ -101,10 +98,7 @@ export async function requestToolCallWithRetry(context, settings, {
     };
     let lastError = null;
     for (let attempt = 0; attempt <= retries; attempt++) {
-        const attemptController = createAttemptAbortController(
-            isAbortSignalLike(abortSignal) ? abortSignal : null,
-            timeoutMs,
-        );
+        const attemptSignal = isAbortSignalLike(abortSignal) ? abortSignal : null;
         try {
             throwIfAborted(abortSignal, 'Orchestration aborted.');
             await waitForRpmSlot(settings, abortSignal);
@@ -122,7 +116,7 @@ export async function requestToolCallWithRetry(context, settings, {
                     requiredFunctionName: fnName,
                     protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
                 },
-                abortSignal: attemptController.signal,
+                abortSignal: attemptSignal,
             };
             const result = settings?.useStreamingTransport
                 ? await context.generateTaskStream(generateTaskOpts).result
@@ -139,21 +133,14 @@ export async function requestToolCallWithRetry(context, settings, {
             }
             return matched.args && typeof matched.args === 'object' ? matched.args : {};
         } catch (error) {
-            const timedOut = attemptController.didTimeout();
-            const sourceAborted = isAbortError(error, abortSignal);
-            if (sourceAborted && !timedOut) {
+            if (isAbortError(error, abortSignal)) {
                 throw error;
             }
-            const effectiveError = timedOut
-                ? Object.assign(new Error(`Agent call '${fnName}' timed out after ${Math.floor(timeoutMs / 1000)}s.`), { name: 'TimeoutError' })
-                : error;
-            lastError = effectiveError;
+            lastError = error;
             if (attempt >= retries) {
-                throw effectiveError;
+                throw error;
             }
-            console.warn(`[${MODULE_NAME}] Tool call '${fnName}' failed. Retrying (${attempt + 1}/${retries})...`, effectiveError);
-        } finally {
-            attemptController.cleanup();
+            console.warn(`[${MODULE_NAME}] Tool call '${fnName}' failed. Retrying (${attempt + 1}/${retries})...`, error);
         }
     }
 
@@ -171,7 +158,6 @@ export async function requestToolCallsWithRetry(context, settings, {
     abortSignal = null,
     includeAssistantText = false,
     allowNoToolCalls = false,
-    applyAgentTimeout = true,
 } = {}) {
     if (!Array.isArray(tools) || tools.length === 0) {
         throw new Error('Tools are required.');
@@ -184,16 +170,12 @@ export async function requestToolCallsWithRetry(context, settings, {
         ? Number(settings?.toolCallRetryMax)
         : Number(retriesOverride);
     const retries = Math.max(0, Math.min(10, Math.floor(retriesSource || 0)));
-    const timeoutMs = applyAgentTimeout ? getAgentTimeoutMs(settings) : 0;
     const allowedSet = Array.isArray(allowedNames)
         ? new Set(allowedNames.map(name => String(name || '').trim()).filter(Boolean))
         : (allowedNames instanceof Set ? allowedNames : null);
     let lastError = null;
     for (let attempt = 0; attempt <= retries; attempt++) {
-        const attemptController = createAttemptAbortController(
-            isAbortSignalLike(abortSignal) ? abortSignal : null,
-            timeoutMs,
-        );
+        const attemptSignal = isAbortSignalLike(abortSignal) ? abortSignal : null;
         try {
             throwIfAborted(abortSignal, 'Orchestration aborted.');
             await waitForRpmSlot(settings, abortSignal);
@@ -210,7 +192,7 @@ export async function requestToolCallsWithRetry(context, settings, {
                 functionCallOptions: {
                     protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
                 },
-                abortSignal: attemptController.signal,
+                abortSignal: attemptSignal,
             };
             const result = settings?.useStreamingTransport
                 ? await context.generateTaskStream(generateTaskOpts).result
@@ -252,21 +234,14 @@ export async function requestToolCallsWithRetry(context, settings, {
             }
             return filteredCalls;
         } catch (error) {
-            const timedOut = attemptController.didTimeout();
-            const sourceAborted = isAbortError(error, abortSignal);
-            if (sourceAborted && !timedOut) {
+            if (isAbortError(error, abortSignal)) {
                 throw error;
             }
-            const effectiveError = timedOut
-                ? Object.assign(new Error(`Multi tool call request timed out after ${Math.floor(timeoutMs / 1000)}s.`), { name: 'TimeoutError' })
-                : error;
-            lastError = effectiveError;
+            lastError = error;
             if (attempt >= retries) {
-                throw effectiveError;
+                throw error;
             }
-            console.warn(`[${MODULE_NAME}] Multi tool call request failed. Retrying (${attempt + 1}/${retries})...`, effectiveError);
-        } finally {
-            attemptController.cleanup();
+            console.warn(`[${MODULE_NAME}] Multi tool call request failed. Retrying (${attempt + 1}/${retries})...`, error);
         }
     }
     throw lastError || new Error('Multi tool call request failed.');

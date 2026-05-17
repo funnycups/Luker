@@ -442,3 +442,38 @@ export function attachOrchestrationRuntimeLoopConversation(trace, conversation) 
     }
     trace.loop.conversation = conversation;
 }
+
+/**
+ * Attach director-mode state to the trace by reference. Same idea as
+ * `attachOrchestrationRuntimeLoopConversation` — the runtime mutates
+ * the same object the renderer reads, so the trace popup picks up
+ * later sub-agent dispatches and main-agent rounds without the
+ * runtime having to re-attach after every change.
+ *
+ * Shape (mutated in place by director-runtime.js / director-tools.js):
+ *   {
+ *     mainAgent: {
+ *       rounds: [{ round, startedAt, assistantText, toolCalls }, ...],
+ *       conversation: { messages: <ref to runtime messages> },
+ *     },
+ *     subagents: [{
+ *       handleId, subagentId, isInline, task,
+ *       systemPromptPreview, status, startedAt, finishedAt,
+ *       outputText, error,
+ *       conversation: { messages: <ref to sub-agent's messages> },
+ *     }, ...],
+ *   }
+ *
+ * Idempotent — passing null / undefined clears the slot; otherwise
+ * replaces the slot wholesale.
+ */
+export function attachOrchestrationRuntimeDirectorState(trace, state) {
+    if (!trace || typeof trace !== 'object') return;
+    if (!state || typeof state !== 'object') {
+        if (trace.director && typeof trace.director === 'object') {
+            delete trace.director;
+        }
+        return;
+    }
+    trace.director = state;
+}

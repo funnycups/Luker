@@ -46,11 +46,23 @@ export const ORCH_EXECUTION_MODE_AGENDA = 'agenda';
 // `normalizeExecutionMode` accepts it; the loop profile schema and
 // sanitizer live in `persistence.js` next to its floor-state binding.
 export const ORCH_EXECUTION_MODE_LOOP = 'loop';
+// Director mode literal + factory live in `director-defaults.js` so they can
+// be imported by tests without dragging in the rest of this module's
+// script.js / lib bundle chain. Re-exported here so callers reading the
+// canonical defaults module still pick them up.
+export {
+    ORCH_EXECUTION_MODE_DIRECTOR,
+    createDefaultDirectorProfile,
+    getDirectorLimitBounds,
+    sanitizeDirectorProfile,
+} from './director-defaults.js';
+import { ORCH_EXECUTION_MODE_DIRECTOR as _ORCH_EXECUTION_MODE_DIRECTOR } from './director-defaults.js';
 export const ORCH_EXECUTION_MODES = Object.freeze([
     ORCH_EXECUTION_MODE_SPEC,
     ORCH_EXECUTION_MODE_SINGLE,
     ORCH_EXECUTION_MODE_AGENDA,
     ORCH_EXECUTION_MODE_LOOP,
+    _ORCH_EXECUTION_MODE_DIRECTOR,
 ]);
 export const PORTABLE_PROFILE_FORMAT_V1 = 'luker_orchestrator_profile_v1';
 export const PORTABLE_PROFILE_FORMAT_V2 = 'luker_orchestrator_profile_v2';
@@ -377,7 +389,6 @@ export const defaultSettings = {
     nodeIterationMaxRounds: 3,
     reviewRerunMaxRounds: 2,
     toolCallRetryMax: 2,
-    agentTimeoutSeconds: 0,
     maxRecentMessages: 14,
     capsuleInjectPosition: world_info_position.atDepth,
     capsuleInjectDepth: 0,

@@ -60,7 +60,20 @@ export function startInspection(request) {
  return sum;
  }, 0),
  maxTokens: body.max_tokens ?? body.max_completion_tokens ?? null,
- fullMessages: messages,
+ // Deep-clone snapshot of the messages array as the client posted it.
+ // Downstream send paths mutate request.body.messages in place to fit
+ // the upstream provider's schema, so a live reference would expose
+ // post-mutation intermediate state at export time.
+ fullMessages: (() => {
+ try {
+ return typeof structuredClone === 'function'
+ ? structuredClone(messages)
+ : JSON.parse(JSON.stringify(messages));
+ } catch {
+ return JSON.parse(JSON.stringify(messages));
+ }
+ })(),
+ responseText: '',
  usage: {
  prompt_tokens: null,
  completion_tokens: null,
@@ -184,6 +197,81 @@ export function extractUsageFromStreamEvents(events, source) {
 }
 
 /**
+ * Extract response text from SSE stream events as a fallback when the caller
+ * didn't accumulate text itself.
+ * @param {string[]} events
+ * @param {string} source
+ * @returns {string}
+ */
+function extractTextFromStreamEvents(events, source) {
+ if (!Array.isArray(events) || events.length === 0) return '';
+ const out = [];
+ for (const raw of events) {
+ if (!raw || raw === '[DONE]') continue;
+ let parsed;
+ try { parsed = JSON.parse(raw); } catch { continue; }
+ if (parsed?.luker) continue;
+
+ if (source === 'claude') {
+ if (parsed?.type === 'content_block_delta' && parsed?.delta?.type === 'text_delta') {
+ out.push(parsed.delta.text || '');
+ }
+ continue;
+ }
+ if (source === 'makersuite' || source === 'vertexai') {
+ const parts = parsed?.candidates?.[0]?.content?.parts;
+ if (Array.isArray(parts)) {
+ for (const p of parts) if (typeof p?.text === 'string') out.push(p.text);
+ }
+ continue;
+ }
+ // OpenAI / generic
+ const delta = parsed?.choices?.[0]?.delta?.content
+ ?? parsed?.choices?.[0]?.text
+ ?? parsed?.choices?.[0]?.message?.content;
+ if (typeof delta === 'string') out.push(delta);
+ else if (Array.isArray(delta)) {
+ for (const p of delta) if (p?.type === 'text' && typeof p.text === 'string') out.push(p.text);
+ }
+ }
+ return out.join('');
+}
+
+/**
+ * Extract response text from a non-streaming payload.
+ * @param {object} payload OpenAI-shaped payload (post-conversion in chat-completions)
+ * @param {string} source backend identifier
+ * @param {object} [rawApiResponse] native API response (pre-conversion), if available
+ * @returns {string}
+ */
+function extractTextFromPayload(payload, source, rawApiResponse) {
+ if (rawApiResponse) {
+ if (source === 'claude' && Array.isArray(rawApiResponse.content)) {
+ return rawApiResponse.content
+ .filter(p => p?.type === 'text' && typeof p.text === 'string')
+ .map(p => p.text)
+ .join('');
+ }
+ if ((source === 'makersuite' || source === 'vertexai') && Array.isArray(rawApiResponse.candidates)) {
+ const parts = rawApiResponse.candidates[0]?.content?.parts;
+ if (Array.isArray(parts)) {
+ return parts.filter(p => typeof p?.text === 'string').map(p => p.text).join('');
+ }
+ }
+ }
+ const choice = payload?.choices?.[0];
+ const msgContent = choice?.message?.content ?? choice?.text;
+ if (typeof msgContent === 'string') return msgContent;
+ if (Array.isArray(msgContent)) {
+ return msgContent
+ .filter(p => p?.type === 'text' && typeof p.text === 'string')
+ .map(p => p.text)
+ .join('');
+ }
+ return '';
+}
+
+/**
  * Complete an inspection with success + usage data from a non-streaming response.
  * @param {import('express').Request} request
  * @param {object} payload
@@ -216,14 +304,16 @@ export function completeInspection(request, payload, rawApiResponse) {
  }
 
  Object.assign(entry.usage, usage);
+ entry.responseText = extractTextFromPayload(payload, source, rawApiResponse);
 }
 
 /**
  * Complete an inspection from streaming events.
  * @param {import('express').Request} request
  * @param {string[]} events
+ * @param {string} [accumulatedText] caller-side accumulated text (preferred over re-parsing events)
  */
-export function completeInspectionFromStream(request, events) {
+export function completeInspectionFromStream(request, events, accumulatedText) {
  const entry = findEntry(request);
  if (!entry) return;
 
@@ -233,6 +323,12 @@ export function completeInspectionFromStream(request, events) {
 
  const usage = extractUsageFromStreamEvents(events, entry.source);
  Object.assign(entry.usage, usage);
+
+ if (typeof accumulatedText === 'string' && accumulatedText.length) {
+ entry.responseText = accumulatedText;
+ } else {
+ entry.responseText = extractTextFromStreamEvents(events, entry.source);
+ }
 }
 
 /**
@@ -521,6 +617,22 @@ export function failImageInspection(request, errorMessage, httpStatus) {
 
 export const router = express.Router();
 
+function buildSearchSnippet(entry) {
+ if (entry.type === 'image') {
+ return [entry.source, entry.model, entry.prompt, entry.negativePrompt, entry.error].filter(Boolean).join(' ');
+ }
+ const messageText = Array.isArray(entry.fullMessages)
+ ? entry.fullMessages.map(m => {
+ const c = m?.content;
+ if (typeof c === 'string') return c;
+ if (Array.isArray(c)) return c.map(p => (typeof p === 'string' ? p : (p?.text || ''))).join(' ');
+ return '';
+ }).join(' ')
+ : '';
+ const combined = [entry.source, entry.model, entry.error, messageText, entry.responseText || ''].filter(Boolean).join(' ');
+ return combined.length > 8192 ? combined.slice(0, 8192) : combined;
+}
+
 router.get('/list', (req, res) => {
  const handle = String(req?.user?.profile?.handle || '');
  if (!handle) return res.status(401).send({ error: 'Unauthorized' });
@@ -537,6 +649,7 @@ router.get('/list', (req, res) => {
  status: e.status,
  httpStatus: e.httpStatus,
  error: e.error,
+ searchText: buildSearchSnippet(e),
  };
  if (e.type === 'image') {
  base.prompt = (e.prompt || '').slice(0, 80);
@@ -550,6 +663,7 @@ router.get('/list', (req, res) => {
  base.promptCharLength = e.promptCharLength;
  base.maxTokens = e.maxTokens;
  base.usage = e.usage;
+ base.responseChars = (e.responseText || '').length;
  }
  return base;
  });
@@ -577,8 +691,42 @@ router.get('/:id/export', (req, res) => {
  const entry = buf.find(e => e.id === req.params.id);
  if (!entry) return res.status(404).send({ error: 'Not found' });
 
+ // Re-compute schema snapshot at export time so caller can compare with
+ // `messageSchemaAtCapture`. If the two disagree, something downstream
+ // mutated `body.messages` in place after `startInspection`.
+ const exportMessages = Array.isArray(entry.fullMessages) ? entry.fullMessages : [];
+ const messageSchemaAtExport = exportMessages.map(m => {
+ const content = m?.content;
+ const ctype = typeof content === 'string'
+ ? 'string'
+ : (Array.isArray(content) ? 'array' : (content === null ? 'null' : typeof content));
+ let clen = 0;
+ let chead = '';
+ if (typeof content === 'string') {
+ clen = content.length;
+ chead = content.slice(0, 60);
+ } else if (Array.isArray(content)) {
+ clen = content.reduce((s, p) => {
+ if (typeof p === 'string') return s + p.length;
+ if (p && typeof p.text === 'string') return s + p.text.length;
+ return s;
+ }, 0);
+ chead = content.map(p => (typeof p === 'string' ? p : (p?.text || `<${p?.type || '?'}>`))).join('|').slice(0, 60);
+ } else if (content !== null && content !== undefined) {
+ try { chead = JSON.stringify(content).slice(0, 60); clen = chead.length; } catch { /* ignore */ }
+ }
+ return {
+ role: String(m?.role || ''),
+ contentType: ctype,
+ contentLen: clen,
+ contentHead: chead,
+ hasToolCalls: Array.isArray(m?.tool_calls) && m.tool_calls.length > 0,
+ toolCallId: m?.tool_call_id ? String(m.tool_call_id).slice(0, 24) : '',
+ };
+ });
+
  const filename = `request-${entry.id.slice(0, 8)}-${entry.timestamp}.json`;
  res.setHeader('Content-Type', 'application/json');
  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
- return res.send(JSON.stringify(entry, null, 2));
+ return res.send(JSON.stringify({ ...entry, messageSchemaAtExport }, null, 2));
 });

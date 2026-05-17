@@ -211,7 +211,6 @@ export function buildAgendaSharedContextText(context, payload, messages) {
             max_total_runs: getAgendaMaxTotalRuns(settings),
             node_iteration_max_rounds: getNodeIterationMaxRounds(settings),
             review_rerun_max_rounds: getReviewRerunMaxRounds(settings),
-            agent_timeout_seconds: Math.max(0, Math.floor(Number(settings?.agentTimeoutSeconds) || 0)),
         }, '{}'),
         '```',
     ].join('\n');
@@ -438,7 +437,6 @@ export async function runAgendaPlannerStep(context, payload, messages, profile, 
             additionalProperties: false,
         },
         abortSignal,
-        applyAgentTimeout: true,
     });
     const conversation = {
         messages: [
@@ -571,7 +569,6 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
             functionDescription: resultToolSchema.function.description,
             parameters: resultToolSchema.function.parameters,
             abortSignal,
-            applyAgentTimeout: true,
         });
         const conversation = {
             messages: [
@@ -631,7 +628,6 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
             abortSignal,
             includeAssistantText: true,
             allowNoToolCalls: false,
-            applyAgentTimeout: true,
         });
         throwIfAborted(abortSignal, 'Orchestration aborted.');
         const calls = Array.isArray(detailed?.toolCalls) ? detailed.toolCalls : [];

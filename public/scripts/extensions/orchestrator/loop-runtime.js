@@ -157,7 +157,6 @@ async function defaultSendLlm({ context, settings, messages, tools, runtimeWorld
         // as an LLM error. allowNoToolCalls=true preserves the assistant
         // text so the streak-break fallback can use it as the capsule.
         allowNoToolCalls: true,
-        applyAgentTimeout: true,
     });
     if (Array.isArray(result)) {
         // Returned shape when includeAssistantText is false — shouldn't
@@ -541,7 +540,7 @@ function makeNotesAdapter(fs) {
  *
  * @param {object} context — toolContext (mutated in place)
  */
-async function attachNotesFloorState(context) {
+export async function attachNotesFloorState(context) {
     if (!context || typeof context !== 'object') return;
     try {
         const fs = await getNotesFloorStateInstance(context);

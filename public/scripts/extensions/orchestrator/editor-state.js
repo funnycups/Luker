@@ -24,18 +24,23 @@
 import { extension_settings } from '../../extensions.js';
 import {
     ORCH_EXECUTION_MODE_AGENDA,
+    ORCH_EXECUTION_MODE_DIRECTOR,
     ORCH_EXECUTION_MODE_LOOP,
     ORCH_EXECUTION_MODE_SPEC,
     ORCH_NODE_TYPE_WORKER,
+    createDefaultDirectorProfile,
     defaultLoopProfile,
     defaultSpec,
+    sanitizeDirectorProfile,
 } from './defaults.js';
 import {
     applyCharacterExecutionModeForAvatar,
     getCharacterAgendaOverrideByAvatar,
+    getCharacterDirectorOverrideByAvatar,
     getCharacterLoopOverrideByAvatar,
     getCharacterOverrideByAvatar,
     hasCharacterAgendaOverride,
+    hasCharacterDirectorOverride,
     hasCharacterLoopOverride,
     hasCharacterSpecOverride,
     normalizeExecutionMode,
@@ -69,9 +74,12 @@ export const uiState = {
     characterAgendaEditor: null,
     globalLoopEditor: null,
     characterLoopEditor: null,
+    globalDirectorEditor: null,
+    characterDirectorEditor: null,
     specDisplayedScope: 'global',
     agendaDisplayedScope: 'global',
     loopDisplayedScope: 'global',
+    directorDisplayedScope: 'global',
     aiIterationSession: null,
     orchEditorPopupContentId: '',
 };
@@ -216,6 +224,62 @@ export function loadCharacterLoopEditorState(context, avatar) {
     };
 }
 
+/**
+ * Ensure a director-mode editor draft has the canonical shape (a
+ * top-level object with a `director` sub-object holding mainAgent /
+ * subAgents / limits / tools). Called before render and after every
+ * input mutation so renderers can index into
+ * `editor.director.mainAgent.systemPrompt` etc. without optional-chain
+ * fallback noise. The sanitizer is the single source of truth for the
+ * shape — we mutate the editor object in place to match the sanitizer
+ * output, preserving any non-director fields (avatar / enabled / notes)
+ * that ride along on character-scope editors.
+ */
+export function ensureDirectorEditorIntegrity(editor) {
+    if (!editor || typeof editor !== 'object') {
+        return;
+    }
+    const normalized = sanitizeDirectorProfile(editor);
+    editor.mode = normalized.mode;
+    editor.director = normalized.director;
+}
+
+/**
+ * Load the global director editor draft from settings. Falls back to
+ * `createDefaultDirectorProfile()` when settings has no directorProfile
+ * key (fresh install) so the editor always renders with the canonical
+ * default sub-agents.
+ */
+export function loadGlobalDirectorEditorState() {
+    const settings = getSettings();
+    const source = settings?.directorProfile && typeof settings.directorProfile === 'object'
+        ? settings.directorProfile
+        : createDefaultDirectorProfile();
+    return sanitizeDirectorProfile(source);
+}
+
+/**
+ * Load the per-character director editor draft. When the character has
+ * a persisted director override, use it; otherwise seed from the global
+ * director profile so the editor has a sensible starting point. The
+ * returned draft carries `enabled` + `notes` like the spec/agenda/loop
+ * character editors, so save / clear flows can roundtrip those fields.
+ */
+export function loadCharacterDirectorEditorState(context, avatar) {
+    const settings = getSettings();
+    const safeAvatar = String(avatar || '');
+    const directorOverride = getCharacterDirectorOverrideByAvatar(context, safeAvatar);
+    const baseProfile = directorOverride
+        ? sanitizeDirectorProfile(directorOverride)
+        : sanitizeDirectorProfile(settings?.directorProfile || createDefaultDirectorProfile());
+    return {
+        ...baseProfile,
+        avatar: safeAvatar,
+        enabled: Boolean(directorOverride?.enabled),
+        notes: String(directorOverride?.notes || ''),
+    };
+}
+
 export function initializeUiState(context) {
     const activeAvatar = String(getCurrentAvatar(context) || '').trim();
     if (activeAvatar !== uiState.selectedAvatar) {
@@ -228,12 +292,16 @@ export function initializeUiState(context) {
     uiState.characterAgendaEditor = loadCharacterAgendaEditorState(context, uiState.selectedAvatar);
     uiState.globalLoopEditor = loadGlobalLoopEditorState();
     uiState.characterLoopEditor = loadCharacterLoopEditorState(context, uiState.selectedAvatar);
+    uiState.globalDirectorEditor = loadGlobalDirectorEditorState();
+    uiState.characterDirectorEditor = loadCharacterDirectorEditorState(context, uiState.selectedAvatar);
     ensureEditorIntegrity(uiState.globalEditor);
     ensureEditorIntegrity(uiState.characterEditor);
     ensureAgendaEditorIntegrity(uiState.globalAgendaEditor);
     ensureAgendaEditorIntegrity(uiState.characterAgendaEditor);
     ensureLoopEditorIntegrity(uiState.globalLoopEditor);
     ensureLoopEditorIntegrity(uiState.characterLoopEditor);
+    ensureDirectorEditorIntegrity(uiState.globalDirectorEditor);
+    ensureDirectorEditorIntegrity(uiState.characterDirectorEditor);
     syncDisplayedScopesFromStoredState(context, getSettings());
 }
 
@@ -247,9 +315,11 @@ export function syncCharacterEditorWithActiveAvatar(context) {
     uiState.characterEditor = loadCharacterEditorState(context, activeAvatar);
     uiState.characterAgendaEditor = loadCharacterAgendaEditorState(context, activeAvatar);
     uiState.characterLoopEditor = loadCharacterLoopEditorState(context, activeAvatar);
+    uiState.characterDirectorEditor = loadCharacterDirectorEditorState(context, activeAvatar);
     ensureEditorIntegrity(uiState.characterEditor);
     ensureAgendaEditorIntegrity(uiState.characterAgendaEditor);
     ensureLoopEditorIntegrity(uiState.characterLoopEditor);
+    ensureDirectorEditorIntegrity(uiState.characterDirectorEditor);
     syncDisplayedScopesFromStoredState(context, getSettings());
 }
 
@@ -257,6 +327,7 @@ export function getScopePreferenceStateKey(mode = ORCH_EXECUTION_MODE_SPEC) {
     const normalized = normalizeExecutionMode(mode);
     if (normalized === ORCH_EXECUTION_MODE_AGENDA) return 'agendaDisplayedScope';
     if (normalized === ORCH_EXECUTION_MODE_LOOP) return 'loopDisplayedScope';
+    if (normalized === ORCH_EXECUTION_MODE_DIRECTOR) return 'directorDisplayedScope';
     return 'specDisplayedScope';
 }
 
@@ -268,6 +339,9 @@ export function getStoredDisplayedScopeForMode(context, settings, mode = ORCH_EX
     }
     if (normalized === ORCH_EXECUTION_MODE_LOOP) {
         return hasCharacterLoopOverride(context, activeAvatar) ? 'character' : 'global';
+    }
+    if (normalized === ORCH_EXECUTION_MODE_DIRECTOR) {
+        return hasCharacterDirectorOverride(context, activeAvatar) ? 'character' : 'global';
     }
     return hasCharacterSpecOverride(context, activeAvatar) ? 'character' : 'global';
 }
@@ -291,4 +365,5 @@ export function syncDisplayedScopesFromStoredState(context, settings) {
     setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_SPEC);
     setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA);
     setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP);
+    setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR);
 }

@@ -134,18 +134,18 @@ describe('runLoopOrchestration minimal happy path (Task 5)', () => {
         expect(sendLlm).not.toHaveBeenCalled();
     });
 
-    test('forwards deps.settings to sendLlm so retries/timeout/rpm are honored', async () => {
+    test('forwards deps.settings to sendLlm so retries/rpm are honored', async () => {
         // Regression: the orchestrator dispatcher must thread `settings`
         // into the loop runtime so `requestToolCallsWithRetry` reads
-        // `toolCallRetryMax` / `agentTimeoutSeconds` / `rpmLimit`. The
-        // production transport (`defaultSendLlm`) takes `settings` from
-        // the deps and passes it straight through; here we verify the
-        // runtime forwards it on every round, including before finalize.
+        // `toolCallRetryMax` / `rpmLimit`. The production transport
+        // (`defaultSendLlm`) takes `settings` from the deps and passes it
+        // straight through; here we verify the runtime forwards it on
+        // every round, including before finalize.
         const sendLlm = jest.fn().mockResolvedValueOnce({
             toolCalls: [{ id: 'tc1', name: 'finalize', args: { capsule_text: 'ok' } }],
             assistantText: '',
         });
-        const settings = { toolCallRetryMax: 3, agentTimeoutSeconds: 30, rpmLimit: 60 };
+        const settings = { toolCallRetryMax: 3, rpmLimit: 60 };
         await runLoopOrchestration(makeContext(), makePayload(), makeProfile(), {
             sendLlm,
             settings,
@@ -154,7 +154,6 @@ describe('runLoopOrchestration minimal happy path (Task 5)', () => {
         const args = sendLlm.mock.calls[0][0];
         expect(args.settings).toBe(settings);
         expect(args.settings.toolCallRetryMax).toBe(3);
-        expect(args.settings.agentTimeoutSeconds).toBe(30);
         expect(args.settings.rpmLimit).toBe(60);
     });
 });

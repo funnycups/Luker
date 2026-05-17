@@ -217,7 +217,6 @@ async function callLlm(adapter, context, settings, session, { systemPrompt, user
         abortSignal,
         includeAssistantText: true,
         allowNoToolCalls: true,
-        applyAgentTimeout: false,
     });
 }
 

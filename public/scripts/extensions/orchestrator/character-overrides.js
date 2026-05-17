@@ -37,6 +37,7 @@ import { extension_settings } from '../../extensions.js';
 import {
     ORCH_EXECUTION_MODES,
     ORCH_EXECUTION_MODE_AGENDA,
+    ORCH_EXECUTION_MODE_DIRECTOR,
     ORCH_EXECUTION_MODE_LOOP,
     ORCH_EXECUTION_MODE_SINGLE,
     ORCH_EXECUTION_MODE_SPEC,
@@ -108,6 +109,12 @@ export function getCharacterLoopOverrideByAvatar(context, avatar) {
     return loop && typeof loop === 'object' ? loop : null;
 }
 
+export function getCharacterDirectorOverrideByAvatar(context, avatar) {
+    const override = getCharacterOverrideByAvatar(context, avatar);
+    const director = override?.director;
+    return director && typeof director === 'object' ? director : null;
+}
+
 export function hasSpecOverrideData(override) {
     return Boolean(override && (
         (override.spec && typeof override.spec === 'object')
@@ -124,6 +131,10 @@ export function hasLoopOverrideData(override) {
     return Boolean(override?.loop && typeof override.loop === 'object');
 }
 
+export function hasDirectorOverrideData(override) {
+    return Boolean(override?.director && typeof override.director === 'object');
+}
+
 export function getCharacterOverrideExecutionMode(override) {
     if (!override || typeof override !== 'object') {
         return '';
@@ -132,6 +143,7 @@ export function getCharacterOverrideExecutionMode(override) {
     const hasSpec = hasSpecOverrideData(override);
     const hasAgenda = hasAgendaOverrideData(override);
     const hasLoop = hasLoopOverrideData(override);
+    const hasDirector = hasDirectorOverrideData(override);
     if (explicitMode === ORCH_EXECUTION_MODE_SPEC && hasSpec) {
         return explicitMode;
     }
@@ -141,18 +153,22 @@ export function getCharacterOverrideExecutionMode(override) {
     if (explicitMode === ORCH_EXECUTION_MODE_LOOP && hasLoop) {
         return explicitMode;
     }
+    if (explicitMode === ORCH_EXECUTION_MODE_DIRECTOR && hasDirector) {
+        return explicitMode;
+    }
     const presentBranches = [
         hasSpec ? ORCH_EXECUTION_MODE_SPEC : null,
         hasAgenda ? ORCH_EXECUTION_MODE_AGENDA : null,
         hasLoop ? ORCH_EXECUTION_MODE_LOOP : null,
+        hasDirector ? ORCH_EXECUTION_MODE_DIRECTOR : null,
     ].filter(Boolean);
     if (presentBranches.length === 1) {
         return presentBranches[0];
     }
     if (presentBranches.length > 1) {
         // Pick the most recently updated branch. `override.updatedAt` is
-        // owned by the spec branch (legacy convention). Agenda + loop each
-        // store their own `updatedAt` on the sub-payload.
+        // owned by the spec branch (legacy convention). Agenda + loop +
+        // director each store their own `updatedAt` on the sub-payload.
         const candidates = [];
         if (hasSpec) {
             candidates.push({
@@ -170,6 +186,12 @@ export function getCharacterOverrideExecutionMode(override) {
             candidates.push({
                 mode: ORCH_EXECUTION_MODE_LOOP,
                 updatedAt: Math.max(0, Number(override.loop?.updatedAt) || 0),
+            });
+        }
+        if (hasDirector) {
+            candidates.push({
+                mode: ORCH_EXECUTION_MODE_DIRECTOR,
+                updatedAt: Math.max(0, Number(override.director?.updatedAt) || 0),
             });
         }
         candidates.sort((left, right) => right.updatedAt - left.updatedAt);
@@ -221,6 +243,10 @@ export function hasCharacterAgendaOverride(context, avatar) {
 
 export function hasCharacterLoopOverride(context, avatar) {
     return hasLoopOverrideData(getCharacterOverrideByAvatar(context, avatar));
+}
+
+export function hasCharacterDirectorOverride(context, avatar) {
+    return hasDirectorOverrideData(getCharacterOverrideByAvatar(context, avatar));
 }
 
 export function hasCharacterOverride(context, avatar) {

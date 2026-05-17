@@ -266,6 +266,41 @@
     gap: 4px;
     margin-bottom: 8px;
     flex-wrap: wrap;
+    align-items: center;
+}
+
+.ri-search-input {
+    flex: 1 1 220px;
+    min-width: 180px;
+    padding: 4px 10px;
+    font-size: 0.85em;
+    height: auto;
+}
+
+.ri-response-body {
+    max-height: 400px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.ri-detail-search {
+    flex: 1 1 200px;
+    min-width: 160px;
+    padding: 4px 10px;
+    font-size: 0.85em;
+    height: auto;
+}
+
+.ri-hl {
+    background: var(--SmartThemeQuoteColor, #ffd54f);
+    color: inherit;
+    padding: 0 2px;
+    border-radius: 2px;
+}
+
+.ri-msg-hit > summary {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #ffd54f) 18%, transparent);
 }
 
 .ri-filter-btn {

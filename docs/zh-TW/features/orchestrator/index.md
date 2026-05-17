@@ -150,7 +150,6 @@ Loop 模式當前還沒接入檔案級的 Profile 匯入匯出按鈕,改用 [AI 
 | 注入角色 | `SYSTEM` / `USER` / `ASSISTANT` |
 | 自定義指令前綴 | 加在 capsule 前的前綴文字 |
 | RPM 限制 | 並行節點的速率限制 |
-| Agent 逾時 | 單 Agent 逾時秒數 |
 | 工具呼叫重試次數 | 工具呼叫失敗的重試次數 |
 | 全域 API 預設 | 預設 API 連接預設 |
 | 全域 Chat Completion 預設 | 預設 Chat Completion 預設 |

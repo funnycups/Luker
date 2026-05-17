@@ -4778,6 +4778,10 @@
     "chars": "字元",
     "No generation requests recorded yet.": "尚無生成請求紀錄。",
     "No messages captured.": "未擷取到訊息。",
+    "Response Body": "回應正文",
+    "(empty)": "(空)",
+    "Search source / model / messages / response...": "搜尋 來源 / 模型 / 訊息 / 回應…",
+    "Search in this request...": "在此請求內搜尋…",
     "Failed to load request details.": "載入請求詳情失敗。",
     "Type": "類型",
     "Image": "圖像",
@@ -5047,4 +5051,23 @@
     ,"blocked": "阻塞"
     ,"dropped": "已丟棄"
     ,"(none)": "(無)"
+    ,"Director (multi-agent)": "導演模式（多 agent）"
+    ,"Main agent": "主代理"
+    ,"Sub-agents": "子代理"
+    ,"Add sub-agent": "新增子代理"
+    ,"Sub-agent ID": "子代理 ID"
+    ,"Description (shown to main agent)": "描述（主代理可見）"
+    ,"Discard partial message on abort": "中止時丟棄殘缺訊息"
+    ,"Maximum tool-calling rounds": "最大工具呼叫輪數"
+    ,"Maximum concurrent sub-agents": "最大並行子代理數"
+    ,"Maximum total sub-agent runs per turn": "本回合最多子代理呼叫總數"
+    ,"Direct message generation": "直接生成訊息"
+    ,"Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.": "導演模式由主代理直接產出助理訊息,主代理可派遣子代理協助。"
+    ,"Director Orchestration": "導演編排"
+    ,"System prompt (leave empty for default)": "系統提示詞（留空使用預設值）"
+    ,"Reset to default": "重設為預設值"
+    ,"Reset main-agent system prompt to default? This overwrites the current text.": "重設主代理系統提示詞為預設值?這會覆蓋目前文字。"
+    ,"Reset main-agent system prompt to default": "已重設主代理系統提示詞為預設值"
+    ,"Limits": "上限"
+    ,"Reset Global": "重設全局設定"
 }

@@ -904,7 +904,7 @@ export async function forwardStreamingWithGenerationJob(fetchResponse, response,
         return;
     }
 
-    completeInspectionFromStream(request, job.events);
+    completeInspectionFromStream(request, job.events, job.text);
     const persisted = await completeGenerationJobFromText(request, job, job.text, modelName);
     const completionEvent = JSON.stringify({
         luker: {
@@ -921,6 +921,104 @@ export async function forwardStreamingWithGenerationJob(fetchResponse, response,
         }
         response.end();
     }
+}
+
+/**
+ * Stream a fetch response to the client while accumulating SSE text for the
+ * request-inspector. Mirrors forwardStreamingWithGenerationJob's tap loop
+ * minus the generation-job bookkeeping. Use when no luker_generation job is
+ * attached but the inspector still needs the response body and completion
+ * signal.
+ */
+export async function forwardStreamingWithInspectorTap(fetchResponse, response, request) {
+    const source = String(request.body?.chat_completion_source || request.body?.api_type || '');
+    let clientClosed = false;
+    response.socket?.on('close', () => { clientClosed = true; });
+
+    if (!fetchResponse.ok) {
+        const errorText = await fetchResponse.text().catch(() => '');
+        const errorMessage = `${fetchResponse.status} ${fetchResponse.statusText}`.trim();
+        console.warn(`Streaming API returned error: ${errorMessage}${errorText ? ` ${errorText}` : ''}`);
+        failInspection(request, errorMessage || errorText || 'Streaming request failed', fetchResponse.status);
+        if (!clientClosed && !response.writableEnded) {
+            if (!response.headersSent) {
+                const errorJson = tryParse(errorText) ?? { error: true };
+                return response.status(500).send(errorJson);
+            }
+            response.end(errorText || '');
+        }
+        return;
+    }
+
+    let statusCode = fetchResponse.status;
+    if (statusCode === 401) statusCode = 400;
+    response.statusCode = statusCode;
+    response.statusMessage = fetchResponse.statusText;
+    const contentType = fetchResponse.headers.get('content-type');
+    if (contentType) response.setHeader('content-type', contentType);
+    response.setHeader('Cache-Control', 'no-cache, no-transform');
+    response.setHeader('Connection', 'keep-alive');
+    response.setHeader('X-Accel-Buffering', 'no');
+    if (typeof response.flushHeaders === 'function') response.flushHeaders();
+
+    let buffer = '';
+    let accumulatedText = '';
+    const events = [];
+    const decoder = new TextDecoder('utf-8');
+    try {
+        if (fetchResponse.body) {
+            for await (const chunk of fetchResponse.body) {
+                const chunkBytes = chunk instanceof Uint8Array ? chunk : Buffer.from(chunk);
+                const chunkText = decoder.decode(chunkBytes, { stream: true });
+                if (!clientClosed && !response.writableEnded) {
+                    response.write(chunkBytes);
+                    if (typeof response.flush === 'function') response.flush();
+                }
+                buffer += chunkText;
+                buffer = buffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+                let delimiterIndex = buffer.indexOf('\n\n');
+                while (delimiterIndex !== -1) {
+                    const frame = buffer.slice(0, delimiterIndex);
+                    buffer = buffer.slice(delimiterIndex + 2);
+                    const dataLines = frame
+                        .split('\n')
+                        .map(line => line.trimEnd())
+                        .filter(line => line.startsWith('data:'))
+                        .map(line => line.slice(5).trimStart());
+                    if (dataLines.length > 0) {
+                        const data = dataLines.join('\n');
+                        events.push(data);
+                        const deltaText = extractTextFromStreamingFrameData(data, source);
+                        if (deltaText) accumulatedText += deltaText;
+                    }
+                    delimiterIndex = buffer.indexOf('\n\n');
+                }
+            }
+        }
+    } catch (error) {
+        failInspection(request, error?.message || 'Streaming interrupted');
+        if (!clientClosed && !response.writableEnded) response.end();
+        return;
+    }
+
+    buffer += decoder.decode();
+    buffer = buffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    if (buffer.trim()) {
+        const dataLines = buffer
+            .split('\n')
+            .map(line => line.trimEnd())
+            .filter(line => line.startsWith('data:'))
+            .map(line => line.slice(5).trimStart());
+        if (dataLines.length > 0) {
+            const data = dataLines.join('\n');
+            events.push(data);
+            const deltaText = extractTextFromStreamingFrameData(data, source);
+            if (deltaText) accumulatedText += deltaText;
+        }
+    }
+
+    completeInspectionFromStream(request, events, accumulatedText);
+    if (!clientClosed && !response.writableEnded) response.end();
 }
 
 export function getActiveGenerationJobsForRequest(request, persistTarget) {

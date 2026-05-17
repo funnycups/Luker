@@ -32,6 +32,7 @@ import {
     ORCH_NODE_TYPE_WORKER,
     defaultSpec,
 } from './defaults.js';
+import { ORCH_EXECUTION_MODE_DIRECTOR, sanitizeDirectorProfile } from './director-defaults.js';
 import { sanitizeOptionalAgentToolFlags } from './persistence.js';
 
 const MODULE_NAME = 'orchestrator';
@@ -87,6 +88,14 @@ export function normalizeNodeSpec(node) {
 export function sanitizeSpec(spec) {
     if (!spec || typeof spec !== 'object') {
         return structuredClone(defaultSpec);
+    }
+
+    // Director-mode profiles are sanitized via their own branch — they own
+    // a {director: {...}} shape, not the {stages, defaultTools} stages-spec
+    // shape. The plan asks sanitizeSpec to route to the director sanitizer
+    // when the input is recognized as a director profile.
+    if (spec.mode === ORCH_EXECUTION_MODE_DIRECTOR) {
+        return sanitizeDirectorProfile(spec);
     }
 
     const stages = Array.isArray(spec.stages) ? spec.stages : [];

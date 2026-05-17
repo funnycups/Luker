@@ -552,7 +552,6 @@ export async function buildAiOrchestrationProfile(context, settings, {
                 allowedNames,
                 retriesOverride: 0,
                 abortSignal,
-                applyAgentTimeout: false,
             });
         } catch (error) {
             if (isAbortError(error, abortSignal)) {

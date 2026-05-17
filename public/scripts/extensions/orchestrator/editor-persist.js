@@ -32,8 +32,10 @@
 import { saveSettings, updateCharacterData } from '../../../script.js';
 import {
     ORCH_EXECUTION_MODE_AGENDA,
+    ORCH_EXECUTION_MODE_DIRECTOR,
     ORCH_EXECUTION_MODE_LOOP,
     ORCH_EXECUTION_MODE_SPEC,
+    sanitizeDirectorProfile,
 } from './defaults.js';
 import {
     getCharacterDisplayNameByAvatar,
@@ -54,7 +56,7 @@ import {
 } from './agenda-profile.js';
 import { sanitizeLoopProfile } from './persistence.js';
 import { cloneJsonCompatible } from './spec-schema.js';
-import { ensureEditorIntegrity } from './editor-state.js';
+import { ensureDirectorEditorIntegrity, ensureEditorIntegrity } from './editor-state.js';
 
 const MODULE_NAME = 'orchestrator';
 
@@ -88,6 +90,18 @@ export async function persistGlobalAgendaEditorFrom(settings, editor) {
  */
 export async function persistGlobalLoopEditorFrom(settings, editor) {
     settings.loopProfile = sanitizeLoopProfile(editor);
+    await saveSettings();
+}
+
+/**
+ * Persist a director-mode editor draft to global settings. Funnels
+ * through `sanitizeDirectorProfile` so the on-disk shape always
+ * matches the canonical director schema (mainAgent / subAgents /
+ * limits / tools, with `tools.finalize` forced false) regardless of
+ * how the editor mutated the draft.
+ */
+export async function persistGlobalDirectorEditorFrom(settings, editor) {
+    settings.directorProfile = sanitizeDirectorProfile(editor);
     await saveSettings();
 }
 
@@ -219,6 +233,64 @@ export async function persistCharacterLoopEditor(context, settings, avatar, {
         mode: ORCH_EXECUTION_MODE_LOOP,
         loop: {
             ...sanitizedProfile,
+            enabled: forceEnabled === null ? Boolean(sourceEnabled) : Boolean(forceEnabled),
+            updatedAt: Date.now(),
+            name: getCharacterDisplayNameByAvatar(context, target),
+            notes: sourceNotes,
+        },
+    };
+
+    const nextPayload = {
+        ...previous,
+        override: normalizeCharacterOverrideMode(overridePayload),
+    };
+    return await persistOrchestratorCharacterExtension(context, characterIndex, nextPayload);
+}
+
+/**
+ * Persist a director-mode editor draft as a character override.
+ * Mirrors `persistCharacterLoopEditor`: writes to `override.director`
+ * on the character card, normalizes the active mode, and routes
+ * through `persistOrchestratorCharacterExtension` for the network
+ * write.
+ *
+ * The director sub-payload runs through `sanitizeDirectorProfile` so
+ * the on-card shape matches the canonical schema regardless of how the
+ * editor mutated the draft, then carries the editor's `enabled`,
+ * `notes`, and `name` fields alongside the profile fields.
+ */
+export async function persistCharacterDirectorEditor(context, settings, avatar, {
+    editor,
+    forceEnabled = null,
+    notes = null,
+} = {}) {
+    void settings;
+    const target = String(avatar || '');
+    if (!target) {
+        return false;
+    }
+    const characterIndex = getCharacterIndexByAvatar(context, target);
+    if (characterIndex < 0) {
+        return false;
+    }
+
+    const sourceEnabled = typeof editor?.enabled === 'boolean' ? editor.enabled : true;
+    const sourceNotes = notes === null ? String(editor?.notes || '') : String(notes || '');
+    const previous = getCharacterExtensionDataByAvatar(context, target);
+    const previousOverride = previous?.override && typeof previous.override === 'object'
+        ? structuredClone(previous.override)
+        : {};
+    const sanitizedProfile = sanitizeDirectorProfile(editor);
+    const overridePayload = {
+        ...previousOverride,
+        mode: ORCH_EXECUTION_MODE_DIRECTOR,
+        director: {
+            // sanitizeDirectorProfile returns { mode, director: {...} }
+            // — we want the inner director object as the sub-payload
+            // (the outer mode is set explicitly above on the override
+            // wrapper). Spread the inner shape, then attach the
+            // character-override metadata.
+            ...sanitizedProfile.director,
             enabled: forceEnabled === null ? Boolean(sourceEnabled) : Boolean(forceEnabled),
             updatedAt: Date.now(),
             name: getCharacterDisplayNameByAvatar(context, target),

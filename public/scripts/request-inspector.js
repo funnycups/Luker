@@ -9,8 +9,11 @@ import { t } from './i18n.js';
 
 const MODULE_NAME = 'RequestInspector';
 let cachedList = [];
+let cachedDetail = null;
 let currentDetailId = null;
 let currentFilter = 'all'; // 'all' | 'chat' | 'image'
+let currentSearch = '';
+let currentDetailSearch = '';
 
 function formatTimestamp(ts) {
  const d = new Date(ts);
@@ -58,6 +61,107 @@ function escapeHtml(str) {
  return div.innerHTML;
 }
 
+function escapeRegex(s) {
+ return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Escape HTML then highlight substring matches of `query` (case-insensitive)
+ * by wrapping them in <mark class="ri-hl">. Query is also escaped to avoid
+ * mismatching entities introduced by escapeHtml.
+ */
+function highlightHtml(text, query) {
+ const safe = escapeHtml(text);
+ const q = (query || '').trim();
+ if (!q) return safe;
+ const safeQ = escapeHtml(q);
+ if (!safeQ) return safe;
+ const re = new RegExp(escapeRegex(safeQ), 'gi');
+ return safe.replace(re, m => `<mark class="ri-hl">${m}</mark>`);
+}
+
+function formatToolCallArgs(rawArgs) {
+ if (typeof rawArgs === 'string') {
+ try { return JSON.stringify(JSON.parse(rawArgs), null, 2); }
+ catch { return rawArgs; }
+ }
+ return JSON.stringify(rawArgs ?? {}, null, 2);
+}
+
+function formatMessage(msg) {
+ const sections = [];
+
+ if (msg?.role === 'tool' && msg?.tool_call_id) {
+ sections.push(`[tool_result: ${msg.tool_call_id}]`);
+ }
+
+ const content = formatMessageContent(msg?.content);
+ if (content) sections.push(content);
+
+ if (Array.isArray(msg?.tool_calls)) {
+ for (const tc of msg.tool_calls) {
+ const name = tc?.function?.name || tc?.name || '?';
+ const id = tc?.id || '';
+ const args = formatToolCallArgs(tc?.function?.arguments ?? tc?.arguments);
+ sections.push(`[tool_call: ${name} (id=${id})]\n${args}`);
+ }
+ }
+
+ if (msg?.function_call) {
+ const fc = msg.function_call;
+ const name = fc?.name || '?';
+ const args = formatToolCallArgs(fc?.arguments);
+ sections.push(`[function_call: ${name}]\n${args}`);
+ }
+
+ return sections.join('\n\n');
+}
+
+function formatMessageContent(content) {
+ if (typeof content === 'string') return content;
+ if (content == null) return '';
+ if (!Array.isArray(content)) return JSON.stringify(content, null, 2);
+
+ const parts = [];
+ for (const part of content) {
+ if (typeof part === 'string') { parts.push(part); continue; }
+ if (part == null) continue;
+
+ if (part.type === 'text' || typeof part.text === 'string') {
+ parts.push(String(part.text ?? ''));
+ continue;
+ }
+ if (part.type === 'image_url') {
+ const url = part.image_url?.url || '';
+ if (url.startsWith('data:')) {
+ const mime = url.slice(5, url.indexOf(';')) || 'data';
+ parts.push(`[image: ${mime}]`);
+ } else {
+ parts.push(`[image: ${url.slice(0, 80)}${url.length > 80 ? '…' : ''}]`);
+ }
+ continue;
+ }
+ if (part.type === 'image' && part.source) {
+ const media = part.source.media_type || part.source.type || 'image';
+ parts.push(`[image: ${media}]`);
+ continue;
+ }
+ if (part.type === 'tool_use') {
+ const name = part.name || '?';
+ const input = JSON.stringify(part.input ?? {}, null, 2);
+ parts.push(`[tool_use: ${name}]\n${input}`);
+ continue;
+ }
+ if (part.type === 'tool_result') {
+ const inner = formatMessageContent(part.content);
+ parts.push(`[tool_result: ${part.tool_use_id || ''}]\n${inner}`);
+ continue;
+ }
+ parts.push(JSON.stringify(part, null, 2));
+ }
+ return parts.join('\n\n');
+}
+
 async function fetchList() {
  try {
  const res = await fetch('/api/request-inspector/list');
@@ -82,17 +186,24 @@ async function fetchDetail(id) {
 }
 
 function buildFilterBar() {
+ const q = escapeHtml(currentSearch);
  return `
  <div class="ri-filter-bar">
  <button class="ri-filter-btn menu_button ${currentFilter === 'all' ? 'active' : ''}" data-filter="all">${t`All`}</button>
  <button class="ri-filter-btn menu_button ${currentFilter === 'chat' ? 'active' : ''}" data-filter="chat">\uD83D\uDCAC ${t`Chat`}</button>
  <button class="ri-filter-btn menu_button ${currentFilter === 'image' ? 'active' : ''}" data-filter="image">\uD83C\uDFA8 ${t`Image`}</button>
+ <input type="text" class="ri-search-input text_pole" placeholder="${t`Search source / model / messages / response...`}" value="${q}" />
  </div>`;
 }
 
 function getFilteredItems(items) {
- if (currentFilter === 'all') return items;
- return items.filter(item => (item.type || 'chat') === currentFilter);
+ const byType = currentFilter === 'all' ? items : items.filter(item => (item.type || 'chat') === currentFilter);
+ const q = currentSearch.trim().toLowerCase();
+ if (!q) return byType;
+ return byType.filter(item => {
+ const hay = (item.searchText || '').toLowerCase();
+ return hay.includes(q);
+ });
 }
 
 function buildInfoCell(item) {
@@ -107,16 +218,13 @@ function buildInfoCell(item) {
  return `${msgs}${tokens}`;
 }
 
-function buildListHtml(items) {
+function buildTableHtml(items) {
  const filtered = getFilteredItems(items);
- let html = buildFilterBar();
-
  if (!filtered.length) {
- html += `<div class="ri-empty">${t`No generation requests recorded yet.`}</div>`;
- return html;
+ return `<div class="ri-empty">${t`No generation requests recorded yet.`}</div>`;
  }
 
- html += `
+ let html = `
  <div class="ri-table-wrap">
  <table class="ri-table">
  <thead>
@@ -154,6 +262,46 @@ function buildListHtml(items) {
  return html;
 }
 
+function buildListHtml(items) {
+ return buildFilterBar() + `<div class="ri-list-body">${buildTableHtml(items)}</div>`;
+}
+
+function buildChatDetailBody(detail) {
+ const q = currentDetailSearch;
+ let messagesHtml = '';
+ if (Array.isArray(detail.fullMessages)) {
+ for (let i = 0; i < detail.fullMessages.length; i++) {
+ const msg = detail.fullMessages[i];
+ const role = msg?.role || '?';
+ const content = formatMessage(msg);
+ const charLen = content.length;
+ const hit = q && content.toLowerCase().includes(q.trim().toLowerCase());
+ messagesHtml += `
+ <details class="ri-msg${hit ? ' ri-msg-hit' : ''}"${hit ? ' open' : ''}>
+ <summary class="ri-msg-summary">
+ <span class="ri-msg-index">#${i}</span>
+ <span class="ri-msg-role ri-role-${escapeHtml(role)}">${escapeHtml(role)}</span>
+ <span class="ri-msg-len">${charLen.toLocaleString()} ${t`chars`}</span>
+ </summary>
+ <pre class="ri-msg-content">${highlightHtml(content || t`(empty)`, q)}</pre>
+ </details>`;
+ }
+ }
+
+ return `
+ <div class="ri-detail-section">
+ <h4>${t`Response Body`} (${(detail.responseText || '').length.toLocaleString()} ${t`chars`})</h4>
+ <pre class="ri-msg-content ri-response-body">${highlightHtml(detail.responseText || t`(empty)`, q)}</pre>
+ </div>
+
+ <div class="ri-detail-section">
+ <h4>${t`Messages`} (${detail.messageCount})</h4>
+ <div class="ri-messages">
+ ${messagesHtml || `<div class="ri-empty">${t`No messages captured.`}</div>`}
+ </div>
+ </div>`;
+}
+
 function buildChatDetailHtml(detail) {
  const usage = detail.usage || {};
  const cacheInfo = (usage.cache_read != null || usage.cache_write != null)
@@ -161,32 +309,12 @@ function buildChatDetailHtml(detail) {
  <tr><td>${t`Cache Write`}</td><td>${formatTokens(usage.cache_write)}</td></tr>`
  : '';
 
- let messagesHtml = '';
- if (Array.isArray(detail.fullMessages)) {
- for (let i = 0; i < detail.fullMessages.length; i++) {
- const msg = detail.fullMessages[i];
- const role = msg?.role || '?';
- const content = typeof msg?.content === 'string'
- ? msg.content
- : JSON.stringify(msg?.content, null, 2);
- const charLen = (content || '').length;
- messagesHtml += `
- <details class="ri-msg">
- <summary class="ri-msg-summary">
- <span class="ri-msg-index">#${i}</span>
- <span class="ri-msg-role ri-role-${escapeHtml(role)}">${escapeHtml(role)}</span>
- <span class="ri-msg-len">${charLen.toLocaleString()} ${t`chars`}</span>
- </summary>
- <pre class="ri-msg-content">${escapeHtml(content || t`(empty)`)}</pre>
- </details>`;
- }
- }
-
  return `
  <div class="ri-detail">
  <div class="ri-detail-header">
  <button class="ri-back menu_button">\u2190 ${t`Back`}</button>
  <button class="ri-export menu_button" data-id="${escapeHtml(detail.id)}">${t`Export JSON`}</button>
+ <input type="text" class="ri-detail-search text_pole" placeholder="${t`Search in this request...`}" value="${escapeHtml(currentDetailSearch)}" />
  </div>
 
  <div class="ri-detail-grid">
@@ -217,12 +345,7 @@ function buildChatDetailHtml(detail) {
  </div>
  </div>
 
- <div class="ri-detail-section">
- <h4>${t`Messages`} (${detail.messageCount})</h4>
- <div class="ri-messages">
- ${messagesHtml || `<div class="ri-empty">${t`No messages captured.`}</div>`}
- </div>
- </div>
+ <div class="ri-detail-body">${buildChatDetailBody(detail)}</div>
  </div>`;
 }
 
@@ -292,21 +415,38 @@ async function openInspectorPanel() {
  content.html(buildListHtml(cachedList));
  });
 
+ content.on('input', '.ri-search-input', function () {
+ currentSearch = $(this).val() || '';
+ content.find('.ri-list-body').html(buildTableHtml(cachedList));
+ });
+
  content.on('click', '.ri-row', async function () {
  const id = $(this).data('id');
  if (!id) return;
  currentDetailId = id;
+ currentDetailSearch = '';
+ cachedDetail = null;
  content.html(`<div class="ri-loading">${t`Loading...`}</div>`);
  const detail = await fetchDetail(id);
+ cachedDetail = detail;
  content.html(buildDetailHtml(detail));
  content.closest('.popup-content').scrollTop(0);
  });
 
  content.on('click', '.ri-back', async function () {
  currentDetailId = null;
+ currentDetailSearch = '';
+ cachedDetail = null;
  const items = await fetchList();
  content.html(buildListHtml(items));
  content.closest('.popup-content').scrollTop(0);
+ });
+
+ content.on('input', '.ri-detail-search', function () {
+ currentDetailSearch = $(this).val() || '';
+ if (cachedDetail && (cachedDetail.type || 'chat') === 'chat') {
+ content.find('.ri-detail-body').html(buildChatDetailBody(cachedDetail));
+ }
  });
 
  content.on('click', '.ri-export', function () {

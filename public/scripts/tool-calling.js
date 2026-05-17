@@ -438,8 +438,15 @@ export class ToolManager {
      * @param {object} toolSignatures Optional mapping of tool call IDs to thought signatures.
      * @returns {void}
      */
-    static parseToolCalls(toolCalls, parsed, toolSignatures = {}) {
-        if (!this.isToolCallingSupported()) {
+    static parseToolCalls(toolCalls, parsed, toolSignatures = {}, { force = false } = {}) {
+        // `isToolCallingSupported()` reads the global `oai_settings.function_calling`
+        // toggle. That gate is meant for the main chat flow — when a caller
+        // (e.g. an extension running its own tool-call loop via
+        // `generateTaskStream`) has already supplied a tools array, it has
+        // explicitly opted into tool calling for THIS request and should not
+        // be overridden by the user's UI-level toggle. Pass `force: true` to
+        // bypass the gate when the caller already knows tools are in play.
+        if (!force && !this.isToolCallingSupported()) {
             return;
         }
         if (Array.isArray(parsed?.choices)) {
@@ -497,7 +504,21 @@ export class ToolManager {
             }
 
             const targetToolCall = toolCalls[choiceIndex][toolCallIndex];
-            ToolManager.#applyToolCallDelta(targetToolCall, parsed.delta.message);
+            // Cohere v2 streams `delta.message.tool_calls` already in
+            // OpenAI shape (`{id, type: 'function', function: {name,
+            // arguments}}` with `arguments` as a concatenable JSON-string
+            // partial — see Cohere v2 streaming docs). Unwrap the
+            // `tool_calls` envelope before merging so the OpenAI fields
+            // land directly on `targetToolCall` instead of one level deeper
+            // under `targetToolCall.tool_calls.*` (which is what the old
+            // unwrapping-less merge produced, breaking every downstream
+            // consumer that reads `call.function.name`).
+            const cohereInner = parsed.delta.message.tool_calls;
+            if (cohereInner && typeof cohereInner === 'object') {
+                ToolManager.#applyToolCallDelta(targetToolCall, cohereInner);
+            } else {
+                ToolManager.#applyToolCallDelta(targetToolCall, parsed.delta.message);
+            }
         }
         if (typeof parsed?.content_block === 'object') {
             const choiceIndex = 0;
@@ -511,7 +532,46 @@ export class ToolManager {
                     toolCalls[choiceIndex][toolCallIndex] = {};
                 }
                 const targetToolCall = toolCalls[choiceIndex][toolCallIndex];
+                // Anthropic streaming sends `content_block` with the
+                // shape `{ type: 'tool_use', id, name, input, ... }`.
+                // The historical merge path here spread that as-is,
+                // leaving the tool call in Anthropic-native shape and
+                // forcing every downstream consumer to special-case it
+                // (generate-task.js `normalizeResponse`, the OpenAI-shaped
+                // assistant turn that gets echoed back to the API on the
+                // next round, etc.). Normalize to the OpenAI tool_call
+                // shape here so downstream code can uniformly read
+                // `call.function.name` and `call.function.arguments`
+                // regardless of which provider streamed the call.
+                // Legacy `name` / `input` fields are preserved alongside
+                // for any caller that still reads them; new code should
+                // prefer the `function.*` path.
                 ToolManager.#applyToolCallDelta(targetToolCall, parsed.content_block);
+                if (parsed.content_block.id && !targetToolCall.id) {
+                    targetToolCall.id = parsed.content_block.id;
+                }
+                if (!targetToolCall.type || targetToolCall.type === 'tool_use') {
+                    targetToolCall.type = 'function';
+                }
+                if (!targetToolCall.function || typeof targetToolCall.function !== 'object') {
+                    targetToolCall.function = {};
+                }
+                if (parsed.content_block.name && !targetToolCall.function.name) {
+                    targetToolCall.function.name = String(parsed.content_block.name);
+                }
+                if (typeof targetToolCall.function.arguments !== 'string') {
+                    // `content_block_start` may carry a seed `input` object
+                    // (typically empty `{}`); stringify it as the initial
+                    // arguments so subsequent input_json_delta chunks can
+                    // append on top.
+                    const seed = parsed.content_block.input;
+                    if (seed && typeof seed === 'object' && Object.keys(seed).length > 0) {
+                        try { targetToolCall.function.arguments = JSON.stringify(seed); }
+                        catch (_) { targetToolCall.function.arguments = ''; }
+                    } else {
+                        targetToolCall.function.arguments = '';
+                    }
+                }
             }
         }
         if (typeof parsed?.delta === 'object') {
@@ -525,6 +585,18 @@ export class ToolManager {
                         targetToolCall[this.#INPUT_DELTA_KEY] = '';
                     }
                     targetToolCall[this.#INPUT_DELTA_KEY] += jsonDelta;
+                    // Mirror the partial JSON into OpenAI-shape
+                    // `function.arguments` so streaming consumers can read
+                    // it incrementally without poking at the private delta
+                    // buffer. content_block_stop will keep this string as
+                    // the final arguments value.
+                    if (!targetToolCall.function || typeof targetToolCall.function !== 'object') {
+                        targetToolCall.function = {};
+                    }
+                    if (typeof targetToolCall.function.arguments !== 'string') {
+                        targetToolCall.function.arguments = '';
+                    }
+                    targetToolCall.function.arguments += String(jsonDelta || '');
                 }
             }
         }
@@ -569,6 +641,7 @@ export class ToolManager {
                 }
             }
         }
+        // ── Diagnostic: dump accumulated toolCalls state when this chunk touched tool-call paths
     }
 
     /**

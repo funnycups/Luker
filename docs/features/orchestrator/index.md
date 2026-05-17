@@ -150,7 +150,6 @@ The most common settings:
 | Injection Role | `SYSTEM` / `USER` / `ASSISTANT` |
 | Custom Instruction Prefix | Prefix prepended to the capsule |
 | Requests Per Minute Limit | Throttle for parallel nodes |
-| Agent Timeout | Per-agent timeout, seconds |
 | Tool Call Retries | Retries for failed tool calls |
 | Global API Preset | Default API connection preset |
 | Global Chat Completion Preset | Default Chat Completion preset |

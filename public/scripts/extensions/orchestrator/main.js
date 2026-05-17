@@ -4,7 +4,9 @@
 
 import { extension_prompt_roles, saveSettings, saveSettingsDebounced } from '../../../script.js';
 import { extension_settings, getContext, getCharacterState, setCharacterState } from '../../extensions.js';
+import { oai_settings } from '../../openai.js';
 import { world_info_position } from '../../world-info.js';
+import { getMessageTimeStamp } from '../../RossAscends-mods.js';
 import { renderObjectDiffHtml } from '../object-diff-view.js';
 import { DiffMatchPatch } from '../../../lib.js';
 import { create as createDiffPatcher, reverse as reverseDiffDelta } from '../../vendor/diffpatch/index.js';
@@ -30,6 +32,7 @@ import {
     DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE,
     ORCH_ALLOWED_GENERATION_TYPES,
     ORCH_EXECUTION_MODE_AGENDA,
+    ORCH_EXECUTION_MODE_DIRECTOR,
     ORCH_EXECUTION_MODE_LOOP,
     ORCH_EXECUTION_MODE_SINGLE,
     ORCH_EXECUTION_MODE_SPEC,
@@ -38,6 +41,8 @@ import {
     ORCH_REVIEW_FEEDBACK_FIELD,
     PORTABLE_PROFILE_FORMAT_V1,
     PORTABLE_PROFILE_FORMAT_V2,
+    createDefaultDirectorProfile,
+    sanitizeDirectorProfile,
     defaultAgendaAgents,
     defaultAgendaPlanner,
     defaultLoopProfile,
@@ -92,12 +97,14 @@ import {
     migrateLegacyCapsuleInjectPosition,
     normalizeCapsuleInjectPosition,
 } from './capsule-injection.js';
+import { DIRECTOR_PURE_PRESET_BODY } from './pure-preset-body.js';
 import {
     clearLatestOrchestrationRuntimeTrace,
     createOrchestrationRuntimeTrace,
     finalizeOrchestrationRuntimeTrace,
     getLatestOrchestrationRuntimeTrace,
     truncateOrchestrationRuntimePreview,
+    attachOrchestrationRuntimeDirectorState,
 } from './runtime-trace.js';
 import {
     formatDiffValue,
@@ -134,10 +141,12 @@ import {
     sanitizeConnectionProfileName,
     sanitizePromptPresetName,
 } from './agent-resolution.js';
+import { presetContainsContentPrompts } from './director-preset-lint.js';
 import {
     applyCharacterExecutionModeForAvatar,
     getCharacterAgendaOverrideByAvatar,
     getCharacterCardSnapshot,
+    getCharacterDirectorOverrideByAvatar,
     getCharacterDisplayNameByAvatar,
     getCharacterExtensionDataByAvatar,
     getCharacterIndexByAvatar,
@@ -145,6 +154,7 @@ import {
     getCharacterOverrideByAvatar,
     getExecutionMode,
     hasCharacterAgendaOverride,
+    hasCharacterDirectorOverride,
     hasCharacterLoopOverride,
     hasCharacterOverride,
     hasCharacterSpecOverride,
@@ -172,7 +182,11 @@ import {
 } from './agenda-profile.js';
 import { runAgendaOrchestration } from './agenda-runtime.js';
 import { runSpecOrchestration } from './spec-runtime.js';
-import { runLoopOrchestration } from './loop-runtime.js';
+import { runLoopOrchestration, attachNotesFloorState } from './loop-runtime.js';
+import { handleDirectorDispatch } from './director-runtime.js';
+import { buildDirectorDefaultSystemPrompt } from './director-default-prompt.js';
+import { createContentPayloadCache } from './director-content-payload.js';
+import { executeLoopTool } from './loop-tools.js';
 // Note: `ORCH_EXECUTION_MODE_LOOP` is canonically defined in defaults.js
 // (alongside the other mode literals) and re-exported by persistence.js
 // for callers that want it bundled with `sanitizeLoopProfile`. We import
@@ -192,13 +206,16 @@ import {
 } from './ai-build.js';
 import {
     createNewStage,
+    ensureDirectorEditorIntegrity,
     ensureEditorIntegrity,
     ensureLoopEditorIntegrity,
     initializeUiState,
     loadCharacterAgendaEditorState,
+    loadCharacterDirectorEditorState,
     loadCharacterEditorState,
     loadCharacterLoopEditorState,
     loadGlobalAgendaEditorState,
+    loadGlobalDirectorEditorState,
     loadGlobalEditorState,
     loadGlobalLoopEditorState,
     pickDefaultPreset,
@@ -225,9 +242,11 @@ import {
     createPortableAgendaProfileFromEditor,
     createPortableProfileFromEditor,
     persistCharacterAgendaEditor,
+    persistCharacterDirectorEditor,
     persistCharacterEditor,
     persistCharacterLoopEditor,
     persistGlobalAgendaEditorFrom,
+    persistGlobalDirectorEditorFrom,
     persistGlobalEditorFrom,
     persistGlobalLoopEditorFrom,
     persistOrchestratorCharacterExtension,
@@ -243,6 +262,91 @@ const ORCH_GLOBAL_ITERATION_HISTORY_KEY = 'global_iteration_history';
 const ORCH_CHARACTER_ITERATION_HISTORY_VERSION = 3;
 const ORCH_CHARACTER_ITERATION_HISTORY_LIMIT = 24;
 const ORCH_ITERATION_DIFF_TEXT_MIN_LENGTH = 80;
+// Module-scope cache for the director content payload captured at
+// GENERATE_TAKEOVER_DISPATCH. Director's main + sub agents read from this
+// to build their taskMessages — single source of truth across the whole
+// session. See `director-content-payload.js`.
+const directorContentCache = createContentPayloadCache();
+
+// ── Pure-preset override (director-mode only) ──
+//
+// Director takes over the assistant message body itself; the messages
+// ST composes for what would have been the main-LLM call become the
+// `directorContentCache` story-context payload that all director agents
+// build their taskMessages on top of. If those captured messages were
+// composed using the user's main-chat preset, every preset-level prompt
+// item (Main Prompt, jailbreak, NSFW, anti-cliche, char-card prompts,
+// etc.) ends up embedded inside the orchestrator agents' context as
+// dead weight that competes with their own system prompts.
+//
+// To get a clean composition we temporarily override `oai_settings`
+// with the bundled "pure" Chat Completion preset before
+// `prepareOpenAIMessages` runs (subscribe to GENERATION_STARTED, which
+// fires at script.js:6868, well before message composition at :8144),
+// and restore it the moment `GENERATE_TAKEOVER_DISPATCH` fires
+// (script.js:8260, immediately after composition is complete). The
+// override is plugin-side only — no save to disk, no preset_settings_openai
+// rotation, no UI notification — so the user's persisted selection is
+// untouched.
+//
+// Snapshot/apply/restore follows the same shape as
+// LittleWhiteBox `_withTemporaryPreset` in
+// `extensions/third-party/LittleWhiteBox/bridges/call-generate-service.js`:
+//   - snapshot via structuredClone (JSON fallback for non-cloneable values)
+//   - apply by copying the preset body's own keys onto oai_settings
+//   - restore by deleting keys not in snapshot, then Object.assign
+//
+// `pendingPresetSnapshot` is the across-events handle. Pairing is:
+//   GENERATION_STARTED  → applyPureSyntheticPresetOverride()
+//   GENERATE_TAKEOVER_DISPATCH (top of handler) → restorePureSyntheticPresetOverride()
+//   GENERATION_ENDED / GENERATION_STOPPED → restorePureSyntheticPresetOverride() (safety net)
+//
+// The restore is idempotent (no-op when snapshot is null) so the safety
+// nets can fire freely after the primary restore on takeover dispatch.
+//
+// Agent preset resolution (director-runtime.js / director-tools.js) is
+// NOT involved here. Each director agent's chat-completion preset is
+// resolved by name through ST's normal preset lookup at agent call time,
+// completely independent of the temporary oai_settings override that
+// only governs the user-send composition.
+const DIRECTOR_TAKEOVER_GEN_TYPES = new Set(['normal', 'regenerate', 'swipe', 'continue']);
+let pendingPresetSnapshot = null;
+
+function cloneForSettings(value) {
+    try {
+        return structuredClone(value);
+    } catch (_) {
+        return JSON.parse(JSON.stringify(value));
+    }
+}
+
+function applyPureSyntheticPresetOverride() {
+    if (pendingPresetSnapshot !== null) {
+        // Defensive: a previous override is still pending. Restore it
+        // before re-applying so we don't lose the original snapshot.
+        // This should only happen if a prior generation skipped both
+        // the primary and safety-net restore paths.
+        restorePureSyntheticPresetOverride();
+    }
+    const snapshot = cloneForSettings(oai_settings);
+    const bodyClone = cloneForSettings(DIRECTOR_PURE_PRESET_BODY);
+    for (const key of Object.keys(bodyClone)) {
+        oai_settings[key] = bodyClone[key];
+    }
+    pendingPresetSnapshot = snapshot;
+}
+
+function restorePureSyntheticPresetOverride() {
+    if (pendingPresetSnapshot === null) return;
+    const snapshot = pendingPresetSnapshot;
+    pendingPresetSnapshot = null;
+    for (const key of Object.keys(oai_settings)) {
+        if (!Object.prototype.hasOwnProperty.call(snapshot, key)) {
+            try { delete oai_settings[key]; } catch (_) { /* best-effort */ }
+        }
+    }
+    Object.assign(oai_settings, snapshot);
+}
 let orchInFlight = false;
 let activeRunInfoToast = null;
 let activeAiBuildToast = null;
@@ -362,10 +466,6 @@ function ensureSettings() {
     extension_settings[MODULE_NAME].reviewRerunMaxRounds = Math.max(
         0,
         Math.min(20, Math.floor(Number(extension_settings[MODULE_NAME].reviewRerunMaxRounds) || 0)),
-    );
-    extension_settings[MODULE_NAME].agentTimeoutSeconds = Math.max(
-        0,
-        Math.min(3600, Math.floor(Number(extension_settings[MODULE_NAME].agentTimeoutSeconds) || 0)),
     );
     if (!extension_settings[MODULE_NAME].chatOverrides || typeof extension_settings[MODULE_NAME].chatOverrides !== 'object') {
         extension_settings[MODULE_NAME].chatOverrides = {};
@@ -672,6 +772,30 @@ function getEffectiveProfile(context) {
                 maxTotalRuns: settings.agendaMaxTotalRuns,
             },
         });
+    }
+    if (executionMode === ORCH_EXECUTION_MODE_DIRECTOR) {
+        // Character director override beats global. Sanitize before
+        // returning so the runtime sees the canonical shape.
+        const characterDirectorOverride = getCharacterDirectorOverrideByAvatar(context, avatar);
+        if (characterDirectorOverride?.enabled) {
+            // The override stores the director inner shape (mainAgent,
+            // subAgents, ...) directly. Wrap into the canonical
+            // { mode: 'director', director: {...} } envelope.
+            const wrapped = sanitizeDirectorProfile({ director: characterDirectorOverride });
+            return {
+                source: 'character',
+                key: avatar,
+                mode: ORCH_EXECUTION_MODE_DIRECTOR,
+                director: wrapped.director,
+            };
+        }
+        const wrapped = sanitizeDirectorProfile(settings.directorProfile || createDefaultDirectorProfile());
+        return {
+            source: 'global',
+            key: 'director',
+            mode: ORCH_EXECUTION_MODE_DIRECTOR,
+            director: wrapped.director,
+        };
     }
     if (executionMode === ORCH_EXECUTION_MODE_SINGLE || settings.singleAgentModeEnabled) {
         return {
@@ -986,6 +1110,15 @@ async function onWorldInfoFinalized(payload) {
         await loadOrchestratorChatState(context);
         throwIfAborted(orchestrationPayload?.signal, 'Orchestration aborted.');
         const profile = getEffectiveProfile(context);
+        // Director mode produces the assistant message body itself via
+        // the GENERATE_TAKEOVER_DISPATCH hook — it does not run on the
+        // capsule-injection pipeline. Exit early so we don't try to
+        // execute a director profile through the spec/agenda/loop
+        // runtimes (which would crash on `profile.presets`).
+        if (String(profile?.mode || '') === ORCH_EXECUTION_MODE_DIRECTOR) {
+            clearCapsulePrompt(context);
+            return;
+        }
         const messages = structuredClone(Array.isArray(payload?.coreChat) ? payload.coreChat : []);
         if (messages.length === 0) {
             clearLatestOrchestrationRuntimeTrace(context);
@@ -1015,7 +1148,13 @@ async function onWorldInfoFinalized(payload) {
                     capsuleText,
                     note: i18n('Reused previous orchestration snapshot. No nodes executed.'),
                 });
-                injectCapsuleToPayload(payload, capsuleText, settings);
+                // Director mode produces the assistant message directly via
+                // the takeover hook — there is no capsule to inject. Skip
+                // here to avoid polluting the prompt with stale text on the
+                // reused-snapshot path.
+                if (profile?.mode !== ORCH_EXECUTION_MODE_DIRECTOR) {
+                    injectCapsuleToPayload(payload, capsuleText, settings);
+                }
                 throwIfAborted(orchestrationPayload?.signal, 'Orchestration aborted.');
                 await emitOrchestratorResultEvent(context, payload, 'reused', {
                     includeSnapshot: true,
@@ -1065,7 +1204,11 @@ async function onWorldInfoFinalized(payload) {
 
         const capsuleText = buildCapsule(finalRun.stageOutputs || [], profile?.capsule_inject?.customInstruction);
         throwIfAborted(orchestrationPayload?.signal, 'Orchestration aborted.');
-        injectCapsuleToPayload(payload, capsuleText, settings);
+        // Same director-mode skip: director owns the message body itself,
+        // not a capsule injected into the main LLM prompt.
+        if (profile?.mode !== ORCH_EXECUTION_MODE_DIRECTOR) {
+            injectCapsuleToPayload(payload, capsuleText, settings);
+        }
         await storeCompletedOrchestrationSnapshot(context, anchor, capsuleText, finalRun.stageOutputs || []);
         ensureUi();
         finalizeOrchestrationRuntimeTrace(finalRun?.runtimeTrace || getLatestOrchestrationRuntimeTrace(context), 'completed', {
@@ -1176,6 +1319,47 @@ function notifyError(message) {
 
 function getSettings() {
     return extension_settings[MODULE_NAME];
+}
+
+/**
+ * Lazy accessor for the persistent director-mode profile slot. Mirrors
+ * the `settings.loopProfile` pattern: a single global slot at the
+ * extension-settings root (MVP — character override comes later). On
+ * first access the slot is materialized from `createDefaultDirectorProfile()`,
+ * so subsequent binders mutate the same object instead of stamping a
+ * detached defaults clone every render.
+ *
+ * Note: we deliberately do NOT run the result through `sanitizeDirectorProfile`
+ * here. The sanitizer drops sub-agents with empty id / systemPrompt
+ * (correct for runtime safety, but it would erase in-progress rows
+ * during typing). Runtime dispatch sanitizes on its way to the LLM;
+ * editor reads and writes operate on the unsanitized draft.
+ */
+function getDirectorProfileFromSettings(settings) {
+    const target = settings && typeof settings === 'object' ? settings : getSettings();
+    if (!target || typeof target !== 'object') {
+        return createDefaultDirectorProfile();
+    }
+    if (!target.directorProfile || typeof target.directorProfile !== 'object') {
+        target.directorProfile = createDefaultDirectorProfile();
+    }
+    if (!target.directorProfile.director || typeof target.directorProfile.director !== 'object') {
+        target.directorProfile.director = createDefaultDirectorProfile().director;
+    }
+    const director = target.directorProfile.director;
+    if (!director.mainAgent || typeof director.mainAgent !== 'object') {
+        director.mainAgent = { promptPresetName: '', apiPresetName: '', systemPrompt: '' };
+    }
+    if (!Array.isArray(director.subAgents)) {
+        director.subAgents = [];
+    }
+    if (!director.tools || typeof director.tools !== 'object') {
+        // Re-materialize via the sanitizer (single source of truth for
+        // the default-all-on disposition and the finalize:false override).
+        const sanitized = sanitizeDirectorProfile({ director });
+        director.tools = sanitized.director.tools;
+    }
+    return target.directorProfile;
 }
 
 function escapeHtml(value) {
@@ -1457,21 +1641,26 @@ function getOrchestratorUiTemplateDeps() {
         DEFAULT_AGENDA_PLANNER_PROMPT,
         DEFAULT_AGENDA_PLANNER_SYSTEM_PROMPT,
         ORCH_EXECUTION_MODE_AGENDA,
+        ORCH_EXECUTION_MODE_DIRECTOR,
         ORCH_EXECUTION_MODE_LOOP,
         ORCH_EXECUTION_MODE_SINGLE,
         ORCH_EXECUTION_MODE_SPEC,
         UI_BLOCK_ID,
         createAgendaPlannerDraft,
+        createDefaultDirectorProfile,
         ensureAgendaEditorIntegrity,
         escapeHtml,
         extension_prompt_roles,
         getAgendaEditorByScope,
         getCharacterAgendaOverrideByAvatar,
+        getCharacterDirectorOverrideByAvatar,
         getCharacterDisplayNameByAvatar,
         getCharacterLoopOverrideByAvatar,
         getCharacterOverrideByAvatar,
         getContext,
         getCurrentAvatar,
+        getDirectorEditorByScope,
+        getDirectorProfileFromSettings,
         getDisplayedScope,
         getEditorByScope,
         getExecutionMode,
@@ -1479,6 +1668,7 @@ function getOrchestratorUiTemplateDeps() {
         getPopupEditingLabel,
         getProfileTitleForScope,
         hasCharacterAgendaOverride,
+        hasCharacterDirectorOverride,
         hasCharacterLoopOverride,
         hasCharacterSpecOverride,
         i18n,
@@ -1512,6 +1702,7 @@ function renderDynamicPanels(root, context) {
     const singleModeEnabled = executionMode === ORCH_EXECUTION_MODE_SINGLE;
     const agendaModeEnabled = executionMode === ORCH_EXECUTION_MODE_AGENDA;
     const loopModeEnabled = executionMode === ORCH_EXECUTION_MODE_LOOP;
+    const directorModeEnabled = executionMode === ORCH_EXECUTION_MODE_DIRECTOR;
     syncCharacterEditorWithActiveAvatar(context);
     const activeAvatar = String(getCurrentAvatar(context) || '').trim();
     const override = activeAvatar ? getCharacterOverrideByAvatar(context, activeAvatar) : null;
@@ -1553,13 +1744,26 @@ function renderDynamicPanels(root, context) {
     root.find('#luker_orch_loop_profile_mode').text(
         getDisplayedScopeLabel(isLoopCharacterScope, hasLoopCharacterOverride, isLoopOverrideEnabled),
     );
+    // Director board: MVP slot is global-only (no character override yet),
+    // so the chips just echo the active card name + a static "Global profile"
+    // editing label. When character-override support lands this block will
+    // mirror the loop branch above.
+    root.find('#luker_orch_director_profile_target').text(
+        activeAvatar
+            ? (getCharacterDisplayNameByAvatar(context, activeAvatar) || activeAvatar)
+            : i18n('(No character card)'),
+    );
+    root.find('#luker_orch_director_profile_mode').text(
+        getDisplayedScopeLabel(false, false, false),
+    );
     const hasLastRun = Boolean(getLatestOrchestrationEntry(context));
     root.find('[data-luker-action="view-last-run"]').toggleClass('luker_orch_button_disabled', !hasLastRun);
     root.find('#luker_orch_last_run_state').text(buildLatestOrchestrationStateSummary(context));
     root.find('[data-luker-ai-goal-input]').val(String(uiState.aiGoal || ''));
-    root.find('#luker_orch_spec_board').toggle(!singleModeEnabled && !agendaModeEnabled && !loopModeEnabled);
+    root.find('#luker_orch_spec_board').toggle(!singleModeEnabled && !agendaModeEnabled && !loopModeEnabled && !directorModeEnabled);
     root.find('#luker_orch_agenda_board').toggle(agendaModeEnabled);
     root.find('#luker_orch_loop_board').toggle(loopModeEnabled);
+    root.find('#luker_orch_director_board').toggle(directorModeEnabled);
     root.find('#luker_orch_single_mode_runtime_tools').toggle(singleModeEnabled);
     root.find('#luker_orch_single_mode_hint').toggle(singleModeEnabled);
     root.find('#luker_orch_single_agent_fields').toggle(singleModeEnabled);
@@ -1578,7 +1782,66 @@ function refreshOrchestrationEditorPopup(context, settings) {
         return;
     }
     mount.html(buildOrchestrationEditorPopupPanelHtml(getOrchestratorUiTemplateDeps(), context, settings));
+    // After the popup HTML is materialized, run the director preset lint
+    // pass so users who already have a content-shaped preset selected
+    // see the warning immediately (rather than only after they touch
+    // the dropdown). Handler binders live in `bindUi`; this helper
+    // just iterates the freshly-rendered `[data-director-preset-select]`
+    // dropdowns and toggles their sibling warning element.
+    refreshDirectorPresetWarnings(context, mount);
 }
+
+/**
+ * Look up a chat-completion preset object by name via ST's
+ * `getPresetManager('openai')` API. Returns `null` if the manager or
+ * lookup method is unavailable, or if the name is empty (which means
+ * "inherit the global orchestration preset" — no preset to lint).
+ * Mirrors the lookup pattern in `director-runtime.js`.
+ */
+function lookupChatCompletionPresetByName(context, name) {
+    const trimmed = String(name || '').trim();
+    if (!trimmed) return null;
+    const manager = context?.getPresetManager?.('openai');
+    if (!manager || typeof manager.getCompletionPresetByName !== 'function') return null;
+    try { return manager.getCompletionPresetByName(trimmed); }
+    catch { return null; }
+}
+
+/**
+ * Toggle the `.director-preset-warning` element immediately following
+ * the given `<select data-director-preset-select=...>` based on
+ * `presetContainsContentPrompts(...)` of its currently-selected name.
+ * Empty selection (= inherit global) hides the warning.
+ */
+function updateDirectorPresetWarningForSelect(context, selectEl) {
+    const $select = jQuery(selectEl);
+    if (!$select.length) return;
+    const presetName = String($select.val() || '').trim();
+    const $warning = $select.closest('label').find('.director-preset-warning');
+    if (!$warning.length) return;
+    const preset = lookupChatCompletionPresetByName(context, presetName);
+    const shouldWarn = presetContainsContentPrompts(preset);
+    $warning.toggleClass('hidden', !shouldWarn);
+}
+
+/**
+ * Refresh all director-preset warning elements within the given
+ * jQuery root (typically the freshly-rendered editor popup mount).
+ * Called after `mount.html(...)` so users see the warning state for
+ * their pre-existing selection without needing to interact.
+ */
+function refreshDirectorPresetWarnings(context, $root) {
+    if (!$root || !$root.length) return;
+    $root.find('[data-director-preset-select]').each(function () {
+        updateDirectorPresetWarningForSelect(context, this);
+    });
+}
+
+// Re-exported so other modules / tests can probe whether a preset
+// will duplicate director's content payload. The implementation lives
+// in `director-preset-lint.js` to keep `main.js` free of standalone
+// pure-utility logic.
+export { presetContainsContentPrompts };
 
 async function openOrchestrationEditorPopup(context, settings) {
     ensureStyles(UI_BLOCK_ID);
@@ -1938,12 +2201,43 @@ function isLoopIterationSession(session) {
     return String(session?.mode || '') === ORCH_EXECUTION_MODE_LOOP;
 }
 
+function isDirectorIterationSession(session) {
+    return String(session?.mode || '') === ORCH_EXECUTION_MODE_DIRECTOR;
+}
+
+// Director profile is stored at settings.directorProfile (global) and
+// optionally at the character card under `override.director` (character
+// scope). The editor uses uiState.globalDirectorEditor /
+// uiState.characterDirectorEditor as working state — edits go to the
+// editor, save persists editor → settings or character card.
+function getDirectorEditorByScope(scope) {
+    if (String(scope || '') === 'character') {
+        return uiState.characterDirectorEditor;
+    }
+    return uiState.globalDirectorEditor;
+}
+
+function cloneDirectorWorkingProfileFromEditor(editor) {
+    // sanitizeDirectorProfile both clones (it deep-copies its input via
+    // structuredClone internally) and normalizes shape (default-on tools,
+    // forced finalize:false, etc.). Returning its result gives the
+    // Studio a stable, predictable working profile.
+    return sanitizeDirectorProfile(editor || {});
+}
+
+function cloneDirectorWorkingProfileFromSettings(settings) {
+    return sanitizeDirectorProfile(getDirectorProfileFromSettings(settings) || {});
+}
+
 function cloneAiIterationWorkingProfile(mode, workingProfile) {
     if (String(mode || '') === ORCH_EXECUTION_MODE_AGENDA) {
         return sanitizeAgendaWorkingProfile(structuredClone(workingProfile || {}));
     }
     if (String(mode || '') === ORCH_EXECUTION_MODE_LOOP) {
         return sanitizeLoopProfile(structuredClone(workingProfile || {}));
+    }
+    if (String(mode || '') === ORCH_EXECUTION_MODE_DIRECTOR) {
+        return sanitizeDirectorProfile(structuredClone(workingProfile || {}));
     }
     return {
         spec: sanitizeSpec(structuredClone(workingProfile?.spec || { stages: [] })),
@@ -2605,6 +2899,11 @@ const AI_ITERATION_EDITABLE_TOOL_NAMES = new Set([
     'luker_orch_set_agenda_final_agent',
     'luker_orch_set_agenda_limits',
     'luker_orch_set_loop_profile',
+    'luker_orch_set_director_main_agent',
+    'luker_orch_set_director_subagent',
+    'luker_orch_remove_director_subagent',
+    'luker_orch_set_director_limits',
+    'luker_orch_set_director_tools',
 ]);
 
 function isAiIterationEditableToolCallName(name) {
@@ -3128,12 +3427,163 @@ function buildLoopIterationPendingDiffState(session, pending) {
     };
 }
 
+function buildDirectorIterationPendingDiffState(session, pending) {
+    const entries = [];
+    // Start from a sanitized copy and apply patches sequentially so the
+    // projectedProfile reflects the cumulative effect of the pending
+    // tool calls (matching the spec / loop / agenda branches).
+    let workingProfile = sanitizeDirectorProfile(session?.workingProfile);
+    const director = () => workingProfile.director;
+
+    for (const call of Array.isArray(pending?.toolCalls) ? pending.toolCalls : []) {
+        const name = String(call?.name || '').trim();
+        if (!isAiIterationEditableToolCallName(name)) continue;
+        const args = call?.args && typeof call.args === 'object' ? call.args : {};
+        const item = { name, summary: '', fields: [], rawArgs: args };
+
+        if (name === 'luker_orch_set_director_main_agent') {
+            const before = { ...director().mainAgent };
+            const next = { ...before };
+            if (typeof args.systemPrompt === 'string') next.systemPrompt = String(args.systemPrompt);
+            if (typeof args.apiPresetName === 'string') next.apiPresetName = String(args.apiPresetName);
+            if (typeof args.promptPresetName === 'string') next.promptPresetName = String(args.promptPresetName);
+            director().mainAgent = next;
+            item.summary = 'Director main agent updated';
+            for (const key of ['systemPrompt', 'apiPresetName', 'promptPresetName']) {
+                if (before[key] !== next[key]) {
+                    item.fields.push({ label: `mainAgent.${key}`, before: formatDiffValue(before[key]), after: formatDiffValue(next[key]) });
+                }
+            }
+            entries.push(item);
+            continue;
+        }
+        if (name === 'luker_orch_set_director_subagent') {
+            const id = sanitizeIdentifierToken(args.id, '');
+            if (!id) {
+                item.summary = 'Skipped: missing sub-agent id';
+                entries.push(item);
+                continue;
+            }
+            if (!Array.isArray(director().subAgents)) director().subAgents = [];
+            const idx = director().subAgents.findIndex(a => String(a?.id || '') === id);
+            const existing = idx >= 0 ? director().subAgents[idx] : null;
+            const before = existing ? { ...existing } : null;
+            const next = {
+                id,
+                description: typeof args.description === 'string' ? String(args.description) : (existing?.description || ''),
+                systemPrompt: typeof args.systemPrompt === 'string' ? String(args.systemPrompt) : (existing?.systemPrompt || ''),
+                apiPresetName: typeof args.apiPresetName === 'string' ? String(args.apiPresetName) : (existing?.apiPresetName || ''),
+                promptPresetName: typeof args.promptPresetName === 'string' ? String(args.promptPresetName) : (existing?.promptPresetName || ''),
+            };
+            if (idx >= 0) {
+                director().subAgents[idx] = next;
+                item.summary = `Sub-agent "${id}" updated`;
+                for (const key of ['description', 'systemPrompt', 'apiPresetName', 'promptPresetName']) {
+                    if (before[key] !== next[key]) {
+                        item.fields.push({ label: `subAgents[${id}].${key}`, before: formatDiffValue(before[key]), after: formatDiffValue(next[key]) });
+                    }
+                }
+            } else {
+                director().subAgents.push(next);
+                item.summary = `Sub-agent "${id}" created`;
+                for (const key of ['description', 'systemPrompt', 'apiPresetName', 'promptPresetName']) {
+                    if (next[key]) {
+                        item.fields.push({ label: `subAgents[${id}].${key}`, before: '', after: formatDiffValue(next[key]) });
+                    }
+                }
+            }
+            entries.push(item);
+            continue;
+        }
+        if (name === 'luker_orch_remove_director_subagent') {
+            const id = sanitizeIdentifierToken(args.id, '');
+            const subs = Array.isArray(director().subAgents) ? director().subAgents : [];
+            const idx = subs.findIndex(a => String(a?.id || '') === id);
+            if (idx >= 0) {
+                subs.splice(idx, 1);
+                item.summary = `Sub-agent "${id}" removed`;
+            } else {
+                item.summary = `Skipped: sub-agent "${id}" not found`;
+            }
+            entries.push(item);
+            continue;
+        }
+        if (name === 'luker_orch_set_director_limits') {
+            const before = {
+                maxRounds: director().maxRounds,
+                maxConcurrentSubagents: director().maxConcurrentSubagents,
+                maxTotalSubagentRuns: director().maxTotalSubagentRuns,
+                discardOnAbort: director().discardOnAbort,
+            };
+            if (Number.isInteger(args.maxRounds)) director().maxRounds = Math.max(1, Math.min(50, Number(args.maxRounds)));
+            if (Number.isInteger(args.maxConcurrentSubagents)) director().maxConcurrentSubagents = Math.max(1, Math.min(16, Number(args.maxConcurrentSubagents)));
+            if (Number.isInteger(args.maxTotalSubagentRuns)) director().maxTotalSubagentRuns = Math.max(1, Math.min(100, Number(args.maxTotalSubagentRuns)));
+            if (typeof args.discardOnAbort === 'boolean') director().discardOnAbort = Boolean(args.discardOnAbort);
+            const after = {
+                maxRounds: director().maxRounds,
+                maxConcurrentSubagents: director().maxConcurrentSubagents,
+                maxTotalSubagentRuns: director().maxTotalSubagentRuns,
+                discardOnAbort: director().discardOnAbort,
+            };
+            item.summary = 'Director limits updated';
+            for (const key of Object.keys(before)) {
+                if (before[key] !== after[key]) {
+                    item.fields.push({ label: key, before: String(before[key]), after: String(after[key]) });
+                }
+            }
+            entries.push(item);
+            continue;
+        }
+        if (name === 'luker_orch_set_director_tools') {
+            const before = JSON.stringify(director().tools);
+            const incoming = args.tools && typeof args.tools === 'object' ? args.tools : {};
+            for (const [ns, verbs] of Object.entries(incoming)) {
+                if (!verbs || typeof verbs !== 'object') continue;
+                if (!director().tools[ns] || typeof director().tools[ns] !== 'object') {
+                    director().tools[ns] = {};
+                }
+                for (const [verb, value] of Object.entries(verbs)) {
+                    director().tools[ns][verb] = Boolean(value);
+                }
+            }
+            workingProfile = sanitizeDirectorProfile(workingProfile);
+            const after = JSON.stringify(workingProfile.director.tools);
+            item.summary = 'Director loop tools updated';
+            if (before !== after) {
+                item.fields.push({ label: 'tools', before: before, after: after });
+            }
+            entries.push(item);
+            continue;
+        }
+        if (name === 'luker_orch_finalize_iteration') {
+            item.summary = 'Finalize iteration';
+            item.fields.push({ label: 'summary', before: '', after: formatDiffValue(args.summary || '') });
+            entries.push(item);
+            continue;
+        }
+        if (name === 'luker_orch_continue_iteration') {
+            item.summary = 'Continue iteration';
+            item.fields.push({ label: 'note', before: '', after: formatDiffValue(args.note || '') });
+            entries.push(item);
+            continue;
+        }
+    }
+
+    return {
+        entries,
+        projectedProfile: sanitizeDirectorProfile(workingProfile),
+    };
+}
+
 function buildAiIterationPendingDiffState(session, pending) {
     if (isAgendaIterationSession(session)) {
         return buildAgendaIterationPendingDiffState(session, pending);
     }
     if (isLoopIterationSession(session)) {
         return buildLoopIterationPendingDiffState(session, pending);
+    }
+    if (isDirectorIterationSession(session)) {
+        return buildDirectorIterationPendingDiffState(session, pending);
     }
     const entries = [];
     const workingProfile = structuredClone(session?.workingProfile || { spec: { stages: [] }, presets: {} });
@@ -3558,12 +4008,65 @@ function renderLoopIterationWorkingProfile(session, { profileOverride = null, pr
 </details>`;
 }
 
+function renderDirectorIterationWorkingProfile(session, { profileOverride = null, previewPending = false } = {}) {
+    const sanitized = sanitizeDirectorProfile(
+        profileOverride && typeof profileOverride === 'object'
+            ? profileOverride
+            : session?.workingProfile,
+    );
+    const d = sanitized.director;
+    const enabledTools = [];
+    if (d.tools?.note?.add) enabledTools.push('note_add');
+    if (d.tools?.note?.delete) enabledTools.push('note_delete');
+    if (d.tools?.chat?.read_range) enabledTools.push('chat_read_range');
+    if (d.tools?.chat?.search) enabledTools.push('chat_search');
+    if (d.tools?.lorebook?.search) enabledTools.push('lorebook_search');
+    if (d.tools?.lorebook?.get) enabledTools.push('lorebook_get');
+    if (d.tools?.memory?.search) enabledTools.push('memory_search');
+    if (d.tools?.memory?.list_recent) enabledTools.push('memory_list_recent');
+    if (d.tools?.memory?.get) enabledTools.push('memory_get');
+    if (d.tools?.search?.search) enabledTools.push('search_search');
+    if (d.tools?.search?.visit) enabledTools.push('search_visit');
+    const simulationSummary = session?.lastSimulation
+        ? `${i18n('Simulation')}: ${String(session.lastSimulation.summary || '')}`
+        : '';
+    const subAgentCards = (Array.isArray(d.subAgents) ? d.subAgents : []).map((a) => `
+<div class="luker_orch_iter_stage">
+    <div class="luker_orch_iter_stage_title">${escapeHtml(String(a.id || '(sub-agent)'))}</div>
+    <div class="luker_orch_iter_stage_mode">${escapeHtml(String(a.description || ''))}</div>
+    <div class="luker_orch_iter_stage_nodes">api=${escapeHtml(a.apiPresetName || '(global)')}, preset=${escapeHtml(a.promptPresetName || '(global)')}</div>
+</div>`).join('');
+    const mainSystem = String(d.mainAgent?.systemPrompt || '');
+    return `
+<div class="luker_orch_iter_profile_meta">
+    <div><b>${escapeHtml(i18nFormat('Iteration source: ${0}', session?.sourceName || i18n('Global profile')))}</b></div>
+    <div>${escapeHtml(`Revision #${Number(session?.revision || 1)}`)}</div>
+    ${previewPending ? `<div>${escapeHtml(i18n('AI suggested changes are waiting for approval.'))}</div>` : ''}
+    ${simulationSummary ? `<div>${escapeHtml(simulationSummary)}</div>` : ''}
+</div>
+<div class="luker_orch_iter_preset_line"><b>${escapeHtml(i18n('Main agent'))} API:</b> ${escapeHtml(d.mainAgent?.apiPresetName || i18n('(Global orchestration API preset)'))}</div>
+<div class="luker_orch_iter_preset_line"><b>${escapeHtml(i18n('Main agent'))} Preset:</b> ${escapeHtml(d.mainAgent?.promptPresetName || i18n('(Current preset)'))}</div>
+<div class="luker_orch_iter_preset_line"><b>${escapeHtml(i18n('Maximum tool-calling rounds'))}:</b> ${escapeHtml(String(d.maxRounds))}</div>
+<div class="luker_orch_iter_preset_line"><b>${escapeHtml(i18n('Maximum concurrent sub-agents'))}:</b> ${escapeHtml(String(d.maxConcurrentSubagents))}</div>
+<div class="luker_orch_iter_preset_line"><b>${escapeHtml(i18n('Maximum total sub-agent runs per turn'))}:</b> ${escapeHtml(String(d.maxTotalSubagentRuns))}</div>
+<div class="luker_orch_iter_preset_line"><b>${escapeHtml(i18n('Discard partial message on abort'))}:</b> ${d.discardOnAbort ? '✓' : '—'}</div>
+<div class="luker_orch_iter_preset_line"><b>Loop tools:</b> ${escapeHtml(enabledTools.length ? enabledTools.join(', ') : '(none)')}</div>
+<details class="luker_orch_iter_diff_raw">
+    <summary>${escapeHtml(i18n('Main agent'))} ${escapeHtml(i18n('System prompt (leave empty for default)'))}</summary>
+    <pre>${escapeHtml(mainSystem || '(empty — runtime uses built-in default)')}</pre>
+</details>
+<div class="luker_orch_iter_stage_list">${subAgentCards || `<div class="luker_orch_iter_empty">(no ${escapeHtml(i18n('Sub-agents').toLowerCase())})</div>`}</div>`;
+}
+
 function renderAiIterationWorkingProfile(session, { profileOverride = null, previewPending = false } = {}) {
     if (isAgendaIterationSession(session)) {
         return renderAgendaIterationWorkingProfile(session, { profileOverride, previewPending });
     }
     if (isLoopIterationSession(session)) {
         return renderLoopIterationWorkingProfile(session, { profileOverride, previewPending });
+    }
+    if (isDirectorIterationSession(session)) {
+        return renderDirectorIterationWorkingProfile(session, { profileOverride, previewPending });
     }
     const profile = profileOverride && typeof profileOverride === 'object'
         ? profileOverride
@@ -3610,6 +4113,86 @@ function buildAiIterationSystemPrompt(settings, session = null) {
     const base = normalizeTemplateForAiPrompt(String(settings.aiSuggestSystemPrompt || '').trim()) || getDefaultAiSuggestSystemPrompt();
     if (isLoopIterationSession(session)) {
         return [base, '', ...LOOP_ITERATION_CONTRACT_LINES].join('\n');
+    }
+    if (isDirectorIterationSession(session)) {
+        return [
+            base,
+            '',
+            '# Director-mode iteration contract',
+            '',
+            'You are editing an existing director-mode orchestration profile incrementally. The user authors the high-level intent; you turn it into concrete profile changes that respect the principles below.',
+            '',
+            '## Profile shape',
+            '',
+            'The working profile is rooted at `director` and has the fields: `mainAgent` (apiPresetName, promptPresetName, systemPrompt), `subAgents` (a list of objects with id, description, systemPrompt, apiPresetName, promptPresetName), `maxRounds`, `maxConcurrentSubagents`, `maxTotalSubagentRuns`, `discardOnAbort`, `tools` (nested `<namespace>.<verb>` boolean flag tree gating the loop tools available to both the main agent and sub-agents).',
+            '',
+            '- `mainAgent.systemPrompt` follows an empty-means-default contract at runtime: empty → the runtime substitutes the built-in default prompt. Do not set it to a copy of the default; leave it empty when the user wants the default. If you do set it, set it to the full prompt the user wants.',
+            '- `mainAgent.apiPresetName` / `mainAgent.promptPresetName` may be empty (inherit the global orchestration API / chat completion preset). If set, use only names from available_connection_profiles / available_chat_completion_presets. Same semantics for each sub-agent\'s own preset fields.',
+            '- `tools.finalize` is always coerced to false on save (director provides its own finalize tool), regardless of input.',
+            '',
+            '## How sub-agents work at runtime (what every sub-agent gets by default — the BASELINE)',
+            '',
+            '- Their own `systemPrompt` (configured: the field you write; inline-dispatched: provided by the main agent at call time).',
+            '- The chat snapshot frozen at the start of the main agent\'s turn.',
+            '- The task brief the main agent passes in `task` (becomes a user message).',
+            '- The same loop tools enabled in this profile (chat / memory / lorebook / note / search), gated identically.',
+            '- The `get_draft` tool — they call it themselves if they need the in-flight draft body.',
+            '',
+            'Sub-agents do NOT see: each other, each other\'s outputs, the main agent\'s reasoning or prior tool calls, mid-turn state changes (their chat context is frozen). They cannot dispatch other sub-agents (no recursion), cannot write the message body, cannot finalize. Each runs its own tool-call mini-loop (capped at 8 internal rounds) and terminates by emitting a no-tool-call round — that round\'s text becomes the output returned via `await_subagents`.',
+            '',
+            '## Description writing convention (CRITICAL)',
+            '',
+            'Each sub-agent has both a `systemPrompt` (sub-agent-facing instruction; what the sub-agent reads and embodies) and a `description` (main-agent-facing summary; the ONLY view the main agent has into the sub-agent\'s role at dispatch time). The full systemPrompt is NEVER exposed to the main agent — bad descriptions cause bad task briefs.',
+            '',
+            'When you create or update a sub-agent via `luker_orch_set_director_subagent`, write the description in three parts (free-form prose, but cover all three):',
+            '',
+            '1. **Role — what the sub-agent already knows + does**: its core function and the static knowledge embedded in its systemPrompt. Everything it has ON TOP of the baseline.',
+            '2. **What the sub-agent does NOT know**: gaps outside its baseline / role that the main agent should not assume. Common gaps for RP analysts: which character is currently speaking, scene-specific tone, the user\'s preferred conventions, what the main agent has done so far this turn.',
+            '3. **What the main agent should include in the task brief every time**: the slots the main agent must fill (target character, scene context, dimension focus, priority facts to check, etc.).',
+            '',
+            'Keep descriptions tight (typically 1–3 sentences total). Example: "Reads drafts and flags lines that read off-character. Knows generic voice-consistency heuristics. Does NOT know which character is speaking or the scene\'s tone target — pass these in the task brief. Per-line observations + maybe-fix; no rewrites."',
+            '',
+            'The systemPrompt must embody what the description claims. If the description says the sub-agent knows X, the systemPrompt must actually teach X.',
+            '',
+            '## Sub-agent design heuristics',
+            '',
+            '- Sub-agents are ORTHOGONAL DIMENSION ANALYSTS, not ghost authors and not value-judges. Each scans one slice of input or output and reports observations.',
+            '- Useful slices for RP — INPUT (pre-draft research): unresolved emotional threads in chat, memory nodes adjacent to current scene, lorebook entries the scene touches, character-specific state to respect. OUTPUT (post-draft analysis): voice / character-cognition boundaries, tone consistency, sensory variety, show-vs-tell balance, continuity vs established facts, anti-mechanical (game-stat prose), anti-academic (essay prose).',
+            '- Two sub-agents should not have overlapping scans — they should be orthogonal, so multiple analysts can run in parallel without conflicting verdicts.',
+            '- Sub-agents should NOT be alternative writers of the message. The main agent is the writer.',
+            '',
+            '## Direction, not verdict',
+            '',
+            'Sub-agent task briefs (which the main agent constructs at dispatch time, not you) should name a DIRECTION ("analyze for anti-mechanical voice", "scan recent chat for unresolved threads") not a VERDICT ("find the mechanical lines", "the previous turn was off-character"). Verdict-shaped briefs bias the analyst. When you write the main agent\'s systemPrompt, teach this rule.',
+            '',
+            '## Main-agent systemPrompt must be strongly coupled to the concrete sub-agents in this profile',
+            '',
+            'The main agent\'s systemPrompt is NOT a generic "if you have sub-agents..." tutorial. It is the operations manual for THIS specific set of sub-agents. When the sub-agent list changes meaningfully (rename / add / remove / role shift), the main agent\'s systemPrompt may need to change too — it should name the actual configured sub-agents by id and give task-brief shapes for each.',
+            '',
+            'When updating the sub-agent list, decide whether the main-agent systemPrompt is still consistent:',
+            '- If the user has left `mainAgent.systemPrompt` empty (using the built-in default), and the default already references the sub-agents you now have, leave the prompt empty.',
+            '- If the user has left it empty BUT the sub-agent list no longer matches what the built-in default references, write an explicit `mainAgent.systemPrompt` that matches the new list. Reference each sub-agent by id with a task-brief shape.',
+            '- If the user already has a custom `mainAgent.systemPrompt`, patch it minimally to reflect the new sub-agent reality — do not rewrite the whole prompt unless asked.',
+            '',
+            '## 4-phase workflow (a useful pattern)',
+            '',
+            'A common RP workflow runs four phases: RESEARCH (optional pre-draft scouting via input-side sub-agents) → DRAFT (main agent writes) → ANALYSIS (post-draft scans via output-side sub-agents) → INTEGRATE (main agent decides what to fix). When designing sub-agents, think about which phase(s) each one serves. When writing the main agent\'s prompt, the workflow should fall out of the concrete sub-agents — not be force-fit on top.',
+            '',
+            'Shorter / simpler turns skip phases. Sub-agents are tools, not ritual.',
+            '',
+            '## Tool usage',
+            '',
+            '- Use `luker_orch_set_director_main_agent` to patch any subset of mainAgent fields. Omitted fields keep their current value.',
+            '- Use `luker_orch_set_director_subagent` to create-or-update one sub-agent at a time. `id` is required; other fields are patches when the sub-agent exists, initial values when it does not.',
+            '- Use `luker_orch_remove_director_subagent` to delete one sub-agent by id.',
+            '- Use `luker_orch_set_director_limits` for budget changes (maxRounds, maxConcurrentSubagents, maxTotalSubagentRuns, discardOnAbort).',
+            '- Use `luker_orch_set_director_tools` to enable / disable specific loop tools. Pass only the verbs you intend to change.',
+            '- Prefer targeted edits. Do not rewrite the whole profile unless the user explicitly asks.',
+            '- If you need one more autonomous step right after current execution, call `luker_orch_continue_iteration`.',
+            '- If you need user decision or clarification, do not call continue or finalize. Stop and wait for user.',
+            '- When iteration is complete, call `luker_orch_finalize_iteration`.',
+            '- Keep output practical and concise for real RP usage.',
+        ].join('\n');
     }
     if (isAgendaIterationSession(session)) {
         return [
@@ -3673,6 +4256,9 @@ function getGlobalIterationBaselineProfile(settings, session = null) {
     }
     if (isLoopIterationSession(session)) {
         return sanitizeLoopProfile(settings?.loopProfile || {});
+    }
+    if (isDirectorIterationSession(session)) {
+        return cloneDirectorWorkingProfileFromSettings(settings);
     }
     return {
         spec: sanitizeSpec(settings?.orchestrationSpec),
@@ -3754,6 +4340,64 @@ function buildAiIterationUserPrompt(settings, session, userInputText, {
         return [
             '# iteration_input',
             'You are in a multi-turn agenda orchestration iteration session.',
+            'Apply focused edits through tools only. Keep edits minimal and high-impact.',
+            '',
+            '## source_scope',
+            String(sourceScope || session?.sourceScope || 'global'),
+            '',
+            '## source_name',
+            String(sourceName || session?.sourceName || ''),
+            '',
+            '## global_profile_baseline',
+            '```yaml',
+            toReadableYamlText(globalProfileValue, '{}'),
+            '```',
+            '',
+            '## working_profile',
+            '```yaml',
+            toReadableYamlText(workingProfileValue, '{}'),
+            '```',
+            '',
+            '## agent_api_routing',
+            '```yaml',
+            toReadableYamlText(buildAgentApiRoutingPromptData(settings), '{}'),
+            '```',
+            '',
+            '## agent_prompt_preset_routing',
+            '```yaml',
+            toReadableYamlText(buildAgentPromptPresetRoutingPromptData(getContext(), settings), '{}'),
+            '```',
+            '',
+            '## conversation_history',
+            '```text',
+            recentConversation || '(empty)',
+            '```',
+            '',
+            '## latest_simulation',
+            '```text',
+            latestSimulationText,
+            '```',
+            '',
+            '## latest_orchestration_snapshot',
+            '```yaml',
+            latestSnapshotText,
+            '```',
+            '',
+            '## user_request',
+            String(userInputText || '').trim(),
+        ].join('\n');
+    }
+    if (isDirectorIterationSession(session)) {
+        const recentConversation = (Array.isArray(session?.messages) ? session.messages : [])
+            .map(item => `${String(item?.role || 'assistant').toUpperCase()}: ${String(item?.content || '')}`)
+            .join('\n\n');
+        const workingProfileValue = sanitizeDirectorProfile(session?.workingProfile);
+        const globalProfileValue = sanitizeDirectorProfile(globalProfile);
+        const latestSimulationText = stringifyIterationSimulationForPrompt(session?.lastSimulation);
+        const latestSnapshotText = toReadableYamlText(normalizeOrchestrationSnapshot(getActiveSnapshot()) || {}, '{}');
+        return [
+            '# iteration_input',
+            'You are in a multi-turn director-mode orchestration iteration session.',
             'Apply focused edits through tools only. Keep edits minimal and high-impact.',
             '',
             '## source_scope',
@@ -3883,6 +4527,167 @@ function buildAiIterationUserPrompt(settings, session, userInputText, {
 }
 
 function buildAiIterationToolSet(session = null) {
+    if (isDirectorIterationSession(session)) {
+        const toolsFlagSchema = {
+            type: 'object',
+            properties: {
+                note: {
+                    type: 'object',
+                    properties: {
+                        add: { type: 'boolean' },
+                        delete: { type: 'boolean' },
+                    },
+                    additionalProperties: false,
+                },
+                chat: {
+                    type: 'object',
+                    properties: {
+                        read_range: { type: 'boolean' },
+                        search: { type: 'boolean' },
+                    },
+                    additionalProperties: false,
+                },
+                lorebook: {
+                    type: 'object',
+                    properties: {
+                        search: { type: 'boolean' },
+                        get: { type: 'boolean' },
+                    },
+                    additionalProperties: false,
+                },
+                memory: {
+                    type: 'object',
+                    properties: {
+                        search: { type: 'boolean' },
+                        list_recent: { type: 'boolean' },
+                        get: { type: 'boolean' },
+                    },
+                    additionalProperties: false,
+                },
+                search: {
+                    type: 'object',
+                    properties: {
+                        search: { type: 'boolean' },
+                        visit: { type: 'boolean' },
+                    },
+                    additionalProperties: false,
+                },
+            },
+            additionalProperties: false,
+        };
+        return [
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_set_director_main_agent',
+                    description: 'Patch fields on the director main agent. Pass only the fields you intend to change; omitted fields keep their current value. systemPrompt empty means runtime default; do not set it to a copy of the default.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            systemPrompt: { type: 'string' },
+                            apiPresetName: { type: 'string' },
+                            promptPresetName: { type: 'string' },
+                        },
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_set_director_subagent',
+                    description: 'Create or update one director sub-agent by id. id is required; other fields patch the existing sub-agent or initialize a new one. Leave apiPresetName and promptPresetName empty unless the user explicitly requests per-sub-agent routing.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            id: { type: 'string' },
+                            description: { type: 'string' },
+                            systemPrompt: { type: 'string' },
+                            apiPresetName: { type: 'string' },
+                            promptPresetName: { type: 'string' },
+                        },
+                        required: ['id'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_remove_director_subagent',
+                    description: 'Remove one director sub-agent by id.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            id: { type: 'string' },
+                        },
+                        required: ['id'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_set_director_limits',
+                    description: 'Update director runtime limits. Pass only the fields you intend to change.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            maxRounds: { type: 'integer', minimum: 1, maximum: 50 },
+                            maxConcurrentSubagents: { type: 'integer', minimum: 1, maximum: 16 },
+                            maxTotalSubagentRuns: { type: 'integer', minimum: 1, maximum: 100 },
+                            discardOnAbort: { type: 'boolean' },
+                        },
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_set_director_tools',
+                    description: 'Toggle director loop tools (chat / lorebook / memory / note / search). Pass only the verbs you intend to change. tools.finalize is always coerced to false on save.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            tools: toolsFlagSchema,
+                        },
+                        required: ['tools'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_continue_iteration',
+                    description: 'Request one automatic follow-up round after current tool execution.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            note: { type: 'string' },
+                        },
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_finalize_iteration',
+                    description: 'Finalize this iteration turn with a concise summary.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            summary: { type: 'string' },
+                        },
+                        additionalProperties: false,
+                    },
+                },
+            },
+        ];
+    }
     if (isLoopIterationSession(session)) {
         return [
             {
@@ -4718,12 +5523,207 @@ async function executeLoopIterationToolCalls(context, session, toolCalls, abortS
     };
 }
 
+async function executeDirectorIterationToolCalls(context, session, toolCalls, _abortSignal = null) {
+    const actions = [];
+    const simulations = [];  // director skips simulate for v1
+    const toolResults = [];
+    let finalized = false;
+    let finalizeSummary = '';
+    let continueRequested = false;
+    let changed = false;
+
+    // Working profile shape: { director: { mainAgent, subAgents, ... } }
+    if (!session.workingProfile || typeof session.workingProfile !== 'object') {
+        session.workingProfile = sanitizeDirectorProfile({});
+    }
+    if (!session.workingProfile.director || typeof session.workingProfile.director !== 'object') {
+        session.workingProfile.director = sanitizeDirectorProfile({}).director;
+    }
+    const director = session.workingProfile.director;
+
+    for (const call of Array.isArray(toolCalls) ? toolCalls : []) {
+        const name = String(call?.name || '').trim();
+        const args = call?.args && typeof call.args === 'object' ? call.args : {};
+        const callId = String(call?.id || '').trim() || makeRuntimeToolCallId();
+        const pushToolResult = (payload) => {
+            toolResults.push({
+                tool_call_id: callId,
+                content: serializeToolResultContent(payload),
+            });
+        };
+        if (!name) continue;
+
+        if (name === 'luker_orch_set_director_main_agent') {
+            if (!director.mainAgent || typeof director.mainAgent !== 'object') {
+                director.mainAgent = {};
+            }
+            const before = { ...director.mainAgent };
+            if (typeof args.systemPrompt === 'string') director.mainAgent.systemPrompt = String(args.systemPrompt);
+            if (typeof args.apiPresetName === 'string') director.mainAgent.apiPresetName = String(args.apiPresetName);
+            if (typeof args.promptPresetName === 'string') director.mainAgent.promptPresetName = String(args.promptPresetName);
+            const after = { ...director.mainAgent };
+            const profileChanged = JSON.stringify(before) !== JSON.stringify(after);
+            const actionText = profileChanged ? 'Director main agent updated.' : 'Director main agent patch produced no changes.';
+            actions.push(actionText);
+            pushToolResult({ ok: true, changed: profileChanged, action: actionText, mainAgent: after });
+            if (profileChanged) changed = true;
+            continue;
+        }
+
+        if (name === 'luker_orch_set_director_subagent') {
+            const id = sanitizeIdentifierToken(args.id, '');
+            if (!id) {
+                const actionText = 'Skipped sub-agent update: missing id.';
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: actionText });
+                continue;
+            }
+            if (!Array.isArray(director.subAgents)) director.subAgents = [];
+            const existingIndex = director.subAgents.findIndex(a => String(a?.id || '') === id);
+            const existing = existingIndex >= 0 ? director.subAgents[existingIndex] : null;
+            const before = existing ? { ...existing } : null;
+            const next = {
+                id,
+                description: typeof args.description === 'string' ? String(args.description) : (existing?.description || ''),
+                systemPrompt: typeof args.systemPrompt === 'string' ? String(args.systemPrompt) : (existing?.systemPrompt || ''),
+                apiPresetName: typeof args.apiPresetName === 'string' ? String(args.apiPresetName) : (existing?.apiPresetName || ''),
+                promptPresetName: typeof args.promptPresetName === 'string' ? String(args.promptPresetName) : (existing?.promptPresetName || ''),
+            };
+            if (existingIndex >= 0) {
+                director.subAgents[existingIndex] = next;
+            } else {
+                director.subAgents.push(next);
+            }
+            const profileChanged = !before || JSON.stringify(before) !== JSON.stringify(next);
+            const actionText = existingIndex >= 0
+                ? (profileChanged ? `Sub-agent "${id}" updated.` : `Sub-agent "${id}" patch produced no changes.`)
+                : `Sub-agent "${id}" created.`;
+            actions.push(actionText);
+            pushToolResult({ ok: true, changed: profileChanged || existingIndex < 0, action: actionText, subagent: next });
+            if (profileChanged || existingIndex < 0) changed = true;
+            continue;
+        }
+
+        if (name === 'luker_orch_remove_director_subagent') {
+            const id = sanitizeIdentifierToken(args.id, '');
+            if (!id || !Array.isArray(director.subAgents)) {
+                const actionText = `Skipped sub-agent removal: id "${id}" not found.`;
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: actionText });
+                continue;
+            }
+            const index = director.subAgents.findIndex(a => String(a?.id || '') === id);
+            if (index < 0) {
+                const actionText = `Skipped sub-agent removal: id "${id}" not found.`;
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: actionText });
+                continue;
+            }
+            director.subAgents.splice(index, 1);
+            const actionText = `Sub-agent "${id}" removed.`;
+            actions.push(actionText);
+            pushToolResult({ ok: true, changed: true, action: actionText, id });
+            changed = true;
+            continue;
+        }
+
+        if (name === 'luker_orch_set_director_limits') {
+            const before = {
+                maxRounds: director.maxRounds,
+                maxConcurrentSubagents: director.maxConcurrentSubagents,
+                maxTotalSubagentRuns: director.maxTotalSubagentRuns,
+                discardOnAbort: director.discardOnAbort,
+            };
+            if (Number.isInteger(args.maxRounds)) director.maxRounds = Math.max(1, Math.min(50, Number(args.maxRounds)));
+            if (Number.isInteger(args.maxConcurrentSubagents)) director.maxConcurrentSubagents = Math.max(1, Math.min(16, Number(args.maxConcurrentSubagents)));
+            if (Number.isInteger(args.maxTotalSubagentRuns)) director.maxTotalSubagentRuns = Math.max(1, Math.min(100, Number(args.maxTotalSubagentRuns)));
+            if (typeof args.discardOnAbort === 'boolean') director.discardOnAbort = Boolean(args.discardOnAbort);
+            const after = {
+                maxRounds: director.maxRounds,
+                maxConcurrentSubagents: director.maxConcurrentSubagents,
+                maxTotalSubagentRuns: director.maxTotalSubagentRuns,
+                discardOnAbort: director.discardOnAbort,
+            };
+            const profileChanged = JSON.stringify(before) !== JSON.stringify(after);
+            const actionText = profileChanged ? 'Director limits updated.' : 'Director limits patch produced no changes.';
+            actions.push(actionText);
+            pushToolResult({ ok: true, changed: profileChanged, action: actionText, limits: after });
+            if (profileChanged) changed = true;
+            continue;
+        }
+
+        if (name === 'luker_orch_set_director_tools') {
+            if (!director.tools || typeof director.tools !== 'object') director.tools = {};
+            const before = JSON.stringify(director.tools);
+            const incoming = args.tools && typeof args.tools === 'object' ? args.tools : {};
+            for (const [ns, verbs] of Object.entries(incoming)) {
+                if (!verbs || typeof verbs !== 'object') continue;
+                if (!director.tools[ns] || typeof director.tools[ns] !== 'object') {
+                    director.tools[ns] = {};
+                }
+                for (const [verb, value] of Object.entries(verbs)) {
+                    director.tools[ns][verb] = Boolean(value);
+                }
+            }
+            // Re-sanitize so finalize:false is enforced + any defaults filled.
+            session.workingProfile = sanitizeDirectorProfile(session.workingProfile);
+            const after = JSON.stringify(session.workingProfile.director.tools);
+            const profileChanged = before !== after;
+            const actionText = profileChanged ? 'Director tools updated.' : 'Director tools patch produced no changes.';
+            actions.push(actionText);
+            pushToolResult({ ok: true, changed: profileChanged, action: actionText, tools: session.workingProfile.director.tools });
+            if (profileChanged) changed = true;
+            continue;
+        }
+
+        if (name === 'luker_orch_continue_iteration') {
+            continueRequested = true;
+            const note = String(args.note || '').trim();
+            const actionText = `Continue requested.${note ? ` ${note}` : ''}`;
+            actions.push(actionText);
+            pushToolResult({ ok: true, action: actionText, continueRequested: true, note });
+            continue;
+        }
+
+        if (name === 'luker_orch_finalize_iteration') {
+            finalized = true;
+            finalizeSummary = String(args.summary || '').trim();
+            const actionText = `Iteration finalized.${finalizeSummary ? ` ${finalizeSummary}` : ''}`;
+            actions.push(actionText);
+            pushToolResult({ ok: true, action: actionText, finalized: true, summary: finalizeSummary });
+            continue;
+        }
+
+        const actionText = `Ignored unknown action: ${name}`;
+        actions.push(actionText);
+        pushToolResult({ ok: false, ignored: true, action: actionText });
+    }
+
+    session.workingProfile = sanitizeDirectorProfile(session.workingProfile);
+    session.revision = Number(session.revision || 0) + (changed ? 1 : 0);
+    session.updatedAt = Date.now();
+    trimAiIterationMessages(session);
+
+    return {
+        actions,
+        simulations,
+        toolResults,
+        finalized,
+        finalizeSummary,
+        continueRequested,
+        changed,
+    };
+}
+
 async function executeAiIterationToolCalls(context, session, toolCalls, abortSignal = null) {
     if (isAgendaIterationSession(session)) {
         return executeAgendaIterationToolCalls(context, session, toolCalls, abortSignal);
     }
     if (isLoopIterationSession(session)) {
         return executeLoopIterationToolCalls(context, session, toolCalls, abortSignal);
+    }
+    if (isDirectorIterationSession(session)) {
+        return executeDirectorIterationToolCalls(context, session, toolCalls, abortSignal);
     }
     const actions = [];
     const simulations = [];
@@ -5064,7 +6064,6 @@ async function runAiIterationTurn(context, settings, session, userText, abortSig
         abortSignal,
         includeAssistantText: true,
         allowNoToolCalls: true,
-        applyAgentTimeout: false,
     });
     const executionToolCalls = buildExecutionToolCalls(Array.isArray(detailed?.toolCalls) ? detailed.toolCalls : []);
     const assistantText = stripIterationThoughtForDisplay(detailed?.assistantText || '');
@@ -5193,6 +6192,19 @@ async function applyAiIterationSessionToGlobal(context, settings, session, root)
         updateUiStatus(i18n('Iteration session applied to global profile.'));
         return;
     }
+    if (isDirectorIterationSession(session)) {
+        const profile = sanitizeDirectorProfile(session?.workingProfile);
+        settings.executionMode = ORCH_EXECUTION_MODE_DIRECTOR;
+        settings.singleAgentModeEnabled = false;
+        settings.directorProfile = profile;
+        await saveSettings();
+        uiState.globalDirectorEditor = loadGlobalDirectorEditorState();
+        ensureDirectorEditorIntegrity(uiState.globalDirectorEditor);
+        renderDynamicPanels(root, context);
+        notifySuccess(i18n('Iteration session applied to global profile.'));
+        updateUiStatus(i18n('Iteration session applied to global profile.'));
+        return;
+    }
     settings.orchestrationSpec = sanitizeSpec(session?.workingProfile?.spec);
     settings.presets = sanitizePresetMap(session?.workingProfile?.presets);
     await saveSettings();
@@ -5261,6 +6273,36 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
         updateUiStatus(i18nFormat('Iteration session applied to character override: ${0}.', name));
         return;
     }
+    if (isDirectorIterationSession(session)) {
+        const avatar = String(getCurrentAvatar(context) || '').trim();
+        if (!avatar) {
+            notifyError(i18n('No character selected. Cannot apply to character override.'));
+            return;
+        }
+        const sanitizedProfile = sanitizeDirectorProfile(session?.workingProfile || {});
+        const importedEditor = {
+            ...sanitizedProfile,
+            avatar,
+            enabled: true,
+            notes: '',
+        };
+        const ok = await persistCharacterDirectorEditor(context, settings, avatar, {
+            editor: importedEditor,
+            forceEnabled: true,
+        });
+        if (!ok) {
+            notifyError(i18n('Failed to persist character override.'));
+            return;
+        }
+        uiState.characterDirectorEditor = loadCharacterDirectorEditorState(context, avatar);
+        ensureDirectorEditorIntegrity(uiState.characterDirectorEditor);
+        setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, 'character');
+        renderDynamicPanels(root, context);
+        const name = getCharacterDisplayNameByAvatar(context, avatar) || avatar;
+        notifySuccess(i18nFormat('Iteration session applied to character override: ${0}.', name));
+        updateUiStatus(i18nFormat('Iteration session applied to character override: ${0}.', name));
+        return;
+    }
     const avatar = String(getCurrentAvatar(context) || '').trim();
     if (!avatar) {
         notifyError(i18n('No character selected. Cannot apply to character override.'));
@@ -5295,7 +6337,12 @@ async function openAiIterationStudio(context, settings, root) {
     // can consume. The shell handles popup lifecycle, abort plumbing, session
     // history, auto-continue, and the per-popup Auto-apply preference.
     const executionMode = getExecutionMode(settings);
-    const studioMode = executionMode === ORCH_EXECUTION_MODE_LOOP || executionMode === ORCH_EXECUTION_MODE_AGENDA
+    const SUPPORTED_STUDIO_MODES = new Set([
+        ORCH_EXECUTION_MODE_LOOP,
+        ORCH_EXECUTION_MODE_AGENDA,
+        ORCH_EXECUTION_MODE_DIRECTOR,
+    ]);
+    const studioMode = SUPPORTED_STUDIO_MODES.has(executionMode)
         ? executionMode
         : ORCH_EXECUTION_MODE_SPEC;
     const adapter = createOrchestratorIterationAdapter(studioMode, {
@@ -5305,13 +6352,16 @@ async function openAiIterationStudio(context, settings, root) {
         getEditorByScope,
         getAgendaEditorByScope,
         getLoopEditorByScope,
+        getDirectorEditorByScope,
         syncCharacterEditorWithActiveAvatar,
         cloneWorkingProfileFromEditor,
         cloneAgendaWorkingProfileFromEditor,
+        cloneDirectorWorkingProfileFromEditor,
         sanitizeLoopProfile,
         sanitizeSpec,
         sanitizePresetMap,
         sanitizeAgendaWorkingProfile,
+        sanitizeDirectorProfile,
         cloneAiIterationWorkingProfile,
         buildAiIterationToolSet,
         buildAiIterationSystemPrompt,
@@ -5326,6 +6376,7 @@ async function openAiIterationStudio(context, settings, root) {
             SPEC: ORCH_EXECUTION_MODE_SPEC,
             AGENDA: ORCH_EXECUTION_MODE_AGENDA,
             LOOP: ORCH_EXECUTION_MODE_LOOP,
+            DIRECTOR: ORCH_EXECUTION_MODE_DIRECTOR,
         },
         MODULE_NAME,
         ORCH_GLOBAL_ITERATION_HISTORY_KEY,
@@ -5360,7 +6411,6 @@ function bindUi() {
     root.find('#luker_orch_node_iterations').val(String(settings.nodeIterationMaxRounds || 3));
     root.find('#luker_orch_review_reruns').val(String(settings.reviewRerunMaxRounds ?? 2));
     root.find('#luker_orch_tool_retries').val(String(settings.toolCallRetryMax ?? 2));
-    root.find('#luker_orch_agent_timeout').val(String(settings.agentTimeoutSeconds ?? 0));
     root.find('#luker_orch_rpm_limit').val(settings.rpmLimit || 0);
     root.find('#luker_orch_capsule_position').val(String(Number(settings.capsuleInjectPosition)));
     root.find('#luker_orch_capsule_depth').val(String(Number(settings.capsuleInjectDepth || 0)));
@@ -5521,6 +6571,149 @@ function bindUi() {
         ensureLoopEditorIntegrity(editor);
     });
 
+    // ─── Director-mode editor handlers ────────────────────────────────
+    // Director edits mutate `uiState.{global,character}DirectorEditor`
+    // (the working state) rather than `settings.directorProfile` directly.
+    // The user explicitly commits with Save To Global / Save To Character
+    // Override (or implicitly when they leave the popup — no auto-save).
+    // The scope is determined by the popup's current displayed scope
+    // (data-scope attribute on the element, or director's stored scope).
+    // We do NOT run sanitizer mid-edit: it would drop rows where the user
+    // hasn't filled `id` / `systemPrompt` yet. Save / runtime sanitize on
+    // their way out.
+    function setDirectorFieldByDotPath(director, dotPath, value) {
+        const parts = String(dotPath || '').split('.').filter(Boolean);
+        if (parts.length === 0) return;
+        let host = director;
+        for (let i = 0; i < parts.length - 1; i += 1) {
+            const key = parts[i];
+            if (!host[key] || typeof host[key] !== 'object') {
+                host[key] = {};
+            }
+            host = host[key];
+        }
+        host[parts[parts.length - 1]] = value;
+    }
+
+    function readDirectorInputValue(el) {
+        const $el = jQuery(el);
+        const type = String($el.attr('type') || '').toLowerCase();
+        if (type === 'checkbox') {
+            return Boolean($el.prop('checked'));
+        }
+        if (type === 'number') {
+            const n = Number($el.val());
+            return Number.isFinite(n) ? n : 0;
+        }
+        return String($el.val() ?? '');
+    }
+
+    function getDirectorEditorForElement(el) {
+        const scope = String(jQuery(el).attr('data-scope') || 'global') === 'character' ? 'character' : 'global';
+        return { scope, editor: getDirectorEditorByScope(scope) };
+    }
+
+    jQuery(document).on('input.lukerOrchEditor change.lukerOrchEditor', '.luker_orch_editor_popup [data-orch-director-field]', function (event) {
+        const $el = jQuery(this);
+        const type = String($el.attr('type') || '').toLowerCase();
+        // Avoid double-firing for checkbox: only consume `change`.
+        if (type === 'checkbox' && event.type === 'input') return;
+        // Avoid double-firing for text inputs / textareas: consume `input`
+        // for live typing, ignore the trailing `change`.
+        if (type !== 'checkbox' && type !== 'number' && event.type === 'change') return;
+        const dotPath = String($el.attr('data-orch-director-field') || '');
+        if (!dotPath) return;
+        const { editor } = getDirectorEditorForElement(this);
+        if (!editor || typeof editor !== 'object') return;
+        if (!editor.director || typeof editor.director !== 'object') {
+            editor.director = createDefaultDirectorProfile().director;
+        }
+        const value = readDirectorInputValue(this);
+        setDirectorFieldByDotPath(editor.director, dotPath, value);
+    });
+
+    jQuery(document).on('input.lukerOrchEditor change.lukerOrchEditor', '.luker_orch_editor_popup [data-orch-subagent-field]', function (event) {
+        const $el = jQuery(this);
+        const type = String($el.attr('type') || '').toLowerCase();
+        if (type === 'checkbox' && event.type === 'input') return;
+        if (type !== 'checkbox' && type !== 'number' && event.type === 'change') return;
+        const field = String($el.attr('data-orch-subagent-field') || '');
+        const index = Number($el.attr('data-subagent-index'));
+        if (!field || !Number.isInteger(index) || index < 0) return;
+        const { editor } = getDirectorEditorForElement(this);
+        if (!editor?.director) return;
+        const subAgents = editor.director.subAgents;
+        if (!Array.isArray(subAgents) || !subAgents[index] || typeof subAgents[index] !== 'object') {
+            return;
+        }
+        subAgents[index][field] = readDirectorInputValue(this);
+    });
+
+    // Passive lint: when any director preset-name dropdown changes,
+    // toggle the sibling `.director-preset-warning` based on whether
+    // the freshly-selected preset has content-shaped prompts enabled.
+    // Pure UX guard — does not block save, runs independently of the
+    // field-binding handlers above (which persist the value into the
+    // editor state). `change` only; `input` does not fire on <select>.
+    jQuery(document).on('change.lukerOrchEditor', '.luker_orch_editor_popup [data-director-preset-select]', function () {
+        updateDirectorPresetWarningForSelect(getContext(), this);
+    });
+
+    jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-orch-add-subagent]', function () {
+        const { editor } = getDirectorEditorForElement(this);
+        if (!editor?.director) return;
+        if (!Array.isArray(editor.director.subAgents)) {
+            editor.director.subAgents = [];
+        }
+        editor.director.subAgents.push({
+            id: '',
+            description: '',
+            systemPrompt: '',
+            apiPresetName: '',
+            promptPresetName: '',
+        });
+        // Re-render so the new row gets its `data-subagent-index`.
+        refreshOrchestrationEditorPopup(getContext(), getSettings());
+    });
+
+    jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-orch-remove-subagent]', function () {
+        const $el = jQuery(this);
+        const index = Number($el.attr('data-subagent-index'));
+        if (!Number.isInteger(index) || index < 0) return;
+        const { editor } = getDirectorEditorForElement(this);
+        if (!editor?.director) return;
+        const subAgents = editor.director.subAgents;
+        if (!Array.isArray(subAgents) || index >= subAgents.length) return;
+        subAgents.splice(index, 1);
+        // Re-render so indices below the removed row shift up correctly.
+        refreshOrchestrationEditorPopup(getContext(), getSettings());
+    });
+
+    // Director main-agent system prompt reset. Materializes the built-in
+    // default into the editor's textarea + state. User still has to
+    // Save To Global / Save To Character Override to commit. Note that
+    // runtime falls back to the same default for an empty textarea
+    // (director-runtime.js) — the button's job is purely UX (give the
+    // user something to read and modify), not behavioral.
+    jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-luker-action="director-reset-main-prompt"]', function () {
+        if (!window.confirm(i18n('Reset main-agent system prompt to default? This overwrites the current text.'))) {
+            return;
+        }
+        const { editor } = getDirectorEditorForElement(this);
+        if (!editor?.director) return;
+        const subAgents = Array.isArray(editor.director.subAgents)
+            ? editor.director.subAgents
+            : [];
+        const defaultText = buildDirectorDefaultSystemPrompt({ subAgents });
+        if (!editor.director.mainAgent || typeof editor.director.mainAgent !== 'object') {
+            editor.director.mainAgent = {};
+        }
+        editor.director.mainAgent.systemPrompt = defaultText;
+        // Refresh so the textarea shows the new value.
+        refreshOrchestrationEditorPopup(getContext(), getSettings());
+        notifySuccess(i18n('Reset main-agent system prompt to default'));
+    });
+
     // Spec-mode profile-root defaultTools checkbox: toggles
     // `editor.spec.defaultTools[ns][verb]`. The grid only renders when
     // defaultTools is non-null, so we can assume the field exists.
@@ -5666,11 +6859,6 @@ function bindUi() {
 
     root.on('change.lukerOrch', '#luker_orch_tool_retries', function () {
         settings.toolCallRetryMax = Math.max(0, Math.min(10, Math.floor(Number(jQuery(this).val()) || 0)));
-        saveSettingsDebounced();
-    });
-
-    root.on('change.lukerOrch', '#luker_orch_agent_timeout', function () {
-        settings.agentTimeoutSeconds = Math.max(0, Math.min(3600, Math.floor(Number(jQuery(this).val()) || 0)));
         saveSettingsDebounced();
     });
 
@@ -6108,6 +7296,23 @@ function bindUi() {
                 renderDynamicPanels(root, context);
                 return;
             }
+            if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_DIRECTOR) {
+                syncCharacterEditorWithActiveAvatar(context);
+                const activeAvatar = String(getCurrentAvatar(context) || '').trim();
+                if (hasCharacterDirectorOverride(context, activeAvatar)) {
+                    uiState.characterDirectorEditor = loadCharacterDirectorEditorState(context, activeAvatar);
+                    ensureDirectorEditorIntegrity(uiState.characterDirectorEditor);
+                    setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, 'character');
+                    updateUiStatus(i18nFormat('Reloaded character override for ${0}.', getCharacterDisplayNameByAvatar(context, activeAvatar) || 'N/A'));
+                } else {
+                    uiState.globalDirectorEditor = loadGlobalDirectorEditorState();
+                    ensureDirectorEditorIntegrity(uiState.globalDirectorEditor);
+                    setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, 'global');
+                    updateUiStatus(i18n('Reloaded global profile from settings.'));
+                }
+                renderDynamicPanels(root, context);
+                return;
+            }
             syncCharacterEditorWithActiveAvatar(context);
             const activeAvatar = String(getCurrentAvatar(context) || '').trim();
             if (hasCharacterOverride(context, activeAvatar)) {
@@ -6160,6 +7365,25 @@ function bindUi() {
                 updateUiStatus(i18n('Reset global profile to defaults.'));
                 return;
             }
+            if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_DIRECTOR) {
+                if (!window.confirm(i18n('Reset global orchestration profile to defaults? This will overwrite current global workflow and presets.'))) {
+                    return;
+                }
+                // Director's profile lives directly in settings — no
+                // separate editor working-state to flush. createDefault
+                // gives us the canonical profile + the 5 default
+                // analyst sub-agents the default main-agent prompt is
+                // coupled to.
+                settings.directorProfile = createDefaultDirectorProfile();
+                await saveSettings();
+                // Refresh editor so the popup reflects the reset state.
+                uiState.globalDirectorEditor = loadGlobalDirectorEditorState();
+                ensureDirectorEditorIntegrity(uiState.globalDirectorEditor);
+                renderDynamicPanels(root, context);
+                notifySuccess(i18n('Global orchestration profile reset to defaults.'));
+                updateUiStatus(i18n('Reset global profile to defaults.'));
+                return;
+            }
             if (!window.confirm(i18n('Reset global orchestration profile to defaults? This will overwrite current global workflow and presets.'))) {
                 return;
             }
@@ -6185,6 +7409,22 @@ function bindUi() {
                 notifySuccess(i18n('Global orchestration profile saved.'));
                 updateUiStatus(i18n('Saved to global profile.'));
                 renderDynamicPanels(root, context);
+                return;
+            }
+            if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_DIRECTOR) {
+                // Persist the director editor draft to global settings,
+                // matching loop/agenda/spec's working-state → settings
+                // commit pattern. Reload editor state from the
+                // sanitized profile so the popup re-renders cleanly.
+                syncCharacterEditorWithActiveAvatar(context);
+                const sourceScope = getDisplayedScope(context, settings);
+                const sourceEditor = getDirectorEditorByScope(sourceScope);
+                await persistGlobalDirectorEditorFrom(settings, sourceEditor);
+                uiState.globalDirectorEditor = loadGlobalDirectorEditorState();
+                ensureDirectorEditorIntegrity(uiState.globalDirectorEditor);
+                renderDynamicPanels(root, context);
+                notifySuccess(i18n('Global orchestration profile saved.'));
+                updateUiStatus(i18n('Saved to global profile.'));
                 return;
             }
             if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_AGENDA) {
@@ -6382,6 +7622,11 @@ function bindUi() {
                     editor: getAgendaEditorByScope(sourceScope),
                     forceEnabled: sourceScope === 'character' ? null : true,
                 });
+            } else if (executionMode === ORCH_EXECUTION_MODE_DIRECTOR) {
+                ok = await persistCharacterDirectorEditor(context, settings, activeAvatar, {
+                    editor: getDirectorEditorByScope(sourceScope),
+                    forceEnabled: sourceScope === 'character' ? null : true,
+                });
             } else {
                 ok = await persistCharacterEditor(context, settings, activeAvatar, {
                     editor: getEditorByScope(sourceScope),
@@ -6400,6 +7645,10 @@ function bindUi() {
                 uiState.characterAgendaEditor = loadCharacterAgendaEditorState(context, activeAvatar);
                 ensureAgendaEditorIntegrity(uiState.characterAgendaEditor);
                 setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA, 'character');
+            } else if (executionMode === ORCH_EXECUTION_MODE_DIRECTOR) {
+                uiState.characterDirectorEditor = loadCharacterDirectorEditorState(context, activeAvatar);
+                ensureDirectorEditorIntegrity(uiState.characterDirectorEditor);
+                setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, 'character');
             } else {
                 uiState.characterEditor = loadCharacterEditorState(context, activeAvatar);
                 ensureEditorIntegrity(uiState.characterEditor);
@@ -6437,6 +7686,10 @@ function bindUi() {
                 if (nextOverride) {
                     delete nextOverride.agenda;
                 }
+            } else if (executionMode === ORCH_EXECUTION_MODE_DIRECTOR) {
+                if (nextOverride) {
+                    delete nextOverride.director;
+                }
             } else if (nextOverride) {
                 delete nextOverride.spec;
                 delete nextOverride.presets;
@@ -6453,6 +7706,7 @@ function bindUi() {
                 || (nextOverride.presetPatch && typeof nextOverride.presetPatch === 'object')
                 || (nextOverride.agenda && typeof nextOverride.agenda === 'object')
                 || (nextOverride.loop && typeof nextOverride.loop === 'object')
+                || (nextOverride.director && typeof nextOverride.director === 'object')
             )) {
                 nextPayload.override = nextOverride;
             } else {
@@ -6472,6 +7726,10 @@ function bindUi() {
                 uiState.characterAgendaEditor = loadCharacterAgendaEditorState(context, avatar);
                 ensureAgendaEditorIntegrity(uiState.characterAgendaEditor);
                 setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA, 'global');
+            } else if (executionMode === ORCH_EXECUTION_MODE_DIRECTOR) {
+                uiState.characterDirectorEditor = loadCharacterDirectorEditorState(context, avatar);
+                ensureDirectorEditorIntegrity(uiState.characterDirectorEditor);
+                setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, 'global');
             } else {
                 uiState.characterEditor = loadCharacterEditorState(context, avatar);
                 ensureEditorIntegrity(uiState.characterEditor);
@@ -6576,6 +7834,225 @@ jQuery(() => {
 
     if (context.eventTypes.GENERATION_WORLD_INFO_FINALIZED) {
         context.eventSource.on(context.eventTypes.GENERATION_WORLD_INFO_FINALIZED, onWorldInfoFinalized);
+    }
+    // Pre-composition hook for director-mode pure-preset override. Fires
+    // at script.js:6868, well before prepareOpenAIMessages at :8144.
+    // Applies only for the four generation types director takes over —
+    // quiet/impersonate must not be touched, otherwise script tools
+    // running silent generations would have their composition replaced
+    // with the pure preset too.
+    if (context.eventTypes.GENERATION_STARTED) {
+        context.eventSource.on(context.eventTypes.GENERATION_STARTED, (type, _params, dryRun) => {
+            try {
+                if (dryRun) return;
+                if (!DIRECTOR_TAKEOVER_GEN_TYPES.has(String(type || ''))) return;
+                const profile = getEffectiveProfile(context);
+                if (!profile || String(profile.mode || '') !== ORCH_EXECUTION_MODE_DIRECTOR) return;
+                applyPureSyntheticPresetOverride();
+            } catch (err) {
+                console.warn(`[${MODULE_NAME}] GENERATION_STARTED preset-swap handler failed:`, err);
+            }
+        });
+    }
+    // Safety-net restores. Primary restore happens at the top of the
+    // GENERATE_TAKEOVER_DISPATCH handler below; these catch any path
+    // where Generate ends or aborts without reaching the takeover
+    // dispatch (network failure mid-compose, user abort before
+    // composition completes, slash-command bail-out, etc.). The
+    // restore function is idempotent so duplicate fires are safe.
+    if (context.eventTypes.GENERATION_ENDED) {
+        context.eventSource.on(context.eventTypes.GENERATION_ENDED, () => {
+            try { restorePureSyntheticPresetOverride(); } catch (_) { /* best-effort */ }
+        });
+    }
+    if (context.eventTypes.GENERATION_STOPPED) {
+        context.eventSource.on(context.eventTypes.GENERATION_STOPPED, () => {
+            try { restorePureSyntheticPresetOverride(); } catch (_) { /* best-effort */ }
+        });
+    }
+    // Director-mode subscriber: when the active profile runs in director
+    // mode, claim the takeover handle so the orchestrator produces the
+    // assistant message body directly (instead of injecting a capsule
+    // and letting the main LLM write the body). Subscription is registered
+    // unconditionally — the handler returns synchronously without claiming
+    // when the active profile is in any other mode.
+    if (context.eventTypes.GENERATE_TAKEOVER_DISPATCH) {
+        context.eventSource.on(context.eventTypes.GENERATE_TAKEOVER_DISPATCH, async (eventData) => {
+            try {
+                // Restore oai_settings before doing anything else.
+                // The pure-preset override was applied at GENERATION_STARTED
+                // so that the messages now sitting on eventData.generateData.prompt
+                // (composed at script.js:8144) are free of preset-level
+                // prompt items. Composition is complete by the time this
+                // event fires, so the override has done its job and the
+                // user's settings must be back in place before the
+                // director loop spins up its agents (whose preset lookup
+                // happens by name and is unrelated to oai_settings).
+                restorePureSyntheticPresetOverride();
+
+                const profile = getEffectiveProfile(context);
+                if (!profile) return;
+                // Bail early when the active profile is not director —
+                // we used to fall through and `acquirePlaceholderMessageId`
+                // would push an empty assistant bubble before the
+                // downstream `handleDirectorDispatch` early-returns
+                // because of the mode mismatch. That left a stray empty
+                // assistant message at the bottom of the chat for every
+                // spec / agenda / loop turn. The dispatch event must be
+                // a no-op for non-director profiles.
+                if (String(profile.mode || '') !== ORCH_EXECUTION_MODE_DIRECTOR) {
+                    return;
+                }
+
+                // Capture ST's assembled messages as the content payload for
+                // all director agents in this session. Director assumes the
+                // user picked a pure-instruction / empty preset (see UI lint
+                // in director-preset-lint.js); the captured messages should
+                // therefore contain only content (character / persona / WI /
+                // chat / extension injections) with no preset-level
+                // instruction text to pollute downstream agent prompts.
+                // ST's Generate() stores the chat-completion messages array
+                // on `generate_data.prompt` — legacy name carried over from
+                // the text-completion path (`prepareOpenAIMessages` returns
+                // `[chat, counts]` and script.js:8162 does
+                // `generate_data = { prompt: prompt }`).
+                const messages = Array.isArray(eventData?.generateData?.prompt)
+                    ? eventData.generateData.prompt
+                    : null;
+                if (messages) {
+                    directorContentCache.set({ messages });
+                } else {
+                    console.warn(`[${MODULE_NAME}] GENERATE_TAKEOVER_DISPATCH missing generateData.prompt — director will run with empty story context`);
+                    directorContentCache.clear();
+                }
+
+                const settings = extension_settings[MODULE_NAME];
+
+                // Both main agent and sub-agents honor the orchestrator's
+                // "Use streaming transport" toggle (settings.useStreamingTransport),
+                // the same way the other 5 built-in plugins do: ON routes
+                // through generateTaskStream(opts) so the HTTP connection
+                // stays alive on long generations *and* exposes chunk-level
+                // deltas via opts.onChunk; OFF uses plain generateTask.
+                // Both API shapes return identical assistantText + toolCalls,
+                // which is what director consumes. The streaming branch
+                // forwards each chunk to opts.onChunk if the caller passes
+                // one — used by director-runtime to push the main agent's
+                // text into the reasoning fold as it arrives, instead of
+                // waiting for the round to finish.
+                const generateTaskRouter = async ({ onChunk, ...opts } = {}) => {
+                    if (settings?.useStreamingTransport) {
+                        const { stream, result } = context.generateTaskStream(opts);
+                        if (typeof onChunk === 'function') {
+                            (async () => {
+                                try {
+                                    for await (const chunk of stream) {
+                                        try { onChunk(chunk); } catch (_) { /* best-effort */ }
+                                    }
+                                } catch (_) { /* errors surface through `result` */ }
+                            })();
+                        }
+                        return await result;
+                    }
+                    return await context.generateTask(opts);
+                };
+
+                // Resolve target message id for director-runtime's handle
+                // seed. The kernel (script.js takeover branch) owns chat-
+                // array mutation in production via its own setOnUpdate
+                // listener — placeholder push, DOM bubble render,
+                // message_updated emits, post-generation pipeline,
+                // saveReply routing all live in the kernel now. This
+                // acquirer just points at the slot the takeover will
+                // write into so the handle's originalText / originalReasoning
+                // come from the right source:
+                //   - chat tail is assistant → reuse it (regenerate /
+                //     continue / swipe — kernel preserves that slot)
+                //   - chat tail is user or chat empty → kernel will
+                //     allocate a fresh bottom slot at `chat.length`;
+                //     handing director-runtime that future index makes
+                //     originalText / originalReasoning default to '' via
+                //     undefined chat lookup, which is correct for `normal`.
+                const acquirePlaceholderMessageId = async () => {
+                    const lastIdx = context.chat.length - 1;
+                    const last = lastIdx >= 0 ? context.chat[lastIdx] : null;
+                    if (last && last.is_user === false) {
+                        return lastIdx;
+                    }
+                    return context.chat.length;
+                };
+
+                // Create a fresh runtime trace for this director turn.
+                // Director's trace shape lives at `trace.director` —
+                // mainAgent rounds + conversation alias, and a list of
+                // sub-agent dispatches. Clearing first avoids the
+                // popup showing a stale trace from a prior loop /
+                // agenda / spec run on the same chat.
+                clearLatestOrchestrationRuntimeTrace(context);
+                const directorTrace = createOrchestrationRuntimeTrace(
+                    context,
+                    { type: eventData?.type || 'normal' },
+                    [],
+                    { mode: 'director' },
+                );
+                attachOrchestrationRuntimeDirectorState(directorTrace, {
+                    mainAgent: {
+                        rounds: [],
+                        conversation: { messages: [] },
+                    },
+                    subagents: [],
+                });
+
+                await handleDirectorDispatch(eventData, {
+                    profile,
+                    chat: context.chat,
+                    acquirePlaceholderMessageId,
+                    getContentPayload: () => directorContentCache.get(),
+                    generateTask: generateTaskRouter,
+                    generateTaskStreamForMainAgent: generateTaskRouter,
+                    // Sub-agent dispatcher uses this when streaming
+                    // transport is on, to pipe each sub-agent's chunks
+                    // into its own reasoning-fold section as they arrive.
+                    // When off, the dispatcher falls back to generateTask
+                    // and the section gets the terminal text in one shot
+                    // (still visible, just not progressive).
+                    generateTaskStream: settings?.useStreamingTransport
+                        ? (opts) => context.generateTaskStream(opts)
+                        : null,
+                    executeLoopTool: (name, args, deps) => executeLoopTool(name, args, deps),
+                    trace: directorTrace,
+                    settings,
+                    // Notes adapter context — same shape loop-runtime
+                    // mounts. Lets sub-agents see persisted notes via the
+                    // "## Previous Notes" block prepended to their system
+                    // prompts. Re-read on every sub dispatch so notes
+                    // written by an earlier sub-agent in this session
+                    // show up for later ones.
+                    contextForNotes: await (async () => {
+                        const notesCtx = {};
+                        await attachNotesFloorState(notesCtx);
+                        return notesCtx;
+                    })(),
+                    // Injected so director-runtime doesn't have to
+                    // import runtime-trace.js (which transitively pulls
+                    // in lib.js and breaks Node test environments).
+                    finalizeTrace: (trace, status) => finalizeOrchestrationRuntimeTrace(trace, status, {}),
+                    // Visible failure surface. Director takes over the
+                    // GENERATE path, so ST core's sender never gets to
+                    // toast on its behalf — we have to do it here when
+                    // the loop blows up (e.g. backend 500 mid-stream).
+                    notifyError: (msg) => {
+                        try {
+                            if (typeof toastr === 'object' && typeof toastr?.error === 'function') {
+                                toastr.error(String(msg || 'Unknown error'), 'Orchestrator (director)');
+                            }
+                        } catch (_) { /* toast is best-effort */ }
+                    },
+                });
+            } catch (err) {
+                console.warn(`[${MODULE_NAME}] GENERATE_TAKEOVER_DISPATCH handler failed:`, err);
+            }
+        });
     }
     if (context.eventTypes.MESSAGE_DELETED) {
         context.eventSource.on(context.eventTypes.MESSAGE_DELETED, onMessageDeleted);

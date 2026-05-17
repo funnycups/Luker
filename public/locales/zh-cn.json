@@ -4943,6 +4943,10 @@
     "chars": "字符",
     "No generation requests recorded yet.": "暂无生成请求记录。",
     "No messages captured.": "未捕获到消息。",
+    "Response Body": "响应正文",
+    "(empty)": "(空)",
+    "Search source / model / messages / response...": "搜索 来源 / 模型 / 消息 / 响应…",
+    "Search in this request...": "在此请求内搜索…",
     "Failed to load request details.": "加载请求详情失败。",
     "Type": "类型",
     "Image": "图像",
@@ -5209,4 +5213,23 @@
     ,"blocked": "阻塞"
     ,"dropped": "已丢弃"
     ,"(none)": "(无)"
+    ,"Director (multi-agent)": "导演模式（多 agent）"
+    ,"Main agent": "主代理"
+    ,"Sub-agents": "子代理"
+    ,"Add sub-agent": "添加子代理"
+    ,"Sub-agent ID": "子代理 ID"
+    ,"Description (shown to main agent)": "描述（主代理可见）"
+    ,"Discard partial message on abort": "中止时丢弃残缺消息"
+    ,"Maximum tool-calling rounds": "最大工具调用轮数"
+    ,"Maximum concurrent sub-agents": "最大并发子代理数"
+    ,"Maximum total sub-agent runs per turn": "本回合最多子代理调用总数"
+    ,"Direct message generation": "直接生成消息"
+    ,"Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.": "导演模式由主代理直接产出助理消息,主代理可派遣子代理协助。"
+    ,"Director Orchestration": "导演编排"
+    ,"System prompt (leave empty for default)": "系统提示词（留空使用默认值）"
+    ,"Reset to default": "重置为默认值"
+    ,"Reset main-agent system prompt to default? This overwrites the current text.": "重置主代理系统提示词为默认值?这会覆盖当前文本。"
+    ,"Reset main-agent system prompt to default": "已重置主代理系统提示词为默认值"
+    ,"Limits": "上限"
+    ,"Reset Global": "重置全局配置"
 }

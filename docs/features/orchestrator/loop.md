@@ -74,8 +74,7 @@ Once a tool call returns, its result lands in the conversation as a light-yellow
 1. **Abort signal** — user clicks Stop / upper-layer cancel → loop aborts immediately; trace records `cancelled` and **no** half-baked capsule is injected.
 2. **`wall_clock_budget_ms`** — break the moment the wall clock expires.
 3. **`max_rounds`** — hard round cap (default 20, max 50).
-4. **Per-tool-call timeout** — reuses the orchestrator's `agentTimeoutSeconds`. A timed-out tool call returns a `ToolError` to the agent.
-5. **Agent stops calling tools** — three consecutive zero-tool-call rounds break the loop early (prevents "talking, not doing"). Any tool call resets the streak.
+4. **Agent stops calling tools** — three consecutive zero-tool-call rounds break the loop early (prevents "talking, not doing"). Any tool call resets the streak.
 
 When any safeguard fires, the loop falls back to the agent's last natural-language reply as the capsule so the main model still gets *something*.
 

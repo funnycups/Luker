@@ -38,14 +38,17 @@ export function createOrchestratorIterationAdapter(mode, deps) {
         getEditorByScope,
         getAgendaEditorByScope,
         getLoopEditorByScope,
+        getDirectorEditorByScope,
         syncCharacterEditorWithActiveAvatar,
         // profile shape helpers
         cloneWorkingProfileFromEditor,
         cloneAgendaWorkingProfileFromEditor,
+        cloneDirectorWorkingProfileFromEditor,
         sanitizeLoopProfile,
         sanitizeSpec,
         sanitizePresetMap,
         sanitizeAgendaWorkingProfile,
+        sanitizeDirectorProfile,
         cloneAiIterationWorkingProfile,
         // LLM round-trip helpers
         buildAiIterationToolSet,
@@ -68,6 +71,7 @@ export function createOrchestratorIterationAdapter(mode, deps) {
 
     const isLoop = mode === ORCH_EXECUTION_MODES.LOOP;
     const isAgenda = mode === ORCH_EXECUTION_MODES.AGENDA;
+    const isDirector = mode === ORCH_EXECUTION_MODES.DIRECTOR;
 
     return defineAdapter({
         id: `orch_${mode}`,
@@ -85,6 +89,9 @@ export function createOrchestratorIterationAdapter(mode, deps) {
             }
             if (isAgenda) {
                 return cloneAgendaWorkingProfileFromEditor(getAgendaEditorByScope(scope));
+            }
+            if (isDirector) {
+                return cloneDirectorWorkingProfileFromEditor(getDirectorEditorByScope(scope));
             }
             return cloneWorkingProfileFromEditor(getEditorByScope(scope));
         },
@@ -108,6 +115,9 @@ export function createOrchestratorIterationAdapter(mode, deps) {
                         maxTotalRuns: settings?.agendaMaxTotalRuns || 0,
                     },
                 });
+            }
+            if (isDirector) {
+                return sanitizeDirectorProfile(settings?.directorProfile || {});
             }
             return {
                 spec: sanitizeSpec(settings?.orchestrationSpec || { stages: [] }),

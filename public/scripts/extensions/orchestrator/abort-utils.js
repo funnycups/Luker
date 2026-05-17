@@ -3,11 +3,10 @@
  *
  * Pure utilities: no I/O, no module state, no `extension_settings`. The
  * orchestrator runs many concurrent tool-call attempts (one per node ×
- * retries), each of which needs to honor a caller-provided abort signal,
- * an optional per-attempt timeout, and the global "stop" button.
- * `linkAbortSignals` and `createAttemptAbortController` give the runtime
- * a single combined signal so each attempt aborts cleanly when any of
- * its triggers fire.
+ * retries), each of which needs to honor a caller-provided abort signal
+ * and the global "stop" button. `linkAbortSignals` combines those triggers
+ * into a single signal so each attempt aborts cleanly when any of them
+ * fires.
  *
  * `isNoToolCallExtractionError` lives here because tool-call retry
  * logic uses the same error-shape inspection idiom as abort detection.
@@ -90,36 +89,3 @@ export function linkAbortSignals(...signals) {
     };
 }
 
-export function getAgentTimeoutMs(settings) {
-    const seconds = Math.max(0, Math.min(3600, Math.floor(Number(settings?.agentTimeoutSeconds) || 0)));
-    return seconds > 0 ? seconds * 1000 : 0;
-}
-
-export function createAttemptAbortController(baseAbortSignal = null, timeoutMs = 0) {
-    const timeoutController = new AbortController();
-    let didTimeout = false;
-    let timeoutId = null;
-
-    if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
-        timeoutId = setTimeout(() => {
-            didTimeout = true;
-            if (!timeoutController.signal.aborted) {
-                timeoutController.abort();
-            }
-        }, timeoutMs);
-    }
-
-    const linked = linkAbortSignals(baseAbortSignal, timeoutController.signal);
-
-    return {
-        signal: linked.signal,
-        didTimeout: () => didTimeout,
-        cleanup: () => {
-            if (timeoutId !== null) {
-                clearTimeout(timeoutId);
-                timeoutId = null;
-            }
-            linked.cleanup();
-        },
-    };
-}

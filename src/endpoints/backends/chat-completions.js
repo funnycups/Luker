@@ -84,6 +84,7 @@ import {
     createGenerationJob,
     failGenerationJob,
     forwardStreamingWithGenerationJob,
+    forwardStreamingWithInspectorTap,
     getActiveGenerationJobsForRequest,
     getGenerationJobForRequest,
     getJobFromRequest,
@@ -242,7 +243,7 @@ async function forwardStreamingResponseWithJob(request, response, fetchResponse)
     if (job) {
         return await forwardStreamingWithGenerationJob(fetchResponse, response, request, job, { modelName: request.body?.model });
     }
-    return forwardFetchResponse(fetchResponse, response, { jsonErrorResponse: true });
+    return await forwardStreamingWithInspectorTap(fetchResponse, response, request);
 }
 
 async function finalizePayloadWithJob(request, response, payload, rawApiResponse) {

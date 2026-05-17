@@ -369,29 +369,237 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
 </div>`;
 }
 
+/**
+ * Render a single sub-agent row for the director editor. Each row binds
+ * its inputs to the position-keyed sub-agent entry under
+ * `profile.director.subAgents[subagentIndex]`; the main.js binders use
+ * `data-subagent-index` to locate the entry. Empty `id` / `systemPrompt`
+ * are normal in-flight (the sanitizer only drops them at runtime), so
+ * the renderer does not validate.
+ */
+function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex) {
+    const {
+        escapeHtml,
+        getContext,
+        i18n,
+        renderConnectionProfileOptions,
+        renderOpenAIPresetOptions,
+    } = deps;
+    const safeScope = scope === 'character' ? 'character' : 'global';
+    const safe = subagent && typeof subagent === 'object' ? subagent : {};
+    const id = String(safe.id ?? '');
+    const description = String(safe.description ?? '');
+    const systemPrompt = String(safe.systemPrompt ?? '');
+    const apiPresetName = String(safe.apiPresetName ?? '');
+    const promptPresetName = String(safe.promptPresetName ?? '');
+    const context = getContext();
+    return `
+<div class="luker_orch_subagent_row luker-studio-card" data-subagent-row="${escapeHtml(id)}" data-subagent-index="${subagentIndex}" data-scope="${safeScope}">
+    <div class="luker-studio-card-header">
+        <b>${escapeHtml(id || i18n('(unnamed sub-agent)'))}</b>
+        <div class="luker-studio-card-actions">
+            <div class="menu_button menu_button_small" data-orch-remove-subagent="1" data-subagent-index="${subagentIndex}" data-scope="${safeScope}">${escapeHtml(i18n('Remove'))}</div>
+        </div>
+    </div>
+    <label>
+        <span data-i18n="Sub-agent ID">${escapeHtml(i18n('Sub-agent ID'))}</span>
+        <input class="text_pole" type="text" data-orch-subagent-field="id" data-subagent-index="${subagentIndex}" data-scope="${safeScope}" value="${escapeHtml(id)}" />
+    </label>
+    <label>
+        <span data-i18n="Description (shown to main agent)">${escapeHtml(i18n('Description (shown to main agent)'))}</span>
+        <input class="text_pole" type="text" data-orch-subagent-field="description" data-subagent-index="${subagentIndex}" data-scope="${safeScope}" value="${escapeHtml(description)}" />
+    </label>
+    <label>
+        <span data-i18n="System prompt">${escapeHtml(i18n('System prompt'))}</span>
+        <textarea class="text_pole textarea_compact" rows="4" data-orch-subagent-field="systemPrompt" data-subagent-index="${subagentIndex}" data-scope="${safeScope}">${escapeHtml(systemPrompt)}</textarea>
+    </label>
+    <label>
+        <span data-i18n="API preset">${escapeHtml(i18n('API preset'))}</span>
+        <select class="text_pole" data-orch-subagent-field="apiPresetName" data-subagent-index="${subagentIndex}" data-scope="${safeScope}">${renderConnectionProfileOptions(apiPresetName, i18n('(Global orchestration API preset)'))}</select>
+    </label>
+    <label>
+        <span data-i18n="Prompt preset">${escapeHtml(i18n('Prompt preset'))}</span>
+        <select class="text_pole" data-orch-subagent-field="promptPresetName" data-subagent-index="${subagentIndex}" data-scope="${safeScope}" data-director-preset-select="subagent">${renderOpenAIPresetOptions(context, promptPresetName)}</select>
+        <div class="director-preset-help" data-i18n="director_preset_help_pure_instruction">${escapeHtml(i18n('Pick a pure-instruction preset (jailbreak / NSFW / style guide). Director provides character / persona / world info / chat history separately; a normal RP preset will duplicate that content.'))}</div>
+        <div class="director-preset-warning hidden" data-director-preset-warning="subagent" data-i18n="director_preset_warning_content_prompts">${escapeHtml(i18n('This preset contains content prompts (character / persona / WI / chat) which director already provides. Consider a pure-instruction preset to avoid duplication.'))}</div>
+    </label>
+</div>`;
+}
+
+/**
+ * Director-mode editor workspace. Mirrors `renderLoopWorkspace` /
+ * `renderAgendaWorkspace`: a two-column grid where the left column holds
+ * the main agent's routing + system prompt + numeric limits + abort
+ * policy, and the right column lists sub-agent rows with an add button.
+ *
+ * Director profile shape (matches `createDefaultDirectorProfile()` /
+ * `sanitizeDirectorProfile` in `director-defaults.js`):
+ *   { mode, director: {
+ *       mainAgent: { apiPresetName, promptPresetName, systemPrompt },
+ *       subAgents: [{ id, description, systemPrompt, apiPresetName, promptPresetName }],
+ *       maxRounds, maxConcurrentSubagents, maxTotalSubagentRuns,
+ *       tools, discardOnAbort,
+ *   } }
+ *
+ * The binders in main.js consume `[data-orch-director-field=...]`
+ * (dot-path under `profile.director.*`) and
+ * `[data-orch-subagent-field=...]` (indexed by `data-subagent-index`).
+ * `[data-orch-add-subagent]` / `[data-orch-remove-subagent]` mutate
+ * `profile.director.subAgents` and trigger a full popup re-render so
+ * the row indices stay aligned with the underlying array.
+ */
+export function renderDirectorWorkspace(deps, scope, profile, title = '') {
+    const {
+        escapeHtml,
+        getContext,
+        i18n,
+        renderConnectionProfileOptions,
+        renderOpenAIPresetOptions,
+    } = deps;
+    const safeScope = scope === 'character' ? 'character' : 'global';
+    const director = (profile && typeof profile === 'object' && profile.director && typeof profile.director === 'object')
+        ? profile.director
+        : {};
+    const mainAgent = director.mainAgent && typeof director.mainAgent === 'object' ? director.mainAgent : {};
+    const subAgents = Array.isArray(director.subAgents) ? director.subAgents : [];
+    const maxRounds = Number.isFinite(Number(director.maxRounds)) ? Number(director.maxRounds) : 20;
+    const maxConcurrentSubagents = Number.isFinite(Number(director.maxConcurrentSubagents)) ? Number(director.maxConcurrentSubagents) : 4;
+    const maxTotalSubagentRuns = Number.isFinite(Number(director.maxTotalSubagentRuns)) ? Number(director.maxTotalSubagentRuns) : 16;
+    const discardOnAbort = Boolean(director.discardOnAbort);
+    const context = getContext();
+    const subAgentRows = subAgents.length === 0
+        ? `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No sub-agents yet.'))}</div>`
+        : subAgents.map((subagent, index) => renderDirectorSubAgentRow(deps, safeScope, subagent, index)).join('');
+    return `
+<div class="luker-studio-workspace luker_orch_director_block" data-luker-scope-root="${safeScope}" data-orch-mode-block="director">
+    <div class="luker-studio-workspace-title" data-i18n="Director Orchestration">${escapeHtml(title || i18n('Director Orchestration'))}</div>
+    <div class="luker-studio-workspace-grid">
+        <div class="luker-studio-workspace-col">
+            <h4 data-i18n="Main agent">${escapeHtml(i18n('Main agent'))}</h4>
+            <label>
+                <span data-i18n="API preset">${escapeHtml(i18n('API preset'))}</span>
+                <select class="text_pole" data-orch-director-field="mainAgent.apiPresetName" data-scope="${safeScope}">${renderConnectionProfileOptions(String(mainAgent.apiPresetName || ''), i18n('(Global orchestration API preset)'))}</select>
+            </label>
+            <label>
+                <span data-i18n="Prompt preset">${escapeHtml(i18n('Prompt preset'))}</span>
+                <select class="text_pole" data-orch-director-field="mainAgent.promptPresetName" data-scope="${safeScope}" data-director-preset-select="main">${renderOpenAIPresetOptions(context, String(mainAgent.promptPresetName || ''))}</select>
+                <div class="director-preset-help" data-i18n="director_preset_help_pure_instruction">${escapeHtml(i18n('Pick a pure-instruction preset (jailbreak / NSFW / style guide). Director provides character / persona / world info / chat history separately; a normal RP preset will duplicate that content.'))}</div>
+                <div class="director-preset-warning hidden" data-director-preset-warning="main" data-i18n="director_preset_warning_content_prompts">${escapeHtml(i18n('This preset contains content prompts (character / persona / WI / chat) which director already provides. Consider a pure-instruction preset to avoid duplication.'))}</div>
+            </label>
+            <label>
+                <span data-i18n="System prompt (leave empty for default)">${escapeHtml(i18n('System prompt (leave empty for default)'))}</span>
+                <textarea class="text_pole textarea_compact" rows="6" data-orch-director-field="mainAgent.systemPrompt" data-scope="${safeScope}">${escapeHtml(String(mainAgent.systemPrompt || ''))}</textarea>
+            </label>
+            <div class="flex-container">
+                <div class="menu_button menu_button_small" data-luker-action="director-reset-main-prompt" data-scope="${safeScope}" data-i18n="Reset to default">${escapeHtml(i18n('Reset to default'))}</div>
+            </div>
+
+            <h4 data-i18n="Limits">${escapeHtml(i18n('Limits'))}</h4>
+            <label>
+                <span data-i18n="Maximum tool-calling rounds">${escapeHtml(i18n('Maximum tool-calling rounds'))}</span>
+                <input class="text_pole" type="number" min="1" max="50" step="1" data-orch-director-field="maxRounds" data-scope="${safeScope}" value="${escapeHtml(String(maxRounds))}" />
+            </label>
+            <label>
+                <span data-i18n="Maximum concurrent sub-agents">${escapeHtml(i18n('Maximum concurrent sub-agents'))}</span>
+                <input class="text_pole" type="number" min="1" max="16" step="1" data-orch-director-field="maxConcurrentSubagents" data-scope="${safeScope}" value="${escapeHtml(String(maxConcurrentSubagents))}" />
+            </label>
+            <label>
+                <span data-i18n="Maximum total sub-agent runs per turn">${escapeHtml(i18n('Maximum total sub-agent runs per turn'))}</span>
+                <input class="text_pole" type="number" min="1" max="100" step="1" data-orch-director-field="maxTotalSubagentRuns" data-scope="${safeScope}" value="${escapeHtml(String(maxTotalSubagentRuns))}" />
+            </label>
+
+            <label class="checkbox_label">
+                <input type="checkbox" data-orch-director-field="discardOnAbort" data-scope="${safeScope}" ${discardOnAbort ? 'checked' : ''} />
+                <span data-i18n="Discard partial message on abort">${escapeHtml(i18n('Discard partial message on abort'))}</span>
+            </label>
+        </div>
+        <div class="luker-studio-workspace-col">
+            <h4 data-i18n="Sub-agents">${escapeHtml(i18n('Sub-agents'))}</h4>
+            <div data-orch-subagent-list>${subAgentRows}</div>
+            <div class="luker-studio-add-row">
+                <button class="menu_button menu_button_small" type="button" data-orch-add-subagent="1" data-scope="${safeScope}" data-i18n="Add sub-agent">${escapeHtml(i18n('Add sub-agent'))}</button>
+            </div>
+        </div>
+    </div>
+</div>`;
+}
+
 export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) {
     const {
         ORCH_EXECUTION_MODE_AGENDA,
+        ORCH_EXECUTION_MODE_DIRECTOR,
         ORCH_EXECUTION_MODE_LOOP,
+        createDefaultDirectorProfile,
         escapeHtml,
         getAgendaEditorByScope,
         getCharacterAgendaOverrideByAvatar,
+        getCharacterDirectorOverrideByAvatar,
         getCharacterDisplayNameByAvatar,
         getCharacterLoopOverrideByAvatar,
         getCharacterOverrideByAvatar,
         getCurrentAvatar,
         getDisplayedScope,
+        getDirectorEditorByScope,
+        getDirectorProfileFromSettings,
         getEditorByScope,
         getLoopEditorByScope,
         getPopupEditingLabel,
         getProfileTitleForScope,
         hasCharacterAgendaOverride,
+        hasCharacterDirectorOverride,
         hasCharacterLoopOverride,
         hasCharacterSpecOverride,
         i18n,
         syncCharacterEditorWithActiveAvatar,
         uiState,
     } = deps;
+
+    if (settings && deps.getExecutionMode && deps.getExecutionMode(settings) === ORCH_EXECUTION_MODE_DIRECTOR) {
+        // Director popup mirrors loop / agenda's scope plumbing: edits go
+        // to uiState.{global,character}DirectorEditor (working state),
+        // Save To Global / Save To Character Override commits.
+        syncCharacterEditorWithActiveAvatar(context);
+        const activeAvatar = String(getCurrentAvatar(context) || '').trim();
+        const hasActiveCharacter = Boolean(activeAvatar);
+        const scope = deps.getDisplayedScope(context, settings);
+        const editor = deps.getDirectorEditorByScope(scope);
+        const directorOverride = activeAvatar && deps.getCharacterDirectorOverrideByAvatar
+            ? deps.getCharacterDirectorOverrideByAvatar(context, activeAvatar)
+            : null;
+        const isCharacterScope = scope === 'character';
+        const hasDirectorCharacterOverride = activeAvatar && deps.hasCharacterDirectorOverride
+            ? deps.hasCharacterDirectorOverride(context, activeAvatar)
+            : false;
+        const editingLabel = getPopupEditingLabel(isCharacterScope, hasDirectorCharacterOverride, Boolean(directorOverride?.enabled));
+        const profileTitle = getProfileTitleForScope(context, activeAvatar, isCharacterScope, hasDirectorCharacterOverride);
+        return `
+<div class="luker-studio luker_orch_editor_popup">
+    <div class="luker-studio-editor-topbar">
+        <div class="luker-studio-editor-topbar-left">
+            <div class="luker-studio-editor-topbar-title">${escapeHtml(i18n('Orchestration Editor'))}</div>
+            <div class="luker-studio-editor-topbar-meta">
+                <span class="luker-studio-editor-chip">${escapeHtml(i18n('Current card:'))} <b>${escapeHtml(activeAvatar ? (getCharacterDisplayNameByAvatar(context, activeAvatar) || activeAvatar) : i18n('(No character card)'))}</b></span>
+                <span class="luker-studio-editor-chip">${escapeHtml(i18n('Editing:'))} <b>${escapeHtml(editingLabel)}</b></span>
+                <span class="luker-studio-editor-chip">${escapeHtml(i18n('Execution mode'))} <b>${escapeHtml(i18n('Director (multi-agent)'))}</b></span>
+            </div>
+        </div>
+        <div class="luker-studio-editor-topbar-right">
+            <textarea class="text_pole textarea_compact" rows="1" data-luker-ai-goal-input placeholder="${escapeHtml(i18n('AI build goal (optional)'))}">${escapeHtml(String(uiState.aiGoal || ''))}</textarea>
+            <div class="menu_button menu_button_small" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
+        </div>
+    </div>
+    <div class="luker-studio-actions-bar">
+        <div class="menu_button" data-luker-action="reload-current">${escapeHtml(i18n('Reload Current'))}</div>
+        <div class="menu_button" data-luker-action="reset-global">${escapeHtml(i18n('Reset Global'))}</div>
+        <div class="menu_button" data-luker-action="save-global">${escapeHtml(i18n('Save To Global'))}</div>
+        ${hasActiveCharacter ? `<div class="menu_button" data-luker-action="save-character">${escapeHtml(i18n('Save To Character Override'))}</div>` : ''}
+        ${hasActiveCharacter && isCharacterScope ? `<div class="menu_button" data-luker-action="clear-character">${escapeHtml(i18n('Clear Character Override'))}</div>` : ''}
+        <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
+        <div class="menu_button" data-luker-action="view-runtime-trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
+    </div>
+    ${renderDirectorWorkspace(deps, scope, editor, profileTitle)}
+</div>`;
+    }
 
     if (settings && deps.getExecutionMode && deps.getExecutionMode(settings) === ORCH_EXECUTION_MODE_LOOP) {
         syncCharacterEditorWithActiveAvatar(context);
@@ -564,6 +772,7 @@ export function buildOrchestratorSettingsHtml(deps) {
         extension_prompt_roles,
         i18n,
         ORCH_EXECUTION_MODE_AGENDA,
+        ORCH_EXECUTION_MODE_DIRECTOR,
         ORCH_EXECUTION_MODE_LOOP,
         ORCH_EXECUTION_MODE_SINGLE,
         ORCH_EXECUTION_MODE_SPEC,
@@ -585,6 +794,7 @@ export function buildOrchestratorSettingsHtml(deps) {
                 <option value="${ORCH_EXECUTION_MODE_SINGLE}">${escapeHtml(i18n('Single agent'))}</option>
                 <option value="${ORCH_EXECUTION_MODE_AGENDA}">${escapeHtml(i18n('Agenda planner'))}</option>
                 <option value="${ORCH_EXECUTION_MODE_LOOP}">${escapeHtml(i18n('Loop (single-agent loop)'))}</option>
+                <option value="${ORCH_EXECUTION_MODE_DIRECTOR}" data-i18n="Director (multi-agent)">${escapeHtml(i18n('Director (multi-agent)'))}</option>
             </select>
             <div id="luker_orch_single_agent_fields">
                 <label for="luker_orch_single_agent_system_prompt">${escapeHtml(i18n('Single-agent system prompt'))}</label>
@@ -621,8 +831,6 @@ export function buildOrchestratorSettingsHtml(deps) {
             <input id="luker_orch_review_reruns" class="text_pole" type="number" min="0" max="20" step="1" />
             <label for="luker_orch_tool_retries">${escapeHtml(i18n('Tool-call retries on invalid/missing tool call (N)'))}</label>
             <input id="luker_orch_tool_retries" class="text_pole" type="number" min="0" max="10" step="1" />
-            <label for="luker_orch_agent_timeout">${escapeHtml(i18n('Per-agent timeout seconds (0 = disabled)'))}</label>
-            <input id="luker_orch_agent_timeout" class="text_pole" type="number" min="0" max="3600" step="1" />
             <label for="luker_orch_rpm_limit">${escapeHtml(i18n('RPM limit (0 = unlimited)'))}</label>
             <input id="luker_orch_rpm_limit" class="text_pole" type="number" min="0" max="600" step="1" />
             <label for="luker_orch_capsule_position">${escapeHtml(i18n('Injection position'))}</label>
@@ -697,6 +905,19 @@ export function buildOrchestratorSettingsHtml(deps) {
                     <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
                 </div>
                 <small class="luker_orch_loop_board_hint">${escapeHtml(i18n('Loop mode runs a single agent that calls tools in a loop and finalizes when ready.'))}</small>
+            </div>
+
+            <div id="luker_orch_director_board" class="luker_orch_board" style="display:none">
+                <div>
+                    <small><span data-i18n="Current card:">${escapeHtml(i18n('Current card:'))}</span> <span id="luker_orch_director_profile_target" data-i18n="(No character card)">${escapeHtml(i18n('(No character card)'))}</span></small><br />
+                    <small><span data-i18n="Editing:">${escapeHtml(i18n('Editing:'))}</span> <span id="luker_orch_director_profile_mode" data-i18n="Global profile">${escapeHtml(i18n('Global profile'))}</span></small>
+                </div>
+                <div class="flex-container">
+                    <div class="menu_button" data-luker-action="open-orch-editor" data-i18n="Open Orchestration Editor">${escapeHtml(i18n('Open Orchestration Editor'))}</div>
+                    <div class="menu_button" data-luker-action="view-runtime-trace" data-i18n="View Runtime Trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
+                    <div class="menu_button" data-luker-action="ai-iterate-open" data-i18n="Open AI Iteration Studio">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
+                </div>
+                <small class="luker_orch_director_board_hint" data-i18n="Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.">${escapeHtml(i18n('Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.'))}</small>
             </div>
 
             <small id="luker_orch_last_run_state" class="luker_orch_state_summary"></small>
