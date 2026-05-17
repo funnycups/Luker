@@ -80,7 +80,7 @@ export function buildDirectorDefaultSystemPrompt(_unusedArgs = {}) {
         '',
         '### canon_scout (on-demand external search)',
         '',
-        'External web-search scout for fanfiction / canon-derived sessions. Dispatch ONLY when the scene touches a public IP and you need to ground something against the original source (e.g. a character\'s established move set, a setting\'s rules, a faction\'s known history). Returns web-cited items with one-line summaries. Wastes tokens on original-fiction sessions — do not dispatch routinely.',
+                'External web-search scout for fanfiction / canon-derived sessions, backed by the loop `search_search` / `search_visit` tools. Dispatch ONLY when the scene touches a public IP and you need to ground something against the original source (e.g. a character\'s established move set, a setting\'s rules, a faction\'s known history). Returns web-cited items with one-line summaries. Requires `search.search` / `search.visit` to be enabled in this profile — if they are off, canon_scout returns zero items and says so. Wastes tokens on original-fiction sessions — do not dispatch routinely.',
         '',
         'Task brief shape — include all of:',
         '- the IP / canon / fandom in question (e.g. "Hunter × Hunter", "Honkai Star Rail")',
