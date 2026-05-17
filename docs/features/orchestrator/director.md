@@ -38,8 +38,8 @@ After the turn opens, the main agent dispatches `chat_scout` to sweep recent cha
 
 The main agent uses the scout output to draft a Chinese-prose passage into the message body (`write_message`), then **in parallel** dispatches the two post-draft critics:
 
-- `voice_critic`: voice / character consistency — flags lines that feel off-character.
-- `continuity_critic`: continuity against chat / memory / lorebook — flags anything that contradicts established facts.
+- `voice_critic`: humanity & voice — flags "data-person" prose (cold observation verbs / data vocabulary / reporting-style dialogue) and archetype mishandling (a scientist actually "analyzing" their love interest, an android "scanning" during intimacy, a taciturn character whose interior is treated as actually empty).
+- `continuity_critic`: hard contradictions only — flags lines where the draft asserts X and chat / memory / lorebook explicitly states NOT-X, plus knowledge-boundary violations (a character knowing something they were never told).
 
 Each critic gets its own named section in the reasoning fold; the two sections grow side-by-side without interleaving at character level (each section's bytes stay contiguous thanks to the JavaScript single-threaded event loop).
 
@@ -58,7 +58,7 @@ For the whole turn, the user sees only that final paragraph in the main chat; ev
 In the extension drawer's **multi-agent orchestration** panel, set **execution mode** to **Director (multi-agent)**. The spec / agenda / loop setting cards collapse and director's setting card appears.
 
 ::: tip 99% of users shouldn't hand-write the main-agent system prompt
-The default main-agent system prompt is **tightly coupled** to the five default sub-agent ids — it's already tuned for the "scout first, draft, then critique, then iterate" discipline. To customize, use the [AI Iteration Studio](/features/orchestrator/iteration-studio): describe what you want in natural language and let it patch your profile via tool calls.
+The default main-agent system prompt is **tightly coupled** to the eight default sub-agent ids — it's already tuned for the "scout first, draft, then critique, then iterate" discipline. To customize, use the [AI Iteration Studio](/features/orchestrator/iteration-studio): describe what you want in natural language and let it patch your profile via tool calls.
 :::
 
 ## Workflow outline
@@ -145,8 +145,8 @@ loop.finalize -> out
    | `epistemic_scout` | Cross-source pre-draft scout — joins chat (what characters have been exposed to) against lorebook / memory (what could be known in-world), producing a per-character Knows / Doesn't-know / Omniscience-traps inventory. | "Lin Wan does NOT know the user is the besieging general's son — she's only met him twice and the rumour-bearer hasn't appeared yet." |
    | `canon_scout` | On-demand external scout for fanfiction / public-IP canon facts. Skip for original-fiction sessions. | When the scene touches Naruto canon: "jōnin promotion is by recommendation, not exam — relevant if Lin Wan claims to be a candidate." |
    | `plot_brainstormer` | Mid-stage brainstormer — one structural sketch per angle. Dispatch several in parallel with diverse angles for genuinely different choices. | Angle A "direct confrontation" / Angle B "silence becomes the beat" / Angle C "she pivots to Luoyang to dodge". |
-   | `voice_critic` | Post-draft critic — voice / character consistency. Flags off-character lines. | "Draft has Lin Wan saying 'Hey buddy' — out-of-voice; she never uses casual address. Suggest: '公子' (formal) or silence." |
-   | `continuity_critic` | Post-draft critic — continuity against chat / memory / lorebook. Flags contradictions. | "Draft has Lin Wan setting down her teacup, but she's been holding a sword since msg 38." |
+   | `voice_critic` | Post-draft critic — humanity & voice. Catches "data-person" prose (cold observation verbs / data vocabulary / reporting-style dialogue at emotional moments) and archetype mishandling (cold-archetype characters written as actually cold instead of stylized-cold over a hot interior). Voice-register mismatches are a secondary dimension. | "Draft has Lin Wan 'observing the subject's micro-expression shifts with clinical detachment' — this is sensor prose, not living-being prose. Swap for a sensation she's actually feeling, even if her surface stays composed." |
+   | `continuity_critic` | Post-draft critic — hard contradictions only. Trusts the draft by default; flags only when chat / memory / lorebook explicitly stated the opposite of what the draft asserts. The one exception is knowledge-boundary violations: a character knowing something they were never told is always a flag. | "Draft has Lin Wan recognizing the family crest on the user's pendant — but chat shows the pendant has only ever been described as 'a silver disc' to her. Knowledge-boundary: she's never been told it's a crest, let alone whose." |
 
    The default main-agent system prompt is **tightly coupled** to these 8 ids — it dispatches by id and writes task-brief templates for each. If you change the sub-agents, the main-agent prompt has to change to match.
 
@@ -160,7 +160,7 @@ Open the editor for a profile inside the **multi-agent orchestration** panel (yo
 
 - **API preset** — the connection profile the main agent's `generateTaskStream` calls run on.
 - **Prompt preset** — the Chat Completion preset the main agent uses (sampler, temperature, etc.); this is the one discussed in the next section, "Recommended preset settings".
-- **System prompt** — leave empty to use the built-in default (draft → critique → revise + dispatch heuristics). The default is calibrated for the critique discipline — try it for a couple of turns before deciding to override.
+- **Main system prompt** — the default text is materialized into the field at profile creation. The runtime uses whatever is currently in the field — an empty field means an empty instruction (no hidden fallback). Edit freely; the **Reset to default** button rewrites the field back to the built-in default. Try the default for a couple of turns before deciding to override.
 
 ### Sub-agents
 
@@ -188,37 +188,45 @@ The Chat Completion preset the main agent uses is **not the same preset you use 
 
 ### Recommended OFF
 
+All four reasons are the same: ST's main path already injects these into the chat context the main agent sees. Re-injecting via a preset placeholder is duplicate content.
+
 | Prompt item | Why off |
 |---|---|
-| **Character card fields** (description / personality / scenario / first message / example messages) | The main agent already sees the character through the chat history, and the pre-draft scouts will surface the relevant lorebook entries themselves. Layering the character card on top just makes the main agent read the same thing twice. |
-| **User persona** | Same reason — the user's persona is already visible in chat context. A separate placeholder injection just gives the main agent two possibly conflicting accounts of "who the user is this turn". |
-| **Example messages** | Their original purpose is to show the *main LLM* what the character sounds like. Director's prose isn't written by the main LLM — and the main agent doesn't imitate examples directly anyway; voice-matching is the job of the "writing style" instruction plus `voice_critic`. Leaving examples on just burns tokens and muddies main-agent judgment. |
-| **Worldbook placeholders** (if your preset has explicit worldInfo splice nodes) | Lorebook content already flows into the main agent's messages via ST's main path, and `lorebook_scout` can pull additional entries on demand — a placeholder layer on top is redundant. |
+| **Character card fields** (description / personality / scenario / first message / example messages) | Duplicate injection — already in the chat context. |
+| **User persona** | Duplicate injection — already in the chat context. |
+| **Example messages** | Duplicate injection — already in the chat context. |
+| **Worldbook placeholders** (any explicit worldInfo splice nodes in the preset) | Duplicate injection — ST's main path already inserts lorebook entries. |
 
 ### Recommended ON
 
+The main agent uses these to write task briefs for sub-agents and to draft the final prose. Without them it has nothing to brief from and nothing to write toward.
+
 | Prompt item | Why on |
 |---|---|
-| **Chat history** | The main agent's only source of truth for "what's happening this turn, who's speaking, what was the prior beat". Keep it complete (don't let an aggressive truncation setting trim it short). |
-| **Writing style instructions** | Acts directly on the final prose. The main agent uses it both when drafting (`write_message`) and when writing the task brief for `voice_critic`. |
-| **Jailbreak / bypass instructions** | As important here as in your main chat — once the main agent hits a refusal mid-loop, the entire "scout → draft → critique" chain can't reach `finalize`. |
-| **Anti-cliché instructions** | Same axis as writing style. Both the main agent's drafting and the critics' reviews read them. |
-| **JSON / function-calling support** | Director is entirely built on Chat Completion tool calls — **this must be on**. Turning it off kills the mode entirely. |
+| **Chat history** | The main agent's only window into "what's happening this turn". It reads chat to write task briefs for scouts / critics and to draft prose. Keep it complete. |
+| **Writing style instructions** | Read by the main agent when drafting via `write_message` and when briefing `voice_critic`. |
+| **Jailbreak / bypass instructions** | A mid-loop refusal stalls the whole scout → draft → critique chain before `finalize` can fire. |
+| **Anti-cliché instructions** | Same channel as writing style — main agent drafting and critic briefs both read them. |
+| **JSON / function-calling support** | Director is built entirely on Chat Completion tool calls — **must be on**, otherwise the mode does not run. |
 
-In short: **keep only the prompt items that speak to "how to write" or "how to call tools". Send everything character / user / world-related back through ST's main injection path.**
+In short: **keep only the items the main agent reads to brief sub-agents and draft prose; everything character / user / world-related is already in chat context, drop it.**
 
 ## Advanced: using director as a single-agent iterative writer
 
-Director defaults to a "main agent + multiple sub-agents" workflow, but a useful power-user variant is to **degrade it into a single-agent, multi-round iterative writer** — no critics, just one main agent drafting, re-reading, revising, and finalizing on its own.
+Director's default workflow is "main agent + multiple sub-agents", but a power-user variant is to degrade it into a **single-agent multi-round iterative writer** — no critics, just one main agent drafting, re-reading, revising, and finalizing on its own.
 
-**When this fits**: you already know the style you want, you don't need critic perspectives, and you just want a strong model to use the tool loop (read context, query the lorebook, draft, re-read, revise) to deliver a finished body directly. Conceptually it's "pull director's main agent out, run it the way loop runs its agent" — except the takeover semantics stay (no capsule; the prose itself is the output).
+**Fits when** you already know the style you want, you don't need critic perspectives, and you just want a strong model to use the tool loop (read context, query the lorebook, draft, re-read, revise) to deliver a finished body directly. Conceptually it's "director's main agent run loop-style" — except the takeover semantics stay (no capsule; the prose itself is the output).
 
-**How to set it up:**
+**Use the [AI Iteration Studio](/features/orchestrator/iteration-studio).** Tell it something like *"convert this profile into a single-agent iterative writer: drop all sub-agents, simplify the main-agent prompt to draft → re-read → revise → finalize, keep `chat_*` / `memory_*` / `lorebook_*` tools"*. The Studio knows this variant and will patch your profile via tool calls — review the diff, approve, save. This is the recommended path; the steps that follow are only for users who want to wire it by hand.
+
+::: details Manual setup (skip if Studio handled it)
 
 1. Rewrite the main-agent system prompt to drop all dispatch-related discipline. Replace it with "draft, re-read, revise; when you think it's ready, call `finalize`."
 2. Remove all sub-agents from the profile (or strip every id out of the main-agent prompt) — this way `dispatch_subagent` doesn't appear in the main agent's tool list. `dispatch_inline_subagent` can stay or go; keep it only if you want the main agent to spin up an ad-hoc consultant for unusual cases.
 3. Leave at minimum these tools enabled for the main agent: `write_message` / `apply_message_patches` / `get_draft` / `finalize`, plus whichever loop tools you want it to use (a typical bundle is `chat_*` + `memory_*` + `lorebook_*`).
 4. Consider lowering the "maximum tool-calling rounds" cap — the default 20 is high for a single agent.
+
+:::
 
 **Caveat**: no critics means the main agent's own judgment is final. Run it for a couple of turns first to see whether it reliably hits `finalize` under your prompt, then decide whether to save the config as a separate profile.
 
@@ -237,8 +245,8 @@ Director defaults to a "main agent + multiple sub-agents" workflow, but a useful
 
 Director profiles support character-card overrides like spec / agenda / loop. With a character selected, open the orchestrator editor and you'll see **Save to character override** / **Clear character override** buttons. Once bound, this director configuration travels with the card on export — card authors can ship a complete "main agent + sub-agents + limits" setup tuned for their character.
 
-::: info Difference vs spec / agenda / loop
-Director has no separate **Export profile** / **Import profile** buttons yet — for cross-machine sync, use the [AI Iteration Studio](/features/orchestrator/iteration-studio) to replay the workflow. File-level import/export is on the roadmap.
+::: info Same shape as spec / agenda / loop
+Director shares the same **Export profile** / **Import profile** buttons as the other modes. The export file is a self-contained JSON payload (`format: luker_orchestrator_profile_v3`) of the active scope (global or character override). Import refuses to load a file whose mode does not match the current execution mode — switch the mode first if you need to load a director profile.
 :::
 
 ## Related pages
