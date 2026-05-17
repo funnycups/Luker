@@ -6395,7 +6395,7 @@ export async function generateRaw({ prompt = '', api = null, instructOverride = 
         [prompt, api, instructOverride, quietToLoud, systemPrompt, responseLength, trimNames, prefill, jsonSchema, llmPresetName, apiPresetName, apiSettingsOverride] = arguments;
     }
 
-    const data = await generateRawData({ prompt, api, instructOverride, quietToLoud, systemPrompt, responseLength, prefill, jsonSchema });
+    const data = await generateRawData({ prompt, api, instructOverride, quietToLoud, systemPrompt, responseLength, prefill, jsonSchema, llmPresetName, apiPresetName, apiSettingsOverride });
 
     // JSON string (matching the provided schema) will already be extracted.
     if (jsonSchema) {
@@ -6426,7 +6426,7 @@ export async function generateRaw({ prompt = '', api = null, instructOverride = 
  * @param {GenerateRawParams} params Parameters for generating a message
  * @returns {Promise<object | string>} Raw API response data, or a JSON string extracted from the response when `jsonSchema` is provided.
  */
-export async function generateRawData({ prompt = '', api = null, instructOverride = false, quietToLoud = false, systemPrompt = '', responseLength = null, prefill = '', jsonSchema = null } = {}) {
+export async function generateRawData({ prompt = '', api = null, instructOverride = false, quietToLoud = false, systemPrompt = '', responseLength = null, prefill = '', jsonSchema = null, llmPresetName = '', apiPresetName = '', apiSettingsOverride = null } = {}) {
     if (!api) {
         api = main_api;
     }
