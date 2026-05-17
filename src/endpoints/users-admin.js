@@ -325,6 +325,68 @@ router.post('/settings/save', requireAdminMiddleware, async (request, response) 
     }
 });
 
+function resolveYamlBool(rawValue, defaultValue) {
+    if (rawValue === undefined || rawValue === null) {
+        return defaultValue;
+    }
+    const lower = String(rawValue).trim().toLowerCase();
+    if (lower === 'true') return true;
+    if (lower === 'false') return false;
+    return rawValue;
+}
+
+function readYamlBool(rawValue, defaultValue) {
+    const resolved = resolveYamlBool(rawValue, defaultValue);
+    return typeof resolved === 'boolean' ? resolved : defaultValue;
+}
+
+/**
+ * Reject configs whose resolved values would crash the server on next startup.
+ * Mirrors the exit-on-bad-config checks in src/users.js (verifySecuritySettings)
+ * and src/server-main.js (IPv4/IPv6 guard) so a save in the admin UI cannot
+ * leave the instance in a state that refuses to boot.
+ * @param {unknown} parsed Parsed YAML root
+ * @returns {{ codes: string[], errors: string[] }} Machine-readable codes for the
+ *   frontend i18n layer, plus English fallback messages for non-UI clients.
+ */
+function validateConfigSafety(parsed) {
+    if (!parsed || typeof parsed !== 'object') return { codes: [], errors: [] };
+    const codes = [];
+    const errors = [];
+
+    const listen = readYamlBool(parsed.listen, false);
+    if (listen) {
+        const whitelistMode = readYamlBool(parsed.whitelistMode, true);
+        const basicAuthMode = readYamlBool(parsed.basicAuthMode, false);
+        const enableUserAccounts = readYamlBool(parsed.enableUserAccounts, false);
+        const securityOverride = readYamlBool(parsed.securityOverride, false);
+        if (!whitelistMode && !basicAuthMode && !enableUserAccounts && !securityOverride) {
+            codes.push('CONFIG_UNSAFE_NO_AUTH');
+            errors.push(
+                'Refusing to save: "listen" is enabled but every auth layer is off. ' +
+                'Enable at least one of "whitelistMode", "basicAuthMode", or "enableUserAccounts" ' +
+                '(or set "securityOverride: true" to opt out). ' +
+                'Saving this config would cause the server to exit on next startup.',
+            );
+        }
+    }
+
+    const protocol = parsed.protocol;
+    const ipv4Raw = protocol && typeof protocol === 'object' ? protocol.ipv4 : undefined;
+    const ipv6Raw = protocol && typeof protocol === 'object' ? protocol.ipv6 : undefined;
+    const ipv4 = resolveYamlBool(ipv4Raw, true);
+    const ipv6 = resolveYamlBool(ipv6Raw, false);
+    if (ipv4 === false && ipv6 === false) {
+        codes.push('CONFIG_UNSAFE_NO_PROTOCOL');
+        errors.push(
+            'Refusing to save: both "protocol.ipv4" and "protocol.ipv6" are disabled. ' +
+            'At least one must be enabled (or set to "auto") or the server will exit on next startup.',
+        );
+    }
+
+    return { codes, errors };
+}
+
 router.post('/config/get', requireAdminMiddleware, async (_request, response) => {
     try {
         const configPath = getConfigFilePath();
@@ -352,7 +414,11 @@ router.post('/config/save', requireAdminMiddleware, async (request, response) =>
             return response.status(500).json({ error: 'Config path not initialized' });
         }
 
-        yaml.parse(content);
+        const parsedConfig = yaml.parse(content);
+        const { codes: safetyCodes, errors: safetyErrors } = validateConfigSafety(parsedConfig);
+        if (safetyCodes.length > 0) {
+            return response.status(400).json({ error: safetyErrors.join(' '), codes: safetyCodes });
+        }
         await fsPromises.writeFile(configPath, content, 'utf8');
         reloadConfigCache();
 
@@ -380,7 +446,11 @@ router.post('/import/config', requireAdminMiddleware, async (request, response) 
         uploadPath = request.file.path;
 
         const content = await fsPromises.readFile(uploadPath, 'utf8');
-        yaml.parse(content);
+        const parsedConfig = yaml.parse(content);
+        const { codes: safetyCodes, errors: safetyErrors } = validateConfigSafety(parsedConfig);
+        if (safetyCodes.length > 0) {
+            return response.status(400).json({ error: safetyErrors.join(' '), codes: safetyCodes });
+        }
 
         const configPath = getConfigFilePath();
         if (!configPath) {

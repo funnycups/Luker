@@ -3373,6 +3373,8 @@
     "Failed to restore some characters.": "恢復部分角色失敗。",
     "Failed to restore template.": "恢復模板失敗。",
     "Failed to save config file": "儲存配置檔案失敗",
+    "Cannot save: with \"listen\" on, you must enable one of whitelistMode, basicAuthMode, or enableUserAccounts (or set securityOverride: true). Otherwise the server will refuse to start.": "無法儲存：在啟用 listen 的情況下，必須開啟 whitelistMode、basicAuthMode 或 enableUserAccounts 其中至少一項（或設定 securityOverride: true）。否則下次啟動時伺服器將直接退出。",
+    "Cannot save: at least one of protocol.ipv4 or protocol.ipv6 must be enabled (or set to \"auto\"). Otherwise the server will refuse to start.": "無法儲存：protocol.ipv4 與 protocol.ipv6 必須至少啟用其中一項（或設為 \"auto\"）。否則下次啟動時伺服器將直接退出。",
     "Failed to save preset": "儲存預設失敗",
     "Failed to update server plugin": "更新服務端外掛失敗",
     "Failed to upload the file.": "上傳檔案失敗。",

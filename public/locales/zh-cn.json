@@ -4180,6 +4180,8 @@
     "Failed to load server plugins": "加载服务端插件失败",
     "Failed to remove server plugin": "移除服务端插件失败",
     "Failed to save config file": "保存配置文件失败",
+    "Cannot save: with \"listen\" on, you must enable one of whitelistMode, basicAuthMode, or enableUserAccounts (or set securityOverride: true). Otherwise the server will refuse to start.": "无法保存：在启用 listen 的情况下，必须开启 whitelistMode、basicAuthMode 或 enableUserAccounts 中的至少一项（或设置 securityOverride: true）。否则下次启动时服务器将直接退出。",
+    "Cannot save: at least one of protocol.ipv4 or protocol.ipv6 must be enabled (or set to \"auto\"). Otherwise the server will refuse to start.": "无法保存：protocol.ipv4 与 protocol.ipv6 必须至少启用其中一项（或设为 \"auto\"）。否则下次启动时服务器将直接退出。",
     "Failed to update server plugin": "更新服务端插件失败",
     "Installed": "已安装",
     "Missing repository URL": "缺少仓库 URL",

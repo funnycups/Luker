@@ -292,6 +292,28 @@ async function saveAdminPanelSettings(payload) {
 }
 
 /**
+ * Map a config-validation error code returned by the server to a localized message.
+ * Codes are defined in src/endpoints/users-admin.js#validateConfigSafety.
+ * @param {string} code Machine-readable error code
+ * @returns {string|null} Localized message, or null if the code is unknown
+ */
+export function getConfigValidationMessage(code) {
+    switch (code) {
+        case 'CONFIG_UNSAFE_NO_AUTH':
+            return t`Cannot save: with "listen" on, you must enable one of whitelistMode, basicAuthMode, or enableUserAccounts (or set securityOverride: true). Otherwise the server will refuse to start.`;
+        case 'CONFIG_UNSAFE_NO_PROTOCOL':
+            return t`Cannot save: at least one of protocol.ipv4 or protocol.ipv6 must be enabled (or set to "auto"). Otherwise the server will refuse to start.`;
+        default:
+            return null;
+    }
+}
+
+function localizeConfigValidationCodes(codes) {
+    if (!Array.isArray(codes) || codes.length === 0) return '';
+    return codes.map(getConfigValidationMessage).filter(Boolean).join('\n');
+}
+
+/**
  * Get runtime config file content.
  * @returns {Promise<{path: string, content: string} | undefined>} Config payload
  */
@@ -329,7 +351,8 @@ async function saveRuntimeConfigFile(content) {
 
         if (!response.ok) {
             const data = await response.json().catch(() => null);
-            toastr.error(data?.error || t`Unknown error`, t`Failed to save config file`);
+            const localized = localizeConfigValidationCodes(data?.codes);
+            toastr.error(localized || data?.error || t`Unknown error`, t`Failed to save config file`);
             throw new Error('Failed to save config file');
         }
 
