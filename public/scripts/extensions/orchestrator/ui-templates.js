@@ -157,7 +157,7 @@ function renderAgendaAgentBoard(deps, scope, editor) {
     </select>
     <label>${escapeHtml(i18n('Agent preset (params + prompt, empty = global orchestration preset)'))}</label>
     <select class="text_pole" data-luker-agenda-agent-field="promptPresetName" data-scope="${safeScope}" data-agent-id="${escapeHtml(agentId)}">
-        ${renderOpenAIPresetOptions(context, preset?.promptPresetName)}
+        ${renderOpenAIPresetOptions(context, preset?.promptPresetName, i18n('(Global orchestration prompt preset)'))}
     </select>
     <label>${escapeHtml(i18n('System Prompt'))}</label>
     <textarea class="text_pole textarea_compact" rows="4" data-luker-agenda-agent-field="systemPrompt" data-scope="${safeScope}" data-agent-id="${escapeHtml(agentId)}">${escapeHtml(preset.systemPrompt)}</textarea>
@@ -202,7 +202,7 @@ export function renderAgendaWorkspace(deps, scope, editor, title = '') {
             <label for="luker_orch_agenda_planner_api_preset">${escapeHtml(i18n('Planner API preset (Connection profile, empty = global orchestration API preset)'))}</label>
             <select id="luker_orch_agenda_planner_api_preset" data-scope="${safeScope}" class="text_pole">${renderConnectionProfileOptions(planner?.apiPresetName, i18n('(Global orchestration API preset)'))}</select>
             <label for="luker_orch_agenda_planner_prompt_preset">${escapeHtml(i18n('Planner preset (params + prompt, empty = global orchestration preset)'))}</label>
-            <select id="luker_orch_agenda_planner_prompt_preset" data-scope="${safeScope}" class="text_pole">${renderOpenAIPresetOptions(context, planner?.promptPresetName)}</select>
+            <select id="luker_orch_agenda_planner_prompt_preset" data-scope="${safeScope}" class="text_pole">${renderOpenAIPresetOptions(context, planner?.promptPresetName, i18n('(Global orchestration prompt preset)'))}</select>
             <label for="luker_orch_agenda_planner_system_prompt">${escapeHtml(i18n('Planner system prompt'))}</label>
             <textarea id="luker_orch_agenda_planner_system_prompt" data-scope="${safeScope}" class="text_pole textarea_compact" rows="5">${escapeHtml(String(planner?.systemPrompt || DEFAULT_AGENDA_PLANNER_SYSTEM_PROMPT))}</textarea>
             <label for="luker_orch_agenda_planner_prompt">${escapeHtml(i18n('Planner Prompt'))}</label>
@@ -324,7 +324,7 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
             <label for="luker_orch_loop_api_preset">${escapeHtml(i18n('Loop API preset (Connection profile, empty = global orchestration API preset)'))}</label>
             <select id="luker_orch_loop_api_preset" data-scope="${safeScope}" class="text_pole">${renderConnectionProfileOptions(editor?.apiPresetName, i18n('(Global orchestration API preset)'))}</select>
             <label for="luker_orch_loop_prompt_preset">${escapeHtml(i18n('Loop preset (params + prompt, empty = global orchestration preset)'))}</label>
-            <select id="luker_orch_loop_prompt_preset" data-scope="${safeScope}" class="text_pole">${renderOpenAIPresetOptions(context, editor?.promptPresetName)}</select>
+            <select id="luker_orch_loop_prompt_preset" data-scope="${safeScope}" class="text_pole">${renderOpenAIPresetOptions(context, editor?.promptPresetName, i18n('(Global orchestration prompt preset)'))}</select>
             <label for="luker_orch_loop_system_prompt">${escapeHtml(i18n('Loop system prompt'))}</label>
             <textarea id="luker_orch_loop_system_prompt" data-scope="${safeScope}" class="text_pole textarea_compact" rows="14">${escapeHtml(String(editor?.system_prompt || ''))}</textarea>
             <label for="luker_orch_loop_max_rounds">${escapeHtml(i18n('Loop max rounds'))}</label>
@@ -419,9 +419,9 @@ function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex) {
     </label>
     <label>
         <span data-i18n="Prompt preset">${escapeHtml(i18n('Prompt preset'))}</span>
-        <select class="text_pole" data-orch-subagent-field="promptPresetName" data-subagent-index="${subagentIndex}" data-scope="${safeScope}" data-director-preset-select="subagent">${renderOpenAIPresetOptions(context, promptPresetName)}</select>
+        <select class="text_pole" data-orch-subagent-field="promptPresetName" data-subagent-index="${subagentIndex}" data-scope="${safeScope}" data-director-preset-select="subagent">${renderOpenAIPresetOptions(context, promptPresetName, i18n('(Global orchestration prompt preset)'))}</select>
         <div class="director-preset-help" data-i18n="director_preset_help_pure_instruction">${escapeHtml(i18n('Pick a pure-instruction preset (jailbreak / NSFW / style guide). Director provides character / persona / world info / chat history separately; a normal RP preset will duplicate that content.'))}</div>
-        <div class="director-preset-warning hidden" data-director-preset-warning="subagent" data-i18n="director_preset_warning_content_prompts">${escapeHtml(i18n('This preset contains content prompts (character / persona / WI / chat) which director already provides. Consider a pure-instruction preset to avoid duplication.'))}</div>
+        <div class="director-preset-warning displayNone" data-director-preset-warning="subagent" data-i18n="director_preset_warning_content_prompts">${escapeHtml(i18n('This preset contains content prompts (character / persona / WI / chat) which director already provides. Consider a pure-instruction preset to avoid duplication.'))}</div>
     </label>
 </div>`;
 }
@@ -482,12 +482,12 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
             </label>
             <label>
                 <span data-i18n="Prompt preset">${escapeHtml(i18n('Prompt preset'))}</span>
-                <select class="text_pole" data-orch-director-field="mainAgent.promptPresetName" data-scope="${safeScope}" data-director-preset-select="main">${renderOpenAIPresetOptions(context, String(mainAgent.promptPresetName || ''))}</select>
+                <select class="text_pole" data-orch-director-field="mainAgent.promptPresetName" data-scope="${safeScope}" data-director-preset-select="main">${renderOpenAIPresetOptions(context, String(mainAgent.promptPresetName || ''), i18n('(Global orchestration prompt preset)'))}</select>
                 <div class="director-preset-help" data-i18n="director_preset_help_pure_instruction">${escapeHtml(i18n('Pick a pure-instruction preset (jailbreak / NSFW / style guide). Director provides character / persona / world info / chat history separately; a normal RP preset will duplicate that content.'))}</div>
-                <div class="director-preset-warning hidden" data-director-preset-warning="main" data-i18n="director_preset_warning_content_prompts">${escapeHtml(i18n('This preset contains content prompts (character / persona / WI / chat) which director already provides. Consider a pure-instruction preset to avoid duplication.'))}</div>
+                <div class="director-preset-warning displayNone" data-director-preset-warning="main" data-i18n="director_preset_warning_content_prompts">${escapeHtml(i18n('This preset contains content prompts (character / persona / WI / chat) which director already provides. Consider a pure-instruction preset to avoid duplication.'))}</div>
             </label>
             <label>
-                <span data-i18n="System prompt (leave empty for default)">${escapeHtml(i18n('System prompt (leave empty for default)'))}</span>
+                <span data-i18n="Main system prompt">${escapeHtml(i18n('Main system prompt'))}</span>
                 <textarea class="text_pole textarea_compact" rows="6" data-orch-director-field="mainAgent.systemPrompt" data-scope="${safeScope}">${escapeHtml(String(mainAgent.systemPrompt || ''))}</textarea>
             </label>
             <div class="flex-container">

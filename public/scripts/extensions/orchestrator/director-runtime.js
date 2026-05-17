@@ -39,7 +39,6 @@ import {
     executeFinalizeTool,
     executeGetDraftTool,
 } from './director-tools.js';
-import { buildDirectorDefaultSystemPrompt } from './director-default-prompt.js';
 import {
     appendToReasoningSection,
     ensureReasoningSection,
@@ -269,9 +268,13 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
     // semantics of "Tool-call retries (on invalid/missing)" are uniform
     // across orchestrator modes. 0 = no retry (one shot, then throw).
     const maxNoToolRetries = Math.max(0, Math.min(10, Math.floor(Number(deps?.settings?.toolCallRetryMax) || 0)));
-    const systemPrompt = director.mainAgent?.systemPrompt
-        ? director.mainAgent.systemPrompt
-        : buildDirectorDefaultSystemPrompt({ subAgents: director.subAgents || [] });
+    // Empty systemPrompt sends an empty instruction — defaults are
+    // materialized into the profile at creation/reset time (see
+    // `createDefaultDirectorProfile` in director-defaults.js and the
+    // `director-reset-main-prompt` button in main.js), so the textarea
+    // is the single source of truth. An empty field means the user
+    // really wants an empty instruction, not a hidden fallback.
+    const systemPrompt = String(director.mainAgent?.systemPrompt || '');
 
     const toolSchemas = buildMainAgentToolSchemas({
         subAgents: director.subAgents || [],

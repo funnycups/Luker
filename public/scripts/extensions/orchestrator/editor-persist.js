@@ -334,3 +334,15 @@ export function createPortableAgendaProfileFromEditor(editor) {
     ensureAgendaEditorIntegrity(editor);
     return sanitizeAgendaWorkingProfile(editor);
 }
+
+/**
+ * Serialize a director editor draft into the portable wire shape:
+ * `{ mode, director: { mainAgent, subAgents, limits, tools, discardOnAbort } }`.
+ * Sanitizer is idempotent so this round-trips: parseImportedProfilePayload →
+ * sanitize again on the receiving side keeps imports tolerant of mildly
+ * malformed files (extra keys, missing limits, etc.).
+ */
+export function createPortableDirectorProfileFromEditor(editor) {
+    ensureDirectorEditorIntegrity(editor);
+    return sanitizeDirectorProfile(editor);
+}

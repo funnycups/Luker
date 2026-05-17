@@ -41,6 +41,7 @@ import {
     ORCH_REVIEW_FEEDBACK_FIELD,
     PORTABLE_PROFILE_FORMAT_V1,
     PORTABLE_PROFILE_FORMAT_V2,
+    PORTABLE_PROFILE_FORMAT_V3,
     createDefaultDirectorProfile,
     sanitizeDirectorProfile,
     defaultAgendaAgents,
@@ -240,6 +241,7 @@ import {
 } from './editor-display.js';
 import {
     createPortableAgendaProfileFromEditor,
+    createPortableDirectorProfileFromEditor,
     createPortableProfileFromEditor,
     persistCharacterAgendaEditor,
     persistCharacterDirectorEditor,
@@ -1821,7 +1823,7 @@ function updateDirectorPresetWarningForSelect(context, selectEl) {
     if (!$warning.length) return;
     const preset = lookupChatCompletionPresetByName(context, presetName);
     const shouldWarn = presetContainsContentPrompts(preset);
-    $warning.toggleClass('hidden', !shouldWarn);
+    $warning.toggleClass('displayNone', !shouldWarn);
 }
 
 /**
@@ -2030,6 +2032,26 @@ function parseImportedProfilePayload(rawText) {
         ? parsed.profile
         : parsed;
     const mode = normalizeExecutionMode(parsed?.mode || profile?.mode);
+
+    // Director payloads: V3 format OR a profile envelope whose mode is
+    // 'director' (some old exports may omit the format key but still set
+    // mode). Recognized before spec/agenda so the dispatcher does not
+    // misroute a director profile into the spec branch on heuristic alone.
+    const isDirectorPayload = mode === ORCH_EXECUTION_MODE_DIRECTOR
+        || String(parsed?.format || '') === PORTABLE_PROFILE_FORMAT_V3;
+    if (isDirectorPayload) {
+        const directorBlob = profile?.director && typeof profile.director === 'object'
+            ? profile
+            : (profile && typeof profile === 'object' ? { mode: ORCH_EXECUTION_MODE_DIRECTOR, director: profile } : null);
+        if (!directorBlob) {
+            throw new Error(i18n('Invalid profile file format.'));
+        }
+        return {
+            mode: ORCH_EXECUTION_MODE_DIRECTOR,
+            director: sanitizeDirectorProfile(directorBlob),
+        };
+    }
+
     const spec = sanitizeSpec(profile?.spec);
     const presets = sanitizePresetMap(profile?.presets);
     if (Array.isArray(spec?.stages) && spec.stages.length > 0 && presets && Object.keys(presets).length > 0) {
@@ -4052,8 +4074,8 @@ function renderDirectorIterationWorkingProfile(session, { profileOverride = null
 <div class="luker_orch_iter_preset_line"><b>${escapeHtml(i18n('Discard partial message on abort'))}:</b> ${d.discardOnAbort ? '✓' : '—'}</div>
 <div class="luker_orch_iter_preset_line"><b>Loop tools:</b> ${escapeHtml(enabledTools.length ? enabledTools.join(', ') : '(none)')}</div>
 <details class="luker_orch_iter_diff_raw">
-    <summary>${escapeHtml(i18n('Main agent'))} ${escapeHtml(i18n('System prompt (leave empty for default)'))}</summary>
-    <pre>${escapeHtml(mainSystem || '(empty — runtime uses built-in default)')}</pre>
+    <summary>${escapeHtml(i18n('Main agent'))} ${escapeHtml(i18n('Main system prompt'))}</summary>
+    <pre>${escapeHtml(mainSystem || '(empty)')}</pre>
 </details>
 <div class="luker_orch_iter_stage_list">${subAgentCards || `<div class="luker_orch_iter_empty">(no ${escapeHtml(i18n('Sub-agents').toLowerCase())})</div>`}</div>`;
 }
@@ -7446,17 +7468,22 @@ function bindUi() {
 
         if (action === 'export-profile') {
             syncCharacterEditorWithActiveAvatar(context);
-            const targetMode = getExecutionMode(settings) === ORCH_EXECUTION_MODE_AGENDA
+            const currentMode = getExecutionMode(settings);
+            const targetMode = currentMode === ORCH_EXECUTION_MODE_AGENDA
                 ? ORCH_EXECUTION_MODE_AGENDA
-                : ORCH_EXECUTION_MODE_SPEC;
+                : currentMode === ORCH_EXECUTION_MODE_DIRECTOR
+                    ? ORCH_EXECUTION_MODE_DIRECTOR
+                    : ORCH_EXECUTION_MODE_SPEC;
             const scope = chooseProfileScopeByConfirm(context, 'Select export source: OK = global profile, Cancel = character override.');
             if (!scope) {
                 return;
             }
             const avatar = String(getCurrentAvatar(context) || '').trim();
             const safeName = sanitizeIdentifierToken(getCharacterDisplayNameByAvatar(context, avatar) || 'character', 'character');
-            const payload = targetMode === ORCH_EXECUTION_MODE_AGENDA
-                ? {
+            let payload;
+            let fileName;
+            if (targetMode === ORCH_EXECUTION_MODE_AGENDA) {
+                payload = {
                     format: PORTABLE_PROFILE_FORMAT_V2,
                     mode: ORCH_EXECUTION_MODE_AGENDA,
                     scope,
@@ -7464,8 +7491,25 @@ function bindUi() {
                     profile: createPortableAgendaProfileFromEditor(scope === 'global'
                         ? uiState.globalAgendaEditor
                         : uiState.characterAgendaEditor),
-                }
-                : {
+                };
+                fileName = scope === 'global'
+                    ? 'luker-orchestrator-agenda-global.json'
+                    : `luker-orchestrator-agenda-character-${safeName}.json`;
+            } else if (targetMode === ORCH_EXECUTION_MODE_DIRECTOR) {
+                payload = {
+                    format: PORTABLE_PROFILE_FORMAT_V3,
+                    mode: ORCH_EXECUTION_MODE_DIRECTOR,
+                    scope,
+                    exportedAt: new Date().toISOString(),
+                    profile: createPortableDirectorProfileFromEditor(scope === 'global'
+                        ? uiState.globalDirectorEditor
+                        : uiState.characterDirectorEditor),
+                };
+                fileName = scope === 'global'
+                    ? 'luker-orchestrator-director-global.json'
+                    : `luker-orchestrator-director-character-${safeName}.json`;
+            } else {
+                payload = {
                     format: PORTABLE_PROFILE_FORMAT_V1,
                     scope,
                     exportedAt: new Date().toISOString(),
@@ -7473,13 +7517,10 @@ function bindUi() {
                         ? uiState.globalEditor
                         : uiState.characterEditor),
                 };
-            const fileName = targetMode === ORCH_EXECUTION_MODE_AGENDA
-                ? (scope === 'global'
-                    ? 'luker-orchestrator-agenda-global.json'
-                    : `luker-orchestrator-agenda-character-${safeName}.json`)
-                : (scope === 'global'
+                fileName = scope === 'global'
                     ? 'luker-orchestrator-global.json'
-                    : `luker-orchestrator-character-${safeName}.json`);
+                    : `luker-orchestrator-character-${safeName}.json`;
+            }
             downloadJsonFile(fileName, payload);
             if (scope === 'global') {
                 notifySuccess(i18n('Exported global profile.'));
@@ -7499,9 +7540,12 @@ function bindUi() {
                     return;
                 }
                 const imported = parseImportedProfilePayload(fileText);
-                const targetMode = getExecutionMode(settings) === ORCH_EXECUTION_MODE_AGENDA
+                const currentMode = getExecutionMode(settings);
+                const targetMode = currentMode === ORCH_EXECUTION_MODE_AGENDA
                     ? ORCH_EXECUTION_MODE_AGENDA
-                    : ORCH_EXECUTION_MODE_SPEC;
+                    : currentMode === ORCH_EXECUTION_MODE_DIRECTOR
+                        ? ORCH_EXECUTION_MODE_DIRECTOR
+                        : ORCH_EXECUTION_MODE_SPEC;
                 if (imported.mode !== targetMode) {
                     throw new Error(i18n('Imported profile does not match current execution mode.'));
                 }
@@ -7557,6 +7601,36 @@ function bindUi() {
                         uiState.characterAgendaEditor = loadCharacterAgendaEditorState(context, avatar);
                         ensureAgendaEditorIntegrity(uiState.characterAgendaEditor);
                         setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA, 'character');
+                        notifySuccess(i18nFormat('Imported to character override: ${0}.', getCharacterDisplayNameByAvatar(context, avatar)));
+                        updateUiStatus(i18nFormat('Imported to character override: ${0}.', getCharacterDisplayNameByAvatar(context, avatar)));
+                    }
+                } else if (targetMode === ORCH_EXECUTION_MODE_DIRECTOR) {
+                    const directorProfile = sanitizeDirectorProfile(imported.director);
+                    if (scope === 'global') {
+                        settings.directorProfile = directorProfile;
+                        await saveSettings();
+                        uiState.globalDirectorEditor = loadGlobalDirectorEditorState();
+                        ensureDirectorEditorIntegrity(uiState.globalDirectorEditor);
+                        setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, 'global');
+                        notifySuccess(i18n('Imported to global profile.'));
+                        updateUiStatus(i18n('Imported to global profile.'));
+                    } else {
+                        const avatar = String(getCurrentAvatar(context) || '').trim();
+                        if (!avatar) {
+                            notifyError(i18n('No character selected.'));
+                            return;
+                        }
+                        const ok = await persistCharacterDirectorEditor(context, settings, avatar, {
+                            editor: directorProfile,
+                            forceEnabled: true,
+                        });
+                        if (!ok) {
+                            notifyError(i18n('Failed to persist character override.'));
+                            return;
+                        }
+                        uiState.characterDirectorEditor = loadCharacterDirectorEditorState(context, avatar);
+                        ensureDirectorEditorIntegrity(uiState.characterDirectorEditor);
+                        setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, 'character');
                         notifySuccess(i18nFormat('Imported to character override: ${0}.', getCharacterDisplayNameByAvatar(context, avatar)));
                         updateUiStatus(i18nFormat('Imported to character override: ${0}.', getCharacterDisplayNameByAvatar(context, avatar)));
                     }
