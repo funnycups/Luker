@@ -7156,11 +7156,17 @@ async function injectMemoryPrompts(context, payload) {
     }
 
     const recallMethod = String(settings.recallMethod || 'llm').trim().toLowerCase();
-    let selectedNodes;
-    let trace;
-    let alwaysInjectNodes = [];
+    // Persistent injection (alwaysInject nodes) ran above via
+    // syncPersistentLorebookProjection. Collect here independently of recall
+    // so __recordInjectedNodeIds publishes the real set even when recall is
+    // disabled or short-circuits.
+    const alwaysInjectNodes = collectAlwaysInjectNodes(store, settings, context);
+    let selectedNodes = [];
+    let trace = [];
 
-    if (recallMethod === 'hybrid' || recallMethod === 'hybrid_rerank' || recallMethod === 'hybrid_llm') {
+    if (!settings.recallEnabled) {
+        // Skip recall; fall through to clear runtime lorebook projection.
+    } else if (recallMethod === 'hybrid' || recallMethod === 'hybrid_rerank' || recallMethod === 'hybrid_llm') {
         const queryBundle = getRecallQueryBundle(payload, context, settings);
         const queryText = normalizeText(queryBundle.fullText || '');
         const currentSeq = getLatestSeqIndex(store);
@@ -7189,7 +7195,6 @@ async function injectMemoryPrompts(context, payload) {
         });
         throwIfRecallRunInvalid(recallRunToken, payload?.signal, 'Memory recall aborted.');
 
-        alwaysInjectNodes = collectAlwaysInjectNodes(store, settings, context);
         const alwaysInjectSet = new Set(alwaysInjectNodes.map(n => n?.id).filter(Boolean));
         const latestSeqIndex = getLatestSeqIndex(store);
         const excludeMessages = Math.max(0, Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns));
@@ -7245,7 +7250,6 @@ async function injectMemoryPrompts(context, payload) {
         const llmResult = await runLLMDrivenRecall(context, store, payload);
         selectedNodes = llmResult.selectedNodes;
         trace = llmResult.trace;
-        alwaysInjectNodes = Array.isArray(llmResult.alwaysInjectNodes) ? llmResult.alwaysInjectNodes : [];
     }
 
     throwIfRecallRunInvalid(recallRunToken, payload?.signal, 'Memory recall aborted.');
