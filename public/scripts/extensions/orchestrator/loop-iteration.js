@@ -86,8 +86,8 @@ export function applyLoopProfilePatchArgs(currentProfile, args) {
                 next.tools[group][key] = incoming[key];
             }
         };
-        merge('note', 'add');
-        merge('note', 'delete');
+        merge('note', 'open');
+        merge('note', 'close');
         merge('chat', 'read_range');
         merge('chat', 'search');
         merge('lorebook', 'search');

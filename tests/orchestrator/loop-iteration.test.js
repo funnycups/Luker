@@ -140,6 +140,19 @@ describe('applyLoopProfilePatchArgs partial-merge contract', () => {
         expect(after.tools.note.open).toBe(true);
     });
 
+    test('note.open / note.close patches actually take effect', () => {
+        // Regression guard: the iteration contract advertises
+        // `tools.note.open` / `tools.note.close` as editable; the merge
+        // function must look for those exact keys (not the pre-rename
+        // `note.add` / `note.delete`).
+        const before = baseProfile();
+        const after = applyLoopProfilePatchArgs(before, {
+            tools: { note: { open: false, close: false } },
+        });
+        expect(after.tools.note.open).toBe(false);
+        expect(after.tools.note.close).toBe(false);
+    });
+
     test('attempting to disable finalize is silently ignored by the sanitizer', () => {
         const after = applyLoopProfilePatchArgs(baseProfile(), {
             tools: { finalize: false },
