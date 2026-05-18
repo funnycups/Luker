@@ -142,9 +142,14 @@ export async function handleDirectorDispatch(eventData, deps) {
     const runMainLoop = typeof deps.runMainLoop === 'function' ? deps.runMainLoop : runMainAgentLoop;
 
     // Background runner — the core Generate() path awaits handle.complete,
-    // so we must guarantee complete eventually settles. On any thrown
-    // error from the loop, we discard the handle (which resolves complete
-    // with status='discarded') and swallow follow-up errors.
+    // so we must guarantee complete eventually settles. We translate the
+    // loop's terminal condition into the takeover API's three states:
+    //   - natural return / maxRounds → commit (kernel runs full finalize)
+    //   - user abort → abort (kernel keeps partial visible, skips finalize)
+    //   - other thrown error → commit with [error] marker (preserve partial
+    //     for debugging; user wants to see how far the turn got)
+    //   - if commit / abort themselves throw → fall back to discard so
+    //     handle.complete still settles
     void (async () => {
         try {
             await runMainLoop({ handle, profile, eventData, deps });
@@ -178,16 +183,8 @@ export async function handleDirectorDispatch(eventData, deps) {
                 }
             }
             if (!handle.complete._settled) {
-                // Preserve user-visible progress: append an error marker
-                // into the reasoning fold, then commit. Discarding here
-                // would revert the placeholder to its pre-takeover state
-                // (empty mes + empty reasoning), destroying every round
-                // of draft + sub-agent output the user has been watching
-                // for the past minute. Users want to see how far the
-                // turn got before the backend died, not a clean wipe.
-                //
-                // If commit itself throws, fall back to discard so
-                // handle.complete still settles — `Generate()` is awaiting it.
+                // Append a marker into the reasoning fold so the user can
+                // see the turn ended unnaturally (vs. a clean finalize).
                 try {
                     const current = handle.getReasoning();
                     const sep = current ? '\n\n' : '';
@@ -197,9 +194,26 @@ export async function handleDirectorDispatch(eventData, deps) {
                     handle.setReasoning(`${current}${sep}${marker}`);
                 } catch (_) { /* reasoning append is best-effort */ }
                 try {
-                    await handle.commit();
-                } catch (commitErr) {
-                    console.warn('[orchestrator-director] commit-after-error failed, falling back to discard:', commitErr);
+                    if (userAborted) {
+                        // User stop: preserve partial output but signal
+                        // the kernel to skip the finalize pipeline
+                        // (MESSAGE_RECEIVED emit, persistence,
+                        // autoContinue) — those are for natural
+                        // completion, not user-driven cancel. Same
+                        // contract as ST core streaming's
+                        // `isStreamFinished` gate: stopped → partial
+                        // visible, no save, no emit.
+                        await handle.abort();
+                    } else {
+                        // Real error (network drop, backend 500, etc.):
+                        // commit so the kernel runs the full pipeline.
+                        // The user wants to see how far the turn got
+                        // before the backend died AND have it persisted
+                        // for debugging / manual recovery.
+                        await handle.commit();
+                    }
+                } catch (settleErr) {
+                    console.warn('[orchestrator-director] settle-after-error failed, falling back to discard:', settleErr);
                     try {
                         if (!handle.complete._settled) await handle.discard();
                     } catch (_) { /* swallow — complete must settle */ }
@@ -219,6 +233,7 @@ export async function handleDirectorDispatch(eventData, deps) {
                     const outcome = await handle.complete;
                     const handleStatus = String(outcome?.status || '');
                     if (handleStatus === 'committed') traceStatus = 'completed';
+                    else if (handleStatus === 'aborted') traceStatus = 'cancelled';
                     else if (handleStatus === 'discarded') traceStatus = 'cancelled';
                     else traceStatus = handleStatus || 'completed';
                 } catch (_) {
@@ -364,15 +379,15 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
 
     for (let round = 0; round < limits.maxRounds; round++) {
         if (eventData?.abortSignal?.aborted) {
-            // User clicked stop. Discard the in-flight draft so the
-            // placeholder reverts to its pre-takeover state (empty for
-            // `normal`, original text for `continue`) and downstream
-            // listeners see a real cancel. Falling through to `commit()`
-            // here would publish whatever the agent had written so far
-            // — which is exactly what the user just clicked "stop" to
-            // prevent.
+            // User clicked stop between rounds. Use handle.abort() to
+            // preserve whatever sub-agent reasoning + partial main-agent
+            // output the user has been watching, but signal the kernel
+            // to skip its natural-completion finalize pipeline (no
+            // emit / persist / autoContinue). Discarding here would
+            // wipe the entire reasoning fold, which is the opposite of
+            // what the user wants when they stop mid-orchestration.
             if (!handle.complete._settled) {
-                try { await handle.discard(); } catch (_) { /* discard is idempotent / best-effort */ }
+                try { await handle.abort(); } catch (_) { /* abort is idempotent / best-effort */ }
             }
             return;
         }

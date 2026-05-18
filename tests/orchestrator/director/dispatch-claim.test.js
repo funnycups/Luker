@@ -115,14 +115,23 @@ describe('handleDirectorDispatch — claim policy', () => {
         expect(outcome.finalReasoning).toContain('blew up');
     });
 
-    test('user-aborted runMainLoop → committed with [aborted] marker (handle.complete must settle for the kernel awaiting)', async () => {
-        // Per the architecture, the kernel awaits handle.complete
-        // unconditionally — a hanging handle would freeze the entire
-        // takeover branch. Director-runtime guarantees settlement: any
-        // error from runMainLoop is caught and translated into either
-        // a commit (preserving in-flight work) or a discard. For user-
-        // initiated aborts we commit with an [aborted] marker so the
-        // user keeps whatever sub-agent output they were watching.
+    test('user-aborted runMainLoop → handle.abort() so the kernel keeps partial visible AND skips the finalize pipeline', async () => {
+        // Director-runtime distinguishes the three terminal states the
+        // takeover API exposes:
+        //   - commit()  → natural completion or non-abort error;
+        //                 kernel runs full finalize (emit / persist /
+        //                 autoContinue).
+        //   - abort()   → user clicked stop; kernel keeps the partial
+        //                 visible (sync writes + redraw) but skips
+        //                 finalize. Mirrors ST core streaming's
+        //                 `isStreamFinished` gate.
+        //   - discard() → explicit rollback; kernel restores
+        //                 pre-takeover state.
+        // For a user-aborted runMainLoop we MUST use abort() — the
+        // `[aborted]` reasoning marker the catch appends only makes
+        // sense if the partial is preserved, and the kernel needs the
+        // status signal to know not to run the finalize pipeline that
+        // would race a fast follow-up regenerate.
         const ev = makeEvent();
         const ac = new AbortController();
         ev.abortSignal = ac.signal;
@@ -141,7 +150,7 @@ describe('handleDirectorDispatch — claim policy', () => {
             runMainLoop,
         });
         const outcome = await ev.takeoverHandle.complete;
-        expect(outcome.status).toBe('committed');
+        expect(outcome.status).toBe('aborted');
         expect(outcome.finalReasoning).toContain('### [aborted]');
     }, 10000);
 

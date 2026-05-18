@@ -8261,6 +8261,21 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
             if (dispatchEvent.takeoverHandle) {
                 const handle = dispatchEvent.takeoverHandle;
+                // Snapshot the module-level abortController. A fresh
+                // Generate() replaces it (see the recreate at
+                // `if (!(abortController && signal))` earlier in this
+                // function) — so reference inequality is the canonical
+                // "a new Generate has started" signal. We use it below
+                // to bail out of the committed/discarded cleanup the
+                // moment a quick user "stop then regenerate" has
+                // already kicked off the next turn into the SAME chat
+                // slot. Without the bail-out, our remaining pipeline
+                // (emit MESSAGE_RECEIVED, redrawMessageBubble,
+                // appendChatMessages, unblockGeneration, plus the
+                // discard-branch rollback's reloadCurrentChat) all
+                // step on the new generation's writes, producing the
+                // observed two-messages-alternating bug.
+                const myAbortController = abortController;
                 const gen_started = new Date();
                 hideSwipeButtons();
 
@@ -8380,7 +8395,74 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                     });
                 }
 
+                if (outcome.status === 'aborted') {
+                    // Plugin signalled mid-turn abort (typically user
+                    // clicked stop and the plugin chose to preserve
+                    // whatever partial output had streamed so far).
+                    // Mirrors ST core streaming's `isStreamFinished`
+                    // gate at line ~8420 below: a stopped stream
+                    // publishes its partial in the chat slot but
+                    // skips `onFinishStreaming` (no MESSAGE_RECEIVED
+                    // / persistence / autoContinue). Same trade-off:
+                    // the aborted partial lives locally until the
+                    // user's next action (regenerate / swipe / send
+                    // / reload). Skipping persistence is deliberate —
+                    // saving the aborted partial to the server would
+                    // crystallise state the user just clicked stop to
+                    // prevent.
+                    //
+                    // The sync writes below mirror the committed
+                    // branch in structure but skip the metadata that
+                    // only matters for persisted messages: no
+                    // token-count `await` (transient content,
+                    // metadata not worth the yield point that opens
+                    // a stop+regenerate race window) and no
+                    // swipe_info clone (the partial is not a finished
+                    // swipe).
+                    const cleanedText = applyPostGenerationText(outcome.finalText, isImpersonate, isContinue);
+                    const finalReasoning = String(outcome.finalReasoning ?? '');
+                    const slot = chat[placeholderId];
+                    if (slot) {
+                        slot.mes = cleanedText;
+                        if (!slot.extra) slot.extra = {};
+                        slot.extra.reasoning = finalReasoning;
+                        slot.extra.reasoning_duration = null;
+                        slot.extra.api = getGeneratingApi();
+                        slot.extra.model = getGeneratingModel();
+                        slot.gen_started = gen_started;
+                        slot.gen_finished = new Date();
+                        slot.send_date = getMessageTimeStamp();
+                        if (Array.isArray(slot.swipes) && typeof slot.swipe_id === 'number') {
+                            slot.swipes[slot.swipe_id] = slot.mes;
+                        }
+                    }
+                    extractMessageById(placeholderId);
+                    redrawMessageBubble(placeholderId);
+                    // Only unblock if we still own the lock — a fresh
+                    // Generate() may have replaced abortController in
+                    // the typical "stop then regenerate" sequence and
+                    // we must not clobber its is_send_press=true.
+                    if (abortController === myAbortController) {
+                        unblockGeneration(type);
+                    }
+                    return Object.defineProperties(new String(cleanedText), {
+                        'fromTakeover': { value: true },
+                    });
+                }
+
                 // status === 'discarded'
+                // Plugin requested rollback (explicit programmatic
+                // discard, not the user-stop flow — that goes through
+                // `aborted` above). Race check covers the edge case
+                // where a fresh Generate() raced in concurrently:
+                // rollback's chat.splice + reloadCurrentChat would
+                // clobber the new generation's slot. Skip rollback in
+                // that case and let the new turn own the slot.
+                if (abortController !== myAbortController) {
+                    return Object.defineProperties(new String(''), {
+                        'fromTakeover': { value: true },
+                    });
+                }
                 try {
                     await rollbackTakeoverPlaceholder(placeholderId, type, originalText, originalReasoning);
                 } catch (rollbackErr) {

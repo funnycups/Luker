@@ -2,8 +2,8 @@
  * Orchestrator plugin-layer utilities on top of the message-takeover kernel.
  *
  * The kernel (`public/scripts/message-takeover.js`) exposes the minimal
- * `MessageEditorHandle` (getText / setText / commit / discard / ...). This
- * module builds the higher-level editing semantics — incremental append,
+ * `MessageEditorHandle` (getText / setText / commit / abort / discard / ...).
+ * This module builds the higher-level editing semantics — incremental append,
  * structured patches, stream pipes — that the orchestrator's director
  * runtime needs to drive multi-agent flows. None of these live in the
  * kernel; each is implementable atop `handle.setText` alone.

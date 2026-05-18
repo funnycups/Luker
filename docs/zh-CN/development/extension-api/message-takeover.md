@@ -30,14 +30,22 @@ context.eventSource.on(context.eventTypes.GENERATE_TAKEOVER_DISPATCH, async (eve
     eventData.takeoverHandle = handle;
 
     // 异步驱动 editor。内核会 await handle.complete,负责 push 占位、
-    // 订阅 onUpdate 做实时重绘,并在终态把流程路由到
-    // saveReply / patchChatMessages。
+    // 订阅 onUpdate 做实时重绘,并在终态把流程路由到对应清理 pipeline。
     void (async () => {
         try {
-            handle.setText('插件产出的消息正文。');
+            for await (const chunk of streamFromMyBackend(eventData)) {
+                handle.setText(handle.getText() + chunk);
+            }
             await handle.commit();
         } catch (err) {
-            await handle.discard();
+            if (err.name === 'AbortError' || eventData.abortSignal.aborted) {
+                // 用户点了停止。保留已经流出来的部分,但跳过 finalize pipeline
+                //  —— 见下面的「三种终态」一节。
+                await handle.abort();
+            } else {
+                // 没有可用 partial 的硬失败。恢复 slot 原状。
+                await handle.discard();
+            }
         }
     })();
 });
@@ -71,6 +79,20 @@ type DispatchEventData = {
 
 `isStreamingEnabled` 是用户**会话级**的偏好,来自 `isStreamingEnabled()`(即决定主 LLM 路径走 `sendStreamingRequest` 还是 `sendOpenAIRequest` 的那同一个 flag)。如果你的插件自行驱动 LLM 调用(比如在 `generateTask` 与 `generateTaskStream` 之间二选一),应该尊重此值以与 UI 其它行为保持一致。带有自己流式开关的插件可以进一步覆写(编排器的「使用流式传输」profile 开关就是一例)。
 
+## 三种终态
+
+句柄会进入三种终态之一,每种触发不同的内核清理 pipeline。选对终态很关键 —— 内核对每种终态跑的下游工作不同,选错了(比如用户点停止时调 `commit()`)会和下一回合产生 race condition。
+
+| 方法 | 插件什么时候调 | 内核响应 | `outcome.status` |
+|------|---------------|-----------|------------------|
+| `commit()` | 自然完成 —— 插件给出了最终输出 | 完整 finalize pipeline:触发 `MESSAGE_RECEIVED` / `CHARACTER_MESSAGE_RENDERED`,跑正则 / cleanup 后处理,经由 `appendChatMessages` / `saveChatConditional` 持久化,触发自动化功能(autoContinue、swipe 初始化),解锁 UI | `committed` |
+| `abort()` | 用户中途取消 —— 保留已流出来的内容但不持久化 | 同步把 partial 写进 chat slot 并 redraw;**跳过** finalize pipeline(不 emit、不 save、不 autoContinue);有条件地解锁 UI(只在后续没有新的生成已经持锁的情况下)。partial 在本地 chat 留着,直到用户下一次操作把它覆盖 —— 跟 ST 核心 streaming 路径在 `streamingProcessor.isStopped` 为 true 时一致的取舍 | `aborted` |
+| `discard()` | 显式回滚 —— partial 输出不可用,恢复 pre-takeover 状态 | 回滚:把占位 splice 出 `chat`(`normal` / `regenerate`)或恢复原 `mes` / `reasoning`(`continue` / `swipe`);触发 `GENERATION_STOPPED`;解锁 UI | `discarded` |
+
+三种终态互斥 —— 句柄一旦进入任一终态,再调用另两个会抛错(`editor_committed` / `editor_aborted` / `editor_discarded`)。同一终态再调一次是 no-op。
+
+**用户停止时该选哪个:** 优先 `abort()`。用户点停止时希望保留 partial 看看停止前生成到哪了,但**不**希望把它当成最终输出固化下来 —— 在被 abort 的 partial 上跑完整 finalize pipeline(emit、save、autoContinue)会跟用户接下来点的 regenerate 撞车,因为 finalize pipeline 含多处 `await` yield,在这些 yield 之间下一个 `Generate()` 会启动。只在 partial 会误导用户的情况下用 `discard()`(比如插件产出了一段格式坏掉的正文,与其展示不如丢掉)。
+
 ## 职责划分
 
 插件负责:
@@ -78,17 +100,16 @@ type DispatchEventData = {
 - 监听 dispatch 事件,决定是否声明接管。
 - 根据 generationType 用合适的 `originalText` / `originalReasoning` 构造句柄。
 - 通过 `setText` / `setReasoning` 把最终的文本和 reasoning 写进 buffer。
-- 成功时调 `commit()`,硬失败时调 `discard()`。
+- 在 `commit()` / `abort()` / `discard()` 三者中**恰好调一个**来让句柄进入终态。
 
 内核负责:
 
 - 把占位消息 push 进 `chat`(`normal` 类型),或复用已存在的 slot(`regenerate` / `swipe` / `continue`)。
 - 通过 `addOneMessage` 渲染占位,通过 `appendChatMessages` 持久化。
 - 订阅句柄的限频 `onUpdate`,让插件流式输出时实现实时重绘。
-- `commit` 时:经由 `saveReply` 路由,这样 swipes 初始化、正则 / cleanup 后处理、`MESSAGE_RECEIVED`、`CHARACTER_MESSAGE_RENDERED`、token 计数、统计、自动化功能等所有生成副作用都会按正常路径触发。
-- `discard` 时:通过 `patchChatMessages` 回滚 chat slot(`normal` 用 `op:remove`;`continue` / `swipe` / `regenerate` 用 `op:replace` 恢复原内容),并触发 `GENERATION_STOPPED`。
+- 句柄进入终态后,路由到对应的清理 pipeline(详见上面「三种终态」一节)。
 
-内核**不会**做时间触发的 abort。用户点击停止时,abort 信号通过 `eventData.abortSignal` 传递,插件应当尊重这个信号(典型做法:在被 abort 的流式调用 catch 里调 `discard()`)。如果插件忽略 abort 信号,句柄会一直处于未结算状态 —— 那是插件 bug,内核不会兜底。
+内核**不会**做时间触发的 abort。用户点击停止时,abort 信号通过 `eventData.abortSignal` 传递,插件应当尊重这个信号(典型做法:在被 abort 的流式调用 catch 里调 `abort()`)。如果插件忽略 abort 信号,句柄会一直处于未结算状态 —— 那是插件 bug,内核不会兜底。
 
 ## 编辑器句柄
 
@@ -110,9 +131,10 @@ interface MessageEditorHandle {
     setReasoning(text: string): void;
 
     commit(): Promise<void>;
+    abort(): Promise<void>;
     discard(): Promise<void>;
     readonly complete: Promise<{
-        status: 'committed' | 'discarded';
+        status: 'committed' | 'aborted' | 'discarded';
         finalText: string;
         finalReasoning: string;
     }>;
@@ -126,12 +148,13 @@ interface MessageEditorHandle {
 
 | 操作 | 行为 |
 |------|------|
-| `setText(text)` | 整体替换文本 buffer。排队一次合并刷新(默认 33ms),调用内核的 onUpdate 回调做实时重绘。`text` 不是字符串抛 `invalid_argument`;到达终态后改写抛 `editor_committed` / `editor_discarded`;`generationType === 'continue'` 时若新文本不保留原前缀,抛 `invalid_op_for_continue`。 |
+| `setText(text)` | 整体替换文本 buffer。排队一次合并刷新(默认 33ms),调用内核的 onUpdate 回调做实时重绘。`text` 不是字符串抛 `invalid_argument`;到达终态后改写抛 `editor_committed` / `editor_aborted` / `editor_discarded`;`generationType === 'continue'` 时若新文本不保留原前缀,抛 `invalid_op_for_continue`。 |
 | `setReasoning(text)` | reasoning buffer 的同语义版本,无前缀不变量。 |
-| `commit()` | 标记句柄已提交,强制刷出待处理更新,以 `{ status: 'committed', finalText, finalReasoning }` resolve `complete`。已提交时再调一次是 no-op(幂等)。对已 discard 的句柄调用会抛 `editor_discarded`。 |
-| `discard()` | 标记句柄已废弃,取消任何待刷新,以 `{ status: 'discarded', finalText: originalText, finalReasoning: originalReasoning }` resolve `complete`。两种终态下都幂等。 |
-| `complete` | `commit` 或 `discard` 完成时 resolve。内核 await 它来判断回合是否已结束。 |
-| `abortSignal` | 返回 `opts.abortSignal` 传入的同一个信号。内核**不会**在 abort 时自动 discard —— 由插件自行决定策略(典型做法:在被 abort 的流式调用 catch 里调 `discard()`)。 |
+| `commit()` | 让句柄进入 committed 终态,强制刷出待处理更新,以 `{ status: 'committed', finalText, finalReasoning }` resolve `complete`。已 committed 时再调一次是 no-op(幂等)。对已 aborted 或已 discarded 的句柄调用会抛错。 |
+| `abort()` | 让句柄进入 aborted 终态,强制刷出待处理更新(让内核读到最新流式 buffer),以 `{ status: 'aborted', finalText, finalReasoning }` resolve `complete`。已 aborted 时再调一次是 no-op(幂等)。对已 committed 或已 discarded 的句柄调用会抛错。 |
+| `discard()` | 让句柄进入 discarded 终态,取消任何待刷新,以 `{ status: 'discarded', finalText: originalText, finalReasoning: originalReasoning }` resolve `complete`。已 discarded 时再调一次是 no-op(幂等)。对已 committed 或已 aborted 的句柄调用会抛错。 |
+| `complete` | 三个终态之一让句柄结算时 resolve。内核 await 它来判断回合是否已结束。 |
+| `abortSignal` | 返回 `opts.abortSignal` 传入的同一个信号。内核**不会**在 abort 时自动结算 —— 由插件自行决定策略(典型做法:在被 abort 的流式调用 catch 里调 `abort()`)。 |
 | `setOnUpdate(fn)` | 内核用它订阅限频后的 buffer 更新。传 `null` 取消订阅。挂上回调时如果有待处理更新会立即刷出。 |
 
 ### `continue` 前缀不变量
@@ -146,8 +169,9 @@ interface MessageEditorHandle {
 |--------|----------|
 | `invalid_generation_type` | `opts.generationType` 缺失,或不是四个合法值之一。 |
 | `invalid_argument` | `setText` / `setReasoning` 接到非字符串值。 |
-| `editor_committed` | `commit()` resolve 之后还有改写调用。 |
-| `editor_discarded` | `discard()` resolve 之后还有改写调用,或对已 discard 的句柄调用 `commit()`。 |
+| `editor_committed` | `commit()` resolve 之后还有改写调用,或对已 committed 的句柄调用 `abort()` / `discard()`。 |
+| `editor_aborted` | `abort()` resolve 之后还有改写调用,或对已 aborted 的句柄调用 `commit()` / `discard()`。 |
+| `editor_discarded` | `discard()` resolve 之后还有改写调用,或对已 discarded 的句柄调用 `commit()` / `abort()`。 |
 | `invalid_op_for_continue` | `continue` 模式下 `setText` 会抹掉原前缀。 |
 
 ## 更高层的编辑模式

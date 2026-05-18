@@ -49,6 +49,49 @@ describe('MessageEditorHandle — buffer semantics', () => {
         expect(outcome).toEqual({ status: 'discarded', finalText: 'orig', finalReasoning: 'origR' });
     });
 
+    test('abort resolves complete with current buffer state (partial preserved)', async () => {
+        // abort() is the third terminal state, distinct from commit (full
+        // finalize pipeline) and discard (rollback). It signals the
+        // kernel to KEEP the partial visible but SKIP the natural-
+        // completion pipeline (emit MESSAGE_RECEIVED / persist /
+        // autoContinue). The outcome shape carries the live buffer
+        // state, not the originals — what the plugin streamed up to
+        // the abort point is what the user sees.
+        const h = createMessageEditorHandle({
+            generationType: 'normal',
+            originalText: 'orig',
+            originalReasoning: 'origR',
+            abortSignal: new AbortController().signal,
+        });
+        h.setText('partial output');
+        h.setReasoning('partial reasoning');
+        await h.abort();
+        const outcome = await h.complete;
+        expect(outcome).toEqual({
+            status: 'aborted',
+            finalText: 'partial output',
+            finalReasoning: 'partial reasoning',
+        });
+    });
+
+    test('abort force-flushes pending updates synchronously (mirrors commit)', async () => {
+        // The kernel's `aborted` branch reads chat[slot] right after
+        // handle.complete resolves; if the last setText hadn't flushed
+        // yet, chat would be stale. So abort() — like commit() — must
+        // flushNow before resolving the complete promise.
+        const h = createMessageEditorHandle({
+            generationType: 'normal',
+            abortSignal: new AbortController().signal,
+            flushIntervalMs: 1000,
+        });
+        const updates = [];
+        h.setOnUpdate((text) => updates.push(text));
+        h.setText('streamed before abort');
+        expect(updates).toHaveLength(0);
+        await h.abort();
+        expect(updates).toContain('streamed before abort');
+    });
+
     test('setOnUpdate fires on subsequent writes (throttled)', async () => {
         const h = createMessageEditorHandle({ generationType: 'normal', abortSignal: new AbortController().signal, flushIntervalMs: 5 });
         const updates = [];
@@ -94,6 +137,41 @@ describe('MessageEditorHandle — buffer semantics', () => {
         await h.discard();
         await expect(h.commit()).rejects.toThrow(TakeoverError);
         await expect(h.commit()).rejects.toMatchObject({ code: 'editor_discarded' });
+    });
+
+    test('three terminal states are mutually exclusive — each settle rejects the other two', async () => {
+        // Commit / abort / discard are the three terminal states; once
+        // a handle reaches any of them, the other two must throw on
+        // subsequent calls. Re-calling the SAME terminal is a no-op
+        // (idempotent) since the kernel's safe `complete.then(...)`
+        // dispatch could in principle race a duplicate.
+        // committed → abort throws, discard throws, commit no-ops
+        const committed = createMessageEditorHandle({ generationType: 'normal', abortSignal: new AbortController().signal });
+        await committed.commit();
+        await expect(committed.abort()).rejects.toMatchObject({ code: 'editor_committed' });
+        await expect(committed.discard()).rejects.toMatchObject({ code: 'editor_committed' });
+        await expect(committed.commit()).resolves.toBeUndefined();
+        // aborted → commit throws, discard throws, abort no-ops
+        const aborted = createMessageEditorHandle({ generationType: 'normal', abortSignal: new AbortController().signal });
+        await aborted.abort();
+        await expect(aborted.commit()).rejects.toMatchObject({ code: 'editor_aborted' });
+        await expect(aborted.discard()).rejects.toMatchObject({ code: 'editor_aborted' });
+        await expect(aborted.abort()).resolves.toBeUndefined();
+        // discarded → commit throws, abort throws, discard no-ops
+        const discarded = createMessageEditorHandle({ generationType: 'normal', abortSignal: new AbortController().signal });
+        await discarded.discard();
+        await expect(discarded.commit()).rejects.toMatchObject({ code: 'editor_discarded' });
+        await expect(discarded.abort()).rejects.toMatchObject({ code: 'editor_discarded' });
+        await expect(discarded.discard()).resolves.toBeUndefined();
+    });
+
+    test('setText after abort throws editor_aborted (mutations rejected post-settle)', async () => {
+        const h = createMessageEditorHandle({ generationType: 'normal', abortSignal: new AbortController().signal });
+        await h.abort();
+        expect(() => h.setText('x')).toThrow(TakeoverError);
+        let err;
+        try { h.setText('x'); } catch (e) { err = e; }
+        expect(err.code).toBe('editor_aborted');
     });
 
     test('setText with non-string throws invalid_argument', () => {

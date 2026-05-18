@@ -42,6 +42,7 @@ export function createMessageEditorHandle(opts = {}) {
         originalReasoning: String(originalReasoning),
         generationType,
         committed: false,
+        aborted: false,
         discarded: false,
         pendingFlush: false,
         flushTimer: null,
@@ -63,6 +64,7 @@ export function createMessageEditorHandle(opts = {}) {
 
     function assertOpen() {
         if (state.committed) throw new TakeoverError('editor_committed', 'editor committed; mutation rejected');
+        if (state.aborted) throw new TakeoverError('editor_aborted', 'editor aborted; mutation rejected');
         if (state.discarded) throw new TakeoverError('editor_discarded', 'editor discarded; mutation rejected');
     }
 
@@ -134,6 +136,7 @@ export function createMessageEditorHandle(opts = {}) {
         },
         async commit() {
             if (state.committed) return;
+            if (state.aborted) throw new TakeoverError('editor_aborted', 'cannot commit an aborted handle');
             if (state.discarded) throw new TakeoverError('editor_discarded', 'cannot commit a discarded handle');
             state.committed = true;
             flushNow();
@@ -143,9 +146,33 @@ export function createMessageEditorHandle(opts = {}) {
                 finalReasoning: state.reasoning,
             });
         },
+        async abort() {
+            // Mid-turn abort: preserve whatever the plugin streamed so
+            // far (last setText/setReasoning state is pushed to the kernel
+            // via a final onUpdate flush) but signal the kernel to skip
+            // the natural-completion finalize pipeline (MESSAGE_RECEIVED
+            // emit, persistence, autoContinue). Mirrors ST core
+            // streaming's `isStreamFinished`-gated path: a stopped stream
+            // keeps the partial visible without running finalize.
+            //
+            // Plugins should call this when the user clicked stop and
+            // they want partial output retained — NOT for completion
+            // (use commit) or rollback (use discard).
+            if (state.aborted) return;
+            if (state.committed) throw new TakeoverError('editor_committed', 'cannot abort a committed handle');
+            if (state.discarded) throw new TakeoverError('editor_discarded', 'cannot abort a discarded handle');
+            state.aborted = true;
+            flushNow();
+            state.completeResolve({
+                status: 'aborted',
+                finalText: state.text,
+                finalReasoning: state.reasoning,
+            });
+        },
         async discard() {
-            if (state.committed) return;
             if (state.discarded) return;
+            if (state.committed) throw new TakeoverError('editor_committed', 'cannot discard a committed handle');
+            if (state.aborted) throw new TakeoverError('editor_aborted', 'cannot discard an aborted handle');
             state.discarded = true;
             if (state.flushTimer) clearTimeout(state.flushTimer);
             state.flushTimer = null;
