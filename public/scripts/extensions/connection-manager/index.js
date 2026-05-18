@@ -62,6 +62,10 @@ const CC_COMMANDS = [
     'function-calling-plain-text',
     'function-calling-plain-text-error-retry',
     'function-calling-plain-text-error-retry-max-attempts',
+    'claude-enable-system-prompt-cache',
+    'claude-extended-ttl',
+    'claude-caching-at-depth',
+    'gemini-enable-system-prompt-cache',
     'custom-include-body',
     'custom-exclude-body',
     'custom-include-headers',
@@ -323,6 +327,24 @@ function parseProfileInteger(value) {
         return null;
     }
     return Math.min(Math.max(Math.round(numeric), 1), 10);
+}
+
+/**
+ * Parses a Claude `cachingAtDepth` value: integer >= 0 (enabled at that depth)
+ * or -1 (disabled). Any non-numeric / non-integer input returns null so callers
+ * can fall back to a default. Mirrors the clamp on the server side.
+ * @param {unknown} value
+ * @returns {number|null}
+ */
+function parseCachingAtDepth(value) {
+    if (value === undefined || value === null || value === '') {
+        return null;
+    }
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || !Number.isInteger(numeric)) {
+        return null;
+    }
+    return numeric < 0 ? -1 : numeric;
 }
 
 function getCommandsForMode(mode) {
@@ -1144,6 +1166,10 @@ export async function init() {
     const plainTextFunctionCallingErrorRetryToggle = document.getElementById('connection_profile_function_calling_plain_text_error_retry');
     const plainTextFunctionCallingRetryAttemptsInput = document.getElementById('connection_profile_function_calling_plain_text_error_retry_max_attempts');
     const rpmLimitInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_rpm_limit'));
+    const claudeEnableSystemPromptCacheToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_claude_enable_system_prompt_cache'));
+    const claudeExtendedTtlToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_claude_extended_ttl'));
+    const claudeCachingAtDepthInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_claude_caching_at_depth'));
+    const geminiEnableSystemPromptCacheToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_gemini_enable_system_prompt_cache'));
     renderConnectionProfiles(profiles);
     initActionableSingleSelect(profiles, {
         searchInputPlaceholder: t`Search...`,
@@ -1210,6 +1236,39 @@ export async function init() {
             if (document.activeElement !== rpmLimitInput) {
                 rpmLimitInput.value = String(rpmValue);
             }
+        }
+
+        const ccGate = !profile || profileMode === 'cc';
+        if (claudeEnableSystemPromptCacheToggle) {
+            const fromProfile = profile && profileMode === 'cc'
+                ? parseProfileBoolean(profile['claude-enable-system-prompt-cache'])
+                : null;
+            claudeEnableSystemPromptCacheToggle.disabled = !ccGate;
+            claudeEnableSystemPromptCacheToggle.checked = fromProfile ?? Boolean(oai_settings.claude_enable_system_prompt_cache);
+        }
+        if (claudeExtendedTtlToggle) {
+            const fromProfile = profile && profileMode === 'cc'
+                ? parseProfileBoolean(profile['claude-extended-ttl'])
+                : null;
+            claudeExtendedTtlToggle.disabled = !ccGate;
+            claudeExtendedTtlToggle.checked = fromProfile ?? Boolean(oai_settings.claude_extended_ttl);
+        }
+        if (claudeCachingAtDepthInput) {
+            const fromProfile = profile && profileMode === 'cc'
+                ? parseCachingAtDepth(profile['claude-caching-at-depth'])
+                : null;
+            claudeCachingAtDepthInput.disabled = !ccGate;
+            if (document.activeElement !== claudeCachingAtDepthInput) {
+                const fallback = parseCachingAtDepth(oai_settings.claude_caching_at_depth) ?? -1;
+                claudeCachingAtDepthInput.value = String(fromProfile ?? fallback);
+            }
+        }
+        if (geminiEnableSystemPromptCacheToggle) {
+            const fromProfile = profile && profileMode === 'cc'
+                ? parseProfileBoolean(profile['gemini-enable-system-prompt-cache'])
+                : null;
+            geminiEnableSystemPromptCacheToggle.disabled = !ccGate;
+            geminiEnableSystemPromptCacheToggle.checked = fromProfile ?? Boolean(oai_settings.gemini_enable_system_prompt_cache);
         }
     }
 
@@ -1304,6 +1363,53 @@ export async function init() {
         });
     }
 
+    const wireProfileBoundCheckbox = (toggle, oaiKey, profileKey) => {
+        if (!toggle) return;
+        toggle.addEventListener('input', async () => {
+            const profile = getSelectedProfile();
+            if (!profile) {
+                oai_settings[oaiKey] = !!toggle.checked;
+                saveSettingsDebounced();
+                syncProfileEditorControls();
+                return;
+            }
+            if (resolveProfileMode(profile) !== 'cc') {
+                syncProfileEditorControls();
+                return;
+            }
+            await applySelectedProfileMutation((selectedProfile) => {
+                setProfileCommandValue(selectedProfile, profileKey, toggle.checked ? 'true' : 'false');
+            });
+        });
+    };
+
+    wireProfileBoundCheckbox(claudeEnableSystemPromptCacheToggle, 'claude_enable_system_prompt_cache', 'claude-enable-system-prompt-cache');
+    wireProfileBoundCheckbox(claudeExtendedTtlToggle, 'claude_extended_ttl', 'claude-extended-ttl');
+    wireProfileBoundCheckbox(geminiEnableSystemPromptCacheToggle, 'gemini_enable_system_prompt_cache', 'gemini-enable-system-prompt-cache');
+
+    if (claudeCachingAtDepthInput) {
+        claudeCachingAtDepthInput.addEventListener('change', async () => {
+            const parsed = parseCachingAtDepth(claudeCachingAtDepthInput.value);
+            const value = parsed ?? -1;
+            claudeCachingAtDepthInput.value = String(value);
+
+            const profile = getSelectedProfile();
+            if (!profile) {
+                oai_settings.claude_caching_at_depth = value;
+                saveSettingsDebounced();
+                syncProfileEditorControls();
+                return;
+            }
+            if (resolveProfileMode(profile) !== 'cc') {
+                syncProfileEditorControls();
+                return;
+            }
+            await applySelectedProfileMutation((selectedProfile) => {
+                setProfileCommandValue(selectedProfile, 'claude-caching-at-depth', String(value));
+            });
+        });
+    }
+
     if (rpmLimitInput) {
         rpmLimitInput.addEventListener('change', async () => {
             const value = clampRpmLimit(rpmLimitInput.value);
@@ -1337,6 +1443,25 @@ export async function init() {
     eventSource.on(event_types.MAIN_API_CHANGED, () => {
         syncProfileEditorControls();
     });
+
+    // The global `[data-source]` toggler in openai.js only runs on
+    // `#chat_completion_source` change events. Our settings template renders
+    // asynchronously and misses the initial pass, so source-gated cache blocks
+    // stay visible regardless of source until the user switches. Apply our own
+    // toggle once at init and re-run when the source changes.
+    const cacheBlocks = [
+        document.getElementById('connection_profile_claude_cache_block'),
+        document.getElementById('connection_profile_gemini_cache_block'),
+    ].filter(Boolean);
+    const applyCacheBlockVisibility = () => {
+        const currentSource = oai_settings.chat_completion_source;
+        for (const block of cacheBlocks) {
+            const validSources = String(block.dataset.source || '').split(',').map(s => s.trim()).filter(Boolean);
+            block.style.display = validSources.includes(currentSource) ? '' : 'none';
+        }
+    };
+    applyCacheBlockVisibility();
+    $('#chat_completion_source').on('change', applyCacheBlockVisibility);
 
     $(profiles).on('change', async function () {
         const profileId = String(profiles.value || '');

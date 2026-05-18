@@ -220,6 +220,34 @@ function buildApiSettingsOverrideFromProfile(profile, fallbackSource = '') {
         }
     }
 
+    if (Object.hasOwn(profile, 'claude-enable-system-prompt-cache')) {
+        const value = parseProfileBoolean(profile['claude-enable-system-prompt-cache']);
+        if (value !== null) {
+            overrides.claude_enable_system_prompt_cache = value;
+        }
+    }
+
+    if (Object.hasOwn(profile, 'claude-extended-ttl')) {
+        const value = parseProfileBoolean(profile['claude-extended-ttl']);
+        if (value !== null) {
+            overrides.claude_extended_ttl = value;
+        }
+    }
+
+    if (Object.hasOwn(profile, 'claude-caching-at-depth')) {
+        const numeric = Number(profile['claude-caching-at-depth']);
+        if (Number.isInteger(numeric)) {
+            overrides.claude_caching_at_depth = numeric < 0 ? -1 : numeric;
+        }
+    }
+
+    if (Object.hasOwn(profile, 'gemini-enable-system-prompt-cache')) {
+        const value = parseProfileBoolean(profile['gemini-enable-system-prompt-cache']);
+        if (value !== null) {
+            overrides.gemini_enable_system_prompt_cache = value;
+        }
+    }
+
     if (Object.hasOwn(profile, 'custom-include-body')) {
         overrides.custom_include_body = String(profile['custom-include-body'] ?? '');
     }

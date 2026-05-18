@@ -536,6 +536,10 @@ export const settingsToUpdate = {
     function_calling_plain_text: ['#connection_profile_function_calling_plain_text', 'function_calling_plain_text', true, true],
     function_calling_plain_text_error_retry: ['#connection_profile_function_calling_plain_text_error_retry', 'function_calling_plain_text_error_retry', true, true],
     function_calling_plain_text_error_retry_max_attempts: ['#connection_profile_function_calling_plain_text_error_retry_max_attempts', 'function_calling_plain_text_error_retry_max_attempts', false, true],
+    claude_enable_system_prompt_cache: ['#connection_profile_claude_enable_system_prompt_cache', 'claude_enable_system_prompt_cache', true, true],
+    claude_caching_at_depth: ['#connection_profile_claude_caching_at_depth', 'claude_caching_at_depth', false, true],
+    claude_extended_ttl: ['#connection_profile_claude_extended_ttl', 'claude_extended_ttl', true, true],
+    gemini_enable_system_prompt_cache: ['#connection_profile_gemini_enable_system_prompt_cache', 'gemini_enable_system_prompt_cache', true, true],
     tool_call_recurse_limit: ['#tool_call_recurse_limit', 'tool_call_recurse_limit', false, false],
     show_thoughts: ['#openai_show_thoughts', 'show_thoughts', true, false],
     reasoning_effort: ['#openai_reasoning_effort', 'reasoning_effort', false, false],
@@ -785,6 +789,10 @@ const default_settings = {
     function_calling_plain_text: false,
     function_calling_plain_text_error_retry: false,
     function_calling_plain_text_error_retry_max_attempts: 3,
+    claude_enable_system_prompt_cache: false,
+    claude_caching_at_depth: -1,
+    claude_extended_ttl: false,
+    gemini_enable_system_prompt_cache: false,
     tool_call_recurse_limit: 5,
     names_behavior: character_names_behavior.DEFAULT,
     continue_postfix: continue_postfix_types.SPACE,
@@ -3518,6 +3526,11 @@ export async function createGenerationParameters(settings, model, type, messages
                 ? substituteParams(settings.assistant_impersonation)
                 : substituteParams(settings.assistant_prefill);
         }
+        generate_data.claude_enable_system_prompt_cache = Boolean(settings.claude_enable_system_prompt_cache);
+        generate_data.claude_extended_ttl = Boolean(settings.claude_extended_ttl);
+        generate_data.claude_caching_at_depth = Number.isInteger(Number(settings.claude_caching_at_depth))
+            ? Number(settings.claude_caching_at_depth)
+            : -1;
     }
 
     if (settings.chat_completion_source === chat_completion_sources.OPENROUTER) {
@@ -3530,11 +3543,19 @@ export async function createGenerationParameters(settings, model, type, messages
         generate_data.quantizations = settings.openrouter_quantizations;
         generate_data.allow_fallbacks = settings.openrouter_allow_fallbacks;
         generate_data.middleout = settings.openrouter_middleout;
+        generate_data.claude_enable_system_prompt_cache = Boolean(settings.claude_enable_system_prompt_cache);
+        generate_data.claude_extended_ttl = Boolean(settings.claude_extended_ttl);
+        generate_data.claude_caching_at_depth = Number.isInteger(Number(settings.claude_caching_at_depth))
+            ? Number(settings.claude_caching_at_depth)
+            : -1;
+        generate_data.gemini_enable_system_prompt_cache = Boolean(settings.gemini_enable_system_prompt_cache);
     }
 
     if (settings.chat_completion_source === chat_completion_sources.NANOGPT) {
         generate_data.nanogpt_provider = settings.nanogpt_provider;
         generate_data.nanogpt_payg_override = settings.nanogpt_payg_override;
+        generate_data.claude_enable_system_prompt_cache = Boolean(settings.claude_enable_system_prompt_cache);
+        generate_data.claude_extended_ttl = Boolean(settings.claude_extended_ttl);
     }
 
     if ([chat_completion_sources.MAKERSUITE, chat_completion_sources.VERTEXAI].includes(settings.chat_completion_source)) {
@@ -8967,6 +8988,80 @@ function registerConnectionProfileAdditionalParameterSlashCommands() {
             }),
         ],
         helpString: t`Sets plain-text function call retry attempts. Gets current value if no argument is provided.`,
+    }));
+
+    // Cache toggles. These must be registered as slash commands so that
+    // applyConnectionProfile() in connection-manager can translate the
+    // kebab-case profile keys back into oai_settings when a profile is loaded.
+    // Without the registration the profile field exists but never reaches
+    // generate_data on the request path.
+    const registerCacheBooleanCommand = (commandName, settingKey, label, help) => {
+        SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+            name: commandName,
+            callback: (args, value) => {
+                const forceApply = String(args?.force || '').toLowerCase() === 'true';
+                if (!String(value ?? '').trim() && !forceApply) {
+                    return String(Boolean(oai_settings[settingKey]));
+                }
+                oai_settings[settingKey] = parseBooleanValue(value);
+                saveSettingsDebounced();
+                return String(Boolean(oai_settings[settingKey]));
+            },
+            returns: label,
+            unnamedArgumentList: [
+                SlashCommandArgument.fromProps({
+                    description: t`value`,
+                    typeList: [ARGUMENT_TYPE.STRING],
+                    isRequired: false,
+                }),
+            ],
+            helpString: help,
+        }));
+    };
+
+    registerCacheBooleanCommand(
+        'claude-enable-system-prompt-cache',
+        'claude_enable_system_prompt_cache',
+        t`Claude system prompt cache toggle state`,
+        t`Sets Claude system prompt caching on/off. Gets current value if no argument is provided.`,
+    );
+    registerCacheBooleanCommand(
+        'claude-extended-ttl',
+        'claude_extended_ttl',
+        t`Claude extended (1h) cache TTL state`,
+        t`Sets Claude cache TTL to 1h (true) or 5m (false). Gets current value if no argument is provided.`,
+    );
+    registerCacheBooleanCommand(
+        'gemini-enable-system-prompt-cache',
+        'gemini_enable_system_prompt_cache',
+        t`OpenRouter Gemini system prompt cache toggle state`,
+        t`Sets OpenRouter Gemini system prompt caching on/off. Gets current value if no argument is provided.`,
+    );
+
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'claude-caching-at-depth',
+        callback: (args, value) => {
+            const forceApply = String(args?.force || '').toLowerCase() === 'true';
+            if (!String(value ?? '').trim() && !forceApply) {
+                return String(Number(oai_settings.claude_caching_at_depth ?? -1));
+            }
+            const numeric = Number(value);
+            if (!Number.isFinite(numeric) || !Number.isInteger(numeric)) {
+                throw new Error(t`Value must be an integer (-1 to disable, >= 0 to enable at that depth).`);
+            }
+            oai_settings.claude_caching_at_depth = numeric < 0 ? -1 : numeric;
+            saveSettingsDebounced();
+            return String(oai_settings.claude_caching_at_depth);
+        },
+        returns: t`Claude caching-at-depth value`,
+        unnamedArgumentList: [
+            SlashCommandArgument.fromProps({
+                description: t`value`,
+                typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.STRING],
+                isRequired: false,
+            }),
+        ],
+        helpString: t`Sets Claude caching-at-depth (-1 to disable). Gets current value if no argument is provided.`,
     }));
 }
 

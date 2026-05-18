@@ -120,16 +120,48 @@ const API_MINIMAX_CN = 'https://api.minimaxi.com/v1';
 const API_OPENROUTER = 'https://openrouter.ai/api/v1';
 const API_WORKERS_AI = 'https://api.cloudflare.com/client/v4/accounts';
 
-/**
- * Module-scoped Claude caching configuration values.
- */
-const cacheTTL = getConfigValue('claude.extendedTTL', false, 'boolean') ? '1h' : '5m';
-const enableSystemPromptCache = getConfigValue('claude.enableSystemPromptCache', false, 'boolean');
-const cachingAtDepth = (() => {
-    const value = getConfigValue('claude.cachingAtDepth', -1, 'number');
-    return Number.isInteger(value) && value >= 0 ? value : -1;
-})();
 const enableAdaptiveThinking = getConfigValue('claude.enableAdaptiveThinking', true, 'boolean');
+
+/**
+ * Resolve Claude prompt-cache settings for a single request. Request-body fields
+ * (set via the connection profile UI) take precedence; otherwise we fall back to
+ * the server defaults from config.yaml. This keeps existing config.yaml deployments
+ * working unchanged while making the UI-driven path no-restart.
+ * @param {import('express').Request} request
+ * @returns {{ cacheTTL: string, enableSystemPromptCache: boolean, cachingAtDepth: number }}
+ */
+function resolveClaudeCacheConfig(request) {
+    const sysFromBody = request?.body?.claude_enable_system_prompt_cache;
+    const depthFromBody = request?.body?.claude_caching_at_depth;
+    const ttlFromBody = request?.body?.claude_extended_ttl;
+
+    const enableSystemPromptCache = typeof sysFromBody === 'boolean'
+        ? sysFromBody
+        : getConfigValue('claude.enableSystemPromptCache', false, 'boolean');
+
+    const useExtendedTtl = typeof ttlFromBody === 'boolean'
+        ? ttlFromBody
+        : getConfigValue('claude.extendedTTL', false, 'boolean');
+    const cacheTTL = useExtendedTtl ? '1h' : '5m';
+
+    const depthRaw = typeof depthFromBody === 'number'
+        ? depthFromBody
+        : getConfigValue('claude.cachingAtDepth', -1, 'number');
+    const cachingAtDepth = Number.isInteger(depthRaw) && depthRaw >= 0 ? depthRaw : -1;
+
+    return { cacheTTL, enableSystemPromptCache, cachingAtDepth };
+}
+
+/**
+ * Resolve Gemini system-prompt cache toggle (OpenRouter Gemini path only).
+ * @param {import('express').Request} request
+ */
+function resolveGeminiSystemPromptCache(request) {
+    const fromBody = request?.body?.gemini_enable_system_prompt_cache;
+    return typeof fromBody === 'boolean'
+        ? fromBody
+        : getConfigValue('gemini.enableSystemPromptCache', false, 'boolean');
+}
 
 /**
  * Cache for cacheable (writing) OpenRouter model IDs.
@@ -471,6 +503,7 @@ async function sendClaudeRequest(request, response) {
             top_k: request.body.top_k,
             stream: request.body.stream,
         };
+        const { cacheTTL, enableSystemPromptCache, cachingAtDepth } = resolveClaudeCacheConfig(request);
         if (useSystemPrompt) {
             if (enableSystemPromptCache && Array.isArray(convertedPrompt.systemPrompt) && convertedPrompt.systemPrompt.length) {
                 convertedPrompt.systemPrompt[convertedPrompt.systemPrompt.length - 1].cache_control = { type: 'ephemeral', ttl: cacheTTL };
@@ -1599,6 +1632,7 @@ async function sendElectronHubRequest(request, response) {
 
     try {
         let bodyParams = {};
+        const { cacheTTL, enableSystemPromptCache, cachingAtDepth } = resolveClaudeCacheConfig(request);
 
         if (request.body.enable_web_search) {
             bodyParams['web_search'] = true;
@@ -2777,6 +2811,7 @@ router.post('/generate', async function (request, response) {
             // OpenRouter needs to pass the Referer and X-Title: https://openrouter.ai/docs#requests
             headers = { ...OPENROUTER_HEADERS };
             const includeReasoning = Boolean(request.body.include_reasoning);
+            const { cacheTTL, enableSystemPromptCache, cachingAtDepth } = resolveClaudeCacheConfig(request);
             bodyParams = {
                 transforms: getOpenRouterTransforms(request),
                 plugins: getOpenRouterPlugins(request),
@@ -2835,7 +2870,7 @@ router.post('/generate', async function (request, response) {
             const isClaude = /^anthropic\/claude/.test(request.body.model);
             const isGemini = /google\/gemini/.test(request.body.model);
             const isCacheableGemini = isGemini && await isOpenRouterModelCacheable(request.body.model);
-            const enableGeminiSystemPromptCache = getConfigValue('gemini.enableSystemPromptCache', false, 'boolean');
+            const enableGeminiSystemPromptCache = resolveGeminiSystemPromptCache(request);
 
             if (Array.isArray(request.body.messages)) {
                 embedOpenRouterMedia(request.body.messages, { audio: true, video: true });
@@ -2940,6 +2975,7 @@ router.post('/generate', async function (request, response) {
             apiKey = readProviderSecret(request, SECRET_KEYS.NANOGPT);
             headers = {};
             bodyParams = {};
+            const { cacheTTL, enableSystemPromptCache } = resolveClaudeCacheConfig(request);
             if (request.body.nanogpt_provider) {
                 headers['X-Provider'] = request.body.nanogpt_provider;
             }

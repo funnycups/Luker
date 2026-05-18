@@ -51,6 +51,30 @@
             <label for="connection_profile_rpm_limit" data-i18n="Requests per minute (0 = unlimited)">Requests per minute (0 = unlimited)</label>
             <input id="connection_profile_rpm_limit" class="text_pole widthUnset" type="number" min="0" step="1" value="0" />
         </div>
+        <div id="connection_profile_claude_cache_block" class="marginTop10" data-source="claude">
+            <h4 class="margin0" data-i18n="Claude Prompt Caching">Claude Prompt Caching</h4>
+            <small class="opacity50p" data-i18n="Only effective when the prompt prefix is stable across requests (no in-chat lorebook injections or random macros). Cache writes cost 1.25× base (5m) or 2× base (1h)\; reads cost 0.1×.">Only effective when the prompt prefix is stable across requests (no in-chat lorebook injections or random macros). Cache writes cost 1.25× base (5m) or 2× base (1h); reads cost 0.1×.</small>
+            <label class="checkbox_label marginTop5">
+                <input id="connection_profile_claude_enable_system_prompt_cache" type="checkbox" />
+                <span data-i18n="Cache system prompt">Cache system prompt</span>
+            </label>
+            <label class="checkbox_label">
+                <input id="connection_profile_claude_extended_ttl" type="checkbox" />
+                <span data-i18n="Use 1h cache TTL (instead of 5m)">Use 1h cache TTL (instead of 5m)</span>
+            </label>
+            <div class="flex-container alignItemsCenter gap10 marginTop5">
+                <label for="connection_profile_claude_caching_at_depth" data-i18n="Cache message history at depth (-1 to disable)">Cache message history at depth (-1 to disable)</label>
+                <input id="connection_profile_claude_caching_at_depth" class="text_pole widthUnset" type="number" min="-1" step="1" value="-1" />
+            </div>
+        </div>
+        <div id="connection_profile_gemini_cache_block" class="marginTop10" data-source="openrouter">
+            <h4 class="margin0" data-i18n="OpenRouter Gemini Prompt Caching">OpenRouter Gemini Prompt Caching</h4>
+            <small class="opacity50p" data-i18n="Only applied when OpenRouter routes to a Gemini model that supports caching. Same prefix-stability caveat as Claude caching.">Only applied when OpenRouter routes to a Gemini model that supports caching. Same prefix-stability caveat as Claude caching.</small>
+            <label class="checkbox_label marginTop5">
+                <input id="connection_profile_gemini_enable_system_prompt_cache" type="checkbox" />
+                <span data-i18n="Cache system prompt">Cache system prompt</span>
+            </label>
+        </div>
         <div id="connection_profile_details_content" class="hidden"></div>
     </div>
     <div class="connection_profile_tab_panel" data-mode="embed" hidden>

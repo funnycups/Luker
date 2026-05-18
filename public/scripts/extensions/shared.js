@@ -474,6 +474,13 @@ export class ConnectionManagerRequestService {
                     const plainTextFunctionCalling = parseProfileBoolean(profile['function-calling-plain-text']);
                     const plainTextFunctionCallingErrorRetry = parseProfileBoolean(profile['function-calling-plain-text-error-retry']);
                     const plainTextFunctionCallingErrorRetryMaxAttempts = parseProfileInteger(profile['function-calling-plain-text-error-retry-max-attempts']);
+                    const claudeEnableSystemPromptCache = parseProfileBoolean(profile['claude-enable-system-prompt-cache']);
+                    const claudeExtendedTtl = parseProfileBoolean(profile['claude-extended-ttl']);
+                    const claudeCachingAtDepthRaw = Number(profile['claude-caching-at-depth']);
+                    const claudeCachingAtDepth = Number.isInteger(claudeCachingAtDepthRaw)
+                        ? (claudeCachingAtDepthRaw < 0 ? -1 : claudeCachingAtDepthRaw)
+                        : null;
+                    const geminiEnableSystemPromptCache = parseProfileBoolean(profile['gemini-enable-system-prompt-cache']);
 
                     const messages = Array.isArray(prompt) ? prompt : [{ role: 'user', content: prompt }];
                     return await context.ChatCompletionService.processRequest({
@@ -495,6 +502,10 @@ export class ConnectionManagerRequestService {
                         ...(plainTextFunctionCalling !== null ? { function_calling_plain_text: plainTextFunctionCalling } : {}),
                         ...(plainTextFunctionCallingErrorRetry !== null ? { function_calling_plain_text_error_retry: plainTextFunctionCallingErrorRetry } : {}),
                         ...(plainTextFunctionCallingErrorRetryMaxAttempts !== null ? { function_calling_plain_text_error_retry_max_attempts: plainTextFunctionCallingErrorRetryMaxAttempts } : {}),
+                        ...(claudeEnableSystemPromptCache !== null ? { claude_enable_system_prompt_cache: claudeEnableSystemPromptCache } : {}),
+                        ...(claudeExtendedTtl !== null ? { claude_extended_ttl: claudeExtendedTtl } : {}),
+                        ...(claudeCachingAtDepth !== null ? { claude_caching_at_depth: claudeCachingAtDepth } : {}),
+                        ...(geminiEnableSystemPromptCache !== null ? { gemini_enable_system_prompt_cache: geminiEnableSystemPromptCache } : {}),
                         ...overridePayload,
                     }, {
                         presetName: includePreset ? profile.preset : undefined,
