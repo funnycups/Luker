@@ -71,7 +71,7 @@ describe('director schema fields', () => {
         expect(p.director.discardOnAbort).toBe(false);
     });
 
-    test('createDefaultDirectorProfile ships with the ten default RP analyst sub-agents (3 single-source scouts + 1 external scout + 1 epistemic scout + 1 notes pickup scout + 1 brainstormer + 2 critics + 1 notes curator)', () => {
+    test('createDefaultDirectorProfile ships with the eleven default RP analyst sub-agents (1 cross-source intent scout + 3 single-source scouts + 1 external scout + 1 epistemic scout + 1 notes pickup scout + 1 brainstormer + 2 critics + 1 notes curator)', () => {
         const p = createDefaultDirectorProfile();
         const ids = p.director.subAgents.map(a => a.id).sort();
         // The default main-agent prompt (director-default-prompt.js) is
@@ -83,6 +83,7 @@ describe('director schema fields', () => {
             'chat_scout',
             'continuity_critic',
             'epistemic_scout',
+            'intent_scout',
             'lorebook_scout',
             'memory_scout',
             'notes_curator',
@@ -118,13 +119,14 @@ describe('director schema fields', () => {
     test('default sub-agents survive sanitize round-trip (no field gets dropped)', () => {
         const p = createDefaultDirectorProfile();
         const sanitized = sanitizeDirectorProfile(p);
-        expect(sanitized.director.subAgents).toHaveLength(10);
+        expect(sanitized.director.subAgents).toHaveLength(11);
         const ids = sanitized.director.subAgents.map(a => a.id).sort();
         expect(ids).toEqual([
             'canon_scout',
             'chat_scout',
             'continuity_critic',
             'epistemic_scout',
+            'intent_scout',
             'lorebook_scout',
             'memory_scout',
             'notes_curator',

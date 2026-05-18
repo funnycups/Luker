@@ -58,7 +58,7 @@ Director 是编排器里唯一一种**接管(takeover)模式** —— 这一回�
 在扩展抽屉的「多智能体编排」面板里,把**执行模式**设为 **Director(多代理)**。切到 Director 后,spec / agenda / loop 的设置卡片会自动收起,Director 自己的设置卡片出现。
 
 ::: tip 99% 的人不该手搓主代理 system prompt
-默认主代理系统提示词与默认的十个子代理 id **强耦合**——它已经按「先派侦察、起草、再派评审、迭代修订」的纪律调好了。要改的话推荐用 [AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio)用自然语言描述需求,让它通过工具调用 patch 你的 profile。
+默认主代理系统提示词与默认的十一个子代理 id **强耦合**——它已经按「先派侦察、起草、再派评审、迭代修订」的纪律调好了。要改的话推荐用 [AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio)用自然语言描述需求,让它通过工具调用 patch 你的 profile。
 :::
 
 ## 工作流梗概
@@ -82,9 +82,9 @@ loop: "主代理坐在写作台前" {
     shape: diamond
   }
 
-  consult: "找位顾问(默认 profile 自带 10 个子代理)" {
+  consult: "找位顾问(默认 profile 自带 11 个子代理)" {
     style.fill: "#fff3e0"
-    pre: "起草前侦察\nchat_scout · memory_scout ·\nlorebook_scout · notes_pickup_scout ·\nepistemic_scout · canon_scout(按需)" {
+    pre: "起草前侦察\nintent_scout · chat_scout · memory_scout ·\nlorebook_scout · notes_pickup_scout ·\nepistemic_scout · canon_scout(按需)" {
       style.fill: "#fffde7"
     }
     mid: "plot_brainstormer\n结构草图 —— 可按不同角度\n并行派出多份" {
@@ -138,10 +138,11 @@ loop.finalize -> out
 
 3. **子代理是「一次性顾问」**:派遣时拿到当前聊天快照 + 主代理写的任务简报 + 自己的系统提示词 + 启用的循环工具 + `get_draft()`。子代理彼此看不到对方的存在,看不到主代理的推理,**不能再向下派遣**,也**不能直接写正文**——它们只产出文本,主代理决定怎么用。
 
-4. **默认 profile 自带 10 个为 RP 优化过的子代理**:
+4. **默认 profile 自带 11 个为 RP 优化过的子代理**:
 
    | 子代理 | 作用 | 简单示例(RP 场景) |
    |---|---|---|
+   | `intent_scout` | 起草前跨源侦察 —— 把用户最近的输入(显式诉求、括号 / OOC 旁白、有载体的隐式信号)与世界书里的「作者向指令」类条目(风格规则、节奏、角色写法、创作约束、输出规范)交叉,surface 用户本回合想要什么 + 世界书对写作有什么要求。 | 「用户旁白:第 72 楼 `(写慢些)`。世界书 `pov-rules`:『始终第二人称叙述,不破第四面墙』。林晚专用条目:『动怒时以碎句开头,然后陷入沉默。』」 |
    | `chat_scout` | 起草前单源侦察 —— 扫近期聊天,挑出主代理起草要靠的载体状态。 | 返回 5 段 `Item / Source / Why`,例如「林晚的焦虑 / 第 42 楼 / 会把对话引回家族话题」。 |
    | `memory_scout` | 起草前单源侦察 —— 在记忆图里找本回合相关的节点。 | 「第 18 楼外祖母线索是当前情感主线;第 3 楼茶道闲笔休眠中。」 |
    | `lorebook_scout` | 起草前单源侦察 —— 拉激活之外的世界书条目。 | 「『洛阳主城』条目尚未进上下文;相关性:林晚的外祖母在那。」 |
@@ -153,7 +154,7 @@ loop.finalize -> out
    | `continuity_critic` | 起草后评审 —— 仅查硬冲突。默认信任 draft;只有当聊天 / 记忆 / 世界书明确说过相反事实时才 flag。例外:角色认知边界违规(角色知道了没人告诉过他的事)永远要 flag。 | 「草稿里林晚认出对方挂坠上的家纹,但聊天里这个挂坠对她而言只被描述成『一枚银盘』。认知边界:她没被告知这是家纹,更没被告知是谁的。」 |
    | `notes_curator` | 起草后清理 —— 本回合 notes 子系统**唯一**的写入点。关闭草稿中已兑现的笔记;只有在草稿确实埋下了真正的剧情承诺时才开新条。**默认动作:什么也不做**。污染笔记比少关一条更糟。 | 「关闭 `o_a3f2`——本稿外祖母见面已发生。不新增;brainstormer 提到未来去洛阳的伏笔,但本稿没真正埋下,不开。」 |
 
-   默认主代理系统提示词与这 10 个 id **强耦合**,按 id 指名调度,并为每个写好了 task brief 的样式。改子代理时,主代理提示词也要同步改。
+   默认主代理系统提示词与这 11 个 id **强耦合**,按 id 指名调度,并为每个写好了 task brief 的样式。改子代理时,主代理提示词也要同步改。
 
    > **笔记反污染原则**:`notes_curator` 默认**什么也不做**。笔记是剧情作者的线索仓库,不是回合日记——被污染的笔记列表会消耗 agent 的注意力。关闭是安全的,开启是昂贵的。这条原则烙在默认 sub-agent 的 prompt 和主代理的 system prompt 里;如果你自己写 director profile,请保留它。
 

@@ -16,6 +16,7 @@ describe('director default system prompt — concrete for the default profile', 
     test('names the ten default analysts by id', () => {
         const text = buildDirectorDefaultSystemPrompt();
         // Pre-draft scouts:
+        expect(text).toContain('intent_scout');
         expect(text).toContain('chat_scout');
         expect(text).toContain('memory_scout');
         expect(text).toContain('lorebook_scout');

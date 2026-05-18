@@ -58,7 +58,7 @@ For the whole turn, the user sees only that final paragraph in the main chat; ev
 In the extension drawer's **multi-agent orchestration** panel, set **execution mode** to **Director (multi-agent)**. The spec / agenda / loop setting cards collapse and director's setting card appears.
 
 ::: tip 99% of users shouldn't hand-write the main-agent system prompt
-The default main-agent system prompt is **tightly coupled** to the ten default sub-agent ids — it's already tuned for the "scout first, draft, then critique, then iterate" discipline. To customize, use the [AI Iteration Studio](/features/orchestrator/iteration-studio): describe what you want in natural language and let it patch your profile via tool calls.
+The default main-agent system prompt is **tightly coupled** to the eleven default sub-agent ids — it's already tuned for the "scout first, draft, then critique, then iterate" discipline. To customize, use the [AI Iteration Studio](/features/orchestrator/iteration-studio): describe what you want in natural language and let it patch your profile via tool calls.
 :::
 
 ## Workflow outline
@@ -84,7 +84,7 @@ loop: "Main agent at the writing desk" {
 
   consult: "Consult a specialist (default profile, 10 sub-agents)" {
     style.fill: "#fff3e0"
-    pre: "Pre-draft scouts\nchat_scout · memory_scout ·\nlorebook_scout · notes_pickup_scout ·\nepistemic_scout · canon_scout (on-demand)" {
+    pre: "Pre-draft scouts\nintent_scout · chat_scout · memory_scout ·\nlorebook_scout · notes_pickup_scout ·\nepistemic_scout · canon_scout (on-demand)" {
       style.fill: "#fffde7"
     }
     mid: "plot_brainstormer\nstructural sketch — dispatch several\nin parallel for diverse angles" {
@@ -142,6 +142,7 @@ loop.finalize -> out
 
    | Sub-agent | Purpose | Concrete RP example |
    |---|---|---|
+   | `intent_scout` | Cross-source pre-draft scout — joins the user's recent input (explicit asks, parenthetical / OOC asides, load-bearing implicit signals) against lorebook authoring-directive entries (style rules, pacing, character-writing conventions, content constraints, output spec). Surfaces what the user wants this turn AND what the lorebook demands of the writing. | "User aside: `(写慢些)` at chat[floor=72]. Lorebook entry `pov-rules`: 'narrate in second-person, never break the fourth wall'. Lin Wan-style entry: 'when angry, speaks in fragments before silence.'" |
    | `chat_scout` | Pre-draft single-source scout — sweeps recent chat for load-bearing state. | Returns 5 `Item / Source / Why` lines, e.g. "Lin Wan's anxiety / msg 42 / will steer dialogue back to family". |
    | `memory_scout` | Pre-draft single-source scout — surveys the memory graph for nodes relevant to this turn. | "msg-18 grandmother arc is the active emotional thread; msg-3 tea ceremony dormant." |
    | `lorebook_scout` | Pre-draft single-source scout — pulls additional lorebook entries beyond what's already injected. | "`Luoyan-MainCity` entry not yet in context; relevant — Lin Wan's grandmother is there." |
@@ -153,7 +154,7 @@ loop.finalize -> out
    | `continuity_critic` | Post-draft critic — hard contradictions only. Trusts the draft by default; flags only when chat / memory / lorebook explicitly stated the opposite of what the draft asserts. The one exception is knowledge-boundary violations: a character knowing something they were never told is always a flag. | "Draft has Lin Wan recognizing the family crest on the user's pendant — but chat shows the pendant has only ever been described as 'a silver disc' to her. Knowledge-boundary: she's never been told it's a crest, let alone whose." |
    | `notes_curator` | Post-draft housekeeping — the ONLY mutation point for the notes substrate this round. Closes notes the draft deployed; opens new ones rarely & only when the draft committed to a genuine plot-load-bearing obligation. **Default disposition: do nothing.** Notes pollution is worse than under-closure. | "Closing `o_a3f2` — the grandmother visit happened in this draft. No new opens; brainstormer suggested a future-Luoyang lead but the draft didn't commit to it." |
 
-   The default main-agent system prompt is **tightly coupled** to these 10 ids — it dispatches by id and writes task-brief templates for each. If you change the sub-agents, the main-agent prompt has to change to match.
+   The default main-agent system prompt is **tightly coupled** to these 11 ids — it dispatches by id and writes task-brief templates for each. If you change the sub-agents, the main-agent prompt has to change to match.
 
    > **Notes anti-pollution principle**: The `notes_curator` defaults to **do nothing**. Notes is a plot-author thread store, not a turn diary — a polluted notes list costs the agent attention every subsequent round. Closing is safe; opening is expensive. This principle is baked into the default sub-agent prompts and the main agent's system prompt; if you author your own director profiles, preserve it.
 
