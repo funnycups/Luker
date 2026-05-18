@@ -211,6 +211,7 @@ context.eventSource.on('luker.orchestrator.result', (evt) => {
 - [單 Agent 模式](/zh-TW/features/orchestrator/single) — 退化的 Spec,只跑一個節點
 - [Agenda 模式](/zh-TW/features/orchestrator/agenda) — Planner 動態調度
 - [Loop 模式](/zh-TW/features/orchestrator/loop) — 單 Agent 工具循環
+- [便箋 — 作者側劇情線索](/zh-TW/features/orchestrator/notes) — agent-as-author 線索追蹤器,作用域為當前 chat
 - [Function Call Runtime](/zh-TW/improvements/function-call-runtime) — Agenda / Loop 模式都依賴此框架
 - [角色卡編輯器](/zh-TW/features/card-editor/) — 與迭代工作台共用 diff 引擎
 - [卡內綁定預設與人格](/zh-TW/improvements/card-bound-presets) — 編排設定如何隨角色卡走

@@ -34,7 +34,7 @@ function makeProfile(overrides = {}) {
         promptPresetName: '',
         system_prompt: 'You are a research agent.',
         tools: {
-            note: { add: false },
+            note: { open: false, close: false },
             chat: { read_range: false, search: false },
             lorebook: { search: false, get: false },
             memory: { search: false, list_recent: false, get: false },
@@ -315,7 +315,7 @@ describe('runLoopOrchestration tool errors and self-correction (Task 7)', () => 
         let observedMessages = null;
         const sendLlm = jest.fn()
             .mockImplementationOnce(async () => ({
-                toolCalls: [{ id: 'tc1', name: 'note_add', args: { text: '' } }],
+                toolCalls: [{ id: 'tc1', name: 'note_open', args: { text: '' } }],
                 assistantText: '',
             }))
             .mockImplementationOnce(async ({ messages }) => {
@@ -327,22 +327,22 @@ describe('runLoopOrchestration tool errors and self-correction (Task 7)', () => 
             });
 
         const executeTool = jest.fn().mockImplementation(async (name, args) => {
-            if (name === 'note_add') {
+            if (name === 'note_open') {
                 if (!String(args?.text || '').trim()) {
                     throw new ToolError(
-                        'note_add text must be non-empty',
+                        'note_open text must be non-empty',
                         'NOTE_EMPTY',
                         'Provide non-empty text.',
                     );
                 }
-                return { ok: true };
+                return { id: 'fake_id' };
             }
             throw new Error(`unexpected tool ${name}`);
         });
 
         const result = await runLoopOrchestration(makeContext(), makePayload(), makeProfile({
             tools: {
-                note: { add: true },
+                note: { open: true, close: false },
                 chat: { read_range: false, search: false },
                 lorebook: { search: false, get: false },
                 memory: { search: false, list_recent: false, get: false },
@@ -365,7 +365,7 @@ describe('runLoopOrchestration tool errors and self-correction (Task 7)', () => 
         const content = typeof errMsg.content === 'string' ? JSON.parse(errMsg.content) : errMsg.content;
         expect(content.ok).toBe(false);
         expect(content.code).toBe('NOTE_EMPTY');
-        expect(String(content.error || '')).toContain('note_add');
+        expect(String(content.error || '')).toContain('note_open');
         expect(String(content.hint || '')).toContain('Provide');
     });
 
@@ -373,7 +373,7 @@ describe('runLoopOrchestration tool errors and self-correction (Task 7)', () => 
         let secondRoundMessages = null;
         const sendLlm = jest.fn()
             .mockImplementationOnce(async () => ({
-                toolCalls: [{ id: 'tc1', name: 'note_add', args: { text: 'remember X' } }],
+                toolCalls: [{ id: 'tc1', name: 'note_open', args: { text: 'remember X' } }],
                 assistantText: '',
             }))
             .mockImplementationOnce(async ({ messages }) => {
@@ -388,7 +388,7 @@ describe('runLoopOrchestration tool errors and self-correction (Task 7)', () => 
 
         const result = await runLoopOrchestration(makeContext(), makePayload(), makeProfile({
             tools: {
-                note: { add: true },
+                note: { open: true, close: false },
                 chat: { read_range: false, search: false },
                 lorebook: { search: false, get: false },
                 memory: { search: false, list_recent: false, get: false },
@@ -437,7 +437,7 @@ describe('runLoopOrchestration tool errors and self-correction (Task 7)', () => 
 
     test('non-ToolError tool failure propagates as runtime error', async () => {
         const sendLlm = jest.fn().mockResolvedValueOnce({
-            toolCalls: [{ id: 'tc1', name: 'note_add', args: { text: 'x' } }],
+            toolCalls: [{ id: 'tc1', name: 'note_open', args: { text: 'x' } }],
             assistantText: '',
         });
         const executeTool = jest.fn().mockImplementation(async () => {
@@ -447,7 +447,7 @@ describe('runLoopOrchestration tool errors and self-correction (Task 7)', () => 
         await expect(
             runLoopOrchestration(makeContext(), makePayload(), makeProfile({
                 tools: {
-                    note: { add: true },
+                    note: { open: true, close: false },
                     chat: { read_range: false, search: false },
                     lorebook: { search: false, get: false },
                     memory: { search: false, list_recent: false, get: false },
@@ -497,7 +497,7 @@ describe('runLoopOrchestration tool errors and self-correction (Task 7)', () => 
         let secondRoundMessages = null;
         const sendLlm = jest.fn()
             .mockImplementationOnce(async () => ({
-                toolCalls: [{ id: 'tc1', name: 'note_add', args: { text: 'kept' } }],
+                toolCalls: [{ id: 'tc1', name: 'note_open', args: { text: 'kept' } }],
                 assistantText: 'thinking...',
             }))
             .mockImplementationOnce(async ({ messages }) => {
@@ -512,7 +512,7 @@ describe('runLoopOrchestration tool errors and self-correction (Task 7)', () => 
 
         await runLoopOrchestration(makeContext(), makePayload(), makeProfile({
             tools: {
-                note: { add: true },
+                note: { open: true, close: false },
                 chat: { read_range: false, search: false },
                 lorebook: { search: false, get: false },
                 memory: { search: false, list_recent: false, get: false },
@@ -527,20 +527,20 @@ describe('runLoopOrchestration tool errors and self-correction (Task 7)', () => 
         expect(prior?.role).toBe('assistant');
         expect(Array.isArray(prior?.tool_calls)).toBe(true);
         expect(prior.tool_calls[0]?.id).toBe('tc1');
-        expect(prior.tool_calls[0]?.function?.name).toBe('note_add');
+        expect(prior.tool_calls[0]?.function?.name).toBe('note_open');
     });
 
     test('legacy dotted tool name from LLM is normalized to underscore in persisted history', async () => {
         // Defends against the rename window: if a model echoes a legacy
-        // `note.add` name (or hallucinates one), the runtime must persist
-        // it as `note_add` so the next round's tools array (underscore-only
+        // `note.open` name (or hallucinates one), the runtime must persist
+        // it as `note_open` so the next round's tools array (underscore-only
         // per Anthropic's name regex) still matches the assistant turn's
         // tool_calls. Dispatch still resolves via the executeLoopTool
         // migration shim.
         let secondRoundMessages = null;
         const sendLlm = jest.fn()
             .mockImplementationOnce(async () => ({
-                toolCalls: [{ id: 'tc1', name: 'note.add', args: { text: 'legacy emission' } }],
+                toolCalls: [{ id: 'tc1', name: 'note.open', args: { text: 'legacy emission' } }],
                 assistantText: '',
             }))
             .mockImplementationOnce(async ({ messages }) => {
@@ -555,7 +555,7 @@ describe('runLoopOrchestration tool errors and self-correction (Task 7)', () => 
 
         await runLoopOrchestration(makeContext(), makePayload(), makeProfile({
             tools: {
-                note: { add: true },
+                note: { open: true, close: false },
                 chat: { read_range: false, search: false },
                 lorebook: { search: false, get: false },
                 memory: { search: false, list_recent: false, get: false },
@@ -566,6 +566,6 @@ describe('runLoopOrchestration tool errors and self-correction (Task 7)', () => 
         const toolIdx = (secondRoundMessages || []).findIndex(m => m?.role === 'tool' && m?.tool_call_id === 'tc1');
         expect(toolIdx).toBeGreaterThan(0);
         const prior = secondRoundMessages[toolIdx - 1];
-        expect(prior.tool_calls[0]?.function?.name).toBe('note_add');
+        expect(prior.tool_calls[0]?.function?.name).toBe('note_open');
     });
 });

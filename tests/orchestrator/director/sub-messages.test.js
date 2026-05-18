@@ -1,5 +1,5 @@
 import { describe, expect, test, jest } from '@jest/globals';
-import { createSubagentDispatcher } from '../../../public/scripts/extensions/orchestrator/director-tools.js';
+import { createSubagentDispatcher, renderSubSystemPromptWithNotes } from '../../../public/scripts/extensions/orchestrator/director-tools.js';
 
 /**
  * Sub-agent dispatch builds taskMessages in the same shape main agent
@@ -138,7 +138,7 @@ describe('director-tools — sub-agent message assembly', () => {
         expect(msgs.every(m => !String(m.content || '').includes('<main_agent_digest>'))).toBe(true);
     });
 
-    test("sub agent system_close has '## Previous Notes' block when notes exist", async () => {
+    test("sub agent system_close has '## Open Notes' block when notes exist", async () => {
         const captured = [];
         const generateTask = jest.fn(async ({ taskMessages }) => {
             captured.push(taskMessages.slice());
@@ -168,12 +168,12 @@ describe('director-tools — sub-agent message assembly', () => {
         const closeMsg = msgs[1];
         expect(closeMsg.role).toBe('system');
         expect(closeMsg.content.startsWith('</story_context>')).toBe(true);
-        expect(closeMsg.content).toContain('## Previous Notes');
-        expect(closeMsg.content).toContain('1. foreshadowing X planted in chapter 3');
-        expect(closeMsg.content).toContain('2. character Y owes a favor to Z');
+        expect(closeMsg.content).toContain('## Open Notes');
+        expect(closeMsg.content).toContain('[n1] foreshadowing X planted in chapter 3');
+        expect(closeMsg.content).toContain('[n2] character Y owes a favor to Z');
     });
 
-    test("sub agent system_close has NO '## Previous Notes' block when there are no notes", async () => {
+    test("sub agent system_close has NO '## Open Notes' block when there are no notes", async () => {
         const captured = [];
         const generateTask = jest.fn(async ({ taskMessages }) => {
             captured.push(taskMessages.slice());
@@ -196,6 +196,22 @@ describe('director-tools — sub-agent message assembly', () => {
         await dispatcher.awaitAll([h]);
 
         const msgs = captured[0];
-        expect(msgs.every(m => !String(m.content || '').includes('## Previous Notes'))).toBe(true);
+        expect(msgs.every(m => !String(m.content || '').includes('## Open Notes'))).toBe(true);
+    });
+
+    test('renderSubSystemPromptWithNotes renders ## Open Notes with id prefix, filters closed', async () => {
+        const fs = {
+            listAcrossFloors: async () => [
+                { id: 'a', text: 'open one', status: 'open' },
+                { id: 'b', text: 'closed one', status: 'closed', closure_reason: 'done' },
+                { id: 'c', text: 'another open' /* legacy no status */ },
+            ],
+        };
+        const result = await renderSubSystemPromptWithNotes('You are a scout.', { __floorStateForNotes: fs });
+        expect(result).toContain('## Open Notes');
+        expect(result).toContain('[a] open one');
+        expect(result).toContain('[c] another open');
+        expect(result).not.toContain('closed one');
+        expect(result).not.toContain('done');
     });
 });

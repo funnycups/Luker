@@ -211,6 +211,7 @@ context.eventSource.on('luker.orchestrator.result', (evt) => {
 - [Single Agent mode](/features/orchestrator/single) — degenerate Spec, single node
 - [Agenda mode](/features/orchestrator/agenda) — Planner-driven dynamic dispatch
 - [Loop mode](/features/orchestrator/loop) — single-agent tool loop
+- [Notes — author-side plot threads](/features/orchestrator/notes) — agent-as-author thread tracker, scoped to the current chat
 - [Function Call Runtime](/improvements/function-call-runtime) — Agenda and Loop both rely on it
 - [Character Card Editor](/features/card-editor/) — shares the diff engine with Iteration Studio
 - [Card-Bound Presets and Personas](/improvements/card-bound-presets) — how the orchestration config rides along with character cards

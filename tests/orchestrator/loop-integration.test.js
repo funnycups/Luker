@@ -31,7 +31,7 @@ function makeProfile(overrides = {}) {
         promptPresetName: '',
         system_prompt: 'You are a research assistant for the autumn-festival saga.',
         tools: {
-            note: { add: true },
+            note: { open: true, close: true },
             chat: { read_range: true, search: true },
             lorebook: { search: true, get: true },
             memory: { search: true, list_recent: true, get: true },
@@ -48,30 +48,41 @@ function makeFakeFloorStateNotes(initialEntries = []) {
     // Mirrors the in-memory shape exposed by `loop-tools-note.test.js`'s
     // fixture; production `makeNotesAdapter` exposes the same call names so
     // the tool itself doesn't know which path it's on. Keeping this mock
-    // close to the production adapter lets us exercise note_add through the
+    // close to the production adapter lets us exercise note_open through the
     // real registry without touching floor-state.
     let counter = 0;
     const mintId = () => `t_${++counter}`;
-    const stored = initialEntries.map(text => ({ floor: 0, id: mintId(), text: String(text) }));
+    const stored = initialEntries.map(text => ({ floor: 0, id: mintId(), text: String(text), status: 'open' }));
     return {
         stored,
         appendForFloor: async (floor, text) => {
             const id = mintId();
-            stored.push({ floor, id, text: String(text) });
+            stored.push({ floor, id, text: String(text), status: 'open' });
             return id;
         },
-        listAcrossFloors: async () => stored.map(s => ({ id: s.id, text: s.text })),
-        pruneOldest: async (n) => {
-            if (n > 0) stored.splice(0, Math.min(n, stored.length));
+        listAcrossFloors: async () => stored.map(s => ({ id: s.id, text: s.text, status: s.status })),
+        updateStatusById: async (id, status, reason) => {
+            const entry = stored.find(s => s.id === id);
+            if (!entry) return { ok: false, error: 'not_found' };
+            if (entry.status === status) return { ok: false, error: 'already_' + status };
+            entry.status = status;
+            if (typeof reason === 'string' && reason.length > 0) entry.closure_reason = reason;
+            return { ok: true };
+        },
+        updateTextById: async (id, text) => {
+            const entry = stored.find(s => s.id === id);
+            if (!entry) return { ok: false, error: 'not_found' };
+            entry.text = String(text);
+            return { ok: true };
         },
         deleteByIds: async (ids) => {
             const target = new Set(Array.isArray(ids) ? ids.map(s => String(s)) : []);
             const present = new Set(stored.map(s => s.id));
-            let removed = 0;
+            const removed = [];
             for (let i = stored.length - 1; i >= 0; i -= 1) {
                 if (target.has(stored[i].id)) {
+                    removed.push(stored[i].id);
                     stored.splice(i, 1);
-                    removed += 1;
                 }
             }
             const missing = [];
@@ -90,12 +101,10 @@ function makeChatContext({ chat = [], notesAdapter = null, sortedEntries = null,
     const ctx = { chat: chat.slice() };
     if (notesAdapter !== null) {
         ctx.__floorStateForNotes = notesAdapter;
-        // Pre-populate the loaded notes so buildInitialMessages sees them
-        // (production attachNotesFloorState does the same eager load).
-        ctx.__loopNotes = [];
-        // Snapshot starts empty too — note_add / note_delete keep it in sync
-        // as the test progresses. Matches production attachNotesFloorState.
-        ctx.__noteIdSnapshot = [];
+        // Pre-populate the open subset so buildInitialMessages sees them
+        // (production attachNotesFloorState does the same eager load,
+        // filtered to status === 'open').
+        ctx.__openNotes = [];
     }
     if (sortedEntries !== null) {
         ctx.__getSortedEntriesFn = async () => sortedEntries;
@@ -128,7 +137,7 @@ function eventTypes(trace) {
 }
 
 describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
-    test('model -> note_add -> lorebook_search -> lorebook_get -> memory_search -> finalize', async () => {
+    test('model -> note_open -> lorebook_search -> lorebook_get -> memory_search -> finalize', async () => {
         // Scripted six-round trajectory. Each `mockImplementationOnce` reads
         // the messages array we observed at that round so we can assert
         // tool-result threading at the boundary; the final round commits
@@ -141,7 +150,7 @@ describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
                 observedRounds.push({ round: 1, messageCount: messages.length });
                 return {
                     toolCalls: [
-                        { id: 'tc1', name: 'note_add', args: { text: 'Lyra mentioned the festival opens at dusk.' } },
+                        { id: 'tc1', name: 'note_open', args: { text: 'Lyra mentioned the festival opens at dusk.' } },
                     ],
                     assistantText: 'I will start by recording the festival timing.',
                 };
@@ -261,7 +270,7 @@ describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
         const toolCallEvents = result.runtimeTrace.events.filter(e => e.type === 'tool_call');
         expect(toolCallEvents).toHaveLength(6);
         expect(toolCallEvents.map(e => e.name)).toEqual([
-            'note_add', 'lorebook_search', 'lorebook_get', 'memory_search', 'memory_get', 'finalize',
+            'note_open', 'lorebook_search', 'lorebook_get', 'memory_search', 'memory_get', 'finalize',
         ]);
     });
 });
@@ -307,7 +316,7 @@ describe('loop mode end-to-end: tool failure -> agent self-correction (Task 15b)
 
         const result = await runLoopOrchestration(context, makePayload(), makeProfile({
             tools: {
-                note: { add: false },
+                note: { open: false, close: false },
                 chat: { read_range: false, search: false },
                 lorebook: { search: true, get: false },
                 memory: { search: false, list_recent: false, get: false },
@@ -385,7 +394,7 @@ describe('loop mode end-to-end: lorebook activated-entry dedup (Task 15c)', () =
 
         const result = await runLoopOrchestration(context, makePayload({ activatedEntryKeys }), makeProfile({
             tools: {
-                note: { add: false },
+                note: { open: false, close: false },
                 chat: { read_range: false, search: false },
                 lorebook: { search: true, get: false },
                 memory: { search: false, list_recent: false, get: false },
@@ -409,16 +418,17 @@ describe('loop mode end-to-end: note persistence across runs (Task 15d)', () => 
         // Persistent floor-state adapter: the second run reuses the same
         // adapter instance so listAcrossFloors() returns the note written
         // in run 1. This proves the production wiring contract: the system
-        // prompt builder reads `__loopNotes` (which production
-        // attachNotesFloorState pre-populates from the adapter), and any
-        // notes written in earlier runs surface for the next loop start.
+        // prompt builder reads `__openNotes` (which production
+        // attachNotesFloorState pre-populates from the adapter, filtered to
+        // open entries only), and any open notes written in earlier runs
+        // surface for the next loop start with their stable id prefix.
         const notesAdapter = makeFakeFloorStateNotes();
 
         // ---- Run 1 (floor F): writes one note, then finalizes.
         const sendLlm1 = jest.fn()
             .mockImplementationOnce(async () => ({
                 toolCalls: [
-                    { id: 'tc1', name: 'note_add', args: { text: 'Lyra wears the crimson sash to the rite.' } },
+                    { id: 'tc1', name: 'note_open', args: { text: 'Lyra wears the crimson sash to the rite.' } },
                 ],
                 assistantText: '',
             }))
@@ -437,7 +447,7 @@ describe('loop mode end-to-end: note persistence across runs (Task 15d)', () => 
 
         const result1 = await runLoopOrchestration(ctxRun1, makePayload(), makeProfile({
             tools: {
-                note: { add: true },
+                note: { open: true, close: true },
                 chat: { read_range: false, search: false },
                 lorebook: { search: false, get: false },
                 memory: { search: false, list_recent: false, get: false },
@@ -469,15 +479,19 @@ describe('loop mode end-to-end: note persistence across runs (Task 15d)', () => 
             notesAdapter,
             targetFloorForNote: 6,
         });
-        // Pre-load __loopNotes the way production attachNotesFloorState does
+        // Pre-load __openNotes the way production attachNotesFloorState does
         // (since we provide a fake adapter, the production loader path is
-        // skipped; the runtime expects __loopNotes already populated when
-        // __floorStateForNotes is supplied via context).
-        ctxRun2.__loopNotes = await notesAdapter.listAcrossFloors();
+        // skipped; the runtime expects __openNotes already populated when
+        // __floorStateForNotes is supplied via context). Filter to open
+        // entries only — closed notes never make it into the prompt.
+        const allEntries = await notesAdapter.listAcrossFloors();
+        ctxRun2.__openNotes = allEntries
+            .filter(e => (e.status ?? 'open') === 'open')
+            .map(e => ({ id: e.id, text: e.text }));
 
         const result2 = await runLoopOrchestration(ctxRun2, makePayload(), makeProfile({
             tools: {
-                note: { add: true },
+                note: { open: true, close: true },
                 chat: { read_range: false, search: false },
                 lorebook: { search: false, get: false },
                 memory: { search: false, list_recent: false, get: false },
@@ -489,11 +503,16 @@ describe('loop mode end-to-end: note persistence across runs (Task 15d)', () => 
         expect(observedRun2Messages).toBeTruthy();
 
         // The first message is the system prompt; loop-runtime weaves the
-        // historical notes block in after the user-authored body.
+        // historical open-notes block in after the user-authored body, with
+        // each entry tagged by its stable id so note_close can reference it.
         const sysMsg = observedRun2Messages.find(m => m.role === 'system');
         expect(sysMsg).toBeTruthy();
-        expect(sysMsg.content).toMatch(/Previous Notes/);
+        expect(sysMsg.content).toMatch(/Open Notes/);
         expect(sysMsg.content).toMatch(/crimson sash/);
+        // The system prompt also tags the entry with its stable id so the
+        // agent can call note_close(id, reason) without positional aliasing.
+        const persistedId = (await notesAdapter.listAcrossFloors())[0].id;
+        expect(sysMsg.content).toContain(`[${persistedId}]`);
     });
 });
 
@@ -509,7 +528,7 @@ describe('loop mode end-to-end: abort path (Task 15e)', () => {
                 queueMicrotask(() => aborter.abort());
                 return {
                     toolCalls: [
-                        { id: 'tc1', name: 'note_add', args: { text: 'first' } },
+                        { id: 'tc1', name: 'note_open', args: { text: 'first' } },
                     ],
                     assistantText: '',
                 };
@@ -533,7 +552,7 @@ describe('loop mode end-to-end: abort path (Task 15e)', () => {
         await expect(
             runLoopOrchestration(context, makePayload({ signal: aborter.signal }), makeProfile({
                 tools: {
-                    note: { add: true },
+                    note: { open: true, close: true },
                     chat: { read_range: false, search: false },
                     lorebook: { search: false, get: false },
                     memory: { search: false, list_recent: false, get: false },

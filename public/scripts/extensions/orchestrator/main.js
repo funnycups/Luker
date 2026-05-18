@@ -188,6 +188,7 @@ import { handleDirectorDispatch } from './director-runtime.js';
 import { buildDirectorDefaultSystemPrompt } from './director-default-prompt.js';
 import { createContentPayloadCache } from './director-content-payload.js';
 import { executeLoopTool } from './loop-tools.js';
+import { mountNotesPanel } from './notes-panel.js';
 // Note: `ORCH_EXECUTION_MODE_LOOP` is canonically defined in defaults.js
 // (alongside the other mode literals) and re-exported by persistence.js
 // for callers that want it bundled with `sanitizeLoopProfile`. We import
@@ -4004,7 +4005,8 @@ function renderLoopIterationWorkingProfile(session, { profileOverride = null, pr
             : session?.workingProfile,
     );
     const enabledTools = [];
-    if (profile.tools?.note?.add) enabledTools.push('note_add');
+    if (profile.tools?.note?.open) enabledTools.push('note_open');
+    if (profile.tools?.note?.close) enabledTools.push('note_close');
     if (profile.tools?.chat?.read_range) enabledTools.push('chat_read_range');
     if (profile.tools?.chat?.search) enabledTools.push('chat_search');
     if (profile.tools?.lorebook?.search) enabledTools.push('lorebook_search');
@@ -4044,8 +4046,8 @@ function renderDirectorIterationWorkingProfile(session, { profileOverride = null
     );
     const d = sanitized.director;
     const enabledTools = [];
-    if (d.tools?.note?.add) enabledTools.push('note_add');
-    if (d.tools?.note?.delete) enabledTools.push('note_delete');
+    if (d.tools?.note?.open) enabledTools.push('note_open');
+    if (d.tools?.note?.close) enabledTools.push('note_close');
     if (d.tools?.chat?.read_range) enabledTools.push('chat_read_range');
     if (d.tools?.chat?.search) enabledTools.push('chat_search');
     if (d.tools?.lorebook?.search) enabledTools.push('lorebook_search');
@@ -6533,7 +6535,7 @@ function bindUi() {
     // Loop scope follows spec/agenda: data-scope on the input is the
     // canonical signal, falling back to the displayed-scope preference
     // when missing. `ensureLoopEditorIntegrity` re-canonicalizes after
-    // every edit so render reads see the V3 shape (`tools.note.add`,
+    // every edit so render reads see the V3 shape (`tools.note.open`,
     // etc.) even if mid-edit numeric clamps trip.
     jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_api_preset, .luker_orch_editor_popup #luker_orch_loop_api_preset`, function () {
         const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_LOOP);
@@ -7893,15 +7895,22 @@ function ensureUi() {
 
     ensureStyles(UI_BLOCK_ID);
 
-    if (jQuery(`#${UI_BLOCK_ID}`).length) {
-        bindUi();
-        return;
+    const needsMount = !jQuery(`#${UI_BLOCK_ID}`).length;
+    if (needsMount) {
+        const html = buildOrchestratorSettingsHtml(getOrchestratorUiTemplateDeps());
+        host.append(html);
     }
-
-    const html = buildOrchestratorSettingsHtml(getOrchestratorUiTemplateDeps());
-
-    host.append(html);
     bindUi();
+
+    // Notes panel mount — idempotent thanks to the dataset.luker_notes_mounted
+    // guard inside mountNotesPanel, so calling on every ensureUi invocation is
+    // safe and ensures the panel mounts even on the early-return path.
+    const notesHost = document.getElementById('orchestrator-notes-host');
+    if (notesHost) {
+        mountNotesPanel(notesHost, getContext()).catch(err => {
+            console.warn(`[${MODULE_NAME}/notes] mount failed:`, err);
+        });
+    }
 }
 
 jQuery(() => {

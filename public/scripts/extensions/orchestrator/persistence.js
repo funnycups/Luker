@@ -71,8 +71,8 @@ export const ORCH_EXECUTION_MODE_LOOP = 'loop';
  *                            ship with a usable RP director prompt. Existing
  *                            user-authored values (including explicit empty
  *                            string) are preserved verbatim.
- *   - tools.note.{add, delete}  persistent note tool (per-chat, cross-run);
- *                            `delete` lets the agent prune notes whose role
+ *   - tools.note.{open, close}  persistent note tool (per-chat, cross-run);
+ *                            `close` lets the agent prune notes whose role
  *                            is exhausted (foreshadowing fired, setting
  *                            superseded) so the system-prompt note block
  *                            doesn't degenerate into noise
@@ -100,7 +100,7 @@ const LOOP_PROFILE_DEFAULTS = Object.freeze({
     promptPresetName: '',
     system_prompt: DEFAULT_LOOP_SYSTEM_PROMPT,
     tools: Object.freeze({
-        note: Object.freeze({ add: true, delete: true }),
+        note: Object.freeze({ open: true, close: true }),
         chat: Object.freeze({ read_range: true, search: true }),
         lorebook: Object.freeze({ search: true, get: true }),
         memory: Object.freeze({ search: true, list_recent: true, get: true }),
@@ -182,8 +182,14 @@ export function sanitizeAgentToolFlags(input, { defaultAllOn = false, forceFinal
     const searchIn = tools.search && typeof tools.search === 'object' ? tools.search : {};
     return {
         note: {
-            add: readBooleanFlag(noteIn.add, def),
-            delete: readBooleanFlag(noteIn.delete, def),
+            // New keys (open/close) win over legacy keys (add/delete). When the
+            // new key is missing we read the legacy key as a one-shot migration
+            // so persisted profiles authored before the rename keep working;
+            // when both are missing we fall back to the namespace default.
+            // After this layer no caller should ever observe `add` / `delete` —
+            // the canonical shape is always { open, close }.
+            open: readBooleanFlag(noteIn.open, readBooleanFlag(noteIn.add, def)),
+            close: readBooleanFlag(noteIn.close, readBooleanFlag(noteIn.delete, def)),
         },
         chat: {
             read_range: readBooleanFlag(chatIn.read_range, def),
@@ -300,7 +306,7 @@ function sanitizeLoopCapsuleInject(input) {
  *   promptPresetName: string,
  *   system_prompt: string,
  *   tools: {
- *     note: { add: boolean, delete: boolean },
+ *     note: { open: boolean, close: boolean },
  *     chat: { read_range: boolean, search: boolean },
  *     lorebook: { search: boolean, get: boolean },
  *     memory: { search: boolean, list_recent: boolean, get: boolean },

@@ -248,6 +248,63 @@ export async function handleDirectorDispatch(eventData, deps) {
 }
 
 /**
+ * Read open notes from a `contextForNotes` adapter for prepending to
+ * the main agent's system prompt. Mirrors the loop-runtime and sub-
+ * agent renderer semantics: an entry without an explicit `status`
+ * field is treated as open (legacy data shape from before the
+ * open/closed state machine landed). Returns `[]` for any unhappy
+ * path — missing adapter, adapter without `listAcrossFloors`,
+ * thrown listAcrossFloors, non-array return — so callers can blindly
+ * pass the result to `renderMainAgentSystemPromptWithOpenNotes`
+ * without further null-checking.
+ *
+ * @internal exported for tests.
+ *
+ * @param {object|null|undefined} contextForNotes
+ * @returns {Promise<Array<{id: string, text: string}>>}
+ */
+export async function readOpenNotesFromContextForNotes(contextForNotes) {
+    const fs = contextForNotes && contextForNotes.__floorStateForNotes;
+    if (!fs || typeof fs.listAcrossFloors !== 'function') return [];
+    let all;
+    try {
+        all = await fs.listAcrossFloors();
+    } catch (_) {
+        return [];
+    }
+    if (!Array.isArray(all)) return [];
+    return all
+        .filter(e => e && typeof e === 'object' && (e.status ?? 'open') === 'open')
+        .map(e => ({ id: String(e.id || ''), text: String(e.text || '') }));
+}
+
+/**
+ * Prepend a "## Open Notes" block to the main agent's system prompt
+ * when there are any open notes. Empty (or null/undefined) list →
+ * the prompt is returned unchanged so the boundary is invisible to
+ * the model when there's nothing to surface. Format mirrors the
+ * loop-runtime and sub-agent renderers (`- [id] text` per entry) so
+ * the same close-by-id contract applies everywhere notes appear in
+ * the prompt stack.
+ *
+ * @internal exported for tests.
+ *
+ * @param {string} systemPrompt - the bare instruction string
+ * @param {Array<{id: string, text: string}>|null|undefined} openNotes
+ * @returns {string}
+ */
+export function renderMainAgentSystemPromptWithOpenNotes(systemPrompt, openNotes) {
+    const open = Array.isArray(openNotes) ? openNotes : [];
+    if (open.length === 0) return systemPrompt;
+    const lines = ['## Open Notes (your plot-author threads — close with note_close when deployed)'];
+    for (const n of open) {
+        lines.push(`- [${String(n.id || '')}] ${String(n.text || '')}`);
+    }
+    const block = lines.join('\n');
+    return systemPrompt ? `${systemPrompt}\n\n${block}` : block;
+}
+
+/**
  * Production main-agent loop. Tests inject a stub via `deps.runMainLoop`.
  *
  * Tools:
@@ -339,11 +396,16 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         // popup reads from there.
         trace: deps?.trace,
         // Notes adapter context (same shape loop-runtime mounts on its
-        // own context for the note_add / note_delete tools). When
-        // provided, each sub-agent dispatch re-reads the floor-state
-        // notes and prepends a "## Previous Notes" block to the
-        // sub-agent's system prompt — mirrors loop-runtime's behavior
-        // so curator-style sub-agents see persisted notes.
+        // own context for the note_open / note_close tools). When
+        // provided:
+        //   - the main agent's system prompt gets a "## Open Notes"
+        //     block prepended (filtered to status=open), so it can
+        //     reason about ongoing plot threads when dispatching.
+        //   - each sub-agent dispatch re-reads the floor-state notes
+        //     and prepends the same "## Open Notes" block to the
+        //     sub-agent's system prompt.
+        // — mirrors loop-runtime's behavior so the curator / pickup-
+        // scout pipeline sees the same surface as the loop agent does.
         contextForNotes: deps?.contextForNotes,
         // Memory-graph store overlay merged into the per-tool-call
         // context the sub-agent dispatcher hands to executeLoopTool.
@@ -354,8 +416,18 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         contextForMemory: deps?.contextForMemory,
     });
 
+    // Prepend an `## Open Notes` block to the main agent's system
+    // prompt when the notes adapter carries any open entries. Mirrors
+    // the sub-agent renderer (`renderSubSystemPromptWithNotes`) and
+    // the loop runtime so the same notes surface — same id-prefixed
+    // format, same filter-on-open semantics — is visible whether the
+    // turn runs through loop, director main, or a director sub-agent.
+    // Empty list → systemPrompt unchanged.
+    const openNotesForMain = await readOpenNotesFromContextForNotes(deps?.contextForNotes);
+    const systemPromptWithOpenNotes = renderMainAgentSystemPromptWithOpenNotes(systemPrompt, openNotesForMain);
+
     const messages = buildAgentTaskMessages(
-        { systemPrompt },
+        { systemPrompt: systemPromptWithOpenNotes },
         contentPayload,
     );
 

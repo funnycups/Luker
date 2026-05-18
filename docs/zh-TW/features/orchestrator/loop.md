@@ -95,11 +95,12 @@ loop.finalize -> out
 
 ## 內建工具
 
-工具走 OpenAI function-calling 協議,結果以 `role: tool` 訊息形式回到 Agent 的下一輪上下文。共 10 個可選工具 + 1 個強制 `finalize`:
+工具走 OpenAI function-calling 協議,結果以 `role: tool` 訊息形式回到 Agent 的下一輪上下文。共 11 個可選工具 + 1 個強制 `finalize`:
 
 | 工具 | 作用 | 簡單範例(RP 場景) |
 |---|---|---|
-| `note_add(text)` | 寫一條**持久化便箋**,綁定當前 chat。下一次 loop 啟動時,這些便箋會自動注入 system prompt。單條上限 1KB,最多保留 50 條 LRU。 | agent 在「林晚提到她的外祖母在洛陽」那一輪呼叫 `note_add('林晚的家族線索:外祖母→洛陽')`,幾次對話後再啟 loop 時仍能看到這條便箋。 |
+| `note_open(text)` | 開啟一條**劇情作者線索**(伏筆、承諾、章節大綱)。便箋會在之後每次 loop 啟動時出現在 agent 的 "## Open Notes" 區塊,直到被關閉。單條上限 16KB。 | agent 發現自己剛埋了一個設定,呼叫 `note_open('林晚:外祖母在洛陽——下次見面兌現')`;之後幾輪 loop 都能看到這條線索。 |
+| `note_close(id, reason?)` | 按 id 關閉一條已開啟的便箋(已兌現、不再需要等)。便箋從 "## Open Notes" 區塊中消失,但仍歸檔保留。 | 章節節拍落地後,`note_close('o_a3f2', '林晚見到外祖母,floor 73')`。 |
 | `chat_read_range(start, end)` | 讀 chat 樓層範圍。負數從末尾倒數,單次最多 50 樓。 | `chat_read_range(-10, -1)` 讀最近 10 樓複習上下文。 |
 | `chat_search(query, limit)` | 全聊天 substring 搜尋(大小寫不敏感),返回樓層 + 內容預覽。 | `chat_search('青冥劍')` 找出之前所有提到「青冥劍」的樓層。 |
 | `lorebook_search(query, limit)` | 在所有啟用的世界書裡 substring 搜尋條目。**預設排除本回合已啟用的條目**(那些已經被注入主上下文,再返回會浪費 token)。返回 `entries` + `excluded_active_count`。 | `lorebook_search('落雁城')` 翻出未啟用的「落雁城」相關設定。 |
@@ -221,8 +222,8 @@ A:那些條目已經透過 worldInfo 主流程注入了主模型上下文,loop a
 **Q:loop 跑到一半我想停下來怎麼辦?**
 A:點工具列的 stop 按鈕(與 spec / agenda 一致)。loop runtime 在每輪頂部檢查 abort signal,立即中止;trace 寫 `cancelled`,不會注入半成品 capsule。
 
-**Q:便箋會跨 chat 共享嗎?**
-A:不會。`note_add` 寫入的是**當前 chat** 的 floor-state 命名空間,跨 chat 之間互不可見。刪除樓層 / swipe 走 floor-state 的 settle 機制——綁定到該樓的便箋會自動消失。
+**Q:便箋是否跨 chat 共享?**
+A:不會——便箋保存在當前 chat 的持久化狀態裡。floor-state 的 settle 機制會自動處理分支和刪除。
 
 **Q:連續 3 輪不呼叫工具被打斷了怎麼辦?**
 A:檢查 system prompt 是否給了 agent 明確的「產出格式」。多數情況是 agent 在「思考」但不知道何時該 finalize;在 prompt 裡加一條「當你掌握的資訊足以寫出 capsule 時,立即呼叫 finalize」通常能解決。
@@ -251,3 +252,4 @@ Loop 模式與 spec / agenda 在效能上有結構性差異:
 - [Agenda 模式](/zh-TW/features/orchestrator/agenda) — Planner 動態調度
 - [Function Call Runtime](/zh-TW/improvements/function-call-runtime) — loop 工具呼叫走的運行時
 - [記憶圖](/zh-TW/features/memory-graph) — `memory.*` 工具背後的資料源
+- [Notes](/zh-TW/features/orchestrator/notes) — open/close 便箋模型的面板使用與概念詳解

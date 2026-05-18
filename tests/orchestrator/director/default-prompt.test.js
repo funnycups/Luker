@@ -13,21 +13,40 @@ import { buildDirectorDefaultSystemPrompt } from '../../../public/scripts/extens
  * set, you must update the default prompt too — and vice versa.
  */
 describe('director default system prompt — concrete for the default profile', () => {
-    test('names the seven default analysts by id', () => {
+    test('names the ten default analysts by id', () => {
         const text = buildDirectorDefaultSystemPrompt();
         // Pre-draft scouts:
         expect(text).toContain('chat_scout');
         expect(text).toContain('memory_scout');
         expect(text).toContain('lorebook_scout');
+        // Pre-draft notes scout:
+        expect(text).toContain('notes_pickup_scout');
         // On-demand external scout:
         expect(text).toContain('canon_scout');
+        // Cross-source pre-draft scout:
+        expect(text).toContain('epistemic_scout');
         // Mid-stage brainstormer:
         expect(text).toContain('plot_brainstormer');
         // Post-draft critics:
         expect(text).toContain('voice_critic');
         expect(text).toContain('continuity_critic');
+        // Post-draft notes curator:
+        expect(text).toContain('notes_curator');
         // Old singular context_scout should be gone (now split into three).
         expect(text).not.toContain('context_scout');
+    });
+
+    test('main agent default prompt mentions notes anti-pollution policy', () => {
+        const prompt = buildDirectorDefaultSystemPrompt();
+        expect(prompt).toMatch(/notes/i);
+        // Anti-pollution key phrases
+        expect(prompt).toMatch(/do not.*record.*just to|don't open.*without|conservative.*notes|notes pollution/i);
+    });
+
+    test('main agent default prompt includes notes_pickup_scout and notes_curator dispatch templates', () => {
+        const prompt = buildDirectorDefaultSystemPrompt();
+        expect(prompt).toMatch(/notes_pickup_scout/);
+        expect(prompt).toMatch(/notes_curator/);
     });
 
     test('teaches a task-brief shape for each analyst', () => {

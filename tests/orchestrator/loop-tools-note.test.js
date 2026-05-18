@@ -1,41 +1,50 @@
 /**
- * loop-tools/note tests (Plan Task 11).
+ * loop-tools/note tests.
  *
- * note_add persists per-chat notes through floor-state with namespace
+ * `note_open` persists per-chat notes through floor-state with namespace
  * `luker_orch_loop_notes`. Notes survive across loop runs and are
- * re-injected into the agent's system prompt at the start of each run
- * (so the agent can see what it told itself last turn).
+ * re-injected into the agent's system prompt as an `## Open Notes` block
+ * at the start of each run (so the agent can see what it told itself
+ * last turn). `note_close` flips an entry to `status: 'closed'` by id,
+ * with an optional reason; closed entries stay in storage as history but
+ * drop out of the prompt injection path.
  *
  * Wiring:
  *   - Production: loop-runtime calls `attachNotesFloorState(context)` at
  *     run start to mount the floor-state namespace + populate
- *     `context.__loopNotes`.
+ *     `context.__openNotes`.
  *   - Tests: inject through `context.__floorStateForNotes`, an adapter
  *     exposing `appendForFloor(floor, text): Promise<id>` /
- *     `listAcrossFloors(): Array<{id, text}>` / `pruneOldest(n)` /
- *     `deleteByIds(ids)`. The production adapter wraps the real
- *     floor-state instance behind these same call names so the tool
- *     doesn't have to care which path it's on.
+ *     `listAcrossFloors(): Array<{id, text, status, closure_reason?}>` /
+ *     `updateStatusById(id, status, reason)` /
+ *     `updateTextById(id, text)` / `deleteByIds(ids)`. The production
+ *     adapter wraps the real floor-state instance behind these same
+ *     call names so the tool doesn't have to care which path it's on.
  *
  * Constraints:
  *   - Empty / whitespace-only text → ToolError(NOTE_EMPTY)
- *   - Text > 1KB UTF-8 → ToolError(NOTE_TOO_LONG)
- *   - LRU 50 notes total: pruneOldest is invoked when list grows past 50
+ *   - Text > 16 KiB UTF-8 → ToolError(NOTE_TOO_LONG)
+ *   - `note_close` empty id → ToolError(NOTE_ID_EMPTY); not_found /
+ *     already_closed surface as `{ ok: false, error }` not throws.
+ *   - No LRU; closed notes are filtered out of the prompt injection path
  *   - Floor binding: `context.__targetFloorForNote ?? max(0, chat.length-1)`
  */
 
 import { describe, test, expect } from '@jest/globals';
 
 import {
-    execNoteAdd,
-    execNoteDelete,
+    execNoteOpen,
+    execNoteClose,
     loadAllNotes,
 } from '../../public/scripts/extensions/orchestrator/loop-tools/note.js';
 import {
     executeLoopTool,
     getEnabledToolSchemas,
 } from '../../public/scripts/extensions/orchestrator/loop-tools.js';
-import { ToolError } from '../../public/scripts/extensions/orchestrator/loop-runtime.js';
+import {
+    ToolError,
+    __testBuildInitialMessages,
+} from '../../public/scripts/extensions/orchestrator/loop-runtime.js';
 
 function makeFakeFloorState() {
     const stored = []; // { floor, id, text }
@@ -55,11 +64,11 @@ function makeFakeFloorState() {
         deleteByIds: async (ids) => {
             const target = new Set(Array.isArray(ids) ? ids.map(s => String(s)) : []);
             const present = new Set(stored.map(s => s.id));
-            let removed = 0;
+            const removed = [];
             for (let i = stored.length - 1; i >= 0; i -= 1) {
                 if (target.has(stored[i].id)) {
+                    removed.push(stored[i].id);
                     stored.splice(i, 1);
-                    removed += 1;
                 }
             }
             const missing = [];
@@ -82,85 +91,157 @@ function makeContext({ floor, chat = [], snapshot = null } = {}) {
     return { ctx, fs };
 }
 
-describe('execNoteAdd (Task 11)', () => {
+function makeAdapter(initial = []) {
+    const entries = initial.map(e => ({ ...e }));
+    return {
+        appendForFloor: async (_floor, text) => {
+            const id = `n${entries.length + 1}`;
+            entries.push({ id, text, status: 'open' });
+            return id;
+        },
+        listAcrossFloors: async () => entries.map(e => ({ ...e })),
+        updateStatusById: async (id, status, reason) => {
+            const found = entries.find(e => e.id === id);
+            if (!found) return { ok: false, error: 'not_found' };
+            if (found.status === status) return { ok: false, error: 'already_' + status };
+            found.status = status;
+            if (typeof reason === 'string') found.closure_reason = reason;
+            return { ok: true };
+        },
+        updateTextById: async (id, text) => {
+            const found = entries.find(e => e.id === id);
+            if (!found) return { ok: false, error: 'not_found' };
+            found.text = text;
+            return { ok: true };
+        },
+        deleteByIds: async (ids) => {
+            const removed = [];
+            for (const id of ids) {
+                const idx = entries.findIndex(e => e.id === id);
+                if (idx >= 0) { removed.push(id); entries.splice(idx, 1); }
+            }
+            return { removed, missing: ids.filter(i => !removed.includes(i)) };
+        },
+        __entries: entries,
+    };
+}
+
+describe('notes adapter status state machine', () => {
+    test('new note defaults to status=open', async () => {
+        const fs = makeAdapter();
+        await fs.appendForFloor(0, 'planted key');
+        expect(fs.__entries[0]).toEqual({ id: 'n1', text: 'planted key', status: 'open' });
+    });
+
+    test('updateStatusById flips open → closed with reason', async () => {
+        const fs = makeAdapter();
+        const id = await fs.appendForFloor(0, 'planted key');
+        const r = await fs.updateStatusById(id, 'closed', 'used by hero at floor 53');
+        expect(r).toEqual({ ok: true });
+        expect(fs.__entries[0]).toMatchObject({ status: 'closed', closure_reason: 'used by hero at floor 53' });
+    });
+
+    test('updateStatusById on already-closed reports already_closed', async () => {
+        const fs = makeAdapter();
+        const id = await fs.appendForFloor(0, 'x');
+        await fs.updateStatusById(id, 'closed', 'r1');
+        const r = await fs.updateStatusById(id, 'closed', 'r2');
+        expect(r).toEqual({ ok: false, error: 'already_closed' });
+    });
+});
+
+describe('notes adapter user-only ops', () => {
+    test('updateTextById changes text without altering status', async () => {
+        const fs = makeAdapter();
+        const id = await fs.appendForFloor(0, 'original');
+        await fs.updateStatusById(id, 'closed', 'r');
+        const r = await fs.updateTextById(id, 'corrected');
+        expect(r.ok).toBe(true);
+        const all = await fs.listAcrossFloors();
+        expect(all[0]).toMatchObject({ id, text: 'corrected', status: 'closed', closure_reason: 'r' });
+    });
+
+    test('deleteByIds removes entries entirely (hard delete)', async () => {
+        const fs = makeAdapter();
+        const id1 = await fs.appendForFloor(0, 'a');
+        const id2 = await fs.appendForFloor(0, 'b');
+        const r = await fs.deleteByIds([id1, 'nope']);
+        expect(r.removed).toEqual([id1]);
+        expect(r.missing).toEqual(['nope']);
+        const all = await fs.listAcrossFloors();
+        expect(all).toHaveLength(1);
+        expect(all[0].id).toBe(id2);
+    });
+});
+
+describe('execNoteOpen', () => {
     test('appends note via appendForFloor with the configured target floor', async () => {
         const { ctx, fs } = makeContext({ floor: 5 });
-        const r = await execNoteAdd({ text: 'remember the lighthouse' }, ctx);
-        expect(r).toEqual({ ok: true });
+        const r = await execNoteOpen({ text: 'remember the lighthouse' }, ctx);
+        expect(r).toEqual({ id: expect.any(String) });
         expect(fs.stored).toEqual([expect.objectContaining({ floor: 5, text: 'remember the lighthouse' })]);
     });
 
     test('default target floor = max(0, chat.length-1) when __targetFloorForNote missing', async () => {
         const { ctx, fs } = makeContext({ chat: [{ mes: 'a' }, { mes: 'b' }, { mes: 'c' }] });
-        await execNoteAdd({ text: 'note A' }, ctx);
+        await execNoteOpen({ text: 'note A' }, ctx);
         expect(fs.stored).toEqual([expect.objectContaining({ floor: 2, text: 'note A' })]);
     });
 
     test('empty chat falls back to floor 0', async () => {
         const { ctx, fs } = makeContext({ chat: [] });
-        await execNoteAdd({ text: 'first note' }, ctx);
+        await execNoteOpen({ text: 'first note' }, ctx);
         expect(fs.stored[0].floor).toBe(0);
     });
 
     test('rejects empty text', async () => {
         const { ctx } = makeContext({ floor: 0 });
-        await expect(execNoteAdd({ text: '' }, ctx)).rejects.toBeInstanceOf(ToolError);
+        await expect(execNoteOpen({ text: '' }, ctx)).rejects.toBeInstanceOf(ToolError);
     });
 
     test('rejects whitespace-only text', async () => {
         const { ctx } = makeContext({ floor: 0 });
-        await expect(execNoteAdd({ text: '    \n  \t  ' }, ctx)).rejects.toThrow(/non-empty/i);
+        await expect(execNoteOpen({ text: '    \n  \t  ' }, ctx)).rejects.toThrow(/non-empty/i);
     });
 
-    test('rejects text > 1KB UTF-8', async () => {
+    test('rejects text > 16KB UTF-8', async () => {
         const { ctx } = makeContext({ floor: 0 });
-        const big = 'a'.repeat(1100);
-        await expect(execNoteAdd({ text: big }, ctx)).rejects.toThrow(/too long/i);
+        const big = 'a'.repeat(16 * 1024 + 1);
+        await expect(execNoteOpen({ text: big }, ctx)).rejects.toThrow(/too long/i);
     });
 
-    test('accepts text exactly at 1KB boundary', async () => {
+    test('accepts text exactly at 16KB boundary', async () => {
         const { ctx, fs } = makeContext({ floor: 0 });
-        const exact = 'a'.repeat(1024);
-        await execNoteAdd({ text: exact }, ctx);
+        const exact = 'a'.repeat(16 * 1024);
+        await execNoteOpen({ text: exact }, ctx);
         expect(fs.stored[0].text).toBe(exact);
     });
 
     test('trims leading/trailing whitespace before storage', async () => {
         const { ctx, fs } = makeContext({ floor: 0 });
-        await execNoteAdd({ text: '   hello world   ' }, ctx);
+        await execNoteOpen({ text: '   hello world   ' }, ctx);
         expect(fs.stored[0].text).toBe('hello world');
     });
 
-    test('LRU prune kicks in past 50 notes', async () => {
-        const { ctx, fs } = makeContext({ floor: 0 });
-        for (let i = 0; i < 51; i += 1) {
-            await execNoteAdd({ text: `note ${i}` }, ctx);
-        }
-        expect(fs.stored).toHaveLength(50);
-        // Oldest dropped → first surviving should be note 1, last note 50
-        expect(fs.stored[0].text).toBe('note 1');
-        expect(fs.stored[49].text).toBe('note 50');
-    });
-
     test('UTF-8 byte length is what gets validated, not character count', async () => {
-        // 4-byte char × 257 = 1028 bytes (just over 1024)
+        // 4-byte char × 4097 = 16388 bytes (just over 16384)
         const { ctx } = makeContext({ floor: 0 });
-        const overByteLimit = '😀'.repeat(257);
-        await expect(execNoteAdd({ text: overByteLimit }, ctx)).rejects.toThrow(/too long/i);
-        // 4-byte char × 256 = 1024 bytes (exactly at the limit)
-        const atByteLimit = '😀'.repeat(256);
+        const overByteLimit = '😀'.repeat(4097);
+        await expect(execNoteOpen({ text: overByteLimit }, ctx)).rejects.toThrow(/too long/i);
+        // 4-byte char × 4096 = 16384 bytes (exactly at the limit)
+        const atByteLimit = '😀'.repeat(4096);
         const { ctx: ctx2, fs } = makeContext({ floor: 0 });
-        await execNoteAdd({ text: atByteLimit }, ctx2);
+        await execNoteOpen({ text: atByteLimit }, ctx2);
         expect(fs.stored).toHaveLength(1);
     });
 });
 
-describe('loadAllNotes (Task 11)', () => {
+describe('loadAllNotes', () => {
     test('returns the in-order list of notes from listAcrossFloors', async () => {
         const { ctx, fs } = makeContext({ floor: 0 });
-        await execNoteAdd({ text: 'first' }, ctx);
-        await execNoteAdd({ text: 'second' }, ctx);
-        await execNoteAdd({ text: 'third' }, ctx);
+        await execNoteOpen({ text: 'first' }, ctx);
+        await execNoteOpen({ text: 'second' }, ctx);
+        await execNoteOpen({ text: 'third' }, ctx);
         const all = await loadAllNotes(ctx);
         expect(all).toEqual([
             expect.objectContaining({ text: 'first' }),
@@ -177,319 +258,155 @@ describe('loadAllNotes (Task 11)', () => {
     });
 });
 
-describe('central dispatcher includes note_add (Task 11)', () => {
-    test('executeLoopTool dispatches note_add', async () => {
+describe('central dispatcher routes note_open / note_close', () => {
+    test('executeLoopTool dispatches note_open', async () => {
         const { ctx, fs } = makeContext({ floor: 0 });
-        const r = await executeLoopTool('note_add', { text: 'a routed note' }, ctx);
-        expect(r).toEqual({ ok: true });
+        const r = await executeLoopTool('note_open', { text: 'a routed note' }, ctx);
+        expect(r).toMatchObject({ id: expect.any(String) });
         expect(fs.stored[0].text).toBe('a routed note');
     });
 
-    test('getEnabledToolSchemas includes note_add when flagged on', () => {
+    test('executeLoopTool dispatches note_close', async () => {
+        const fs = makeAdapter();
+        const ctx = { __floorStateForNotes: fs, chat: [{}, {}] };
+        const { id } = await execNoteOpen({ text: 'a routed note' }, ctx);
+        const r = await executeLoopTool('note_close', { id, reason: 'done' }, ctx);
+        expect(r).toEqual({ ok: true });
+        const all = await fs.listAcrossFloors();
+        expect(all[0]).toMatchObject({ status: 'closed', closure_reason: 'done' });
+    });
+
+    test('getEnabledToolSchemas includes note_open when flagged on', () => {
         const schemas = getEnabledToolSchemas({
             tools: {
                 finalize: true,
                 chat: { read_range: false, search: false },
                 lorebook: { search: false, get: false },
                 memory: { search: false, list_recent: false, get: false },
-                note: { add: true },
+                note: { open: true },
             },
         });
         const names = schemas.map(s => s?.function?.name);
-        expect(names).toContain('note_add');
+        expect(names).toContain('note_open');
     });
 
-    test('getEnabledToolSchemas omits note_add when flagged off', () => {
+    test('getEnabledToolSchemas omits note_open when flagged off', () => {
         const schemas = getEnabledToolSchemas({
-            tools: { finalize: true, note: { add: false } },
+            tools: { finalize: true, note: { open: false } },
         });
         const names = schemas.map(s => s?.function?.name);
-        expect(names).not.toContain('note_add');
+        expect(names).not.toContain('note_open');
+    });
+
+    test('getEnabledToolSchemas includes note_close when flagged on', () => {
+        const schemas = getEnabledToolSchemas({
+            tools: {
+                finalize: true,
+                chat: { read_range: false, search: false },
+                lorebook: { search: false, get: false },
+                memory: { search: false, list_recent: false, get: false },
+                note: { open: true, close: true },
+            },
+        });
+        const names = schemas.map(s => s?.function?.name);
+        expect(names).toContain('note_close');
+    });
+
+    test('getEnabledToolSchemas omits note_close when flagged off', () => {
+        const schemas = getEnabledToolSchemas({
+            tools: { finalize: true, note: { open: true, close: false } },
+        });
+        const names = schemas.map(s => s?.function?.name);
+        expect(names).not.toContain('note_close');
+        // note_open stays on independently
+        expect(names).toContain('note_open');
     });
 });
 
-describe('execNoteDelete', () => {
-    async function seedNotes(ctx, texts) {
-        for (const text of texts) {
-            await execNoteAdd({ text }, ctx);
-        }
-    }
-
-    test('removes a single note by 1-based index and reports counts', async () => {
-        const { ctx, fs } = makeContext({ floor: 0 });
-        await seedNotes(ctx, ['one', 'two', 'three']);
-        const r = await execNoteDelete({ indexes: [2] }, ctx);
-        expect(r).toEqual({ ok: true, removed: 1, remaining: 2 });
-        expect(fs.stored.map(s => s.text)).toEqual(['one', 'three']);
+describe('note_close tool', () => {
+    test('closes an open note by id with reason', async () => {
+        const fs = makeAdapter();
+        const ctx = { __floorStateForNotes: fs, chat: [{}, {}] };
+        const { id } = await execNoteOpen({ text: 'planted key' }, ctx);
+        const r = await execNoteClose({ id, reason: 'used by hero' }, ctx);
+        expect(r).toEqual({ ok: true });
+        const all = await fs.listAcrossFloors();
+        expect(all[0]).toMatchObject({ status: 'closed', closure_reason: 'used by hero' });
     });
 
-    test('removes multiple notes in one call without index drift', async () => {
-        // Deleting [1, 3] from ['a','b','c','d'] must yield ['b','d'] — a
-        // naive forward iterate would mis-target after the first splice.
-        const { ctx, fs } = makeContext({ floor: 0 });
-        await seedNotes(ctx, ['a', 'b', 'c', 'd']);
-        const r = await execNoteDelete({ indexes: [1, 3] }, ctx);
-        expect(r).toEqual({ ok: true, removed: 2, remaining: 2 });
-        expect(fs.stored.map(s => s.text)).toEqual(['b', 'd']);
+    test('closing already-closed returns ok:false / error:already_closed (no throw)', async () => {
+        const fs = makeAdapter();
+        const ctx = { __floorStateForNotes: fs, chat: [{}, {}] };
+        const { id } = await execNoteOpen({ text: 'x' }, ctx);
+        await execNoteClose({ id, reason: 'r1' }, ctx);
+        const r = await execNoteClose({ id, reason: 'r2' }, ctx);
+        expect(r.ok).toBe(false);
+        expect(r.error).toBe('already_closed');
     });
 
-    test('dedupes repeated indexes (counts each unique once)', async () => {
-        const { ctx, fs } = makeContext({ floor: 0 });
-        await seedNotes(ctx, ['x', 'y', 'z']);
-        const r = await execNoteDelete({ indexes: [2, 2, 2] }, ctx);
-        expect(r).toEqual({ ok: true, removed: 1, remaining: 2 });
-        expect(fs.stored.map(s => s.text)).toEqual(['x', 'z']);
+    test('closing unknown id returns ok:false / error:not_found', async () => {
+        const fs = makeAdapter();
+        const ctx = { __floorStateForNotes: fs, chat: [{}, {}] };
+        const r = await execNoteClose({ id: 'nope', reason: '' }, ctx);
+        expect(r.ok).toBe(false);
+        expect(r.error).toBe('not_found');
     });
 
-    test('rejects empty indexes array', async () => {
-        const { ctx } = makeContext({ floor: 0 });
-        await seedNotes(ctx, ['a']);
-        await expect(execNoteDelete({ indexes: [] }, ctx)).rejects.toBeInstanceOf(ToolError);
-        await expect(execNoteDelete({ indexes: [] }, ctx)).rejects.toThrow(/non-empty/i);
-    });
-
-    test('rejects missing / non-array indexes', async () => {
-        const { ctx } = makeContext({ floor: 0 });
-        await seedNotes(ctx, ['a']);
-        await expect(execNoteDelete({}, ctx)).rejects.toThrow(/non-empty/i);
-        await expect(execNoteDelete({ indexes: 'all' }, ctx)).rejects.toThrow(/non-empty/i);
-    });
-
-    test('rejects non-integer / zero / negative indexes with NOTE_INDEX_INVALID', async () => {
-        const { ctx } = makeContext({ floor: 0 });
-        await seedNotes(ctx, ['a', 'b', 'c']);
-        try {
-            await execNoteDelete({ indexes: [1, 0, -2, 1.5, 'x'] }, ctx);
-            throw new Error('expected ToolError');
-        } catch (e) {
-            expect(e).toBeInstanceOf(ToolError);
-            expect(e.code).toBe('NOTE_INDEX_INVALID');
-        }
-    });
-
-    test('rejects out-of-range indexes with NOTE_INDEX_OUT_OF_RANGE', async () => {
-        const { ctx } = makeContext({ floor: 0 });
-        await seedNotes(ctx, ['a', 'b']);
-        try {
-            await execNoteDelete({ indexes: [5] }, ctx);
-            throw new Error('expected ToolError');
-        } catch (e) {
-            expect(e).toBeInstanceOf(ToolError);
-            expect(e.code).toBe('NOTE_INDEX_OUT_OF_RANGE');
-            // Hint message should reference current count so the agent can correct itself.
-            expect(e.hint).toMatch(/2/);
-        }
-    });
-
-    test('rejects when notes list is empty', async () => {
-        const { ctx } = makeContext({ floor: 0 });
-        try {
-            await execNoteDelete({ indexes: [1] }, ctx);
-            throw new Error('expected ToolError');
-        } catch (e) {
-            expect(e).toBeInstanceOf(ToolError);
-            expect(e.code).toBe('NOTE_INDEX_OUT_OF_RANGE');
-        }
-    });
-
-    test('rejects when adapter is missing', async () => {
-        const ctx = { chat: [] }; // no __floorStateForNotes
-        try {
-            await execNoteDelete({ indexes: [1] }, ctx);
-            throw new Error('expected ToolError');
-        } catch (e) {
-            expect(e).toBeInstanceOf(ToolError);
-            expect(e.code).toBe('NOTE_FS_UNAVAILABLE');
-        }
-    });
-
-    test('snapshot binding: two agents see same list, delete different positions, both land correctly', async () => {
-        // Single shared adapter (= the underlying floor-state); two agent
-        // contexts that observed the same initial snapshot. This is the
-        // multi-agent concurrent-delete scenario the ID refactor is for.
-        const fs = makeFakeFloorState();
-        // Seed 4 notes through fs directly so both agent contexts can
-        // snapshot from a known state.
-        const id1 = await fs.appendForFloor(0, 'A');
-        const id2 = await fs.appendForFloor(0, 'B');
-        const id3 = await fs.appendForFloor(0, 'C');
-        const id4 = await fs.appendForFloor(0, 'D');
-
-        const baseSnapshot = [id1, id2, id3, id4];
-        const ctxX = {
-            chat: [],
-            __floorStateForNotes: fs,
-            __noteIdSnapshot: baseSnapshot.slice(),
-        };
-        const ctxY = {
-            chat: [],
-            __floorStateForNotes: fs,
-            __noteIdSnapshot: baseSnapshot.slice(),
-        };
-
-        // Agent X deletes its index 2 (= B, id2)
-        const rX = await execNoteDelete({ indexes: [2] }, ctxX);
-        expect(rX).toEqual({ ok: true, removed: 1, remaining: 3 });
-
-        // Agent Y, still holding the original snapshot, deletes index 3
-        // (which was C in the snapshot, id3). The naive index-based path
-        // would mis-target D after X's removal; ID resolution lands the
-        // correct note.
-        const rY = await execNoteDelete({ indexes: [3] }, ctxY);
-        expect(rY.ok).toBe(true);
-        expect(rY.removed).toBe(1);
-
-        // Underlying state has A and D left; B and C both deleted.
-        expect(fs.stored.map(s => s.text).sort()).toEqual(['A', 'D']);
-    });
-
-    test('snapshot binding: target already deleted by another agent reports already_gone', async () => {
-        const fs = makeFakeFloorState();
-        const id1 = await fs.appendForFloor(0, 'A');
-        const id2 = await fs.appendForFloor(0, 'B');
-
-        const ctxX = { chat: [], __floorStateForNotes: fs, __noteIdSnapshot: [id1, id2] };
-        const ctxY = { chat: [], __floorStateForNotes: fs, __noteIdSnapshot: [id1, id2] };
-
-        // X deletes B
-        await execNoteDelete({ indexes: [2] }, ctxX);
-        // Y also tries to delete B (index 2 in its snapshot) — already gone.
-        const rY = await execNoteDelete({ indexes: [2] }, ctxY);
-        expect(rY.ok).toBe(true);
-        expect(rY.removed).toBe(0);
-        expect(rY.already_gone).toEqual([2]);
+    test('reason is optional', async () => {
+        const fs = makeAdapter();
+        const ctx = { __floorStateForNotes: fs, chat: [{}, {}] };
+        const { id } = await execNoteOpen({ text: 'x' }, ctx);
+        const r = await execNoteClose({ id }, ctx);
+        expect(r).toEqual({ ok: true });
     });
 });
 
-describe('central dispatcher routes note_delete', () => {
-    test('executeLoopTool dispatches note_delete', async () => {
-        const { ctx, fs } = makeContext({ floor: 0 });
-        await execNoteAdd({ text: 'first' }, ctx);
-        await execNoteAdd({ text: 'second' }, ctx);
-        const r = await executeLoopTool('note_delete', { indexes: [1] }, ctx);
-        expect(r).toEqual({ ok: true, removed: 1, remaining: 1 });
-        expect(fs.stored.map(s => s.text)).toEqual(['second']);
+describe('buildInitialMessages renders ## Open Notes', () => {
+    test('renders open notes with id prefix, omits closed and floor', () => {
+        const ctx = {
+            __openNotes: [
+                { id: 'o_a3f2', text: 'planted key', status: 'open' },
+                { id: 'o_b8c1', text: 'sanctum oath', status: 'open' },
+            ],
+        };
+        const profile = { system_prompt: 'You are a writer.' };
+        const messages = __testBuildInitialMessages(ctx, null, profile);
+        const sys = messages.find(m => m.role === 'system')?.content || '';
+        expect(sys).toContain('## Open Notes');
+        expect(sys).toContain('[o_a3f2] planted key');
+        expect(sys).toContain('[o_b8c1] sanctum oath');
+        expect(sys).not.toMatch(/floor\s+\d+/);
     });
 
-    test('getEnabledToolSchemas includes note_delete when flagged on', () => {
-        const schemas = getEnabledToolSchemas({
-            tools: {
-                finalize: true,
-                chat: { read_range: false, search: false },
-                lorebook: { search: false, get: false },
-                memory: { search: false, list_recent: false, get: false },
-                note: { add: true, delete: true },
-            },
-        });
-        const names = schemas.map(s => s?.function?.name);
-        expect(names).toContain('note_delete');
+    test('omits the Open Notes block when nothing is open', () => {
+        const ctx = { __openNotes: [] };
+        const profile = { system_prompt: 'You are a writer.' };
+        const messages = __testBuildInitialMessages(ctx, null, profile);
+        const sys = messages.find(m => m.role === 'system')?.content || '';
+        expect(sys).not.toContain('## Open Notes');
+        expect(sys).not.toContain('## Previous Notes');
     });
 
-    test('getEnabledToolSchemas omits note_delete when flagged off', () => {
-        const schemas = getEnabledToolSchemas({
-            tools: { finalize: true, note: { add: true, delete: false } },
-        });
-        const names = schemas.map(s => s?.function?.name);
-        expect(names).not.toContain('note_delete');
-        // note_add stays on independently
-        expect(names).toContain('note_add');
-    });
-});
-
-describe('runtime injects historical notes into the system prompt (Task 11)', () => {
-    test('buildInitialMessages prepends a Previous Notes block when context.__loopNotes is non-empty', async () => {
-        const { runLoopOrchestration } = await import(
-            '../../public/scripts/extensions/orchestrator/loop-runtime.js'
-        );
-        const { jest } = await import('@jest/globals');
-
-        let observedSystemPrompt = null;
-        const sendLlm = jest.fn().mockImplementationOnce(async ({ messages }) => {
-            observedSystemPrompt = messages.find(m => m.role === 'system')?.content || '';
-            return {
-                toolCalls: [{ id: 'tc1', name: 'finalize', args: { capsule_text: 'done' } }],
-                assistantText: '',
-            };
-        });
-
-        const profile = {
-            mode: 'loop',
-            apiPresetName: '',
-            promptPresetName: '',
-            system_prompt: 'You are a research agent.',
-            tools: {
-                note: { add: true },
-                chat: { read_range: false, search: false },
-                lorebook: { search: false, get: false },
-                memory: { search: false, list_recent: false, get: false },
-                finalize: true,
-            },
-            max_rounds: 5,
-            wall_clock_budget_ms: 60000,
-            capsule_inject: { position: 'atDepth', depth: 0, role: 'system', customInstruction: '' },
-        };
-
-        const context = {
-            chat: [],
-            __loopNotes: ['note one', 'note two'],
-        };
-        const payload = {
-            signal: new AbortController().signal,
-            coreChat: [],
-        };
-
-        const result = await runLoopOrchestration(context, payload, profile, { sendLlm });
-        expect(result.status).toBe('completed');
-        expect(observedSystemPrompt).toContain('You are a research agent.');
-        expect(observedSystemPrompt).toContain('Previous Notes');
-        expect(observedSystemPrompt).toContain('1. note one');
-        expect(observedSystemPrompt).toContain('2. note two');
+    test('preserves the system_prompt body when no notes are open', () => {
+        const ctx = { __openNotes: [] };
+        const profile = { system_prompt: 'You are a writer.' };
+        const messages = __testBuildInitialMessages(ctx, null, profile);
+        const sys = messages.find(m => m.role === 'system')?.content || '';
+        expect(sys).toBe('You are a writer.');
     });
 
-    test('buildInitialMessages omits the Previous Notes block when notes is empty', async () => {
-        const { runLoopOrchestration } = await import(
-            '../../public/scripts/extensions/orchestrator/loop-runtime.js'
-        );
-        const { jest } = await import('@jest/globals');
+    test('treats missing __openNotes as empty', () => {
+        const ctx = {};
+        const profile = { system_prompt: 'You are a writer.' };
+        const messages = __testBuildInitialMessages(ctx, null, profile);
+        const sys = messages.find(m => m.role === 'system')?.content || '';
+        expect(sys).toBe('You are a writer.');
+    });
 
-        let observedSystemPrompt = null;
-        const sendLlm = jest.fn().mockImplementationOnce(async ({ messages }) => {
-            observedSystemPrompt = messages.find(m => m.role === 'system')?.content || '';
-            return {
-                toolCalls: [{ id: 'tc1', name: 'finalize', args: { capsule_text: 'done' } }],
-                assistantText: '',
-            };
-        });
-
-        const profile = {
-            mode: 'loop',
-            apiPresetName: '',
-            promptPresetName: '',
-            system_prompt: 'You are a research agent.',
-            tools: {
-                note: { add: false },
-                chat: { read_range: false, search: false },
-                lorebook: { search: false, get: false },
-                memory: { search: false, list_recent: false, get: false },
-                finalize: true,
-            },
-            max_rounds: 5,
-            wall_clock_budget_ms: 60000,
-            capsule_inject: { position: 'atDepth', depth: 0, role: 'system', customInstruction: '' },
-        };
-
-        const context = {
-            chat: [],
-            __loopNotes: [],
-        };
-        const payload = {
-            signal: new AbortController().signal,
-            coreChat: [],
-        };
-
-        const result = await runLoopOrchestration(context, payload, profile, { sendLlm });
-        expect(result.status).toBe('completed');
-        expect(observedSystemPrompt).toBe('You are a research agent.');
-        expect(observedSystemPrompt).not.toContain('Previous Notes');
+    test('returns no messages when both system prompt and notes are empty', () => {
+        const ctx = { __openNotes: [] };
+        const profile = { system_prompt: '' };
+        const messages = __testBuildInitialMessages(ctx, null, profile);
+        expect(messages).toEqual([]);
     });
 });

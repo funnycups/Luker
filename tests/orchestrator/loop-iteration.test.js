@@ -42,8 +42,8 @@ describe('LOOP_ITERATION_CONTRACT_LINES', () => {
     });
 
     test('mentions every tool flag by its dotted path so the AI can target them', () => {
-        expect(text).toMatch(/tools\.note\.add/);
-        expect(text).toMatch(/tools\.note\.delete/);
+        expect(text).toMatch(/tools\.note\.open/);
+        expect(text).toMatch(/tools\.note\.close/);
         expect(text).toMatch(/tools\.chat\.read_range/);
         expect(text).toMatch(/tools\.chat\.search/);
         expect(text).toMatch(/tools\.lorebook\.search/);
@@ -89,7 +89,7 @@ describe('applyLoopProfilePatchArgs partial-merge contract', () => {
             apiPresetName: 'baseline-api',
             promptPresetName: 'baseline-preset',
             tools: {
-                note: { add: true },
+                note: { open: true, close: true },
                 chat: { read_range: true, search: true },
                 lorebook: { search: true, get: true },
                 memory: { search: true, list_recent: true, get: true },
@@ -137,7 +137,7 @@ describe('applyLoopProfilePatchArgs partial-merge contract', () => {
         expect(after.tools.lorebook.get).toBe(true);
         expect(after.tools.chat.read_range).toBe(true);
         expect(after.tools.chat.search).toBe(true);
-        expect(after.tools.note.add).toBe(true);
+        expect(after.tools.note.open).toBe(true);
     });
 
     test('attempting to disable finalize is silently ignored by the sanitizer', () => {

@@ -95,11 +95,12 @@ loop.finalize -> out
 
 ## 内置工具
 
-工具走 OpenAI function-calling 协议,结果以 `role: tool` 消息形式回到 Agent 的下一轮上下文。共 10 个可选工具 + 1 个强制 `finalize`:
+工具走 OpenAI function-calling 协议,结果以 `role: tool` 消息形式回到 Agent 的下一轮上下文。共 11 个可选工具 + 1 个强制 `finalize`:
 
 | 工具 | 作用 | 简单示例(RP 场景) |
 |---|---|---|
-| `note_add(text)` | 写一条**持久化笔记**,绑定当前 chat。下一次 loop 启动时,这些笔记会自动注入 system prompt。单条上限 1KB,最多保留 50 条 LRU。 | agent 在「林晚提到她的外祖母在洛阳」那一轮调 `note_add('林晚的家族线索:外祖母→洛阳')`,几次对话后再启 loop 时仍能看到这条笔记。 |
+| `note_open(text)` | 开启一条**剧情作者线索**(伏笔、承诺、章节大纲)。笔记会在之后每次 loop 启动时出现在 agent 的 "## Open Notes" 块,直到被关闭。单条上限 16KB。 | agent 发现自己刚埋了一个设定,调 `note_open('林晚:外祖母在洛阳——下次见面兑现')`;之后几轮 loop 都能看到这条线索。 |
+| `note_close(id, reason?)` | 按 id 关闭一条已开启的笔记(已兑现、不再需要等)。笔记从 "## Open Notes" 块中消失,但仍归档保留。 | 章节节拍落地后,`note_close('o_a3f2', '林晚见到外祖母,floor 73')`。 |
 | `chat_read_range(start, end)` | 读 chat 楼层范围。负数从末尾倒数,单次最多 50 楼。 | `chat_read_range(-10, -1)` 读最近 10 楼复习上下文。 |
 | `chat_search(query, limit)` | 全聊天 substring 搜索(大小写不敏感),返回楼层 + 内容预览。 | `chat_search('青冥剑')` 找出之前所有提到「青冥剑」的楼层。 |
 | `lorebook_search(query, limit)` | 在所有启用的世界书里 substring 搜索条目。**默认排除本回合已激活的条目**(那些已经被注入主上下文,再返回会浪费 token)。返回 `entries` + `excluded_active_count`。 | `lorebook_search('落雁城')` 翻出未激活的「落雁城」相关设定。 |
@@ -221,8 +222,8 @@ A:那些条目已经通过 worldInfo 主流程注入了主模型上下文,loop a
 **Q:loop 跑到一半我想停下来怎么办?**
 A:点工具栏的 stop 按钮(与 spec / agenda 一致)。loop runtime 在每轮顶部检查 abort signal,立即中止;trace 写 `cancelled`,不会注入半成品 capsule。
 
-**Q:笔记会跨 chat 共享吗?**
-A:不会。`note_add` 写入的是**当前 chat** 的 floor-state 命名空间,跨 chat 之间互不可见。删除楼层 / swipe 走 floor-state 的 settle 机制——绑定到该楼的笔记会自动消失。
+**Q:笔记是否跨 chat 共享?**
+A:不会——笔记保存在当前 chat 的持久化状态里。floor-state 的 settle 机制会自动处理分支和删除。
 
 **Q:连续 3 轮不调工具被打断了怎么办?**
 A:检查 system prompt 是否给了 agent 明确的「产出格式」。多数情况是 agent 在「思考」但不知道何时该 finalize;在 prompt 里加一条「当你掌握的信息足以写出 capsule 时,立即调用 finalize」通常能解决。
@@ -251,3 +252,4 @@ Loop 模式与 spec / agenda 在性能上有结构性差异:
 - [Agenda 模式](/zh-CN/features/orchestrator/agenda) — Planner 动态调度
 - [Function Call Runtime](/zh-CN/improvements/function-call-runtime) — loop 工具调用走的运行时
 - [记忆图](/zh-CN/features/memory-graph) — `memory.*` 工具背后的数据源
+- [Notes](/zh-CN/features/orchestrator/notes) — open/close 笔记模型的面板使用与概念详解

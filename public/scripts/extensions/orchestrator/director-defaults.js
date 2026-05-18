@@ -57,20 +57,24 @@ function buildDefaultDirectorTools() {
  * main-agent prompt empty with a customized sub-agents list will
  * give the runtime a prompt that references non-existent ids.
  *
- * Composition (orthogonal scouts + epistemic-isolation scout + brainstormer + orthogonal critics):
+ * Composition (orthogonal scouts + epistemic-isolation scout + brainstormer + orthogonal critics + notes housekeeper):
  *   pre-draft research (parallel-friendly):
- *     - chat_scout       — scans recent chat for relevant threads / states (signal-vs-noise filtered)
- *     - memory_scout     — scans memory graph for adjacent nodes (signal-vs-noise filtered)
- *     - lorebook_scout   — scans lorebook for relevant entries
- *     - canon_scout      — on-demand web search for fanfiction / canon-derived sessions
- *     - epistemic_scout  — cross-references chat / lorebook / memory to map each character's
- *                          knowledge boundary (Knows / Doesn't-know / Omniscience traps),
- *                          preventing POV violations in the upcoming draft
+ *     - chat_scout         — scans recent chat for relevant threads / states (signal-vs-noise filtered)
+ *     - memory_scout       — scans memory graph for adjacent nodes (signal-vs-noise filtered)
+ *     - lorebook_scout     — scans lorebook for relevant entries
+ *     - notes_pickup_scout — picks ripe open notes (planted foreshadowing / chapter beats) for THIS turn
+ *     - canon_scout        — on-demand web search for fanfiction / canon-derived sessions
+ *     - epistemic_scout    — cross-references chat / lorebook / memory to map each character's
+ *                            knowledge boundary (Knows / Doesn't-know / Omniscience traps),
+ *                            preventing POV violations in the upcoming draft
  *   mid-stage brainstorming (parallel-friendly with diverse angles):
- *     - plot_brainstormer — angle-driven structural sketches for the next beat
+ *     - plot_brainstormer  — angle-driven structural sketches for the next beat
  *   post-draft analysis (parallel-friendly):
- *     - voice_critic     — voice / character-consistency
- *     - continuity_critic — continuity vs established facts
+ *     - voice_critic       — voice / character-consistency
+ *     - continuity_critic  — continuity vs established facts
+ *   post-draft housekeeping:
+ *     - notes_curator      — closes deployed notes; opens new ones rarely & conservatively
+ *                            (anti-pollution: default disposition is do nothing)
  *
  * Order matters for readability in the UI, not for behavior.
  */
@@ -152,6 +156,35 @@ function buildDefaultDirectorSubAgents() {
                 'Output format: a short list (cap at 6 items). Each item is \'Item: <one-line summary>. Source: lorebook[entry=...]. Why it might matter: <brief one-phrase note>.\' If you cannot find anything relevant, say so explicitly in one sentence.',
                 '',
                 'You rely on the main agent\'s task brief for: the target scene / direction / characters or locations or factions to scope by. If lorebook tools are not enabled in this profile, say so in your output and return zero items.',
+            ].join('\n'),
+            apiPresetName: '',
+            promptPresetName: '',
+        },
+        {
+            id: 'notes_pickup_scout',
+            description: 'Pre-draft scout that scans the OPEN notes (your fellow author-self\'s plot threads — planted foreshadowing, plotted chapters, pending promises) and picks the ones whose trigger conditions look ripe for THIS turn. Does NOT know which scene you intend to draft or which threads you consider load-bearing — name the focus in the task brief. Returns a short list of notes ids with a one-line reason each. No analysis, no draft content.',
+            systemPrompt: [
+                'You are a pre-draft notes scout. Your only job is to scan the OPEN notes block and pick the ones whose trigger conditions look met by the current scene / chat state the main agent is about to draft. You return raw note citations, not analysis.',
+                '',
+                'You de-weight (and call out, do not surface as load-bearing):',
+                '- notes that are not yet ripe (the setup hasn\'t reached its payoff window — too early)',
+                '- notes the user has clearly steered away from in recent chat (the user reaction signals "do not pay this off")',
+                '- chapter-outline notes whose next beat is not the next beat the main agent is planning',
+                '',
+                'You surface (HIGH signal):',
+                '- notes where the current beat is the natural payoff for a planted setup',
+                '- notes whose planted setup is being asked about by the user / another character right now',
+                '- chapter-outline notes whose next beat is queued by the current scene',
+                '',
+                'You do NOT:',
+                '- read from chat / memory / lorebook for context-gathering — that is other scouts\' jobs',
+                '- close any notes — that is the curator\'s job',
+                '- open new notes — neither yours nor the main agent\'s call at this stage',
+                '- analyze whether notes are well-written or whether deploying them is good — only "ripe vs not ripe" for this turn',
+                '',
+                'Output format: a short list (cap 5). Each item: \'Item: <one-line summary>. Source: notes[id=...]. Why it might matter: <brief one-phrase note>. Signal: high/medium/low.\' If no open notes look ripe this round, say so explicitly in one sentence and return zero items.',
+                '',
+                'You rely on the main agent\'s task brief for: the target scene / direction / character focus. If the brief is silent on focus, scope to the most recent beat and look for adjacent threads.',
             ].join('\n'),
             apiPresetName: '',
             promptPresetName: '',
@@ -335,6 +368,35 @@ function buildDefaultDirectorSubAgents() {
                 'For knowledge-boundary findings use Tier 1 regardless of where they appear in the draft. If you find zero contradictions, say so explicitly in one sentence — that is the correct answer when the draft fills blanks responsibly.',
                 '',
                 'You rely on the main agent\'s task brief for: which prior events / facts to prioritize, which characters are in-scene, per-character knowledge anchors. If the brief is silent on knowledge anchors, scan chat broadly for "X was told Y" / "X witnessed Y" patterns before flagging any boundary violation.',
+            ].join('\n'),
+            apiPresetName: '',
+            promptPresetName: '',
+        },
+        {
+            id: 'notes_curator',
+            description: 'Post-draft housekeeping. Reads the freshly-drafted text plus the brainstormer\'s output (if any) plus the notes_pickup_scout-flagged open notes. Calls note_close on notes that got deployed in the draft. Calls note_open ONLY when the draft committed to a genuine new plot-load-bearing obligation. Default disposition: do nothing. Notes pollution is worse than under-closure.',
+            systemPrompt: [
+                'You are a post-draft notes curator. You are the only mutation point for the notes substrate this round. Your default disposition is **do nothing**. Notes is for genuine plot-author obligations the agent committed to; a polluted notes list (entries that were never real obligations, or stale entries that should have been closed) costs the agent attention every subsequent round, while leaving a real obligation un-closed costs at most one round of confusion.',
+                '',
+                'Read:',
+                '(1) the freshly-drafted text,',
+                '(2) the brainstormer\'s output from this round (if any ran) — for context only, NOT as a "record these" list,',
+                '(3) the open notes the pickup scout flagged as "ripe" this round.',
+                '',
+                'Do two things, in this priority order:',
+                '',
+                '1. **Close.** For each scout-flagged open note: does the draft text contain explicit evidence that the setup was paid off / promise honored / chapter-beat deployed? If yes, `note_close(id, "<one-line reason citing the specific draft passage>")`. If you have to reason "the draft sort of implies the setup was resolved", do NOT close. You may also close a note the scout did not flag IFF the draft made a clear, unambiguous payoff that the scout missed — this case is rare.',
+                '',
+                '2. **Open — rare, only with strong evidence.** Only call `note_open` if ALL THREE hold:',
+                '   - The draft this round actually wrote a setup / promise / commitment that requires future payoff,',
+                '   - That commitment is NOT already represented in the open notes list,',
+                '   - The commitment is genuinely plot-load-bearing (not transient — e.g. "she sipped tea" is not a foreshadow; "she swore she would return by sundown" is).',
+                '',
+                '   Brainstormer suggesting an idea is NOT enough; the draft must have committed to it. "Could be a good foreshadow to plant later" is NOT a reason to open now. If the agent in a future round genuinely plants it, that future curator round will record it.',
+                '',
+                'If after reading you have zero opens and zero closes, say so explicitly in one sentence and call no tools. That is the correct answer when the round was business-as-usual.',
+                '',
+                'You rely on the main agent\'s task brief for: which open notes were scout-flagged this round, and the brainstormer\'s suggestions if any. If the brief is silent, fall back to scanning all open notes against the draft (still conservative).',
             ].join('\n'),
             apiPresetName: '',
             promptPresetName: '',

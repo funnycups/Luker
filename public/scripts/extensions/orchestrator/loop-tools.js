@@ -23,7 +23,7 @@
  *
  * Task 8 introduces the dispatcher with chat tools wired in. Task 9
  * appends `lorebook_search` / `lorebook_get`. Task 10 adds memory tools.
- * Task 11 adds `note_add`.
+ * Task 11 adds `note_open` / `note_close`.
  *
  * Tool names use `<namespace>_<verb>` (e.g. `chat_read_range`) because
  * Anthropic's tool-name regex `^[a-zA-Z0-9_-]{1,128}$` rejects dots.
@@ -36,7 +36,7 @@ import { FINALIZE_TOOL_SCHEMA, ToolError } from './loop-runtime.js';
 import { execChatReadRange, execChatSearch } from './loop-tools/chat.js';
 import { execLorebookSearch, execLorebookGet } from './loop-tools/lorebook.js';
 import { execMemorySearch, execMemoryListRecent, execMemoryGet } from './loop-tools/memory.js';
-import { execNoteAdd, execNoteDelete } from './loop-tools/note.js';
+import { execNoteOpen, execNoteClose } from './loop-tools/note.js';
 import { execSearchSearch, execSearchVisit } from './loop-tools/search.js';
 
 /**
@@ -230,17 +230,17 @@ registerTool('memory_get', execMemoryGet, {
 
 // ---- note namespace -----------------------------------------------------
 
-registerTool('note_add', execNoteAdd, {
+registerTool('note_open', execNoteOpen, {
     type: 'function',
     function: {
-        name: 'note_add',
-        description: 'Append a persistent note (bound to the current chat) that survives across loop runs and is re-injected into your system prompt at the start of the next run. Use sparingly: for short reminders, intent commitments, or "I should ask the user about X next turn." Long-form context belongs in lorebook / memory-graph. Limit: 1KB UTF-8 per note, 50 notes total per chat (oldest pruned automatically).',
+        name: 'note_open',
+        description: 'Open a new plot-author note (foreshadowing, promise, chapter outline). Returns its id. The note shows up in your "## Open Notes" block until you close it.',
         parameters: {
             type: 'object',
             properties: {
                 text: {
                     type: 'string',
-                    description: 'Note body. Must be non-empty after whitespace trim and at most 1024 UTF-8 bytes.',
+                    description: 'The note content. Short or long; max 16KB UTF-8.',
                 },
             },
             required: ['text'],
@@ -249,22 +249,24 @@ registerTool('note_add', execNoteAdd, {
     },
 });
 
-registerTool('note_delete', execNoteDelete, {
+registerTool('note_close', execNoteClose, {
     type: 'function',
     function: {
-        name: 'note_delete',
-        description: 'Delete persisted notes by their 1-based positions in the "## Previous Notes" block of your system prompt (the same numbering you see at run start). Use this to prune notes whose role is exhausted: foreshadowing has fired, the character beat has happened, the setting was superseded by later events, or several notes have collapsed into a duplicate. Out-of-range or non-integer indexes are rejected with a structured error so you can correct on the next round.',
+        name: 'note_close',
+        description: 'Close an open note by id (e.g. it has been deployed or is no longer needed). Optional one-line reason.',
         parameters: {
             type: 'object',
             properties: {
-                indexes: {
-                    type: 'array',
-                    description: 'Non-empty array of 1-based positive integers. Each must match a current entry in the "## Previous Notes" block.',
-                    items: { type: 'integer', minimum: 1 },
-                    minItems: 1,
+                id: {
+                    type: 'string',
+                    description: 'The note id visible in the Open Notes block.',
+                },
+                reason: {
+                    type: 'string',
+                    description: 'Optional one-line closure reason.',
                 },
             },
-            required: ['indexes'],
+            required: ['id'],
             additionalProperties: false,
         },
     },

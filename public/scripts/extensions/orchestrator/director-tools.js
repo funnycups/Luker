@@ -657,7 +657,7 @@ export function createSubagentDispatcher({
             ? renderMainAgentDigest(parentMessages, payloadMessages.length + 1)
             : null;
 
-        // Augment sub-agent system prompt with the "## Previous Notes"
+        // Augment sub-agent system prompt with the "## Open Notes"
         // block (mirrors loop-runtime). Re-read on every dispatch so
         // notes written by earlier sub-agents in this session show up
         // for later ones. No-op when the adapter isn't mounted.
@@ -844,17 +844,28 @@ function safeStringifyArgs(value) {
 }
 
 /**
- * Append a "## Previous Notes" block to a sub-agent's system prompt
- * if the notes adapter on contextForNotes returns any. Mirrors
- * loop-runtime's injection so curator-style sub-agents reading
- * persisted notes get the same numbered block format.
+ * Append an "## Open Notes" block to a sub-agent's system prompt
+ * if the notes adapter on contextForNotes returns any open entries.
+ * Mirrors loop-runtime's injection so curator-style sub-agents
+ * reading persisted notes get the same `[id] text` block format.
+ *
+ * Closed entries (status === 'closed') are filtered out — only open
+ * threads are surfaced. Legacy entries without a status field default
+ * to open (matching loop-runtime's `(status ?? 'open') === 'open'`
+ * semantics).
+ *
+ * Each entry is rendered as `- [id] text` so the model can reference
+ * notes by id (e.g., to close them via `note_close`).
  *
  * Called on every dispatch (not cached) so notes written by earlier
  * sub-agents in the same director session show up for later ones.
- * If no adapter is mounted, or it returns empty, the system prompt
- * is returned unchanged.
+ * If no adapter is mounted, or it returns empty / only-closed, the
+ * system prompt is returned unchanged.
+ *
+ * @internal exported for tests; consumers should call through the
+ *           dispatcher's system_close assembly path.
  */
-async function renderSubSystemPromptWithNotes(systemPrompt, contextForNotes) {
+export async function renderSubSystemPromptWithNotes(systemPrompt, contextForNotes) {
     const fs = contextForNotes && contextForNotes.__floorStateForNotes;
     if (!fs || typeof fs.listAcrossFloors !== 'function') return systemPrompt;
     let all;
@@ -864,11 +875,11 @@ async function renderSubSystemPromptWithNotes(systemPrompt, contextForNotes) {
         return systemPrompt;
     }
     if (!Array.isArray(all) || all.length === 0) return systemPrompt;
-    const lines = ['', '## Previous Notes (persistent, written by you in earlier runs)'];
-    for (let i = 0; i < all.length; i++) {
-        const entry = all[i];
-        const text = (entry && typeof entry === 'object') ? String(entry.text || '') : String(entry || '');
-        lines.push(`${i + 1}. ${text}`);
+    const open = all.filter(e => e && typeof e === 'object' && (e.status ?? 'open') === 'open');
+    if (open.length === 0) return systemPrompt;
+    const lines = ['', '## Open Notes (your plot-author threads — close with note_close when deployed)'];
+    for (const e of open) {
+        lines.push(`- [${String(e.id || '')}] ${String(e.text || '')}`);
     }
     return `${systemPrompt}${lines.join('\n')}`;
 }

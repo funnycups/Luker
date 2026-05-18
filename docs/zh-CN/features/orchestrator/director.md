@@ -58,7 +58,7 @@ Director 是编排器里唯一一种**接管(takeover)模式** —— 这一回�
 在扩展抽屉的「多智能体编排」面板里,把**执行模式**设为 **Director(多代理)**。切到 Director 后,spec / agenda / loop 的设置卡片会自动收起,Director 自己的设置卡片出现。
 
 ::: tip 99% 的人不该手搓主代理 system prompt
-默认主代理系统提示词与默认的八个子代理 id **强耦合**——它已经按「先派侦察、起草、再派评审、迭代修订」的纪律调好了。要改的话推荐用 [AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio)用自然语言描述需求,让它通过工具调用 patch 你的 profile。
+默认主代理系统提示词与默认的十个子代理 id **强耦合**——它已经按「先派侦察、起草、再派评审、迭代修订」的纪律调好了。要改的话推荐用 [AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio)用自然语言描述需求,让它通过工具调用 patch 你的 profile。
 :::
 
 ## 工作流梗概
@@ -82,15 +82,18 @@ loop: "主代理坐在写作台前" {
     shape: diamond
   }
 
-  consult: "找位顾问(默认 profile 自带 8 个子代理)" {
+  consult: "找位顾问(默认 profile 自带 10 个子代理)" {
     style.fill: "#fff3e0"
-    pre: "起草前侦察\nchat_scout · memory_scout ·\nlorebook_scout · epistemic_scout ·\ncanon_scout(按需)" {
+    pre: "起草前侦察\nchat_scout · memory_scout ·\nlorebook_scout · notes_pickup_scout ·\nepistemic_scout · canon_scout(按需)" {
       style.fill: "#fffde7"
     }
     mid: "plot_brainstormer\n结构草图 —— 可按不同角度\n并行派出多份" {
       style.fill: "#fffde7"
     }
     post: "起草后评审\nvoice_critic · continuity_critic" {
+      style.fill: "#fffde7"
+    }
+    housekeeping: "起草后清理\nnotes_curator —— notes 子系统唯一的写入点\n(默认:什么也不做)" {
       style.fill: "#fffde7"
     }
   }
@@ -129,26 +132,30 @@ loop.finalize -> out
 1. **主代理在一个工具循环里跑**。每一轮它可以调若干工具,直到主动调 `finalize`、到达轮次上限、或被用户中止。
 
 2. **主代理能用的工具组**:
-   - **循环工具**(在 profile 里勾选启用)—— 跟 loop 模式同源:`chat_*` / `lorebook_*` / `memory_*` / `note_*` / `search_*`,用来收集上下文。
+   - **循环工具**(在 profile 里勾选启用)—— 跟 loop 模式同源:`chat_*` / `lorebook_*` / `memory_*` / `note_*`(开启/关闭) / `search_*`,用来收集上下文。
    - **协作工具** —— `dispatch_subagent(subagentId, task)` 按 id 启动 profile 预定义的子代理;`dispatch_inline_subagent(systemPrompt, task, ...)` 启动一次性 ad-hoc 子代理;`await_subagents(handles)` 阻塞等子代理完工;`cancel_subagent(handle)` 中止跑到一半的子代理。
    - **消息产出工具** —— `write_message(text, mode?)` 写正文(`mode='replace'` 覆写、`mode='append'` 追加);`apply_message_patches(patches)` 做定点的 context-replace 补丁;`get_draft()` 回读当前草稿;`finalize()` 提交并收尾。
 
 3. **子代理是「一次性顾问」**:派遣时拿到当前聊天快照 + 主代理写的任务简报 + 自己的系统提示词 + 启用的循环工具 + `get_draft()`。子代理彼此看不到对方的存在,看不到主代理的推理,**不能再向下派遣**,也**不能直接写正文**——它们只产出文本,主代理决定怎么用。
 
-4. **默认 profile 自带 8 个为 RP 优化过的子代理**:
+4. **默认 profile 自带 10 个为 RP 优化过的子代理**:
 
    | 子代理 | 作用 | 简单示例(RP 场景) |
    |---|---|---|
    | `chat_scout` | 起草前单源侦察 —— 扫近期聊天,挑出主代理起草要靠的载体状态。 | 返回 5 段 `Item / Source / Why`,例如「林晚的焦虑 / 第 42 楼 / 会把对话引回家族话题」。 |
    | `memory_scout` | 起草前单源侦察 —— 在记忆图里找本回合相关的节点。 | 「第 18 楼外祖母线索是当前情感主线;第 3 楼茶道闲笔休眠中。」 |
    | `lorebook_scout` | 起草前单源侦察 —— 拉激活之外的世界书条目。 | 「『洛阳主城』条目尚未进上下文;相关性:林晚的外祖母在那。」 |
+   | `notes_pickup_scout` | 起草前 scout —— 扫描 OPEN notes 块(agent 自己在更早回合开启的伏笔、承诺、章节大纲),挑出本回合触发条件成熟的 id。不分析、不写稿——只挑出来。 | 「`o_a3f2`(外祖母在洛阳)成熟——林晚刚提到这座城。`o_b8c1`(神殿誓言)还没到时机。」 |
    | `epistemic_scout` | 起草前跨源侦察 —— 把聊天(每个角色经历过什么)与世界书 / 记忆(世界里能知道什么)交叉,给出每个角色的「知道 / 不知道 / 上帝视角陷阱」清单。 | 「林晚**不知道**用户是围城将军的儿子 —— 她只见过他两次,带话的人还没出场。」 |
    | `canon_scout` | 按需的外部侦察 —— 同人 / 公共 IP 设定考据,底层走循环工具 `search_search` / `search_visit`。需要 profile 里启用 `search.search` / `search.visit`,否则返回零条结果。原创世界跳过。 | 触到火影设定:「中忍考试不是考的,是推荐 —— 相关:若林晚自称中忍候选则要修正。」 |
    | `plot_brainstormer` | 中段头脑风暴 —— 每个角度产出一份结构草图。可按不同角度并行派多份拿到真正不同的选项。 | 角度 A「正面冲突」 / 角度 B「沉默本身成为节拍」 / 角度 C「她借转向洛阳话题躲避」。 |
    | `voice_critic` | 起草后评审 —— 人性 & 口吻。揪出「数据人」式描写(冷观察动词 / 数据词汇 / 汇报式对白等动情时刻应该烫的地方却写得冷)和冷设定误读(冷设定角色被写成真的冷,而不是「冷皮包热瓤」)。口吻语域错配是次要维度。 | 「草稿里林晚『以临床抽离的姿态观察对象的微表情漂移』—— 这是传感器笔法,不是活人笔法。换成她真的有的某个感觉,即使表面仍然克制。」 |
    | `continuity_critic` | 起草后评审 —— 仅查硬冲突。默认信任 draft;只有当聊天 / 记忆 / 世界书明确说过相反事实时才 flag。例外:角色认知边界违规(角色知道了没人告诉过他的事)永远要 flag。 | 「草稿里林晚认出对方挂坠上的家纹,但聊天里这个挂坠对她而言只被描述成『一枚银盘』。认知边界:她没被告知这是家纹,更没被告知是谁的。」 |
+   | `notes_curator` | 起草后清理 —— 本回合 notes 子系统**唯一**的写入点。关闭草稿中已兑现的笔记;只有在草稿确实埋下了真正的剧情承诺时才开新条。**默认动作:什么也不做**。污染笔记比少关一条更糟。 | 「关闭 `o_a3f2`——本稿外祖母见面已发生。不新增;brainstormer 提到未来去洛阳的伏笔,但本稿没真正埋下,不开。」 |
 
-   默认主代理系统提示词与这 8 个 id **强耦合**,按 id 指名调度,并为每个写好了 task brief 的样式。改子代理时,主代理提示词也要同步改。
+   默认主代理系统提示词与这 10 个 id **强耦合**,按 id 指名调度,并为每个写好了 task brief 的样式。改子代理时,主代理提示词也要同步改。
+
+   > **笔记反污染原则**:`notes_curator` 默认**什么也不做**。笔记是剧情作者的线索仓库,不是回合日记——被污染的笔记列表会消耗 agent 的注意力。关闭是安全的,开启是昂贵的。这条原则烙在默认 sub-agent 的 prompt 和主代理的 system prompt 里;如果你自己写 director profile,请保留它。
 
 5. **主代理对每个子代理的可见信息只有 `id` + `description`**——用户写的 `systemPrompt` **不会**泄露进主代理的提示词。description 是它「点菜」时唯一的依据,所以默认 description 写成三段式:角色 / 不知道什么 / 任务简报每次该带哪些字段。Studio 的迭代系统提示词把这一约定教给 AI,让它编辑 profile 时新建出的子代理 description 真能被主代理用起来。
 
@@ -228,7 +235,7 @@ Director 默认是「主代理 + 多子代理」的工作流,但有一种 power-
 - 适用于 `normal` / `regenerate` / `swipe` / `continue` 四种生成类型。`quiet` 与 `impersonate` 不触发 Director。
 - 要求当前激活的连接配置属于 OpenAI 家族(Anthropic / OpenAI / Gemini / OpenRouter 等)——底层流式 API 暂不支持 kobold / textgen。
 - Director 激活的回合里,capsule 注入路径自动禁用(两者概念上互斥:正文本身就是产出)。
-- **子代理深度为 1**:不能再向下派遣子代理。它们共享主代理启用的循环工具——profile 里 chat / lorebook / memory / note / search 哪几个开了,子代理就能调哪几个。子代理的自然终止条件是「某一轮没有调用任何工具」:那一轮的文本就是它返回给主代理的答案。
+- **子代理深度为 1**:不能再向下派遣子代理。它们共享主代理启用的循环工具——profile 里 chat / lorebook / memory / note(开启/关闭) / search 哪几个开了,子代理就能调哪几个。子代理的自然终止条件是「某一轮没有调用任何工具」:那一轮的文本就是它返回给主代理的答案。
 - Director 遵循编排器现有的 **使用流式传输** 开关:开启时主代理与子代理都走流式 API;关闭时使用普通非流式调用。
 - **消息气泡在主代理工作过程中实时更新**。主代理每次调 `write_message` / `apply_message_patches` 时,气泡的正文都会被重绘——你能看到消息随工具调用一步步生长、被打补丁、被改写。粒度是「每次工具调用」,不是「每个 token」。
 - **子代理的输出实时进入思考折叠**。每个派遣出去的子代理在折叠里有一段命名区(锚点 `### [<handleId>: <subagentId>]`)。开启流式传输时,每个子代理的 token 抵达即落入它自己的区段——同一回合并行派出的多个子代理会以「多个区段同时各自生长」的形式呈现,字符级互不错位(各区段定位依靠 JavaScript 单线程事件循环,保证每个 producer 的字节都连续)。关闭流式时,区段一次性收到子代理的终态全文。区段标题在子代理工作期间带 `(running)` 后缀,完成后清除(失败时替换为 `(error: ...)`)。
@@ -246,6 +253,7 @@ Director 跟其他模式一样支持 **导出 profile** / **导入 profile** 按
 
 - [编排器概览](/zh-CN/features/orchestrator/) — 通用配置 / 触发时机 / 角色卡绑定
 - [AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio) — AI 帮你写主代理 / 子代理 system prompt(强烈推荐)
+- [笔记子系统](/zh-CN/features/orchestrator/notes) — `notes_pickup_scout` 读取、`notes_curator` 写入的开/关状态线索仓库
 - [Loop 模式](/zh-CN/features/orchestrator/loop) — 单 Agent 跑工具循环、产出 capsule
 - [Spec 模式](/zh-CN/features/orchestrator/spec) — 默认 DAG,多 Agent 各 stage 产出 capsule
 - [Agenda 模式](/zh-CN/features/orchestrator/agenda) — Planner 动态调度 Worker,产出 capsule

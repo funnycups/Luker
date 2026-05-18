@@ -37,8 +37,11 @@ describe('sanitizeLoopProfile defaults', () => {
         // Missing system_prompt falls back to the shipped default prompt so
         // fresh installs ship with a usable RP director system message.
         expect(out.system_prompt).toBe(DEFAULT_LOOP_SYSTEM_PROMPT);
-        expect(out.tools.note.add).toBe(true);
-        expect(out.tools.note.delete).toBe(true);
+        // Canonical post-migration shape: tools.note.{open, close}. Legacy
+        // tools.note.{add, delete} inputs are remapped to this shape by the
+        // sanitizer; no caller should ever observe the legacy keys.
+        expect(out.tools.note.open).toBe(true);
+        expect(out.tools.note.close).toBe(true);
         expect(out.tools.chat.read_range).toBe(true);
         expect(out.tools.chat.search).toBe(true);
         expect(out.tools.lorebook.search).toBe(true);
@@ -168,15 +171,15 @@ describe('sanitizeLoopProfile tools handling', () => {
     test('respects user-disabled flags for non-finalize tools', () => {
         const out = sanitizeLoopProfile({
             tools: {
-                note: { add: false, delete: false },
+                note: { open: false, close: false },
                 chat: { read_range: false, search: false },
                 lorebook: { search: false, get: false },
                 memory: { search: false, list_recent: false, get: false },
                 finalize: false,
             },
         });
-        expect(out.tools.note.add).toBe(false);
-        expect(out.tools.note.delete).toBe(false);
+        expect(out.tools.note.open).toBe(false);
+        expect(out.tools.note.close).toBe(false);
         expect(out.tools.chat.read_range).toBe(false);
         expect(out.tools.chat.search).toBe(false);
         expect(out.tools.lorebook.search).toBe(false);
@@ -194,8 +197,8 @@ describe('sanitizeLoopProfile tools handling', () => {
         expect(out.tools.chat.read_range).toBe(false);
         expect(out.tools.chat.search).toBe(true);
         // unmentioned namespaces default to all-true
-        expect(out.tools.note.add).toBe(true);
-        expect(out.tools.note.delete).toBe(true);
+        expect(out.tools.note.open).toBe(true);
+        expect(out.tools.note.close).toBe(true);
         expect(out.tools.lorebook.search).toBe(true);
         expect(out.tools.lorebook.get).toBe(true);
         expect(out.tools.memory.search).toBe(true);

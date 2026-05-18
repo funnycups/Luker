@@ -27,13 +27,13 @@ import { sanitizeLoopProfile } from './persistence.js';
  * `session.mode === 'loop'`. Kept as an array of lines so the prompt
  * builder can join with the base prompt, and so it stays grep-able for
  * tests that assert key fields are mentioned (system_prompt /
- * tools.note.add / finalize tool is always enabled / etc.).
+ * tools.note.open / finalize tool is always enabled / etc.).
  */
 export const LOOP_ITERATION_CONTRACT_LINES = Object.freeze([
     'Iteration mode contract (loop profile):',
     '- You are editing an existing loop-mode orchestration profile.',
     '- The profile drives a single agent that calls tools in a loop and finalizes when ready; there are no stages, nodes, or presets to manage.',
-    '- Editable fields: system_prompt (string), apiPresetName (string), promptPresetName (string), max_rounds (1-50), wall_clock_budget_ms (>= 10000), tools.note.add, tools.note.delete, tools.chat.read_range, tools.chat.search, tools.lorebook.search, tools.lorebook.get, tools.memory.search, tools.memory.list_recent, tools.memory.get, tools.search.search, tools.search.visit (all boolean).',
+    '- Editable fields: system_prompt (string), apiPresetName (string), promptPresetName (string), max_rounds (1-50), wall_clock_budget_ms (>= 10000), tools.note.open, tools.note.close, tools.chat.read_range, tools.chat.search, tools.lorebook.search, tools.lorebook.get, tools.memory.search, tools.memory.list_recent, tools.memory.get, tools.search.search, tools.search.visit (all boolean).',
     '- Use luker_orch_set_loop_profile to update one or more fields. Pass only the fields you intend to change; omitted fields are inherited from the current profile.',
     '- The finalize tool is always enabled — it is the only loop terminator. Do not propose disabling tools.finalize; the schema will ignore that field.',
     '- If the user describes a workflow, infer which tool namespaces they need (note / chat / lorebook / memory / search) and propose enabling those while keeping the other tools default-on unless the user explicitly asks to disable them.',

@@ -9,6 +9,37 @@ import {
     createDefaultDirectorProfile,
     sanitizeDirectorProfile,
 } from '../../../public/scripts/extensions/orchestrator/director-defaults.js';
+import { sanitizeAgentToolFlags } from '../../../public/scripts/extensions/orchestrator/persistence.js';
+
+describe('sanitizeAgentToolFlags: note flag migration', () => {
+    test('legacy note.add/delete migrated to note.open/close', () => {
+        const sanitized = sanitizeAgentToolFlags({
+            note: { add: true, delete: false },
+        });
+        expect(sanitized.note).toEqual({ open: true, close: false });
+        expect(sanitized.note.add).toBeUndefined();
+        expect(sanitized.note.delete).toBeUndefined();
+    });
+
+    test('new note.open/close pass through unchanged', () => {
+        const sanitized = sanitizeAgentToolFlags({
+            note: { open: false, close: true },
+        });
+        expect(sanitized.note).toEqual({ open: false, close: true });
+    });
+
+    test('mixed old+new: new takes precedence', () => {
+        const sanitized = sanitizeAgentToolFlags({
+            note: { add: true, open: false, delete: true, close: false },
+        });
+        expect(sanitized.note).toEqual({ open: false, close: false });
+    });
+
+    test('empty note section under defaultAllOn:true gets both on', () => {
+        const sanitized = sanitizeAgentToolFlags({}, { defaultAllOn: true });
+        expect(sanitized.note).toEqual({ open: true, close: true });
+    });
+});
 
 describe('director schema fields', () => {
     test('ORCH_EXECUTION_MODE_DIRECTOR exported as the string "director"', () => {
@@ -30,17 +61,17 @@ describe('director schema fields', () => {
             chat: expect.objectContaining({ read_range: expect.any(Boolean), search: expect.any(Boolean) }),
             lorebook: expect.objectContaining({ search: expect.any(Boolean), get: expect.any(Boolean) }),
             memory: expect.objectContaining({ search: expect.any(Boolean), list_recent: expect.any(Boolean), get: expect.any(Boolean) }),
-            note: expect.objectContaining({ add: expect.any(Boolean), delete: expect.any(Boolean) }),
+            note: expect.objectContaining({ open: expect.any(Boolean), close: expect.any(Boolean) }),
             search: expect.objectContaining({ search: expect.any(Boolean), visit: expect.any(Boolean) }),
             finalize: false,
         }));
         // Default disposition is all-on across namespaces.
         expect(p.director.tools.chat.read_range).toBe(true);
-        expect(p.director.tools.note.add).toBe(true);
+        expect(p.director.tools.note.open).toBe(true);
         expect(p.director.discardOnAbort).toBe(false);
     });
 
-    test('createDefaultDirectorProfile ships with the eight default RP analyst sub-agents (3 single-source scouts + 1 external scout + 1 epistemic scout + 1 brainstormer + 2 critics)', () => {
+    test('createDefaultDirectorProfile ships with the ten default RP analyst sub-agents (3 single-source scouts + 1 external scout + 1 epistemic scout + 1 notes pickup scout + 1 brainstormer + 2 critics + 1 notes curator)', () => {
         const p = createDefaultDirectorProfile();
         const ids = p.director.subAgents.map(a => a.id).sort();
         // The default main-agent prompt (director-default-prompt.js) is
@@ -54,6 +85,8 @@ describe('director schema fields', () => {
             'epistemic_scout',
             'lorebook_scout',
             'memory_scout',
+            'notes_curator',
+            'notes_pickup_scout',
             'plot_brainstormer',
             'voice_critic',
         ]);
@@ -73,6 +106,10 @@ describe('director schema fields', () => {
         // knows/does, what it does NOT know, and what the main agent
         // must include in the task brief.
         for (const a of p.director.subAgents) {
+            // notes_curator is a post-draft housekeeper, not a knowledge-source scout —
+            // its description intentionally does not use the "does NOT know" / "task brief"
+            // shape that the scouts share. Exempt it from this structural check.
+            if (a.id === 'notes_curator') continue;
             expect(a.description).toMatch(/(does NOT know|Does NOT know|doesn't know)/);
             expect(a.description).toMatch(/(task brief|brief)/i);
         }
@@ -81,7 +118,7 @@ describe('director schema fields', () => {
     test('default sub-agents survive sanitize round-trip (no field gets dropped)', () => {
         const p = createDefaultDirectorProfile();
         const sanitized = sanitizeDirectorProfile(p);
-        expect(sanitized.director.subAgents).toHaveLength(8);
+        expect(sanitized.director.subAgents).toHaveLength(10);
         const ids = sanitized.director.subAgents.map(a => a.id).sort();
         expect(ids).toEqual([
             'canon_scout',
@@ -90,6 +127,8 @@ describe('director schema fields', () => {
             'epistemic_scout',
             'lorebook_scout',
             'memory_scout',
+            'notes_curator',
+            'notes_pickup_scout',
             'plot_brainstormer',
             'voice_critic',
         ]);
@@ -167,7 +206,7 @@ describe('director schema fields', () => {
                     chat: { read_range: true, search: false },
                     lorebook: { search: false, get: false },
                     memory: { search: true, list_recent: true, get: true },
-                    note: { add: false, delete: false },
+                    note: { open: false, close: false },
                     search: { search: false, visit: false },
                 },
             },

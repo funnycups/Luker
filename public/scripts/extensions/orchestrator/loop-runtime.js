@@ -296,23 +296,46 @@ function attachLoopConversationFallback(trace, conversation) {
     trace.loop.conversation = conversation;
 }
 
+/**
+ * Render the `## Open Notes` block injected into the loop-mode system
+ * prompt. The block opens with a one-line header explaining what the
+ * thread list is for and then enumerates every open note with its
+ * stable id prefix (`[id]`) so the agent can refer back to the entry
+ * by id when calling `note_close`. Closed notes never appear here —
+ * `attachNotesFloorState` filters to `status === 'open'` before this
+ * function runs.
+ *
+ * @internal — exposed for tests via `__testBuildInitialMessages`.
+ */
+function renderOpenNotesSection(rawNotes) {
+    const open = Array.isArray(rawNotes) ? rawNotes : [];
+    if (open.length === 0) return '';
+    const lines = ['', '## Open Notes (your plot-author threads — close with note_close when deployed)'];
+    for (const n of open) {
+        const id = String(n?.id ?? '').trim();
+        const text = String(n?.text ?? '');
+        if (!id && !text) continue;
+        lines.push(`- [${id}] ${text}`);
+    }
+    return lines.join('\n');
+}
+
 function buildInitialMessages(context, _payload, profile) {
     const systemContent = String(profile?.system_prompt || '').trim();
-    const rawNotes = Array.isArray(context?.__loopNotes) ? context.__loopNotes : [];
-    const notes = rawNotes
-        .map(n => (n && typeof n === 'object' && typeof n.text === 'string') ? n.text : String(n ?? ''))
-        .filter(s => s.trim());
-
-    let body = systemContent;
-    if (notes.length > 0) {
-        const block = '## Previous Notes (persistent, written by you in earlier runs)\n'
-            + notes.map((note, i) => `${i + 1}. ${note}`).join('\n');
-        body = body ? `${body}\n\n${block}` : block;
-    }
+    const openNotesBlock = renderOpenNotesSection(context?.__openNotes);
+    const body = systemContent + (openNotesBlock ? '\n' + openNotesBlock : '');
     return body
         ? [{ role: 'system', content: body }]
         : [];
 }
+
+/**
+ * @internal — exposed for tests. `buildInitialMessages` would otherwise
+ * be private to this module; tests use this alias to assert the system
+ * prompt body against `context.__openNotes` shapes without booting the
+ * full `runLoopOrchestration` loop.
+ */
+export const __testBuildInitialMessages = buildInitialMessages;
 
 /**
  * Production wiring for memory.* tools (Task 10). Loads the materialized
@@ -391,35 +414,50 @@ export function resetNotesFloorStateInstanceForTesting() {
 }
 
 /**
- * Build the production adapter expected by `loop-tools/note.js`. The
- * underlying floor-state instance stores notes as an ordered array under
- * a single key (`entries`) inside the data namespace; reads / writes go
- * through `fs.update(reducer, { floor })` so each commit is incremental.
+ * Build the production adapter expected by `loop-tools/note.js` and the
+ * Task 12 notes UI panel. The underlying floor-state instance stores
+ * notes as an ordered array under a single key (`entries`) inside the
+ * data namespace; reads / writes go through `fs.update(reducer, { floor })`
+ * so each commit is incremental.
  *
  * Adapter shape (matches the test fixture in `loop-tools-note.test.js`):
  *
  *   {
- *     appendForFloor(floor, text): Promise<string>      // returns new id
- *     listAcrossFloors(): Promise<Array<{id, text}>>
- *     pruneOldest(n): Promise<void>
- *     deleteByIds(ids: string[]): Promise<{ removed, missing }>
+ *     appendForFloor(floor, text): Promise<string>
+ *       // returns new id; entry persisted with status: 'open'
+ *     listAcrossFloors(): Promise<Array<{id, text, status, closure_reason?}>>
+ *       // chronological; full entry shape so the UI panel can show
+ *       // closure reasons. Legacy entries without `status` are
+ *       // surfaced as status='open' by the lazy migration so the
+ *       // open-notes prompt filter has a stable field to read.
+ *     updateStatusById(id, status, reason?): Promise<{ok:true} | {ok:false, error:string}>
+ *       // flip a single entry's status; reports `already_<status>` on no-op
+ *     updateTextById(id, text): Promise<{ok:true} | {ok:false, error:string}>
+ *       // mutate an existing entry's text (used by UI / curator agent)
+ *     deleteByIds(ids: string[]): Promise<{ removed: string[], missing: string[] }>
+ *       // hard-delete from storage (used by UI / curator agent, not the LLM tools).
+ *       // `removed` is the list of ids that were actually present and dropped;
+ *       // `missing` is the requested ids that were not in storage. The UI can
+ *       // diff its optimistic list against `removed` directly without an
+ *       // index-based reconciliation against the original request.
  *   }
  *
- * Each note carries a stable id assigned at append time. The id is opaque
- * to the LLM (it still sees 1-based positions in the "## Previous Notes"
- * block) — `loop-tools/note.js` keeps a per-agent index→id snapshot and
- * resolves `note_delete([2, 3])` through it, so two agents that observed
- * the same snapshot can both delete their intended notes without one's
- * positional indexes shifting under the other.
+ * Each note carries a stable id assigned at append time and a `status`
+ * field (`'open'` for fresh notes; flipped to `'closed'` by `note_close`).
+ * The id is visible to the LLM in the `## Open Notes` system-prompt block
+ * so subsequent `note_close` calls reference it directly — there is no
+ * positional / index resolution and no per-run snapshot.
  *
- * Legacy entries stored as bare strings (pre-ID) are migrated lazily: on
- * first read after the upgrade, an `fs.update` rewrites them as
- * `{id, text}` rows. Subsequent reads see the migrated shape directly.
+ * Legacy entries stored as bare strings (pre-status) are migrated lazily:
+ * on first read after the upgrade, an `fs.update` rewrites them as
+ * `{id, text}` rows (no `status` field — the open-notes filter treats
+ * missing status as `'open'`). Subsequent reads see the migrated shape
+ * directly.
  *
- * A simple promise-chain mutex serializes append / prune / deleteByIds
- * so a concurrent multi-agent caller can't observe a partial LRU prune.
- * Reads are not gated — they may snapshot mid-operation but each
- * individual `fs.update` is atomic.
+ * A simple promise-chain mutex serializes append / status-update /
+ * text-update / deleteByIds so a concurrent multi-agent caller can't
+ * observe a partial write. Reads are not gated — they may snapshot
+ * mid-operation but each individual `fs.update` is atomic.
  */
 function makeNotesAdapter(fs) {
     let chain = Promise.resolve();
@@ -437,8 +475,16 @@ function makeNotesAdapter(fs) {
         let dirty = false;
         for (const entry of arr) {
             if (entry && typeof entry === 'object' && typeof entry.id === 'string' && typeof entry.text === 'string') {
-                out.push(entry);
+                // Preserve status / closure_reason when present so a round-trip
+                // through normalize doesn't strip the state machine fields.
+                const next = { id: entry.id, text: entry.text };
+                if (typeof entry.status === 'string') next.status = entry.status;
+                if (typeof entry.closure_reason === 'string') next.closure_reason = entry.closure_reason;
+                out.push(next);
             } else if (typeof entry === 'string') {
+                // Legacy bare-string entry from pre-status chats. Upgrade
+                // shape lazily; leave status unset so the open-notes filter
+                // treats it as 'open' by default (back-compat).
                 out.push({ id: mintId(), text: entry });
                 dirty = true;
             }
@@ -456,7 +502,7 @@ function makeNotesAdapter(fs) {
             await lock(() => fs.update((current) => {
                 const safe = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
                 const { entries } = normalizeEntries(safe.entries);
-                entries.push({ id, text: String(text) });
+                entries.push({ id, text: String(text), status: 'open' });
                 return { ...safe, entries };
             }, { floor: targetFloor }));
             return id;
@@ -467,8 +513,7 @@ function makeNotesAdapter(fs) {
             const safe = (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
             const { entries, dirty } = normalizeEntries(safe.entries);
             // Lazy migration: if any legacy string entries were upgraded,
-            // commit the new shape back so subsequent reads (and any later
-            // `deleteByIds` call) see stable ids.
+            // commit the new shape back so subsequent reads see stable ids.
             if (dirty) {
                 await lock(() => fs.update((current) => {
                     const inner = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
@@ -476,37 +521,87 @@ function makeNotesAdapter(fs) {
                     return { ...inner, entries: migrated };
                 }));
             }
-            return entries.map(e => ({ id: e.id, text: e.text }));
+            // Return the full entry shape (id, text, status, closure_reason)
+            // so the UI panel in Task 12 can render closure metadata. The
+            // open-notes prompt filter in `loadOpenNotes` projects to its
+            // own narrower shape.
+            return entries.map(e => {
+                const out = { id: e.id, text: e.text };
+                if (typeof e.status === 'string') out.status = e.status;
+                if (typeof e.closure_reason === 'string') out.closure_reason = e.closure_reason;
+                return out;
+            });
         },
-        async pruneOldest(n) {
-            const drop = Math.max(0, Math.floor(Number(n) || 0));
-            if (!drop) return;
-            // The pruning commit attaches at the chat tail (no override) so
-            // it travels with subsequent activity — pruning is a maintenance
-            // op rather than a per-floor record.
+        async updateStatusById(id, status, reason) {
+            const targetId = String(id || '').trim();
+            if (!targetId) return { ok: false, error: 'not_found' };
+            const nextStatus = String(status || '');
+            let outcome = { ok: false, error: 'not_found' };
             await lock(() => fs.update((current) => {
                 const safe = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
                 const { entries } = normalizeEntries(safe.entries);
-                if (drop >= entries.length) return { ...safe, entries: [] };
-                return { ...safe, entries: entries.slice(drop) };
+                const idx = entries.findIndex(e => e.id === targetId);
+                if (idx < 0) {
+                    outcome = { ok: false, error: 'not_found' };
+                    return current;
+                }
+                const existing = entries[idx];
+                const existingStatus = existing.status ?? 'open';
+                if (existingStatus === nextStatus) {
+                    outcome = { ok: false, error: 'already_' + nextStatus };
+                    return current;
+                }
+                const next = { ...existing, status: nextStatus };
+                if (typeof reason === 'string' && reason.length > 0) {
+                    next.closure_reason = reason;
+                }
+                entries[idx] = next;
+                outcome = { ok: true };
+                return { ...safe, entries };
             }));
+            return outcome;
+        },
+        async updateTextById(id, text) {
+            const targetId = String(id || '').trim();
+            if (!targetId) return { ok: false, error: 'not_found' };
+            const nextText = String(text ?? '');
+            let outcome = { ok: false, error: 'not_found' };
+            await lock(() => fs.update((current) => {
+                const safe = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
+                const { entries } = normalizeEntries(safe.entries);
+                const idx = entries.findIndex(e => e.id === targetId);
+                if (idx < 0) {
+                    outcome = { ok: false, error: 'not_found' };
+                    return current;
+                }
+                entries[idx] = { ...entries[idx], text: nextText };
+                outcome = { ok: true };
+                return { ...safe, entries };
+            }));
+            return outcome;
         },
         async deleteByIds(ids) {
             const requested = new Set((Array.isArray(ids) ? ids : [])
                 .map(v => String(v || '').trim())
                 .filter(Boolean));
-            if (requested.size === 0) return { removed: 0, missing: [] };
+            if (requested.size === 0) return { removed: [], missing: [] };
 
-            let removed = 0;
+            // `removed` collects the ids that were actually present and dropped
+            // (not just a count), so the UI panel can diff its optimistic state
+            // against the result without a positional reconciliation against
+            // the original request. `seen` tracks every id we walked past so
+            // we can compute `missing` (= requested - seen) after the write.
+            const removed = [];
             const seen = new Set();
             await lock(() => fs.update((current) => {
                 const safe = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
                 const { entries } = normalizeEntries(safe.entries);
                 const kept = [];
+                removed.length = 0; // reset in case fs.update retries the reducer
                 for (const entry of entries) {
                     seen.add(entry.id);
                     if (requested.has(entry.id)) {
-                        removed += 1;
+                        removed.push(entry.id);
                         continue;
                     }
                     kept.push(entry);
@@ -523,20 +618,26 @@ function makeNotesAdapter(fs) {
 }
 
 /**
- * Production wiring for note.add (Task 11). Mounts the
- * `luker_orch_loop_notes` floor-state namespace, exposes an
- * `appendForFloor` / `listAcrossFloors` / `pruneOldest` / `deleteByIds`
- * adapter on `context.__floorStateForNotes`, pre-populates
- * `context.__loopNotes` with `{id, text}[]` so `buildInitialMessages`
- * can render them, and seeds `context.__noteIdSnapshot` with the same
- * id sequence so `note_delete` can resolve agent-supplied 1-based
- * positions to stable ids regardless of concurrent deletes by other
- * agents (relevant once tools are exposed beyond single-agent loop mode).
+ * Production wiring for `note_open` / `note_close` (Task 11+).
  *
- * Failures degrade silently: the adapter stays null and both
- * `__loopNotes` / `__noteIdSnapshot` stay `[]`, so the agent simply
- * doesn't get a "Previous Notes" block this run (and any `note_add`
- * call surfaces `NOTE_FS_UNAVAILABLE`).
+ * Mounts the `luker_orch_loop_notes` floor-state namespace, exposes the
+ * adapter on `context.__floorStateForNotes` (with `appendForFloor` /
+ * `listAcrossFloors` / `updateStatusById` / `updateTextById` /
+ * `deleteByIds`), and pre-populates `context.__openNotes` with the
+ * filtered subset `[{ id, text }]` so `buildInitialMessages` can render
+ * the `## Open Notes` system-prompt block without re-querying the
+ * adapter mid-build.
+ *
+ * Closed notes are filtered out before stashing — they stay in floor
+ * storage as history (the UI panel renders them with their
+ * `closure_reason`), but the agent never sees them again in its
+ * prompt. Notes without a `status` field (legacy entries pre-state-
+ * machine) are treated as open.
+ *
+ * Failures degrade silently: the adapter stays null and `__openNotes`
+ * stays `[]`, so the agent simply doesn't get an Open Notes block this
+ * run (and any `note_open` / `note_close` call surfaces
+ * `NOTE_FS_UNAVAILABLE`).
  *
  * @param {object} context — toolContext (mutated in place)
  */
@@ -546,19 +647,23 @@ export async function attachNotesFloorState(context) {
         const fs = await getNotesFloorStateInstance(context);
         if (!fs || typeof fs.ready !== 'function' || typeof fs.get !== 'function' || typeof fs.update !== 'function') {
             context.__floorStateForNotes = null;
-            context.__loopNotes = [];
-            context.__noteIdSnapshot = [];
+            context.__openNotes = [];
             return;
         }
         const adapter = makeNotesAdapter(fs);
         context.__floorStateForNotes = adapter;
         const initial = await adapter.listAcrossFloors();
-        context.__loopNotes = initial;
-        context.__noteIdSnapshot = initial.map(n => n.id);
+        // Only the open subset goes into the system prompt. The UI panel
+        // (Task 12) reads the full entry list directly from the adapter
+        // so it can show closure metadata.
+        context.__openNotes = Array.isArray(initial)
+            ? initial
+                .filter(e => e && typeof e === 'object' && (e.status ?? 'open') === 'open')
+                .map(e => ({ id: String(e.id || ''), text: String(e.text || '') }))
+            : [];
     } catch (_error) {
         context.__floorStateForNotes = null;
-        context.__loopNotes = [];
-        context.__noteIdSnapshot = [];
+        context.__openNotes = [];
     }
 }
 
@@ -573,14 +678,16 @@ export async function attachNotesFloorState(context) {
  *   - `__memoryStore` (+ optional `__memoryDeps`) — chat-scoped
  *     memory-graph handle; `memory_*` tools surface
  *     `ToolError(MEMORY_DISABLED)` when this is null.
- *   - `__floorStateForNotes` adapter + `__loopNotes` + `__noteIdSnapshot`
- *     — per-chat persistent notes; `note_add` / `note_delete` plus the
- *     system-prompt builder all read this.
+ *   - `__floorStateForNotes` adapter + `__openNotes` — per-chat
+ *     persistent notes; `note_open` / `note_close` plus the
+ *     system-prompt builder all read this. `__openNotes` carries only
+ *     the open subset (closed entries stay in floor storage as
+ *     history but are filtered out of the prompt-injection path).
  *
  * The returned object is created via `Object.create(context)` so caller
  * sees a fresh frame whose unset fields fall through to the upstream
  * extension context. Tests pre-populate the relevant `__memoryStore` /
- * `__floorStateForNotes` / `__loopNotes` fields on the upstream context
+ * `__floorStateForNotes` / `__openNotes` fields on the upstream context
  * to skip the production loaders — that "undefined means not-set, load
  * it" gate per attachment is preserved here.
  *
@@ -606,7 +713,7 @@ export async function attachToolContext(context, payload) {
         await attachMemoryStore(toolContext);
     }
 
-    if (toolContext.__floorStateForNotes === undefined && toolContext.__loopNotes === undefined) {
+    if (toolContext.__floorStateForNotes === undefined && toolContext.__openNotes === undefined) {
         await attachNotesFloorState(toolContext);
     }
 

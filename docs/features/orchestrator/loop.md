@@ -95,11 +95,12 @@ Key fields:
 
 ## Built-in tools
 
-Tools follow the OpenAI function-calling protocol; results come back as `role: tool` messages in the agent's next round. Ten optional tools plus the always-on `finalize`:
+Tools follow the OpenAI function-calling protocol; results come back as `role: tool` messages in the agent's next round. Eleven optional tools plus the always-on `finalize`:
 
 | Tool | Purpose | Concrete RP example |
 |---|---|---|
-| `note_add(text)` | Write a **persistent note** bound to the current chat. Auto-injected into the system prompt the next time loop starts. 1 KB per entry, LRU-capped at 50. | The agent learns "Lin Wan mentioned her grandmother in Luoyang" and calls `note_add('Lin Wan family lead: grandmother → Luoyang')`; the note resurfaces in the system prompt next session. |
+| `note_open(text)` | Open a new plot-author thread (foreshadowing, promise, chapter outline). The note appears in the agent's "## Open Notes" block on every subsequent run until you close it. Max 16KB per note. | The agent realizes it just planted a setup and calls `note_open('Lin Wan: grandmother in Luoyang — payoff next visit')`; subsequent runs surface that thread. |
+| `note_close(id, reason?)` | Close an open note by id (it has been deployed, or is no longer needed). The note drops out of the "## Open Notes" block but stays archived. | After the chapter beat lands, `note_close('o_a3f2', 'grandmother visit happened in floor 73')`. |
 | `chat_read_range(start, end)` | Read a range of chat floors. Negatives count from the tail; ≤ 50 floors per call. | `chat_read_range(-10, -1)` reviews the last 10 floors for context. |
 | `chat_search(query, limit)` | Substring search across the entire chat (case-insensitive); returns matching floors with previews. | `chat_search('Qingming Sword')` surfaces every prior mention of "Qingming Sword". |
 | `lorebook_search(query, limit)` | Substring search across all enabled lorebooks. **Excludes entries activated this turn by default** — they're already injected into the main context, returning them again wastes tokens. Returns `entries` plus `excluded_active_count`. | `lorebook_search('Luoyan City')` surfaces non-activated lore on Luoyan City. |
@@ -222,7 +223,7 @@ A: Those entries are already injected into the main model via the worldInfo path
 A: Click the toolbar's stop button (same as for spec / agenda). The loop runtime checks the abort signal at the top of every round and stops immediately; the trace records `cancelled` and no half-baked capsule is injected.
 
 **Q: Are notes shared across chats?**
-A: No. `note_add` writes to the **current chat**'s floor-state namespace; chats don't see each other's notes. When floors are deleted / swiped, floor-state's settle mechanism kicks in — notes bound to a removed floor disappear automatically.
+A: No — notes live in the current chat's persistent state. Floor-state's settle mechanism handles branching automatically.
 
 **Q: My loop got cut off after three rounds without tool calls — what now?**
 A: Check whether the system prompt gives the agent a clear "output shape". Most of the time the agent is "thinking" but not sure when to call `finalize`; adding "as soon as you have enough information to write the capsule, call `finalize` immediately" usually fixes it.
@@ -251,3 +252,4 @@ Concrete latency deltas, capsule-quality preferences, and total-token usage acro
 - [Agenda mode](/features/orchestrator/agenda) — Planner-driven dynamic dispatch
 - [Function Call Runtime](/improvements/function-call-runtime) — the runtime tool calls go through
 - [Memory Graph](/features/memory-graph) — data source behind the `memory_*` tools
+- [Notes](/features/orchestrator/notes) — panel usage and detailed concept reference for the open/close note model

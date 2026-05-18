@@ -487,6 +487,75 @@ export function ensureStyles(uiBlockId) {
     font-size: 0.85em;
     line-height: 1.35;
 }
+/* ============================================================== */
+/* Notes panel (consumed by notes-panel.js / ui-templates.js)      */
+/* ============================================================== */
+.luker-notes-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+}
+.luker-notes-panel__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.luker-notes-panel__tabs {
+    display: flex;
+    gap: 4px;
+}
+.luker-notes-tab {
+    padding: 4px 10px;
+    opacity: 0.6;
+}
+.luker-notes-tab.is-active {
+    opacity: 1;
+    font-weight: 600;
+}
+.luker-notes-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.luker-notes-row {
+    padding: 6px 8px;
+    border-radius: 4px;
+    background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.04));
+}
+.luker-notes-row__text {
+    font-size: 0.95em;
+    line-height: 1.4;
+}
+.luker-notes-row__text[contenteditable="true"] {
+    outline: 1px dashed var(--SmartThemeBorderColor, #888);
+    padding: 2px 4px;
+}
+.luker-notes-row__reason {
+    margin-top: 4px;
+    font-size: 0.85em;
+    opacity: 0.7;
+}
+.luker-notes-row__actions {
+    display: flex;
+    gap: 4px;
+    margin-top: 4px;
+}
+.luker-notes-action {
+    padding: 2px 8px;
+    font-size: 0.85em;
+}
+.luker-notes-action--danger {
+    color: var(--SmartThemeWarningColor, #c66);
+}
+.luker-notes-empty {
+    opacity: 0.5;
+    padding: 12px;
+    text-align: center;
+}
 @media (max-width: 980px) {
     #${uiBlockId} .luker_orch_workspace_grid {
         grid-template-columns: 1fr;
