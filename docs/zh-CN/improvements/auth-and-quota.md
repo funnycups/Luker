@@ -4,6 +4,20 @@ Luker 内置了多用户认证和配额管理系统，适用于团队共享实�
 
 ## 认证系统
 
+### 自助注册
+
+登录页面可以展示「创建账户」表单，供访客直接注册账户。该功能默认关闭，由管理员面板切换（保存在 `admin-settings.json` 的 `accountRegistration` 配置段中）：
+
+```json
+{
+  "accountRegistration": {
+    "enabled": false
+  }
+}
+```
+
+通过此方式创建的账户始终为非管理员，创建后立即启用，并继承默认存储配额。功能关闭时，注册接口无论请求内容如何都会返回 HTTP 403，因此表单无法被绕过启用。
+
 ### GitHub OAuth 登录
 
 Luker 支持通过 GitHub OAuth 进行用户认证。用户点击登录后，会被重定向到 GitHub 授权页面，授权完成后自动创建或关联本地用户账户。
@@ -75,6 +89,7 @@ Luker 的日志系统覆盖后端和前端，帮助管理员远程排查问题�
 
 | 配置路径 | 类型 | 默认值 | 用途 |
 |---------|------|--------|------|
+| `accountRegistration.enabled` | boolean | `false` | 是否在登录页展示自助注册表单 |
 | `oauth.github.enabled` | boolean | `false` | 是否启用 GitHub OAuth |
 | `oauth.github.clientId` | string | — | GitHub OAuth 客户端 ID |
 | `oauth.github.clientSecret` | string | — | GitHub OAuth 客户端密钥 |

@@ -70,6 +70,22 @@ enableDiscreetLogin: true
 
 When enabled, the login page won't display obvious Luker branding — useful for low-profile deployments.
 
+## Self-Service Registration
+
+The login page can optionally show a "Create account" form so visitors can register themselves without administrator intervention. This is **disabled by default** — toggle it from the admin panel under "Auth & Limits → Account Registration".
+
+New accounts created via self-registration:
+
+- Default to non-admin role
+- Are enabled immediately (no email verification or approval step)
+- Inherit the default storage quota set in the same admin panel
+
+The login page exposes a "Don't have an account? Create one" link only when this is enabled. Direct POSTs to the registration endpoint are also rejected while disabled.
+
+::: warning
+Self-service registration is intended for trusted networks or invite-gated deployments. If you expose Luker to the public internet, prefer OAuth or admin-created accounts so you can vet new users.
+:::
+
 ## GitHub OAuth Login
 
 Luker supports logging in with a GitHub account. Users are redirected to GitHub's authorization page, and upon completion, a local user account is automatically created or linked.

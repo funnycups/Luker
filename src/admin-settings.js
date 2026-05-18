@@ -12,6 +12,9 @@ const DEFAULT_ADMIN_SETTINGS = Object.freeze({
     storage: {
         defaultUserQuotaBytes: -1,
     },
+    accountRegistration: {
+        enabled: false,
+    },
     oauth: {
         github: {
             enabled: false,
@@ -128,6 +131,9 @@ export function sanitizeAdminSettings(rawSettings) {
     const settings = {
         storage: {
             defaultUserQuotaBytes: normalizeQuotaBytes(source?.storage?.defaultUserQuotaBytes ?? defaults.storage.defaultUserQuotaBytes),
+        },
+        accountRegistration: {
+            enabled: Boolean(source?.accountRegistration?.enabled),
         },
         oauth: {
             github: {

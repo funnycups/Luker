@@ -2186,6 +2186,8 @@ async function openAdminPanel() {
 
         template.find('#defaultUserQuotaMbInput').val(bytesToMbInput(settings?.storage?.defaultUserQuotaBytes));
 
+        template.find('#accountRegistrationEnabled').prop('checked', Boolean(settings?.accountRegistration?.enabled));
+
         template.find('#oauthGithubEnabled').prop('checked', Boolean(settings?.oauth?.github?.enabled));
         template.find('#oauthGithubAutoCreate').prop('checked', Boolean(settings?.oauth?.github?.allowAutoCreate));
         template.find('#oauthGithubClientId').val(settings?.oauth?.github?.clientId || '');
@@ -2210,6 +2212,9 @@ async function openAdminPanel() {
         return {
             storage: {
                 defaultUserQuotaBytes: defaultQuotaBytes,
+            },
+            accountRegistration: {
+                enabled: template.find('#accountRegistrationEnabled').is(':checked'),
             },
             oauth: {
                 github: {

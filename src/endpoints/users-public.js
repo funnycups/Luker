@@ -14,6 +14,7 @@ const DISCREET_LOGIN = getConfigValue('enableDiscreetLogin', false, 'boolean');
 const PREFER_REAL_IP_HEADER = getConfigValue('rateLimiting.preferRealIpHeader', false, 'boolean');
 const LOGIN_POINTS = getConfigValue('rateLimiting.accountsLoginMaxAttempts', 5, 'number');
 const RECOVER_POINTS = getConfigValue('rateLimiting.accountsRecoverMaxAttempts', 5, 'number');
+const REGISTER_POINTS = getConfigValue('rateLimiting.accountsRegisterMaxAttempts', 3, 'number');
 const MFA_CACHE = new Cache(5 * 60 * 1000);
 const OAUTH_STATE_CACHE = new Cache(10 * 60 * 1000);
 
@@ -26,6 +27,10 @@ const loginLimiter = new RateLimiterMemory({
 });
 const recoverLimiter = new RateLimiterMemory({
     points: RECOVER_POINTS > 0 ? RECOVER_POINTS : Number.MAX_SAFE_INTEGER,
+    duration: 300,
+});
+const registerLimiter = new RateLimiterMemory({
+    points: REGISTER_POINTS > 0 ? REGISTER_POINTS : Number.MAX_SAFE_INTEGER,
     duration: 300,
 });
 
@@ -55,6 +60,17 @@ function toKebabHandle(value) {
         .replace(/^-+|-+$/g, '')
         .slice(0, 40);
     return candidate || 'user';
+}
+
+function sanitizeRequestedHandle(value) {
+    const trimmed = String(value || '').toLowerCase().trim();
+    if (!trimmed) {
+        return '';
+    }
+    return trimmed
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 40);
 }
 
 async function findUserByOAuth(provider, externalId) {
@@ -240,6 +256,85 @@ router.post('/oauth/providers', async (_request, response) => {
         return response.json({ providers });
     } catch (error) {
         console.error('OAuth providers request failed:', error);
+        return response.sendStatus(500);
+    }
+});
+
+router.post('/registration/info', async (_request, response) => {
+    try {
+        const settings = await getAdminSettings();
+        return response.json({ enabled: Boolean(settings?.accountRegistration?.enabled) });
+    } catch (error) {
+        console.error('Registration info request failed:', error);
+        return response.sendStatus(500);
+    }
+});
+
+router.post('/register', async (request, response) => {
+    try {
+        const settings = await getAdminSettings();
+        if (!settings?.accountRegistration?.enabled) {
+            return response.status(403).json({ error: 'Account registration is disabled.' });
+        }
+
+        const ip = getIpAddress(request, PREFER_REAL_IP_HEADER);
+        await registerLimiter.consume(ip);
+
+        const rawHandle = String(request.body?.handle || '').trim();
+        const rawName = String(request.body?.name || '').trim();
+        const password = String(request.body?.password || '');
+
+        if (!rawHandle || !rawName || !password) {
+            return response.status(400).json({ error: 'Missing required fields' });
+        }
+
+        const handle = sanitizeRequestedHandle(rawHandle);
+        if (!handle) {
+            return response.status(400).json({ error: 'Invalid handle' });
+        }
+
+        const handles = await getAllUserHandles();
+        if (handles.includes(handle)) {
+            return response.status(409).json({ error: 'User already exists' });
+        }
+
+        if (!request.session) {
+            console.error('Session not available');
+            return response.sendStatus(500);
+        }
+
+        const salt = getPasswordSalt();
+        const defaultQuotaBytes = Number(settings?.storage?.defaultUserQuotaBytes);
+
+        /** @type {import('../users.js').User} */
+        const newUser = {
+            handle,
+            name: rawName,
+            created: Date.now(),
+            password: getPasswordHash(password, salt),
+            salt,
+            admin: false,
+            enabled: true,
+            storageQuotaBytes: Number.isFinite(defaultQuotaBytes) && defaultQuotaBytes >= 0 ? Math.floor(defaultQuotaBytes) : undefined,
+        };
+
+        await storage.setItem(toKey(handle), newUser);
+        await ensurePublicDirectoriesExist();
+        const directories = getUserDirectories(handle);
+        await checkForNewContent([directories], [CONTENT_TYPES.SETTINGS]);
+
+        await registerLimiter.delete(ip);
+        request.session.handle = newUser.handle;
+        request.session.version = getAccountVersion(newUser);
+        console.info('Registration successful:', newUser.handle, 'from', ip, 'at', new Date().toLocaleString());
+        return response.json({ handle: newUser.handle });
+    } catch (error) {
+        if (error instanceof RateLimiterRes) {
+            console.warn('Registration failed: Rate limited from', getIpAddress(request, PREFER_REAL_IP_HEADER));
+            return retryAfter(response, error).status(429).send({ error: 'Too many attempts. Try again later.' });
+        }
+
+        console.error('Registration failed:', error);
         return response.sendStatus(500);
     }
 });

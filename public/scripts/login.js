@@ -5,6 +5,7 @@ import { initAccessibility } from './a11y.js';
  */
 let csrfToken = '';
 let discreetLogin = false;
+let oauthAvailable = false;
 
 /**
  * Gets a CSRF token from the server.
@@ -63,6 +64,61 @@ async function getOAuthProviders() {
         return response.json();
     } catch {
         return null;
+    }
+}
+
+/**
+ * Gets account registration availability from the server.
+ * @returns {Promise<{enabled: boolean}|null>}
+ */
+async function getRegistrationInfo() {
+    try {
+        const response = await fetch('/api/users/registration/info', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken,
+            },
+        });
+
+        if (!response.ok) {
+            return null;
+        }
+
+        return response.json();
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Submits a registration request to the server.
+ * @param {{handle: string, name: string, password: string}} payload
+ * @returns {Promise<void>}
+ */
+async function submitRegistration(payload) {
+    try {
+        const response = await fetch('/api/users/register', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken,
+            },
+            body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            return displayError(errorData.error || 'Registration failed.');
+        }
+
+        const data = await response.json();
+        if (data.handle) {
+            redirectToHome();
+        }
+    } catch (error) {
+        console.error('Error registering:', error);
+        displayError(String(error));
     }
 }
 
@@ -238,7 +294,75 @@ function configureOAuthButtons(oauthPayload) {
     $('#oauthGithubButton').attr('href', '/api/users/oauth/start/github').toggle(githubEnabled);
     $('#oauthDiscordButton').attr('href', '/api/users/oauth/start/discord').toggle(discordEnabled);
 
-    $('#oauthLoginBlock').toggle(githubEnabled || discordEnabled);
+    oauthAvailable = githubEnabled || discordEnabled;
+    $('#oauthLoginBlock').toggle(oauthAvailable);
+}
+
+function showRegisterBlock() {
+    $('#userList').hide();
+    $('#handleEntryBlock').hide();
+    $('#passwordEntryBlock').hide();
+    $('#oauthLoginBlock').hide();
+    $('#passwordRecoveryBlock').hide();
+    $('#registerEntryBlock').hide();
+    $('#normalLoginPrompt').hide();
+    $('#discreetLoginPrompt').hide();
+    $('#registerBlock').show();
+    $('#registerName').val('');
+    $('#registerHandle').val('');
+    $('#registerPassword').val('');
+    $('#registerConfirm').val('');
+    displayError('');
+    $('#registerName').trigger('focus');
+}
+
+function hideRegisterBlock() {
+    $('#registerBlock').hide();
+    if (discreetLogin) {
+        $('#handleEntryBlock').show();
+        $('#passwordEntryBlock').show();
+        $('#discreetLoginPrompt').show();
+    } else {
+        $('#userList').show();
+        $('#normalLoginPrompt').show();
+    }
+    $('#oauthLoginBlock').toggle(oauthAvailable);
+    $('#registerEntryBlock').show();
+    displayError('');
+}
+
+async function onSubmitRegistrationClick() {
+    const name = String($('#registerName').val() || '').trim();
+    const handle = String($('#registerHandle').val() || '').trim();
+    const password = String($('#registerPassword').val() || '');
+    const confirm = String($('#registerConfirm').val() || '');
+
+    if (!name || !handle || !password) {
+        return displayError('Display name, handle, and password are required.');
+    }
+
+    if (password !== confirm) {
+        return displayError('Passwords do not match.');
+    }
+
+    await submitRegistration({ handle, name, password });
+}
+
+/**
+ * Configures the registration entry button + form, if enabled.
+ * @param {{enabled?: boolean}|null} registrationPayload
+ */
+function configureRegistration(registrationPayload) {
+    const enabled = Boolean(registrationPayload?.enabled);
+    $('#registerEntryBlock').toggle(enabled);
+
+    if (!enabled) {
+        return;
+    }
+
+    $('#openRegisterLink').off('click').on('click', showRegisterBlock);
+    $('#submitRegister').off('click').on('click', onSubmitRegistrationClick);
+    $('#cancelRegister').off('click').on('click', hideRegisterBlock);
 }
 
 /**
@@ -320,9 +444,10 @@ function handleOAuthErrorParam() {
     initAccessibility();
 
     csrfToken = await getCsrfToken();
-    const [userList, oauthPayload] = await Promise.all([
+    const [userList, oauthPayload, registrationPayload] = await Promise.all([
         getUserList(),
         getOAuthProviders(),
+        getRegistrationInfo(),
     ]);
 
     if (discreetLogin) {
@@ -332,13 +457,16 @@ function handleOAuthErrorParam() {
     }
 
     configureOAuthButtons(oauthPayload);
+    configureRegistration(registrationPayload);
     handleOAuthErrorParam();
 
     document.getElementById('shadow_popup').style.opacity = '';
     $('#cancelRecovery').on('click', onCancelRecoveryClick);
     $(document).on('keydown', (evt) => {
         if (evt.key === 'Enter' && document.activeElement.tagName === 'INPUT') {
-            if ($('#passwordRecoveryBlock').is(':visible')) {
+            if ($('#registerBlock').is(':visible')) {
+                $('#submitRegister').trigger('click');
+            } else if ($('#passwordRecoveryBlock').is(':visible')) {
                 $('#sendRecovery').trigger('click');
             } else {
                 $('#loginButton').trigger('click');

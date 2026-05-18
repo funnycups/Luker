@@ -129,6 +129,12 @@
             <input id="defaultUserQuotaMbInput" class="text_pole" type="number" min="-1" step="1" placeholder="-1 for unlimited" />
         </div>
 
+        <h4 class="margin0">Account Registration</h4>
+        <div class="flex-container flexFlowColumn flexGap10">
+            <label><input type="checkbox" id="accountRegistrationEnabled" /> Allow visitors to register accounts from the login page</label>
+            <small>When enabled, the login page shows a "Create account" form. New accounts default to non-admin and respect the storage quota above.</small>
+        </div>
+
         <h4 class="margin0">GitHub OAuth</h4>
         <div class="flex-container flexFlowColumn flexGap10">
             <label><input type="checkbox" id="oauthGithubEnabled" /> Enable GitHub OAuth login</label>

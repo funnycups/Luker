@@ -4,6 +4,20 @@ Luker has a built-in multi-user authentication and quota management system, suit
 
 ## Authentication System
 
+### Self-Service Registration
+
+The login page can show a "Create account" form so visitors register themselves directly. This is disabled by default and is toggled from the admin panel (stored in the `accountRegistration` section of `admin-settings.json`):
+
+```json
+{
+  "accountRegistration": {
+    "enabled": false
+  }
+}
+```
+
+Accounts created this way are always non-admin, are enabled immediately, and inherit the default storage quota. When disabled, the registration endpoint rejects requests with HTTP 403 regardless of payload — there is no way for the form to leak through.
+
 ### GitHub OAuth Login
 
 Luker supports user authentication via GitHub OAuth. When users click login, they are redirected to the GitHub authorization page. After authorization is complete, a local user account is automatically created or associated.
@@ -75,6 +89,7 @@ The following are OAuth-related configuration items in `admin-settings.json` (se
 
 | Config Path | Type | Default | Purpose |
 |------------|------|---------|--------|
+| `accountRegistration.enabled` | boolean | `false` | Whether to expose the self-service registration form on the login page |
 | `oauth.github.enabled` | boolean | `false` | Whether to enable GitHub OAuth |
 | `oauth.github.clientId` | string | — | GitHub OAuth client ID |
 | `oauth.github.clientSecret` | string | — | GitHub OAuth client secret |

@@ -70,6 +70,20 @@
                                     </a>
                                 </div>
                             </div>
+                            <div id="registerEntryBlock" style="display:none;" class="flex-container flexFlowColumn alignItemsCenter">
+                                <a id="openRegisterLink" href="#" onclick="return false;">Don't have an account? Create one</a>
+                            </div>
+                            <div id="registerBlock" style="display:none;" class="flex-container flexFlowColumn alignItemsCenter">
+                                <h3>Create a new account</h3>
+                                <input id="registerName" class="text_pole" type="text" placeholder="Display name" autocomplete="name">
+                                <input id="registerHandle" class="text_pole" type="text" placeholder="User handle (lowercase letters, numbers, dashes)" autocomplete="username" pattern="[a-z0-9-]+">
+                                <input id="registerPassword" class="text_pole" type="password" placeholder="Password" autocomplete="new-password">
+                                <input id="registerConfirm" class="text_pole" type="password" placeholder="Confirm password" autocomplete="new-password">
+                                <div class="flex-container flexGap10">
+                                    <div id="submitRegister" class="menu_button">Create account</div>
+                                    <div id="cancelRegister" class="menu_button">Cancel</div>
+                                </div>
+                            </div>
                             <div id="passwordRecoveryBlock" style="display:none;" class="flex-container flexFlowColumn alignItemsCenter">
                                 <div id="recoverMessage">Recovery code has been posted to the server console.</div>
                                 <input id="recoveryCode" class="text_pole" type="text" placeholder="Recovery code">
