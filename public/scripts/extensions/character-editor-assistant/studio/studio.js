@@ -1464,9 +1464,12 @@ function handleStudioKeydown(e) {
         return;
     }
 
-    // Enter in AI input: Send message (without Shift)
+    // Ctrl/Cmd+Enter in AI input: Send message. Plain Enter is reserved
+    // for newlines so mobile users (no Ctrl key on touch keyboards) can
+    // compose multi-line prompts. Skip during IME composition to avoid
+    // sending mid-Chinese-input.
     const input = document.querySelector('[data-studio-input]');
-    if (e.key === 'Enter' && !e.shiftKey && document.activeElement === input) {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing && document.activeElement === input) {
         e.preventDefault();
         handleAISend();
         return;

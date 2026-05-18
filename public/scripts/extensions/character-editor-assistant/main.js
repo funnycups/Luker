@@ -4776,7 +4776,7 @@ async function openCharacterEditorPopup(context = getContext()) {
                     }
                 });
                 input.addEventListener('keydown', (event) => {
-                    if (event.key !== 'Enter' || event.shiftKey) {
+                    if (event.isComposing || event.key !== 'Enter' || (!event.ctrlKey && !event.metaKey)) {
                         return;
                     }
                     event.preventDefault();
@@ -5402,7 +5402,7 @@ async function runLorebookSyncFlow(context, previousSnapshot, currentSnapshot, c
                     }
                 });
                 input.addEventListener('keydown', (event) => {
-                    if (event.key !== 'Enter' || event.shiftKey) {
+                    if (event.isComposing || event.key !== 'Enter' || (!event.ctrlKey && !event.metaKey)) {
                         return;
                     }
                     event.preventDefault();
