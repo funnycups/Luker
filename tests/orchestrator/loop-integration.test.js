@@ -13,7 +13,7 @@
  * for note persistence (matches the production `makeNotesAdapter` shape so
  * `attachNotesFloorState` does not get reached). Real `loop-tools` registry
  * is exercised for chat / lorebook / memory paths via injected fixtures
- * (`__getSortedEntriesFn`, `__memoryStore`, `__memoryDeps`,
+ * (`__getSortedEntriesFn`, `__memoryStore`, `__memoryReadApi`,
  * `__floorStateForNotes`) — no `lib.js` dependency is touched, so tests
  * run on the Node-based jest config.
  */
@@ -34,7 +34,10 @@ function makeProfile(overrides = {}) {
             note: { open: true, close: true },
             chat: { read_range: true, search: true },
             lorebook: { search: true, get: true },
-            memory: { search: true, list_recent: true, get: true },
+            memory: {
+                list_candidates: true, edge_summary: true, node_brief: true,
+                expand_seeds: true, rank: true, schema: true,
+            },
             finalize: true,
         },
         max_rounds: 10,
@@ -94,7 +97,7 @@ function makeFakeFloorStateNotes(initialEntries = []) {
     };
 }
 
-function makeChatContext({ chat = [], notesAdapter = null, sortedEntries = null, memoryStore = null, memoryDeps = null, activatedEntryKeys = null, targetFloorForNote = null } = {}) {
+function makeChatContext({ chat = [], notesAdapter = null, sortedEntries = null, memoryStore = null, memoryReadApi = null, activatedEntryKeys = null, targetFloorForNote = null } = {}) {
     // Loose context object that matches what the orchestrator hands the
     // runtime in production: a plain object with `chat`, plus the optional
     // run-scoped helpers loop-runtime reads through `Object.create(context)`.
@@ -112,8 +115,8 @@ function makeChatContext({ chat = [], notesAdapter = null, sortedEntries = null,
     if (memoryStore !== null) {
         ctx.__memoryStore = memoryStore;
     }
-    if (memoryDeps !== null) {
-        ctx.__memoryDeps = memoryDeps;
+    if (memoryReadApi !== null) {
+        ctx.__memoryReadApi = memoryReadApi;
     }
     if (activatedEntryKeys !== null) {
         ctx.__lukerRun = { activatedEntryKeys };
@@ -137,7 +140,7 @@ function eventTypes(trace) {
 }
 
 describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
-    test('model -> note_open -> lorebook_search -> lorebook_get -> memory_search -> finalize', async () => {
+    test('model -> note_open -> lorebook_search -> lorebook_get -> memory_list_candidates -> memory_node_brief -> finalize', async () => {
         // Scripted six-round trajectory. Each `mockImplementationOnce` reads
         // the messages array we observed at that round so we can assert
         // tool-result threading at the boundary; the final round commits
@@ -177,7 +180,7 @@ describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
                 observedRounds.push({ round: 4, messageCount: messages.length });
                 return {
                     toolCalls: [
-                        { id: 'tc4', name: 'memory_search', args: { query: 'Lyra', limit: 3 } },
+                        { id: 'tc4', name: 'memory_list_candidates', args: {} },
                     ],
                     assistantText: '',
                 };
@@ -186,7 +189,7 @@ describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
                 observedRounds.push({ round: 5, messageCount: messages.length });
                 return {
                     toolCalls: [
-                        { id: 'tc5', name: 'memory_get', args: { node_id: 'lyra-vow' } },
+                        { id: 'tc5', name: 'memory_node_brief', args: { node_id: 'lyra-vow' } },
                     ],
                     assistantText: '',
                 };
@@ -209,14 +212,25 @@ describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
             { world: 'global', uid: 3, key: ['winter-feast'], content: 'Winter feast unrelated.' },
         ];
         const memoryStore = { nodes: { 'lyra-vow': { id: 'lyra-vow', title: 'Lyra\'s vow' } } };
-        const memoryDeps = {
-            searchNodesLexical: () => ({ nodes: [{ id: 'lyra-vow', preview: 'Lyra swore a vow at the last festival.' }] }),
-            listRecentNodes: () => ({ nodes: [] }),
-            getNodeById: () => ({
-                node: { id: 'lyra-vow', title: 'Lyra\'s vow', summary: 'Lyra promises to return at autumn.' },
-                neighbors: [{ id: 'autumn-festival-node', edgeType: 'mentioned_at' }],
+        const memoryReadApi = {
+            listVisibleCandidates: () => [
+                { id: 'lyra-vow', type: 'event', level: 'episodic', title: 'Lyra\'s vow', seqTo: 7, semanticDepth: 0 },
+            ],
+            getEdgeSummary: () => ({ degree: 0, relations: [], sample_neighbors: [] }),
+            getNodeBrief: id => ({
+                id,
+                title: 'Lyra\'s vow',
+                summary: 'Lyra promises to return at autumn.',
+                keyValues: {},
+                rowValues: [],
+                childCount: 0,
+                exposure: 'full',
+                edgeSummary: { degree: 1, relations: [], sample_neighbors: [{ id: 'autumn-festival-node', type: 'event', title: '' }] },
+                alwaysInject: false,
             }),
-            getCurrentlyInjectedNodeIds: () => ({ alwaysInjectIds: new Set(), recallSelectedIds: new Set() }),
+            expandFromSeeds: () => [],
+            rankNodes: async () => [],
+            getSchema: () => ({ types: [] }),
         };
         const notesAdapter = makeFakeFloorStateNotes();
 
@@ -227,7 +241,7 @@ describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
             notesAdapter,
             sortedEntries,
             memoryStore,
-            memoryDeps,
+            memoryReadApi,
             activatedEntryKeys: new Set(),
             targetFloorForNote: 0,
         });
@@ -270,7 +284,7 @@ describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
         const toolCallEvents = result.runtimeTrace.events.filter(e => e.type === 'tool_call');
         expect(toolCallEvents).toHaveLength(6);
         expect(toolCallEvents.map(e => e.name)).toEqual([
-            'note_open', 'lorebook_search', 'lorebook_get', 'memory_search', 'memory_get', 'finalize',
+            'note_open', 'lorebook_search', 'lorebook_get', 'memory_list_candidates', 'memory_node_brief', 'finalize',
         ]);
     });
 });
@@ -319,7 +333,10 @@ describe('loop mode end-to-end: tool failure -> agent self-correction (Task 15b)
                 note: { open: false, close: false },
                 chat: { read_range: false, search: false },
                 lorebook: { search: true, get: false },
-                memory: { search: false, list_recent: false, get: false },
+                memory: {
+                    list_candidates: false, edge_summary: false, node_brief: false,
+                    expand_seeds: false, rank: false, schema: false,
+                },
                 finalize: true,
             },
         }), { sendLlm });
@@ -397,7 +414,10 @@ describe('loop mode end-to-end: lorebook activated-entry dedup (Task 15c)', () =
                 note: { open: false, close: false },
                 chat: { read_range: false, search: false },
                 lorebook: { search: true, get: false },
-                memory: { search: false, list_recent: false, get: false },
+                memory: {
+                    list_candidates: false, edge_summary: false, node_brief: false,
+                    expand_seeds: false, rank: false, schema: false,
+                },
                 finalize: true,
             },
         }), { sendLlm });
@@ -450,7 +470,10 @@ describe('loop mode end-to-end: note persistence across runs (Task 15d)', () => 
                 note: { open: true, close: true },
                 chat: { read_range: false, search: false },
                 lorebook: { search: false, get: false },
-                memory: { search: false, list_recent: false, get: false },
+                memory: {
+                    list_candidates: false, edge_summary: false, node_brief: false,
+                    expand_seeds: false, rank: false, schema: false,
+                },
                 finalize: true,
             },
         }), { sendLlm: sendLlm1 });
@@ -494,7 +517,10 @@ describe('loop mode end-to-end: note persistence across runs (Task 15d)', () => 
                 note: { open: true, close: true },
                 chat: { read_range: false, search: false },
                 lorebook: { search: false, get: false },
-                memory: { search: false, list_recent: false, get: false },
+                memory: {
+                    list_candidates: false, edge_summary: false, node_brief: false,
+                    expand_seeds: false, rank: false, schema: false,
+                },
                 finalize: true,
             },
         }), { sendLlm: sendLlm2 });
@@ -555,7 +581,10 @@ describe('loop mode end-to-end: abort path (Task 15e)', () => {
                     note: { open: true, close: true },
                     chat: { read_range: false, search: false },
                     lorebook: { search: false, get: false },
-                    memory: { search: false, list_recent: false, get: false },
+                    memory: {
+                    list_candidates: false, edge_summary: false, node_brief: false,
+                    expand_seeds: false, rank: false, schema: false,
+                },
                     finalize: true,
                 },
             }), { sendLlm }),

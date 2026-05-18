@@ -41,7 +41,10 @@ describe('director profile round-trip through Studio sanitizer', () => {
         original.director.discardOnAbort = true;
         original.director.tools = {
             chat: { read_range: true, search: true },
-            memory: { search: true, list_recent: false, get: true },
+            memory: {
+                list_candidates: true, edge_summary: false, node_brief: true,
+                expand_seeds: false, rank: true, schema: true,
+            },
             lorebook: { search: true, get: false },
             note: { add: false, delete: false },
             search: { search: false, visit: false },
@@ -72,8 +75,9 @@ describe('director profile round-trip through Studio sanitizer', () => {
         // Tool flags preserved.
         expect(after.director.tools.chat.read_range).toBe(true);
         expect(after.director.tools.chat.search).toBe(true);
-        expect(after.director.tools.memory.search).toBe(true);
-        expect(after.director.tools.memory.list_recent).toBe(false);
+        expect(after.director.tools.memory.list_candidates).toBe(true);
+        expect(after.director.tools.memory.edge_summary).toBe(false);
+        expect(after.director.tools.memory.node_brief).toBe(true);
         expect(after.director.tools.lorebook.search).toBe(true);
         // tools.finalize is forced to false (no leakage between modes).
         if (after.director.tools.finalize !== undefined) {

@@ -487,9 +487,9 @@ describe('subagent dispatcher', () => {
     });
 
     test('contextForMemory overlay reaches executeLoopTool so memory_* tools find the store', async () => {
-        // Sub-agent calls memory_search once, then terminates.
+        // Sub-agent calls memory_list_candidates once, then terminates.
         const calls = [
-            { assistantText: '', toolCalls: [{ id: 't1', name: 'memory_search', args: { query: 'birds' } }], reasoning: null, finishReason: 'tool_calls' },
+            { assistantText: '', toolCalls: [{ id: 't1', name: 'memory_list_candidates', args: {} }], reasoning: null, finishReason: 'tool_calls' },
             { assistantText: 'done', toolCalls: [], reasoning: null, finishReason: 'stop' },
         ];
         let i = 0;
@@ -498,7 +498,7 @@ describe('subagent dispatcher', () => {
         const seenToolCtx = [];
         const executeLoopTool = jest.fn(async (_name, _args, ctx) => {
             seenToolCtx.push(ctx);
-            return { nodes: [{ id: 'n1', preview: 'a bird' }] };
+            return { candidates: [{ id: 'n1', type: 'event', title: 'a bird' }] };
         });
 
         const memCtx = { __memoryStore: { nodes: new Map(), edges: new Map() } };
@@ -507,7 +507,7 @@ describe('subagent dispatcher', () => {
             limits: { maxTotalSubagentRuns: 5 },
             generateTask: fakeGenerate,
             abortSignal: new AbortController().signal,
-            tools: { memory: { search: true } },
+            tools: { memory: { list_candidates: true } },
             executeLoopTool,
             chat: [],
             contextForMemory: memCtx,
@@ -516,7 +516,7 @@ describe('subagent dispatcher', () => {
         await dispatcher.awaitAll([h]);
 
         expect(executeLoopTool).toHaveBeenCalledTimes(1);
-        expect(executeLoopTool.mock.calls[0][0]).toBe('memory_search');
+        expect(executeLoopTool.mock.calls[0][0]).toBe('memory_list_candidates');
         // The per-call context must carry the memory store the dispatcher
         // was wired with — without this, requireStore() throws MEMORY_DISABLED
         // even when memory-graph is enabled.
@@ -527,7 +527,7 @@ describe('subagent dispatcher', () => {
 
     test('without contextForMemory, executeLoopTool sees no __memoryStore (regression guard)', async () => {
         const calls = [
-            { assistantText: '', toolCalls: [{ id: 't1', name: 'memory_search', args: { query: 'birds' } }], reasoning: null, finishReason: 'tool_calls' },
+            { assistantText: '', toolCalls: [{ id: 't1', name: 'memory_list_candidates', args: {} }], reasoning: null, finishReason: 'tool_calls' },
             { assistantText: 'done', toolCalls: [], reasoning: null, finishReason: 'stop' },
         ];
         let i = 0;
@@ -544,7 +544,7 @@ describe('subagent dispatcher', () => {
             limits: { maxTotalSubagentRuns: 5 },
             generateTask: fakeGenerate,
             abortSignal: new AbortController().signal,
-            tools: { memory: { search: true } },
+            tools: { memory: { list_candidates: true } },
             executeLoopTool,
             chat: [],
             // contextForMemory deliberately omitted.

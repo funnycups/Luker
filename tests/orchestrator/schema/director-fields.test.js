@@ -57,18 +57,14 @@ describe('director schema fields', () => {
         expect(p.director.maxTotalSubagentRuns).toBeGreaterThan(0);
         // Tools use the nested loop-style schema. Default = every verb on,
         // except `finalize` which is forced off (director ships its own).
-        // The memory subtree carries both legacy external-api wrappers
-        // (search / list_recent / get) AND the spec-2 read-api pipeline
-        // tools (list_candidates / edge_summary / node_brief / expand_seeds
-        // / rank / schema) — all default-on so the director's default
+        // The memory subtree carries the read-api pipeline tools
+        // (list_candidates / edge_summary / node_brief / expand_seeds /
+        // rank / schema) — all default-on so the director's default
         // memory_scout has the full pipeline available.
         expect(p.director.tools).toEqual(expect.objectContaining({
             chat: expect.objectContaining({ read_range: expect.any(Boolean), search: expect.any(Boolean) }),
             lorebook: expect.objectContaining({ search: expect.any(Boolean), get: expect.any(Boolean) }),
             memory: expect.objectContaining({
-                search: expect.any(Boolean),
-                list_recent: expect.any(Boolean),
-                get: expect.any(Boolean),
                 list_candidates: expect.any(Boolean),
                 edge_summary: expect.any(Boolean),
                 node_brief: expect.any(Boolean),
@@ -224,9 +220,6 @@ describe('director schema fields', () => {
         // source` already covers it, because this test is the dedicated
         // contract test for the spec-2 rewrite.
         expect(ms.systemPrompt).toMatch(/stay in your lane/i);
-
-        // Legacy tools are explicitly noted as insufficient on their own.
-        expect(ms.systemPrompt).toMatch(/legacy.*not enough|NOT enough/i);
     });
 
     test('canon_scout systemPrompt guards against original-fiction misuse', () => {
@@ -275,7 +268,10 @@ describe('director schema fields', () => {
                 tools: {
                     chat: { read_range: true, search: false },
                     lorebook: { search: false, get: false },
-                    memory: { search: true, list_recent: true, get: true },
+                    memory: {
+                        list_candidates: true, edge_summary: true, node_brief: true,
+                        expand_seeds: true, rank: true, schema: true,
+                    },
                     note: { open: false, close: false },
                     search: { search: false, visit: false },
                 },
@@ -288,7 +284,7 @@ describe('director schema fields', () => {
         // canonical contract; we only verify director respects what was set).
         expect(sanitized.director.tools.chat.read_range).toBe(true);
         expect(sanitized.director.tools.chat.search).toBe(false);
-        expect(sanitized.director.tools.memory.search).toBe(true);
+        expect(sanitized.director.tools.memory.list_candidates).toBe(true);
         expect(sanitized.director.tools.finalize).toBe(false);  // director always strips loop's finalize
     });
 

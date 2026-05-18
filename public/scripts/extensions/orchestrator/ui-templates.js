@@ -55,9 +55,12 @@ function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}) 
 </fieldset>
 <fieldset class="luker_orch_loop_tools_group">
     <legend>${escapeHtml(i18n('memory (memory-graph)'))}</legend>
-    ${cb('memory.search', memory.search, 'memory_search')}
-    ${cb('memory.list_recent', memory.list_recent, 'memory_list_recent')}
-    ${cb('memory.get', memory.get, 'memory_get')}
+    ${cb('memory.list_candidates', memory.list_candidates, 'memory_list_candidates')}
+    ${cb('memory.edge_summary', memory.edge_summary, 'memory_edge_summary')}
+    ${cb('memory.node_brief', memory.node_brief, 'memory_node_brief')}
+    ${cb('memory.expand_seeds', memory.expand_seeds, 'memory_expand_seeds')}
+    ${cb('memory.rank', memory.rank, 'memory_rank')}
+    ${cb('memory.schema', memory.schema, 'memory_schema')}
 </fieldset>
 <fieldset class="luker_orch_loop_tools_group">
     <legend>${escapeHtml(i18n('search (web search)'))}</legend>
@@ -351,9 +354,12 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
             </fieldset>
             <fieldset class="luker_orch_loop_tools_group">
                 <legend>${escapeHtml(i18n('memory (memory-graph)'))}</legend>
-                ${checkbox('memory.search', memory.search, 'memory_search')}
-                ${checkbox('memory.list_recent', memory.list_recent, 'memory_list_recent')}
-                ${checkbox('memory.get', memory.get, 'memory_get')}
+                ${checkbox('memory.list_candidates', memory.list_candidates, 'memory_list_candidates')}
+                ${checkbox('memory.edge_summary', memory.edge_summary, 'memory_edge_summary')}
+                ${checkbox('memory.node_brief', memory.node_brief, 'memory_node_brief')}
+                ${checkbox('memory.expand_seeds', memory.expand_seeds, 'memory_expand_seeds')}
+                ${checkbox('memory.rank', memory.rank, 'memory_rank')}
+                ${checkbox('memory.schema', memory.schema, 'memory_schema')}
             </fieldset>
             <fieldset class="luker_orch_loop_tools_group">
                 <legend>${escapeHtml(i18n('search (web search)'))}</legend>

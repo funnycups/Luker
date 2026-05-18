@@ -178,11 +178,6 @@ describe('memory_scout content contract (spec 2 §8.3)', () => {
         expect(scout.systemPrompt).toMatch(/do NOT read chat or lorebook/i);
     });
 
-    test('systemPrompt includes legacy-tools-not-enough fallback note (spec §4.4)', () => {
-        expect(scout.systemPrompt).toMatch(/Legacy memory_search/);
-        expect(scout.systemPrompt).toMatch(/NOT enough/);
-    });
-
     test('systemPrompt mentions every read-api tool by name (the menu the scout dispatches from)', () => {
         const expectedTools = [
             'memory_schema',

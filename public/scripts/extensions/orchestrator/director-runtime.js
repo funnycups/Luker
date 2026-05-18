@@ -409,10 +409,10 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         contextForNotes: deps?.contextForNotes,
         // Memory-graph store overlay merged into the per-tool-call
         // context the sub-agent dispatcher hands to executeLoopTool.
-        // Carries `__memoryStore` so memory_search / memory_list_recent
-        // / memory_get find a live store instead of throwing
-        // MEMORY_DISABLED. Mounted once per director turn by main.js;
-        // shared by reference across every sub-agent's tool calls.
+        // Carries `__memoryStore` so memory_* tools find a live store
+        // instead of throwing MEMORY_DISABLED. Mounted once per director
+        // turn by main.js; shared by reference across every sub-agent's
+        // tool calls.
         contextForMemory: deps?.contextForMemory,
     });
 

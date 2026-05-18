@@ -111,9 +111,6 @@ const LOOP_PROFILE_DEFAULTS = Object.freeze({
         chat: Object.freeze({ read_range: true, search: true }),
         lorebook: Object.freeze({ search: true, get: true }),
         memory: Object.freeze({
-            search: true,
-            list_recent: true,
-            get: true,
             list_candidates: true,
             edge_summary: true,
             node_brief: true,
@@ -217,13 +214,6 @@ export function sanitizeAgentToolFlags(input, { defaultAllOn = false, forceFinal
             get: readBooleanFlag(lorebookIn.get, def),
         },
         memory: {
-            search: readBooleanFlag(memoryIn.search, def),
-            list_recent: readBooleanFlag(memoryIn.list_recent, def),
-            get: readBooleanFlag(memoryIn.get, def),
-            // Spec 2 (read-api pipeline tools): pure additive keys; old
-            // profiles without them fall through to `def` (matches the
-            // sibling keys' all-on-when-defaultAllOn behavior so the
-            // director's default memory_scout ships with these enabled).
             list_candidates: readBooleanFlag(memoryIn.list_candidates, def),
             edge_summary: readBooleanFlag(memoryIn.edge_summary, def),
             node_brief: readBooleanFlag(memoryIn.node_brief, def),

@@ -48,9 +48,12 @@ describe('LOOP_ITERATION_CONTRACT_LINES', () => {
         expect(text).toMatch(/tools\.chat\.search/);
         expect(text).toMatch(/tools\.lorebook\.search/);
         expect(text).toMatch(/tools\.lorebook\.get/);
-        expect(text).toMatch(/tools\.memory\.search/);
-        expect(text).toMatch(/tools\.memory\.list_recent/);
-        expect(text).toMatch(/tools\.memory\.get/);
+        expect(text).toMatch(/tools\.memory\.list_candidates/);
+        expect(text).toMatch(/tools\.memory\.edge_summary/);
+        expect(text).toMatch(/tools\.memory\.node_brief/);
+        expect(text).toMatch(/tools\.memory\.expand_seeds/);
+        expect(text).toMatch(/tools\.memory\.rank/);
+        expect(text).toMatch(/tools\.memory\.schema/);
         expect(text).toMatch(/tools\.search\.search/);
         expect(text).toMatch(/tools\.search\.visit/);
     });
@@ -92,7 +95,10 @@ describe('applyLoopProfilePatchArgs partial-merge contract', () => {
                 note: { open: true, close: true },
                 chat: { read_range: true, search: true },
                 lorebook: { search: true, get: true },
-                memory: { search: true, list_recent: true, get: true },
+                memory: {
+                    list_candidates: true, edge_summary: true, node_brief: true,
+                    expand_seeds: true, rank: true, schema: true,
+                },
             },
             ...overrides,
         });
@@ -124,14 +130,14 @@ describe('applyLoopProfilePatchArgs partial-merge contract', () => {
         const after = applyLoopProfilePatchArgs(before, {
             tools: {
                 lorebook: { search: false },
-                memory: { search: false, list_recent: false, get: false },
+                memory: { list_candidates: false, edge_summary: false, node_brief: false },
             },
         });
         // Touched flags flip…
         expect(after.tools.lorebook.search).toBe(false);
-        expect(after.tools.memory.search).toBe(false);
-        expect(after.tools.memory.list_recent).toBe(false);
-        expect(after.tools.memory.get).toBe(false);
+        expect(after.tools.memory.list_candidates).toBe(false);
+        expect(after.tools.memory.edge_summary).toBe(false);
+        expect(after.tools.memory.node_brief).toBe(false);
         // …while siblings the AI did not name remain at their previous
         // value (lorebook.get is still true, all chat flags still true).
         expect(after.tools.lorebook.get).toBe(true);

@@ -35,8 +35,7 @@
 import { FINALIZE_TOOL_SCHEMA, ToolError } from './loop-runtime.js';
 import { execChatReadRange, execChatSearch } from './loop-tools/chat.js';
 import { execLorebookSearch, execLorebookGet } from './loop-tools/lorebook.js';
-import { execMemorySearch, execMemoryListRecent, execMemoryGet,
-    execMemoryListCandidates, execMemoryEdgeSummary, execMemoryNodeBrief,
+import { execMemoryListCandidates, execMemoryEdgeSummary, execMemoryNodeBrief,
     execMemoryExpandSeeds, execMemoryRank, execMemorySchema } from './loop-tools/memory.js';
 import { execNoteOpen, execNoteClose } from './loop-tools/note.js';
 import { execSearchSearch, execSearchVisit } from './loop-tools/search.js';
@@ -165,83 +164,15 @@ registerTool('lorebook_get', execLorebookGet, {
 });
 
 // ---- memory namespace ---------------------------------------------------
-
-registerTool('memory_search', execMemorySearch, {
-    type: 'function',
-    function: {
-        name: 'memory_search',
-        description: 'Lexical (substring) search over memory-graph nodes for the current chat. Excludes nodes already injected into the main model context this turn (always-inject + recall-selected). Returns id + preview + optional type/time per match.',
-        parameters: {
-            type: 'object',
-            properties: {
-                query: {
-                    type: 'string',
-                    description: 'Non-empty search string. Matched against node title and key fields.',
-                },
-                limit: {
-                    type: 'integer',
-                    description: 'Max results to return (default 5, max 50).',
-                    minimum: 1,
-                    maximum: 50,
-                },
-            },
-            required: ['query'],
-            additionalProperties: false,
-        },
-    },
-});
-
-registerTool('memory_list_recent', execMemoryListRecent, {
-    type: 'function',
-    function: {
-        name: 'memory_list_recent',
-        description: 'Browse the most recent memory-graph nodes in time-descending order. Excludes already-injected nodes (same union as memory_search). Use this to scan timeline-recent context the model has not yet seen.',
-        parameters: {
-            type: 'object',
-            properties: {
-                limit: {
-                    type: 'integer',
-                    description: 'Max results to return (default 10, max 100).',
-                    minimum: 1,
-                    maximum: 100,
-                },
-            },
-            additionalProperties: false,
-        },
-    },
-});
-
-registerTool('memory_get', execMemoryGet, {
-    type: 'function',
-    function: {
-        name: 'memory_get',
-        description: 'Fetch a memory-graph node by id, with direct neighbor ids and edge metadata. Does NOT dedup against the injected set — use this to inspect an injected node\'s neighbors.',
-        parameters: {
-            type: 'object',
-            properties: {
-                node_id: {
-                    type: 'string',
-                    description: 'Node id from memory_search / memory_list_recent.',
-                },
-            },
-            required: ['node_id'],
-            additionalProperties: false,
-        },
-    },
-});
-
-// ---- memory namespace (read-api pipeline tools) -------------------------
-// These wrap the memory-graph read-only API. They mirror the inputs the
-// native recall LLM sees so a director sub-agent can reproduce an
-// LLM-grade recall pass. Prefer these over memory_search / memory_list_recent
-// for relevance-driven recall; legacy tools are still fine for verifying a
-// single id you already have in mind.
+// Read-api pipeline tools. They mirror the inputs the native recall LLM
+// sees so a director sub-agent (or the loop main agent) can reproduce an
+// LLM-grade recall pass.
 
 registerTool('memory_list_candidates', execMemoryListCandidates, {
     type: 'function',
     function: {
         name: 'memory_list_candidates',
-        description: 'Enumerate the visible memory-graph candidate pool — the same pool the memory-graph\'s own recall LLM sees. Returns { candidates: [{ id, type, level, title, seqTo, semanticDepth }] } in recency-first order (seqTo desc, semanticDepth desc). Use this as the FIRST step of a recall pipeline; prefer it over memory_search / memory_list_recent for relevance-driven recall.',
+        description: 'Enumerate the visible memory-graph candidate pool — the same pool the memory-graph\'s own recall LLM sees. Returns { candidates: [{ id, type, level, title, seqTo, semanticDepth }] } in recency-first order (seqTo desc, semanticDepth desc). Use this as the FIRST step of a recall pipeline.',
         parameters: {
             type: 'object',
             properties: {
@@ -280,7 +211,7 @@ registerTool('memory_edge_summary', execMemoryEdgeSummary, {
             properties: {
                 node_id: {
                     type: 'string',
-                    description: 'Node id from memory_list_candidates / memory_rank / memory_search.',
+                    description: 'Node id from memory_list_candidates / memory_rank.',
                 },
                 edge_types: {
                     type: 'array',
@@ -562,8 +493,8 @@ export async function executeLoopTool(name, args, context) {
  * `finalize` is always included; chat / lorebook / memory / note tools
  * follow `profile.tools.<namespace>.<verb>` flags. The schema's flat
  * `<ns>_<verb>` tool name is split on the **first** underscore to
- * recover the profile path (so `memory_list_recent` reads
- * `flags.memory.list_recent`). Unknown namespaces are ignored
+ * recover the profile path (so `memory_list_candidates` reads
+ * `flags.memory.list_candidates`). Unknown namespaces are ignored
  * (forward compatibility with future task adds).
  */
 export function getEnabledToolSchemas(profile) {

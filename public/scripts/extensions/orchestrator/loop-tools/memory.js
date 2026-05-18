@@ -1,17 +1,8 @@
 /**
  * loop-tools/memory.js — memory-graph query tools for loop mode.
  *
- * Legacy wrappers over `memory-graph/external-api.js` (kept for spec /
- * agenda mode sub-agents and ad-hoc lookups):
- *
- *   - memory_search → searchNodesLexical(store, query, { limit, excludeIds })
- *   - memory_list_recent → listRecentNodes(store, { limit, excludeIds })
- *   - memory_get → getNodeById(store, id, { includeNeighbors: true })
- *
- * Spec 2 ("memory_scout uses readonly API") adds 6 new wrappers over
- * `memory-graph/read-api.js` that mirror the inputs the native recall LLM
- * sees. These are the pipeline tools the director's `memory_scout` uses for
- * LLM-grade recall:
+ * Wraps `memory-graph/read-api.js` (`getMemoryGraphReadApi(context)`) so the
+ * agent sees the same inputs the native recall LLM sees:
  *
  *   - memory_list_candidates → listVisibleCandidates(options)
  *   - memory_edge_summary    → getEdgeSummary(id, options)
@@ -19,15 +10,6 @@
  *   - memory_expand_seeds    → expandFromSeeds(ids, options)
  *   - memory_rank            → rankNodes(options)  [async]
  *   - memory_schema          → getSchema()
- *
- * Dedup contract: every legacy search / list call passes `excludeIds =
- * union(getCurrentlyInjectedNodeIds(context).alwaysInjectIds,
- *      getCurrentlyInjectedNodeIds(context).recallSelectedIds)` so the agent
- * never re-surfaces nodes already injected into the main model context for
- * this turn. `memory_get` does NOT dedup — the agent may legitimately want
- * to inspect an already-injected node's neighbors. The new read-api wrappers
- * do NOT apply dedup either; recall pipeline correctness depends on seeing
- * the full visible pool (which is exactly what the native route LLM sees).
  *
  * Store + dependency wiring:
  *
@@ -39,45 +21,20 @@
  *     `ToolError(MEMORY_DISABLED)` so the agent reads the failure and
  *     pivots to other tools.
  *   - Tests: skip the loader by setting `context.__memoryStore` directly
- *     (any object with a `nodes` property satisfies the contract). The
- *     legacy external-api functions can also be swapped by setting
- *     `context.__memoryDeps`, which the loader prefers over importing
- *     the real module — that import would otherwise pull in
- *     memory-graph/graph-ops.js → ../../primitives.js etc., and ultimately
- *     ../../../script.js which is the build-time `lib.js` chain Node tests
- *     can't load. The new read-api wrappers honor a parallel hook,
- *     `context.__memoryReadApi`: when present, tools call its methods
- *     directly instead of building one via `getMemoryGraphReadApi(context)`.
+ *     (any object with a `nodes` property satisfies the contract). Tests
+ *     inject a stub read-api through `context.__memoryReadApi`; when
+ *     present, tools call its methods directly instead of building one
+ *     via `getMemoryGraphReadApi(context)`. Lazy import of the real module
+ *     keeps the Node test runner from pulling memory-graph/main.js (the
+ *     build-only `lib.js` chain).
  */
 
 import { ToolError } from '../loop-runtime.js';
 
 /**
- * Resolve the external-api function set. Tests inject through
- * `context.__memoryDeps`; production lazily imports the real module.
- * The lazy import keeps the test runner from pulling memory-graph
- * (which transitively pulls the build-only `lib.js`).
- */
-async function pickDeps(context) {
-    if (context && context.__memoryDeps && typeof context.__memoryDeps === 'object') {
-        return context.__memoryDeps;
-    }
-    const mod = await import('../../memory-graph/external-api.js');
-    return {
-        searchNodesLexical: mod.searchNodesLexical,
-        listRecentNodes: mod.listRecentNodes,
-        getNodeById: mod.getNodeById,
-        getCurrentlyInjectedNodeIds: mod.getCurrentlyInjectedNodeIds,
-    };
-}
-
-/**
- * Resolve a read-api instance for the new pipeline tools. Tests inject
- * through `context.__memoryReadApi`; production lazily imports
- * `memory-graph/read-api.js` and builds a per-call instance bound to the
- * orchestrator context (which carries `__memoryStore`). Lazy import keeps
- * the Node test runner from pulling memory-graph/main.js (build-only
- * `lib.js` chain).
+ * Resolve a read-api instance. Tests inject through `context.__memoryReadApi`;
+ * production lazily imports `memory-graph/read-api.js` and builds a per-call
+ * instance bound to the orchestrator context (which carries `__memoryStore`).
  */
 async function pickReadApi(context) {
     if (context && context.__memoryReadApi && typeof context.__memoryReadApi === 'object') {
@@ -101,33 +58,7 @@ function loadStore(context) {
     return context?.__memoryStore ?? null;
 }
 
-function unionInjected(deps, context) {
-    const injected = deps?.getCurrentlyInjectedNodeIds
-        ? deps.getCurrentlyInjectedNodeIds(context)
-        : { alwaysInjectIds: new Set(), recallSelectedIds: new Set() };
-    const out = new Set();
-    for (const id of injected?.alwaysInjectIds || []) out.add(id);
-    for (const id of injected?.recallSelectedIds || []) out.add(id);
-    return out;
-}
-
-function requireStore(context) {
-    const store = loadStore(context);
-    if (!store) {
-        throw new ToolError(
-            'memory-graph not enabled or store unavailable.',
-            'MEMORY_DISABLED',
-            'Enable memory-graph in extension settings, or skip memory_* tools and rely on chat / lorebook context.',
-        );
-    }
-    return store;
-}
-
 function requireStoreForReadApi(toolName, context) {
-    // Mirrors `requireStore` but raises a tool-named error so the agent's
-    // failure trace points at the specific pipeline tool. The hint differs
-    // from the legacy tools' hint because pipeline tools are not optional
-    // fall-throughs — when memory-graph is off, the whole pipeline is off.
     const store = loadStore(context);
     if (!store) {
         throw new ToolError(
@@ -137,80 +68,6 @@ function requireStoreForReadApi(toolName, context) {
         );
     }
     return store;
-}
-
-/**
- * Lexical / substring search across memory-graph nodes for the current
- * chat. Excludes nodes already injected (always-inject + recall-selected).
- *
- * @param {{ query: string, limit?: number }} args
- * @param {object} context — must carry `__memoryStore` (and optionally
- *                           `__memoryDeps` for tests)
- * @returns {Promise<{ nodes: Array<{ id: string, preview: string, type?: string, time?: number }> }>}
- */
-export async function execMemorySearch(args, context) {
-    const queryRaw = String(args?.query ?? '');
-    if (!queryRaw.trim()) {
-        throw new ToolError(
-            'memory_search: query must be non-empty.',
-            'MEMORY_QUERY_EMPTY',
-            'Provide a non-empty query. Use whole words for best results.',
-        );
-    }
-    const limit = Math.max(1, Math.min(50, Math.floor(Number(args?.limit) || 5)));
-    const store = requireStore(context);
-    const deps = await pickDeps(context);
-    const excludeIds = unionInjected(deps, context);
-    const result = deps.searchNodesLexical(store, queryRaw, { limit, excludeIds });
-    return result || { nodes: [] };
-}
-
-/**
- * Browse most-recent nodes in time-descending order. Excludes already-
- * injected nodes (same union as memory_search).
- *
- * @param {{ limit?: number }} args
- * @param {object} context
- * @returns {Promise<{ nodes: Array<{ id: string, preview: string, time?: number, type?: string }> }>}
- */
-export async function execMemoryListRecent(args, context) {
-    const limit = Math.max(1, Math.min(100, Math.floor(Number(args?.limit) || 10)));
-    const store = requireStore(context);
-    const deps = await pickDeps(context);
-    const excludeIds = unionInjected(deps, context);
-    const result = deps.listRecentNodes(store, { limit, excludeIds });
-    return result || { nodes: [] };
-}
-
-/**
- * Fetch a node by id with direct neighbor metadata (`{id, edgeType,
- * relation?}`). Does NOT dedup — the agent may want to inspect an
- * already-injected node's neighbors.
- *
- * @param {{ node_id: string }} args
- * @param {object} context
- * @returns {Promise<{ node: object, neighbors: Array<object> }>}
- */
-export async function execMemoryGet(args, context) {
-    const idRaw = String(args?.node_id ?? '');
-    if (!idRaw.trim()) {
-        throw new ToolError(
-            'memory_get: node_id must be non-empty.',
-            'MEMORY_ID_EMPTY',
-            'Pass the id string returned by memory_search or memory_list_recent.',
-        );
-    }
-    const store = requireStore(context);
-    const deps = await pickDeps(context);
-    const result = deps.getNodeById(store, idRaw.trim(), { includeNeighbors: true });
-    if (!result) {
-        throw new ToolError(
-            `memory_get: node '${idRaw.trim()}' not found.`,
-            'MEMORY_NOT_FOUND',
-            'Verify the id with memory_search or memory_list_recent first.',
-        );
-    }
-    return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -336,7 +193,7 @@ export async function execMemoryEdgeSummary(args, context) {
         throw new ToolError(
             'memory_edge_summary: node_id must be non-empty.',
             'MEMORY_ID_EMPTY',
-            'Pass an id from memory_list_candidates / memory_rank / memory_search.',
+            'Pass an id from memory_list_candidates / memory_rank.',
         );
     }
     requireStoreForReadApi('memory_edge_summary', context);
@@ -362,7 +219,7 @@ export async function execMemoryNodeBrief(args, context) {
         throw new ToolError(
             'memory_node_brief: node_id must be non-empty.',
             'MEMORY_ID_EMPTY',
-            'Pass an id from memory_list_candidates / memory_rank / memory_search.',
+            'Pass an id from memory_list_candidates / memory_rank.',
         );
     }
     requireStoreForReadApi('memory_node_brief', context);

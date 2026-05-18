@@ -4011,9 +4011,12 @@ function renderLoopIterationWorkingProfile(session, { profileOverride = null, pr
     if (profile.tools?.chat?.search) enabledTools.push('chat_search');
     if (profile.tools?.lorebook?.search) enabledTools.push('lorebook_search');
     if (profile.tools?.lorebook?.get) enabledTools.push('lorebook_get');
-    if (profile.tools?.memory?.search) enabledTools.push('memory_search');
-    if (profile.tools?.memory?.list_recent) enabledTools.push('memory_list_recent');
-    if (profile.tools?.memory?.get) enabledTools.push('memory_get');
+    if (profile.tools?.memory?.list_candidates) enabledTools.push('memory_list_candidates');
+    if (profile.tools?.memory?.edge_summary) enabledTools.push('memory_edge_summary');
+    if (profile.tools?.memory?.node_brief) enabledTools.push('memory_node_brief');
+    if (profile.tools?.memory?.expand_seeds) enabledTools.push('memory_expand_seeds');
+    if (profile.tools?.memory?.rank) enabledTools.push('memory_rank');
+    if (profile.tools?.memory?.schema) enabledTools.push('memory_schema');
     if (profile.tools?.search?.search) enabledTools.push('search_search');
     if (profile.tools?.search?.visit) enabledTools.push('search_visit');
     enabledTools.push('finalize');
@@ -4052,9 +4055,12 @@ function renderDirectorIterationWorkingProfile(session, { profileOverride = null
     if (d.tools?.chat?.search) enabledTools.push('chat_search');
     if (d.tools?.lorebook?.search) enabledTools.push('lorebook_search');
     if (d.tools?.lorebook?.get) enabledTools.push('lorebook_get');
-    if (d.tools?.memory?.search) enabledTools.push('memory_search');
-    if (d.tools?.memory?.list_recent) enabledTools.push('memory_list_recent');
-    if (d.tools?.memory?.get) enabledTools.push('memory_get');
+    if (d.tools?.memory?.list_candidates) enabledTools.push('memory_list_candidates');
+    if (d.tools?.memory?.edge_summary) enabledTools.push('memory_edge_summary');
+    if (d.tools?.memory?.node_brief) enabledTools.push('memory_node_brief');
+    if (d.tools?.memory?.expand_seeds) enabledTools.push('memory_expand_seeds');
+    if (d.tools?.memory?.rank) enabledTools.push('memory_rank');
+    if (d.tools?.memory?.schema) enabledTools.push('memory_schema');
     if (d.tools?.search?.search) enabledTools.push('search_search');
     if (d.tools?.search?.visit) enabledTools.push('search_visit');
     const simulationSummary = session?.lastSimulation
@@ -8144,10 +8150,10 @@ jQuery(() => {
                     // Mirrors loop-runtime: load the materialized store
                     // once at director-turn start and let every sub-agent
                     // tool call share the same `__memoryStore` reference.
-                    // Without this, memory_search / memory_list_recent /
-                    // memory_get throw MEMORY_DISABLED even when memory-
-                    // graph is enabled — because the sub-agent dispatcher
-                    // never had a path to attach the store.
+                    // Without this, memory_* tools throw MEMORY_DISABLED
+                    // even when memory-graph is enabled — because the
+                    // sub-agent dispatcher never had a path to attach the
+                    // store.
                     contextForMemory: await (async () => {
                         const memCtx = {};
                         await attachMemoryStore(memCtx);

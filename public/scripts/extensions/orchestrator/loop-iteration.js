@@ -33,7 +33,7 @@ export const LOOP_ITERATION_CONTRACT_LINES = Object.freeze([
     'Iteration mode contract (loop profile):',
     '- You are editing an existing loop-mode orchestration profile.',
     '- The profile drives a single agent that calls tools in a loop and finalizes when ready; there are no stages, nodes, or presets to manage.',
-    '- Editable fields: system_prompt (string), apiPresetName (string), promptPresetName (string), max_rounds (1-50), wall_clock_budget_ms (>= 10000), tools.note.open, tools.note.close, tools.chat.read_range, tools.chat.search, tools.lorebook.search, tools.lorebook.get, tools.memory.search, tools.memory.list_recent, tools.memory.get, tools.search.search, tools.search.visit (all boolean).',
+    '- Editable fields: system_prompt (string), apiPresetName (string), promptPresetName (string), max_rounds (1-50), wall_clock_budget_ms (>= 10000), tools.note.open, tools.note.close, tools.chat.read_range, tools.chat.search, tools.lorebook.search, tools.lorebook.get, tools.memory.list_candidates, tools.memory.edge_summary, tools.memory.node_brief, tools.memory.expand_seeds, tools.memory.rank, tools.memory.schema, tools.search.search, tools.search.visit (all boolean).',
     '- Use luker_orch_set_loop_profile to update one or more fields. Pass only the fields you intend to change; omitted fields are inherited from the current profile.',
     '- The finalize tool is always enabled — it is the only loop terminator. Do not propose disabling tools.finalize; the schema will ignore that field.',
     '- If the user describes a workflow, infer which tool namespaces they need (note / chat / lorebook / memory / search) and propose enabling those while keeping the other tools default-on unless the user explicitly asks to disable them.',
@@ -92,9 +92,12 @@ export function applyLoopProfilePatchArgs(currentProfile, args) {
         merge('chat', 'search');
         merge('lorebook', 'search');
         merge('lorebook', 'get');
-        merge('memory', 'search');
-        merge('memory', 'list_recent');
-        merge('memory', 'get');
+        merge('memory', 'list_candidates');
+        merge('memory', 'edge_summary');
+        merge('memory', 'node_brief');
+        merge('memory', 'expand_seeds');
+        merge('memory', 'rank');
+        merge('memory', 'schema');
         merge('search', 'search');
         merge('search', 'visit');
         // tools.finalize is ignored — sanitizer forces it back to true.
