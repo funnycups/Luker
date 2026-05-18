@@ -338,7 +338,7 @@ function buildInitialMessages(context, _payload, profile) {
  *
  * @param {object} context — toolContext object (mutated in place)
  */
-async function attachMemoryStore(context) {
+export async function attachMemoryStore(context) {
     if (!context || typeof context !== 'object') return;
     try {
         const mod = await import('../memory-graph/persistence.js');

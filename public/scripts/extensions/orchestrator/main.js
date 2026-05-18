@@ -183,7 +183,7 @@ import {
 } from './agenda-profile.js';
 import { runAgendaOrchestration } from './agenda-runtime.js';
 import { runSpecOrchestration } from './spec-runtime.js';
-import { runLoopOrchestration, attachNotesFloorState } from './loop-runtime.js';
+import { runLoopOrchestration, attachNotesFloorState, attachMemoryStore } from './loop-runtime.js';
 import { handleDirectorDispatch } from './director-runtime.js';
 import { buildDirectorDefaultSystemPrompt } from './director-default-prompt.js';
 import { createContentPayloadCache } from './director-content-payload.js';
@@ -8112,6 +8112,19 @@ jQuery(() => {
                         const notesCtx = {};
                         await attachNotesFloorState(notesCtx);
                         return notesCtx;
+                    })(),
+                    // Memory-graph store for sub-agent tool dispatch.
+                    // Mirrors loop-runtime: load the materialized store
+                    // once at director-turn start and let every sub-agent
+                    // tool call share the same `__memoryStore` reference.
+                    // Without this, memory_search / memory_list_recent /
+                    // memory_get throw MEMORY_DISABLED even when memory-
+                    // graph is enabled — because the sub-agent dispatcher
+                    // never had a path to attach the store.
+                    contextForMemory: await (async () => {
+                        const memCtx = {};
+                        await attachMemoryStore(memCtx);
+                        return memCtx;
                     })(),
                     // Injected so director-runtime doesn't have to
                     // import runtime-trace.js (which transitively pulls

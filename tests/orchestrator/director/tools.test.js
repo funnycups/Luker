@@ -485,4 +485,74 @@ describe('subagent dispatcher', () => {
         const budgetErrors = awaited.filter(r => r.error && /budget/i.test(r.error));
         expect(budgetErrors).toHaveLength(1);
     });
+
+    test('contextForMemory overlay reaches executeLoopTool so memory_* tools find the store', async () => {
+        // Sub-agent calls memory_search once, then terminates.
+        const calls = [
+            { assistantText: '', toolCalls: [{ id: 't1', name: 'memory_search', args: { query: 'birds' } }], reasoning: null, finishReason: 'tool_calls' },
+            { assistantText: 'done', toolCalls: [], reasoning: null, finishReason: 'stop' },
+        ];
+        let i = 0;
+        const fakeGenerate = jest.fn(async () => calls[i++] || { assistantText: '', toolCalls: [], reasoning: null, finishReason: 'stop' });
+
+        const seenToolCtx = [];
+        const executeLoopTool = jest.fn(async (_name, _args, ctx) => {
+            seenToolCtx.push(ctx);
+            return { nodes: [{ id: 'n1', preview: 'a bird' }] };
+        });
+
+        const memCtx = { __memoryStore: { nodes: new Map(), edges: new Map() } };
+        const dispatcher = createSubagentDispatcher({
+            subAgents: [{ id: 's', description: '', systemPrompt: 's' }],
+            limits: { maxTotalSubagentRuns: 5 },
+            generateTask: fakeGenerate,
+            abortSignal: new AbortController().signal,
+            tools: { memory: { search: true } },
+            executeLoopTool,
+            chat: [],
+            contextForMemory: memCtx,
+        });
+        const h = await dispatcher.dispatch({ subagentId: 's', task: 't' });
+        await dispatcher.awaitAll([h]);
+
+        expect(executeLoopTool).toHaveBeenCalledTimes(1);
+        expect(executeLoopTool.mock.calls[0][0]).toBe('memory_search');
+        // The per-call context must carry the memory store the dispatcher
+        // was wired with — without this, requireStore() throws MEMORY_DISABLED
+        // even when memory-graph is enabled.
+        expect(seenToolCtx[0].__memoryStore).toBe(memCtx.__memoryStore);
+        // And chat is still forwarded (not clobbered by the overlay).
+        expect(seenToolCtx[0].chat).toBeDefined();
+    });
+
+    test('without contextForMemory, executeLoopTool sees no __memoryStore (regression guard)', async () => {
+        const calls = [
+            { assistantText: '', toolCalls: [{ id: 't1', name: 'memory_search', args: { query: 'birds' } }], reasoning: null, finishReason: 'tool_calls' },
+            { assistantText: 'done', toolCalls: [], reasoning: null, finishReason: 'stop' },
+        ];
+        let i = 0;
+        const fakeGenerate = jest.fn(async () => calls[i++] || { assistantText: '', toolCalls: [], reasoning: null, finishReason: 'stop' });
+
+        const seenToolCtx = [];
+        const executeLoopTool = jest.fn(async (_name, _args, ctx) => {
+            seenToolCtx.push(ctx);
+            return { nodes: [] };
+        });
+
+        const dispatcher = createSubagentDispatcher({
+            subAgents: [{ id: 's', description: '', systemPrompt: 's' }],
+            limits: { maxTotalSubagentRuns: 5 },
+            generateTask: fakeGenerate,
+            abortSignal: new AbortController().signal,
+            tools: { memory: { search: true } },
+            executeLoopTool,
+            chat: [],
+            // contextForMemory deliberately omitted.
+        });
+        const h = await dispatcher.dispatch({ subagentId: 's', task: 't' });
+        await dispatcher.awaitAll([h]);
+
+        expect(seenToolCtx[0].__memoryStore).toBeUndefined();
+        expect(seenToolCtx[0].chat).toBeDefined();
+    });
 });
