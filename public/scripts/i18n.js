@@ -191,11 +191,40 @@ function findLang(language) {
 }
 
 /**
+ * Splits a `data-i18n` attribute value into individual keys. Multi-key entries
+ * are `;`-delimited; backslash-escaped semicolons (`\;`) are preserved as
+ * literal semicolons in the key. This lets translation values legitimately
+ * contain semicolons without breaking the `[attr]value;[attr2]value2` syntax.
+ * @param {string} raw
+ * @returns {string[]}
+ */
+function splitI18nKeys(raw) {
+    const parts = [];
+    let current = '';
+    for (let i = 0; i < raw.length; i++) {
+        const ch = raw[i];
+        if (ch === '\\' && raw[i + 1] === ';') {
+            current += ';';
+            i++;
+            continue;
+        }
+        if (ch === ';') {
+            parts.push(current);
+            current = '';
+            continue;
+        }
+        current += ch;
+    }
+    parts.push(current);
+    return parts;
+}
+
+/**
  * Translates a given element based on its data-i18n attribute.
  * @param {Element} element The element to translate
  */
 function translateElement(element) {
-    const keys = element.getAttribute('data-i18n').split(';'); // Multi-key entries are ; delimited
+    const keys = splitI18nKeys(element.getAttribute('data-i18n'));
     for (const key of keys) {
         const attributeMatch = key.match(/\[(\S+)\](.+)/); // [attribute]key
         if (attributeMatch) { // attribute-tagged key
@@ -236,7 +265,7 @@ async function getMissingTranslations() {
     for (const language of langsToProcess) {
         const localeData = await getLocaleData(language.lang, { withFallback: false });
         $(document).find('[data-i18n]').each(function () {
-            const keys = $(this).data('i18n').split(';'); // Multi-key entries are ; delimited
+            const keys = splitI18nKeys($(this).data('i18n'));
             for (const key of keys) {
                 const attributeMatch = key.match(/\[(\S+)\](.+)/); // [attribute]key
                 if (attributeMatch) { // attribute-tagged key
