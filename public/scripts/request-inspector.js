@@ -357,6 +357,13 @@ function buildChatDetailHtml(detail) {
  <tr><td>${t`Cache Write`}</td><td>${formatTokens(usage.cache_write)}</td></tr>`
  : '';
 
+ const endpointRow = detail.endpoint
+ ? `<tr><td>${t`Endpoint URL`}</td><td class="ri-mono" title="${escapeHtml(detail.endpoint)}">${escapeHtml(detail.endpoint)}</td></tr>`
+ : '';
+ const keyRow = detail.apiKeyFingerprint
+ ? `<tr><td>${t`API Key`}</td><td class="ri-mono" title="${escapeHtml(detail.apiKeyFingerprint)}">${escapeHtml(detail.apiKeyFingerprint)}</td></tr>`
+ : '';
+
  return `
  <div class="ri-detail">
  <div class="ri-detail-header">
@@ -371,6 +378,8 @@ function buildChatDetailHtml(detail) {
  <table class="ri-kv">
  <tr><td>${t`Source`}</td><td>${escapeHtml(detail.source)}</td></tr>
  <tr><td>${t`Model`}</td><td>${escapeHtml(detail.model)}</td></tr>
+ ${endpointRow}
+ ${keyRow}
  <tr><td>${t`Stream`}</td><td>${detail.stream ? t`Yes` : t`No`}</td></tr>
  <tr><td>${t`Messages`}</td><td>${detail.messageCount}</td></tr>
  <tr><td>${t`Prompt Chars`}</td><td>${(detail.promptCharLength || 0).toLocaleString()}</td></tr>
@@ -400,6 +409,13 @@ function buildChatDetailHtml(detail) {
 function buildImageDetailHtml(detail) {
  const dims = (detail.width && detail.height) ? `${detail.width} \u00D7 ${detail.height}` : '\u2014';
 
+ const endpointRow = detail.endpoint
+ ? `<tr><td>${t`Endpoint URL`}</td><td class="ri-mono" title="${escapeHtml(detail.endpoint)}">${escapeHtml(detail.endpoint)}</td></tr>`
+ : '';
+ const keyRow = detail.apiKeyFingerprint
+ ? `<tr><td>${t`API Key`}</td><td class="ri-mono" title="${escapeHtml(detail.apiKeyFingerprint)}">${escapeHtml(detail.apiKeyFingerprint)}</td></tr>`
+ : '';
+
  return `
  <div class="ri-detail">
  <div class="ri-detail-header">
@@ -413,6 +429,8 @@ function buildImageDetailHtml(detail) {
  <table class="ri-kv">
  <tr><td>${t`Source`}</td><td>${escapeHtml(detail.source)}</td></tr>
  <tr><td>${t`Model`}</td><td>${escapeHtml(detail.model || '\u2014')}</td></tr>
+ ${endpointRow}
+ ${keyRow}
  <tr><td>${t`Dimensions`}</td><td>${dims}</td></tr>
  <tr><td>${t`Steps`}</td><td>${detail.steps ?? '\u2014'}</td></tr>
  <tr><td>${t`CFG Scale`}</td><td>${detail.cfgScale ?? '\u2014'}</td></tr>

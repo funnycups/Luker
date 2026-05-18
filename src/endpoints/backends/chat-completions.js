@@ -42,6 +42,7 @@ import {
     completeInspection,
     failInspection,
     abortInspection,
+    attachInspectionEndpoint,
 } from '../../request-inspector.js';
 import {
     convertClaudeMessages,
@@ -639,6 +640,7 @@ async function sendClaudeRequest(request, response) {
 
         console.debug('Claude request:', requestBody);
 
+        attachInspectionEndpoint(request, apiUrl + '/messages', apiKey);
         const generateResponse = await fetch(apiUrl + '/messages', {
             method: 'POST',
             signal: controller.signal,
@@ -944,6 +946,7 @@ async function sendMakerSuiteRequest(request, response) {
             url = `${apiUrl.toString().replace(/\/$/, '')}/${apiVersion}/models/${model}:${responseType}?key=${apiKey}${stream ? '&alt=sse' : ''}`;
         }
 
+        attachInspectionEndpoint(request, url, apiKey);
         const generateResponse = await fetch(url, {
             body: JSON.stringify(body),
             method: 'POST',
@@ -1061,6 +1064,7 @@ async function sendAI21Request(request, response) {
     console.debug('AI21 request:', body);
 
     try {
+        attachInspectionEndpoint(request, API_AI21 + '/chat/completions', apiKey);
         const generateResponse = await fetch(API_AI21 + '/chat/completions', options);
         if (request.body.stream) {
             await forwardStreamingResponseWithJob(request, response, generateResponse);
@@ -1151,6 +1155,7 @@ async function sendMistralAIRequest(request, response) {
 
         console.debug('MisralAI request:', requestBody);
 
+        attachInspectionEndpoint(request, apiUrl + '/chat/completions', apiKey);
         const generateResponse = await fetch(apiUrl + '/chat/completions', config);
         if (request.body.stream) {
             await forwardStreamingResponseWithJob(request, response, generateResponse);
@@ -1250,6 +1255,7 @@ async function sendCohereRequest(request, response) {
 
         const apiUrl = API_COHERE_V2 + '/chat';
 
+        attachInspectionEndpoint(request, apiUrl, apiKey);
         if (request.body.stream) {
             const stream = await fetch(apiUrl, config);
             await forwardStreamingResponseWithJob(request, response, stream);
@@ -1374,6 +1380,7 @@ async function sendDeepSeekRequest(request, response) {
 
         console.debug('DeepSeek request:', requestBody);
 
+        attachInspectionEndpoint(request, apiUrl + '/chat/completions', apiKey);
         const generateResponse = await fetch(apiUrl + '/chat/completions', config);
 
         if (request.body.stream) {
@@ -1480,6 +1487,7 @@ async function sendXaiRequest(request, response) {
 
         console.debug('xAI request:', requestBody);
 
+        attachInspectionEndpoint(request, apiUrl + '/chat/completions', apiKey);
         const generateResponse = await fetch(apiUrl + '/chat/completions', config);
 
         if (request.body.stream) {
@@ -1585,6 +1593,7 @@ async function sendAimlapiRequest(request, response) {
 
         console.debug('AI/ML API request:', requestBody);
 
+        attachInspectionEndpoint(request, apiUrl + '/chat/completions', apiKey);
         const generateResponse = await fetch(apiUrl + '/chat/completions', config);
 
         if (request.body.stream) {
@@ -1698,6 +1707,7 @@ async function sendElectronHubRequest(request, response) {
 
         console.debug('Electron Hub request:', requestBody);
 
+        attachInspectionEndpoint(request, apiUrl + '/chat/completions', apiKey);
         const generateResponse = await fetch(apiUrl + '/chat/completions', config);
 
         if (request.body.stream) {
@@ -1799,6 +1809,7 @@ async function sendChutesRequest(request, response) {
 
         console.debug('Chutes request:', requestBody);
 
+        attachInspectionEndpoint(request, apiUrl + '/chat/completions', apiKey);
         const generateResponse = await fetch(apiUrl + '/chat/completions', config);
 
         if (request.body.stream) {
@@ -1883,6 +1894,7 @@ async function sendMinimaxRequest(request, response) {
 
         console.debug('MiniMax request:', requestBody);
 
+        attachInspectionEndpoint(request, apiUrl + '/chat/completions', apiKey);
         const generateResponse = await fetch(apiUrl + '/chat/completions', config);
 
         if (request.body.stream) {
@@ -1976,6 +1988,7 @@ async function sendAzureOpenAIRequest(request, response) {
     console.info(`Sending request to Azure OpenAI: ${endpointUrl}`);
     console.debug('Azure OpenAI Request Body:', apiRequestBody);
     try {
+        attachInspectionEndpoint(request, endpointUrl, apiKey);
         const fetchResponse = await fetch(endpointUrl, config);
 
         if (request.body.stream) {
@@ -3176,6 +3189,7 @@ router.post('/generate', async function (request, response) {
 
         console.debug('Chat Completion request:', requestBody);
 
+        attachInspectionEndpoint(request, endpointUrl, apiKey);
         const fetchResponse = await fetch(endpointUrl, config);
 
         if (lukerGenerationJob) {

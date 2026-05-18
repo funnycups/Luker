@@ -25,6 +25,57 @@ function pushEntry(handle, entry) {
 }
 
 /**
+ * Produce a redacted fingerprint of an API key suitable for the Inspector UI.
+ * Plaintext keys never enter the ring buffer — only a prefix/suffix preview
+ * plus the original length, so a user can tell which credential was used
+ * without leaking it via JSON export or screenshots.
+ *
+ * @param {string} apiKey
+ * @returns {string}
+ */
+export function fingerprintApiKey(apiKey) {
+ const key = String(apiKey ?? '');
+ if (!key) return '';
+ const len = key.length;
+ if (len <= 8) return `${'*'.repeat(len)} (${len} chars)`;
+ return `${key.slice(0, 4)}...${key.slice(-4)} (${len} chars)`;
+}
+
+const REDACT_QUERY_KEYS = new Set(['key', 'api_key', 'apikey', 'access_token', 'token']);
+
+function sanitizeEndpointUrl(endpoint) {
+ const raw = String(endpoint || '');
+ if (!raw) return '';
+ try {
+ const url = new URL(raw);
+ for (const name of [...url.searchParams.keys()]) {
+ if (REDACT_QUERY_KEYS.has(name.toLowerCase())) {
+ url.searchParams.set(name, '***');
+ }
+ }
+ return url.toString();
+ } catch {
+ return raw;
+ }
+}
+
+/**
+ * Attach the resolved upstream endpoint and a redacted key fingerprint to the
+ * current inspection entry. Call this right before fetching the upstream
+ * provider from any send*Request function.
+ *
+ * @param {import('express').Request} request
+ * @param {string|URL} endpoint Full URL that the server is about to hit
+ * @param {string} apiKey Plaintext API key (never stored)
+ */
+export function attachInspectionEndpoint(request, endpoint, apiKey) {
+ const entry = findEntry(request);
+ if (!entry) return;
+ entry.endpoint = sanitizeEndpointUrl(endpoint);
+ entry.apiKeyFingerprint = fingerprintApiKey(apiKey);
+}
+
+/**
  * Start tracking a generation request. Call at the top of /generate.
  * Attaches `request.__inspectorId` for later completion.
  * @param {import('express').Request} request
@@ -44,6 +95,8 @@ export function startInspection(request) {
  source: String(body.chat_completion_source || body.api_type || 'unknown'),
  model: String(body.model || ''),
  stream: Boolean(body.stream),
+ endpoint: '',
+ apiKeyFingerprint: '',
  messageCount: messages.length,
  messageRoles: messages.map(m => String(m?.role || '?')),
  promptCharLength: messages.reduce((sum, m) => {
@@ -797,6 +850,8 @@ export function startImageInspection(request, meta) {
         prompt: String(meta.prompt || ''),
         negativePrompt: String(meta.negativePrompt || ''),
         model: String(meta.model || ''),
+        endpoint: '',
+        apiKeyFingerprint: '',
         width: meta.width ?? null,
         height: meta.height ?? null,
         steps: meta.steps ?? null,

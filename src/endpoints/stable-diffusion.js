@@ -15,7 +15,7 @@ import { delay, getBasicAuthHeader, isValidUrl, tryParse } from '../util.js';
 import { readSecret, SECRET_KEYS } from './secrets.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 import { AIMLAPI_HEADERS } from '../constants.js';
-import { startImageInspection, completeImageInspection, failImageInspection, abortInspection, extractImageMeta } from '../request-inspector.js';
+import { startImageInspection, completeImageInspection, failImageInspection, abortInspection, extractImageMeta, attachInspectionEndpoint } from '../request-inspector.js';
 
 /**
  * Gets the comfy workflows.
@@ -330,6 +330,7 @@ router.post('/generate', async (request, response) => {
         console.debug('SD WebUI request:', request.body);
         const txt2imgUrl = new URL(request.body.url);
         txt2imgUrl.pathname = '/sdapi/v1/txt2img';
+        attachInspectionEndpoint(request, txt2imgUrl, request.body.auth || '');
         const result = await fetch(txt2imgUrl, {
             method: 'POST',
             body: JSON.stringify(request.body),
@@ -712,6 +713,7 @@ comfy.post('/generate', async (request, response) => {
         const promptUrl = new URL(urlJoin(baseUrl, '/prompt'));
         const promptBody = JSON.parse(request.body.prompt);
         promptBody.client_id = clientId;
+        attachInspectionEndpoint(request, promptUrl, '');
         const promptResult = await fetch(promptUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -853,6 +855,7 @@ comfyRunPod.post('/generate', async (request, response) => {
 
         console.debug('ComfyUI RunPod request:', wrappedWorkflow);
 
+        attachInspectionEndpoint(request, url, key);
         const promptResult = await fetch(url, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${key}` },
@@ -949,6 +952,7 @@ together.post('/generate', async (request, response) => {
         startImageInspection(request, extractImageMeta('together', request.body));
         console.debug('TogetherAI request:', request.body);
 
+        attachInspectionEndpoint(request, 'https://api.together.xyz/v1/images/generations', key);
         const result = await fetch('https://api.together.xyz/v1/images/generations', {
             method: 'POST',
             body: JSON.stringify({
@@ -1059,6 +1063,7 @@ sdcpp.post('/generate', async (request, response) => {
 
         console.debug('stable-diffusion.cpp request:', payload);
 
+        attachInspectionEndpoint(request, url, '');
         const result = await fetch(url, {
             method: 'POST',
             body: JSON.stringify(payload),
@@ -1155,6 +1160,7 @@ drawthings.post('/generate', async (request, response) => {
         delete body.url;
         delete body.auth;
 
+        attachInspectionEndpoint(request, url, request.body.auth || '');
         const result = await fetch(url, {
             method: 'POST',
             body: JSON.stringify(body),
@@ -1230,6 +1236,7 @@ pollinations.post('/generate', async (request, response) => {
 
         console.info('Pollinations request URL:', promptUrl.toString());
 
+        attachInspectionEndpoint(request, promptUrl, key);
         const result = await fetch(promptUrl, {
             method: 'GET',
             headers: {
@@ -1293,6 +1300,7 @@ stability.post('/generate', async (request, response) => {
                 throw new Error('Invalid Stability AI model selected');
         }
 
+        attachInspectionEndpoint(request, apiUrl, key);
         const result = await fetch(apiUrl, {
             method: 'POST',
             headers: {
@@ -1332,7 +1340,9 @@ huggingface.post('/generate', async (request, response) => {
         startImageInspection(request, extractImageMeta('huggingface', request.body));
         console.debug('Hugging Face request:', request.body);
 
-        const result = await fetch(`https://api-inference.huggingface.co/models/${request.body.model}`, {
+        const huggingFaceUrl = `https://api-inference.huggingface.co/models/${request.body.model}`;
+        attachInspectionEndpoint(request, huggingFaceUrl, key);
+        const result = await fetch(huggingFaceUrl, {
             method: 'POST',
             body: JSON.stringify({
                 inputs: request.body.prompt,
@@ -1428,6 +1438,7 @@ electronhub.post('/generate', async (request, response) => {
 
         console.debug('Electron Hub request:', bodyParams);
 
+        attachInspectionEndpoint(request, 'https://api.electronhub.ai/v1/images/generations', key);
         const result = await fetch('https://api.electronhub.ai/v1/images/generations', {
             method: 'POST',
             headers: {
@@ -1546,6 +1557,7 @@ chutes.post('/generate', async (request, response) => {
 
         console.debug('Chutes request:', bodyParams);
 
+        attachInspectionEndpoint(request, 'https://image.chutes.ai/generate', key);
         const result = await fetch('https://image.chutes.ai/generate', {
             method: 'POST',
             headers: {
@@ -1627,6 +1639,7 @@ nanogpt.post('/generate', async (request, response) => {
         startImageInspection(request, extractImageMeta('nanogpt', request.body));
         console.debug('NanoGPT request:', request.body);
 
+        attachInspectionEndpoint(request, 'https://nano-gpt.com/api/generate-image', key);
         const result = await fetch('https://nano-gpt.com/api/generate-image', {
             method: 'POST',
             body: JSON.stringify(request.body),
@@ -1722,7 +1735,9 @@ bfl.post('/generate', async (request, response) => {
 
         console.debug('BFL request:', requestBody);
 
-        const result = await fetch(`https://api.bfl.ml/v1/${request.body.model}`, {
+        const bflUrl = `https://api.bfl.ml/v1/${request.body.model}`;
+        attachInspectionEndpoint(request, bflUrl, key);
+        const result = await fetch(bflUrl, {
             method: 'POST',
             body: JSON.stringify(requestBody),
             headers: {
@@ -1849,7 +1864,9 @@ falai.post('/generate', async (request, response) => {
 
         console.debug('FAL.AI request:', requestBody);
 
-        const result = await fetch(`https://queue.fal.run/fal-ai/${request.body.model}`, {
+        const falaiUrl = `https://queue.fal.run/fal-ai/${request.body.model}`;
+        attachInspectionEndpoint(request, falaiUrl, key);
+        const result = await fetch(falaiUrl, {
             method: 'POST',
             body: JSON.stringify(requestBody),
             headers: {
@@ -1947,6 +1964,7 @@ xai.post('/generate', async (request, response) => {
 
         console.debug('xAI request:', requestBody);
 
+        attachInspectionEndpoint(request, 'https://api.x.ai/v1/images/generations', key);
         const result = await fetch('https://api.x.ai/v1/images/generations', {
             method: 'POST',
             body: JSON.stringify(requestBody),
