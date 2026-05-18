@@ -833,26 +833,28 @@ export function buildOrchestratorSettingsHtml(deps) {
             <input id="luker_orch_tool_retries" class="text_pole" type="number" min="0" max="10" step="1" />
             <label for="luker_orch_rpm_limit">${escapeHtml(i18n('RPM limit (0 = unlimited)'))}</label>
             <input id="luker_orch_rpm_limit" class="text_pole" type="number" min="0" max="600" step="1" />
-            <label for="luker_orch_capsule_position">${escapeHtml(i18n('Injection position'))}</label>
-            <select id="luker_orch_capsule_position" class="text_pole">
-                <option value="${world_info_position.before}">${escapeHtml(i18n('Before Character Definitions'))}</option>
-                <option value="${world_info_position.after}">${escapeHtml(i18n('After Character Definitions'))}</option>
-                <option value="${world_info_position.ANTop}">${escapeHtml(i18n('Before Author\'s Note'))}</option>
-                <option value="${world_info_position.ANBottom}">${escapeHtml(i18n('After Author\'s Note'))}</option>
-                <option value="${world_info_position.EMTop}">${escapeHtml(i18n('Before Example Messages'))}</option>
-                <option value="${world_info_position.EMBottom}">${escapeHtml(i18n('After Example Messages'))}</option>
-                <option value="${world_info_position.atDepth}">${escapeHtml(i18n('At Chat Depth'))}</option>
-            </select>
-            <label for="luker_orch_capsule_depth">${escapeHtml(i18n('Injection depth (At Chat Depth only)'))}</label>
-            <input id="luker_orch_capsule_depth" class="text_pole" type="number" min="0" max="10000" step="1" />
-            <label for="luker_orch_capsule_role">${escapeHtml(i18n('Injection role (At Chat Depth only)'))}</label>
-            <select id="luker_orch_capsule_role" class="text_pole">
-                <option value="${extension_prompt_roles.SYSTEM}">${escapeHtml(i18n('System'))}</option>
-                <option value="${extension_prompt_roles.USER}">${escapeHtml(i18n('User'))}</option>
-                <option value="${extension_prompt_roles.ASSISTANT}">${escapeHtml(i18n('Assistant'))}</option>
-            </select>
-            <label for="luker_orch_capsule_custom_instruction">${escapeHtml(i18n('Custom orchestration result instruction (prepended before analysis)'))}</label>
-            <textarea id="luker_orch_capsule_custom_instruction" class="text_pole textarea_compact" rows="2" placeholder="${escapeHtml(i18n('e.g. Follow this guidance first, then write final reply in-character.'))}"></textarea>
+            <div id="luker_orch_capsule_settings">
+                <label for="luker_orch_capsule_position">${escapeHtml(i18n('Injection position'))}</label>
+                <select id="luker_orch_capsule_position" class="text_pole">
+                    <option value="${world_info_position.before}">${escapeHtml(i18n('Before Character Definitions'))}</option>
+                    <option value="${world_info_position.after}">${escapeHtml(i18n('After Character Definitions'))}</option>
+                    <option value="${world_info_position.ANTop}">${escapeHtml(i18n('Before Author\'s Note'))}</option>
+                    <option value="${world_info_position.ANBottom}">${escapeHtml(i18n('After Author\'s Note'))}</option>
+                    <option value="${world_info_position.EMTop}">${escapeHtml(i18n('Before Example Messages'))}</option>
+                    <option value="${world_info_position.EMBottom}">${escapeHtml(i18n('After Example Messages'))}</option>
+                    <option value="${world_info_position.atDepth}">${escapeHtml(i18n('At Chat Depth'))}</option>
+                </select>
+                <label for="luker_orch_capsule_depth">${escapeHtml(i18n('Injection depth (At Chat Depth only)'))}</label>
+                <input id="luker_orch_capsule_depth" class="text_pole" type="number" min="0" max="10000" step="1" />
+                <label for="luker_orch_capsule_role">${escapeHtml(i18n('Injection role (At Chat Depth only)'))}</label>
+                <select id="luker_orch_capsule_role" class="text_pole">
+                    <option value="${extension_prompt_roles.SYSTEM}">${escapeHtml(i18n('System'))}</option>
+                    <option value="${extension_prompt_roles.USER}">${escapeHtml(i18n('User'))}</option>
+                    <option value="${extension_prompt_roles.ASSISTANT}">${escapeHtml(i18n('Assistant'))}</option>
+                </select>
+                <label for="luker_orch_capsule_custom_instruction">${escapeHtml(i18n('Custom orchestration result instruction (prepended before analysis)'))}</label>
+                <textarea id="luker_orch_capsule_custom_instruction" class="text_pole textarea_compact" rows="2" placeholder="${escapeHtml(i18n('e.g. Follow this guidance first, then write final reply in-character.'))}"></textarea>
+            </div>
             <small id="luker_orch_single_mode_hint" style="opacity:0.8">${escapeHtml(i18n('Single-agent mode is enabled. Workflow board is hidden and runtime uses the simplified single node profile.'))}</small>
             <div id="luker_orch_single_mode_runtime_tools" class="luker_orch_board luker_orch_single_mode_tools">
                 <div class="flex-container">

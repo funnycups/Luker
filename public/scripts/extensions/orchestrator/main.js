@@ -1766,6 +1766,12 @@ function renderDynamicPanels(root, context) {
     root.find('#luker_orch_agenda_board').toggle(agendaModeEnabled);
     root.find('#luker_orch_loop_board').toggle(loopModeEnabled);
     root.find('#luker_orch_director_board').toggle(directorModeEnabled);
+    // Capsule settings (injection position/depth/role + custom result
+    // instruction) only apply to modes that produce a capsule for the
+    // main LLM to consume. Director writes the message body directly
+    // and never produces a capsule, so this whole group is irrelevant
+    // there.
+    root.find('#luker_orch_capsule_settings').toggle(!directorModeEnabled);
     root.find('#luker_orch_single_mode_runtime_tools').toggle(singleModeEnabled);
     root.find('#luker_orch_single_mode_hint').toggle(singleModeEnabled);
     root.find('#luker_orch_single_agent_fields').toggle(singleModeEnabled);
