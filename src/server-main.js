@@ -52,6 +52,23 @@ function serializeLogArg(value) {
     };
 });
 
+// Node diagnostic reports — written on fatal V8 errors, uncaught exceptions,
+// and OS signals. These are the only artefact left behind when a native
+// module SEGVs and the process aborts without flushing stderr (the rename
+// silent-crash class of bug). Reports land in <DATA_ROOT>/diagnostic-reports
+// as JSON containing the native stack, JS stack, heap snapshot pointers,
+// and open libuv handles. Always-on; cost is zero until something crashes.
+try {
+    const reportDir = path.join(globalThis.DATA_ROOT || '.', 'diagnostic-reports');
+    fs.mkdirSync(reportDir, { recursive: true });
+    process.report.directory = reportDir;
+    process.report.reportOnFatalError = true;
+    process.report.reportOnUncaughtException = true;
+    process.report.reportOnSignal = true;
+} catch (error) {
+    console.warn('Failed to configure Node diagnostic reports:', error);
+}
+
 // local library imports
 import './fetch-patch.js';
 import { serverDirectory } from './server-directory.js';
