@@ -19,6 +19,7 @@ import {
     normalizeAnchorPlayableFloor,
 } from './anchors.js';
 import {
+    commitAnchorSnapshot,
     getFloorStateInstance,
     loadAnchorMap,
     loadMetaSidecar,
@@ -26,6 +27,7 @@ import {
     persistFallbackManagedEntries,
     pickLatestValidSnapshot,
 } from './persistence.js';
+import { POPUP_TYPE, Popup } from '../../popup.js';
 
 const MODULE_NAME = 'search_tools';
 const UI_BLOCK_ID = 'search_tools_settings';
@@ -1997,6 +1999,86 @@ async function storeCompletedSearchAgentSnapshot(context, anchor, result) {
     return latestSearchAgentSnapshot;
 }
 
+async function applyManualManagedEntriesUpdate(context, nextEntries) {
+    const normalized = normalizeStoredManagedEntries(nextEntries);
+    latestManagedEntries = normalized;
+
+    if (latestSearchAgentSnapshot && typeof latestSearchAgentSnapshot === 'object') {
+        const updated = {
+            anchorHash: String(latestSearchAgentSnapshot.anchorHash || '').trim(),
+            updatedAt: new Date().toISOString(),
+            summary: normalizeWhitespace(latestSearchAgentSnapshot.summary || ''),
+            mutationCount: Math.max(0, Math.floor(Number(latestSearchAgentSnapshot.mutationCount || 0))),
+            managedEntryCount: normalized.length,
+            bookName: normalizeWhitespace(latestSearchAgentSnapshot.bookName || ''),
+            managedEntries: normalized,
+        };
+        const committed = await commitAnchorSnapshot(
+            context,
+            {
+                playableFloor: latestSearchAgentSnapshot.anchorPlayableFloor,
+                hash: latestSearchAgentSnapshot.anchorHash,
+            },
+            updated,
+        );
+        if (committed) {
+            latestSearchAgentSnapshot = materializeSearchAgentSnapshot(
+                getChatKey(context),
+                latestSearchAgentSnapshot.anchorPlayableFloor,
+                updated,
+            );
+        } else {
+            // Anchor no longer resolvable (user message was deleted or
+            // turned non-user) — drop the snapshot and fall back to the
+            // meta sidecar so the change survives a reload.
+            latestSearchAgentSnapshot = null;
+            await persistFallbackManagedEntries(context, normalized);
+        }
+    } else {
+        await persistFallbackManagedEntries(context, normalized);
+    }
+
+    await syncSharedLorebookForCurrentChat(context);
+    return normalized;
+}
+
+async function manuallyDeleteManagedEntries(context, entryIds = []) {
+    const idsToDelete = new Set(
+        (Array.isArray(entryIds) ? entryIds : [])
+            .map((id) => sanitizeEntryId(id))
+            .filter(Boolean),
+    );
+    if (idsToDelete.size === 0) {
+        return { deleted: [], remaining: latestManagedEntries.slice() };
+    }
+    const before = Array.isArray(latestManagedEntries) ? latestManagedEntries.slice() : [];
+    const after = before.filter((entry) => !idsToDelete.has(entry.entryId));
+    const deleted = before
+        .filter((entry) => idsToDelete.has(entry.entryId))
+        .map((entry) => entry.entryId);
+    if (deleted.length === 0) {
+        return { deleted: [], remaining: before };
+    }
+    const remaining = await applyManualManagedEntriesUpdate(context, after);
+    return { deleted, remaining };
+}
+
+async function manuallyResetManagedEntries(context) {
+    const before = Array.isArray(latestManagedEntries) ? latestManagedEntries.slice() : [];
+    if (before.length === 0) {
+        return { deleted: [], remaining: [] };
+    }
+    const remaining = await applyManualManagedEntriesUpdate(context, []);
+    return {
+        deleted: before.map((entry) => entry.entryId),
+        remaining,
+    };
+}
+
+function getManagedEntriesSnapshot() {
+    return Array.isArray(latestManagedEntries) ? latestManagedEntries.slice() : [];
+}
+
 function getLatestSearchAgentEntry(context) {
     const chatKey = getChatKey(context);
     if (!latestSearchAgentSnapshot || typeof latestSearchAgentSnapshot !== 'object') {
@@ -2598,6 +2680,21 @@ function registerLocaleData() {
         '(Current preset)': '（当前预设）',
         '(Current API config)': '（当前 API 配置）',
         '(missing)': '（缺失）',
+        'Manage stored search entries': '管理已保存的搜索条目',
+        'Remove entries that are no longer relevant. Changes apply to the current chat.': '删除不再相关的条目，改动只作用于当前聊天。',
+        'No managed search entries in this chat.': '当前聊天没有任何搜索条目。',
+        'Select all': '全选',
+        'Delete selected': '删除选中',
+        'Reset all': '重置全部',
+        'Delete': '删除',
+        'Close': '关闭',
+        'Total': '总计',
+        'Always inject': '始终注入',
+        'Always': '常驻',
+        'Delete 1 selected search entry? This cannot be undone for the current chat.': '删除已选中的 1 条搜索条目？当前聊天的此操作无法撤销。',
+        'Delete {count} selected search entries? This cannot be undone for the current chat.': '删除已选中的 {count} 条搜索条目？当前聊天的此操作无法撤销。',
+        'Remove ALL managed search entries from this chat? This cannot be undone.': '清空当前聊天的全部搜索条目？此操作无法撤销。',
+        'Failed to update managed entries. See console for details.': '更新搜索条目失败，详情查看控制台。',
     });
 
     addLocaleData('zh-tw', {
@@ -2654,6 +2751,21 @@ function registerLocaleData() {
         '(Current preset)': '（目前預設）',
         '(Current API config)': '（目前 API 設定）',
         '(missing)': '（缺失）',
+        'Manage stored search entries': '管理已儲存的搜尋條目',
+        'Remove entries that are no longer relevant. Changes apply to the current chat.': '刪除不再相關的條目，變動只套用於目前聊天。',
+        'No managed search entries in this chat.': '目前聊天沒有任何搜尋條目。',
+        'Select all': '全選',
+        'Delete selected': '刪除選中',
+        'Reset all': '重置全部',
+        'Delete': '刪除',
+        'Close': '關閉',
+        'Total': '總計',
+        'Always inject': '始終注入',
+        'Always': '常駐',
+        'Delete 1 selected search entry? This cannot be undone for the current chat.': '刪除已選中的 1 條搜尋條目？目前聊天的此操作無法復原。',
+        'Delete {count} selected search entries? This cannot be undone for the current chat.': '刪除已選中的 {count} 條搜尋條目？目前聊天的此操作無法復原。',
+        'Remove ALL managed search entries from this chat? This cannot be undone.': '清空目前聊天的全部搜尋條目？此操作無法復原。',
+        'Failed to update managed entries. See console for details.': '更新搜尋條目失敗，詳情請查看主控台。',
     });
 }
 
@@ -2683,6 +2795,11 @@ const {
     hasConfiguredSecret,
     i18n,
     listManagedEntries,
+    manuallyDeleteManagedEntries,
+    manuallyResetManagedEntries,
+    getManagedEntriesSnapshot,
+    POPUP_TYPE,
+    Popup,
     normalizeLorebookPosition,
     normalizeLorebookRole,
     normalizeProvider,

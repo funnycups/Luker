@@ -19,6 +19,11 @@ export function createSearchToolsSettingsUi(deps) {
         hasConfiguredSecret,
         i18n,
         listManagedEntries,
+        manuallyDeleteManagedEntries,
+        manuallyResetManagedEntries,
+        getManagedEntriesSnapshot,
+        POPUP_TYPE,
+        Popup,
         normalizeLorebookPosition,
         normalizeLorebookRole,
         normalizeProvider,
@@ -161,6 +166,9 @@ export function createSearchToolsSettingsUi(deps) {
             <div id="search_tools_reset_agent_prompt" class="menu_button menu_button_small">${escapeHtml(i18n('Reset search-stage agent prompt'))}</div>
             <div id="search_tools_reset_agent_final_stage_prompt" class="menu_button menu_button_small">${escapeHtml(i18n('Reset final-stage agent prompt'))}</div>
         </div>
+        <div class="flex-container" style="margin-top: 8px;">
+            <div id="search_tools_manage_entries" class="menu_button menu_button_small">${escapeHtml(i18n('Manage stored search entries'))}</div>
+        </div>
         <div id="${STATUS_ID}" class="wide100p text_muted" style="margin-top: 8px;"></div>
     </div>
 </div>`;
@@ -184,6 +192,100 @@ export function createSearchToolsSettingsUi(deps) {
     text-orientation: mixed;
     align-items: center;
     justify-content: center;
+}
+.luker-stm-entries .luker-stm-intro {
+    margin-bottom: 8px;
+    opacity: 0.75;
+}
+.luker-stm-entries .luker-stm-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor);
+    margin-bottom: 10px;
+}
+.luker-stm-entries .luker-stm-toolbar-spacer {
+    flex: 1 1 auto;
+}
+.luker-stm-entries .luker-stm-count {
+    opacity: 0.75;
+}
+.luker-stm-entries .luker-stm-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.luker-stm-entries .luker-stm-card {
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 6px;
+    padding: 8px 10px;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 50%, transparent);
+}
+.luker-stm-entries .luker-stm-card-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.luker-stm-entries .luker-stm-title {
+    flex: 1 1 auto;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+.luker-stm-entries .luker-stm-actions {
+    display: flex;
+    gap: 6px;
+}
+.luker-stm-entries .luker-stm-keys {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+}
+.luker-stm-entries .luker-stm-tag {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 12px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    color: var(--SmartThemeQuoteColor);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 10%, transparent);
+    font-size: 0.85em;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+.luker-stm-entries .luker-stm-content {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--SmartThemeBorderColor);
+    font-size: 0.9em;
+    opacity: 0.85;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 8em;
+    overflow-y: auto;
+}
+.luker-stm-entries .luker-stm-flag {
+    display: inline-block;
+    padding: 0 6px;
+    margin-left: 6px;
+    border-radius: 4px;
+    border: 1px solid var(--SmartThemeQuoteColor);
+    color: var(--SmartThemeQuoteColor);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 15%, transparent);
+    font-size: 0.72em;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    vertical-align: middle;
+}
+.luker-stm-entries .luker-stm-caution {
+    color: var(--fullred);
+}
+.luker-stm-entries .luker-stm-empty {
+    padding: 24px 0;
+    text-align: center;
+    opacity: 0.6;
 }
 </style>`);
     }
@@ -258,6 +360,185 @@ export function createSearchToolsSettingsUi(deps) {
             console.warn(`[${MODULE_NAME}] Failed to refresh UI status`, error);
             updateUiStatus(i18n('Failed to inspect shared search lorebook.'));
         }
+    }
+
+    function buildPreviewText(content, limit = 320) {
+        const text = String(content || '').replace(/\r\n?/g, '\n').trim();
+        if (!text) return '';
+        if (text.length <= limit) return text;
+        return `${text.slice(0, limit - 1).trimEnd()}…`;
+    }
+
+    function renderEntriesList($container, entries) {
+        const list = Array.isArray(entries) ? entries : [];
+        const $list = $container.find('.luker-stm-list');
+        const $empty = $container.find('.luker-stm-empty');
+        const $count = $container.find('.luker-stm-count');
+        const $selectAll = $container.find('.luker-stm-select-all');
+        const $deleteSelected = $container.find('.luker-stm-delete-selected');
+        const $resetAll = $container.find('.luker-stm-reset-all');
+
+        $count.text(`${i18n('Total')}: ${list.length}`);
+        $selectAll.prop('checked', false);
+        $selectAll.prop('disabled', list.length === 0);
+        $deleteSelected.toggleClass('disabled', true);
+        $resetAll.toggleClass('disabled', list.length === 0);
+
+        if (list.length === 0) {
+            $list.empty();
+            $empty.show();
+            return;
+        }
+        $empty.hide();
+
+        const fragments = list.map((entry) => {
+            const keywords = Array.isArray(entry.keywords)
+                ? entry.keywords.filter((k) => String(k || '').trim() !== '')
+                : [];
+            const keywordsHtml = keywords.length
+                ? `<div class="luker-stm-keys">${keywords.map((k) => `<span class="luker-stm-tag">${escapeHtml(k)}</span>`).join('')}</div>`
+                : '';
+            const previewHtml = entry.content
+                ? `<div class="luker-stm-content">${escapeHtml(buildPreviewText(entry.content))}</div>`
+                : '';
+            const alwaysFlag = entry.alwaysInject
+                ? `<span class="luker-stm-flag" title="${escapeHtml(i18n('Always inject'))}">${escapeHtml(i18n('Always'))}</span>`
+                : '';
+            return `
+<div class="luker-stm-card" data-entry-id="${escapeHtml(entry.entryId)}">
+    <div class="luker-stm-card-head">
+        <label class="checkbox_label" style="margin: 0;">
+            <input type="checkbox" class="luker-stm-row-check" />
+        </label>
+        <div class="luker-stm-title">${escapeHtml(entry.title || entry.entryId)}${alwaysFlag}</div>
+        <div class="luker-stm-actions">
+            <div class="menu_button menu_button_small caution luker-stm-row-delete">${escapeHtml(i18n('Delete'))}</div>
+        </div>
+    </div>
+    ${keywordsHtml}
+    ${previewHtml}
+</div>`;
+        });
+        $list.html(fragments.join(''));
+    }
+
+    function updateBulkButtonsEnabled($container) {
+        const checkedCount = $container.find('.luker-stm-row-check:checked').length;
+        $container.find('.luker-stm-delete-selected').toggleClass('disabled', checkedCount === 0);
+        const totalCount = $container.find('.luker-stm-row-check').length;
+        const allChecked = totalCount > 0 && checkedCount === totalCount;
+        $container.find('.luker-stm-select-all').prop('checked', allChecked);
+    }
+
+    async function openManageEntriesDialog() {
+        const context = getContext();
+        if (!context?.chatId && !context?.getCurrentChatId?.()) {
+            if (typeof toastr !== 'undefined') {
+                toastr.info(i18n('No active chat.'));
+            }
+            return;
+        }
+
+        const initialHtml = `
+<div class="luker-stm-entries">
+    <h3 style="margin-top: 0;">${escapeHtml(i18n('Manage stored search entries'))}</h3>
+    <div class="luker-stm-intro">${escapeHtml(i18n('Remove entries that are no longer relevant. Changes apply to the current chat.'))}</div>
+    <div class="luker-stm-toolbar">
+        <label class="checkbox_label" style="margin: 0;">
+            <input type="checkbox" class="luker-stm-select-all" />
+            <span>${escapeHtml(i18n('Select all'))}</span>
+        </label>
+        <span class="luker-stm-count"></span>
+        <span class="luker-stm-toolbar-spacer"></span>
+        <div class="menu_button menu_button_small luker-stm-caution luker-stm-delete-selected disabled">${escapeHtml(i18n('Delete selected'))}</div>
+        <div class="menu_button menu_button_small luker-stm-caution luker-stm-reset-all">${escapeHtml(i18n('Reset all'))}</div>
+    </div>
+    <div class="luker-stm-list"></div>
+    <div class="luker-stm-empty" style="display: none;">${escapeHtml(i18n('No managed search entries in this chat.'))}</div>
+</div>`;
+
+        const popup = new Popup(initialHtml, POPUP_TYPE.DISPLAY, '', {
+            wide: true,
+            large: true,
+            allowVerticalScrolling: true,
+            okButton: i18n('Close'),
+            cancelButton: false,
+        });
+
+        let busy = false;
+
+        function getRoot() {
+            return jQuery(popup.content).find('.luker-stm-entries');
+        }
+
+        function refresh() {
+            renderEntriesList(getRoot(), getManagedEntriesSnapshot());
+        }
+
+        async function runMutation(mutationFn, confirmMessage) {
+            if (busy) return;
+            if (confirmMessage && !window.confirm(confirmMessage)) return;
+            busy = true;
+            try {
+                await mutationFn();
+                refresh();
+                void refreshUiStatusForCurrentChat();
+            } catch (error) {
+                console.warn(`[${MODULE_NAME}] Manage entries mutation failed`, error);
+                if (typeof toastr !== 'undefined') {
+                    toastr.error(i18n('Failed to update managed entries. See console for details.'));
+                }
+            } finally {
+                busy = false;
+            }
+        }
+
+        const $root = getRoot();
+
+        $root.on('change', '.luker-stm-select-all', function () {
+            const checked = jQuery(this).prop('checked');
+            $root.find('.luker-stm-row-check').prop('checked', checked);
+            updateBulkButtonsEnabled($root);
+        });
+
+        $root.on('change', '.luker-stm-row-check', function () {
+            updateBulkButtonsEnabled($root);
+        });
+
+        $root.on('click', '.luker-stm-row-delete', function () {
+            const entryId = jQuery(this).closest('.luker-stm-card').data('entry-id');
+            if (!entryId) return;
+            void runMutation(async () => {
+                await manuallyDeleteManagedEntries(getContext(), [String(entryId)]);
+            });
+        });
+
+        $root.on('click', '.luker-stm-delete-selected', function () {
+            if (jQuery(this).hasClass('disabled')) return;
+            const ids = $root.find('.luker-stm-row-check:checked')
+                .map((_, el) => jQuery(el).closest('.luker-stm-card').data('entry-id'))
+                .get()
+                .map((value) => String(value || ''))
+                .filter(Boolean);
+            if (ids.length === 0) return;
+            void runMutation(
+                async () => { await manuallyDeleteManagedEntries(getContext(), ids); },
+                ids.length === 1
+                    ? i18n('Delete 1 selected search entry? This cannot be undone for the current chat.')
+                    : i18n('Delete {count} selected search entries? This cannot be undone for the current chat.').replace('{count}', String(ids.length)),
+            );
+        });
+
+        $root.on('click', '.luker-stm-reset-all', function () {
+            if (jQuery(this).hasClass('disabled')) return;
+            void runMutation(
+                async () => { await manuallyResetManagedEntries(getContext()); },
+                i18n('Remove ALL managed search entries from this chat? This cannot be undone.'),
+            );
+        });
+
+        refresh();
+        await popup.show();
     }
 
     function bindSettingsUi() {
@@ -414,6 +695,9 @@ export function createSearchToolsSettingsUi(deps) {
             if (typeof toastr !== 'undefined') {
                 toastr.success(i18n('Reset final-stage agent prompt'));
             }
+        });
+        root.on('click.searchTools', '#search_tools_manage_entries', function () {
+            void openManageEntriesDialog();
         });
     }
 
