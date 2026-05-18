@@ -421,10 +421,15 @@ export function createEmptyPersistedMemoryState() {
  * `repairStoreAfterRollback`, which uses `cloneRollbackEdgeSnapshot` to
  * normalize edge types and dedupe.
  */
+const RUNTIME_NORMALIZED_TAG = Symbol('luker.memoryGraph.runtimeNormalized');
+
 export function normalizeStoreForRuntime(store) {
     const empty = createEmptyStore();
     if (!store || typeof store !== 'object') {
         return empty;
+    }
+    if (store[RUNTIME_NORMALIZED_TAG] === true) {
+        return store;
     }
     const normalized = { ...empty, ...store };
     const rawNodes = (normalized.nodes && typeof normalized.nodes === 'object' && !Array.isArray(normalized.nodes))
@@ -483,6 +488,12 @@ export function normalizeStoreForRuntime(store) {
     normalized.seqCounter = Math.max(normalized.seqCounter, normalized.loggedSeqTo);
 
     repairStoreAfterRollback(normalized);
+    Object.defineProperty(normalized, RUNTIME_NORMALIZED_TAG, {
+        value: true,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+    });
     return normalized;
 }
 

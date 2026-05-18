@@ -1316,6 +1316,7 @@ async function importMemoryGraphStore(context, parsed) {
     const persistSeq = importPlan.importMode === 'restore'
         ? importPlan.exportedFloor
         : Math.max(1, Math.floor(Number(importPlan.bindFloor || 0)));
+    await new Promise(resolve => setTimeout(resolve, 0));
     await commitMemoryStoreReplaceByChatKey(
         context,
         chatKey,
@@ -13853,8 +13854,15 @@ function bindUi() {
             notifyError(i18n('No active chat selected.'));
             return;
         }
+        const importToast = toastr.info(i18n('Importing memory graph…'), '', {
+            timeOut: 0,
+            extendedTimeOut: 0,
+            tapToDismiss: false,
+        });
         try {
+            await new Promise(resolve => setTimeout(resolve, 0));
             const parsed = JSON.parse(await getFileText(file));
+            await new Promise(resolve => setTimeout(resolve, 0));
             const imported = await importMemoryGraphStore(context, parsed);
             if (!imported) {
                 return;
@@ -13870,6 +13878,10 @@ function bindUi() {
         } catch (error) {
             notifyError(i18nFormat('Import failed: ${0}', error?.message || error));
             updateUiStatus(i18n('Memory graph import failed.'));
+        } finally {
+            if (importToast) {
+                toastr.clear(importToast);
+            }
         }
     });
 }
