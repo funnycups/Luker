@@ -4188,6 +4188,14 @@ body #toast-container .toast-warning {
     background-color: #e29325;
 }
 
+/* Global `small { color: var(--SmartThemeBodyColor); opacity: 0.7 }` renders
+   as low-contrast grey on the colored toast backgrounds. Override inside
+   toasts so detail lines stay readable across themes. */
+body #toast-container > div small {
+    color: #fff;
+    opacity: 0.92;
+}
+
 button.toast-close-button {
     padding-right: 5px;
     padding-top: 3px;
