@@ -12589,6 +12589,13 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
         const target = resolveChatStateTarget();
         const generationIds = summarizeLukerGenerationIdsForMessages(messages);
 
+        // Capture chat sync BEFORE the fetch awaits. Snapshot must reflect
+        // what BE just received, not what `chat[]` happens to be after the
+        // await. Plugins (e.g. table-state managers) mutate chat[i] during
+        // the request — if we recorded the post-mutation live array, the
+        // next diff would compare against fields BE never saw and trip 409.
+        const chatSnapshotAtRequest = cloneJsonValue(chat) ?? chat.slice();
+
         if (selected_group) {
             const group = groups.find(x => x.id == selected_group);
             const groupChatId = group?.chat_id;
@@ -12624,7 +12631,7 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
                     return Boolean(refreshed && lodash.isEqual(refreshed.messages, chat));
                 }
                 applyIntegrityFromWritePayload(payload);
-                rememberChatMessageSnapshot({ is_group: true, id: groupChatId }, chat);
+                rememberChatMessageSnapshot({ is_group: true, id: groupChatId }, chatSnapshotAtRequest);
                 return true;
             }
             // Any 409 surfaces via resolveChatWriteConflict (toast + event + snapshot
@@ -12677,7 +12684,7 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
                 return Boolean(refreshed && lodash.isEqual(refreshed.messages, chat));
             }
             applyIntegrityFromWritePayload(payload);
-            rememberChatMessageSnapshot({ is_group: false, avatar_url: avatar, file_name: fileName }, chat);
+            rememberChatMessageSnapshot({ is_group: false, avatar_url: avatar, file_name: fileName }, chatSnapshotAtRequest);
             return true;
         }
         // See group-branch comment: any 409 → toast/event/snapshot-invalidate via
@@ -12719,6 +12726,13 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
         const previousMessages = target ? chatMessageSnapshotCache.get(getChatMessageSnapshotKey(target)) : null;
         const guardedOperations = attachChatMessagePatchTests(previousMessages, normalizedOperations);
 
+        // Sync deep-copy of chat[] BEFORE the fetch awaits. Snapshot must
+        // record what BE just received (= live chat at request time), not
+        // whatever `chat[]` became after the await — plugins commonly mutate
+        // chat[i] fields while the request is in flight and would otherwise
+        // leave snapshot pointing at state BE never saw.
+        const chatSnapshotAtRequest = cloneJsonValue(chat) ?? chat.slice();
+
         if (selected_group) {
             const group = groups.find(x => x.id == selected_group);
             const groupChatId = group?.chat_id;
@@ -12742,7 +12756,7 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
             if (response.ok) {
                 const payload = await response.json().catch(() => null);
                 applyIntegrityFromWritePayload(payload);
-                rememberChatMessageSnapshot({ is_group: true, id: groupChatId }, chat);
+                rememberChatMessageSnapshot({ is_group: true, id: groupChatId }, chatSnapshotAtRequest);
                 return true;
             }
             // Any 409 surfaces via resolveChatWriteConflict; returning false lets
@@ -12783,7 +12797,7 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
         if (response.ok) {
             const payload = await response.json().catch(() => null);
             applyIntegrityFromWritePayload(payload);
-            rememberChatMessageSnapshot({ is_group: false, avatar_url: avatar, file_name: fileName }, chat);
+            rememberChatMessageSnapshot({ is_group: false, avatar_url: avatar, file_name: fileName }, chatSnapshotAtRequest);
             return true;
         }
         // See group-branch comment: full-save fallback via the caller covers all
