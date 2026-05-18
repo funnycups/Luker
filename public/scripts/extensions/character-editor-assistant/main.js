@@ -4775,13 +4775,6 @@ async function openCharacterEditorPopup(context = getContext()) {
                         syncComposerState();
                     }
                 });
-                input.addEventListener('keydown', (event) => {
-                    if (event.isComposing || event.key !== 'Enter' || (!event.ctrlKey && !event.metaKey)) {
-                        return;
-                    }
-                    event.preventDefault();
-                    void handleSend();
-                });
                 chat.addEventListener('click', async (event) => {
                     const target = event.target instanceof Element ? event.target.closest('[data-cea-editor-action]') : null;
                     if (!(target instanceof HTMLElement) || isSending) {
@@ -5400,13 +5393,6 @@ async function runLorebookSyncFlow(context, previousSnapshot, currentSnapshot, c
                             notifyError(i18nFormat('Clear failed: ${0}', error?.message || error));
                         }
                     }
-                });
-                input.addEventListener('keydown', (event) => {
-                    if (event.isComposing || event.key !== 'Enter' || (!event.ctrlKey && !event.metaKey)) {
-                        return;
-                    }
-                    event.preventDefault();
-                    void handleSend();
                 });
 
                 setComposerState(true);

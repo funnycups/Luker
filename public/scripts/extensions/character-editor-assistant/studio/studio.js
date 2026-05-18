@@ -1464,16 +1464,11 @@ function handleStudioKeydown(e) {
         return;
     }
 
-    // Ctrl/Cmd+Enter in AI input: Send message. Plain Enter is reserved
-    // for newlines so mobile users (no Ctrl key on touch keyboards) can
-    // compose multi-line prompts. Skip during IME composition to avoid
-    // sending mid-Chinese-input.
-    const input = document.querySelector('[data-studio-input]');
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing && document.activeElement === input) {
-        e.preventDefault();
-        handleAISend();
-        return;
-    }
+    // Enter behavior in the AI input is the textarea default (newline).
+    // Sending is via the Send button only, matching iteration-studio /
+    // completion-preset-assistant. Mobile keyboards have no Ctrl key,
+    // so an Enter-to-send shortcut here would always lose newlines for
+    // touch users.
 
     // Escape: Close studio (only if not focused in AI input textarea or CM6 editor)
     if (e.key === 'Escape' && document.activeElement?.tagName !== 'TEXTAREA' && !document.activeElement?.closest('.cm-editor')) {
