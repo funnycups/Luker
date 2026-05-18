@@ -657,9 +657,9 @@ export function createSubagentDispatcher({
         const baseSystemPrompt = await renderSubSystemPromptWithNotes(systemPrompt, contextForNotes);
 
         const subMessages = [
-            { role: 'system', content: (baseSystemPrompt ? baseSystemPrompt + '\n\n' : '') + '<story_context>' },
+            { role: 'system', content: '<story_context>' },
             ...payloadMessages,
-            { role: 'system', content: '</story_context>' },
+            { role: 'system', content: '</story_context>' + (baseSystemPrompt ? '\n\n' + baseSystemPrompt : '') },
             ...(mainRoundsDigest ? [{ role: 'system', content: '<main_agent_digest>\n' + mainRoundsDigest + '\n</main_agent_digest>' }] : []),
             { role: 'system', content: '<task>\n' + String(task || '') + '\n</task>' },
         ];
@@ -672,7 +672,7 @@ export function createSubagentDispatcher({
             subagentId: displayId,
             isInline,
             task,
-            systemPrompt: subMessages[0]?.content || '',
+            systemPrompt: baseSystemPrompt,
             subMessages,
         });
 

@@ -5,13 +5,16 @@ import { createSubagentDispatcher } from '../../../public/scripts/extensions/orc
  * Sub-agent dispatch builds taskMessages in the same shape main agent
  * uses (see `buildAgentTaskMessages`):
  *
- *   [system_open, ...payload.messages, system_close,
+ *   [system_open, ...payload.messages, system_close+systemPrompt,
  *    (optional) <main_agent_digest>, <task>]
  *
- * `<main_agent_digest>` only appears when `__parentMessages` contains
- * post-prefix rounds; `<task>` is always present and is emitted as a
- * system-role message with XML-wrapped content (no user-role hardcoding —
- * if the user wants a user turn, they wire it via their prompt preset).
+ * The sub-agent's role description is appended onto the `</story_context>`
+ * close so the model reads chat context first and the task framing
+ * last (recency bias). `<main_agent_digest>` only appears when
+ * `__parentMessages` contains post-prefix rounds; `<task>` is always
+ * present and is emitted as a system-role message with XML-wrapped
+ * content (no user-role hardcoding — if the user wants a user turn,
+ * they wire it via their prompt preset).
  */
 function makeDispatcherFixture({ payloadMessages = [{ role: 'user', content: 'chat user 0' }, { role: 'assistant', content: 'chat assistant 0' }] } = {}) {
     const captured = [];
@@ -33,17 +36,17 @@ function makeDispatcherFixture({ payloadMessages = [{ role: 'user', content: 'ch
 }
 
 describe('director-tools — sub-agent message assembly', () => {
-    test('dispatch produces [system_open, ...payload, system_close, digest, task] when parentMessages has rounds', async () => {
+    test('dispatch produces [system_open, ...payload, system_close+role, digest, task] when parentMessages has rounds', async () => {
         const { dispatcher, capturedSubMessages } = makeDispatcherFixture();
 
         // parentMessages shape mirrors what runMainAgentLoop snapshots:
-        // [system_open, ...payload, system_close, ...rounds]
+        // [system_open, ...payload, system_close+role, ...rounds]
         // Here payload has 2 messages, so prefix length = 4. Rounds = 2.
         const parent = [
-            { role: 'system', content: 'You are the main director agent.\n\n<story_context>' },
+            { role: 'system', content: '<story_context>' },
             { role: 'user', content: 'chat user 0' },
             { role: 'assistant', content: 'chat assistant 0' },
-            { role: 'system', content: '</story_context>' },
+            { role: 'system', content: '</story_context>\n\nYou are the main director agent.' },
             { role: 'assistant', content: 'main thinking', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'dispatch_subagent', arguments: '{}' } }] },
             { role: 'tool', tool_call_id: 'c1', content: '{"outputText":"curator briefing"}' },
         ];
@@ -51,21 +54,21 @@ describe('director-tools — sub-agent message assembly', () => {
         await dispatcher.awaitAll([h]);
 
         const msgs = capturedSubMessages[0];
-        // [system_open, payload0, payload1, system_close, digest, task] = 6
+        // [system_open, payload0, payload1, system_close+role, digest, task] = 6
         expect(msgs).toHaveLength(6);
 
-        // Sub-agent system_open wraps role prompt + <story_context> tag.
-        expect(msgs[0].role).toBe('system');
-        expect(msgs[0].content).toContain('You are a brainstormer.');
-        expect(msgs[0].content).toContain('<story_context>');
-        expect(msgs[0].content.trimEnd().endsWith('<story_context>')).toBe(true);
+        // system_open is just the <story_context> tag — no role prompt.
+        expect(msgs[0]).toEqual({ role: 'system', content: '<story_context>' });
 
         // Payload spliced verbatim.
         expect(msgs[1]).toEqual({ role: 'user', content: 'chat user 0' });
         expect(msgs[2]).toEqual({ role: 'assistant', content: 'chat assistant 0' });
 
-        // </story_context> close.
-        expect(msgs[3]).toEqual({ role: 'system', content: '</story_context>' });
+        // </story_context> close carries the agent's role description AFTER
+        // the boundary tag, so the model reads context first and task framing last.
+        expect(msgs[3].role).toBe('system');
+        expect(msgs[3].content.startsWith('</story_context>')).toBe(true);
+        expect(msgs[3].content).toContain('You are a brainstormer.');
 
         // Digest is a system-role message wrapped in <main_agent_digest>.
         expect(msgs[4].role).toBe('system');
@@ -82,7 +85,7 @@ describe('director-tools — sub-agent message assembly', () => {
         const { dispatcher, capturedSubMessages } = makeDispatcherFixture();
 
         const parent = [
-            { role: 'system', content: 'main system_open' },
+            { role: 'system', content: '<story_context>' },
             { role: 'user', content: 'chat user 0' },
             { role: 'assistant', content: 'chat assistant 0' },
             { role: 'system', content: '</story_context>' },
@@ -106,7 +109,7 @@ describe('director-tools — sub-agent message assembly', () => {
 
         // parentMessages = just the prefix — no rounds yet.
         const parent = [
-            { role: 'system', content: 'main system_open' },
+            { role: 'system', content: '<story_context>' },
             { role: 'user', content: 'chat user 0' },
             { role: 'assistant', content: 'chat assistant 0' },
             { role: 'system', content: '</story_context>' },
@@ -115,7 +118,7 @@ describe('director-tools — sub-agent message assembly', () => {
         await dispatcher.awaitAll([h]);
 
         const msgs = capturedSubMessages[0];
-        // [system_open, payload0, payload1, system_close, task] = 5 — NO digest.
+        // [system_open, payload0, payload1, system_close+role, task] = 5 — NO digest.
         expect(msgs).toHaveLength(5);
         expect(msgs[4]).toEqual({ role: 'system', content: '<task>\nfirst task\n</task>' });
         // Confirm no <main_agent_digest> anywhere.
@@ -129,13 +132,13 @@ describe('director-tools — sub-agent message assembly', () => {
         await dispatcher.awaitAll([h]);
 
         const msgs = capturedSubMessages[0];
-        // [system_open, payload0, payload1, system_close, task] = 5
+        // [system_open, payload0, payload1, system_close+role, task] = 5
         expect(msgs).toHaveLength(5);
         expect(msgs[4]).toEqual({ role: 'system', content: '<task>\nlegacy\n</task>' });
         expect(msgs.every(m => !String(m.content || '').includes('<main_agent_digest>'))).toBe(true);
     });
 
-    test("sub agent system_open has '## Previous Notes' block when notes exist", async () => {
+    test("sub agent system_close has '## Previous Notes' block when notes exist", async () => {
         const captured = [];
         const generateTask = jest.fn(async ({ taskMessages }) => {
             captured.push(taskMessages.slice());
@@ -161,15 +164,16 @@ describe('director-tools — sub-agent message assembly', () => {
         await dispatcher.awaitAll([h]);
 
         const msgs = captured[0];
-        expect(msgs[0].role).toBe('system');
-        expect(msgs[0].content).toContain('## Previous Notes');
-        expect(msgs[0].content).toContain('1. foreshadowing X planted in chapter 3');
-        expect(msgs[0].content).toContain('2. character Y owes a favor to Z');
-        // Open tag still terminates the open system message.
-        expect(msgs[0].content.trimEnd().endsWith('<story_context>')).toBe(true);
+        // Empty payload → [open, close+role, task] = 3
+        const closeMsg = msgs[1];
+        expect(closeMsg.role).toBe('system');
+        expect(closeMsg.content.startsWith('</story_context>')).toBe(true);
+        expect(closeMsg.content).toContain('## Previous Notes');
+        expect(closeMsg.content).toContain('1. foreshadowing X planted in chapter 3');
+        expect(closeMsg.content).toContain('2. character Y owes a favor to Z');
     });
 
-    test("sub agent system_open has NO '## Previous Notes' block when there are no notes", async () => {
+    test("sub agent system_close has NO '## Previous Notes' block when there are no notes", async () => {
         const captured = [];
         const generateTask = jest.fn(async ({ taskMessages }) => {
             captured.push(taskMessages.slice());
@@ -192,6 +196,6 @@ describe('director-tools — sub-agent message assembly', () => {
         await dispatcher.awaitAll([h]);
 
         const msgs = captured[0];
-        expect(msgs[0].content).not.toContain('## Previous Notes');
+        expect(msgs.every(m => !String(m.content || '').includes('## Previous Notes'))).toBe(true);
     });
 });

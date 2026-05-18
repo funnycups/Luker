@@ -609,17 +609,20 @@ function safeStringifyArgs(value) {
  *
  * Shape:
  *   [
- *     { role: 'system', content: agentProfile.systemPrompt + '\n\n<story_context>' },
+ *     { role: 'system', content: '<story_context>' },
  *     ...contentPayload.messages,    // takeover-captured messages spliced verbatim
- *     { role: 'system', content: '</story_context>' },
+ *     { role: 'system', content: '</story_context>\n\n' + agentProfile.systemPrompt },
  *   ]
  *
- * Director hard-codes only the `<story_context>` open/close tags; everything
- * else (chat history, character info, world info, the final user turn that
- * triggers the model's response) is the user's responsibility to manage via
- * their chat-completion preset (prompt items, macros). This minimises
- * director's interference with the user's prompt-assembly system and makes
- * the structural boundary readable to the model.
+ * The agent's instruction is appended AFTER `</story_context>` so the model
+ * reads the long reference material first and the task framing last
+ * (recency bias works in our favour). Director hard-codes only the
+ * `<story_context>` open/close tags; everything else (chat history,
+ * character info, world info, the final user turn that triggers the
+ * model's response) is the user's responsibility to manage via their
+ * chat-completion preset (prompt items, macros). This minimises
+ * director's interference with the user's prompt-assembly system and
+ * makes the structural boundary readable to the model.
  *
  * @param {object} agentProfile - has `systemPrompt: string` (or empty/missing)
  * @param {object|null} contentPayload - cached payload, or null if missing
@@ -629,11 +632,11 @@ export function buildAgentTaskMessages(agentProfile, contentPayload) {
     const instruction = String(agentProfile?.systemPrompt || '');
     const messagesIn = Array.isArray(contentPayload?.messages) ? contentPayload.messages : [];
 
-    const openContent = (instruction ? instruction + '\n\n' : '') + '<story_context>';
+    const closeContent = '</story_context>' + (instruction ? '\n\n' + instruction : '');
 
     return [
-        { role: 'system', content: openContent },
+        { role: 'system', content: '<story_context>' },
         ...messagesIn,
-        { role: 'system', content: '</story_context>' },
+        { role: 'system', content: closeContent },
     ];
 }

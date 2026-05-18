@@ -441,17 +441,18 @@ describe('subagent dispatcher', () => {
         }));
         // System prompt was the inline one (not whatever a missing spec
         // would have produced — which would have been empty). The
-        // dispatcher folds in the `<story_context>` open tag on top of
-        // the caller-provided systemPrompt in the FIRST system message,
-        // so use toContain rather than strict equality.
+        // dispatcher folds the caller-provided systemPrompt onto the
+        // `</story_context>` close tag, so it lives in the system message
+        // immediately before <task> rather than at the very start.
         const firstCall = seenCallOpts[0];
         const systemOpen = firstCall.taskMessages[0];
-        expect(systemOpen.role).toBe('system');
-        expect(systemOpen.content).toContain('You are an ad-hoc auditor. Find any continuity errors.');
-        expect(systemOpen.content).toContain('<story_context>');
-        // Task lands as the last system-role message wrapped in <task>.
+        expect(systemOpen).toEqual({ role: 'system', content: '<story_context>' });
         const taskMsg = firstCall.taskMessages[firstCall.taskMessages.length - 1];
         expect(taskMsg).toEqual({ role: 'system', content: '<task>\ngo\n</task>' });
+        const closeMsg = firstCall.taskMessages[firstCall.taskMessages.length - 2];
+        expect(closeMsg.role).toBe('system');
+        expect(closeMsg.content.startsWith('</story_context>')).toBe(true);
+        expect(closeMsg.content).toContain('You are an ad-hoc auditor. Find any continuity errors.');
     });
 
     test('dispatchInline: empty systemPrompt is rejected with error result', async () => {

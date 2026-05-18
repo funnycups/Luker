@@ -882,8 +882,8 @@ describe('director integration — scripted main agent', () => {
 
         const capturedSubTaskMessages = [];
         const fakeSubGenerate = jest.fn(async ({ taskMessages }) => {
-            const sysPrompt = String(taskMessages?.[0]?.content || '');
-            const role = sysPrompt.includes('curator') ? 'curator' : 'brainstormer';
+            const allContent = taskMessages.map(m => String(m?.content || '')).join('\n');
+            const role = allContent.includes('You are a curator.') ? 'curator' : 'brainstormer';
             capturedSubTaskMessages.push({ role, messages: taskMessages.slice() });
             if (role === 'curator') {
                 return { assistantText: 'CURATOR_BRIEFING_X', toolCalls: [], reasoning: null, finishReason: 'stop', usage: null, raw: null };
@@ -1104,8 +1104,8 @@ describe('director integration — scripted main agent', () => {
 
         const capturedB = [];
         const fakeSubGenerate = jest.fn(async ({ taskMessages }) => {
-            const sysPrompt = String(taskMessages?.[0]?.content || '');
-            const role = sysPrompt.includes('sub B') ? 'B' : 'A';
+            const allContent = taskMessages.map(m => String(m?.content || '')).join('\n');
+            const role = allContent.includes('sub B') ? 'B' : 'A';
             if (role === 'B') capturedB.push(taskMessages.slice());
             return { assistantText: `OUT_${role}_UNIQUE`, toolCalls: [], reasoning: null, finishReason: 'stop', usage: null, raw: null };
         });
