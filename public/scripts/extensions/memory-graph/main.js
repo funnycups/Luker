@@ -5745,14 +5745,42 @@ async function chooseRecallRoute(context, settings, recallState) {
             reason: 'No recall candidates.',
         };
     }
+    // Dogfood the read-only API for candidate brief + schema overview so the
+    // recall LLM and any plugin that re-implements recall both consume the
+    // same view shape (spec §5). Dynamic import avoids a static circular
+    // dependency with read-api.js (which itself imports helpers from here);
+    // the ESM module cache makes repeat calls effectively free.
+    const { getMemoryGraphReadApi } = await import('./read-api.js');
+    const readApi = getMemoryGraphReadApi(context);
+
     const candidateRows = (recallState.candidates || []).map(node => {
-        const row = formatNodeBrief(node, settings, context, {
+        const id = String(node?.id || '');
+        const brief = readApi.getNodeBrief(id, {
+            visibleNodeIds: candidateSet,
+            edgeSummaryLimit: 8,
+        });
+        if (brief) return brief;
+        // Fallback: node was dropped from the live store between candidate
+        // collection and this point (archived / merged). Reconstruct the
+        // legacy shape so the route LLM still sees a row for it.
+        return formatNodeBrief(node, settings, context, {
             exposure: getNodeRecallExposure(settings, node, context),
             edge_summary: buildEdgeSummary(recallState.store, node?.id, { nodeSet: candidateSet, limit: 8 }),
-            always_inject: alwaysInjectIds.includes(String(node?.id || '')),
+            always_inject: alwaysInjectIds.includes(id),
         });
-        return row;
     });
+
+    const schemaOverview = readApi.getSchema().types.map(spec => ({
+        id: spec.type,
+        table_name: spec.tableName,
+        table_columns: spec.tableColumns,
+        required_columns: spec.requiredColumns,
+        force_update: Boolean(spec.forceUpdate),
+        always_inject: Boolean(spec.alwaysInject),
+        editable: Boolean(spec.editable),
+        compression_mode: String(spec.compressionMode || 'none'),
+    }));
+
     try {
         const parsed = await runFunctionCallTask(context, settings, {
             systemPrompt: routeSystemPrompt,
@@ -5763,16 +5791,7 @@ async function chooseRecallRoute(context, settings, recallState) {
                 },
                 candidateNodes: candidateRows,
                 alwaysInjectNodeIds: alwaysInjectIds,
-                schemaOverview: getEffectiveNodeTypeSchema(context, settings).map(item => ({
-                    id: item.id,
-                    table_name: item.tableName,
-                    table_columns: item.tableColumns,
-                    required_columns: item.requiredColumns,
-                    force_update: Boolean(item.forceUpdate),
-                    always_inject: Boolean(item.alwaysInject),
-                    editable: Boolean(item.editable),
-                    compression_mode: String(item?.compression?.mode || 'none'),
-                })),
+                schemaOverview,
                 selectionConstraints: {
                     recent_message_window: Math.max(3, Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns)),
                     injection_exclude_recent_messages: Math.max(0, Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns)),
