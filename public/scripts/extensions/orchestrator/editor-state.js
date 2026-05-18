@@ -172,7 +172,7 @@ export function loadCharacterAgendaEditorState(context, avatar) {
 /**
  * Ensure a loop-mode editor draft has the canonical V3 shape. Called
  * before render and after every input mutation so renderers can index
- * into `tools.note.add` etc. without optional-chain fallback noise.
+ * into `tools.note.open` etc. without optional-chain fallback noise.
  */
 export function ensureLoopEditorIntegrity(editor) {
     if (!editor || typeof editor !== 'object') {

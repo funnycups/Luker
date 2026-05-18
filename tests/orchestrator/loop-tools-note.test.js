@@ -58,9 +58,6 @@ function makeFakeFloorState() {
             return id;
         },
         listAcrossFloors: async () => stored.map(s => ({ id: s.id, text: s.text })),
-        pruneOldest: async (n) => {
-            if (n > 0) stored.splice(0, Math.min(n, stored.length));
-        },
         deleteByIds: async (ids) => {
             const target = new Set(Array.isArray(ids) ? ids.map(s => String(s)) : []);
             const present = new Set(stored.map(s => s.id));
@@ -80,13 +77,12 @@ function makeFakeFloorState() {
     };
 }
 
-function makeContext({ floor, chat = [], snapshot = null } = {}) {
+function makeContext({ floor, chat = [] } = {}) {
     const fs = makeFakeFloorState();
     const ctx = {
         chat,
         __targetFloorForNote: floor,
         __floorStateForNotes: fs,
-        __noteIdSnapshot: Array.isArray(snapshot) ? snapshot.slice() : [],
     };
     return { ctx, fs };
 }

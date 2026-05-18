@@ -8113,7 +8113,7 @@ jQuery(() => {
                     settings,
                     // Notes adapter context — same shape loop-runtime
                     // mounts. Lets sub-agents see persisted notes via the
-                    // "## Previous Notes" block prepended to their system
+                    // "## Open Notes" block prepended to their system
                     // prompts. Re-read on every sub dispatch so notes
                     // written by an earlier sub-agent in this session
                     // show up for later ones.

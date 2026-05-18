@@ -40,8 +40,8 @@ function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}) 
     return `
 <fieldset class="luker_orch_loop_tools_group">
     <legend>${escapeHtml(i18n('note (persistent notes)'))}</legend>
-    ${cb('note.add', note.add, 'note_add')}
-    ${cb('note.delete', note.delete, 'note_delete')}
+    ${cb('note.open', note.open, 'note_open')}
+    ${cb('note.close', note.close, 'note_close')}
 </fieldset>
 <fieldset class="luker_orch_loop_tools_group">
     <legend>${escapeHtml(i18n('chat (in-chat history)'))}</legend>
@@ -336,8 +336,8 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
             <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Loop tools'))}</div>
             <fieldset class="luker_orch_loop_tools_group">
                 <legend>${escapeHtml(i18n('note (persistent notes)'))}</legend>
-                ${checkbox('note.add', note.add, 'note_add')}
-                ${checkbox('note.delete', note.delete, 'note_delete')}
+                ${checkbox('note.open', note.open, 'note_open')}
+                ${checkbox('note.close', note.close, 'note_close')}
             </fieldset>
             <fieldset class="luker_orch_loop_tools_group">
                 <legend>${escapeHtml(i18n('chat (in-chat history)'))}</legend>
