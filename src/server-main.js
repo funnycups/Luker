@@ -168,6 +168,26 @@ app.use(compression({
 }));
 app.use(responseTime());
 
+// In-flight request tracker — when the process exits unexpectedly (signal,
+// uncaught exception escaping a handler, native abort, stray process.exit),
+// the exit hook below dumps whatever requests were still running so we know
+// which endpoint took the server down.
+const inFlightRequests = new Map();
+let inFlightSeq = 0;
+app.use((req, res, next) => {
+    const id = ++inFlightSeq;
+    inFlightRequests.set(id, {
+        id,
+        method: req.method,
+        path: req.path,
+        startedAt: Date.now(),
+    });
+    const cleanup = () => inFlightRequests.delete(id);
+    res.on('finish', cleanup);
+    res.on('close', cleanup);
+    next();
+});
+
 app.use(bodyParser.json({ limit: '500mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '500mb' }));
 
@@ -424,6 +444,26 @@ async function preSetupTasks() {
     // failing request should never take the whole server with it.
     process.on('unhandledRejection', (reason) => {
         console.error('Unhandled promise rejection:', reason);
+    });
+    // Make every process exit auditable: a silent crash with no stderr
+    // output is otherwise indistinguishable from a clean shutdown. The
+    // exit-hook writes straight to stderr.fd because the console wrapper
+    // may already be torn down at that point, and it dumps any in-flight
+    // requests so the offending endpoint is identifiable.
+    process.on('beforeExit', (code) => {
+        console.warn('Process beforeExit', { code, intentionalShutdown: isExiting });
+    });
+    process.on('exit', (code) => {
+        try {
+            const lines = [`Process exit code=${code} intentionalShutdown=${isExiting}`];
+            if (inFlightRequests.size > 0) {
+                lines.push(`  in-flight requests (${inFlightRequests.size}):`);
+                for (const r of inFlightRequests.values()) {
+                    lines.push(`    - ${r.method} ${r.path} (${Date.now() - r.startedAt}ms)`);
+                }
+            }
+            process.stderr.write(lines.join('\n') + '\n');
+        } catch { /* ignore */ }
     });
 
     // Add private request filter.
