@@ -1,39 +1,39 @@
 <div class="adminTabs wide100p">
     <nav class="adminNav flex-container alignItemsCenter justifyCenter">
         <button type="button" class="manageUsersButton menu_button menu_button_icon" data-target-tab="usersList">
-            <h4>Manage Users</h4>
+            <h4 data-i18n="Manage Users">Manage Users</h4>
         </button>
         <button type="button" class="overviewButton menu_button menu_button_icon" data-target-tab="adminOverviewTab">
-            <h4>System Overview</h4>
+            <h4 data-i18n="System Overview">System Overview</h4>
         </button>
         <button type="button" class="securityButton menu_button menu_button_icon" data-target-tab="adminSecurityTab">
-            <h4>Security Status</h4>
+            <h4 data-i18n="Security Status">Security Status</h4>
         </button>
         <button type="button" class="authQuotaButton menu_button menu_button_icon" data-target-tab="authAndQuotaTab">
-            <h4>Auth & Limits</h4>
+            <h4 data-i18n="Auth & Limits">Auth & Limits</h4>
         </button>
         <button type="button" class="serverPluginsButton menu_button menu_button_icon" data-target-tab="serverPluginsTab">
-            <h4>Server Plugins</h4>
+            <h4 data-i18n="Server Plugins">Server Plugins</h4>
         </button>
         <button type="button" class="configEditorButton menu_button menu_button_icon" data-target-tab="configEditorTab">
-            <h4>Config</h4>
+            <h4 data-i18n="Config">Config</h4>
         </button>
         <button type="button" class="newUserButton menu_button menu_button_icon" data-target-tab="registerNewUserBlock">
-            <h4>New User</h4>
+            <h4 data-i18n="New User">New User</h4>
         </button>
     </nav>
 
     <div class="userAccountTemplate template_element">
         <div class="flex-container userAccount alignItemsCenter flexGap10">
             <div class="flex-container flexFlowColumn alignItemsCenter flexNoGap">
-                <div class="avatar" title="If a custom avatar is not set, the user's default persona image will be displayed.">
+                <div class="avatar" title="If a custom avatar is not set, the user's default persona image will be displayed." data-i18n="[title]If a custom avatar is not set, the user's default persona image will be displayed.">
                     <img src="img/ai4.png" alt="avatar">
                 </div>
                 <div class="flex-container alignItemsCenter">
-                    <div class="userAvatarChange right_menu_button" title="Set a custom avatar.">
+                    <div class="userAvatarChange right_menu_button" title="Set a custom avatar." data-i18n="[title]Set a custom avatar.">
                         <i class="fa-fw fa-solid fa-image"></i>
                     </div>
-                    <div class="userAvatarRemove right_menu_button" title="Remove a custom avatar.">
+                    <div class="userAvatarRemove right_menu_button" title="Remove a custom avatar." data-i18n="[title]Remove a custom avatar.">
                         <i class="fa-fw fa-solid fa-trash"></i>
                     </div>
                 </div>
@@ -43,48 +43,48 @@
             </div>
             <div class="flex1 flex-container flexFlowColumn flexNoGap justifyLeft">
                 <div class="flex-container flexGap10 alignItemsCenter">
-                    <i class="hasPassword fa-solid fa-lock" title="This account is password protected."></i>
-                    <i class="noPassword fa-solid fa-lock-open" title="This account is not password protected."></i>
+                    <i class="hasPassword fa-solid fa-lock" title="This account is password protected." data-i18n="[title]This account is password protected."></i>
+                    <i class="noPassword fa-solid fa-lock-open" title="This account is not password protected." data-i18n="[title]This account is not password protected."></i>
                     <h3 class="userName margin0"></h3>
                     <small class="userHandle">&nbsp;</small>
                 </div>
                 <div class="flex-container flexFlowColumn flexNoGap">
-                    <span><span>Role:</span> <span class="userRole"></span></span>
-                    <span><span>Status:</span> <span class="userStatus">&nbsp;</span></span>
-                    <span><span>Created:</span> <span class="userCreated">&nbsp;</span></span>
-                    <span><span>Quota:</span> <span class="userQuota">Unlimited</span></span>
-                    <span><span>OAuth:</span> <span class="userOAuth">None</span></span>
+                    <span><span data-i18n="Role:">Role:</span> <span class="userRole"></span></span>
+                    <span><span data-i18n="Status:">Status:</span> <span class="userStatus">&nbsp;</span></span>
+                    <span><span data-i18n="Created:">Created:</span> <span class="userCreated">&nbsp;</span></span>
+                    <span><span data-i18n="Quota:">Quota:</span> <span class="userQuota" data-i18n="Unlimited">Unlimited</span></span>
+                    <span><span data-i18n="OAuth:">OAuth:</span> <span class="userOAuth" data-i18n="None">None</span></span>
                 </div>
             </div>
             <div class="flex-container flexFlowColumn">
                 <div class="flex-container">
-                    <div class="userChangeNameButton menu_button" title="Change user display name.">
+                    <div class="userChangeNameButton menu_button" title="Change user display name." data-i18n="[title]Change user display name.">
                         <i class="fa-fw fa-solid fa-pencil"></i>
                     </div>
-                    <div class="userQuotaButton menu_button" title="Set per-user storage quota.">
+                    <div class="userQuotaButton menu_button" title="Set per-user storage quota." data-i18n="[title]Set per-user storage quota.">
                         <i class="fa-fw fa-solid fa-hard-drive"></i>
                     </div>
-                    <div class="userEnableButton menu_button" title="Enable user account.">
+                    <div class="userEnableButton menu_button" title="Enable user account." data-i18n="[title]Enable user account.">
                         <i class="fa-fw fa-solid fa-check"></i>
                     </div>
-                    <div class="userDisableButton menu_button" title="Disable user account.">
+                    <div class="userDisableButton menu_button" title="Disable user account." data-i18n="[title]Disable user account.">
                         <i class="fa-fw fa-solid fa-ban"></i>
                     </div>
-                    <div class="userPromoteButton menu_button" title="Promote user to admin.">
+                    <div class="userPromoteButton menu_button" title="Promote user to admin." data-i18n="[title]Promote user to admin.">
                         <i class="fa-fw fa-solid fa-arrow-up"></i>
                     </div>
-                    <div class="userDemoteButton menu_button" title="Demote user to regular user.">
+                    <div class="userDemoteButton menu_button" title="Demote user to regular user." data-i18n="[title]Demote user to regular user.">
                         <i class="fa-fw fa-solid fa-arrow-down"></i>
                     </div>
                 </div>
                 <div class="flex-container">
-                    <div class="userBackupButton menu_button menu_button_icon" title="Open backup and restore manager.">
+                    <div class="userBackupButton menu_button menu_button_icon" title="Open backup and restore manager." data-i18n="[title]Open backup and restore manager.">
                         <i class="fa-fw fa-solid fa-download"></i>
                     </div>
-                    <div class="userChangePasswordButton menu_button" title="Change user password.">
+                    <div class="userChangePasswordButton menu_button" title="Change user password." data-i18n="[title]Change user password.">
                         <i class="fa-fw fa-solid fa-key"></i>
                     </div>
-                    <div class="userDelete menu_button warning" title="Delete user account.">
+                    <div class="userDelete menu_button warning" title="Delete user account." data-i18n="[title]Delete user account.">
                         <i class="fa-fw fa-solid fa-trash"></i>
                     </div>
                 </div>
@@ -106,60 +106,60 @@
 
     <div class="navTab adminOverviewTab flex-container flexFlowColumn flexGap10" style="display: none;">
         <div class="flex-container alignItemsCenter spaceBetween">
-            <h4 class="margin0">Server Snapshot</h4>
+            <h4 class="margin0" data-i18n="Server Snapshot">Server Snapshot</h4>
             <div class="overviewRefreshButton menu_button menu_button_icon">
                 <i class="fa-fw fa-solid fa-arrows-rotate"></i>
-                <span>Refresh</span>
+                <span data-i18n="Refresh">Refresh</span>
             </div>
         </div>
         <div class="adminOverviewSummary flex-container flexFlowColumn flexGap10"></div>
-        <h4 class="margin0">User Storage</h4>
+        <h4 class="margin0" data-i18n="User Storage">User Storage</h4>
         <div class="adminOverviewUsers flex-container flexFlowColumn flexGap10"></div>
     </div>
 
     <div class="navTab adminSecurityTab flex-container flexFlowColumn flexGap10" style="display: none;">
-        <h4 class="margin0">Security Checks</h4>
+        <h4 class="margin0" data-i18n="Security Checks">Security Checks</h4>
         <div class="adminSecurityContent flex-container flexFlowColumn flexGap10"></div>
     </div>
 
     <div class="navTab authAndQuotaTab flex-container flexFlowColumn flexGap10" style="display: none;">
-        <h4 class="margin0">Storage Quota</h4>
+        <h4 class="margin0" data-i18n="Storage Quota">Storage Quota</h4>
         <div class="flex-container alignItemsCenter flexGap10">
-            <label for="defaultUserQuotaMbInput">Default quota for new users (MB)</label>
-            <input id="defaultUserQuotaMbInput" class="text_pole" type="number" min="-1" step="1" placeholder="-1 for unlimited" />
+            <label for="defaultUserQuotaMbInput" data-i18n="Default quota for new users (MB)">Default quota for new users (MB)</label>
+            <input id="defaultUserQuotaMbInput" class="text_pole" type="number" min="-1" step="1" placeholder="-1 for unlimited" data-i18n="[placeholder]-1 for unlimited" />
         </div>
 
-        <h4 class="margin0">Account Registration</h4>
+        <h4 class="margin0" data-i18n="Account Registration">Account Registration</h4>
         <div class="flex-container flexFlowColumn flexGap10">
-            <label><input type="checkbox" id="accountRegistrationEnabled" /> Allow visitors to register accounts from the login page</label>
-            <small>When enabled, the login page shows a "Create account" form. New accounts default to non-admin and respect the storage quota above.</small>
+            <label><input type="checkbox" id="accountRegistrationEnabled" /> <span data-i18n="Allow visitors to register accounts from the login page">Allow visitors to register accounts from the login page</span></label>
+            <small data-i18n="When enabled, the login page shows a &quot;Create account&quot; form. New accounts default to non-admin and respect the storage quota above.">When enabled, the login page shows a "Create account" form. New accounts default to non-admin and respect the storage quota above.</small>
         </div>
 
-        <h4 class="margin0">GitHub OAuth</h4>
+        <h4 class="margin0" data-i18n="GitHub OAuth">GitHub OAuth</h4>
         <div class="flex-container flexFlowColumn flexGap10">
-            <label><input type="checkbox" id="oauthGithubEnabled" /> Enable GitHub OAuth login</label>
-            <label><input type="checkbox" id="oauthGithubAutoCreate" /> Auto-create user on first GitHub login</label>
-            <input id="oauthGithubClientId" class="text_pole" type="text" placeholder="GitHub Client ID" />
-            <input id="oauthGithubClientSecret" class="text_pole" type="password" placeholder="GitHub Client Secret" />
+            <label><input type="checkbox" id="oauthGithubEnabled" /> <span data-i18n="Enable GitHub OAuth login">Enable GitHub OAuth login</span></label>
+            <label><input type="checkbox" id="oauthGithubAutoCreate" /> <span data-i18n="Auto-create user on first GitHub login">Auto-create user on first GitHub login</span></label>
+            <input id="oauthGithubClientId" class="text_pole" type="text" placeholder="GitHub Client ID" data-i18n="[placeholder]GitHub Client ID" />
+            <input id="oauthGithubClientSecret" class="text_pole" type="password" placeholder="GitHub Client Secret" data-i18n="[placeholder]GitHub Client Secret" />
         </div>
 
-        <h4 class="margin0">Discord OAuth</h4>
+        <h4 class="margin0" data-i18n="Discord OAuth">Discord OAuth</h4>
         <div class="flex-container flexFlowColumn flexGap10">
-            <label><input type="checkbox" id="oauthDiscordEnabled" /> Enable Discord OAuth login</label>
-            <label><input type="checkbox" id="oauthDiscordAutoCreate" /> Auto-create user on first Discord login</label>
-            <label><input type="checkbox" id="oauthDiscordRequireGuild" /> Require membership in target server</label>
-            <input id="oauthDiscordClientId" class="text_pole" type="text" placeholder="Discord Client ID" />
-            <input id="oauthDiscordClientSecret" class="text_pole" type="password" placeholder="Discord Client Secret" />
-            <textarea id="oauthDiscordScopes" class="text_pole" rows="2" placeholder="Extra OAuth scopes (optional, comma/space/new line separated; identify is always included)"></textarea>
-            <textarea id="oauthDiscordAllowedGuilds" class="text_pole" rows="2" placeholder="Allowed server IDs (comma or new line separated)"></textarea>
-            <textarea id="oauthDiscordRequiredRoles" class="text_pole" rows="2" placeholder="Required role IDs (optional, comma or new line separated)"></textarea>
-            <small>When "Require membership in target server" is enabled, required Discord scopes for server checks are added automatically.</small>
+            <label><input type="checkbox" id="oauthDiscordEnabled" /> <span data-i18n="Enable Discord OAuth login">Enable Discord OAuth login</span></label>
+            <label><input type="checkbox" id="oauthDiscordAutoCreate" /> <span data-i18n="Auto-create user on first Discord login">Auto-create user on first Discord login</span></label>
+            <label><input type="checkbox" id="oauthDiscordRequireGuild" /> <span data-i18n="Require membership in target server">Require membership in target server</span></label>
+            <input id="oauthDiscordClientId" class="text_pole" type="text" placeholder="Discord Client ID" data-i18n="[placeholder]Discord Client ID" />
+            <input id="oauthDiscordClientSecret" class="text_pole" type="password" placeholder="Discord Client Secret" data-i18n="[placeholder]Discord Client Secret" />
+            <textarea id="oauthDiscordScopes" class="text_pole" rows="2" placeholder="Extra OAuth scopes (optional, comma/space/new line separated; identify is always included)" data-i18n="[placeholder]Extra OAuth scopes (optional, comma/space/new line separated\; identify is always included)"></textarea>
+            <textarea id="oauthDiscordAllowedGuilds" class="text_pole" rows="2" placeholder="Allowed server IDs (comma or new line separated)" data-i18n="[placeholder]Allowed server IDs (comma or new line separated)"></textarea>
+            <textarea id="oauthDiscordRequiredRoles" class="text_pole" rows="2" placeholder="Required role IDs (optional, comma or new line separated)" data-i18n="[placeholder]Required role IDs (optional, comma or new line separated)"></textarea>
+            <small data-i18n="When &quot;Require membership in target server&quot; is enabled, required Discord scopes for server checks are added automatically.">When "Require membership in target server" is enabled, required Discord scopes for server checks are added automatically.</small>
         </div>
 
         <div class="flex-container">
             <div class="saveAuthQuotaSettingsButton menu_button menu_button_icon">
                 <i class="fa-fw fa-solid fa-save"></i>
-                <span>Save Auth & Limit Settings</span>
+                <span data-i18n="Save Auth & Limit Settings">Save Auth & Limit Settings</span>
             </div>
         </div>
     </div>
@@ -175,11 +175,11 @@
             <div class="flex-container alignItemsCenter flexGap10">
                 <button type="button" class="serverPluginUpdateButton menu_button menu_button_icon">
                     <i class="fa-fw fa-solid fa-arrows-rotate"></i>
-                    <span>Update</span>
+                    <span data-i18n="Update">Update</span>
                 </button>
                 <button type="button" class="serverPluginDeleteButton menu_button menu_button_icon">
                     <i class="fa-fw fa-solid fa-trash-can"></i>
-                    <span>Remove</span>
+                    <span data-i18n="Remove">Remove</span>
                 </button>
             </div>
         </div>
@@ -187,72 +187,72 @@
 
     <div class="navTab serverPluginsTab flex-container flexFlowColumn flexGap10" style="display: none;">
         <div class="flex-container alignItemsCenter spaceBetween">
-            <h4 class="margin0">Server Plugins</h4>
+            <h4 class="margin0" data-i18n="Server Plugins">Server Plugins</h4>
             <div class="refreshServerPluginsButton menu_button menu_button_icon">
                 <i class="fa-fw fa-solid fa-arrows-rotate"></i>
-                <span>Refresh</span>
+                <span data-i18n="Refresh">Refresh</span>
             </div>
         </div>
-        <small>Installing a server plugin grants backend code execution. Install only repositories you trust.</small>
+        <small data-i18n="Installing a server plugin grants backend code execution. Install only repositories you trust.">Installing a server plugin grants backend code execution. Install only repositories you trust.</small>
         <div class="serverPluginsStatus flex-container flexFlowColumn flexGap5"></div>
         <div class="flex-container alignItemsCenter flexGap10">
-            <input id="serverPluginRepoUrlInput" class="text_pole flex1" type="text" placeholder="Git repository URL" />
+            <input id="serverPluginRepoUrlInput" class="text_pole flex1" type="text" placeholder="Git repository URL" data-i18n="[placeholder]Git repository URL" />
             <button type="button" class="installServerPluginButton menu_button menu_button_icon">
                 <i class="fa-fw fa-solid fa-download"></i>
-                <span>Install</span>
+                <span data-i18n="Install">Install</span>
             </button>
         </div>
-        <small>New installs are picked up after backend restart.</small>
+        <small data-i18n="New installs are picked up after backend restart.">New installs are picked up after backend restart.</small>
         <div class="serverPluginsList flex-container flexFlowColumn flexGap10"></div>
     </div>
 
     <div class="navTab configEditorTab flex-container flexFlowColumn flexGap10" style="display: none;">
         <div class="flex-container alignItemsCenter spaceBetween">
-            <h4 class="margin0">Runtime Config (config.yaml)</h4>
+            <h4 class="margin0" data-i18n="Runtime Config (config.yaml)">Runtime Config (config.yaml)</h4>
             <div class="flex-container alignItemsCenter flexGap10">
                 <button type="button" class="reloadRuntimeConfigButton menu_button menu_button_icon">
                     <i class="fa-fw fa-solid fa-arrows-rotate"></i>
-                    <span>Reload</span>
+                    <span data-i18n="Reload">Reload</span>
                 </button>
                 <button type="button" class="saveRuntimeConfigButton menu_button menu_button_icon">
                     <i class="fa-fw fa-solid fa-save"></i>
-                    <span>Save</span>
+                    <span data-i18n="Save">Save</span>
                 </button>
             </div>
         </div>
         <div class="flex-container flexFlowColumn flexNoGap">
-            <small class="runtimeConfigPathLabel">Path:</small>
+            <small class="runtimeConfigPathLabel" data-i18n="Path:">Path:</small>
             <code class="runtimeConfigPath">-</code>
         </div>
-        <textarea class="runtimeConfigEditor text_pole" spellcheck="false" rows="20" placeholder="config.yaml content"></textarea>
-        <small class="runtimeConfigHint">Changes are validated as YAML before save. Some settings may require backend restart.</small>
+        <textarea class="runtimeConfigEditor text_pole" spellcheck="false" rows="20" placeholder="config.yaml content" data-i18n="[placeholder]config.yaml content"></textarea>
+        <small class="runtimeConfigHint" data-i18n="Changes are validated as YAML before save. Some settings may require backend restart.">Changes are validated as YAML before save. Some settings may require backend restart.</small>
     </div>
 
     <div class="navTab registerNewUserBlock" style="display: none;">
         <form class="flex-container flexFlowColumn flexGap10 userCreateForm" action="javascript:void(0);">
             <div class="flex-container flexNoGap">
-                <span>Display Name:</span>
+                <span data-i18n="Display Name:">Display Name:</span>
                 <span class="warning">*</span>
-                <input name="_name" class="createUserDisplayName text_pole" type="text" placeholder="e.g. John Snow" autocomplete="username">
+                <input name="_name" class="createUserDisplayName text_pole" type="text" placeholder="e.g. John Snow" autocomplete="username" data-i18n="[placeholder]e.g. John Snow">
             </div>
             <div class="flex-container flexNoGap">
-                <span>User Handle:</span>
+                <span data-i18n="User Handle:">User Handle:</span>
                 <span class="warning">*</span>
-                <input name="handle" class="createUserHandle text_pole" placeholder="e.g. john-snow (lowercase letters, numbers, and dashes only)" type="text" pattern="[a-z0-9-]+">
+                <input name="handle" class="createUserHandle text_pole" placeholder="e.g. john-snow (lowercase letters, numbers, and dashes only)" type="text" pattern="[a-z0-9-]+" data-i18n="[placeholder]e.g. john-snow (lowercase letters, numbers, and dashes only)">
             </div>
             <div class="flex-container flexNoGap">
-                <span>Password:</span>
-                <input name="password" class="createUserPassword text_pole" type="password" placeholder="[ No password ]" autocomplete="new-password">
+                <span data-i18n="Password:">Password:</span>
+                <input name="password" class="createUserPassword text_pole" type="password" placeholder="[ No password ]" autocomplete="new-password" data-i18n="[placeholder][ No password ]">
             </div>
             <div class="flex-container flexNoGap">
-                <span>Confirm Password:</span>
-                <input name="confirm" class="createUserConfirmPassword text_pole" type="password" placeholder="[ No password ]" autocomplete="new-password">
+                <span data-i18n="Confirm Password:">Confirm Password:</span>
+                <input name="confirm" class="createUserConfirmPassword text_pole" type="password" placeholder="[ No password ]" autocomplete="new-password" data-i18n="[placeholder][ No password ]">
             </div>
-            <span>This will create a new subfolder in the /data/ directory with the user's handle as the folder name.</span>
+            <span data-i18n="This will create a new subfolder in the /data/ directory with the user's handle as the folder name.">This will create a new subfolder in the /data/ directory with the user's handle as the folder name.</span>
             <div class="flex-container justifyCenter">
                 <button type="submit" class="menu_button menu_button_icon newUserRegisterFinalizeButton">
                     <i class="fa-fw fa-solid fa-user-plus"></i>
-                    <span>Create</span>
+                    <span data-i18n="Create">Create</span>
                 </button>
             </div>
         </form>

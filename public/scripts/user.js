@@ -2254,10 +2254,10 @@ async function openAdminPanel() {
     async function promptAndSetQuota(user) {
         const currentMb = user.storageQuotaBytes == null ? '-1' : String(Math.floor(Number(user.storageQuotaBytes) / (1024 * 1024)));
         const result = await callGenericPopup(
-            'Set per-user quota in MB. Enter -1 to use default/unlimited.',
+            t`Set per-user quota in MB. Enter -1 to use default/unlimited.`,
             POPUP_TYPE.INPUT,
             currentMb,
-            { okButton: 'Save', cancelButton: 'Cancel', wide: false, large: false },
+            { okButton: t`Save`, cancelButton: t`Cancel`, wide: false, large: false },
         );
 
         if (result === POPUP_RESULT.CANCELLED || result === POPUP_RESULT.NEGATIVE) {
@@ -2266,7 +2266,7 @@ async function openAdminPanel() {
 
         const parsed = Number(result);
         if (!Number.isFinite(parsed)) {
-            toastr.error('Please enter a valid number.', 'Invalid quota');
+            toastr.error(t`Please enter a valid number.`, t`Invalid quota`);
             return;
         }
 
@@ -2294,24 +2294,24 @@ async function openAdminPanel() {
 
         summary.append(
             $('<div class="flex-container flexFlowColumn flexNoGap"/>')
-                .append(`<div><strong>Node.js:</strong> ${overview.server?.nodeVersion || '-'}</div>`)
-                .append(`<div><strong>Platform:</strong> ${overview.server?.platform || '-'}</div>`)
-                .append(`<div><strong>Uptime:</strong> ${uptimeHours}h ${uptimeMinutes}m</div>`)
-                .append(`<div><strong>Now:</strong> ${now}</div>`),
+                .append(`<div><strong>${t`Node.js:`}</strong> ${overview.server?.nodeVersion || '-'}</div>`)
+                .append(`<div><strong>${t`Platform:`}</strong> ${overview.server?.platform || '-'}</div>`)
+                .append(`<div><strong>${t`Uptime:`}</strong> ${uptimeHours}h ${uptimeMinutes}m</div>`)
+                .append(`<div><strong>${t`Now:`}</strong> ${now}</div>`),
         );
 
         const defaultQuota = Number(currentAdminSettings?.storage?.defaultUserQuotaBytes);
-        const quotaLabel = Number.isFinite(defaultQuota) && defaultQuota >= 0 ? humanFileSize(defaultQuota) : 'Unlimited';
+        const quotaLabel = Number.isFinite(defaultQuota) && defaultQuota >= 0 ? humanFileSize(defaultQuota) : t`Unlimited`;
 
         summary.append(
             $('<div class="flex-container flexFlowColumn flexNoGap"/>')
-                .append(`<div><strong>Total users:</strong> ${overview.totals?.users ?? 0}</div>`)
-                .append(`<div><strong>Enabled:</strong> ${overview.totals?.enabledUsers ?? 0}</div>`)
-                .append(`<div><strong>Admins:</strong> ${overview.totals?.adminUsers ?? 0}</div>`)
-                .append(`<div><strong>Password protected:</strong> ${overview.totals?.protectedUsers ?? 0}</div>`)
-                .append(`<div><strong>Total storage:</strong> ${humanFileSize(overview.totals?.storageBytes ?? 0)}</div>`)
-                .append(`<div><strong>Over quota users:</strong> ${overview.totals?.overQuotaUsers ?? 0}</div>`)
-                .append(`<div><strong>Default quota:</strong> ${quotaLabel}</div>`),
+                .append(`<div><strong>${t`Total users:`}</strong> ${overview.totals?.users ?? 0}</div>`)
+                .append(`<div><strong>${t`Enabled:`}</strong> ${overview.totals?.enabledUsers ?? 0}</div>`)
+                .append(`<div><strong>${t`Admins:`}</strong> ${overview.totals?.adminUsers ?? 0}</div>`)
+                .append(`<div><strong>${t`Password protected:`}</strong> ${overview.totals?.protectedUsers ?? 0}</div>`)
+                .append(`<div><strong>${t`Total storage:`}</strong> ${humanFileSize(overview.totals?.storageBytes ?? 0)}</div>`)
+                .append(`<div><strong>${t`Over quota users:`}</strong> ${overview.totals?.overQuotaUsers ?? 0}</div>`)
+                .append(`<div><strong>${t`Default quota:`}</strong> ${quotaLabel}</div>`),
         );
 
         const usersList = template.find('.adminOverviewUsers');
@@ -2321,10 +2321,10 @@ async function openAdminPanel() {
             const row = template.find('.adminOverviewUserTemplate .adminOverviewUser').clone();
             const userQuota = Number(user.storageQuotaBytes);
             const ratio = Number.isFinite(Number(user.storageUsageRatio)) ? Number(user.storageUsageRatio) : null;
-            const suffix = ratio != null ? ` · ${(ratio * 100).toFixed(1)}% of quota` : '';
+            const suffix = ratio != null ? ` · ${t`${(ratio * 100).toFixed(1)}% of quota`}` : '';
             row.find('.overviewUserName').text(`${user.name} (${user.handle})`);
-            row.find('.overviewUserMeta').text(`${user.admin ? 'Admin' : 'User'} · ${user.enabled ? 'Enabled' : 'Disabled'}${suffix}`);
-            row.find('.overviewUserStorage').text(`${humanFileSize(user.storageBytes || 0)} / ${userQuota >= 0 ? humanFileSize(userQuota) : 'Unlimited'}`);
+            row.find('.overviewUserMeta').text(`${user.admin ? t`Admin` : t`User`} · ${user.enabled ? t`Enabled` : t`Disabled`}${suffix}`);
+            row.find('.overviewUserStorage').text(`${humanFileSize(user.storageBytes || 0)} / ${userQuota >= 0 ? humanFileSize(userQuota) : t`Unlimited`}`);
             usersList.append(row);
         }
 
@@ -2336,9 +2336,9 @@ async function openAdminPanel() {
         const disabledUsers = overview.security?.disabledUsers || [];
 
         security
-            .append(`<div><strong>Admins without password:</strong> ${adminWithoutPassword.length ? adminWithoutPassword.join(', ') : 'None'}</div>`)
-            .append(`<div><strong>Disabled admins:</strong> ${disabledAdmins.length ? disabledAdmins.join(', ') : 'None'}</div>`)
-            .append(`<div><strong>Disabled users:</strong> ${disabledUsers.length ? disabledUsers.join(', ') : 'None'}</div>`);
+            .append(`<div><strong>${t`Admins without password:`}</strong> ${adminWithoutPassword.length ? adminWithoutPassword.join(', ') : t`None`}</div>`)
+            .append(`<div><strong>${t`Disabled admins:`}</strong> ${disabledAdmins.length ? disabledAdmins.join(', ') : t`None`}</div>`)
+            .append(`<div><strong>${t`Disabled users:`}</strong> ${disabledUsers.length ? disabledUsers.join(', ') : t`None`}</div>`);
     }
 
     async function renderServerPlugins() {
@@ -2353,15 +2353,15 @@ async function openAdminPanel() {
         list.empty();
 
         status
-            .append(`<div><strong>Install path:</strong> ${payload.pluginsPath || '-'}</div>`)
-            .append(`<div><strong>Installed directories:</strong> ${payload.plugins?.length ?? 0}</div>`);
+            .append(`<div><strong>${t`Install path:`}</strong> ${payload.pluginsPath || '-'}</div>`)
+            .append(`<div><strong>${t`Installed directories:`}</strong> ${payload.plugins?.length ?? 0}</div>`);
 
         if (!payload.enabled) {
-            status.append('<div><strong>Server plugins are currently disabled in config.</strong> Installed plugins will load after you enable them and restart the backend.</div>');
+            status.append(`<div><strong>${t`Server plugins are currently disabled in config.`}</strong> ${t`Installed plugins will load after you enable them and restart the backend.`}</div>`);
         }
 
         if (!Array.isArray(payload.plugins) || payload.plugins.length === 0) {
-            list.append('<div>No server plugins installed.</div>');
+            list.append(`<div>${t`No server plugins installed.`}</div>`);
             return;
         }
 
@@ -2379,12 +2379,12 @@ async function openAdminPanel() {
 
             row.find('.serverPluginDirectory').text(plugin.directory || '-');
             row.find('.serverPluginVersion').text(plugin.version ? `v${plugin.version}` : '');
-            row.find('.serverPluginMeta').text(metaParts.join(' · ') || 'No package metadata');
-            row.find('.serverPluginRemote').text(plugin.remoteUrl || 'No git remote detected');
+            row.find('.serverPluginMeta').text(metaParts.join(' · ') || t`No package metadata`);
+            row.find('.serverPluginRemote').text(plugin.remoteUrl || t`No git remote detected`);
             row.find('.serverPluginUpdateButton')
                 .toggleClass('disabled', !plugin.remoteUrl)
                 .prop('disabled', !plugin.remoteUrl)
-                .attr('title', plugin.remoteUrl ? '' : 'No git remote detected')
+                .attr('title', plugin.remoteUrl ? '' : t`No git remote detected`)
                 .on('click', async function () {
                     const button = $(this);
                     if (button.hasClass('disabled')) {
@@ -2416,10 +2416,10 @@ async function openAdminPanel() {
                 });
             row.find('.serverPluginDeleteButton').on('click', async function () {
                 const confirmed = await callGenericPopup(
-                    `Remove server plugin "${plugin.directory}"?`,
+                    t`Remove server plugin "${plugin.directory}"?`,
                     POPUP_TYPE.CONFIRM,
                     '',
-                    { okButton: 'Remove', cancelButton: 'Cancel', wide: false, large: false },
+                    { okButton: t`Remove`, cancelButton: t`Cancel`, wide: false, large: false },
                 );
 
                 if (confirmed !== POPUP_RESULT.AFFIRMATIVE) {
@@ -2454,13 +2454,13 @@ async function openAdminPanel() {
         template.find('.usersList').empty();
         for (const user of users) {
             const userBlock = template.find('.userAccountTemplate .userAccount').clone();
-            const quotaLabel = user.storageQuotaBytes == null ? 'Default' : humanFileSize(Number(user.storageQuotaBytes));
-            const oauthProviders = Array.isArray(user.oauthProviders) && user.oauthProviders.length ? user.oauthProviders.join(', ') : 'None';
+            const quotaLabel = user.storageQuotaBytes == null ? t`Default` : humanFileSize(Number(user.storageQuotaBytes));
+            const oauthProviders = Array.isArray(user.oauthProviders) && user.oauthProviders.length ? user.oauthProviders.join(', ') : t`None`;
 
             userBlock.find('.userName').text(user.name);
             userBlock.find('.userHandle').text(user.handle);
-            userBlock.find('.userStatus').text(user.enabled ? 'Enabled' : 'Disabled');
-            userBlock.find('.userRole').text(user.admin ? 'Admin' : 'User');
+            userBlock.find('.userStatus').text(user.enabled ? t`Enabled` : t`Disabled`);
+            userBlock.find('.userRole').text(user.admin ? t`Admin` : t`User`);
             userBlock.find('.userQuota').text(quotaLabel);
             userBlock.find('.userOAuth').text(oauthProviders);
             userBlock.find('.avatar img').attr('src', user.avatar);
@@ -2539,7 +2539,7 @@ async function openAdminPanel() {
 
         currentAdminSettings = saved;
         populateAuthSettingsForm(saved);
-        toastr.success('Admin settings saved.', 'Saved');
+        toastr.success(t`Admin settings saved.`, t`Saved`);
         await renderOverview();
     });
 
@@ -2612,7 +2612,7 @@ async function openAdminPanel() {
         });
     });
 
-    callGenericPopup(template, POPUP_TYPE.TEXT, '', { okButton: 'Close', wide: false, large: false, allowVerticalScrolling: true, allowHorizontalScrolling: false });
+    callGenericPopup(template, POPUP_TYPE.TEXT, '', { okButton: t`Close`, wide: false, large: false, allowVerticalScrolling: true, allowHorizontalScrolling: false });
     renderUsers();
 }
 
