@@ -8305,6 +8305,23 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 try { handle.setOnUpdate?.(null); } catch { /* idempotent */ }
                 showSwipeButtons();
 
+                // Liveness boundary: a fresh Generate() may have replaced
+                // our abortController while we awaited handle.complete —
+                // the typical "stop then send a new message" sequence. The
+                // plugin's late settle is stale for every outcome, not
+                // just `discarded`: a late `committed` would mutate a slot
+                // the user already cancelled, emit MESSAGE_RECEIVED + run
+                // saveChatConditional / triggerAutoContinue against state
+                // the new turn now owns; a late `aborted` would clobber
+                // the slot the new turn pushed. setOnUpdate is already
+                // detached above so the plugin can't keep writing either.
+                // Drop everything and let the new turn proceed unaware.
+                if (abortController !== myAbortController) {
+                    return Object.defineProperties(new String(''), {
+                        'fromTakeover': { value: true },
+                    });
+                }
+
                 // ── 4. Route by outcome ──
                 if (outcome.status === 'committed') {
                     const cleanedText = applyPostGenerationText(outcome.finalText, isImpersonate, isContinue);
@@ -8438,31 +8455,18 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                     }
                     extractMessageById(placeholderId);
                     redrawMessageBubble(placeholderId);
-                    // Only unblock if we still own the lock — a fresh
-                    // Generate() may have replaced abortController in
-                    // the typical "stop then regenerate" sequence and
-                    // we must not clobber its is_send_press=true.
-                    if (abortController === myAbortController) {
-                        unblockGeneration(type);
-                    }
+                    unblockGeneration(type);
                     return Object.defineProperties(new String(cleanedText), {
                         'fromTakeover': { value: true },
                     });
                 }
 
                 // status === 'discarded'
-                // Plugin requested rollback (explicit programmatic
-                // discard, not the user-stop flow — that goes through
-                // `aborted` above). Race check covers the edge case
-                // where a fresh Generate() raced in concurrently:
-                // rollback's chat.splice + reloadCurrentChat would
-                // clobber the new generation's slot. Skip rollback in
-                // that case and let the new turn own the slot.
-                if (abortController !== myAbortController) {
-                    return Object.defineProperties(new String(''), {
-                        'fromTakeover': { value: true },
-                    });
-                }
+                // Plugin requested rollback (explicit programmatic discard,
+                // not the user-stop flow — that goes through `aborted`
+                // above). The race check at the top of the outcome handling
+                // already filtered out late settles, so we always own the
+                // slot here.
                 try {
                     await rollbackTakeoverPlaceholder(placeholderId, type, originalText, originalReasoning);
                 } catch (rollbackErr) {
