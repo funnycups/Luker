@@ -2436,8 +2436,8 @@
     }
 
     .popup .luker-studio-chat {
-        min-height: 96px;
-        max-height: 24vh;
+        min-height: 48px;
+        max-height: 40vh;
     }
 
     .popup .luker-studio-diff {
@@ -2454,8 +2454,15 @@
         background: color-mix(in oklab, var(--SmartThemeBlurTintColor) 94%, transparent);
     }
 
+    /* Cap the composer textarea height on mobile. `height` overrides the
+       `rows="4"` attribute that several plugin templates set — without it
+       the textarea defaults to 4 line-heights, which dominates the panel
+       on narrow viewports. Users can still drag-resize via the handle,
+       bounded by max-height. */
     .popup .luker-studio-composer textarea {
-        min-height: 72px;
+        height: 56px;
+        min-height: 48px;
+        max-height: 25dvh;
     }
 
     .popup .luker-studio-composer-actions {

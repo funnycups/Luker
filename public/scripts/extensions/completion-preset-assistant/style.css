@@ -59,9 +59,13 @@
     max-width: none;
 }
 
-/* CPA-specific: textarea min-width inside toolbar/composer */
-.popup .luker-studio-toolbar .text_pole,
-.popup .luker-studio-composer .text_pole {
+/* CPA-specific: textarea min-width inside toolbar/composer.
+   Scoped to `.cpa_dialog` so the flex sizing (intended for CPA's
+   horizontal toolbar/composer layout) doesn't leak to other plugins
+   whose composers use a vertical flex direction — there
+   `flex-basis: 220px` would become a 220px minimum height. */
+.popup .cpa_dialog .luker-studio-toolbar .text_pole,
+.popup .cpa_dialog .luker-studio-composer .text_pole {
     min-width: 0;
     flex: 1 1 220px;
 }
