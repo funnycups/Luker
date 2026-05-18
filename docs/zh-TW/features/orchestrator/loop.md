@@ -105,9 +105,12 @@ loop.finalize -> out
 | `chat_search(query, limit)` | 全聊天 substring 搜尋(大小寫不敏感),返回樓層 + 內容預覽。 | `chat_search('青冥劍')` 找出之前所有提到「青冥劍」的樓層。 |
 | `lorebook_search(query, limit)` | 在所有啟用的世界書裡 substring 搜尋條目。**預設排除本回合已啟用的條目**(那些已經被注入主上下文,再返回會浪費 token)。返回 `entries` + `excluded_active_count`。 | `lorebook_search('落雁城')` 翻出未啟用的「落雁城」相關設定。 |
 | `lorebook_get(entry_key)` | 按 key 拉取條目全文。**不去重**——允許 agent 精確引用某條已啟用條目以保持術語一致。 | `lorebook_get('落雁城-主城')` 把這一條全文調出來引用。 |
-| `memory_search(query, limit)` | 在記憶圖(memory-graph)做 lexical 搜尋,**不依賴 vector 設定**。同樣預設排除已注入節點。 | `memory_search('家族秘密')` 找歷史事件節點。 |
-| `memory_list_recent(limit)` | 時間倒序瀏覽記憶節點,看看最近發生了什麼。 | `memory_list_recent(10)` 取最近 10 個事件節點。 |
-| `memory_get(node_id)` | 按 id 拉節點本身 + 直連鄰居 id 列表(不含完整鄰居節點)。 | 看完 `memory_search` 拿到一個節點 id,用 `memory_get` 看它和誰相關。 |
+| `memory_list_candidates(seq_window?, types?, exclude_recent_messages?)` | 列舉可見的記憶圖候選池——與記憶圖自身召回 LLM 看到的同一組。回傳 `{ candidates: [{ id, type, level, title, seqTo, semanticDepth }] }`,按時間倒序。**召回流水線的第一步**。 | `memory_list_candidates({ types: ['event'] })` 回傳召回 LLM 會考慮的最近事件節點。 |
+| `memory_rank(query, mode?, types?, k?)` | 按 `recency` / `vector` / `keyword` / `hybrid` 排序候選。回傳 `{ ranked: [{ id, type, title, seqTo, score, scoreMode }] }`。候選池較大時用它快速產生短名單,再拉詳細 brief。 | `memory_rank({ query: '家族秘密', mode: 'hybrid', k: 8 })` 用混合分數浮現最相關的 8 個節點。 |
+| `memory_node_brief(node_id, include_edge_summary?, edge_summary_limit?)` | 節點的標準化 brief(title、summary、key/row 欄位、子節點數、exposure、edge summary、alwaysInject)——與召回 LLM 看到的單行格式一致。 | 排序後,`memory_node_brief({ node_id: 'evt_42' })` 拉一個節點的完整 brief。 |
+| `memory_edge_summary(node_id, edge_types?, limit?)` | 只回傳邊摘要 `{ degree, relations, sample_neighbors }`。只想判斷「這是不是個 hub」而不要整個 brief 時用。 | `memory_edge_summary({ node_id: 'evt_42' })` 只取拓撲訊號。 |
+| `memory_expand_seeds(seed_ids, hops?, edge_types?, include_children?)` | 從種子 id 沿子節點 + 投影邊做 BFS 擴展。當某節點主題相關但具體細節大機率在子節點或相關 rollup 時用。 | `memory_expand_seeds({ seed_ids: ['evt_42'], hops: 1, include_children: true })` 浮現 `evt_42` 的子節點。 |
+| `memory_schema()` | 一輪一次:有哪些節點型別,哪些欄位是 key vs detail,哪些型別走 hierarchical compression。讓你能正確解讀其他 memory_* 工具的回傳。 | 召回開始前 `memory_schema()` 一次,瞭解可用的型別集。 |
 | `search_search(query)` | **聯網搜尋**,轉發給 [Search Tools](/zh-TW/features/search-tools) 外掛(DuckDuckGo / SearXNG / Brave)。預設開啟,但需要 search-tools 擴展已載入並設定好 provider——否則 Agent 會收到 `SEARCH_UNAVAILABLE` / `SEARCH_DISABLED` 並自行改用其他工具。 | `search_search('某某新聞最新進展')` 返回 provider 形態的結果(通常是 `{title, url, snippet}` 列表)。 |
 | `search_visit(url)` | 抓取 `search_search` 命中的某個頁面,返回可讀正文。 | 拿到搜尋結果後,`search_visit('https://example.com/article')` 把整篇正文拉回來。 |
 | `finalize(capsule_text)` | **終止訊號**(強制啟用)。`capsule_text` 直接注入主模型 prompt。 | `finalize('林晚此刻心情焦慮:剛得知外祖母身世,可能在下一句對白中引出洛陽話題。')` |
@@ -213,8 +216,8 @@ Loop popup 當前沒有 **匯出 Profile** / **匯入 Profile** 按鈕,跨電腦
 
 ## 常見問題
 
-**Q:`memory_search` 返回空怎麼辦?**
-A:先確認 memory-graph 擴展是否啟用、當前 chat 是否真的有記憶節點。返回空也可能是查詢詞太具體;試試 `memory_list_recent` 看時間線,再決定下一步。
+**Q:`memory_list_candidates` 返回空怎麼辦?**
+A:先確認 memory-graph 擴展是否啟用、當前 chat 是否真的有記憶節點。返回空也可能是這個 chat 還很早、還沒產生候選節點;可以用 `memory_schema` 確認型別表已經填充。
 
 **Q:`lorebook_search` 為什麼排除已啟用條目?**
 A:那些條目已經透過 worldInfo 主流程注入了主模型上下文,loop agent 再把它們返回到自己的循環裡只是浪費 token。**用 `lorebook_get` 才能精確引用已啟用條目原文**,比如保持術語一致。
