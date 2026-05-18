@@ -7949,6 +7949,7 @@ jQuery(() => {
         context.eventSource.on(context.eventTypes.GENERATION_STARTED, (type, _params, dryRun) => {
             try {
                 if (dryRun) return;
+                if (!extension_settings[MODULE_NAME]?.enabled) return;
                 if (!DIRECTOR_TAKEOVER_GEN_TYPES.has(String(type || ''))) return;
                 const profile = getEffectiveProfile(context);
                 if (!profile || String(profile.mode || '') !== ORCH_EXECUTION_MODE_DIRECTOR) return;
@@ -7993,6 +7994,8 @@ jQuery(() => {
                 // director loop spins up its agents (whose preset lookup
                 // happens by name and is unrelated to oai_settings).
                 restorePureSyntheticPresetOverride();
+
+                if (!extension_settings[MODULE_NAME]?.enabled) return;
 
                 const profile = getEffectiveProfile(context);
                 if (!profile) return;
