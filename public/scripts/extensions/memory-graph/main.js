@@ -931,7 +931,7 @@ function ensureSettings() {
     extension_settings[MODULE_NAME].nodeTypeSchema = normalizeNodeTypeSchema(extension_settings[MODULE_NAME].nodeTypeSchema);
 }
 
-function getSettings() {
+export function getSettings() {
     return extension_settings[MODULE_NAME];
 }
 
@@ -1673,7 +1673,7 @@ async function ensureMemoryStoreLoaded(context, { force = false, targetHint = nu
     }
 }
 
-function getMemoryStore(context, targetHint = null) {
+export function getMemoryStore(context, targetHint = null) {
     const chatKey = getChatKey(context, targetHint);
     return memoryStoreCache.get(chatKey) || null;
 }
@@ -2254,12 +2254,12 @@ function getNodeTypeSchemaMap(settings, context = null) {
     return map;
 }
 
-function getSemanticTypeSpec(settings, type, context = null) {
+export function getSemanticTypeSpec(settings, type, context = null) {
     const map = getNodeTypeSchemaMap(settings, context);
     return map.get(String(type || '').toLowerCase()) || null;
 }
 
-function getSemanticCompressionConfig(settings, type, context = null) {
+export function getSemanticCompressionConfig(settings, type, context = null) {
     const spec = getSemanticTypeSpec(settings, type, context);
     const raw = spec?.compression && typeof spec.compression === 'object' ? spec.compression : {};
     const mode = ['none', 'hierarchical'].includes(String(raw.mode || '').toLowerCase())
@@ -2364,7 +2364,7 @@ function listNodesByLevel(store, level) {
         });
 }
 
-function getChildren(store, nodeId) {
+export function getChildren(store, nodeId) {
     const node = store.nodes[nodeId];
     if (!node || !Array.isArray(node.childrenIds)) {
         return [];
@@ -3654,7 +3654,7 @@ function buildDeleteFromDynamicToolCall(call, spec) {
     };
 }
 
-function getSchemaProjectionColumns(spec = null) {
+export function getSchemaProjectionColumns(spec = null) {
     return Array.isArray(spec?.tableColumns)
         ? spec.tableColumns.map(column => String(column || '').trim()).filter(Boolean)
         : [];
@@ -3714,7 +3714,7 @@ function buildLlmFriendlyNodeProjection(node, spec = null) {
     };
 }
 
-function buildGraphNodeHints(store, schema, limit = 0, options = {}) {
+export function buildGraphNodeHints(store, schema, limit = 0, options = {}) {
     const numericLimit = Number(limit);
     const safeLimit = Number.isFinite(numericLimit) && numericLimit > 0
         ? Math.max(1, Math.min(5000, Math.floor(numericLimit)))
@@ -5301,7 +5301,7 @@ async function runExtractionForStore(context, store, {
     return extractedAny;
 }
 
-function formatNodeBrief(node, settings = null, context = null, extra = {}) {
+export function formatNodeBrief(node, settings = null, context = null, extra = {}) {
     const spec = settings ? getSemanticTypeSpec(settings, node?.type, context) : null;
     return {
         ...buildLlmFriendlyNodeProjection(node, spec),
@@ -5321,7 +5321,7 @@ function formatNodeDetail(node, settings = null, context = null, extra = {}) {
     };
 }
 
-function compareNodesByRecency(a, b) {
+export function compareNodesByRecency(a, b) {
     const aSeq = Number(a?.seqTo ?? -1);
     const bSeq = Number(b?.seqTo ?? -1);
     if (aSeq !== bSeq) {
@@ -5517,7 +5517,7 @@ function shouldPreserveLatestRecallSnapshotForAssistantMutation(context, fromSeq
         && affectedAssistantSeq > anchorAssistantFloor;
 }
 
-function getNodeRecallExposure(settings, node, context = null) {
+export function getNodeRecallExposure(settings, node, context = null) {
     if (!node) {
         return 'high_only';
     }
@@ -5531,7 +5531,7 @@ function getNodeRecallExposure(settings, node, context = null) {
     return 'full';
 }
 
-function getNearestVisibleAncestorId(store, nodeId, visibleSet) {
+export function getNearestVisibleAncestorId(store, nodeId, visibleSet) {
     const target = String(nodeId || '').trim();
     if (!target) {
         return '';
@@ -5553,7 +5553,7 @@ function getNearestVisibleAncestorId(store, nodeId, visibleSet) {
     return '';
 }
 
-function buildProjectedEdges(store, {
+export function buildProjectedEdges(store, {
     visibleNodeIds = null,
     relationTypes = null,
     excludeInternal = false,
@@ -5605,7 +5605,7 @@ function buildProjectedEdges(store, {
     return Array.from(merged.values());
 }
 
-function buildEdgeSummary(store, nodeId, { nodeSet = null, relationTypes = null, limit = 10 } = {}) {
+export function buildEdgeSummary(store, nodeId, { nodeSet = null, relationTypes = null, limit = 10 } = {}) {
     if (!nodeId) {
         return {
             degree: 0,
@@ -5679,12 +5679,12 @@ function buildEdgeSummary(store, nodeId, { nodeSet = null, relationTypes = null,
     };
 }
 
-function isRecallDiagnosticNode(node) {
+export function isRecallDiagnosticNode(node) {
     const type = String(node?.type || '').trim().toLowerCase();
     return type === 'recall' || type.startsWith('recall_');
 }
 
-function collectRootCandidates(store, settings, queryBundle = { fullText: '' }, alwaysInjectNodes = [], context = null, {
+export function collectRootCandidates(store, settings, queryBundle = { fullText: '' }, alwaysInjectNodes = [], context = null, {
     latestSeqIndex = -1,
     excludeMessages = 0,
 } = {}) {
@@ -5856,7 +5856,7 @@ function addCandidate(candidateMap, node) {
     }
 }
 
-function expandRouteCandidates(store, route, rootCandidates) {
+export function expandRouteCandidates(store, route, rootCandidates) {
     const candidateMap = new Map();
     const expandPlan = Array.isArray(route?.expand_plan) ? route.expand_plan : [];
 
@@ -6066,7 +6066,7 @@ function hasActiveSemanticChildOfType(store, node, type) {
     return false;
 }
 
-function selectVisibleNodesForType(store, typeNodes, type, compressionMode = 'none') {
+export function selectVisibleNodesForType(store, typeNodes, type, compressionMode = 'none') {
     const sorted = Array.isArray(typeNodes)
         ? typeNodes.slice().sort(compareNodesByTimeline)
         : [];
@@ -6137,7 +6137,7 @@ function getNodeSeqRange(node) {
     return '';
 }
 
-function getLatestSeqIndex(store) {
+export function getLatestSeqIndex(store) {
     return Math.max(-1, getStoreCoveredSeqTo(store));
 }
 
@@ -6180,7 +6180,7 @@ function getRecentMessagesByAssistantTurns(messages, keepAssistantTurns) {
     return source.slice(startIndex);
 }
 
-function isNodeInRecentExcludeWindow(node, latestSeqIndex, excludeMessages) {
+export function isNodeInRecentExcludeWindow(node, latestSeqIndex, excludeMessages) {
     const windowSize = Math.max(0, Number(excludeMessages || 0));
     if (windowSize <= 0 || latestSeqIndex < 0 || !node) {
         return false;
