@@ -574,6 +574,7 @@ const defaultSettings = {
     extractExcludeRecentTurns: 0,
     recallQueryMessages: 2,
     recentRawTurns: 2,
+    mainInjectionAssistantTurnsWindow: 0,
     llmVisibleRecentMessages: 5,
     lorebookNameOverride: '',
     lorebookEntryOrderBase: 9800,
@@ -900,6 +901,7 @@ function ensureSettings() {
     const extractExcludeRecentTurnsRaw = Number(extension_settings[MODULE_NAME].extractExcludeRecentTurns);
     const recallQueryMessagesRaw = Number(extension_settings[MODULE_NAME].recallQueryMessages);
     const recentRawTurnsRaw = Number(extension_settings[MODULE_NAME].recentRawTurns);
+    const mainInjectionWindowRaw = Number(extension_settings[MODULE_NAME].mainInjectionAssistantTurnsWindow);
     const llmVisibleRecentMessagesRaw = Number(extension_settings[MODULE_NAME].llmVisibleRecentMessages);
     extension_settings[MODULE_NAME].extractBatchTurns = Math.max(
         1,
@@ -919,6 +921,10 @@ function ensureSettings() {
     extension_settings[MODULE_NAME].recentRawTurns = Math.max(
         0,
         Math.floor(Number.isFinite(recentRawTurnsRaw) ? recentRawTurnsRaw : defaultSettings.recentRawTurns),
+    );
+    extension_settings[MODULE_NAME].mainInjectionAssistantTurnsWindow = Math.max(
+        0,
+        Math.floor(Number.isFinite(mainInjectionWindowRaw) ? mainInjectionWindowRaw : defaultSettings.mainInjectionAssistantTurnsWindow),
     );
     extension_settings[MODULE_NAME].llmVisibleRecentMessages = Math.max(
         0,
@@ -943,6 +949,7 @@ function normalizeAdvancedSettings(source = null, fallbackSource = null) {
     const extractExcludeRecentTurnsRaw = Number(input.extractExcludeRecentTurns);
     const recallQueryMessagesRaw = Number(input.recallQueryMessages);
     const recentRawTurnsRaw = Number(input.recentRawTurns);
+    const mainInjectionWindowRaw = Number(input.mainInjectionAssistantTurnsWindow);
     const llmVisibleRecentMessagesRaw = Number(input.llmVisibleRecentMessages);
     const recallIterationsRaw = Number(input.recallMaxIterations);
     const toolRetryRaw = Number(input.toolCallRetryMax);
@@ -951,6 +958,10 @@ function normalizeAdvancedSettings(source = null, fallbackSource = null) {
         recentRawTurns: Math.max(
             0,
             Math.floor(Number.isFinite(recentRawTurnsRaw) ? recentRawTurnsRaw : Number(base.recentRawTurns ?? defaultSettings.recentRawTurns)),
+        ),
+        mainInjectionAssistantTurnsWindow: Math.max(
+            0,
+            Math.floor(Number.isFinite(mainInjectionWindowRaw) ? mainInjectionWindowRaw : Number(base.mainInjectionAssistantTurnsWindow ?? defaultSettings.mainInjectionAssistantTurnsWindow)),
         ),
         llmVisibleRecentMessages: Math.max(
             0,
@@ -997,6 +1008,7 @@ function applyAdvancedSettings(target, values) {
     }
     const normalized = normalizeAdvancedSettings(values, target);
     target.recentRawTurns = normalized.recentRawTurns;
+    target.mainInjectionAssistantTurnsWindow = normalized.mainInjectionAssistantTurnsWindow;
     target.llmVisibleRecentMessages = normalized.llmVisibleRecentMessages;
     target.recallMaxIterations = normalized.recallMaxIterations;
     target.toolCallRetryMax = normalized.toolCallRetryMax;
@@ -6091,7 +6103,11 @@ export function selectVisibleNodesForType(store, typeNodes, type, compressionMod
     return picked.sort(compareNodesByTimeline);
 }
 
-function collectAlwaysInjectNodes(store, settings, context = null) {
+function collectAlwaysInjectNodes(store, settings, context = null, options = {}) {
+    // `options.seqWindowFrom?: number` — when set, post-filter the picked nodes
+    // to only include those whose `node.seqTo >= seqWindowFrom` (inclusive of the
+    // exact boundary). When unset / non-finite, behavior is unchanged. The window
+    // is applied after per-type selection so type / compression behavior is preserved.
     const alwaysSpecs = getEffectiveNodeTypeSchema(context, settings)
         .filter((spec) => {
             const tableName = String(spec?.tableName || '').trim().toLowerCase();
@@ -6127,7 +6143,12 @@ function collectAlwaysInjectNodes(store, settings, context = null) {
         }
     }
 
-    return picked.sort(compareNodesByTimeline);
+    const seqWindowFromRaw = Number(options?.seqWindowFrom);
+    const windowed = Number.isFinite(seqWindowFromRaw)
+        ? picked.filter(node => Number.isFinite(Number(node?.seqTo)) && Number(node.seqTo) >= seqWindowFromRaw)
+        : picked;
+
+    return windowed.sort(compareNodesByTimeline);
 }
 
 function getNodeSeqRange(node) {
@@ -6579,7 +6600,16 @@ async function syncPersistentLorebookProjection(context, settings, store) {
             alwaysInjectNodes: [],
         };
     }
-    const alwaysInjectNodes = collectAlwaysInjectNodes(store, settings, context);
+    const mainWindow = Math.max(0, Math.floor(Number(settings.mainInjectionAssistantTurnsWindow) || 0));
+    const seqWindowFrom = mainWindow > 0
+        ? Math.max(0, getLatestSeqIndex(store) - mainWindow)
+        : undefined;
+    const alwaysInjectNodes = collectAlwaysInjectNodes(
+        store,
+        settings,
+        context,
+        seqWindowFrom !== undefined ? { seqWindowFrom } : {},
+    );
     const corePacket = normalizeMultilineText(
         buildFocusTablesText(alwaysInjectNodes, settings, { tablePrefix: 'Core' }, context),
     );
@@ -12703,6 +12733,7 @@ async function openAdvancedSettingsPopup(context, settings, root) {
             return;
         }
         popupRoot.find(`#${popupId}_recent_raw_turns`).val(String(Math.max(0, Number(source.recentRawTurns ?? defaultSettings.recentRawTurns))));
+        popupRoot.find(`#${popupId}_main_injection_window`).val(String(Math.max(0, Number(source.mainInjectionAssistantTurnsWindow ?? defaultSettings.mainInjectionAssistantTurnsWindow))));
         popupRoot.find(`#${popupId}_recall_iterations`).val(String(Math.max(2, Math.min(6, Number(source.recallMaxIterations ?? defaultSettings.recallMaxIterations)))));
         popupRoot.find(`#${popupId}_tool_retries`).val(String(Math.max(0, Math.min(10, Number(source.toolCallRetryMax ?? defaultSettings.toolCallRetryMax)))));
         popupRoot.find(`#${popupId}_extract_context_turns`).val(String(Math.max(1, Math.min(32, Number(source.extractContextTurns ?? defaultSettings.extractContextTurns)))));
@@ -12757,6 +12788,7 @@ async function openAdvancedSettingsPopup(context, settings, root) {
         }
         return {
             recentRawTurnsValue: Number(popupRoot.find(`#${popupId}_recent_raw_turns`).val()),
+            mainInjectionWindowValue: Number(popupRoot.find(`#${popupId}_main_injection_window`).val()),
             recallIterationsValue: Number(popupRoot.find(`#${popupId}_recall_iterations`).val()),
             toolRetriesValue: Number(popupRoot.find(`#${popupId}_tool_retries`).val()),
             rpmLimitValue: Number(popupRoot.find(`#${popupId}_rpm_limit`).val()),
@@ -12776,6 +12808,7 @@ async function openAdvancedSettingsPopup(context, settings, root) {
     };
     const buildAdvancedSettingsFromValues = (values, fallbackSettings) => normalizeAdvancedSettings({
         recentRawTurns: values.recentRawTurnsValue,
+        mainInjectionAssistantTurnsWindow: values.mainInjectionWindowValue,
         recallMaxIterations: values.recallIterationsValue,
         toolCallRetryMax: values.toolRetriesValue,
         rpmLimit: values.rpmLimitValue,

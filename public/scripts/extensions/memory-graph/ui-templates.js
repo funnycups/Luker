@@ -67,6 +67,10 @@ export function buildAdvancedSettingsPopupHtml(deps, popupId, scopeInfo) {
     <label>${escapeHtml(i18n('Exclude latest N assistant turns from memory injection'))}
         <input id="${popupId}_recent_raw_turns" class="text_pole" type="number" min="0" step="1" value="${Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns)}" />
     </label>
+    <label>${escapeHtml(i18n('Main-context injection window (assistant turns; 0 = no limit)'))}
+        <input id="${popupId}_main_injection_window" class="text_pole" type="number" min="0" step="1" value="${Number(settings.mainInjectionAssistantTurnsWindow ?? defaultSettings.mainInjectionAssistantTurnsWindow)}" />
+    </label>
+    <small style="opacity:0.8">${escapeHtml(i18n('0 = inject all always-on nodes (current behavior). N > 0 = drop always-on nodes older than N assistant turns from the main context; recall candidates and recall-selected nodes are unaffected.'))}</small>
     <label>${escapeHtml(i18n('Recall max iterations'))}
         <input id="${popupId}_recall_iterations" class="text_pole" type="number" min="2" max="6" step="1" value="${Number(settings.recallMaxIterations || defaultSettings.recallMaxIterations)}" />
     </label>
