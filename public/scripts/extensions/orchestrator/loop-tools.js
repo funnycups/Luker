@@ -35,7 +35,9 @@
 import { FINALIZE_TOOL_SCHEMA, ToolError } from './loop-runtime.js';
 import { execChatReadRange, execChatSearch } from './loop-tools/chat.js';
 import { execLorebookSearch, execLorebookGet } from './loop-tools/lorebook.js';
-import { execMemorySearch, execMemoryListRecent, execMemoryGet } from './loop-tools/memory.js';
+import { execMemorySearch, execMemoryListRecent, execMemoryGet,
+    execMemoryListCandidates, execMemoryEdgeSummary, execMemoryNodeBrief,
+    execMemoryExpandSeeds, execMemoryRank, execMemorySchema } from './loop-tools/memory.js';
 import { execNoteOpen, execNoteClose } from './loop-tools/note.js';
 import { execSearchSearch, execSearchVisit } from './loop-tools/search.js';
 
@@ -223,6 +225,188 @@ registerTool('memory_get', execMemoryGet, {
                 },
             },
             required: ['node_id'],
+            additionalProperties: false,
+        },
+    },
+});
+
+// ---- memory namespace (read-api pipeline tools) -------------------------
+// These wrap the memory-graph read-only API. They mirror the inputs the
+// native recall LLM sees so a director sub-agent can reproduce an
+// LLM-grade recall pass. Prefer these over memory_search / memory_list_recent
+// for relevance-driven recall; legacy tools are still fine for verifying a
+// single id you already have in mind.
+
+registerTool('memory_list_candidates', execMemoryListCandidates, {
+    type: 'function',
+    function: {
+        name: 'memory_list_candidates',
+        description: 'Enumerate the visible memory-graph candidate pool — the same pool the memory-graph\'s own recall LLM sees. Returns { candidates: [{ id, type, level, title, seqTo, semanticDepth }] } in recency-first order (seqTo desc, semanticDepth desc). Use this as the FIRST step of a recall pipeline; prefer it over memory_search / memory_list_recent for relevance-driven recall.',
+        parameters: {
+            type: 'object',
+            properties: {
+                seq_window: {
+                    type: 'object',
+                    properties: {
+                        from: { type: 'integer', description: 'Inclusive lower bound on node seqTo.' },
+                        to: { type: 'integer', description: 'Inclusive upper bound on node seqTo.' },
+                    },
+                    additionalProperties: false,
+                    description: 'Optional seq range to narrow the pool.',
+                },
+                types: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Optional node-type filter (e.g. ["event", "character_sheet"]).',
+                },
+                exclude_recent_messages: {
+                    type: 'integer',
+                    minimum: 0,
+                    description: 'Drop nodes inside the recent-N raw turns window so freshly-injected context is not duplicated.',
+                },
+            },
+            additionalProperties: false,
+        },
+    },
+});
+
+registerTool('memory_edge_summary', execMemoryEdgeSummary, {
+    type: 'function',
+    function: {
+        name: 'memory_edge_summary',
+        description: 'Get a node\'s edge_summary: { degree, relations: [{ relation, direction, count }], sample_neighbors: [{ id, type, title }] }. The native recall LLM uses this structural signal; reach for it when a brief is overkill and you just need "is this node a hub?".',
+        parameters: {
+            type: 'object',
+            properties: {
+                node_id: {
+                    type: 'string',
+                    description: 'Node id from memory_list_candidates / memory_rank / memory_search.',
+                },
+                edge_types: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Optional relation-type filter.',
+                },
+                limit: {
+                    type: 'integer',
+                    minimum: 1,
+                    description: 'Sample-neighbors cap (default 8).',
+                },
+            },
+            required: ['node_id'],
+            additionalProperties: false,
+        },
+    },
+});
+
+registerTool('memory_node_brief', execMemoryNodeBrief, {
+    type: 'function',
+    function: {
+        name: 'memory_node_brief',
+        description: 'Get the canonical recall-side brief for one node: { id, title, summary, keyValues, rowValues, toSeq, childCount, exposure, edgeSummary, alwaysInject }. This is the SAME per-row format the memory-graph recall LLM sees. Returns { brief: null } when the node does not exist or is archived.',
+        parameters: {
+            type: 'object',
+            properties: {
+                node_id: {
+                    type: 'string',
+                    description: 'Node id to fetch the brief for.',
+                },
+                include_edge_summary: {
+                    type: 'boolean',
+                    description: 'Include edge_summary in the brief (default true). Set false to save tokens when you only need the textual fields.',
+                },
+                edge_summary_limit: {
+                    type: 'integer',
+                    minimum: 1,
+                    description: 'sample_neighbors cap inside the embedded edge_summary (default 8).',
+                },
+            },
+            required: ['node_id'],
+            additionalProperties: false,
+        },
+    },
+});
+
+registerTool('memory_expand_seeds', execMemoryExpandSeeds, {
+    type: 'function',
+    function: {
+        name: 'memory_expand_seeds',
+        description: 'BFS-expand from seed ids along children + projected edges (default 1 hop). Returns { nodes: [{ id, type, level, title, seqTo }] } for the union of seeds + reachable nodes. Use SPARINGLY: when a brief is on-topic but compressed (high_only exposure, large childCount) and you need to surface specific children.',
+        parameters: {
+            type: 'object',
+            properties: {
+                seed_ids: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Non-empty list of node ids to expand around.',
+                },
+                hops: {
+                    type: 'integer',
+                    minimum: 1,
+                    description: 'BFS depth (default 1). Keep low; wide drilling wastes budget.',
+                },
+                edge_types: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Optional relation-type filter for projected edges.',
+                },
+                include_children: {
+                    type: 'boolean',
+                    description: 'Include hierarchical children (rollup → leaves). Default true.',
+                },
+                exclude_internal: {
+                    type: 'boolean',
+                    description: 'Drop nodes reached only through contains / semantic_contains internal edges. Default false (mirrors native expandRouteCandidates).',
+                },
+            },
+            required: ['seed_ids'],
+            additionalProperties: false,
+        },
+    },
+});
+
+registerTool('memory_rank', execMemoryRank, {
+    type: 'function',
+    function: {
+        name: 'memory_rank',
+        description: 'Rank active nodes by recency / vector / keyword / hybrid. Returns { ranked: [{ id, type, title, seqTo, score, scoreMode }] }. Use this BEFORE fetching briefs when the candidate pool is large; the shortlist tells you which nodes to call memory_node_brief on.',
+        parameters: {
+            type: 'object',
+            properties: {
+                query: {
+                    type: 'string',
+                    description: 'One-line topical summary (from the task brief). Required for vector / keyword / hybrid modes.',
+                },
+                mode: {
+                    type: 'string',
+                    enum: ['recency', 'vector', 'keyword', 'hybrid'],
+                    description: 'Ranking mode. Use "recency" when no semantic axis is given; "hybrid" combines vector + keyword 50/50 (falls back to recency if vector / keyword yield nothing).',
+                },
+                types: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Optional node-type filter.',
+                },
+                k: {
+                    type: 'integer',
+                    minimum: 1,
+                    description: 'Max ranked results to return (default 20).',
+                },
+            },
+            required: ['query'],
+            additionalProperties: false,
+        },
+    },
+});
+
+registerTool('memory_schema', execMemorySchema, {
+    type: 'function',
+    function: {
+        name: 'memory_schema',
+        description: 'Return the active node-type schema: { types: [{ type, tableName, tableColumns, requiredColumns, primaryKeyColumns, forceUpdate, alwaysInject, editable, compressionMode }] }. This is the SAME schema_overview the native recall LLM sees. Read once at the start of a recall pass to understand which fields are key vs detail and which types use hierarchical compression.',
+        parameters: {
+            type: 'object',
+            properties: {},
             additionalProperties: false,
         },
     },

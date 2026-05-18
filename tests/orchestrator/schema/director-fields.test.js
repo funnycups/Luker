@@ -57,10 +57,25 @@ describe('director schema fields', () => {
         expect(p.director.maxTotalSubagentRuns).toBeGreaterThan(0);
         // Tools use the nested loop-style schema. Default = every verb on,
         // except `finalize` which is forced off (director ships its own).
+        // The memory subtree carries both legacy external-api wrappers
+        // (search / list_recent / get) AND the spec-2 read-api pipeline
+        // tools (list_candidates / edge_summary / node_brief / expand_seeds
+        // / rank / schema) — all default-on so the director's default
+        // memory_scout has the full pipeline available.
         expect(p.director.tools).toEqual(expect.objectContaining({
             chat: expect.objectContaining({ read_range: expect.any(Boolean), search: expect.any(Boolean) }),
             lorebook: expect.objectContaining({ search: expect.any(Boolean), get: expect.any(Boolean) }),
-            memory: expect.objectContaining({ search: expect.any(Boolean), list_recent: expect.any(Boolean), get: expect.any(Boolean) }),
+            memory: expect.objectContaining({
+                search: expect.any(Boolean),
+                list_recent: expect.any(Boolean),
+                get: expect.any(Boolean),
+                list_candidates: expect.any(Boolean),
+                edge_summary: expect.any(Boolean),
+                node_brief: expect.any(Boolean),
+                expand_seeds: expect.any(Boolean),
+                rank: expect.any(Boolean),
+                schema: expect.any(Boolean),
+            }),
             note: expect.objectContaining({ open: expect.any(Boolean), close: expect.any(Boolean) }),
             search: expect.objectContaining({ search: expect.any(Boolean), visit: expect.any(Boolean) }),
             finalize: false,
@@ -68,6 +83,15 @@ describe('director schema fields', () => {
         // Default disposition is all-on across namespaces.
         expect(p.director.tools.chat.read_range).toBe(true);
         expect(p.director.tools.note.open).toBe(true);
+        // Spec 2: read-api pipeline tools ship on by default so memory_scout
+        // can run an LLM-grade recall pass out of the box. A regression here
+        // would silently demote memory_scout back to legacy substring search.
+        expect(p.director.tools.memory.list_candidates).toBe(true);
+        expect(p.director.tools.memory.edge_summary).toBe(true);
+        expect(p.director.tools.memory.node_brief).toBe(true);
+        expect(p.director.tools.memory.expand_seeds).toBe(true);
+        expect(p.director.tools.memory.rank).toBe(true);
+        expect(p.director.tools.memory.schema).toBe(true);
         expect(p.director.discardOnAbort).toBe(false);
     });
 
@@ -151,14 +175,58 @@ describe('director schema fields', () => {
         expect(byId.canon_scout.systemPrompt).toMatch(/stay in your lane/i);
     });
 
-    test('chat_scout / memory_scout systemPrompts include signal-vs-noise filter', () => {
+    test('chat_scout systemPrompt includes signal-vs-noise filter', () => {
+        // chat_scout retains the original signal-vs-noise judgment shape
+        // (it reads chat, which is exactly where engagement signal lives).
+        // memory_scout has been overhauled in spec 2 — its noise judgment
+        // moved from "did the user engage with this in chat?" to
+        // "is this node a structural hub per the read-api?"; see the
+        // dedicated `memory_scout (spec 2)` test below.
         const p = createDefaultDirectorProfile();
         const byId = Object.fromEntries(p.director.subAgents.map(a => [a.id, a]));
-        // The noise-judgment capability is the user-asked-for upgrade —
-        // pin it in the prompts so future edits cannot silently
-        // regress the scouts to "return everything they find".
         expect(byId.chat_scout.systemPrompt).toMatch(/signal[- ]vs[- ]noise|de-?weight|low signal/i);
-        expect(byId.memory_scout.systemPrompt).toMatch(/signal[- ]vs[- ]noise|de-?weight|low signal/i);
+    });
+
+    test('memory_scout (spec 2) uses read-api pipeline contract instead of chat-grounded signal', () => {
+        // Spec 2 (2026-05-18-memory-scout-uses-readonly-api): memory_scout's
+        // description + systemPrompt were rewritten to drive the read-only
+        // memory-graph API (enumerate → rank → expand → cite). The old
+        // "engaged with" / "build on" / "sedimented" / "traverse" framing
+        // was removed because it required reading chat, which memory_scout
+        // is now explicitly forbidden from doing. Pin both sides — what
+        // the new prompt SAYS and what it deliberately no longer says —
+        // so future edits cannot silently regress the scout to the
+        // pre-read-api workflow.
+        const p = createDefaultDirectorProfile();
+        const byId = Object.fromEntries(p.director.subAgents.map(a => [a.id, a]));
+        const ms = byId.memory_scout;
+
+        // description: enumerate (not traverse).
+        expect(ms.description).not.toMatch(/traverse/i);
+        expect(ms.description).toMatch(/enumerate/i);
+
+        // systemPrompt: the new four-verb pipeline shape (enumerate → rank
+        // → expand → cite) must be teachable to the LLM verbatim.
+        expect(ms.systemPrompt).toMatch(/enumerate.*rank.*expand.*cite/i);
+        expect(ms.systemPrompt).toMatch(/1\.\s*\*\*Enumerate\.\*\*/);
+        expect(ms.systemPrompt).toMatch(/2\.\s*\*\*Rank\.\*\*/);
+        expect(ms.systemPrompt).toMatch(/3\.\s*\*\*Brief\.\*\*/);
+        expect(ms.systemPrompt).toMatch(/4\.\s*\*\*Expand/);
+        expect(ms.systemPrompt).toMatch(/5\.\s*\*\*Cite\.\*\*/);
+
+        // Stale chat-grounded judgment phrases must be gone.
+        expect(ms.systemPrompt).not.toMatch(/engaged with/i);
+        expect(ms.systemPrompt).not.toMatch(/build on/i);
+        expect(ms.systemPrompt).not.toMatch(/sedimented/i);
+
+        // The "stay in your lane" discipline still applies — pin it here
+        // too even though `default pre-draft scouts are each scoped to one
+        // source` already covers it, because this test is the dedicated
+        // contract test for the spec-2 rewrite.
+        expect(ms.systemPrompt).toMatch(/stay in your lane/i);
+
+        // Legacy tools are explicitly noted as insufficient on their own.
+        expect(ms.systemPrompt).toMatch(/legacy.*not enough|NOT enough/i);
     });
 
     test('canon_scout systemPrompt guards against original-fiction misuse', () => {

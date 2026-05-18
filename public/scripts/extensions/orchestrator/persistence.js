@@ -78,8 +78,15 @@ export const ORCH_EXECUTION_MODE_LOOP = 'loop';
  *                            doesn't degenerate into noise
  *   - tools.chat.{read_range, search}  in-chat history tools
  *   - tools.lorebook.{search, get}      world-info lookup tools
- *   - tools.memory.{search, list_recent, get}  memory-graph external-api
- *                            wrappers; each requires memory-graph enabled
+ *   - tools.memory.{search, list_recent, get, list_candidates,
+ *                   edge_summary, node_brief, expand_seeds, rank, schema}
+ *                            memory-graph wrappers. The first three are
+ *                            external-api lexical / browse helpers; the
+ *                            last six are read-api pipeline tools that
+ *                            mirror the inputs the native recall LLM sees
+ *                            (the director's `memory_scout` uses them for
+ *                            LLM-grade recall). Each requires memory-graph
+ *                            enabled.
  *   - tools.search.{search, visit}      web-search tools backed by the
  *                            search-tools plugin (DuckDuckGo / SearXNG /
  *                            Brave); default ON like the other tool
@@ -103,7 +110,17 @@ const LOOP_PROFILE_DEFAULTS = Object.freeze({
         note: Object.freeze({ open: true, close: true }),
         chat: Object.freeze({ read_range: true, search: true }),
         lorebook: Object.freeze({ search: true, get: true }),
-        memory: Object.freeze({ search: true, list_recent: true, get: true }),
+        memory: Object.freeze({
+            search: true,
+            list_recent: true,
+            get: true,
+            list_candidates: true,
+            edge_summary: true,
+            node_brief: true,
+            expand_seeds: true,
+            rank: true,
+            schema: true,
+        }),
         search: Object.freeze({ search: true, visit: true }),
         finalize: true,
     }),
@@ -203,6 +220,16 @@ export function sanitizeAgentToolFlags(input, { defaultAllOn = false, forceFinal
             search: readBooleanFlag(memoryIn.search, def),
             list_recent: readBooleanFlag(memoryIn.list_recent, def),
             get: readBooleanFlag(memoryIn.get, def),
+            // Spec 2 (read-api pipeline tools): pure additive keys; old
+            // profiles without them fall through to `def` (matches the
+            // sibling keys' all-on-when-defaultAllOn behavior so the
+            // director's default memory_scout ships with these enabled).
+            list_candidates: readBooleanFlag(memoryIn.list_candidates, def),
+            edge_summary: readBooleanFlag(memoryIn.edge_summary, def),
+            node_brief: readBooleanFlag(memoryIn.node_brief, def),
+            expand_seeds: readBooleanFlag(memoryIn.expand_seeds, def),
+            rank: readBooleanFlag(memoryIn.rank, def),
+            schema: readBooleanFlag(memoryIn.schema, def),
         },
         search: {
             search: readBooleanFlag(searchIn.search, def),
@@ -309,7 +336,11 @@ function sanitizeLoopCapsuleInject(input) {
  *     note: { open: boolean, close: boolean },
  *     chat: { read_range: boolean, search: boolean },
  *     lorebook: { search: boolean, get: boolean },
- *     memory: { search: boolean, list_recent: boolean, get: boolean },
+ *     memory: {
+ *       search: boolean, list_recent: boolean, get: boolean,
+ *       list_candidates: boolean, edge_summary: boolean, node_brief: boolean,
+ *       expand_seeds: boolean, rank: boolean, schema: boolean
+ *     },
  *     search: { search: boolean, visit: boolean },
  *     finalize: true,
  *   },
