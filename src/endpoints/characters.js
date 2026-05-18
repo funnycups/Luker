@@ -34,7 +34,7 @@ const memoryCache = new MemoryLimitedMap(memoryCacheCapacity);
 // Some Android devices require tighter memory management
 const isAndroid = process.platform === 'android';
 // Use shallow character data for the character list
-const useShallowCharacters = isAndroid || !!getConfigValue('performance.lazyLoadCharacters', false, 'boolean');
+const useShallowCharacters = isAndroid || !!getConfigValue('performance.lazyLoadCharacters', true, 'boolean');
 const useDiskCache = !!getConfigValue('performance.useDiskCache', true, 'boolean');
 const CHARACTER_STATE_FILE_PREFIX = '.state.';
 const CHARACTER_STATE_FILE_SUFFIX = '.json';
