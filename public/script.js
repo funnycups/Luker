@@ -12675,12 +12675,19 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
         const target = resolveChatStateTarget();
         const generationIds = summarizeLukerGenerationIdsForMessages(messages);
 
-        // Capture chat sync BEFORE the fetch awaits. Snapshot must reflect
-        // what BE just received, not what `chat[]` happens to be after the
-        // await. Plugins (e.g. table-state managers) mutate chat[i] during
-        // the request — if we recorded the post-mutation live array, the
-        // next diff would compare against fields BE never saw and trip 409.
-        const chatSnapshotAtRequest = cloneJsonValue(chat) ?? chat.slice();
+        // Optimistic snapshot commit: set BEFORE the fetch to what BE state will
+        // be once it applies our append. `chat[]` is irrelevant here — only the
+        // bytes we hand to BE matter. Previously we set the snapshot from `chat`
+        // after the await, which absorbed any plugin / streaming / swipe mutation
+        // happening on `chat[i]` during the await window and silently smuggled
+        // those changes into snapshot without ever sending them to BE → drift.
+        const snapshotKey = target ? getChatMessageSnapshotKey(target) : null;
+        const previousMessages = snapshotKey ? chatMessageSnapshotCache.get(snapshotKey) : null;
+        if (Array.isArray(previousMessages) && snapshotKey) {
+            // rememberChatMessageSnapshot deep-clones internally, so spreading
+            // raw references is safe here — they get frozen on `.set`.
+            rememberChatMessageSnapshot(target, [...previousMessages, ...messages]);
+        }
 
         if (selected_group) {
             const group = groups.find(x => x.id == selected_group);
@@ -12713,11 +12720,13 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
                     matched_existing_generation_id: Boolean(payload?.matched_existing_generation_id),
                 });
                 if (payload?.matched_existing_generation_id && Number(payload?.appended || 0) === 0) {
+                    // BE deduped against an earlier append with the same gen id. Our
+                    // optimistic snapshot grew too far; refresh from server truth.
                     const refreshed = await refreshChatWriteSnapshotsFromServer(target);
                     return Boolean(refreshed && lodash.isEqual(refreshed.messages, chat));
                 }
                 applyIntegrityFromWritePayload(payload);
-                rememberChatMessageSnapshot({ is_group: true, id: groupChatId }, chatSnapshotAtRequest);
+                // Snapshot already committed optimistically before the fetch.
                 return true;
             }
             // Any 409 surfaces via resolveChatWriteConflict (toast + event + snapshot
@@ -12766,11 +12775,13 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
                 matched_existing_generation_id: Boolean(payload?.matched_existing_generation_id),
             });
             if (payload?.matched_existing_generation_id && Number(payload?.appended || 0) === 0) {
+                // BE deduped against an earlier append with the same gen id. Our
+                // optimistic snapshot grew too far; refresh from server truth.
                 const refreshed = await refreshChatWriteSnapshotsFromServer(target);
                 return Boolean(refreshed && lodash.isEqual(refreshed.messages, chat));
             }
             applyIntegrityFromWritePayload(payload);
-            rememberChatMessageSnapshot({ is_group: false, avatar_url: avatar, file_name: fileName }, chatSnapshotAtRequest);
+            // Snapshot already committed optimistically before the fetch.
             return true;
         }
         // See group-branch comment: any 409 → toast/event/snapshot-invalidate via
@@ -12809,15 +12820,31 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
 
     try {
         const target = resolveChatStateTarget();
-        const previousMessages = target ? chatMessageSnapshotCache.get(getChatMessageSnapshotKey(target)) : null;
+        const snapshotKey = target ? getChatMessageSnapshotKey(target) : null;
+        const previousMessages = snapshotKey ? chatMessageSnapshotCache.get(snapshotKey) : null;
         const guardedOperations = attachChatMessagePatchTests(previousMessages, normalizedOperations);
 
-        // Sync deep-copy of chat[] BEFORE the fetch awaits. Snapshot must
-        // record what BE just received (= live chat at request time), not
-        // whatever `chat[]` became after the await — plugins commonly mutate
-        // chat[i] fields while the request is in flight and would otherwise
-        // leave snapshot pointing at state BE never saw.
-        const chatSnapshotAtRequest = cloneJsonValue(chat) ?? chat.slice();
+        // Optimistic snapshot commit: compute what snapshot will be after BE
+        // applies our ops, then set it BEFORE the fetch. `chat[]` does not
+        // factor in — only the ops we actually send to BE define the new
+        // BE state. Previously we set the snapshot from a deep-clone of
+        // `chat` after the await, which silently absorbed any plugin /
+        // streaming mutation happening on chat[i] during the await window
+        // and smuggled those changes into snapshot without ever sending
+        // them to BE → permanent drift.
+        if (Array.isArray(previousMessages) && snapshotKey) {
+            try {
+                const patchResult = applyJsonPatch(previousMessages, normalizedOperations, false, false);
+                if (Array.isArray(patchResult?.newDocument)) {
+                    rememberChatMessageSnapshot(target, patchResult.newDocument);
+                }
+            } catch (error) {
+                // Simulation failed (e.g. caller-supplied op targets a path that
+                // no longer exists in snapshot). Skip optimistic commit; the
+                // actual BE response will drive what happens next.
+                console.debug('[ChatWrite] optimistic snapshot simulation failed', error);
+            }
+        }
 
         if (selected_group) {
             const group = groups.find(x => x.id == selected_group);
@@ -12842,7 +12869,7 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
             if (response.ok) {
                 const payload = await response.json().catch(() => null);
                 applyIntegrityFromWritePayload(payload);
-                rememberChatMessageSnapshot({ is_group: true, id: groupChatId }, chatSnapshotAtRequest);
+                // Snapshot already committed optimistically before the fetch.
                 return true;
             }
             // Any 409 surfaces via resolveChatWriteConflict; returning false lets
@@ -12883,7 +12910,7 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
         if (response.ok) {
             const payload = await response.json().catch(() => null);
             applyIntegrityFromWritePayload(payload);
-            rememberChatMessageSnapshot({ is_group: false, avatar_url: avatar, file_name: fileName }, chatSnapshotAtRequest);
+            // Snapshot already committed optimistically before the fetch.
             return true;
         }
         // See group-branch comment: full-save fallback via the caller covers all
