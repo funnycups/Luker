@@ -11,19 +11,23 @@
 
 export const DEFAULT_PER_TYPE_INSTRUCTIONS = {
     event: [
-        'Event decision (event/event_table): create or skip, and why.',
-        'Event strict policy: each extraction batch may create AT MOST ONE event node.',
-        'If multiple sub-events happened in one batch, merge them into one coherent event summary instead of creating multiple event rows.',
-        'If no meaningful event progression occurred, do not fabricate an event; explain the skip clearly.',
+        'Event decision: SKIP is the default. Most batches do not warrant a new event.',
+        'Create at most ONE event node per batch. If multiple sub-events happened, merge into one coherent summary.',
+        'Emit an event only when something of 24h+ consequence happened (契约/誓言/婚约/师徒关系 建立或破裂、不可逆物理状态变化、长期身份/立场变更、新角色登场并被命名、新地点建立长期 controller、获得/转让重要物品).',
+        'Do NOT emit an event for: 单次场景姿态、当前心情、临时性服务关系、对话氛围、未付诸行动的情绪、被某个 KEEP 事件包含的子动作、引述的对白原文.',
+        'When emitting, the summary must start with "时间：<具体时间>；" using complete in-world date/time and follow the event style standard.',
     ].join('\n'),
     character_sheet: [
-        'Character decision (character_sheet/character_table): create/edit/delete/skip with evidence.',
-        'Character consistency hard rule: for any mentioned character grounded by card/world-info baseline, if no character_sheet node exists, create one; if an existing character_sheet conflicts with baseline facts, emit edit to align it.',
-        'Alias quality rule: when dialogue uses nicknames/short names/titles, fill aliases.',
+        'Character decision: SKIP unless the character\'s long-term traits/identity/goal/aliases changed in this batch.',
+        'Character consistency rule: if a character is grounded by card/world-info baseline and no character_sheet exists for them, create one. If an existing sheet conflicts with baseline, emit edit to align.',
+        'Alias quality: when dialogue uses nicknames/short names/titles, fill aliases.',
+        'language_sample edit rule: existing samples are scene templates. Scan before editing. Only rewrite the whole sample group on identity/stance reversal (faction switch, brainwashing, awakening, long-term role transition). A new scene materially different from all logged ones can ADD (cap at 3 total); already-logged scene samples are not rewritten to match the current scene\'s mood.',
+        'Single-scene tone shifts, intimate-mode dialogue, situational politeness = SKIP for language_sample.',
+        'identity rule: long-term identity only. Temporary roles (服侍员, 临时随从, 患者) = SKIP.',
     ].join('\n'),
     location_state: [
-        'Location decision (location_state/location_table): create/edit/delete/skip with evidence.',
-        'State quality rule: keep state/status fields updated when progression changes (e.g. ongoing/resolved/blocked).',
+        'Location decision: SKIP unless controller / danger / resources changed in this batch.',
+        '"Entering a new location" alone = SKIP — that\'s event territory. Only create / edit when the location\'s long-term properties shifted.',
     ].join('\n'),
 };
 

@@ -95,12 +95,17 @@ export function getRollbackEdgeKey(edge) {
  * Idempotent edge insertion. Drops self-edges, dedupes on
  * `(from, to, type)` triple. Mutates `store.edges` in place.
  *
+ * Optional `seqTo` records the extraction sequence at which this edge
+ * was written. When omitted, the edge is stored without the field, and
+ * downstream projections fall back to max(node.seqTo) for ordering.
+ *
  * @param {{edges: Array}} store
  * @param {string} from
  * @param {string} to
  * @param {string} [type='related']
+ * @param {{seqTo?: number}} [options]
  */
-export function addEdge(store, from, to, type = 'related') {
+export function addEdge(store, from, to, type = 'related', { seqTo } = {}) {
     if (!from || !to || from === to) {
         return;
     }
@@ -110,11 +115,44 @@ export function addEdge(store, from, to, type = 'related') {
         return;
     }
 
-    store.edges.push({
-        from,
-        to,
-        type,
-    });
+    const edge = { from, to, type };
+    if (Number.isFinite(Number(seqTo))) {
+        edge.seqTo = Math.max(0, Math.floor(Number(seqTo)));
+    }
+    store.edges.push(edge);
+}
+
+/**
+ * Remove edges matching (from, to, type). Direction controls whether
+ * the reverse pair (to, from, type) is also removed:
+ *   - 'outgoing'      — remove only edges from→to with matching type
+ *   - 'incoming'      — remove only edges to→from with matching type
+ *   - 'bidirectional' — remove both directions (default)
+ *
+ * Mutates `store.edges` in place. Returns the number of edges removed.
+ *
+ * @param {{edges: Array}} store
+ * @param {string} from
+ * @param {string} to
+ * @param {string} type
+ * @param {{direction?: 'outgoing'|'incoming'|'bidirectional'}} [options]
+ * @returns {number}
+ */
+export function removeEdge(store, from, to, type, { direction = 'bidirectional' } = {}) {
+    if (!from || !to || !type || !Array.isArray(store?.edges)) {
+        return 0;
+    }
+    const matchesType = (e) => e.type === type;
+    const matchesForward = (e) => e.from === from && e.to === to && matchesType(e);
+    const matchesReverse = (e) => e.from === to && e.to === from && matchesType(e);
+    const shouldRemove = (e) => {
+        if (direction === 'outgoing') return matchesForward(e);
+        if (direction === 'incoming') return matchesReverse(e);
+        return matchesForward(e) || matchesReverse(e);
+    };
+    const before = store.edges.length;
+    store.edges = store.edges.filter(e => !shouldRemove(e));
+    return before - store.edges.length;
 }
 
 /**

@@ -109,6 +109,7 @@ import {
     cloneRollbackEdgeSnapshot,
     getRollbackEdgeKey,
     addEdge,
+    removeEdge,
     dropNode,
     repairStoreAfterRollback,
     compareNodesByTimeline,
@@ -294,7 +295,7 @@ const defaultNodeTypeSchema = [
             summary: DEFAULT_EVENT_SUMMARY_COLUMN_HINT,
         },
         requiredColumns: ['summary'],
-        forceUpdate: true,
+        forceUpdate: false,
         editable: false,
         level: LEVEL.SEMANTIC,
         extractHint: DEFAULT_EVENT_EXTRACT_HINT,
@@ -317,18 +318,16 @@ const defaultNodeTypeSchema = [
         id: 'character_sheet',
         label: 'Character Sheet',
         tableName: 'character_table',
-        tableColumns: ['title', 'aliases', 'traits', 'identity', 'state', 'goal', 'inventory', 'language_sample', 'core_note', 'addressing_user'],
-        embeddingColumns: ['title', 'aliases', 'traits', 'identity', 'state', 'goal', 'core_note'],
+        tableColumns: ['title', 'aliases', 'traits', 'identity', 'goal', 'inventory', 'language_sample', 'addressing_user'],
+        embeddingColumns: ['title', 'aliases', 'traits', 'identity', 'goal'],
         columnHints: {
             title: 'Canonical character name only. Do not include aliases, English names, titles, translations, or any parenthetical/bracketed clarification here.',
             aliases: 'Nicknames, aliases, titles, English names, translated names, or alternative names used in dialogue. Store them here instead of appending them to title.',
             traits: 'Stable character traits, personality tendencies, and notable appearance/style markers.',
-            identity: 'Stable identity/background facts.',
-            state: 'Current condition or stance.',
+            identity: 'Long-term identity/background facts (stable for at least 24 in-world hours). Do NOT record temporary roles (服侍员, 临时随从, 患者) — those belong in event summary.',
             goal: 'Current objective or motivation.',
             inventory: 'Key carried or owned items.',
-            language_sample: 'Representative current speech style sample.',
-            core_note: 'Stable critical notes worth persistent recall.',
+            language_sample: 'Stable speech-style samples per scene category, capped at 2-3 (e.g. formal work / private intimate / combat tension). Each sample is a template for that scene category, not a copy of a single line.',
             addressing_user: 'How this character addresses the user.',
         },
         requiredColumns: ['title'],
@@ -454,7 +453,7 @@ const DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT = [
 ].join('\n');
 
 const EXTRACT_PROMPT_NODE_DEDUP_LINES = [
-    'Thought dedup rule: in section [2] and section [3], explicitly inspect graph_data.nodes for existing candidate character/location nodes before any create decision, and explain the matched node_id or the no-match reason.',
+    'Thought dedup rule: in section [1] (event participants) and section [2] (stable-fact node create/edit decisions), explicitly inspect graph_data.nodes for existing candidate character/location nodes before any create decision, and explain the matched node_id or the no-match reason.',
     'Duplicate prevention hard rule: never create a second character/location node merely because one form uses a canonical name and another form uses an alias, title, short name, translated name, or English name. Reuse one node and store alternate forms in aliases.',
     'Create-gate rule for character/location nodes: only create when you have explicitly checked existing graph_data nodes by canonical name and alias overlap and found no plausible match.',
     'Name format hard rule: for character/location nodes, name must be canonical plain name only.',
@@ -462,11 +461,19 @@ const EXTRACT_PROMPT_NODE_DEDUP_LINES = [
     'Alias format rule: English names, translated names, nicknames, titles, short names, and alternative spellings belong in aliases only, not in name.',
 ];
 
-const CANONICAL_EXTRACT_RELATION_TYPES = ['related', 'involved_in', 'occurred_at', 'mentions', 'evidence', 'updates', 'advances'];
+const CANONICAL_EXTRACT_RELATION_TYPES = [
+    // Generic graph relations (existing)
+    'related', 'involved_in', 'occurred_at', 'mentions', 'evidence', 'updates', 'advances',
+    // Character-character relations (new — spec §3.2)
+    // Symmetric (use bidirectional direction in upsert):
+    'partner_of', 'family_of', 'allied_with', 'hostile_to',
+    // Directed (from = action originator):
+    'mentor_of', 'sworn_to', 'debt_owed_to', 'deceiving',
+];
 const CANONICAL_EXTRACT_RELATION_TYPES_TEXT = CANONICAL_EXTRACT_RELATION_TYPES.join(', ');
 const EXTRACT_PROMPT_EDGE_TYPE_LINES = [
     `Relation vocabulary hard rule: only use these canonical relation types for semantic links: ${CANONICAL_EXTRACT_RELATION_TYPES_TEXT}.`,
-    'Thought relation review rule: in section [4], explicitly inspect graph_data edges and reuse existing canonical relation labels when the meaning matches. Do not invent a new synonym, translation, or near-duplicate relation label.',
+    'Thought relation review rule: in section [3] (link plan), explicitly inspect graph_data edges and reuse existing canonical relation labels when the meaning matches. Do not invent a new synonym, translation, or near-duplicate relation label.',
     'Relation normalization rule: if the meaning is "entity/character participates in or is materially involved in an event", always use involved_in.',
     'Relation normalization rule: if the meaning is "an event takes place at a location", always use occurred_at.',
     'Relation normalization rule: if the meaning is simple weak association and no sharper canonical type fits, use related.',
@@ -478,21 +485,28 @@ const DEFAULT_EXTRACT_SYSTEM_PROMPT = [
     'Extract structured memory nodes from dialogue messages into a high-utility memory graph.',
     'Before tool calls, output one VERY detailed <thought>...</thought> analysis. Do not output plain JSON text.',
     'Do not skip reasoning. Do not jump directly to tool calls.',
+    '',
     'Hard output format for <thought> (must follow exactly this order):',
     '<thought>',
-    '[0] Batch scope and chronology: this batch covered seq range, what changed vs previous memory.',
-    '[1..N] Per-type decisions: for each active type listed in the per-type rules appendix at the end of this prompt, output one section (decision, evidence seq(s), field-level update plan).',
-    '[4] Link plan: exact relation edges to add (from -> relation -> target), locator method per edge (target_node_id vs target_ref), or explicit no-link reason.',
-    '[5] Planned tool calls: full call list in execution order (done last), including ref declarations before any link that depends on them.',
+    '[0] Batch scope + chronology: seq range covered, what changed vs previous memory.',
+    '[1] Event decision: SKIP (default) or one summary draft.',
+    '    Most batches do not warrant a new event. If nothing of 24h+ consequence happened (路过 / 休整 / 姿势 / 对白氛围 / 单次场景 / 被某 KEEP 包含的子动作), emit ZERO event nodes and explain why in this section.',
+    '[2] Stable-fact updates (OPTIONAL — list ONLY types with evidence this batch):',
+    '    For each type that has evidence, one block with: evidence seq(s), which fields will change and why, existing node_id (after inspecting graph_data) or new-node decision.',
+    '    Types without evidence are simply absent from this section. Do not write "skip" lines for them.',
+    '[3] Link plan (only if [1] or [2] produced nodes / changed relations):',
+    '    Each planned edge: from → relation → target, locator method (target_node_id vs target_ref), seq evidence triggering it.',
+    '    List edges planned for DELETION (relationship dissolved, debt repaid, oath broken) explicitly.',
+    '[4] Planned tool calls in execution order (done last). Include ref declarations before any link that depends on them.',
     '</thought>',
+    '',
     'If <thought> misses any required section above, treat your own response as invalid and regenerate fully.',
-    'Thought depth rule: each section must include (a) decision, (b) evidence seq(s), (c) field-level update plan.',
-    'Thought anti-lazy rule: no one-line vague claims like "no update needed" without evidence.',
-    'For each type, explicitly check whether optional columns can be updated from evidence in this batch.',
+    '',
+    'Skip-default rule: stable-fact types (character_sheet, location_state) default to SKIP. Emit create/edit only when evidence passes the 24-hour persistence test (the change still constrains story state 24 in-world hours later).',
+    'Event SKIP rule: most batches do not warrant a new event. If nothing of 24h+ consequence happened, emit zero event nodes.',
     'Tool set is dynamic. Semantic types expose create/edit/delete tools as needed; some types can be create-only. Treat tool descriptions as the source of truth.',
     'Call type tools to emit concrete updates, then call luker_rpg_extract_done as the final call.',
-    'Hard rule: one response must contain COMPLETE extraction tool calls; do not stop after a single tool call.',
-    'Hard rule: return at least 2 tool calls in one response: >=1 type tool call + 1 luker_rpg_extract_done (done must be last).',
+    'Hard rule: return COMPLETE extraction tool calls in one response — at least one luker_rpg_extract_done at the end. Type tool calls are optional when nothing warrants extraction (SKIP-all is valid; output just the done call).',
     'Type tools are split by intent: create / edit / delete (if available for that type).',
     'Use create for new nodes, edit for existing node_id patch updates, delete for explicit removals.',
     'Create tool uses flattened top-level table columns. Edit tool uses set_fields for sparse patch updates.',
@@ -501,18 +515,13 @@ const DEFAULT_EXTRACT_SYSTEM_PROMPT = [
     'Never fabricate node_id. If no suitable existing node is listed, create a new node without node_id.',
     'If an existing node clearly matches, prefer node_id update over duplicate creation.',
     'Delete rule: use delete tool only when a listed node is clearly wrong/duplicate/stale and must be removed.',
-    'Coverage goal: when evidence exists for a semantic type in this batch, actively update that type instead of only emitting minimal name-only skeletons.',
-    'Hard coverage rule: if a type has grounded evidence and there are editable nodes or clear new facts, you MUST emit create/edit calls for that type in this batch.',
-    'Never output lazy rationale such as "non-required type so can skip" when grounded evidence is present.',
     'Alias quality rule: when dialogue uses nicknames/short names/titles, fill aliases for character/location nodes.',
     ...EXTRACT_PROMPT_NODE_DEDUP_LINES,
     ...EXTRACT_PROMPT_EDGE_TYPE_LINES,
+    'Edge deletion rule: delete a relation edge only when the relation in that direction is no longer in effect (relationship dissolved, alliance broken, debt repaid, oath revoked). Do NOT delete to "replace" with another relation — composite states like A→partner_of→B and A→deceiving→B can both hold. Thought section [3] must list each deletion with seq evidence.',
     'Fill optional columns whenever evidence is present; if unknown, omit conservatively.',
     'Respect required columns and force-update types declared in tool descriptions.',
-    'If a type is marked force-update, emit at least one grounded node for it in this batch.',
     'Grounding rule: do not hallucinate. Every field should be inferable from the batch or stable continuity.',
-    'Coverage rule: avoid event-only outputs when other schema types have clear evidence; update them in the same batch.',
-    'State quality rule: keep state/status fields updated when progression changes (e.g. ongoing/resolved/blocked).',
     'Editability rule: only types listed in graph_data.editable_type_ids may use edit/delete tools. For non-editable types, use create tools only.',
     ...EVENT_SUMMARY_TIME_EXTRACT_PROMPT_LINES,
     'Relation modeling rule: encode cross-node relations (who/where linkage) via links, not by stuffing relation lists into node row columns.',
@@ -520,20 +529,20 @@ const DEFAULT_EXTRACT_SYSTEM_PROMPT = [
     'Link quality rule: include links for involved entities/locations when evidence exists.',
     'Event linking priority: when an event clearly involves participants/locations, include links for those relations.',
     'If relation-worthy nodes are updated but links are missing, your response is incomplete.',
-    'If you decide not to add links in this batch, explain why in <thought> section [4] with explicit evidence.',
+    'If you decide not to add links in this batch, explain why in <thought> section [3] with explicit evidence.',
     'Link locator rule: use target_ref (same-batch temporary reference) or target_node_id (existing node id). Do not use title/type matching.',
     'Link locator decision policy: if target already exists in graph_data.nodes, use target_node_id.',
     'Link locator decision policy: if target will be created in this batch, assign ref in its create call and use target_ref.',
     'Link locator decision policy: if you cannot locate by node_id and target is missing, create target first (with ref), then link by target_ref.',
     'Never skip a grounded relation only because locator is missing; create/ref it first, then link.',
-    'In <thought> section [4], for each planned edge, explicitly state locator choice and why (existing node_id vs same-batch ref).',
+    'In <thought> section [3], for each planned edge, explicitly state locator choice and why.',
     'Create-time linking rule: if a node needs links now, include links in that create call instead of deferring.',
     'Post-update linking rule: when only relations change, use luker_rpg_extract_link_upsert.',
     'For each create call, you may set optional ref to name this new node for later same-batch links.',
-    'Event strict link rule: event create must include links. If truly no relation can be grounded, set links: [] and provide no_link_reason.',
+    'Event linking rule: if an event genuinely has no groundable relation, set links: [] and provide no_link_reason.',
     'Summary rule: summary is abstraction, not raw text copy.',
     'Summary quality: emphasize causality, turning points, commitments, outcomes, and unresolved hooks.',
-    'For event-type summaries, the writing style standard below is mandatory; the same standard is also enforced during compression so source material must already obey it.',
+    'For event-type summaries, the writing style standard below is mandatory.',
     EVENT_SUMMARY_STYLE_STANDARD,
     'If information is large, split into multiple focused create/edit operations instead of one oversized summary.',
     'For non-event types, summary is optional unless schema requires it.',
@@ -3471,6 +3480,36 @@ function buildDynamicExtractTools(schema = [], options = {}) {
         toolName: linkUpsertToolName,
     });
 
+    const linkDeleteToolName = 'luker_rpg_extract_link_delete';
+    tools.push({
+        type: 'function',
+        function: {
+            name: linkDeleteToolName,
+            description: `Delete a relation edge between two semantic nodes. Use when a relationship is no longer in effect (dissolved, broken, repaid, revoked). Composite states like partner_of + deceiving stay valid — do NOT delete to "replace" with another relation. Direction: 'outgoing' deletes from→to only; 'incoming' deletes to→from only; 'bidirectional' (default) deletes both. Only use canonical relation types: ${CANONICAL_EXTRACT_RELATION_TYPES_TEXT}.`,
+            parameters: {
+                type: 'object',
+                properties: {
+                    source_node_id: { type: 'string', description: 'Existing node id (one endpoint of the edge).' },
+                    target_node_id: { type: 'string', description: 'Existing node id (the other endpoint).' },
+                    relation: { type: 'string', description: `Canonical relation type only. Allowed values: ${CANONICAL_EXTRACT_RELATION_TYPES_TEXT}.` },
+                    direction: { type: 'string', enum: ['outgoing', 'incoming', 'bidirectional'] },
+                },
+                required: ['source_node_id', 'target_node_id', 'relation'],
+                additionalProperties: false,
+            },
+        },
+    });
+    specByToolName.set(linkDeleteToolName, {
+        id: 'link',
+        tableName: 'link',
+        tableColumns: [],
+        requiredColumns: [],
+        columnHints: {},
+        editable: true,
+        op: 'link_delete',
+        toolName: linkDeleteToolName,
+    });
+
     tools.push({
         type: 'function',
         function: {
@@ -3588,6 +3627,39 @@ function buildLinkUpsertFromToolCall(call) {
             sourceNodeId,
             sourceRef,
             links,
+        },
+        invalidReason: '',
+    };
+}
+
+function buildLinkDeleteFromToolCall(call) {
+    if (!call || typeof call !== 'object') {
+        return { payload: null, invalidReason: 'Invalid call.' };
+    }
+    const args = call.args && typeof call.args === 'object' ? call.args : {};
+    const sourceNodeId = normalizeText(args.source_node_id || '');
+    const targetNodeId = normalizeText(args.target_node_id || '');
+    const relation = normalizeText(args.relation || '').toLowerCase();
+    if (!sourceNodeId) {
+        return { payload: null, invalidReason: 'source_node_id is required.' };
+    }
+    if (!targetNodeId) {
+        return { payload: null, invalidReason: 'target_node_id is required.' };
+    }
+    if (!relation) {
+        return { payload: null, invalidReason: 'relation is required.' };
+    }
+    const directionRaw = String(args.direction || 'bidirectional').toLowerCase();
+    const direction = ['outgoing', 'incoming', 'bidirectional'].includes(directionRaw)
+        ? directionRaw
+        : 'bidirectional';
+    return {
+        payload: {
+            op: 'link_delete',
+            sourceNodeId,
+            targetNodeId,
+            relation,
+            direction,
         },
         invalidReason: '',
     };
@@ -4050,7 +4122,7 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
     let lastRetryableError = null;
     for (let attempt = 0; attempt <= semanticRetries; attempt++) {
         const reminderText = attempt > 0
-            ? `Previous response was incomplete. Return COMPLETE extraction tool calls in one response: at least one type tool call and exactly one final luker_rpg_extract_done as the last call.${retryReason ? ` Fix: ${retryReason}` : ''}`
+            ? `Previous response was incomplete. Return COMPLETE extraction tool calls in one response: exactly one final luker_rpg_extract_done as the last call (SKIP-all with done-only is valid).${retryReason ? ` Fix: ${retryReason}` : ''}`
             : '';
         const taskMessages = [
             { role: 'system', content: extractSystemPrompt },
@@ -4081,7 +4153,7 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
             console.warn(`[${MODULE_NAME}] Extract request failed. Retrying semantic pass (${attempt + 1}/${semanticRetries})...`, error);
             continue;
         }
-        if (!Array.isArray(calls) || calls.length < 2) {
+        if (!Array.isArray(calls) || calls.length < 1) {
             retryReason = 'Tool calls are missing or incomplete.';
             continue;
         }
@@ -4095,10 +4167,6 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
                 continue;
             }
             const typeCalls = calls.filter(call => specByToolName.has(String(call?.name || '')));
-            if (typeCalls.length < 1) {
-                retryReason = 'No semantic type tool call found.';
-                continue;
-            }
             const ops = [];
             const calledTypes = new Set();
             let invalid = false;
@@ -4136,6 +4204,16 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
                     if (!linkOp.payload) {
                         invalid = true;
                         retryReason = `Link call invalid: ${linkOp.invalidReason}`;
+                        break;
+                    }
+                    ops.push(linkOp.payload);
+                    continue;
+                }
+                if (spec.op === 'link_delete') {
+                    const linkOp = buildLinkDeleteFromToolCall(call);
+                    if (!linkOp.payload) {
+                        invalid = true;
+                        retryReason = `Link delete call invalid: ${linkOp.invalidReason}`;
                         break;
                     }
                     ops.push(linkOp.payload);
@@ -4201,15 +4279,8 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
                 retryReason = `Missing force-update type tool calls: ${missingForceTypes.join(', ')}.`;
                 continue;
             }
-            if (ops.length < 1) {
-                retryReason = 'No valid extraction operations found.';
-                continue;
-            }
-        validatedOps = ops;
-        break;
-    }
-    if (validatedOps.length > 0) {
-        return validatedOps;
+            validatedOps = ops;
+            return validatedOps;
     }
     const failureReason = normalizeText(retryReason || String(lastRetryableError?.message || '')) || 'No valid extraction tool calls after retries.';
     throw new Error(failureReason);
@@ -4432,6 +4503,12 @@ function applyExtractedLinks(store, sourceNode, rawLinks, options = {}) {
         return;
     }
 
+    const rawSeqTo = options?.maxSeq;
+    const seqTo = (rawSeqTo !== null && rawSeqTo !== undefined && Number.isFinite(Number(rawSeqTo)))
+        ? Math.max(0, Math.floor(Number(rawSeqTo)))
+        : undefined;
+    const edgeOptions = seqTo !== undefined ? { seqTo } : undefined;
+
     for (const link of rawLinks) {
         const targetNodeId = resolveExtractNodeId(store, {
             nodeId: link?.targetNodeId || link?.target_node_id || '',
@@ -4449,16 +4526,16 @@ function applyExtractedLinks(store, sourceNode, rawLinks, options = {}) {
         const direction = String(link?.direction || 'bidirectional').toLowerCase();
 
         if (direction === 'incoming') {
-            addEdge(store, targetNode.id, sourceNode.id, relation);
+            addEdge(store, targetNode.id, sourceNode.id, relation, edgeOptions);
             continue;
         }
         if (direction === 'outgoing') {
-            addEdge(store, sourceNode.id, targetNode.id, relation);
+            addEdge(store, sourceNode.id, targetNode.id, relation, edgeOptions);
             continue;
         }
 
-        addEdge(store, sourceNode.id, targetNode.id, relation);
-        addEdge(store, targetNode.id, sourceNode.id, relation);
+        addEdge(store, sourceNode.id, targetNode.id, relation, edgeOptions);
+        addEdge(store, targetNode.id, sourceNode.id, relation, edgeOptions);
     }
 }
 
@@ -5078,6 +5155,19 @@ async function processPendingMessageBatchWithLLM(context, store, settings, schem
             });
             continue;
         }
+        if (op === 'link_delete') {
+            const sourceNodeId = String(item?.sourceNodeId || '').trim();
+            const targetNodeId = String(item?.targetNodeId || '').trim();
+            const relation = String(item?.relation || '').trim().toLowerCase();
+            const directionRaw = String(item?.direction || 'bidirectional').toLowerCase();
+            const direction = ['outgoing', 'incoming', 'bidirectional'].includes(directionRaw)
+                ? directionRaw
+                : 'bidirectional';
+            if (sourceNodeId && targetNodeId && relation) {
+                removeEdge(store, sourceNodeId, targetNodeId, relation, { direction });
+            }
+            continue;
+        }
         const type = String(item?.type || 'semantic').toLowerCase();
         const title = normalizeText(item?.title || '');
         if (!type) {
@@ -5602,6 +5692,7 @@ export function buildProjectedEdges(store, {
             continue;
         }
         const key = `${fromVisible}::${toVisible}::${edgeType}`;
+        const edgeSeq = edgeSeqTo(edge, store);
         const current = merged.get(key);
         if (!current) {
             merged.set(key, {
@@ -5609,12 +5700,33 @@ export function buildProjectedEdges(store, {
                 to: toVisible,
                 type: edgeType,
                 weight: 1,
+                seqTo: edgeSeq,
             });
             continue;
         }
         current.weight = Number(current.weight || 0) + 1;
+        if (edgeSeq > Number(current.seqTo ?? -1)) {
+            current.seqTo = edgeSeq;
+        }
     }
     return Array.from(merged.values());
+}
+
+/**
+ * Resolve an edge's effective seqTo for projection ordering. Older edges
+ * predate the `seqTo` field; fall back to the most-recent endpoint node's
+ * seqTo so projections still rank them sensibly. Never returns negative.
+ */
+function edgeSeqTo(edge, store) {
+    const direct = Number(edge?.seqTo);
+    if (Number.isFinite(direct)) {
+        return Math.max(0, Math.floor(direct));
+    }
+    const fromNode = store?.nodes?.[edge?.from];
+    const toNode = store?.nodes?.[edge?.to];
+    const fromSeq = Number(fromNode?.seqTo ?? -1);
+    const toSeq = Number(toNode?.seqTo ?? -1);
+    return Math.max(Number.isFinite(fromSeq) ? fromSeq : -1, Number.isFinite(toSeq) ? toSeq : -1, 0);
 }
 
 export function buildEdgeSummary(store, nodeId, { nodeSet = null, relationTypes = null, limit = 10 } = {}) {
@@ -5636,7 +5748,7 @@ export function buildEdgeSummary(store, nodeId, { nodeSet = null, relationTypes 
         excludeInternal: false,
     });
     const byRelation = new Map();
-    const neighborIds = new Set();
+    const neighborSeqTo = new Map();
     let degree = 0;
     for (const edge of projectedEdges) {
         const edgeType = normalizeText(edge.type || '').toLowerCase() || 'related';
@@ -5662,7 +5774,12 @@ export function buildEdgeSummary(store, nodeId, { nodeSet = null, relationTypes 
         }
         const supportCount = Math.max(1, Number(edge?.weight || 1));
         degree += supportCount;
-        neighborIds.add(neighborId);
+        // Track the most-recent edge per neighbor for sample sort/cutoff.
+        const edgeSeq = edgeSeqTo(edge, store);
+        const previousSeq = neighborSeqTo.get(neighborId);
+        if (previousSeq === undefined || edgeSeq > previousSeq) {
+            neighborSeqTo.set(neighborId, edgeSeq);
+        }
         const key = `${edgeType}:${direction}`;
         byRelation.set(key, Number(byRelation.get(key) || 0) + supportCount);
     }
@@ -5673,16 +5790,19 @@ export function buildEdgeSummary(store, nodeId, { nodeSet = null, relationTypes 
         })
         .sort((a, b) => b.count - a.count);
 
-    const sampleNeighbors = Array.from(neighborIds)
-        .slice(0, Math.max(1, Number(limit || 10)))
-        .map(id => {
+    const sampleNeighbors = Array.from(neighborSeqTo.entries())
+        .map(([id, seqTo]) => {
             const node = store.nodes[id];
             return {
                 id,
                 type: String(node?.type || ''),
                 title: String(node?.title || ''),
+                to_seq: seqTo,
             };
-        });
+        })
+        // Most-recent first; stable tiebreak on id keeps output deterministic.
+        .sort((a, b) => (b.to_seq - a.to_seq) || a.id.localeCompare(b.id))
+        .slice(0, Math.max(1, Number(limit || 10)));
 
     return {
         degree,

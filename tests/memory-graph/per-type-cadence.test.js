@@ -13,12 +13,14 @@ describe('DEFAULT_PER_TYPE_INSTRUCTIONS', () => {
         expect(DEFAULT_PER_TYPE_INSTRUCTIONS.location_state).toEqual(expect.stringContaining('Location'));
     });
 
-    test('event instructions inherit the strict one-per-batch policy that was previously in the base prompt', () => {
-        expect(DEFAULT_PER_TYPE_INSTRUCTIONS.event).toContain('AT MOST ONE event node');
+    test('event instructions cap creation at one node per batch (skip-default policy)', () => {
+        expect(DEFAULT_PER_TYPE_INSTRUCTIONS.event).toContain('SKIP is the default');
+        expect(DEFAULT_PER_TYPE_INSTRUCTIONS.event).toContain('at most ONE event node per batch');
     });
 
-    test('character instructions inherit the consistency hard rule that was previously in the base prompt', () => {
-        expect(DEFAULT_PER_TYPE_INSTRUCTIONS.character_sheet).toContain('Character consistency hard rule');
+    test('character instructions carry the consistency rule aligning sheets with card/world-info baseline', () => {
+        expect(DEFAULT_PER_TYPE_INSTRUCTIONS.character_sheet).toContain('Character consistency rule');
+        expect(DEFAULT_PER_TYPE_INSTRUCTIONS.character_sheet).toContain('card/world-info baseline');
     });
 });
 

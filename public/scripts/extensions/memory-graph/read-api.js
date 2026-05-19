@@ -209,6 +209,7 @@ function freezeEdgeSummaryView(summary) {
             id: String(n?.id || ''),
             type: String(n?.type || ''),
             title: String(n?.title || ''),
+            to_seq: Number.isFinite(Number(n?.to_seq)) ? Math.max(0, Math.floor(Number(n.to_seq))) : 0,
         }))),
     });
 }
