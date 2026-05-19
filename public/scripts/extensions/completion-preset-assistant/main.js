@@ -259,6 +259,8 @@ function registerLocaleData() {
         'Optimize for orchestrator': '为编排器优化',
         'Jailbreak-only': '仅保留破限',
         'Mode is fixed for the lifetime of the session. To switch modes, start a new session.': '会话模式一旦确定不可中途切换。要换模式请新建会话。',
+        'Switching the mode starts a new session.': '切换模式会新建一个会话。',
+        'Switching session mode starts a new session. Continue?': '切换会话模式会新建一个会话，要继续吗？',
         'Start new session': '开始新会话',
         'Cancel': '取消',
     });
@@ -366,6 +368,8 @@ function registerLocaleData() {
         'Optimize for orchestrator': '為編排器最佳化',
         'Jailbreak-only': '僅保留破限',
         'Mode is fixed for the lifetime of the session. To switch modes, start a new session.': '會話模式一旦確定不可中途切換。要切換模式請新建會話。',
+        'Switching the mode starts a new session.': '切換模式會新建一個會話。',
+        'Switching session mode starts a new session. Continue?': '切換會話模式會新建一個會話，要繼續嗎？',
         'Start new session': '開始新會話',
         'Cancel': '取消',
     });
@@ -1429,7 +1433,6 @@ function buildDialogMetaItems(dialogState) {
     const llmPresetLabel = settings.requestLlmPresetName || i18n('(current)');
     return [
         `${i18n('Target')}: ${dialogState.targetRef?.name || ''}`,
-        `${i18n('Mode')}: ${describeSessionMode(dialogState.session?.mode)}`,
         `${i18n('Current request API preset')}: ${requestProfileLabel}`,
         `${i18n('Current request prompt preset')}: ${llmPresetLabel}`,
         i18n('Prompt preset paths use lodash syntax like prompts[0].content or new_chat_prompt.'),
@@ -3188,6 +3191,14 @@ function describeSessionMode(mode) {
     return i18n('General editing');
 }
 
+function renderModeSelectOptions(currentMode) {
+    const sanitized = sanitizeSessionMode(currentMode);
+    return SESSION_MODES.map((value) => {
+        const selected = value === sanitized ? ' selected' : '';
+        return `<option value="${escapeHtml(value)}"${selected}>${escapeHtml(describeSessionMode(value))}</option>`;
+    }).join('');
+}
+
 async function pickSessionMode() {
     let chosen = SESSION_MODE_DEFAULT;
     const html = `
@@ -3216,6 +3227,27 @@ async function pickSessionMode() {
         return null;
     }
     return chosen;
+}
+
+async function handleModeChange(dialogState, requestedMode) {
+    if (dialogState.busy) {
+        await rerenderDialog(dialogState);
+        return;
+    }
+    const sanitized = sanitizeSessionMode(requestedMode);
+    const currentMode = sanitizeSessionMode(dialogState.session?.mode);
+    if (sanitized === currentMode) {
+        return;
+    }
+    const confirmed = await Popup.show.confirm(
+        i18n('Switching session mode starts a new session. Continue?'),
+        '',
+    );
+    if (!confirmed) {
+        await rerenderDialog(dialogState);
+        return;
+    }
+    await handleNewSession(dialogState, { mode: sanitized });
 }
 
 async function handleNewSessionWithModePicker(dialogState) {
@@ -3659,7 +3691,6 @@ async function openAssistantPopup({ targetRef: explicitTargetRef = null, liveSna
         okButton: false,
         cancelButton: false,
         wider: true,
-        large: true,
         allowVerticalScrolling: true,
         onOpen: async (instance) => {
             dialogState.popup = instance;
@@ -3712,12 +3743,14 @@ const {
     handleDeleteSession,
     handleMessageDiff,
     handleNewSession: handleNewSessionWithModePicker,
+    handleModeChange,
     handleRollbackToMessage,
     handleSend,
     i18n,
     i18nFormat,
     renderConversationHtml,
     renderDraftHtml,
+    renderModeSelectOptions,
     renderPresetConversationHistoryItems,
     renderSelectOptions,
     saveSettingsDebounced,

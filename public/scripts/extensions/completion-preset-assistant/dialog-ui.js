@@ -26,12 +26,14 @@ export function createCompletionPresetAssistantDialogUi(deps) {
         handleDeleteSession,
         handleMessageDiff,
         handleNewSession,
+        handleModeChange,
         handleRollbackToMessage,
         handleSend,
         i18n,
         i18nFormat,
         renderConversationHtml,
         renderDraftHtml,
+        renderModeSelectOptions,
         renderPresetConversationHistoryItems,
         renderSelectOptions,
         saveSettingsDebounced,
@@ -53,6 +55,12 @@ export function createCompletionPresetAssistantDialogUi(deps) {
         ${metaItems.map(item => `<div class="luker-studio-meta-item">${escapeHtml(item)}</div>`).join('')}
     </div>
     <div class="luker-studio-toolbar">
+        <div class="luker-studio-toolbar-field">
+            <label for="cpa_session_mode">${escapeHtml(i18n('Session mode'))}</label>
+            <select id="cpa_session_mode" class="text_pole" title="${escapeHtml(i18n('Switching the mode starts a new session.'))}">
+                ${renderModeSelectOptions(dialogState.session?.mode)}
+            </select>
+        </div>
         <div class="luker-studio-toolbar-field">
             <label for="cpa_reference_preset">${escapeHtml(i18n('Reference preset'))}</label>
             <select id="cpa_reference_preset" class="text_pole" title="${escapeHtml(i18n('Select reference preset'))}">
@@ -111,6 +119,9 @@ export function createCompletionPresetAssistantDialogUi(deps) {
         });
         dialogState.root.on('change.cpaDialog', '#cpa_reference_preset', async function () {
             await handleReferenceChange(dialogState, jQuery(this).val());
+        });
+        dialogState.root.on('change.cpaDialog', '#cpa_session_mode', async function () {
+            await handleModeChange(dialogState, jQuery(this).val());
         });
         dialogState.root.on('click.cpaDialog', '[data-cpa-action="send-or-stop"]', async function () {
             await handleSend(dialogState);
