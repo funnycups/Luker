@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { defineConfig } from 'vitepress'
 import { createBuildTimeDiagramsPlugin } from 'vitepress-plugin-diagrams'
 
@@ -7,6 +8,63 @@ const diagrams = createBuildTimeDiagramsPlugin({
   diagramsDistDir: 'diagrams',
   krokiServerUrl: 'https://kroki.io',
 })
+
+type DocLocale = 'en' | 'zh-CN' | 'zh-TW'
+
+const localeMeta: Record<DocLocale, { tagline: string }> = {
+  en: { tagline: 'Next-gen Roleplay Chat Platform' },
+  'zh-CN': { tagline: '下一代角色扮演聊天平台' },
+  'zh-TW': { tagline: '下一代角色扮演聊天平台' },
+}
+
+function detectLocale(relativePath: string): DocLocale {
+  if (relativePath.startsWith('zh-CN/')) return 'zh-CN'
+  if (relativePath.startsWith('zh-TW/')) return 'zh-TW'
+  return 'en'
+}
+
+function extractExcerpt(filePath: string): string | undefined {
+  let raw: string
+  try {
+    raw = readFileSync(filePath, 'utf-8')
+  } catch {
+    return undefined
+  }
+  const body = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '')
+  const lines = body.split(/\r?\n/)
+  let fenced = false
+  const para: string[] = []
+  for (const r of lines) {
+    const line = r.trim()
+    if (/^```/.test(line)) { fenced = !fenced; continue }
+    if (fenced) continue
+    if (line === '') {
+      if (para.length > 0) break
+      continue
+    }
+    if (/^#{1,6}\s/.test(line)) continue
+    if (/^[<:]/.test(line)) continue
+    if (/^!\[/.test(line)) continue
+    if (/^[-*+]\s/.test(line) || /^\d+\.\s/.test(line)) continue
+    para.push(line)
+  }
+  if (para.length === 0) return undefined
+  let text = para.join(' ')
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, '')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!text) return undefined
+  if (text.length > 180) {
+    const cut = text.slice(0, 180)
+    text = cut.replace(/\s+\S*$/, '') + '…'
+  }
+  return text
+}
 
 const zhCNSidebar = [
   {
@@ -382,9 +440,42 @@ export default defineConfig({
   head: [
     ['meta', { name: 'theme-color', content: '#4F46E5' }],
     ['meta', { property: 'og:type', content: 'website' }],
-    ['meta', { property: 'og:title', content: 'Luker — Next-gen Roleplay Chat Platform' }],
-    ['meta', { property: 'og:description', content: 'Deep rebuild of SillyTavern with knowledge-graph memory, multi-agent orchestration, and AI-assisted character creation' }],
+    ['meta', { property: 'og:site_name', content: 'Luker' }],
   ],
+
+  transformPageData(pageData) {
+    const locale = detectLocale(pageData.relativePath)
+    const fb = localeMeta[locale]
+    const isHome = pageData.frontmatter.layout === 'home'
+    const baseTitle = pageData.title || pageData.frontmatter.title || 'Luker'
+
+    const ogTitle = (isHome || baseTitle === 'Luker')
+      ? `Luker — ${fb.tagline}`
+      : `${baseTitle} | Luker`
+
+    let description: string | undefined = pageData.frontmatter.description
+    if (!description && isHome && pageData.frontmatter.hero?.tagline) {
+      description = String(pageData.frontmatter.hero.tagline).replace(/\s+/g, ' ').trim()
+    }
+    if (!description && !isHome) {
+      description = extractExcerpt(pageData.filePath)
+    }
+    if (!description) {
+      description = fb.tagline
+    }
+
+    pageData.description = description
+
+    pageData.frontmatter.head ??= []
+    pageData.frontmatter.head.push(
+      ['meta', { property: 'og:title', content: ogTitle }],
+      ['meta', { property: 'og:description', content: description }],
+      ['meta', { property: 'og:locale', content: locale.replace('-', '_') }],
+      ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
+      ['meta', { name: 'twitter:title', content: ogTitle }],
+      ['meta', { name: 'twitter:description', content: description }],
+    )
+  },
 
   locales: {
     root: {
