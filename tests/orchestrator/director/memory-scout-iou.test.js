@@ -167,7 +167,7 @@ describe('memory_scout content contract (spec 2 §8.3)', () => {
 
     test('systemPrompt contains the five-step pipeline markers (spec §4.4 numbered list)', () => {
         expect(scout.systemPrompt).toContain('1. **Enumerate.**');
-        expect(scout.systemPrompt).toContain('2. **Rank.**');
+        expect(scout.systemPrompt).toContain('2. **Shortlist.**');
         expect(scout.systemPrompt).toContain('3. **Brief.**');
         expect(scout.systemPrompt).toContain('4. **Expand');
         expect(scout.systemPrompt).toContain('5. **Cite.**');
@@ -185,7 +185,9 @@ describe('memory_scout content contract (spec 2 §8.3)', () => {
             'memory_node_brief',
             'memory_edge_summary',
             'memory_expand_seeds',
-            'memory_rank',
+            'memory_keyword_search',
+            'memory_vector_search',
+            'memory_find_by_name',
         ];
         for (const tool of expectedTools) {
             expect(scout.systemPrompt).toContain(tool);

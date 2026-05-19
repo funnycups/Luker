@@ -59,8 +59,10 @@ describe('director schema fields', () => {
         // except `finalize` which is forced off (director ships its own).
         // The memory subtree carries the read-api pipeline tools
         // (list_candidates / edge_summary / node_brief / expand_seeds /
-        // rank / schema) — all default-on so the director's default
-        // memory_scout has the full pipeline available.
+        // schema) plus the spec-2 search / find / compaction-candidate
+        // tools and the write-api primitives — all default-on so the
+        // director's default memory_scout / memory_curator have the full
+        // pipeline available.
         expect(p.director.tools).toEqual(expect.objectContaining({
             chat: expect.objectContaining({ read_range: expect.any(Boolean), search: expect.any(Boolean) }),
             lorebook: expect.objectContaining({ search: expect.any(Boolean), get: expect.any(Boolean) }),
@@ -69,8 +71,17 @@ describe('director schema fields', () => {
                 edge_summary: expect.any(Boolean),
                 node_brief: expect.any(Boolean),
                 expand_seeds: expect.any(Boolean),
-                rank: expect.any(Boolean),
                 schema: expect.any(Boolean),
+                keyword_search: expect.any(Boolean),
+                vector_search: expect.any(Boolean),
+                find_by_name: expect.any(Boolean),
+                compaction_candidates: expect.any(Boolean),
+                node_create: expect.any(Boolean),
+                node_edit: expect.any(Boolean),
+                node_delete: expect.any(Boolean),
+                link_upsert: expect.any(Boolean),
+                link_delete: expect.any(Boolean),
+                compact_nodes: expect.any(Boolean),
             }),
             note: expect.objectContaining({ open: expect.any(Boolean), close: expect.any(Boolean) }),
             search: expect.objectContaining({ search: expect.any(Boolean), visit: expect.any(Boolean) }),
@@ -86,12 +97,23 @@ describe('director schema fields', () => {
         expect(p.director.tools.memory.edge_summary).toBe(true);
         expect(p.director.tools.memory.node_brief).toBe(true);
         expect(p.director.tools.memory.expand_seeds).toBe(true);
-        expect(p.director.tools.memory.rank).toBe(true);
         expect(p.director.tools.memory.schema).toBe(true);
+        // Spec-2 retrieval + compaction tools (replaced the old `rank` aggregate).
+        expect(p.director.tools.memory.keyword_search).toBe(true);
+        expect(p.director.tools.memory.vector_search).toBe(true);
+        expect(p.director.tools.memory.find_by_name).toBe(true);
+        expect(p.director.tools.memory.compaction_candidates).toBe(true);
+        // Write-api primitives are default-on so memory_curator can mutate the graph.
+        expect(p.director.tools.memory.node_create).toBe(true);
+        expect(p.director.tools.memory.node_edit).toBe(true);
+        expect(p.director.tools.memory.node_delete).toBe(true);
+        expect(p.director.tools.memory.link_upsert).toBe(true);
+        expect(p.director.tools.memory.link_delete).toBe(true);
+        expect(p.director.tools.memory.compact_nodes).toBe(true);
         expect(p.director.discardOnAbort).toBe(false);
     });
 
-    test('createDefaultDirectorProfile ships with the eleven default RP analyst sub-agents (1 cross-source intent scout + 3 single-source scouts + 1 external scout + 1 epistemic scout + 1 notes pickup scout + 1 brainstormer + 2 critics + 1 notes curator)', () => {
+    test('createDefaultDirectorProfile ships with the twelve default RP analyst sub-agents (1 cross-source intent scout + 3 single-source scouts + 1 external scout + 1 epistemic scout + 1 notes pickup scout + 1 brainstormer + 2 critics + 1 notes curator + 1 memory curator)', () => {
         const p = createDefaultDirectorProfile();
         const ids = p.director.subAgents.map(a => a.id).sort();
         // The default main-agent prompt (director-default-prompt.js) is
@@ -105,6 +127,7 @@ describe('director schema fields', () => {
             'epistemic_scout',
             'intent_scout',
             'lorebook_scout',
+            'memory_curator',
             'memory_scout',
             'notes_curator',
             'notes_pickup_scout',
@@ -127,10 +150,10 @@ describe('director schema fields', () => {
         // knows/does, what it does NOT know, and what the main agent
         // must include in the task brief.
         for (const a of p.director.subAgents) {
-            // notes_curator is a post-draft housekeeper, not a knowledge-source scout —
-            // its description intentionally does not use the "does NOT know" / "task brief"
-            // shape that the scouts share. Exempt it from this structural check.
-            if (a.id === 'notes_curator') continue;
+            // notes_curator and memory_curator are post-draft housekeepers, not knowledge-source
+            // scouts — their descriptions intentionally do not use the "does NOT know" /
+            // "task brief" shape that the scouts share. Exempt them from this structural check.
+            if (a.id === 'notes_curator' || a.id === 'memory_curator') continue;
             expect(a.description).toMatch(/(does NOT know|Does NOT know|doesn't know)/);
             expect(a.description).toMatch(/(task brief|brief)/i);
         }
@@ -139,7 +162,7 @@ describe('director schema fields', () => {
     test('default sub-agents survive sanitize round-trip (no field gets dropped)', () => {
         const p = createDefaultDirectorProfile();
         const sanitized = sanitizeDirectorProfile(p);
-        expect(sanitized.director.subAgents).toHaveLength(11);
+        expect(sanitized.director.subAgents).toHaveLength(12);
         const ids = sanitized.director.subAgents.map(a => a.id).sort();
         expect(ids).toEqual([
             'canon_scout',
@@ -148,6 +171,7 @@ describe('director schema fields', () => {
             'epistemic_scout',
             'intent_scout',
             'lorebook_scout',
+            'memory_curator',
             'memory_scout',
             'notes_curator',
             'notes_pickup_scout',
@@ -184,9 +208,13 @@ describe('director schema fields', () => {
     });
 
     test('memory_scout (spec 2) uses read-api pipeline contract instead of chat-grounded signal', () => {
-        // Spec 2 (2026-05-18-memory-scout-uses-readonly-api): memory_scout's
+        // Spec 2 (2026-05-18-memory-scout-uses-readonly-api, refined by the
+        // 2026-05-19 extraction/compaction-api spec): memory_scout's
         // description + systemPrompt were rewritten to drive the read-only
-        // memory-graph API (enumerate → rank → expand → cite). The old
+        // memory-graph API (enumerate → search → expand → cite — the
+        // shortlist step is "search" now that memory_rank has been
+        // retired in favour of memory_keyword_search /
+        // memory_find_by_name / memory_vector_search). The old
         // "engaged with" / "build on" / "sedimented" / "traverse" framing
         // was removed because it required reading chat, which memory_scout
         // is now explicitly forbidden from doing. Pin both sides — what
@@ -201,11 +229,11 @@ describe('director schema fields', () => {
         expect(ms.description).not.toMatch(/traverse/i);
         expect(ms.description).toMatch(/enumerate/i);
 
-        // systemPrompt: the new four-verb pipeline shape (enumerate → rank
+        // systemPrompt: the new four-verb pipeline shape (enumerate → search
         // → expand → cite) must be teachable to the LLM verbatim.
-        expect(ms.systemPrompt).toMatch(/enumerate.*rank.*expand.*cite/i);
+        expect(ms.systemPrompt).toMatch(/enumerate.*search.*expand.*cite/i);
         expect(ms.systemPrompt).toMatch(/1\.\s*\*\*Enumerate\.\*\*/);
-        expect(ms.systemPrompt).toMatch(/2\.\s*\*\*Rank\.\*\*/);
+        expect(ms.systemPrompt).toMatch(/2\.\s*\*\*Shortlist\.\*\*/);
         expect(ms.systemPrompt).toMatch(/3\.\s*\*\*Brief\.\*\*/);
         expect(ms.systemPrompt).toMatch(/4\.\s*\*\*Expand/);
         expect(ms.systemPrompt).toMatch(/5\.\s*\*\*Cite\.\*\*/);
@@ -270,7 +298,11 @@ describe('director schema fields', () => {
                     lorebook: { search: false, get: false },
                     memory: {
                         list_candidates: true, edge_summary: true, node_brief: true,
-                        expand_seeds: true, rank: true, schema: true,
+                        expand_seeds: true, schema: true,
+                        keyword_search: true, vector_search: true, find_by_name: true,
+                        compaction_candidates: true,
+                        node_create: true, node_edit: true, node_delete: true,
+                        link_upsert: true, link_delete: true, compact_nodes: true,
                     },
                     note: { open: false, close: false },
                     search: { search: false, visit: false },

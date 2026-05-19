@@ -4015,8 +4015,17 @@ function renderLoopIterationWorkingProfile(session, { profileOverride = null, pr
     if (profile.tools?.memory?.edge_summary) enabledTools.push('memory_edge_summary');
     if (profile.tools?.memory?.node_brief) enabledTools.push('memory_node_brief');
     if (profile.tools?.memory?.expand_seeds) enabledTools.push('memory_expand_seeds');
-    if (profile.tools?.memory?.rank) enabledTools.push('memory_rank');
     if (profile.tools?.memory?.schema) enabledTools.push('memory_schema');
+    if (profile.tools?.memory?.keyword_search) enabledTools.push('memory_keyword_search');
+    if (profile.tools?.memory?.vector_search) enabledTools.push('memory_vector_search');
+    if (profile.tools?.memory?.find_by_name) enabledTools.push('memory_find_by_name');
+    if (profile.tools?.memory?.compaction_candidates) enabledTools.push('memory_compaction_candidates');
+    if (profile.tools?.memory?.node_create) enabledTools.push('memory_node_create');
+    if (profile.tools?.memory?.node_edit) enabledTools.push('memory_node_edit');
+    if (profile.tools?.memory?.node_delete) enabledTools.push('memory_node_delete');
+    if (profile.tools?.memory?.link_upsert) enabledTools.push('memory_link_upsert');
+    if (profile.tools?.memory?.link_delete) enabledTools.push('memory_link_delete');
+    if (profile.tools?.memory?.compact_nodes) enabledTools.push('memory_compact_nodes');
     if (profile.tools?.search?.search) enabledTools.push('search_search');
     if (profile.tools?.search?.visit) enabledTools.push('search_visit');
     enabledTools.push('finalize');
@@ -4059,8 +4068,17 @@ function renderDirectorIterationWorkingProfile(session, { profileOverride = null
     if (d.tools?.memory?.edge_summary) enabledTools.push('memory_edge_summary');
     if (d.tools?.memory?.node_brief) enabledTools.push('memory_node_brief');
     if (d.tools?.memory?.expand_seeds) enabledTools.push('memory_expand_seeds');
-    if (d.tools?.memory?.rank) enabledTools.push('memory_rank');
     if (d.tools?.memory?.schema) enabledTools.push('memory_schema');
+    if (d.tools?.memory?.keyword_search) enabledTools.push('memory_keyword_search');
+    if (d.tools?.memory?.vector_search) enabledTools.push('memory_vector_search');
+    if (d.tools?.memory?.find_by_name) enabledTools.push('memory_find_by_name');
+    if (d.tools?.memory?.compaction_candidates) enabledTools.push('memory_compaction_candidates');
+    if (d.tools?.memory?.node_create) enabledTools.push('memory_node_create');
+    if (d.tools?.memory?.node_edit) enabledTools.push('memory_node_edit');
+    if (d.tools?.memory?.node_delete) enabledTools.push('memory_node_delete');
+    if (d.tools?.memory?.link_upsert) enabledTools.push('memory_link_upsert');
+    if (d.tools?.memory?.link_delete) enabledTools.push('memory_link_delete');
+    if (d.tools?.memory?.compact_nodes) enabledTools.push('memory_compact_nodes');
     if (d.tools?.search?.search) enabledTools.push('search_search');
     if (d.tools?.search?.visit) enabledTools.push('search_visit');
     const simulationSummary = session?.lastSimulation
@@ -4609,9 +4627,21 @@ function buildAiIterationToolSet(session = null) {
                 memory: {
                     type: 'object',
                     properties: {
-                        search: { type: 'boolean' },
-                        list_recent: { type: 'boolean' },
-                        get: { type: 'boolean' },
+                        schema: { type: 'boolean' },
+                        list_candidates: { type: 'boolean' },
+                        edge_summary: { type: 'boolean' },
+                        node_brief: { type: 'boolean' },
+                        expand_seeds: { type: 'boolean' },
+                        keyword_search: { type: 'boolean' },
+                        vector_search: { type: 'boolean' },
+                        find_by_name: { type: 'boolean' },
+                        compaction_candidates: { type: 'boolean' },
+                        node_create: { type: 'boolean' },
+                        node_edit: { type: 'boolean' },
+                        node_delete: { type: 'boolean' },
+                        link_upsert: { type: 'boolean' },
+                        link_delete: { type: 'boolean' },
+                        compact_nodes: { type: 'boolean' },
                     },
                     additionalProperties: false,
                 },
@@ -4784,9 +4814,21 @@ function buildAiIterationToolSet(session = null) {
                                     memory: {
                                         type: 'object',
                                         properties: {
-                                            search: { type: 'boolean' },
-                                            list_recent: { type: 'boolean' },
-                                            get: { type: 'boolean' },
+                                            schema: { type: 'boolean' },
+                                            list_candidates: { type: 'boolean' },
+                                            edge_summary: { type: 'boolean' },
+                                            node_brief: { type: 'boolean' },
+                                            expand_seeds: { type: 'boolean' },
+                                            keyword_search: { type: 'boolean' },
+                                            vector_search: { type: 'boolean' },
+                                            find_by_name: { type: 'boolean' },
+                                            compaction_candidates: { type: 'boolean' },
+                                            node_create: { type: 'boolean' },
+                                            node_edit: { type: 'boolean' },
+                                            node_delete: { type: 'boolean' },
+                                            link_upsert: { type: 'boolean' },
+                                            link_delete: { type: 'boolean' },
+                                            compact_nodes: { type: 'boolean' },
                                         },
                                         additionalProperties: false,
                                     },

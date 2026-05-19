@@ -218,7 +218,37 @@ jest.unstable_mockModule(
             const mode = ['none', 'hierarchical'].includes(String(raw.mode || '').toLowerCase())
                 ? String(raw.mode).toLowerCase()
                 : 'none';
-            return { mode, label: String(spec?.label || type || 'Semantic') };
+            return {
+                mode,
+                threshold: Math.max(2, Number(raw.threshold) || 6),
+                fanIn: Math.max(2, Number(raw.fanIn) || 3),
+                maxDepth: Math.max(1, Number(raw.maxDepth) || 6),
+                keepRecentLeaves: Math.max(0, Number(raw.keepRecentLeaves) || 0),
+                rule: String(raw.rule || '').trim(),
+                summarizeInstruction: String(raw.summarizeInstruction || '').trim(),
+                label: String(spec?.label || type || 'Semantic'),
+            };
+        }
+
+        function _collectSemanticRootsByDepth(store, type, depth, options = {}) {
+            const rawMaxSeq = options?.maxSeq;
+            const maxSeq = (rawMaxSeq !== null && rawMaxSeq !== undefined && Number.isFinite(Number(rawMaxSeq)))
+                ? Math.max(0, Math.floor(Number(rawMaxSeq)))
+                : null;
+            const targetType = String(type || '').toLowerCase();
+            return Object.values(store?.nodes || {})
+                .filter(node => Boolean(node) && !node.archived)
+                .filter(node => String(node?.level || '') === 'semantic')
+                .filter(node => String(node?.type || '').toLowerCase() === targetType)
+                .filter(node => Number(node?.semanticDepth ?? 0) === Number(depth))
+                .filter(node => !String(node.parentId || '').trim())
+                .filter(node => maxSeq === null || Number(node?.seqTo ?? 0) <= maxSeq)
+                .sort((a, b) => {
+                    const aTo = Number(a.seqTo ?? 0);
+                    const bTo = Number(b.seqTo ?? 0);
+                    if (aTo !== bTo) return aTo - bTo;
+                    return String(a?.id || '').localeCompare(String(b?.id || ''));
+                });
         }
 
         function _getNodeRecallExposure(settings, node, _context = null) {
@@ -400,6 +430,7 @@ jest.unstable_mockModule(
             selectVisibleNodesForType: () => [],
             getLatestSeqIndex: _getLatestSeqIndex,
             isNodeInRecentExcludeWindow: _isNodeInRecentExcludeWindow,
+            collectSemanticRootsByDepth: _collectSemanticRootsByDepth,
         };
     },
 );
@@ -1139,55 +1170,180 @@ describe('Layer C: recall primitives (spec §4.4)', () => {
         expect(ids).not.toContain('evt_leaf_b');
     });
 
-    test('rankNodes({query, mode:"recency"}) returns ScoredNodeView[] sorted by seqTo desc', async () => {
-        const result = await api.rankNodes({ query: 'foo', mode: 'recency', k: 5 });
-        expect(Array.isArray(result)).toBe(true);
-        expect(result.length).toBeLessThanOrEqual(5);
-        for (const r of result) {
-            expect(r.scoreMode).toBe('recency');
-            expect(typeof r.score).toBe('number');
-        }
-        // seqTo descending check
-        for (let i = 1; i < result.length; i++) {
-            expect(result[i - 1].seqTo).toBeGreaterThanOrEqual(result[i].seqTo);
-        }
+});
+
+describe('keywordSearch', () => {
+    let api;
+
+    beforeEach(() => {
+        const ctx = {
+            __memoryStore: {
+                nodes: {
+                    n1: { id: 'n1', type: 'character_sheet', title: 'Eileen', fields: { aliases: '艾琳', traits: 'healer quiet' }, seqTo: 10 },
+                    n2: { id: 'n2', type: 'character_sheet', title: 'Marcus', fields: { traits: 'warrior loud' }, seqTo: 12 },
+                    n3: { id: 'n3', type: 'event', title: 'Forest battle', fields: { summary: '时间:Day 5;Marcus 击退 wolves。' }, seqTo: 15 },
+                },
+                edges: [],
+            },
+        };
+        testHolder.settings = null;
+        api = getMemoryGraphReadApi(ctx);
     });
 
-    test('rankNodes({query, mode:"keyword"}) ranks nodes by token overlap', async () => {
-        // 'foo' appears in evt_rollup1.fields.summary ("A foo storyline summary") AND
-        // evt_leaf_a.fields.summary ("leaf a foo detail"). Both should rank above unrelated nodes.
-        const result = await api.rankNodes({ query: 'foo', mode: 'keyword', k: 10 });
-        expect(Array.isArray(result)).toBe(true);
-        const matchedIds = result.map(r => r.id);
-        // At least one of the foo-bearing nodes must be present.
-        expect(matchedIds).toEqual(expect.arrayContaining(['evt_leaf_a']));
-        for (const r of result) {
-            expect(r.scoreMode).toBe('keyword');
-            expect(typeof r.score).toBe('number');
-            expect(r.score).toBeGreaterThan(0);
+    test('matches against title and projected columns', () => {
+        const results = api.keywordSearch({ query: 'healer' });
+        expect(results.map(r => r.id)).toContain('n1');
+        expect(results.map(r => r.id)).not.toContain('n2');
+    });
+
+    test('returns empty array on empty query', () => {
+        expect(api.keywordSearch({ query: '' })).toEqual([]);
+        expect(api.keywordSearch({ query: '   ' })).toEqual([]);
+    });
+
+    test('respects types filter', () => {
+        const results = api.keywordSearch({ query: 'Marcus', types: ['event'] });
+        expect(results.map(r => r.id)).toContain('n3');
+        expect(results.map(r => r.id)).not.toContain('n2');
+    });
+
+    test('respects k cap', () => {
+        const results = api.keywordSearch({ query: 'a', k: 1 });
+        expect(results.length).toBeLessThanOrEqual(1);
+    });
+});
+
+describe('vectorSearch', () => {
+    test('throws NO_EMBEDDING_PROFILE when no profile configured', async () => {
+        const ctx = { __memoryStore: { nodes: {}, edges: [] } };
+        const api = getMemoryGraphReadApi(ctx);
+        await expect(api.vectorSearch({ query: 'anything' })).rejects.toMatchObject({
+            code: 'NO_EMBEDDING_PROFILE',
+        });
+    });
+
+    test('returns empty array on empty query (no throw)', async () => {
+        const ctx = { __memoryStore: { nodes: {}, edges: [] } };
+        const api = getMemoryGraphReadApi(ctx);
+        await expect(api.vectorSearch({ query: '' })).resolves.toEqual([]);
+    });
+});
+
+describe('findByName', () => {
+    let api;
+    beforeEach(() => {
+        const ctx = {
+            __memoryStore: {
+                nodes: {
+                    n1: { id: 'n1', type: 'character_sheet', title: 'Eileen', fields: { aliases: '艾琳, Eily' }, seqTo: 10 },
+                    n2: { id: 'n2', type: 'character_sheet', title: 'Marcus', fields: { aliases: '' }, seqTo: 12 },
+                    n3: { id: 'n3', type: 'location_state', title: 'Dark Forest', fields: { aliases: '黑森林' }, seqTo: 8 },
+                },
+                edges: [],
+            },
+        };
+        // Both character_sheet and location_state must declare aliases in
+        // primaryKeyColumns so findByName can substring-match against the field.
+        // (Matches the default schema where both types ship with ['title','aliases'].)
+        testHolder.settings = {
+            nodeTypeSchema: [
+                {
+                    id: 'character_sheet',
+                    label: 'Character',
+                    tableName: 'character_table',
+                    tableColumns: ['title', 'aliases', 'traits'],
+                    requiredColumns: ['title'],
+                    primaryKeyColumns: ['title', 'aliases'],
+                    forceUpdate: false,
+                    alwaysInject: false,
+                    editable: true,
+                    keywords: [],
+                    compression: { mode: 'none' },
+                },
+                {
+                    id: 'location_state',
+                    label: 'Location',
+                    tableName: 'location_table',
+                    tableColumns: ['title', 'aliases'],
+                    requiredColumns: ['title'],
+                    primaryKeyColumns: ['title', 'aliases'],
+                    forceUpdate: false,
+                    alwaysInject: false,
+                    editable: true,
+                    keywords: [],
+                    compression: { mode: 'none' },
+                },
+            ],
+        };
+        api = getMemoryGraphReadApi(ctx);
+    });
+
+    test('matches on title case-insensitively', () => {
+        expect(api.findByName({ query: 'eileen' }).matches.map(m => m.id)).toContain('n1');
+    });
+
+    test('matches on aliases (substring of comma-separated values)', () => {
+        expect(api.findByName({ query: '艾琳' }).matches.map(m => m.id)).toContain('n1');
+        expect(api.findByName({ query: '黑森林' }).matches.map(m => m.id)).toContain('n3');
+    });
+
+    test('respects types filter', () => {
+        const matches = api.findByName({ query: 'forest', types: ['character_sheet'] }).matches;
+        expect(matches.map(m => m.id)).not.toContain('n3');
+    });
+
+    test('returns { matches: [] } on no match', () => {
+        expect(api.findByName({ query: 'NonExistent' })).toEqual({ matches: expect.any(Array) });
+        expect(api.findByName({ query: 'NonExistent' }).matches).toEqual([]);
+    });
+});
+
+describe('compactionCandidates', () => {
+    test('returns empty groups when type has compression.mode === "none"', () => {
+        const ctx = {
+            __memoryStore: {
+                nodes: {
+                    c1: { id: 'c1', type: 'character_sheet', title: 'A', seqTo: 1, level: 'semantic' },
+                    c2: { id: 'c2', type: 'character_sheet', title: 'B', seqTo: 2, level: 'semantic' },
+                    c3: { id: 'c3', type: 'character_sheet', title: 'C', seqTo: 3, level: 'semantic' },
+                },
+                edges: [],
+            },
+        };
+        testHolder.settings = { nodeTypeSchema: buildFixtureSchema() };
+        const api = getMemoryGraphReadApi(ctx);
+        // character_sheet schema has compression.mode = 'none' in defaults
+        expect(api.compactionCandidates({ type: 'character_sheet' })).toEqual({ groups: [] });
+    });
+
+    test('returns groups for hierarchical type at depth 0', () => {
+        // Build a store with 15 leaf events.
+        // Fixture schema uses { mode: 'hierarchical' } → mock fills defaults:
+        //   threshold=6, fanIn=3, maxDepth=6, keepRecentLeaves=0.
+        // With keepRecentLeaves=0 and 15 candidates: 15 >= 6 threshold, so
+        // groups = floor(15 / 3) = 5 groups.
+        const nodes = {};
+        for (let i = 1; i <= 15; i++) {
+            nodes[`e${i}`] = {
+                id: `e${i}`,
+                type: 'event',
+                title: `Summary ${i}`,
+                level: 'semantic',
+                seqTo: i,
+                semanticDepth: 0,
+                semanticRollup: false,
+                childrenIds: [],
+                fields: { summary: '时间：Day ' + i + '；something happened.' },
+            };
         }
-    });
-
-    test('rankNodes({query, mode:"vector"}) falls back to recency when vector index is unavailable', async () => {
-        // testHolder.vectorProfile is null → contract says fall back to recency, scoreMode reflects 'recency'.
-        testHolder.vectorProfile = null;
-        testHolder.vectorHits = [];
-        const result = await api.rankNodes({ query: 'foo', mode: 'vector', k: 5 });
-        expect(Array.isArray(result)).toBe(true);
-        for (const r of result) expect(r.scoreMode).toBe('recency');
-    });
-
-    test('rankNodes({query, mode:"vector"}) uses vector hits when available', async () => {
-        testHolder.vectorProfile = { id: 'fake' };
-        testHolder.vectorHits = [
-            { nodeId: 'evt_leaf_a', score: 0.92 },
-            { nodeId: 'char_alice', score: 0.81 },
-            { nodeId: 'evt_archived', score: 0.99 }, // archived → must be skipped
-        ];
-        const result = await api.rankNodes({ query: 'foo', mode: 'vector', k: 5 });
-        const ids = result.map(r => r.id);
-        expect(ids).toEqual(['evt_leaf_a', 'char_alice']);
-        for (const r of result) expect(r.scoreMode).toBe('vector');
+        const ctx = { __memoryStore: { nodes, edges: [] } };
+        testHolder.settings = { nodeTypeSchema: buildFixtureSchema() };
+        const api = getMemoryGraphReadApi(ctx);
+        const result = api.compactionCandidates({ type: 'event', depth: 0 });
+        expect(result.groups.length).toBeGreaterThan(0);
+        expect(result.groups[0].depth).toBe(0);
+        expect(result.groups[0].childIds.length).toBe(3); // fanIn
+        expect(result.groups[0].fanIn).toBe(3);
     });
 });
 

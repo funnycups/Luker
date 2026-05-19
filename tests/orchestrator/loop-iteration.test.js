@@ -52,7 +52,16 @@ describe('LOOP_ITERATION_CONTRACT_LINES', () => {
         expect(text).toMatch(/tools\.memory\.edge_summary/);
         expect(text).toMatch(/tools\.memory\.node_brief/);
         expect(text).toMatch(/tools\.memory\.expand_seeds/);
-        expect(text).toMatch(/tools\.memory\.rank/);
+        expect(text).toMatch(/tools\.memory\.keyword_search/);
+        expect(text).toMatch(/tools\.memory\.vector_search/);
+        expect(text).toMatch(/tools\.memory\.find_by_name/);
+        expect(text).toMatch(/tools\.memory\.compaction_candidates/);
+        expect(text).toMatch(/tools\.memory\.node_create/);
+        expect(text).toMatch(/tools\.memory\.node_edit/);
+        expect(text).toMatch(/tools\.memory\.node_delete/);
+        expect(text).toMatch(/tools\.memory\.link_upsert/);
+        expect(text).toMatch(/tools\.memory\.link_delete/);
+        expect(text).toMatch(/tools\.memory\.compact_nodes/);
         expect(text).toMatch(/tools\.memory\.schema/);
         expect(text).toMatch(/tools\.search\.search/);
         expect(text).toMatch(/tools\.search\.visit/);
@@ -97,7 +106,11 @@ describe('applyLoopProfilePatchArgs partial-merge contract', () => {
                 lorebook: { search: true, get: true },
                 memory: {
                     list_candidates: true, edge_summary: true, node_brief: true,
-                    expand_seeds: true, rank: true, schema: true,
+                    expand_seeds: true, schema: true,
+                    keyword_search: true, vector_search: true, find_by_name: true,
+                    compaction_candidates: true,
+                    node_create: true, node_edit: true, node_delete: true,
+                    link_upsert: true, link_delete: true, compact_nodes: true,
                 },
             },
             ...overrides,

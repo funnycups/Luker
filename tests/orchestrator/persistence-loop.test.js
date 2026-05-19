@@ -50,7 +50,16 @@ describe('sanitizeLoopProfile defaults', () => {
         expect(out.tools.memory.edge_summary).toBe(true);
         expect(out.tools.memory.node_brief).toBe(true);
         expect(out.tools.memory.expand_seeds).toBe(true);
-        expect(out.tools.memory.rank).toBe(true);
+        expect(out.tools.memory.keyword_search).toBe(true);
+        expect(out.tools.memory.vector_search).toBe(true);
+        expect(out.tools.memory.find_by_name).toBe(true);
+        expect(out.tools.memory.compaction_candidates).toBe(true);
+        expect(out.tools.memory.node_create).toBe(true);
+        expect(out.tools.memory.node_edit).toBe(true);
+        expect(out.tools.memory.node_delete).toBe(true);
+        expect(out.tools.memory.link_upsert).toBe(true);
+        expect(out.tools.memory.link_delete).toBe(true);
+        expect(out.tools.memory.compact_nodes).toBe(true);
         expect(out.tools.memory.schema).toBe(true);
         expect(out.tools.finalize).toBe(true);
         expect(out.max_rounds).toBe(20);
@@ -179,7 +188,11 @@ describe('sanitizeLoopProfile tools handling', () => {
                 lorebook: { search: false, get: false },
                 memory: {
                     list_candidates: false, edge_summary: false, node_brief: false,
-                    expand_seeds: false, rank: false, schema: false,
+                    expand_seeds: false, schema: false,
+                    keyword_search: false, vector_search: false, find_by_name: false,
+                    compaction_candidates: false,
+                    node_create: false, node_edit: false, node_delete: false,
+                    link_upsert: false, link_delete: false, compact_nodes: false,
                 },
                 finalize: false,
             },
@@ -194,7 +207,16 @@ describe('sanitizeLoopProfile tools handling', () => {
         expect(out.tools.memory.edge_summary).toBe(false);
         expect(out.tools.memory.node_brief).toBe(false);
         expect(out.tools.memory.expand_seeds).toBe(false);
-        expect(out.tools.memory.rank).toBe(false);
+        expect(out.tools.memory.keyword_search).toBe(false);
+        expect(out.tools.memory.vector_search).toBe(false);
+        expect(out.tools.memory.find_by_name).toBe(false);
+        expect(out.tools.memory.compaction_candidates).toBe(false);
+        expect(out.tools.memory.node_create).toBe(false);
+        expect(out.tools.memory.node_edit).toBe(false);
+        expect(out.tools.memory.node_delete).toBe(false);
+        expect(out.tools.memory.link_upsert).toBe(false);
+        expect(out.tools.memory.link_delete).toBe(false);
+        expect(out.tools.memory.compact_nodes).toBe(false);
         expect(out.tools.memory.schema).toBe(false);
         // finalize remains forced on
         expect(out.tools.finalize).toBe(true);
@@ -214,7 +236,16 @@ describe('sanitizeLoopProfile tools handling', () => {
         expect(out.tools.memory.edge_summary).toBe(true);
         expect(out.tools.memory.node_brief).toBe(true);
         expect(out.tools.memory.expand_seeds).toBe(true);
-        expect(out.tools.memory.rank).toBe(true);
+        expect(out.tools.memory.keyword_search).toBe(true);
+        expect(out.tools.memory.vector_search).toBe(true);
+        expect(out.tools.memory.find_by_name).toBe(true);
+        expect(out.tools.memory.compaction_candidates).toBe(true);
+        expect(out.tools.memory.node_create).toBe(true);
+        expect(out.tools.memory.node_edit).toBe(true);
+        expect(out.tools.memory.node_delete).toBe(true);
+        expect(out.tools.memory.link_upsert).toBe(true);
+        expect(out.tools.memory.link_delete).toBe(true);
+        expect(out.tools.memory.compact_nodes).toBe(true);
         expect(out.tools.memory.schema).toBe(true);
     });
 });

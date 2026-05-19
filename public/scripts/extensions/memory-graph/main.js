@@ -559,6 +559,8 @@ export { DEFAULT_EXTRACT_SYSTEM_PROMPT };
 
 const defaultSettings = {
     enabled: false,
+    autoExtractionEnabled: true,
+    autoCompressionEnabled: true,
     updateEvery: 1,
     maxTurns: 900,
     recallEnabled: true,
@@ -897,6 +899,10 @@ function ensureSettings() {
     extension_settings[MODULE_NAME].recallInjectDepth = normalizeRecallInjectDepth(extension_settings[MODULE_NAME].recallInjectDepth);
     extension_settings[MODULE_NAME].recallInjectRole = normalizeRecallInjectRole(extension_settings[MODULE_NAME].recallInjectRole);
     delete extension_settings[MODULE_NAME].plainTextFunctionCallMode;
+    extension_settings[MODULE_NAME].autoExtractionEnabled =
+        extension_settings[MODULE_NAME].autoExtractionEnabled !== false;
+    extension_settings[MODULE_NAME].autoCompressionEnabled =
+        extension_settings[MODULE_NAME].autoCompressionEnabled !== false;
     extension_settings[MODULE_NAME].updateEvery = Math.max(
         1,
         Math.floor(Number(extension_settings[MODULE_NAME].updateEvery) || defaultSettings.updateEvery),
@@ -4577,7 +4583,7 @@ function getCompressionRoundsByType(stats, type) {
     return Math.max(0, Math.floor(Number(stats.byType[safeType] || 0)));
 }
 
-function collectSemanticRootsByDepth(store, type, depth, options = {}) {
+export function collectSemanticRootsByDepth(store, type, depth, options = {}) {
     const rawMaxSeq = options?.maxSeq;
     const maxSeq = (rawMaxSeq !== null && rawMaxSeq !== undefined && Number.isFinite(Number(rawMaxSeq))) ? Math.max(0, Math.floor(Number(rawMaxSeq))) : null;
     return getSemanticNodesForType(store, type)
@@ -4771,6 +4777,56 @@ function getNextSemanticRollupOrdinal(store, type, depth) {
     return nodes.length + 1;
 }
 
+/**
+ * Create a rollup node with the given children. Used by both:
+ *   - compressSemanticHierarchical (internal compression loop)
+ *   - write-api.js::compactNodes (external agent-driven compaction)
+ *
+ * Throws structured errors:
+ *   - { code: 'BAD_ARGS' } when type or childIds missing/empty
+ *   - { code: 'CHILD_NOT_FOUND' } when a child id is not in the store
+ *   - { code: 'CHILD_HAS_PARENT' } when a child already has a rollup parent of the same type
+ */
+export function createRollupWithChildren(store, { type, childIds, summary, fields = {}, label = '' } = {}) {
+    if (!type || !Array.isArray(childIds) || childIds.length === 0) {
+        const err = new Error('createRollupWithChildren requires type and non-empty childIds.');
+        err.code = 'BAD_ARGS';
+        throw err;
+    }
+    const children = childIds.map(id => store?.nodes?.[id]).filter(Boolean);
+    if (children.length !== childIds.length) {
+        const err = new Error('createRollupWithChildren: one or more childIds not in store.');
+        err.code = 'CHILD_NOT_FOUND';
+        throw err;
+    }
+    for (const child of children) {
+        if (child.parentId) {
+            const err = new Error(`createRollupWithChildren: child ${child.id} already has rollup parent ${child.parentId}.`);
+            err.code = 'CHILD_HAS_PARENT';
+            throw err;
+        }
+    }
+    const childDepths = children.map(c => Number(c.semanticDepth || 0));
+    const rollupDepth = Math.max(...childDepths) + 1;
+    const ordinal = getNextSemanticRollupOrdinal(store, type, rollupDepth);
+    const finalFields = { summary: String(summary || ''), ...fields };
+    const parent = createNode(store, {
+        type: String(type),
+        level: LEVEL.SEMANTIC,
+        title: `${String(label || type)} Summary L${rollupDepth} #${ordinal}`,
+        fields: finalFields,
+        archived: false,
+        semanticRollup: true,
+        semanticDepth: rollupDepth,
+        seqTo: Math.max(...children.map(c => Number(c.seqTo ?? 0))),
+    });
+    for (const child of children) {
+        reparentNode(store, child.id, parent.id);
+        addEdge(store, parent.id, child.id, 'semantic_contains');
+    }
+    return parent;
+}
+
 async function compressSemanticHierarchical(context, store, settings, spec, type, config, options = {}) {
     let changed = false;
     let guard = 0;
@@ -4852,22 +4908,13 @@ async function compressSemanticHierarchical(context, store, settings, spec, type
                 break;
             }
 
-            const rollupOrdinal = getNextSemanticRollupOrdinal(store, type, rollupDepth);
-            const parent = createNode(store, {
-                type: String(type || 'semantic'),
-                level: LEVEL.SEMANTIC,
-                title: `${String(config.label || type || 'Semantic')} Summary L${rollupDepth} #${rollupOrdinal}`,
+            const parent = createRollupWithChildren(store, {
+                type,
+                childIds: group.map(n => n.id),
+                summary: rollupFields.summary,
                 fields: rollupFields,
-                archived: false,
-                semanticRollup: true,
-                semanticDepth: rollupDepth,
-                seqTo: Math.max(...group.map(node => Number(node.seqTo ?? 0))),
+                label: config.label,
             });
-
-            for (const child of group) {
-                reparentNode(store, child.id, parent.id);
-                addEdge(store, parent.id, child.id, 'semantic_contains');
-            }
             changed = true;
             compressedRounds += 1;
             recordCompressionRound(options?.compressionStats, type, 1);
@@ -5032,6 +5079,8 @@ async function compressSemanticTypesIfNeeded(context, store, settings, options =
 }
 
 async function runCompressionLoop(context, store, settings, options = {}) {
+    if (!settings?.enabled) return false;
+    if (!settings?.autoCompressionEnabled) return false;
     return await compressSemanticTypesIfNeeded(context, store, settings, options);
 }
 
@@ -5099,121 +5148,204 @@ async function processPendingMessageBatchWithLLM(context, store, settings, schem
         return { processed: true, changed: false };
     }
 
+    applyExtractionOpsImpl(store, operations, {
+        maxSeq: extractionMaxSeq,
+        context,
+        settings,
+    });
+
+    return { processed: true, changed: true };
+}
+
+/**
+ * Apply a batch of extraction operations to a memory-graph store in place.
+ *
+ * Used by both the internal LLM-driven extraction pipeline
+ * (`processPendingMessageBatchWithLLM`) and by the public write API
+ * (`write-api.js`, Task 19). The function mutates `store` and returns a
+ * report of which ops applied vs. which were rejected; it never throws on
+ * individual op failures so a partial batch still commits as much as it can.
+ *
+ * Supported op shapes (matches the in-tree extraction tool schema):
+ *   - { op: 'create', type, title, fields, ref?, links?, nodeId? } — upsert
+ *     a semantic node via `upsertSemanticNode`; `ref` is recorded in a
+ *     per-batch ref→nodeId map so subsequent `link_upsert` ops can target
+ *     freshly-created nodes by ref.
+ *   - { op: 'edit', nodeId, type, setFields?, clearFields?, hasTitlePatch?, title? }
+ *     — patch fields / title on an existing semantic node.
+ *   - { op: 'delete', nodeId } — drop a node and its edges.
+ *   - { op: 'link_upsert', sourceNodeId?|sourceRef?, links: [...] } — deferred
+ *     until after the create pass so refs from sibling ops resolve.
+ *   - { op: 'link_delete', sourceNodeId, targetNodeId, relation, direction? }
+ *     — remove a directed/bidirectional edge.
+ *
+ * @param {object} store - memory-graph store, mutated in place
+ * @param {Array<object>} operations - op records produced by extraction
+ * @param {object} [opts]
+ * @param {number} [opts.maxSeq=0] - extraction seq ceiling for new/edited node seqTo
+ * @param {object} [opts.context] - accepted for caller parity; currently unused inside
+ * @param {object} [opts.settings] - effective settings (threaded into `upsertSemanticNode`)
+ * @returns {{ applied: object[], rejected: object[] }}
+ */
+export function applyExtractionOpsImpl(store, operations, {
+    maxSeq = 0,
+    context = null,
+    settings = null,
+} = {}) {
+    const applied = [];
+    const rejected = [];
+    if (!Array.isArray(operations) || operations.length === 0) {
+        return { applied, rejected };
+    }
+    const extractionMaxSeq = Number.isFinite(Number(maxSeq))
+        ? Math.max(0, Math.floor(Number(maxSeq)))
+        : 0;
     const extractionRefIndex = new Map();
     const pendingLinkJobs = [];
 
     for (const item of operations) {
         const op = String(item?.op || 'create').trim().toLowerCase();
-        if (op === 'delete') {
-            const nodeId = String(item?.nodeId || '').trim();
-            if (nodeId && store?.nodes?.[nodeId]) {
-                dropNode(store, nodeId, true);
-            }
-            continue;
-        }
-        if (op === 'edit') {
-            const nodeId = String(item?.nodeId || '').trim();
-            const targetNode = nodeId ? store?.nodes?.[nodeId] : null;
-            if (!targetNode || targetNode.archived || targetNode.level !== LEVEL.SEMANTIC) {
-                continue;
-            }
-            if (String(targetNode.type || '').toLowerCase() !== String(item?.type || '').toLowerCase()) {
-                continue;
-            }
-            const setFields = item?.setFields && typeof item.setFields === 'object' && !Array.isArray(item.setFields)
-                ? item.setFields
-                : {};
-            const clearFields = Array.isArray(item?.clearFields)
-                ? item.clearFields.map(key => String(key || '').trim()).filter(Boolean)
-                : [];
-            if (!targetNode.fields || typeof targetNode.fields !== 'object' || Array.isArray(targetNode.fields)) {
-                targetNode.fields = {};
-            }
-            if (Boolean(item?.hasTitlePatch)) {
-                const patchedTitle = normalizeText(item?.title || '');
-                if (patchedTitle) {
-                    targetNode.title = patchedTitle;
+        try {
+            if (op === 'delete') {
+                const nodeId = String(item?.nodeId || '').trim();
+                if (nodeId && store?.nodes?.[nodeId]) {
+                    dropNode(store, nodeId, true);
                 }
+                applied.push(item);
+                continue;
             }
-            for (const [key, value] of Object.entries(setFields)) {
-                if (value === undefined || value === null) {
+            if (op === 'edit') {
+                const nodeId = String(item?.nodeId || '').trim();
+                const targetNode = nodeId ? store?.nodes?.[nodeId] : null;
+                if (!targetNode || targetNode.archived || targetNode.level !== LEVEL.SEMANTIC) {
                     continue;
                 }
-                targetNode.fields[key] = value;
+                if (String(targetNode.type || '').toLowerCase() !== String(item?.type || '').toLowerCase()) {
+                    continue;
+                }
+                const setFields = item?.setFields && typeof item.setFields === 'object' && !Array.isArray(item.setFields)
+                    ? item.setFields
+                    : {};
+                const clearFields = Array.isArray(item?.clearFields)
+                    ? item.clearFields.map(key => String(key || '').trim()).filter(Boolean)
+                    : [];
+                if (!targetNode.fields || typeof targetNode.fields !== 'object' || Array.isArray(targetNode.fields)) {
+                    targetNode.fields = {};
+                }
+                if (Boolean(item?.hasTitlePatch)) {
+                    const patchedTitle = normalizeText(item?.title || '');
+                    if (patchedTitle) {
+                        targetNode.title = patchedTitle;
+                    }
+                }
+                for (const [key, value] of Object.entries(setFields)) {
+                    if (value === undefined || value === null) {
+                        continue;
+                    }
+                    targetNode.fields[key] = value;
+                }
+                for (const key of clearFields) {
+                    delete targetNode.fields[key];
+                }
+                targetNode.seqTo = Math.max(Number(targetNode.seqTo || 0), Number(extractionMaxSeq || 0));
+                applied.push(item);
+                continue;
             }
-            for (const key of clearFields) {
-                delete targetNode.fields[key];
+            if (op === 'link_upsert') {
+                pendingLinkJobs.push({
+                    sourceNodeId: normalizeText(item?.sourceNodeId || ''),
+                    sourceRef: normalizeText(item?.sourceRef || ''),
+                    links: Array.isArray(item?.links) ? item.links : [],
+                    raw: item,
+                });
+                continue;
             }
-            targetNode.seqTo = Math.max(Number(targetNode.seqTo || 0), Number(extractionMaxSeq || 0));
-            continue;
-        }
-        if (op === 'link_upsert') {
-            pendingLinkJobs.push({
-                sourceNodeId: normalizeText(item?.sourceNodeId || ''),
-                sourceRef: normalizeText(item?.sourceRef || ''),
-                links: Array.isArray(item?.links) ? item.links : [],
-            });
-            continue;
-        }
-        if (op === 'link_delete') {
-            const sourceNodeId = String(item?.sourceNodeId || '').trim();
-            const targetNodeId = String(item?.targetNodeId || '').trim();
-            const relation = String(item?.relation || '').trim().toLowerCase();
-            const directionRaw = String(item?.direction || 'bidirectional').toLowerCase();
-            const direction = ['outgoing', 'incoming', 'bidirectional'].includes(directionRaw)
-                ? directionRaw
-                : 'bidirectional';
-            if (sourceNodeId && targetNodeId && relation) {
-                removeEdge(store, sourceNodeId, targetNodeId, relation, { direction });
+            if (op === 'link_delete') {
+                const sourceNodeId = String(item?.sourceNodeId || '').trim();
+                const targetNodeId = String(item?.targetNodeId || '').trim();
+                const relation = String(item?.relation || '').trim().toLowerCase();
+                const directionRaw = String(item?.direction || 'bidirectional').toLowerCase();
+                const direction = ['outgoing', 'incoming', 'bidirectional'].includes(directionRaw)
+                    ? directionRaw
+                    : 'bidirectional';
+                if (sourceNodeId && targetNodeId && relation) {
+                    removeEdge(store, sourceNodeId, targetNodeId, relation, { direction });
+                    applied.push(item);
+                } else {
+                    rejected.push({ op: item, error: { code: 'VALIDATION_SKIP', message: 'link_delete requires sourceNodeId, targetNodeId, and relation.' } });
+                }
+                continue;
             }
-            continue;
-        }
-        const type = String(item?.type || 'semantic').toLowerCase();
-        const title = normalizeText(item?.title || '');
-        if (!type) {
-            continue;
-        }
-        const targetNode = upsertSemanticNode(store, {
-            type,
-            nodeId: String(item?.nodeId || ''),
-            title,
-            fields: item?.fields && typeof item.fields === 'object' ? item.fields : {},
-            seqTo: extractionMaxSeq,
-        }, settings, { maxSeq: extractionMaxSeq });
-        if (targetNode) {
-            const ref = normalizeText(item?.ref || '');
-            if (ref) {
-                extractionRefIndex.set(ref, targetNode.id);
+            // op === 'create' (default)
+            const type = String(item?.type || 'semantic').toLowerCase();
+            const title = normalizeText(item?.title || '');
+            if (!type) {
+                continue;
             }
-            pendingLinkJobs.push({
-                sourceNodeId: targetNode.id,
-                sourceRef: '',
-                links: Array.isArray(item?.links) ? item.links : [],
+            const targetNode = upsertSemanticNode(store, {
+                type,
+                nodeId: String(item?.nodeId || ''),
+                title,
+                fields: item?.fields && typeof item.fields === 'object' ? item.fields : {},
+                seqTo: extractionMaxSeq,
+            }, settings, { maxSeq: extractionMaxSeq });
+            if (targetNode) {
+                const ref = normalizeText(item?.ref || '');
+                if (ref) {
+                    extractionRefIndex.set(ref, targetNode.id);
+                }
+                pendingLinkJobs.push({
+                    sourceNodeId: targetNode.id,
+                    sourceRef: '',
+                    links: Array.isArray(item?.links) ? item.links : [],
+                    raw: item,
+                });
+                applied.push(item);
+            }
+        } catch (err) {
+            rejected.push({
+                op: item,
+                error: { code: err?.code || 'OP_FAILED', message: String(err?.message || err) },
             });
         }
     }
 
     for (const job of pendingLinkJobs) {
-        const sourceNodeId = resolveExtractNodeId(store, {
-            nodeId: job?.sourceNodeId || '',
-            ref: job?.sourceRef || '',
-        }, { refIndex: extractionRefIndex });
-        if (!sourceNodeId) {
-            continue;
+        try {
+            const sourceNodeId = resolveExtractNodeId(store, {
+                nodeId: job?.sourceNodeId || '',
+                ref: job?.sourceRef || '',
+            }, { refIndex: extractionRefIndex });
+            if (!sourceNodeId) {
+                continue;
+            }
+            const sourceNode = store?.nodes?.[sourceNodeId];
+            if (!sourceNode || sourceNode.archived || sourceNode.level !== LEVEL.SEMANTIC) {
+                continue;
+            }
+            applyExtractedLinks(
+                store,
+                sourceNode,
+                Array.isArray(job?.links) ? job.links : [],
+                { maxSeq: extractionMaxSeq, refIndex: extractionRefIndex },
+            );
+            // link_upsert ops surface as applied here; create ops were already counted above.
+            if (job?.raw && String(job.raw.op || '').toLowerCase() === 'link_upsert') {
+                applied.push(job.raw);
+            }
+        } catch (err) {
+            rejected.push({
+                op: job?.raw || { op: 'link_upsert', ...job },
+                error: { code: err?.code || 'OP_FAILED', message: String(err?.message || err) },
+            });
         }
-        const sourceNode = store?.nodes?.[sourceNodeId];
-        if (!sourceNode || sourceNode.archived || sourceNode.level !== LEVEL.SEMANTIC) {
-            continue;
-        }
-        applyExtractedLinks(
-            store,
-            sourceNode,
-            Array.isArray(job?.links) ? job.links : [],
-            { maxSeq: extractionMaxSeq, refIndex: extractionRefIndex },
-        );
     }
 
-    return { processed: true, changed: true };
+    // `context` is accepted for future use (Task 19 write-api) but currently has
+    // no in-loop consumers; reference it to keep static analysis honest.
+    void context;
+
+    return { applied, rejected };
 }
 
 async function runExtractionForStore(context, store, {
@@ -7786,6 +7918,9 @@ async function runScheduledExtractionPass(chatKey) {
 function scheduleExtraction(context) {
     const settings = getEffectiveSettings(context, getSettings());
     if (!settings.enabled) {
+        return;
+    }
+    if (!settings.autoExtractionEnabled) {
         return;
     }
     const chatKey = getChatKey(context);
@@ -13376,6 +13511,8 @@ function bindUi() {
     }
 
     root.find('#luker_rpg_memory_enabled').prop('checked', Boolean(settings.enabled));
+    root.find('#luker_rpg_memory_auto_extraction_enabled').prop('checked', settings.autoExtractionEnabled !== false);
+    root.find('#luker_rpg_memory_auto_compression_enabled').prop('checked', settings.autoCompressionEnabled !== false);
     root.find('#luker_rpg_memory_recall_enabled').prop('checked', Boolean(settings.recallEnabled));
     root.find('#luker_rpg_memory_recall_inject_position').val(String(normalizeRecallInjectPosition(settings.recallInjectPosition)));
     root.find('#luker_rpg_memory_recall_inject_depth').val(String(normalizeRecallInjectDepth(settings.recallInjectDepth)));
@@ -13417,6 +13554,16 @@ function bindUi() {
 
     root.find('#luker_rpg_memory_recall_enabled').off('input').on('input', function () {
         settings.recallEnabled = Boolean(jQuery(this).prop('checked'));
+        saveSettingsDebounced();
+    });
+
+    root.find('#luker_rpg_memory_auto_extraction_enabled').off('input').on('input', function () {
+        settings.autoExtractionEnabled = Boolean(jQuery(this).prop('checked'));
+        saveSettingsDebounced();
+    });
+
+    root.find('#luker_rpg_memory_auto_compression_enabled').off('input').on('input', function () {
+        settings.autoCompressionEnabled = Boolean(jQuery(this).prop('checked'));
         saveSettingsDebounced();
     });
 

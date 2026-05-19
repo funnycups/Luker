@@ -1,15 +1,26 @@
 /**
- * loop-tools/memory.js — memory-graph query tools for loop mode.
+ * loop-tools/memory.js — memory-graph query + write tools for loop mode.
  *
- * Wraps `memory-graph/read-api.js` (`getMemoryGraphReadApi(context)`) so the
- * agent sees the same inputs the native recall LLM sees:
+ * Wraps `memory-graph/read-api.js` (`getMemoryGraphReadApi(context)`) and
+ * `memory-graph/write-api.js` (`getMemoryGraphWriteApi(context)`) so the
+ * agent sees the same inputs the native recall LLM sees and can mutate the
+ * graph through the same boundary used by the extraction pipeline:
  *
- *   - memory_list_candidates → listVisibleCandidates(options)
- *   - memory_edge_summary    → getEdgeSummary(id, options)
- *   - memory_node_brief      → getNodeBrief(id, options)
- *   - memory_expand_seeds    → expandFromSeeds(ids, options)
- *   - memory_rank            → rankNodes(options)  [async]
- *   - memory_schema          → getSchema()
+ *   - memory_list_candidates       → listVisibleCandidates(options)
+ *   - memory_edge_summary          → getEdgeSummary(id, options)
+ *   - memory_node_brief            → getNodeBrief(id, options)
+ *   - memory_expand_seeds          → expandFromSeeds(ids, options)
+ *   - memory_schema                → getSchema()
+ *   - memory_keyword_search        → keywordSearch(options)
+ *   - memory_vector_search         → vectorSearch(options)        [async]
+ *   - memory_find_by_name          → findByName(options)
+ *   - memory_compaction_candidates → compactionCandidates(options)
+ *   - memory_node_create           → createNode(op)
+ *   - memory_node_edit             → editNode(op)
+ *   - memory_node_delete           → deleteNode(op)
+ *   - memory_link_upsert           → upsertLinks(op)
+ *   - memory_link_delete           → deleteLinks(op)
+ *   - memory_compact_nodes         → compactNodes(op)
  *
  * Store + dependency wiring:
  *
@@ -193,7 +204,7 @@ export async function execMemoryEdgeSummary(args, context) {
         throw new ToolError(
             'memory_edge_summary: node_id must be non-empty.',
             'MEMORY_ID_EMPTY',
-            'Pass an id from memory_list_candidates / memory_rank.',
+            'Pass an id from memory_list_candidates / memory_keyword_search / memory_find_by_name.',
         );
     }
     requireStoreForReadApi('memory_edge_summary', context);
@@ -219,7 +230,7 @@ export async function execMemoryNodeBrief(args, context) {
         throw new ToolError(
             'memory_node_brief: node_id must be non-empty.',
             'MEMORY_ID_EMPTY',
-            'Pass an id from memory_list_candidates / memory_rank.',
+            'Pass an id from memory_list_candidates / memory_keyword_search / memory_find_by_name.',
         );
     }
     requireStoreForReadApi('memory_node_brief', context);
@@ -247,7 +258,7 @@ export async function execMemoryExpandSeeds(args, context) {
         throw new ToolError(
             'memory_expand_seeds: seed_ids must be a non-empty array of ids.',
             'MEMORY_SEEDS_EMPTY',
-            'Provide one or more ids from memory_list_candidates / memory_rank to expand around.',
+            'Provide one or more ids from memory_list_candidates / memory_keyword_search / memory_find_by_name to expand around.',
         );
     }
     requireStoreForReadApi('memory_expand_seeds', context);
@@ -264,41 +275,6 @@ export async function execMemoryExpandSeeds(args, context) {
 }
 
 /**
- * Rank candidate nodes by recency / vector / keyword / hybrid. Wraps
- * `rankNodes` (the only async read-api method).
- *
- * @param {{ query: string, mode?: 'recency'|'vector'|'keyword'|'hybrid', types?: string[], k?: number }} args
- * @param {object} context
- * @returns {Promise<{ ranked: Array<{ id, type, title, seqTo, score, scoreMode }> }>}
- */
-export async function execMemoryRank(args, context) {
-    const queryRaw = String(args?.query ?? '');
-    // `recency` mode is the only one that does not require a query; for the
-    // other modes (vector / keyword / hybrid) an empty query degrades to a
-    // recency-mode fall-through inside read-api. Either way the caller's
-    // intent is unambiguous only when query OR explicit non-recency mode is
-    // present; reject when both are missing so the agent learns to brief.
-    const explicitMode = ['recency', 'vector', 'keyword', 'hybrid'].includes(args?.mode) ? args.mode : null;
-    if (!queryRaw.trim() && explicitMode !== 'recency') {
-        throw new ToolError(
-            'memory_rank: query must be non-empty (or explicitly set mode: "recency").',
-            'MEMORY_QUERY_EMPTY',
-            'Pass a topical one-line summary; or pass mode: "recency" to rank by recency alone.',
-        );
-    }
-    requireStoreForReadApi('memory_rank', context);
-    const api = await pickReadApi(context);
-    const options = { query: queryRaw };
-    if (explicitMode) options.mode = explicitMode;
-    const types = normalizeStringArrayArg(args?.types);
-    if (types) options.types = types;
-    const k = pickFiniteInt(args?.k);
-    if (k !== undefined && k >= 1) options.k = k;
-    const ranked = (await api.rankNodes(options)) || [];
-    return { ranked: Array.from(ranked).map(trimRankedPreview).filter(Boolean) };
-}
-
-/**
  * Get the active node-type schema (the same shape the native recall LLM
  * sees as `schema_overview`). Wraps `getSchema`.
  *
@@ -310,4 +286,243 @@ export async function execMemorySchema(_args, context) {
     requireStoreForReadApi('memory_schema', context);
     const api = await pickReadApi(context);
     return { schema: api.getSchema() };
+}
+
+// ---------------------------------------------------------------------------
+// Spec 2 (continued) — read-api keyword/vector/find/compaction wrappers
+//
+// These four wrap the targeted lookups added in Tasks 13–16 (keyword and
+// vector search, exact-name lookup, and hierarchical compaction candidates).
+// They take the place of the old `memory_rank` aggregate so the agent picks
+// a retrieval mode by tool choice instead of by a `mode` argument.
+// ---------------------------------------------------------------------------
+
+/**
+ * Token-overlap keyword search over visible nodes. Wraps `keywordSearch`.
+ *
+ * @param {{ query: string, types?: string[], k?: number }} args
+ * @param {object} context
+ * @returns {Promise<{ results: Array<{ id, type, title, seqTo, score, scoreMode }> }>}
+ */
+export async function execMemoryKeywordSearch(args, context) {
+    requireStoreForReadApi('memory_keyword_search', context);
+    const api = await pickReadApi(context);
+    const results = api.keywordSearch({
+        query: String(args?.query || ''),
+        types: Array.isArray(args?.types) ? args.types : undefined,
+        k: args?.k,
+    });
+    return { results: Array.from(results).map(trimRankedPreview).filter(Boolean) };
+}
+
+/**
+ * Embedding-based semantic search. Wraps `vectorSearch`. Translates the
+ * raw `NO_EMBEDDING_PROFILE` error into a structured `ToolError` so the
+ * agent learns to fall back to `memory_keyword_search`.
+ *
+ * @param {{ query: string, types?: string[], k?: number }} args
+ * @param {object} context
+ * @returns {Promise<{ results: Array<{ id, type, title, seqTo, score, scoreMode }> }>}
+ */
+export async function execMemoryVectorSearch(args, context) {
+    requireStoreForReadApi('memory_vector_search', context);
+    const api = await pickReadApi(context);
+    try {
+        const results = await api.vectorSearch({
+            query: String(args?.query || ''),
+            types: Array.isArray(args?.types) ? args.types : undefined,
+            k: args?.k,
+        });
+        return { results: Array.from(results).map(trimRankedPreview).filter(Boolean) };
+    } catch (err) {
+        if (err?.code === 'NO_EMBEDDING_PROFILE') {
+            throw new ToolError(
+                'memory_vector_search: no embedding profile configured.',
+                'NO_EMBEDDING_PROFILE',
+                'Use memory_keyword_search instead, or configure an embedding profile in memory-graph settings.',
+            );
+        }
+        throw err;
+    }
+}
+
+/**
+ * Exact / substring lookup against node titles and primary-key columns
+ * (typically aliases). Used for dedup before creating a new node. Wraps
+ * `findByName`.
+ *
+ * @param {{ query: string, types?: string[] }} args
+ * @param {object} context
+ * @returns {Promise<{ matches: Array<{ id, type, level, title, seqTo, semanticDepth }> }>}
+ */
+export async function execMemoryFindByName(args, context) {
+    requireStoreForReadApi('memory_find_by_name', context);
+    const api = await pickReadApi(context);
+    const result = api.findByName({
+        query: String(args?.query || ''),
+        types: Array.isArray(args?.types) ? args.types : undefined,
+    });
+    return { matches: Array.from(result.matches).map(trimCandidatePreview).filter(Boolean) };
+}
+
+/**
+ * Plan-side helper: which semantic roots at a given depth qualify for
+ * compaction into a rollup parent. Wraps `compactionCandidates`.
+ *
+ * @param {{ type: string, depth?: number }} args
+ * @param {object} context
+ * @returns {Promise<{ groups: object[] }>}
+ */
+export async function execMemoryCompactionCandidates(args, context) {
+    requireStoreForReadApi('memory_compaction_candidates', context);
+    const api = await pickReadApi(context);
+    const result = api.compactionCandidates({
+        type: String(args?.type || ''),
+        depth: args?.depth,
+    });
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Spec 3 — write-api wrappers (node create/edit/delete, link upsert/delete,
+// rollup compaction). Mirror the read-side trim-and-forward pattern; the
+// write-api enforces semantics + persistence and returns minimal ack shapes.
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a write-api instance. Tests inject through `context.__memoryWriteApi`;
+ * production lazily imports `memory-graph/write-api.js`. Mirrors `pickReadApi`.
+ */
+async function pickWriteApi(context) {
+    if (context && context.__memoryWriteApi && typeof context.__memoryWriteApi === 'object') {
+        return context.__memoryWriteApi;
+    }
+    const mod = await import('../../memory-graph/write-api.js');
+    return mod.getMemoryGraphWriteApi(context);
+}
+
+function requireStoreForWriteApi(toolName, context) {
+    const store = loadStore(context);
+    if (!store) {
+        throw new ToolError(
+            `${toolName}: memory-graph store is not loaded.`,
+            'MEMORY_DISABLED',
+            MEMORY_DISABLED_HINT,
+        );
+    }
+    return store;
+}
+
+/**
+ * Create a node of the given type with title + fields and optional
+ * outgoing links. Wraps `createNode`.
+ *
+ * @param {{ type: string, title?: string, fields?: object, links?: object[], ref?: string }} args
+ * @param {object} context
+ * @returns {Promise<{ ok: true, id: string }>}
+ */
+export async function execMemoryNodeCreate(args, context) {
+    requireStoreForWriteApi('memory_node_create', context);
+    const api = await pickWriteApi(context);
+    const result = api.createNode({
+        type: String(args?.type || ''),
+        title: String(args?.title || ''),
+        fields: args?.fields || {},
+        links: Array.isArray(args?.links) ? args.links : undefined,
+        ref: args?.ref || undefined,
+    });
+    return { ok: true, id: result.id };
+}
+
+/**
+ * Patch an existing node: set / clear fields and optionally rename.
+ * Wraps `editNode`.
+ *
+ * @param {{ node_id: string, set_fields?: object, clear_fields?: string[], title?: string }} args
+ * @param {object} context
+ * @returns {Promise<{ ok: boolean }>}
+ */
+export async function execMemoryNodeEdit(args, context) {
+    requireStoreForWriteApi('memory_node_edit', context);
+    const api = await pickWriteApi(context);
+    const result = api.editNode({
+        id: String(args?.node_id || ''),
+        setFields: args?.set_fields || undefined,
+        clearFields: Array.isArray(args?.clear_fields) ? args.clear_fields : undefined,
+        title: args?.title,
+    });
+    return { ok: result.ok };
+}
+
+/**
+ * Archive a node (soft-delete + sweep dangling edges). Wraps `deleteNode`.
+ *
+ * @param {{ node_id: string }} args
+ * @param {object} context
+ * @returns {Promise<{ ok: boolean }>}
+ */
+export async function execMemoryNodeDelete(args, context) {
+    requireStoreForWriteApi('memory_node_delete', context);
+    const api = await pickWriteApi(context);
+    const result = api.deleteNode({ id: String(args?.node_id || '') });
+    return { ok: result.ok };
+}
+
+/**
+ * Add or update edges from a source node. Wraps `upsertLinks`.
+ *
+ * @param {{ source_node_id?: string, source_ref?: string, links?: object[] }} args
+ * @param {object} context
+ * @returns {Promise<{ ok: boolean, applied: number }>}
+ */
+export async function execMemoryLinkUpsert(args, context) {
+    requireStoreForWriteApi('memory_link_upsert', context);
+    const api = await pickWriteApi(context);
+    const result = api.upsertLinks({
+        source: {
+            id: args?.source_node_id || undefined,
+            ref: args?.source_ref || undefined,
+        },
+        links: Array.isArray(args?.links) ? args.links : [],
+    });
+    return { ok: result.applied > 0, applied: result.applied };
+}
+
+/**
+ * Remove a specific edge. Wraps `deleteLinks`.
+ *
+ * @param {{ source_node_id: string, target_node_id: string, relation: string, direction?: 'in'|'out'|'bidirectional' }} args
+ * @param {object} context
+ * @returns {Promise<{ ok: boolean, removed: number }>}
+ */
+export async function execMemoryLinkDelete(args, context) {
+    requireStoreForWriteApi('memory_link_delete', context);
+    const api = await pickWriteApi(context);
+    const result = api.deleteLinks({
+        source: { id: args?.source_node_id || undefined },
+        target: { id: args?.target_node_id || undefined },
+        relation: String(args?.relation || ''),
+        direction: args?.direction || undefined,
+    });
+    return { ok: result.removed > 0, removed: result.removed };
+}
+
+/**
+ * Roll a set of children up into a new semantic parent of the given type.
+ * Wraps `compactNodes`.
+ *
+ * @param {{ type: string, child_ids: string[], summary: string, fields?: object }} args
+ * @param {object} context
+ * @returns {Promise<{ ok: true, rollup_node_id: string }>}
+ */
+export async function execMemoryCompactNodes(args, context) {
+    requireStoreForWriteApi('memory_compact_nodes', context);
+    const api = await pickWriteApi(context);
+    const result = api.compactNodes({
+        type: String(args?.type || ''),
+        childIds: Array.isArray(args?.child_ids) ? args.child_ids : [],
+        summary: String(args?.summary || ''),
+        fields: args?.fields || undefined,
+    });
+    return { ok: true, rollup_node_id: result.rollupNodeId };
 }

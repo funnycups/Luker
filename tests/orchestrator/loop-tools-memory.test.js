@@ -1,11 +1,10 @@
 /**
- * loop-tools/memory tests — six read-api pipeline wrappers:
+ * loop-tools/memory tests — five read-api pipeline wrappers:
  *
  *   - memory_list_candidates → listVisibleCandidates(options)
  *   - memory_edge_summary    → getEdgeSummary(id, options)
  *   - memory_node_brief      → getNodeBrief(id, options)
  *   - memory_expand_seeds    → expandFromSeeds(ids, options)
- *   - memory_rank            → rankNodes(options)  [async]
  *   - memory_schema          → getSchema()
  *
  * Tests inject the read-api shim through `context.__memoryReadApi` so we
@@ -23,7 +22,6 @@ import {
     execMemoryEdgeSummary,
     execMemoryNodeBrief,
     execMemoryExpandSeeds,
-    execMemoryRank,
     execMemorySchema,
 } from '../../public/scripts/extensions/orchestrator/loop-tools/memory.js';
 import {
@@ -33,12 +31,12 @@ import {
 import { ToolError } from '../../public/scripts/extensions/orchestrator/loop-runtime.js';
 
 /**
- * Build a stub read-api object that satisfies the 6 pipeline tools. Tests
+ * Build a stub read-api object that satisfies the 5 pipeline tools. Tests
  * inject this through `context.__memoryReadApi` (see memory.js
  * `pickReadApi`) so we never load `memory-graph/read-api.js` (which would
  * pull the build-only `lib.js` chain into the Node test runtime).
  *
- * Override individual methods per test by spreading: `makeReadApi({ rankNodes: jest.fn() })`.
+ * Override individual methods per test by spreading: `makeReadApi({ getSchema: jest.fn() })`.
  */
 function makeReadApi(overrides = {}) {
     return {
@@ -46,7 +44,6 @@ function makeReadApi(overrides = {}) {
         getEdgeSummary: () => ({ degree: 0, relations: [], sample_neighbors: [] }),
         getNodeBrief: () => null,
         expandFromSeeds: () => [],
-        rankNodes: async () => [],
         getSchema: () => ({ types: [] }),
         ...overrides,
     };
@@ -368,71 +365,6 @@ describe('execMemoryExpandSeeds (spec 2)', () => {
     });
 });
 
-describe('execMemoryRank (spec 2)', () => {
-    test('dispatches query / mode / types / k into rankNodes (async)', async () => {
-        const rankFn = jest.fn(async () => [
-            { id: 'r1', type: 'event', title: 'T1', seqTo: 9, score: 0.91, scoreMode: 'hybrid' },
-            { id: 'r2', type: 'event', title: 'T2', seqTo: 4, score: 0.42, scoreMode: 'hybrid' },
-        ]);
-        const ctx = {
-            __memoryStore: { nodes: {} },
-            __memoryReadApi: makeReadApi({ rankNodes: rankFn }),
-        };
-        const result = await execMemoryRank({
-            query: 'autumn',
-            mode: 'hybrid',
-            types: ['event'],
-            k: 10,
-        }, ctx);
-        expect(rankFn).toHaveBeenCalledTimes(1);
-        expect(rankFn.mock.calls[0][0]).toEqual({
-            query: 'autumn', mode: 'hybrid', types: ['event'], k: 10,
-        });
-        expect(result.ranked).toHaveLength(2);
-        expect(result.ranked[0]).toEqual({
-            id: 'r1', type: 'event', title: 'T1', seqTo: 9, score: 0.91, scoreMode: 'hybrid',
-        });
-    });
-
-    test('mode: "recency" is exempt from the empty-query check', async () => {
-        // Production contract: vector/keyword/hybrid require a query; recency
-        // does not (it ranks by recency alone). Empty query + mode='recency'
-        // must NOT throw MEMORY_QUERY_EMPTY.
-        const rankFn = jest.fn(async () => []);
-        const ctx = {
-            __memoryStore: { nodes: {} },
-            __memoryReadApi: makeReadApi({ rankNodes: rankFn }),
-        };
-        const result = await execMemoryRank({ query: '', mode: 'recency' }, ctx);
-        expect(rankFn).toHaveBeenCalledTimes(1);
-        expect(rankFn.mock.calls[0][0].mode).toBe('recency');
-        expect(result).toEqual({ ranked: [] });
-    });
-
-    test('throws MEMORY_QUERY_EMPTY when query empty AND mode != recency', async () => {
-        const ctx = { __memoryStore: { nodes: {} }, __memoryReadApi: makeReadApi() };
-        await expect(execMemoryRank({ query: '' }, ctx)).rejects.toMatchObject({ code: 'MEMORY_QUERY_EMPTY' });
-        await expect(execMemoryRank({ query: '   ', mode: 'hybrid' }, ctx)).rejects.toMatchObject({ code: 'MEMORY_QUERY_EMPTY' });
-        await expect(execMemoryRank({ query: '', mode: 'vector' }, ctx)).rejects.toMatchObject({ code: 'MEMORY_QUERY_EMPTY' });
-    });
-
-    test('throws MEMORY_DISABLED when store missing', async () => {
-        const ctx = { __memoryStore: null };
-        await expect(execMemoryRank({ query: 'x' }, ctx)).rejects.toMatchObject({ code: 'MEMORY_DISABLED' });
-    });
-
-    test('dispatches through executeLoopTool', async () => {
-        const ctx = {
-            __memoryStore: { nodes: {} },
-            __memoryReadApi: makeReadApi({
-                rankNodes: async () => [{ id: 'ranked1', type: 'event', title: 'X', seqTo: 1, score: 0.5, scoreMode: 'hybrid' }],
-            }),
-        };
-        const result = await executeLoopTool('memory_rank', { query: 'q' }, ctx);
-        expect(result.ranked[0].id).toBe('ranked1');
-    });
-});
-
 describe('execMemorySchema (spec 2)', () => {
     test('dispatches to getSchema with no args', async () => {
         const schemaFn = jest.fn(() => ({
@@ -471,45 +403,32 @@ describe('getEnabledToolSchemas — read-api pipeline flag gating (spec 2)', () 
     // `getEnabledToolSchemas` uses indexOf('_'), so
     // memory_list_candidates → memory.list_candidates,
     // memory_edge_summary    → memory.edge_summary, etc.
+    const MEMORY_VERBS = [
+        'list_candidates', 'edge_summary', 'node_brief', 'expand_seeds', 'schema',
+        'keyword_search', 'vector_search', 'find_by_name', 'compaction_candidates',
+        'node_create', 'node_edit', 'node_delete', 'link_upsert', 'link_delete', 'compact_nodes',
+    ];
+    const MEMORY_TOOL_NAMES = MEMORY_VERBS.map(v => `memory_${v}`);
+    const allFlags = (value) => Object.fromEntries(MEMORY_VERBS.map(v => [v, value]));
     const ALL_ON = {
         finalize: true,
-        memory: {
-            list_candidates: true, edge_summary: true, node_brief: true,
-            expand_seeds: true, rank: true, schema: true,
-        },
+        memory: allFlags(true),
     };
     const ALL_OFF = {
         finalize: true,
-        memory: {
-            list_candidates: false, edge_summary: false, node_brief: false,
-            expand_seeds: false, rank: false, schema: false,
-        },
+        memory: allFlags(false),
     };
 
-    test('includes all 6 read-api pipeline tools when flagged on', () => {
+    test('includes all 15 memory tools when flagged on', () => {
         const schemas = getEnabledToolSchemas({ tools: ALL_ON });
         const names = schemas.map(s => s?.function?.name);
-        expect(names).toEqual(expect.arrayContaining([
-            'memory_list_candidates',
-            'memory_edge_summary',
-            'memory_node_brief',
-            'memory_expand_seeds',
-            'memory_rank',
-            'memory_schema',
-        ]));
+        expect(names).toEqual(expect.arrayContaining(MEMORY_TOOL_NAMES));
     });
 
-    test('omits all 6 read-api pipeline tools when flagged off', () => {
+    test('omits all 15 memory tools when flagged off', () => {
         const schemas = getEnabledToolSchemas({ tools: ALL_OFF });
         const names = schemas.map(s => s?.function?.name);
-        for (const n of [
-            'memory_list_candidates',
-            'memory_edge_summary',
-            'memory_node_brief',
-            'memory_expand_seeds',
-            'memory_rank',
-            'memory_schema',
-        ]) {
+        for (const n of MEMORY_TOOL_NAMES) {
             expect(names).not.toContain(n);
         }
     });
@@ -517,26 +436,15 @@ describe('getEnabledToolSchemas — read-api pipeline flag gating (spec 2)', () 
     test('per-tool gating: each flag independently controls its tool', () => {
         // Flip exactly one flag on at a time and assert that exactly that
         // tool (plus the always-on finalize) is in the resulting schema set.
-        const verbToName = {
-            list_candidates: 'memory_list_candidates',
-            edge_summary: 'memory_edge_summary',
-            node_brief: 'memory_node_brief',
-            expand_seeds: 'memory_expand_seeds',
-            rank: 'memory_rank',
-            schema: 'memory_schema',
-        };
-        for (const [verb, name] of Object.entries(verbToName)) {
+        for (const verb of MEMORY_VERBS) {
+            const name = `memory_${verb}`;
             const flags = {
                 finalize: true,
-                memory: {
-                    list_candidates: false, edge_summary: false, node_brief: false,
-                    expand_seeds: false, rank: false, schema: false,
-                    [verb]: true,
-                },
+                memory: { ...allFlags(false), [verb]: true },
             };
             const names = getEnabledToolSchemas({ tools: flags }).map(s => s?.function?.name);
             expect(names).toContain(name);
-            for (const otherName of Object.values(verbToName)) {
+            for (const otherName of MEMORY_TOOL_NAMES) {
                 if (otherName !== name) expect(names).not.toContain(otherName);
             }
         }

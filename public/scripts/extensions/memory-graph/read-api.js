@@ -16,7 +16,7 @@
 //                                  getNearestVisibleAncestor, projectEdges
 //   - Layer C (recall primitives): listVisibleCandidates, getNodeExposure,
 //                                   getEdgeSummary, getNodeBrief,
-//                                   expandFromSeeds, rankNodes
+//                                   expandFromSeeds, keywordSearch
 //   - Layer D (injection):        getInjectionState, onInjectionChanged
 //
 // All hot-path helpers (`buildProjectedEdges`, `buildEdgeSummary`,
@@ -52,6 +52,7 @@ import {
     selectVisibleNodesForType,
     getLatestSeqIndex,
     isNodeInRecentExcludeWindow,
+    collectSemanticRootsByDepth,
 } from './main.js';
 import { compareNodesByTimeline } from './graph-ops.js';
 import { getEffectiveNodeTypeSchema, getEffectiveSettings } from './character-overrides.js';
@@ -844,142 +845,180 @@ export function getMemoryGraphReadApi(context) {
         return fragments.join(' ');
     }
 
-    async function rankNodes(options = {}) {
+    function keywordSearch({ query, types, k = 20 } = {}) {
         const store = resolveStore();
         if (!store) return Object.freeze([]);
         const settings = resolveSettings();
-        const queryText = String(options.query || '').trim();
-        const mode = ['recency', 'vector', 'keyword', 'hybrid'].includes(options.mode) ? options.mode : 'recency';
-        const k = Number.isFinite(Number(options.k)) ? Math.max(1, Math.floor(Number(options.k))) : 20;
-        const typeFilter = normalizeStringArray(options.types);
+        const queryText = String(query || '').trim();
+        if (!queryText) return Object.freeze([]);
+
+        const typeFilter = normalizeStringArray(types);
         const typeSet = typeFilter ? new Set(typeFilter.map(t => t.toLowerCase())) : null;
+        const limit = Number.isFinite(Number(k)) ? Math.max(1, Math.floor(Number(k))) : 20;
 
-        function activeNodesForRanking() {
-            const out = [];
-            for (const node of iterateStoreNodes(store)) {
-                if (!node || !node.id) continue;
-                if (node.archived) continue;
-                if (isRecallDiagnosticNode(node)) continue;
-                if (typeSet && !typeSet.has(String(node.type || '').toLowerCase())) continue;
-                out.push(node);
-            }
-            return out;
-        }
+        const queryTokens = tokenizeForKeyword(queryText);
+        const queryTokenCount = Math.max(1, queryTokens.length);
+        const querySet = new Set(queryTokens);
 
-        function recencyRanking(scoreMode = 'recency') {
-            const pool = activeNodesForRanking();
-            pool.sort((a, b) => Number(b?.seqTo ?? -1) - Number(a?.seqTo ?? -1));
-            return pool.slice(0, k).map((node) => Object.freeze({
-                ...freezeNodeView(node),
-                score: Number(node?.seqTo ?? 0),
-                scoreMode,
-            }));
-        }
-
-        function keywordScoredPool() {
-            const queryTokens = tokenizeForKeyword(queryText);
-            const queryTokenCount = Math.max(1, queryTokens.length);
-            const querySet = new Set(queryTokens);
-            return activeNodesForRanking().map(node => {
-                const corpus = buildKeywordCorpus(node, settings);
-                const nodeTokens = tokenizeForKeyword(corpus);
-                let matches = 0;
-                const seenTokens = new Set();
-                for (const tok of nodeTokens) {
-                    if (querySet.has(tok) && !seenTokens.has(tok)) {
-                        seenTokens.add(tok);
-                        matches += 1;
-                    }
+        const scored = [];
+        for (const node of iterateStoreNodes(store)) {
+            if (!node || !node.id) continue;
+            if (node.archived) continue;
+            if (isRecallDiagnosticNode(node)) continue;
+            if (typeSet && !typeSet.has(String(node.type || '').toLowerCase())) continue;
+            const corpus = buildKeywordCorpus(node, settings);
+            const nodeTokens = tokenizeForKeyword(corpus);
+            const seenTokens = new Set();
+            let matches = 0;
+            for (const tok of nodeTokens) {
+                if (querySet.has(tok) && !seenTokens.has(tok)) {
+                    seenTokens.add(tok);
+                    matches += 1;
                 }
-                return { node, score: matches / queryTokenCount };
-            }).filter(entry => entry.score > 0)
-                .sort((a, b) => b.score - a.score);
+            }
+            if (matches > 0) {
+                scored.push({ node, score: matches / queryTokenCount });
+            }
         }
+        scored.sort((a, b) => b.score - a.score);
+        const sliced = scored.slice(0, limit);
+        return Object.freeze(sliced.map(({ node, score }) => Object.freeze({
+            ...freezeNodeView(node),
+            score,
+            scoreMode: 'keyword',
+        })));
+    }
 
-        if (mode === 'recency' || !queryText) {
-            return Object.freeze(recencyRanking('recency'));
-        }
+    async function vectorSearch({ query, types, k = 20 } = {}) {
+        const queryText = String(query || '').trim();
+        if (!queryText) return Object.freeze([]);
 
-        if (mode === 'keyword') {
-            const sliced = keywordScoredPool().slice(0, k);
-            return Object.freeze(sliced.map(({ node, score }) => Object.freeze({
-                ...freezeNodeView(node),
-                score,
-                scoreMode: 'keyword',
-            })));
-        }
+        const store = resolveStore();
+        if (!store) return Object.freeze([]);
+        const settings = resolveSettings();
+        const typeFilter = normalizeStringArray(types);
+        const typeSet = typeFilter ? new Set(typeFilter.map(t => t.toLowerCase())) : null;
+        const limit = Number.isFinite(Number(k)) ? Math.max(1, Math.floor(Number(k))) : 20;
 
-        // vector and hybrid paths share the embedding profile lookup
         let profile = null;
         try { profile = getVectorConfigFromSettings(settings); } catch (_) { profile = null; }
+        if (!profile) {
+            const err = new Error('Vector search requires an embedding profile to be configured.');
+            err.code = 'NO_EMBEDDING_PROFILE';
+            throw err;
+        }
+
         const chatId = String(context?.chatId || context?.chat_metadata?.chatId || '');
-
-        const vectorHits = profile
-            ? await (async () => {
-                try {
-                    return await findSimilarNodes(queryText, store, profile, chatId, { topK: Math.max(k, 20) });
-                } catch (_) { return []; }
-            })()
-            : [];
-
-        if (mode === 'vector') {
-            if (!profile || vectorHits.length === 0) {
-                // Spec §7: vector mode falls back to recency, and the returned
-                // scoreMode reflects the actual mode used.
-                return Object.freeze(recencyRanking('recency'));
-            }
-            const scored = [];
-            for (const hit of vectorHits) {
-                const node = lookupNodeById(store, hit.nodeId);
-                if (!node || node.archived) continue;
-                if (typeSet && !typeSet.has(String(node.type || '').toLowerCase())) continue;
-                if (isRecallDiagnosticNode(node)) continue;
-                scored.push({ node, score: Number(hit.score) || 0 });
-                if (scored.length >= k) break;
-            }
-            return Object.freeze(scored.map(({ node, score }) => Object.freeze({
-                ...freezeNodeView(node),
-                score,
-                scoreMode: 'vector',
-            })));
-        }
-
-        // hybrid: combine vector + keyword 50/50 (normalized to [0,1] each).
-        const keywordScored = keywordScoredPool();
-        const keywordMap = new Map(keywordScored.map(entry => [String(entry.node.id), entry.score]));
-        const vectorMap = new Map();
-        let vectorMax = 0;
-        for (const hit of vectorHits) {
-            const id = String(hit.nodeId || '');
-            if (!id) continue;
-            const score = Number(hit.score) || 0;
-            vectorMap.set(id, score);
-            if (score > vectorMax) vectorMax = score;
-        }
-        const keywordMaxRaw = Math.max(0, ...Array.from(keywordMap.values()));
-        const candidateIds = new Set([...vectorMap.keys(), ...keywordMap.keys()]);
-        const hybridScored = [];
-        for (const id of candidateIds) {
-            const node = lookupNodeById(store, id);
+        const hits = await findSimilarNodes(queryText, store, profile, chatId, { topK: Math.max(limit, 20) });
+        const scored = [];
+        for (const hit of hits) {
+            const node = lookupNodeById(store, hit.nodeId);
             if (!node || node.archived) continue;
             if (typeSet && !typeSet.has(String(node.type || '').toLowerCase())) continue;
             if (isRecallDiagnosticNode(node)) continue;
-            const vNorm = vectorMax > 0 ? (vectorMap.get(id) || 0) / vectorMax : 0;
-            const kNorm = keywordMaxRaw > 0 ? (keywordMap.get(id) || 0) / keywordMaxRaw : 0;
-            const combined = 0.5 * vNorm + 0.5 * kNorm;
-            if (combined <= 0) continue;
-            hybridScored.push({ node, score: combined });
+            scored.push({ node, score: Number(hit.score) || 0 });
+            if (scored.length >= limit) break;
         }
-        hybridScored.sort((a, b) => b.score - a.score);
-        const slicedHybrid = hybridScored.slice(0, k);
-        if (slicedHybrid.length === 0) {
-            return Object.freeze(recencyRanking('recency'));
-        }
-        return Object.freeze(slicedHybrid.map(({ node, score }) => Object.freeze({
+        return Object.freeze(scored.map(({ node, score }) => Object.freeze({
             ...freezeNodeView(node),
             score,
-            scoreMode: 'hybrid',
+            scoreMode: 'vector',
         })));
+    }
+
+    function findByName({ query, types } = {}) {
+        const store = resolveStore();
+        if (!store) return Object.freeze({ matches: Object.freeze([]) });
+        const settings = resolveSettings();
+
+        const queryText = String(query || '').trim().toLowerCase();
+        if (!queryText) return Object.freeze({ matches: Object.freeze([]) });
+
+        const typeFilter = normalizeStringArray(types);
+        const typeSet = typeFilter ? new Set(typeFilter.map(t => t.toLowerCase())) : null;
+
+        const matches = [];
+        for (const node of iterateStoreNodes(store)) {
+            if (!node || !node.id) continue;
+            if (node.archived) continue;
+            if (isRecallDiagnosticNode(node)) continue;
+            if (typeSet && !typeSet.has(String(node.type || '').toLowerCase())) continue;
+
+            const title = String(node.title || '').toLowerCase();
+            if (title.includes(queryText)) {
+                matches.push(node);
+                continue;
+            }
+
+            // Check primary-key columns (typically includes aliases for char/location)
+            let spec = null;
+            try { spec = getSemanticTypeSpec(settings, node.type, context); } catch (_) { spec = null; }
+            const primaryKeys = Array.isArray(spec?.primaryKeyColumns) ? spec.primaryKeyColumns : [];
+            let aliasHit = false;
+            for (const col of primaryKeys) {
+                const value = String(node?.fields?.[col] || '').toLowerCase();
+                if (value && value.includes(queryText)) {
+                    aliasHit = true;
+                    break;
+                }
+            }
+            if (aliasHit) matches.push(node);
+        }
+        matches.sort(compareNodesByTimeline);
+        return Object.freeze({
+            matches: Object.freeze(matches.map(freezeNodeView)),
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // Layer C extension: compaction planning (Task 16)
+    // -----------------------------------------------------------------------
+
+    function compactionCandidates({ type, depth = 0 } = {}) {
+        const store = resolveStore();
+        if (!store) return Object.freeze({ groups: Object.freeze([]) });
+
+        const settings = resolveSettings();
+        const typeId = String(type || '').trim().toLowerCase();
+        if (!typeId) return Object.freeze({ groups: Object.freeze([]) });
+
+        let config = null;
+        try { config = getSemanticCompressionConfig(settings, typeId, context); } catch (_) { config = null; }
+        if (!config || config.mode !== 'hierarchical') {
+            return Object.freeze({ groups: Object.freeze([]) });
+        }
+
+        const requestedDepth = Math.max(0, Math.floor(Number(depth) || 0));
+        const maxDepth = Math.max(1, Math.floor(Number(config.maxDepth) || 1));
+        if (requestedDepth >= maxDepth) {
+            return Object.freeze({ groups: Object.freeze([]) });
+        }
+
+        let candidates = [];
+        try {
+            candidates = collectSemanticRootsByDepth(store, typeId, requestedDepth, {}) || [];
+        } catch (_) {
+            candidates = [];
+        }
+
+        const threshold = Math.max(2, Number(config.threshold || 2));
+        const fanIn = Math.max(2, Number(config.fanIn || 2));
+        const keepRecent = Number(config.keepRecentLeaves || 0);
+
+        if (requestedDepth === 0 && keepRecent > 0 && candidates.length > keepRecent) {
+            candidates = candidates.slice(0, candidates.length - keepRecent);
+        }
+
+        if (candidates.length < threshold) {
+            return Object.freeze({ groups: Object.freeze([]) });
+        }
+
+        const groups = [];
+        for (let i = 0; i + fanIn <= candidates.length; i += fanIn) {
+            const childIds = candidates.slice(i, i + fanIn).map(n => String(n.id));
+            groups.push(Object.freeze({ depth: requestedDepth, childIds: Object.freeze(childIds), fanIn }));
+        }
+        return Object.freeze({ groups: Object.freeze(groups) });
     }
 
     // -----------------------------------------------------------------------
@@ -1014,18 +1053,16 @@ export function getMemoryGraphReadApi(context) {
 
     // -----------------------------------------------------------------------
     // Imports retained for surface symmetry: `selectVisibleNodesForType`,
-    // `isNodeInRecentExcludeWindow`, `buildGraphNodeHints`, and
-    // `getSemanticCompressionConfig` are part of the spec's "view onto recall
-    // primitives" but are reached transitively via `collectRootCandidates` /
-    // `getNodeRecallExposure`. Keeping the imports documents the dependency
-    // boundary even when this file does not call them directly — they remain
-    // available for future Layer-C extensions without forcing another import
-    // edit + commit cycle.
+    // `isNodeInRecentExcludeWindow`, and `buildGraphNodeHints` are part of the
+    // spec's "view onto recall primitives" but are reached transitively via
+    // `collectRootCandidates` / `getNodeRecallExposure`. Keeping the imports
+    // documents the dependency boundary even when this file does not call
+    // them directly — they remain available for future Layer-C extensions
+    // without forcing another import edit + commit cycle.
     // -----------------------------------------------------------------------
     void selectVisibleNodesForType;
     void isNodeInRecentExcludeWindow;
     void buildGraphNodeHints;
-    void getSemanticCompressionConfig;
 
     return Object.freeze({
         // Layer A
@@ -1045,7 +1082,10 @@ export function getMemoryGraphReadApi(context) {
         getEdgeSummary,
         getNodeBrief,
         expandFromSeeds,
-        rankNodes,
+        keywordSearch,
+        vectorSearch,
+        findByName,
+        compactionCandidates,
         // Layer D
         getInjectionState,
         onInjectionChanged,

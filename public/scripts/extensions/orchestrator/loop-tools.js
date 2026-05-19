@@ -35,8 +35,23 @@
 import { FINALIZE_TOOL_SCHEMA, ToolError } from './loop-runtime.js';
 import { execChatReadRange, execChatSearch } from './loop-tools/chat.js';
 import { execLorebookSearch, execLorebookGet } from './loop-tools/lorebook.js';
-import { execMemoryListCandidates, execMemoryEdgeSummary, execMemoryNodeBrief,
-    execMemoryExpandSeeds, execMemoryRank, execMemorySchema } from './loop-tools/memory.js';
+import {
+    execMemoryListCandidates,
+    execMemoryEdgeSummary,
+    execMemoryNodeBrief,
+    execMemoryExpandSeeds,
+    execMemorySchema,
+    execMemoryKeywordSearch,
+    execMemoryVectorSearch,
+    execMemoryFindByName,
+    execMemoryCompactionCandidates,
+    execMemoryNodeCreate,
+    execMemoryNodeEdit,
+    execMemoryNodeDelete,
+    execMemoryLinkUpsert,
+    execMemoryLinkDelete,
+    execMemoryCompactNodes,
+} from './loop-tools/memory.js';
 import { execNoteOpen, execNoteClose } from './loop-tools/note.js';
 import { execSearchSearch, execSearchVisit } from './loop-tools/search.js';
 
@@ -211,7 +226,7 @@ registerTool('memory_edge_summary', execMemoryEdgeSummary, {
             properties: {
                 node_id: {
                     type: 'string',
-                    description: 'Node id from memory_list_candidates / memory_rank.',
+                    description: 'Node id from memory_list_candidates / memory_keyword_search / memory_find_by_name.',
                 },
                 edge_types: {
                     type: 'array',
@@ -296,40 +311,6 @@ registerTool('memory_expand_seeds', execMemoryExpandSeeds, {
     },
 });
 
-registerTool('memory_rank', execMemoryRank, {
-    type: 'function',
-    function: {
-        name: 'memory_rank',
-        description: 'Rank active nodes by recency / vector / keyword / hybrid. Returns { ranked: [{ id, type, title, seqTo, score, scoreMode }] }. Use this BEFORE fetching briefs when the candidate pool is large; the shortlist tells you which nodes to call memory_node_brief on.',
-        parameters: {
-            type: 'object',
-            properties: {
-                query: {
-                    type: 'string',
-                    description: 'One-line topical summary (from the task brief). Required for vector / keyword / hybrid modes.',
-                },
-                mode: {
-                    type: 'string',
-                    enum: ['recency', 'vector', 'keyword', 'hybrid'],
-                    description: 'Ranking mode. Use "recency" when no semantic axis is given; "hybrid" combines vector + keyword 50/50 (falls back to recency if vector / keyword yield nothing).',
-                },
-                types: {
-                    type: 'array',
-                    items: { type: 'string' },
-                    description: 'Optional node-type filter.',
-                },
-                k: {
-                    type: 'integer',
-                    minimum: 1,
-                    description: 'Max ranked results to return (default 20).',
-                },
-            },
-            required: ['query'],
-            additionalProperties: false,
-        },
-    },
-});
-
 registerTool('memory_schema', execMemorySchema, {
     type: 'function',
     function: {
@@ -338,6 +319,210 @@ registerTool('memory_schema', execMemorySchema, {
         parameters: {
             type: 'object',
             properties: {},
+            additionalProperties: false,
+        },
+    },
+});
+
+registerTool('memory_keyword_search', execMemoryKeywordSearch, {
+    type: 'function',
+    function: {
+        name: 'memory_keyword_search',
+        description: 'Token-intersection search across node title + projected columns. Always available (no profile required). Returns { results: [{ id, type, title, seqTo, score, scoreMode: "keyword" }] } sorted by score desc. Use to locate existing nodes by name / keyword for dedup or relevance.',
+        parameters: {
+            type: 'object',
+            properties: {
+                query: { type: 'string', description: 'Search query — name, keyword, or short phrase.' },
+                types: { type: 'array', items: { type: 'string' }, description: 'Optional type filter (e.g. ["character_sheet"]).' },
+                k: { type: 'integer', minimum: 1, description: 'Max results (default 20).' },
+            },
+            required: ['query'],
+            additionalProperties: false,
+        },
+    },
+});
+
+registerTool('memory_vector_search', execMemoryVectorSearch, {
+    type: 'function',
+    function: {
+        name: 'memory_vector_search',
+        description: 'Semantic vector search. REQUIRES an embedding profile configured in memory-graph settings. Throws NO_EMBEDDING_PROFILE error when not configured — fall back to memory_keyword_search in that case. Returns { results: [{ id, type, title, seqTo, score, scoreMode: "vector" }] }.',
+        parameters: {
+            type: 'object',
+            properties: {
+                query: { type: 'string', description: 'Semantic query — descriptive phrase.' },
+                types: { type: 'array', items: { type: 'string' } },
+                k: { type: 'integer', minimum: 1 },
+            },
+            required: ['query'],
+            additionalProperties: false,
+        },
+    },
+});
+
+registerTool('memory_find_by_name', execMemoryFindByName, {
+    type: 'function',
+    function: {
+        name: 'memory_find_by_name',
+        description: 'Find existing nodes by name (case-insensitive substring match on title + primary key columns including aliases). Use BEFORE creating a character_sheet or location_state to verify the entity is not already in the graph. Returns { matches: [{ id, type, title, seqTo, ... }] } — empty array if no match.',
+        parameters: {
+            type: 'object',
+            properties: {
+                query: { type: 'string', description: 'Name or alias to look up.' },
+                types: { type: 'array', items: { type: 'string' }, description: 'Optional type filter.' },
+            },
+            required: ['query'],
+            additionalProperties: false,
+        },
+    },
+});
+
+registerTool('memory_compaction_candidates', execMemoryCompactionCandidates, {
+    type: 'function',
+    function: {
+        name: 'memory_compaction_candidates',
+        description: 'Returns the set of node groups currently eligible for hierarchical compaction at the given depth. { groups: [{ depth, childIds, fanIn }] }. Empty groups means no compaction warranted right now. Returns empty for types with compression.mode === "none".',
+        parameters: {
+            type: 'object',
+            properties: {
+                type: { type: 'string', description: 'Type id (e.g. "event").' },
+                depth: { type: 'integer', minimum: 0, description: 'Depth to scan (default 0).' },
+            },
+            required: ['type'],
+            additionalProperties: false,
+        },
+    },
+});
+
+registerTool('memory_node_create', execMemoryNodeCreate, {
+    type: 'function',
+    function: {
+        name: 'memory_node_create',
+        description: 'Create a new semantic node in the memory graph. Use sparingly — first call memory_find_by_name to check for an existing entity. Returns { ok, id }.',
+        parameters: {
+            type: 'object',
+            properties: {
+                type: { type: 'string', description: 'Node type from schema (e.g. "character_sheet").' },
+                title: { type: 'string', description: 'Canonical short title.' },
+                fields: { type: 'object', description: 'Field values per the type schema.' },
+                links: {
+                    type: 'array',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            target_node_id: { type: 'string' },
+                            target_ref: { type: 'string' },
+                            relation: { type: 'string' },
+                            direction: { type: 'string', enum: ['outgoing', 'incoming', 'bidirectional'] },
+                        },
+                        additionalProperties: false,
+                    },
+                    description: 'Optional: links to add at create time.',
+                },
+                ref: { type: 'string', description: 'Optional ref for same-call link targeting.' },
+            },
+            required: ['type', 'title'],
+            additionalProperties: false,
+        },
+    },
+});
+
+registerTool('memory_node_edit', execMemoryNodeEdit, {
+    type: 'function',
+    function: {
+        name: 'memory_node_edit',
+        description: 'Patch fields on an existing node. Use set_fields for sparse updates; clear_fields to drop specific columns. Returns { ok }.',
+        parameters: {
+            type: 'object',
+            properties: {
+                node_id: { type: 'string' },
+                set_fields: { type: 'object', description: 'Field → new value map. Only these fields are changed.' },
+                clear_fields: { type: 'array', items: { type: 'string' }, description: 'Field names to clear.' },
+                title: { type: 'string', description: 'New title (optional).' },
+            },
+            required: ['node_id'],
+            additionalProperties: false,
+        },
+    },
+});
+
+registerTool('memory_node_delete', execMemoryNodeDelete, {
+    type: 'function',
+    function: {
+        name: 'memory_node_delete',
+        description: 'Delete a node by id. Use only when the node is clearly wrong / duplicate / stale. Returns { ok }.',
+        parameters: {
+            type: 'object',
+            properties: { node_id: { type: 'string' } },
+            required: ['node_id'],
+            additionalProperties: false,
+        },
+    },
+});
+
+registerTool('memory_link_upsert', execMemoryLinkUpsert, {
+    type: 'function',
+    function: {
+        name: 'memory_link_upsert',
+        description: 'Add relation edges between nodes. Use canonical relation vocabulary only. Composite states allowed (multiple relations between same pair). Returns { ok, applied }.',
+        parameters: {
+            type: 'object',
+            properties: {
+                source_node_id: { type: 'string' },
+                source_ref: { type: 'string', description: 'Alternative to source_node_id; references a same-call create.' },
+                links: {
+                    type: 'array',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            target_node_id: { type: 'string' },
+                            target_ref: { type: 'string' },
+                            relation: { type: 'string' },
+                            direction: { type: 'string', enum: ['outgoing', 'incoming', 'bidirectional'] },
+                        },
+                        additionalProperties: false,
+                    },
+                },
+            },
+            required: ['links'],
+            additionalProperties: false,
+        },
+    },
+});
+
+registerTool('memory_link_delete', execMemoryLinkDelete, {
+    type: 'function',
+    function: {
+        name: 'memory_link_delete',
+        description: 'Delete a relation edge between two nodes. Use when the relation in that direction is no longer in effect (relationship dissolved, alliance broken, debt repaid). Returns { ok, removed }. Do NOT delete to "replace" — composite multi-edge states are valid.',
+        parameters: {
+            type: 'object',
+            properties: {
+                source_node_id: { type: 'string' },
+                target_node_id: { type: 'string' },
+                relation: { type: 'string' },
+                direction: { type: 'string', enum: ['outgoing', 'incoming', 'bidirectional'], description: 'Default: bidirectional.' },
+            },
+            required: ['source_node_id', 'target_node_id', 'relation'],
+            additionalProperties: false,
+        },
+    },
+});
+
+registerTool('memory_compact_nodes', execMemoryCompactNodes, {
+    type: 'function',
+    function: {
+        name: 'memory_compact_nodes',
+        description: 'Compact a group of child nodes into one higher-tier rollup node. Children get reparented; semantic_contains edges added. Use after memory_compaction_candidates returns groups. Summary must follow the type\'s compression style standard. Returns { ok, rollup_node_id }.',
+        parameters: {
+            type: 'object',
+            properties: {
+                type: { type: 'string' },
+                child_ids: { type: 'array', items: { type: 'string' } },
+                summary: { type: 'string', description: 'Telegraphic-style summary per the compression style standard.' },
+                fields: { type: 'object', description: 'Optional additional fields beyond summary.' },
+            },
+            required: ['type', 'child_ids', 'summary'],
             additionalProperties: false,
         },
     },

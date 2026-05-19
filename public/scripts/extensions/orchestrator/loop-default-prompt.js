@@ -75,7 +75,7 @@ const LINES = [
     '# 工作流程',
     '',
     '1. `chat_read_range` 看最近 5–10 floor,把握短期态势 + 玩家信号 + 在场角色(必做)',
-    '2. `memory_schema` 一次看清节点类型;`memory_list_candidates` 枚举可见候选池;`memory_rank` 按主题快速排序;`memory_node_brief` / `memory_edge_summary` / `memory_expand_seeds` 深挖关键节点和邻居,补长期画像与伏笔',
+    '2. `memory_schema` 一次看清节点类型;`memory_list_candidates` 枚举可见候选池;`memory_keyword_search` / `memory_find_by_name` 按关键词或名字快速定位;`memory_node_brief` / `memory_edge_summary` / `memory_expand_seeds` 深挖关键节点和邻居,补长期画像与伏笔',
     '3. 世界规则或老设定模糊时 `lorebook_search` / `lorebook_get` 核对(已激活进上下文的条目自动 dedup,不必重读)',
     '4. 玩家提到旧人旧事时 `chat_search` 回溯历史 floor',
     '5. 维度都有判断就 `finalize`,**不要为搜而搜**,每多一轮都浪费预算',

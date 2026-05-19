@@ -189,6 +189,10 @@ export function buildMemoryGraphSettingsHtml(deps) {
         </div>
         <div class="inline-drawer-content">
             <label class="checkbox_label"><input id="luker_rpg_memory_enabled" type="checkbox" /> ${escapeHtml(i18n('Enabled'))}</label>
+            <label class="checkbox_label"><input id="luker_rpg_memory_auto_extraction_enabled" type="checkbox" /> ${escapeHtml(i18n('Auto extraction'))}</label>
+            <small style="opacity:0.8">${escapeHtml(i18n('Auto extraction help'))}</small>
+            <label class="checkbox_label"><input id="luker_rpg_memory_auto_compression_enabled" type="checkbox" /> ${escapeHtml(i18n('Auto compression'))}</label>
+            <small style="opacity:0.8">${escapeHtml(i18n('Auto compression help'))}</small>
             <label class="checkbox_label"><input id="luker_rpg_memory_recall_enabled" type="checkbox" /> ${escapeHtml(i18n('Enable recall injection'))}</label>
             <label for="luker_rpg_memory_recall_method">${escapeHtml(i18n('Recall method'))}</label>
             <select id="luker_rpg_memory_recall_method" class="text_pole">

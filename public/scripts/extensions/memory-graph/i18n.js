@@ -23,6 +23,10 @@ export function registerLocaleData() {
     addLocaleData('zh-cn', {
         'Memory': '记忆',
         'Enabled': '启用',
+        'Auto extraction': '自动抽取',
+        'Auto extraction help': '每次 AI 回复后由记忆图自动抽取节点。关闭后可由编排器的 memory_curator 接管,或完全手动。',
+        'Auto compression': '自动压缩',
+        'Auto compression help': '事件累积到阈值后由记忆图自动压缩为高层 rollup。关闭后可由编排器接管,或完全手动。',
         'Enable recall injection': '启用记忆召回注入',
         'Recall method': '召回方法',
         'LLM Recall (default)': 'LLM 召回（默认）',
@@ -407,6 +411,10 @@ export function registerLocaleData() {
     addLocaleData('zh-tw', {
         'Memory': '記憶',
         'Enabled': '啟用',
+        'Auto extraction': '自動抽取',
+        'Auto extraction help': '每次 AI 回覆後由記憶圖自動抽取節點。關閉後可由編排器的 memory_curator 接管,或完全手動。',
+        'Auto compression': '自動壓縮',
+        'Auto compression help': '事件累積到閾值後由記憶圖自動壓縮為高層 rollup。關閉後可由編排器接管,或完全手動。',
         'Enable recall injection': '啟用記憶召回注入',
         'Recall method': '召回方法',
         'LLM Recall (default)': 'LLM 召回（預設）',

@@ -55,12 +55,21 @@ function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}) 
 </fieldset>
 <fieldset class="luker_orch_loop_tools_group">
     <legend>${escapeHtml(i18n('memory (memory-graph)'))}</legend>
+    ${cb('memory.schema', memory.schema, 'memory_schema')}
     ${cb('memory.list_candidates', memory.list_candidates, 'memory_list_candidates')}
     ${cb('memory.edge_summary', memory.edge_summary, 'memory_edge_summary')}
     ${cb('memory.node_brief', memory.node_brief, 'memory_node_brief')}
     ${cb('memory.expand_seeds', memory.expand_seeds, 'memory_expand_seeds')}
-    ${cb('memory.rank', memory.rank, 'memory_rank')}
-    ${cb('memory.schema', memory.schema, 'memory_schema')}
+    ${cb('memory.keyword_search', memory.keyword_search, 'memory_keyword_search')}
+    ${cb('memory.vector_search', memory.vector_search, 'memory_vector_search')}
+    ${cb('memory.find_by_name', memory.find_by_name, 'memory_find_by_name')}
+    ${cb('memory.compaction_candidates', memory.compaction_candidates, 'memory_compaction_candidates')}
+    ${cb('memory.node_create', memory.node_create, 'memory_node_create')}
+    ${cb('memory.node_edit', memory.node_edit, 'memory_node_edit')}
+    ${cb('memory.node_delete', memory.node_delete, 'memory_node_delete')}
+    ${cb('memory.link_upsert', memory.link_upsert, 'memory_link_upsert')}
+    ${cb('memory.link_delete', memory.link_delete, 'memory_link_delete')}
+    ${cb('memory.compact_nodes', memory.compact_nodes, 'memory_compact_nodes')}
 </fieldset>
 <fieldset class="luker_orch_loop_tools_group">
     <legend>${escapeHtml(i18n('search (web search)'))}</legend>
@@ -354,12 +363,21 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
             </fieldset>
             <fieldset class="luker_orch_loop_tools_group">
                 <legend>${escapeHtml(i18n('memory (memory-graph)'))}</legend>
+                ${checkbox('memory.schema', memory.schema, 'memory_schema')}
                 ${checkbox('memory.list_candidates', memory.list_candidates, 'memory_list_candidates')}
                 ${checkbox('memory.edge_summary', memory.edge_summary, 'memory_edge_summary')}
                 ${checkbox('memory.node_brief', memory.node_brief, 'memory_node_brief')}
                 ${checkbox('memory.expand_seeds', memory.expand_seeds, 'memory_expand_seeds')}
-                ${checkbox('memory.rank', memory.rank, 'memory_rank')}
-                ${checkbox('memory.schema', memory.schema, 'memory_schema')}
+                ${checkbox('memory.keyword_search', memory.keyword_search, 'memory_keyword_search')}
+                ${checkbox('memory.vector_search', memory.vector_search, 'memory_vector_search')}
+                ${checkbox('memory.find_by_name', memory.find_by_name, 'memory_find_by_name')}
+                ${checkbox('memory.compaction_candidates', memory.compaction_candidates, 'memory_compaction_candidates')}
+                ${checkbox('memory.node_create', memory.node_create, 'memory_node_create')}
+                ${checkbox('memory.node_edit', memory.node_edit, 'memory_node_edit')}
+                ${checkbox('memory.node_delete', memory.node_delete, 'memory_node_delete')}
+                ${checkbox('memory.link_upsert', memory.link_upsert, 'memory_link_upsert')}
+                ${checkbox('memory.link_delete', memory.link_delete, 'memory_link_delete')}
+                ${checkbox('memory.compact_nodes', memory.compact_nodes, 'memory_compact_nodes')}
             </fieldset>
             <fieldset class="luker_orch_loop_tools_group">
                 <legend>${escapeHtml(i18n('search (web search)'))}</legend>

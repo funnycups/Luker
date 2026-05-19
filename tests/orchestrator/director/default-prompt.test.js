@@ -13,7 +13,7 @@ import { buildDirectorDefaultSystemPrompt } from '../../../public/scripts/extens
  * set, you must update the default prompt too — and vice versa.
  */
 describe('director default system prompt — concrete for the default profile', () => {
-    test('names the ten default analysts by id', () => {
+    test('names the twelve default analysts by id', () => {
         const text = buildDirectorDefaultSystemPrompt();
         // Pre-draft scouts:
         expect(text).toContain('intent_scout');
@@ -31,8 +31,9 @@ describe('director default system prompt — concrete for the default profile', 
         // Post-draft critics:
         expect(text).toContain('voice_critic');
         expect(text).toContain('continuity_critic');
-        // Post-draft notes curator:
+        // Post-draft housekeepers:
         expect(text).toContain('notes_curator');
+        expect(text).toContain('memory_curator');
         // Old singular context_scout should be gone (now split into three).
         expect(text).not.toContain('context_scout');
     });
@@ -44,10 +45,11 @@ describe('director default system prompt — concrete for the default profile', 
         expect(prompt).toMatch(/do not.*record.*just to|don't open.*without|conservative.*notes|notes pollution/i);
     });
 
-    test('main agent default prompt includes notes_pickup_scout and notes_curator dispatch templates', () => {
+    test('main agent default prompt includes notes_pickup_scout, notes_curator, and memory_curator dispatch templates', () => {
         const prompt = buildDirectorDefaultSystemPrompt();
         expect(prompt).toMatch(/notes_pickup_scout/);
         expect(prompt).toMatch(/notes_curator/);
+        expect(prompt).toMatch(/memory_curator/);
     });
 
     test('teaches a task-brief shape for each analyst', () => {
