@@ -92,12 +92,21 @@ export function applyLoopProfilePatchArgs(currentProfile, args) {
         merge('chat', 'search');
         merge('lorebook', 'search');
         merge('lorebook', 'get');
+        merge('memory', 'schema');
         merge('memory', 'list_candidates');
         merge('memory', 'edge_summary');
         merge('memory', 'node_brief');
         merge('memory', 'expand_seeds');
-        merge('memory', 'rank');
-        merge('memory', 'schema');
+        merge('memory', 'keyword_search');
+        merge('memory', 'vector_search');
+        merge('memory', 'find_by_name');
+        merge('memory', 'compaction_candidates');
+        merge('memory', 'node_create');
+        merge('memory', 'node_edit');
+        merge('memory', 'node_delete');
+        merge('memory', 'link_upsert');
+        merge('memory', 'link_delete');
+        merge('memory', 'compact_nodes');
         merge('search', 'search');
         merge('search', 'visit');
         // tools.finalize is ignored — sanitizer forces it back to true.
