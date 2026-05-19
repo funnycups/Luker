@@ -6,7 +6,7 @@ import { saveSettingsDebounced } from '../../../script.js';
 import { areComparableOpenAIPresetBodiesEqual } from '../../openai.js';
 import { extension_settings, getContext } from '../../extensions.js';
 import { addLocaleData, translate } from '../../i18n.js';
-import { Popup, POPUP_TYPE } from '../../popup.js';
+import { Popup, POPUP_TYPE, POPUP_RESULT } from '../../popup.js';
 import { escapeHtml, uuidv4 } from '../../utils.js';
 import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import {
@@ -52,7 +52,14 @@ const MODEL_TOOLS = Object.freeze({
     REMOVE_ORDER_ITEM: 'preset_remove_prompt_order_item',
     DIFF_REFERENCE: 'preset_diff_reference',
     SIMULATE: 'preset_simulate',
+    CLONE_TO_NEW: 'preset_clone_to_new',
 });
+const SESSION_MODES = Object.freeze(['general', 'orchestrator-optimize', 'jailbreak-only']);
+const SESSION_MODE_DEFAULT = 'general';
+function sanitizeSessionMode(value) {
+    const candidate = String(value || '').trim();
+    return SESSION_MODES.includes(candidate) ? candidate : SESSION_MODE_DEFAULT;
+}
 const defaultSettings = {
     requestLlmPresetName: '',
     requestApiProfileName: '',
@@ -246,6 +253,14 @@ function registerLocaleData() {
         'Load failed: ${0}': '加载会话失败：${0}',
         'Tool calls (${0})': '工具调用（${0}）',
         'Tool result': '工具结果',
+        'Mode': '模式',
+        'Session mode': '会话模式',
+        'General editing': '通用编辑',
+        'Optimize for orchestrator': '为编排器优化',
+        'Jailbreak-only': '仅保留破限',
+        'Mode is fixed for the lifetime of the session. To switch modes, start a new session.': '会话模式一旦确定不可中途切换。要换模式请新建会话。',
+        'Start new session': '开始新会话',
+        'Cancel': '取消',
     });
     addLocaleData('zh-tw', {
         'Completion Preset Assistant': '聊天補全預設助手',
@@ -345,6 +360,14 @@ function registerLocaleData() {
         'Load failed: ${0}': '載入會話失敗：${0}',
         'Tool calls (${0})': '工具調用（${0}）',
         'Tool result': '工具結果',
+        'Mode': '模式',
+        'Session mode': '會話模式',
+        'General editing': '通用編輯',
+        'Optimize for orchestrator': '為編排器最佳化',
+        'Jailbreak-only': '僅保留破限',
+        'Mode is fixed for the lifetime of the session. To switch modes, start a new session.': '會話模式一旦確定不可中途切換。要切換模式請新建會話。',
+        'Start new session': '開始新會話',
+        'Cancel': '取消',
     });
 }
 
@@ -426,11 +449,12 @@ async function buildNewPresetBaseline(context = getContext()) {
     return {};
 }
 
-function createEmptySession() {
+function createEmptySession({ mode = SESSION_MODE_DEFAULT } = {}) {
     return {
         version: SESSION_VERSION,
         id: uuidv4(),
         referencePresetName: '',
+        mode: sanitizeSessionMode(mode),
         messages: [],
         draft: null,
         updatedAt: Date.now(),
@@ -719,6 +743,7 @@ function sanitizeSession(rawSession) {
     const next = createEmptySession();
     next.id = String(session.id || uuidv4());
     next.referencePresetName = String(session.referencePresetName || '').trim();
+    next.mode = sanitizeSessionMode(session.mode);
     next.messages = Array.isArray(session.messages)
         ? session.messages.map(item => sanitizeMessage(item)).slice(-settings.sessionMessageLimit)
         : [];
@@ -1404,16 +1429,128 @@ function buildDialogMetaItems(dialogState) {
     const llmPresetLabel = settings.requestLlmPresetName || i18n('(current)');
     return [
         `${i18n('Target')}: ${dialogState.targetRef?.name || ''}`,
+        `${i18n('Mode')}: ${describeSessionMode(dialogState.session?.mode)}`,
         `${i18n('Current request API preset')}: ${requestProfileLabel}`,
         `${i18n('Current request prompt preset')}: ${llmPresetLabel}`,
         i18n('Prompt preset paths use lodash syntax like prompts[0].content or new_chat_prompt.'),
     ];
 }
 
+function buildOrchestratorOptimizeModeBlock() {
+    return [
+        '',
+        'Mode: orchestrator-optimize.',
+        '',
+        'The user is editing this preset for use with a multi-agent orchestrator',
+        '(director / loop / iteration). The model consuming this preset will be an',
+        'agent that issues tool calls, not a narrator producing a single textual',
+        'response. Three patterns in typical RP presets actively interfere:',
+        '',
+        '1. Hard output-format constraints. A preset that prescribes a literal',
+        '   output schema (any structural shape the model is forced to produce)',
+        '   is incompatible with tool-calling — the agent cannot satisfy the',
+        '   schema and emit tool calls in the same response. Rewrite these',
+        '   directives to express the cognitive intent (think before acting,',
+        '   plan structure, consider tradeoffs) without prescribing a literal',
+        '   output format.',
+        '',
+        '2. Final-product-only directives. Anything that should appear only in',
+        '   the final committed assistant message must be conditioned on that',
+        '   stage in the directive itself. The orchestrator runs many sub-agent',
+        '   rounds and iterations; these directives should not fire every round.',
+        '   Rewrite the directive\'s content so it explicitly conditions itself',
+        '   on "the final committed message" or equivalent — the consuming',
+        '   agent then decides per round whether it applies.',
+        '',
+        '3. Duplicate-injection placeholders. The orchestrator\'s main path',
+        '   already injects character / persona / worldbook content into the',
+        '   chat context the agent sees. Preset items that splice the same',
+        '   content double the injection.',
+        '',
+        '   Disable: character card fields (description / personality /',
+        '   scenario / first message / example messages), user persona,',
+        '   worldbook splice nodes (any explicit worldInfo entries in the',
+        '   preset).',
+        '',
+        '   Must stay enabled:',
+        '   - chat history — the channel through which the agent\'s prompt',
+        '     reaches the LLM; disabling it silences the agent. If the original',
+        '     preset has it off, enable it.',
+        '   - writing style / anti-cliché instructions — read by the main',
+        '     agent when drafting and when briefing critic sub-agents.',
+        '   - jailbreak / bypass instructions — a mid-loop refusal stalls the',
+        '     scout → draft → critique chain before finalize can fire.',
+        '',
+        'Preserve everything else not covered above. NSFW permissions, RP voice',
+        'rules, character-writing instructions, content directives — they are',
+        'not the problem.',
+        '',
+        'Approach:',
+        '- Inspect the live preset with read tools to identify entries matching',
+        '  the patterns above before proposing changes.',
+        '- Default to suggesting derivation via preset_clone_to_new: propose a',
+        '  new preset name (e.g., `<original>-orchestrator`), explain why, await',
+        '  user consent. Only edit the live preset directly if the user opts in.',
+        '- Prefer minimal edits — rewrite offending lines / sections inside an',
+        '  entry rather than removing the entry, when possible.',
+        '- When unsure whether a directive is format constraint vs writing',
+        '  style, err toward preserving and ask the user.',
+    ].join('\n');
+}
+
+function buildJailbreakOnlyModeBlock() {
+    return [
+        '',
+        'Mode: jailbreak-only.',
+        '',
+        'The user is editing this preset for use by a tool-style LLM caller — an',
+        'internal Luker subsystem (memory graph curator, preset assistant,',
+        'other LLM-driven plugins) running structured tasks, not producing',
+        'narrative RP. To such a caller, the user\'s preset is valuable solely',
+        'as a jailbreak / uncensoring layer; everything else is noise that',
+        'biases the model toward writing prose when it should be emitting',
+        'structured output.',
+        '',
+        'Goals:',
+        '1. Identify and preserve jailbreak / uncensoring directives. The',
+        '   standard `jailbreak` field is the obvious one, but jailbreak content',
+        '   commonly lives in custom-named entries or as inline sections inside',
+        '   larger entries. Recognize them by semantic intent — directives that',
+        '   grant permission to handle restricted content, override default',
+        '   safety posture, or operate as an uncensored persona. When in doubt,',
+        '   preserve and flag for user confirmation.',
+        '2. Disable everything that exists to shape narrative RP output —',
+        '   writing style, voice rules, character-writing guidance, output',
+        '   schemas, NSFW writing rules, narrative meta-rules. Heuristic: if',
+        '   removing this directive would change *how the model writes a story*',
+        '   but not *what the model is permitted to write*, disable it.',
+        '3. Do not touch the ST-filled content slots (charDescription /',
+        '   personaDescription / scenario / worldInfoBefore / worldInfoAfter /',
+        '   chatHistory and the like). The host plugin decides at call time',
+        '   whether it wants those slots populated; this mode should not',
+        '   preempt that decision. Leave their enabled/disabled state as the',
+        '   original preset has it.',
+        '',
+        'Approach:',
+        '- Default to suggesting derivation via preset_clone_to_new: propose a',
+        '  new preset name (e.g., `<original>-jailbreak`), explain why, await',
+        '  user consent.',
+        '- Inspect the live preset with read tools before proposing disables.',
+        '  Decide by semantic intent, not by entry name.',
+        '- Disable by removing from prompt order, not by deleting the',
+        '  underlying prompt entry. The user can revert by re-adding to order.',
+        '- When an entry contains BOTH jailbreak content AND other content',
+        '  interleaved, edit the entry to isolate the jailbreak section rather',
+        '  than disabling the whole entry — losing the jailbreak portion would',
+        '  defeat the mode\'s purpose.',
+    ].join('\n');
+}
+
 function buildModelSystemPrompt({
     hasReference = false,
+    mode = SESSION_MODE_DEFAULT,
 } = {}) {
-    return [
+    const baseLines = [
         'You are editing one Luker chat completion preset.',
         'Edit prompt-related preset content only.',
         'Do not modify API connection, provider routing, endpoint selection, proxy settings, transport settings, or credential fields.',
@@ -1435,8 +1572,20 @@ function buildModelSystemPrompt({
         'Use preset_simulate when you need to inspect how the current preset assembles prompt messages.',
         'For preset_simulate, prefer the text argument so the tool appends that user text to the current chat. Use the messages array only when the user explicitly supplied a structured message list/record list.',
         'Use preset_copy_from_reference only when a selected reference preset exists and already contains the desired content.',
+        'preset_clone_to_new copies the current live preset under a new name and switches the dialog target to it. Use it when the user agrees to derive a new preset rather than editing the original.',
         'If no changes are needed, reply briefly without tool calls.',
-    ].join('\n');
+    ];
+
+    const safeMode = sanitizeSessionMode(mode);
+    const modeBlock = safeMode === 'orchestrator-optimize'
+        ? buildOrchestratorOptimizeModeBlock()
+        : safeMode === 'jailbreak-only'
+            ? buildJailbreakOnlyModeBlock()
+            : '';
+
+    return modeBlock
+        ? `${baseLines.join('\n')}\n${modeBlock}`
+        : baseLines.join('\n');
 }
 
 function buildConversationHistoryMessages(session) {
@@ -1874,6 +2023,91 @@ function createPresetAssistantSimulateToolApi(dialogState) {
     };
 }
 
+function createPresetAssistantCloneToolApi(dialogState) {
+    return {
+        toolNames: {
+            CLONE_TO_NEW: MODEL_TOOLS.CLONE_TO_NEW,
+        },
+        getToolDefs() {
+            return [{
+                type: 'function',
+                function: {
+                    name: MODEL_TOOLS.CLONE_TO_NEW,
+                    description: 'Clone the current live preset under a new name and switch the dialog target to it. Use when the user agrees to derive a new preset rather than editing the original. Fails if new_name already exists; retry with a different name in that case. Any pending unapplied draft is discarded.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            new_name: {
+                                type: 'string',
+                                description: 'Name of the new preset. Must be non-empty and must not collide with an existing OpenAI preset.',
+                            },
+                            reason: {
+                                type: 'string',
+                                description: 'Short rationale shown to the user explaining why derivation was preferred over editing the original.',
+                            },
+                        },
+                        required: ['new_name'],
+                        additionalProperties: false,
+                    },
+                },
+            }];
+        },
+        isToolName(name) {
+            return String(name || '').trim() === MODEL_TOOLS.CLONE_TO_NEW;
+        },
+        async invoke(call) {
+            const args = call?.args && typeof call.args === 'object' ? call.args : {};
+            const requestedName = String(args.new_name || '').trim();
+            if (!requestedName) {
+                throw new Error('preset_clone_to_new requires new_name.');
+            }
+            const context = dialogState.context;
+            if (!context?.presets || typeof context.presets.save !== 'function') {
+                throw new Error('Preset persistence API is unavailable.');
+            }
+            const existingName = findCanonicalPresetName(getOpenAIPresetNames(context), requestedName);
+            if (existingName) {
+                throw new Error(`Preset already exists: ${existingName}. Retry with a different new_name.`);
+            }
+            const liveBody = isPlainObject(dialogState.liveSnapshot?.body)
+                ? clone(dialogState.liveSnapshot.body, {})
+                : {};
+
+            const result = await context.presets.save(
+                { collection: 'openai', name: requestedName },
+                liveBody,
+                { select: true },
+            );
+            if (!result?.ok || !result?.ref) {
+                throw new Error('Failed to save the new preset.');
+            }
+
+            const previousTargetName = String(dialogState.targetRef?.name || '');
+            dialogState.targetRef = clone(result.ref, null);
+            dialogState.liveSnapshot = {
+                ref: clone(result.ref, null),
+                body: clone(result.body || liveBody, {}),
+                source: 'live',
+                selected: true,
+                stored: true,
+            };
+            dialogState.session.draft = null;
+            dialogState.sessionStore = await loadSessionStore(context, dialogState.targetRef);
+            dialogState.journal = createEmptyJournal(dialogState.liveSnapshot.body);
+            await persistDialogJournal(dialogState);
+            await persistDialogSession(dialogState);
+
+            return {
+                ok: true,
+                cloned_from: previousTargetName,
+                new_preset: String(result.ref.name || requestedName),
+                target_switched: true,
+                draft_cleared: true,
+            };
+        },
+    };
+}
+
 function getRequestPresetOptions() {
     const settings = getSettings();
     return {
@@ -2065,6 +2299,7 @@ async function requestPresetAssistantReply(dialogState, userText, {
     const helperToolApis = [
         createPresetAssistantLiveReadToolApi(dialogState),
         createPresetAssistantSimulateToolApi(dialogState),
+        createPresetAssistantCloneToolApi(dialogState),
         ...(dialogState.referenceSnapshot ? [createPresetAssistantReferenceReadToolApi(dialogState)] : []),
         ...(dialogState.referenceSnapshot ? [createPresetAssistantReferenceDiffToolApi(dialogState)] : []),
     ];
@@ -2081,6 +2316,7 @@ async function requestPresetAssistantReply(dialogState, userText, {
         const response = await requestToolCallsWithRetry(dialogState.context, getSettings(), {
             systemPrompt: buildModelSystemPrompt({
                 hasReference: Boolean(dialogState.referenceSnapshot),
+                mode: sanitizeSessionMode(dialogState.session?.mode),
             }),
             userPrompt: buildUserPrompt(dialogState, userText),
             historyMessages: [
@@ -2945,14 +3181,62 @@ async function handleClearHistory(dialogState) {
     await rerenderDialog(dialogState);
 }
 
-async function handleNewSession(dialogState) {
+function describeSessionMode(mode) {
+    const safeMode = sanitizeSessionMode(mode);
+    if (safeMode === 'orchestrator-optimize') return i18n('Optimize for orchestrator');
+    if (safeMode === 'jailbreak-only') return i18n('Jailbreak-only');
+    return i18n('General editing');
+}
+
+async function pickSessionMode() {
+    let chosen = SESSION_MODE_DEFAULT;
+    const html = `
+<div class="cpa_mode_picker">
+    <div class="cpa_mode_picker_title">${escapeHtml(i18n('Session mode'))}</div>
+    <select id="cpa_new_session_mode" class="text_pole">
+        <option value="general" selected>${escapeHtml(i18n('General editing'))}</option>
+        <option value="orchestrator-optimize">${escapeHtml(i18n('Optimize for orchestrator'))}</option>
+        <option value="jailbreak-only">${escapeHtml(i18n('Jailbreak-only'))}</option>
+    </select>
+    <div class="cpa_mode_picker_hint">${escapeHtml(i18n('Mode is fixed for the lifetime of the session. To switch modes, start a new session.'))}</div>
+</div>`;
+    const popup = new Popup(html, POPUP_TYPE.CONFIRM, '', {
+        okButton: i18n('Start new session'),
+        cancelButton: i18n('Cancel'),
+        onClosing: (p) => {
+            const sel = p.dlg?.querySelector('#cpa_new_session_mode');
+            if (sel) {
+                chosen = sanitizeSessionMode(sel.value);
+            }
+            return true;
+        },
+    });
+    const result = await popup.show();
+    if (result !== POPUP_RESULT.AFFIRMATIVE) {
+        return null;
+    }
+    return chosen;
+}
+
+async function handleNewSessionWithModePicker(dialogState) {
+    if (dialogState.busy) {
+        return;
+    }
+    const mode = await pickSessionMode();
+    if (!mode) {
+        return;
+    }
+    await handleNewSession(dialogState, { mode });
+}
+
+async function handleNewSession(dialogState, { mode = SESSION_MODE_DEFAULT } = {}) {
     if (dialogState.busy) {
         return;
     }
     const saved = await savePresetConversationSession(
         dialogState.context,
         dialogState.targetRef,
-        createEmptySession(),
+        createEmptySession({ mode }),
         {
             store: dialogState.sessionStore,
             setCurrent: true,
@@ -3427,7 +3711,7 @@ const {
     handleLoadSession,
     handleDeleteSession,
     handleMessageDiff,
-    handleNewSession,
+    handleNewSession: handleNewSessionWithModePicker,
     handleRollbackToMessage,
     handleSend,
     i18n,
