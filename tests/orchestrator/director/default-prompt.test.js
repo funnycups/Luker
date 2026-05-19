@@ -176,4 +176,31 @@ describe('director default system prompt — concrete for the default profile', 
         // does not know to read their "demoted" / "low signal" callouts.
         expect(text).toMatch(/signal[- ]vs[- ]noise|signal.*noise|demote/i);
     });
+
+    test('Draft step bans meta-narration / substrate names in the prose', () => {
+        // Regression: prevent the recurring failure mode where the main
+        // agent narrates "这是世界书里写的那种 X——X 是 ..." or similar
+        // substrate-name leakage inside the in-universe draft body.
+        const text = buildDirectorDefaultSystemPrompt();
+        expect(text).toMatch(/(meta-narration|fourth-wall|substrate name)/i);
+        // Forbidden substrate keywords must be enumerated so the model
+        // gets a concrete list, not just an abstract principle.
+        expect(text).toMatch(/世界书/);
+        expect(text).toMatch(/lorebook/);
+        expect(text).toMatch(/角色卡|character card/);
+        // Forbidden patterns: the specific "这是世界书里写的那种 X" shape
+        // and English "according to the lorebook" gloss.
+        expect(text).toMatch(/这是世界书里写的那种|according to the lorebook/);
+    });
+
+    test('voice_critic description advertises Hard-fail meta-narration scan', () => {
+        // The main agent must know voice_critic is the one catching
+        // meta-narration so it doesn't go reinvent an inline meta-leak
+        // critic when this one is already on duty.
+        const text = buildDirectorDefaultSystemPrompt();
+        const voiceSection = text.match(/### voice_critic[\s\S]*?(?=###|\n##\s|$)/);
+        expect(voiceSection).not.toBeNull();
+        expect(voiceSection[0]).toMatch(/Hard-fail/i);
+        expect(voiceSection[0]).toMatch(/(meta-narration|fourth-wall)/i);
+    });
 });

@@ -281,6 +281,33 @@ describe('director schema fields', () => {
         expect(epi.description).toMatch(/lorebook/);
     });
 
+    test('voice_critic systemPrompt has a Hard-fail meta-narration scan with enumerated substrate keywords', () => {
+        // Regression: the main agent repeatedly leaked author-substrate
+        // names ("这是世界书里写的那种 X——X 是 ...") into the in-universe
+        // draft body. voice_critic is the post-draft owner of catching
+        // this; pin both the scan structure and a representative slice of
+        // the keyword/pattern list so future edits cannot quietly strip it.
+        const p = createDefaultDirectorProfile();
+        const vc = p.director.subAgents.find(a => a.id === 'voice_critic');
+        expect(vc).toBeDefined();
+        // Description must advertise the Hard-fail mode so the main agent
+        // routes meta-leakage to this critic instead of an inline one.
+        expect(vc.description).toMatch(/Hard-fail|HARD-FAIL/);
+        expect(vc.description).toMatch(/(meta-narration|fourth-wall)/i);
+        // systemPrompt must contain the dedicated section and enumerate
+        // both CJK and English substrate keywords + at least one of the
+        // forbidden citation patterns.
+        expect(vc.systemPrompt).toMatch(/# Hard-fail/);
+        expect(vc.systemPrompt).toMatch(/(meta-narration|fourth-wall)/i);
+        expect(vc.systemPrompt).toMatch(/世界书/);
+        expect(vc.systemPrompt).toMatch(/lorebook/);
+        expect(vc.systemPrompt).toMatch(/角色卡|character card/);
+        expect(vc.systemPrompt).toMatch(/这是世界书里写的那种|according to the lorebook/);
+        // Output format must include a hard-fail tagged exemplar so the
+        // model produces the right wire shape on findings.
+        expect(vc.systemPrompt).toMatch(/\[Hard-fail\]/);
+    });
+
     test('sanitizeDirectorProfile preserves director.subAgents entries', () => {
         const profile = {
             mode: 'director',
