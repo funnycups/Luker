@@ -12,7 +12,18 @@ Memory Graph runs three things in the background: **automatic extraction**, **sm
 
 ### Automatic extraction
 
-After each AI reply, Memory Graph examines what was said and extracts anything worth remembering. The extraction itself is done by an LLM and produces structured knowledge nodes.
+After each AI reply, Memory Graph examines what was said and extracts anything worth remembering. Extraction produces structured knowledge nodes and can run through two channels:
+
+**Built-in extraction** — When the **Auto extraction** toggle in the Memory panel is on, Memory Graph runs its own LLM call after each AI reply to fill the schema's structured fields. This is the default and works without any other plugin.
+
+**Orchestrator-driven extraction** — When the orchestrator plugin is installed and director mode is active with the default profile, the main agent dispatches a `memory_curator` sub-agent after drafting each reply. `memory_curator` runs a multi-round observe-act loop, using the memory graph's read tools to verify before writing. This tends to give higher quality on stable-fact types because the agent can check whether a character already exists before creating a duplicate.
+
+Both channels can be enabled at the same time; they don't coordinate, so that trades extra LLM cost for resilience. Most users pick one.
+
+To use orchestrator-driven extraction exclusively:
+
+1. Open the Memory panel and uncheck **Auto extraction**.
+2. In the orchestrator profile editor, ensure `memory_curator` is enabled and dispatched by the main agent (default in fresh installs).
 
 Nodes come in two tiers. The **default schema** ships with three types listed below — but the schema is fully customizable. You can add new node types (a `magic_system` for fantasy, a `faction` for politics, an `inventory_item` for survival, whatever your card needs) and remove any of the defaults. The fields shown here are also defaults; each type's fields can be edited from the Schema Editor (covered below).
 
@@ -20,7 +31,7 @@ Nodes come in two tiers. The **default schema** ships with three types listed be
 
 | Type | Description | Example |
 |---|---|---|
-| `character_sheet` | A character's name, identity, goals, relationships, current state | "Eileen is a healer, currently injured" |
+| `character_sheet` | A character's name, identity, traits, goals, inventory | "Eileen is a healer who acknowledged a debt to the protagonist" |
 | `location_state` | A place's name, controller, danger level, resources | "Dark Forest is controlled by elves, high danger" |
 
 **Event-layer nodes** (plot records, new each extraction, never merged):
@@ -66,6 +77,12 @@ As the conversation goes on, event memories pile up. Memory Graph compresses old
 
 Compression is recursive. When summaries at one tier exceed the threshold, they get compressed again, recursing upward until node count drops below the limit. For example, multiple battle events first compress into "Forest Campaign," and multiple campaigns may compress into "Northern Expedition." Compressed summaries can still be expanded back to view the originals.
 
+Like extraction, compression has two channels:
+
+**Built-in compression** — When the **Auto compression** toggle in the Memory panel is on, Memory Graph runs a one-shot LLM summarize call once leaf events accumulate past the threshold.
+
+**Orchestrator-driven compression** — `memory_curator` evaluates `memory_compaction_candidates` after extraction and calls `memory_compact_nodes` with KEEP/FOLD/DROP-style summaries. The multi-round agent can iterate per rollup whereas the built-in path is one-shot.
+
 ## What it actually looks like
 
 Most readers want to know: what does an extracted node *look* like? Here's a real example.
@@ -92,11 +109,9 @@ After this turn, Memory Graph runs extraction in the background and produces str
     "aliases": "",
     "traits": "Quiet, weighs her words, careful — measured even when grateful",
     "identity": "Traveling healer met in the Northern Reach",
-    "state": "Wounded; recovering after using the herbal salve",
     "goal": "Repay the debt; heal enough to walk on her own again",
     "inventory": "Herbal salve (just received), light pack",
     "language_sample": "...thank you. But are you sure?",
-    "core_note": "Just acknowledged the friendship explicitly; treats the salve as a debt to remember",
     "addressing_user": "By name, with deliberate pauses"
   },
   "floor": 12
@@ -117,7 +132,7 @@ After this turn, Memory Graph runs extraction in the background and produces str
 ```
 
 ::: info These fields are the default schema
-The fields shown above (`aliases / traits / identity / state / goal / inventory / language_sample / core_note / addressing_user` for `character_sheet`, `summary` for `event`) are the real default columns. The Schema Editor lets you rename them, drop some, or add new types entirely.
+The fields shown above (`aliases / traits / identity / goal / inventory / language_sample / addressing_user` for `character_sheet`, `summary` for `event`) are the real default columns. The Schema Editor lets you rename them, drop some, or add new types entirely.
 :::
 
 You can see all of this in the panel, either as a graph or as a table:

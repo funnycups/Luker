@@ -1,20 +1,24 @@
-# Memory Graph Read-Only API
+# Memory Graph Extension API
 
 > Status: experimental (subject to breaking changes for 2-3 minor versions per spec §9)
 >
-> Entry point: `getMemoryGraphReadApi(context)` from `public/scripts/extensions/memory-graph/read-api.js`
+> Entry points:
+> - `getMemoryGraphReadApi(context)` from `public/scripts/extensions/memory-graph/read-api.js` (read surface)
+> - `getMemoryGraphWriteApi(context)` from `public/scripts/extensions/memory-graph/write-api.js` (write surface)
 
 ## Overview
 
-The memory-graph extension drives Luker's long-term recall by feeding a curated pool of nodes (`character_sheet`, `event`, `relationship`, ...) plus a per-node `edge_summary` to a "route" LLM that picks which memories to inject into the next turn. The native pipeline (`chooseRecallRoute` / `collectRootCandidates` in `main.js`) constructs that LLM input from internal helpers — `buildProjectedEdges`, `getNearestVisibleAncestorId`, `formatNodeBrief`, etc. — which were all private until now.
+The memory-graph extension drives Luker's long-term recall by feeding a curated pool of nodes (`character_sheet`, `event`, `relationship`, ...) plus a per-node `edge_summary` to a "route" LLM that picks which memories to inject into the next turn. The native pipeline (`chooseRecallRoute` / `collectRootCandidates` in `main.js`) constructs that LLM input from internal helpers — `buildProjectedEdges`, `getNearestVisibleAncestorId`, `formatNodeBrief`, etc.
 
 `getMemoryGraphReadApi(context)` exposes the same data, topology, and recall primitives as a frozen, caller-safe API surface. The intended consumer is an agent-style plugin that wants to run its own LLM-driven recall — for example the orchestrator's `memory_scout` sub-agent — with whatever model / preset its operator prefers, against the exact same candidate pool and field projection the native router sees.
 
-The API is strictly read-only:
+`getMemoryGraphWriteApi(context)` is the companion mutation surface: an extractor-style agent (or a curator agent that edits the graph between turns) goes through it instead of touching store internals. The Write API is documented in [Write API](#write-api) below.
+
+The read surface is strictly read-only:
 
 - Returned views are deep-frozen plain objects / arrays / Sets. The factory never returns store-internal references.
-- There is no write path: nodes, edges, and schema mutations remain owned by `extractionInstructions` tool calls and the memory-graph runtime.
 - Views are synthesised per call from the live store, so a single API instance stays valid across chat / character switches.
+- Every mutation goes through the Write API; the read factory never exposes a write path.
 
 ## Quick Start
 
@@ -95,17 +99,6 @@ interface EdgeSummaryView {
 ```
 
 The compact edge view the native recall LLM sees per candidate row. Counts are aggregated per `(relation, direction)` pair; `sample_neighbors` is a bounded sample (default 8) of distinct neighbour nodes. Field names are snake_case to match the native LLM prompt block.
-
-### ScoredNodeView
-
-```ts
-interface ScoredNodeView extends NodeView {
-    score: number;
-    scoreMode: 'recency' | 'vector' | 'keyword' | 'hybrid';
-}
-```
-
-A `NodeView` augmented with the score and the mode that produced it. `scoreMode` reflects the *actual* mode used after fallback (see `rankNodes`).
 
 ### InjectionState
 
@@ -480,36 +473,103 @@ const expanded = api.expandFromSeeds(['character_sheet_alice'], {
 console.log(expanded.length, 'nodes reachable');
 ```
 
-### rankNodes(options)
+### keywordSearch(options)
 
-**Signature:** `rankNodes(options: { query: string, mode?: 'recency' | 'vector' | 'keyword' | 'hybrid', types?: string[], k?: number }): Promise<ReadonlyArray<ScoredNodeView>>`
+**Signature:** `keywordSearch(options: { query: string, types?: string[], k?: number }): ReadonlyArray<NodeView & { score: number, scoreMode: 'keyword' }>`
 
 **Contract:**
 
-- Always returns a `Promise` for API symmetry; `'recency'` and `'keyword'` resolve synchronously, `'vector'` and `'hybrid'` await the vector index.
-- Default `mode: 'recency'`, default `k: 20`.
-- Empty / missing `query` forces `'recency'` regardless of requested mode (no query to rank against).
-- Returned `scoreMode` reflects the **actual** mode used after fallback (see below).
+- Token-intersection search across each node's `title` and schema-projected fields. Case-insensitive.
+- `score` is `matches / queryTokenCount` per node; results are sorted by `score` descending and capped at `k` (default `20`).
+- Empty / whitespace-only `query` returns an empty array (no throw).
+- Always available — no embedding profile required, no async work.
 
-**Modes:**
-
-- `'recency'` — sorts active nodes by `seqTo` descending. `score` equals `seqTo`. Query-independent; the safest default for pure LLM recall.
-- `'keyword'` — simple token-overlap over each node's `title` + projection columns + spec keywords. `score` is normalised matches/query-tokens.
-- `'vector'` — defers to `findSimilarNodes` (vector-index-core). Requires a built vector index and a valid embedding profile. **Falls back to `'recency'`** when the profile is invalid or no hits are returned; in that case `scoreMode` will be `'recency'`.
-- `'hybrid'` — 50/50 blend of normalised vector and keyword scores. Falls back to `'recency'` when both pools are empty.
-
-**When to use:** generating a small ranked shortlist of candidate ids to feed into `getNodeBrief`. Note: even though `rankNodes` exists, the canonical LLM-recall input is `listVisibleCandidates` — `rankNodes` is for plugins that want a query-prefiltered shortlist instead of (or in addition to) the full candidate pool.
+**When to use:** the safe default when you need a query-prefiltered shortlist of candidate ids and cannot rely on an embedding profile being configured. Also the recommended fallback when `vectorSearch` throws `NO_EMBEDDING_PROFILE`.
 
 **Minimal example:**
 
 ```js
-const ranked = await api.rankNodes({
-    query: 'who is Alice?',
-    mode: 'hybrid',
-    k: 10,
+const hits = api.keywordSearch({
+    query: 'Eileen',
+    types: ['character_sheet'],
 });
-for (const view of ranked) {
-    console.log(view.title, view.score.toFixed(3), view.scoreMode);
+// hits: [{ id, title, ..., score: 0.5, scoreMode: 'keyword' }, ...]
+```
+
+### vectorSearch(options)
+
+**Signature:** `vectorSearch(options: { query: string, types?: string[], k?: number }): Promise<ReadonlyArray<NodeView & { score: number, scoreMode: 'vector' }>>`
+
+**Contract:**
+
+- Semantic vector search using the configured embedding profile. Default `k: 20`.
+- `score` is the vector-index similarity; results are sorted by `score` descending and capped at `k`.
+- Throws `{ code: 'NO_EMBEDDING_PROFILE' }` when no embedding profile is configured. The method does **not** silently fall back — callers choose their own fallback strategy (typically `keywordSearch`).
+- Empty / whitespace-only `query` resolves to an empty array (no throw).
+
+**When to use:** when the consumer wants the semantic ranking the vector index provides and is prepared to handle the no-profile case explicitly.
+
+**Minimal example:**
+
+```js
+try {
+    const hits = await api.vectorSearch({
+        query: 'the woman who healed me',
+        types: ['character_sheet'],
+    });
+    // hits: [{ id, title, ..., score: 0.83, scoreMode: 'vector' }, ...]
+} catch (err) {
+    if (err.code === 'NO_EMBEDDING_PROFILE') {
+        const fallback = api.keywordSearch({ query: 'the woman who healed me' });
+    }
+}
+```
+
+### findByName(options)
+
+**Signature:** `findByName(options: { query: string, types?: string[] }): { matches: ReadonlyArray<NodeView> }`
+
+**Contract:**
+
+- Case-insensitive substring matching against each candidate's `title` and primary-key columns (which typically include `aliases`).
+- Returns `{ matches: ReadonlyArray<NodeView> }` with no `score` field; matches are sorted by timeline (seqTo ascending).
+- Empty / whitespace-only `query` returns `{ matches: [] }` (no throw).
+
+**When to use:** the entity-identity probe — call **before** creating a `character_sheet` or `location_state` so the consumer can detect that the entity is already in the graph and edit it instead of duplicating.
+
+**Minimal example:**
+
+```js
+const { matches } = api.findByName({
+    query: '艾琳',
+    types: ['character_sheet'],
+});
+// matches: [{ id: 'n_eileen', title: 'Eileen', ... }]
+```
+
+### compactionCandidates(options)
+
+**Signature:** `compactionCandidates(options: { type: string, depth?: number }): { groups: ReadonlyArray<{ depth: number, childIds: ReadonlyArray<string>, fanIn: number }> }`
+
+**Contract:**
+
+- Pure structural query — no LLM calls — returning the set of node groups currently eligible for hierarchical compaction at `depth` (default `0`).
+- Returns `{ groups: [] }` when:
+    - The `type` does not exist in the active schema.
+    - The type's `compression.mode` is `'none'` (or anything other than `'hierarchical'`).
+    - The number of available candidates is below `compression.threshold` (after applying `keepRecentLeaves`).
+    - The requested `depth` is at or above `compression.maxDepth`.
+- Each group's `childIds` are the candidate child node ids; `fanIn` is the group size; `depth` is the rollup tier that would be produced.
+
+**When to use:** driving an agent-side compaction workflow — enumerate groups, build a summary per group via your own LLM, then call `writeApi.compactNodes` with the same `type` / `childIds`.
+
+**Minimal example:**
+
+```js
+const { groups } = api.compactionCandidates({ type: 'event' });
+for (const group of groups) {
+    const briefs = group.childIds.map(id => api.getNodeBrief(id));
+    // summarise briefs via your LLM, then writeApi.compactNodes({ type: 'event', childIds: group.childIds, summary })
 }
 ```
 
@@ -589,23 +649,206 @@ const candidateRows = candidates.map(view => api.getNodeBrief(view.id, {
 
 The full equivalence guarantee — `candidateRows` field-by-field and order-by-order matching the native router's input — is enforced by the dogfood test (`tests/memory-graph/read-api-dogfood.test.js`), which constructs the same blocks via the API and asserts structural equality against the native `chooseRecallRoute` internal state.
 
+## Write API
+
+The write API is the Layer-1 entry for third-party agents that want to edit the memory graph directly — for example a curator agent that runs between turns instead of relying on the built-in extractor. It uses the same `context.__memoryStore` convention as the read API.
+
+### Factory: getMemoryGraphWriteApi(context)
+
+```js
+import { getMemoryGraphWriteApi } from '/scripts/extensions/memory-graph/write-api.js';
+
+const writeApi = getMemoryGraphWriteApi(Luker.getContext());
+```
+
+Returns a frozen object exposing the methods documented below. Like the read factory, this is stateless — each method call resolves the store from `context.__memoryStore` at invocation time, so a single instance stays valid across chat / character switches. Methods throw `{ code: 'MEMORY_STORE_MISSING' }` when no store is mounted on the context.
+
+### Recommended entry: applyExtractionBatch(options)
+
+**Signature:** `applyExtractionBatch(options: { ops: ExtractionOp[], maxSeq?: number }): { applied: ExtractionOp[], rejected: Array<{ op: ExtractionOp, error: { code: string, message: string } }> }`
+
+**Contract:**
+
+- The recommended entry for multi-op intents (e.g. create + link in the same logical action). Provides a single rollback / persist boundary, resolves same-batch `ref`s within the call, and surfaces failures in `rejected` rather than throwing midway.
+- Default `maxSeq` is the store's current `seqCounter`.
+- `ExtractionOp` is a discriminated union:
+    - `{ op: 'create', type, title?, fields, links?, ref? }` — create a new semantic node.
+    - `{ op: 'edit', nodeId, setFields?, clearFields?, title? }` — patch fields on an existing node.
+    - `{ op: 'delete', nodeId }` — delete a node.
+    - `{ op: 'link_upsert', sourceNodeId? | sourceRef?, links: [{ targetNodeId? | targetRef?, relation, direction? }] }` — add relation edges. Same-batch `ref`s resolve within the call.
+    - `{ op: 'link_delete', sourceNodeId, targetNodeId, relation, direction? }` — remove a relation edge.
+- The per-op primitives below are convenience wrappers that build a one-op batch and apply it through the same pipeline.
+
+**When to use:** any agent that produces more than one op per logical action — atomicity, batch-level `ref` resolution, and predictable failure reporting all live at this level.
+
+**Minimal example:**
+
+```js
+const { applied, rejected } = writeApi.applyExtractionBatch({
+    ops: [
+        { op: 'create', type: 'character_sheet', ref: 'c1', fields: { name: 'Eileen', aliases: ['艾琳'] } },
+        { op: 'link_upsert', sourceRef: 'c1', links: [{ targetNodeId: 'event_42', relation: 'mentions' }] },
+    ],
+});
+console.log(applied.length, 'applied;', rejected.length, 'rejected');
+```
+
+### createNode(options)
+
+**Signature:** `createNode(options: { type: string, title?: string, fields?: Record<string, unknown>, links?: LinkSpec[], ref?: string }): { id: string, ref?: string }`
+
+**Contract:**
+
+- Throws synchronously when `type` is missing.
+- Returns the new node's `id`. When `ref` is supplied, the same `ref` is echoed back so the caller can refer to it in a follow-up `upsertLinks` call within a batch.
+- Throws `{ code: 'OP_FAILED', rejected }` when the underlying batch rejects the op (for example a schema validation failure).
+
+**When to use:** a one-shot node creation. For create-plus-link in the same logical action, prefer `applyExtractionBatch` so the link resolution and rollback boundary apply to the whole intent.
+
+**Minimal example:**
+
+```js
+const { id } = writeApi.createNode({
+    type: 'character_sheet',
+    title: 'Eileen',
+    fields: { name: 'Eileen', aliases: ['艾琳'] },
+});
+```
+
+### editNode(options)
+
+**Signature:** `editNode(options: { id: string, setFields?: Record<string, unknown>, clearFields?: string[], title?: string }): { ok: boolean }`
+
+**Contract:**
+
+- Throws synchronously when `id` is missing.
+- `setFields` patches columns; `clearFields` resets the listed columns; passing `title` updates the node title.
+- `ok: true` when the node was found and the patch was applied; `ok: false` when the node was missing, archived, or otherwise skipped (silent skip — no throw).
+
+**When to use:** mutating an existing node in place. Always check `ok` to confirm the patch landed.
+
+**Minimal example:**
+
+```js
+const { ok } = writeApi.editNode({
+    id: 'n_eileen',
+    setFields: { profession: 'healer' },
+});
+```
+
+### deleteNode(options)
+
+**Signature:** `deleteNode(options: { id: string }): { ok: boolean }`
+
+**Contract:**
+
+- Throws synchronously when `id` is missing.
+- `ok: true` when the node existed and was deleted; `ok: false` otherwise.
+
+**When to use:** removing a node the agent has decided is no longer relevant or was created in error.
+
+**Minimal example:**
+
+```js
+const { ok } = writeApi.deleteNode({ id: 'n_obsolete' });
+```
+
+### upsertLinks(options)
+
+**Signature:** `upsertLinks(options: { source: { id?: string, ref?: string }, links: Array<{ target: { id?: string, ref?: string }, relation: string, direction?: 'outgoing' | 'incoming' | 'bidirectional' }> }): { applied: number }`
+
+**Contract:**
+
+- Adds relation edges from `source` to each `target`. `direction` defaults to `'bidirectional'`.
+- Source / target may be addressed by `id` (live node id) or `ref` (batch-local reference). Refs only resolve within an `applyExtractionBatch` call; the per-primitive wrapper is intended for the live-id case.
+- Multiple edges between the same pair with different `relation`s are allowed (composite states).
+- `applied` is the number of ops the underlying pipeline accepted.
+
+**When to use:** attaching relation edges to existing nodes. For create-plus-link, prefer `applyExtractionBatch` so the create's `ref` resolves inside the same call.
+
+**Minimal example:**
+
+```js
+const { applied } = writeApi.upsertLinks({
+    source: { id: 'n_eileen' },
+    links: [
+        { target: { id: 'event_42' }, relation: 'mentions' },
+        { target: { id: 'n_garden' }, relation: 'located_in', direction: 'outgoing' },
+    ],
+});
+```
+
+### deleteLinks(options)
+
+**Signature:** `deleteLinks(options: { source: { id: string }, target: { id: string }, relation: string, direction?: 'outgoing' | 'incoming' | 'bidirectional' }): { removed: number }`
+
+**Contract:**
+
+- Throws synchronously when `source`, `target`, or `relation` is missing.
+- `direction` defaults to `'bidirectional'`. `relation` is lower-cased before lookup.
+- `removed` is the count of edges that disappeared from the store as a result of the op.
+
+**When to use:** retracting a relation edge the agent previously added (or that the extractor produced and the curator now wants to undo).
+
+**Minimal example:**
+
+```js
+const { removed } = writeApi.deleteLinks({
+    source: { id: 'n_eileen' },
+    target: { id: 'event_42' },
+    relation: 'mentions',
+});
+```
+
+### compactNodes(options)
+
+**Signature:** `compactNodes(options: { type: string, childIds: string[], summary: string, fields?: Record<string, unknown> }): { rollupNodeId: string }`
+
+**Contract:**
+
+- Creates a higher-tier rollup node of `type`, reparents the given `childIds` to it, and adds the `semantic_contains` edges. Shares the rollup builder (`createRollupWithChildren`) with the internal compression loop, so the agent-driven and native paths produce identical rollup shapes.
+- Throws:
+    - `{ code: 'BAD_ARGS' }` when `type` is missing, `childIds` is empty, or `summary` is empty.
+    - `{ code: 'CHILD_NOT_FOUND' }` when a `childId` is not in the store.
+    - `{ code: 'CHILD_HAS_PARENT' }` when a child already has a rollup parent of the same type.
+- Returns the new rollup node id.
+
+**When to use:** the agent-side compaction workflow — pair with `readApi.compactionCandidates` to enumerate eligible groups, build a summary per group via your own LLM, then call `compactNodes` to install the rollup.
+
+**Minimal example:**
+
+```js
+const { groups } = readApi.compactionCandidates({ type: 'event' });
+if (groups.length > 0) {
+    const group = groups[0];
+    const briefs = group.childIds.map(id => readApi.getNodeBrief(id));
+    const summary = await myLLM.summarize(briefs);
+    const { rollupNodeId } = writeApi.compactNodes({
+        type: 'event',
+        childIds: group.childIds,
+        summary,
+    });
+}
+```
+
 ## Compatibility
 
 - `external-api.js` legacy exports (`getCurrentlyInjectedNodeIds`, `__recordInjectedNodeIds`, `applyMemoryGraphInjectionUpdate`, `createEmptyInjectionState`) remain in place — existing plugins do not need to change.
 - `getMemoryGraphInjectionState(context)` is re-exported from `read-api.js` for symmetry: it returns the same shape (`alwaysInjectIds`, `recallSelectedIds`, `visibleIds`) as `getInjectionState()`.
-- The factory `getMemoryGraphReadApi(context)` does not pollute the legacy namespace; importing it has no side effects beyond loading the read-api module.
-- The API is marked `@experimental` for 2-3 minor versions per spec §9. Breaking changes during that window are permitted; field semantics will be preserved, but field names and signatures may shift in response to real-world plugin usage before the API is frozen.
+- The factories `getMemoryGraphReadApi(context)` and `getMemoryGraphWriteApi(context)` do not pollute the legacy namespace; importing them has no side effects beyond loading the respective module.
+- Both APIs are marked `@experimental` for 2-3 minor versions per spec §9. Breaking changes during that window are permitted; field semantics will be preserved, but field names and signatures may shift in response to real-world plugin usage before the API is frozen.
 
 ## Performance
 
 - `listNodes` / `listEdges` iterate the full store — use for offline / one-shot analysis only. Cost grows linearly with the node / edge count.
 - `listVisibleCandidates` is the hot-path equivalent — equivalent cost to one native `collectRootCandidates` call. Pre-applies the recall-side filters so callers do not pay for them again.
 - `getEdgeSummary` / `projectEdges` are not cached — each call recomputes from raw edges. This is acceptable for typical recall workloads (1-2 calls per turn) per spec §7. If you find yourself calling `getEdgeSummary` per candidate in a hot loop, consider caching the result yourself keyed on the visible-id set.
-- `rankNodes(mode: 'vector' | 'hybrid')` depends on the vector index being built. Both fall back to `'recency'` when the profile is invalid; the returned `scoreMode` reflects what was actually used.
+- `vectorSearch` depends on the vector index being built and an embedding profile being configured; it throws `NO_EMBEDDING_PROFILE` rather than falling back silently. `keywordSearch` is always available and runs synchronously.
+- Write-API ops persist the store and rebuild downstream indices (vector / edge summaries) at the batch boundary. Prefer `applyExtractionBatch` over a sequence of per-primitive calls when several ops belong to the same logical action — the rollback / persist boundary then applies to the whole batch.
 - All returned views are frozen lazily during construction. Re-freezing already-frozen objects is a no-op, so repeated reads of the same node are cheap on the consumer side.
 
 ## See Also
 
 - Native recall path: `public/scripts/extensions/memory-graph/main.js` (`chooseRecallRoute`, `collectRootCandidates`, `expandRouteCandidates`)
 - Companion: the orchestrator's `memory_scout` sub-agent uses this API — see [Director runtime](/features/orchestrator/director).
-- Related extension API: [Plugin Integration](/development/extension-api/plugin-integration) for the broader extension API registry that exposes `getMemoryGraphReadApi` alongside other extension entry points.
+- Related extension API: [Plugin Integration](/development/extension-api/plugin-integration) for the broader extension API registry that exposes `getMemoryGraphReadApi` and `getMemoryGraphWriteApi` alongside other extension entry points.
