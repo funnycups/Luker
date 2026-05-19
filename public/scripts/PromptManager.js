@@ -1402,11 +1402,32 @@ class PromptManager {
     }
 
     /**
+     * Walk up from #prompt_manager to find the first ancestor that actually scrolls
+     * on the Y axis. On desktop the scroll container is the #left-nav-panel drawer
+     * itself (.drawer-content.openDrawer); on mobile it's the inner .scrollableInner.
+     * Hard-coding either selector breaks the other.
+     */
+    #getScrollContainer() {
+        let cur = document.getElementById(this.configuration.prefix + 'prompt_manager');
+        while (cur instanceof HTMLElement) {
+            try {
+                const oy = window.getComputedStyle(cur).overflowY;
+                if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay')
+                    && (cur.scrollHeight - cur.clientHeight) > 2) {
+                    return cur;
+                }
+            } catch { /* getComputedStyle can throw if element is detached */ }
+            cur = cur.parentElement;
+        }
+        return null;
+    }
+
+    /**
      * Get the scroll position of the prompt manager
      * @returns {number} - Scroll position of the prompt manager
      */
     #getScrollPosition() {
-        return document.getElementById(this.configuration.prefix + 'prompt_manager')?.closest('.scrollableInner')?.scrollTop;
+        return this.#getScrollContainer()?.scrollTop;
     }
 
     /**
@@ -1415,7 +1436,7 @@ class PromptManager {
      */
     #setScrollPosition(scrollPosition) {
         if (scrollPosition === undefined || scrollPosition === null) return;
-        document.getElementById(this.configuration.prefix + 'prompt_manager')?.closest('.scrollableInner')?.scrollTo(0, scrollPosition);
+        this.#getScrollContainer()?.scrollTo(0, scrollPosition);
     }
 
     /**
@@ -3607,10 +3628,27 @@ class PromptManager {
         if (!this.serviceSettings.prompts) return;
         if (this._rlrafId) {
             cancelAnimationFrame(this._rlrafId);
-        }
-        this._rlrafId = requestAnimationFrame(() => {
             this._rlrafId = null;
-            this._renderPromptManagerListItemsImpl();
+            // Settle any previously-awaiting caller so it doesn't hang forever
+            // now that its RAF has been superseded.
+            if (this._rlrafResolve) {
+                const prev = this._rlrafResolve;
+                this._rlrafResolve = null;
+                prev();
+            }
+        }
+        return new Promise(resolve => {
+            this._rlrafResolve = resolve;
+            this._rlrafId = requestAnimationFrame(async () => {
+                this._rlrafId = null;
+                try {
+                    await this._renderPromptManagerListItemsImpl();
+                } finally {
+                    const r = this._rlrafResolve;
+                    this._rlrafResolve = null;
+                    if (r) r();
+                }
+            });
         });
     }
 
