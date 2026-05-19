@@ -265,12 +265,86 @@ jest.unstable_mockModule(
                 : [];
         }
 
-        function _buildGraphNodeHints(store, _schema, _limit = 0) {
+        function _buildGraphNodeHints(store, schema, _limit = 0) {
+            const schemaList = Array.isArray(schema) ? schema : [];
+            const schemaMap = new Map(
+                schemaList.map(item => [String(item?.id || '').trim().toLowerCase(), item]),
+            );
+            const allSemantic = Object.values(store?.nodes || {}).filter(node => {
+                if (!node || node.archived) return false;
+                if (_isRecallDiagnosticNode(node)) return false;
+                return String(node?.level || '') === 'semantic';
+            });
+            // Group by type, then project per type's compression mode. This
+            // mirrors main.js#buildGraphNodeHints (default scope='visible'):
+            // hierarchical types collapse leaves up to their top active ancestor.
+            const typeIds = new Set(
+                allSemantic
+                    .map(node => String(node?.type || '').trim().toLowerCase())
+                    .filter(Boolean),
+            );
             const out = [];
+            const outIds = new Set();
+            // Also include any non-semantic-level node so episodic / non-typed
+            // helpers still see them (legacy mock behavior).
             for (const node of Object.values(store?.nodes || {})) {
                 if (!node || node.archived) continue;
                 if (_isRecallDiagnosticNode(node)) continue;
+                if (String(node?.level || '') === 'semantic') continue;
+                if (outIds.has(node.id)) continue;
+                outIds.add(node.id);
                 out.push({ id: String(node.id || '') });
+            }
+            for (const type of typeIds) {
+                const spec = schemaMap.get(type);
+                const mode = String(spec?.compression?.mode || 'none').toLowerCase();
+                const typeNodes = allSemantic
+                    .filter(node => String(node?.type || '').toLowerCase() === type);
+                if (mode !== 'hierarchical') {
+                    for (const node of typeNodes) {
+                        if (!node?.id || outIds.has(node.id)) continue;
+                        outIds.add(node.id);
+                        out.push({ id: String(node.id) });
+                    }
+                    continue;
+                }
+                // Hierarchical: leaves project up to their top active semantic
+                // ancestor of the same type (matching main.js#selectVisibleNodesForType).
+                const byId = new Map(typeNodes.map(n => [String(n.id), n]));
+                const hasActiveChildOfType = (node) => {
+                    const childIds = Array.isArray(node?.childrenIds) ? node.childrenIds : [];
+                    return childIds.some((cid) => {
+                        const child = store?.nodes?.[cid];
+                        if (!child || child.archived) return false;
+                        if (String(child.level || '') !== 'semantic') return false;
+                        return String(child.type || '').toLowerCase() === type;
+                    });
+                };
+                const topAncestorOfType = (node) => {
+                    let cursor = node;
+                    let top = node;
+                    const guard = new Set();
+                    while (cursor && !guard.has(cursor.id)) {
+                        guard.add(cursor.id);
+                        const parentId = String(cursor.parentId || '').trim();
+                        if (!parentId) break;
+                        const parent = store?.nodes?.[parentId];
+                        if (!parent || parent.archived) break;
+                        if (String(parent.level || '') !== 'semantic') break;
+                        if (String(parent.type || '').toLowerCase() !== type) break;
+                        top = parent;
+                        cursor = parent;
+                    }
+                    return top;
+                };
+                for (const node of typeNodes) {
+                    if (hasActiveChildOfType(node)) continue;
+                    const top = topAncestorOfType(node) || node;
+                    if (!top?.id || outIds.has(top.id)) continue;
+                    if (!byId.has(top.id)) continue;
+                    outIds.add(top.id);
+                    out.push({ id: String(top.id) });
+                }
             }
             return out;
         }
@@ -1006,19 +1080,19 @@ describe('Layer C: recall primitives (spec §4.4)', () => {
 
     test('listVisibleCandidates is sorted by compareNodesByRecency (seqTo desc → semanticDepth desc → id asc)', () => {
         const result = api.listVisibleCandidates();
-        // Active non-diag pool: char_root(8), char_alice(7), evt_leaf_c(6), loc_castle(5),
-        // evt_rollup1(4, depth=1), evt_leaf_b(4, depth=0), epi_log1(3), evt_leaf_a(2).
-        // Recency: seqTo desc, then semanticDepth desc, then id asc.
-        // Tie at seqTo=4 → rollup(depth=1) > leaf_b(depth=0).
+        // event has hierarchical compression: leaves a/b under evt_rollup1
+        // project up to the rollup; evt_leaf_c is an orphan leaf (no
+        // active rollup ancestor) and stays as itself. Active visible pool
+        // after projection:
+        //   char_root(8), char_alice(7), evt_leaf_c(6), loc_castle(5),
+        //   evt_rollup1(4, depth=1), epi_log1(3, episodic).
         expect(result.map(n => n.id)).toEqual([
             'char_root',
             'char_alice',
             'evt_leaf_c',
             'loc_castle',
             'evt_rollup1',
-            'evt_leaf_b',
             'epi_log1',
-            'evt_leaf_a',
         ]);
     });
 
@@ -1035,8 +1109,8 @@ describe('Layer C: recall primitives (spec §4.4)', () => {
         const ids = result.map(n => n.id);
         expect(ids).not.toContain('char_root');
         expect(ids).not.toContain('char_alice');
-        // Older nodes still present.
-        expect(ids).toEqual(expect.arrayContaining(['evt_leaf_a', 'evt_leaf_b', 'epi_log1', 'loc_castle']));
+        // Older nodes still present (event leaves a/b project up to evt_rollup1).
+        expect(ids).toEqual(expect.arrayContaining(['evt_leaf_c', 'evt_rollup1', 'epi_log1', 'loc_castle']));
     });
 
     test('getNodeExposure: hierarchical-compression semantic node returns "high_only"', () => {
@@ -1413,5 +1487,56 @@ describe('Layer D: injection observation (spec §4.5)', () => {
         const reexport = getMemoryGraphInjectionStateReexport({});
         expect(reexport.alwaysInjectIds).toBeInstanceOf(Set);
         expect(reexport.alwaysInjectIds.has('x')).toBe(true);
+    });
+});
+
+describe('edge_summary fallback when injection state is empty (agent-only mode)', () => {
+    test('falls back to canonical top-rollup pool for edge projection', () => {
+        // Build a store with: rollup R (depth 1) containing leaves A,B (depth 0).
+        // A has involved_in edge to character X.
+        // Expected: in agent-only mode (no injection state), getEdgeSummary on X
+        // should project A's edge up to R, so X sees R as a neighbor (not A).
+        testHolder.settings = { nodeTypeSchema: buildFixtureSchema() };
+        const ctx = {
+            __memoryStore: {
+                nodes: {
+                    R: { id: 'R', type: 'event', level: 'semantic', semanticDepth: 1, semanticRollup: true, seqTo: 10, parentId: '', childrenIds: ['A', 'B'], fields: { summary: 'rollup' } },
+                    A: { id: 'A', type: 'event', level: 'semantic', semanticDepth: 0, semanticRollup: false, seqTo: 5, parentId: 'R', childrenIds: [], fields: { summary: 'leaf A' } },
+                    B: { id: 'B', type: 'event', level: 'semantic', semanticDepth: 0, semanticRollup: false, seqTo: 8, parentId: 'R', childrenIds: [], fields: { summary: 'leaf B' } },
+                    X: { id: 'X', type: 'character_sheet', level: 'semantic', semanticDepth: 0, semanticRollup: false, seqTo: 6, parentId: '', childrenIds: [], fields: { title: 'X' } },
+                },
+                edges: [
+                    { from: 'R', to: 'A', type: 'semantic_contains', seqTo: 10 },
+                    { from: 'R', to: 'B', type: 'semantic_contains', seqTo: 10 },
+                    { from: 'A', to: 'X', type: 'involved_in', seqTo: 5 },
+                ],
+                appliedSeqTo: 10,
+                loggedSeqTo: 10,
+            },
+        };
+        const api = getMemoryGraphReadApi(ctx);
+        // No options.visibleNodeIds; no injection state — should fall back to canonical pool.
+        const summary = api.getEdgeSummary('X');
+        // Should find at least one neighbor (R, via leaf-edge projection)
+        expect(summary.sample_neighbors.map(n => n.id)).toContain('R');
+        // Should NOT include the hidden leaf A directly
+        expect(summary.sample_neighbors.map(n => n.id)).not.toContain('A');
+    });
+
+    test('returns empty when explicit empty visibleNodeIds passed (caller intent)', () => {
+        testHolder.settings = { nodeTypeSchema: buildFixtureSchema() };
+        const ctx = {
+            __memoryStore: {
+                nodes: {
+                    A: { id: 'A', type: 'event', level: 'semantic', semanticDepth: 0, seqTo: 1, parentId: '', childrenIds: [], fields: {} },
+                    X: { id: 'X', type: 'character_sheet', level: 'semantic', semanticDepth: 0, seqTo: 1, parentId: '', childrenIds: [], fields: {} },
+                },
+                edges: [{ from: 'A', to: 'X', type: 'involved_in', seqTo: 1 }],
+            },
+        };
+        const api = getMemoryGraphReadApi(ctx);
+        // Explicit empty array — caller wants "nothing visible".
+        const summary = api.getEdgeSummary('X', { visibleNodeIds: [] });
+        expect(summary.sample_neighbors).toEqual([]);
     });
 });

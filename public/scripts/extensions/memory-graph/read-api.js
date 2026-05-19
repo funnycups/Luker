@@ -27,10 +27,12 @@
 // IMPORTANT (visibleIds default): `getInjectionState().visibleIds` is the
 // "current route LLM candidate pool" snapshot. It is empty until the recall
 // pipeline runs at least once (see `__recordInjectedNodeIds` in
-// external-api.js). Methods that default to "current visibleIds" therefore
-// fall back to an empty Set on first use; callers that need a guaranteed
-// candidate pool should pass `visibleNodeIds` / `visibleNodeIds` arrays
-// explicitly or call `listVisibleCandidates()` first.
+// external-api.js). For `getEdgeSummary` / `getNodeBrief` (the agent-only
+// hot path), when the snapshot is empty we transparently fall back to the
+// canonical top-rollup-projected pool (the same shape
+// `listVisibleCandidates()` returns) so edge projection still works.
+// Callers can override with an explicit `visibleNodeIds` array (including an
+// empty array to mean "nothing visible").
 
 import {
     getSettings,
@@ -327,6 +329,41 @@ export function getMemoryGraphReadApi(context) {
         try {
             const snap = getCurrentlyInjectedNodeIds(context);
             return snap?.visibleIds instanceof Set ? new Set(snap.visibleIds) : toIdSet(snap?.visibleIds);
+        } catch (_) {
+            return new Set();
+        }
+    }
+
+    /**
+     * Compute the canonical "top rollup" visible pool — the same shape
+     * listVisibleCandidates() returns (collectRootCandidates with empty
+     * query + projection to top rollup per type). Used as fallback when
+     * injection state is empty (agent-only mode) so edge projection works.
+     *
+     * Cached per factory instance (callers typically make 5-15 edge_summary
+     * / node_brief calls per dispatch; recomputing each time is wasteful).
+     */
+    let _canonicalVisibleSetCache = null;
+    function canonicalVisibleIdSet() {
+        if (_canonicalVisibleSetCache) return _canonicalVisibleSetCache;
+        const store = resolveStore();
+        if (!store) return new Set();
+        const settings = resolveSettings();
+        try {
+            const latestSeqIndex = getLatestSeqIndex(store);
+            const candidates = collectRootCandidates(
+                store,
+                settings,
+                { fullText: '' },
+                [],
+                context,
+                { latestSeqIndex, excludeMessages: 0 },
+            ) || [];
+            const ids = candidates
+                .map(node => String(node?.id || ''))
+                .filter(Boolean);
+            _canonicalVisibleSetCache = new Set(ids);
+            return _canonicalVisibleSetCache;
         } catch (_) {
             return new Set();
         }
@@ -644,9 +681,13 @@ export function getMemoryGraphReadApi(context) {
     function getEdgeSummary(id, options = {}) {
         const store = resolveStore();
         if (!store) return freezeEdgeSummaryView(null);
-        const nodeSet = options.visibleNodeIds !== undefined
-            ? toIdSet(options.visibleNodeIds)
-            : currentVisibleIdSet();
+        let nodeSet;
+        if (options.visibleNodeIds !== undefined) {
+            nodeSet = toIdSet(options.visibleNodeIds);
+        } else {
+            const fromInjection = currentVisibleIdSet();
+            nodeSet = fromInjection.size > 0 ? fromInjection : canonicalVisibleIdSet();
+        }
         const relationTypes = normalizeStringArray(options.edgeTypes);
         const limit = Number.isFinite(Number(options.limit)) ? Math.max(1, Math.floor(Number(options.limit))) : 8;
         const summary = buildEdgeSummary(store, String(id || '').trim(), {
@@ -667,9 +708,13 @@ export function getMemoryGraphReadApi(context) {
         const edgeSummaryLimit = Number.isFinite(Number(options.edgeSummaryLimit))
             ? Math.max(1, Math.floor(Number(options.edgeSummaryLimit)))
             : 8;
-        const nodeSet = options.visibleNodeIds !== undefined
-            ? toIdSet(options.visibleNodeIds)
-            : currentVisibleIdSet();
+        let nodeSet;
+        if (options.visibleNodeIds !== undefined) {
+            nodeSet = toIdSet(options.visibleNodeIds);
+        } else {
+            const fromInjection = currentVisibleIdSet();
+            nodeSet = fromInjection.size > 0 ? fromInjection : canonicalVisibleIdSet();
+        }
 
         let briefRaw;
         try {
