@@ -6810,3 +6810,86 @@ body:not(.movingUI) .drawer-content.maximized {
         border-width: 2px;
     }
 }
+
+/* === Announcements === */
+#announcement-banner-host {
+    width: var(--sheldWidth);
+    margin: 0 auto;
+}
+.announcement-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+    margin: 4px 0;
+    background: var(--SmartThemeBlurTintColor, rgba(255, 165, 0, 0.15));
+    border-left: 4px solid var(--warning, #ffae42);
+    border-radius: 4px;
+}
+.announcement-banner-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.announcement-level-info { color: var(--SmartThemeBodyColor, inherit); }
+.announcement-level-warning .announcement-level-icon { color: #ffae42; }
+.announcement-level-critical .announcement-level-icon { color: #ff5252; }
+.announcement-item {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.1));
+}
+.announcement-item:last-child { border-bottom: none; }
+.announcement-level-tag {
+    margin-left: auto;
+    opacity: 0.7;
+    text-transform: uppercase;
+    font-size: 0.75em;
+}
+#announcement-bell-badge.hidden { display: none; }
+#announcement-bell-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    background: #ff5252;
+    color: white;
+    border-radius: 10px;
+    padding: 0 6px;
+    font-size: 10px;
+    line-height: 14px;
+    min-width: 14px;
+    text-align: center;
+}
+#announcement-bell-button {
+    position: relative;
+    display: inline-flex;
+}
+.announcement-inbox-row {
+    padding: 8px 6px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.1));
+    cursor: pointer;
+}
+.announcement-inbox-row.is-unread strong { font-weight: 700; }
+.announcement-inbox-row.is-unread::before {
+    content: '';
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    background: #ff5252;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: middle;
+}
+.announcement-inbox-body {
+    padding: 8px 12px 8px 24px;
+    opacity: 0.9;
+}
+.announcement-inbox-time {
+    opacity: 0.6;
+    margin-left: 8px;
+}
+.announcement-inbox-empty {
+    padding: 24px;
+    text-align: center;
+    opacity: 0.7;
+}

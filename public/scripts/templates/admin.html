@@ -21,6 +21,9 @@
         <button type="button" class="newUserButton menu_button menu_button_icon" data-target-tab="registerNewUserBlock">
             <h4 data-i18n="New User">New User</h4>
         </button>
+        <button type="button" class="announcementsButton menu_button menu_button_icon" data-target-tab="announcementsTab">
+            <h4 data-i18n="Announcements">Announcements</h4>
+        </button>
     </nav>
 
     <div class="userAccountTemplate template_element">
@@ -256,5 +259,55 @@
                 </button>
             </div>
         </form>
+    </div>
+
+    <div class="navTab announcementsTab flex-container flexFlowColumn flexGap10" style="display: none;">
+        <div class="flex-container alignItemsCenter spaceBetween">
+            <h4 class="margin0" data-i18n="Announcements">Announcements</h4>
+            <div class="newAnnouncementButton menu_button menu_button_icon">
+                <i class="fa-fw fa-solid fa-plus"></i>
+                <span data-i18n="New announcement">New announcement</span>
+            </div>
+        </div>
+        <div class="announcementsList flex-container flexFlowColumn flexGap10"></div>
+
+        <div class="announcementsFormTemplate template_element">
+            <div class="announcement-form flex-container flexFlowColumn flexGap10">
+                <div class="flex-container alignItemsCenter flexGap10">
+                    <label data-i18n="Level">Level</label>
+                    <select class="announcementLevelInput text_pole">
+                        <option value="info" data-i18n="Info">Info</option>
+                        <option value="warning" data-i18n="Warning">Warning</option>
+                        <option value="critical" data-i18n="Critical">Critical</option>
+                    </select>
+                </div>
+                <div class="flex-container flexFlowColumn">
+                    <label data-i18n="Title">Title</label>
+                    <input type="text" class="announcementTitleInput text_pole" maxlength="200">
+                </div>
+                <div class="flex-container flexFlowColumn">
+                    <label data-i18n="Body (Markdown)">Body (Markdown)</label>
+                    <textarea class="announcementBodyInput text_pole" rows="10" maxlength="10000"></textarea>
+                </div>
+                <div class="flex-container flexFlowColumn">
+                    <label data-i18n="Preview">Preview</label>
+                    <div class="announcementPreview"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="announcementRowTemplate template_element">
+            <div class="announcement-admin-row flex-container alignItemsCenter flexGap10">
+                <span class="announcement-admin-level"></span>
+                <strong class="announcement-admin-title flex1"></strong>
+                <small class="announcement-admin-created"></small>
+                <div class="announcement-admin-edit menu_button menu_button_icon" title="Edit" data-i18n="[title]Edit">
+                    <i class="fa-fw fa-solid fa-pencil"></i>
+                </div>
+                <div class="announcement-admin-delete menu_button menu_button_icon warning" title="Delete" data-i18n="[title]Delete">
+                    <i class="fa-fw fa-solid fa-trash"></i>
+                </div>
+            </div>
+        </div>
     </div>
 </div>

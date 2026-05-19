@@ -32,6 +32,13 @@ import {
     getGitUpdateStatus,
     startGitUpdate,
 } from '../updater.js';
+import {
+    createAnnouncement,
+    deleteAnnouncement,
+    listAnnouncements,
+    updateAnnouncement,
+    ValidationError as AnnouncementValidationError,
+} from '../announcements.js';
 import { ensureDirectory, getConfigFilePath, getConfigValue, normalizeZipEntryPath, reloadConfigCache } from '../util.js';
 import {
     installServerPlugin,
@@ -871,5 +878,72 @@ router.post('/slugify', requireAdminMiddleware, async (request, response) => {
     } catch (error) {
         console.error('Slugify failed:', error);
         return response.sendStatus(500);
+    }
+});
+
+function respondAnnouncementError(error, response) {
+    if (error instanceof AnnouncementValidationError) {
+        return response.status(400).json({ error: error.message });
+    }
+    console.error('Announcement endpoint failed:', error);
+    return response.status(500).json({ error: 'internal' });
+}
+
+router.post('/announcements/list', requireAdminMiddleware, async (_request, response) => {
+    try {
+        const items = await listAnnouncements();
+        return response.json({ items });
+    } catch (error) {
+        return respondAnnouncementError(error, response);
+    }
+});
+
+router.post('/announcements/create', requireAdminMiddleware, async (request, response) => {
+    try {
+        const body = request.body || {};
+        const item = await createAnnouncement({
+            level: body.level,
+            title: body.title,
+            body: body.body,
+            createdBy: request.user?.profile?.handle || 'admin',
+        });
+        return response.json({ item });
+    } catch (error) {
+        return respondAnnouncementError(error, response);
+    }
+});
+
+router.post('/announcements/update', requireAdminMiddleware, async (request, response) => {
+    try {
+        const body = request.body || {};
+        if (typeof body.id !== 'string' || !body.id) {
+            return response.status(400).json({ error: 'id is required' });
+        }
+        const item = await updateAnnouncement({
+            id: body.id,
+            level: body.level,
+            title: body.title,
+            body: body.body,
+        });
+        if (item === null) {
+            return response.status(404).json({ error: 'not found' });
+        }
+        return response.json({ item });
+    } catch (error) {
+        return respondAnnouncementError(error, response);
+    }
+});
+
+router.post('/announcements/delete', requireAdminMiddleware, async (request, response) => {
+    try {
+        const body = request.body || {};
+        if (typeof body.id !== 'string' || !body.id) {
+            return response.status(400).json({ error: 'id is required' });
+        }
+        const ok = await deleteAnnouncement({ id: body.id });
+        if (!ok) return response.status(404).json({ error: 'not found' });
+        return response.sendStatus(204);
+    } catch (error) {
+        return respondAnnouncementError(error, response);
     }
 });

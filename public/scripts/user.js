@@ -10,6 +10,7 @@ import { POPUP_RESULT, POPUP_TYPE, callGenericPopup } from './popup.js';
 import { canViewSecrets } from './secrets.js';
 import { renderTemplateAsync } from './templates.js';
 import { copyText, debounce, ensureImageFormatSupported, getBase64Async, humanFileSize } from './utils.js';
+import { formatAnnouncementBody } from './announcements.js';
 
 /**
  * @type {import('../../src/users.js').UserViewModel} Logged in user
@@ -2341,6 +2342,111 @@ async function openAdminPanel() {
             .append(`<div><strong>${t`Disabled users:`}</strong> ${disabledUsers.length ? disabledUsers.join(', ') : t`None`}</div>`);
     }
 
+    async function fetchAdminAnnouncements() {
+        const response = await fetch('/api/users/announcements/list', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+        });
+        if (!response.ok) {
+            toastr.error(t`Failed to load announcements.`);
+            return [];
+        }
+        const data = await response.json();
+        return Array.isArray(data?.items) ? data.items : [];
+    }
+
+    function announcementLevelLabel(level) {
+        if (level === 'critical') return t`Critical`;
+        if (level === 'warning') return t`Warning`;
+        return t`Info`;
+    }
+
+    async function openAnnouncementForm(existing) {
+        const formTemplate = template.find('.announcementsFormTemplate').children().first().clone();
+        if (existing) {
+            formTemplate.find('.announcementLevelInput').val(existing.level);
+            formTemplate.find('.announcementTitleInput').val(existing.title);
+            formTemplate.find('.announcementBodyInput').val(existing.body);
+        } else {
+            formTemplate.find('.announcementLevelInput').val('info');
+        }
+        const previewEl = formTemplate.find('.announcementPreview');
+        const bodyEl = formTemplate.find('.announcementBodyInput');
+        const refreshPreview = () => {
+            previewEl.html(formatAnnouncementBody(bodyEl.val()));
+        };
+        bodyEl.on('input', refreshPreview);
+        refreshPreview();
+
+        const result = await callGenericPopup(formTemplate, POPUP_TYPE.CONFIRM, '', {
+            okButton: existing ? t`Save` : t`Create`,
+            cancelButton: t`Cancel`,
+            wide: true,
+            large: true,
+        });
+        if (result !== POPUP_RESULT.AFFIRMATIVE) return null;
+
+        return {
+            level: String(formTemplate.find('.announcementLevelInput').val()),
+            title: String(formTemplate.find('.announcementTitleInput').val()),
+            body: String(formTemplate.find('.announcementBodyInput').val()),
+        };
+    }
+
+    async function renderAnnouncements() {
+        const items = await fetchAdminAnnouncements();
+        const list = template.find('.announcementsList');
+        list.empty();
+        if (items.length === 0) {
+            list.append(`<div style="opacity: 0.6; padding: 16px;">${$('<div>').text(t`No announcements yet`).html()}</div>`);
+            return;
+        }
+        for (const item of items) {
+            const row = template.find('.announcementRowTemplate').children().first().clone();
+            row.find('.announcement-admin-level').text(announcementLevelLabel(item.level));
+            row.find('.announcement-admin-level').addClass(`announcement-level-${item.level}`);
+            row.find('.announcement-admin-title').text(item.title);
+            row.find('.announcement-admin-created').text(new Date(item.createdAt).toLocaleString());
+            row.find('.announcement-admin-edit').on('click', async () => {
+                const payload = await openAnnouncementForm(item);
+                if (!payload) return;
+                const response = await fetch('/api/users/announcements/update', {
+                    method: 'POST',
+                    headers: getRequestHeaders(),
+                    body: JSON.stringify({ id: item.id, ...payload }),
+                });
+                if (!response.ok) {
+                    const data = await response.json().catch(() => ({}));
+                    toastr.error(data?.error || t`Update failed.`);
+                    return;
+                }
+                toastr.success(t`Announcement updated.`);
+                await renderAnnouncements();
+            });
+            row.find('.announcement-admin-delete').on('click', async () => {
+                const safeTitle = $('<div>').text(item.title).html();
+                const ok = await callGenericPopup(
+                    t`Delete announcement "${safeTitle}"? This cannot be undone.`,
+                    POPUP_TYPE.CONFIRM,
+                );
+                if (ok !== POPUP_RESULT.AFFIRMATIVE) return;
+                const response = await fetch('/api/users/announcements/delete', {
+                    method: 'POST',
+                    headers: getRequestHeaders(),
+                    body: JSON.stringify({ id: item.id }),
+                });
+                if (!response.ok) {
+                    const data = await response.json().catch(() => ({}));
+                    toastr.error(data?.error || t`Delete failed.`);
+                    return;
+                }
+                toastr.success(t`Announcement deleted.`);
+                await renderAnnouncements();
+            });
+            list.append(row);
+        }
+    }
+
     async function renderServerPlugins() {
         const payload = await getServerPluginsAdminData();
         if (!payload) {
@@ -2524,6 +2630,8 @@ async function openAdminPanel() {
             renderServerPlugins();
         } else if (target === 'configEditorTab') {
             renderRuntimeConfig();
+        } else if (target === 'announcementsTab') {
+            renderAnnouncements();
         }
     });
 
@@ -2593,6 +2701,23 @@ async function openAdminPanel() {
         } finally {
             button.removeClass('disabled');
         }
+    });
+
+    template.find('.newAnnouncementButton').on('click', async () => {
+        const payload = await openAnnouncementForm(null);
+        if (!payload) return;
+        const response = await fetch('/api/users/announcements/create', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            toastr.error(data?.error || t`Create failed.`);
+            return;
+        }
+        toastr.success(t`Announcement created.`);
+        await renderAnnouncements();
     });
 
     template.find('.createUserDisplayName').on('input', async function () {

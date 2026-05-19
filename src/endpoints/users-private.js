@@ -18,6 +18,7 @@ import { checkForNewContent, CONTENT_TYPES } from './content-manager.js';
 import { invalidateRecentChatIndex } from './chats.js';
 import { color, Cache, getConfigValue, ensureDirectory, isValidUrl, normalizeZipEntryPath, trimTrailingSlash } from '../util.js';
 import { createLanMigrationOffer, LAN_MIGRATION_PATH_PREFIX } from '../lan-migration.js';
+import { listForUser, mergeReadIds } from '../announcements.js';
 
 const RESET_CACHE = new Cache(5 * 60 * 1000);
 const FULL_IMPORT_SELECTION = Object.freeze({
@@ -1108,6 +1109,48 @@ router.post('/reset-step2', async (request, response) => {
         return response.sendStatus(204);
     } catch (error) {
         console.error('Recover step 2 failed:', error);
+        return response.sendStatus(500);
+    }
+});
+
+router.post('/announcements/me/list', async (request, response) => {
+    try {
+        if (!request.user) {
+            return response.sendStatus(403);
+        }
+        const handle = request.user.profile.handle;
+        const userRecord = await storage.getItem(toKey(handle));
+        const readIds = Array.isArray(userRecord?.readAnnouncementIds)
+            ? userRecord.readAnnouncementIds
+            : [];
+        const result = await listForUser({ readIds });
+        return response.json(result);
+    } catch (error) {
+        console.error('Announcements me/list failed:', error);
+        return response.sendStatus(500);
+    }
+});
+
+router.post('/announcements/me/mark-read', async (request, response) => {
+    try {
+        if (!request.user) {
+            return response.sendStatus(403);
+        }
+        const ids = Array.isArray(request.body?.ids) ? request.body.ids : [];
+        const handle = request.user.profile.handle;
+        const userRecord = await storage.getItem(toKey(handle));
+        if (!userRecord) {
+            return response.sendStatus(404);
+        }
+        const next = mergeReadIds({
+            existing: userRecord.readAnnouncementIds,
+            ids,
+        });
+        userRecord.readAnnouncementIds = next;
+        await storage.setItem(toKey(handle), userRecord);
+        return response.sendStatus(204);
+    } catch (error) {
+        console.error('Announcements me/mark-read failed:', error);
         return response.sendStatus(500);
     }
 });
