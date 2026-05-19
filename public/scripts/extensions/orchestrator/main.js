@@ -4192,7 +4192,7 @@ function buildAiIterationSystemPrompt(settings, session = null) {
             '- The same loop tools enabled in this profile (chat / memory / lorebook / note / search), gated identically.',
             '- The `get_draft` tool — they call it themselves if they need the in-flight draft body.',
             '',
-            'Sub-agents do NOT see: each other, each other\'s outputs, the main agent\'s reasoning or prior tool calls, mid-turn state changes (their chat context is frozen). They cannot dispatch other sub-agents (no recursion), cannot write the message body, cannot finalize. Each runs its own tool-call mini-loop (capped at 8 internal rounds) and terminates by emitting a no-tool-call round — that round\'s text becomes the output returned via `await_subagents`.',
+            'Sub-agents do NOT see: each other, each other\'s outputs, the main agent\'s reasoning or prior tool calls, mid-turn state changes (their chat context is frozen). They cannot dispatch other sub-agents (no recursion), cannot write the message body, cannot finalize. Each runs its own tool-call mini-loop (capped at 16 internal rounds) and terminates by emitting a no-tool-call round — that round\'s text becomes the output returned via `await_subagents`.',
             '',
             '## Description writing convention (CRITICAL)',
             '',

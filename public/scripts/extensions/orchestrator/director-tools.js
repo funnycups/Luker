@@ -289,12 +289,14 @@ export async function executeGetDraftTool(handle) {
 /**
  * Default cap on the sub-agent's own tool-call mini-loop. Independent
  * from the main agent's `maxRounds` — sub-agents are expected to
- * converge quickly (gather context, then emit a final text response).
- * The cap is a runaway safety net; in practice a well-prompted sub-agent
- * either calls one or two read tools and answers, or just answers from
- * the cached chat history directly.
+ * converge in modest rounds (gather context, then emit a final text
+ * response). The cap is a runaway safety net; in practice a short
+ * critic finishes in 1-3 rounds, and a recall-style sub-agent
+ * (memory_scout / memory_curator) doing schema + a few find_by_name +
+ * brief + 1-2 drill calls fits in ~10-12 rounds. 16 gives those a
+ * comfortable headroom without letting a runaway burn the whole turn.
  */
-const SUB_AGENT_MAX_ROUNDS = 8;
+const SUB_AGENT_MAX_ROUNDS = 16;
 
 /**
  * Creates the per-turn sub-agent dispatcher used by director-runtime.
