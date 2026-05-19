@@ -50,6 +50,17 @@ import { buildProfileDelta } from './delta.js';
 
 let activeAbortController = null;
 
+function isProfileEqual(adapter, before, after) {
+    if (!before || !after) return false;
+    try {
+        const { delta } = buildProfileDelta(adapter, before, after);
+        return !delta;
+    } catch (error) {
+        console.warn('[iteration-studio] Failed to compare profiles', error);
+        return false;
+    }
+}
+
 function createEmptySession(adapter, context, settings) {
     const initial = adapter.getInitialProfile(context, settings) || {};
     const scope = adapter.getDefaultScope(context);
@@ -95,7 +106,14 @@ export async function openIterationStudio(adapter, context, settings, root) {
 
     let session = createEmptySession(adapter, context, settings);
     const latest = findLatestHistorySession(historyState, adapter.mode);
-    if (latest) {
+    // Auto-restore latest only when its base still matches the current editor.
+    // External edits between sessions invalidate the stored base — its diffs
+    // and apply targets would point at a stale profile. Drifted sessions stay
+    // in the history list so the user can still load them manually.
+    const canResumeLatest = latest
+        ? isProfileEqual(adapter, latest.baseWorkingProfile, session.baseWorkingProfile)
+        : false;
+    if (canResumeLatest) {
         replaceSessionInPlace(session, latest, adapter);
     } else {
         historyState = upsertHistorySession(adapter, historyState, session);
