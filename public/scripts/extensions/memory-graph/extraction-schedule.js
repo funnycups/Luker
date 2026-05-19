@@ -11,11 +11,12 @@
 
 export const DEFAULT_PER_TYPE_INSTRUCTIONS = {
     event: [
-        'Event decision: SKIP is the default. Most batches do not warrant a new event.',
-        'Create at most ONE event node per batch. If multiple sub-events happened, merge into one coherent summary.',
-        'Emit an event only when something of 24h+ consequence happened (契约/誓言/婚约/师徒关系 建立或破裂、不可逆物理状态变化、长期身份/立场变更、新角色登场并被命名、新地点建立长期 controller、获得/转让重要物品).',
-        'Do NOT emit an event for: 单次场景姿态、当前心情、临时性服务关系、对话氛围、未付诸行动的情绪、被某个 KEEP 事件包含的子动作、引述的对白原文.',
-        'When emitting, the summary must start with "时间：<具体时间>；" using complete in-world date/time and follow the event style standard.',
+        'Event decision: MANDATORY — exactly ONE event node per batch. Even routine turns (路过/休整/闲聊/单次场景) produce a one-line event; compression\'s KEEP/FOLD/DROP filter handles noise at rollup.',
+        'If multiple sub-events happened, merge into one coherent summary.',
+        'High-consequence events (契约/誓言/婚约/师徒关系 建立或破裂、不可逆物理状态变化、长期身份/立场变更、新角色登场并被命名、新地点建立长期 controller、获得/转让重要物品) get full causal detail.',
+        'Routine events (单次场景姿态/当前心情/临时性服务关系/对话氛围/被某 KEEP 包含的子动作) get a brief one-line summary so the timeline is continuous; their detail will be dropped at compression.',
+        'Summary must start with "时间：<具体时间>；" using complete in-world date/time and follow the event style standard.',
+        'Never copy quoted dialogue verbatim into summary — paraphrase to action description.',
     ].join('\n'),
     character_sheet: [
         'Character decision: SKIP unless the character\'s long-term traits/identity/goal/aliases changed in this batch.',

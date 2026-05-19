@@ -81,7 +81,8 @@ function buildDefaultDirectorTools() {
  *                            (anti-pollution: default disposition is do nothing)
  *     - memory_curator     — updates the memory graph based on the just-committed turn;
  *                            multi-round observe-act using memory_* read tools to verify before
- *                            writing; defaults to SKIP for most batches; then runs hierarchical
+ *                            writing; emits exactly one event per dispatch (timeline continuity);
+ *                            stable-fact types default to SKIP; then runs hierarchical
  *                            compaction when warranted
  *
  * Order matters for readability in the UI, not for behavior.
@@ -522,15 +523,17 @@ function buildDefaultDirectorSubAgents() {
         },
         {
             id: 'memory_curator',
-            description: 'Post-draft housekeeping sub-agent that updates the memory graph based on the just-committed turn. Observes existing nodes before writing; defaults to SKIP for most batches; emits at most one event when something of 24h+ consequence happened. After extraction, evaluates whether event compaction is warranted and runs it. Multi-round observe-act using memory_* read tools to verify before writing. Returns a short summary of what was updated (or "no changes" when SKIP-all).',
+            description: 'Post-draft housekeeping sub-agent that updates the memory graph based on the just-committed turn. Always emits exactly one event node per dispatch (even for routine turns — compression filters noise at rollup); stable-fact types (character_sheet / location_state / custom) default to SKIP. Observes existing nodes before writing. After extraction, evaluates whether event compaction is warranted and runs it. Multi-round observe-act using memory_* read tools to verify before writing. Returns a short summary of what was updated.',
             systemPrompt: [
                 '你是 memory curator。你的职责是观察刚发生的一轮对话,把其中**故事时间往后推 24 小时仍然约束剧情走向**的稳定事实变成图记忆的更新。',
                 '',
-                '## 核心原则',
+                '## 核心原则(type-specific)',
                 '',
-                '**默认 SKIP。** 大多数对话轮次不需要任何图变更 — 这是常态,不是失败。',
-                '适合 emit 的:契约/誓言/婚约/师徒关系建立或破裂、不可逆物理状态变化、长期身份/立场变更、新角色登场并被命名、新地点建立长期 controller、获得/转让重要物品。',
-                '不适合 emit 的:单次场景姿态、当前心情、临时性服务关系、对话氛围、未付诸行动的情绪、被某个 KEEP 事件包含的子动作、引述的对白原文。',
+                '**event 类型:每次 dispatch 必出一个 event 节点。** 即便本轮只是路过/休整/闲聊/单次场景 — 仍写一行简短 event(电报体)。压缩端的 KEEP/FOLD/DROP 在 rollup 时过滤 routine noise;但**叶层必须有连续 event 流,否则时间线断裂、recall 无法重建剧情上下文**。高后果事件(契约/誓言/婚约/师徒关系建立或破裂、不可逆物理状态变化、长期身份/立场变更、新角色登场、地点 controller 变更、重要物品转让)写完整因果细节;routine 事件写一行交代时间和人物动作即可。',
+                '',
+                '**其他类型(character_sheet / location_state / 自定义)默认 SKIP。** 写错的代价高(LLM 编属性)。emit 的门槛:候选变更在故事时间往后 24h 之后仍约束故事走向。"不一定"/"取决于场景" → 不写。',
+                '',
+                '不要把单次场景姿态、当前心情、临时性服务关系、对话氛围、未付诸行动的情绪、引述的对白原文写进 character_sheet / location_state 等字段。',
                 '',
                 '**你比记忆图内置抽取更强。** 内置抽取是 one-shot;你可以多轮 observe-act,先查再写。**永远不要不查就 create** — 那是内置抽取被迫做的弱点;你的工具集让你能在调用一次工具的时间内确认同名节点是否存在。',
                 '',
@@ -547,6 +550,8 @@ function buildDefaultDirectorSubAgents() {
                 '4. **判定**: 对每条候选变更,自检"这个事实在故事时间往后 24 小时之后还约束故事吗?"如果答案是"不一定"或"取决于场景",**不写**。',
                 '',
                 '5. **写**: 调 `memory_node_create` / `memory_node_edit` / `memory_node_delete` / `memory_link_upsert` / `memory_link_delete` 落地。每次工具调用前用一句简短中文说明意图,无需结构化 thought 块。',
+                '',
+                '6. **event 兜底**: 完成 stable-fact 写入后,如果还没写 event,**必须调一次** `memory_node_create({ type: \'event\', fields: { summary: \'时间：<本轮时间>；<本轮主线动作>\' } })`。即便本轮 routine 也要 emit。漏了 event 会让时间线断裂 — 这是硬要求。',
                 '',
                 '### Phase B — 压缩',
                 '',
@@ -588,7 +593,7 @@ function buildDefaultDirectorSubAgents() {
                 '',
                 '- 不要查到信息一致还反复查 — 一个角色一次 `find_by_name` + 一次 `node_brief` 就够。',
                 '- 不要在 thought 里穷举每个 type 是否要写 — 直接对你判断要动的 type 操作即可。',
-                '- 不要为 SKIP 写一段长长的理由 — SKIP 就是不出工具调用。',
+                '- 不要为 stable-fact 类型(character_sheet / location_state 等)的 SKIP 写一段长长的理由 — SKIP 就是不出该 type 的工具调用(event 不算 SKIP,每轮必出)。',
                 '- 不要做"防御性" edit(只是把 LLM 觉得"应该更新"但没证据的字段刷一遍)。**没有证据就不写**。',
                 '- 不要把对白原文复制进任何字段。所有字段都是抽象,不是 transcript。',
                 '',

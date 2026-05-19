@@ -13,9 +13,9 @@ describe('DEFAULT_PER_TYPE_INSTRUCTIONS', () => {
         expect(DEFAULT_PER_TYPE_INSTRUCTIONS.location_state).toEqual(expect.stringContaining('Location'));
     });
 
-    test('event instructions cap creation at one node per batch (skip-default policy)', () => {
-        expect(DEFAULT_PER_TYPE_INSTRUCTIONS.event).toContain('SKIP is the default');
-        expect(DEFAULT_PER_TYPE_INSTRUCTIONS.event).toContain('at most ONE event node per batch');
+    test('event instructions enforce mandatory one-node-per-batch policy', () => {
+        expect(DEFAULT_PER_TYPE_INSTRUCTIONS.event).toContain('MANDATORY');
+        expect(DEFAULT_PER_TYPE_INSTRUCTIONS.event).toContain('exactly ONE event node per batch');
     });
 
     test('character instructions carry the consistency rule aligning sheets with card/world-info baseline', () => {
