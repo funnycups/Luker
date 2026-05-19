@@ -95,7 +95,7 @@ loop.finalize -> out
 
 ## 內建工具
 
-工具走 OpenAI function-calling 協議,結果以 `role: tool` 訊息形式回到 Agent 的下一輪上下文。共 11 個可選工具 + 1 個強制 `finalize`:
+工具走 OpenAI function-calling 協議,結果以 `role: tool` 訊息形式回到 Agent 的下一輪上下文。共 23 個可選工具 + 1 個強制 `finalize`:
 
 | 工具 | 作用 | 簡單範例(RP 場景) |
 |---|---|---|
@@ -106,8 +106,17 @@ loop.finalize -> out
 | `lorebook_search(query, limit)` | 在所有啟用的世界書裡 substring 搜尋條目。**預設排除本回合已啟用的條目**(那些已經被注入主上下文,再返回會浪費 token)。返回 `entries` + `excluded_active_count`。 | `lorebook_search('落雁城')` 翻出未啟用的「落雁城」相關設定。 |
 | `lorebook_get(entry_key)` | 按 key 拉取條目全文。**不去重**——允許 agent 精確引用某條已啟用條目以保持術語一致。 | `lorebook_get('落雁城-主城')` 把這一條全文調出來引用。 |
 | `memory_list_candidates(seq_window?, types?, exclude_recent_messages?)` | 列舉可見的記憶圖候選池——與記憶圖自身召回 LLM 看到的同一組。回傳 `{ candidates: [{ id, type, level, title, seqTo, semanticDepth }] }`,按時間倒序。**召回流水線的第一步**。 | `memory_list_candidates({ types: ['event'] })` 回傳召回 LLM 會考慮的最近事件節點。 |
-| `memory_rank(query, mode?, types?, k?)` | 按 `recency` / `vector` / `keyword` / `hybrid` 排序候選。回傳 `{ ranked: [{ id, type, title, seqTo, score, scoreMode }] }`。候選池較大時用它快速產生短名單,再拉詳細 brief。 | `memory_rank({ query: '家族秘密', mode: 'hybrid', k: 8 })` 用混合分數浮現最相關的 8 個節點。 |
-| `memory_node_brief(node_id, include_edge_summary?, edge_summary_limit?)` | 節點的標準化 brief(title、summary、key/row 欄位、子節點數、exposure、edge summary、alwaysInject)——與召回 LLM 看到的單行格式一致。 | 排序後,`memory_node_brief({ node_id: 'evt_42' })` 拉一個節點的完整 brief。 |
+| `memory_keyword_search(query, types?, k?)` | 按 token 比對 title + 欄位值,無需 profile。回傳 `{ results: [{ id, type, title, seqTo, score, scoreMode: 'keyword' }] }`,按 score 降序。按關鍵字或短語查時用。 | `memory_keyword_search({ query: 'family secret', k: 8 })` |
+| `memory_vector_search(query, types?, k?)` | 按設定的 embedding profile 做語義相似度搜尋。未設定 embedding profile 時直接拋 `NO_EMBEDDING_PROFILE`,不靜默 fallback;需要時手動回落到 `memory_keyword_search`。 | `memory_vector_search({ query: 'the moment she chose forgiveness', k: 5 })` |
+| `memory_find_by_name(query, types?)` | 在 title + primary key 欄(通常含 aliases)上做大小寫不敏感子串比對。回傳 `{ matches: [...] }`。**建立角色 / 地點前先呼叫它確認實體不存在** —— 名稱去重時比 search 更便宜也更可靠。 | `memory_find_by_name({ query: 'Eileen', types: ['character_sheet'] })` |
+| `memory_compaction_candidates(type, depth?)` | 純讀:查哪些節點群目前可做層級壓縮。回傳 `{ groups: [{ depth, childIds, fanIn }] }`,搭配 `memory_compact_nodes` 用。`compression.mode === 'none'` 的型別會回傳空 groups。 | `memory_compaction_candidates({ type: 'event' })` |
+| `memory_node_create({ type, title, fields, links?, ref? })` | 建立新語義節點。節制使用 — 先呼叫 `memory_find_by_name` 確認實體不存在。回傳 `{ ok, id }`。 | `memory_node_create({ type: 'character_sheet', title: 'Marcus', fields: { traits: 'warrior, terse' } })` |
+| `memory_node_edit({ node_id, set_fields?, clear_fields?, title? })` | 給已有節點打欄位補丁。`fields` 的 key 必須在該 type 的 `tableColumns` schema 裡(用 `memory_schema` 確認)。回傳 `{ ok }`。 | `memory_node_edit({ node_id: 'n_eileen', set_fields: { goal: 'reach the summit' } })` |
+| `memory_node_delete({ node_id })` | 按 id 刪節點。僅當節點顯然過期 / 重複 / 錯誤時用。回傳 `{ ok }`。 | `memory_node_delete({ node_id: 'n_stale_dup' })` |
+| `memory_link_upsert({ source_node_id\|source_ref, links })` | 在節點間加 relation 邊。必須使用規範的 relation 詞表。允許同一對節點上多種 relation 並存(複合狀態)。回傳 `{ ok, applied }`。 | `memory_link_upsert({ source_node_id: 'n_eileen', links: [{ target_node_id: 'n_protag', relation: 'partner_of' }] })` |
+| `memory_link_delete({ source_node_id, target_node_id, relation, direction? })` | 刪 relation 邊。該方向上的 relation 不再成立時用(關係破裂、債務償清)。**不要為「替換」而刪** —— 複合多邊狀態本身就是合法的。回傳 `{ ok, removed }`。 | `memory_link_delete({ source_node_id: 'n_eileen', target_node_id: 'n_protag', relation: 'sworn_to' })` |
+| `memory_compact_nodes({ type, child_ids, summary, fields? })` | 建立一個高層 rollup 節點,把指定 children reparent 進來;同時加 `semantic_contains` 邊。在 `memory_compaction_candidates` 回傳 groups 後呼叫。回傳 `{ ok, rollup_node_id }`。 | `memory_compact_nodes({ type: 'event', child_ids: ['e1', 'e2', 'e3'], summary: '時間：Day 1-3；...' })` |
+| `memory_node_brief(node_id, include_edge_summary?, edge_summary_limit?)` | 節點的標準化 brief(title、summary、key/row 欄位、子節點數、exposure、edge summary、alwaysInject)——與召回 LLM 看到的單行格式一致。 | 搜尋拿到短名單後,`memory_node_brief({ node_id: 'evt_42' })` 拉一個節點的完整 brief。 |
 | `memory_edge_summary(node_id, edge_types?, limit?)` | 只回傳邊摘要 `{ degree, relations, sample_neighbors }`。只想判斷「這是不是個 hub」而不要整個 brief 時用。 | `memory_edge_summary({ node_id: 'evt_42' })` 只取拓撲訊號。 |
 | `memory_expand_seeds(seed_ids, hops?, edge_types?, include_children?)` | 從種子 id 沿子節點 + 投影邊做 BFS 擴展。當某節點主題相關但具體細節大機率在子節點或相關 rollup 時用。 | `memory_expand_seeds({ seed_ids: ['evt_42'], hops: 1, include_children: true })` 浮現 `evt_42` 的子節點。 |
 | `memory_schema()` | 一輪一次:有哪些節點型別,哪些欄位是 key vs detail,哪些型別走 hierarchical compression。讓你能正確解讀其他 memory_* 工具的回傳。 | 召回開始前 `memory_schema()` 一次,瞭解可用的型別集。 |

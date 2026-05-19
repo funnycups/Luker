@@ -58,7 +58,7 @@ Director 是編排器裡唯一一種**接管(takeover)模式** —— 這一回�
 在擴充套件抽屜的「多智慧體編排」面板裡,把**執行模式**設為 **Director(多代理)**。切到 Director 後,spec / agenda / loop 的設定卡片會自動收起,Director 自己的設定卡片出現。
 
 ::: tip 99% 的人不該手搓主代理 system prompt
-預設主代理系統提示詞與預設的十一個子代理 id **強耦合**——它已經按「先派偵察、起草、再派評審、迭代修訂」的紀律調好了。要改的話推薦用 [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio)用自然語言描述需求,讓它透過工具呼叫 patch 你的 profile。
+預設主代理系統提示詞與預設的十二個子代理 id **強耦合**——它已經按「先派偵察、起草、再派評審、迭代修訂、最後落盤」的紀律調好了。要改的話推薦用 [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio)用自然語言描述需求,讓它透過工具呼叫 patch 你的 profile。
 :::
 
 ## 工作流梗概
@@ -82,7 +82,7 @@ loop: "主代理坐在寫作台前" {
     shape: diamond
   }
 
-  consult: "找位顧問(預設 profile 自帶 11 個子代理)" {
+  consult: "找位顧問(預設 profile 自帶 12 個子代理)" {
     style.fill: "#fff3e0"
     pre: "起草前偵察\nintent_scout · chat_scout · memory_scout ·\nlorebook_scout · notes_pickup_scout ·\nepistemic_scout · canon_scout(按需)" {
       style.fill: "#fffde7"
@@ -93,7 +93,7 @@ loop: "主代理坐在寫作台前" {
     post: "起草後評審\nvoice_critic · continuity_critic" {
       style.fill: "#fffde7"
     }
-    housekeeping: "起草後清理\nnotes_curator —— notes 子系統唯一的寫入點\n(預設:什麼也不做)" {
+    housekeeping: "起草後清理\nmemory_curator —— 把會延續的事實寫進記憶圖\nnotes_curator —— notes 子系統唯一的寫入點\n(預設:什麼也不做)" {
       style.fill: "#fffde7"
     }
   }
@@ -138,13 +138,13 @@ loop.finalize -> out
 
 3. **子代理是「一次性顧問」**:派遣時拿到當前聊天快照 + 主代理寫的任務簡報 + 自己的系統提示詞 + 啟用的迴圈工具 + `get_draft()`。子代理彼此看不到對方的存在,看不到主代理的推理,**不能再向下派遣**,也**不能直接寫正文**——它們只產出文本,主代理決定怎麼用。
 
-4. **預設 profile 自帶 11 個為 RP 最佳化過的子代理**:
+4. **預設 profile 自帶 12 個為 RP 最佳化過的子代理**:
 
    | 子代理 | 作用 | 簡單範例(RP 場景) |
    |---|---|---|
    | `intent_scout` | 起草前跨源偵察 —— 把使用者最近的輸入(顯式訴求、括號 / OOC 旁白、有載體的隱式信號)與世界書裡的「作者向指令」類條目(風格規則、節奏、角色寫法、創作約束、輸出規範)交叉,surface 使用者本回合想要什麼 + 世界書對寫作有什麼要求。 | 「使用者旁白:第 72 樓 `(寫慢些)`。世界書 `pov-rules`:『始終第二人稱敘述,不破第四面牆』。林晚專用條目:『動怒時以碎句開頭,然後陷入沉默。』」 |
    | `chat_scout` | 起草前單源偵察 —— 掃近期聊天,挑出主代理起草要靠的載體狀態。 | 返回 5 段 `Item / Source / Why`,例如「林晚的焦慮 / 第 42 樓 / 會把對話引回家族話題」。 |
-   | `memory_scout` | 起草前單源偵察 —— 透過記憶圖唯讀 API 跑一遍接近原生召回級別(LLM-grade recall)的召回過程。枚舉可見候選池,按時間近度與邊結構排序 / 展開,必要時下鑽 rollup,然後返回一份帶引用與 signal 級別的短清單;signal 來源是 API 暴露的結構訊號(edge density / exposure / alwaysInject),不再依賴 chat。**不**讀聊天與世界書 —— 那是其他 scout 的活。 | 「`evt_42`(第 3 章外祖母線索)是 hub —— 其子節點裡有 draft 要回收的告白節拍。降權:`msg_18`(一次性提及,無後續)。」 |
+   | `memory_scout` | 起草前的單源 scout,透過 memory-graph 唯讀 API 跑一次 LLM 級召回。列舉可見候選池,用 `memory_find_by_name` / `memory_keyword_search`(或設定了 embedding profile 時 `memory_vector_search`)定位命名實體或主題命中,必要時透過 `memory_expand_seeds` 鑽 rollup,然後回傳帶 signal level 的 ≤6 條引用列表(signal 來自 API 結構訊號:edge density、exposure、alwaysInject)。不讀 chat 或 lorebook(那是別的 scout 的活)。不改圖。 | 「`evt_42`(第 3 章外祖母線索)是 hub —— 其子節點裡有 draft 要回收的告白節拍。降權:`msg_18`(一次性提及,無後續)。」 |
    | `lorebook_scout` | 起草前單源偵察 —— 拉啟動之外的世界書條目。 | 「『洛陽主城』條目尚未進上下文;相關性:林晚的外祖母在那。」 |
    | `notes_pickup_scout` | 起草前 scout —— 掃描 OPEN notes 區塊(agent 自己在更早回合開啟的伏筆、承諾、章節大綱),挑出本回合觸發條件成熟的 id。不分析、不寫稿——只挑出來。 | 「`o_a3f2`(外祖母在洛陽)成熟——林晚剛提到這座城。`o_b8c1`(神殿誓言)還沒到時機。」 |
    | `epistemic_scout` | 起草前跨源偵察 —— 把聊天(每個角色經歷過什麼)與世界書 / 記憶(世界裡能知道什麼)交叉,給出每個角色的「知道 / 不知道 / 上帝視角陷阱」清單。 | 「林晚**不知道**使用者是圍城將軍的兒子 —— 她只見過他兩次,帶話的人還沒出場。」 |
@@ -152,9 +152,10 @@ loop.finalize -> out
    | `plot_brainstormer` | 中段頭腦風暴 —— 每個角度產出一份結構草圖。可按不同角度平行派多份拿到真正不同的選項。 | 角度 A「正面衝突」 / 角度 B「沉默本身成為節拍」 / 角度 C「她藉轉向洛陽話題躲避」。 |
    | `voice_critic` | 起草後評審 —— 人性 & 口吻。揪出「資料人」式描寫(冷觀察動詞 / 資料詞彙 / 彙報式對白等動情時刻應該燙的地方卻寫得冷)和冷設定誤讀(冷設定角色被寫成真的冷,而不是「冷皮包熱瓤」)。口吻語域錯配是次要維度。 | 「草稿裡林晚『以臨床抽離的姿態觀察對象的微表情漂移』—— 這是傳感器筆法,不是活人筆法。換成她真的有的某個感覺,即使表面仍然剋制。」 |
    | `continuity_critic` | 起草後評審 —— 僅查硬衝突。預設信任 draft;只有當聊天 / 記憶 / 世界書明確說過相反事實時才 flag。例外:角色認知邊界違規(角色知道了沒人告訴過他的事)永遠要 flag。 | 「草稿裡林晚認出對方掛墜上的家紋,但聊天裡這個掛墜對她而言只被描述成『一枚銀盤』。認知邊界:她沒被告知這是家紋,更沒被告知是誰的。」 |
+   | `memory_curator` | 後置 mutation sub-agent,更新記憶圖,把本輪中會延續過場景的事實寫下來。多輪 observe-act 流程:查 schema,建立前用 `memory_find_by_name` 查重已有實體,用 `memory_node_edit` 打補丁欄位,用 `memory_link_upsert` / `memory_link_delete` 管理關係邊,Phase B 檢查 `memory_compaction_candidates` 並呼叫 `memory_compact_nodes` 把事件層級壓縮。**event 節點每次 dispatch 必出一個**(時間線連續性);character_sheet / location_state 預設 SKIP,只在變化通過 24 小時持續性測試時才寫。 | 「建立 `evt_42`(Day 5 立誓節點)。編輯 `n_eileen` 加 `goal: '還債'`。新增 `n_eileen → debt_owed_to → n_protag` 邊。把 `evt_18,19,20` 壓縮成 `rollup_l1_06`。」 |
    | `notes_curator` | 起草後清理 —— 本回合 notes 子系統**唯一**的寫入點。關閉草稿中已兌現的便箋;只有在草稿確實埋下了真正的劇情承諾時才開新條。**預設動作:什麼也不做**。污染便箋比少關一條更糟。 | 「關閉 `o_a3f2`——本稿外祖母見面已發生。不新增;brainstormer 提到未來去洛陽的伏筆,但本稿沒真正埋下,不開。」 |
 
-   預設主代理系統提示詞與這 11 個 id **強耦合**,按 id 指名排程,併為每個寫好了 task brief 的樣式。改子代理時,主代理提示詞也要同步改。
+   預設主代理系統提示詞與這 12 個 id **強耦合**,按 id 指名排程,併為每個寫好了 task brief 的樣式。改子代理時,主代理提示詞也要同步改。
 
    > **便箋反污染原則**:`notes_curator` 預設**什麼也不做**。便箋是劇情作者的線索倉庫,不是回合日記——被污染的便箋列表會消耗 agent 的注意力。關閉是安全的,開啟是昂貴的。這條原則烙在預設 sub-agent 的 prompt 和主代理的 system prompt 裡;如果你自己寫 director profile,請保留它。
 

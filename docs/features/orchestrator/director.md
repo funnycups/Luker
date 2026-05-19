@@ -58,7 +58,7 @@ For the whole turn, the user sees only that final paragraph in the main chat; ev
 In the extension drawer's **multi-agent orchestration** panel, set **execution mode** to **Director (multi-agent)**. The spec / agenda / loop setting cards collapse and director's setting card appears.
 
 ::: tip 99% of users shouldn't hand-write the main-agent system prompt
-The default main-agent system prompt is **tightly coupled** to the eleven default sub-agent ids — it's already tuned for the "scout first, draft, then critique, then iterate" discipline. To customize, use the [AI Iteration Studio](/features/orchestrator/iteration-studio): describe what you want in natural language and let it patch your profile via tool calls.
+The default main-agent system prompt is **tightly coupled** to the twelve default sub-agent ids — it's already tuned for the "scout first, draft, then critique, then iterate, then mutate" discipline. To customize, use the [AI Iteration Studio](/features/orchestrator/iteration-studio): describe what you want in natural language and let it patch your profile via tool calls.
 :::
 
 ## Workflow outline
@@ -82,7 +82,7 @@ loop: "Main agent at the writing desk" {
     shape: diamond
   }
 
-  consult: "Consult a specialist (default profile, 10 sub-agents)" {
+  consult: "Consult a specialist (default profile, 12 sub-agents)" {
     style.fill: "#fff3e0"
     pre: "Pre-draft scouts\nintent_scout · chat_scout · memory_scout ·\nlorebook_scout · notes_pickup_scout ·\nepistemic_scout · canon_scout (on-demand)" {
       style.fill: "#fffde7"
@@ -93,7 +93,7 @@ loop: "Main agent at the writing desk" {
     post: "Post-draft critics\nvoice_critic · continuity_critic" {
       style.fill: "#fffde7"
     }
-    housekeeping: "Post-draft housekeeping\nnotes_curator — the ONLY notes mutator\n(default: do nothing)" {
+    housekeeping: "Post-draft housekeeping\nmemory_curator — writes durable facts to the memory graph\nnotes_curator — the ONLY notes mutator\n(default: do nothing)" {
       style.fill: "#fffde7"
     }
   }
@@ -138,13 +138,13 @@ loop.finalize -> out
 
 3. **Sub-agents are one-shot consultants.** At dispatch time each one gets the chat snapshot, the main agent's task brief, its own system prompt, the enabled loop tools, and `get_draft()`. They don't see each other's existence, don't see the main agent's reasoning, **cannot dispatch deeper sub-agents**, and **cannot write into the message body** — they only return text, and the main agent decides what to do with it.
 
-4. **The default profile ships with 10 RP-tuned sub-agents:**
+4. **The default profile ships with 12 RP-tuned sub-agents:**
 
    | Sub-agent | Purpose | Concrete RP example |
    |---|---|---|
    | `intent_scout` | Cross-source pre-draft scout — joins the user's recent input (explicit asks, parenthetical / OOC asides, load-bearing implicit signals) against lorebook authoring-directive entries (style rules, pacing, character-writing conventions, content constraints, output spec). Surfaces what the user wants this turn AND what the lorebook demands of the writing. | "User aside: `(写慢些)` at chat[floor=72]. Lorebook entry `pov-rules`: 'narrate in second-person, never break the fourth wall'. Lin Wan-style entry: 'when angry, speaks in fragments before silence.'" |
    | `chat_scout` | Pre-draft single-source scout — sweeps recent chat for load-bearing state. | Returns 5 `Item / Source / Why` lines, e.g. "Lin Wan's anxiety / msg 42 / will steer dialogue back to family". |
-   | `memory_scout` | Pre-draft single-source scout that runs an LLM-grade recall pass via the memory-graph read-only API. Enumerates the visible candidate pool, ranks / expands by recency and edge structure, and drill-expands rollups when warranted, then returns a cited short list with signal levels grounded in API signals (edge density, exposure, alwaysInject). Does NOT read chat or lorebook — those are other scouts' jobs. | "`evt_42` (Chapter 3 grandmother arc) is a hub — its children contain the romantic-confession beat the draft will recall. Demoted: `msg_18` (one-off mention, no follow-up)." |
+   | `memory_scout` | Pre-draft single-source scout that runs an LLM-grade recall pass via the memory-graph read-only API. Enumerates the visible candidate pool, finds named entities or topic matches via `memory_find_by_name` / `memory_keyword_search` (or `memory_vector_search` when an embedding profile is configured), drills rollups via `memory_expand_seeds` when warranted, then returns a cited short list with signal levels grounded in API signals (edge density, exposure, alwaysInject). Does NOT read chat or lorebook — those are other scouts' jobs. Does NOT mutate the graph. | "`evt_42` (Chapter 3 grandmother arc) is a hub — its children contain the romantic-confession beat the draft will recall. Demoted: `msg_18` (one-off mention, no follow-up)." |
    | `lorebook_scout` | Pre-draft single-source scout — pulls additional lorebook entries beyond what's already injected. | "`Luoyan-MainCity` entry not yet in context; relevant — Lin Wan's grandmother is there." |
    | `notes_pickup_scout` | Pre-draft scout — scans the OPEN notes block (foreshadowing, promises, chapter outlines the agent itself opened in earlier turns) and surfaces the ids whose trigger conditions are ripe for THIS beat. Doesn't analyze, doesn't draft — just picks. | "`o_a3f2` (grandmother in Luoyang) is ripe — Lin Wan just mentioned the city. `o_b8c1` (sanctum oath) is not yet ripe." |
    | `epistemic_scout` | Cross-source pre-draft scout — joins chat (what characters have been exposed to) against lorebook / memory (what could be known in-world), producing a per-character Knows / Doesn't-know / Omniscience-traps inventory. | "Lin Wan does NOT know the user is the besieging general's son — she's only met him twice and the rumour-bearer hasn't appeared yet." |
@@ -152,9 +152,10 @@ loop.finalize -> out
    | `plot_brainstormer` | Mid-stage brainstormer — one structural sketch per angle. Dispatch several in parallel with diverse angles for genuinely different choices. | Angle A "direct confrontation" / Angle B "silence becomes the beat" / Angle C "she pivots to Luoyang to dodge". |
    | `voice_critic` | Post-draft critic — humanity & voice. Catches "data-person" prose (cold observation verbs / data vocabulary / reporting-style dialogue at emotional moments) and archetype mishandling (cold-archetype characters written as actually cold instead of stylized-cold over a hot interior). Voice-register mismatches are a secondary dimension. | "Draft has Lin Wan 'observing the subject's micro-expression shifts with clinical detachment' — this is sensor prose, not living-being prose. Swap for a sensation she's actually feeling, even if her surface stays composed." |
    | `continuity_critic` | Post-draft critic — hard contradictions only. Trusts the draft by default; flags only when chat / memory / lorebook explicitly stated the opposite of what the draft asserts. The one exception is knowledge-boundary violations: a character knowing something they were never told is always a flag. | "Draft has Lin Wan recognizing the family crest on the user's pendant — but chat shows the pendant has only ever been described as 'a silver disc' to her. Knowledge-boundary: she's never been told it's a crest, let alone whose." |
+   | `memory_curator` | Post-draft mutation sub-agent that updates the memory graph for facts that survive past the scene. Multi-round observe-act: queries schema, looks up existing entities via `memory_find_by_name` before creating, patches fields via `memory_node_edit`, manages relation edges via `memory_link_upsert` / `memory_link_delete`, and (Phase B) checks `memory_compaction_candidates` and runs `memory_compact_nodes` for hierarchical event rollups. event nodes are mandatory per dispatch (timeline continuity); character_sheet / location_state default to SKIP unless the change passes a 24-hour-in-world persistence test. | "Created node `evt_42` (Day 5 oath beat). Edited `n_eileen` to add `goal: 'pay the debt'`. Upserted `n_eileen → debt_owed_to → n_protag`. Compacted leaves `evt_18,19,20` into `rollup_l1_06`." |
    | `notes_curator` | Post-draft housekeeping — the ONLY mutation point for the notes substrate this round. Closes notes the draft deployed; opens new ones rarely & only when the draft committed to a genuine plot-load-bearing obligation. **Default disposition: do nothing.** Notes pollution is worse than under-closure. | "Closing `o_a3f2` — the grandmother visit happened in this draft. No new opens; brainstormer suggested a future-Luoyang lead but the draft didn't commit to it." |
 
-   The default main-agent system prompt is **tightly coupled** to these 11 ids — it dispatches by id and writes task-brief templates for each. If you change the sub-agents, the main-agent prompt has to change to match.
+   The default main-agent system prompt is **tightly coupled** to these 12 ids — it dispatches by id and writes task-brief templates for each. If you change the sub-agents, the main-agent prompt has to change to match.
 
    > **Notes anti-pollution principle**: The `notes_curator` defaults to **do nothing**. Notes is a plot-author thread store, not a turn diary — a polluted notes list costs the agent attention every subsequent round. Closing is safe; opening is expensive. This principle is baked into the default sub-agent prompts and the main agent's system prompt; if you author your own director profiles, preserve it.
 
