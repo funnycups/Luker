@@ -219,7 +219,7 @@ export async function getGoogleApiConfig(request, model, endpoint = 'generateCon
     } else {
         // Google AI Studio
         const apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.MAKERSUITE) || '';
-        const apiUrl = trimTrailingSlash(request.body.base_url || request.body.reverse_proxy || API_MAKERSUITE);
+        const apiUrl = trimTrailingSlash(request.body.reverse_proxy || request.body.base_url || API_MAKERSUITE);
         const apiVersion = getConfigValue('gemini.apiVersion', 'v1beta');
         baseUrl = `${apiUrl}/${apiVersion}`;
         url = `${baseUrl}/models/${model}:${endpoint}`;

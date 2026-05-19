@@ -17,7 +17,7 @@ router.post('/caption-image', async (request, response) => {
         let key = '';
         let headers = {};
         let bodyParams = {};
-        const customBaseUrl = request.body.base_url || request.body.reverse_proxy || '';
+        const customBaseUrl = request.body.reverse_proxy || request.body.base_url || '';
 
         if (request.body.api === 'openai' && !customBaseUrl) {
             key = readProviderSecret(request, SECRET_KEYS.OPENAI);
