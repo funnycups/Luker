@@ -552,6 +552,8 @@ function buildDefaultDirectorSubAgents() {
                 '',
                 '## 字段与边规范',
                 '',
+                '- **字段范围硬规则**: `memory_node_create` / `memory_node_edit` 的 `fields` 对象,key 必须 ⊆ 该 type schema 的 `tableColumns`。**写入前如不确定就再调一次 `memory_schema` 确认**。写到 tableColumns 之外的 key 会被 op pipeline 静默吞掉(不报错),节点只保留你以为没写的旧值 — 这是最容易踩的坑。',
+                '- **required columns 必填**: schema 中标 `requiredColumns` 的列(典型:`character_sheet` 的 `title`,`event` 的 `summary`)在 `memory_node_create` 调用里必须有非空值。`memory_node_edit` 不允许把 required 列清空(`clear_fields` 不许包含 required)。`memory_schema` 返回的 type spec 里有 `requiredColumns` 列表 — 写入前对照检查。',
                 '- **零引号规则**: summary 字段内不出现任何 `"..."` / `「...」` / 中英文引号包裹的内容。真专名去引号写出;原对白引述属违规,改写成动作描述。',
                 '- **专名格式**: character/location 的 `title` 是核心名,不带势力/职位/种族前缀,不含括号/双语对照。别名进 `aliases` 列。',
                 '- **关系词表**: 只能用 canonical vocabulary —',
