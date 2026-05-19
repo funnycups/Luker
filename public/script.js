@@ -10951,7 +10951,7 @@ function isPlainObject(value) {
     return prototype === Object.prototype || prototype === null;
 }
 
-function cloneJsonValue(value) {
+export function cloneJsonValue(value) {
     if (typeof structuredClone === 'function') {
         try {
             return structuredClone(value);
@@ -13200,11 +13200,19 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
         characters[this_chid].date_last_chat = Date.now();
     }
 
-    const trimmedChat = Array.isArray(saveContext?.messagesSnapshot)
+    const stagedFromContext = Array.isArray(saveContext?.messagesSnapshot);
+    const liveTrimmedChat = stagedFromContext
         ? saveContext.messagesSnapshot
         : ((mesId !== undefined && mesId >= 0 && mesId < chat.length)
             ? chat.slice(0, Number(mesId) + 1)
             : chat.slice());
+    // Freeze a stable deep clone before any await: third-party plugins (TavernDB ACU, __bl_*, etc.)
+    // mutate chat[i] in-place during the network round-trip, and a shallow slice would let those
+    // mutations leak into the snapshot via shared message references — producing test/N guards on
+    // the next write that BE has no chance of matching. Retries already pass a cloned snapshot.
+    const trimmedChat = stagedFromContext
+        ? liveTrimmedChat
+        : (cloneJsonValue(liveTrimmedChat) ?? liveTrimmedChat);
 
     /** @type {ChatHeader} */
     const chatHeader = {
@@ -13225,6 +13233,10 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
 
             if (operations.length > 0) {
                 refreshSnapshotIntegrityFromActiveLive(writeTarget, metadata);
+                // Commit the snapshot to the projected post-patch state BEFORE the fetch so the
+                // snapshot reflects what BE will hold once it applies our ops, not whatever chat[]
+                // has been mutated into by plugins while we await.
+                rememberChatMessageSnapshot(writeTarget, trimmedChat);
                 const patchResult = await fetch('/api/chats/patch', {
                     method: 'POST',
                     cache: 'no-cache',
@@ -13244,7 +13256,6 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
                 if (patchResult.ok) {
                     const payload = await patchResult.json().catch(() => null);
                     applyIntegrityFromWritePayloadToTarget(payload, writeTarget, metadata);
-                    rememberChatMessageSnapshot(writeTarget, trimmedChat);
                     rememberChatMetadataSnapshot(writeTarget, metadata);
                     return;
                 }
@@ -13273,6 +13284,9 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
         }
 
         refreshSnapshotIntegrityFromActiveLive(writeTarget, metadata);
+        // Same pre-await commit as the patch path: snapshot must represent what we are sending,
+        // not whatever chat[] looks like after plugins mutate it during the round-trip.
+        rememberChatMessageSnapshot(writeTarget, trimmedChat);
         const result = await fetch('/api/chats/save', {
             method: 'POST',
             cache: 'no-cache',
@@ -13289,7 +13303,6 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
         if (result.ok) {
             const payload = await result.json().catch(() => null);
             applyIntegrityFromWritePayloadToTarget(payload, writeTarget, metadata);
-            rememberChatMessageSnapshot(writeTarget, trimmedChat);
             rememberChatMetadataSnapshot(writeTarget, metadata);
             return;
         }

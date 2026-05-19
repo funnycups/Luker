@@ -102,6 +102,7 @@ import {
     getCharacterPersonality,
     getCharacterScenario,
     getCharacterTalkativeness,
+    cloneJsonValue,
 } from '../script.js';
 import { settleChatChanged } from './floor-state.js';
 import { printTagList, createTagMapFromList, applyTagsOnCharacterSelect, tag_map, applyTagsOnGroupSelect, printTagFilters, tag_filter_type } from './tags.js';
@@ -669,9 +670,17 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
     const metadataSnapshot = saveContext?.metadataSnapshot && typeof saveContext.metadataSnapshot === 'object'
         ? saveContext.metadataSnapshot
         : { ...chat_metadata };
-    const messagesSnapshot = Array.isArray(saveContext?.messagesSnapshot)
+    const messagesSnapshotFromContext = Array.isArray(saveContext?.messagesSnapshot);
+    const liveMessagesSnapshot = messagesSnapshotFromContext
         ? saveContext.messagesSnapshot
         : chat;
+    // Freeze a stable deep clone before any await: third-party plugins mutate chat[i] in place
+    // during the network round-trip, and a live reference would let those mutations leak into the
+    // snapshot via the post-success seed — producing test/N guards on the next write that BE has
+    // no chance of matching. Retry callers already pass a cloned snapshot through saveContext.
+    const messagesSnapshot = messagesSnapshotFromContext
+        ? liveMessagesSnapshot
+        : (cloneJsonValue(liveMessagesSnapshot) ?? liveMessagesSnapshot);
     /** @type {ChatHeader} */
     const chatHeader = {
         chat_metadata: { ...metadataSnapshot },
@@ -693,6 +702,10 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
             const opPreview = operations.slice(0, 3).map(op => `${op?.op ?? '?'} ${op?.path ?? ''}`.trim()).join(', ')
                 + (operations.length > 3 ? `, +${operations.length - 3} more` : '');
             requestSummary = { endpoint: 'chats/group/patch', opSummary: opPreview };
+            // Commit the snapshot to the projected post-patch state BEFORE the fetch so the
+            // snapshot reflects what BE will hold once it applies our ops, not whatever chat[]
+            // has been mutated into by plugins while we await.
+            seedChatMessageSnapshot(target, messagesSnapshot);
             response = await fetch('/api/chats/group/patch', {
                 method: 'POST',
                 headers: getRequestHeaders(),
@@ -738,6 +751,9 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
             endpoint: 'chats/group/save (full)',
             opSummary: `full ${Array.isArray(messagesSnapshot) ? messagesSnapshot.length : 0} msgs`,
         };
+        // Same pre-await commit as the patch path: snapshot must represent what we are sending,
+        // not whatever chat[] looks like after plugins mutate it during the round-trip.
+        seedChatMessageSnapshot(target, messagesSnapshot);
         response = await fetch('/api/chats/group/save', {
             method: 'POST',
             headers: getRequestHeaders(),
@@ -784,7 +800,7 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
     }
 
     seedChatMetadataSnapshot(target, metadataSnapshot);
-    seedChatMessageSnapshot(target, messagesSnapshot);
+    // Snapshot already committed optimistically before each fetch above.
 
     if (shouldSaveGroup) {
         await editGroup(resolvedGroupId, false, false);
