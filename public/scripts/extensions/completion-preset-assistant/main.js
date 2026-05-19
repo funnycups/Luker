@@ -256,7 +256,7 @@ function registerLocaleData() {
         'Mode': '模式',
         'Session mode': '会话模式',
         'General editing': '通用编辑',
-        'Optimize for orchestrator': '为编排器优化',
+        'Agent orchestration preset': 'Agent编排预设',
         'Jailbreak-only': '仅保留破限',
         'Mode is fixed for the lifetime of the session. To switch modes, start a new session.': '会话模式一旦确定不可中途切换。要换模式请新建会话。',
         'Switching the mode starts a new session.': '切换模式会新建一个会话。',
@@ -365,7 +365,7 @@ function registerLocaleData() {
         'Mode': '模式',
         'Session mode': '會話模式',
         'General editing': '通用編輯',
-        'Optimize for orchestrator': '為編排器最佳化',
+        'Agent orchestration preset': 'Agent編排預設',
         'Jailbreak-only': '僅保留破限',
         'Mode is fixed for the lifetime of the session. To switch modes, start a new session.': '會話模式一旦確定不可中途切換。要切換模式請新建會話。',
         'Switching the mode starts a new session.': '切換模式會新建一個會話。',
@@ -3186,7 +3186,7 @@ async function handleClearHistory(dialogState) {
 
 function describeSessionMode(mode) {
     const safeMode = sanitizeSessionMode(mode);
-    if (safeMode === 'orchestrator-optimize') return i18n('Optimize for orchestrator');
+    if (safeMode === 'orchestrator-optimize') return i18n('Agent orchestration preset');
     if (safeMode === 'jailbreak-only') return i18n('Jailbreak-only');
     return i18n('General editing');
 }
@@ -3206,7 +3206,7 @@ async function pickSessionMode() {
     <div class="cpa_mode_picker_title">${escapeHtml(i18n('Session mode'))}</div>
     <select id="cpa_new_session_mode" class="text_pole">
         <option value="general" selected>${escapeHtml(i18n('General editing'))}</option>
-        <option value="orchestrator-optimize">${escapeHtml(i18n('Optimize for orchestrator'))}</option>
+        <option value="orchestrator-optimize">${escapeHtml(i18n('Agent orchestration preset'))}</option>
         <option value="jailbreak-only">${escapeHtml(i18n('Jailbreak-only'))}</option>
     </select>
     <div class="cpa_mode_picker_hint">${escapeHtml(i18n('Mode is fixed for the lifetime of the session. To switch modes, start a new session.'))}</div>
