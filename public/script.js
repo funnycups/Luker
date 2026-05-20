@@ -12774,17 +12774,24 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
 
             if (response.ok) {
                 const payload = await response.json().catch(() => null);
+                const appendedCount = Number(payload?.appended || 0);
+                const skippedCount = Number(payload?.skipped || 0);
                 console.debug('[ChatWrite]', {
                     phase: 'append_result',
                     target: { kind: 'group', id: String(groupChatId) },
                     generation_ids: generationIds,
-                    appended: Number(payload?.appended || 0),
-                    skipped: Number(payload?.skipped || 0),
+                    appended: appendedCount,
+                    skipped: skippedCount,
                     matched_existing_generation_id: Boolean(payload?.matched_existing_generation_id),
                 });
-                if (payload?.matched_existing_generation_id && Number(payload?.appended || 0) === 0) {
-                    // BE deduped against an earlier append with the same gen id. Our
-                    // optimistic snapshot grew too far; refresh from server truth.
+                if (appendedCount < messages.length) {
+                    // BE dedup happened (content match against last-stored msg, OR
+                    // gen-id match against sidecar). Either way, our optimistic
+                    // snapshot already grew with the full messages array but BE
+                    // didn't accept all of them — the unaccepted ones are now
+                    // phantom entries in snapshot that BE has no copy of. Refresh
+                    // from server truth to realign before the next write builds
+                    // diffs against a snapshot BE can't match.
                     const refreshed = await refreshChatWriteSnapshotsFromServer(target);
                     return Boolean(refreshed && lodash.isEqual(refreshed.messages, chat));
                 }
@@ -12829,17 +12836,24 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
 
         if (response.ok) {
             const payload = await response.json().catch(() => null);
+            const appendedCount = Number(payload?.appended || 0);
+            const skippedCount = Number(payload?.skipped || 0);
             console.debug('[ChatWrite]', {
                 phase: 'append_result',
                 target: { kind: 'character', avatar_url: String(avatar), file_name: String(fileName) },
                 generation_ids: generationIds,
-                appended: Number(payload?.appended || 0),
-                skipped: Number(payload?.skipped || 0),
+                appended: appendedCount,
+                skipped: skippedCount,
                 matched_existing_generation_id: Boolean(payload?.matched_existing_generation_id),
             });
-            if (payload?.matched_existing_generation_id && Number(payload?.appended || 0) === 0) {
-                // BE deduped against an earlier append with the same gen id. Our
-                // optimistic snapshot grew too far; refresh from server truth.
+            if (appendedCount < messages.length) {
+                // BE dedup happened (content match against last-stored msg, OR
+                // gen-id match against sidecar). Either way, our optimistic
+                // snapshot already grew with the full messages array but BE
+                // didn't accept all of them — the unaccepted ones are now
+                // phantom entries in snapshot that BE has no copy of. Refresh
+                // from server truth to realign before the next write builds
+                // diffs against a snapshot BE can't match.
                 const refreshed = await refreshChatWriteSnapshotsFromServer(target);
                 return Boolean(refreshed && lodash.isEqual(refreshed.messages, chat));
             }
