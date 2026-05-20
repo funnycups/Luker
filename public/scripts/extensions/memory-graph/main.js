@@ -1729,13 +1729,12 @@ export function resolveChatKeyForSession(context, targetHint = null) {
  *   3. Replace-mode flush to floor-state (the session owns whole-store
  *      semantics; we don't keep a diff base, and the LLM's write surface
  *      is not part of the user-facing rollback timeline).
- *   4. Persist meta. `syncPersistentProjection` stays OFF: lorebook
- *      projection is a side-channel mirror of the graph, sensitive to
- *      schema configuration, and any in-progress LLM write batch will
- *      typically be followed by CHAT_CHANGED / MESSAGE_RECEIVED that
- *      re-trigger projection. Folding it into every session write would
- *      both thrash World Info entries and crash on partially-configured
- *      schema in headless contexts.
+ *   4. Persist meta + sync the persistent lorebook projection so World
+ *      Info bindings reflect the new graph immediately. If the
+ *      projection step fails (e.g. schema deps not wired in headless
+ *      contexts), fall back to a meta-only persist so the graph store
+ *      itself is still committed — projection retriggers on later
+ *      lifecycle events like CHAT_CHANGED / MESSAGE_RECEIVED.
  *   5. Best-effort UI refresh — `refreshUiStats` early-returns when the
  *      popup isn't mounted, so this is safe in headless contexts.
  */
@@ -1746,7 +1745,12 @@ export async function commitSessionMutation(context, chatKey, store) {
     clearRollbackHistory(key);
     const seq = getStoreCoveredSeqTo(store);
     await replacePersistedGraphWithStore(context, key, store, seq);
-    await persistMemoryStoreByChatKey(context, key, store, { syncPersistentProjection: false });
+    try {
+        await persistMemoryStoreByChatKey(context, key, store, { syncPersistentProjection: true });
+    } catch (err) {
+        console.warn('[memory-graph] commitSessionMutation: lorebook projection sync failed, persisting graph only', err);
+        await persistMemoryStoreByChatKey(context, key, store, { syncPersistentProjection: false });
+    }
     try { refreshUiStats(); } catch (_) { /* UI optional in headless / test env */ }
 }
 
