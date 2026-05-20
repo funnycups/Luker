@@ -6862,10 +6862,13 @@ body:not(.movingUI) .drawer-content.maximized {
     pointer-events: none;
 }
 #announcement-bell-button {
+    display: none;
     position: relative;
-    display: inline-flex;
     align-items: center;
     cursor: pointer;
+}
+#announcement-bell-button.is-active {
+    display: inline-flex;
 }
 .announcement-inbox-row {
     padding: 8px 6px;

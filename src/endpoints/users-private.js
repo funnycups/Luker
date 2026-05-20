@@ -1118,13 +1118,14 @@ router.post('/announcements/me/list', async (request, response) => {
         if (!request.user) {
             return response.sendStatus(403);
         }
+        const multiUser = getConfigValue('enableUserAccounts', false, 'boolean');
         const handle = request.user.profile.handle;
         const userRecord = await storage.getItem(toKey(handle));
         const readIds = Array.isArray(userRecord?.readAnnouncementIds)
             ? userRecord.readAnnouncementIds
             : [];
         const result = await listForUser({ readIds });
-        return response.json(result);
+        return response.json({ ...result, multiUser });
     } catch (error) {
         console.error('Announcements me/list failed:', error);
         return response.sendStatus(500);

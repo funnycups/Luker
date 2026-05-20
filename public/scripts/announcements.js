@@ -24,6 +24,8 @@ const state = {
     readIds: new Set(),
     /** @type {Announcement[]} ordered desc by createdAt, recomputed on warning dismiss */
     warningQueue: [],
+    /** @type {boolean} server reports whether enableUserAccounts is on; bell + routing are off otherwise */
+    multiUser: false,
 };
 
 async function api(path, body) {
@@ -43,6 +45,14 @@ async function fetchAnnouncements() {
     const result = await api('/api/users/announcements/me/list');
     state.items = Array.isArray(result?.items) ? result.items : [];
     state.readIds = new Set(Array.isArray(result?.readIds) ? result.readIds : []);
+    state.multiUser = Boolean(result?.multiUser);
+    updateBellVisibility();
+}
+
+function updateBellVisibility() {
+    const bell = document.getElementById('announcement-bell-button');
+    if (!bell) return;
+    bell.classList.toggle('is-active', state.multiUser);
 }
 
 async function markRead(ids) {
@@ -181,6 +191,11 @@ function updateBellBadge() {
 }
 
 async function routeUnreadAfterFetch() {
+    if (!state.multiUser) {
+        console.info('[announcements] single-user mode, skipping routing');
+        updateBellBadge();
+        return;
+    }
     const critical = unreadByLevel('critical');
     const warning = unreadByLevel('warning');
     const info = unreadByLevel('info');
