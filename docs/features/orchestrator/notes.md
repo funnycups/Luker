@@ -1,4 +1,4 @@
-# Notes — Author-Side Plot Thread Tracker
+# Notes — Agent Plot Thread Tracker
 
 Notes is the orchestrator's per-chat store for **what the agent (as plot author) wants to make happen later**. Foreshadowing planted, promises made by characters, chapter outlines written ahead, mystery-genre solutions drafted before the investigation — anything that captures an obligation the agent has committed to honoring in a future turn.
 
@@ -50,9 +50,6 @@ The panel updates live as agents open / close notes via tools, and your panel ac
 
 **Q: Should I manually open notes in the panel to give the agent plot hints?**
 No. Notes is the agent's instrument. If you want to seed plot direction, use a lorebook entry or a memory-graph always-injected node — those are designed as user-side authoring surfaces.
-
-**Q: What happens to closed notes — can I reopen one?**
-There is no reopen action; the design treats reopen as a YAGNI. If you want a closed thread back, write a new note with similar text (or edit the closed one's text and re-close it — closed notes can still be edited).
 
 **Q: Are notes shared across chats?**
 No — each chat has its own notes store. Switching chats shows that chat's own open / closed lists.

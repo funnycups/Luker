@@ -124,6 +124,7 @@ const zhCNSidebar = [
       { text: 'Loop 模式', link: '/zh-CN/features/orchestrator/loop' },
       { text: '导演模式', link: '/zh-CN/features/orchestrator/director' },
       { text: 'AI 迭代工作台', link: '/zh-CN/features/orchestrator/iteration-studio' },
+      { text: '笔记', link: '/zh-CN/features/orchestrator/notes' },
     ],
   },
   {
@@ -180,6 +181,7 @@ const zhCNSidebar = [
               { text: '插件集成', link: '/zh-CN/development/extension-api/plugin-integration' },
               { text: '底层端点', link: '/zh-CN/development/extension-api/low-level-endpoints' },
               { text: '记忆图只读 API', link: '/zh-CN/development/extension-api/memory-graph' },
+              { text: '迭代工作台框架', link: '/zh-CN/development/extension-api/iteration-studio' },
             ],
           },
           { text: '角色卡开发者指南', link: '/zh-CN/development/card-developers' },
@@ -246,6 +248,7 @@ const zhTWSidebar = [
           { text: 'Loop 模式', link: '/zh-TW/features/orchestrator/loop' },
           { text: '導演模式', link: '/zh-TW/features/orchestrator/director' },
           { text: 'AI 迭代工作台', link: '/zh-TW/features/orchestrator/iteration-studio' },
+          { text: '便箋', link: '/zh-TW/features/orchestrator/notes' },
         ],
       },
       {
@@ -302,6 +305,7 @@ const zhTWSidebar = [
                   { text: '外掛整合', link: '/zh-TW/development/extension-api/plugin-integration' },
                   { text: '底層端點', link: '/zh-TW/development/extension-api/low-level-endpoints' },
                   { text: '記憶圖唯讀 API', link: '/zh-TW/development/extension-api/memory-graph' },
+                  { text: '迭代工作台框架', link: '/zh-TW/development/extension-api/iteration-studio' },
                 ],
               },
               { text: '角色卡開發者指南', link: '/zh-TW/development/card-developers' },
@@ -368,6 +372,7 @@ const enSidebar = [
           { text: 'Loop Mode', link: '/features/orchestrator/loop' },
           { text: 'Director Mode', link: '/features/orchestrator/director' },
           { text: 'AI Iteration Studio', link: '/features/orchestrator/iteration-studio' },
+          { text: 'Notes', link: '/features/orchestrator/notes' },
         ],
       },
       {
@@ -424,6 +429,7 @@ const enSidebar = [
                   { text: 'Plugin Integration', link: '/development/extension-api/plugin-integration' },
                   { text: 'Low-Level Endpoints', link: '/development/extension-api/low-level-endpoints' },
                   { text: 'Memory Graph Read-Only API', link: '/development/extension-api/memory-graph' },
+                  { text: 'Iteration Studio Framework', link: '/development/extension-api/iteration-studio' },
                 ],
               },
               { text: 'Card Developer Guide', link: '/development/card-developers' },

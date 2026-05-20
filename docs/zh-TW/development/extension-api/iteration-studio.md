@@ -1,4 +1,4 @@
-# IterationStudio
+# 迭代工作台框架
 
 一個共享的彈窗框架，用於 **AI 驅動地迭代式編輯一個典型工件**。Studio 負責對話、會話歷史、工具分發、diff 預覽、批准 / 拒絕生命週期；外掛透過 adapter 提供「工件長什麼樣、哪些工具能編輯、怎麼持久化」。
 
@@ -16,7 +16,7 @@ Shell 擁有**工作台外殼** —— 跨所有 studio 通用的部分：
 - popup 生命週期（開啟 / 關閉、abort 接線、焦點）
 - 對話面板（user / assistant 訊息、pending 審批塊）
 - 輸入區（textarea + 發送 / 終止 / 清空 / Auto-apply 開關）
-- 工具呼叫 round trip（透過 `context.generateTask` 呼叫 LLM,帶重試 / RPM / 逾時）
+- 工具呼叫 round trip（透過 `context.generateTask` 呼叫 LLM，帶重試 / RPM / 逾時）
 - 工具呼叫拆分（editable vs control）、pending vs 自動執行
 - Auto-continue（AI 標記 `continueRequested` 時）
 - Auto-apply（按 adapter 持久儲存的偏好，跳過審批步驟）
@@ -337,4 +337,4 @@ Shell 不解釋動作 id —— 任意命名，符合你的領域即可。不需
 
 - `public/scripts/iteration-studio/adapter.js` —— JSDoc 標註的契約（權威來源）
 - `public/scripts/extensions/orchestrator/iteration-adapter.js` —— 包裹現有編排器 helper；參考「舊程式碼薄包裝」模式
-- `public/scripts/extensions/memory-graph/schema-adapter.js` —— 直接基於契約從零建構;參考新 adapter 模式
+- `public/scripts/extensions/memory-graph/schema-adapter.js` —— 直接基於契約從零建構；參考新 adapter 模式

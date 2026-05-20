@@ -1,4 +1,4 @@
-# IterationStudio
+# Iteration Studio Framework
 
 A shared popup framework for **AI-driven iterative editing of a typed artifact**. The studio orchestrates the conversation, session history, tool dispatch, diff preview, and approve/reject lifecycle; the plugin (via an adapter) supplies what the artifact looks like, which tools edit it, and how it gets persisted.
 

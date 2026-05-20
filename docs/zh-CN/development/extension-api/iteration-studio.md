@@ -1,4 +1,4 @@
-# IterationStudio
+# 迭代工作台框架
 
 一个共享的弹窗框架，用于 **AI 驱动地迭代式编辑一个典型工件**。Studio 负责对话、会话历史、工具分发、diff 预览、批准 / 拒绝生命周期；插件通过 adapter 提供"工件长什么样、哪些工具能编辑、怎么持久化"。
 
@@ -337,4 +337,4 @@ Shell 不解释动作 id —— 任意命名，符合你的领域即可。不需
 
 - `public/scripts/iteration-studio/adapter.js` —— JSDoc 标注的契约（权威来源）
 - `public/scripts/extensions/orchestrator/iteration-adapter.js` —— 包裹已有编排器助手；参考"老代码薄包装"模式
-- `public/scripts/extensions/memory-graph/schema-adapter.js` —— 直接基于契约从零构建;参考新 adapter 模式
+- `public/scripts/extensions/memory-graph/schema-adapter.js` —— 直接基于契约从零构建；参考新 adapter 模式
