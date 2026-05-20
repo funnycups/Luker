@@ -664,7 +664,19 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                 finalized = !!toolResult.ok;
             } else if (typeof deps?.executeLoopTool === 'function') {
                 try {
-                    const raw = await deps.executeLoopTool(name, args, { chat: deps.chat });
+                    // Spread the same per-feature overlays the dispatcher
+                    // gives sub-agents (`contextForSession` carries
+                    // `__memoryGraphSession`; `contextForNotes` carries
+                    // `__floorStateForNotes`) so memory_* / note_* tools
+                    // invoked by the MAIN agent reach the live adapters
+                    // instead of throwing MEMORY_DISABLED / silently
+                    // losing the floor-state writer. Mirrors
+                    // director-tools.js's sub-agent tool-exec context.
+                    const raw = await deps.executeLoopTool(name, args, {
+                        ...(deps?.contextForSession || {}),
+                        ...(deps?.contextForNotes || {}),
+                        chat: deps.chat,
+                    });
                     toolResult = { ok: true, result: raw };
                 } catch (err) {
                     toolResult = { ok: false, error: String(err?.message || err) };

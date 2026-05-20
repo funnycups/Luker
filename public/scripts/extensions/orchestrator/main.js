@@ -8225,7 +8225,18 @@ jQuery(() => {
                     // written by an earlier sub-agent in this session
                     // show up for later ones.
                     contextForNotes: await (async () => {
-                        const notesCtx = {};
+                        // Base the overlay on the extension context via
+                        // prototype chain so `attachNotesFloorState` ->
+                        // `getNotesFloorStateInstance` can reach the live
+                        // `createFloorState` factory. A bare `{}` here
+                        // makes the adapter open as null (the loader
+                        // throws "createFloorState API is unavailable"
+                        // and falls through to the catch). Spreading the
+                        // returned object later picks up only own props
+                        // (`__floorStateForNotes` / `__openNotes`) — the
+                        // prototype-side ST APIs do not leak into tool
+                        // ctx. Mirrors loop-runtime's `attachToolContext`.
+                        const notesCtx = Object.create(context);
                         await attachNotesFloorState(notesCtx);
                         return notesCtx;
                     })(),
@@ -8238,7 +8249,13 @@ jQuery(() => {
                     // memory-graph is enabled — because the sub-agent
                     // dispatcher never had a path to attach the session.
                     contextForSession: await (async () => {
-                        const memCtx = {};
+                        // Same prototype-chain trick as contextForNotes
+                        // above. `openSession` reads
+                        // `context.createFloorState` to load the chat-
+                        // scoped store; a bare `{}` short-circuits it to
+                        // `null` and every memory_* tool call lands on
+                        // MEMORY_DISABLED.
+                        const memCtx = Object.create(context);
                         await attachMemoryGraphSession(memCtx);
                         return memCtx;
                     })(),

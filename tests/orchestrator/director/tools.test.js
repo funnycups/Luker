@@ -525,6 +525,52 @@ describe('subagent dispatcher', () => {
         expect(seenToolCtx[0].chat).toBeDefined();
     });
 
+    test('contextForNotes overlay reaches executeLoopTool so note_* tools find the floor-state adapter', async () => {
+        // Symmetric to the contextForSession overlay: the dispatcher
+        // owns contextForNotes for system-prompt "## Open Notes"
+        // rendering and must also spread it into the per-tool-call ctx
+        // so note_open / note_close can reach `__floorStateForNotes`.
+        // Without the spread, sub-agents lose write access to notes
+        // even when the adapter is wired by main.js.
+        const calls = [
+            { assistantText: '', toolCalls: [{ id: 't1', name: 'note_open', args: { text: 'pending' } }], reasoning: null, finishReason: 'tool_calls' },
+            { assistantText: 'done', toolCalls: [], reasoning: null, finishReason: 'stop' },
+        ];
+        let i = 0;
+        const fakeGenerate = jest.fn(async () => calls[i++] || { assistantText: '', toolCalls: [], reasoning: null, finishReason: 'stop' });
+
+        const seenToolCtx = [];
+        const executeLoopTool = jest.fn(async (_name, _args, ctx) => {
+            seenToolCtx.push(ctx);
+            return { id: 'n1' };
+        });
+
+        const notesCtx = {
+            __floorStateForNotes: {
+                appendForFloor: async () => 'n1',
+                listAcrossFloors: async () => [],
+                updateStatusById: async () => ({ ok: true }),
+            },
+        };
+        const dispatcher = createSubagentDispatcher({
+            subAgents: [{ id: 's', description: '', systemPrompt: 's' }],
+            limits: { maxTotalSubagentRuns: 5 },
+            generateTask: fakeGenerate,
+            abortSignal: new AbortController().signal,
+            tools: { note: { open: true } },
+            executeLoopTool,
+            chat: [],
+            contextForNotes: notesCtx,
+        });
+        const h = await dispatcher.dispatch({ subagentId: 's', task: 't' });
+        await dispatcher.awaitAll([h]);
+
+        expect(executeLoopTool).toHaveBeenCalledTimes(1);
+        expect(executeLoopTool.mock.calls[0][0]).toBe('note_open');
+        expect(seenToolCtx[0].__floorStateForNotes).toBe(notesCtx.__floorStateForNotes);
+        expect(seenToolCtx[0].chat).toBeDefined();
+    });
+
     test('without contextForSession, executeLoopTool sees no __memoryGraphSession (regression guard)', async () => {
         const calls = [
             { assistantText: '', toolCalls: [{ id: 't1', name: 'memory_list_candidates', args: {} }], reasoning: null, finishReason: 'tool_calls' },

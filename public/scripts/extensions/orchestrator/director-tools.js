@@ -745,7 +745,11 @@ export function createSubagentDispatcher({
                             toolResult = await executeGetDraftTool(handle);
                         } else if (typeof executeLoopTool === 'function') {
                             try {
-                                const raw = await executeLoopTool(name, args, { ...(contextForSession || {}), chat });
+                                const raw = await executeLoopTool(name, args, {
+                                    ...(contextForSession || {}),
+                                    ...(contextForNotes || {}),
+                                    chat,
+                                });
                                 toolResult = { ok: true, result: raw };
                             } catch (err) {
                                 toolResult = { ok: false, error: String(err?.message || err) };
