@@ -6866,9 +6866,6 @@ body:not(.movingUI) .drawer-content.maximized {
 }
 #announcement-bell-button.is-active {
     display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-flow: row;
     position: relative;
     cursor: pointer;
 }
