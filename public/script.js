@@ -8285,6 +8285,16 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 const placeholderId = await acquireTakeoverPlaceholder(type);
                 const originalText = String(chat[placeholderId]?.mes ?? '');
                 const originalReasoning = String(chat[placeholderId]?.extra?.reasoning ?? '');
+                // Seed the slot's gen_started with the takeover claim time so
+                // redrawMessageBubble can render a live, growing timer during
+                // streaming. saveReply's placeholder push left gen_started at
+                // the module-level `generation_started` and gen_finished at
+                // the push moment, which collapses to 0.0s. Mirrors core
+                // streaming, whose timer also walks from claim-time forward
+                // chunk by chunk.
+                if (chat[placeholderId]) {
+                    chat[placeholderId].gen_started = gen_started;
+                }
 
                 // ── 2. Wire onUpdate → live redraw + chat mutation ──
                 handle.setOnUpdate?.((text, reasoning) => {
@@ -8292,6 +8302,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                     chat[placeholderId].mes = String(text ?? '');
                     if (!chat[placeholderId].extra) chat[placeholderId].extra = {};
                     chat[placeholderId].extra.reasoning = String(reasoning ?? '');
+                    chat[placeholderId].gen_finished = new Date();
                     redrawMessageBubble(placeholderId);
                     eventSource.emit(event_types.MESSAGE_UPDATED, placeholderId);
                 });
@@ -9979,7 +9990,9 @@ async function rollbackTakeoverPlaceholder(messageId, type, origText, origReason
 function redrawMessageBubble(messageId) {
     const msg = chat[messageId];
     if (!msg) return;
-    const block = $(`#chat .mes[mesid="${messageId}"] .mes_text`);
+    const messageElement = $(`#chat .mes[mesid="${messageId}"]`);
+    if (!messageElement.length) return;
+    const block = messageElement.find('.mes_text');
     if (block.length) {
         block.empty().append(
             messageFormatting(
@@ -9993,8 +10006,33 @@ function redrawMessageBubble(messageId) {
             ),
         );
     }
+    // Resync timer + token counter from the current slot. Takeover commit
+    // mutates these fields after the placeholder DOM was rendered with
+    // empty data, and nothing else touches these two nodes on that path
+    // — streaming owns them via StreamingProcessor's cached refs, and
+    // non-streaming saveReply renders them once with final data.
+    const tokenCount = msg.extra?.token_count;
+    const { timerValue, timerTitle } = formatGenerationTimer(
+        msg.gen_started,
+        msg.gen_finished,
+        tokenCount,
+        msg.extra?.reasoning_duration,
+        msg.extra?.time_to_first_token,
+    );
+    const tokenEl = messageElement.find('.tokenCounterDisplay');
+    if (tokenCount) {
+        tokenEl.text(`${tokenCount}t`);
+    } else {
+        tokenEl.empty();
+    }
+    const timerEl = messageElement.find('.mes_timer');
+    if (timerValue) {
+        timerEl.attr('title', timerTitle).text(timerValue);
+    } else {
+        timerEl.empty().removeAttr('title');
+    }
     try {
-        const mesEl = $(`#chat .mes[mesid="${messageId}"]`).get(0);
+        const mesEl = messageElement.get(0);
         if (mesEl && typeof updateReasoningUI === 'function') updateReasoningUI(mesEl);
     } catch { /* tolerate missing DOM in edge transitions */ }
 }
