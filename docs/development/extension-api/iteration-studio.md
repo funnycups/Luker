@@ -217,5 +217,6 @@ Read these for working end-to-end examples of the contract:
 
 - `public/scripts/extensions/orchestrator/iteration-adapter.js` — wraps the orchestrator's pre-existing mutator with the sandbox-diff pattern. Layout `split`, per-mode session buckets, runtime world-info resolution, custom control tool names.
 - `public/scripts/extensions/memory-graph/schema-adapter.js` — node-type schema editor built directly on the v2 contract. Layout `split`, global-only sessions, apply-to-global / apply-to-character action buttons in the preview pane.
+- `public/scripts/extensions/character-editor-assistant/studio/adapter.js` — CardApp Studio, the per-character custom-frontend editor. Layout `split`, per-character session scope `char_<avatar>`. The live preview is the host CardApp behind the popup (reloaded via the `card-app` extension API); the adapter renders the file tree + CM6 editor in the right pane. All file CRUD goes through the existing `fetchFileList / saveFileContent / deleteFile / renameFile` helpers; the 4 write tools route through `normalizeToolCallToEdit`, the 2 read tools through `executeControlToolCall`.
 
 The adapter contract JSDoc lives in `public/scripts/iteration-studio/adapter.js` — that file is the canonical source for required vs optional fields and exact signatures.

@@ -39,6 +39,7 @@
 
 ## Recent breaking changes
 
+- **CEA CardApp Studio rebuilt on the iteration-studio shell** (SP-2 of the adapter migration). The standalone session / popup / diff infrastructure has been replaced with the SP-1 v2 adapter contract: `live()` is the single authority, the 4 file-write tools route through `normalizeToolCallToEdit`, the 2 file-read tools through `executeControlToolCall`, and `commit()` diffs against the previous snapshot before fanning out to the existing `saveFileContent / deleteFile` helpers. The old `cardapp_studio_sessions` character-sidecar bucket is wiped once on first open after upgrade; CardApp files on disk are untouched.
 - **Iteration Studio adapter contract v2 (IDE-style).** The shell no longer carries a `workingProfile` snapshot; the adapter's `live()` is the single authority. In-tree orchestrator + memory-graph adapters migrated. Out-of-tree adapters require updates (see `docs/development/extension-api/iteration-studio.md`). Old iteration-studio session data is wiped once per adapter on first open after upgrade; live artifacts (preset files, character cards, settings) are untouched. CEA and CPA adapters arrive in subsequent releases.
 - **CPA conversation rollback resets on upgrade.** The journal-based session model was replaced with IDE-style live=authority + per-message `appliedEdits`. Preset files themselves are unchanged; only CPA's conversation rollback history from prior sessions is lost. New conversations rollback normally via the new mechanism.
 

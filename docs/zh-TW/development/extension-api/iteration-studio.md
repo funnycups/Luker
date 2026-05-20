@@ -213,9 +213,10 @@ Layer 3 表面重新匯出與 Layer 1 相同的函式；`open` 是 `openIteratio
 
 ## 參考適配器
 
-閱讀這兩個檔案可以看到契約的端到端樣例：
+閱讀這些檔案可以看到契約的端到端樣例：
 
 - `public/scripts/extensions/orchestrator/iteration-adapter.js` —— 用 sandbox-diff 模式包裹編排器既有的變更器。佈局 `split`、按 mode 分桶的會話、執行時 world-info 解析、自定義控制工具名。
 - `public/scripts/extensions/memory-graph/schema-adapter.js` —— 直接基於 v2 契約構建的節點類型 schema 編輯器。佈局 `split`、僅全域會話、預覽面板裡有「應用到全域」/「應用到角色」動作按鈕。
+- `public/scripts/extensions/character-editor-assistant/studio/adapter.js` —— 卡片應用工作室、按角色的自訂前端編輯器。佈局 `split`、按角色範圍 `char_<avatar>`。即時預覽是彈窗背後的宿主卡片應用（透過 `card-app` 擴充功能 API 重新載入）；轉接器在右側面板呈現檔案樹和 CM6 編輯器。所有檔案 CRUD 均透過現有的 `fetchFileList / saveFileContent / deleteFile / renameFile` 輔助函式完成；4 個寫工具走 `normalizeToolCallToEdit`、2 個讀工具走 `executeControlToolCall`。
 
 適配器契約 JSDoc 位於 `public/scripts/iteration-studio/adapter.js` —— 該檔案是必需 vs 可選欄位與精確簽名的規範來源。
