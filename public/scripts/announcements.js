@@ -182,10 +182,15 @@ function updateBellBadge() {
 
 async function routeUnreadAfterFetch() {
     const critical = unreadByLevel('critical');
+    const warning = unreadByLevel('warning');
+    const info = unreadByLevel('info');
+    console.info(
+        `[announcements] fetched ${state.items.length} total, unread: ${critical.length} critical / ${warning.length} warning / ${info.length} info`,
+    );
     if (critical.length > 0) {
         await showCriticalModal(critical);
     }
-    state.warningQueue = unreadByLevel('warning');
+    state.warningQueue = warning;
     renderWarningBanner();
     updateBellBadge();
 }
@@ -202,7 +207,10 @@ export async function initAnnouncements() {
             await fetchAnnouncements();
             await routeUnreadAfterFetch();
         } catch (error) {
-            console.warn('initAnnouncements failed:', error);
+            console.error('[announcements] init failed:', error);
+            if (window.toastr) {
+                window.toastr.error(String(error?.message || error), t`Announcements`);
+            }
         }
     })();
 }
