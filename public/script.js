@@ -6121,7 +6121,7 @@ class StreamingProcessor {
      * @param {Object} options - Additional options for finalization.
      * @param {boolean} options.unlockUI - Whether to unlock the generation UI.
      */
-    async finalizeIntermediaryMessage(messageId, text, { unlockUI = true }) {
+    async finalizeIntermediaryMessage(messageId, text, { unlockUI = true, deferEmit = false }) {
         await this.onProgressStreaming(messageId, text, true);
         const messageElement = chatElement.find(`.mes[mesid="${messageId}"]`);
         const message = chat[messageId];
@@ -6166,8 +6166,16 @@ class StreamingProcessor {
 
         if (this.type !== 'impersonate') {
             extractMessageById(this.messageId);
-            await eventSource.emit(event_types.MESSAGE_RECEIVED, this.messageId, this.type);
-            await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, this.messageId, this.type);
+            // deferEmit lets the streaming-finish path persist BEFORE notifying
+            // extensions, so a MESSAGE_RECEIVED listener calling saveChatConditional
+            // doesn't double-write the same message and produce a snapshot phantom
+            // via BE content-dedup. The tool-call caller at line 8532 doesn't
+            // defer because its emit ordering interacts with shouldStopGeneration
+            // — the snapshot self-heal in commit 6c99b32d0 covers that path.
+            if (!deferEmit) {
+                await eventSource.emit(event_types.MESSAGE_RECEIVED, this.messageId, this.type);
+                await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, this.messageId, this.type);
+            }
         } else {
             await eventSource.emit(event_types.IMPERSONATE_READY, text);
         }
@@ -6176,7 +6184,11 @@ class StreamingProcessor {
     }
 
     async onFinishStreaming(messageId, text) {
-        await this.finalizeIntermediaryMessage(messageId, text, { unlockUI: true });
+        // Defer the MESSAGE_RECEIVED/CHARACTER_MESSAGE_RENDERED emits to AFTER
+        // the persist below so extension listeners can't race us into a
+        // double-write that BE then dedups (producing a snapshot phantom).
+        // See commit 6c99b32d0 (HAR analysis) for the race details.
+        await this.finalizeIntermediaryMessage(messageId, text, { unlockUI: true, deferEmit: true });
 
         const isAborted = this.abortController.signal.aborted;
         if (!isAborted && power_user.auto_swipe && generatedTextFiltered(text)) {
@@ -6212,6 +6224,11 @@ class StreamingProcessor {
             }
         } else {
             await saveChatConditional();
+        }
+
+        if (this.type !== 'impersonate') {
+            await eventSource.emit(event_types.MESSAGE_RECEIVED, this.messageId, this.type);
+            await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, this.messageId, this.type);
         }
 
         playMessageSound();
@@ -8388,10 +8405,11 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                     extractMessageById(placeholderId);
                     redrawMessageBubble(placeholderId);
 
-                    await eventSource.emit(event_types.MESSAGE_RECEIVED, placeholderId, type);
-                    await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, placeholderId, type);
-
                     // Persist (mirrors onFinishStreaming's strategy).
+                    // Emit MESSAGE_RECEIVED / CHARACTER_MESSAGE_RENDERED AFTER
+                    // the persist below — see commit 6c99b32d0 for why running
+                    // emits first lets extension listeners race us into a
+                    // double-write + BE dedup + snapshot phantom.
                     const isAborted = abortController && abortController.signal.aborted;
                     const serverPersistedReply = isLastLukerReplyPersistedByServerForApi();
                     const canUseIncrementalAppend = !isAborted
@@ -8408,6 +8426,9 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                     } else {
                         await saveChatConditional();
                     }
+
+                    await eventSource.emit(event_types.MESSAGE_RECEIVED, placeholderId, type);
+                    await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, placeholderId, type);
 
                     // Note: `statMesProcess` was already called inside the
                     // `saveReply({ fromStreaming: true })` placeholder push
@@ -9133,13 +9154,18 @@ export async function sendMessageAsUser(messageText, messageBias, insertAt = nul
         chat.push(message);
         const chat_id = (chat.length - 1);
         extractMessageById(chat_id);
-        await eventSource.emit(event_types.MESSAGE_SENT, chat_id);
         addOneMessage(message);
-        await eventSource.emit(event_types.USER_MESSAGE_RENDERED, chat_id);
+        // Persist to BE BEFORE emitting MESSAGE_SENT, so any extension listener
+        // calling saveChatConditional in its handler doesn't race us — it'll
+        // diff against a snapshot that already matches BE (no ops to send)
+        // instead of producing a phantom duplicate via the BE content-dedup
+        // path. See commit 6c99b32d0 (HAR analysis) for the race details.
         const appended = await appendChatMessages([message]);
         if (!appended) {
             await saveChatConditional();
         }
+        await eventSource.emit(event_types.MESSAGE_SENT, chat_id);
+        await eventSource.emit(event_types.USER_MESSAGE_RENDERED, chat_id);
     }
 
     return message;
