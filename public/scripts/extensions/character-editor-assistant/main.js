@@ -15,14 +15,16 @@ import {
 import { DOMPurify } from '../../../lib.js';
 import { extension_settings, getContext, getCharacterState, setCharacterState } from '../../extensions.js';
 import { addLocaleData, translate } from '../../i18n.js';
-import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../popup.js';
-import { convertCharacterBook, deleteWorldInfo, newWorldInfoEntryTemplate, setWorldInfoButtonClass, updateWorldInfoList, getCharaAuxWorlds, getChatWorldInfoNames, selected_world_info } from '../../world-info.js';
+import { POPUP_TYPE, Popup } from '../../popup.js';
+import { newWorldInfoEntryTemplate, setWorldInfoButtonClass, updateWorldInfoList, getCharaAuxWorlds, getChatWorldInfoNames, selected_world_info } from '../../world-info.js';
 import { getCharaFilename } from '../../utils.js';
 import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import {
     TOOL_PROTOCOL_STYLE,
     validateParsedToolCalls,
 } from '../function-call-runtime.js';
+import { openIterationStudio } from '../../iteration-studio/index.js';
+import { createCharacterEditorAdapter } from './character-editor-adapter.js';
 import { createCharacterEditorDiffUi } from './diff-ui.js';
 import { createCharacterEditorUi } from './editor-ui.js';
 
@@ -70,7 +72,6 @@ const CHARACTER_EDITOR_SESSION_LIMIT = 24;
 
 const stateCache = new Map();
 const lorebookSnapshotCache = new Map();
-const lorebookSyncDialogLocks = new Set();
 const editorStudioDialogLocks = new Set();
 
 function i18n(text) {
@@ -237,6 +238,10 @@ function registerLocaleData() {
         'Delete this session?': '删除此会话？',
         'Session deleted': '会话已删除',
         'Delete failed: ${0}': '删除失败：${0}',
+        'Card fields': '卡片字段',
+        'Lorebook': '世界书',
+        'Diff vs reference': '与参考对比',
+        'Pick a reference from the toolbar to compare.': '从工具栏选择参考以进行对比。',
  });
  addLocaleData('zh-tw', {
  'Character Editor Assistant': '角色卡編輯助手',
@@ -393,6 +398,10 @@ function registerLocaleData() {
         'Delete this session?': '刪除此會話？',
         'Session deleted': '會話已刪除',
         'Delete failed: ${0}': '刪除失敗：${0}',
+        'Card fields': '卡片欄位',
+        'Lorebook': '世界書',
+        'Diff vs reference': '與參考對比',
+        'Pick a reference from the toolbar to compare.': '從工具列選擇參考以進行對比。',
  });
 }
 
@@ -414,12 +423,6 @@ function clone(value) {
 function notifySuccess(message) {
     if (typeof toastr !== 'undefined') {
         toastr.success(String(message || ''));
-    }
-}
-
-function notifyInfo(message) {
-    if (typeof toastr !== 'undefined') {
-        toastr.info(String(message || ''));
     }
 }
 
@@ -1169,24 +1172,6 @@ async function loadLorebookData(context, bookName) {
     return { entries: {} };
 }
 
-async function loadCharacterByAvatar(context, avatar) {
-    const safeAvatar = String(avatar || '').trim();
-    if (!safeAvatar) {
-        return null;
-    }
-    const response = await fetch('/api/characters/get', {
-        method: 'POST',
-        headers: context?.getRequestHeaders?.() || {},
-        body: JSON.stringify({ avatar_url: safeAvatar }),
-        cache: 'no-cache',
-    });
-    if (!response.ok) {
-        return null;
-    }
-    const payload = await response.json().catch(() => null);
-    return payload && typeof payload === 'object' ? payload : null;
-}
-
 function normalizeLorebookEntryForSync(entry, uid) {
     const normalizeLineEndings = (value) => String(value ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     const source = entry && typeof entry === 'object' ? entry : {};
@@ -1265,177 +1250,6 @@ async function captureCharacterLorebookSnapshot(context, character) {
         bookName,
         entries,
         capturedAt: Date.now(),
-    };
-}
-
-function captureEmbeddedLorebookSnapshot(character) {
-    const target = character && typeof character === 'object' ? character : null;
-    const rawBook = target?.data?.character_book;
-    if (!rawBook || !Array.isArray(rawBook.entries)) {
-        return null;
-    }
-    const safeBook = clone(rawBook);
-    const converted = convertCharacterBook(safeBook);
-    if (!converted || typeof converted !== 'object' || !converted.entries || typeof converted.entries !== 'object') {
-        return null;
-    }
-    const avatar = String(target?.avatar || '').trim();
-    const characterName = String(target?.name || '').trim();
-    const preferredBookName = String(
-        getPrimaryLorebookName(target)
-        || safeBook?.name
-        || `${characterName || 'Character'}'s Lorebook`,
-    ).trim();
-    if (!preferredBookName) {
-        return null;
-    }
-    return {
-        avatar,
-        characterName,
-        bookName: preferredBookName,
-        entries: clone(converted.entries || {}) || {},
-        capturedAt: Date.now(),
-    };
-}
-
-function buildLorebookSyncPlan(previousSnapshot, currentSnapshot) {
-    const previous = previousSnapshot && typeof previousSnapshot === 'object' ? previousSnapshot : {};
-    const current = currentSnapshot && typeof currentSnapshot === 'object' ? currentSnapshot : {};
-    const sourceBook = String(previous.bookName || '').trim();
-    const targetBook = String(current.bookName || '').trim();
-    const previousEntries = previous.entries && typeof previous.entries === 'object' ? previous.entries : {};
-    const currentEntries = current.entries && typeof current.entries === 'object' ? current.entries : {};
-
-    const operations = [];
-    const diffItems = [];
-    const maxOperations = 300;
-    const uids = new Set([
-        ...collectLorebookEntryUids(previousEntries),
-        ...collectLorebookEntryUids(currentEntries),
-    ]);
-    const sortedUids = Array.from(uids.values()).sort((a, b) => a - b);
-    for (const uid of sortedUids) {
-        const oldEntryRaw = getLorebookEntryByUid(previousEntries, uid);
-        const newEntryRaw = getLorebookEntryByUid(currentEntries, uid);
-        const oldEntry = oldEntryRaw ? normalizeLorebookEntryForSync(oldEntryRaw, uid) : null;
-        const newEntry = newEntryRaw ? normalizeLorebookEntryForSync(newEntryRaw, uid) : null;
-        if (oldEntry && newEntry && areLorebookEntriesEqualForSync(oldEntry, newEntry)) {
-            continue;
-        }
-        const reason = !oldEntry
-            ? 'added'
-            : (!newEntry ? 'missing' : 'changed');
-        diffItems.push({
-            uid,
-            reason,
-            oldEntry,
-            newEntry,
-        });
-        if (!targetBook || operations.length >= maxOperations) {
-            continue;
-        }
-        if (newEntry) {
-            operations.push({
-                kind: 'lorebook_upsert_entry',
-                args: buildLorebookEntryUpsertArgs(targetBook, uid, newEntry),
-            });
-            continue;
-        }
-        operations.push({
-            kind: 'lorebook_delete_entry',
-            args: {
-                book_name: targetBook,
-                entry_uid: uid,
-            },
-        });
-    }
-
-    return {
-        sourceBook,
-        targetBook,
-        sourceCharacterName: String(previous.characterName || '').trim(),
-        targetCharacterName: String(current.characterName || '').trim(),
-        sourceEntryCount: Object.keys(previousEntries).length,
-        targetEntryCount: Object.keys(currentEntries).length,
-        sourceMaxEntryUid: Math.max(-1, ...collectLorebookEntryUids(previousEntries)),
-        targetMaxEntryUid: Math.max(-1, ...collectLorebookEntryUids(currentEntries)),
-        diffItems,
-        operations,
-    };
-}
-
-async function applyDirectLorebookReplace(context, previousSnapshot, currentSnapshot, currentCharacter) {
-    const previousBook = String(previousSnapshot?.bookName || '').trim();
-    const targetBook = String(currentSnapshot?.bookName || '').trim();
-    const targetData = targetBook ? { entries: clone(currentSnapshot?.entries || {}) || {} } : null;
-    if (!targetBook || !targetData || !targetData.entries || typeof targetData.entries !== 'object') {
-        throw new Error('No target lorebook data available for direct replacement.');
-    }
-
-    // Refuse the destructive shape "save empty new book + delete non-empty
-    // old book" — that would leave the character bound to an empty world
-    // and wipe their existing lore. Happens when the snapshot selection
-    // picks an empty fetched snapshot over a usable embedded one, or when
-    // the embedded book itself parsed to zero entries.
-    const targetEntryCount = Object.keys(targetData.entries).length;
-    const previousEntryCount = Object.keys(previousSnapshot?.entries || {}).length;
-    if (targetEntryCount === 0 && previousEntryCount > 0) {
-        throw new Error(`Refusing direct replace: target lorebook '${targetBook}' has no entries while previous '${previousBook}' has ${previousEntryCount}. Aborting to prevent data loss.`);
-    }
-
-    // Write target first, then delete old one to avoid destructive half-success state.
-    await context.saveWorldInfo(targetBook, targetData, true);
-
-    if (previousBook && previousBook !== targetBook) {
-        const existingPrevious = await context.loadWorldInfo(previousBook);
-        if (existingPrevious) {
-            const deleted = await deleteWorldInfo(previousBook);
-            if (!deleted) {
-                throw new Error(`Failed to delete old lorebook '${previousBook}'.`);
-            }
-        }
-    }
-
-    const avatar = String(currentSnapshot?.avatar || currentCharacter?.avatar || '').trim();
-    if (avatar) {
-        await mergeCharacterAttributes(context, avatar, {
-            data: {
-                extensions: {
-                    world: targetBook,
-                },
-            },
-        });
-    }
-    await syncWorldBindingUi(context, targetBook);
-
-    return {
-        previousBook,
-        targetBook,
-    };
-}
-
-async function restorePreviousLorebookBinding(context, previousSnapshot, currentSnapshot, currentCharacter) {
-    const previousBook = String(previousSnapshot?.bookName || '').trim();
-    const avatar = String(currentSnapshot?.avatar || currentCharacter?.avatar || '').trim();
-    if (!avatar) {
-        return {
-            previousBook,
-            applied: false,
-        };
-    }
-
-    await mergeCharacterAttributes(context, avatar, {
-        data: {
-            extensions: {
-                world: previousBook,
-            },
-        },
-    });
-    await syncWorldBindingUi(context, previousBook);
-
-    return {
-        previousBook,
-        applied: true,
     };
 }
 
@@ -2076,74 +1890,6 @@ function createCharacterEditorWorldBookListToolApi(context, { avatar = '' } = {}
     };
 }
 
-function summarizeLorebookEntryForDebug(entry) {
-    const safe = entry && typeof entry === 'object' ? entry : null;
-    if (!safe) {
-        return null;
-    }
-    const key = Array.isArray(safe.key) ? safe.key : [];
-    const keysecondary = Array.isArray(safe.keysecondary) ? safe.keysecondary : [];
-    return {
-        uid: asFiniteInteger(safe.uid, null),
-        key_head: key.slice(0, 3),
-        keysecondary_head: keysecondary.slice(0, 3),
-        comment: clipLorebookDebugText(safe.comment ?? ''),
-        content_head: clipLorebookDebugText(safe.content ?? ''),
-        order: asFiniteInteger(safe.order, null),
-        position: asFiniteInteger(safe.position, null),
-        depth: asFiniteInteger(safe.depth, null),
-        disable: Boolean(safe.disable),
-        constant: Boolean(safe.constant),
-    };
-}
-
-function summarizeLorebookSnapshotForDebug(snapshot) {
-    const safe = snapshot && typeof snapshot === 'object' ? snapshot : null;
-    if (!safe) {
-        return null;
-    }
-    const entries = safe.entries && typeof safe.entries === 'object' ? safe.entries : {};
-    const uids = Array.from(collectLorebookEntryUids(entries).values()).sort((a, b) => a - b);
-    const firstEntry = uids.length > 0 ? getLorebookEntryByUid(entries, uids[0]) : null;
-    return {
-        avatar: String(safe.avatar || ''),
-        character: String(safe.characterName || ''),
-        book: String(safe.bookName || ''),
-        entry_count: uids.length,
-        first_uid: uids.length > 0 ? uids[0] : null,
-        first_entry: summarizeLorebookEntryForDebug(firstEntry),
-        capturedAt: Number(safe.capturedAt || 0),
-    };
-}
-
-function summarizeLorebookPlanForDebug(plan) {
-    const safePlan = plan && typeof plan === 'object' ? plan : {};
-    const diffItems = Array.isArray(safePlan.diffItems) ? safePlan.diffItems : [];
-    const operations = Array.isArray(safePlan.operations) ? safePlan.operations : [];
-    return {
-        sourceBook: String(safePlan.sourceBook || ''),
-        targetBook: String(safePlan.targetBook || ''),
-        sourceEntryCount: Number(safePlan.sourceEntryCount || 0),
-        targetEntryCount: Number(safePlan.targetEntryCount || 0),
-        diffCount: diffItems.length,
-        operationCount: operations.length,
-        diffPreview: diffItems.slice(0, 3).map(item => ({
-            uid: asFiniteInteger(item?.uid, null),
-            reason: String(item?.reason || ''),
-            old: summarizeLorebookEntryForDebug(item?.oldEntry),
-            new: summarizeLorebookEntryForDebug(item?.newEntry),
-        })),
-    };
-}
-
-function logLorebookSyncDebug(stage, payload = null) {
-    try {
-        console.info(`[${MODULE_NAME}] lorebook-sync:${String(stage || 'event')}`, payload || {});
-    } catch {
-        // ignore debug logging failures
-    }
-}
-
 function renderLorebookSyncAnalysisMarkdown(markdownText) {
     const source = String(markdownText || '').trim();
     if (!source) {
@@ -2157,30 +1903,6 @@ function renderLorebookSyncAnalysisMarkdown(markdownText) {
     } catch {
         return `<pre>${escapeHtml(source)}</pre>`;
     }
-}
-
-function buildLorebookSyncDialogHtml(plan) {
-    const safePlan = plan && typeof plan === 'object' ? plan : {};
-
-    return `
-<div class="luker-studio cea_sync_popup">
-    <div class="cea_sync_intro">${escapeHtml(i18n('Review model analysis and optionally add requirements. Save will apply model edits; cancel will restore the previous lorebook.'))}</div>
-    <div class="cea_sync_meta">
-        <div class="cea_sync_meta_item"><b>${escapeHtml(i18n('Old lorebook'))}:</b> ${escapeHtml(String(safePlan.sourceBook || i18n('(empty)')))}</div>
-        <div class="cea_sync_meta_item"><b>${escapeHtml(i18n('New lorebook'))}:</b> ${escapeHtml(String(safePlan.targetBook || i18n('(empty)')))}</div>
-        <div class="cea_sync_meta_item"><b>${escapeHtml(i18n('Candidate sync operations'))}:</b> ${escapeHtml(String(Number(safePlan.operations?.length || 0)))}</div>
-    </div>
-    <div class="cea_sync_chat" data-cea-sync-chat>
-    </div>
-    <div class="cea_sync_composer">
-        <textarea class="text_pole textarea_compact" rows="4" data-cea-sync-input placeholder="${escapeHtml(i18n('Type your requirement to continue this conversation...'))}"></textarea>
-        <div class="menu_button menu_button_small" data-cea-sync-send>${escapeHtml(i18n('Send'))}</div>
-    </div>
-    <details class="cea_sync_history">
-        <summary>${escapeHtml(i18n('History'))}</summary>
-        <div class="cea_sync_history_list" data-cea-sync-history></div>
-    </details>
-</div>`;
 }
 
 function getLorebookEntryByUid(entries, uid) {
@@ -2238,31 +1960,6 @@ function collectLorebookEntryUids(entries) {
         }
     }
     return output;
-}
-
-function normalizeModelOperationsFromCalls(rawCalls, targetBook) {
-    const normalizedOperations = [];
-    for (const call of Array.isArray(rawCalls) ? rawCalls : []) {
-        const kind = String(call?.name || '').trim();
-        if (kind !== 'lorebook_upsert_entry' && kind !== 'lorebook_delete_entry') {
-            continue;
-        }
-        const normalizedArgs = normalizeModelOperationArgs(kind, call.args, targetBook);
-        if (!normalizedArgs) {
-            continue;
-        }
-        normalizedOperations.push({
-            kind,
-            args: normalizedArgs,
-        });
-    }
-    const dedupeMap = new Map();
-    for (const item of normalizedOperations) {
-        const uid = String(item?.args?.entry_uid ?? '');
-        const key = `${String(item.kind)}:${uid}`;
-        dedupeMap.set(key, item);
-    }
-    return Array.from(dedupeMap.values());
 }
 
 function buildLorebookDraftDiffPreview(operation, targetBook, beforeEntry, afterEntry) {
@@ -2345,178 +2042,6 @@ function buildLorebookDraftDiffPreview(operation, targetBook, beforeEntry, after
     return preview;
 }
 
-function applyDraftOperationsAndBuildPreviews(targetBook, draftEntries, operationSpecs) {
-    const entries = draftEntries && typeof draftEntries === 'object' ? draftEntries : {};
-    const normalized = Array.isArray(operationSpecs) ? operationSpecs : [];
-    const previews = [];
-    const appliedOperations = [];
-
-    for (const spec of normalized) {
-        const kind = String(spec?.kind || '');
-        const args = spec?.args && typeof spec.args === 'object' ? spec.args : {};
-        const uid = asFiniteInteger(args.entry_uid, null);
-        if (!Number.isInteger(uid) || uid < 0) {
-            continue;
-        }
-
-        const beforeEntryRaw = getLorebookEntryByUid(entries, uid);
-        const beforeEntry = beforeEntryRaw ? clone(beforeEntryRaw) : null;
-        let afterEntry = beforeEntry ? clone(beforeEntry) : null;
-
-        if (kind === 'lorebook_upsert_entry') {
-            afterEntry = applyLorebookEntryArgs(beforeEntry, args, uid);
-            if (
-                beforeEntry
-                && afterEntry
-                && areLorebookEntriesEqualForSync(
-                    normalizeLorebookEntryForSync(beforeEntry, uid),
-                    normalizeLorebookEntryForSync(afterEntry, uid),
-                )
-            ) {
-                continue;
-            }
-            entries[String(uid)] = clone(afterEntry);
-        } else if (kind === 'lorebook_delete_entry') {
-            if (!beforeEntry) {
-                continue;
-            }
-            delete entries[String(uid)];
-            afterEntry = null;
-        } else {
-            continue;
-        }
-
-        const preview = buildLorebookDraftDiffPreview(spec, targetBook, beforeEntry, afterEntry);
-        if (!preview) {
-            continue;
-        }
-        previews.push(preview);
-        appliedOperations.push({
-            kind,
-            args: clone(args),
-        });
-    }
-
-    return {
-        appliedOperations,
-        diffPreviews: previews,
-    };
-}
-
-function buildFinalLorebookOperationSpecsFromDraft(targetBook, baselineEntries, draftEntries) {
-    const safeTargetBook = String(targetBook || '').trim();
-    if (!safeTargetBook) {
-        return [];
-    }
-    const baseline = baselineEntries && typeof baselineEntries === 'object' ? baselineEntries : {};
-    const draft = draftEntries && typeof draftEntries === 'object' ? draftEntries : {};
-    const uids = new Set([
-        ...collectLorebookEntryUids(baseline),
-        ...collectLorebookEntryUids(draft),
-    ]);
-    const sorted = Array.from(uids.values()).sort((a, b) => a - b);
-    const output = [];
-
-    for (const uid of sorted) {
-        const beforeRaw = getLorebookEntryByUid(baseline, uid);
-        const afterRaw = getLorebookEntryByUid(draft, uid);
-        if (beforeRaw && !afterRaw) {
-            output.push({
-                kind: 'lorebook_delete_entry',
-                args: {
-                    book_name: safeTargetBook,
-                    entry_uid: uid,
-                },
-            });
-            continue;
-        }
-        if (!afterRaw) {
-            continue;
-        }
-        if (!beforeRaw || !areLorebookEntriesEqualForSync(beforeRaw, afterRaw)) {
-            output.push({
-                kind: 'lorebook_upsert_entry',
-                args: buildLorebookEntryUpsertArgs(safeTargetBook, uid, afterRaw),
-            });
-        }
-    }
-
-    return output;
-}
-
-function buildLorebookOperationApprovalKey(operation) {
-    const kind = String(operation?.kind || '').trim();
-    const uid = asFiniteInteger(operation?.args?.entry_uid, null);
-    if (!kind || !Number.isInteger(uid) || uid < 0) {
-        return '';
-    }
-    return `${kind}:${uid}`;
-}
-
-function markOperationsPendingApproval(operations, approvalMap) {
-    const map = approvalMap instanceof Map ? approvalMap : new Map();
-    for (const operation of Array.isArray(operations) ? operations : []) {
-        const key = buildLorebookOperationApprovalKey(operation);
-        if (!key) {
-            continue;
-        }
-        map.set(key, 'pending');
-    }
-}
-
-function getFinalOperationApprovalSummary(operationSpecs, approvalMap) {
-    const map = approvalMap instanceof Map ? approvalMap : new Map();
-    const summary = {
-        approved: 0,
-        pending: 0,
-        rejected: 0,
-    };
-    for (const operation of Array.isArray(operationSpecs) ? operationSpecs : []) {
-        const key = buildLorebookOperationApprovalKey(operation);
-        const state = key ? String(map.get(key) || 'pending') : 'pending';
-        if (state === 'approved') {
-            summary.approved += 1;
-        } else if (state === 'rejected') {
-            summary.rejected += 1;
-        } else {
-            summary.pending += 1;
-        }
-    }
-    return summary;
-}
-
-function selectApprovedFinalOperations(operationSpecs, approvalMap) {
-    const map = approvalMap instanceof Map ? approvalMap : new Map();
-    return (Array.isArray(operationSpecs) ? operationSpecs : []).filter(operation => {
-        const key = buildLorebookOperationApprovalKey(operation);
-        const state = key ? String(map.get(key) || 'pending') : 'pending';
-        return state === 'approved';
-    });
-}
-
-function buildFinalDiffReviewContext(operationSpecs, approvalMap) {
-    const specs = Array.isArray(operationSpecs) ? operationSpecs : [];
-    const summary = getFinalOperationApprovalSummary(specs, approvalMap);
-    const decisions = specs.map(spec => {
-        const kind = String(spec?.kind || '').trim();
-        const entryUid = asFiniteInteger(spec?.args?.entry_uid, null);
-        const key = buildLorebookOperationApprovalKey(spec);
-        const status = key ? String(approvalMap?.get?.(key) || 'pending') : 'pending';
-        return {
-            kind,
-            entry_uid: Number.isInteger(entryUid) ? entryUid : null,
-            status,
-        };
-    });
-    return {
-        total: Number(specs.length),
-        approved: Number(summary.approved),
-        rejected: Number(summary.rejected),
-        pending: Number(summary.pending),
-        decisions,
-    };
-}
-
 function cacheLorebookSnapshot(snapshot) {
     const safeSnapshot = snapshot && typeof snapshot === 'object' ? clone(snapshot) : null;
     const avatar = String(safeSnapshot?.avatar || '').trim();
@@ -2524,35 +2049,6 @@ function cacheLorebookSnapshot(snapshot) {
         return;
     }
     lorebookSnapshotCache.set(avatar, safeSnapshot);
-}
-
-function rebuildLorebookDraftEntriesFromConversation(targetBook, baselineEntries, draftEntries, conversationMessages) {
-    const safeDraftEntries = draftEntries && typeof draftEntries === 'object' ? draftEntries : {};
-    const safeBaselineEntries = baselineEntries && typeof baselineEntries === 'object' ? baselineEntries : {};
-
-    for (const key of Object.keys(safeDraftEntries)) {
-        delete safeDraftEntries[key];
-    }
-    for (const [key, value] of Object.entries(safeBaselineEntries)) {
-        safeDraftEntries[String(key)] = clone(value);
-    }
-
-    const list = Array.isArray(conversationMessages) ? conversationMessages : [];
-    for (const item of list) {
-        const operations = Array.isArray(item?.operations) ? item.operations : [];
-        if (operations.length === 0) {
-            if (item && typeof item === 'object') {
-                item.operations = [];
-                item.diffPreviews = [];
-            }
-            continue;
-        }
-        const draftRound = applyDraftOperationsAndBuildPreviews(targetBook, safeDraftEntries, operations);
-        if (item && typeof item === 'object') {
-            item.operations = draftRound.appliedOperations;
-            item.diffPreviews = draftRound.diffPreviews;
-        }
-    }
 }
 
 const LINE_DIFF_LONG_CHAR_THRESHOLD = 900;
@@ -2755,79 +2251,6 @@ const {
     sanitizeDiffPlaceholderValue,
 });
 
-function renderLorebookSyncTurnDiffHtml(message, messageIndex = -1, approvalMap = null) {
-    const safeMessage = message && typeof message === 'object' ? message : {};
-    const hasTurnData = Object.hasOwn(safeMessage, 'diffPreviews') || Object.hasOwn(safeMessage, 'operations');
-    if (!hasTurnData) {
-        return '';
-    }
-    const previews = Array.isArray(safeMessage.diffPreviews) ? safeMessage.diffPreviews : [];
-    const operations = Array.isArray(safeMessage.operations) ? safeMessage.operations : [];
-    const canRollbackRound = Number.isInteger(messageIndex) && messageIndex >= 0 && operations.length > 0;
-    const summaryText = previews.length > 0
-        ? i18nFormat('Round diff (${0} operations)', previews.length)
-        : i18n('Round diff');
-
-    if (previews.length === 0) {
-        return `
-<details class="cea_sync_turn_diff">
-    <summary>${escapeHtml(summaryText)}</summary>
-    ${canRollbackRound ? `
-    <div class="cea_sync_turn_actions">
-        <div class="menu_button menu_button_small" data-cea-sync-action="rollback-round" data-cea-sync-message-index="${messageIndex}">${escapeHtml(i18n('Rollback to this round'))}</div>
-    </div>` : ''}
-    <div class="cea_sync_turn_diff_empty">${escapeHtml(i18n('No draft operations proposed in this round.'))}</div>
-</details>`;
-    }
-
-    return `
-<details class="cea_sync_turn_diff" open>
-    <summary>${escapeHtml(summaryText)}</summary>
-    ${canRollbackRound ? `
-    <div class="cea_sync_turn_actions">
-        <div class="menu_button menu_button_small" data-cea-sync-action="rollback-round" data-cea-sync-message-index="${messageIndex}">${escapeHtml(i18n('Rollback to this round'))}</div>
-    </div>` : ''}
-    <div class="cea_sync_turn_diff_list">
-        ${previews.map((preview, index) => {
-        const fields = Array.isArray(preview?.fields) ? preview.fields : [];
-        const meta = Array.isArray(preview?.meta) ? preview.meta : [];
-        const operation = operations[index] || null;
-        const rawArgs = operation?.args || preview?.rawArgs || {};
-        const operationKey = buildLorebookOperationApprovalKey(operation);
-        const approvalState = operationKey ? String(approvalMap?.get?.(operationKey) || 'pending') : 'pending';
-        const approvalLabel = approvalState === 'approved'
-            ? i18n('Approved')
-            : (approvalState === 'rejected' ? i18n('Rejected') : i18n('Pending review'));
-        return `
-<div class="cea_sync_turn_diff_item">
-    <div class="cea_sync_turn_diff_title">${escapeHtml(i18nFormat('Operation ${0}', index + 1))}: ${escapeHtml(String(preview?.title || ''))}</div>
-    <div class="cea_sync_turn_diff_actions">
-        <div class="cea_sync_turn_diff_status ${escapeHtml(approvalState)}">${escapeHtml(approvalLabel)}</div>
-        ${operationKey ? `
-        <div class="menu_button menu_button_small" data-cea-sync-action="approve-diff" data-cea-sync-message-index="${messageIndex}" data-cea-sync-op-index="${index}">${escapeHtml(i18n('Approve'))}</div>
-        <div class="menu_button menu_button_small" data-cea-sync-action="reject-diff" data-cea-sync-message-index="${messageIndex}" data-cea-sync-op-index="${index}">${escapeHtml(i18n('Reject'))}</div>
-        ` : ''}
-    </div>
-    ${meta.length > 0 ? `<div class="cea_sync_turn_diff_meta">${meta.map(item => `
-        <div class="cea_sync_turn_diff_meta_item"><b>${escapeHtml(String(item?.label || ''))}:</b> ${escapeHtml(String(item?.value || ''))}</div>
-    `).join('')}</div>` : ''}
-    <div class="cea_sync_turn_diff_fields">
-        ${fields.map(field => `
-<div class="cea_sync_turn_diff_field">
-    <div class="cea_sync_turn_diff_label">${escapeHtml(String(field?.label || 'field'))}</div>
-    ${renderLineDiffHtml(field?.before ?? '', field?.after ?? '', String(field?.label || 'field'))}
-</div>`).join('')}
-    </div>
-    <details class="cea_sync_turn_diff_raw">
-        <summary>${escapeHtml(i18n('Raw arguments'))}</summary>
-        <pre>${escapeHtml(JSON.stringify(rawArgs, null, 2))}</pre>
-    </details>
-</div>`;
-    }).join('')}
-    </div>
-</details>`;
-}
-
 function findPreviousConversationUserMessageIndex(messages, startIndex) {
     const list = Array.isArray(messages) ? messages : [];
     const index = Math.min(list.length - 1, Math.max(-1, Math.floor(Number(startIndex) || -1)));
@@ -2864,227 +2287,6 @@ function renderConversationMessageRefreshAction(attributeName, messageIndex, mes
 <div class="cea_sync_msg_actions">
     <div class="menu_button menu_button_small" ${attributeName}="refresh-message" data-cea-sync-message-index="${messageIndex}">${escapeHtml(i18n('Regenerate'))}</div>
 </div>`;
-}
-
-function renderLorebookSyncChatMessages(messages, { loading = false, loadingText = '', approvalMap = null } = {}) {
-    const list = Array.isArray(messages) ? messages : [];
-    const html = list.map((item, index) => {
-        const role = String(item?.role || 'assistant');
-        const text = String(item?.content || '').trim();
-        const toolSummary = String(item?.toolSummary || '').trim();
-        if (!text && !toolSummary) {
-            return '';
-        }
-        if (role === 'user') {
-            return `
-<div class="cea_sync_chat_msg cea_sync_chat_msg_user">
-    <pre>${escapeHtml(text)}</pre>
-</div>`;
-        }
-        return `
-<div class="cea_sync_chat_msg cea_sync_chat_msg_assistant">
-    ${text ? `<div class="cea_sync_chat_text">${renderLorebookSyncAnalysisMarkdown(text)}</div>` : ''}
-    ${renderLorebookSyncTurnDiffHtml(item, index, approvalMap)}
-    ${toolSummary ? `<div class="cea_sync_tool_summary">${escapeHtml(toolSummary)}</div>` : ''}
-    ${renderConversationMessageRefreshAction('data-cea-sync-action', index, list)}
-</div>`;
-    }).join('');
-
-    if (!loading) {
-        return html;
-    }
-    const loadingLabel = String(loadingText || i18n('Assistant is thinking...'));
-    return `${html}
-<div class="cea_sync_chat_msg cea_sync_chat_msg_assistant cea_sync_chat_msg_loading">
-    <i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i>
-    <span>${escapeHtml(loadingLabel)}</span>
-</div>`;
-}
-
-function buildLorebookSyncModeChoiceHtml(plan) {
-    const safePlan = plan && typeof plan === 'object' ? plan : {};
-    return `
-<div class="luker-studio cea_sync_popup">
-    <div class="cea_sync_intro">${escapeHtml(i18n('Choose how to handle lorebook update'))}</div>
-    <div class="cea_sync_meta">
-        <div class="cea_sync_meta_item"><b>${escapeHtml(i18n('Old lorebook'))}:</b> ${escapeHtml(String(safePlan.sourceBook || i18n('(empty)')))}</div>
-        <div class="cea_sync_meta_item"><b>${escapeHtml(i18n('New lorebook'))}:</b> ${escapeHtml(String(safePlan.targetBook || i18n('(empty)')))}</div>
-        <div class="cea_sync_meta_item"><b>${escapeHtml(i18n('Candidate sync operations'))}:</b> ${escapeHtml(String(Number(safePlan.operations?.length || 0)))}</div>
-    </div>
-</div>`;
-}
-
-async function selectLorebookSyncMode(plan) {
-    const popup = new Popup(
-        buildLorebookSyncModeChoiceHtml(plan),
-        POPUP_TYPE.CONFIRM,
-        '',
-        {
-            wide: true,
-            wider: true,
-            allowVerticalScrolling: true,
-            okButton: false,
-            cancelButton: false,
-            defaultResult: POPUP_RESULT.CUSTOM1,
-            customButtons: [
-                {
-                    text: i18n('Analyze then update'),
-                    result: POPUP_RESULT.CUSTOM1,
-                },
-                {
-                    text: i18n('Direct replace'),
-                    result: POPUP_RESULT.CUSTOM2,
-                },
-                {
-                    text: i18n('Do not replace'),
-                    result: POPUP_RESULT.CUSTOM3,
-                },
-            ],
-        },
-    );
-
-    const result = await popup.show();
-    if (result === POPUP_RESULT.CUSTOM2) {
-        return 'direct_replace';
-    }
-    if (result === POPUP_RESULT.CUSTOM3 || result === POPUP_RESULT.CANCELLED) {
-        return 'skip_replace';
-    }
-    return 'analyze_then_update';
-}
-
-function buildLorebookModelContextPayload(plan, requirements = '', analysisSummary = '') {
-    const candidateItems = Array.isArray(plan?.diffItems) ? plan.diffItems : [];
-    const targetMaxEntryUid = asFiniteInteger(plan?.targetMaxEntryUid, -1);
-    return {
-        source_lorebook: String(plan?.sourceBook || ''),
-        target_lorebook: String(plan?.targetBook || ''),
-        source_entry_count: Number(plan?.sourceEntryCount || 0),
-        target_entry_count: Number(plan?.targetEntryCount || 0),
-        target_max_entry_uid: Number.isInteger(targetMaxEntryUid) ? targetMaxEntryUid : -1,
-        candidates: candidateItems.map(item => ({
-            uid: Number(item?.uid || 0),
-            reason: String(item?.reason || ''),
-            old_entry: item?.oldEntry ? compactEntryForModel(item.oldEntry, item?.uid) : null,
-            new_entry: item?.newEntry ? compactEntryForModel(item.newEntry, item.uid) : null,
-        })),
-        user_requirements: String(requirements || '').trim(),
-        analysis_summary: String(analysisSummary || '').trim(),
-    };
-}
-
-function buildLorebookSyncBaselineData(baselineEntries) {
-    return {
-        entries: clone(baselineEntries || {}) || {},
-    };
-}
-
-function buildLorebookSyncSeedDiffPreviews(plan) {
-    const targetBook = String(plan?.targetBook || '').trim();
-    const items = Array.isArray(plan?.diffItems) ? plan.diffItems : [];
-    const previews = [];
-    for (const item of items) {
-        const uid = asFiniteInteger(item?.uid, asFiniteInteger(item?.newEntry?.uid, asFiniteInteger(item?.oldEntry?.uid, null)));
-        if (!Number.isInteger(uid) || uid < 0) {
-            continue;
-        }
-        const beforeEntry = item?.oldEntry && typeof item.oldEntry === 'object' ? clone(item.oldEntry) : null;
-        const afterEntry = item?.newEntry && typeof item.newEntry === 'object' ? clone(item.newEntry) : null;
-        const operation = afterEntry
-            ? {
-                kind: 'lorebook_upsert_entry',
-                args: buildLorebookEntryUpsertArgs(targetBook, uid, afterEntry),
-            }
-            : {
-                kind: 'lorebook_delete_entry',
-                args: {
-                    book_name: targetBook,
-                    entry_uid: uid,
-                },
-            };
-        const preview = buildLorebookDraftDiffPreview(operation, targetBook, beforeEntry, afterEntry);
-        if (preview) {
-            previews.push(preview);
-        }
-    }
-    return previews;
-}
-
-function buildLorebookSyncModelTools() {
-    return [
-        {
-            type: 'function',
-            function: {
-                name: 'lorebook_upsert_entry',
-                description: 'Upsert one lorebook entry in the target lorebook.',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        entry_uid: { type: 'integer' },
-                        key_csv: { type: 'string' },
-                        secondary_key_csv: { type: 'string' },
-                        comment: { type: 'string' },
-                        content: { type: 'string' },
-                        selective_logic: { type: 'integer' },
-                        order: { type: 'integer' },
-                        position: { type: 'integer' },
-                        depth: { type: 'integer' },
-                        enabled: { type: 'boolean' },
-                        disable: { type: 'boolean' },
-                        constant: { type: 'boolean' },
-                        exclude_recursion: { type: 'boolean' },
-                        prevent_recursion: { type: 'boolean' },
-                        delay_until_recursion: { type: 'integer' },
-                    },
-                    required: ['entry_uid'],
-                    additionalProperties: false,
-                },
-            },
-        },
-        {
-            type: 'function',
-            function: {
-                name: 'lorebook_delete_entry',
-                description: 'Delete one lorebook entry in the target lorebook by uid.',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        entry_uid: { type: 'integer' },
-                    },
-                    required: ['entry_uid'],
-                    additionalProperties: false,
-                },
-            },
-        },
-    ];
-}
-
-function renderLorebookSyncHistoryItems(state) {
-    const items = Array.isArray(state?.journal) ? state.journal.slice().reverse() : [];
-    const toolbar = items.length > 0
-        ? `<div class="cea_sync_history_toolbar"><div class="menu_button menu_button_small" data-cea-sync-history-action="clear">${escapeHtml(i18n('Clear history'))}</div></div>`
-        : '';
-    if (items.length === 0) {
-        return `${toolbar}<div class="cea_sync_history_empty">${escapeHtml(i18n('No history yet.'))}</div>`;
-    }
-    return `${toolbar}${items.map(item => {
-        const journalId = String(item?.id || '').trim();
-        const actions = [];
-        if (journalId && String(item?.kind || '') !== 'rollback') {
-            actions.push(`<div class="menu_button menu_button_small" data-cea-sync-history-action="rollback" data-cea-sync-history-id="${escapeHtml(journalId)}">${escapeHtml(i18n('Rollback'))}</div>`);
-        }
-        if (journalId) {
-            actions.push(`<div class="menu_button menu_button_small" data-cea-sync-history-action="delete" data-cea-sync-history-id="${escapeHtml(journalId)}">${escapeHtml(i18n('Delete'))}</div>`);
-        }
-        return `
-<div class="cea_sync_history_item">
-    <div class="cea_sync_history_item_main">
-        <div class="cea_sync_history_item_summary">${escapeHtml(String(item?.summary || item?.kind || ''))}</div>
-        <div class="cea_sync_history_item_time">${escapeHtml(new Date(Number(item?.createdAt || Date.now())).toLocaleString())}</div>
-    </div>
-    ${actions.length > 0 ? `<div class="cea_sync_history_item_actions">${actions.join('')}</div>` : ''}
-</div>`;
-    }).join('')}`;
 }
 
 async function requestLorebookToolCallsWithRetry(context, settings, {
@@ -3199,290 +2401,6 @@ async function requestLorebookToolCallsWithRetry(context, settings, {
     return {
         calls: [],
         assistantText: '',
-    };
-}
-
-function normalizeModelOperationArgs(kind, args, targetBook) {
-    const safeArgs = args && typeof args === 'object' ? args : {};
-    if (kind === 'lorebook_upsert_entry') {
-        const entryUid = asFiniteInteger(safeArgs.entry_uid, null);
-        if (!Number.isInteger(entryUid) || entryUid < 0) {
-            return null;
-        }
-        const upsertPayloadKeys = [
-            'key_csv',
-            'secondary_key_csv',
-            'comment',
-            'content',
-            'selective_logic',
-            'order',
-            'position',
-            'depth',
-            'enabled',
-            'disable',
-            'constant',
-            'exclude_recursion',
-            'prevent_recursion',
-            'delay_until_recursion',
-        ];
-        const hasPayload = upsertPayloadKeys.some(key => Object.hasOwn(safeArgs, key));
-        if (!hasPayload) {
-            return null;
-        }
-        const normalized = {
-            book_name: targetBook,
-            entry_uid: entryUid,
-        };
-        if (Object.hasOwn(safeArgs, 'key_csv')) {
-            normalized.key_csv = String(safeArgs.key_csv ?? '');
-        }
-        if (Object.hasOwn(safeArgs, 'secondary_key_csv')) {
-            normalized.secondary_key_csv = String(safeArgs.secondary_key_csv ?? '');
-        }
-        if (Object.hasOwn(safeArgs, 'comment')) {
-            normalized.comment = String(safeArgs.comment ?? '');
-        }
-        if (Object.hasOwn(safeArgs, 'content')) {
-            normalized.content = String(safeArgs.content ?? '');
-        }
-        if (Object.hasOwn(safeArgs, 'selective_logic')) {
-            const value = asFiniteInteger(safeArgs.selective_logic, null);
-            if (value !== null) {
-                normalized.selective_logic = value;
-            }
-        }
-        if (Object.hasOwn(safeArgs, 'order')) {
-            const value = asFiniteInteger(safeArgs.order, null);
-            if (value !== null) {
-                normalized.order = value;
-            }
-        }
-        if (Object.hasOwn(safeArgs, 'position')) {
-            const value = asFiniteInteger(safeArgs.position, null);
-            if (value !== null) {
-                normalized.position = value;
-            }
-        }
-        if (Object.hasOwn(safeArgs, 'depth')) {
-            const value = asFiniteInteger(safeArgs.depth, null);
-            if (value !== null) {
-                normalized.depth = value;
-            }
-        }
-        if (Object.hasOwn(safeArgs, 'enabled')) {
-            normalized.enabled = Boolean(safeArgs.enabled);
-        }
-        if (Object.hasOwn(safeArgs, 'disable')) {
-            normalized.disable = Boolean(safeArgs.disable);
-        }
-        if (Object.hasOwn(safeArgs, 'constant')) {
-            normalized.constant = Boolean(safeArgs.constant);
-        }
-        if (Object.hasOwn(safeArgs, 'exclude_recursion')) {
-            normalized.exclude_recursion = Boolean(safeArgs.exclude_recursion);
-        }
-        if (Object.hasOwn(safeArgs, 'prevent_recursion')) {
-            normalized.prevent_recursion = Boolean(safeArgs.prevent_recursion);
-        }
-        if (Object.hasOwn(safeArgs, 'delay_until_recursion')) {
-            const value = asFiniteInteger(safeArgs.delay_until_recursion, null);
-            if (value !== null) {
-                normalized.delay_until_recursion = value;
-            }
-        }
-        return normalized;
-    }
-    if (kind === 'lorebook_delete_entry') {
-        const entryUid = asFiniteInteger(safeArgs.entry_uid, null);
-        if (!Number.isInteger(entryUid) || entryUid < 0) {
-            return null;
-        }
-        return {
-            book_name: targetBook,
-            entry_uid: entryUid,
-        };
-    }
-    return null;
-}
-
-async function requestModelLorebookDiffAnalysis(context, plan) {
-    const targetBook = String(plan?.targetBook || '').trim();
-    if (!targetBook) {
-        return {
-            assistantText: '',
-        };
-    }
-    const contextPayload = buildLorebookModelContextPayload(plan, '');
-    logLorebookSyncDebug('model-analysis-request', {
-        plan: summarizeLorebookPlanForDebug(plan),
-        candidatesPreview: Array.isArray(contextPayload?.candidates)
-            ? contextPayload.candidates.slice(0, 3).map(item => ({
-                uid: asFiniteInteger(item?.uid, null),
-                reason: String(item?.reason || ''),
-                old: summarizeLorebookEntryForDebug(item?.old_entry),
-                new: summarizeLorebookEntryForDebug(item?.new_entry),
-            }))
-            : [],
-    });
-    const systemPrompt = [
-        'You are analyzing differences between an old lorebook and a new lorebook.',
-        'Do not call tools in this step. Provide analysis only.',
-        'The new lorebook is the target baseline to keep.',
-        'The old lorebook is reference-only, used to identify optional carry-over details.',
-        'Focus on migration risk, conflicts, and concrete recommendations without reverting to the old lorebook by default.',
-        `Target lorebook is "${targetBook}".`,
-    ].join('\n');
-    const userPrompt = [
-        'Analyze this lorebook diff payload and summarize key points for the user.',
-        'Keep it concise and practical.',
-        JSON.stringify(contextPayload),
-    ].join('\n\n');
-    const requestPresetOptions = getLorebookSyncRequestPresetOptions();
-    const settings = getSettings();
-    const generateTaskOpts = {
-        taskMessages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt },
-        ],
-        includeCharacterCard: true,
-        worldInfoSource: 'none',
-        runtimeWorldInfo: {},
-        apiPresetName: requestPresetOptions.apiPresetName,
-        llmPresetName: requestPresetOptions.llmPresetName,
-        // Authoring scope: userPrompt embeds the raw lorebook diff payload —
-        // any {{...}} placeholders inside it are part of the source under
-        // analysis and must not be resolved before the model sees them.
-        substituteMacros: false,
-    };
-    const result = settings?.useStreamingTransport
-        ? await context.generateTaskStream(generateTaskOpts).result
-        : await context.generateTask(generateTaskOpts);
-
-    return {
-        assistantText: String(result?.assistantText || '').trim(),
-    };
-}
-
-async function requestModelLorebookConversationReply(context, plan, conversationMessages, { finalOperationSpecs = [], approvalMap = null } = {}) {
-    const targetBook = String(plan?.targetBook || '').trim();
-    if (!targetBook) {
-        return { assistantText: '', operations: [] };
-    }
-
-    const contextPayload = buildLorebookModelContextPayload(plan, '', '');
-    const history = (Array.isArray(conversationMessages) ? conversationMessages : [])
-        .map(item => ({
-            role: String(item?.role || ''),
-            content: String(item?.content || '').trim(),
-        }))
-        .filter(item => (item.role === 'assistant' || item.role === 'user') && item.content);
-    const reviewContext = buildFinalDiffReviewContext(finalOperationSpecs, approvalMap);
-    logLorebookSyncDebug('model-conversation-request', {
-        plan: summarizeLorebookPlanForDebug(plan),
-        conversationCount: history.length,
-        finalOperationCount: Array.isArray(finalOperationSpecs) ? finalOperationSpecs.length : 0,
-        reviewSummary: reviewContext?.summary || null,
-        candidatesPreview: Array.isArray(contextPayload?.candidates)
-            ? contextPayload.candidates.slice(0, 3).map(item => ({
-                uid: asFiniteInteger(item?.uid, null),
-                reason: String(item?.reason || ''),
-                old: summarizeLorebookEntryForDebug(item?.old_entry),
-                new: summarizeLorebookEntryForDebug(item?.new_entry),
-            }))
-            : [],
-    });
-
-    const systemPrompt = [
-        'You are assisting the user in reviewing lorebook diffs.',
-        'Continue the conversation and answer the user message directly.',
-        'After your reply, you may provide tool calls to propose draft lorebook edits for this round.',
-        'Tool calls are draft-only proposals and will not be auto-applied immediately.',
-        'Treat the new lorebook as the target baseline.',
-        'Do not revert entries back to old lorebook content unless user explicitly asks for that exact rollback.',
-        'Respect review decisions: rejected operations are intentionally excluded.',
-        'Do not re-propose rejected {kind, entry_uid} operations unless user explicitly asks to reconsider them.',
-        'Use tool calls only when proposing concrete entry changes; otherwise return no tool calls.',
-        'Be concise, practical, and grounded in the provided diff context.',
-        `Target lorebook is "${targetBook}".`,
-    ].join('\n');
-    const userPrompt = [
-        'Conversation task for lorebook sync:',
-        JSON.stringify({
-            context: contextPayload,
-            conversation_history: history,
-            final_diff_review: reviewContext,
-        }),
-    ].join('\n\n');
-    const requestPresetOptions = getLorebookSyncRequestPresetOptions();
-    const settings = getSettings();
-    const allowedToolNames = ['lorebook_upsert_entry', 'lorebook_delete_entry'];
-
-    const { calls: rawCalls, assistantText } = await requestLorebookToolCallsWithRetry(
-        context,
-        settings,
-        {
-            systemPrompt,
-            userPrompt,
-            historyMessages: buildPersistentToolHistoryMessages(conversationMessages),
-            apiPresetName: requestPresetOptions.apiPresetName,
-            promptPresetName: requestPresetOptions.llmPresetName,
-            tools: buildLorebookSyncModelTools(),
-            allowedNames: allowedToolNames,
-        },
-    );
-    const operations = normalizeModelOperationsFromCalls(rawCalls, targetBook);
-    return {
-        assistantText: String(assistantText || '').trim(),
-        operations,
-    };
-}
-
-async function finalizeLorebookSyncReplacement(context, previousSnapshot, currentSnapshot, currentCharacter) {
-    const previousBook = String(previousSnapshot?.bookName || '').trim();
-    const targetBook = String(currentSnapshot?.bookName || '').trim();
-    const avatar = String(currentSnapshot?.avatar || currentCharacter?.avatar || '').trim();
-
-    // Caller saved targetBook with the baseline snapshot just before calling
-    // us. If that baseline was empty (snapshot selection fell through to
-    // a missing-from-disk fetched snapshot, or the embedded book parsed to
-    // zero entries), the disk now has an empty target. Refuse to delete
-    // the previous book in that state — it would discard real lore in
-    // exchange for an empty rebind.
-    if (previousBook && targetBook && previousBook !== targetBook) {
-        const targetData = await context.loadWorldInfo(targetBook).catch(() => null);
-        const targetEntries = targetData && typeof targetData === 'object' && targetData.entries && typeof targetData.entries === 'object'
-            ? Object.keys(targetData.entries).length
-            : 0;
-        const previousEntryCount = Object.keys(previousSnapshot?.entries || {}).length;
-        if (targetEntries === 0 && previousEntryCount > 0) {
-            throw new Error(`Refusing to delete previous lorebook '${previousBook}' (${previousEntryCount} entries): target '${targetBook}' has no entries. Aborting to prevent data loss.`);
-        }
-    }
-
-    if (avatar && targetBook) {
-        await mergeCharacterAttributes(context, avatar, {
-            data: {
-                extensions: {
-                    world: targetBook,
-                },
-            },
-        });
-    }
-
-    if (previousBook && targetBook && previousBook !== targetBook) {
-        const existingPrevious = await context.loadWorldInfo(previousBook);
-        if (existingPrevious) {
-            const deleted = await deleteWorldInfo(previousBook);
-            if (!deleted) {
-                throw new Error(`Failed to delete old lorebook '${previousBook}'.`);
-            }
-        }
-    }
-    await syncWorldBindingUi(context, targetBook);
-
-    return {
-        previousBook,
-        targetBook,
     };
 }
 
@@ -3773,68 +2691,6 @@ function buildPendingToolResults(toolCalls = [], summaryText = '') {
             summary: String(summaryText || 'Pending review.'),
         }),
     })).filter(item => item.tool_call_id);
-}
-
-function buildLorebookOperationApprovalToolResults(message, approvalMap) {
-    const toolCalls = normalizePersistentToolCalls(message);
-    const operations = Array.isArray(message?.operations) ? message.operations : [];
-    const map = approvalMap instanceof Map ? approvalMap : new Map();
-    return toolCalls.map((toolCall, index) => {
-        const operation = operations[index];
-        const key = buildLorebookOperationApprovalKey(operation);
-        const state = key ? String(map.get(key) || 'pending') : 'pending';
-        let result = {
-            ok: true,
-            pending: true,
-            summary: 'Pending review',
-        };
-        if (state === 'approved') {
-            result = {
-                ok: true,
-                pending: false,
-                approved: true,
-                summary: 'Approved',
-            };
-        } else if (state === 'rejected') {
-            result = {
-                ok: false,
-                pending: false,
-                rejected: true,
-                summary: 'Rejected',
-            };
-        }
-        return {
-            tool_call_id: String(toolCall?.id || '').trim(),
-            content: serializeToolResultContent(result),
-        };
-    }).filter(item => item.tool_call_id);
-}
-
-function getLorebookOperationApprovalSummaryLabel(message, approvalMap) {
-    const operations = Array.isArray(message?.operations) ? message.operations : [];
-    if (operations.length === 0) {
-        return '';
-    }
-    const summary = getFinalOperationApprovalSummary(operations, approvalMap);
-    if (summary.pending > 0) {
-        return i18nFormat(
-            'Round review: approved ${0}, rejected ${1}, pending ${2}.',
-            summary.approved,
-            summary.rejected,
-            summary.pending,
-        );
-    }
-    if (summary.rejected > 0 && summary.approved === 0) {
-        return i18n('All round operations rejected.');
-    }
-    if (summary.approved > 0 && summary.rejected === 0) {
-        return i18n('All round operations approved.');
-    }
-    return i18nFormat(
-        'Round review complete: approved ${0}, rejected ${1}.',
-        summary.approved,
-        summary.rejected,
-    );
 }
 
 function buildRejectedToolResults(toolCalls = [], summaryText = '') {
@@ -5101,442 +3957,6 @@ const {
     summarizeCharacterEditorSession,
 });
 
-async function runLorebookSyncFlow(context, previousSnapshot, currentSnapshot, currentCharacter = null) {
-    const latestCharacter = currentCharacter && typeof currentCharacter === 'object' ? currentCharacter : null;
-    const effectiveCurrentSnapshot = currentSnapshot && typeof currentSnapshot === 'object' ? currentSnapshot : {};
-    const plan = buildLorebookSyncPlan(previousSnapshot, effectiveCurrentSnapshot);
-    logLorebookSyncDebug('flow-start', {
-        previous: summarizeLorebookSnapshotForDebug(previousSnapshot),
-        current: summarizeLorebookSnapshotForDebug(effectiveCurrentSnapshot),
-        plan: summarizeLorebookPlanForDebug(plan),
-    });
-    const targetAvatar = String(latestCharacter?.avatar || effectiveCurrentSnapshot?.avatar || '').trim();
-    if (!plan.targetBook && !plan.sourceBook) {
-        return;
-    }
-
-    const hasMeaningfulDiff = Array.isArray(plan.diffItems) && plan.diffItems.length > 0;
-    const changedBinding = String(plan.sourceBook || '').trim() !== String(plan.targetBook || '').trim();
-    const shouldAskMode = hasMeaningfulDiff || changedBinding;
-
-    if (!plan.targetBook) {
-        return;
-    }
-
-    if (!shouldAskMode) {
-        notifyInfo(i18n('No lorebook changes detected.'));
-        await refreshUiState(context);
-        return;
-    }
-
-    const selectedMode = await selectLorebookSyncMode(plan);
-    if (selectedMode === 'direct_replace') {
-        const replaced = await applyDirectLorebookReplace(context, previousSnapshot, effectiveCurrentSnapshot, latestCharacter);
-        await refreshUiState(context);
-        notifySuccess(`Lorebook replaced: ${String(replaced.targetBook || '(none)')}`);
-        return;
-    }
-    if (selectedMode === 'skip_replace') {
-        const restored = await restorePreviousLorebookBinding(context, previousSnapshot, effectiveCurrentSnapshot, latestCharacter);
-        await refreshUiState(context);
-        notifyWarning(i18nFormat('No replacement applied. Restored previous lorebook binding: ${0}', restored.previousBook || '(none)'));
-        return;
-    }
-
-    let analysisReady = false;
-    let isSending = false;
-    const conversationMessages = [];
-    const baselineTargetEntries = clone(effectiveCurrentSnapshot?.entries || {}) || {};
-    const draftTargetEntries = clone(baselineTargetEntries) || {};
-    const baselineLorebookData = buildLorebookSyncBaselineData(baselineTargetEntries);
-    const seedDiffPreviews = buildLorebookSyncSeedDiffPreviews(plan);
-    if (seedDiffPreviews.length > 0) {
-        conversationMessages.push({
-            role: 'assistant',
-            content: i18nFormat('Detected ${0} candidate changes between old and new lorebook.', seedDiffPreviews.length),
-            operations: [],
-            diffPreviews: seedDiffPreviews,
-        });
-    }
-    const operationApprovalMap = new Map();
-    const getCurrentFinalOperationSpecs = () => buildFinalLorebookOperationSpecsFromDraft(
-        plan.targetBook,
-        baselineTargetEntries,
-        draftTargetEntries,
-    );
-
-    const popup = new Popup(
-        buildLorebookSyncDialogHtml(plan),
-        POPUP_TYPE.TEXT,
-        '',
-        {
-            wide: true,
-            wider: true,
-            large: true,
-            allowVerticalScrolling: true,
-            okButton: i18n('Save and update'),
-            cancelButton: i18n('Cancel and restore previous lorebook'),
-            onOpen: (instance) => {
-                const chat = instance?.content?.querySelector('[data-cea-sync-chat]');
-                const input = instance?.content?.querySelector('[data-cea-sync-input]');
-                const sendBtn = instance?.content?.querySelector('[data-cea-sync-send]');
-                const history = instance?.content?.querySelector('[data-cea-sync-history]');
-                if (!(chat instanceof HTMLElement) || !(input instanceof HTMLTextAreaElement) || !(sendBtn instanceof HTMLElement) || !(history instanceof HTMLElement)) {
-                    return;
-                }
-                const renderConversation = (loading = false, loadingText = '') => {
-                    chat.innerHTML = renderLorebookSyncChatMessages(conversationMessages, { loading, loadingText, approvalMap: operationApprovalMap });
-                    chat.scrollTop = chat.scrollHeight;
-                };
-                const renderHistory = async () => {
-                    try {
-                        const opState = await loadOperationState(context, { force: true, avatar: targetAvatar });
-                        history.innerHTML = renderLorebookSyncHistoryItems(opState);
-                    } catch {
-                        history.innerHTML = `<div class="cea_sync_history_empty">${escapeHtml(i18n('No history yet.'))}</div>`;
-                    }
-                };
-                const setComposerState = (disabled) => {
-                    input.disabled = Boolean(disabled);
-                    sendBtn.classList.toggle('disabled', Boolean(disabled));
-                };
-                const pruneApprovalMap = () => {
-                    const finalSpecs = getCurrentFinalOperationSpecs();
-                    for (const key of Array.from(operationApprovalMap.keys())) {
-                        const exists = finalSpecs.some(spec => buildLorebookOperationApprovalKey(spec) === key);
-                        if (!exists) {
-                            operationApprovalMap.delete(key);
-                        }
-                    }
-                };
-                const truncateConversationFrom = (removeFrom) => {
-                    const index = asFiniteInteger(removeFrom, -1);
-                    if (!Number.isInteger(index) || index < 0 || index > conversationMessages.length) {
-                        return false;
-                    }
-                    conversationMessages.splice(index);
-                    rebuildLorebookDraftEntriesFromConversation(
-                        plan.targetBook,
-                        baselineTargetEntries,
-                        draftTargetEntries,
-                        conversationMessages,
-                    );
-                    pruneApprovalMap();
-                    return true;
-                };
-                const rollbackToMessage = (messageIndex) => {
-                    const index = asFiniteInteger(messageIndex, -1);
-                    if (!Number.isInteger(index) || index < 0 || index >= conversationMessages.length) {
-                        return;
-                    }
-                    if (isSending || input.disabled) {
-                        notifyWarning(i18n('Assistant is thinking...'));
-                        return;
-                    }
-                    const targetMessage = conversationMessages[index];
-                    const hasOperations = Array.isArray(targetMessage?.operations) && targetMessage.operations.length > 0;
-                    if (!hasOperations) {
-                        return;
-                    }
-
-                    let removeFrom = index;
-                    const previous = removeFrom > 0 ? conversationMessages[removeFrom - 1] : null;
-                    if (String(targetMessage?.role || '') === 'assistant' && String(previous?.role || '') === 'user') {
-                        removeFrom -= 1;
-                    }
-                    truncateConversationFrom(removeFrom);
-                    renderConversation(false);
-                    notifySuccess(i18n('Rolled back to selected round.'));
-                };
-                const rollbackHistoryEntry = async (journalId) => {
-                    const id = String(journalId || '').trim();
-                    if (!id) {
-                        return;
-                    }
-                    await rollbackJournalEntryWithLog(context, id, {
-                        avatar: targetAvatar,
-                        source: 'manual',
-                    });
-                };
-                const runAssistantTurn = async (userText, { appendUserMessage = true, loadingText = '' } = {}) => {
-                    const safeUserText = String(userText || '').trim();
-                    if (isSending || input.disabled) {
-                        return false;
-                    }
-                    if (!safeUserText) {
-                        notifyWarning(i18n('Message cannot be empty.'));
-                        return false;
-                    }
-                    if (appendUserMessage) {
-                        conversationMessages.push({ role: 'user', content: safeUserText });
-                        input.value = '';
-                    }
-                    isSending = true;
-                    setComposerState(true);
-                    renderConversation(true, loadingText || i18n('Assistant is thinking...'));
-                    try {
-                        const reply = await requestModelLorebookConversationReply(context, plan, conversationMessages, {
-                            finalOperationSpecs: getCurrentFinalOperationSpecs(),
-                            approvalMap: operationApprovalMap,
-                        });
-                        const proposedOperations = Array.isArray(reply?.operations) ? reply.operations : [];
-                        const draftRound = applyDraftOperationsAndBuildPreviews(
-                            plan.targetBook,
-                            draftTargetEntries,
-                            proposedOperations,
-                        );
-                        markOperationsPendingApproval(draftRound.appliedOperations, operationApprovalMap);
-                        const assistantText = String(reply?.assistantText || '').trim();
-                        const toolCalls = buildCharacterEditorToolCallsFromOperations(draftRound.appliedOperations);
-                        const fallbackText = draftRound.appliedOperations.length > 0
-                            ? i18nFormat('Proposed ${0} operations in this round.', draftRound.appliedOperations.length)
-                            : i18n('No draft operations proposed in this round.');
-                        const assistantMessage = createPersistentToolTurnMessage({
-                            messageId: makeConversationMessageId('cea_sync_msg'),
-                            assistantText: assistantText || fallbackText,
-                            toolCalls,
-                            toolResults: toolCalls.length > 0 ? buildPendingToolResults(toolCalls, i18n('AI proposed changes are waiting for approval.')) : [],
-                            toolSummary: toolCalls.length > 0 ? i18n('AI proposed changes are waiting for approval.') : '',
-                            toolState: toolCalls.length > 0 ? 'pending' : '',
-                        });
-                        assistantMessage.operations = draftRound.appliedOperations;
-                        assistantMessage.diffPreviews = draftRound.diffPreviews;
-                        conversationMessages.push(assistantMessage);
-                        return true;
-                    } catch (error) {
-                        const errorText = i18nFormat('Model reply failed: ${0}', String(error?.message || error || ''));
-                        conversationMessages.push({ role: 'assistant', content: errorText });
-                        return false;
-                    } finally {
-                        isSending = false;
-                        setComposerState(false);
-                        renderConversation(false);
-                    }
-                };
-                const handleSend = async () => {
-                    await runAssistantTurn(String(input.value || '').trim(), {
-                        appendUserMessage: true,
-                    });
-                };
-
-                sendBtn.addEventListener('click', () => void handleSend());
-                chat.addEventListener('click', async (event) => {
-                    const target = event.target instanceof Element ? event.target.closest('[data-cea-sync-action]') : null;
-                    if (!(target instanceof HTMLElement)) {
-                        return;
-                    }
-                    const action = String(target.getAttribute('data-cea-sync-action') || '').trim();
-                    if (action === 'rollback-round') {
-                        const messageIndex = target.getAttribute('data-cea-sync-message-index');
-                        rollbackToMessage(messageIndex);
-                        return;
-                    }
-                    if (action === 'refresh-message') {
-                        if (isSending || input.disabled) {
-                            notifyWarning(i18n('Assistant is thinking...'));
-                            return;
-                        }
-                        const messageIndex = asFiniteInteger(target.getAttribute('data-cea-sync-message-index'), -1);
-                        if (!Number.isInteger(messageIndex) || messageIndex < 0 || messageIndex >= conversationMessages.length) {
-                            return;
-                        }
-                        const userIndex = findPreviousConversationUserMessageIndex(conversationMessages, messageIndex);
-                        if (userIndex < 0) {
-                            notifyWarning(i18n('This message cannot be regenerated.'));
-                            return;
-                        }
-                        const userText = String(conversationMessages[userIndex]?.content || '').trim();
-                        isSending = true;
-                        setComposerState(true);
-                        renderConversation(true, i18n('Regenerating message...'));
-                        try {
-                            truncateConversationFrom(messageIndex);
-                        } finally {
-                            isSending = false;
-                            setComposerState(false);
-                        }
-                        await runAssistantTurn(userText, {
-                            appendUserMessage: false,
-                            loadingText: i18n('Regenerating message...'),
-                        });
-                        return;
-                    }
-                    if (action === 'approve-diff' || action === 'reject-diff') {
-                        const messageIndex = asFiniteInteger(target.getAttribute('data-cea-sync-message-index'), -1);
-                        const opIndex = asFiniteInteger(target.getAttribute('data-cea-sync-op-index'), -1);
-                        if (!Number.isInteger(messageIndex) || !Number.isInteger(opIndex) || messageIndex < 0 || opIndex < 0) {
-                            return;
-                        }
-                        const message = conversationMessages[messageIndex];
-                        const operation = Array.isArray(message?.operations) ? message.operations[opIndex] : null;
-                        const key = buildLorebookOperationApprovalKey(operation);
-                        if (!key) {
-                            return;
-                        }
-                        operationApprovalMap.set(key, action === 'approve-diff' ? 'approved' : 'rejected');
-                        const toolResults = buildLorebookOperationApprovalToolResults(message, operationApprovalMap);
-                        if (toolResults[opIndex]) {
-                            message.tool_results = toolResults;
-                            message.toolSummary = getLorebookOperationApprovalSummaryLabel(message, operationApprovalMap);
-                            message.toolState = 'reviewed';
-                        }
-                        renderConversation(false);
-                    }
-                });
-                history.addEventListener('click', async (event) => {
-                    const target = event.target instanceof Element ? event.target.closest('[data-cea-sync-history-action]') : null;
-                    if (!(target instanceof HTMLElement)) {
-                        return;
-                    }
-                    const action = String(target.getAttribute('data-cea-sync-history-action') || '').trim();
-                    const journalId = String(target.getAttribute('data-cea-sync-history-id') || '').trim();
-                    try {
-                        if (action === 'clear') {
-                            if (!window.confirm(i18n('Clear all history records?'))) {
-                                return;
-                            }
-                            await clearHistoryRecords(context, { avatar: targetAvatar });
-                            await renderHistory();
-                            await refreshUiState(context);
-                            notifySuccess(i18n('History cleared.'));
-                            return;
-                        }
-                        if (!journalId) {
-                            return;
-                        }
-                        if (action === 'delete') {
-                            if (!window.confirm(i18n('Delete this history record?'))) {
-                                return;
-                            }
-                            const deleted = await deleteHistoryRecord(context, journalId, { avatar: targetAvatar });
-                            if (!deleted) {
-                                throw new Error('Journal entry not found.');
-                            }
-                            await renderHistory();
-                            await refreshUiState(context);
-                            notifySuccess(i18n('History record deleted.'));
-                            return;
-                        }
-                        if (action === 'rollback') {
-                            await rollbackHistoryEntry(journalId);
-                            await renderHistory();
-                            await refreshUiState(context);
-                            notifySuccess(i18n('Rollback completed.'));
-                        }
-                    } catch (error) {
-                        if (action === 'rollback') {
-                            notifyError(i18nFormat('Rollback failed: ${0}', error?.message || error));
-                            return;
-                        }
-                        if (action === 'delete') {
-                            notifyError(i18nFormat('Delete failed: ${0}', error?.message || error));
-                            return;
-                        }
-                        if (action === 'clear') {
-                            notifyError(i18nFormat('Clear failed: ${0}', error?.message || error));
-                        }
-                    }
-                });
-
-                setComposerState(true);
-                renderConversation(true, i18n('Analyzing lorebook differences with model...'));
-                void renderHistory();
-            },
-            onClosing: (instance) => {
-                if (!analysisReady && Number(instance?.result) === Number(POPUP_RESULT.AFFIRMATIVE)) {
-                    notifyWarning(i18n('Model analysis is still running. Please wait or cancel to restore previous lorebook.'));
-                    return false;
-                }
-                if (isSending && Number(instance?.result) === Number(POPUP_RESULT.AFFIRMATIVE)) {
-                    notifyWarning(i18n('Assistant is thinking...'));
-                    return false;
-                }
-                if (Number(instance?.result) === Number(POPUP_RESULT.AFFIRMATIVE)) {
-                    const finalSpecs = getCurrentFinalOperationSpecs();
-                    const summary = getFinalOperationApprovalSummary(finalSpecs, operationApprovalMap);
-                    if (summary.pending > 0) {
-                        notifyWarning(i18n('All final diffs must be reviewed before saving.'));
-                        return false;
-                    }
-                }
-                return true;
-            },
-        },
-    );
-
-    const popupPromise = popup.show();
-    const analysisPromise = (async () => {
-        try {
-            const analysisResult = await requestModelLorebookDiffAnalysis(context, plan);
-            const analysisText = String(analysisResult?.assistantText || '').trim();
-            if (analysisText) {
-                conversationMessages.push({ role: 'assistant', content: analysisText });
-            } else {
-                conversationMessages.push({ role: 'assistant', content: i18n('No analysis output.') });
-            }
-        } catch (error) {
-            const analysisError = String(error?.message || error || '');
-            conversationMessages.push({ role: 'assistant', content: i18nFormat('Model analysis failed: ${0}', analysisError) });
-        } finally {
-            analysisReady = true;
-            if (popup?.dlg?.isConnected) {
-                const chat = popup.content.querySelector('[data-cea-sync-chat]');
-                const input = popup.content.querySelector('[data-cea-sync-input]');
-                const sendBtn = popup.content.querySelector('[data-cea-sync-send]');
-                if (chat instanceof HTMLElement) {
-                    chat.innerHTML = renderLorebookSyncChatMessages(conversationMessages, { loading: false, approvalMap: operationApprovalMap });
-                    chat.scrollTop = chat.scrollHeight;
-                }
-                if (input instanceof HTMLTextAreaElement) {
-                    input.disabled = false;
-                }
-                if (sendBtn instanceof HTMLElement) {
-                    sendBtn.classList.remove('disabled');
-                }
-            }
-        }
-    })();
-
-    const popupResult = await popupPromise;
-
-    // Cancel means restore previous lorebook binding.
-    if (popupResult !== POPUP_RESULT.AFFIRMATIVE) {
-        const restored = await restorePreviousLorebookBinding(context, previousSnapshot, effectiveCurrentSnapshot, latestCharacter);
-        await refreshUiState(context);
-        notifyWarning(i18nFormat('No replacement applied. Restored previous lorebook binding: ${0}', restored.previousBook || '(none)'));
-        return;
-    }
-
-    await analysisPromise;
-
-    if (String(plan.targetBook || '').trim()) {
-        await context.saveWorldInfo(plan.targetBook, clone(baselineLorebookData), true);
-    }
-
-    const operationSpecs = getCurrentFinalOperationSpecs();
-    const approvedOperationSpecs = selectApprovedFinalOperations(operationSpecs, operationApprovalMap);
-    let result = { applied: 0, failed: 0, errors: [] };
-    if (approvedOperationSpecs.length > 0) {
-        result = await submitGeneratedOperations(context, approvedOperationSpecs, 'character_update_lorebook_sync', { targetAvatar });
-        if (result.failed > 0) {
-            notifyWarning(i18n('Lorebook finalization skipped due failed operations.'));
-            await refreshUiState(context);
-            notifySuccess(i18nFormat('Lorebook sync result: applied ${0}, failed ${1}', result.applied, result.failed));
-            notifyWarning(result.errors[0] || 'Some operations failed.');
-            return;
-        }
-    } else {
-        notifyWarning(i18n('No approved diff to apply. Finalizing without additional changes.'));
-    }
-
-    const finalized = await finalizeLorebookSyncReplacement(context, previousSnapshot, effectiveCurrentSnapshot, latestCharacter);
-    if (finalized.previousBook || finalized.targetBook) {
-        notifySuccess(i18nFormat('Finalize lorebook replacement: ${0} -> ${1}', finalized.previousBook || '(none)', finalized.targetBook || '(none)'));
-    }
-    await refreshUiState(context);
-    notifySuccess(i18nFormat('Lorebook sync result: applied ${0}, failed ${1}', result.applied, result.failed));
-}
-
 async function primeActiveCharacterLorebookSnapshot(context) {
     try {
         const record = getActiveCharacterRecord(context);
@@ -5546,161 +3966,6 @@ async function primeActiveCharacterLorebookSnapshot(context) {
         }
     } catch {
         // no active character, ignore
-    }
-}
-
-async function handleCharacterReplacedLorebookSync(context, event) {
-    const settings = getSettings();
-    if (!settings.replaceLorebookSyncEnabled) {
-        return;
-    }
-    const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
-    const eventCharacter = detail.character && typeof detail.character === 'object' ? detail.character : null;
-    const previousCharacter = detail.previousCharacter && typeof detail.previousCharacter === 'object' ? detail.previousCharacter : null;
-    const eventPreviousSnapshot = detail.previousLorebookSnapshot && typeof detail.previousLorebookSnapshot === 'object'
-        ? detail.previousLorebookSnapshot
-        : null;
-    const avatar = String(eventCharacter?.avatar || '').trim();
-    if (!eventCharacter || !previousCharacter || !avatar) {
-        return;
-    }
-
-    const previousSnapshot = eventPreviousSnapshot
-        ? {
-            avatar: String(eventPreviousSnapshot.avatar || previousCharacter?.avatar || '').trim(),
-            characterName: String(eventPreviousSnapshot.characterName || previousCharacter?.name || '').trim(),
-            bookName: String(eventPreviousSnapshot.bookName || '').trim(),
-            entries: clone(eventPreviousSnapshot.entries && typeof eventPreviousSnapshot.entries === 'object' ? eventPreviousSnapshot.entries : {}) || {},
-            capturedAt: Number(eventPreviousSnapshot.capturedAt || Date.now()),
-        }
-        : await captureCharacterLorebookSnapshot(context, previousCharacter);
-    const eventSourceName = String(detail.source || '').trim();
-    const embeddedCurrentSnapshot = eventSourceName === 'replace_update'
-        ? captureEmbeddedLorebookSnapshot(eventCharacter)
-        : null;
-    const fetchedCurrentSnapshot = await captureCharacterLorebookSnapshot(context, eventCharacter);
-    const currentCandidates = [];
-    if (embeddedCurrentSnapshot) {
-        currentCandidates.push({
-            source: 'event_character_embedded',
-            snapshot: embeddedCurrentSnapshot,
-            diffCount: Number(previousSnapshot ? buildLorebookSyncPlan(previousSnapshot, embeddedCurrentSnapshot).diffItems.length : 0),
-        });
-    }
-    if (fetchedCurrentSnapshot) {
-        currentCandidates.push({
-            source: 'event_character_fetched',
-            snapshot: fetchedCurrentSnapshot,
-            diffCount: Number(previousSnapshot ? buildLorebookSyncPlan(previousSnapshot, fetchedCurrentSnapshot).diffItems.length : 0),
-        });
-    }
-    if (currentCandidates.length === 0) {
-        return;
-    }
-    currentCandidates.sort((a, b) => {
-        // Prefer candidates whose entries are non-empty. An empty snapshot
-        // means the world file doesn't exist on disk yet (or hasn't been
-        // imported), not that "all entries were deleted". If embedded has
-        // the same content as the previously-bound world, its diffCount
-        // is low, while the empty fetched snapshot's diffCount equals
-        // every previous entry counted as "missing" — letting that win
-        // by raw diffCount makes the next save write an empty world and
-        // delete the old one, wiping the character's lore.
-        const aHasEntries = Object.keys(a.snapshot?.entries || {}).length > 0;
-        const bHasEntries = Object.keys(b.snapshot?.entries || {}).length > 0;
-        if (aHasEntries !== bHasEntries) {
-            return aHasEntries ? -1 : 1;
-        }
-        if (b.diffCount !== a.diffCount) {
-            return b.diffCount - a.diffCount;
-        }
-        if (a.source === b.source) {
-            return 0;
-        }
-        if (a.source === 'event_character_embedded') {
-            return -1;
-        }
-        if (b.source === 'event_character_embedded') {
-            return 1;
-        }
-        return 0;
-    });
-    const selectedCurrent = currentCandidates[0];
-    const effectiveCurrentSnapshot = selectedCurrent.snapshot;
-    const effectiveCurrentCharacter = eventCharacter;
-
-    logLorebookSyncDebug('replace-event-selection', {
-        avatar,
-        previousSource: eventPreviousSnapshot ? 'event_previous_lorebook_snapshot' : 'event_previous',
-        currentSource: selectedCurrent.source,
-        previousCandidates: {
-            previousFromEvent: summarizeLorebookSnapshotForDebug(previousSnapshot),
-            selected: summarizeLorebookSnapshotForDebug(previousSnapshot),
-        },
-        currentCandidates: {
-            embedded: summarizeLorebookSnapshotForDebug(embeddedCurrentSnapshot),
-            fetched: summarizeLorebookSnapshotForDebug(fetchedCurrentSnapshot),
-            scoring: currentCandidates.map(item => ({
-                source: item.source,
-                diffCount: item.diffCount,
-            })),
-            embeddedRawEntryCount: Array.isArray(eventCharacter?.data?.character_book?.entries)
-                ? eventCharacter.data.character_book.entries.length
-                : 0,
-            selected: summarizeLorebookSnapshotForDebug(effectiveCurrentSnapshot),
-        },
-    });
-
-    cacheLorebookSnapshot(effectiveCurrentSnapshot);
-
-    if (!previousSnapshot) {
-        return;
-    }
-    const hasEmbeddedLorebook = Boolean(String(effectiveCurrentSnapshot?.bookName || '').trim());
-    if (!hasEmbeddedLorebook && !String(previousSnapshot.bookName || '').trim() && !String(effectiveCurrentSnapshot.bookName || '').trim()) {
-        return;
-    }
-
-    const plan = buildLorebookSyncPlan(previousSnapshot, effectiveCurrentSnapshot);
-    logLorebookSyncDebug('replace-event-plan', summarizeLorebookPlanForDebug(plan));
-    if (!hasEmbeddedLorebook && plan.operations.length === 0) {
-        return;
-    }
-
-    if (lorebookSyncDialogLocks.has(avatar)) {
-        notifyWarning(i18n('A lorebook sync dialog is already open for this character.'));
-        return;
-    }
-    lorebookSyncDialogLocks.add(avatar);
-    try {
-        await runLorebookSyncFlow(context, previousSnapshot, effectiveCurrentSnapshot, effectiveCurrentCharacter);
-    } catch (error) {
-        console.warn(`[${MODULE_NAME}] Lorebook sync flow failed`, error);
-        notifyError(String(error?.message || error));
-    } finally {
-        lorebookSyncDialogLocks.delete(avatar);
-        let refreshedCharacter = effectiveCurrentCharacter;
-        try {
-            const fetched = await loadCharacterByAvatar(context, avatar);
-            if (fetched && typeof fetched === 'object') {
-                refreshedCharacter = fetched;
-            }
-            if (typeof context?.getOneCharacter === 'function') {
-                await context.getOneCharacter(avatar);
-                const latest = Array.isArray(context?.characters)
-                    ? context.characters.find(item => String(item?.avatar || '').trim() === avatar)
-                    : null;
-                if (latest && typeof latest === 'object') {
-                    refreshedCharacter = latest;
-                }
-            }
-        } catch (error) {
-            console.warn(`[${MODULE_NAME}] Failed to refresh replaced character after lorebook sync`, error);
-        }
-        const refreshedSnapshot = await captureCharacterLorebookSnapshot(context, refreshedCharacter);
-        if (refreshedSnapshot.avatar) {
-            cacheLorebookSnapshot(refreshedSnapshot);
-        }
     }
 }
 
@@ -6483,6 +4748,48 @@ function bindHistoryUiActions() {
     });
 }
 
+/**
+ * Open the iteration-studio popup wired to the CEA character adapter. This is
+ * the SP-3 replacement for the old `cea_sync_popup` analyze-then-apply flow:
+ * the shell drives a multi-turn editing session over the card fields and the
+ * primary lorebook in one adapter. State is read from / written to the live
+ * SillyTavern character via `mergeCharacterAttributes` and `saveWorldInfo`.
+ */
+async function openCharacterEditorIteration(avatar) {
+    const context = getContext();
+    const settings = getSettings();
+    const safeAvatar = String(avatar || '').trim();
+
+    const adapter = createCharacterEditorAdapter({
+        avatar: safeAvatar,
+        i18n,
+        i18nFormat,
+        escapeHtml,
+        readCard: () => {
+            const record = getActiveCharacterRecord(context, { avatar: safeAvatar });
+            return structuredClone(record?.character ?? {});
+        },
+        readLorebook: async () => {
+            const record = getActiveCharacterRecord(context, { avatar: safeAvatar });
+            const bookName = getPrimaryLorebookName(record.character);
+            const data = bookName ? await loadLorebookData(context, bookName) : { entries: {} };
+            return { bookName, entries: data?.entries ?? {} };
+        },
+        mergeCharacterAttributes,
+        saveLorebook: async (bookName, data) => {
+            if (!String(bookName || '').trim()) {
+                return;
+            }
+            await context.saveWorldInfo(bookName, data, true);
+        },
+        getSettings,
+        saveSettingsDebounced,
+        getContext: () => context,
+    });
+
+    await openIterationStudio(adapter, context, settings);
+}
+
 jQuery(async () => {
     registerLocaleData();
     ensureSettings();
@@ -6516,6 +4823,27 @@ jQuery(async () => {
 
     const characterReplacedEvent = eventTypes?.CHARACTER_REPLACED || 'character_replaced';
     eventSource.on(characterReplacedEvent, async (event) => {
-        await handleCharacterReplacedLorebookSync(getContext(), event);
+        const settings = getSettings();
+        if (!settings.replaceLorebookSyncEnabled) {
+            return;
+        }
+        const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+        const avatar = String(detail.character?.avatar || '').trim();
+        if (!avatar) {
+            return;
+        }
+        if (editorStudioDialogLocks.has(avatar)) {
+            notifyWarning(i18n('A character editor dialog is already open for this character.'));
+            return;
+        }
+        editorStudioDialogLocks.add(avatar);
+        try {
+            await openCharacterEditorIteration(avatar);
+        } catch (error) {
+            console.warn(`[${MODULE_NAME}] Character editor iteration failed`, error);
+            notifyError(String(error?.message || error));
+        } finally {
+            editorStudioDialogLocks.delete(avatar);
+        }
     });
 });
