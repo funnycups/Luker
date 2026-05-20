@@ -17,13 +17,12 @@ import {
     buildJsonStateDelta,
     cloneJsonValue,
     createJsonStateDiffPatcher,
-    extractJsonStateTouchedPaths,
-    hasJsonStatePathConflict,
     isPlainObject,
-    replayJsonStateJournal,
     tokenizeJsonPath,
 } from '../json-state-journal.js';
 import { renderObjectDiffHtml } from '../object-diff-view.js';
+import { applyEdits, inverseEdit, getRegisteredOp } from '../../lib/edits/index.js';
+import { showConflictResolution } from '../../lib/edits/conflict-ui.js';
 import { createCompletionPresetAssistantDialogUi } from './dialog-ui.js';
 
 const MODULE_NAME = 'completion_preset_assistant';
@@ -32,10 +31,8 @@ const OPEN_BUTTON_ID = 'completion_preset_assistant_open';
 const CREATE_BUTTON_ID = 'completion_preset_assistant_create';
 const OPENAI_BUTTON_ID = 'completion_preset_assistant_openai_button';
 const SESSION_NAMESPACE = 'completion_preset_assistant_session';
-const JOURNAL_NAMESPACE = 'completion_preset_assistant_journal';
 const SESSION_VERSION = 3;
 const SESSION_STORE_VERSION = 1;
-const JOURNAL_VERSION = 1;
 const TOOL_CALL_RETRY_MAX = 10;
 const SESSION_MESSAGE_LIMIT_MIN = 8;
 const SESSION_MESSAGE_LIMIT_MAX = 48;
@@ -53,6 +50,12 @@ const MODEL_TOOLS = Object.freeze({
     DIFF_REFERENCE: 'preset_diff_reference',
     SIMULATE: 'preset_simulate',
     CLONE_TO_NEW: 'preset_clone_to_new',
+    STR_REPLACE: 'preset_str_replace',
+    STR_INSERT: 'preset_str_insert',
+    STR_DELETE: 'preset_str_delete',
+    LIST_INSERT: 'preset_list_insert',
+    LIST_REMOVE: 'preset_list_remove',
+    LIST_MOVE: 'preset_list_move',
 });
 const SESSION_MODES = Object.freeze(['general', 'orchestrator-optimize', 'jailbreak-only']);
 const SESSION_MODE_DEFAULT = 'general';
@@ -193,6 +196,7 @@ function registerLocaleData() {
         'Stop': '终止',
         'Type what to change in this preset...': '输入你想如何修改这个预设...',
         'Applied draft to preset.': '已将草稿应用到预设。',
+        'Conversation cleared.': '对话已清空。',
         'Draft discarded.': '草稿已丢弃。',
         'Session history cleared.': '会话历史已清空。',
         'No reference diff available.': '没有可显示的参考 diff。',
@@ -208,6 +212,7 @@ function registerLocaleData() {
         'Applying draft...': '正在应用草稿...',
         'Assistant is thinking...': '模型思考中...',
         'Refreshing live preset will discard the current draft. Continue?': '刷新 live 预设会丢弃当前草稿。要继续吗？',
+        'Clear all conversation history for this preset?': '清空该预设的全部对话历史？',
         'Clear this preset assistant history and draft?': '要清空这个预设助手的历史和草稿吗？',
         'Discard current draft?': '要丢弃当前草稿吗？',
         'Change summary': '变更摘要',
@@ -232,9 +237,18 @@ function registerLocaleData() {
         'Rolling back...': '正在回滚...',
         'Rolled back current session changes to the selected message.': '已将当前会话的变更回滚到所选消息。',
         'No applied changes for this message.': '这条消息没有已应用的变更。',
-        'Current live preset no longer matches assistant history. Clear history before applying or rolling back more changes.': '当前 live 预设已经不再匹配助手历史。请先清空历史，再继续应用或回滚。',
         'Later committed changes overlap the same preset paths. Automatic tail rollback is blocked.': '后续已提交的变更与相同预设路径重叠，已阻止自动尾部回滚。',
         'Applied preset edits: ${0}': '已应用预设修改：${0}',
+        'No draft to apply.': '没有可应用的草稿。',
+        'Apply cancelled by user.': '用户已取消应用。',
+        'Draft applied.': '草稿已应用。',
+        'Apply failed: ${0}': '应用失败：${0}',
+        'Conflict resolution incomplete — try again.': '冲突未完全解决，请重试。',
+        'Message not found.': '未找到消息。',
+        'Nothing to roll back from this point.': '此处没有可回退的修改。',
+        'Rollback cancelled by user.': '用户已取消回退。',
+        'Rolled back.': '已回退。',
+        'Rollback failed: ${0}': '回退失败：${0}',
         'Previous version': '回滚前版本',
         'Applied version': '已应用版本',
         'User': '用户',
@@ -302,6 +316,7 @@ function registerLocaleData() {
         'Stop': '終止',
         'Type what to change in this preset...': '輸入你想如何修改這個預設...',
         'Applied draft to preset.': '已將草稿套用到預設。',
+        'Conversation cleared.': '對話已清空。',
         'Draft discarded.': '草稿已捨棄。',
         'Session history cleared.': '會話歷史已清空。',
         'No reference diff available.': '沒有可顯示的參考 diff。',
@@ -317,6 +332,7 @@ function registerLocaleData() {
         'Applying draft...': '正在套用草稿...',
         'Assistant is thinking...': '模型思考中...',
         'Refreshing live preset will discard the current draft. Continue?': '重新整理 live 預設會捨棄目前草稿。要繼續嗎？',
+        'Clear all conversation history for this preset?': '清空該預設的全部對話歷史？',
         'Clear this preset assistant history and draft?': '要清空這個預設助手的歷史與草稿嗎？',
         'Discard current draft?': '要捨棄目前草稿嗎？',
         'Change summary': '變更摘要',
@@ -341,9 +357,18 @@ function registerLocaleData() {
         'Rolling back...': '正在回滾...',
         'Rolled back current session changes to the selected message.': '已將目前會話的變更回滾到所選訊息。',
         'No applied changes for this message.': '這條訊息沒有已套用的變更。',
-        'Current live preset no longer matches assistant history. Clear history before applying or rolling back more changes.': '目前 live 預設已不再匹配助手歷史。請先清空歷史，再繼續套用或回滾。',
         'Later committed changes overlap the same preset paths. Automatic tail rollback is blocked.': '後續已提交的變更與相同預設路徑重疊，已阻止自動尾部回滾。',
         'Applied preset edits: ${0}': '已套用預設修改：${0}',
+        'No draft to apply.': '沒有可套用的草稿。',
+        'Apply cancelled by user.': '使用者已取消套用。',
+        'Draft applied.': '草稿已套用。',
+        'Apply failed: ${0}': '套用失敗：${0}',
+        'Conflict resolution incomplete — try again.': '衝突尚未完全解決，請重試。',
+        'Message not found.': '找不到訊息。',
+        'Nothing to roll back from this point.': '此處沒有可回退的修改。',
+        'Rollback cancelled by user.': '已取消回退。',
+        'Rolled back.': '已回退。',
+        'Rollback failed: ${0}': '回退失敗：${0}',
         'Previous version': '回滾前版本',
         'Applied version': '已套用版本',
         'User': '使用者',
@@ -462,14 +487,6 @@ function createEmptySession({ mode = SESSION_MODE_DEFAULT } = {}) {
         messages: [],
         draft: null,
         updatedAt: Date.now(),
-    };
-}
-
-function createEmptyJournal(baseSnapshot = {}) {
-    return {
-        version: JOURNAL_VERSION,
-        baseSnapshot: isPlainObject(baseSnapshot) ? clone(baseSnapshot, {}) : {},
-        entries: [],
     };
 }
 
@@ -673,6 +690,11 @@ function sanitizeMessage(rawMessage) {
     const role = ['user', 'assistant', 'system'].includes(String(message.role || '').trim().toLowerCase())
         ? String(message.role).trim().toLowerCase()
         : 'system';
+    const appliedEdits = Array.isArray(message?.appliedEdits)
+        ? message.appliedEdits
+            .map(edit => (edit && typeof edit === 'object' ? { ...edit } : null))
+            .filter(edit => edit && typeof edit.op === 'string')
+        : null;
     const next = {
         id: String(message.id || uuidv4()),
         role,
@@ -680,6 +702,8 @@ function sanitizeMessage(rawMessage) {
         createdAt: Number(message.createdAt || Date.now()),
         summary: String(message.summary || '').trim(),
         editCount: Math.max(0, toInteger(message.editCount, 0)),
+        appliedEdits,
+        rolledBack: Boolean(message?.rolledBack),
     };
     if (role === 'assistant') {
         const toolCalls = normalizePersistentToolCalls(message);
@@ -717,32 +741,12 @@ function sanitizeDraft(rawDraft) {
     };
 }
 
-function sanitizeJournalEntry(rawEntry) {
-    const entry = rawEntry && typeof rawEntry === 'object' ? rawEntry : null;
-    if (!entry) {
-        return null;
-    }
-
-    const sessionId = String(entry.sessionId || '').trim();
-    const messageId = String(entry.messageId || '').trim();
-    const delta = entry.delta && typeof entry.delta === 'object' ? clone(entry.delta, entry.delta) : null;
-    if (!sessionId || !messageId || !delta) {
-        return null;
-    }
-
-    return {
-        id: String(entry.id || uuidv4()),
-        sessionId,
-        messageId,
-        delta,
-        touchedPaths: Array.isArray(entry.touchedPaths)
-            ? [...new Set(entry.touchedPaths.map(item => String(item || '').trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right))
-            : extractJsonStateTouchedPaths(delta),
-    };
-}
-
 function sanitizeSession(rawSession) {
     const session = rawSession && typeof rawSession === 'object' ? rawSession : {};
+    if (session.journal !== undefined && !sanitizeSession.__journalWarned) {
+        console.info('[CPA] Legacy journal field dropped from session — rollback history reset.');
+        sanitizeSession.__journalWarned = true;
+    }
     const settings = getSettings();
     const next = createEmptySession();
     next.id = String(session.id || uuidv4());
@@ -780,48 +784,53 @@ function normalizeSessionStore(rawStore) {
     return createEmptySessionStore();
 }
 
-function sanitizeJournal(rawJournal, fallbackBaseSnapshot = {}) {
-    const journal = rawJournal && typeof rawJournal === 'object' ? rawJournal : {};
-    return {
-        version: JOURNAL_VERSION,
-        baseSnapshot: isPlainObject(journal.baseSnapshot)
-            ? clone(journal.baseSnapshot, {})
-            : (isPlainObject(fallbackBaseSnapshot) ? clone(fallbackBaseSnapshot, {}) : {}),
-        entries: Array.isArray(journal.entries)
-            ? journal.entries.map(item => sanitizeJournalEntry(item)).filter(Boolean)
-            : [],
-    };
-}
-
 function sanitizeEdit(rawEdit) {
     const edit = rawEdit && typeof rawEdit === 'object' ? rawEdit : null;
     if (!edit) {
         return null;
     }
 
-    const kind = String(edit.kind || '').trim();
-    if (!['set', 'remove', 'copy', 'upsert_prompt_entry', 'remove_prompt_entry', 'upsert_order_item', 'remove_order_item'].includes(kind)) {
-        return null;
+    // New `{op, ...}` shape consumed by the edits lib — pass through verbatim
+    // (engine + per-op handlers validate path/argument shape at apply time).
+    if (typeof edit.op === 'string' && edit.op) {
+        return { ...edit };
     }
 
-    return {
-        kind,
-        path: String(edit.path || '').trim(),
-        fromPath: String(edit.fromPath || '').trim(),
-        reason: String(edit.reason || '').trim(),
-        value: kind === 'set' ? clone(edit.value, edit.value) : undefined,
-        identifier: normalizePromptIdentifier(edit.identifier),
-        character_id: String(edit.character_id || '').trim(),
-        position: Number(edit.position),
-        content: Object.hasOwn(edit, 'content') ? String(edit.content ?? '') : undefined,
-        role: Object.hasOwn(edit, 'role') ? String(edit.role ?? '').trim() : undefined,
-        enabled: Object.hasOwn(edit, 'enabled') ? Boolean(edit.enabled) : undefined,
-        name: Object.hasOwn(edit, 'name') ? String(edit.name ?? '').trim() : undefined,
-        marker: Object.hasOwn(edit, 'marker') ? Boolean(edit.marker) : undefined,
-        injection_position: Object.hasOwn(edit, 'injection_position') ? edit.injection_position : undefined,
-        injection_depth: Object.hasOwn(edit, 'injection_depth') ? edit.injection_depth : undefined,
-        injection_order: Object.hasOwn(edit, 'injection_order') ? edit.injection_order : undefined,
-    };
+    // Legacy `{kind, ...}` migration. Only `set`/`remove` map cleanly onto
+    // the new ops; the prompt/order conveniences (`upsert_prompt_entry`,
+    // `upsert_order_item`, `copy`, …) have no 1:1 lib equivalent and are
+    // dropped with a warning. CPA was non-functional for these between T17
+    // and T20 — losing in-flight drafts is the accepted trade-off.
+    const kind = String(edit.kind || '').trim();
+    if (kind === 'set') {
+        return {
+            op: 'set',
+            path: String(edit.path || '').trim(),
+            // Pre-T21 drafts have no `oldValue` — drift detection will treat
+            // any current value as the baseline (skip-or-conflict).
+            oldValue: Object.hasOwn(edit, 'oldValue') ? edit.oldValue : undefined,
+            newValue: Object.hasOwn(edit, 'newValue') ? edit.newValue : edit.value,
+            reason: String(edit.reason || '').trim(),
+        };
+    }
+    if (kind === 'remove') {
+        return {
+            op: 'unset',
+            path: String(edit.path || '').trim(),
+            expected_value: Object.hasOwn(edit, 'expected_value') ? edit.expected_value : undefined,
+            reason: String(edit.reason || '').trim(),
+        };
+    }
+    if (kind) {
+        if (!sanitizeEdit.__droppedKindsWarned) {
+            sanitizeEdit.__droppedKindsWarned = new Set();
+        }
+        if (!sanitizeEdit.__droppedKindsWarned.has(kind)) {
+            sanitizeEdit.__droppedKindsWarned.add(kind);
+            console.warn(`[${MODULE_NAME}] Dropping legacy draft edit with kind=${kind} (no edits-lib equivalent).`);
+        }
+    }
+    return null;
 }
 
 async function loadSessionStore(context, targetRef) {
@@ -931,86 +940,10 @@ async function deletePresetConversationSessionById(context, targetRef, sessionId
     return await persistSessionStore(context, targetRef, store);
 }
 
-async function loadJournal(context, targetRef, fallbackBaseSnapshot = {}) {
-    try {
-        const raw = await context.presets.state.get(JOURNAL_NAMESPACE, { target: targetRef });
-        return sanitizeJournal(raw, fallbackBaseSnapshot);
-    } catch (error) {
-        console.warn(`[${MODULE_NAME}] Failed to load preset journal`, error);
-        return createEmptyJournal(fallbackBaseSnapshot);
-    }
-}
-
-async function saveJournal(context, targetRef, journal) {
-    const nextJournal = sanitizeJournal(journal, journal?.baseSnapshot || {});
-    const result = await context.presets.state.update(
-        JOURNAL_NAMESPACE,
-        () => nextJournal,
-        {
-            target: targetRef,
-            asyncDiff: false,
-        },
-    );
-    if (!result?.ok) {
-        console.warn(`[${MODULE_NAME}] Failed to persist preset journal`, result);
-    }
-    return nextJournal;
-}
-
-function getJournalEntries(journal) {
-    return Array.isArray(journal?.entries)
-        ? journal.entries.map(item => sanitizeJournalEntry(item)).filter(Boolean)
-        : [];
-}
-
-function ensureJournalBaseSnapshot(journal, baseSnapshot = {}) {
-    const nextJournal = sanitizeJournal(journal, baseSnapshot);
-    if (nextJournal.entries.length > 0) {
-        return nextJournal;
-    }
-    return {
-        ...nextJournal,
-        baseSnapshot: isPlainObject(baseSnapshot) ? clone(baseSnapshot, {}) : {},
-    };
-}
-
-function replayJournalBody(journal, {
-    includeEntry = null,
-} = {}) {
-    const safeJournal = sanitizeJournal(journal, journal?.baseSnapshot || {});
-    return replayJsonStateJournal(
-        diffPatcher,
-        safeJournal.baseSnapshot || {},
-        getJournalEntries(safeJournal),
-        { includeEntry },
-    );
-}
-
-function journalMatchesLive(journal, liveBody) {
-    return arePresetBodiesEquivalent(replayJournalBody(journal), liveBody);
-}
-
-function getCommittedMessageEntryMap(session, journal) {
-    const sessionId = String(session?.id || '').trim();
-    const commitMap = new Map();
-    if (!sessionId) {
-        return commitMap;
-    }
-
-    for (const entry of getJournalEntries(journal)) {
-        if (entry.sessionId !== sessionId) {
-            continue;
-        }
-        const current = commitMap.get(entry.messageId) || 0;
-        commitMap.set(entry.messageId, current + 1);
-    }
-
-    return commitMap;
-}
-
-function collectTouchedPaths(entries) {
-    return [...new Set((Array.isArray(entries) ? entries : []).flatMap(entry => Array.isArray(entry?.touchedPaths) ? entry.touchedPaths : []).filter(Boolean))]
-        .sort((left, right) => left.localeCompare(right));
+function ensureJournalBaseSnapshot(...args) {
+    // Stub - legacy journal mechanism removed in T17; full removal in later tasks.
+    void args;
+    return null;
 }
 
 function getDraftSourceMessageId(session, draft) {
@@ -1028,76 +961,6 @@ function getDraftSourceMessageId(session, draft) {
     }
 
     return '';
-}
-
-function buildMessageDiffPlan(session, journal, messageId) {
-    const safeMessageId = String(messageId || '').trim();
-    if (!safeMessageId) {
-        return null;
-    }
-
-    const safeSession = sanitizeSession(session);
-    const entries = getJournalEntries(journal);
-    const matchedIndices = [];
-    for (let index = 0; index < entries.length; index += 1) {
-        const entry = entries[index];
-        if (entry.sessionId === safeSession.id && entry.messageId === safeMessageId) {
-            matchedIndices.push(index);
-        }
-    }
-
-    if (matchedIndices.length === 0) {
-        return null;
-    }
-
-    const firstIndex = matchedIndices[0];
-    const lastIndex = matchedIndices[matchedIndices.length - 1];
-    return {
-        beforeBody: replayJsonStateJournal(diffPatcher, journal?.baseSnapshot || {}, entries.slice(0, firstIndex)),
-        afterBody: replayJsonStateJournal(diffPatcher, journal?.baseSnapshot || {}, entries.slice(0, lastIndex + 1)),
-    };
-}
-
-function buildTailRollbackPlan(session, journal, messageId) {
-    const safeMessageId = String(messageId || '').trim();
-    if (!safeMessageId) {
-        return null;
-    }
-
-    const safeSession = sanitizeSession(session);
-    const messages = Array.isArray(safeSession.messages) ? safeSession.messages : [];
-    const startIndex = messages.findIndex(message => String(message?.id || '') === safeMessageId);
-    if (startIndex < 0) {
-        return null;
-    }
-
-    const rollbackMessageIds = new Set(messages.slice(startIndex).map(message => String(message?.id || '').trim()).filter(Boolean));
-    const trimIndex = startIndex > 0 && messages[startIndex - 1]?.role === 'user'
-        ? startIndex - 1
-        : startIndex;
-    const entries = getJournalEntries(journal);
-    const targetEntries = entries.filter(entry => entry.sessionId === safeSession.id && rollbackMessageIds.has(entry.messageId));
-    if (targetEntries.length === 0) {
-        return null;
-    }
-
-    const targetEntryIds = new Set(targetEntries.map(entry => entry.id));
-    const firstTargetIndex = entries.findIndex(entry => targetEntryIds.has(entry.id));
-    const retainedLaterEntries = firstTargetIndex >= 0
-        ? entries.slice(firstTargetIndex).filter(entry => !targetEntryIds.has(entry.id))
-        : [];
-
-    return {
-        trimIndex,
-        targetEntries,
-        revertedBody: replayJsonStateJournal(diffPatcher, journal?.baseSnapshot || {}, entries, {
-            includeEntry: entry => !targetEntryIds.has(entry.id),
-        }),
-        conflicting: hasJsonStatePathConflict(
-            collectTouchedPaths(targetEntries),
-            collectTouchedPaths(retainedLaterEntries),
-        ),
-    };
 }
 
 function getChangedTopLevelKeys(before, after) {
@@ -1576,6 +1439,21 @@ function buildModelSystemPrompt({
         'For preset_simulate, prefer the text argument so the tool appends that user text to the current chat. Use the messages array only when the user explicitly supplied a structured message list/record list.',
         'Use preset_copy_from_reference only when a selected reference preset exists and already contains the desired content.',
         'preset_clone_to_new copies the current live preset under a new name and switches the dialog target to it. Use it when the user agrees to derive a new preset rather than editing the original.',
+        '',
+        'EDIT TOOLS — PREFERENCES',
+        '',
+        'For long-string fields (typically > 200 chars, like prompts[*].content):',
+        '  - Use preset_str_replace when changing a substring within the field — it is far cheaper than re-emitting the whole field via preset_set_field, and avoids accidentally garbling unchanged text.',
+        '  - Use preset_str_insert to add a paragraph after a known anchor sentence.',
+        '  - `find` / `after_text` for these tools MUST be a unique occurrence in the current value (or you must pass `expected_count > 1` for preset_str_replace).',
+        '',
+        'For object fields:',
+        '  - Prefer preset_set_field(\'parent.child\', value) over preset_set_field(\'parent\', wholeObject) — finer paths surface conflicts only on actually-overlapping fields.',
+        '',
+        'For array fields like prompts[]:',
+        '  - Use preset_list_insert / preset_list_remove / preset_list_move rather than rewriting the whole array via preset_set_field.',
+        '  - Prefer after_value anchors over after_index when the array might be reordered between propose-time and apply-time.',
+        '',
         'If no changes are needed, reply briefly without tool calls.',
     ];
 
@@ -2096,8 +1974,6 @@ function createPresetAssistantCloneToolApi(dialogState) {
             };
             dialogState.session.draft = null;
             dialogState.sessionStore = await loadSessionStore(context, dialogState.targetRef);
-            dialogState.journal = createEmptyJournal(dialogState.liveSnapshot.body);
-            await persistDialogJournal(dialogState);
             await persistDialogSession(dialogState);
 
             return {
@@ -2229,6 +2105,124 @@ function buildAssistantTools({
                         reason: { type: 'string' },
                     },
                     required: ['character_id', 'identifier'],
+                    additionalProperties: false,
+                },
+            },
+        },
+        {
+            type: 'function',
+            function: {
+                name: MODEL_TOOLS.STR_REPLACE,
+                description: 'Replace a unique substring inside a string-valued preset field. Prefer this over preset_set_field for editing long-string fields like prompts[*].content — it sends only the changed substring instead of the whole field, and surfaces drift if the surrounding text changed externally. `find` must occur exactly `expected_count` times in the current value (default 1, i.e. must be unique). All matching occurrences are replaced.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        path: { type: 'string', description: 'Lodash-style path to the string field, e.g. prompts[2].content.' },
+                        find: { type: 'string', description: 'The substring to replace. Must be findable in the current value.' },
+                        replace: { type: 'string', description: 'The new substring.' },
+                        expected_count: { type: 'number', description: 'Expected occurrence count of `find` (default 1). Used to enforce uniqueness and catch external drift.' },
+                        reason: { type: 'string' },
+                    },
+                    required: ['path', 'find', 'replace'],
+                    additionalProperties: false,
+                },
+            },
+        },
+        {
+            type: 'function',
+            function: {
+                name: MODEL_TOOLS.STR_INSERT,
+                description: 'Insert text immediately after a unique anchor substring in a string-valued preset field. Use for adding a paragraph or sentence after a known marker, without rewriting the whole field.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        path: { type: 'string', description: 'Lodash-style path to the string field.' },
+                        after_text: { type: 'string', description: 'A unique anchor substring in the current value. Insertion happens immediately after this anchor.' },
+                        insert_text: { type: 'string', description: 'The text to insert.' },
+                        reason: { type: 'string' },
+                    },
+                    required: ['path', 'after_text', 'insert_text'],
+                    additionalProperties: false,
+                },
+            },
+        },
+        {
+            type: 'function',
+            function: {
+                name: MODEL_TOOLS.STR_DELETE,
+                description: 'Remove a unique substring from a string-valued preset field. Surrounding context is captured at apply time so rollback can re-insert the text at the correct position.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        path: { type: 'string', description: 'Lodash-style path to the string field.' },
+                        find: { type: 'string', description: 'The unique substring to delete.' },
+                        reason: { type: 'string' },
+                    },
+                    required: ['path', 'find'],
+                    additionalProperties: false,
+                },
+            },
+        },
+        {
+            type: 'function',
+            function: {
+                name: MODEL_TOOLS.LIST_INSERT,
+                description: 'Insert a value into an array-valued preset field (e.g., prompts[]). Use anchor to specify position: before/after a given index, or after a unique sibling value. Prefer after_value over after_index when the array may be reordered between propose and apply.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        path: { type: 'string', description: 'Lodash-style path to the array.' },
+                        anchor: {
+                            type: 'object',
+                            description: 'Where to insert. Use exactly one of before_index / after_index / after_value.',
+                            properties: {
+                                before_index: { type: 'number', description: 'Insert at this index (existing element shifts right).' },
+                                after_index: { type: 'number', description: 'Insert at index+1 (or end if last).' },
+                                after_value: { description: 'Insert after the unique array element equal to this value.' },
+                            },
+                            additionalProperties: false,
+                        },
+                        value: { description: 'The value to insert.' },
+                        reason: { type: 'string' },
+                    },
+                    required: ['path', 'anchor', 'value'],
+                    additionalProperties: false,
+                },
+            },
+        },
+        {
+            type: 'function',
+            function: {
+                name: MODEL_TOOLS.LIST_REMOVE,
+                description: 'Remove an element from an array-valued preset field at a given index. Use expected_value to guard against external shifts (the element at index must equal expected_value).',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        path: { type: 'string', description: 'Lodash-style path to the array.' },
+                        index: { type: 'number', description: 'Index of the element to remove.' },
+                        expected_value: { description: 'Optional safety check: the element currently at this index must deep-equal this value, else conflict.' },
+                        reason: { type: 'string' },
+                    },
+                    required: ['path', 'index'],
+                    additionalProperties: false,
+                },
+            },
+        },
+        {
+            type: 'function',
+            function: {
+                name: MODEL_TOOLS.LIST_MOVE,
+                description: 'Relocate an element within an array-valued preset field from one index to another. Use expected_value to guard against external shifts.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        path: { type: 'string', description: 'Lodash-style path to the array.' },
+                        from_index: { type: 'number', description: 'Current index of the element to move.' },
+                        to_index: { type: 'number', description: 'Target index after the move.' },
+                        expected_value: { description: 'Optional safety check: the element currently at from_index must deep-equal this value, else conflict.' },
+                        reason: { type: 'string' },
+                    },
+                    required: ['path', 'from_index', 'to_index'],
                     additionalProperties: false,
                 },
             },
@@ -2649,10 +2643,11 @@ function normalizeEditPath(path) {
     return String(path || '').trim();
 }
 
-function normalizeToolCallToEdit(call) {
+function normalizeToolCallToEdit(call, dialogState = null) {
     const name = String(call?.name || '').trim();
     const args = call?.args && typeof call.args === 'object' ? call.args : {};
     const reason = String(args.reason || '').trim();
+    const liveBody = isPlainObject(dialogState?.liveSnapshot?.body) ? dialogState.liveSnapshot.body : {};
 
     if (name === MODEL_TOOLS.SET_FIELD) {
         const path = normalizeEditPath(args.path);
@@ -2669,7 +2664,13 @@ function normalizeToolCallToEdit(call) {
         } catch (error) {
             throw new Error(`Invalid JSON for ${path}: ${error?.message || error}`);
         }
-        return { kind: 'set', path, value, reason };
+        return {
+            op: 'set',
+            path,
+            oldValue: clone(lodash.get(liveBody, path), null),
+            newValue: value,
+            reason,
+        };
     }
 
     if (name === MODEL_TOOLS.REMOVE_FIELD) {
@@ -2677,7 +2678,12 @@ function normalizeToolCallToEdit(call) {
         if (!path) {
             return null;
         }
-        return { kind: 'remove', path, fromPath: '', reason };
+        return {
+            op: 'unset',
+            path,
+            expected_value: clone(lodash.get(liveBody, path), null),
+            reason,
+        };
     }
 
     if (name === MODEL_TOOLS.COPY_FROM_REFERENCE) {
@@ -2685,10 +2691,22 @@ function normalizeToolCallToEdit(call) {
         if (!path) {
             return null;
         }
+        const fromPath = normalizeEditPath(args.from_path) || path;
+        const referenceBody = isPlainObject(dialogState?.referenceSnapshot?.body)
+            ? dialogState.referenceSnapshot.body
+            : null;
+        if (!referenceBody) {
+            throw new Error('Reference preset is required for preset_copy_from_reference.');
+        }
+        const sourceValue = lodash.get(referenceBody, fromPath);
+        if (sourceValue === undefined) {
+            throw new Error(`Reference path not found: ${fromPath}`);
+        }
         return {
-            kind: 'copy',
+            op: 'set',
             path,
-            fromPath: normalizeEditPath(args.from_path) || path,
+            oldValue: clone(lodash.get(liveBody, path), null),
+            newValue: clone(sourceValue, sourceValue),
             reason,
         };
     }
@@ -2698,27 +2716,31 @@ function normalizeToolCallToEdit(call) {
         if (!identifier) {
             return null;
         }
-        const edit = {
-            kind: 'upsert_prompt_entry',
-            identifier,
+        const draftBody = clone(liveBody, {});
+        upsertPromptEntryInBody(draftBody, { identifier, ...args });
+        return {
+            op: 'set',
+            path: 'prompts',
+            oldValue: clone(liveBody.prompts ?? null, null),
+            newValue: clone(draftBody.prompts ?? null, null),
             reason,
         };
-        for (const key of ['content', 'role', 'name']) {
-            if (Object.hasOwn(args, key)) {
-                edit[key] = args[key];
-            }
-        }
-        for (const key of ['enabled', 'marker', 'injection_position', 'injection_depth', 'injection_order']) {
-            if (Object.hasOwn(args, key)) {
-                edit[key] = args[key];
-            }
-        }
-        return edit;
     }
 
     if (name === MODEL_TOOLS.REMOVE_PROMPT_ENTRY) {
         const identifier = normalizePromptIdentifier(args.identifier);
-        return identifier ? { kind: 'remove_prompt_entry', identifier, reason } : null;
+        if (!identifier) {
+            return null;
+        }
+        const draftBody = clone(liveBody, {});
+        removePromptEntryFromBody(draftBody, identifier);
+        return {
+            op: 'set',
+            path: 'prompts',
+            oldValue: clone(liveBody.prompts ?? null, null),
+            newValue: clone(draftBody.prompts ?? null, null),
+            reason,
+        };
     }
 
     if (name === MODEL_TOOLS.UPSERT_ORDER_ITEM) {
@@ -2728,12 +2750,18 @@ function normalizeToolCallToEdit(call) {
         if (!identifier || !characterId || !Number.isInteger(position) || position < 1) {
             return null;
         }
-        return {
-            kind: 'upsert_order_item',
+        const draftBody = clone(liveBody, {});
+        upsertPromptOrderItemInBody(draftBody, {
             identifier,
             character_id: characterId,
             position,
             enabled: Object.hasOwn(args, 'enabled') ? Boolean(args.enabled) : true,
+        });
+        return {
+            op: 'set',
+            path: 'prompt_order',
+            oldValue: clone(liveBody.prompt_order ?? null, null),
+            newValue: clone(draftBody.prompt_order ?? null, null),
             reason,
         };
     }
@@ -2744,70 +2772,120 @@ function normalizeToolCallToEdit(call) {
         if (!identifier || !characterId) {
             return null;
         }
+        const draftBody = clone(liveBody, {});
+        removePromptOrderItemFromBody(draftBody, characterId, identifier);
         return {
-            kind: 'remove_order_item',
-            identifier,
-            character_id: characterId,
+            op: 'set',
+            path: 'prompt_order',
+            oldValue: clone(liveBody.prompt_order ?? null, null),
+            newValue: clone(draftBody.prompt_order ?? null, null),
             reason,
         };
+    }
+
+    if (name === MODEL_TOOLS.STR_REPLACE) {
+        const path = normalizeEditPath(args.path);
+        if (!path) return null;
+        return {
+            op: 'str_replace',
+            path,
+            find: String(args.find ?? ''),
+            replace: String(args.replace ?? ''),
+            expected_count: Object.hasOwn(args, 'expected_count') ? Number(args.expected_count) : 1,
+            reason,
+        };
+    }
+
+    if (name === MODEL_TOOLS.STR_INSERT) {
+        const path = normalizeEditPath(args.path);
+        if (!path) return null;
+        return {
+            op: 'str_insert',
+            path,
+            after_text: String(args.after_text ?? ''),
+            insert_text: String(args.insert_text ?? ''),
+            reason,
+        };
+    }
+
+    if (name === MODEL_TOOLS.STR_DELETE) {
+        const path = normalizeEditPath(args.path);
+        if (!path) return null;
+        return {
+            op: 'str_delete',
+            path,
+            find: String(args.find ?? ''),
+            reason,
+        };
+    }
+
+    if (name === MODEL_TOOLS.LIST_INSERT) {
+        const path = normalizeEditPath(args.path);
+        if (!path) return null;
+        return {
+            op: 'list_insert',
+            path,
+            anchor: isPlainObject(args.anchor) ? clone(args.anchor, {}) : {},
+            value: clone(args.value, args.value),
+            reason,
+        };
+    }
+
+    if (name === MODEL_TOOLS.LIST_REMOVE) {
+        const path = normalizeEditPath(args.path);
+        if (!path) return null;
+        const index = Number(args.index);
+        if (!Number.isInteger(index)) return null;
+        const edit = {
+            op: 'list_remove',
+            path,
+            index,
+            reason,
+        };
+        if (Object.hasOwn(args, 'expected_value')) {
+            edit.expected_value = clone(args.expected_value, args.expected_value);
+        }
+        return edit;
+    }
+
+    if (name === MODEL_TOOLS.LIST_MOVE) {
+        const path = normalizeEditPath(args.path);
+        if (!path) return null;
+        const fromIndex = Number(args.from_index);
+        const toIndex = Number(args.to_index);
+        if (!Number.isInteger(fromIndex) || !Number.isInteger(toIndex)) return null;
+        const edit = {
+            op: 'list_move',
+            path,
+            from_index: fromIndex,
+            to_index: toIndex,
+            reason,
+        };
+        if (Object.hasOwn(args, 'expected_value')) {
+            edit.expected_value = clone(args.expected_value, args.expected_value);
+        }
+        return edit;
     }
 
     return null;
 }
 
 function applyEditsToPreset(baseBody, edits, referenceBody = null) {
-    const draftBody = clone(isPlainObject(baseBody) ? baseBody : {}, {});
-    const safeReferenceBody = isPlainObject(referenceBody) ? referenceBody : null;
-
-    for (const rawEdit of edits) {
-        const edit = sanitizeEdit(rawEdit);
-        if (!edit) {
-            continue;
-        }
-
-        if (edit.kind === 'set') {
-            lodash.set(draftBody, edit.path, clone(edit.value, edit.value));
-            continue;
-        }
-
-        if (edit.kind === 'remove') {
-            lodash.unset(draftBody, edit.path);
-            continue;
-        }
-
-        if (edit.kind === 'copy') {
-            if (!safeReferenceBody) {
-                throw new Error('Reference preset is required for copy operations.');
-            }
-            const sourceValue = lodash.get(safeReferenceBody, edit.fromPath || edit.path);
-            if (sourceValue === undefined) {
-                throw new Error(`Reference path not found: ${edit.fromPath || edit.path}`);
-            }
-            lodash.set(draftBody, edit.path, clone(sourceValue, sourceValue));
-            continue;
-        }
-
-        if (edit.kind === 'upsert_prompt_entry') {
-            upsertPromptEntryInBody(draftBody, edit);
-            continue;
-        }
-
-        if (edit.kind === 'remove_prompt_entry') {
-            removePromptEntryFromBody(draftBody, edit.identifier);
-            continue;
-        }
-
-        if (edit.kind === 'upsert_order_item') {
-            upsertPromptOrderItemInBody(draftBody, edit);
-            continue;
-        }
-
-        if (edit.kind === 'remove_order_item') {
-            removePromptOrderItemFromBody(draftBody, edit.character_id, edit.identifier);
-        }
+    void referenceBody; // copy-from-reference now resolves to {op:'set'} upstream.
+    const safeEdits = (Array.isArray(edits) ? edits : [])
+        .map(sanitizeEdit)
+        .filter(Boolean);
+    const safeBase = clone(isPlainObject(baseBody) ? baseBody : {}, {});
+    if (safeEdits.length === 0) {
+        return safeBase;
     }
-
-    return draftBody;
+    const result = applyEdits(safeEdits, safeBase);
+    if (Array.isArray(result?.conflicts) && result.conflicts.length > 0) {
+        // Preview rendering should never throw — drift surfaces at apply time
+        // via the conflict-resolution UI. Surface a log so authors can spot it.
+        console.warn(`[${MODULE_NAME}] Preview detected ${result.conflicts.length} draft conflict(s); preview omits them.`);
+    }
+    return result?.newLive ?? safeBase;
 }
 
 function renderDeltaHtml(before, after) {
@@ -2834,37 +2912,23 @@ function describeEdit(edit) {
     if (!safeEdit) {
         return '';
     }
-
-    if (safeEdit.kind === 'set') {
-        return `${safeEdit.path} <- set`;
+    const path = String(safeEdit.path || '').trim();
+    switch (safeEdit.op) {
+        case 'set':         return `${path} <- set`;
+        case 'unset':       return `${path} <- unset`;
+        case 'str_replace': return `${path} <- str_replace`;
+        case 'str_insert':  return `${path} <- str_insert`;
+        case 'str_delete':  return `${path} <- str_delete`;
+        case 'list_insert': return `${path} <- list_insert`;
+        case 'list_remove': return `${path}[${Number(safeEdit.index)}] <- list_remove`;
+        case 'list_move':   return `${path}[${Number(safeEdit.from_index)}->${Number(safeEdit.to_index)}] <- list_move`;
+        default:            return `${path} <- ${safeEdit.op}`;
     }
-
-    if (safeEdit.kind === 'remove') {
-        return `${safeEdit.path} <- remove`;
-    }
-
-    if (safeEdit.kind === 'upsert_prompt_entry') {
-        return `prompt ${safeEdit.identifier} <- upsert`;
-    }
-
-    if (safeEdit.kind === 'remove_prompt_entry') {
-        return `prompt ${safeEdit.identifier} <- remove`;
-    }
-
-    if (safeEdit.kind === 'upsert_order_item') {
-        return `prompt_order ${safeEdit.character_id}:${safeEdit.identifier} <- position ${safeEdit.position}`;
-    }
-
-    if (safeEdit.kind === 'remove_order_item') {
-        return `prompt_order ${safeEdit.character_id}:${safeEdit.identifier} <- remove`;
-    }
-
-    return `${safeEdit.path} <- copy ${safeEdit.fromPath || safeEdit.path}`;
 }
 
 function buildDraftFromResponse(dialogState, assistantText, toolCalls, sourceMessageId = '') {
     const edits = toolCalls
-        .map(call => normalizeToolCallToEdit(call))
+        .map(call => normalizeToolCallToEdit(call, dialogState))
         .filter(Boolean);
     if (edits.length === 0) {
         return null;
@@ -2914,9 +2978,7 @@ function renderPresetToolTraceHtml(message) {
 </details>`;
 }
 
-function renderMessageHtml(message, {
-    commitCount = 0,
-} = {}) {
+function renderMessageHtml(message) {
     const safeMessage = sanitizeMessage(message);
     const roleLabel = safeMessage.role === 'user'
         ? i18n('User')
@@ -2927,10 +2989,13 @@ function renderMessageHtml(message, {
     const toolSummary = safeMessage.toolSummary
         ? `<div class="luker-studio-msg-note">${escapeHtml(safeMessage.toolSummary)}</div>`
         : '';
-    const commitBadge = safeMessage.role === 'assistant' && commitCount > 0
+    const hasAppliedEdits = safeMessage.role === 'assistant'
+        && Array.isArray(safeMessage.appliedEdits)
+        && safeMessage.appliedEdits.length > 0;
+    const commitBadge = hasAppliedEdits
         ? `<span class="luker-studio-msg-badge">${escapeHtml(i18n('Applied'))}</span>`
         : '';
-    const actions = safeMessage.role === 'assistant' && commitCount > 0
+    const actions = hasAppliedEdits
         ? `
 <div class="luker-studio-msg-actions">
     <div class="menu_button menu_button_small" data-cpa-action="show-message-diff" data-cpa-message-id="${escapeHtml(safeMessage.id)}">${escapeHtml(i18n('Applied diff'))}</div>
@@ -2984,15 +3049,12 @@ function renderPresetConversationHistoryItems(sessionStore, currentSessionId = '
     }).join('')}`;
 }
 
-function renderConversationHtml(session, journal) {
+function renderConversationHtml(session) {
     const messages = Array.isArray(session?.messages) ? session.messages : [];
     if (messages.length === 0) {
         return `<div class="luker-studio-empty">${escapeHtml(i18n('No conversation yet.'))}</div>`;
     }
-    const commitMap = getCommittedMessageEntryMap(session, journal);
-    return messages.map((item) => renderMessageHtml(item, {
-        commitCount: commitMap.get(String(item?.id || '').trim()) || 0,
-    })).join('');
+    return messages.map((item) => renderMessageHtml(item)).join('');
 }
 
 function renderDraftHtml(dialogState) {
@@ -3098,10 +3160,6 @@ async function persistDialogSession(dialogState) {
     dialogState.currentSessionId = String(saved.session?.id || '').trim();
 }
 
-async function persistDialogJournal(dialogState) {
-    dialogState.journal = await saveJournal(dialogState.context, dialogState.targetRef, dialogState.journal);
-}
-
 async function handleReferenceChange(dialogState, selectValue) {
     dialogState.session.referencePresetName = String(selectValue || '').trim();
     await refreshReferenceSnapshot(dialogState);
@@ -3143,18 +3201,28 @@ async function handleReferenceDiff(dialogState) {
 }
 
 async function handleMessageDiff(dialogState, messageId) {
-    const diffPlan = buildMessageDiffPlan(dialogState.session, dialogState.journal, messageId);
-    if (!diffPlan) {
+    const messages = Array.isArray(dialogState.session?.messages) ? dialogState.session.messages : [];
+    const message = messages.find(item => String(item?.id || '') === String(messageId));
+    const appliedEdits = Array.isArray(message?.appliedEdits) ? message.appliedEdits : [];
+    if (appliedEdits.length === 0) {
         toastr.info(i18n('No applied changes for this message.'));
         return;
     }
-    await showDiffPopup(
-        i18n('Applied diff'),
-        i18n('Previous version'),
-        i18n('Applied version'),
-        diffPlan.beforeBody || {},
-        diffPlan.afterBody || {},
-    );
+    const items = appliedEdits.map(edit => `<li>${escapeHtml(describeEdit(edit))}</li>`).join('');
+    const content = `
+<div class="luker-studio">
+    <div class="luker-studio-meta">
+        <div class="luker-studio-meta-item">${escapeHtml(i18nFormat('Applied preset edits: ${0}', appliedEdits.length))}</div>
+    </div>
+    <ul class="luker-studio-edit-list">${items}</ul>
+</div>`;
+    const popup = new Popup(content, POPUP_TYPE.TEXT, i18n('Applied diff'), {
+        okButton: false,
+        cancelButton: 'Close',
+        wider: true,
+        allowVerticalScrolling: true,
+    });
+    await popup.show();
 }
 
 async function handleDiscardDraft(dialogState, { silent = false } = {}) {
@@ -3183,24 +3251,16 @@ async function handleDiscardDraft(dialogState, { silent = false } = {}) {
 }
 
 async function handleClearHistory(dialogState) {
-    const confirmed = await Popup.show.confirm(i18n('Clear this preset assistant history and draft?'), '');
+    const confirmed = await Popup.show.confirm(i18n('Clear all conversation history for this preset?'), '');
     if (!confirmed) {
         return;
     }
-    try {
-        await refreshLiveSnapshot(dialogState);
-        dialogState.session = createEmptySession();
-        dialogState.sessionStore = createEmptySessionStore();
-        dialogState.currentSessionId = dialogState.session.id;
-        dialogState.journal = createEmptyJournal(dialogState.liveSnapshot?.body || {});
-        dialogState.referenceSnapshot = null;
-        dialogState.status = i18n('Session history cleared.');
-        await persistDialogJournal(dialogState);
-        await persistDialogSession(dialogState);
-    } catch (error) {
-        dialogState.status = String(error?.message || error || '');
-    }
+    dialogState.session.messages = [];
+    dialogState.session.draft = null;
+    await persistDialogSession(dialogState);
+    dialogState.status = i18n('Conversation cleared.');
     await rerenderDialog(dialogState);
+    toastr.success(i18n('Conversation cleared.'));
 }
 
 function describeSessionMode(mode) {
@@ -3370,7 +3430,8 @@ async function handleDeleteSession(dialogState, sessionId) {
 
 async function handleApplyDraft(dialogState) {
     const draft = sanitizeDraft(dialogState.session?.draft);
-    if (!draft) {
+    if (!draft || !Array.isArray(draft.edits) || draft.edits.length === 0) {
+        toastr.info(i18n('No draft to apply.'));
         return;
     }
     dialogState.busy = true;
@@ -3378,76 +3439,112 @@ async function handleApplyDraft(dialogState) {
     await rerenderDialog(dialogState);
     try {
         const currentLiveSnapshot = await readValidatedLiveSnapshot(dialogState);
-        dialogState.journal = ensureJournalBaseSnapshot(dialogState.journal, currentLiveSnapshot.body || {});
-        if (!arePresetBodiesEquivalent(currentLiveSnapshot.body || {}, dialogState.liveSnapshot?.body || {})) {
-            throw new Error(i18n('Current live preset changed since this draft was created. Refresh live and request a new draft.'));
+        const currentLive = currentLiveSnapshot.body || {};
+
+        // First pass — detect conflicts via the edits lib.
+        let result = applyEdits(draft.edits, currentLive);
+
+        // If conflicts surfaced, ask the user to resolve via the 3-pane UI.
+        if (result.conflicts.length > 0) {
+            const resolutions = await showConflictResolution(result.conflicts, { getRegisteredOp });
+            if (!resolutions) {
+                toastr.info(i18n('Apply cancelled by user.'));
+                return;
+            }
+            const resolvedEdits = [...result.clean];
+            for (const resolution of resolutions) {
+                if (resolution.decision === 'apply-mine') {
+                    resolvedEdits.push(resolution.edit);
+                } else if (resolution.decision === 'manual') {
+                    if (resolution.edit.op === 'set') {
+                        resolvedEdits.push({ ...resolution.edit, newValue: resolution.newValue });
+                    } else {
+                        resolvedEdits.push(resolution.edit);
+                    }
+                }
+                // 'keep-theirs' → skip (don't push).
+            }
+            result = applyEdits(resolvedEdits, currentLive);
+            if (result.conflicts.length > 0) {
+                throw new Error(i18n('Conflict resolution incomplete — try again.'));
+            }
         }
-        if (!journalMatchesLive(dialogState.journal, currentLiveSnapshot.body || {})) {
-            throw new Error(i18n('Current live preset no longer matches assistant history. Clear history before applying or rolling back more changes.'));
-        }
-        const sourceMessageId = getDraftSourceMessageId(dialogState.session, draft);
-        if (!sourceMessageId) {
-            throw new Error(i18n('Current live preset no longer matches assistant history. Clear history before applying or rolling back more changes.'));
-        }
-        const delta = buildJsonStateDelta(diffPatcher, currentLiveSnapshot.body || {}, draft.draftBody || {});
-        if (!delta) {
-            dialogState.session.draft = null;
-            dialogState.status = i18n('No meaningful changes detected.');
-            await persistDialogSession(dialogState);
-            return;
-        }
-        const result = await dialogState.context.presets.save(
+
+        // Persist new live preset.
+        const saveResult = await dialogState.context.presets.save(
             { collection: 'openai', name: dialogState.targetRef.name },
-            draft.draftBody,
+            result.newLive,
             { select: true },
         );
-        if (!result?.ok) {
+        if (!saveResult?.ok) {
             throw new Error(i18n('Save failed.'));
         }
-        dialogState.journal = {
-            ...dialogState.journal,
-            entries: [
-                ...getJournalEntries(dialogState.journal),
-                sanitizeJournalEntry({
-                    id: uuidv4(),
-                    sessionId: dialogState.session.id,
-                    messageId: sourceMessageId,
-                    delta,
-                    touchedPaths: extractJsonStateTouchedPaths(delta),
-                }),
-            ].filter(Boolean),
-        };
+
+        // Refresh the live snapshot so subsequent reads see the new body.
         await refreshLiveSnapshot(dialogState);
-        dialogState.session = replaceSessionMessage(dialogState.session, sourceMessageId, (message) => ({
-            ...message,
-            tool_results: buildAppliedToolResults(normalizePersistentToolCalls(message), i18n('Applied draft to preset.')),
-            toolSummary: i18nFormat('Applied preset edits: ${0}', draft.edits.length),
-            toolState: 'completed',
-        }));
+
+        // Stash the applied edits on the source message for later inverse-based rollback.
+        const sourceMessageId = getDraftSourceMessageId(dialogState.session, draft);
+        if (sourceMessageId) {
+            dialogState.session = replaceSessionMessage(dialogState.session, sourceMessageId, (message) => ({
+                ...message,
+                appliedEdits: result.clean,
+                tool_results: buildAppliedToolResults(normalizePersistentToolCalls(message), i18n('Applied draft to preset.')),
+                toolSummary: i18nFormat('Applied preset edits: ${0}', result.clean.length),
+                toolState: 'completed',
+            }));
+        }
+
         dialogState.session.draft = null;
-        dialogState.status = i18n('Applied draft to preset.');
-        await persistDialogJournal(dialogState);
+        dialogState.status = i18n('Draft applied.');
         await persistDialogSession(dialogState);
+        toastr.success(i18n('Draft applied.'));
     } catch (error) {
-        dialogState.status = i18nFormat('AI request failed: ${0}', error?.message || error);
+        dialogState.status = i18nFormat('Apply failed: ${0}', error?.message || error);
         console.error(`[${MODULE_NAME}] Failed to apply preset draft`, error);
+        toastr.error(i18nFormat('Apply failed: ${0}', error?.message || error));
     } finally {
         dialogState.busy = false;
         await rerenderDialog(dialogState);
     }
 }
 
-async function handleRollbackToMessage(dialogState, messageId) {
-    const rollbackPlan = buildTailRollbackPlan(dialogState.session, dialogState.journal, messageId);
-    if (!rollbackPlan) {
-        toastr.info(i18n('No applied changes for this message.'));
+async function handleRollbackToMessage(dialogState, targetMessageId) {
+    if (!targetMessageId) {
         return;
     }
-    if (rollbackPlan.conflicting) {
-        toastr.warning(i18n('Later committed changes overlap the same preset paths. Automatic tail rollback is blocked.'));
+    const messages = Array.isArray(dialogState.session?.messages) ? dialogState.session.messages : [];
+    const targetIdx = messages.findIndex(item => String(item?.id || '') === String(targetMessageId));
+    if (targetIdx < 0) {
+        toastr.warning(i18n('Message not found.'));
         return;
     }
-    const rollbackMessage = sanitizeMessage((dialogState.session?.messages || []).find(item => String(item?.id || '') === String(messageId || '')));
+
+    // Collect appliedEdits from messages in [targetIdx, end], reverse order,
+    // map to inverses, flatten into one list.
+    const inverseList = [];
+    for (let i = messages.length - 1; i >= targetIdx; i -= 1) {
+        const message = messages[i];
+        if (!Array.isArray(message?.appliedEdits) || message.appliedEdits.length === 0) {
+            continue;
+        }
+        // Reverse within a single message's edits too — later edits in the
+        // same apply batch are undone first.
+        for (let j = message.appliedEdits.length - 1; j >= 0; j -= 1) {
+            try {
+                inverseList.push(inverseEdit(message.appliedEdits[j]));
+            } catch (error) {
+                console.warn(`[${MODULE_NAME}] Skipping orphan op during rollback:`, message.appliedEdits[j], error);
+            }
+        }
+    }
+
+    if (inverseList.length === 0) {
+        toastr.info(i18n('Nothing to roll back from this point.'));
+        return;
+    }
+
+    const rollbackMessage = sanitizeMessage(messages[targetIdx]);
     const confirmed = await Popup.show.confirm(
         i18n('Rollback this message and every later applied change in the current session?'),
         String(rollbackMessage?.summary || rollbackMessage?.text || '').trim(),
@@ -3455,53 +3552,73 @@ async function handleRollbackToMessage(dialogState, messageId) {
     if (!confirmed) {
         return;
     }
+
     dialogState.busy = true;
     dialogState.status = i18n('Rolling back...');
     await rerenderDialog(dialogState);
     try {
         const currentLiveSnapshot = await readValidatedLiveSnapshot(dialogState);
-        dialogState.journal = ensureJournalBaseSnapshot(dialogState.journal, currentLiveSnapshot.body || {});
-        if (!journalMatchesLive(dialogState.journal, currentLiveSnapshot.body || {})) {
-            throw new Error(i18n('Current live preset no longer matches assistant history. Clear history before applying or rolling back more changes.'));
-        }
-        const revertDelta = buildJsonStateDelta(diffPatcher, currentLiveSnapshot.body || {}, rollbackPlan.revertedBody || {});
-        if (revertDelta) {
-            const result = await dialogState.context.presets.save(
-                { collection: 'openai', name: dialogState.targetRef.name },
-                rollbackPlan.revertedBody || {},
-                { select: true },
-            );
-            if (!result?.ok) {
-                throw new Error(i18n('Save failed.'));
+        const currentLive = currentLiveSnapshot.body || {};
+
+        // First pass — detect conflicts via the edits lib.
+        let result = applyEdits(inverseList, currentLive);
+
+        // If conflicts surfaced, ask the user to resolve via the 3-pane UI.
+        if (result.conflicts.length > 0) {
+            const resolutions = await showConflictResolution(result.conflicts, { getRegisteredOp });
+            if (!resolutions) {
+                toastr.info(i18n('Rollback cancelled by user.'));
+                return;
             }
-            dialogState.journal = {
-                ...dialogState.journal,
-                entries: [
-                    ...getJournalEntries(dialogState.journal),
-                    sanitizeJournalEntry({
-                        id: uuidv4(),
-                        sessionId: dialogState.session.id,
-                        messageId: String(messageId || '').trim(),
-                        delta: revertDelta,
-                        touchedPaths: extractJsonStateTouchedPaths(revertDelta),
-                    }),
-                ].filter(Boolean),
-            };
-            await refreshLiveSnapshot(dialogState);
-            await persistDialogJournal(dialogState);
+            const resolvedEdits = [...result.clean];
+            for (const resolution of resolutions) {
+                if (resolution.decision === 'apply-mine') {
+                    resolvedEdits.push(resolution.edit);
+                } else if (resolution.decision === 'manual') {
+                    if (resolution.edit.op === 'set') {
+                        resolvedEdits.push({ ...resolution.edit, newValue: resolution.newValue });
+                    } else {
+                        resolvedEdits.push(resolution.edit);
+                    }
+                }
+                // 'keep-theirs' → skip (don't push).
+            }
+            result = applyEdits(resolvedEdits, currentLive);
+            if (result.conflicts.length > 0) {
+                throw new Error(i18n('Conflict resolution incomplete — try again.'));
+            }
         }
+
+        // Persist new live preset.
+        const saveResult = await dialogState.context.presets.save(
+            { collection: 'openai', name: dialogState.targetRef.name },
+            result.newLive,
+            { select: true },
+        );
+        if (!saveResult?.ok) {
+            throw new Error(i18n('Save failed.'));
+        }
+
+        // Refresh the live snapshot so subsequent reads see the new body.
+        await refreshLiveSnapshot(dialogState);
+
+        // Mark rolled-back messages — keep their appliedEdits for potential
+        // future redo while signalling that they no longer represent live state.
+        const nextMessages = messages.map((message, index) => (
+            index >= targetIdx ? { ...message, rolledBack: true } : message
+        ));
         dialogState.session = {
             ...dialogState.session,
-            messages: Array.isArray(dialogState.session?.messages)
-                ? dialogState.session.messages.slice(0, rollbackPlan.trimIndex)
-                : [],
+            messages: nextMessages,
             draft: null,
         };
-        dialogState.status = i18n('Rolled back current session changes to the selected message.');
+        dialogState.status = i18n('Rolled back.');
         await persistDialogSession(dialogState);
+        toastr.success(i18n('Rolled back.'));
     } catch (error) {
-        dialogState.status = i18nFormat('AI request failed: ${0}', error?.message || error);
+        dialogState.status = i18nFormat('Rollback failed: ${0}', error?.message || error);
         console.error(`[${MODULE_NAME}] Failed to rollback preset draft`, error);
+        toastr.error(i18nFormat('Rollback failed: ${0}', error?.message || error));
     } finally {
         dialogState.busy = false;
         await rerenderDialog(dialogState);
@@ -3668,10 +3785,7 @@ async function openAssistantPopup({ targetRef: explicitTargetRef = null, liveSna
         return;
     }
 
-    const [loadedSessionStore, journal] = await Promise.all([
-        loadSessionStore(context, targetRef),
-        loadJournal(context, targetRef, liveSnapshot.body || {}),
-    ]);
+    const loadedSessionStore = await loadSessionStore(context, targetRef);
     let sessionStore = normalizeSessionStore(loadedSessionStore);
     let session = getPreferredPresetConversationSession(sessionStore);
     if (!session) {
@@ -3693,16 +3807,12 @@ async function openAssistantPopup({ targetRef: explicitTargetRef = null, liveSna
         sessionStore,
         currentSessionId: String(session?.id || '').trim(),
         session: sanitizeSession(session),
-        journal: ensureJournalBaseSnapshot(journal, liveSnapshot.body || {}),
         referenceSnapshot: null,
         busy: false,
         status: '',
         inputText: '',
         abortController: null,
     };
-    if (getJournalEntries(dialogState.journal).length > 0 && !journalMatchesLive(dialogState.journal, liveSnapshot.body || {})) {
-        dialogState.status = i18n('Current live preset no longer matches assistant history. Clear history before applying or rolling back more changes.');
-    }
 
     await refreshReferenceSnapshot(dialogState);
 

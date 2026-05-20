@@ -79,7 +79,7 @@ export function createCompletionPresetAssistantDialogUi(deps) {
                 <summary>${escapeHtml(i18n('Conversation history'))}</summary>
                 ${renderPresetConversationHistoryItems(dialogState.sessionStore, dialogState.currentSessionId)}
             </details>
-            <div class="luker-studio-chat">${renderConversationHtml(dialogState.session, dialogState.journal)}</div>
+            <div class="luker-studio-chat">${renderConversationHtml(dialogState.session)}</div>
         </div>
         <div class="luker-studio-panel">
             <div class="luker-studio-panel-title">${escapeHtml(i18n('Draft diff'))}</div>

@@ -10,7 +10,8 @@
 - **Multi-Agent Orchestrator** — Three execution modes (Spec workflow, Single agent, Agenda planner)
 - **Card Editor Assistant** — AI-driven conversational character-card editing with 7 tools
 - **Search Tools** — Three-engine support: DuckDuckGo, SearXNG, Brave Search
-- **Preset Assistant** — AI-assisted preset parameter understanding and tuning
+- **Preset Assistant** — AI-assisted preset editing with IDE-style drift handling and per-message rollback; new fine-grained tools (str_replace / str_insert / list_insert / list_move) save tokens on long fields
+- **Edits library** (`public/scripts/lib/edits/`) — shared op-typed structured-edit primitives with drift-aware apply + interactive conflict UI, exposed to third-party extensions (ESM / lukerContext / ctx). See `docs/development/extension-api/edits-lib.md`.
 - **CardApp** — Interactive applications embedded in character cards
 
 ### Architecture improvements
@@ -35,6 +36,10 @@
 - Image generation enhancements
 - Mobile UX refinements
 - Startup performance optimization
+
+## Recent breaking changes
+
+- **CPA conversation rollback resets on upgrade.** The journal-based session model was replaced with IDE-style live=authority + per-message `appliedEdits`. Preset files themselves are unchanged; only CPA's conversation rollback history from prior sessions is lost. New conversations rollback normally via the new mechanism.
 
 ---
 
