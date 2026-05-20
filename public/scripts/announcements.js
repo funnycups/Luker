@@ -55,6 +55,11 @@ function updateBellVisibility() {
     bell.classList.toggle('is-active', state.multiUser);
 }
 
+export function refreshBellUI() {
+    updateBellVisibility();
+    updateBellBadge();
+}
+
 async function markRead(ids) {
     if (!Array.isArray(ids) || ids.length === 0) return;
     try {

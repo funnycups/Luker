@@ -36,6 +36,7 @@ import { t } from './i18n.js';
 import { callGenericPopup, POPUP_TYPE } from './popup.js';
 import { getMessageTimeStamp } from './RossAscends-mods.js';
 import { renderTemplateAsync } from './templates.js';
+import { refreshBellUI } from './announcements.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { clamp, flashHighlight, focusWithoutVirtualKeyboard, isElementInViewport, sortMoments, timestampToMoment } from './utils.js';
 
@@ -528,6 +529,7 @@ async function sendWelcomePanel(chats, expand = false) {
             });
         });
         chatElement.append(fragment.firstChild);
+        refreshBellUI();
         if (expand) {
             chatElement.querySelectorAll('button.showMoreChats').forEach((button) => {
                 if (button instanceof HTMLButtonElement) {

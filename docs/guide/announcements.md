@@ -43,15 +43,17 @@ Each level routes differently on the user side:
 | **Warning** | Top banner above the chat area. The user dismisses it with the × button; the next unread warning automatically takes its place. |
 | **Info** | No proactive UI. The announcement is only visible by opening the inbox. |
 
-All levels — including `Info` — contribute to the unread badge on the inbox bell.
+All levels — including `Info` — contribute to the unread badge on the **Announcements** button.
 
 Pick the level honestly. Most operational notices are `Info` or `Warning`; reserve `Critical` for things the user must read before continuing (security, data loss, breaking change).
 
 ## How Users See Announcements
 
-### The Inbox Bell
+### The Inbox
 
-A bell icon in the top bar opens the inbox. The bell shows a red badge with the unread count (`9+` past nine). The inbox lists every announcement still active, newest first. Clicking a row expands the Markdown body inline and marks the announcement as read.
+The welcome screen carries an **Announcements** button in the shortcuts row (next to Docs / GitHub / Discord / Temporary Chat). It shows a red badge with the unread count (`9+` past nine). Clicking it opens the inbox, which lists every active announcement (newest first). Clicking a row expands the Markdown body inline and marks the announcement as read.
+
+The button only appears on the welcome screen, not inside an open chat. To check the inbox, return to the welcome screen by closing the current chat (the X above the chat).
 
 ### Critical Modal at Login
 
