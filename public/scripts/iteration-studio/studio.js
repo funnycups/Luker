@@ -10,6 +10,7 @@
 
 import { POPUP_TYPE, Popup } from '../popup.js';
 import { isAbortError } from '../extensions/orchestrator/abort-utils.js';
+import { registerOp as editsRegisterOp, getRegisteredOp as editsGetRegisteredOp } from '../lib/edits/index.js';
 
 import { i18n, i18nFormat } from './i18n.js';
 import { buildIterationStudioPopupHtml } from './template.js';
@@ -33,6 +34,32 @@ import {
 import { ensureStorageWipeOnce } from './storage-migration.js';
 
 let activeAbortController = null;
+
+/**
+ * Build the facade adapters use to register their custom edits-lib ops.
+ *
+ * The facade wraps the engine's `registerOp` with a `getRegisteredOp` guard
+ * so that re-opening the same studio popup never re-registers (or fails on
+ * duplicate) the same op handler.
+ */
+export function makeCustomOpsRegistryFacade() {
+    return {
+        registerOp(name, handler) {
+            if (editsGetRegisteredOp(name)) return;
+            editsRegisterOp(name, handler);
+        },
+    };
+}
+
+/**
+ * Test-only helper: exercise the `registerCustomOps` invocation without
+ * mounting a Popup. Mirrors what `openIterationStudio` does post-validation.
+ */
+export async function runRegisterCustomOpsForTest(adapter, facade) {
+    if (typeof adapter.registerCustomOps === 'function') {
+        adapter.registerCustomOps(facade);
+    }
+}
 
 async function loadOrCreateSession(adapter) {
     const scope = adapter.sessionScope();
@@ -58,6 +85,11 @@ export async function openIterationStudio(adapter, context, settings, root) {
     defineAdapter(adapter);
     if (typeof adapter.ensureStyles === 'function') {
         try { adapter.ensureStyles(adapter.popupClassName || ''); } catch { /* ignore */ }
+    }
+
+    const customOpsFacade = makeCustomOpsRegistryFacade();
+    if (typeof adapter.registerCustomOps === 'function') {
+        adapter.registerCustomOps(customOpsFacade);
     }
 
     await ensureStorageWipeOnce(adapter);
