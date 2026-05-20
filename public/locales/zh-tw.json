@@ -1,5 +1,5 @@
 {
-    "Use streaming transport (avoid timeout on slow APIs)": "使用串流傳輸 (避免慢速 API 逾時)",
+    "Use streaming transport (avoid timeout on slow APIs)": "使用串流傳輸（避免慢速 API 逾時）",
     "Favorite": "我的最愛",
     "Tag": "標籤",
     "Duplicate": "複製",
@@ -100,10 +100,10 @@
     "Top_K_desc": "Top K 設定可以選擇的最高符元數量。\n例如，Top K 為 20，這意味著只保留排名前 20 的符元（無論它們的機率是多樣還是有限的）。\n設定為 0 以停用。",
     "Top_P_desc": "Top P(又名核心取樣) 會將所有頂級符元加總，直到達到目標百分比。\n例如，如果前兩個符元都是 25%，而 Top P 設為 0.5，那麼只有前兩個符元會被考慮。\n設定為 1.0 以停用。",
     "Typical P": "Typical P",
-    "Typical_P_desc": "Typical P 取樣根據符元偏離集合平均熵的程度進行優先排序。\n它會保留累積機率接近預設閾值 (例如 0.5) 的符元，強調那些具有平均資訊量的符元。\n設定為 1.0 以停用。",
+    "Typical_P_desc": "Typical P 取樣根據符元偏離集合平均熵的程度進行優先排序。\n它會保留累積機率接近預設閾值（例如 0.5）的符元，強調那些具有平均資訊量的符元。\n設定為 1.0 以停用。",
     "Min_P_desc": "Min P 設定基本最小機率。\n這個值會根據最高符元的機率進行調整。例如，如果最高符元機率為 80%,而 Min P 設為 0.1，那麼只有機率高於 8% 的符元會被考慮。\n設定為 0 以停用。",
     "Top_A_desc": "Top A 根據最高符元機率的平方設定符元選擇的門檻。\n例如，如果 Top A 值為 0.2，而最高符元機率為 50%，那麼低於 5%(0.2 * 0.5^2) 的符元機率就會被排除。\n設定為 0 以停用。",
-    "Tail_Free_Sampling_desc": "無尾取樣 (Tail-Free Sampling, TFS) 會透過分析符元機率的變化率 (使用導數) 來尋找分佈中的低機率符元尾部。\n它會根據標準化的二階導數，保留直到某個閾值 (例如 0.3) 的符元。\n數值越接近 0，表示會棄去越多符元。設定為 1.0 以停用。",
+    "Tail_Free_Sampling_desc": "無尾取樣（Tail-Free Sampling, TFS）會透過分析符元機率的變化率（使用導數）來尋找分佈中的低機率符元尾部。\n它會根據標準化的二階導數，保留直到某個閾值（例如 0.3）的符元。\n數值越接近 0，表示會棄去越多符元。設定為 1.0 以停用。",
     "rep.pen range": "重複懲罰範圍",
     "Mirostat": "Mirostat",
     "Mode": "模式",
@@ -336,7 +336,7 @@
     "Example: http://127.0.0.1:5001": "範例：http://127.0.0.1:5001",
     "Authorize": "授權",
     "OpenRouter API key already exists": "OpenRouter API 密鑰已存在",
-    "Do you really wish to create a new OpenRouter key? Your existing key will not be deleted.": "您確定要建立新的 OpenRouter API 金鑰嗎?您現有的金鑰不會被刪除。",
+    "Do you really wish to create a new OpenRouter key? Your existing key will not be deleted.": "您確定要建立新的 OpenRouter API 金鑰嗎？您現有的金鑰不會被刪除。",
     "Get your OpenRouter API token using OAuth flow. You will be redirected to openrouter.ai": "使用 OAuth 流程取得您的 OpenRouter API 符元。您將被重新導向到 openrouter.ai",
     "Bypass status check": "繞過狀態檢查",
     "Chat Completion Source": "聊天補全來源",
@@ -3149,8 +3149,8 @@
     "Chat Character Settings Override": "聊天角色設定覆蓋",
     "Chat Time": "聊天時長",
     "Chat could not be saved": "聊天無法儲存",
-    "Chat sync: integrity drift detected, auto-recovering.": "聊天同步:偵測到完整性漂移,正在自動還原。",
-    "Chat sync: snapshot conflict detected, auto-recovering.": "聊天同步:偵測到快照衝突,正在自動還原。",
+    "Chat sync: integrity drift detected, auto-recovering.": "聊天同步：偵測到完整性漂移，正在自動還原。",
+    "Chat sync: snapshot conflict detected, auto-recovering.": "聊天同步：偵測到快照衝突，正在自動還原。",
     "Chat write conflict": "聊天寫入衝突",
     "server: ${0}": "伺服端:${0}",
     "diverge: ${0}": "差異:${0}",
@@ -4890,11 +4890,11 @@
     ,"Use Probability Trigger": "啟用機率觸發"
     ,"at Depth": "按深度"
     ,"On": "開"
-    ,"currently On": "目前: 開"
-    ,"currently Off": "目前: 關"
+    ,"currently On": "目前：開"
+    ,"currently Off": "目前：關"
     ,"New value:": "新值:"
     ,"Mixed values across selected entries": "各條目目前值不一致"
-    ,"For each option: choose Keep / On / Off": "每列可選: 保持不變 / 開 / 關"
+    ,"For each option: choose Keep / On / Off": "每列可選：保持不變 / 開 / 關"
     ,"Select…": "選擇…"
     ,"Please enter a value": "請輸入一個值"
     ,"Please choose a value": "請選擇一個值"
@@ -4922,8 +4922,8 @@
     ,"Rerank": "重排序"
     ,"Embedding Profile": "嵌入設定檔"
     ,"Rerank Profile": "重排序設定檔"
-    ,"Embedding profiles are used by Vector Storage and Memory Graph for text embeddings. They are not active chat connections.": "嵌入設定檔供向量儲存、記憶圖等外掛運算文字嵌入,不會作為聊天連線生效。"
-    ,"Rerank profiles are used to re-score candidates after vector retrieval. They are not active chat connections.": "重排序設定檔用於在向量檢索後對候選結果重新評分,不會作為聊天連線生效。"
+    ,"Embedding profiles are used by Vector Storage and Memory Graph for text embeddings. They are not active chat connections.": "嵌入設定檔供向量儲存、記憶圖等外掛運算文字嵌入，不會作為聊天連線生效。"
+    ,"Rerank profiles are used to re-score candidates after vector retrieval. They are not active chat connections.": "重排序設定檔用於在向量檢索後對候選結果重新評分，不會作為聊天連線生效。"
     ,"Manage profiles in the Connection Profile panel (Embedding tab) under API Connections.": "請在 API 連線設定面板的「嵌入」分頁中管理設定檔。"
     ,"Create a new embedding profile": "新增嵌入設定檔"
     ,"Edit embedding profile": "編輯嵌入設定檔"
@@ -4932,22 +4932,22 @@
     ,"Edit rerank profile": "編輯重排序設定檔"
     ,"Delete rerank profile": "刪除重排序設定檔"
     ,"Profile Name": "設定檔名稱"
-    ,"URL Override (optional)": "URL 覆寫(選填)"
-    ,"Server URL (required)": "伺服器 URL(必填)"
-    ,"API Key (used with URL Override)": "API 金鑰(搭配 URL 覆寫使用)"
-    ,"When set, requests are sent to this URL using the API Key below; the saved Secret is ignored.": "設定後,請求將透過下方的 API 金鑰送往此 URL;已儲存的 Secret 將被忽略。"
+    ,"URL Override (optional)": "URL 覆寫（選填）"
+    ,"Server URL (required)": "伺服器 URL（必填）"
+    ,"API Key (used with URL Override)": "API 金鑰（搭配 URL 覆寫使用）"
+    ,"When set, requests are sent to this URL using the API Key below; the saved Secret is ignored.": "設定後，請求將透過下方的 API 金鑰送往此 URL；已儲存的 Secret 將被忽略。"
     ,"Saved Secret": "已儲存的金鑰"
-    ,"Use active (default)": "使用啟用中的金鑰(預設)"
+    ,"Use active (default)": "使用啟用中的金鑰（預設）"
     ,"Late Chunking": "Late Chunking"
-    ,"Dimensions (0 = auto)": "維度(0 = 自動)"
-    ,"Task (optional)": "任務(選填)"
+    ,"Dimensions (0 = auto)": "維度（0 = 自動）"
+    ,"Task (optional)": "任務（選填）"
     ,"Keep model loaded between requests": "在請求之間保留模型載入狀態"
     ,"Endpoint Region": "服務區域"
     ,"International": "國際"
     ,"China": "中國"
     ,"Cloudflare Account ID": "Cloudflare Account ID"
     ,"Auth Mode": "認證模式"
-    ,"Default (API Key)": "預設(API 金鑰)"
+    ,"Default (API Key)": "預設（API 金鑰）"
     ,"Express": "Express"
     ,"Service Account": "服務帳號"
     ,"Express Project ID": "Express 專案 ID"
@@ -4957,7 +4957,7 @@
     ,"Rerank profile": "重排序設定檔"
     ,"Vector pre-filter Top-K": "向量預篩 Top-K"
     ,"Max recall results": "最大召回結果數"
-    ,"Hybrid Pipeline (vector + graph diffusion)": "混合管線(向量 + 圖擴散)"
+    ,"Hybrid Pipeline (vector + graph diffusion)": "混合管線（向量 + 圖擴散）"
     ,"Hybrid + Rerank": "混合 + 重排序"
     ,"Hybrid + LLM Rerank": "混合 + LLM 重排序"
     ,"Recompute Vector Index": "重建向量索引"
@@ -4973,7 +4973,7 @@
     ,"Enable defaults": "啟用預設"
     ,"Tools": "工具"
     ,"Using the profile default.": "使用 profile 預設。"
-    ,"No tools active. This node runs as a single LLM call.": "不啟用工具,該節點會直接出結果(單次 LLM 呼叫)。"
+    ,"No tools active. This node runs as a single LLM call.": "不啟用工具，該節點會直接出結果（單次 LLM 呼叫）。"
     ,"Override": "覆寫"
     ,"Reset to inherit": "重設為繼承"
     ,"Loop Orchestration": "迴圈編排"
@@ -4986,11 +4986,11 @@
     ,"search (web search)": "search(聯網搜尋)"
     ,"terminator": "終止器"
     ,"(forced on)": "(強制開啟)"
-    ,"Loop API preset (Connection profile, empty = global orchestration API preset)": "迴圈 API 預設(Connection profile,留空 = 全域編排 API 預設)"
-    ,"Loop preset (params + prompt, empty = global orchestration preset)": "迴圈預設(參數 + prompt,留空 = 全域編排預設)"
+    ,"Loop API preset (Connection profile, empty = global orchestration API preset)": "迴圈 API 預設（Connection profile，留空 = 全域編排 API 預設）"
+    ,"Loop preset (params + prompt, empty = global orchestration preset)": "迴圈預設（參數 + prompt，留空 = 全域編排預設）"
     ,"Loop system prompt": "迴圈 system prompt"
     ,"Loop max rounds": "迴圈最大輪數"
-    ,"Loop wall-clock budget (seconds)": "迴圈 wall-clock 預算(秒)"
+    ,"Loop wall-clock budget (seconds)": "迴圈 wall-clock 預算（秒）"
     ,"Workflow": "工作流"
     ,"Agent Presets": "Agent 預設"
     ,"Add Stage": "加 Stage"
@@ -4999,37 +4999,37 @@
     ,"Node ID": "節點 ID"
     ,"Node Type": "節點類型"
     ,"Worker": "Worker"
-    ,"Node Prompt Template (optional)": "節點 Prompt 模板(可選)"
-    ,"Use {{recent_chat}}, {{last_user}}, {{distiller}}, {{previous_outputs}}. Previous orchestration result and approved review feedback are auto-injected.": "可用 {{recent_chat}}、{{last_user}}、{{distiller}}、{{previous_outputs}};上一輪編排結果與已批准的 review 回饋會自動注入。"
+    ,"Node Prompt Template (optional)": "節點 Prompt 模板（可選）"
+    ,"Use {{recent_chat}}, {{last_user}}, {{distiller}}, {{previous_outputs}}. Previous orchestration result and approved review feedback are auto-injected.": "可用 {{recent_chat}}、{{last_user}}、{{distiller}}、{{previous_outputs}}；上一輪編排結果與已批准的 review 回饋會自動注入。"
     ,"Serial": "串行"
     ,"Parallel": "並行"
     ,"Up": "上移"
     ,"Down": "下移"
-    ,"No stages yet. Add one stage to start orchestration.": "尚無 stage,先加一個開始編排。"
-    ,"No nodes. Add one to define this stage.": "尚無節點,加一個來定義此 stage。"
+    ,"No stages yet. Add one stage to start orchestration.": "尚無 stage，先加一個開始編排。"
+    ,"No nodes. Add one to define this stage.": "尚無節點，加一個來定義此 stage。"
     ,"Agenda Orchestration": "Agenda 編排"
     ,"Agenda Agents": "Agenda Agents"
     ,"Planner system prompt": "Planner system prompt"
     ,"Planner Prompt": "Planner Prompt"
-    ,"Planner API preset (Connection profile, empty = global orchestration API preset)": "Planner API 預設(Connection profile,留空 = 全域編排 API 預設)"
-    ,"Planner preset (params + prompt, empty = global orchestration preset)": "Planner 預設(參數 + prompt,留空 = 全域編排預設)"
+    ,"Planner API preset (Connection profile, empty = global orchestration API preset)": "Planner API 預設（Connection profile，留空 = 全域編排 API 預設）"
+    ,"Planner preset (params + prompt, empty = global orchestration preset)": "Planner 預設（參數 + prompt，留空 = 全域編排預設）"
     ,"Final Agent": "終結 Agent"
     ,"Planner max rounds": "Planner 最大輪數"
     ,"Max concurrent agents": "最大並發 agent 數"
     ,"Max total agent runs": "總 agent 運行數上限"
-    ,"Agent API preset (Connection profile, empty = global orchestration API preset)": "Agent API 預設(Connection profile,留空 = 全域編排 API 預設)"
-    ,"Agent preset (params + prompt, empty = global orchestration preset)": "Agent 預設(參數 + prompt,留空 = 全域編排預設)"
+    ,"Agent API preset (Connection profile, empty = global orchestration API preset)": "Agent API 預設（Connection profile，留空 = 全域編排 API 預設）"
+    ,"Agent preset (params + prompt, empty = global orchestration preset)": "Agent 預設（參數 + prompt，留空 = 全域編排預設）"
     ,"User Prompt Template": "User Prompt 模板"
     ,"Add Preset": "加預設"
     ,"new_preset_id": "new_preset_id"
     ,"No presets yet.": "尚無預設。"
-    ,"No tools active. This agent runs as a single LLM call.": "不啟用工具,該 agent 會直接出結果(單次 LLM 呼叫)。"
-    ,"Requests per minute (0 = unlimited)": "每分鐘請求數(0 = 不限制)"
+    ,"No tools active. This agent runs as a single LLM call.": "不啟用工具，該 agent 會直接出結果（單次 LLM 呼叫）。"
+    ,"Requests per minute (0 = unlimited)": "每分鐘請求數（0 = 不限制）"
     ,"Claude Prompt Caching": "Claude 提示詞快取"
-    ,"Only effective when the prompt prefix is stable across requests (no in-chat lorebook injections or random macros). Cache writes cost 1.25× base (5m) or 2× base (1h); reads cost 0.1×.": "僅在每次請求的前綴穩定時有效(不使用聊天內世界書注入或隨機巨集)。快取寫入成本為基礎價 ×1.25(5m)或 ×2(1h),讀取僅 ×0.1。"
+    ,"Only effective when the prompt prefix is stable across requests (no in-chat lorebook injections or random macros). Cache writes cost 1.25× base (5m) or 2× base (1h); reads cost 0.1×.": "僅在每次請求的前綴穩定時有效（不使用聊天內世界書注入或隨機巨集）。快取寫入成本為基礎價 ×1.25(5m)或 ×2(1h)，讀取僅 ×0.1。"
     ,"Cache system prompt": "快取 system prompt"
-    ,"Use 1h cache TTL (instead of 5m)": "使用 1 小時 TTL(代替 5 分鐘)"
-    ,"Cache message history at depth (-1 to disable)": "在對話歷史指定深度快取(-1 表示停用)"
+    ,"Use 1h cache TTL (instead of 5m)": "使用 1 小時 TTL（代替 5 分鐘）"
+    ,"Cache message history at depth (-1 to disable)": "在對話歷史指定深度快取（-1 表示停用）"
     ,"OpenRouter Gemini Prompt Caching": "OpenRouter Gemini 提示詞快取"
     ,"Only applied when OpenRouter routes to a Gemini model that supports caching. Same prefix-stability caveat as Claude caching.": "僅在 OpenRouter 路由到支援快取的 Gemini 模型時生效。與 Claude 快取同樣要求前綴穩定。"
     ,"Requests per minute": "每分鐘請求數"
@@ -5073,11 +5073,11 @@
     ,"Maximum concurrent sub-agents": "最大並行子代理數"
     ,"Maximum total sub-agent runs per turn": "本回合最多子代理呼叫總數"
     ,"Direct message generation": "直接生成訊息"
-    ,"Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.": "導演模式由主代理直接產出助理訊息,主代理可派遣子代理協助。"
+    ,"Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.": "導演模式由主代理直接產出助理訊息，主代理可派遣子代理協助。"
     ,"Director Orchestration": "導演編排"
     ,"System prompt (leave empty for default)": "系統提示詞（留空使用預設值）"
     ,"Reset to default": "重設為預設值"
-    ,"Reset main-agent system prompt to default? This overwrites the current text.": "重設主代理系統提示詞為預設值?這會覆蓋目前文字。"
+    ,"Reset main-agent system prompt to default? This overwrites the current text.": "重設主代理系統提示詞為預設值？這會覆蓋目前文字。"
     ,"Reset main-agent system prompt to default": "已重設主代理系統提示詞為預設值"
     ,"Limits": "上限"
     ,"Reset Global": "重設全局設定"
@@ -5087,10 +5087,10 @@
     ,"No open notes yet": "還沒有進行中的條目"
     ,"No closed notes yet": "還沒有已關閉的條目"
     ,"Close this note": "關閉這條"
-    ,"Closure reason (optional)": "關閉原因(可選)"
+    ,"Closure reason (optional)": "關閉原因（可選）"
     ,"Edit note": "編輯"
     ,"Delete note (permanent)": "永久刪除"
-    ,"Confirm delete (permanent)?": "確認永久刪除?"
+    ,"Confirm delete (permanent)?": "確認永久刪除？"
     ,"Manage Users": "使用者管理"
     ,"System Overview": "系統概覽"
     ,"Security Status": "安全狀態"

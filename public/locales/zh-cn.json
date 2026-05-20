@@ -1,5 +1,5 @@
 {
-    "Use streaming transport (avoid timeout on slow APIs)": "使用流式传输 (避免慢速 API 超时)",
+    "Use streaming transport (avoid timeout on slow APIs)": "使用流式传输（避免慢速 API 超时）",
     "Favorite": "星标",
     "Tag": "标签",
     "Duplicate": "复制",
@@ -429,7 +429,7 @@
     "Derive context size from backend": "从后端获取上下文长度",
     "Authorize": "授权",
     "OpenRouter API key already exists": "OpenRouter API 密钥已存在",
-    "Do you really wish to create a new OpenRouter key? Your existing key will not be deleted.": "您确定要创建新的 OpenRouter API 密钥吗?您现有的密钥不会被删除。",
+    "Do you really wish to create a new OpenRouter key? Your existing key will not be deleted.": "您确定要创建新的 OpenRouter API 密钥吗？您现有的密钥不会被删除。",
     "Get your OpenRouter API token using OAuth flow. You will be redirected to openrouter.ai": "使用OAuth流程获取您的OpenRouter API令牌。您将被重定向到openrouter.ai",
     "Chat Completion Source": "聊天补全来源",
     "Custom (OpenAI-compatible)": "自定义（兼容 OpenAI）",
@@ -1536,8 +1536,8 @@
     "<p>After you click OK, the page will be reloaded to prevent data corruption.</p>\n              <p>To confirm an overwrite (and potentially <b>LOSE YOUR DATA</b>), enter <code>OVERWRITE</code> (in all caps) in the box below before clicking OK.</p>": "<p>点击确定后，页面将被重新加载以防止数据损坏。</p>\n              <p>如要确认覆盖（有可能<b>丢失您的数据</b>），请在点击确定之前，在下面的框中输入<code>OVERWRITE</code>（全部大写）。</p>",
     "Check the server connection and reload the page to prevent data loss.": "请检查服务器连接并重新加载页面，以防数据丢失。",
     "Chat could not be saved": "聊天无法保存",
-    "Chat sync: integrity drift detected, auto-recovering.": "聊天同步:检测到完整性漂移,正在自动恢复。",
-    "Chat sync: snapshot conflict detected, auto-recovering.": "聊天同步:检测到快照冲突,正在自动恢复。",
+    "Chat sync: integrity drift detected, auto-recovering.": "聊天同步：检测到完整性漂移，正在自动恢复。",
+    "Chat sync: snapshot conflict detected, auto-recovering.": "聊天同步：检测到快照冲突，正在自动恢复。",
     "Chat write conflict": "聊天写入冲突",
     "server: ${0}": "服务端:${0}",
     "diverge: ${0}": "差异:${0}",
@@ -3481,7 +3481,7 @@
     "Restore tags from a file": "从文件中恢复标签",
     "Create a new tag": "新建一个标签",
     "Sort mode": "排序模式",
-    "Manual (Drag & Drop)": "手动 (拖放)",
+    "Manual (Drag & Drop)": "手动（拖放）",
     "Alphabetical (A-Z)": "按字母 (A-Z)",
     "Most Used (By Count)": "按使用次数",
     "Drag handle to reorder. Click name to rename. Click color to change display.": "拖拽左侧三条横线以排序，点击名字以重命名，点击调色盘以切换颜色。",
@@ -5053,11 +5053,11 @@
     ,"Use Probability Trigger": "启用概率触发"
     ,"at Depth": "按深度"
     ,"On": "开"
-    ,"currently On": "当前: 开"
-    ,"currently Off": "当前: 关"
+    ,"currently On": "当前：开"
+    ,"currently Off": "当前：关"
     ,"New value:": "新值:"
     ,"Mixed values across selected entries": "各条目当前值不一致"
-    ,"For each option: choose Keep / On / Off": "每行可选: 保持不变 / 开 / 关"
+    ,"For each option: choose Keep / On / Off": "每行可选：保持不变 / 开 / 关"
     ,"Select…": "选择…"
     ,"Please enter a value": "请输入一个值"
     ,"Please choose a value": "请选择一个值"
@@ -5084,8 +5084,8 @@
     ,"Rerank": "重排序"
     ,"Embedding Profile": "嵌入配置"
     ,"Rerank Profile": "重排序配置"
-    ,"Embedding profiles are used by Vector Storage and Memory Graph for text embeddings. They are not active chat connections.": "嵌入配置供向量存储、记忆图等插件计算文本嵌入,不会作为聊天连接生效。"
-    ,"Rerank profiles are used to re-score candidates after vector retrieval. They are not active chat connections.": "重排序配置用于在向量检索后对候选结果重新打分,不会作为聊天连接生效。"
+    ,"Embedding profiles are used by Vector Storage and Memory Graph for text embeddings. They are not active chat connections.": "嵌入配置供向量存储、记忆图等插件计算文本嵌入，不会作为聊天连接生效。"
+    ,"Rerank profiles are used to re-score candidates after vector retrieval. They are not active chat connections.": "重排序配置用于在向量检索后对候选结果重新打分，不会作为聊天连接生效。"
     ,"Manage profiles in the Connection Profile panel (Embedding tab) under API Connections.": "请在 API 连接配置面板的「嵌入」选项卡中管理配置。"
     ,"Create a new embedding profile": "新建嵌入配置"
     ,"Edit embedding profile": "编辑嵌入配置"
@@ -5094,22 +5094,22 @@
     ,"Edit rerank profile": "编辑重排序配置"
     ,"Delete rerank profile": "删除重排序配置"
     ,"Profile Name": "配置名称"
-    ,"URL Override (optional)": "URL 覆盖(可选)"
-    ,"Server URL (required)": "服务器 URL(必填)"
-    ,"API Key (used with URL Override)": "API 密钥(配合 URL 覆盖使用)"
-    ,"When set, requests are sent to this URL using the API Key below; the saved Secret is ignored.": "设置后,请求将通过下方的 API 密钥发送到此 URL;已保存的 Secret 将被忽略。"
+    ,"URL Override (optional)": "URL 覆盖（可选）"
+    ,"Server URL (required)": "服务器 URL（必填）"
+    ,"API Key (used with URL Override)": "API 密钥（配合 URL 覆盖使用）"
+    ,"When set, requests are sent to this URL using the API Key below; the saved Secret is ignored.": "设置后，请求将通过下方的 API 密钥发送到此 URL；已保存的 Secret 将被忽略。"
     ,"Saved Secret": "已保存的密钥"
-    ,"Use active (default)": "使用激活的密钥(默认)"
+    ,"Use active (default)": "使用激活的密钥（默认）"
     ,"Late Chunking": "Late Chunking"
-    ,"Dimensions (0 = auto)": "维度(0 = 自动)"
-    ,"Task (optional)": "任务(可选)"
+    ,"Dimensions (0 = auto)": "维度（0 = 自动）"
+    ,"Task (optional)": "任务（可选）"
     ,"Keep model loaded between requests": "在请求之间保持模型加载"
     ,"Endpoint Region": "服务区域"
     ,"International": "国际"
     ,"China": "中国"
     ,"Cloudflare Account ID": "Cloudflare Account ID"
     ,"Auth Mode": "认证模式"
-    ,"Default (API Key)": "默认(API 密钥)"
+    ,"Default (API Key)": "默认（API 密钥）"
     ,"Express": "Express"
     ,"Service Account": "服务账号"
     ,"Express Project ID": "Express 项目 ID"
@@ -5119,7 +5119,7 @@
     ,"Rerank profile": "重排序配置"
     ,"Vector pre-filter Top-K": "向量预筛 Top-K"
     ,"Max recall results": "最大召回结果数"
-    ,"Hybrid Pipeline (vector + graph diffusion)": "混合管线(向量 + 图扩散)"
+    ,"Hybrid Pipeline (vector + graph diffusion)": "混合管线（向量 + 图扩散）"
     ,"Hybrid + Rerank": "混合 + 重排序"
     ,"Hybrid + LLM Rerank": "混合 + LLM 重排序"
     ,"Recompute Vector Index": "重建向量索引"
@@ -5135,7 +5135,7 @@
     ,"Enable defaults": "启用默认"
     ,"Tools": "工具"
     ,"Using the profile default.": "使用 profile 默认。"
-    ,"No tools active. This node runs as a single LLM call.": "不启用工具,该节点会直接出结果(单次 LLM 调用)。"
+    ,"No tools active. This node runs as a single LLM call.": "不启用工具，该节点会直接出结果（单次 LLM 调用）。"
     ,"Override": "覆盖"
     ,"Reset to inherit": "重置为继承"
     ,"Loop Orchestration": "循环编排"
@@ -5148,11 +5148,11 @@
     ,"search (web search)": "search(联网搜索)"
     ,"terminator": "终止器"
     ,"(forced on)": "(强制开启)"
-    ,"Loop API preset (Connection profile, empty = global orchestration API preset)": "循环 API 预设(Connection profile,留空 = 全局编排 API 预设)"
-    ,"Loop preset (params + prompt, empty = global orchestration preset)": "循环预设(参数 + prompt,留空 = 全局编排预设)"
+    ,"Loop API preset (Connection profile, empty = global orchestration API preset)": "循环 API 预设（Connection profile，留空 = 全局编排 API 预设）"
+    ,"Loop preset (params + prompt, empty = global orchestration preset)": "循环预设（参数 + prompt，留空 = 全局编排预设）"
     ,"Loop system prompt": "循环 system prompt"
     ,"Loop max rounds": "循环最大轮数"
-    ,"Loop wall-clock budget (seconds)": "循环 wall-clock 预算(秒)"
+    ,"Loop wall-clock budget (seconds)": "循环 wall-clock 预算（秒）"
     ,"Workflow": "工作流"
     ,"Agent Presets": "Agent 预设"
     ,"Add Stage": "加 Stage"
@@ -5161,37 +5161,37 @@
     ,"Node ID": "节点 ID"
     ,"Node Type": "节点类型"
     ,"Worker": "Worker"
-    ,"Node Prompt Template (optional)": "节点 Prompt 模板(可选)"
-    ,"Use {{recent_chat}}, {{last_user}}, {{distiller}}, {{previous_outputs}}. Previous orchestration result and approved review feedback are auto-injected.": "可用 {{recent_chat}}、{{last_user}}、{{distiller}}、{{previous_outputs}};上一轮编排结果与批准的 review 反馈会自动注入。"
+    ,"Node Prompt Template (optional)": "节点 Prompt 模板（可选）"
+    ,"Use {{recent_chat}}, {{last_user}}, {{distiller}}, {{previous_outputs}}. Previous orchestration result and approved review feedback are auto-injected.": "可用 {{recent_chat}}、{{last_user}}、{{distiller}}、{{previous_outputs}}；上一轮编排结果与批准的 review 反馈会自动注入。"
     ,"Serial": "串行"
     ,"Parallel": "并行"
     ,"Up": "上移"
     ,"Down": "下移"
-    ,"No stages yet. Add one stage to start orchestration.": "尚无 stage,先加一个开始编排。"
-    ,"No nodes. Add one to define this stage.": "尚无节点,加一个来定义此 stage。"
+    ,"No stages yet. Add one stage to start orchestration.": "尚无 stage，先加一个开始编排。"
+    ,"No nodes. Add one to define this stage.": "尚无节点，加一个来定义此 stage。"
     ,"Agenda Orchestration": "Agenda 编排"
     ,"Agenda Agents": "Agenda Agents"
     ,"Planner system prompt": "Planner system prompt"
     ,"Planner Prompt": "Planner Prompt"
-    ,"Planner API preset (Connection profile, empty = global orchestration API preset)": "Planner API 预设(Connection profile,留空 = 全局编排 API 预设)"
-    ,"Planner preset (params + prompt, empty = global orchestration preset)": "Planner 预设(参数 + prompt,留空 = 全局编排预设)"
+    ,"Planner API preset (Connection profile, empty = global orchestration API preset)": "Planner API 预设（Connection profile，留空 = 全局编排 API 预设）"
+    ,"Planner preset (params + prompt, empty = global orchestration preset)": "Planner 预设（参数 + prompt，留空 = 全局编排预设）"
     ,"Final Agent": "终结 Agent"
     ,"Planner max rounds": "Planner 最大轮数"
     ,"Max concurrent agents": "最大并发 agent 数"
     ,"Max total agent runs": "总 agent 运行数上限"
-    ,"Agent API preset (Connection profile, empty = global orchestration API preset)": "Agent API 预设(Connection profile,留空 = 全局编排 API 预设)"
-    ,"Agent preset (params + prompt, empty = global orchestration preset)": "Agent 预设(参数 + prompt,留空 = 全局编排预设)"
+    ,"Agent API preset (Connection profile, empty = global orchestration API preset)": "Agent API 预设（Connection profile，留空 = 全局编排 API 预设）"
+    ,"Agent preset (params + prompt, empty = global orchestration preset)": "Agent 预设（参数 + prompt，留空 = 全局编排预设）"
     ,"User Prompt Template": "User Prompt 模板"
     ,"Add Preset": "加预设"
     ,"new_preset_id": "new_preset_id"
     ,"No presets yet.": "尚无预设。"
-    ,"No tools active. This agent runs as a single LLM call.": "不启用工具,该 agent 会直接出结果(单次 LLM 调用)。"
-    ,"Requests per minute (0 = unlimited)": "每分钟请求数(0 = 不限制)"
+    ,"No tools active. This agent runs as a single LLM call.": "不启用工具，该 agent 会直接出结果（单次 LLM 调用）。"
+    ,"Requests per minute (0 = unlimited)": "每分钟请求数（0 = 不限制）"
     ,"Claude Prompt Caching": "Claude 提示词缓存"
-    ,"Only effective when the prompt prefix is stable across requests (no in-chat lorebook injections or random macros). Cache writes cost 1.25× base (5m) or 2× base (1h); reads cost 0.1×.": "仅在每次请求的前缀稳定时有效(不使用聊天内世界书注入或随机宏)。缓存写入成本为基础价 ×1.25(5m)或 ×2(1h),读取仅 ×0.1。"
+    ,"Only effective when the prompt prefix is stable across requests (no in-chat lorebook injections or random macros). Cache writes cost 1.25× base (5m) or 2× base (1h); reads cost 0.1×.": "仅在每次请求的前缀稳定时有效（不使用聊天内世界书注入或随机宏）。缓存写入成本为基础价 ×1.25(5m)或 ×2(1h)，读取仅 ×0.1。"
     ,"Cache system prompt": "缓存 system prompt"
-    ,"Use 1h cache TTL (instead of 5m)": "使用 1 小时 TTL(代替 5 分钟)"
-    ,"Cache message history at depth (-1 to disable)": "在对话历史指定深度缓存(-1 表示禁用)"
+    ,"Use 1h cache TTL (instead of 5m)": "使用 1 小时 TTL（代替 5 分钟）"
+    ,"Cache message history at depth (-1 to disable)": "在对话历史指定深度缓存（-1 表示禁用）"
     ,"OpenRouter Gemini Prompt Caching": "OpenRouter Gemini 提示词缓存"
     ,"Only applied when OpenRouter routes to a Gemini model that supports caching. Same prefix-stability caveat as Claude caching.": "仅在 OpenRouter 路由到支持缓存的 Gemini 模型时生效。与 Claude 缓存同样要求前缀稳定。"
     ,"Requests per minute": "每分钟请求数"
@@ -5235,11 +5235,11 @@
     ,"Maximum concurrent sub-agents": "最大并发子代理数"
     ,"Maximum total sub-agent runs per turn": "本回合最多子代理调用总数"
     ,"Direct message generation": "直接生成消息"
-    ,"Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.": "导演模式由主代理直接产出助理消息,主代理可派遣子代理协助。"
+    ,"Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.": "导演模式由主代理直接产出助理消息，主代理可派遣子代理协助。"
     ,"Director Orchestration": "导演编排"
     ,"System prompt (leave empty for default)": "系统提示词（留空使用默认值）"
     ,"Reset to default": "重置为默认值"
-    ,"Reset main-agent system prompt to default? This overwrites the current text.": "重置主代理系统提示词为默认值?这会覆盖当前文本。"
+    ,"Reset main-agent system prompt to default? This overwrites the current text.": "重置主代理系统提示词为默认值？这会覆盖当前文本。"
     ,"Reset main-agent system prompt to default": "已重置主代理系统提示词为默认值"
     ,"Limits": "上限"
     ,"Reset Global": "重置全局配置"
@@ -5249,10 +5249,10 @@
     ,"No open notes yet": "还没有未结清的条目"
     ,"No closed notes yet": "还没有已关闭的条目"
     ,"Close this note": "关闭这条"
-    ,"Closure reason (optional)": "关闭原因(可选)"
+    ,"Closure reason (optional)": "关闭原因（可选）"
     ,"Edit note": "编辑"
     ,"Delete note (permanent)": "永久删除"
-    ,"Confirm delete (permanent)?": "确认永久删除?"
+    ,"Confirm delete (permanent)?": "确认永久删除？"
     ,"Manage Users": "用户管理"
     ,"System Overview": "系统概览"
     ,"Security Status": "安全状态"
