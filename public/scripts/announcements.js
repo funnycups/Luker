@@ -1,6 +1,6 @@
 import { converter, getRequestHeaders } from '../script.js';
 import { callGenericPopup, POPUP_TYPE } from './popup.js';
-import { t } from './i18n.js';
+import { t, translate } from './i18n.js';
 
 /**
  * @typedef {Object} Announcement
@@ -89,7 +89,7 @@ function formatAnnouncementBody(body) {
 
 function renderAnnouncementBlock(item) {
     const bodyHtml = formatAnnouncementBody(item.body);
-    const levelLabel = t(levelTextKey(item.level));
+    const levelLabel = translate(levelTextKey(item.level));
     return `
         <div class="announcement-item announcement-level-${escapeHtml(item.level)}" data-id="${escapeHtml(item.id)}">
             <div class="announcement-header flex-container alignItemsCenter flexGap10">
@@ -228,7 +228,7 @@ function formatRelativeTime(ts) {
 
 function renderInboxRow(item) {
     const unread = isUnread(item);
-    const levelLabel = t(levelTextKey(item.level));
+    const levelLabel = translate(levelTextKey(item.level));
     return `
         <div class="announcement-inbox-row ${unread ? 'is-unread' : ''}" data-id="${escapeHtml(item.id)}">
             <div class="flex-container alignItemsCenter flexGap10">
