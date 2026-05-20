@@ -207,14 +207,14 @@ await ctx.updateCharacterData(ctx.characterId, { description: '新的描述。' 
 await ctx.updateCharacterData(ctx.characterId, { 'extensions.world': 'my_book' });
 ```
 
-跟现有的 `saveCharacterDebounced` / 表单路径互补 — 弹窗打开时仍走表单(那时表单是 source of truth)。`updateCharacterData` 是面向 AI 工具、slash command、以及其他可能在编辑器关闭时运行的程序化调用方的数据驱动替代路径。
+跟现有的 `saveCharacterDebounced` / 表单路径互补 — 弹窗打开时仍走表单（那时表单是 source of truth）。`updateCharacterData` 是面向 AI 工具、slash command、以及其他可能在编辑器关闭时运行的程序化调用方的数据驱动替代路径。
 
-写入 in-memory 后会触发 [`event_types.CHARACTER_FIELDS_UPDATED`](#character_fields_updated-event),携带 `{ charId, keys }`,让 view (打开的弹窗、CardApp UI) 从权威 data sync。
+写入 in-memory 后会触发 [`event_types.CHARACTER_FIELDS_UPDATED`](#character_fields_updated-event)，携带 `{ charId, keys }`，让 view （打开的弹窗、CardApp UI） 从权威 data sync。
 
 | 选项 | 默认 | 含义 |
 |---|---|---|
 | `persist` | `true` | 是否调度一次保存。需要做"另一调用方稍后会保存"的暂时写入时传 `false`。 |
-| `immediate` | `false` | 立刻 await 保存,不走 debounce。后续代码需要文件已落盘时使用。 |
+| `immediate` | `false` | 立刻 await 保存，不走 debounce。后续代码需要文件已落盘时使用。 |
 
 ### persistCharacterData
 
@@ -226,7 +226,7 @@ persistCharacterData(charId: number | string): Promise<void>
 
 HTTP 失败时抛错。扩展数据**不会**走这条路径——它有自己的 `/api/characters/merge-attributes` 路径，采用替换语义（[`writeExtensionField`](#writeextensionfield)）。
 
-绝大多数调用方应该用 `updateCharacterData`(它会替你调度这个)。只有当你已经亲自 mutate 过 in-memory 对象、想 flush 时才直接调用。
+绝大多数调用方应该用 `updateCharacterData`（它会替你调度这个）。只有当你已经亲自 mutate 过 in-memory 对象、想 flush 时才直接调用。
 
 ### persistCharacterDataDebounced
 
@@ -234,11 +234,11 @@ HTTP 失败时抛错。扩展数据**不会**走这条路径——它有自己�
 persistCharacterDataDebounced(charId: number | string): void
 ```
 
-在标准 save-edit 超时上调度一次防抖的 `persistCharacterData(charId)` 调用(按 character 各自调度 — 同时写两张不同的卡不会被合并成单次错误目标的保存)。窗口内的后续调用会被合并。
+在标准 save-edit 超时上调度一次防抖的 `persistCharacterData(charId)` 调用（按 character 各自调度 — 同时写两张不同的卡不会被合并成单次错误目标的保存）。窗口内的后续调用会被合并。
 
 ### `character_fields_updated` event
 
-`updateCharacterData` mutate `characters[charId].data` 之后、持久化完成之前触发。监听器接收 `{ charId, keys }`,`keys` 是 patch 里的 dot-path 数组。用它来 sync view(弹窗表单、CardApp 面板)而无需轮询。
+`updateCharacterData` mutate `characters[charId].data` 之后、持久化完成之前触发。监听器接收 `{ charId, keys }`，`keys` 是 patch 里的 dot-path 数组。用它来 sync view（弹窗表单、CardApp 面板）而无需轮询。
 
 ```js
 const ctx = Luker.getContext();

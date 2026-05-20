@@ -48,8 +48,8 @@ DIR -> NS2
 ```
 
 - `{chat}.jsonl` — 聊天主文件
-- `{chat}.luker-state.chat_sync.json` — integrity + updated_at(同步元数据)
-- `{chat}.luker-state.<namespace>.json` — 各插件的 namespace 状态(每个插件一份独立 sidecar)
+- `{chat}.luker-state.chat_sync.json` — integrity + updated_at（同步元数据）
+- `{chat}.luker-state.<namespace>.json` — 各插件的 namespace 状态（每个插件一份独立 sidecar）
 
 如果状态文件不存在（例如从旧版本迁移的聊天），系统会自动回退处理，并在首次写入时自动创建状态文件。
 

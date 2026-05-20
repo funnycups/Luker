@@ -167,14 +167,14 @@ chat[i] = {
 
 ## 渲染結構化變數 — `{{each}}` 與 `loop_value`
 
-聊天變數本身能裝任意 JSON 可序列化的值,所以一個結構化的集合(NPC 名冊、任務日誌、物品表)可以裝在單個變數裡,按需要渲染進 prompt 或世界書條目。
+聊天變數本身能裝任意 JSON 可序列化的值，所以一個結構化的集合（NPC 名冊、任務日誌、物品表）可以裝在單個變數裡，按需要渲染進 prompt 或世界書條目。
 
-- **路徑存取** — <code v-pre>{{getvar::npcs.alice.hp}}</code> 解析存在 `npcs` 裡的 JSON 並按路徑下鑽。中間鍵缺失 / 解析失敗 / 頭段不可迭代 → 空字串。如果頭段不是 JSON,會回退到字面 flat-key 查找,所以名為 `a.b` 的變數也能用。
-- **遍歷** — <code v-pre>{{each::npcs}}{{loop_key}}: {{loop_value::hp}}{{/each}}</code> 遍歷集合(物件 → 鍵/值,陣列 → 字串索引/元素)。each 體內可用:
-  - <code v-pre>{{loop_key}}</code> — 當前鍵(陣列下標轉字串)
-  - <code v-pre>{{loop_value}}</code> — 當前完整值(物件會自動 JSON.stringify)
-  - <code v-pre>{{loop_value::path}}</code> — 按路徑下鑽,語義與 <code v-pre>{{getvar}}</code> 一致
+- **路徑存取** — <code v-pre>{{getvar::npcs.alice.hp}}</code> 解析存在 `npcs` 裡的 JSON 並按路徑下鑽。中間鍵缺失 / 解析失敗 / 頭段不可迭代 → 空字串。如果頭段不是 JSON，會回退到字面 flat-key 查找，所以名為 `a.b` 的變數也能用。
+- **遍歷** — <code v-pre>{{each::npcs}}{{loop_key}}: {{loop_value::hp}}{{/each}}</code> 遍歷集合（物件 → 鍵/值，陣列 → 字串索引/元素）。each 體內可用：
+  - <code v-pre>{{loop_key}}</code> — 當前鍵（陣列下標轉字串）
+  - <code v-pre>{{loop_value}}</code> — 當前完整值（物件會自動 JSON.stringify）
+  - <code v-pre>{{loop_value::path}}</code> — 按路徑下鑽，語義與 <code v-pre>{{getvar}}</code> 一致
 
-  巢狀 <code v-pre>{{each}}</code> 時內層會自然 shadow 外層。集合參數也接受內聯 JSON 陣列字面量(<code v-pre>{{each::["sword","shield"]}}</code>)和巢狀宏(<code v-pre>{{each::{{getvar::roster}}}}</code>),不必非得先把資料寫進具名變數。
+  巢狀 <code v-pre>{{each}}</code> 時內層會自然 shadow 外層。集合參數也接受內聯 JSON 陣列字面量（<code v-pre>{{each::["sword"，"shield"]}}</code>）和巢狀宏（<code v-pre>{{each::{{getvar::roster}}}}</code>），不必非得先把資料寫進具名變數。
 
-這就讓"一個變數裝 JSON 物件 → 一個世界書條目渲染它"成為完整的模式:AI 用 <code v-pre>{{setvar::npcs::...}}</code> 維護結構,條目內容用 <code v-pre>{{each::npcs}}…{{/each}}</code> 把結構鋪到 prompt 裡。
+這就讓"一個變數裝 JSON 物件 → 一個世界書條目渲染它"成為完整的模式：AI 用 <code v-pre>{{setvar::npcs::...}}</code> 維護結構，條目內容用 <code v-pre>{{each::npcs}}…{{/each}}</code> 把結構鋪到 prompt 裡。

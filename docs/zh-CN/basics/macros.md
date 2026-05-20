@@ -181,7 +181,7 @@ condition 可以是：
 
 `collection` 接受三种形式：
 
-1. 内嵌 JSON 字面量——<code v-pre>{{each::["sword","shield"]}}</code> 或 <code v-pre>{{each::{"a":1,"b":2}}}</code>。
+1. 内嵌 JSON 字面量——<code v-pre>{{each::["sword"，"shield"]}}</code> 或 <code v-pre>{{each::{"a":1，"b":2}}}</code>。
 2. 变量名——<code v-pre>{{each::npcs}}</code> 读局部变量 `npcs`（找不到 fallback 到全局），并把字符串当 JSON 解析。
 3. 解析结果为集合的嵌套宏——<code v-pre>{{each::{{getglobalvar::roster}}}}</code>。
 

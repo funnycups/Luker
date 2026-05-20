@@ -282,7 +282,7 @@ await fs.update((current) => nextState, { floor: targetFloor, swipeId: 0 });
 不传 `options` 时按聊天尾部推断。`floor` 必须是当前 `chat` 的有效索引（`0 <= floor < chat.length`），越界、负数、非整数、负 `swipeId` 都会被拒绝并返回 `false`，避免悄无声息地把状态错挂到不存在的楼层。
 
 ::: tip
-覆写只影响这条提交在日志里的标签——`MESSAGE_DELETED` 仍按 floor 截断，`MESSAGE_SWIPE_DELETED` 仍按 (floor, swipeId) 重编号。重建顺序由日志的写入顺序决定，不会因为你指定了较小的 `floor` 就被「插队」到前面执行。
+覆写只影响这条提交在日志里的标签——`MESSAGE_DELETED` 仍按 floor 截断，`MESSAGE_SWIPE_DELETED` 仍按 （floor， swipeId） 重编号。重建顺序由日志的写入顺序决定，不会因为你指定了较小的 `floor` 就被「插队」到前面执行。
 :::
 
 ### 进阶：预先算好的 patch
@@ -412,7 +412,7 @@ openCharacterChat(fileName: string): Promise<void>
 closeCurrentChat(): Promise<boolean>
 ```
 
-关闭当前聊天,返回角色列表。返回 `true` 表示成功,`false` 表示生成正在进行且用户拒绝中断。
+关闭当前聊天，返回角色列表。返回 `true` 表示成功，`false` 表示生成正在进行且用户拒绝中断。
 
 ### doNewChat
 
@@ -420,7 +420,7 @@ closeCurrentChat(): Promise<boolean>
 doNewChat(options?: { deleteCurrentChat?: boolean }): Promise<void>
 ```
 
-为当前角色创建一个全新的聊天。当 `deleteCurrentChat: true` 时会删除之前活跃的聊天文件 — 谨慎使用,这是破坏性操作。
+为当前角色创建一个全新的聊天。当 `deleteCurrentChat: true` 时会删除之前活跃的聊天文件 — 谨慎使用，这是破坏性操作。
 
 ### getPastCharacterChats
 
@@ -434,7 +434,7 @@ getPastCharacterChats(characterId?: number): Promise<Array<{
 }>>
 ```
 
-列出某个角色已有的全部聊天。`characterId` 省略时默认为当前角色(`this_chid`)。`file_id` 字段是应用层 chat 标识符 — 把它传回 `openCharacterChat` / `deleteCharacterChat` / `renameChat`(这些函数期望不带 `.jsonl` 后缀的名字)。
+列出某个角色已有的全部聊天。`characterId` 省略时默认为当前角色（`this_chid`）。`file_id` 字段是应用层 chat 标识符 — 把它传回 `openCharacterChat` / `deleteCharacterChat` / `renameChat`（这些函数期望不带 `.jsonl` 后缀的名字）。
 
 ### deleteCharacterChat
 
@@ -442,7 +442,7 @@ getPastCharacterChats(characterId?: number): Promise<Array<{
 deleteCharacterChat(characterId: string, fileName: string): Promise<void>
 ```
 
-永久删除指定角色的某个历史聊天。`fileName` 是 chat id(不带后缀);末尾若带 `.jsonl` 会被自动剥除。
+永久删除指定角色的某个历史聊天。`fileName` 是 chat id（不带后缀）；末尾若带 `.jsonl` 会被自动剥除。
 
 ### openGroupChat
 

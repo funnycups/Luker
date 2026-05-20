@@ -36,7 +36,7 @@ Luker 使用角色卡 `data.extensions` 中的多个命名空间存储扩展数�
 | `luker.memoryGraphSchema.nodeTypes[].label` | string | 节点类型显示名称 |
 | `luker.memoryGraphSchema.nodeTypes[].color` | string | 节点颜色（十六进制色值） |
 | `card_app.enabled` | boolean | 是否启用 CardApp |
-| `card_app.entry` | string | CardApp 文件夹下的入口模块文件名,默认 `index.js`。入口文件必须导出 `init(ctx)` 函数。同目录下的 `style.css` 会按约定自动加载。 |
+| `card_app.entry` | string | CardApp 文件夹下的入口模块文件名，默认 `index.js`。入口文件必须导出 `init(ctx)` 函数。同目录下的 `style.css` 会按约定自动加载。 |
 
 > [!NOTE]
 > 绑定预设和人设的数据存储在角色卡的状态文件中，不在 `data.extensions` 内。这样设计是为了避免修改角色卡本身的 JSON 数据。
@@ -103,7 +103,7 @@ Luker 支持在角色卡中绑定推荐的生成预设和用户人设。当用�
 
 ### 应用定义结构
 
-CardApp 定义在角色卡的 `data.extensions.card_app` 字段中。角色卡里只存开关和入口文件名,实际代码以文件形式存放在 CardApp 的角色级目录(由 Studio 管理):
+CardApp 定义在角色卡的 `data.extensions.card_app` 字段中。角色卡里只存开关和入口文件名，实际代码以文件形式存放在 CardApp 的角色级目录（由 Studio 管理）:
 
 ```json
 {
@@ -118,11 +118,11 @@ CardApp 定义在角色卡的 `data.extensions.card_app` 字段中。角色卡�
 }
 ```
 
-运行时把 `index.js`(或 `entry` 指向的文件)以 ES 模块方式从 `/api/card-app/<charId>/<entry>` 加载,同目录下若有 `style.css` 也会自动注入。推荐用 Studio 编辑/保存/版本管理这些文件。
+运行时把 `index.js`（或 `entry` 指向的文件）以 ES 模块方式从 `/api/card-app/<charId>/<entry>` 加载，同目录下若有 `style.css` 也会自动注入。推荐用 Studio 编辑/保存/版本管理这些文件。
 
 ### 入口函数
 
-CardApp 的入口模块必须导出 `init(ctx)` 函数,接收上下文对象:
+CardApp 的入口模块必须导出 `init(ctx)` 函数，接收上下文对象：
 
 ```javascript
 export async function init(ctx) {
@@ -174,14 +174,14 @@ CardApp 的上下文对象提供以下 API：
 |-----|------|
 | `ctx.getCharacterData()` | 获取当前角色数据（只读） |
 | `ctx.updateCharacterFields(fields)` | 更新角色字段并保存。支持name、description、personality、scenario、first_mes、mes_example、system_prompt、post_history_instructions、creator_notes、creator、character_version、tags（逗号分隔字符串）、talkativeness（数字）、depth_prompt相关字段 |
-| `ctx.getChatState(namespace, options?)` | **异步** 读取聊天绑定的 sidecar 状态(server-backed,`/api/chats/state/`)。HP / 金币 / 好感度 / 物品 / 任务标志这类用聊天变量。 |
-| `ctx.updateChatState(namespace, updater, options?)` | **异步** reducer 风格写入聊天 sidecar,返回 `{ ok, state, updated }`。 |
+| `ctx.getChatState(namespace, options?)` | **异步** 读取聊天绑定的 sidecar 状态（server-backed，`/api/chats/state/`）。HP / 金币 / 好感度 / 物品 / 任务标志这类用聊天变量。 |
+| `ctx.updateChatState(namespace, updater, options?)` | **异步** reducer 风格写入聊天 sidecar，返回 `{ ok, state, updated }`。 |
 | `ctx.patchChatState(namespace, operations, options?)` | **异步** 对聊天 sidecar 应用 JSON-patch 操作。 |
 | `ctx.deleteChatState(namespace, options?)` | **异步** 删除一个聊天 sidecar 命名空间。 |
-| `ctx.getCharacterState(namespace)` | **异步** 读取角色绑定的 sidecar(avatar 自动绑定),跨该角色的所有聊天保留。 |
-| `ctx.setCharacterState(namespace, data)` | **异步** 写入角色绑定的 sidecar(avatar 自动绑定),传 `null` 表示删除。 |
-| `ctx.getVariable(key)` | 读取聊天变量(来自 `chat_metadata.variables`,即 <code v-pre>{{getvar::key}}</code> 读的同一个桶)。 |
-| `ctx.setVariable(key, value, options?)` | **异步** 设置聊天变量。默认写入 `chat_metadata.variables`(会话级,贯穿整个 chat)。传 `{ floor: <消息序号> }` 则改走变量 op-log,把这次写入绑定到该楼的**当前 swipe**——切 swipe / 切回 / 删楼 / 创建分支都会经过 rebuilder 重放,效果跟 AI 在消息里直接写 <code v-pre>{{setvar}}</code> 一致。绑定楼层的路径会把 value 强转成字符串(op-log 的存储格式只承载字符串)。如果需要"结构化的逐楼状态 + 独立命名空间 + 自己的 commit log",改用 `ctx.lukerContext.createFloorState({ namespace })`。 |
+| `ctx.getCharacterState(namespace)` | **异步** 读取角色绑定的 sidecar（avatar 自动绑定），跨该角色的所有聊天保留。 |
+| `ctx.setCharacterState(namespace, data)` | **异步** 写入角色绑定的 sidecar（avatar 自动绑定），传 `null` 表示删除。 |
+| `ctx.getVariable(key)` | 读取聊天变量（来自 `chat_metadata.variables`，即 <code v-pre>{{getvar::key}}</code> 读的同一个桶）。 |
+| `ctx.setVariable(key, value, options?)` | **异步** 设置聊天变量。默认写入 `chat_metadata.variables`（会话级，贯穿整个 chat）。传 `{ floor: <消息序号> }` 则改走变量 op-log，把这次写入绑定到该楼的**当前 swipe**——切 swipe / 切回 / 删楼 / 创建分支都会经过 rebuilder 重放，效果跟 AI 在消息里直接写 <code v-pre>{{setvar}}</code> 一致。绑定楼层的路径会把 value 强转成字符串（op-log 的存储格式只承载字符串）。如果需要"结构化的逐楼状态 + 独立命名空间 + 自己的 commit log"，改用 `ctx.lukerContext.createFloorState({ namespace })`。 |
 
 #### 聊天管理
 
@@ -197,7 +197,7 @@ CardApp 的上下文对象提供以下 API：
 | API | 说明 |
 |-----|------|
 | `ctx.getWorldBooks()` | 获取当前角色可见的世界书名称列表（角色主世界书 + 角色附加世界书 + 聊天绑定 + 全局激活，已去重）。传 `{ withSource: true }` 可拿到带 `source: 'character' \| 'character_aux' \| 'chat' \| 'global'` 的标注列表 |
-| `ctx.getCharacterAuxWorldBooks()` | 获取当前角色绑定的附加世界书（非主世界书）。这些与主世界书一同参与提示词组装,但通过 Luker 的世界书编辑器单独管理 |
+| `ctx.getCharacterAuxWorldBooks()` | 获取当前角色绑定的附加世界书（非主世界书）。这些与主世界书一同参与提示词组装，但通过 Luker 的世界书编辑器单独管理 |
 | `ctx.getWorldBookEntries(bookName)` | 获取指定世界书的所有条目 |
 | `ctx.createWorldBookEntry(bookName, fields?)` | 创建世界书条目，返回新条目对象（含 uid） |
 | `ctx.updateWorldBookEntry(bookName, uid, patch)` | 更新世界书条目（浅合并） |

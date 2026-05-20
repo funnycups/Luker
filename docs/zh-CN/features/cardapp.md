@@ -20,7 +20,7 @@ CardApp 是 Luker 独有的角色卡内嵌应用系统。它允许角色卡在 `
 
 - **角色卡内嵌互动元素** — 状态面板、情绪指示器、自定义按钮等
 - **小游戏** — 文字冒险选择界面、骰子投掷器、卡牌游戏组件等
-- **状态追踪** — 通过聊天变量(`ctx.getVariable` / `ctx.setVariable`)持久化好感度、任务进度、物品清单等数据;只有当数据是 CardApp 独占、不适合放进单个变量的结构化命名空间时,才用聊天状态(`ctx.getChatState` / `ctx.updateChatState`)。
+- **状态追踪** — 通过聊天变量（`ctx.getVariable` / `ctx.setVariable`）持久化好感度、任务进度、物品清单等数据；只有当数据是 CardApp 独占、不适合放进单个变量的结构化命名空间时，才用聊天状态（`ctx.getChatState` / `ctx.updateChatState`）。
 
 ## 相关页面
 

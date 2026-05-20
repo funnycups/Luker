@@ -236,7 +236,7 @@ ctx.variables.local.set('inventory', 'shield', { index: 1, as: 'string' });
 
 ### 樓層級寫入
 
-`local` / `global` 七件套之外,luker 在頂層另外導出一個 `setVariable`,支援把單次寫入掛到某一樓——這是 <span v-pre>`{{setvar::name::value}}`</span> 在文字裡寫出來效果的程式碼版等價物。
+`local` / `global` 七件套之外，luker 在頂層另外導出一個 `setVariable`，支援把單次寫入掛到某一樓——這是 <span v-pre>`{{setvar::name::value}}`</span> 在文字裡寫出來效果的程式碼版等價物。
 
 ```ts
 context.setVariable(
@@ -248,14 +248,14 @@ context.setVariable(
 
 | 呼叫方式 | 效果 |
 |---|---|
-| `await ctx.setVariable(k, v)` | 直接寫 `chat_metadata.variables[k] = v`,跟 `ctx.variables.local.set(k, v)` 落到同一個桶,適合在非同步程式碼裡使用 |
-| `await ctx.setVariable(k, v, { floor: N })` | 在第 N 樓的 `extra.var_ops` 末尾掛一條 `setvar`,綁在該樓的當前 swipe 上——後續 swipe 切換 / 刪樓 / 建分支時,跟樓層一起被 variable-op-log 重放或回滾 |
+| `await ctx.setVariable(k, v)` | 直接寫 `chat_metadata.variables[k] = v`，跟 `ctx.variables.local.set(k, v)` 落到同一個桶，適合在非同步程式碼裡使用 |
+| `await ctx.setVariable(k, v, { floor: N })` | 在第 N 樓的 `extra.var_ops` 末尾掛一條 `setvar`，綁在該樓的當前 swipe 上——後續 swipe 切換 / 刪樓 / 建分支時，跟樓層一起被 variable-op-log 重放或回滾 |
 
-帶 `floor` 時的幾點細節:
+帶 `floor` 時的幾點細節：
 
-- **值會被強轉成字串**——`extra.var_ops` 的格式只承載字串(<span v-pre>`{{getvar}}`</span> 取回的也是字串)。需要存結構化物件請改用 `createFloorState`(見 [樓層級結構化 state](./chat-and-state.md#createfloorstate))。
-- **是重放,不是覆寫**——swipe / 刪樓 / 建分支時,rebuilder 會按當前活動 swipe 上所有 var_ops 的寫入順序,把它們觸碰過的 key 在 `chat_metadata.variables` 上重放一遍;沒被任何 var_op 寫過的 key(world-info 副作用、slash 命令、其他擴充寫的值)會原樣保留。所以一次 floor 寫入並不直接修改儲存,而是為後續每次重放貢獻一條指令。
-- **`floor` 必須是有效樓層索引**(`0 <= floor < chat.length`),越界會拋錯。
+- **值會被強轉成字串**——`extra.var_ops` 的格式只承載字串（<span v-pre>`{{getvar}}`</span> 取回的也是字串）。需要存結構化物件請改用 `createFloorState`（見 [樓層級結構化 state](./chat-and-state.md#createfloorstate)）。
+- **是重放，不是覆寫**——swipe / 刪樓 / 建分支時，rebuilder 會按當前活動 swipe 上所有 var_ops 的寫入順序，把它們觸碰過的 key 在 `chat_metadata.variables` 上重放一遍；沒被任何 var_op 寫過的 key（world-info 副作用、slash 命令、其他擴充寫的值）會原樣保留。所以一次 floor 寫入並不直接修改儲存，而是為後續每次重放貢獻一條指令。
+- **`floor` 必須是有效樓層索引**(`0 <= floor < chat.length`)，越界會拋錯。
 
 ```js
 const ctx = Luker.getContext();
@@ -271,9 +271,9 @@ await ctx.setVariable('hp', 42, { floor: ctx.chat.length - 1 });
 
 | | floor 寫入 | `createFloorState` |
 |---|---|---|
-| 資料形狀 | 標量(字串 / 數字) | 結構化物件 |
-| 桶 | 跟 <span v-pre>`{{getvar::k}}`</span> 共用 `chat_metadata.variables` | 獨立 namespace,不進 macro 系統 |
-| 提交日誌 | variable-op-log(樓層 `extra.var_ops`) | 樓層結構化提交日誌(`__floor_log`) |
+| 資料形狀 | 標量（字串 / 數字） | 結構化物件 |
+| 桶 | 跟 <span v-pre>`{{getvar::k}}`</span> 共用 `chat_metadata.variables` | 獨立 namespace，不進 macro 系統 |
+| 提交日誌 | variable-op-log（樓層 `extra.var_ops`） | 樓層結構化提交日誌（`__floor_log`） |
 | 適合 | 跟 AI 寫的 <span v-pre>`{{setvar}}`</span> 共享儲存的可回滾標量 | CardApp / 外掛自己管理的可回滾結構化狀態 |
 
-兩個機制走的是各自獨立的提交日誌,**同一個 key 不要兩邊都寫**——重建順序無保證,容易互相覆蓋。
+兩個機制走的是各自獨立的提交日誌，**同一個 key 不要兩邊都寫**——重建順序無保證，容易互相覆蓋。

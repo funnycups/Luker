@@ -36,7 +36,7 @@ Luker 使用角色卡 `data.extensions` 中的多個命名空間儲存擴充資�
 | `luker.memoryGraphSchema.nodeTypes[].label` | string | 節點類型顯示名稱 |
 | `luker.memoryGraphSchema.nodeTypes[].color` | string | 節點顏色（十六進位色值） |
 | `card_app.enabled` | boolean | 是否啟用 CardApp |
-| `card_app.entry` | string | CardApp 資料夾下的入口模組檔名,預設 `index.js`。入口檔案必須匯出 `init(ctx)` 函式。同目錄下的 `style.css` 會依約定自動載入。 |
+| `card_app.entry` | string | CardApp 資料夾下的入口模組檔名，預設 `index.js`。入口檔案必須匯出 `init(ctx)` 函式。同目錄下的 `style.css` 會依約定自動載入。 |
 
 > [!NOTE]
 > 綁定預設和人設的資料儲存在角色卡的狀態檔案中，不在 `data.extensions` 內。這樣設計是為了避免修改角色卡本身的 JSON 資料。
@@ -103,7 +103,7 @@ Luker 支援在角色卡中綁定推薦的生成預設和使用者人設。當�
 
 ### 應用定義結構
 
-CardApp 定義在角色卡的 `data.extensions.card_app` 欄位中。角色卡裡只存開關和入口檔名,實際程式碼以檔案形式存放在 CardApp 的角色級目錄(由 Studio 管理):
+CardApp 定義在角色卡的 `data.extensions.card_app` 欄位中。角色卡裡只存開關和入口檔名，實際程式碼以檔案形式存放在 CardApp 的角色級目錄（由 Studio 管理）:
 
 ```json
 {
@@ -118,11 +118,11 @@ CardApp 定義在角色卡的 `data.extensions.card_app` 欄位中。角色卡�
 }
 ```
 
-執行時把 `index.js`(或 `entry` 指向的檔案)以 ES 模組方式從 `/api/card-app/<charId>/<entry>` 載入,同目錄下若有 `style.css` 也會自動注入。建議用 Studio 編輯/儲存/版本管理這些檔案。
+執行時把 `index.js`（或 `entry` 指向的檔案）以 ES 模組方式從 `/api/card-app/<charId>/<entry>` 載入，同目錄下若有 `style.css` 也會自動注入。建議用 Studio 編輯/儲存/版本管理這些檔案。
 
 ### 入口函式
 
-CardApp 的入口模組必須匯出 `init(ctx)` 函式,接收上下文物件:
+CardApp 的入口模組必須匯出 `init(ctx)` 函式，接收上下文物件：
 
 ```javascript
 export async function init(ctx) {
@@ -174,14 +174,14 @@ CardApp 的上下文物件提供以下 API：
 |-----|------|
 | `ctx.getCharacterData()` | 取得當前角色資料（唯讀） |
 | `ctx.updateCharacterFields(fields)` | 更新角色欄位並儲存。支援name、description、personality、scenario、first_mes、mes_example、system_prompt、post_history_instructions、creator_notes、creator、character_version、tags（逗號分隔字串）、talkativeness（數字）、depth_prompt相關欄位 |
-| `ctx.getChatState(namespace, options?)` | **非同步** 讀取聊天綁定的 sidecar 狀態(server-backed,`/api/chats/state/`)。HP / 金幣 / 好感度 / 物品 / 任務旗標這類用聊天變數。 |
-| `ctx.updateChatState(namespace, updater, options?)` | **非同步** reducer 風格寫入聊天 sidecar,回傳 `{ ok, state, updated }`。 |
+| `ctx.getChatState(namespace, options?)` | **非同步** 讀取聊天綁定的 sidecar 狀態（server-backed，`/api/chats/state/`）。HP / 金幣 / 好感度 / 物品 / 任務旗標這類用聊天變數。 |
+| `ctx.updateChatState(namespace, updater, options?)` | **非同步** reducer 風格寫入聊天 sidecar，回傳 `{ ok, state, updated }`。 |
 | `ctx.patchChatState(namespace, operations, options?)` | **非同步** 對聊天 sidecar 套用 JSON-patch 操作。 |
 | `ctx.deleteChatState(namespace, options?)` | **非同步** 刪除一個聊天 sidecar 命名空間。 |
-| `ctx.getCharacterState(namespace)` | **非同步** 讀取角色綁定的 sidecar(avatar 自動繫結),跨該角色的所有聊天保留。 |
-| `ctx.setCharacterState(namespace, data)` | **非同步** 寫入角色綁定的 sidecar(avatar 自動繫結),傳 `null` 表示刪除。 |
-| `ctx.getVariable(key)` | 讀取聊天變數(來自 `chat_metadata.variables`,即 <code v-pre>{{getvar::key}}</code> 讀的同一個桶)。 |
-| `ctx.setVariable(key, value, options?)` | **非同步** 設定聊天變數。預設寫入 `chat_metadata.variables`(會話級,貫穿整個 chat)。傳 `{ floor: <訊息索引> }` 則改走變數 op-log,把這次寫入繫結到該樓的**當前 swipe**——切 swipe / 切回 / 刪樓 / 建立分支都會經過 rebuilder 重放,效果跟 AI 在訊息裡直接寫 <code v-pre>{{setvar}}</code> 一致。繫結樓層的路徑會把 value 強制轉成字串(op-log 的儲存格式只承載字串)。如果需要「結構化的逐樓狀態 + 獨立命名空間 + 自己的 commit log」,改用 `ctx.lukerContext.createFloorState({ namespace })`。 |
+| `ctx.getCharacterState(namespace)` | **非同步** 讀取角色綁定的 sidecar（avatar 自動繫結），跨該角色的所有聊天保留。 |
+| `ctx.setCharacterState(namespace, data)` | **非同步** 寫入角色綁定的 sidecar（avatar 自動繫結），傳 `null` 表示刪除。 |
+| `ctx.getVariable(key)` | 讀取聊天變數（來自 `chat_metadata.variables`，即 <code v-pre>{{getvar::key}}</code> 讀的同一個桶）。 |
+| `ctx.setVariable(key, value, options?)` | **非同步** 設定聊天變數。預設寫入 `chat_metadata.variables`（會話級，貫穿整個 chat）。傳 `{ floor: <訊息索引> }` 則改走變數 op-log，把這次寫入繫結到該樓的**當前 swipe**——切 swipe / 切回 / 刪樓 / 建立分支都會經過 rebuilder 重放，效果跟 AI 在訊息裡直接寫 <code v-pre>{{setvar}}</code> 一致。繫結樓層的路徑會把 value 強制轉成字串（op-log 的儲存格式只承載字串）。如果需要「結構化的逐樓狀態 + 獨立命名空間 + 自己的 commit log」，改用 `ctx.lukerContext.createFloorState({ namespace })`。 |
 
 #### 聊天管理
 

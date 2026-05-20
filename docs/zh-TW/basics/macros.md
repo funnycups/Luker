@@ -181,7 +181,7 @@ condition 可以是：
 
 `collection` 接受三種形式：
 
-1. 內嵌 JSON 字面量——<code v-pre>{{each::["sword","shield"]}}</code> 或 <code v-pre>{{each::{"a":1,"b":2}}}</code>。
+1. 內嵌 JSON 字面量——<code v-pre>{{each::["sword"，"shield"]}}</code> 或 <code v-pre>{{each::{"a":1，"b":2}}}</code>。
 2. 變數名——<code v-pre>{{each::npcs}}</code> 讀區域變數 `npcs`（找不到 fallback 到全域），並把字串當 JSON 解析。
 3. 解析結果為集合的巢狀巨集——<code v-pre>{{each::{{getglobalvar::roster}}}}</code>。
 

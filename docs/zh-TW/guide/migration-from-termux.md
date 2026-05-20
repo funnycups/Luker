@@ -61,7 +61,7 @@ Luker 的匯入邏輯會自動辨識 ZIP 裡 `characters/`、`chats/`、`worlds/
 
 從 [GitHub Releases](https://github.com/funnycups/Luker/releases/latest) 下載安裝最新 APK。
 
-**首次開啟** Luker 會彈出標題為 **「歡迎來到 Luker!」** 的引導視窗。視窗頂部可以選介面語言（Language，預設英文，建議先切到「繁體中文」，下面的按鈕就會變中文），中間是一塊 **「從 SillyTavern 遷移」**，列出三個並排按鈕：
+**首次開啟** Luker 會彈出標題為 **「歡迎來到 Luker！」** 的引導視窗。視窗頂部可以選介面語言（Language，預設英文，建議先切到「繁體中文」，下面的按鈕就會變中文），中間是一塊 **「從 SillyTavern 遷移」**，列出三個並排按鈕：
 
 | 按鈕 | 用途 | 選什麼檔案 |
 | --- | --- | --- |

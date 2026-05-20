@@ -15,7 +15,7 @@ CardApp Studio 是角色卡编辑助手的完整开发环境，专为内嵌了 [
 
 ## 界面布局
 
-Studio 采用三栏布局,覆盖在 Luker 主界面之上:
+Studio 采用三栏布局，覆盖在 Luker 主界面之上：
 
 ![Studio 三栏总览：左侧 AI 对话 / 中间实时预览 / 右侧代码编辑器](/images/cardapp-studio/studio-overview.png)
 
@@ -53,7 +53,7 @@ Studio 采用三栏布局,覆盖在 Luker 主界面之上:
 
 ## 支持的操作
 
-Studio 中的 AI 拥有比普通弹窗更丰富的工具集,分七大类:
+Studio 中的 AI 拥有比普通弹窗更丰富的工具集，分七大类：
 
 **CardApp 文件操作：**
 - 列出所有文件
@@ -62,24 +62,24 @@ Studio 中的 AI 拥有比普通弹窗更丰富的工具集,分七大类:
 - 补丁式修改文件（查找替换）
 - 删除文件
 - 重命名 / 移动文件
-- 切换 CardApp 启用开关(`extensions.card_app.enabled`)
+- 切换 CardApp 启用开关（`extensions.card_app.enabled`）
 
 **角色卡字段操作：**
 - 读取所有可编辑字段
 - 更新一个或多个字段
 
 **世界书操作：**
-- 列出可见世界书并标注作用域(`character` / `chat` / `global`)
+- 列出可见世界书并标注作用域（`character` / `chat` / `global`）
 - 获取/创建/更新/删除/全量替换某本书内的条目
-- 列出、替换、创建+绑定 chat-bound 世界书(`chat_metadata.world_info`)
+- 列出、替换、创建+绑定 chat-bound 世界书（`chat_metadata.world_info`）
 
-**正则脚本操作** — 列出/创建/更新/删除卡级(`character.data.extensions.regex_scripts`)或全局(`extension_settings.regex`)正则脚本。Studio AI 是这套流程里唯一会创建卡级正则脚本的入口。
+**正则脚本操作** — 列出/创建/更新/删除卡级（`character.data.extensions.regex_scripts`）或全局（`extension_settings.regex`）正则脚本。Studio AI 是这套流程里唯一会创建卡级正则脚本的入口。
 
-**角色级编排器(orchestrator)覆盖** — 读取、替换、清空当前角色卡上的编排器覆盖。永远只作用于当前角色,不会动全局编排器设置。
+**角色级编排器（orchestrator）覆盖** — 读取、替换、清空当前角色卡上的编排器覆盖。永远只作用于当前角色，不会动全局编排器设置。
 
-**角色级记忆图覆盖** — 读取生效的记忆图配置(schema + 高级设置 + 作用域标签)、替换节点类型 schema、或对高级设置打补丁。永远只作用于当前角色。
+**角色级记忆图覆盖** — 读取生效的记忆图配置（schema + 高级设置 + 作用域标签）、替换节点类型 schema、或对高级设置打补丁。永远只作用于当前角色。
 
-**发现 / 文档查询** — `slashcmd_list` + `slashcmd_help` 查斜杠命令,`luker_context_list_keys` + `luker_context_describe` 查运行时 API,`list_luker_docs` + `read_luker_doc` 直接读 Markdown 文档(和本站同源)。Studio AI 用这些工具在生成代码前核对名字和签名,而不是凭记忆猜。
+**发现 / 文档查询** — `slashcmd_list` + `slashcmd_help` 查斜杠命令，`luker_context_list_keys` + `luker_context_describe` 查运行时 API，`list_luker_docs` + `read_luker_doc` 直接读 Markdown 文档（和本站同源）。Studio AI 用这些工具在生成代码前核对名字和签名，而不是凭记忆猜。
 
 ::: tip CardApp 创作约定
 按 Luker 的 CardApp 创作约定，所有 AI 可见内容都应放在通过 `extensions.world` 绑定的世界书里，而非角色卡的 `system_prompt` / `post_history_instructions` 字段。Studio 默认遵守这一约定。详见[角色卡开发者指南](/zh-CN/development/card-developers)。
