@@ -835,6 +835,27 @@ function addExtensionLocale(name, manifest) {
 }
 
 /**
+ * Whether an extension's manifest dependencies and minimum client version are satisfied.
+ * @param {object} manifest
+ * @returns {boolean}
+ */
+function canExtensionBeActivated(manifest) {
+    const minClientVersion = manifest?.minimum_client_version;
+    if (minClientVersion) {
+        const clientVersion = EXTENSIONS_CLIENT_VERSION.split(':')[1];
+        if (!versionCompare(clientVersion, minClientVersion)) {
+            return false;
+        }
+    }
+    const deps = manifest?.dependencies;
+    if (Array.isArray(deps)) {
+        if (!isSubsetOf(extensionNames, deps)) return false;
+        if (deps.some(dep => extension_settings.disabledExtensions.includes(dep))) return false;
+    }
+    return true;
+}
+
+/**
  * Generates an element for displaying an extension in the UI.
  *
  * @param {string} name - The name of the extension.
@@ -881,17 +902,22 @@ function generateExtensionElement(name, manifest, isActive, isDisabled, isExtern
     block.classList.add('extension_block');
     block.dataset.name = externalId;
 
-    // Toggle
+    // Toggle reflects user intent (!isDisabled), not runtime activation — so popup
+    // re-renders during the pending-reload window don't drop a freshly toggled state.
+    const shouldBeEnabled = !isDisabled;
+    const canActivate = canExtensionBeActivated(manifest);
+    const canBeToggled = isActive || isDisabled || canActivate;
+
     const toggleDiv = document.createElement('div');
     toggleDiv.classList.add('extension_toggle');
     const toggle = document.createElement('input');
     toggle.type = 'checkbox';
     toggle.dataset.name = name;
-    if (isActive || isDisabled) {
+    if (canBeToggled) {
         toggle.title = t`Click to toggle`;
-        toggle.classList.add(isActive ? 'toggle_disable' : 'toggle_enable');
+        toggle.classList.add(shouldBeEnabled ? 'toggle_disable' : 'toggle_enable');
         if (checkboxClass) toggle.classList.add(checkboxClass);
-        toggle.checked = isActive;
+        toggle.checked = shouldBeEnabled;
     } else {
         toggle.title = t`Cannot enable extension`;
         toggle.classList.add('extension_missing');
@@ -912,7 +938,7 @@ function generateExtensionElement(name, manifest, isActive, isDisabled, isExtern
     textBlock.classList.add('flexGrow', 'extension_text_block');
 
     const statusSpan = document.createElement('span');
-    statusSpan.className = isActive ? 'extension_enabled' : isDisabled ? 'extension_disabled' : 'extension_missing';
+    statusSpan.className = !shouldBeEnabled ? 'extension_disabled' : (canActivate || isActive) ? 'extension_enabled' : 'extension_missing';
 
     const nameSpan = document.createElement('span');
     nameSpan.classList.add('extension_name');
