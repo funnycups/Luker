@@ -2412,7 +2412,26 @@ async function requestToolCallsWithRetry(context, settings, {
         ...(Array.isArray(historyMessages) ? historyMessages.map(item => ({ ...item })) : []),
         { role: 'system', content: systemText },
         { role: 'user', content: userText },
-    ].filter(item => item && typeof item === 'object' && item.content);
+    ].filter((item) => {
+        if (!item || typeof item !== 'object') {
+            return false;
+        }
+        if (item.content) {
+            return true;
+        }
+        // Assistant turns may legitimately have empty text content when the
+        // model emits only tool calls. Keep them so the next round's tool
+        // results still pair with their tool_use blocks (Anthropic rejects
+        // tool_result whose tool_use_id has no matching tool_use in the
+        // immediately preceding assistant message).
+        if (Array.isArray(item.tool_calls) && item.tool_calls.length > 0) {
+            return true;
+        }
+        if (item.role === 'tool' && item.tool_call_id) {
+            return true;
+        }
+        return false;
+    });
 
     const worldInfoSource = settings?.includeWorldInfo === false ? 'none' : 'chat';
 

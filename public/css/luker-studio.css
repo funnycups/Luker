@@ -683,7 +683,14 @@
     height: min(92vh, 920px);
     border: 1px solid var(--SmartThemeBorderColor);
     border-radius: 10px;
-    background: var(--SmartThemeBlurTintColor);
+    background-color: var(--SmartThemeBlurTintColor);
+    /* See .luker-studio-diff-zoom-dialog above for the rationale — touch-scroll
+       inside the body drops Chromium's backdrop-filter layer, so we stack the
+       tint to enforce effective opacity without altering hue. */
+    background-image:
+        linear-gradient(var(--SmartThemeBlurTintColor), var(--SmartThemeBlurTintColor)),
+        linear-gradient(var(--SmartThemeBlurTintColor), var(--SmartThemeBlurTintColor));
+    isolation: isolate;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -1201,7 +1208,15 @@
     height: min(92vh, 920px);
     border: 1px solid var(--SmartThemeBorderColor);
     border-radius: 10px;
-    background: var(--SmartThemeBlurTintColor);
+    background-color: var(--SmartThemeBlurTintColor);
+    /* Stack the tint so translucent themes still read as opaque while the
+       user scrolls inside .luker-studio-diff-zoom-body (Android Chromium
+       drops backdrop-filter rasterization during touch-scroll, exposing
+       the popup behind). See same pattern in popup.css for .popup. */
+    background-image:
+        linear-gradient(var(--SmartThemeBlurTintColor), var(--SmartThemeBlurTintColor)),
+        linear-gradient(var(--SmartThemeBlurTintColor), var(--SmartThemeBlurTintColor));
+    isolation: isolate;
     display: flex;
     flex-direction: column;
     overflow: hidden;
