@@ -338,51 +338,30 @@ function buildInitialMessages(context, _payload, profile) {
 export const __testBuildInitialMessages = buildInitialMessages;
 
 /**
- * Production wiring for memory.* tools (Task 10). Loads the materialized
- * memory-graph store via the extension's floor-state instance and stashes
- * it on `context.__memoryStore`. Failures (memory-graph disabled,
- * `createFloorState` unavailable, race during chat switch) silently fall
- * through to `null` so the memory tools surface the structured
+ * Production wiring for memory.* tools. Opens a session through
+ * memory-graph's Layer-1 API and stashes it on `context.__memoryGraphSession`.
+ * When memory-graph isn't loaded (extension disabled, test runner)
+ * the field is set to null and memory tools surface the structured
  * `ToolError(MEMORY_DISABLED)` rather than crashing the run.
  *
- * The shape returned by `fs.get()` is `graphPayloadFromStore(store)` from
- * `memory-graph/persistence.js` — a plain object `{ nodes, edges, ... }`
- * — exactly what `external-api.js`'s `iterateStoreNodes` expects.
+ * Safe to call when memory-graph is not loaded: `getExtensionApi` returns
+ * undefined, the optional-chain short-circuits, and the catch swallows
+ * any thrown errors. The `extensions.js` import is lazy so the Node test
+ * runner (which can't resolve `lib.js`'s build-only `lib.core.bundle.js`)
+ * never reaches the build-time bundle.
  *
- * Safe to call when memory-graph is not loaded: `import('../memory-graph/
- * persistence.js')` will succeed (the file is always present), but
- * `getFloorStateInstance` may throw if `context.createFloorState` is
- * missing (test runners, non-extension callers). The catch swallows that
- * and leaves the field null.
- *
- * NOTE: this helper performs a lazy dynamic import on every call. The
- * memory-graph persistence module sits behind ES module import caching
- * so the actual filesystem read happens at most once per session.
- *
- * @param {object} context — toolContext object (mutated in place)
+ * @param {object} context - toolContext object (mutated in place)
  */
-export async function attachMemoryStore(context) {
+export async function attachMemoryGraphSession(context) {
     if (!context || typeof context !== 'object') return;
     try {
-        const mod = await import('../memory-graph/persistence.js');
-        if (typeof mod?.getFloorStateInstance !== 'function') {
-            context.__memoryStore = null;
-            return;
-        }
-        const fs = await mod.getFloorStateInstance(context);
-        if (!fs || typeof fs.ready !== 'function' || typeof fs.get !== 'function') {
-            context.__memoryStore = null;
-            return;
-        }
-        await fs.ready();
-        const payload = await fs.get();
-        context.__memoryStore = (payload && typeof payload === 'object' && !Array.isArray(payload))
-            ? payload
+        const { getExtensionApi } = await import('../../extensions.js');
+        const api = getExtensionApi('memory-graph');
+        context.__memoryGraphSession = (api && typeof api.openSession === 'function')
+            ? await api.openSession(context)
             : null;
     } catch (_error) {
-        // memory-graph not available, createFloorState missing, or
-        // floor-state replay failed — degrade gracefully.
-        context.__memoryStore = null;
+        context.__memoryGraphSession = null;
     }
 }
 
@@ -675,8 +654,8 @@ export async function attachNotesFloorState(context) {
  *     injected for this turn, populated by the orchestrator's
  *     `onWorldInfoFinalized` hook and forwarded by `main.js` on the
  *     generation payload. `lorebook_search` reads this to dedup.
- *   - `__memoryStore` (+ optional `__memoryDeps`) — chat-scoped
- *     memory-graph handle; `memory_*` tools surface
+ *   - `__memoryGraphSession` — chat-scoped memory-graph session opened
+ *     via the extension's Layer-1 API; `memory_*` tools surface
  *     `ToolError(MEMORY_DISABLED)` when this is null.
  *   - `__floorStateForNotes` adapter + `__openNotes` — per-chat
  *     persistent notes; `note_open` / `note_close` plus the
@@ -686,7 +665,7 @@ export async function attachNotesFloorState(context) {
  *
  * The returned object is created via `Object.create(context)` so caller
  * sees a fresh frame whose unset fields fall through to the upstream
- * extension context. Tests pre-populate the relevant `__memoryStore` /
+ * extension context. Tests pre-populate the relevant `__memoryGraphSession` /
  * `__floorStateForNotes` / `__openNotes` fields on the upstream context
  * to skip the production loaders — that "undefined means not-set, load
  * it" gate per attachment is preserved here.
@@ -709,8 +688,8 @@ export async function attachToolContext(context, payload) {
         toolContext.__lukerRun = { activatedEntryKeys: new Set() };
     }
 
-    if (toolContext.__memoryStore === undefined) {
-        await attachMemoryStore(toolContext);
+    if (toolContext.__memoryGraphSession === undefined) {
+        await attachMemoryGraphSession(toolContext);
     }
 
     if (toolContext.__floorStateForNotes === undefined && toolContext.__openNotes === undefined) {

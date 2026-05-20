@@ -407,13 +407,13 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         // — mirrors loop-runtime's behavior so the curator / pickup-
         // scout pipeline sees the same surface as the loop agent does.
         contextForNotes: deps?.contextForNotes,
-        // Memory-graph store overlay merged into the per-tool-call
+        // Memory-graph session overlay merged into the per-tool-call
         // context the sub-agent dispatcher hands to executeLoopTool.
-        // Carries `__memoryStore` so memory_* tools find a live store
-        // instead of throwing MEMORY_DISABLED. Mounted once per director
-        // turn by main.js; shared by reference across every sub-agent's
-        // tool calls.
-        contextForMemory: deps?.contextForMemory,
+        // Carries `__memoryGraphSession` so memory_* tools find a live
+        // session instead of throwing MEMORY_DISABLED. Mounted once per
+        // director turn by main.js; shared by reference across every
+        // sub-agent's tool calls.
+        contextForSession: deps?.contextForSession,
     });
 
     // Prepend an `## Open Notes` block to the main agent's system

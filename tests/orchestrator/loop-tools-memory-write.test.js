@@ -10,16 +10,14 @@
  *   - memory_compact_nodes  → compactNodes  (smoke-tested separately if needed)
  *
  * Like the read-side tests in `loop-tools-memory.test.js`, we inject a stub
- * write-api through `context.__memoryWriteApi` so we never load the real
- * `memory-graph/write-api.js` (which would pull `main.js` and its big web
- * of SillyTavern globals into the Node test runtime). The stub mutates a
+ * session through `context.__memoryGraphSession` so we never load the real
+ * `memory-graph/api.js` (which would pull `main.js` and its big web of
+ * SillyTavern globals into the Node test runtime). The stub mutates a
  * caller-supplied `store` object so tests can assert side-effects directly.
  *
  * Required wiring on the context:
- *   - `__memoryStore` must be a non-null object — wrappers throw
- *     `ToolError(MEMORY_DISABLED)` when it's missing.
- *   - `__memoryWriteApi` short-circuits the lazy import done by
- *     `pickWriteApi`.
+ *   - `__memoryGraphSession` must be a non-null object exposing the write
+ *     methods — wrappers throw `ToolError(MEMORY_DISABLED)` when it's missing.
  */
 
 import { describe, test, expect, beforeAll } from '@jest/globals';
@@ -40,15 +38,15 @@ beforeAll(async () => {
 });
 
 /**
- * Build a small stub write-api that mutates `store` directly. The shape
- * mirrors `getMemoryGraphWriteApi(context)` from `memory-graph/write-api.js`
+ * Build a small stub session that mutates `store` directly. The shape
+ * mirrors the Layer-1 session exposed by `memory-graph/api.js::openSession`
  * — return values are minimal ack shapes (id / ok / applied / removed /
  * rollupNodeId) and the wrappers re-key them into LLM-facing forms.
  *
  * Override individual methods per test by spreading:
- *   makeWriteApi(store, { createNode: jest.fn() })
+ *   makeSession(store, { createNode: jest.fn() })
  */
-function makeWriteApi(store, overrides = {}) {
+function makeSession(store, overrides = {}) {
     let counter = Number(store?.seqCounter || 0);
     function nextId(prefix) {
         counter += 1;
@@ -127,10 +125,9 @@ function makeWriteApi(store, overrides = {}) {
     };
 }
 
-function makeCtx(store = { nodes: {}, edges: [], seqCounter: 0 }, apiOverrides = {}) {
+function makeCtx(store = { nodes: {}, edges: [], seqCounter: 0 }, sessionOverrides = {}) {
     return {
-        __memoryStore: store,
-        __memoryWriteApi: makeWriteApi(store, apiOverrides),
+        __memoryGraphSession: makeSession(store, sessionOverrides),
     };
 }
 
@@ -198,8 +195,8 @@ describe('memory write tool execs', () => {
         expect(store.edges).toEqual([]);
     });
 
-    test('MEMORY_DISABLED surfaces when __memoryStore is null', async () => {
-        const ctx = { __memoryStore: null };
+    test('MEMORY_DISABLED surfaces when __memoryGraphSession is null', async () => {
+        const ctx = { __memoryGraphSession: null };
         await expect(execMemoryNodeCreate({ type: 'x', title: 'y' }, ctx))
             .rejects.toMatchObject({ code: 'MEMORY_DISABLED' });
     });

@@ -7,12 +7,11 @@
  *   - memory_expand_seeds    → expandFromSeeds(ids, options)
  *   - memory_schema          → getSchema()
  *
- * Tests inject the read-api shim through `context.__memoryReadApi` so we
- * never load the real `memory-graph/read-api.js` (which would transitively
- * pull the build-only `lib.js` chain that Node can't import). The store is
- * delivered through `context.__memoryStore`; when null/undefined we expect
- * a structured `ToolError(MEMORY_DISABLED)` so the agent reads the failure
- * and pivots.
+ * Tests inject a session stub through `context.__memoryGraphSession` so we
+ * never load the real `memory-graph/api.js` (which would transitively
+ * pull the build-only `lib.js` chain that Node can't import). When the
+ * field is null/undefined we expect a structured `ToolError(MEMORY_DISABLED)`
+ * so the agent reads the failure and pivots.
  */
 
 import { describe, test, expect, jest } from '@jest/globals';
@@ -31,14 +30,14 @@ import {
 import { ToolError } from '../../public/scripts/extensions/orchestrator/loop-runtime.js';
 
 /**
- * Build a stub read-api object that satisfies the 5 pipeline tools. Tests
- * inject this through `context.__memoryReadApi` (see memory.js
- * `pickReadApi`) so we never load `memory-graph/read-api.js` (which would
- * pull the build-only `lib.js` chain into the Node test runtime).
+ * Build a stub session object that satisfies the 5 pipeline tools. Tests
+ * inject this through `context.__memoryGraphSession` so we never load
+ * `memory-graph/api.js` (which would pull the build-only `lib.js` chain
+ * into the Node test runtime).
  *
- * Override individual methods per test by spreading: `makeReadApi({ getSchema: jest.fn() })`.
+ * Override individual methods per test by spreading: `makeSession({ getSchema: jest.fn() })`.
  */
-function makeReadApi(overrides = {}) {
+function makeSession(overrides = {}) {
     return {
         listVisibleCandidates: () => [],
         getEdgeSummary: () => ({ degree: 0, relations: [], sample_neighbors: [] }),
@@ -56,8 +55,7 @@ function makeReadApi(overrides = {}) {
 describe('central dispatcher routes pipeline tools', () => {
     test('executeLoopTool migrates dotted `memory.list_candidates` to underscore form', async () => {
         const ctx = {
-            __memoryStore: { nodes: {} },
-            __memoryReadApi: makeReadApi({
+            __memoryGraphSession: makeSession({
                 listVisibleCandidates: () => [
                     { id: 'cand1', type: 'event', level: 'episodic', title: 'x', seqTo: 1, semanticDepth: 0 },
                 ],
@@ -68,8 +66,8 @@ describe('central dispatcher routes pipeline tools', () => {
     });
 });
 
-describe('runtime propagates __memoryStore / __memoryReadApi into toolContext', () => {
-    test('memory_list_candidates invoked through the runtime sees both fields from the upstream context', async () => {
+describe('runtime propagates __memoryGraphSession into toolContext', () => {
+    test('memory_list_candidates invoked through the runtime sees the session from the upstream context', async () => {
         const { runLoopOrchestration } = await import(
             '../../public/scripts/extensions/orchestrator/loop-runtime.js'
         );
@@ -116,8 +114,7 @@ describe('runtime propagates __memoryStore / __memoryReadApi into toolContext', 
 
         const context = {
             chat: [],
-            __memoryStore: { nodes: {} },
-            __memoryReadApi: makeReadApi({
+            __memoryGraphSession: makeSession({
                 listVisibleCandidates: () => [
                     { id: 'recalled', type: 'event', level: 'episodic', title: 'p', seqTo: 1, semanticDepth: 0 },
                 ],
@@ -146,9 +143,9 @@ describe('runtime propagates __memoryStore / __memoryReadApi into toolContext', 
 // Read-api pipeline wrappers (per-tool)
 //
 // Each wrapper is verified for:
-//   - Dispatch: args are routed to the correct read-api method with the
+//   - Dispatch: args are routed to the correct session method with the
 //     correct option-name translation (snake_case args → camelCase options).
-//   - MEMORY_DISABLED: missing store raises a structured ToolError with
+//   - MEMORY_DISABLED: missing session raises a structured ToolError with
 //     code 'MEMORY_DISABLED'.
 //   - Arg validation: required args (node_id / seed_ids / query) surface
 //     the documented MEMORY_*_EMPTY codes.
@@ -161,8 +158,7 @@ describe('execMemoryListCandidates (spec 2)', () => {
             { id: 'n2', type: 'character_sheet', level: 'semantic', title: 't2', seqTo: 3, semanticDepth: 2 },
         ]);
         const ctx = {
-            __memoryStore: { nodes: {} },
-            __memoryReadApi: makeReadApi({ listVisibleCandidates: listFn }),
+            __memoryGraphSession: makeSession({ listVisibleCandidates: listFn }),
         };
         const result = await execMemoryListCandidates({
             seq_window: { from: 1, to: 10 },
@@ -181,25 +177,23 @@ describe('execMemoryListCandidates (spec 2)', () => {
         expect(result.candidates[1].level).toBe('semantic');
     });
 
-    test('returns { candidates: [] } when read-api returns nothing', async () => {
+    test('returns { candidates: [] } when session returns nothing', async () => {
         const ctx = {
-            __memoryStore: { nodes: {} },
-            __memoryReadApi: makeReadApi({ listVisibleCandidates: () => null }),
+            __memoryGraphSession: makeSession({ listVisibleCandidates: () => null }),
         };
         const result = await execMemoryListCandidates({}, ctx);
         expect(result).toEqual({ candidates: [] });
     });
 
-    test('throws MEMORY_DISABLED when store missing (no __memoryReadApi either)', async () => {
-        const ctx = { __memoryStore: null };
+    test('throws MEMORY_DISABLED when session missing', async () => {
+        const ctx = { __memoryGraphSession: null };
         await expect(execMemoryListCandidates({}, ctx)).rejects.toBeInstanceOf(ToolError);
         await expect(execMemoryListCandidates({}, ctx)).rejects.toMatchObject({ code: 'MEMORY_DISABLED' });
     });
 
     test('dispatches through executeLoopTool', async () => {
         const ctx = {
-            __memoryStore: { nodes: {} },
-            __memoryReadApi: makeReadApi({
+            __memoryGraphSession: makeSession({
                 listVisibleCandidates: () => [{ id: 'cand1', type: 'event', level: 'episodic', title: 'x', seqTo: 1, semanticDepth: 0 }],
             }),
         };
@@ -216,8 +210,7 @@ describe('execMemoryEdgeSummary (spec 2)', () => {
             sample_neighbors: [{ id: 'nb1', type: 'event', title: 't' }],
         }));
         const ctx = {
-            __memoryStore: { nodes: {} },
-            __memoryReadApi: makeReadApi({ getEdgeSummary: summaryFn }),
+            __memoryGraphSession: makeSession({ getEdgeSummary: summaryFn }),
         };
         const result = await execMemoryEdgeSummary({
             node_id: 'n42',
@@ -231,20 +224,19 @@ describe('execMemoryEdgeSummary (spec 2)', () => {
     });
 
     test('throws MEMORY_ID_EMPTY on empty node_id', async () => {
-        const ctx = { __memoryStore: { nodes: {} }, __memoryReadApi: makeReadApi() };
+        const ctx = { __memoryGraphSession: makeSession() };
         await expect(execMemoryEdgeSummary({ node_id: '' }, ctx)).rejects.toBeInstanceOf(ToolError);
         await expect(execMemoryEdgeSummary({ node_id: '   ' }, ctx)).rejects.toMatchObject({ code: 'MEMORY_ID_EMPTY' });
     });
 
-    test('throws MEMORY_DISABLED when store missing', async () => {
-        const ctx = { __memoryStore: null };
+    test('throws MEMORY_DISABLED when session missing', async () => {
+        const ctx = { __memoryGraphSession: null };
         await expect(execMemoryEdgeSummary({ node_id: 'n1' }, ctx)).rejects.toMatchObject({ code: 'MEMORY_DISABLED' });
     });
 
     test('dispatches through executeLoopTool', async () => {
         const ctx = {
-            __memoryStore: { nodes: {} },
-            __memoryReadApi: makeReadApi({
+            __memoryGraphSession: makeSession({
                 getEdgeSummary: (_id, _opts) => ({ degree: 1, relations: [], sample_neighbors: [] }),
             }),
         };
@@ -262,8 +254,7 @@ describe('execMemoryNodeBrief (spec 2)', () => {
             alwaysInject: false,
         }));
         const ctx = {
-            __memoryStore: { nodes: {} },
-            __memoryReadApi: makeReadApi({ getNodeBrief: briefFn }),
+            __memoryGraphSession: makeSession({ getNodeBrief: briefFn }),
         };
         const result = await execMemoryNodeBrief({
             node_id: 'n7',
@@ -276,32 +267,30 @@ describe('execMemoryNodeBrief (spec 2)', () => {
         expect(result.brief.id).toBe('n7');
     });
 
-    test('returns { brief: null } when read-api returns null (node missing or archived)', async () => {
+    test('returns { brief: null } when session returns null (node missing or archived)', async () => {
         // Production contract: missing/archived nodes surface as `{ brief: null }`,
         // NOT as a thrown error. The brief tool mirrors the read-api's null
         // return so the agent can decide whether to drop the id or retry.
         const ctx = {
-            __memoryStore: { nodes: {} },
-            __memoryReadApi: makeReadApi({ getNodeBrief: () => null }),
+            __memoryGraphSession: makeSession({ getNodeBrief: () => null }),
         };
         const result = await execMemoryNodeBrief({ node_id: 'missing' }, ctx);
         expect(result).toEqual({ brief: null });
     });
 
     test('throws MEMORY_ID_EMPTY on empty node_id', async () => {
-        const ctx = { __memoryStore: { nodes: {} }, __memoryReadApi: makeReadApi() };
+        const ctx = { __memoryGraphSession: makeSession() };
         await expect(execMemoryNodeBrief({ node_id: '' }, ctx)).rejects.toMatchObject({ code: 'MEMORY_ID_EMPTY' });
     });
 
-    test('throws MEMORY_DISABLED when store missing', async () => {
-        const ctx = { __memoryStore: null };
+    test('throws MEMORY_DISABLED when session missing', async () => {
+        const ctx = { __memoryGraphSession: null };
         await expect(execMemoryNodeBrief({ node_id: 'n1' }, ctx)).rejects.toMatchObject({ code: 'MEMORY_DISABLED' });
     });
 
     test('dispatches through executeLoopTool', async () => {
         const ctx = {
-            __memoryStore: { nodes: {} },
-            __memoryReadApi: makeReadApi({
+            __memoryGraphSession: makeSession({
                 getNodeBrief: id => ({ id, title: 'T', summary: 'S' }),
             }),
         };
@@ -317,8 +306,7 @@ describe('execMemoryExpandSeeds (spec 2)', () => {
             { id: 'b', type: 'event', level: 'semantic', title: 'B', seqTo: 9 },
         ]);
         const ctx = {
-            __memoryStore: { nodes: {} },
-            __memoryReadApi: makeReadApi({ expandFromSeeds: expandFn }),
+            __memoryGraphSession: makeSession({ expandFromSeeds: expandFn }),
         };
         const result = await execMemoryExpandSeeds({
             seed_ids: ['s1', '  s2  ', ''],
@@ -342,21 +330,20 @@ describe('execMemoryExpandSeeds (spec 2)', () => {
     });
 
     test('throws MEMORY_SEEDS_EMPTY when seed_ids missing or all-whitespace', async () => {
-        const ctx = { __memoryStore: { nodes: {} }, __memoryReadApi: makeReadApi() };
+        const ctx = { __memoryGraphSession: makeSession() };
         await expect(execMemoryExpandSeeds({}, ctx)).rejects.toMatchObject({ code: 'MEMORY_SEEDS_EMPTY' });
         await expect(execMemoryExpandSeeds({ seed_ids: [] }, ctx)).rejects.toMatchObject({ code: 'MEMORY_SEEDS_EMPTY' });
         await expect(execMemoryExpandSeeds({ seed_ids: ['', '  '] }, ctx)).rejects.toMatchObject({ code: 'MEMORY_SEEDS_EMPTY' });
     });
 
-    test('throws MEMORY_DISABLED when store missing', async () => {
-        const ctx = { __memoryStore: null };
+    test('throws MEMORY_DISABLED when session missing', async () => {
+        const ctx = { __memoryGraphSession: null };
         await expect(execMemoryExpandSeeds({ seed_ids: ['x'] }, ctx)).rejects.toMatchObject({ code: 'MEMORY_DISABLED' });
     });
 
     test('dispatches through executeLoopTool', async () => {
         const ctx = {
-            __memoryStore: { nodes: {} },
-            __memoryReadApi: makeReadApi({
+            __memoryGraphSession: makeSession({
                 expandFromSeeds: () => [{ id: 'x', type: 'event', level: 'episodic', title: 'X', seqTo: 1 }],
             }),
         };
@@ -373,8 +360,7 @@ describe('execMemorySchema (spec 2)', () => {
             ],
         }));
         const ctx = {
-            __memoryStore: { nodes: {} },
-            __memoryReadApi: makeReadApi({ getSchema: schemaFn }),
+            __memoryGraphSession: makeSession({ getSchema: schemaFn }),
         };
         const result = await execMemorySchema({}, ctx);
         expect(schemaFn).toHaveBeenCalledTimes(1);
@@ -382,15 +368,14 @@ describe('execMemorySchema (spec 2)', () => {
         expect(result.schema.types[0].type).toBe('event');
     });
 
-    test('throws MEMORY_DISABLED when store missing', async () => {
-        const ctx = { __memoryStore: null };
+    test('throws MEMORY_DISABLED when session missing', async () => {
+        const ctx = { __memoryGraphSession: null };
         await expect(execMemorySchema({}, ctx)).rejects.toMatchObject({ code: 'MEMORY_DISABLED' });
     });
 
     test('dispatches through executeLoopTool', async () => {
         const ctx = {
-            __memoryStore: { nodes: {} },
-            __memoryReadApi: makeReadApi({ getSchema: () => ({ types: [{ type: 'character_sheet' }] }) }),
+            __memoryGraphSession: makeSession({ getSchema: () => ({ types: [{ type: 'character_sheet' }] }) }),
         };
         const result = await executeLoopTool('memory_schema', {}, ctx);
         expect(result.schema.types[0].type).toBe('character_sheet');

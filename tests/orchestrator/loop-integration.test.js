@@ -13,7 +13,7 @@
  * for note persistence (matches the production `makeNotesAdapter` shape so
  * `attachNotesFloorState` does not get reached). Real `loop-tools` registry
  * is exercised for chat / lorebook / memory paths via injected fixtures
- * (`__getSortedEntriesFn`, `__memoryStore`, `__memoryReadApi`,
+ * (`__getSortedEntriesFn`, `__memoryGraphSession`,
  * `__floorStateForNotes`) — no `lib.js` dependency is touched, so tests
  * run on the Node-based jest config.
  */
@@ -97,7 +97,7 @@ function makeFakeFloorStateNotes(initialEntries = []) {
     };
 }
 
-function makeChatContext({ chat = [], notesAdapter = null, sortedEntries = null, memoryStore = null, memoryReadApi = null, activatedEntryKeys = null, targetFloorForNote = null } = {}) {
+function makeChatContext({ chat = [], notesAdapter = null, sortedEntries = null, memorySession = null, activatedEntryKeys = null, targetFloorForNote = null } = {}) {
     // Loose context object that matches what the orchestrator hands the
     // runtime in production: a plain object with `chat`, plus the optional
     // run-scoped helpers loop-runtime reads through `Object.create(context)`.
@@ -112,11 +112,8 @@ function makeChatContext({ chat = [], notesAdapter = null, sortedEntries = null,
     if (sortedEntries !== null) {
         ctx.__getSortedEntriesFn = async () => sortedEntries;
     }
-    if (memoryStore !== null) {
-        ctx.__memoryStore = memoryStore;
-    }
-    if (memoryReadApi !== null) {
-        ctx.__memoryReadApi = memoryReadApi;
+    if (memorySession !== null) {
+        ctx.__memoryGraphSession = memorySession;
     }
     if (activatedEntryKeys !== null) {
         ctx.__lukerRun = { activatedEntryKeys };
@@ -211,8 +208,7 @@ describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
             { world: 'global', uid: 2, key: ['autumn-fest'],  content: 'Autumn-fest opens at dusk on the first cold night.' },
             { world: 'global', uid: 3, key: ['winter-feast'], content: 'Winter feast unrelated.' },
         ];
-        const memoryStore = { nodes: { 'lyra-vow': { id: 'lyra-vow', title: 'Lyra\'s vow' } } };
-        const memoryReadApi = {
+        const memorySession = {
             listVisibleCandidates: () => [
                 { id: 'lyra-vow', type: 'event', level: 'episodic', title: 'Lyra\'s vow', seqTo: 7, semanticDepth: 0 },
             ],
@@ -229,7 +225,6 @@ describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
                 alwaysInject: false,
             }),
             expandFromSeeds: () => [],
-            rankNodes: async () => [],
             getSchema: () => ({ types: [] }),
         };
         const notesAdapter = makeFakeFloorStateNotes();
@@ -240,8 +235,7 @@ describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
             ],
             notesAdapter,
             sortedEntries,
-            memoryStore,
-            memoryReadApi,
+            memorySession,
             activatedEntryKeys: new Set(),
             targetFloorForNote: 0,
         });

@@ -1,10 +1,9 @@
 /**
  * loop-tools/memory.js — memory-graph query + write tools for loop mode.
  *
- * Wraps `memory-graph/read-api.js` (`getMemoryGraphReadApi(context)`) and
- * `memory-graph/write-api.js` (`getMemoryGraphWriteApi(context)`) so the
- * agent sees the same inputs the native recall LLM sees and can mutate the
- * graph through the same boundary used by the extraction pipeline:
+ * Wraps the memory-graph Layer-1 session object so the agent sees the same
+ * inputs the native recall LLM sees and can mutate the graph through the
+ * same boundary used by the extraction pipeline:
  *
  *   - memory_list_candidates       → listVisibleCandidates(options)
  *   - memory_edge_summary          → getEdgeSummary(id, options)
@@ -24,76 +23,49 @@
  *
  * Store + dependency wiring:
  *
- *   - Production: `loop-runtime` calls `attachMemoryStore(context)` once at
- *     the start of `runLoopOrchestration`, which loads the memory-graph
- *     store via the floor-state instance and stashes it on
- *     `context.__memoryStore`. When memory-graph is disabled or the loader
- *     fails, the field is left null and these tools throw a structured
- *     `ToolError(MEMORY_DISABLED)` so the agent reads the failure and
- *     pivots to other tools.
- *   - Tests: skip the loader by setting `context.__memoryStore` directly
- *     (any object with a `nodes` property satisfies the contract). Tests
- *     inject a stub read-api through `context.__memoryReadApi`; when
- *     present, tools call its methods directly instead of building one
- *     via `getMemoryGraphReadApi(context)`. Lazy import of the real module
- *     keeps the Node test runner from pulling memory-graph/main.js (the
- *     build-only `lib.js` chain).
+ *   - Production: `loop-runtime` calls `attachMemoryGraphSession(context)`
+ *     once at the start of `runLoopOrchestration`, which opens a session
+ *     through memory-graph's Layer-1 API
+ *     (`getExtensionApi('memory-graph').openSession(context)`) and stashes
+ *     it on `context.__memoryGraphSession`. When memory-graph is disabled
+ *     or the open fails, the field is null and these tools throw a
+ *     structured `ToolError(MEMORY_DISABLED)`.
+ *   - Tests: skip the production opener by setting
+ *     `context.__memoryGraphSession` directly to a stub object exposing
+ *     the methods the wrappers call.
  */
 
 import { ToolError } from '../loop-runtime.js';
 
-/**
- * Resolve a read-api instance. Tests inject through `context.__memoryReadApi`;
- * production lazily imports `memory-graph/read-api.js` and builds a per-call
- * instance bound to the orchestrator context (which carries `__memoryStore`).
- */
-async function pickReadApi(context) {
-    if (context && context.__memoryReadApi && typeof context.__memoryReadApi === 'object') {
-        return context.__memoryReadApi;
-    }
-    const mod = await import('../../memory-graph/read-api.js');
-    return mod.getMemoryGraphReadApi(context);
-}
-
 const MEMORY_DISABLED_HINT = 'Memory-graph is disabled or not loaded. Enable it in the memory-graph extension.';
 
-/**
- * Read the chat-scoped store from the context. `attachMemoryStore` in the
- * runtime sets this to the materialized memory-graph payload (or null when
- * memory-graph is disabled / unloaded). `undefined` is treated as
- * "loader never ran" and surfaces the same MEMORY_DISABLED error so the
- * agent doesn't get a confusing "no nodes" response when the underlying
- * extension isn't present at all.
- */
-function loadStore(context) {
-    return context?.__memoryStore ?? null;
+function loadSession(context) {
+    return context?.__memoryGraphSession ?? null;
 }
 
-function requireStoreForReadApi(toolName, context) {
-    const store = loadStore(context);
-    if (!store) {
+function requireSession(toolName, context) {
+    const session = loadSession(context);
+    if (!session) {
         throw new ToolError(
             `${toolName}: memory-graph store is not loaded.`,
             'MEMORY_DISABLED',
             MEMORY_DISABLED_HINT,
         );
     }
-    return store;
+    return session;
 }
 
 // ---------------------------------------------------------------------------
 // Spec 2 — read-api pipeline wrappers
 //
 // Each wrapper:
-//   1. Validates that `__memoryStore` is loaded (raises MEMORY_DISABLED).
+//   1. Validates that `__memoryGraphSession` is loaded (raises MEMORY_DISABLED).
 //   2. Validates required args (raises MEMORY_*_EMPTY codes when missing).
-//   3. Builds a per-call read-api instance via `pickReadApi(context)`
-//      (tests inject a stub through `context.__memoryReadApi`).
-//   4. Forwards args, trimming returns to LLM-friendly shapes where the
-//      raw view would be too verbose for tool-output rendering.
+//   3. Forwards args to the session method, trimming returns to LLM-friendly
+//      shapes where the raw view would be too verbose for tool-output rendering.
 //
 // The return-shape trimming policy:
-//   - `listVisibleCandidates` / `expandFromSeeds` / `rankNodes` return arrays
+//   - `listVisibleCandidates` / `expandFromSeeds` return arrays
 //     of full NodeView records (fields object can be sizable); we project to
 //     `{ id, type, level?, title, seqTo, ... }` so the agent can shortlist
 //     and then fetch full briefs via `memory_node_brief` only for the few
@@ -173,8 +145,7 @@ function trimRankedPreview(entry) {
  * @returns {Promise<{ candidates: Array<{ id, type, level, title, seqTo, semanticDepth }> }>}
  */
 export async function execMemoryListCandidates(args, context) {
-    requireStoreForReadApi('memory_list_candidates', context);
-    const api = await pickReadApi(context);
+    const session = requireSession('memory_list_candidates', context);
     const options = {};
     const seqWindow = normalizeSeqWindow(args?.seq_window);
     if (seqWindow) options.seqWindow = seqWindow;
@@ -184,7 +155,7 @@ export async function execMemoryListCandidates(args, context) {
     if (excludeRecent !== undefined && excludeRecent >= 0) {
         options.excludeRecentMessages = excludeRecent;
     }
-    const candidates = api.listVisibleCandidates(options) || [];
+    const candidates = session.listVisibleCandidates(options) || [];
     return {
         candidates: Array.from(candidates).map(trimCandidatePreview).filter(Boolean),
     };
@@ -207,14 +178,13 @@ export async function execMemoryEdgeSummary(args, context) {
             'Pass an id from memory_list_candidates / memory_keyword_search / memory_find_by_name.',
         );
     }
-    requireStoreForReadApi('memory_edge_summary', context);
-    const api = await pickReadApi(context);
+    const session = requireSession('memory_edge_summary', context);
     const options = {};
     const edgeTypes = normalizeStringArrayArg(args?.edge_types);
     if (edgeTypes) options.edgeTypes = edgeTypes;
     const limit = pickFiniteInt(args?.limit);
     if (limit !== undefined && limit >= 1) options.limit = limit;
-    return { summary: api.getEdgeSummary(idRaw, options) };
+    return { summary: session.getEdgeSummary(idRaw, options) };
 }
 
 /**
@@ -233,15 +203,14 @@ export async function execMemoryNodeBrief(args, context) {
             'Pass an id from memory_list_candidates / memory_keyword_search / memory_find_by_name.',
         );
     }
-    requireStoreForReadApi('memory_node_brief', context);
-    const api = await pickReadApi(context);
+    const session = requireSession('memory_node_brief', context);
     const options = {};
     if (args?.include_edge_summary === false) options.includeEdgeSummary = false;
     const edgeSummaryLimit = pickFiniteInt(args?.edge_summary_limit);
     if (edgeSummaryLimit !== undefined && edgeSummaryLimit >= 1) {
         options.edgeSummaryLimit = edgeSummaryLimit;
     }
-    return { brief: api.getNodeBrief(idRaw, options) };
+    return { brief: session.getNodeBrief(idRaw, options) };
 }
 
 /**
@@ -261,8 +230,7 @@ export async function execMemoryExpandSeeds(args, context) {
             'Provide one or more ids from memory_list_candidates / memory_keyword_search / memory_find_by_name to expand around.',
         );
     }
-    requireStoreForReadApi('memory_expand_seeds', context);
-    const api = await pickReadApi(context);
+    const session = requireSession('memory_expand_seeds', context);
     const options = {};
     const hops = pickFiniteInt(args?.hops);
     if (hops !== undefined && hops >= 1) options.hops = hops;
@@ -270,7 +238,7 @@ export async function execMemoryExpandSeeds(args, context) {
     if (edgeTypes) options.edgeTypes = edgeTypes;
     if (args?.include_children === false) options.includeChildren = false;
     if (args?.exclude_internal === true) options.excludeInternal = true;
-    const nodes = api.expandFromSeeds(seedIds, options) || [];
+    const nodes = session.expandFromSeeds(seedIds, options) || [];
     return { nodes: Array.from(nodes).map(trimExpandPreview).filter(Boolean) };
 }
 
@@ -283,9 +251,8 @@ export async function execMemoryExpandSeeds(args, context) {
  * @returns {Promise<{ schema: object }>}
  */
 export async function execMemorySchema(_args, context) {
-    requireStoreForReadApi('memory_schema', context);
-    const api = await pickReadApi(context);
-    return { schema: api.getSchema() };
+    const session = requireSession('memory_schema', context);
+    return { schema: session.getSchema() };
 }
 
 // ---------------------------------------------------------------------------
@@ -305,9 +272,8 @@ export async function execMemorySchema(_args, context) {
  * @returns {Promise<{ results: Array<{ id, type, title, seqTo, score, scoreMode }> }>}
  */
 export async function execMemoryKeywordSearch(args, context) {
-    requireStoreForReadApi('memory_keyword_search', context);
-    const api = await pickReadApi(context);
-    const results = api.keywordSearch({
+    const session = requireSession('memory_keyword_search', context);
+    const results = session.keywordSearch({
         query: String(args?.query || ''),
         types: Array.isArray(args?.types) ? args.types : undefined,
         k: args?.k,
@@ -325,10 +291,9 @@ export async function execMemoryKeywordSearch(args, context) {
  * @returns {Promise<{ results: Array<{ id, type, title, seqTo, score, scoreMode }> }>}
  */
 export async function execMemoryVectorSearch(args, context) {
-    requireStoreForReadApi('memory_vector_search', context);
-    const api = await pickReadApi(context);
+    const session = requireSession('memory_vector_search', context);
     try {
-        const results = await api.vectorSearch({
+        const results = await session.vectorSearch({
             query: String(args?.query || ''),
             types: Array.isArray(args?.types) ? args.types : undefined,
             k: args?.k,
@@ -356,9 +321,8 @@ export async function execMemoryVectorSearch(args, context) {
  * @returns {Promise<{ matches: Array<{ id, type, level, title, seqTo, semanticDepth }> }>}
  */
 export async function execMemoryFindByName(args, context) {
-    requireStoreForReadApi('memory_find_by_name', context);
-    const api = await pickReadApi(context);
-    const result = api.findByName({
+    const session = requireSession('memory_find_by_name', context);
+    const result = session.findByName({
         query: String(args?.query || ''),
         types: Array.isArray(args?.types) ? args.types : undefined,
     });
@@ -374,9 +338,8 @@ export async function execMemoryFindByName(args, context) {
  * @returns {Promise<{ groups: object[] }>}
  */
 export async function execMemoryCompactionCandidates(args, context) {
-    requireStoreForReadApi('memory_compaction_candidates', context);
-    const api = await pickReadApi(context);
-    const result = api.compactionCandidates({
+    const session = requireSession('memory_compaction_candidates', context);
+    const result = session.compactionCandidates({
         type: String(args?.type || ''),
         depth: args?.depth,
     });
@@ -390,30 +353,6 @@ export async function execMemoryCompactionCandidates(args, context) {
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve a write-api instance. Tests inject through `context.__memoryWriteApi`;
- * production lazily imports `memory-graph/write-api.js`. Mirrors `pickReadApi`.
- */
-async function pickWriteApi(context) {
-    if (context && context.__memoryWriteApi && typeof context.__memoryWriteApi === 'object') {
-        return context.__memoryWriteApi;
-    }
-    const mod = await import('../../memory-graph/write-api.js');
-    return mod.getMemoryGraphWriteApi(context);
-}
-
-function requireStoreForWriteApi(toolName, context) {
-    const store = loadStore(context);
-    if (!store) {
-        throw new ToolError(
-            `${toolName}: memory-graph store is not loaded.`,
-            'MEMORY_DISABLED',
-            MEMORY_DISABLED_HINT,
-        );
-    }
-    return store;
-}
-
-/**
  * Create a node of the given type with title + fields and optional
  * outgoing links. Wraps `createNode`.
  *
@@ -422,9 +361,8 @@ function requireStoreForWriteApi(toolName, context) {
  * @returns {Promise<{ ok: true, id: string }>}
  */
 export async function execMemoryNodeCreate(args, context) {
-    requireStoreForWriteApi('memory_node_create', context);
-    const api = await pickWriteApi(context);
-    const result = api.createNode({
+    const session = requireSession('memory_node_create', context);
+    const result = session.createNode({
         type: String(args?.type || ''),
         title: String(args?.title || ''),
         fields: args?.fields || {},
@@ -443,9 +381,8 @@ export async function execMemoryNodeCreate(args, context) {
  * @returns {Promise<{ ok: boolean }>}
  */
 export async function execMemoryNodeEdit(args, context) {
-    requireStoreForWriteApi('memory_node_edit', context);
-    const api = await pickWriteApi(context);
-    const result = api.editNode({
+    const session = requireSession('memory_node_edit', context);
+    const result = session.editNode({
         id: String(args?.node_id || ''),
         setFields: args?.set_fields || undefined,
         clearFields: Array.isArray(args?.clear_fields) ? args.clear_fields : undefined,
@@ -462,9 +399,8 @@ export async function execMemoryNodeEdit(args, context) {
  * @returns {Promise<{ ok: boolean }>}
  */
 export async function execMemoryNodeDelete(args, context) {
-    requireStoreForWriteApi('memory_node_delete', context);
-    const api = await pickWriteApi(context);
-    const result = api.deleteNode({ id: String(args?.node_id || '') });
+    const session = requireSession('memory_node_delete', context);
+    const result = session.deleteNode({ id: String(args?.node_id || '') });
     return { ok: result.ok };
 }
 
@@ -476,9 +412,8 @@ export async function execMemoryNodeDelete(args, context) {
  * @returns {Promise<{ ok: boolean, applied: number }>}
  */
 export async function execMemoryLinkUpsert(args, context) {
-    requireStoreForWriteApi('memory_link_upsert', context);
-    const api = await pickWriteApi(context);
-    const result = api.upsertLinks({
+    const session = requireSession('memory_link_upsert', context);
+    const result = session.upsertLinks({
         source: {
             id: args?.source_node_id || undefined,
             ref: args?.source_ref || undefined,
@@ -496,9 +431,8 @@ export async function execMemoryLinkUpsert(args, context) {
  * @returns {Promise<{ ok: boolean, removed: number }>}
  */
 export async function execMemoryLinkDelete(args, context) {
-    requireStoreForWriteApi('memory_link_delete', context);
-    const api = await pickWriteApi(context);
-    const result = api.deleteLinks({
+    const session = requireSession('memory_link_delete', context);
+    const result = session.deleteLinks({
         source: { id: args?.source_node_id || undefined },
         target: { id: args?.target_node_id || undefined },
         relation: String(args?.relation || ''),
@@ -516,9 +450,8 @@ export async function execMemoryLinkDelete(args, context) {
  * @returns {Promise<{ ok: true, rollup_node_id: string }>}
  */
 export async function execMemoryCompactNodes(args, context) {
-    requireStoreForWriteApi('memory_compact_nodes', context);
-    const api = await pickWriteApi(context);
-    const result = api.compactNodes({
+    const session = requireSession('memory_compact_nodes', context);
+    const result = session.compactNodes({
         type: String(args?.type || ''),
         childIds: Array.isArray(args?.child_ids) ? args.child_ids : [],
         summary: String(args?.summary || ''),

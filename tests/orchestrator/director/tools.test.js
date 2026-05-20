@@ -486,7 +486,7 @@ describe('subagent dispatcher', () => {
         expect(budgetErrors).toHaveLength(1);
     });
 
-    test('contextForMemory overlay reaches executeLoopTool so memory_* tools find the store', async () => {
+    test('contextForSession overlay reaches executeLoopTool so memory_* tools find the session', async () => {
         // Sub-agent calls memory_list_candidates once, then terminates.
         const calls = [
             { assistantText: '', toolCalls: [{ id: 't1', name: 'memory_list_candidates', args: {} }], reasoning: null, finishReason: 'tool_calls' },
@@ -501,7 +501,7 @@ describe('subagent dispatcher', () => {
             return { candidates: [{ id: 'n1', type: 'event', title: 'a bird' }] };
         });
 
-        const memCtx = { __memoryStore: { nodes: new Map(), edges: new Map() } };
+        const memCtx = { __memoryGraphSession: { listVisibleCandidates: () => [] } };
         const dispatcher = createSubagentDispatcher({
             subAgents: [{ id: 's', description: '', systemPrompt: 's' }],
             limits: { maxTotalSubagentRuns: 5 },
@@ -510,22 +510,22 @@ describe('subagent dispatcher', () => {
             tools: { memory: { list_candidates: true } },
             executeLoopTool,
             chat: [],
-            contextForMemory: memCtx,
+            contextForSession: memCtx,
         });
         const h = await dispatcher.dispatch({ subagentId: 's', task: 't' });
         await dispatcher.awaitAll([h]);
 
         expect(executeLoopTool).toHaveBeenCalledTimes(1);
         expect(executeLoopTool.mock.calls[0][0]).toBe('memory_list_candidates');
-        // The per-call context must carry the memory store the dispatcher
-        // was wired with — without this, requireStore() throws MEMORY_DISABLED
+        // The per-call context must carry the memory session the dispatcher
+        // was wired with — without this, requireSession() throws MEMORY_DISABLED
         // even when memory-graph is enabled.
-        expect(seenToolCtx[0].__memoryStore).toBe(memCtx.__memoryStore);
+        expect(seenToolCtx[0].__memoryGraphSession).toBe(memCtx.__memoryGraphSession);
         // And chat is still forwarded (not clobbered by the overlay).
         expect(seenToolCtx[0].chat).toBeDefined();
     });
 
-    test('without contextForMemory, executeLoopTool sees no __memoryStore (regression guard)', async () => {
+    test('without contextForSession, executeLoopTool sees no __memoryGraphSession (regression guard)', async () => {
         const calls = [
             { assistantText: '', toolCalls: [{ id: 't1', name: 'memory_list_candidates', args: {} }], reasoning: null, finishReason: 'tool_calls' },
             { assistantText: 'done', toolCalls: [], reasoning: null, finishReason: 'stop' },
@@ -547,12 +547,12 @@ describe('subagent dispatcher', () => {
             tools: { memory: { list_candidates: true } },
             executeLoopTool,
             chat: [],
-            // contextForMemory deliberately omitted.
+            // contextForSession deliberately omitted.
         });
         const h = await dispatcher.dispatch({ subagentId: 's', task: 't' });
         await dispatcher.awaitAll([h]);
 
-        expect(seenToolCtx[0].__memoryStore).toBeUndefined();
+        expect(seenToolCtx[0].__memoryGraphSession).toBeUndefined();
         expect(seenToolCtx[0].chat).toBeDefined();
     });
 });

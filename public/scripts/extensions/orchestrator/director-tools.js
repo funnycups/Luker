@@ -349,10 +349,10 @@ const SUB_AGENT_MAX_ROUNDS = 16;
  *     by main.js). Receives the sub-agent's tool calls.
  *   - chat: live chat array, forwarded as `ctx.chat` to executeLoopTool
  *     so chat-reading tools work.
- *   - contextForMemory: optional overlay carrying `__memoryStore` (and
- *     anything else `loop-runtime::attachMemoryStore` mounts in the
- *     future). Spread into the per-tool-call context so memory_* tools
- *     find a live store — without this, sub-agents hit MEMORY_DISABLED
+ *   - contextForSession: optional overlay carrying `__memoryGraphSession`
+ *     (and anything else `loop-runtime::attachMemoryGraphSession` mounts in
+ *     the future). Spread into the per-tool-call context so memory_* tools
+ *     find a live session — without this, sub-agents hit MEMORY_DISABLED
  *     even when memory-graph is enabled. Mounted by main.js once per
  *     director turn; shared by reference across every tool call.
  */
@@ -370,7 +370,7 @@ export function createSubagentDispatcher({
     chat,
     trace,
     contextForNotes,
-    contextForMemory,
+    contextForSession,
 }) {
     const list = Array.isArray(subAgents) ? subAgents : [];
     const byId = new Map(list.map(a => [a.id, a]));
@@ -745,7 +745,7 @@ export function createSubagentDispatcher({
                             toolResult = await executeGetDraftTool(handle);
                         } else if (typeof executeLoopTool === 'function') {
                             try {
-                                const raw = await executeLoopTool(name, args, { ...(contextForMemory || {}), chat });
+                                const raw = await executeLoopTool(name, args, { ...(contextForSession || {}), chat });
                                 toolResult = { ok: true, result: raw };
                             } catch (err) {
                                 toolResult = { ok: false, error: String(err?.message || err) };
