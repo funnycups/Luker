@@ -162,6 +162,7 @@ import {
     buildProfileDelta as buildIterationStudioProfileDelta,
     renderProfileDeltaHtml as renderIterationStudioProfileDeltaHtml,
 } from './iteration-studio/index.js';
+import * as EDITS_API from './lib/edits/index.js';
 
 /**
  * Layer 2 export of the shared IterationStudio shell. Third-party
@@ -2205,6 +2206,7 @@ export function getContext() {
         deleteCharacterChat: deleteCharacterChatByName,
         saveSettingsDebounced,
         iterationStudio: ITERATION_STUDIO_API,
+        edits: EDITS_API,
         onlineStatus: online_status,
         maxContext: Number(max_context),
         chatMetadata: chat_metadata,

@@ -2518,3 +2518,105 @@
         max-width: none;
     }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   EDITS LIB — Conflict resolution popup
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.popup .luker-studio-merge {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ls-space-md);
+    max-width: 100%;
+}
+
+.popup .luker-studio-merge-header h3 {
+    margin: 0 0 var(--ls-space-sm) 0;
+    font-size: 1.05rem;
+}
+
+.popup .luker-studio-merge-entry {
+    border: var(--ls-card-border);
+    border-radius: var(--ls-card-radius);
+    background: var(--ls-card-bg);
+    padding: var(--ls-space-md);
+    display: flex;
+    flex-direction: column;
+    gap: var(--ls-space-sm);
+}
+
+.popup .luker-studio-merge-head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ls-space-sm);
+    align-items: baseline;
+}
+
+.popup .luker-studio-merge-path {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 10%, transparent);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.popup .luker-studio-merge-op,
+.popup .luker-studio-merge-reason {
+    font-size: 0.85em;
+    opacity: var(--ls-muted);
+}
+
+.popup .luker-studio-merge-panes {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--ls-space-sm);
+}
+
+.popup .luker-studio-merge-pane {
+    border: 1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 14%, transparent);
+    border-radius: 6px;
+    padding: 6px 8px;
+    min-width: 0;
+}
+
+.popup .luker-studio-merge-pane h4 {
+    margin: 0 0 4px 0;
+    font-size: 0.85em;
+    opacity: var(--ls-muted);
+    font-weight: 600;
+}
+
+.popup .luker-studio-merge-pane pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.85em;
+    max-height: 12em;
+    overflow: auto;
+}
+
+.popup .luker-studio-merge-choices {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.popup .luker-studio-merge-choices label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+
+.popup .luker-studio-merge-manual {
+    margin-top: 4px;
+    width: 100%;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85em;
+    resize: vertical;
+}
+
+@media (max-width: 760px) {
+    .popup .luker-studio-merge-panes {
+        grid-template-columns: 1fr;
+    }
+}
