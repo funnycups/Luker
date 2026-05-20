@@ -1189,6 +1189,15 @@ function normalizeLorebookEntryForSync(entry, uid) {
     const normalizedUid = Number.isInteger(asFiniteInteger(uid, null))
         ? Number(asFiniteInteger(uid, 0))
         : Number(asFiniteInteger(source.uid, 0) || 0);
+    const rawDelay = source.delayUntilRecursion;
+    let delayUntilRecursion;
+    if (typeof rawDelay === 'number' && Number.isFinite(rawDelay)) {
+        delayUntilRecursion = Math.max(0, Math.trunc(rawDelay));
+    } else if (rawDelay === true) {
+        delayUntilRecursion = 1;
+    } else {
+        delayUntilRecursion = 0;
+    }
     return {
         uid: normalizedUid,
         comment: normalizeLineEndings(source.comment ?? ''),
@@ -1201,6 +1210,9 @@ function normalizeLorebookEntryForSync(entry, uid) {
         depth: asFiniteInteger(source.depth, 0) ?? 0,
         disable: Boolean(source.disable),
         constant: Boolean(source.constant),
+        excludeRecursion: Boolean(source.excludeRecursion),
+        preventRecursion: Boolean(source.preventRecursion),
+        delayUntilRecursion,
     };
 }
 
@@ -1223,6 +1235,9 @@ function buildLorebookEntryUpsertArgs(bookName, uid, entry) {
         depth: Number(normalized.depth),
         disable: Boolean(normalized.disable),
         constant: Boolean(normalized.constant),
+        exclude_recursion: Boolean(normalized.excludeRecursion),
+        prevent_recursion: Boolean(normalized.preventRecursion),
+        delay_until_recursion: Number(normalized.delayUntilRecursion),
     };
 }
 
@@ -1512,6 +1527,9 @@ function normalizeCharacterEditorLorebookToolEntry(entry, uid, { includeContent 
         output.order = Number(normalized.order);
         output.position = Number(normalized.position);
         output.depth = Number(normalized.depth);
+        output.exclude_recursion = Boolean(normalized.excludeRecursion);
+        output.prevent_recursion = Boolean(normalized.preventRecursion);
+        output.delay_until_recursion = Number(normalized.delayUntilRecursion);
     }
     if (includeContent) {
         output.content = String(normalized.content || '');
@@ -3010,6 +3028,9 @@ function buildLorebookSyncModelTools() {
                         enabled: { type: 'boolean' },
                         disable: { type: 'boolean' },
                         constant: { type: 'boolean' },
+                        exclude_recursion: { type: 'boolean' },
+                        prevent_recursion: { type: 'boolean' },
+                        delay_until_recursion: { type: 'integer' },
                     },
                     required: ['entry_uid'],
                     additionalProperties: false,
@@ -3196,6 +3217,9 @@ function normalizeModelOperationArgs(kind, args, targetBook) {
             'enabled',
             'disable',
             'constant',
+            'exclude_recursion',
+            'prevent_recursion',
+            'delay_until_recursion',
         ];
         const hasPayload = upsertPayloadKeys.some(key => Object.hasOwn(safeArgs, key));
         if (!hasPayload) {
@@ -3249,6 +3273,18 @@ function normalizeModelOperationArgs(kind, args, targetBook) {
         }
         if (Object.hasOwn(safeArgs, 'constant')) {
             normalized.constant = Boolean(safeArgs.constant);
+        }
+        if (Object.hasOwn(safeArgs, 'exclude_recursion')) {
+            normalized.exclude_recursion = Boolean(safeArgs.exclude_recursion);
+        }
+        if (Object.hasOwn(safeArgs, 'prevent_recursion')) {
+            normalized.prevent_recursion = Boolean(safeArgs.prevent_recursion);
+        }
+        if (Object.hasOwn(safeArgs, 'delay_until_recursion')) {
+            const value = asFiniteInteger(safeArgs.delay_until_recursion, null);
+            if (value !== null) {
+                normalized.delay_until_recursion = value;
+            }
         }
         return normalized;
     }
@@ -3915,6 +3951,9 @@ function buildCharacterEditorModelTools({ helperToolApis = [] } = {}) {
                         enabled: { type: 'boolean' },
                         disable: { type: 'boolean' },
                         constant: { type: 'boolean' },
+                        exclude_recursion: { type: 'boolean', description: 'Non-recursable: this entry will NOT be triggered by other entries\' content during recursive scans.' },
+                        prevent_recursion: { type: 'boolean', description: 'Prevent further recursion: once this entry fires, do NOT recurse into other entries from its content.' },
+                        delay_until_recursion: { type: 'integer', description: 'Delay-until-recursion level: 0=fire on first scan as normal; 1=skip first scan and only fire from recursion level 1; 2+ = wait until that level.' },
                     },
                     required: ['book_name', 'entry_uid'],
                     additionalProperties: false,
@@ -4002,7 +4041,7 @@ function normalizeCharacterEditorOperationsFromCalls(rawCalls) {
                     hasPayload = true;
                 }
             }
-            const intFields = ['selective_logic', 'order', 'position', 'depth'];
+            const intFields = ['selective_logic', 'order', 'position', 'depth', 'delay_until_recursion'];
             for (const key of intFields) {
                 if (!Object.hasOwn(args, key)) {
                     continue;
@@ -4013,7 +4052,7 @@ function normalizeCharacterEditorOperationsFromCalls(rawCalls) {
                     hasPayload = true;
                 }
             }
-            const boolFields = ['create_if_missing', 'enabled', 'disable', 'constant'];
+            const boolFields = ['create_if_missing', 'enabled', 'disable', 'constant', 'exclude_recursion', 'prevent_recursion'];
             for (const key of boolFields) {
                 if (Object.hasOwn(args, key)) {
                     normalizedArgs[key] = Boolean(args[key]);
@@ -5785,6 +5824,18 @@ function applyLorebookEntryArgs(baseEntry, args, entryUid) {
     if (Object.hasOwn(args, 'constant')) {
         entry.constant = Boolean(args.constant);
     }
+    if (Object.hasOwn(args, 'exclude_recursion')) {
+        entry.excludeRecursion = Boolean(args.exclude_recursion);
+    }
+    if (Object.hasOwn(args, 'prevent_recursion')) {
+        entry.preventRecursion = Boolean(args.prevent_recursion);
+    }
+    if (Object.hasOwn(args, 'delay_until_recursion')) {
+        const level = asFiniteInteger(args.delay_until_recursion, null);
+        if (level !== null) {
+            entry.delayUntilRecursion = Math.max(0, level);
+        }
+    }
 
     return entry;
 }
@@ -6302,6 +6353,9 @@ function registerTools(context) {
                 enabled: { type: 'boolean' },
                 disable: { type: 'boolean' },
                 constant: { type: 'boolean' },
+                exclude_recursion: { type: 'boolean' },
+                prevent_recursion: { type: 'boolean' },
+                delay_until_recursion: { type: 'integer' },
             },
             required: ['book_name', 'entry_uid'],
             additionalProperties: false,

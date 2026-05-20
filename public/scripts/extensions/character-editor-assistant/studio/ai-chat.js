@@ -258,6 +258,9 @@ function buildTools() {
  order: { type: 'number', description: 'Sort order within position bucket. Default 100. Lower=earlier in bucket.' },
  depth: { type: 'number', description: 'Chat depth (only used when position=4). 0=right at conversation tail, higher=further back.' },
  role: { type: 'number', description: 'Role for atDepth injection (only used when position=4): 0=system, 1=user, 2=assistant. Default 0.' },
+ excludeRecursion: { type: 'boolean', description: 'Non-recursable: do NOT let this entry be triggered by other entries\' content during recursive scans (default false).' },
+ preventRecursion: { type: 'boolean', description: 'Prevent further recursion: once this entry fires, do NOT recurse into other entries from its content (default false).' },
+ delayUntilRecursion: { type: 'number', description: 'Delay-until-recursion level: 0=fire on the first scan as normal; 1=skip first scan, only fire from recursion level 1 onward; 2+ = wait until that level. Default 0.' },
  },
  required: ['book_name'],
  additionalProperties: false,
@@ -268,7 +271,7 @@ function buildTools() {
  type: 'function',
  function: {
  name: TOOL_NAMES.WORLDINFO_UPDATE_ENTRY,
- description: 'Update fields of an existing world book entry.',
+ description: 'Update fields of an existing world book entry. Patch accepts any entry field; common: comment, content, key, keysecondary, constant, selective, disable, position, order, depth, role, excludeRecursion, preventRecursion, delayUntilRecursion.',
  parameters: {
  type: 'object',
  properties: {
@@ -346,6 +349,9 @@ function buildTools() {
  order: { type: 'number', description: 'Sort order within position bucket. Default 100. Lower=earlier.' },
  depth: { type: 'number', description: 'Chat depth (only when position=4). 0=tail.' },
  role: { type: 'number', description: 'Role for atDepth (only when position=4): 0=system, 1=user, 2=assistant.' },
+ excludeRecursion: { type: 'boolean', description: 'Non-recursable: do NOT let this entry be triggered by other entries\' content (default false).' },
+ preventRecursion: { type: 'boolean', description: 'Prevent further recursion from this entry (default false).' },
+ delayUntilRecursion: { type: 'number', description: 'Delay-until-recursion level (0=normal, 1+=skip until that recursion level). Default 0.' },
  },
  additionalProperties: true,
  },
