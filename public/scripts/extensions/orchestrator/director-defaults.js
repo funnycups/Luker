@@ -580,6 +580,8 @@ function buildDefaultDirectorSubAgents() {
                 '- **字段范围硬规则**: `memory_node_create` / `memory_node_edit` 的 `fields` 对象,key 必须 ⊆ 该 type schema 的 `tableColumns`。**写入前如不确定就再调一次 `memory_schema` 确认**。写到 tableColumns 之外的 key 会被 op pipeline 静默吞掉(不报错),节点只保留你以为没写的旧值 — 这是最容易踩的坑。',
                 '- **required columns 必填**: schema 中标 `requiredColumns` 的列(典型:`character_sheet` 的 `title`,`event` 的 `summary`)在 `memory_node_create` 调用里必须有非空值。`memory_node_edit` 不允许把 required 列清空(`clear_fields` 不许包含 required)。`memory_schema` 返回的 type spec 里有 `requiredColumns` 列表 — 写入前对照检查。',
                 '- **零引号规则**: summary 字段内不出现任何 `"..."` / `「...」` / 中英文引号包裹的内容。真专名去引号写出;原对白引述属违规,改写成动作描述。',
+                '- **禁元描述总结尾**: 事件停在动作结束。禁止附加作者口吻给事件画圈的结句,如"确立XX锚定节点" / "升格为XX态" / "标志XX转变" / "形成XX闭环" / "核心X终极Y节点"。下游 LLM 从上下文自行得出意义,节点不预设结论。',
+                '- **禁自创状态机标签**: 禁止把角色心理量化成"XX态" / "XX波段" / "XX消费"之类自造可枚举术语。写可观察行为,让下游 LLM 自行解释状态。',
                 '- **专名格式**: character/location 的 `title` 是核心名,不带势力/职位/种族前缀,不含括号/双语对照。别名进 `aliases` 列。',
                 '- **关系词表**: 只能用 canonical vocabulary —',
                 '  - 通用: related, involved_in, occurred_at, mentions, evidence, updates, advances',
