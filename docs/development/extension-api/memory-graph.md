@@ -3,37 +3,123 @@
 > Status: experimental (subject to breaking changes for 2-3 minor versions per spec §9)
 >
 > Entry points:
-> - `getMemoryGraphReadApi(context)` from `public/scripts/extensions/memory-graph/read-api.js` (read surface)
-> - `getMemoryGraphWriteApi(context)` from `public/scripts/extensions/memory-graph/write-api.js` (write surface)
+> - **Recommended:** `getExtensionApi('memory-graph').openSession(context)` from `public/scripts/extensions.js` (session facade)
+> - Lower-level: `getMemoryGraphReadApi(store, context)` from `public/scripts/extensions/memory-graph/read-api.js` (read factory)
+> - Lower-level: `getMemoryGraphWriteApi(store, context)` from `public/scripts/extensions/memory-graph/write-api.js` (write factory)
+
+## Session API (recommended entry)
+
+Open a chat-scoped session through Luker's extension registry:
+
+```js
+import { getExtensionApi } from '/scripts/extensions.js';
+
+const memoryApi = getExtensionApi('memory-graph');
+const session = await memoryApi?.openSession?.(context);
+if (!session) {
+    // memory-graph not loaded, or context lacks createFloorState
+    return;
+}
+
+// Read
+const candidates = session.listVisibleCandidates({ types: ['character_sheet'], limit: 20 });
+const brief = session.getNodeBrief('node_42');
+const edges = session.getEdgeSummary('node_42');
+const matches = session.findByName({ query: 'Alice' });
+const ranked = session.keywordSearch({ query: 'sword fight in the inn', k: 5 });
+const semantic = await session.vectorSearch({ query: 'betrayal', k: 5 });
+
+// Write
+const { id } = session.createNode({ type: 'event', title: 'Alice draws her sword', fields: { what: '...' } });
+session.editNode({ id, setFields: { who: ['Alice', 'Bob'] } });
+session.upsertLinks({ source: { id }, links: [{ to: 'alice_node', relation: 'about' }] });
+session.deleteLinks({ source: { id }, target: { id: 'bob_node' }, relation: 'about' });
+session.compactNodes({ type: 'event', childIds: [...], summary: '...' });
+```
+
+The `'memory-graph'` extension api is published via Luker's `registerExtensionApi(name, api)` mechanism — the same one `card-app` and other Luker extensions use. Third-party extensions that integrate with memory-graph should always go through `getExtensionApi('memory-graph')`, never import `memory-graph/*.js` directly.
+
+### Lifetime
+
+Each `openSession` call resolves the current chat's store snapshot. If the user switches chats, or you want a fresh read of in-flight edits made by another path, call `openSession` again — sessions are cheap to open.
+
+### Empty store
+
+A chat that has never had extraction run still gets a writable session. Read methods return empty arrays; write methods populate the store and persist through the same floor-state path the native extraction pipeline uses. This means the first write on a fresh chat works without any precondition setup.
+
+### When `openSession` returns `null`
+
+- Memory-graph extension is not loaded (`getExtensionApi('memory-graph')` returned `undefined`).
+- The context lacks `createFloorState` (typical for test runners that didn't mock the SillyTavern context fully).
+
+The orchestrator's `memory_*` loop tools translate a `null` session into `ToolError(MEMORY_DISABLED)` so agents can pivot.
+
+### Method reference
+
+All 16 methods on the returned session object:
+
+| Method | Returns | Notes |
+| --- | --- | --- |
+| `listVisibleCandidates(opts)` | `NodeView[]` | The pool the native recall LLM sees |
+| `getEdgeSummary(id, opts)` | `EdgeSummaryView` | Degree + relations + sample neighbours |
+| `getNodeBrief(id, opts)` | `NodeBriefView \| null` | Full brief incl. fields + edges |
+| `expandFromSeeds(ids, opts)` | `NodeView[]` | BFS-expand a small seed set |
+| `getSchema()` | `SchemaView` | Active node-type schema |
+| `keywordSearch(opts)` | `RankedView[]` | Token-overlap over visible nodes |
+| `vectorSearch(opts)` | `Promise<RankedView[]>` | Embedding search; throws `NO_EMBEDDING_PROFILE` |
+| `findByName(opts)` | `{ matches: NodeView[] }` | Exact / substring title + primary-key match |
+| `compactionCandidates(opts)` | `{ groups: ... }` | Semantic roots ready for rollup |
+| `createNode(op)` | `{ id }` | Create a node |
+| `editNode(op)` | `{ ok }` | Patch fields / rename |
+| `deleteNode(op)` | `{ ok }` | Archive (soft-delete) |
+| `upsertLinks(op)` | `{ applied }` | Add or update edges |
+| `deleteLinks(op)` | `{ removed }` | Remove a specific edge |
+| `compactNodes(op)` | `{ rollupNodeId }` | Roll children into a semantic parent |
+| `applyExtractionBatch(input)` | `{ applied, rejected }` | One-shot multi-op batch |
+
+For full signatures of each method, see the **Read API** and **Write API** sections below — `openSession` delegates to those internally.
+
+### Lower-level access
+
+`getMemoryGraphReadApi(store, context)` and `getMemoryGraphWriteApi(store, context)` remain exported for internal callers that already hold a store reference (e.g. the native `chooseRecallRoute` pipeline). Third-party extensions should prefer `openSession` — the session facade handles store loading, fresh-chat fallback, and registration through Luker's standard extension api in one place.
 
 ## Overview
 
 The memory-graph extension drives Luker's long-term recall by feeding a curated pool of nodes (`character_sheet`, `event`, `relationship`, ...) plus a per-node `edge_summary` to a "route" LLM that picks which memories to inject into the next turn. The native pipeline (`chooseRecallRoute` / `collectRootCandidates` in `main.js`) constructs that LLM input from internal helpers — `buildProjectedEdges`, `getNearestVisibleAncestorId`, `formatNodeBrief`, etc.
 
-`getMemoryGraphReadApi(context)` exposes the same data, topology, and recall primitives as a frozen, caller-safe API surface. The intended consumer is an agent-style plugin that wants to run its own LLM-driven recall — for example the orchestrator's `memory_scout` sub-agent — with whatever model / preset its operator prefers, against the exact same candidate pool and field projection the native router sees.
+`getMemoryGraphReadApi(store, context)` exposes the same data, topology, and recall primitives as a frozen, caller-safe API surface. The intended consumer is an agent-style plugin that wants to run its own LLM-driven recall — for example the orchestrator's `memory_scout` sub-agent — with whatever model / preset its operator prefers, against the exact same candidate pool and field projection the native router sees.
 
-`getMemoryGraphWriteApi(context)` is the companion mutation surface: an extractor-style agent (or a curator agent that edits the graph between turns) goes through it instead of touching store internals. The Write API is documented in [Write API](#write-api) below.
+`getMemoryGraphWriteApi(store, context)` is the companion mutation surface: an extractor-style agent (or a curator agent that edits the graph between turns) goes through it instead of touching store internals. The Write API is documented in [Write API](#write-api) below.
 
 The read surface is strictly read-only:
 
 - Returned views are deep-frozen plain objects / arrays / Sets. The factory never returns store-internal references.
-- Views are synthesised per call from the live store, so a single API instance stays valid across chat / character switches.
+- Views are synthesised per call from the supplied store, so a single API instance stays valid for the lifetime of that store reference.
 - Every mutation goes through the Write API; the read factory never exposes a write path.
 
 ## Quick Start
 
 ```js
-import { getMemoryGraphReadApi } from '/scripts/extensions/memory-graph/read-api.js';
+import { getExtensionApi } from '/scripts/extensions.js';
 
-const api = getMemoryGraphReadApi(Luker.getContext());
+const session = await getExtensionApi('memory-graph')?.openSession?.(Luker.getContext());
+if (!session) return;
 
 // Enumerate the visible candidate pool the native recall LLM sees.
-const candidates = api.listVisibleCandidates();
+const candidates = session.listVisibleCandidates();
 
 // Get a brief for one node — id, summary, edge_summary, exposure, always_inject.
-const brief = api.getNodeBrief(candidates[0].id);
+const brief = session.getNodeBrief(candidates[0].id);
+```
 
-// Observe injection state changes.
+If you already hold a store reference (internal callers only), you can construct a read factory directly:
+
+```js
+import { getMemoryGraphReadApi } from '/scripts/extensions/memory-graph/read-api.js';
+
+const api = getMemoryGraphReadApi(store, context);
+const candidates = api.listVisibleCandidates();
+// ... onInjectionChanged, listNodes, projectEdges, etc. live here.
 const unsubscribe = api.onInjectionChanged(state => {
     console.log('injection changed', state.alwaysInjectIds.size, state.recallSelectedIds.size);
 });
@@ -482,7 +568,7 @@ console.log(expanded.length, 'nodes reachable');
 - Token-intersection search across each node's `title` and schema-projected fields. Case-insensitive.
 - `score` is `matches / queryTokenCount` per node; results are sorted by `score` descending and capped at `k` (default `20`).
 - Empty / whitespace-only `query` returns an empty array (no throw).
-- Always available — no embedding profile required, no async work.
+- Always available — no embedding profile required, no async work, no recency fallback.
 
 **When to use:** the safe default when you need a query-prefiltered shortlist of candidate ids and cannot rely on an embedding profile being configured. Also the recommended fallback when `vectorSearch` throws `NO_EMBEDDING_PROFILE`.
 
@@ -622,7 +708,10 @@ unsubscribe();
 The two LLM-input blocks that `chooseRecallRoute` constructs are `schema_overview` and `candidateRows`. With the API, replicating them is direct:
 
 ```js
-const api = getMemoryGraphReadApi(Luker.getContext());
+import { getExtensionApi } from '/scripts/extensions.js';
+
+const api = await getExtensionApi('memory-graph')?.openSession?.(Luker.getContext());
+if (!api) return;
 
 // schema_overview block (the LLM prompt segment that describes each node type).
 const schemaOverview = api.getSchema().types.map(spec => ({
@@ -651,17 +740,17 @@ The full equivalence guarantee — `candidateRows` field-by-field and order-by-o
 
 ## Write API
 
-The write API is the Layer-1 entry for third-party agents that want to edit the memory graph directly — for example a curator agent that runs between turns instead of relying on the built-in extractor. It uses the same `context.__memoryStore` convention as the read API.
+The write API is the Layer-1 entry for third-party agents that want to edit the memory graph directly — for example a curator agent that runs between turns instead of relying on the built-in extractor. The session facade exposes the common write methods; the lower-level `getMemoryGraphWriteApi(store, context)` factory is what `openSession` wraps internally.
 
-### Factory: getMemoryGraphWriteApi(context)
+### Factory: getMemoryGraphWriteApi(store, context)
 
 ```js
 import { getMemoryGraphWriteApi } from '/scripts/extensions/memory-graph/write-api.js';
 
-const writeApi = getMemoryGraphWriteApi(Luker.getContext());
+const writeApi = getMemoryGraphWriteApi(store, context);
 ```
 
-Returns a frozen object exposing the methods documented below. Like the read factory, this is stateless — each method call resolves the store from `context.__memoryStore` at invocation time, so a single instance stays valid across chat / character switches. Methods throw `{ code: 'MEMORY_STORE_MISSING' }` when no store is mounted on the context.
+Returns a frozen object exposing the methods documented below. The factory binds to the supplied `store` reference — pass the live store you obtained from the floor-state loader. Methods throw `{ code: 'MEMORY_STORE_MISSING' }` when invoked against a `null` store. Third-party extensions should normally use `openSession` instead of constructing this factory directly.
 
 ### Recommended entry: applyExtractionBatch(options)
 
@@ -835,7 +924,7 @@ if (groups.length > 0) {
 
 - `external-api.js` legacy exports (`getCurrentlyInjectedNodeIds`, `__recordInjectedNodeIds`, `applyMemoryGraphInjectionUpdate`, `createEmptyInjectionState`) remain in place — existing plugins do not need to change.
 - `getMemoryGraphInjectionState(context)` is re-exported from `read-api.js` for symmetry: it returns the same shape (`alwaysInjectIds`, `recallSelectedIds`, `visibleIds`) as `getInjectionState()`.
-- The factories `getMemoryGraphReadApi(context)` and `getMemoryGraphWriteApi(context)` do not pollute the legacy namespace; importing them has no side effects beyond loading the respective module.
+- The factories `getMemoryGraphReadApi(store, context)` and `getMemoryGraphWriteApi(store, context)` do not pollute the legacy namespace; importing them has no side effects beyond loading the respective module.
 - Both APIs are marked `@experimental` for 2-3 minor versions per spec §9. Breaking changes during that window are permitted; field semantics will be preserved, but field names and signatures may shift in response to real-world plugin usage before the API is frozen.
 
 ## Performance
@@ -843,12 +932,12 @@ if (groups.length > 0) {
 - `listNodes` / `listEdges` iterate the full store — use for offline / one-shot analysis only. Cost grows linearly with the node / edge count.
 - `listVisibleCandidates` is the hot-path equivalent — equivalent cost to one native `collectRootCandidates` call. Pre-applies the recall-side filters so callers do not pay for them again.
 - `getEdgeSummary` / `projectEdges` are not cached — each call recomputes from raw edges. This is acceptable for typical recall workloads (1-2 calls per turn) per spec §7. If you find yourself calling `getEdgeSummary` per candidate in a hot loop, consider caching the result yourself keyed on the visible-id set.
-- `vectorSearch` depends on the vector index being built and an embedding profile being configured; it throws `NO_EMBEDDING_PROFILE` rather than falling back silently. `keywordSearch` is always available and runs synchronously.
+- `keywordSearch` is pure token-overlap over the candidate pool — synchronous, always available, no recency fallback. `vectorSearch` depends on the vector index being built and an embedding profile being configured; it throws `NO_EMBEDDING_PROFILE` rather than falling back silently, so callers pick their own fallback (typically `keywordSearch`).
 - Write-API ops persist the store and rebuild downstream indices (vector / edge summaries) at the batch boundary. Prefer `applyExtractionBatch` over a sequence of per-primitive calls when several ops belong to the same logical action — the rollback / persist boundary then applies to the whole batch.
 - All returned views are frozen lazily during construction. Re-freezing already-frozen objects is a no-op, so repeated reads of the same node are cheap on the consumer side.
 
 ## See Also
 
 - Native recall path: `public/scripts/extensions/memory-graph/main.js` (`chooseRecallRoute`, `collectRootCandidates`, `expandRouteCandidates`)
-- Companion: the orchestrator's `memory_scout` sub-agent uses this API — see [Director runtime](/features/orchestrator/director).
-- Related extension API: [Plugin Integration](/development/extension-api/plugin-integration) for the broader extension API registry that exposes `getMemoryGraphReadApi` and `getMemoryGraphWriteApi` alongside other extension entry points.
+- Companion: the orchestrator opens a session via `getExtensionApi('memory-graph').openSession(context)` and stashes the resulting session on `__memoryGraphSession` for its `memory_*` loop tools — see [Director runtime](/features/orchestrator/director).
+- Related extension API: [Plugin Integration](/development/extension-api/plugin-integration) for the broader extension API registry that publishes `'memory-graph'` alongside other extension entry points.
