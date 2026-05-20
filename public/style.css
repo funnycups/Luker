@@ -6849,20 +6849,23 @@ body:not(.movingUI) .drawer-content.maximized {
 #announcement-bell-badge.hidden { display: none; }
 #announcement-bell-badge {
     position: absolute;
-    top: -4px;
+    top: -2px;
     right: -4px;
     background: #ff5252;
     color: white;
     border-radius: 10px;
-    padding: 0 6px;
+    padding: 0 5px;
     font-size: 10px;
     line-height: 14px;
     min-width: 14px;
     text-align: center;
+    pointer-events: none;
 }
 #announcement-bell-button {
     position: relative;
     display: inline-flex;
+    align-items: center;
+    cursor: pointer;
 }
 .announcement-inbox-row {
     padding: 8px 6px;

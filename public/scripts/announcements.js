@@ -274,27 +274,38 @@ document.addEventListener('click', async (event) => {
     const bell = target.closest('#announcement-bell-button');
     if (bell) {
         event.preventDefault();
-        await openInbox();
+        try {
+            await openInbox();
+        } catch (error) {
+            console.error('Failed to open announcements inbox:', error);
+            if (window.toastr) {
+                window.toastr.error(String(error?.message || error), t`Announcements`);
+            }
+        }
         return;
     }
 
     const row = target.closest('.announcement-inbox-row');
     if (row) {
-        const id = row.getAttribute('data-id');
-        const item = state.items.find((x) => x.id === id);
-        if (!item) return;
-        const bodyEl = row.querySelector('.announcement-inbox-body');
-        if (!bodyEl) return;
-        const isOpen = bodyEl.style.display !== 'none';
-        if (isOpen) {
-            bodyEl.style.display = 'none';
-        } else {
-            bodyEl.innerHTML = formatAnnouncementBody(item.body);
-            bodyEl.style.display = '';
-            if (isUnread(item)) {
-                row.classList.remove('is-unread');
-                await markRead([item.id]);
+        try {
+            const id = row.getAttribute('data-id');
+            const item = state.items.find((x) => x.id === id);
+            if (!item) return;
+            const bodyEl = row.querySelector('.announcement-inbox-body');
+            if (!bodyEl) return;
+            const isOpen = bodyEl.style.display !== 'none';
+            if (isOpen) {
+                bodyEl.style.display = 'none';
+            } else {
+                bodyEl.innerHTML = formatAnnouncementBody(item.body);
+                bodyEl.style.display = '';
+                if (isUnread(item)) {
+                    row.classList.remove('is-unread');
+                    await markRead([item.id]);
+                }
             }
+        } catch (error) {
+            console.error('Announcement row interaction failed:', error);
         }
     }
 });
