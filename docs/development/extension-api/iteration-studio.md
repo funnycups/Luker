@@ -170,9 +170,25 @@ The shell shows the dropdown in the toolbar, calls `loadReference(id)` when the 
 
 ## Custom ops
 
-The 8 built-in edits-lib ops (`set` / `unset` / `str_*` / `list_*`) cover most cases. For surface-specific mutations the adapter can declare a `registerCustomOps(registry)` hook; the registry receives the same shape `registerOp(name, handler)` from edits-lib.
+The shell calls `adapter.registerCustomOps?.(registry)` once per `openIterationStudio()` invocation. The `registry` is a facade that wraps the edits-lib engine's `registerOp` with a `getRegisteredOp` guard, so re-opening the popup never re-registers (or fails on duplicate). Adapters that introduce schema-specific ops register them here.
 
-For SP-1 the sandbox-diff pattern means the reference adapters emit only `set` at path `''`, so no custom ops are needed. When you graduate to per-field normalization and find that a built-in op doesn't fit a domain mutation (e.g. `graph.node.add`, `preset.entry.move`), reach for `registerOp` directly — see `edits-lib.md` for the handler contract.
+Example — CEA's lorebook-entry custom ops:
+
+```js
+import {
+    createLorebookEntryAddOp,
+    createLorebookEntryUpdateOp,
+    createLorebookEntryRemoveOp,
+} from './lorebook-ops.js';
+
+registerCustomOps: (registry) => {
+    registry.registerOp('lorebook_entry_add', createLorebookEntryAddOp());
+    registry.registerOp('lorebook_entry_update', createLorebookEntryUpdateOp());
+    registry.registerOp('lorebook_entry_remove', createLorebookEntryRemoveOp());
+},
+```
+
+Each handler implements `{ apply, inverse, detectConflict }` — see [edits-lib.md](edits-lib.md) for the full op contract. Use a custom op when an entry shape is keyed by something other than array index (e.g. lorebook `uid`s), where built-in `list_*` ops would silently drift across reorderings.
 
 ## Migration: clearObsoleteSessions
 
@@ -218,5 +234,6 @@ Read these for working end-to-end examples of the contract:
 - `public/scripts/extensions/orchestrator/iteration-adapter.js` — wraps the orchestrator's pre-existing mutator with the sandbox-diff pattern. Layout `split`, per-mode session buckets, runtime world-info resolution, custom control tool names.
 - `public/scripts/extensions/memory-graph/schema-adapter.js` — node-type schema editor built directly on the v2 contract. Layout `split`, global-only sessions, apply-to-global / apply-to-character action buttons in the preview pane.
 - `public/scripts/extensions/character-editor-assistant/studio/adapter.js` — CardApp Studio, the per-character custom-frontend editor. Layout `split`, per-character session scope `char_<avatar>`. The live preview is the host CardApp behind the popup (reloaded via the `card-app` extension API); the adapter renders the file tree + CM6 editor in the right pane. All file CRUD goes through the existing `fetchFileList / saveFileContent / deleteFile / renameFile` helpers; the 4 write tools route through `normalizeToolCallToEdit`, the 2 read tools through `executeControlToolCall`.
+- **CEA Character Editor** — `public/scripts/extensions/character-editor-assistant/character-editor-adapter.js`, layout `split`, per-character session scope `char_<avatar>`. Live shape is `{ card, lorebook: { bookName, entries: { [uid]: entry } } }`. Edits character card fields via `mergeCharacterAttributes` and lorebooks via `context.saveWorldInfo`. Registers 3 custom ops (`lorebook_entry_add / update / remove`) keyed by entry uid.
 
 The adapter contract JSDoc lives in `public/scripts/iteration-studio/adapter.js` — that file is the canonical source for required vs optional fields and exact signatures.

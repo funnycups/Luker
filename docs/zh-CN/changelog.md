@@ -38,6 +38,7 @@
 
 ## 近期破坏性变更
 
+- **CEA 角色编辑器基于迭代工作台外壳重构**（适配器迁移 SP-3）。世界书同步分析弹窗被多轮迭代会话替代。一个适配器同时编辑角色卡与世界书；新增 3 个 CEA 自有的 edits-lib 自定义 op（`lorebook_entry_add / update / remove`），以条目 uid 为键。外壳现每次打开时调用一次 `adapter.registerCustomOps(registry)`。旧的 `lorebookSyncHistory` 设置项会在首次打开时被清除；磁盘上的角色卡与世界书数据不受影响。
 - **迭代工作台适配器合约 v2（IDE 风格）。** Shell 不再持有 `workingProfile` 快照；适配器的 `live()` 为唯一权威源。已迁移内置 orchestrator + memory-graph 适配器。外部适配器需要相应升级（参见 `docs/zh-CN/development/extension-api/iteration-studio.md`）。升级后首次打开时按适配器清空一次旧的迭代工作台会话数据；实时数据（预设文件、角色卡、设置）不受影响。CEA 与 CPA 适配器将在后续版本提供。
 
 ---

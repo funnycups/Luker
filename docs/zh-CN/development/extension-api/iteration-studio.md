@@ -170,9 +170,25 @@ loadReference(id): Promise<any>
 
 ## 自定义 op
 
-edits-lib 的 8 个内置 op（`set` / `unset` / `str_*` / `list_*`）覆盖大多数场景。对于面向特定表面的变更，适配器可以声明 `registerCustomOps(registry)` 钩子；registry 接受与 edits-lib 相同形态的 `registerOp(name, handler)`。
+外壳每次调用 `openIterationStudio()` 时会触发一次 `adapter.registerCustomOps?.(registry)`。`registry` 是对 edits-lib 引擎 `registerOp` 的封装，带 `getRegisteredOp` 守卫，所以重新打开弹窗不会重复注册（也不会因重复注册而失败）。需要 schema 专属 op 的适配器在这里注册。
 
-SP-1 阶段，由于 sandbox-diff 模式让参考适配器只在 path `''` 上发射 `set`，无需自定义 op。当升级到逐字段归一化、发现某个内置 op 不适合某种领域变更（如 `graph.node.add`、`preset.entry.move`）时，直接用 `registerOp` —— handler 契约见 `edits-lib.md`。
+示例 —— CEA 的世界书条目自定义 op：
+
+```js
+import {
+    createLorebookEntryAddOp,
+    createLorebookEntryUpdateOp,
+    createLorebookEntryRemoveOp,
+} from './lorebook-ops.js';
+
+registerCustomOps: (registry) => {
+    registry.registerOp('lorebook_entry_add', createLorebookEntryAddOp());
+    registry.registerOp('lorebook_entry_update', createLorebookEntryUpdateOp());
+    registry.registerOp('lorebook_entry_remove', createLorebookEntryRemoveOp());
+},
+```
+
+每个 handler 实现 `{ apply, inverse, detectConflict }` —— 完整 op 契约见 [edits-lib.md](edits-lib.md)。当条目以非数组下标的方式（如世界书 `uid`）作为键时使用自定义 op；这种场景下内置 `list_*` op 会在重排序时悄然漂移。
 
 ## 迁移：clearObsoleteSessions
 
@@ -218,5 +234,6 @@ Layer 3 表面重新导出与 Layer 1 相同的函数；`open` 是 `openIteratio
 - `public/scripts/extensions/orchestrator/iteration-adapter.js` —— 用 sandbox-diff 模式包裹编排器既有的变更器。布局 `split`、按 mode 分桶的会话、运行时 world-info 解析、自定义控制工具名。
 - `public/scripts/extensions/memory-graph/schema-adapter.js` —— 直接基于 v2 契约构建的节点类型 schema 编辑器。布局 `split`、仅全局会话、预览面板里有"应用到全局" /"应用到角色"动作按钮。
 - `public/scripts/extensions/character-editor-assistant/studio/adapter.js` —— 卡片应用工作室、按角色的自定义前端编辑器。布局 `split`、按角色范围 `char_<avatar>`。实时预览是弹窗背后的宿主卡片应用（通过 `card-app` 扩展 API 重新加载）；适配器在右侧面板渲染文件树和 CM6 编辑器。所有文件 CRUD 均通过现有的 `fetchFileList / saveFileContent / deleteFile / renameFile` 辅助函数完成；4 个写工具走 `normalizeToolCallToEdit`、2 个读工具走 `executeControlToolCall`。
+- **CEA 角色编辑器** —— `public/scripts/extensions/character-editor-assistant/character-editor-adapter.js`，布局 `split`、按角色范围 `char_<avatar>`。实时数据结构为 `{ card, lorebook: { bookName, entries: { [uid]: entry } } }`。通过 `mergeCharacterAttributes` 编辑角色卡字段，通过 `context.saveWorldInfo` 编辑世界书。注册 3 个以条目 uid 为键的自定义 op（`lorebook_entry_add / update / remove`）。
 
 适配器契约 JSDoc 位于 `public/scripts/iteration-studio/adapter.js` —— 该文件是必需 vs 可选字段与精确签名的规范来源。

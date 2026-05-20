@@ -170,9 +170,25 @@ loadReference(id): Promise<any>
 
 ## 自定義 op
 
-edits-lib 的 8 個內建 op（`set` / `unset` / `str_*` / `list_*`）覆蓋大多數場景。對於面向特定表面的變更，適配器可以宣告 `registerCustomOps(registry)` 鉤子；registry 接受與 edits-lib 相同形態的 `registerOp(name, handler)`。
+外殼每次呼叫 `openIterationStudio()` 時會觸發一次 `adapter.registerCustomOps?.(registry)`。`registry` 是對 edits-lib 引擎 `registerOp` 的封裝，帶 `getRegisteredOp` 守衛，所以重新開啟彈窗不會重複註冊（也不會因重複註冊而失敗）。需要 schema 專屬 op 的適配器在此註冊。
 
-SP-1 階段，由於 sandbox-diff 模式讓參考適配器只在 path `''` 上發射 `set`，無需自定義 op。當升級到逐欄位歸一化、發現某個內建 op 不適合某種領域變更（如 `graph.node.add`、`preset.entry.move`）時，直接用 `registerOp` —— handler 契約見 `edits-lib.md`。
+範例 —— CEA 的世界書條目自定義 op：
+
+```js
+import {
+    createLorebookEntryAddOp,
+    createLorebookEntryUpdateOp,
+    createLorebookEntryRemoveOp,
+} from './lorebook-ops.js';
+
+registerCustomOps: (registry) => {
+    registry.registerOp('lorebook_entry_add', createLorebookEntryAddOp());
+    registry.registerOp('lorebook_entry_update', createLorebookEntryUpdateOp());
+    registry.registerOp('lorebook_entry_remove', createLorebookEntryRemoveOp());
+},
+```
+
+每個 handler 實作 `{ apply, inverse, detectConflict }` —— 完整 op 契約見 [edits-lib.md](edits-lib.md)。當條目以非陣列索引的方式（如世界書 `uid`）作為鍵時使用自定義 op；這種場景下內建 `list_*` op 會在重新排序時悄然漂移。
 
 ## 遷移：clearObsoleteSessions
 
@@ -218,5 +234,6 @@ Layer 3 表面重新匯出與 Layer 1 相同的函式；`open` 是 `openIteratio
 - `public/scripts/extensions/orchestrator/iteration-adapter.js` —— 用 sandbox-diff 模式包裹編排器既有的變更器。佈局 `split`、按 mode 分桶的會話、執行時 world-info 解析、自定義控制工具名。
 - `public/scripts/extensions/memory-graph/schema-adapter.js` —— 直接基於 v2 契約構建的節點類型 schema 編輯器。佈局 `split`、僅全域會話、預覽面板裡有「應用到全域」/「應用到角色」動作按鈕。
 - `public/scripts/extensions/character-editor-assistant/studio/adapter.js` —— 卡片應用工作室、按角色的自訂前端編輯器。佈局 `split`、按角色範圍 `char_<avatar>`。即時預覽是彈窗背後的宿主卡片應用（透過 `card-app` 擴充功能 API 重新載入）；轉接器在右側面板呈現檔案樹和 CM6 編輯器。所有檔案 CRUD 均透過現有的 `fetchFileList / saveFileContent / deleteFile / renameFile` 輔助函式完成；4 個寫工具走 `normalizeToolCallToEdit`、2 個讀工具走 `executeControlToolCall`。
+- **CEA 角色編輯器** —— `public/scripts/extensions/character-editor-assistant/character-editor-adapter.js`，佈局 `split`、按角色範圍 `char_<avatar>`。即時資料結構為 `{ card, lorebook: { bookName, entries: { [uid]: entry } } }`。透過 `mergeCharacterAttributes` 編輯角色卡欄位，透過 `context.saveWorldInfo` 編輯世界書。註冊 3 個以條目 uid 為鍵的自定義 op（`lorebook_entry_add / update / remove`）。
 
 適配器契約 JSDoc 位於 `public/scripts/iteration-studio/adapter.js` —— 該檔案是必需 vs 可選欄位與精確簽名的規範來源。
