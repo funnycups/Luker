@@ -11,49 +11,45 @@
 //   const session = await memoryApi?.openSession?.(context);
 //   if (session) {
 //       const candidates = session.listVisibleCandidates({ types: ['character_sheet'] });
-//       const { id } = session.createNode({ type: 'event', title: '...', fields: {} });
+//       const { id } = await session.createNode({ type: 'event', title: '...', fields: {} });
 //   }
 //
-// Lifetime: the session captures the store snapshot at openSession time. Chat
-// switches require a fresh openSession call.
+// Lifetime: the session shares the same runtime store the rest of memory-graph
+// uses — `ensureMemoryStoreLoaded` either returns the cached active store or
+// loads it on first access and caches it. Writes mutate that shared store and
+// flush through `commitSessionMutation` so the change is visible to recall /
+// UI / persistence immediately. Chat switches invalidate the cached store
+// (handled by memory-graph's own CHAT_CHANGED listener), so callers should
+// open a fresh session per chat.
 
 import { registerExtensionApi } from '../../extensions.js';
 import {
-    getFloorStateInstance,
-    loadMetaFields,
-    buildRuntimeStoreFromGraphPayloadAndMeta,
-} from './persistence.js';
+    ensureMemoryStoreLoaded,
+    resolveChatKeyForSession,
+    commitSessionMutation,
+} from './main.js';
 import { getMemoryGraphReadApi } from './read-api.js';
 import { getMemoryGraphWriteApi } from './write-api.js';
 
-async function loadCurrentChatStore(context) {
-    if (!context || typeof context.createFloorState !== 'function') {
-        return null;
-    }
-    let payload = null;
-    let meta = null;
-    try {
-        const fs = await getFloorStateInstance(context);
-        await fs.ready();
-        payload = await fs.get();
-    } catch (err) {
-        console.warn('[memory-graph] openSession: floor-state unavailable', err);
-        return null;
-    }
-    try {
-        meta = await loadMetaFields(context);
-    } catch (err) {
-        console.warn('[memory-graph] openSession: meta sidecar read failed; continuing without meta', err);
-        meta = null;
-    }
-    return buildRuntimeStoreFromGraphPayloadAndMeta(payload, meta);
-}
-
 export async function openSession(context) {
-    const store = await loadCurrentChatStore(context);
+    if (!context || typeof context !== 'object') return null;
+    let chatKey;
+    let store;
+    try {
+        chatKey = resolveChatKeyForSession(context);
+        if (!chatKey) return null;
+        store = await ensureMemoryStoreLoaded(context);
+    } catch (err) {
+        console.warn('[memory-graph] openSession: failed to resolve runtime store', err);
+        return null;
+    }
     if (!store) return null;
     const read = getMemoryGraphReadApi(store, context);
-    const write = getMemoryGraphWriteApi(store, context);
+    const write = getMemoryGraphWriteApi(store, context, {
+        onCommit: async () => {
+            await commitSessionMutation(context, chatKey, store);
+        },
+    });
     // Curated surface for the agent / third-party consumer. The 16 methods
     // below are the recall + write hot path. Lower-level read accessors
     // (listNodes, getNode, listEdges, getNeighbors, projectEdges, injection
@@ -71,7 +67,9 @@ export async function openSession(context) {
         vectorSearch: (opts) => read.vectorSearch(opts),
         findByName: (opts) => read.findByName(opts),
         compactionCandidates: (opts) => read.compactionCandidates(opts),
-        // Write
+        // Write — each method awaits its `onCommit` flush, so callers that
+        // `await session.X(...)` are guaranteed the change is persisted by
+        // the time the promise resolves.
         createNode: (op) => write.createNode(op),
         editNode: (op) => write.editNode(op),
         deleteNode: (op) => write.deleteNode(op),

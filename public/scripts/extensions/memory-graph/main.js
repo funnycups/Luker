@@ -1602,7 +1602,7 @@ async function appendPersistedDiffEntry(context, chatKey, beforeStore, afterStor
     return Boolean(result);
 }
 
-async function ensureMemoryStoreLoaded(context, { force = false, targetHint = null } = {}) {
+export async function ensureMemoryStoreLoaded(context, { force = false, targetHint = null } = {}) {
     const target = buildMemoryTargetFromContext(context, targetHint);
     if (!target) {
         return null;
@@ -1704,6 +1704,50 @@ async function ensureMemoryStoreLoaded(context, { force = false, targetHint = nu
 export function getMemoryStore(context, targetHint = null) {
     const chatKey = getChatKey(context, targetHint);
     return memoryStoreCache.get(chatKey) || null;
+}
+
+/**
+ * Layer-1 helper: resolve the cache key the session should commit under.
+ * Wraps the internal `getChatKey` so `api.js` doesn't need a private import.
+ * Returns an empty string when the context has no resolvable target — the
+ * commit path then no-ops, matching `commitSessionMutation`'s guard.
+ */
+export function resolveChatKeyForSession(context, targetHint = null) {
+    const target = buildMemoryTargetFromContext(context, targetHint);
+    if (!target) return '';
+    return getChatKey(context, target);
+}
+
+/**
+ * Layer-1 commit boundary called after a `session.X(...)` write mutation
+ * lands. Mirrors the shape of the editor-save commit (`persistLatest` in
+ * the popup) minus the toast / status messaging owned by the popup:
+ *   1. Re-seat the (already mutated) runtime store in the cache so any
+ *      subsequent `getMemoryStore` / recall path reads the latest shape.
+ *   2. Drop any cached rollback frames — they're tied to UI rollback and
+ *      the session-side write didn't go through that pipeline.
+ *   3. Replace-mode flush to floor-state (the session owns whole-store
+ *      semantics; we don't keep a diff base, and the LLM's write surface
+ *      is not part of the user-facing rollback timeline).
+ *   4. Persist meta. `syncPersistentProjection` stays OFF: lorebook
+ *      projection is a side-channel mirror of the graph, sensitive to
+ *      schema configuration, and any in-progress LLM write batch will
+ *      typically be followed by CHAT_CHANGED / MESSAGE_RECEIVED that
+ *      re-trigger projection. Folding it into every session write would
+ *      both thrash World Info entries and crash on partially-configured
+ *      schema in headless contexts.
+ *   5. Best-effort UI refresh — `refreshUiStats` early-returns when the
+ *      popup isn't mounted, so this is safe in headless contexts.
+ */
+export async function commitSessionMutation(context, chatKey, store) {
+    const key = String(chatKey || '').trim();
+    if (!key || !store || typeof store !== 'object') return;
+    memoryStoreCache.set(key, store);
+    clearRollbackHistory(key);
+    const seq = getStoreCoveredSeqTo(store);
+    await replacePersistedGraphWithStore(context, key, store, seq);
+    await persistMemoryStoreByChatKey(context, key, store, { syncPersistentProjection: false });
+    try { refreshUiStats(); } catch (_) { /* UI optional in headless / test env */ }
 }
 
 /**

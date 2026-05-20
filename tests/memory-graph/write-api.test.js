@@ -168,20 +168,43 @@ describe('write-api factory shape', () => {
         expect(typeof api.applyExtractionBatch).toBe('function');
     });
 
-    test('getMemoryGraphWriteApi accepts (store, context) and resolves store directly', () => {
+    test('getMemoryGraphWriteApi accepts (store, context) and resolves store directly', async () => {
         const store = { nodes: {}, edges: [], seqCounter: 0, appliedSeqTo: 0, loggedSeqTo: 0, nodeSeq: 0 };
         const api = getMemoryGraphWriteApi(store, {});
-        const result = api.createNode({ type: 'event', title: 'first event', fields: { what: 'thing happened' } });
+        const result = await api.createNode({ type: 'event', title: 'first event', fields: { what: 'thing happened' } });
         expect(result.id).toBeTruthy();
         expect(Object.keys(store.nodes)).toHaveLength(1);
+    });
+
+    test('onCommit fires after a successful mutation and receives the store', async () => {
+        const store = { nodes: {}, edges: [], seqCounter: 0, appliedSeqTo: 0, loggedSeqTo: 0, nodeSeq: 0 };
+        const seen = [];
+        const api = getMemoryGraphWriteApi(store, {}, {
+            onCommit: async (s) => { seen.push(s); },
+        });
+        await api.createNode({ type: 'event', title: 'flush', fields: { what: 'x' } });
+        expect(seen).toHaveLength(1);
+        expect(seen[0]).toBe(store);
+    });
+
+    test('onCommit does NOT fire when the mutation produced no applied op', async () => {
+        const store = { nodes: {}, edges: [], seqCounter: 0, appliedSeqTo: 0, loggedSeqTo: 0, nodeSeq: 0 };
+        const seen = [];
+        const api = getMemoryGraphWriteApi(store, {}, {
+            onCommit: async (s) => { seen.push(s); },
+        });
+        // editNode on a non-existent id returns ok:false; nothing to commit.
+        const res = await api.editNode({ id: 'ghost', setFields: { traits: 'nope' } });
+        expect(res.ok).toBe(false);
+        expect(seen).toHaveLength(0);
     });
 });
 
 describe('write-api createNode', () => {
-    test('creates a semantic node and returns its id', () => {
+    test('creates a semantic node and returns its id', async () => {
         const ctx = makeContext();
         const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
-        const result = api.createNode({
+        const result = await api.createNode({
             type: 'character_sheet',
             title: 'Eileen',
             fields: { traits: 'healer' },
@@ -193,10 +216,10 @@ describe('write-api createNode', () => {
         expect(node.fields.traits).toBe('healer');
     });
 
-    test('passes ref through in the return value', () => {
+    test('passes ref through in the return value', async () => {
         const ctx = makeContext();
         const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
-        const result = api.createNode({
+        const result = await api.createNode({
             type: 'character_sheet',
             title: 'Marcus',
             fields: {},
@@ -206,58 +229,58 @@ describe('write-api createNode', () => {
         expect(result.ref).toBe('marcus');
     });
 
-    test('throws on missing type', () => {
+    test('throws on missing type', async () => {
         const ctx = makeContext();
         const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
-        expect(() => api.createNode({ title: 'X' })).toThrow();
+        await expect(api.createNode({ title: 'X' })).rejects.toThrow();
     });
 
-    test('MEMORY_STORE_MISSING when store is null', () => {
+    test('MEMORY_STORE_MISSING when store is null', async () => {
         const api = getMemoryGraphWriteApi(null, {});
-        expect(() => api.createNode({ type: 'character_sheet', title: 'y' }))
-            .toThrow(/MEMORY_STORE_MISSING|runtime store/);
+        await expect(api.createNode({ type: 'character_sheet', title: 'y' }))
+            .rejects.toThrow(/MEMORY_STORE_MISSING|runtime store/);
     });
 });
 
 describe('write-api editNode / deleteNode', () => {
-    test('editNode throws when id missing', () => {
+    test('editNode throws when id missing', async () => {
         const ctx = makeContext();
         const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
-        expect(() => api.editNode({ setFields: { x: 1 } })).toThrow();
+        await expect(api.editNode({ setFields: { x: 1 } })).rejects.toThrow();
     });
 
-    test('deleteNode throws when id missing', () => {
+    test('deleteNode throws when id missing', async () => {
         const ctx = makeContext();
         const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
-        expect(() => api.deleteNode({})).toThrow();
+        await expect(api.deleteNode({})).rejects.toThrow();
     });
 
-    test('deleteNode removes an existing node and returns ok', () => {
+    test('deleteNode removes an existing node and returns ok', async () => {
         const ctx = makeContext();
         const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
-        const { id } = api.createNode({ type: 'character_sheet', title: 'Zara' });
+        const { id } = await api.createNode({ type: 'character_sheet', title: 'Zara' });
         expect(ctx.__memoryStore.nodes[id]).toBeDefined();
-        const res = api.deleteNode({ id });
+        const res = await api.deleteNode({ id });
         expect(res.ok).toBe(true);
     });
 });
 
 describe('write-api upsertLinks / deleteLinks', () => {
-    test('upsertLinks throws without source or links', () => {
+    test('upsertLinks throws without source or links', async () => {
         const ctx = makeContext();
         const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
-        expect(() => api.upsertLinks({})).toThrow();
-        expect(() => api.upsertLinks({ source: { id: 'a' } })).toThrow();
+        await expect(api.upsertLinks({})).rejects.toThrow();
+        await expect(api.upsertLinks({ source: { id: 'a' } })).rejects.toThrow();
     });
 
-    test('deleteLinks requires source/target/relation', () => {
+    test('deleteLinks requires source/target/relation', async () => {
         const ctx = makeContext();
         const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
-        expect(() => api.deleteLinks({})).toThrow();
-        expect(() => api.deleteLinks({ source: { id: 'a' }, target: { id: 'b' } })).toThrow();
+        await expect(api.deleteLinks({})).rejects.toThrow();
+        await expect(api.deleteLinks({ source: { id: 'a' }, target: { id: 'b' } })).rejects.toThrow();
     });
 
-    test('deleteLinks reports removed count based on edges before/after', () => {
+    test('deleteLinks reports removed count based on edges before/after', async () => {
         const ctx = makeContext({
             nodes: { a: { id: 'a' }, b: { id: 'b' } },
             edges: [
@@ -267,7 +290,7 @@ describe('write-api upsertLinks / deleteLinks', () => {
             seqCounter: 0,
         });
         const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
-        const res = api.deleteLinks({
+        const res = await api.deleteLinks({
             source: { id: 'a' },
             target: { id: 'b' },
             relation: 'partner_of',
@@ -279,13 +302,13 @@ describe('write-api upsertLinks / deleteLinks', () => {
 });
 
 describe('write-api applyExtractionBatch', () => {
-    test('throws when ops is not an array', () => {
+    test('throws when ops is not an array', async () => {
         const ctx = makeContext();
         const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
-        expect(() => api.applyExtractionBatch({ ops: 'nope' })).toThrow();
+        await expect(api.applyExtractionBatch({ ops: 'nope' })).rejects.toThrow();
     });
 
-    test('forwards a batch directly to applyExtractionOpsImpl and returns its result', () => {
+    test('forwards a batch directly to applyExtractionOpsImpl and returns its result', async () => {
         const ctx = makeContext();
         const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
         const ops = [
@@ -297,7 +320,7 @@ describe('write-api applyExtractionBatch', () => {
                 links: [{ targetRef: 'marcus', relation: 'allied_with', direction: 'bidirectional' }],
             },
         ];
-        const result = api.applyExtractionBatch({ ops, maxSeq: 10 });
+        const result = await api.applyExtractionBatch({ ops, maxSeq: 10 });
         expect(Array.isArray(result.applied)).toBe(true);
         expect(result.applied.length).toBeGreaterThanOrEqual(2);
 
@@ -312,10 +335,10 @@ describe('write-api applyExtractionBatch', () => {
         expect(allied).toBeDefined();
     });
 
-    test('MEMORY_STORE_MISSING when store is null', () => {
+    test('MEMORY_STORE_MISSING when store is null', async () => {
         const api = getMemoryGraphWriteApi(null, {});
-        expect(() => api.applyExtractionBatch({ ops: [] }))
-            .toThrow(/MEMORY_STORE_MISSING|runtime store/);
+        await expect(api.applyExtractionBatch({ ops: [] }))
+            .rejects.toThrow(/MEMORY_STORE_MISSING|runtime store/);
     });
 });
 
@@ -332,10 +355,10 @@ describe('write-api compactNodes', () => {
         };
     }
 
-    test('compactNodes creates rollup, reparents children, adds semantic_contains edges', () => {
+    test('compactNodes creates rollup, reparents children, adds semantic_contains edges', async () => {
         const ctx = makeContext(makeStoreWithLeaves());
         const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
-        const result = api.compactNodes({
+        const result = await api.compactNodes({
             type: 'event',
             childIds: ['e1', 'e2', 'e3'],
             summary: 'time: D1-D3; A and B and C.',
@@ -356,21 +379,22 @@ describe('write-api compactNodes', () => {
         expect(containsEdges.length).toBe(3);
     });
 
-    test('compactNodes throws CHILD_HAS_PARENT when a child already has a rollup parent', () => {
+    test('compactNodes throws CHILD_HAS_PARENT when a child already has a rollup parent', async () => {
         const store = makeStoreWithLeaves();
         store.nodes.e1.parentId = 'some_other_rollup';
         const ctx = makeContext(store);
         const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
-        expect(() => api.compactNodes({
+        await expect(api.compactNodes({
             type: 'event',
             childIds: ['e1', 'e2', 'e3'],
             summary: 'x',
-        })).toThrow();
+        })).rejects.toThrow();
     });
 
-    test('compactNodes throws on missing summary', () => {
+    test('compactNodes throws on missing summary', async () => {
         const ctx = makeContext(makeStoreWithLeaves());
         const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
-        expect(() => api.compactNodes({ type: 'event', childIds: ['e1', 'e2', 'e3'], summary: '' })).toThrow(/summary/);
+        await expect(api.compactNodes({ type: 'event', childIds: ['e1', 'e2', 'e3'], summary: '' }))
+            .rejects.toThrow(/summary/);
     });
 });

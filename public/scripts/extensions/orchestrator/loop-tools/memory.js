@@ -362,7 +362,7 @@ export async function execMemoryCompactionCandidates(args, context) {
  */
 export async function execMemoryNodeCreate(args, context) {
     const session = requireSession('memory_node_create', context);
-    const result = session.createNode({
+    const result = await session.createNode({
         type: String(args?.type || ''),
         title: String(args?.title || ''),
         fields: args?.fields || {},
@@ -382,7 +382,7 @@ export async function execMemoryNodeCreate(args, context) {
  */
 export async function execMemoryNodeEdit(args, context) {
     const session = requireSession('memory_node_edit', context);
-    const result = session.editNode({
+    const result = await session.editNode({
         id: String(args?.node_id || ''),
         setFields: args?.set_fields || undefined,
         clearFields: Array.isArray(args?.clear_fields) ? args.clear_fields : undefined,
@@ -400,7 +400,7 @@ export async function execMemoryNodeEdit(args, context) {
  */
 export async function execMemoryNodeDelete(args, context) {
     const session = requireSession('memory_node_delete', context);
-    const result = session.deleteNode({ id: String(args?.node_id || '') });
+    const result = await session.deleteNode({ id: String(args?.node_id || '') });
     return { ok: result.ok };
 }
 
@@ -413,7 +413,7 @@ export async function execMemoryNodeDelete(args, context) {
  */
 export async function execMemoryLinkUpsert(args, context) {
     const session = requireSession('memory_link_upsert', context);
-    const result = session.upsertLinks({
+    const result = await session.upsertLinks({
         source: {
             id: args?.source_node_id || undefined,
             ref: args?.source_ref || undefined,
@@ -432,7 +432,7 @@ export async function execMemoryLinkUpsert(args, context) {
  */
 export async function execMemoryLinkDelete(args, context) {
     const session = requireSession('memory_link_delete', context);
-    const result = session.deleteLinks({
+    const result = await session.deleteLinks({
         source: { id: args?.source_node_id || undefined },
         target: { id: args?.target_node_id || undefined },
         relation: String(args?.relation || ''),
@@ -451,7 +451,7 @@ export async function execMemoryLinkDelete(args, context) {
  */
 export async function execMemoryCompactNodes(args, context) {
     const session = requireSession('memory_compact_nodes', context);
-    const result = session.compactNodes({
+    const result = await session.compactNodes({
         type: String(args?.type || ''),
         childIds: Array.isArray(args?.child_ids) ? args.child_ids : [],
         summary: String(args?.summary || ''),
