@@ -1,68 +1,81 @@
-/**
- * IterationStudio — popup HTML template.
- *
- * Returns the full HTML string for the studio popup. Generic across all
- * adapters; per-adapter chrome (title, optional buttons) is injected by the
- * shell via the deps object.
- *
- * Class naming convention:
- *   - `luker-studio*` are shared across all studios (CSS in
- *     public/css/luker-studio.css).
- *   - `luker-iteration-studio*` are this shell's private classes
- *     (event hooks, ids).
- *   - `data-iter-action="..."` are shell-managed click targets. Adapter
- *     content embedded inside the working-profile panel can use its own
- *     selectors freely — the shell does not delegate from them.
- */
+import { i18n } from './i18n.js';
 
-import { escapeHtml } from '../utils.js';
-import { i18n, i18nFormat } from './i18n.js';
+function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' }[c]));
+}
 
-export function buildIterationStudioPopupHtml({
-    popupId,
-    session,
-    adapter,
-    opts = {},
-}) {
-    const { enableSessionHistory = true } = opts;
-    const popupClassName = String(adapter?.popupClassName || '').trim();
-    const headerSourceLine = i18nFormat('Iteration source: ${0}', session?.sourceName || i18n('Global profile'));
-    const rootClasses = ['luker-studio', 'luker-iteration-studio', popupClassName].filter(Boolean).join(' ');
+export function buildIterationStudioPopupHtml({ popupId, layout, popupClassName = '', title = '' }) {
+    const cls = ['luker-studio', 'luker-iter-studio', `luker-iter-studio--${layout}`, popupClassName].filter(Boolean).join(' ');
+    const titleHtml = title ? `<div class="luker-studio-meta-item">${escapeHtml(title)}</div>` : '';
 
-    return `
-<div id="${popupId}" class="${rootClasses}" data-iter-popup-id="${popupId}">
-    <div class="luker-studio-header">
-        <div class="luker-studio-title">${escapeHtml(String(adapter?.title || i18n('AI Iteration Studio')))}</div>
-        <div id="${popupId}_sub" class="luker-studio-subtitle">${escapeHtml(headerSourceLine)}</div>
+    if (layout === 'split') {
+        return `
+<div id="${popupId}" class="${cls}">
+    <div class="luker-studio-meta">${titleHtml}</div>
+    <div class="luker-studio-toolbar" data-iter-toolbar>
+        <div class="luker-studio-toolbar-slot" data-iter-slot="start"></div>
+        <div class="luker-studio-toolbar-field">
+            <label for="${popupId}_reference">${escapeHtml(i18n('Compare with'))}</label>
+            <select id="${popupId}_reference" class="text_pole" data-iter-reference-select></select>
+        </div>
+        <div class="luker-studio-toolbar-actions">
+            <div class="menu_button menu_button_small" data-iter-action="clear-history">${escapeHtml(i18n('Clear history'))}</div>
+        </div>
+        <div class="luker-studio-toolbar-slot" data-iter-slot="end"></div>
     </div>
-    <div id="${popupId}_status" class="luker-studio-status"></div>
     <div class="luker-studio-columns">
         <div class="luker-studio-panel">
-            <div class="luker-studio-panel-title">${escapeHtml(i18n('Conversation'))}</div>
-            <div id="${popupId}_conversation" class="luker-studio-chat"></div>
-            <div id="${popupId}_pending"></div>
-            <div class="luker-studio-composer">
-                <textarea id="${popupId}_input" class="text_pole textarea_compact" rows="4" placeholder="${escapeHtml(i18n('Tell the AI what to change...'))}"></textarea>
-                <div class="luker-studio-composer-buttons">
-                    <div class="menu_button" data-iter-action="send">${escapeHtml(i18n('Send to AI'))}</div>
-                    <div class="menu_button" data-iter-action="stop">${escapeHtml(i18n('Stop'))}</div>
-                    <div class="menu_button" data-iter-action="clear">${escapeHtml(i18n('Clear Session'))}</div>
-                    <label class="luker-studio-switch" title="${escapeHtml(i18n('Skip the manual approve step for tool calls. Changes apply immediately.'))}">
-                        <input type="checkbox" data-iter-toggle="auto-apply" />
-                        <span class="luker-studio-switch-track" aria-hidden="true"><span class="luker-studio-switch-knob"></span></span>
-                        <span class="luker-studio-switch-label">${escapeHtml(i18n('Auto-apply'))}</span>
-                    </label>
-                </div>
+            <details class="luker-studio-history" open>
+                <summary>${escapeHtml(i18n('Conversation history'))}</summary>
+                <div data-iter-history></div>
+            </details>
+            <div class="luker-studio-chat" data-iter-chat></div>
+            <div class="luker-studio-pending" data-iter-pending></div>
+        </div>
+        <div class="luker-studio-panel" data-iter-preview-pane></div>
+    </div>
+    <div class="luker-studio-composer">
+        <textarea class="text_pole" data-iter-input placeholder="${escapeHtml(i18n('Type what to change...'))}"></textarea>
+        <div class="luker-studio-composer-actions">
+            <div class="luker-studio-status" data-iter-status></div>
+            <div class="luker-studio-composer-buttons">
+                <div class="menu_button" data-iter-action="send-or-stop">${escapeHtml(i18n('Send'))}</div>
+                <div class="menu_button" data-iter-action="close">${escapeHtml(i18n('Close'))}</div>
             </div>
         </div>
-        <div class="luker-studio-panel">
-            <div id="${popupId}_profile" class="luker-iteration-studio-profile"></div>
-            ${enableSessionHistory ? `
-            <div class="luker-studio-panel-title">${escapeHtml(i18n('Session history'))}</div>
-            <div id="${popupId}_history" class="luker-studio-history-list"></div>
+    </div>
+</div>`;
+    }
+
+    // popup layout
+    return `
+<div id="${popupId}" class="${cls}">
+    <div class="luker-studio-meta">${titleHtml}</div>
+    <div class="luker-studio-toolbar" data-iter-toolbar>
+        <div class="luker-studio-toolbar-slot" data-iter-slot="start"></div>
+        <div class="luker-studio-toolbar-field">
+            <label for="${popupId}_reference">${escapeHtml(i18n('Compare with'))}</label>
+            <select id="${popupId}_reference" class="text_pole" data-iter-reference-select></select>
+        </div>
+        <div class="luker-studio-toolbar-actions">
+            <div class="menu_button menu_button_small" data-iter-action="clear-history">${escapeHtml(i18n('Clear history'))}</div>
+        </div>
+        <div class="luker-studio-toolbar-slot" data-iter-slot="end"></div>
+    </div>
+    <details class="luker-studio-history" open>
+        <summary>${escapeHtml(i18n('Conversation history'))}</summary>
+        <div data-iter-history></div>
+    </details>
+    <div class="luker-studio-chat" data-iter-chat></div>
+    <div class="luker-studio-pending" data-iter-pending></div>
+    <div class="luker-studio-composer">
+        <textarea class="text_pole" data-iter-input placeholder="${escapeHtml(i18n('Type what to change...'))}"></textarea>
+        <div class="luker-studio-composer-actions">
+            <div class="luker-studio-status" data-iter-status></div>
             <div class="luker-studio-composer-buttons">
-                <div class="menu_button" data-iter-action="new-session">${escapeHtml(i18n('New session'))}</div>
-            </div>` : ''}
+                <div class="menu_button" data-iter-action="send-or-stop">${escapeHtml(i18n('Send'))}</div>
+                <div class="menu_button" data-iter-action="close">${escapeHtml(i18n('Close'))}</div>
+            </div>
         </div>
     </div>
 </div>`;

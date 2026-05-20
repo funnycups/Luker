@@ -156,11 +156,23 @@ import { generateHorde } from './horde.js';
 import { getKoboldGenerationData, kai_settings, koboldai_settings, koboldai_setting_names } from './kai-settings.js';
 import { getNovelGenerationData, nai_settings, novelai_settings, novelai_setting_names } from './nai-settings.js';
 import {
-    open as openIterationStudio,
+    openIterationStudio,
     defineAdapter as defineIterationStudioAdapter,
-    createSettingsBackedHistoryStore as createIterationStudioHistoryStore,
-    buildProfileDelta as buildIterationStudioProfileDelta,
-    renderProfileDeltaHtml as renderIterationStudioProfileDeltaHtml,
+    createEmptyHistoryState as createIterationStudioHistoryState,
+    makeSessionId as makeIterationStudioSessionId,
+    sanitizeSession as sanitizeIterationStudioSession,
+    sanitizeSessionMessage as sanitizeIterationStudioMessage,
+    findMessageById as findIterationStudioMessage,
+    buildControlToolDefs as buildIterationStudioControlTools,
+    getControlToolNames as getIterationStudioControlNames,
+    runIterationTurn as runIterationStudioTurn,
+    executeToolCalls as executeIterationStudioTools,
+    stagePendingApproval as stageIterationStudioPendingApproval,
+    applyPendingApproval as applyIterationStudioPendingApproval,
+    rejectPendingApproval as rejectIterationStudioPendingApproval,
+    rollbackToMessage as rollbackIterationStudioMessage,
+    buildAutoContinuePrompt as buildIterationStudioAutoContinue,
+    ensureStorageWipeOnce as ensureIterationStudioStorageWipe,
 } from './iteration-studio/index.js';
 import * as EDITS_API from './lib/edits/index.js';
 
@@ -174,10 +186,23 @@ import * as EDITS_API from './lib/edits/index.js';
  */
 const ITERATION_STUDIO_API = Object.freeze({
     open: openIterationStudio,
+    openIterationStudio,
     defineAdapter: defineIterationStudioAdapter,
-    createSettingsBackedHistoryStore: createIterationStudioHistoryStore,
-    buildProfileDelta: buildIterationStudioProfileDelta,
-    renderProfileDeltaHtml: renderIterationStudioProfileDeltaHtml,
+    createEmptyHistoryState: createIterationStudioHistoryState,
+    makeSessionId: makeIterationStudioSessionId,
+    sanitizeSession: sanitizeIterationStudioSession,
+    sanitizeSessionMessage: sanitizeIterationStudioMessage,
+    findMessageById: findIterationStudioMessage,
+    buildControlToolDefs: buildIterationStudioControlTools,
+    getControlToolNames: getIterationStudioControlNames,
+    runIterationTurn: runIterationStudioTurn,
+    executeToolCalls: executeIterationStudioTools,
+    stagePendingApproval: stageIterationStudioPendingApproval,
+    applyPendingApproval: applyIterationStudioPendingApproval,
+    rejectPendingApproval: rejectIterationStudioPendingApproval,
+    rollbackToMessage: rollbackIterationStudioMessage,
+    buildAutoContinuePrompt: buildIterationStudioAutoContinue,
+    ensureStorageWipeOnce: ensureIterationStudioStorageWipe,
 });
 
 function safeClone(value, fallback = {}) {
