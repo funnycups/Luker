@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // External API for memory-graph. Injection observation surface for other
-// extensions; richer read access lives in `read-api.js` via
-// `getMemoryGraphReadApi(context)`.
+// extensions; richer read access lives in `api.js` via
+// `openSession(context)` (or directly via `getMemoryGraphReadApi(store, context)`
+// for callers that already hold a store reference).
 //
 // Contracts:
 //   - All exports are READ-ONLY. Do not mutate the snapshots returned.

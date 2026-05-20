@@ -66,6 +66,7 @@ jest.unstable_mockModule('../../public/script.js', () => ({
 jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
     extension_settings: extensionSettingsMock,
     getContext: () => ({}),
+    registerExtensionApi: () => {},
     UNSET_VALUE: Symbol('UNSET_VALUE'),
 }));
 
@@ -407,9 +408,9 @@ function buildDogfoodFixture() {
         loggedSeqTo: 22,
     };
 
-    // Context the read-api can resolve the store from synchronously.
+    // Layer-1 callers pass `store` explicitly to the read-api factory; the
+    // context only carries the SillyTavern surface (chat, character info).
     const context = {
-        __memoryStore: store,
         characters: [],
         characterId: -1,
         chat: [],
@@ -459,7 +460,7 @@ describe('dogfood: candidateRows equivalence', () => {
             recallSelectedIds: new Set(),
         });
 
-        const api = getMemoryGraphReadApi(context);
+        const api = getMemoryGraphReadApi(store, context);
 
         // ---- Native path: replicate chooseRecallRoute's candidateRows build. ----
         const latestSeqIndex = getLatestSeqIndex(store);
@@ -547,8 +548,8 @@ describe('dogfood: candidateRows equivalence', () => {
 
 describe('dogfood: schema_overview equivalence', () => {
     test('getSchema() row shape ≡ chooseRecallRoute schema_overview projection', () => {
-        const { context, settings } = buildDogfoodFixture();
-        const api = getMemoryGraphReadApi(context);
+        const { store, context, settings } = buildDogfoodFixture();
+        const api = getMemoryGraphReadApi(store, context);
 
         // ---- Native shape (chooseRecallRoute main.js:5754) ----
         const nativeSchema = getEffectiveNodeTypeSchema(context, settings);
@@ -635,7 +636,7 @@ describe('dogfood: drill expansion equivalence', () => {
         const nativeIds = new Set(nativeExpanded.map(n => String(n.id)));
 
         // ---- API path ----
-        const api = getMemoryGraphReadApi(context);
+        const api = getMemoryGraphReadApi(store, context);
         const apiExpanded = api.expandFromSeeds([seedId], {
             hops: 2,
             includeChildren: true,

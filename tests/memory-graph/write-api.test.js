@@ -52,6 +52,7 @@ jest.unstable_mockModule('../../public/script.js', () => ({
 jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
     extension_settings: extensionSettingsMock,
     getContext: () => ({}),
+    registerExtensionApi: () => {},
     UNSET_VALUE: Symbol('UNSET_VALUE'),
 }));
 
@@ -143,6 +144,9 @@ beforeAll(async () => {
 });
 
 function makeContext(initialStore) {
+    // Tests still inspect `ctx.__memoryStore` to assert post-mutation state,
+    // so the helper keeps that field. The factory now takes the store as its
+    // first arg; call sites pass `ctx.__memoryStore, ctx`.
     return { __memoryStore: initialStore || { nodes: {}, edges: [], seqCounter: 0 } };
 }
 
@@ -152,7 +156,8 @@ function makeContext(initialStore) {
 
 describe('write-api factory shape', () => {
     test('returns a frozen object exposing all primitives', () => {
-        const api = getMemoryGraphWriteApi(makeContext());
+        const ctx = makeContext();
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
         expect(Object.isFrozen(api)).toBe(true);
         expect(typeof api.createNode).toBe('function');
         expect(typeof api.editNode).toBe('function');
@@ -162,12 +167,20 @@ describe('write-api factory shape', () => {
         expect(typeof api.compactNodes).toBe('function');
         expect(typeof api.applyExtractionBatch).toBe('function');
     });
+
+    test('getMemoryGraphWriteApi accepts (store, context) and resolves store directly', () => {
+        const store = { nodes: {}, edges: [], seqCounter: 0, appliedSeqTo: 0, loggedSeqTo: 0, nodeSeq: 0 };
+        const api = getMemoryGraphWriteApi(store, {});
+        const result = api.createNode({ type: 'event', title: 'first event', fields: { what: 'thing happened' } });
+        expect(result.id).toBeTruthy();
+        expect(Object.keys(store.nodes)).toHaveLength(1);
+    });
 });
 
 describe('write-api createNode', () => {
     test('creates a semantic node and returns its id', () => {
         const ctx = makeContext();
-        const api = getMemoryGraphWriteApi(ctx);
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
         const result = api.createNode({
             type: 'character_sheet',
             title: 'Eileen',
@@ -182,7 +195,7 @@ describe('write-api createNode', () => {
 
     test('passes ref through in the return value', () => {
         const ctx = makeContext();
-        const api = getMemoryGraphWriteApi(ctx);
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
         const result = api.createNode({
             type: 'character_sheet',
             title: 'Marcus',
@@ -195,31 +208,33 @@ describe('write-api createNode', () => {
 
     test('throws on missing type', () => {
         const ctx = makeContext();
-        const api = getMemoryGraphWriteApi(ctx);
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
         expect(() => api.createNode({ title: 'X' })).toThrow();
     });
 
-    test('MEMORY_STORE_MISSING when context lacks __memoryStore', () => {
-        const api = getMemoryGraphWriteApi({});
+    test('MEMORY_STORE_MISSING when store is null', () => {
+        const api = getMemoryGraphWriteApi(null, {});
         expect(() => api.createNode({ type: 'character_sheet', title: 'y' }))
-            .toThrow(/__memoryStore|MEMORY_STORE_MISSING/);
+            .toThrow(/MEMORY_STORE_MISSING|runtime store/);
     });
 });
 
 describe('write-api editNode / deleteNode', () => {
     test('editNode throws when id missing', () => {
-        const api = getMemoryGraphWriteApi(makeContext());
+        const ctx = makeContext();
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
         expect(() => api.editNode({ setFields: { x: 1 } })).toThrow();
     });
 
     test('deleteNode throws when id missing', () => {
-        const api = getMemoryGraphWriteApi(makeContext());
+        const ctx = makeContext();
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
         expect(() => api.deleteNode({})).toThrow();
     });
 
     test('deleteNode removes an existing node and returns ok', () => {
         const ctx = makeContext();
-        const api = getMemoryGraphWriteApi(ctx);
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
         const { id } = api.createNode({ type: 'character_sheet', title: 'Zara' });
         expect(ctx.__memoryStore.nodes[id]).toBeDefined();
         const res = api.deleteNode({ id });
@@ -229,13 +244,15 @@ describe('write-api editNode / deleteNode', () => {
 
 describe('write-api upsertLinks / deleteLinks', () => {
     test('upsertLinks throws without source or links', () => {
-        const api = getMemoryGraphWriteApi(makeContext());
+        const ctx = makeContext();
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
         expect(() => api.upsertLinks({})).toThrow();
         expect(() => api.upsertLinks({ source: { id: 'a' } })).toThrow();
     });
 
     test('deleteLinks requires source/target/relation', () => {
-        const api = getMemoryGraphWriteApi(makeContext());
+        const ctx = makeContext();
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
         expect(() => api.deleteLinks({})).toThrow();
         expect(() => api.deleteLinks({ source: { id: 'a' }, target: { id: 'b' } })).toThrow();
     });
@@ -249,7 +266,7 @@ describe('write-api upsertLinks / deleteLinks', () => {
             ],
             seqCounter: 0,
         });
-        const api = getMemoryGraphWriteApi(ctx);
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
         const res = api.deleteLinks({
             source: { id: 'a' },
             target: { id: 'b' },
@@ -263,13 +280,14 @@ describe('write-api upsertLinks / deleteLinks', () => {
 
 describe('write-api applyExtractionBatch', () => {
     test('throws when ops is not an array', () => {
-        const api = getMemoryGraphWriteApi(makeContext());
+        const ctx = makeContext();
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
         expect(() => api.applyExtractionBatch({ ops: 'nope' })).toThrow();
     });
 
     test('forwards a batch directly to applyExtractionOpsImpl and returns its result', () => {
         const ctx = makeContext();
-        const api = getMemoryGraphWriteApi(ctx);
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
         const ops = [
             { op: 'create', type: 'character_sheet', title: 'Eileen', fields: { traits: 'healer' }, ref: 'eileen' },
             { op: 'create', type: 'character_sheet', title: 'Marcus', fields: { traits: 'warrior' }, ref: 'marcus' },
@@ -294,10 +312,10 @@ describe('write-api applyExtractionBatch', () => {
         expect(allied).toBeDefined();
     });
 
-    test('MEMORY_STORE_MISSING when context lacks __memoryStore', () => {
-        const api = getMemoryGraphWriteApi({});
+    test('MEMORY_STORE_MISSING when store is null', () => {
+        const api = getMemoryGraphWriteApi(null, {});
         expect(() => api.applyExtractionBatch({ ops: [] }))
-            .toThrow(/__memoryStore|MEMORY_STORE_MISSING/);
+            .toThrow(/MEMORY_STORE_MISSING|runtime store/);
     });
 });
 
@@ -316,7 +334,7 @@ describe('write-api compactNodes', () => {
 
     test('compactNodes creates rollup, reparents children, adds semantic_contains edges', () => {
         const ctx = makeContext(makeStoreWithLeaves());
-        const api = getMemoryGraphWriteApi(ctx);
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
         const result = api.compactNodes({
             type: 'event',
             childIds: ['e1', 'e2', 'e3'],
@@ -342,7 +360,7 @@ describe('write-api compactNodes', () => {
         const store = makeStoreWithLeaves();
         store.nodes.e1.parentId = 'some_other_rollup';
         const ctx = makeContext(store);
-        const api = getMemoryGraphWriteApi(ctx);
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
         expect(() => api.compactNodes({
             type: 'event',
             childIds: ['e1', 'e2', 'e3'],
@@ -352,7 +370,7 @@ describe('write-api compactNodes', () => {
 
     test('compactNodes throws on missing summary', () => {
         const ctx = makeContext(makeStoreWithLeaves());
-        const api = getMemoryGraphWriteApi(ctx);
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
         expect(() => api.compactNodes({ type: 'event', childIds: ['e1', 'e2', 'e3'], summary: '' })).toThrow(/summary/);
     });
 });

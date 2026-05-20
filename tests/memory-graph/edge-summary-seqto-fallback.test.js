@@ -49,6 +49,7 @@ jest.unstable_mockModule('../../public/script.js', () => ({
 jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
     extension_settings: extensionSettingsMock,
     getContext: () => ({}),
+    registerExtensionApi: () => {},
     UNSET_VALUE: Symbol('UNSET_VALUE'),
 }));
 
@@ -155,7 +156,7 @@ function buildStore({ edgeSeqTo } = {}) {
 
 describe('edge_summary seqTo fallback', () => {
     test('edge with explicit seqTo uses that value', () => {
-        const api = getMemoryGraphReadApi({ __memoryStore: buildStore({ edgeSeqTo: 99 }) });
+        const api = getMemoryGraphReadApi(buildStore({ edgeSeqTo: 99 }), {});
         const summary = api.getEdgeSummary('a', { visibleNodeIds: ['a', 'b'], limit: 5 });
         const neighbor = summary?.sample_neighbors?.[0];
         expect(neighbor).toBeDefined();
@@ -164,7 +165,7 @@ describe('edge_summary seqTo fallback', () => {
     });
 
     test('edge without seqTo falls back to max(node.seqTo)', () => {
-        const api = getMemoryGraphReadApi({ __memoryStore: buildStore() });
+        const api = getMemoryGraphReadApi(buildStore(), {});
         const summary = api.getEdgeSummary('a', { visibleNodeIds: ['a', 'b'], limit: 5 });
         const neighbor = summary?.sample_neighbors?.[0];
         expect(neighbor).toBeDefined();
@@ -188,7 +189,7 @@ describe('edge_summary seqTo fallback', () => {
                 { from: 'a', to: 'd', type: 'partner_of', seqTo: 22 },
             ],
         };
-        const api = getMemoryGraphReadApi({ __memoryStore: store });
+        const api = getMemoryGraphReadApi(store, {});
         const summary = api.getEdgeSummary('a', { visibleNodeIds: ['a', 'b', 'c', 'd'], limit: 5 });
         const ids = summary.sample_neighbors.map(n => n.id);
         const seqs = summary.sample_neighbors.map(n => n.to_seq);
@@ -197,19 +198,17 @@ describe('edge_summary seqTo fallback', () => {
     });
 
     test('Map accumulator tracks max seqTo across multiple edges to the same neighbor', () => {
-        const ctx = {
-            __memoryStore: {
-                nodes: {
-                    a: { id: 'a', type: 'character_sheet', seqTo: 1, fields: {} },
-                    b: { id: 'b', type: 'character_sheet', seqTo: 2, fields: {} },
-                },
-                edges: [
-                    { from: 'a', to: 'b', type: 'partner_of', seqTo: 5 },
-                    { from: 'a', to: 'b', type: 'rival_of', seqTo: 12 },
-                ],
+        const store = {
+            nodes: {
+                a: { id: 'a', type: 'character_sheet', seqTo: 1, fields: {} },
+                b: { id: 'b', type: 'character_sheet', seqTo: 2, fields: {} },
             },
+            edges: [
+                { from: 'a', to: 'b', type: 'partner_of', seqTo: 5 },
+                { from: 'a', to: 'b', type: 'rival_of', seqTo: 12 },
+            ],
         };
-        const api = getMemoryGraphReadApi(ctx);
+        const api = getMemoryGraphReadApi(store, {});
         const summary = api.getEdgeSummary('a', { visibleNodeIds: ['a', 'b'], limit: 5 });
         const neighborB = summary?.sample_neighbors?.find(n => n.id === 'b');
         expect(neighborB).toBeDefined();

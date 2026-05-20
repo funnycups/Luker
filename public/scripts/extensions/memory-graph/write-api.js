@@ -1,38 +1,37 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Memory-graph Layer-1 write API. Mirrors read-api.js shape. Caller
-// resolves store via context.__memoryStore (same convention as read-api).
+// Memory-graph Layer-1 write API. Mirrors read-api.js shape. The runtime
+// store is supplied by the caller; the optional `context` flows through to
+// `applyExtractionOpsImpl` for the few op handlers that consult it (e.g.
+// timeline / link semantics that may inspect chat metadata).
 // applyExtractionBatch is the recommended entry — it provides the
 // single rollback / persist boundary; the per-op primitives are thin
 // wrappers that build a one-op batch.
 
 import { applyExtractionOpsImpl, createRollupWithChildren } from './main.js';
 
-export function getMemoryGraphWriteApi(context) {
+export function getMemoryGraphWriteApi(store, context = null) {
     function resolveStore() {
-        if (context && context.__memoryStore && typeof context.__memoryStore === 'object') {
-            return context.__memoryStore;
-        }
-        return null;
+        return (store && typeof store === 'object') ? store : null;
     }
 
     function requireStore(method) {
-        const store = resolveStore();
-        if (!store) {
-            const err = new Error(`memory-graph write-api: ${method} requires __memoryStore on context.`);
+        const resolved = resolveStore();
+        if (!resolved) {
+            const err = new Error(`memory-graph write-api: ${method} requires a runtime store.`);
             err.code = 'MEMORY_STORE_MISSING';
             throw err;
         }
-        return store;
+        return resolved;
     }
 
     function applyOne(method, op) {
-        const store = requireStore(method);
-        const result = applyExtractionOpsImpl(store, [op], {
-            maxSeq: Number(store.seqCounter || 0),
+        const resolved = requireStore(method);
+        const result = applyExtractionOpsImpl(resolved, [op], {
+            maxSeq: Number(resolved.seqCounter || 0),
             context,
         });
-        return { store, result };
+        return { store: resolved, result };
     }
 
     function createNode({ type, title, fields, links, ref } = {}) {

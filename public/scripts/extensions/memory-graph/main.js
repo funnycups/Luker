@@ -3,6 +3,8 @@
 
 import { event_types, eventSource, extension_prompt_roles, extension_prompt_types, resolveChatStateTarget, saveSettings, saveSettingsDebounced } from '../../../script.js';
 import { extension_settings, getContext } from '../../extensions.js';
+// Register the Layer-1 session API at module load.
+import './api.js';
 import { i18n, i18nFormat, registerLocaleData } from './i18n.js';
 import {
     DEFAULT_PER_TYPE_INSTRUCTIONS,
@@ -6002,7 +6004,7 @@ async function chooseRecallRoute(context, settings, recallState) {
     // dependency with read-api.js (which itself imports helpers from here);
     // the ESM module cache makes repeat calls effectively free.
     const { getMemoryGraphReadApi } = await import('./read-api.js');
-    const readApi = getMemoryGraphReadApi(context);
+    const readApi = getMemoryGraphReadApi(recallState.store, context);
 
     const candidateRows = (recallState.candidates || []).map(node => {
         const id = String(node?.id || '');

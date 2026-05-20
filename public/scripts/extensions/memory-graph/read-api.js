@@ -5,10 +5,12 @@
 //
 // Exposes the same data + topology + recall primitives that
 // `chooseRecallRoute` (main.js) feeds to the route LLM, but as a frozen,
-// caller-safe surface. The factory `getMemoryGraphReadApi(context)` returns
-// an object whose methods all read from the live memory-graph store (resolved
-// per-call). Returned views are deep-frozen plain objects / Sets so callers
-// cannot mutate internal state.
+// caller-safe surface. The factory `getMemoryGraphReadApi(store, context)`
+// returns an object whose methods all read from the passed store. Returned
+// views are deep-frozen plain objects / Sets so callers cannot mutate
+// internal state. Most consumers should go through `openSession(context)`
+// in `api.js` instead — it handles store loading and is the recommended
+// public entry point.
 //
 // Four layers, mirroring the spec:
 //   - Layer A (data access):      listNodes, getNode, listEdges, getSchema
@@ -36,7 +38,6 @@
 
 import {
     getSettings,
-    getMemoryStore,
     getSemanticTypeSpec,
     getSemanticCompressionConfig,
     getChildren,
@@ -294,26 +295,18 @@ function freezeNodeBriefView(brief) {
 // ---------------------------------------------------------------------------
 
 /**
- * Builds the read-only memory-graph API surface bound to `context`. Returns a
- * frozen object whose methods resolve the live store on each call so a single
- * API instance stays valid across chat / character switches.
+ * Builds the read-only memory-graph API surface bound to `store`. Returns a
+ * frozen object whose methods read from the supplied store on each call. The
+ * optional `context` is used for settings cascade, embeddings configuration,
+ * and injection-state observation.
  *
- * @param {object} context SillyTavern context (from `getContext()`)
+ * @param {object} store the runtime memory-graph store
+ * @param {object} [context] SillyTavern context (from `getContext()`)
  * @returns {object} the frozen API
  */
-export function getMemoryGraphReadApi(context) {
+export function getMemoryGraphReadApi(store, context = null) {
     function resolveStore() {
-        // Orchestrator's mount pattern stashes the resolved store on the
-        // context object as `__memoryStore` for synchronous reuse; prefer it
-        // when present. Otherwise fall back to the live cache lookup.
-        if (context && context.__memoryStore && typeof context.__memoryStore === 'object') {
-            return context.__memoryStore;
-        }
-        try {
-            return getMemoryStore(context, null);
-        } catch (_) {
-            return null;
-        }
+        return (store && typeof store === 'object') ? store : null;
     }
 
     function resolveSettings() {

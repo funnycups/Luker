@@ -688,12 +688,25 @@ function buildFixtureStore() {
 }
 
 function makeContext(store) {
-    return { __memoryStore: store };
+    // Kept for back-compat with older tests that built context this way.
+    // The store is now supplied as the first arg to getMemoryGraphReadApi;
+    // this helper just returns a plain context object.
+    void store;
+    return {};
 }
 
 // ---------------------------------------------------------------------------
 // Test groups
 // ---------------------------------------------------------------------------
+
+describe('read-api factory signature', () => {
+    test('getMemoryGraphReadApi accepts (store, context) and resolves store directly', () => {
+        const store = { nodes: { n1: { id: 'n1', type: 'character_sheet', level: 'episodic', title: 'Alice' } }, edges: [], seqCounter: 1 };
+        const api = getMemoryGraphReadApi(store, {});
+        const list = api.listVisibleCandidates({ types: ['character_sheet'] });
+        expect(list.some(n => n.id === 'n1')).toBe(true);
+    });
+});
 
 describe('read-api type freeze (spec §8.1)', () => {
     let api;
@@ -704,7 +717,7 @@ describe('read-api type freeze (spec §8.1)', () => {
         store = buildFixtureStore();
         ctx = makeContext(store);
         testHolder.settings = { nodeTypeSchema: buildFixtureSchema() };
-        api = getMemoryGraphReadApi(ctx);
+        api = getMemoryGraphReadApi(store, ctx);
     });
 
     test('NodeView from getNode is frozen — assignment leaves value unchanged', () => {
@@ -795,7 +808,7 @@ describe('Layer A: data access (spec §4.2)', () => {
         store = buildFixtureStore();
         ctx = makeContext(store);
         testHolder.settings = { nodeTypeSchema: buildFixtureSchema() };
-        api = getMemoryGraphReadApi(ctx);
+        api = getMemoryGraphReadApi(store, ctx);
     });
 
     test('listNodes() returns active, non-diagnostic nodes sorted by compareNodesByTimeline (seqTo asc + id tiebreak)', () => {
@@ -916,7 +929,7 @@ describe('Layer B: topology navigation (spec §4.3)', () => {
         store = buildFixtureStore();
         ctx = makeContext(store);
         testHolder.settings = { nodeTypeSchema: buildFixtureSchema() };
-        api = getMemoryGraphReadApi(ctx);
+        api = getMemoryGraphReadApi(store, ctx);
     });
 
     test('getNeighbors(direction:"out") returns out-edges only', () => {
@@ -1063,7 +1076,7 @@ describe('Layer C: recall primitives (spec §4.4)', () => {
         store = buildFixtureStore();
         ctx = makeContext(store);
         testHolder.settings = { nodeTypeSchema: buildFixtureSchema() };
-        api = getMemoryGraphReadApi(ctx);
+        api = getMemoryGraphReadApi(store, ctx);
     });
 
     test('listVisibleCandidates() matches collectRootCandidates id set (spec §8.2)', async () => {
@@ -1250,18 +1263,16 @@ describe('keywordSearch', () => {
     let api;
 
     beforeEach(() => {
-        const ctx = {
-            __memoryStore: {
-                nodes: {
-                    n1: { id: 'n1', type: 'character_sheet', title: 'Eileen', fields: { aliases: '艾琳', traits: 'healer quiet' }, seqTo: 10 },
-                    n2: { id: 'n2', type: 'character_sheet', title: 'Marcus', fields: { traits: 'warrior loud' }, seqTo: 12 },
-                    n3: { id: 'n3', type: 'event', title: 'Forest battle', fields: { summary: '时间:Day 5;Marcus 击退 wolves。' }, seqTo: 15 },
-                },
-                edges: [],
+        const store = {
+            nodes: {
+                n1: { id: 'n1', type: 'character_sheet', title: 'Eileen', fields: { aliases: '艾琳', traits: 'healer quiet' }, seqTo: 10 },
+                n2: { id: 'n2', type: 'character_sheet', title: 'Marcus', fields: { traits: 'warrior loud' }, seqTo: 12 },
+                n3: { id: 'n3', type: 'event', title: 'Forest battle', fields: { summary: '时间:Day 5;Marcus 击退 wolves。' }, seqTo: 15 },
             },
+            edges: [],
         };
         testHolder.settings = null;
-        api = getMemoryGraphReadApi(ctx);
+        api = getMemoryGraphReadApi(store, {});
     });
 
     test('matches against title and projected columns', () => {
@@ -1289,16 +1300,16 @@ describe('keywordSearch', () => {
 
 describe('vectorSearch', () => {
     test('throws NO_EMBEDDING_PROFILE when no profile configured', async () => {
-        const ctx = { __memoryStore: { nodes: {}, edges: [] } };
-        const api = getMemoryGraphReadApi(ctx);
+        const store = { nodes: {}, edges: [] };
+        const api = getMemoryGraphReadApi(store, {});
         await expect(api.vectorSearch({ query: 'anything' })).rejects.toMatchObject({
             code: 'NO_EMBEDDING_PROFILE',
         });
     });
 
     test('returns empty array on empty query (no throw)', async () => {
-        const ctx = { __memoryStore: { nodes: {}, edges: [] } };
-        const api = getMemoryGraphReadApi(ctx);
+        const store = { nodes: {}, edges: [] };
+        const api = getMemoryGraphReadApi(store, {});
         await expect(api.vectorSearch({ query: '' })).resolves.toEqual([]);
     });
 });
@@ -1306,15 +1317,13 @@ describe('vectorSearch', () => {
 describe('findByName', () => {
     let api;
     beforeEach(() => {
-        const ctx = {
-            __memoryStore: {
-                nodes: {
-                    n1: { id: 'n1', type: 'character_sheet', title: 'Eileen', fields: { aliases: '艾琳, Eily' }, seqTo: 10 },
-                    n2: { id: 'n2', type: 'character_sheet', title: 'Marcus', fields: { aliases: '' }, seqTo: 12 },
-                    n3: { id: 'n3', type: 'location_state', title: 'Dark Forest', fields: { aliases: '黑森林' }, seqTo: 8 },
-                },
-                edges: [],
+        const store = {
+            nodes: {
+                n1: { id: 'n1', type: 'character_sheet', title: 'Eileen', fields: { aliases: '艾琳, Eily' }, seqTo: 10 },
+                n2: { id: 'n2', type: 'character_sheet', title: 'Marcus', fields: { aliases: '' }, seqTo: 12 },
+                n3: { id: 'n3', type: 'location_state', title: 'Dark Forest', fields: { aliases: '黑森林' }, seqTo: 8 },
             },
+            edges: [],
         };
         // Both character_sheet and location_state must declare aliases in
         // primaryKeyColumns so findByName can substring-match against the field.
@@ -1349,7 +1358,7 @@ describe('findByName', () => {
                 },
             ],
         };
-        api = getMemoryGraphReadApi(ctx);
+        api = getMemoryGraphReadApi(store, {});
     });
 
     test('matches on title case-insensitively', () => {
@@ -1374,18 +1383,16 @@ describe('findByName', () => {
 
 describe('compactionCandidates', () => {
     test('returns empty groups when type has compression.mode === "none"', () => {
-        const ctx = {
-            __memoryStore: {
-                nodes: {
-                    c1: { id: 'c1', type: 'character_sheet', title: 'A', seqTo: 1, level: 'semantic' },
-                    c2: { id: 'c2', type: 'character_sheet', title: 'B', seqTo: 2, level: 'semantic' },
-                    c3: { id: 'c3', type: 'character_sheet', title: 'C', seqTo: 3, level: 'semantic' },
-                },
-                edges: [],
+        const store = {
+            nodes: {
+                c1: { id: 'c1', type: 'character_sheet', title: 'A', seqTo: 1, level: 'semantic' },
+                c2: { id: 'c2', type: 'character_sheet', title: 'B', seqTo: 2, level: 'semantic' },
+                c3: { id: 'c3', type: 'character_sheet', title: 'C', seqTo: 3, level: 'semantic' },
             },
+            edges: [],
         };
         testHolder.settings = { nodeTypeSchema: buildFixtureSchema() };
-        const api = getMemoryGraphReadApi(ctx);
+        const api = getMemoryGraphReadApi(store, {});
         // character_sheet schema has compression.mode = 'none' in defaults
         expect(api.compactionCandidates({ type: 'character_sheet' })).toEqual({ groups: [] });
     });
@@ -1410,9 +1417,9 @@ describe('compactionCandidates', () => {
                 fields: { summary: '时间：Day ' + i + '；something happened.' },
             };
         }
-        const ctx = { __memoryStore: { nodes, edges: [] } };
+        const store = { nodes, edges: [] };
         testHolder.settings = { nodeTypeSchema: buildFixtureSchema() };
-        const api = getMemoryGraphReadApi(ctx);
+        const api = getMemoryGraphReadApi(store, {});
         const result = api.compactionCandidates({ type: 'event', depth: 0 });
         expect(result.groups.length).toBeGreaterThan(0);
         expect(result.groups[0].depth).toBe(0);
@@ -1430,7 +1437,7 @@ describe('Layer D: injection observation (spec §4.5)', () => {
         store = buildFixtureStore();
         ctx = makeContext(store);
         testHolder.settings = { nodeTypeSchema: buildFixtureSchema() };
-        api = getMemoryGraphReadApi(ctx);
+        api = getMemoryGraphReadApi(store, ctx);
     });
 
     test('getInjectionState() returns frozen InjectionState with three Sets', () => {
@@ -1497,24 +1504,22 @@ describe('edge_summary fallback when injection state is empty (agent-only mode)'
         // Expected: in agent-only mode (no injection state), getEdgeSummary on X
         // should project A's edge up to R, so X sees R as a neighbor (not A).
         testHolder.settings = { nodeTypeSchema: buildFixtureSchema() };
-        const ctx = {
-            __memoryStore: {
-                nodes: {
-                    R: { id: 'R', type: 'event', level: 'semantic', semanticDepth: 1, semanticRollup: true, seqTo: 10, parentId: '', childrenIds: ['A', 'B'], fields: { summary: 'rollup' } },
-                    A: { id: 'A', type: 'event', level: 'semantic', semanticDepth: 0, semanticRollup: false, seqTo: 5, parentId: 'R', childrenIds: [], fields: { summary: 'leaf A' } },
-                    B: { id: 'B', type: 'event', level: 'semantic', semanticDepth: 0, semanticRollup: false, seqTo: 8, parentId: 'R', childrenIds: [], fields: { summary: 'leaf B' } },
-                    X: { id: 'X', type: 'character_sheet', level: 'semantic', semanticDepth: 0, semanticRollup: false, seqTo: 6, parentId: '', childrenIds: [], fields: { title: 'X' } },
-                },
-                edges: [
-                    { from: 'R', to: 'A', type: 'semantic_contains', seqTo: 10 },
-                    { from: 'R', to: 'B', type: 'semantic_contains', seqTo: 10 },
-                    { from: 'A', to: 'X', type: 'involved_in', seqTo: 5 },
-                ],
-                appliedSeqTo: 10,
-                loggedSeqTo: 10,
+        const store = {
+            nodes: {
+                R: { id: 'R', type: 'event', level: 'semantic', semanticDepth: 1, semanticRollup: true, seqTo: 10, parentId: '', childrenIds: ['A', 'B'], fields: { summary: 'rollup' } },
+                A: { id: 'A', type: 'event', level: 'semantic', semanticDepth: 0, semanticRollup: false, seqTo: 5, parentId: 'R', childrenIds: [], fields: { summary: 'leaf A' } },
+                B: { id: 'B', type: 'event', level: 'semantic', semanticDepth: 0, semanticRollup: false, seqTo: 8, parentId: 'R', childrenIds: [], fields: { summary: 'leaf B' } },
+                X: { id: 'X', type: 'character_sheet', level: 'semantic', semanticDepth: 0, semanticRollup: false, seqTo: 6, parentId: '', childrenIds: [], fields: { title: 'X' } },
             },
+            edges: [
+                { from: 'R', to: 'A', type: 'semantic_contains', seqTo: 10 },
+                { from: 'R', to: 'B', type: 'semantic_contains', seqTo: 10 },
+                { from: 'A', to: 'X', type: 'involved_in', seqTo: 5 },
+            ],
+            appliedSeqTo: 10,
+            loggedSeqTo: 10,
         };
-        const api = getMemoryGraphReadApi(ctx);
+        const api = getMemoryGraphReadApi(store, {});
         // No options.visibleNodeIds; no injection state — should fall back to canonical pool.
         const summary = api.getEdgeSummary('X');
         // Should find at least one neighbor (R, via leaf-edge projection)
@@ -1525,16 +1530,14 @@ describe('edge_summary fallback when injection state is empty (agent-only mode)'
 
     test('returns empty when explicit empty visibleNodeIds passed (caller intent)', () => {
         testHolder.settings = { nodeTypeSchema: buildFixtureSchema() };
-        const ctx = {
-            __memoryStore: {
-                nodes: {
-                    A: { id: 'A', type: 'event', level: 'semantic', semanticDepth: 0, seqTo: 1, parentId: '', childrenIds: [], fields: {} },
-                    X: { id: 'X', type: 'character_sheet', level: 'semantic', semanticDepth: 0, seqTo: 1, parentId: '', childrenIds: [], fields: {} },
-                },
-                edges: [{ from: 'A', to: 'X', type: 'involved_in', seqTo: 1 }],
+        const store = {
+            nodes: {
+                A: { id: 'A', type: 'event', level: 'semantic', semanticDepth: 0, seqTo: 1, parentId: '', childrenIds: [], fields: {} },
+                X: { id: 'X', type: 'character_sheet', level: 'semantic', semanticDepth: 0, seqTo: 1, parentId: '', childrenIds: [], fields: {} },
             },
+            edges: [{ from: 'A', to: 'X', type: 'involved_in', seqTo: 1 }],
         };
-        const api = getMemoryGraphReadApi(ctx);
+        const api = getMemoryGraphReadApi(store, {});
         // Explicit empty array — caller wants "nothing visible".
         const summary = api.getEdgeSummary('X', { visibleNodeIds: [] });
         expect(summary.sample_neighbors).toEqual([]);

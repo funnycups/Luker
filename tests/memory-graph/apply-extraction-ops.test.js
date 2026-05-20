@@ -52,6 +52,7 @@ jest.unstable_mockModule('../../public/script.js', () => ({
 jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
     extension_settings: extensionSettingsMock,
     getContext: () => ({}),
+    registerExtensionApi: () => {},
     UNSET_VALUE: Symbol('UNSET_VALUE'),
 }));
 
