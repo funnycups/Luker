@@ -4,15 +4,15 @@
 
 ## 发送 LLM 请求
 
-推荐使用 `context.generateTask` —— 一次调用同时处理 profile 解析、世界书激活、prompt 组装、分发与响应归一化。Luker 内置的 search-tools、completion-preset-assistant、character-editor-assistant、memory-graph、orchestrator 都通过它发起 LLM 请求。第三方插件也应该用这个 API,而不是自己拼装 `sendOpenAIRequest` + `buildPresetAwarePromptMessages` + `connectionProfiles.resolve`。
+推荐使用 `context.generateTask` —— 一次调用同时处理 profile 解析、世界书激活、prompt 组装、分发与响应归一化。Luker 内置的 search-tools、completion-preset-assistant、character-editor-assistant、记忆图、orchestrator 都通过它发起 LLM 请求。第三方插件也应该用这个 API，而不是自己拼装 `sendOpenAIRequest` + `buildPresetAwarePromptMessages` + `connectionProfiles.resolve`。
 
 ::: info 为什么要统一成一个 API
-手动拼装意味着每个插件都得自己重做 profile 解析、世界书激活、家族分发(openai vs kobold/novel/textgen)、响应解析。`generateTask` 把这些都收敛到一处,无论底层 API 家族是哪种,都返回归一化的结果结构。
+手动拼装意味着每个插件都得自己重做 profile 解析、世界书激活、家族分发（openai vs kobold/novel/textgen）、响应解析。`generateTask` 把这些都收敛到一处，无论底层 API 家族是哪种，都返回归一化的结果结构。
 :::
 
 ### 快速开始
 
-最简单的纯文本请求 —— 自动遵循当前 prompt preset、角色卡和聊天世界书:
+最简单的纯文本请求 —— 自动遵循当前 prompt preset、角色卡和聊天世界书：
 
 ```js
 const context = Luker.getContext();
@@ -64,31 +64,31 @@ context.generateTask({
 
 | 取值 | 含义 |
 |------|------|
-| `'none'`(默认) | 跳过世界书激活。适合已经预先解析好 `runtimeWorldInfo` 或本任务根本不需要世界书的场景。 |
+| `'none'`（默认） | 跳过世界书激活。适合已经预先解析好 `runtimeWorldInfo` 或本任务根本不需要世界书的场景。 |
 | `'task'` | 基于 `taskMessages` 激活。任务自身驱动 WI 匹配时用。 |
-| `'chat'` | 基于当前聊天历史激活(内部使用 `fallbackToCurrentChat: true`)。 |
+| `'chat'` | 基于当前聊天历史激活（内部使用 `fallbackToCurrentChat: true`）。 |
 | `'custom'` | 基于你显式提供的 `customWorldInfoMessages` 激活。 |
 
-如果已经有解析好的 WI 快照(例如重试循环中缓存了一份),直接传 `runtimeWorldInfo` 并把 `worldInfoSource` 设成 `'none'`,可以跳过重复激活。
+如果已经有解析好的 WI 快照（例如重试循环中缓存了一份），直接传 `runtimeWorldInfo` 并把 `worldInfoSource` 设成 `'none'`，可以跳过重复激活。
 
 ### 宏替换
 
-`substituteMacros` 默认为 `true`,`generateTask` 会在拼装前对每条 task 消息的字符串 `content` 跑一遍 `substituteParams`。这样插件请求里也能解析跟主聊天路径一致的 <span v-pre>`{{...}}`</span> 宏 —— 包括 Luker 内置宏(<span v-pre>`{{user}}`</span>、<span v-pre>`{{char}}`</span>、<span v-pre>`{{persona}}`</span>、<span v-pre>`{{datetime}}`</span>、<span v-pre>`{{random:a,b}}`</span> 等)和经由同一引擎注册的扩展宏(例如 MagVarUpdate 的 <span v-pre>`{{getvar::}}`</span> 系列)。
+`substituteMacros` 默认为 `true`，`generateTask` 会在拼装前对每条 task 消息的字符串 `content` 跑一遍 `substituteParams`。这样插件请求里也能解析跟主聊天路径一致的 <span v-pre>`{{...}}`</span> 宏 —— 包括 Luker 内置宏（<span v-pre>`{{user}}`</span>、<span v-pre>`{{char}}`</span>、<span v-pre>`{{persona}}`</span>、<span v-pre>`{{datetime}}`</span>、<span v-pre>`{{random:a,b}}`</span> 等）和经由同一引擎注册的扩展宏（例如 MagVarUpdate 的 <span v-pre>`{{getvar::}}`</span> 系列）。
 
-带副作用的宏(<span v-pre>`{{setvar::}}`</span>、<span v-pre>`{{addvar::}}`</span>、<span v-pre>`{{incvar::}}`</span>、<span v-pre>`{{decvar::}}`</span>、<span v-pre>`{{deletevar::}}`</span>)会通过 `skipSideEffects: true` 直接剥除,否则插件每次请求都会重新触发这些写入并污染 `chat_metadata.variables`。
+带副作用的宏（<span v-pre>`{{setvar::}}`</span>、<span v-pre>`{{addvar::}}`</span>、<span v-pre>`{{incvar::}}`</span>、<span v-pre>`{{decvar::}}`</span>、<span v-pre>`{{deletevar::}}`</span>）会通过 `skipSideEffects: true` 直接剥除，否则插件每次请求都会重新触发这些写入并污染 `chat_metadata.variables`。
 
 #### 何时应该关闭
 
-对于**编辑/创作类**流程,把 `substituteMacros` 设为 `false`:这些场景下 AI 的工作是阅读或编辑含有 <span v-pre>`{{...}}`</span> 字面量的源文本,如果 <span v-pre>`{{user}}`</span> 在 AI 看到之前就被展开,模型就没办法对源模板做对比、diff 或修改了。
+对于**编辑/创作类**流程，把 `substituteMacros` 设为 `false`：这些场景下 AI 的工作是阅读或编辑含有 <span v-pre>`{{...}}`</span> 字面量的源文本，如果 <span v-pre>`{{user}}`</span> 在 AI 看到之前就被展开，模型就没办法对源模板做对比、diff 或修改了。
 
-代码库里现有的具体例子:
+代码库里现有的具体例子：
 
 - 角色卡编辑器 —— AI 在改包含 <span v-pre>`{{user}}`</span> / <span v-pre>`{{char}}`</span> 占位符的卡字段。
 - 世界书 diff 分析 —— diff payload 里的世界书条目里那些 <span v-pre>`{{...}}`</span> 本身就是分析对象。
-- 预设编辑器 —— AI 在改给最终用户使用的提示词预设正文,正文里携带 <span v-pre>`{{...}}`</span> 宏。
+- 预设编辑器 —— AI 在改给最终用户使用的提示词预设正文，正文里携带 <span v-pre>`{{...}}`</span> 宏。
 - CardApp Studio AI —— 对话里可能引用源文本片段供助手修改。
 
-判断原则:
+判断原则：
 
 - AI 在**生产**最终展示给用户的内容 → 保持 `substituteMacros: true`。
 - AI 在**阅读或编辑**含有 <span v-pre>`{{...}}`</span> 占位符的源文本 → 显式 `substituteMacros: false`。
@@ -123,11 +123,11 @@ for (const call of result.toolCalls) {
 }
 ```
 
-`result.toolCalls` 始终是 `{ name, args, raw }` 数组。`args` 已经被解析成对象,不用再 `JSON.parse`。`raw` 是发送方返回的原始 tool-call 对象,需要原始 `id` 时可用。
+`result.toolCalls` 始终是 `{ name, args, raw }` 数组。`args` 已经被解析成对象，不用再 `JSON.parse`。`raw` 是发送方返回的原始 tool-call 对象，需要原始 `id` 时可用。
 
 #### 强制单一函数
 
-如果想让模型必须调用某个特定函数:
+如果想让模型必须调用某个特定函数：
 
 ```js
 toolChoice: { type: 'function', function: { name: 'my_fn' } },
@@ -138,14 +138,14 @@ functionCallOptions: { requiredFunctionName: 'my_fn' },
 
 | 模式 | 何时选用 |
 |------|----------|
-| `'auto'`(默认) | 由运行时根据当前连接配置自动决定。 |
-| `'native'` | 强制使用原生工具调用(例如 OpenAI tools / Anthropic tool_use)。 |
+| `'auto'`（默认） | 由运行时根据当前连接配置自动决定。 |
+| `'native'` | 强制使用原生工具调用（例如 OpenAI tools / Anthropic tool_use）。 |
 | `'prompt_xml'` | 把工具定义嵌入 system prompt 作为 XML —— 适合不支持原生工具调用的模型。 |
 | `'prompt_json'` | 把工具定义作为 JSON 嵌入 prompt。 |
 
-### 结构化输出 (JSON Schema)
+### 结构化输出 （JSON Schema）
 
-非工具的结构化输出:
+非工具的结构化输出：
 
 ```js
 const result = await context.generateTask({
@@ -169,11 +169,11 @@ const result = await context.generateTask({
 console.log(result.jsonData);  // { name: 'Alice', age: 32, occupation: 'software engineer' }
 ```
 
-`tools` 与 `jsonSchema` 互斥,只能传其中一个。
+`tools` 与 `jsonSchema` 互斥，只能传其中一个。
 
 ### 错误处理
 
-所有失败都抛 `GenerateTaskError`,在 `context.GenerateTaskError` 暴露:
+所有失败都抛 `GenerateTaskError`，在 `context.GenerateTaskError` 暴露：
 
 ```js
 try {
@@ -192,22 +192,22 @@ try {
 | `code` | 含义 |
 |--------|------|
 | `aborted` | 通过 `abortSignal` 主动中止。 |
-| `network` | 网络层失败(DNS、ECONNREFUSED 等)。 |
-| `auth_missing` | 鉴权错误(401、缺 API key)。 |
-| `rate_limit` | 触发限流(429)。 |
-| `invalid_input` | 选项不合法(例如同时传了 `tools` 和 `jsonSchema`,或 `worldInfoSource:'custom'` 但未传 `customWorldInfoMessages`)。 |
+| `network` | 网络层失败（DNS、ECONNREFUSED 等）。 |
+| `auth_missing` | 鉴权错误（401、缺 API key）。 |
+| `rate_limit` | 触发限流（429）。 |
+| `invalid_input` | 选项不合法（例如同时传了 `tools` 和 `jsonSchema`，或 `worldInfoSource:'custom'` 但未传 `customWorldInfoMessages`）。 |
 | `unsupported_api` | 解析出的请求 API 在运行时不支持。 |
-| `stream_unavailable` | 解析后的请求 API 不支持通过 `generateTaskStream` 流式输出(kobold / koboldhorde / novel / textgenerationwebui)。 |
+| `stream_unavailable` | 解析后的请求 API 不支持通过 `generateTaskStream` 流式输出（kobold / koboldhorde / novel / textgenerationwebui）。 |
 | `tool_call_parse` | 模型返回的 tool call `arguments` 无法 `JSON.parse`。 |
 | `json_schema_violation` | `jsonSchema` 模式校验失败。 |
 | `no_response` | 发送方没返回可用内容。 |
 | `unknown` | 未分类失败的兜底。 |
 
-`error.cause` 在可用时携带原始底层错误;`error.details` 携带诊断上下文(例如 `tool_call_parse` 时被拒的 `rawArgs`)。
+`error.cause` 在可用时携带原始底层错误；`error.details` 携带诊断上下文（例如 `tool_call_parse` 时被拒的 `rawArgs`）。
 
 ### 端到端示例
 
-一个搜索代理 —— 遵循用户选择的连接配置、循环工具调用直到模型给出最终结果、支持取消:
+一个搜索代理 —— 遵循用户选择的连接配置、循环工具调用直到模型给出最终结果、支持取消：
 
 ```js
 const context = Luker.getContext();
@@ -238,7 +238,7 @@ return {
 
 ### 流式响应
 
-对于希望在模型生成过程中实时渲染 token 的交互式场景,`context.generateTaskStream` 返回一对 split-stream:一个用于消费 delta 增量的 `AsyncIterable`,以及一个 `Promise` 拿到与 `generateTask` 相同形态的终态结果。
+对于希望在模型生成过程中实时渲染 token 的交互式场景，`context.generateTaskStream` 返回一对 split-stream：一个用于消费 delta 增量的 `AsyncIterable`，以及一个 `Promise` 拿到与 `generateTask` 相同形态的终态结果。
 
 ```js
 const { stream, result } = context.generateTaskStream({
@@ -270,42 +270,42 @@ type StreamChunk =
 ```
 
 - `text` —— assistant 文本增量。按到达顺序拼接所有 `text.delta` 等于 `final.assistantText`。
-- `reasoning` —— 推理/思考增量(Claude thinking 块、OpenAI o 系列 reasoning、Gemini thought summaries)。拼接所有 `reasoning.delta` 等于 `final.reasoning`。
+- `reasoning` —— 推理/思考增量（Claude thinking 块、OpenAI o 系列 reasoning、Gemini thought summaries）。拼接所有 `reasoning.delta` 等于 `final.reasoning`。
 
-`type` 是一个开放的判别字段。请用 `switch (chunk.type)` 配合 `default` 分支静默忽略未知类型,这样未来扩展(如 `citation_added`)不会破坏现有消费方。
+`type` 是一个开放的判别字段。请用 `switch (chunk.type)` 配合 `default` 分支静默忽略未知类型，这样未来扩展（如 `citation_added`）不会破坏现有消费方。
 
 #### 兼容矩阵
 
 | 模式 | 流式行为 |
 |------|----------|
-| 纯文本 | 完全支持。text 与 reasoning delta 通过 `stream` 到达,终态 `result` 同样持有归一化后的完整内容。 |
-| `tools` | 支持。模型直接输出工具调用时 `stream` 通常不会 yield 任何 chunk;终态 `result.toolCalls` 携带解析后的结构。 |
-| `jsonSchema` | 支持。`stream` 以 text delta 形式输出 JSON 文本(partial JSON,中途不可 parse);终态 `result.jsonData` 拿到解析后的对象。适用于只需要最终结构化结果,但又想用流式传输保持长连接活跃以避免超时的场景。 |
+| 纯文本 | 完全支持。text 与 reasoning delta 通过 `stream` 到达，终态 `result` 同样持有归一化后的完整内容。 |
+| `tools` | 支持。模型直接输出工具调用时 `stream` 通常不会 yield 任何 chunk；终态 `result.toolCalls` 携带解析后的结构。 |
+| `jsonSchema` | 支持。`stream` 以 text delta 形式输出 JSON 文本（partial JSON，中途不可 parse）；终态 `result.jsonData` 拿到解析后的对象。适用于只需要最终结构化结果，但又想用流式传输保持长连接活跃以避免超时的场景。 |
 | `requestApi !== 'openai'` | 抛 `GenerateTaskError({ code: 'stream_unavailable' })`。 |
 
 #### 取消与错误传播
 
-`abortSignal` 用于取消请求。signal 触发时,**同一个 `GenerateTaskError({ code: 'aborted' })` 实例**会同时拒绝 `stream`(终止进行中的 `for await`)和 `result`。网络、鉴权及其他运行时错误同样遵循"同实例"约定 —— 在任一侧 catch 即可。
+`abortSignal` 用于取消请求。signal 触发时，**同一个 `GenerateTaskError({ code: 'aborted' })` 实例**会同时拒绝 `stream`（终止进行中的 `for await`）和 `result`。网络、鉴权及其他运行时错误同样遵循"同实例"约定 —— 在任一侧 catch 即可。
 
-从 `for await (const chunk of stream)` 中 `break` **不会**取消底层 HTTP 请求,只是停止本地消费。如需中止上游模型调用,请触发 `abortSignal`。
+从 `for await (const chunk of stream)` 中 `break` **不会**取消底层 HTTP 请求，只是停止本地消费。如需中止上游模型调用，请触发 `abortSignal`。
 
 #### 不消费 stream 的情况
 
-直接 `await result` 也是合法的。在任何消费方挂接之前到达的增量会被丢弃(不为延迟消费缓存),但内部累加器仍会构造出完整的终态 `result`。当你只想拿响应形态、不需要逐 token 渲染时使用这种模式。
+直接 `await result` 也是合法的。在任何消费方挂接之前到达的增量会被丢弃（不为延迟消费缓存），但内部累加器仍会构造出完整的终态 `result`。当你只想拿响应形态、不需要逐 token 渲染时使用这种模式。
 
 ## 消息接管
 
-对于希望由插件直接产出助理消息、而非引导主 LLM 的场景,参见 **[消息接管 API](./message-takeover.md)**。该 API 允许插件接管消息体的完整产出过程,跳过主 LLM 调用。
+对于希望由插件直接产出助理消息、而非引导主 LLM 的场景，参见 **[消息接管 API](./message-takeover.md)**。该 API 允许插件接管消息体的完整产出过程，跳过主 LLM 调用。
 
 ## 迁移手册
 
-如果你的插件以前直接调 `sendOpenAIRequest`,这里是平移指引。
+如果你的插件以前直接调 `sendOpenAIRequest`，这里是平移指引。
 
 ### 映射表
 
 | 旧 | 新 |
 |----|----|
-| `import { sendOpenAIRequest } from '../../openai.js'` | 用 `context.generateTask`(无需 import) |
+| `import { sendOpenAIRequest } from '../../openai.js'` | 用 `context.generateTask`（无需 import） |
 | `import { resolveChatCompletionRequestProfile } from '../connection-manager/profile-resolver.js'` | 删除 —— 给 `generateTask` 传 `apiPresetName` |
 | `import { extractAllFunctionCalls, getResponseMessageContent } from '../function-call-runtime.js'` | 删除 —— 读 `result.toolCalls` 和 `result.assistantText` |
 | `context.buildPresetAwarePromptMessages({ messages, envelopeOptions, runtimeWorldInfo })` | 删除 —— `generateTask` 内部组装 |
@@ -315,7 +315,7 @@ type StreamChunk =
 
 ### 改造前 / 改造后
 
-**改造前**(手动拼装):
+**改造前**（手动拼装）:
 
 ```js
 import { sendOpenAIRequest } from '../../openai.js';
@@ -384,9 +384,9 @@ const calls = result.toolCalls.filter(c => allowedNames.has(c.name));
 
 ### 注意事项
 
-- `generateTask` 内部固定使用 `requestScope: 'extension_internal'`,你不再需要传这个字段。
-- 传了 `tools` 就隐含 `replaceTools: true`,没有单独的开关。
-- 推荐 API 不再暴露 `apiSettingsOverride` 路径。如果确实需要原始 override(高级用法),可以走 `connectionProfiles.resolve` 加底层 dispatcher,见 [底层参考](#底层参考)。
+- `generateTask` 内部固定使用 `requestScope: 'extension_internal'`，你不再需要传这个字段。
+- 传了 `tools` 就隐含 `replaceTools: true`，没有单独的开关。
+- 推荐 API 不再暴露 `apiSettingsOverride` 路径。如果确实需要原始 override（高级用法），可以走 `connectionProfiles.resolve` 加底层 dispatcher，见 [底层参考](#底层参考)。
 
 ## 工具注册
 
@@ -419,13 +419,13 @@ context.registerFunctionTool({
 });
 ```
 
-移除已注册的工具:
+移除已注册的工具：
 
 ```js
 context.unregisterFunctionTool('my_plugin_tool');
 ```
 
-工具相关方法:
+工具相关方法：
 
 | 方法 | 说明 |
 |------|------|
@@ -435,30 +435,30 @@ context.unregisterFunctionTool('my_plugin_tool');
 | `context.canPerformToolCalls(type)` | 检查指定请求类型是否可以执行工具调用 |
 
 ::: warning 全局工具 vs 单次请求工具
-`registerFunctionTool` 将工具添加到**全局注册表**——它们在主聊天中可供模型调用。`generateTask` 的 `tools` 参数仅为**该次请求**提供工具,不影响全局注册表。
+`registerFunctionTool` 将工具添加到**全局注册表**——它们在主聊天中可供模型调用。`generateTask` 的 `tools` 参数仅为**该次请求**提供工具，不影响全局注册表。
 :::
 
 ## 底层参考
 
 下面这些是 `generateTask` 背后的底层原语。除非你的场景 `generateTask` 真的覆盖不了 —— 例如需要流式响应、需要在重试间改写请求、要接非标准管道 —— 否则不建议直接调用。
 
-### 连接配置 (Connection Profile) 解析
+### 连接配置 （Connection Profile） 解析
 
-Connection profile 是 Luker 连接管理器管理的一组**连接配置**(API 类型、模型、密钥、代理等),与 chat completion preset 是**两个独立的东西**——前者描述「连到哪」,后者描述「按什么参数生成」,可自由组合。
+Connection profile 是 Luker 连接管理器管理的一组**连接配置**（API 类型、模型、密钥、代理等），与 chat completion preset 是**两个独立的东西**——前者描述「连到哪」，后者描述「按什么参数生成」，可自由组合。
 
-当插件需要让用户从 connection profile 中挑一个发请求时(例如自带「使用哪个 API 配置」的下拉框),用 `context.connectionProfiles.list()` 填充 UI:
+当插件需要让用户从 connection profile 中挑一个发请求时（例如自带「使用哪个 API 配置」的下拉框），用 `context.connectionProfiles.list()` 填充 UI:
 
 ```js
 context.connectionProfiles.list(): ConnectionProfile[]
 ```
 
 ::: info `connectionProfiles.resolve` 已不推荐插件直接调用
-有了 `generateTask`,你只需要传 profile 的*名称*(`apiPresetName`),解析在内部完成。`resolve(...)` 仍保留以兼容旧代码,但新代码不推荐用。
+有了 `generateTask`，你只需要传 profile 的*名称*(`apiPresetName`)，解析在内部完成。`resolve(...)` 仍保留以兼容旧代码，但新代码不推荐用。
 :::
 
 ### sendOpenAIRequest
 
-底层 LLM dispatcher。`generateTask` 内部对 OpenAI 家族的请求会调用它,前提是 envelope 组装、世界书激活、profile 解析都已经在外层完成。
+底层 LLM dispatcher。`generateTask` 内部对 OpenAI 家族的请求会调用它，前提是 envelope 组装、世界书激活、profile 解析都已经在外层完成。
 
 ```js
 import { sendOpenAIRequest } from '../../../openai.js';
@@ -474,18 +474,18 @@ const result = await sendOpenAIRequest('quiet', messages, signal, {
 });
 ```
 
-第一个参数 `'quiet'` 表示这是一个后台请求,不会出现在聊天 UI 中。
+第一个参数 `'quiet'` 表示这是一个后台请求，不会出现在聊天 UI 中。
 
 | 参数 | 用途 |
 |------|------|
-| `llmPresetName` | 加载 chat completion preset 来覆盖**生成参数**(温度、top_p、frequency_penalty、max_tokens 等)。不影响连接字段。 |
-| `apiPresetName` | 连接配置名。内部解析。如果同时传了 `apiSettingsOverride`,以显式 override 为准。 |
-| `apiSettingsOverride` | 直接用对象覆盖连接设置(通常来自 `connectionProfiles.resolve`)。优先级高于 `apiPresetName`。 |
+| `llmPresetName` | 加载 chat completion preset 来覆盖**生成参数**（温度、top_p、frequency_penalty、max_tokens 等）。不影响连接字段。 |
+| `apiPresetName` | 连接配置名。内部解析。如果同时传了 `apiSettingsOverride`，以显式 override 为准。 |
+| `apiSettingsOverride` | 直接用对象覆盖连接设置（通常来自 `connectionProfiles.resolve`）。优先级高于 `apiPresetName`。 |
 | `requestScope` | 设为 `'extension_internal'` 可跳过主聊天的 CHAT_COMPLETION 钩子。 |
 
 ### buildPresetAwarePromptMessages
 
-只做 envelope 组装,不发请求。适合需要**预览**组装结果但不实际发送的场景(例如「展示将要发送的 prompt」工具)。
+只做 envelope 组装，不发请求。适合需要**预览**组装结果但不实际发送的场景（例如「展示将要发送的 prompt」工具）。
 
 ```js
 const messages = context.buildPresetAwarePromptMessages({
@@ -503,7 +503,7 @@ const messages = context.buildPresetAwarePromptMessages({
 });
 ```
 
-它按照当前 prompt 预设的 `prompt_order` 排列消息,可选地注入角色卡和世界书条目。组装详情见 [预设与提示词](/zh-CN/development/extension-api/presets-and-prompts)。
+它按照当前 prompt 预设的 `prompt_order` 排列消息，可选地注入角色卡和世界书条目。组装详情见 [预设与提示词](/zh-CN/development/extension-api/presets-and-prompts)。
 
 ### generateRaw
 
