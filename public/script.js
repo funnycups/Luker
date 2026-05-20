@@ -3385,7 +3385,12 @@ export async function deleteMessage(id, swipeDeletionIndex = undefined, askConfi
     updateViewMessageIds(startIndex);
     const patched = await patchChatMessages([{ op: 'remove', path: `/${id}` }]);
     if (!patched) {
-        saveChatDebounced();
+        // Delete already mutated chat[] synchronously above; if the patch fetch
+        // failed, the snapshot was invalidated and chat[] now disagrees with BE.
+        // Awaiting saveChatConditional here forces an immediate full-save resync;
+        // a 1-second debounce would leave a window where a subsequent send
+        // appends into a stale BE state and produces the "ghost /1" symptom.
+        await saveChatConditional();
     }
 
     if (this_edit_mes_id === id) {
@@ -12351,8 +12356,13 @@ async function readChatWriteConflictPayload(response) {
     }
 }
 
-async function resolveChatWriteConflict(response, retryCount = 0, requestContext = null) {
-    return await resolveChatWriteConflictForTarget(response, resolveChatStateTarget(), chat_metadata, retryCount, requestContext);
+async function resolveChatWriteConflict(response, retryCount = 0, requestContext = null, target = null) {
+    // target is captured by the caller BEFORE the await, so a chat switch
+    // during the round-trip doesn't make us invalidate the wrong snapshot.
+    // Fall back to active target only if the caller didn't pass one (rare —
+    // mostly for older shouldRetryChatWriteOnConflict callers).
+    const resolvedTarget = target ?? resolveChatStateTarget();
+    return await resolveChatWriteConflictForTarget(response, resolvedTarget, chat_metadata, retryCount, requestContext);
 }
 
 /**
@@ -12790,7 +12800,7 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
                 endpoint: 'chats/group/append',
                 opSummary: summarizeAppendedMessages(messages),
                 sentIntegrity: chat_metadata?.integrity,
-            });
+            }, target);
             return false;
         }
 
@@ -12843,7 +12853,7 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
             endpoint: 'chats/append',
             opSummary: summarizeAppendedMessages(messages),
             sentIntegrity: chat_metadata?.integrity,
-        });
+        }, target);
         return false;
     } catch (error) {
         console.warn('Incremental chat append failed', error);
@@ -12942,7 +12952,7 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
                 endpoint: 'chats/group/patch',
                 opSummary: summarizeJsonPatchOperations(guardedOperations),
                 sentIntegrity: chat_metadata?.integrity,
-            });
+            }, target);
             return false;
         }
 
@@ -12981,7 +12991,7 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
             endpoint: 'chats/patch',
             opSummary: summarizeJsonPatchOperations(guardedOperations),
             sentIntegrity: chat_metadata?.integrity,
-        });
+        }, target);
         return false;
     } catch (error) {
         console.warn('Incremental chat patch failed', error);
@@ -19246,7 +19256,9 @@ jQuery(async function () {
 
         const patched = await patchChatMessages([{ op: 'add', path: `/${insertAt}`, value: message }]);
         if (!patched) {
-            saveChatDebounced();
+            // chat[] is already mutated; recover immediately rather than after
+            // a 1s debounce, otherwise a follow-up write can race a stale BE.
+            await saveChatConditional();
         }
 
         await reloadCurrentChat();

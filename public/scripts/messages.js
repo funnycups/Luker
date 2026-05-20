@@ -22,7 +22,6 @@ import {
     updateViewMessageIds,
     refreshSwipeButtons,
     deleteSwipe,
-    saveChatDebounced,
 } from '../script.js';
 
 import { deleteItemizedPromptForMessage } from './itemized-prompts.js';
@@ -138,7 +137,9 @@ export async function updateMessages(updates, options = {}) {
     if (operations.length > 0) {
         const patched = await patchChatMessages(operations);
         if (!patched) {
-            saveChatDebounced();
+            // chat[] already mutated above; recover immediately. A 1s debounce
+            // leaves a window for follow-up writes to race a stale BE.
+            await saveChatConditional();
         }
     }
 }
@@ -245,7 +246,9 @@ export async function deleteMessages(index, options = {}) {
     if (operations.length > 0) {
     const patched = await patchChatMessages(operations);
     if (!patched) {
-    saveChatDebounced();
+    // chat[] already mutated above; recover immediately. A 1s debounce
+    // leaves a window for follow-up writes to race a stale BE.
+    await saveChatConditional();
     }
     }
 
