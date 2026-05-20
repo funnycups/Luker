@@ -1,340 +1,221 @@
 # Iteration Studio Framework
 
-A shared popup framework for **AI-driven iterative editing of a typed artifact**. The studio orchestrates the conversation, session history, tool dispatch, diff preview, and approve/reject lifecycle; the plugin (via an adapter) supplies what the artifact looks like, which tools edit it, and how it gets persisted.
+A shared popup shell for **AI-driven iterative editing of an adapter-supplied artifact**. The shell drives the conversation, tool dispatch, drift-aware apply, history list, and approve/reject UI; the plugin (via an adapter) supplies what is being edited, which tools propose changes, and where sessions are stored.
 
-Two reference implementations live in-tree:
+Two reference adapters live in-tree:
 
-- `public/scripts/extensions/orchestrator/iteration-adapter.js` — edits orchestration profiles (spec / agenda / loop)
+- `public/scripts/extensions/orchestrator/iteration-adapter.js` — edits orchestrator profiles (spec / agenda / loop)
 - `public/scripts/extensions/memory-graph/schema-adapter.js` — edits memory-graph node-type schema
 
-This page is the contract + walkthrough for building your own adapter.
+This page is the contract and walkthrough for building your own adapter.
 
-## Mental model
+## What it is
 
-The shell owns the **studio shell** — everything generic across studios:
+An Iteration Studio session is a popup chat between the user and an LLM that emits **tool calls describing edits**. Each turn:
 
-- Popup lifecycle (open / close, abort plumbing, focus)
-- Conversation pane (user / assistant messages, pending approval blocks)
-- Composer (textarea + Send / Stop / Clear / Auto-apply toggle)
-- Tool round trip (LLM call via `context.generateTask` with retry / RPM / timeout)
-- Tool call split (editable vs control), pending vs auto-applied
-- Auto-continue (when AI signals `continueRequested`)
-- Auto-apply (skip approval step on a per-adapter persistent preference)
-- Session history list + new/load/delete
-- Profile delta computation (jsondiffpatch) and rendering (text diff + zoom + splitter for free)
+1. User types a request and clicks Send.
+2. Shell asks the LLM with the adapter's tool catalog (plus shell-injected `continue` / `finalize` control tools).
+3. For each tool call returned, the adapter normalizes it to a list of op-typed `Edit`s (see `edits-lib.md`).
+4. Shell applies the edits to `adapter.live()` via the edits library, detecting drift per-edit at apply time.
+5. Approved changes are committed back through `adapter.commit(newLive)`.
+6. If the LLM signaled `continueRequested`, the shell loops with an auto-continue prompt.
 
-The adapter owns the **artifact** — everything per-studio:
+The shell does not carry a working copy of the artifact. `adapter.live()` is the single authority, called fresh whenever the shell needs the current value.
 
-- The shape of `workingProfile` (clone + sanitize)
-- Initial profile (read from current settings / character override)
-- Prompt building (system + user + optional auto-continue)
-- Tool set + per-tool execution (mutate `session.workingProfile`)
-- The working-profile preview panel (right-side HTML)
-- Persistence (storage path for session history + adapter-defined apply actions)
-
-## Entry points
-
-**Layer 2 (recommended for third-party plugins):**
+## Quick start: minimal adapter
 
 ```js
-const ctx = SillyTavern.getContext();
-const { open, defineAdapter, createSettingsBackedHistoryStore } = ctx.iterationStudio;
-```
-
-**Layer 1 (direct import for in-tree code):**
-
-```js
-import {
-    open,
-    defineAdapter,
-    createSettingsBackedHistoryStore,
-    buildProfileDelta,
-    renderProfileDeltaHtml,
-} from '/scripts/iteration-studio/index.js';
-```
-
-Opening the studio:
-
-```js
-const adapter = defineAdapter({ /* … contract below … */ });
-await open(adapter, context, settings, root);
-```
-
-`open` blocks until the user closes the popup.
-
-## Quickstart — minimum viable adapter
-
-The smallest useful adapter, editing a single string field on extension settings:
-
-```js
-import { defineAdapter, createSettingsBackedHistoryStore, open as openIterationStudio } from '/scripts/iteration-studio/index.js';
-import { i18n, i18nFormat } from './i18n.js';   // your extension's own
-import { escapeHtml } from '/scripts/utils.js';
+import { defineAdapter, openIterationStudio } from '/scripts/iteration-studio/index.js';
 
 const TOOL_SET = 'mything_set_value';
 
-export function createMyThingAdapter() {
+export function createMyThingAdapter({ readValue, writeValue, listMetas, loadMeta, saveMeta, deleteMeta }) {
     return defineAdapter({
         id: 'mything',
-        title: i18n('My Thing Studio'),
+        title: 'My Thing Studio',
         mode: 'mything',
-        i18n,
-        i18nFormat,
+        layout: 'popup',
+        i18n: (s) => s,
+        i18nFormat: (s, ...args) => args.reduce((out, v, i) => out.split('${' + i + '}').join(String(v)), s),
 
-        getInitialProfile(ctx, settings) {
-            return { value: String(settings.myThingValue || '') };
-        },
-        cloneWorkingProfile(profile) {
-            return { value: String(profile?.value ?? '') };
-        },
-        getDefaultScope(ctx) {
-            return ctx.characterId != null ? 'character' : 'global';
-        },
+        live: () => readValue(),
+        commit: async (newLive) => { await writeValue(newLive); },
+        sessionScope: () => 'global',
 
-        // Pre-built helper handles the common "global → settings, character → character state" pattern.
-        ...createSettingsBackedHistoryStore({
-            moduleName: 'my_extension',
-            globalSettingsKey: 'iterationHistory',
-            characterStateNamespace: 'my_ext_iteration_history',
-        }),
+        listSessions: async () => listMetas(),
+        loadSession: async (_scope, id) => loadMeta(id),
+        saveSession: async (_scope, session) => saveMeta(session),
+        deleteSession: async (_scope, id) => deleteMeta(id),
 
-        buildSystemPrompt() {
-            return 'You edit a single string field. Call mything_set_value with the new value.';
-        },
-        buildUserPrompt(settings, session, text) {
-            return `[Current]\n${session.workingProfile.value}\n\n[Request]\n${text}`;
-        },
+        buildSystemPrompt: () => 'You edit a single string. Call mything_set_value with the new value.',
+        buildUserPrompt: (session, userText) => `[Current]\n${readValue()}\n\n[Request]\n${userText}`,
 
-        buildEditableToolSet() {
-            return [{
-                type: 'function',
-                function: {
-                    name: TOOL_SET,
-                    description: 'Set the value to a new string.',
-                    parameters: {
-                        type: 'object',
-                        properties: { next: { type: 'string' } },
-                        required: ['next'],
-                        additionalProperties: false,
-                    },
+        buildToolCatalog: () => [{
+            type: 'function',
+            function: {
+                name: TOOL_SET,
+                description: 'Set the value.',
+                parameters: {
+                    type: 'object',
+                    properties: { next: { type: 'string' } },
+                    required: ['next'],
+                    additionalProperties: false,
                 },
-            }];
-        },
-        async executeEditableToolCall(ctx, session, call) {
-            const args = call?.args && typeof call.args === 'object' ? call.args : {};
-            session.workingProfile.value = String(args.next ?? '');
-            return {
-                content: JSON.stringify({ ok: true }),
-                action: i18n('Updated value'),
-                changed: true,
-            };
+            },
+        }],
+        normalizeToolCallToEdit: (call) => {
+            if (call?.name !== TOOL_SET) return null;
+            const next = String(call?.args?.next ?? '');
+            return [{ op: 'set', path: '', oldValue: readValue(), newValue: next }];
         },
 
-        renderWorkingProfile(session) {
-            return `
-<div class="luker-studio-panel-title">${escapeHtml(i18n('Current value'))}</div>
-<pre>${escapeHtml(session.workingProfile.value)}</pre>
-<div class="luker-studio-composer-buttons">
-    <div class="menu_button" data-iter-custom-action="apply">${escapeHtml(i18n('Apply'))}</div>
-</div>`;
-        },
-        async handleAction(actionId, ctx) {
-            if (actionId === 'apply') {
-                ctx.settings.myThingValue = ctx.session.workingProfile.value;
-                await SillyTavern.getContext().saveSettings();
-            }
-        },
-
-        getRequestPresetOptions(settings) {
-            return {
-                apiPresetName: String(settings.myThingApiPresetName || '').trim(),
-                llmPresetName: String(settings.myThingPresetName || '').trim(),
-            };
-        },
+        renderMessageCard: (message) => `<div>${message.role}: ${message.content}</div>`,
+        renderHistoryItem: (meta) => `<div>${meta.title}</div>`,
     });
 }
+
+await openIterationStudio(adapter, SillyTavern.getContext(), settings, document.body);
 ```
 
-That's the entire adapter. The shell handles: popup chrome, conversation, history, auto-continue, auto-apply toggle, diff rendering, Approve/Reject, abort plumbing, LLM retry/timeout, session persistence.
+That is the entire adapter. The shell handles popup chrome, conversation rendering, history list, auto-continue, abort plumbing, LLM retry / timeout, drift-aware apply, conflict UI, and rollback.
 
-## ProfileAdapter contract
+## Authority model
 
-Required fields (`defineAdapter` throws if any are missing):
+`adapter.live()` is the single source of truth.
 
-| Field | Signature | Purpose |
-|------|------|------|
-| `id` | `string` | Stable identifier, e.g. `'mything'`. Used as namespace prefix for popup id, session history filter, auto-apply preference key. |
-| `title` | `string` | Localized popup title. |
-| `mode` | `string` | History filter key. One adapter, one mode. Stored as `Session.mode`. |
-| `i18n` | `(key) => string` | Adapter's own translator. Used only for adapter-specific strings — shell chrome uses shell's i18n. |
-| `i18nFormat` | `(key, ...args) => string` | `${0}` / `${1}` style interpolation wrapper. Default supplied by `defineAdapter`. |
-| `getInitialProfile` | `(context, settings) => WorkingProfile` | Build the workingProfile when a fresh session opens. |
-| `cloneWorkingProfile` | `(profile) => WorkingProfile` | Deep clone + sanitize. Must be idempotent. |
-| `loadHistoryState` | `(context, scope, avatar) => Promise<HistoryState>` | Load session history for the given scope. |
-| `persistHistoryState` | `(context, state, scope, avatar) => Promise<void>` | Persist session history. |
-| `getDefaultScope` | `(context) => 'global'\|'character'` | Choose which scope to open with. |
-| `buildSystemPrompt` | `(settings, session) => string` | Adapter's full system prompt. |
-| `buildUserPrompt` | `(settings, session, userText, opts) => string` | Stitch user request + current profile + history. |
-| `buildEditableToolSet` | `(session) => ToolDefinition[]` | The editable tools only — shell injects `continue`/`finalize` automatically. |
-| `executeEditableToolCall` | `(ctx, session, call, signal) => Promise<{content, action, changed}>` | Dispatch one editable call. Must mutate only `session.workingProfile` / `session.lastSimulation`. |
-| `renderWorkingProfile` | `(session, opts) => string` | Right-side panel HTML, including any apply / save / publish buttons the adapter wants. |
+- The shell never caches a working profile. Every render and every apply re-reads `live()`.
+- `adapter.commit(newLive)` is the only write path. The adapter decides where that goes (extension settings, character state, IndexedDB, remote API).
+- Drift detection happens **per-edit at apply time** via the edits library. If the user edits the artifact externally between the LLM proposal and the user clicking Approve, conflicts surface through the standard conflict UI from `edits-lib`.
+- Rollback uses `inverseEdit(edit)` over the message's `appliedEdits` array in reverse, then re-commits.
 
-Optional fields:
+This means the artifact stays editable outside the studio at all times. The studio is one editor among many.
 
-| Field | Signature | Default |
-|------|------|------|
-| `popupClassName` | `string` | Extra class on popup root for adapter-private CSS hooks. |
-| `getGlobalBaselineProfile` | `(settings, session) => WorkingProfile\|null` | `null` — pass a non-null value to let the LLM see what's currently persisted vs what's been edited mid-session. |
-| `buildAutoContinuePrompt` | `(executionResult) => string` | Shell-built default referencing the control tool names. |
-| `controlToolNames` | `{ continue?: string, finalize?: string }` | `{continue: 'iter_continue', finalize: 'iter_finalize'}`. Override only for backward-compat with adapter-specific names. |
-| `describeTool` | `(name) => string` | Returns name as-is. Used for friendly tool labels in pending-approval summary. |
-| `getRequestPresetOptions` | `(settings) => { apiPresetName, llmPresetName }` | `{'', ''}` — both empty means "use whatever is currently active". |
-| `resolveRuntimeWorldInfo` | `(ctx, settings, session, signal) => Promise<any\|null>` | `null` — return an object to splice extra world-info into the LLM call. |
-| `renderMessageDiff` | `(session, message, popupId) => string` | Falls back to `renderProfileDeltaHtml(adapter, message.profileDelta, …)`. Override only for radical layout changes. |
-| `renderTextDiff` | `(beforeText, afterText, path) => string` | Shell-provided full table-style line/word diff with zoom + splitter. Override only for radically different inline UI. |
-| `formatDiffPathLabel` | `(path, item) => string` | Returns path as-is. Override to render `presets.critic.systemPrompt` as `Preset 'critic' / System Prompt`. |
-| `renderDiffItem` | `(item) => string\|null` | `null` — returning HTML preempts the default per-path card render. |
-| `handleAction` | `(actionId, ctx) => Promise<void>\|void` | No-op. Receives any click on `[data-iter-custom-action]` inside the popup. |
-| `ensureStyles` | `(popupClassName) => void` | No-op. Inject adapter-specific stylesheets once when the popup opens. |
+## Tool dispatch
 
-## Lifecycle
+`buildToolCatalog(session)` returns only the adapter's editable + custom control tools. The shell automatically injects two control tools:
 
-```
-open(adapter, context, settings, root)
-  │
-  ├─ adapter.ensureStyles(popupClassName)
-  ├─ adapter.getDefaultScope(context)        → scope ('global' | 'character')
-  ├─ adapter.loadHistoryState(...)           → HistoryState
-  ├─ adapter.getInitialProfile / cloneWorkingProfile  → fresh Session
-  ├─ (replace session with latest matching mode if history has one)
-  ├─ Popup opens; rerender() draws conversation, profile, history
-  │
-  ├─ user types + clicks Send
-  │   ├─ adapter.buildSystemPrompt
-  │   ├─ adapter.buildUserPrompt
-  │   ├─ adapter.buildEditableToolSet + shell control tools
-  │   ├─ adapter.getRequestPresetOptions → LLM request via generateTask
-  │   ├─ split tool calls: editable vs control (continue / finalize)
-  │   ├─ if editable calls AND !autoApply:
-  │   │     ├─ sandbox-execute editable calls on cloned session → projected delta
-  │   │     ├─ persist pending message with the projected delta
-  │   │     └─ render Approve / Reject buttons
-  │   └─ else:
-  │         ├─ adapter.executeEditableToolCall for each
-  │         ├─ build actual delta vs before
-  │         ├─ persist completed message
-  │         └─ if continueRequested → loop
-  │
-  ├─ user clicks Approve
-  │   ├─ adapter.executeEditableToolCall for each editable call (real, not sandbox)
-  │   ├─ build delta, persist as completed
-  │   └─ if continueRequested → loop
-  │
-  └─ user clicks Reject / Stop / Close → cleanup
-```
+| Tool | Default name | Effect |
+|---|---|---|
+| Continue | `iter_continue` | Loop another LLM turn with an auto-continue prompt. |
+| Finalize | `iter_finalize` | End the iteration cleanly with a summary. |
 
-## Session shape
+Override the defaults via `controlToolNames: { continue, finalize }` if you need namespacing (both reference adapters do — `luker_orch_continue_iteration`, `luker_mg_schema_continue_iteration`, etc).
 
-`Session` fields the shell manages:
+Each LLM tool call routes through `classifyToolCall(call)` (default: anything not matching the control names is editable). Editable calls go to:
 
 ```ts
-{
-    id: string,                    // 'session_<ts>_<rand>'
-    mode: string,                  // adapter.mode
-    chatKey: string,               // for chat-bound resets
-    sourceScope: 'global'|'character',
-    sourceAvatar: string,          // '' when global
-    sourceName: string,            // adapter-supplied label (e.g. character name)
-    revision: number,              // increments per editable tool call
-    createdAt: number,
-    updatedAt: number,
-    workingProfile: WorkingProfile,  // adapter-typed
-    baseWorkingProfile: WorkingProfile,
-    messages: SessionMessage[],
-    lastSimulation: Simulation|null,
-    pendingApproval: PendingApproval|null,
-}
+normalizeToolCallToEdit(call, { session, live }): Edit[] | null | Promise<Edit[] | null>
 ```
 
-Adapters typically only read `workingProfile`, `sourceScope`, `sourceAvatar`, `sourceName`, `messages`. Everything else is internal but visible.
+Return the op-typed edits (see `edits-lib.md` for op shapes). Return `null` to skip the call.
 
-## Storage
+**Sandbox-diff pattern** — quick bootstrap when you already have a working in-place mutator:
 
-`createSettingsBackedHistoryStore({ moduleName, globalSettingsKey, characterStateNamespace, historyLimit?, modeFilter? })` returns a `{ loadHistoryState, persistHistoryState }` pair that adapters can spread into their definition.
+1. `clone live` into a sandbox profile.
+2. Run the existing mutator against the sandbox.
+3. Emit one coarse `{ op: 'set', path: '', oldValue: live, newValue: sandbox }` edit.
 
-- Global scope → `extension_settings[moduleName][globalSettingsKey]` (saved via `saveSettingsDebounced`)
-- Character scope → `context.getCharacterState(avatar, characterStateNamespace)` / `setCharacterState(...)`
-- `historyLimit` (default 24) caps the most-recent sessions kept per scope
-- `modeFilter` lets multiple adapters share the same underlying storage but each only sees its own sessions (orchestrator's spec / agenda / loop adapters use this so they don't migrate existing history)
+Both reference adapters use this pattern. It is good enough to ship but produces profile-level conflicts (any concurrent change collides with the whole batch). For production-grade conflict resolution, normalize each tool call into per-field ops (`set` / `str_replace` / `list_insert` etc).
 
-For adapters that want custom storage (IndexedDB, encrypted, cloud sync), implement `loadHistoryState` / `persistHistoryState` directly — the shell only checks the return shape (`{ version: 3, sessions: Session[] }`).
+Control tools (continue / finalize) are handled by the shell directly. Override `executeControlToolCall(call, ctx, signal)` only if you want extra behavior on continue or finalize.
 
-## Adapter-driven actions
+## Session storage
 
-Shell delegates clicks on `[data-iter-custom-action="<id>"]` inside the popup to `adapter.handleAction(id, ctx)`. Use this for apply buttons, save-as-new, publish, undo, anything you want.
+The adapter owns session persistence. Four hooks:
+
+```ts
+listSessions(scope): Promise<SessionMeta[]>           // newest first
+loadSession(scope, id): Promise<Session | null>
+saveSession(scope, session): Promise<void>
+deleteSession(scope, id): Promise<void>
+```
+
+`scope` is whatever `sessionScope()` returns. Common patterns: `'global'`, `'character_<avatar>'`, `'chat_<chatId>'`.
+
+Where you store sessions is entirely up to you. Typical patterns:
+
+- Global → an extension-settings bucket: `extension_settings.my_extension.iterStudioSessions`
+- Per-character → `context.getCharacterState(avatar, 'my_ext_iter_sessions')`
+- Per-chat → chat metadata
+
+Session shape is shell-defined (see `public/scripts/iteration-studio/adapter.js` for the JSDoc typedef). The adapter can stash arbitrary blob data in `session.surfaceState`.
+
+## Layout choice
+
+`layout: 'popup' | 'split'`.
+
+- `'popup'` — single-column conversation. The composer + history are stacked. Use for adapters where the artifact preview is short or the diff already lives inside message cards.
+- `'split'` — two-column conversation + preview pane. The right pane is rendered by `renderPreviewPane(state)`. Use when the artifact has a meaningful canonical view (graph schema, profile tree, character card) that the user wants visible alongside the chat.
+
+Slot hooks the shell calls into:
+
+| Hook | When | Required |
+|---|---|---|
+| `renderMessageCard(message, state)` | Every conversation message | yes |
+| `renderHistoryItem(meta)` | Each session in the history list | yes |
+| `renderPreviewPane(state)` | Right pane of `split` layout | required for `split` |
+| `renderToolbarSlots(state)` | Extra `{start, end}` HTML for the toolbar | optional |
+| `handleAction(actionId, ctx)` | Any click on `[data-iter-action="<id>"]` inside the popup | optional |
+
+## Reference
+
+Adapters can offer a "Compare with..." selector that pulls a snapshot from elsewhere and renders it next to live. Two hooks:
+
+```ts
+listReferences(session): { id: string, label: string }[]
+loadReference(id): Promise<any>
+```
+
+The shell shows the dropdown in the toolbar, calls `loadReference(id)` when the user picks one, and passes the result through `state.reference` to render hooks. Omit both to hide the selector entirely.
+
+## Custom ops
+
+The 8 built-in edits-lib ops (`set` / `unset` / `str_*` / `list_*`) cover most cases. For surface-specific mutations the adapter can declare a `registerCustomOps(registry)` hook; the registry receives the same shape `registerOp(name, handler)` from edits-lib.
+
+For SP-1 the sandbox-diff pattern means the reference adapters emit only `set` at path `''`, so no custom ops are needed. When you graduate to per-field normalization and find that a built-in op doesn't fit a domain mutation (e.g. `graph.node.add`, `preset.entry.move`), reach for `registerOp` directly — see `edits-lib.md` for the handler contract.
+
+## Migration: clearObsoleteSessions
+
+```ts
+clearObsoleteSessions?(scope): Promise<void>
+```
+
+A one-shot hook the shell calls once per adapter on first open after upgrade. Use it to wipe legacy v1 storage keys (the shell tracks a per-adapter wipe flag in localStorage so this only runs once). Both reference adapters implement it to drop their v1 history buckets:
 
 ```js
-renderWorkingProfile(session) {
-    return `
-${profileHtml}
-<div class="luker-studio-composer-buttons">
-    <div class="menu_button" data-iter-custom-action="apply-global">${escapeHtml(i18n('Apply to Global'))}</div>
-    ${session.sourceAvatar ? `<div class="menu_button" data-iter-custom-action="apply-character">${escapeHtml(i18n('Apply to Character'))}</div>` : ''}
-</div>`;
-},
-async handleAction(actionId, ctx) {
-    const { context, settings, session, root } = ctx;
-    if (actionId === 'apply-global') {
-        // ... persist session.workingProfile to settings
+clearObsoleteSessions: async () => {
+    const root = getMySettings();
+    if (root && Object.prototype.hasOwnProperty.call(root, LEGACY_GLOBAL_HISTORY_KEY)) {
+        delete root[LEGACY_GLOBAL_HISTORY_KEY];
+        persistSettings();
     }
-    if (actionId === 'apply-character') {
-        // ... persist to character state
-    }
-},
-```
-
-The shell doesn't interpret action ids — pick whatever names match your domain. Studios that don't persist anything can omit `handleAction` and skip rendering action buttons entirely.
-
-## Diff customization
-
-Default behavior already covers most cases — no override needed:
-
-- Object-vs-object replacements **auto-recurse** into per-field cards (up to depth 3) so you don't see two giant JSON blobs.
-- Long string fields get **inline line/word diff** via the shell's built-in renderer (with zoom + splitter).
-- Pending approval projects the proposed diff before the user clicks Approve.
-
-Customize via the optional hooks when default isn't enough:
-
-- `renderTextDiff(beforeText, afterText, path)` — own the inline string renderer
-- `formatDiffPathLabel(path, item)` — turn `presets.critic.systemPrompt` into `Preset 'critic' / System Prompt`
-- `renderDiffItem(item)` — preempt the entire per-path card (return `null` to fall back)
-- `renderMessageDiff(session, message, popupId)` — replace the whole diff block
-
-`item` shape passed to `renderDiffItem`:
-
-```ts
-{
-    path: string,                                    // e.g. 'presets.critic'
-    beforeValue: any,
-    afterValue: any,
-    beforePayload: { text: string, missing: boolean },  // pre-stringified for convenience
-    afterPayload: { text: string, missing: boolean },
 }
 ```
 
-## i18n notes
+If nothing needs migrating, omit the hook.
 
-- The shell uses its own translation table (`public/scripts/iteration-studio/i18n.js`) for chrome strings. Adapters don't need to translate `Conversation` / `Send to AI` / `Approve & Apply` / etc.
-- Locale registration is deferred to DOM-ready because SillyTavern's `addLocaleData` no-ops before the locale file loads.
-- Adapters supply their own `i18n` function pointing at their own locale table — used for popup title, system prompt strings, tool action descriptions, custom action button labels.
+## Three-layer API exposure
 
-## Compatibility
+Per the Luker API convention, every shell capability is exposed at three layers — same as `edits-lib`:
 
-- `getApplyTargets` / `applyToGlobal` / `applyToCharacter` / `canApplyToCharacter` — these were intermediate API designs and are not part of the current contract. Use `renderWorkingProfile` + `handleAction` for buttons.
-- The shell does not assume a "global / character" scope model — adapters that edit chat-scoped or preset-scoped artifacts are free to render whatever applies.
+```js
+// Layer 1 — direct ESM import (in-tree extensions)
+import { openIterationStudio, defineAdapter } from '/scripts/iteration-studio/index.js';
 
-## See also
+// Layer 2 — lukerContext property (CardApp / extension code with a context handle)
+const { openIterationStudio, defineAdapter } = lukerContext.iterationStudio;
 
-- `public/scripts/iteration-studio/adapter.js` — JSDoc-typed contract (canonical source)
-- `public/scripts/extensions/orchestrator/iteration-adapter.js` — wraps existing orchestrator helpers; reference for "thin wrapper around legacy code"
-- `public/scripts/extensions/memory-graph/schema-adapter.js` — built from scratch on the contract; reference for new adapters
+// Layer 3 — getContext (third-party extensions)
+const { open, defineAdapter } = SillyTavern.getContext().iterationStudio;
+```
+
+The Layer 3 surface re-exports the same functions as Layer 1; `open` is a short alias for `openIterationStudio`.
+
+## Reference adapters
+
+Read these for working end-to-end examples of the contract:
+
+- `public/scripts/extensions/orchestrator/iteration-adapter.js` — wraps the orchestrator's pre-existing mutator with the sandbox-diff pattern. Layout `split`, per-mode session buckets, runtime world-info resolution, custom control tool names.
+- `public/scripts/extensions/memory-graph/schema-adapter.js` — node-type schema editor built directly on the v2 contract. Layout `split`, global-only sessions, apply-to-global / apply-to-character action buttons in the preview pane.
+
+The adapter contract JSDoc lives in `public/scripts/iteration-studio/adapter.js` — that file is the canonical source for required vs optional fields and exact signatures.

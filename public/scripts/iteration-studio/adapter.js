@@ -133,7 +133,7 @@
  * ## Tool catalog + dispatch
  * @property {(session: Session) => ToolDefinition[]} buildToolCatalog
  * @property {(call: Object) => 'editable'|'control'} [classifyToolCall]
- * @property {(call: Object, ctx: {session: Session, live: any}) => Object[] | null} normalizeToolCallToEdit
+ * @property {(call: Object, ctx: {session: Session, live: any}) => Object[] | null | Promise<Object[] | null>} normalizeToolCallToEdit
  * @property {(call: Object, ctx: {session: Session, live: any}, signal: AbortSignal|null) => Promise<{content: string, action?: string, continueRequested?: boolean, finalized?: boolean, finalizeSummary?: string}>} [executeControlToolCall]
  * @property {(registry: Object) => void} [registerCustomOps]
  * @property {(toolName: string) => string} [describeTool]

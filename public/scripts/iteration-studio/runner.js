@@ -163,10 +163,12 @@ export async function executeToolCalls(adapter, session, allCalls, abortSignal) 
             continue;
         }
 
-        // Editable tool: normalize to Edit[]
+        // Editable tool: normalize to Edit[]. The contract allows the
+        // adapter to return a Promise (e.g. orchestrator's sandbox-diff
+        // strategy awaits its own async executor), so we await here.
         let edits;
         try {
-            edits = adapter.normalizeToolCallToEdit(call, { session, live: currentLive });
+            edits = await adapter.normalizeToolCallToEdit(call, { session, live: currentLive });
         } catch (error) {
             result.toolResults.push({
                 tool_call_id: String(call?.id || ''),
@@ -456,7 +458,7 @@ export async function stagePendingApproval(adapter, session, { messageId, assist
         if (cls !== 'editable') continue;
         let edits;
         try {
-            edits = adapter.normalizeToolCallToEdit(call, { session, live: liveSnapshot });
+            edits = await adapter.normalizeToolCallToEdit(call, { session, live: liveSnapshot });
         } catch { continue; }
         if (Array.isArray(edits)) editsToProject.push(...edits);
     }

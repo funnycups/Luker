@@ -36,6 +36,10 @@
 - 行動裝置適配最佳化
 - 啟動效能最佳化
 
+## 近期破壞性變更
+
+- **迭代工作台適配器合約 v2（IDE 風格）。** Shell 不再持有 `workingProfile` 快照；適配器的 `live()` 為唯一權威源。已遷移內建 orchestrator + memory-graph 適配器。外部適配器需要相應升級（參見 `docs/zh-TW/development/extension-api/iteration-studio.md`）。升級後首次打開時按適配器清空一次舊的迭代工作台會話數據；實時數據（預設文件、角色卡、設定）不受影響。CEA 與 CPA 適配器將在後續版本提供。
+
 ---
 
 詳細的逐版本更新日誌將在後續補充。如需了解具體功能的詳細資訊，請參閱對應的文件頁面。

@@ -1,340 +1,221 @@
 # 迭代工作台框架
 
-一个共享的弹窗框架，用于 **AI 驱动地迭代式编辑一个典型工件**。Studio 负责对话、会话历史、工具分发、diff 预览、批准 / 拒绝生命周期；插件通过 adapter 提供"工件长什么样、哪些工具能编辑、怎么持久化"。
+一个共享的弹窗外壳，用于 **AI 驱动地迭代式编辑由适配器提供的工件**。外壳负责对话、工具分发、感知漂移的应用、历史列表和批准 / 拒绝 UI；插件通过适配器提供"编辑什么、哪些工具能提出变更、会话存储在哪"。
 
-仓库内有两份参考实现：
+仓库内有两份参考适配器：
 
-- `public/scripts/extensions/orchestrator/iteration-adapter.js` — 编辑编排器 profile（spec / agenda / loop）
-- `public/scripts/extensions/memory-graph/schema-adapter.js` — 编辑记忆图节点类型 schema
+- `public/scripts/extensions/orchestrator/iteration-adapter.js` —— 编辑编排器 profile（spec / agenda / loop）
+- `public/scripts/extensions/memory-graph/schema-adapter.js` —— 编辑记忆图节点类型 schema
 
-本页是契约和构建你自己 adapter 的 walkthrough。
+本页是契约和构建自己适配器的 walkthrough。
 
-## 心智模型
+## 它是什么
 
-Shell 拥有**工作台外壳** —— 跨所有 studio 通用的部分：
+一个迭代工作台会话，是用户与 LLM 之间的弹窗对话，LLM 输出**描述编辑动作的工具调用**。每一轮：
 
-- popup 生命周期（打开 / 关闭、abort 接线、焦点）
-- 对话面板（user / assistant 消息、pending 审批块）
-- 输入区（textarea + 发送 / 终止 / 清空 / Auto-apply 开关）
-- 工具调用 round trip（通过 `context.generateTask` 调 LLM，带重试 / RPM / 超时）
-- 工具调用拆分（editable vs control）、pending vs 自动执行
-- Auto-continue（AI 标记 `continueRequested` 时）
-- Auto-apply（按 adapter 持久保存的偏好，跳过审批步骤）
-- 会话历史列表 + 新建 / 加载 / 删除
-- profile delta 计算（jsondiffpatch）和渲染（自带文本 diff + 放大 + 拖拽分栏）
+1. 用户输入请求并点击发送。
+2. 外壳带着适配器的工具集（外加外壳自动注入的 `continue` / `finalize` 控制工具）请求 LLM。
+3. 对每个返回的工具调用，适配器将其归一化为一组 op 类型化的 `Edit`（见 `edits-lib.md`）。
+4. 外壳通过 edits 库把编辑应用到 `adapter.live()`，在应用时逐条做漂移检测。
+5. 批准的变更通过 `adapter.commit(newLive)` 提交回去。
+6. 若 LLM 标记了 `continueRequested`，外壳带着自动续写 prompt 进入下一轮。
 
-Adapter 拥有**工件** —— 每个 studio 独有的部分：
+外壳不持有工件的工作副本。`adapter.live()` 是唯一权威源，外壳每次需要当前值时都重新调用它。
 
-- `workingProfile` 的形状（clone + sanitize）
-- 初始 profile（从当前设置 / 角色卡覆写读出）
-- prompt 构建（system + user + 可选的 auto-continue）
-- 工具集 + 每个工具的执行（mutate `session.workingProfile`）
-- 右侧"工作 profile"预览面板（HTML）
-- 持久化（会话历史的存储路径 + adapter 自定义的 apply 动作）
-
-## 入口
-
-**Layer 2（推荐第三方插件用）：**
+## 快速上手：最小适配器
 
 ```js
-const ctx = SillyTavern.getContext();
-const { open, defineAdapter, createSettingsBackedHistoryStore } = ctx.iterationStudio;
-```
-
-**Layer 1（仓库内代码直接 import）：**
-
-```js
-import {
-    open,
-    defineAdapter,
-    createSettingsBackedHistoryStore,
-    buildProfileDelta,
-    renderProfileDeltaHtml,
-} from '/scripts/iteration-studio/index.js';
-```
-
-打开 studio：
-
-```js
-const adapter = defineAdapter({ /* … 见下方契约 … */ });
-await open(adapter, context, settings, root);
-```
-
-`open` 在用户关闭 popup 之前一直 await。
-
-## 快速上手 —— 最小可用 adapter
-
-最简单有用的 adapter，编辑插件设置中的一个字符串字段：
-
-```js
-import { defineAdapter, createSettingsBackedHistoryStore, open as openIterationStudio } from '/scripts/iteration-studio/index.js';
-import { i18n, i18nFormat } from './i18n.js';   // 你自己插件的 i18n
-import { escapeHtml } from '/scripts/utils.js';
+import { defineAdapter, openIterationStudio } from '/scripts/iteration-studio/index.js';
 
 const TOOL_SET = 'mything_set_value';
 
-export function createMyThingAdapter() {
+export function createMyThingAdapter({ readValue, writeValue, listMetas, loadMeta, saveMeta, deleteMeta }) {
     return defineAdapter({
         id: 'mything',
-        title: i18n('My Thing Studio'),
+        title: 'My Thing Studio',
         mode: 'mything',
-        i18n,
-        i18nFormat,
+        layout: 'popup',
+        i18n: (s) => s,
+        i18nFormat: (s, ...args) => args.reduce((out, v, i) => out.split('${' + i + '}').join(String(v)), s),
 
-        getInitialProfile(ctx, settings) {
-            return { value: String(settings.myThingValue || '') };
-        },
-        cloneWorkingProfile(profile) {
-            return { value: String(profile?.value ?? '') };
-        },
-        getDefaultScope(ctx) {
-            return ctx.characterId != null ? 'character' : 'global';
-        },
+        live: () => readValue(),
+        commit: async (newLive) => { await writeValue(newLive); },
+        sessionScope: () => 'global',
 
-        // 内置 helper 处理常见的 "全局 → settings、角色 → character state" 模式
-        ...createSettingsBackedHistoryStore({
-            moduleName: 'my_extension',
-            globalSettingsKey: 'iterationHistory',
-            characterStateNamespace: 'my_ext_iteration_history',
-        }),
+        listSessions: async () => listMetas(),
+        loadSession: async (_scope, id) => loadMeta(id),
+        saveSession: async (_scope, session) => saveMeta(session),
+        deleteSession: async (_scope, id) => deleteMeta(id),
 
-        buildSystemPrompt() {
-            return 'You edit a single string field. Call mything_set_value with the new value.';
-        },
-        buildUserPrompt(settings, session, text) {
-            return `[Current]\n${session.workingProfile.value}\n\n[Request]\n${text}`;
-        },
+        buildSystemPrompt: () => 'You edit a single string. Call mything_set_value with the new value.',
+        buildUserPrompt: (session, userText) => `[Current]\n${readValue()}\n\n[Request]\n${userText}`,
 
-        buildEditableToolSet() {
-            return [{
-                type: 'function',
-                function: {
-                    name: TOOL_SET,
-                    description: 'Set the value to a new string.',
-                    parameters: {
-                        type: 'object',
-                        properties: { next: { type: 'string' } },
-                        required: ['next'],
-                        additionalProperties: false,
-                    },
+        buildToolCatalog: () => [{
+            type: 'function',
+            function: {
+                name: TOOL_SET,
+                description: 'Set the value.',
+                parameters: {
+                    type: 'object',
+                    properties: { next: { type: 'string' } },
+                    required: ['next'],
+                    additionalProperties: false,
                 },
-            }];
-        },
-        async executeEditableToolCall(ctx, session, call) {
-            const args = call?.args && typeof call.args === 'object' ? call.args : {};
-            session.workingProfile.value = String(args.next ?? '');
-            return {
-                content: JSON.stringify({ ok: true }),
-                action: i18n('Updated value'),
-                changed: true,
-            };
+            },
+        }],
+        normalizeToolCallToEdit: (call) => {
+            if (call?.name !== TOOL_SET) return null;
+            const next = String(call?.args?.next ?? '');
+            return [{ op: 'set', path: '', oldValue: readValue(), newValue: next }];
         },
 
-        renderWorkingProfile(session) {
-            return `
-<div class="luker-studio-panel-title">${escapeHtml(i18n('Current value'))}</div>
-<pre>${escapeHtml(session.workingProfile.value)}</pre>
-<div class="luker-studio-composer-buttons">
-    <div class="menu_button" data-iter-custom-action="apply">${escapeHtml(i18n('Apply'))}</div>
-</div>`;
-        },
-        async handleAction(actionId, ctx) {
-            if (actionId === 'apply') {
-                ctx.settings.myThingValue = ctx.session.workingProfile.value;
-                await SillyTavern.getContext().saveSettings();
-            }
-        },
-
-        getRequestPresetOptions(settings) {
-            return {
-                apiPresetName: String(settings.myThingApiPresetName || '').trim(),
-                llmPresetName: String(settings.myThingPresetName || '').trim(),
-            };
-        },
+        renderMessageCard: (message) => `<div>${message.role}: ${message.content}</div>`,
+        renderHistoryItem: (meta) => `<div>${meta.title}</div>`,
     });
 }
+
+await openIterationStudio(adapter, SillyTavern.getContext(), settings, document.body);
 ```
 
-整个 adapter 就这些。Shell 负责：popup 外壳、对话、历史、auto-continue、Auto-apply 开关、diff 渲染、批准 / 拒绝、abort 接线、LLM 重试 / 超时、会话持久化。
+这就是完整适配器。外壳负责弹窗外观、对话渲染、历史列表、自动续写、abort 接线、LLM 重试 / 超时、感知漂移的应用、冲突 UI 和回滚。
 
-## ProfileAdapter 契约
+## 权威模型
 
-必填字段（`defineAdapter` 缺任意一项会抛错）：
+`adapter.live()` 是唯一可信来源。
 
-| 字段 | 签名 | 用途 |
-|------|------|------|
-| `id` | `string` | 稳定标识符（如 `'mything'`）。用作 popup id 前缀、会话历史 mode filter、Auto-apply 偏好的存储 key |
-| `title` | `string` | 本地化后的 popup 标题 |
-| `mode` | `string` | 历史过滤 key。一个 adapter 一个 mode。存到 `Session.mode` |
-| `i18n` | `(key) => string` | adapter 自己的翻译函数。仅用于 adapter 自有字符串 —— shell 外壳走 shell 自己的 i18n |
-| `i18nFormat` | `(key, ...args) => string` | `${0}` / `${1}` 风格的插值。`defineAdapter` 自带默认实现 |
-| `getInitialProfile` | `(context, settings) => WorkingProfile` | 新会话开打时构造 workingProfile |
-| `cloneWorkingProfile` | `(profile) => WorkingProfile` | 深拷贝 + sanitize。必须幂等 |
-| `loadHistoryState` | `(context, scope, avatar) => Promise<HistoryState>` | 读取指定 scope 下的会话历史 |
-| `persistHistoryState` | `(context, state, scope, avatar) => Promise<void>` | 写入会话历史 |
-| `getDefaultScope` | `(context) => 'global'\|'character'` | 决定打开时默认使用的 scope |
-| `buildSystemPrompt` | `(settings, session) => string` | adapter 自己的完整 system prompt |
-| `buildUserPrompt` | `(settings, session, userText, opts) => string` | 拼接用户请求 + 当前 profile + 历史 |
-| `buildEditableToolSet` | `(session) => ToolDefinition[]` | 只返回可编辑工具 —— shell 会自动注入 `continue` / `finalize` |
-| `executeEditableToolCall` | `(ctx, session, call, signal) => Promise<{content, action, changed}>` | 处理单次 editable 调用。只能 mutate `session.workingProfile` / `session.lastSimulation` |
-| `renderWorkingProfile` | `(session, opts) => string` | 右侧面板 HTML，包含 adapter 想要的任何 apply / save / publish 按钮 |
+- 外壳不缓存工作 profile。每次渲染和每次应用都重新调用 `live()`。
+- `adapter.commit(newLive)` 是唯一写入路径。适配器决定写到哪里（扩展设置、角色状态、IndexedDB、远程 API 都行）。
+- 漂移检测**在应用时逐条**通过 edits 库进行。若用户在 LLM 提案与点击批准之间从外部修改了工件，冲突会通过 `edits-lib` 标准冲突 UI 暴露出来。
+- 回滚把消息上 `appliedEdits` 数组逆序送入 `inverseEdit(edit)`，再重新提交。
 
-可选字段：
+这意味着工件随时可以在工作台之外被编辑。工作台只是众多编辑器中的一个。
 
-| 字段 | 签名 | 默认 |
-|------|------|------|
-| `popupClassName` | `string` | popup 根元素附加 class，供 adapter 私有 CSS 钩入 |
-| `getGlobalBaselineProfile` | `(settings, session) => WorkingProfile\|null` | `null` —— 返回非 null 可以让 LLM 看到"持久化的 vs 会话内已改的" |
-| `buildAutoContinuePrompt` | `(executionResult) => string` | shell 自带默认（引用 control 工具名） |
-| `controlToolNames` | `{ continue?: string, finalize?: string }` | `{continue: 'iter_continue', finalize: 'iter_finalize'}`。仅为兼容性才覆盖 |
-| `describeTool` | `(name) => string` | 默认原样返回。用于 pending 审批摘要里的友好工具名 |
-| `getRequestPresetOptions` | `(settings) => { apiPresetName, llmPresetName }` | `{'', ''}` —— 两个空字符串表示"用当前激活的" |
-| `resolveRuntimeWorldInfo` | `(ctx, settings, session, signal) => Promise<any\|null>` | `null` —— 返回对象可以给 LLM 注入额外的 world info |
-| `renderMessageDiff` | `(session, message, popupId) => string` | 走 `renderProfileDeltaHtml(adapter, message.profileDelta, …)`。仅在需要彻底改布局时覆盖 |
-| `renderTextDiff` | `(beforeText, afterText, path) => string` | shell 自带完整的表格式行 / 词级 diff（带放大 + 拖拽分栏）。仅在需要完全不同的内联 UI 时覆盖 |
-| `formatDiffPathLabel` | `(path, item) => string` | 默认原样返回。覆盖后可以把 `presets.critic.systemPrompt` 渲染成 `Preset 'critic' / System Prompt` |
-| `renderDiffItem` | `(item) => string\|null` | `null` —— 返回 HTML 可以接管单张 diff 卡片的默认渲染 |
-| `handleAction` | `(actionId, ctx) => Promise<void>\|void` | 空操作。接 popup 内任何 `[data-iter-custom-action]` 元素的点击 |
-| `ensureStyles` | `(popupClassName) => void` | 空操作。在 popup 打开时一次性注入 adapter 自己的样式 |
+## 工具分发
 
-## 生命周期
+`buildToolCatalog(session)` 只返回适配器自己的可编辑工具加上自定义控制工具。外壳自动注入两个控制工具：
 
-```
-open(adapter, context, settings, root)
-  │
-  ├─ adapter.ensureStyles(popupClassName)
-  ├─ adapter.getDefaultScope(context)        → scope ('global' | 'character')
-  ├─ adapter.loadHistoryState(...)           → HistoryState
-  ├─ adapter.getInitialProfile / cloneWorkingProfile  → 新 Session
-  ├─ （若历史里有匹配 mode 的最近会话，则用它替换）
-  ├─ popup 打开;rerender() 绘制对话 / profile / 历史
-  │
-  ├─ 用户输入并点 Send
-  │   ├─ adapter.buildSystemPrompt
-  │   ├─ adapter.buildUserPrompt
-  │   ├─ adapter.buildEditableToolSet + shell 的 control 工具
-  │   ├─ adapter.getRequestPresetOptions → 通过 generateTask 请求 LLM
-  │   ├─ 拆分工具调用:editable vs control(continue / finalize)
-  │   ├─ 若有 editable 调用且 !autoApply:
-  │   │     ├─ 在克隆 session 上沙箱执行 editable 调用 → 预测出 delta
-  │   │     ├─ 把预测 delta 一起存到 pending 消息
-  │   │     └─ 渲染 批准 / 拒绝 按钮
-  │   └─ 否则:
-  │         ├─ 对每个 editable 调用 adapter.executeEditableToolCall
-  │         ├─ 计算实际 delta 与 before
-  │         ├─ 存为 completed 消息
-  │         └─ 若 continueRequested → 再循环一轮
-  │
-  ├─ 用户点 批准
-  │   ├─ 对每个 editable 调用(真实而非沙箱)调 adapter.executeEditableToolCall
-  │   ├─ 计算 delta,存为 completed
-  │   └─ 若 continueRequested → 再循环一轮
-  │
-  └─ 用户点 拒绝 / 终止 / 关闭 → 清理
-```
+| 工具 | 默认名 | 效果 |
+|---|---|---|
+| Continue | `iter_continue` | 用自动续写 prompt 再跑一轮 LLM。 |
+| Finalize | `iter_finalize` | 干净结束迭代，附带总结。 |
 
-## Session 形状
+如果需要命名空间隔离，可通过 `controlToolNames: { continue, finalize }` 覆写默认值（两个参考适配器都覆写了 —— `luker_orch_continue_iteration`、`luker_mg_schema_continue_iteration` 等）。
 
-Shell 维护的 `Session` 字段：
+每个 LLM 工具调用先经过 `classifyToolCall(call)`（默认：不匹配控制名的都是可编辑）。可编辑调用进入：
 
 ```ts
-{
-    id: string,                    // 'session_<ts>_<rand>'
-    mode: string,                  // adapter.mode
-    chatKey: string,               // 用于聊天绑定的重置
-    sourceScope: 'global'|'character',
-    sourceAvatar: string,          // 全局时为 ''
-    sourceName: string,            // adapter 提供的标签（如角色名）
-    revision: number,              // 每次 editable 调用自增
-    createdAt: number,
-    updatedAt: number,
-    workingProfile: WorkingProfile,  // adapter 自己定义形状
-    baseWorkingProfile: WorkingProfile,
-    messages: SessionMessage[],
-    lastSimulation: Simulation|null,
-    pendingApproval: PendingApproval|null,
-}
+normalizeToolCallToEdit(call, { session, live }): Edit[] | null | Promise<Edit[] | null>
 ```
 
-Adapter 一般只读 `workingProfile` / `sourceScope` / `sourceAvatar` / `sourceName` / `messages`。其他字段是内部的但对你可见。
+返回 op 类型化编辑（op 形态见 `edits-lib.md`）。返回 `null` 跳过此调用。
 
-## 存储
+**sandbox-diff 模式** —— 当你已经有一个原地变更器时，这是快速 bootstrap 的方式：
 
-`createSettingsBackedHistoryStore({ moduleName, globalSettingsKey, characterStateNamespace, historyLimit?, modeFilter? })` 返回一对 `{ loadHistoryState, persistHistoryState }`，adapter 把它展开到自己定义里：
+1. 把 `live` 克隆成一个 sandbox profile。
+2. 在 sandbox 上跑现有变更器。
+3. 发射一条粗粒度的 `{ op: 'set', path: '', oldValue: live, newValue: sandbox }` 编辑。
 
-- 全局 scope → `extension_settings[moduleName][globalSettingsKey]`（通过 `saveSettingsDebounced` 保存）
-- 角色 scope → `context.getCharacterState(avatar, characterStateNamespace)` / `setCharacterState(...)`
-- `historyLimit`（默认 24）限制每个 scope 保留的最近会话数
-- `modeFilter` 让多个 adapter 共享同一份底层存储但各自只看自己的 sessions（编排器的 spec / agenda / loop 三个 adapter 就用它，所以现有历史不需要迁移）
+两个参考适配器都用此模式。它足够上线，但产出 profile 级冲突（任何并发变更都会与整批冲突）。要做生产级冲突解决，应当把每个工具调用归一化成逐字段 op（`set` / `str_replace` / `list_insert` 等）。
 
-需要自定义存储的 adapter（IndexedDB、加密、云同步）直接实现 `loadHistoryState` / `persistHistoryState` —— shell 只检查返回形状（`{ version: 3, sessions: Session[] }`）。
+控制工具（continue / finalize）由外壳直接处理。仅当你想在 continue 或 finalize 上加额外行为时，才覆写 `executeControlToolCall(call, ctx, signal)`。
 
-## Adapter 驱动的动作
+## 会话存储
 
-Shell 把 popup 内 `[data-iter-custom-action="<id>"]` 的点击委托给 `adapter.handleAction(id, ctx)`。用它来做 apply 按钮、save-as-new、发布、撤销，等等。
+适配器拥有会话持久化。四个钩子：
+
+```ts
+listSessions(scope): Promise<SessionMeta[]>           // 最新在前
+loadSession(scope, id): Promise<Session | null>
+saveSession(scope, session): Promise<void>
+deleteSession(scope, id): Promise<void>
+```
+
+`scope` 即 `sessionScope()` 的返回值。常见样式：`'global'`、`'character_<avatar>'`、`'chat_<chatId>'`。
+
+会话存到哪完全由你决定。典型模式：
+
+- 全局 → 扩展设置桶：`extension_settings.my_extension.iterStudioSessions`
+- 按角色 → `context.getCharacterState(avatar, 'my_ext_iter_sessions')`
+- 按聊天 → chat metadata
+
+会话形状由外壳定义（见 `public/scripts/iteration-studio/adapter.js` 的 JSDoc typedef）。适配器可以把任意 blob 数据塞到 `session.surfaceState`。
+
+## 布局选择
+
+`layout: 'popup' | 'split'`。
+
+- `'popup'` —— 单列对话。输入区与历史是堆叠的。适合工件预览很短、或 diff 已经放在消息卡里的适配器。
+- `'split'` —— 双列对话 + 预览面板。右侧面板由 `renderPreviewPane(state)` 渲染。适合工件具有有意义的规范视图（图 schema、profile 树、角色卡）、用户希望与对话同时可见的场景。
+
+外壳调用的插槽钩子：
+
+| 钩子 | 何时 | 必需 |
+|---|---|---|
+| `renderMessageCard(message, state)` | 每条对话消息 | 是 |
+| `renderHistoryItem(meta)` | 历史列表的每个会话 | 是 |
+| `renderPreviewPane(state)` | `split` 布局的右侧面板 | `split` 必需 |
+| `renderToolbarSlots(state)` | 工具栏额外 `{start, end}` HTML | 可选 |
+| `handleAction(actionId, ctx)` | 弹窗内 `[data-iter-action="<id>"]` 的任何点击 | 可选 |
+
+## 对比基准
+
+适配器可以提供"与...对比"选择器，从别处拉取一份快照与实时数据并排渲染。两个钩子：
+
+```ts
+listReferences(session): { id: string, label: string }[]
+loadReference(id): Promise<any>
+```
+
+外壳在工具栏显示下拉菜单，用户选择时调 `loadReference(id)`，结果通过 `state.reference` 传给渲染钩子。两个都省略则整个选择器隐藏。
+
+## 自定义 op
+
+edits-lib 的 8 个内置 op（`set` / `unset` / `str_*` / `list_*`）覆盖大多数场景。对于面向特定表面的变更，适配器可以声明 `registerCustomOps(registry)` 钩子；registry 接受与 edits-lib 相同形态的 `registerOp(name, handler)`。
+
+SP-1 阶段，由于 sandbox-diff 模式让参考适配器只在 path `''` 上发射 `set`，无需自定义 op。当升级到逐字段归一化、发现某个内置 op 不适合某种领域变更（如 `graph.node.add`、`preset.entry.move`）时，直接用 `registerOp` —— handler 契约见 `edits-lib.md`。
+
+## 迁移：clearObsoleteSessions
+
+```ts
+clearObsoleteSessions?(scope): Promise<void>
+```
+
+一个一次性钩子，外壳在升级后首次打开时按适配器调用一次。用它清掉旧的 v1 存储 key（外壳在 localStorage 中记录按适配器的清理标记，因此只跑一次）。两个参考适配器都实现了它，用来丢掉 v1 历史桶：
 
 ```js
-renderWorkingProfile(session) {
-    return `
-${profileHtml}
-<div class="luker-studio-composer-buttons">
-    <div class="menu_button" data-iter-custom-action="apply-global">${escapeHtml(i18n('Apply to Global'))}</div>
-    ${session.sourceAvatar ? `<div class="menu_button" data-iter-custom-action="apply-character">${escapeHtml(i18n('Apply to Character'))}</div>` : ''}
-</div>`;
-},
-async handleAction(actionId, ctx) {
-    const { context, settings, session, root } = ctx;
-    if (actionId === 'apply-global') {
-        // ... 把 session.workingProfile 写入 settings
+clearObsoleteSessions: async () => {
+    const root = getMySettings();
+    if (root && Object.prototype.hasOwnProperty.call(root, LEGACY_GLOBAL_HISTORY_KEY)) {
+        delete root[LEGACY_GLOBAL_HISTORY_KEY];
+        persistSettings();
     }
-    if (actionId === 'apply-character') {
-        // ... 写入角色 state
-    }
-},
-```
-
-Shell 不解释动作 id —— 任意命名，符合你的领域即可。不需要持久化的 studio 可以完全省略 `handleAction` 并不渲染动作按钮。
-
-## diff 自定义
-
-默认行为已经覆盖大部分场景 —— 不需要覆盖：
-
-- 对象 vs 对象 整体替换会**自动递归**展开成逐字段卡片（最多深度 3），不会看到两块大 JSON
-- 长字符串字段自动走 shell 内置的**行级 / 词级内联 diff**（带放大 + 拖拽分栏）
-- pending 审批会**预投影** diff（用户点批准之前就能看到将要改什么）
-
-默认不够用时，通过可选钩子定制：
-
-- `renderTextDiff(beforeText, afterText, path)` —— 接管字符串内联渲染
-- `formatDiffPathLabel(path, item)` —— 把 `presets.critic.systemPrompt` 美化成 `Preset 'critic' / System Prompt`
-- `renderDiffItem(item)` —— 接管整张 path 卡片（返回 `null` 回退到默认）
-- `renderMessageDiff(session, message, popupId)` —— 整个 diff 块都接管
-
-传给 `renderDiffItem` 的 `item` 形状：
-
-```ts
-{
-    path: string,                                    // e.g. 'presets.critic'
-    beforeValue: any,
-    afterValue: any,
-    beforePayload: { text: string, missing: boolean },  // 已预格式化方便使用
-    afterPayload: { text: string, missing: boolean },
 }
 ```
 
-## i18n 注意
+无需迁移则省略该钩子。
 
-- Shell 用自己的翻译表（`public/scripts/iteration-studio/i18n.js`）渲染外壳字符串。adapter 不用翻译 `对话` / `发送给 AI` / `批准并应用` 这些
-- 本地化注册延迟到 DOM-ready，因为 SillyTavern 的 `addLocaleData` 在 locale 文件加载前调用会静默 no-op
-- Adapter 提供自己的 `i18n` 函数指向自己的翻译表 —— 用于 popup 标题、system prompt、工具动作描述、自定义按钮文本
+## 三层 API 暴露
 
-## 兼容性
+按 Luker API 约定，外壳每个能力都在三层暴露 —— 与 `edits-lib` 一致：
 
-- `getApplyTargets` / `applyToGlobal` / `applyToCharacter` / `canApplyToCharacter` —— 这些是设计过程中的中间方案，不是当前契约的一部分。用 `renderWorkingProfile` + `handleAction` 来做按钮
-- Shell 不假定 "global / character" 的 scope 模型 —— 编辑 chat scope 或 preset scope 工件的 adapter 自由渲染自己合适的按钮
+```js
+// Layer 1 —— 直接 ESM import（仓库内扩展）
+import { openIterationStudio, defineAdapter } from '/scripts/iteration-studio/index.js';
 
-## 参考
+// Layer 2 —— lukerContext 属性（持有 context 的 CardApp / 扩展代码）
+const { openIterationStudio, defineAdapter } = lukerContext.iterationStudio;
 
-- `public/scripts/iteration-studio/adapter.js` —— JSDoc 标注的契约（权威来源）
-- `public/scripts/extensions/orchestrator/iteration-adapter.js` —— 包裹已有编排器助手；参考"老代码薄包装"模式
-- `public/scripts/extensions/memory-graph/schema-adapter.js` —— 直接基于契约从零构建；参考新 adapter 模式
+// Layer 3 —— getContext（第三方扩展）
+const { open, defineAdapter } = SillyTavern.getContext().iterationStudio;
+```
+
+Layer 3 表面重新导出与 Layer 1 相同的函数；`open` 是 `openIterationStudio` 的短别名。
+
+## 参考适配器
+
+阅读这两个文件可以看到契约的端到端样例：
+
+- `public/scripts/extensions/orchestrator/iteration-adapter.js` —— 用 sandbox-diff 模式包裹编排器既有的变更器。布局 `split`、按 mode 分桶的会话、运行时 world-info 解析、自定义控制工具名。
+- `public/scripts/extensions/memory-graph/schema-adapter.js` —— 直接基于 v2 契约构建的节点类型 schema 编辑器。布局 `split`、仅全局会话、预览面板里有"应用到全局" /"应用到角色"动作按钮。
+
+适配器契约 JSDoc 位于 `public/scripts/iteration-studio/adapter.js` —— 该文件是必需 vs 可选字段与精确签名的规范来源。

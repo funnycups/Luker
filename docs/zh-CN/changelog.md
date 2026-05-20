@@ -36,6 +36,10 @@
 - 移动端适配优化
 - 启动性能优化
 
+## 近期破坏性变更
+
+- **迭代工作台适配器合约 v2（IDE 风格）。** Shell 不再持有 `workingProfile` 快照；适配器的 `live()` 为唯一权威源。已迁移内置 orchestrator + memory-graph 适配器。外部适配器需要相应升级（参见 `docs/zh-CN/development/extension-api/iteration-studio.md`）。升级后首次打开时按适配器清空一次旧的迭代工作台会话数据；实时数据（预设文件、角色卡、设置）不受影响。CEA 与 CPA 适配器将在后续版本提供。
+
 ---
 
 详细的逐版本更新日志将在后续补充。如需了解具体功能的详细信息，请参阅对应的文档页面。

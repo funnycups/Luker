@@ -39,6 +39,7 @@
 
 ## Recent breaking changes
 
+- **Iteration Studio adapter contract v2 (IDE-style).** The shell no longer carries a `workingProfile` snapshot; the adapter's `live()` is the single authority. In-tree orchestrator + memory-graph adapters migrated. Out-of-tree adapters require updates (see `docs/development/extension-api/iteration-studio.md`). Old iteration-studio session data is wiped once per adapter on first open after upgrade; live artifacts (preset files, character cards, settings) are untouched. CEA and CPA adapters arrive in subsequent releases.
 - **CPA conversation rollback resets on upgrade.** The journal-based session model was replaced with IDE-style live=authority + per-message `appliedEdits`. Preset files themselves are unchanged; only CPA's conversation rollback history from prior sessions is lost. New conversations rollback normally via the new mechanism.
 
 ---
