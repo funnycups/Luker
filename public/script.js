@@ -12284,7 +12284,7 @@ function applyIntegrityFromWritePayload(payload) {
     applyIntegrityFromWritePayloadToTarget(payload, resolveChatStateTarget(), chat_metadata);
 }
 
-function invalidateChatWriteSnapshot(target = resolveChatStateTarget()) {
+export function invalidateChatWriteSnapshot(target = resolveChatStateTarget()) {
     const snapshotKey = getChatMessageSnapshotKey(target);
     if (!snapshotKey) {
         return;
@@ -12575,6 +12575,17 @@ function notifyChatWriteConflict({ kind, errorType, target, retryCount, currentI
 
 export async function resolveChatWriteConflictForTarget(response, target = null, metadata = null, retryCount = 0, requestContext = null) {
     if (!response || response.status !== 409 || retryCount > 0) {
+        // Non-409 failure (5xx, network error surfaced as a non-ok response,
+        // or a retry that exhausted): the optimistic snapshot committed by
+        // append/patch/save BEFORE the fetch may now disagree with BE — we
+        // never learned whether BE applied any of our changes. Drop the
+        // snapshot so the next save's diff sees no `previousMessages` and
+        // falls through to /api/chats/save, which re-seeds from BE truth.
+        // Without this, the ghost state lurks until the next write trips a
+        // 409 — exactly the conflict toast users keep reporting.
+        if (response && target) {
+            invalidateChatWriteSnapshot(target);
+        }
         return 'none';
     }
 
@@ -12673,8 +12684,10 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
         return true;
     }
 
+    /** @type {ReturnType<typeof resolveChatStateTarget> | null} */
+    let target = null;
     try {
-        const target = resolveChatStateTarget();
+        target = resolveChatStateTarget();
         const generationIds = summarizeLukerGenerationIdsForMessages(messages);
 
         // Optimistic snapshot commit: set BEFORE the fetch to what BE state will
@@ -12796,6 +12809,13 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
         return false;
     } catch (error) {
         console.warn('Incremental chat append failed', error);
+        // Fetch threw (network error / abort / CORS / disconnect) after the
+        // optimistic snapshot commit. Drop the snapshot so the next save
+        // re-syncs from BE. (Same rationale as the non-409 branch inside
+        // resolveChatWriteConflictForTarget, but exceptions bypass it.)
+        if (target) {
+            invalidateChatWriteSnapshot(target);
+        }
         return false;
     }
 }
@@ -12820,8 +12840,10 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
         return true;
     }
 
+    /** @type {ReturnType<typeof resolveChatStateTarget> | null} */
+    let target = null;
     try {
-        const target = resolveChatStateTarget();
+        target = resolveChatStateTarget();
         const snapshotKey = target ? getChatMessageSnapshotKey(target) : null;
         const previousMessages = snapshotKey ? chatMessageSnapshotCache.get(snapshotKey) : null;
         const guardedOperations = attachChatMessagePatchTests(previousMessages, normalizedOperations);
@@ -12925,6 +12947,12 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
         return false;
     } catch (error) {
         console.warn('Incremental chat patch failed', error);
+        // Fetch threw after the optimistic snapshot commit — drop the snapshot
+        // so the next save re-syncs from BE. See appendChatMessagesInternal
+        // for the full rationale.
+        if (target) {
+            invalidateChatWriteSnapshot(target);
+        }
         return false;
     }
 }
@@ -13223,9 +13251,11 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
         character_name: 'unused',
     };
 
+    /** @type {{is_group:boolean, avatar_url?:string, file_name?:string, char_name?:string, id?:string} | null} */
+    let writeTarget = null;
     try {
         // "Save as branch/checkpoint" writes to a different chat file, so snapshot keys must follow the destination file.
-        const writeTarget = target?.is_group
+        writeTarget = target?.is_group
             ? target
             : { is_group: false, avatar_url: avatar, file_name: fileName, char_name: charName };
         const previousMessages = chatMessageSnapshotCache.get(getChatMessageSnapshotKey(writeTarget));
@@ -13328,6 +13358,12 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
     } catch (error) {
         console.error(error);
         toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Chat could not be saved`);
+        // Fetch threw after the optimistic snapshot commit — drop the snapshot
+        // so the next save re-syncs from BE. See appendChatMessagesInternal
+        // for the full rationale.
+        if (writeTarget) {
+            invalidateChatWriteSnapshot(writeTarget);
+        }
     }
 }
 

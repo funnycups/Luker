@@ -103,6 +103,7 @@ import {
     getCharacterScenario,
     getCharacterTalkativeness,
     cloneJsonValue,
+    invalidateChatWriteSnapshot,
 } from '../script.js';
 import { settleChatChanged } from './floor-state.js';
 import { printTagList, createTagMapFromList, applyTagsOnCharacterSelect, tag_map, applyTagsOnGroupSelect, printTagFilters, tag_filter_type } from './tags.js';
@@ -791,10 +792,18 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
         }
 
         if (response.status !== 409) {
+            // Optimistic snapshot commit + non-409 failure: resolver already
+            // invalidated (see script.js resolveChatWriteConflictForTarget),
+            // but force=true skipped the resolver. Invalidate explicitly here
+            // so the next save re-syncs from BE truth.
+            invalidateChatWriteSnapshot(target);
             toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Group Chat could not be saved`);
             console.error('Group chat could not be saved', response);
             return;
         }
+        // 409 + resolver returned 'none' (retryAttempt > 0): the resolver's
+        // early-return doesn't invalidate, but the optimistic commit is stale.
+        invalidateChatWriteSnapshot(target);
         toastr.error(t`Group chat changed on server. Reloaded once and save still failed.`, t`Group Chat could not be saved`);
         return;
     }
