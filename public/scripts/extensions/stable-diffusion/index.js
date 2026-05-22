@@ -58,6 +58,8 @@ import { commonEnumProviders } from '../../slash-commands/SlashCommandCommonEnum
 import { ToolManager } from '../../tool-calling.js';
 import { macros, MacroCategory } from '../../macros/macro-system.js';
 import { t, translate } from '../../i18n.js';
+import { withRetry } from '../../request-retry.js';
+import { getMaxRequestRetries } from '../connection-manager/max-retries.js';
 import { oai_settings } from '../../openai.js';
 import { power_user } from '/scripts/power-user.js';
 import { MacrosParser } from '/scripts/macros.js';
@@ -3411,90 +3413,107 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
     const currentChatId = getCurrentChatId();
 
     try {
-        switch (extension_settings.sd.source) {
-            case sources.horde:
-                result = await generateHordeImage(prefixedPrompt, negativePrompt, signal);
-                break;
-            case sources.vlad:
-                result = await generateAutoImage(prefixedPrompt, negativePrompt, signal);
-                break;
-            case sources.drawthings:
-                result = await generateDrawthingsImage(prefixedPrompt, negativePrompt, signal);
-                break;
-            case sources.auto:
-                result = await generateAutoImage(prefixedPrompt, negativePrompt, signal);
-                break;
-            case sources.sdcpp:
-                result = await generateSdcppImage(prefixedPrompt, negativePrompt, signal);
-                break;
-            case sources.novel:
-                result = await generateNovelImage(prefixedPrompt, negativePrompt, signal);
-                break;
-            case sources.openai:
-                result = await generateOpenAiImage(prefixedPrompt, signal);
-                break;
-            case sources.aimlapi:
-                result = await generateAimlapiImage(prefixedPrompt, signal);
-                break;
-            case sources.comfy:
-                switch (extension_settings.sd.comfy_type) {
-                    case comfyTypes.runpod_serverless:
-                        result = await generateComfyRunPodImage(prefixedPrompt, negativePrompt, signal);
-                        break;
-                    case comfyTypes.standard:
-                        result = await generateComfyImage(prefixedPrompt, negativePrompt, signal);
-                        break;
-                    default:
-                        throw new Error('Unknown comfyUI server type.');
-                }
-                break;
-            case sources.togetherai:
-                result = await generateTogetherAIImage(prefixedPrompt, negativePrompt, signal);
-                break;
-            case sources.pollinations:
-                result = await generatePollinationsImage(prefixedPrompt, negativePrompt, signal);
-                break;
-            case sources.stability:
-                result = await generateStabilityImage(prefixedPrompt, negativePrompt, signal);
-                break;
-            case sources.huggingface:
-                result = await generateHuggingFaceImage(prefixedPrompt, signal);
-                break;
-            case sources.chutes:
-                result = await generateChutesImage(prefixedPrompt, negativePrompt, signal);
-                break;
-            case sources.electronhub:
-                result = await generateElectronHubImage(prefixedPrompt, signal);
-                break;
-            case sources.nanogpt:
-                result = await generateNanoGPTImage(prefixedPrompt, negativePrompt, signal);
-                break;
-            case sources.bfl:
-                result = await generateBflImage(prefixedPrompt, signal);
-                break;
-            case sources.falai:
-                result = await generateFalaiImage(prefixedPrompt, negativePrompt, signal);
-                break;
-            case sources.xai:
-                result = await generateXAIImage(prefixedPrompt, negativePrompt, signal);
-                break;
-            case sources.google:
-                result = await generateGoogleImage(prefixedPrompt, negativePrompt, signal);
-                break;
-            case sources.zai:
-                result = await generateZaiImage(prefixedPrompt, signal);
-                break;
-            case sources.openrouter:
-                result = await generateOpenRouterImage(prefixedPrompt, signal);
-                break;
-            case sources.workersai:
-                result = await generateWorkersAIImage(prefixedPrompt, negativePrompt, signal);
-                break;
-        }
+        const maxRetries = getMaxRequestRetries();
 
-        if (!result.data) {
-            throw new Error('Endpoint did not return image data.');
-        }
+        result = await withRetry(async () => {
+            let inner = { format: '', data: '' };
+            switch (extension_settings.sd.source) {
+                case sources.horde:
+                    inner = await generateHordeImage(prefixedPrompt, negativePrompt, signal);
+                    break;
+                case sources.vlad:
+                    inner = await generateAutoImage(prefixedPrompt, negativePrompt, signal);
+                    break;
+                case sources.drawthings:
+                    inner = await generateDrawthingsImage(prefixedPrompt, negativePrompt, signal);
+                    break;
+                case sources.auto:
+                    inner = await generateAutoImage(prefixedPrompt, negativePrompt, signal);
+                    break;
+                case sources.sdcpp:
+                    inner = await generateSdcppImage(prefixedPrompt, negativePrompt, signal);
+                    break;
+                case sources.novel:
+                    inner = await generateNovelImage(prefixedPrompt, negativePrompt, signal);
+                    break;
+                case sources.openai:
+                    inner = await generateOpenAiImage(prefixedPrompt, signal);
+                    break;
+                case sources.aimlapi:
+                    inner = await generateAimlapiImage(prefixedPrompt, signal);
+                    break;
+                case sources.comfy:
+                    switch (extension_settings.sd.comfy_type) {
+                        case comfyTypes.runpod_serverless:
+                            inner = await generateComfyRunPodImage(prefixedPrompt, negativePrompt, signal);
+                            break;
+                        case comfyTypes.standard:
+                            inner = await generateComfyImage(prefixedPrompt, negativePrompt, signal);
+                            break;
+                        default:
+                            throw new Error('Unknown comfyUI server type.');
+                    }
+                    break;
+                case sources.togetherai:
+                    inner = await generateTogetherAIImage(prefixedPrompt, negativePrompt, signal);
+                    break;
+                case sources.pollinations:
+                    inner = await generatePollinationsImage(prefixedPrompt, negativePrompt, signal);
+                    break;
+                case sources.stability:
+                    inner = await generateStabilityImage(prefixedPrompt, negativePrompt, signal);
+                    break;
+                case sources.huggingface:
+                    inner = await generateHuggingFaceImage(prefixedPrompt, signal);
+                    break;
+                case sources.chutes:
+                    inner = await generateChutesImage(prefixedPrompt, negativePrompt, signal);
+                    break;
+                case sources.electronhub:
+                    inner = await generateElectronHubImage(prefixedPrompt, signal);
+                    break;
+                case sources.nanogpt:
+                    inner = await generateNanoGPTImage(prefixedPrompt, negativePrompt, signal);
+                    break;
+                case sources.bfl:
+                    inner = await generateBflImage(prefixedPrompt, signal);
+                    break;
+                case sources.falai:
+                    inner = await generateFalaiImage(prefixedPrompt, negativePrompt, signal);
+                    break;
+                case sources.xai:
+                    inner = await generateXAIImage(prefixedPrompt, negativePrompt, signal);
+                    break;
+                case sources.google:
+                    inner = await generateGoogleImage(prefixedPrompt, negativePrompt, signal);
+                    break;
+                case sources.zai:
+                    inner = await generateZaiImage(prefixedPrompt, signal);
+                    break;
+                case sources.openrouter:
+                    inner = await generateOpenRouterImage(prefixedPrompt, signal);
+                    break;
+                case sources.workersai:
+                    inner = await generateWorkersAIImage(prefixedPrompt, negativePrompt, signal);
+                    break;
+            }
+
+            if (!inner?.data) {
+                throw new Error('Endpoint did not return image data.');
+            }
+            return inner;
+        }, {
+            maxRetries,
+            signal,
+            label: 'image-generation',
+            onAttempt: (attempt) => {
+                toastr.info(
+                    t`Retrying image generation… (${attempt}/${maxRetries})`,
+                    t`Image generation failed`,
+                    { timeOut: 3000 },
+                );
+            },
+        });
     } catch (err) {
         // Check if this was an intentional abort by user
         if (signal?.aborted) {
