@@ -44,6 +44,7 @@ let _testOnly_renderMgSchemaPreviewPane;
 let _testOnly_applyEmptyPathSet;
 let _testOnly_renderOrchPreviewPane;
 let _testOnly_orchApplyEmptyPathSet;
+let _testOnly_renderCeaCharPreviewPane;
 
 beforeAll(async () => {
     const mod = await import('../../public/scripts/extensions/completion-preset-assistant/cpa-iteration/studio.js');
@@ -54,6 +55,8 @@ beforeAll(async () => {
     const orchMod = await import('../../public/scripts/extensions/orchestrator/iter-studio/studio.js');
     _testOnly_renderOrchPreviewPane = orchMod._testOnly_renderOrchPreviewPane;
     _testOnly_orchApplyEmptyPathSet = orchMod._testOnly_applyEmptyPathSet;
+    const ceaCharMod = await import('../../public/scripts/extensions/character-editor-assistant/character-iteration/studio.js');
+    _testOnly_renderCeaCharPreviewPane = ceaCharMod._testOnly_renderCeaCharPreviewPane;
 });
 
 describe('renderCpaPreviewPane', () => {
@@ -379,5 +382,59 @@ describe('renderOrchPreviewPane', () => {
         };
         const html = _testOnly_renderOrchPreviewPane(profile, [], 'unknown_mode');
         expect(html).toContain('stage_x');
+    });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// CEA Character iteration preview renderer.
+//
+// Edit shape per `character-editor-assistant/character-iteration/tools.js`
+// is FINE-GRAINED (not sandbox-diff): `card.<field>`, `lorebook.entries`,
+// `lorebook.<key>` — the empty-path no-op fix is NOT needed here.
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('renderCeaCharPreviewPane', () => {
+    const sampleLive = {
+        card: {
+            name: 'Alice',
+            description: 'A curious explorer.',
+            personality: 'Kind, brave.',
+            scenario: 'Forest village at dawn.',
+            first_mes: 'Hello, traveler!',
+            mes_example: '<USER>: Hi\n<CHAR>: Greetings.',
+        },
+        lorebook: {
+            name: 'Alice Lore',
+            entries: [{ uid: 1, keys: ['forest'] }, { uid: 2, keys: ['dawn'] }],
+        },
+    };
+
+    test('renders all six character fields', () => {
+        const html = _testOnly_renderCeaCharPreviewPane(sampleLive, []);
+        expect(html).toContain('Alice');
+        expect(html).toContain('A curious explorer');
+        expect(html).toContain('Kind, brave');
+        expect(html).toContain('Forest village');
+        expect(html).toContain('Hello, traveler');
+    });
+
+    test('renders bound-lorebook section with entry count', () => {
+        const html = _testOnly_renderCeaCharPreviewPane(sampleLive, []);
+        expect(html).toContain('Alice Lore');
+        expect(html).toMatch(/2/);
+    });
+
+    test('highlights field when pending edit modifies it', () => {
+        // Real CEA char edit shape from tools.js#normalizeToolCallToEdit:
+        //   `cea_set_card_field` → `{ op: 'set', path: 'card.<field>', oldValue, newValue }`
+        const edit = { op: 'set', path: 'card.name', oldValue: 'Alice', newValue: 'Alicia' };
+        const html = _testOnly_renderCeaCharPreviewPane(sampleLive, [edit]);
+        expect(html).toContain('pending-change');
+        expect(html).toContain('Alicia');
+    });
+
+    test('empty-state when live is null', () => {
+        const html = _testOnly_renderCeaCharPreviewPane(null, []);
+        expect(html).toMatch(/no character|未加载|未載入/i);
     });
 });

@@ -5319,4 +5319,8 @@
     ,"rounds": "輪次"
     ,"concurrent subagents": "並發子代理"
     ,"total subagent runs": "子代理總執行次數"
+    ,"Character fields": "角色欄位"
+    ,"Bound lorebook": "綁定世界書"
+    ,"No character loaded.": "未載入角色。"
+    ,"(click to expand)": "(點擊展開)"
 }

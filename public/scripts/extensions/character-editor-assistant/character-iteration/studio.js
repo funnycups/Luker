@@ -40,6 +40,7 @@ import { lodash } from '../../../../lib.js';
 import { Popup, POPUP_TYPE } from '../../../popup.js';
 import {
     applyEdits,
+    bindIterWorkspaceResizer,
     registerOp,
     render as ITER_RENDER,
     runner as ITER_RUNNER,
@@ -72,10 +73,30 @@ function ensureStylesheetInjected() {
  * Build the popup root HTML. Built once on open; per-render mutations
  * scope to subordinate `[data-cea-charit-*]` slots so we never re-mount
  * the textarea (which would lose focus + the in-progress draft).
+ *
+ * Workspace shell (luker-iter-workspace): split grid with chat + preview
+ * panes on desktop, mobile tab-bar fallback under 900px (driven by
+ * shared section 24 in luker-studio.css). The composer hosts the
+ * auto-apply checkbox in-line.
  */
-function buildPopupHtml({ popupId, title, historyOpen, historyLabel, newSessionLabel, clearAllLabel, sendLabel, composerPlaceholder }) {
+function buildPopupHtml({
+    popupId,
+    title,
+    historyOpen,
+    historyLabel,
+    newSessionLabel,
+    clearAllLabel,
+    sendLabel,
+    composerPlaceholder,
+    autoApply,
+    autoApplyLabel,
+    chatTabLabel,
+    previewTabLabel,
+    chatBadgeAriaLabel,
+    resizerAriaLabel,
+}) {
     return `
-<div id="${popupId}" class="cea_charit_popup">
+<div id="${popupId}" class="cea_charit_popup luker-iter-workspace" data-iter-layout="split" data-iter-active-tab="chat">
     <div class="cea_charit_title">${title}</div>
     <details class="cea_charit_history" data-cea-charit-history${historyOpen ? ' open' : ''}>
         <summary>${escapeHtmlLocal(historyLabel)}</summary>
@@ -85,11 +106,36 @@ function buildPopupHtml({ popupId, title, historyOpen, historyLabel, newSessionL
             <button class="menu_button menu_button_small" data-cea-charit-action="clear-history">${escapeHtmlLocal(clearAllLabel)}</button>
         </div>
     </details>
-    <div class="cea_charit_messages" data-cea-charit-messages></div>
-    <div class="cea_charit_pending" data-cea-charit-pending hidden></div>
-    <div class="cea_charit_composer">
-        <textarea class="text_pole" rows="2" data-cea-charit-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
-        <button class="menu_button" data-cea-charit-action="send">${escapeHtmlLocal(sendLabel)}</button>
+
+    <div class="luker-iter-workspace-tabs" role="tablist">
+        <button type="button" class="luker-iter-workspace-tab active" role="tab" aria-selected="true" data-iter-action="switch-tab" data-iter-tab="chat">
+            <span class="luker-iter-workspace-tab-label">${escapeHtmlLocal(chatTabLabel)}</span>
+            <span class="luker-iter-workspace-tab-badge" data-iter-chat-badge hidden aria-label="${escapeHtmlLocal(chatBadgeAriaLabel)}"></span>
+        </button>
+        <button type="button" class="luker-iter-workspace-tab" role="tab" aria-selected="false" data-iter-action="switch-tab" data-iter-tab="preview">
+            <span class="luker-iter-workspace-tab-label">${escapeHtmlLocal(previewTabLabel)}</span>
+        </button>
+    </div>
+
+    <div class="luker-iter-workspace-grid">
+        <div class="luker-iter-workspace-chat" data-iter-pane="chat">
+            <div class="cea_charit_messages" data-cea-charit-messages></div>
+            <div class="cea_charit_pending" data-cea-charit-pending hidden></div>
+            <div class="cea_charit_composer">
+                <textarea class="text_pole" rows="2" data-cea-charit-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
+                <div class="cea_charit_composer_actions">
+                    <label class="cea_charit_composer_auto_apply">
+                        <input type="checkbox" data-cea-charit-action="toggle-auto-apply"${autoApply ? ' checked' : ''}>
+                        <span>${escapeHtmlLocal(autoApplyLabel)}</span>
+                    </label>
+                    <div class="cea_charit_composer_buttons">
+                        <button class="menu_button" data-cea-charit-action="send">${escapeHtmlLocal(sendLabel)}</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="luker-iter-workspace-resizer" data-iter-resizer aria-label="${escapeHtmlLocal(resizerAriaLabel)}"></div>
+        <div class="luker-iter-workspace-preview" data-iter-pane="preview" data-iter-preview-pane></div>
     </div>
 </div>`;
 }
@@ -105,13 +151,164 @@ function makeSessionId() {
     return `sess_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Live target preview — file-local helpers + renderer.
+//
+// Module-scope so unit tests can `import { _testOnly_renderCeaCharPreviewPane }`
+// without instantiating the popup. Pure function: given `live` + pending
+// edits, return preview HTML. Snippets B + C from the implementation plan.
+//
+// `computeChangedPathSet`, `walkDiff`, `truncateForPreview`,
+// `fmtPendingChangeInline` are intentionally file-local (duplicated rather
+// than extracted to iteration-library per spec §B), mirroring CPA / MG /
+// Orchestrator.
+//
+// Edit shape: CEA char emits FINE-GRAINED edits (`card.<field>`,
+// `lorebook.entries`, `lorebook.<key>`) — `applyEdits` handles them via
+// lodash.set so the empty-path no-op pattern (orch / MG) is NOT needed.
+// ──────────────────────────────────────────────────────────────────────────
+
+function computeChangedPathSet(live, pendingEdits) {
+    if (!Array.isArray(pendingEdits) || pendingEdits.length === 0) return new Set();
+    let next;
+    try {
+        const cloned = structuredClone(live);
+        const result = applyEdits(pendingEdits, cloned);
+        next = result?.newLive ?? cloned;
+    } catch {
+        return new Set();
+    }
+    const changed = new Set();
+    walkDiff('', live, next, changed);
+    return changed;
+}
+
+function walkDiff(path, a, b, out) {
+    if (a === b) return;
+    if (typeof a !== typeof b || a === null || b === null || typeof a !== 'object') {
+        out.add(path);
+        return;
+    }
+    const keys = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
+    for (const k of keys) {
+        const childPath = path ? `${path}.${k}` : k;
+        walkDiff(childPath, a?.[k], b?.[k], out);
+    }
+}
+
+function truncateForPreview(str, max = 200) {
+    if (typeof str !== 'string') str = String(str ?? '');
+    return str.length > max ? str.slice(0, max) + '…' : str;
+}
+
+/**
+ * Format a `(was oldVal → now newVal)` inline diff span. Substitutes
+ * `${0}` / `${1}` against the truncated values; lookup against an
+ * optional `tFn` lets the production popup substitute the localized
+ * template ("(待修改:..."). When `tFn` is omitted we fall back to the
+ * English template so the marker is still legible in tests.
+ */
+function fmtPendingChangeInline(oldVal, newVal, tFn) {
+    const oldDisp = truncateForPreview(String(oldVal ?? '(unset)'), 60);
+    const newDisp = truncateForPreview(String(newVal ?? '(unset)'), 60);
+    const template = '(was ${0} → now ${1})';
+    const localized = typeof tFn === 'function' ? String(tFn(template) ?? template) : template;
+    const filled = localized.replace(/\$\{(\d+)\}/g, (_, idx) => String([oldDisp, newDisp][Number(idx)] ?? ''));
+    return `<span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(filled)}</span>`;
+}
+
+/**
+ * Render the right-pane HTML for the CEA Character workspace preview.
+ * Pure function — never throws (defensive wraps below).
+ *
+ * Surfaces the six card fields (name, description, personality, scenario,
+ * first_mes, mes_example) followed by a Bound-lorebook section. Each row
+ * highlights `.pending-change` when the dotted path (e.g. `card.name`,
+ * `lorebook.entries`) matches an emitted edit.
+ *
+ * @param {{card?: object, lorebook?: object}|null} live
+ * @param {Array} pendingEdits  Edits from the latest LLM round.
+ * @param {Function} [tFn]      Optional i18n function (string → string).
+ * @returns {string} HTML.
+ */
+function renderCeaCharPreviewPane(live, pendingEdits, tFn) {
+    const t = typeof tFn === 'function' ? tFn : (s) => String(s ?? '');
+    if (!live || !live.card) {
+        return `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('No character loaded.'))}</div>`;
+    }
+    const edits = Array.isArray(pendingEdits) ? pendingEdits : [];
+    const changed = computeChangedPathSet(live, edits);
+    let next = live;
+    if (edits.length > 0) {
+        try {
+            const cloned = structuredClone(live);
+            const r = applyEdits(edits, cloned);
+            next = r?.newLive ?? cloned;
+        } catch { /* fall back to live */ }
+    }
+
+    const fields = ['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example'];
+    const fieldRows = fields.map(f => {
+        const path = `card.${f}`;
+        const isChanged = changed.has(path);
+        const cls = isChanged
+            ? 'luker-iter-workspace-preview-row pending-change'
+            : 'luker-iter-workspace-preview-row';
+        const oldVal = live.card?.[f] ?? '';
+        const newVal = next?.card?.[f] ?? '';
+        const display = truncateForPreview(isChanged ? newVal : oldVal, 250);
+        const inlineDiff = (isChanged && oldVal !== newVal)
+            ? fmtPendingChangeInline(oldVal, newVal, t)
+            : '';
+        const bodyHtml = display
+            ? escapeHtmlLocal(display)
+            : `<span class="muted">${escapeHtmlLocal(t('(empty)'))}</span>`;
+        return `<div class="${cls}"><div class="luker-iter-workspace-preview-row-head"><span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(f)}</span>${inlineDiff}</div><div class="luker-iter-workspace-preview-row-body">${bodyHtml}</div></div>`;
+    }).join('');
+
+    const lore = live.lorebook;
+    let loreSection = '';
+    if (lore) {
+        const loreChanged = changed.has('lorebook') || changed.has('lorebook.entries') || changed.has('lorebook.name');
+        const loreCls = loreChanged
+            ? 'luker-iter-workspace-preview-row pending-change'
+            : 'luker-iter-workspace-preview-row';
+        const loreName = lore.name || lore.bookName || '?';
+        const entryCount = Array.isArray(lore.entries)
+            ? lore.entries.length
+            : (lore.entries && typeof lore.entries === 'object')
+                ? Object.keys(lore.entries).length
+                : 0;
+        loreSection = `
+        <div class="luker-iter-workspace-preview-section">
+            <div class="luker-iter-workspace-preview-section-title">${escapeHtmlLocal(t('Bound lorebook'))}</div>
+            <div class="${loreCls}">
+                <div class="luker-iter-workspace-preview-row-head">
+                    <span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(loreName)}</span>
+                    <span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(`${entryCount} entries`)}</span>
+                </div>
+            </div>
+        </div>`;
+    }
+
+    return `
+        <div class="luker-iter-workspace-preview-section">
+            <div class="luker-iter-workspace-preview-section-title">${escapeHtmlLocal(t('Character fields'))}</div>
+            ${fieldRows}
+        </div>
+        ${loreSection}
+    `;
+}
+
+export { renderCeaCharPreviewPane as _testOnly_renderCeaCharPreviewPane };
+
 function createNewSession() {
     const now = Date.now();
     return {
         id: makeSessionId(),
         title: '',
         messages: [],
-        surfaceState: { historyOpen: false },
+        surfaceState: { historyOpen: false, autoApply: false },
         updatedAt: now,
         createdAt: now,
     };
@@ -137,7 +334,6 @@ export async function openCharacterIterationStudio(avatar, deps) {
     const {
         context,
         i18n,
-        i18nFormat: _i18nFormat,   // reserved for future use; not consumed in single-column layout
         readCard,
         readLorebook,
         mergeCharacterAttributes,
@@ -227,8 +423,9 @@ export async function openCharacterIterationStudio(avatar, deps) {
         if (!loaded) return;
         state.session = {
             ...loaded,
-            surfaceState: loaded.surfaceState || { historyOpen: false },
+            surfaceState: { historyOpen: false, autoApply: false, ...(loaded.surfaceState || {}) },
         };
+        state.session.surfaceState.autoApply = !!state.session.surfaceState.autoApply;
         state.pendingEdits = [];
         await render();
     }
@@ -488,6 +685,18 @@ export async function openCharacterIterationStudio(avatar, deps) {
                 $history.prop('open', wantOpen);
             }
         }
+
+        // Auto-apply checkbox: sync to persisted preference (avoids the
+        // checkbox state drifting away from surfaceState across re-renders
+        // of the static shell).
+        const $autoApply = $root.find('[data-cea-charit-action="toggle-auto-apply"]');
+        if ($autoApply.length) {
+            const wantChecked = Boolean(state.session.surfaceState?.autoApply);
+            if ($autoApply.prop('checked') !== wantChecked) {
+                $autoApply.prop('checked', wantChecked);
+            }
+        }
+
         const metas = await sessionStore.list();
         const historyHtml = metas.map(renderHistoryItem).join('')
             || `<div class="cea_charit_history_empty">${escapeHtml(t('No saved sessions'))}</div>`;
@@ -525,6 +734,28 @@ export async function openCharacterIterationStudio(avatar, deps) {
         // Send / Stop button label
         const $sendBtn = $root.find('[data-cea-charit-action="send"]');
         $sendBtn.text(state.isBusy ? t('Stop') : t('Send'));
+
+        // Live target preview pane (right column on desktop, Preview tab
+        // on mobile). Pure render against state.live + pendingEdits — the
+        // renderer wraps applyEdits in try/catch so a malformed pending
+        // edit shape can't blank the workspace.
+        try {
+            const $previewPane = $root.find('[data-iter-preview-pane]');
+            if ($previewPane.length) {
+                const previewHtml = renderCeaCharPreviewPane(
+                    state.live,
+                    state.pendingEdits || [],
+                    t,
+                );
+                $previewPane.html(previewHtml);
+            }
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(`[${MODULE}] preview render failed`, err);
+            $root.find('[data-iter-preview-pane]').html(
+                `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('Preview unavailable'))}</div>`,
+            );
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -635,6 +866,25 @@ Use the cea_* tools to propose each edit. Each edit becomes a reviewable change 
                 content: t('Suggested edits: ') + names,
             });
         }
+
+        // Mobile workspace: if the user was on the Preview tab, bump the
+        // chat-tab badge so they know new assistant content arrived without
+        // forcing a tab switch.
+        bumpChatBadge();
+
+        // Composer-row auto-apply: when enabled AND this turn produced
+        // edits, apply immediately. Errors land via applyPendingEdits's
+        // own try/catch (which currently doesn't push a system note — CEA
+        // char keeps the rejection path silent, mirroring its manual Apply).
+        const autoApply = Boolean(state.session.surfaceState?.autoApply);
+        if (autoApply && state.pendingEdits.length > 0) {
+            try {
+                await applyPendingEdits();
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] auto-apply failed`, err);
+            }
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -712,6 +962,12 @@ Use the cea_* tools to propose each edit. Each edit becomes a reviewable change 
         clearAllLabel: t('Clear all'),
         sendLabel: t('Send'),
         composerPlaceholder: t('Type what to change...'),
+        autoApply: Boolean(state.session.surfaceState?.autoApply),
+        autoApplyLabel: t('Auto-apply edits'),
+        chatTabLabel: t('Chat'),
+        previewTabLabel: t('Preview'),
+        chatBadgeAriaLabel: t('New messages while you were on Preview'),
+        resizerAriaLabel: t('Resize columns'),
     });
     const popup = new Popup(popupHtml, POPUP_TYPE.DISPLAY, '', {
         wider: true,
@@ -797,11 +1053,79 @@ Use the cea_* tools to propose each edit. Each edit becomes a reviewable change 
         }
     });
 
+    // ── Workspace events ──────────────────────────────────────────────
+    // Mobile tab switcher — only relevant when the < 900px media query
+    // collapses the grid; on desktop both panes are mounted simultaneously
+    // and the tab bar is hidden via CSS.
+    $root.on('click.ceaCharIt', '[data-iter-action="switch-tab"]', (e) => {
+        const tab = e.currentTarget?.dataset?.iterTab;
+        if (!tab) return;
+        e.preventDefault();
+        setActiveTab(tab);
+    });
+
+    // Composer-row auto-apply toggle. Persists per-session via surfaceState.
+    // Toggling ON when edits are already pending applies them immediately,
+    // matching CPA / Orchestrator's existing behavior.
+    $root.on('change.ceaCharIt', '[data-cea-charit-action="toggle-auto-apply"]', async (e) => {
+        const checked = Boolean(e.currentTarget?.checked);
+        state.session.surfaceState = {
+            ...(state.session.surfaceState || {}),
+            autoApply: checked,
+        };
+        await persistSession();
+        if (checked && state.pendingEdits.length > 0) {
+            try {
+                await applyPendingEdits();
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] auto-apply on toggle failed`, err);
+            }
+        }
+    });
+
+    function setActiveTab(tab) {
+        const root = $root?.[0];
+        if (!root) return;
+        root.dataset.iterActiveTab = tab;
+        root.querySelectorAll('[data-iter-action="switch-tab"]').forEach(btn => {
+            const isActive = btn.dataset.iterTab === tab;
+            btn.classList.toggle('active', isActive);
+            btn.setAttribute('aria-selected', String(isActive));
+        });
+        if (tab === 'chat') {
+            const badge = root.querySelector('[data-iter-chat-badge]');
+            if (badge) {
+                badge.hidden = true;
+                badge.textContent = '';
+            }
+        }
+    }
+
+    function bumpChatBadge() {
+        const root = $root?.[0];
+        if (!root || root.dataset?.iterActiveTab !== 'preview') return;
+        const badge = root.querySelector('[data-iter-chat-badge]');
+        if (!badge) return;
+        const next = (Number(badge.textContent) || 0) + 1;
+        badge.textContent = String(next);
+        badge.hidden = false;
+    }
+
+    // Bind the column resizer. Returns a no-op when grid/splitter are
+    // missing (e.g. during teardown), so the unbind call below is safe
+    // regardless of mount state.
+    const unbindResizer = bindIterWorkspaceResizer($root[0]);
+
     await render();
 
     // Block until the user dismisses the popup. Persist one final time
     // so any in-flight composer / surfaceState changes survive close.
-    await popupPromise;
+    try {
+        await popupPromise;
+    } finally {
+        try { unbindResizer(); } catch { /* ignore */ }
+    }
     try { state.abortController?.abort(); } catch { /* ignore */ }
     try { zoomOverlayUnbind?.(); } catch { /* ignore */ }
     await persistSession();

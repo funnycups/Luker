@@ -5480,4 +5480,8 @@
     ,"rounds": "轮次"
     ,"concurrent subagents": "并发子代理"
     ,"total subagent runs": "子代理总执行次数"
+    ,"Character fields": "角色字段"
+    ,"Bound lorebook": "绑定世界书"
+    ,"No character loaded.": "未加载角色。"
+    ,"(click to expand)": "(点击展开)"
 }

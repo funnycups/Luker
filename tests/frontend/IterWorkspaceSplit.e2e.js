@@ -270,3 +270,109 @@ test.describe('Iter-studio workspace split — Orchestrator', () => {
         await page.keyboard.press('Escape');
     });
 });
+
+test.describe('Iter-studio workspace split — CEA Character Iteration', () => {
+    test.setTimeout(90000);
+
+    // The CEA character iteration popup opens via the `CHARACTER_REPLACED`
+    // event handler in main.js — gated on `settings.replaceLorebookSyncEnabled`
+    // and the active character's avatar. There is no direct "open studio"
+    // button to click, so this test synthesizes the event with the currently
+    // selected character. Soft-skips if no character is loaded.
+    async function ensureActiveCharacter(page) {
+        const avatar = await page.evaluate(() => {
+            const ctx = window.SillyTavern?.getContext?.();
+            return String(ctx?.characters?.[ctx?.characterId]?.avatar || '').trim();
+        });
+        test.skip(!avatar, 'no active character — cannot trigger CEA char iteration popup');
+        return avatar;
+    }
+
+    test('CEA Char: workspace mounts with split layout + preview + auto-apply control', async ({ page }) => {
+        await awaitMainUI(page);
+        const avatar = await ensureActiveCharacter(page);
+
+        // Force-enable the setting + emit the CHARACTER_REPLACED event with
+        // the current character's detail shape (matching main.js's reader:
+        // `event.detail.character.avatar`).
+        await page.evaluate(async (avatarId) => {
+            const ctx = window.SillyTavern?.getContext?.();
+            const settings = ctx?.extensionSettings?.['character-editor-assistant'];
+            if (settings && typeof settings === 'object') {
+                settings.replaceLorebookSyncEnabled = true;
+            }
+            const eventTypes = ctx?.event_types || {};
+            const evtName = eventTypes.CHARACTER_REPLACED || 'character_replaced';
+            const character = ctx?.characters?.find(c => String(c?.avatar) === avatarId) || { avatar: avatarId };
+            // SillyTavern's eventSource.emit forwards a plain object that the
+            // handler reads via event.detail.character — the CustomEvent shape
+            // is the canonical wire format used by ST internals.
+            const evt = new CustomEvent(evtName, { detail: { character } });
+            await ctx?.eventSource?.emit?.(evtName, evt);
+        }, avatar);
+
+        const popup = page.locator('.cea_charit_popup.luker-iter-workspace').first();
+        await expect(popup).toBeVisible({ timeout: 15000 });
+
+        // Structural assertions: split grid + chat pane + preview pane + resizer.
+        await expect(popup.locator('.luker-iter-workspace-grid')).toBeVisible();
+        await expect(popup.locator('.luker-iter-workspace-chat')).toBeVisible();
+        await expect(popup.locator('[data-iter-preview-pane]')).toBeVisible();
+        await expect(popup.locator('.luker-iter-workspace-resizer')).toHaveCount(1);
+
+        // Auto-apply control is mounted in the composer row, unchecked by default.
+        const autoApply = popup.locator('[data-cea-charit-action="toggle-auto-apply"]');
+        await expect(autoApply).toHaveCount(1);
+        await expect(autoApply).not.toBeChecked();
+
+        // Tab bar exists (display: none on desktop, but the elements are mounted).
+        await expect(popup.locator('[data-iter-action="switch-tab"][data-iter-tab="chat"]')).toHaveCount(1);
+        await expect(popup.locator('[data-iter-action="switch-tab"][data-iter-tab="preview"]')).toHaveCount(1);
+
+        // Preview pane has content — at minimum the Character fields heading
+        // (or the 'No character loaded' fallback). Active locale may be en/zh-cn/zh-tw.
+        const previewText = await popup.locator('[data-iter-preview-pane]').textContent();
+        expect(previewText || '').toMatch(/Character fields|角色字段|角色欄位|No character loaded|未加载|未載入/);
+
+        // Toggle auto-apply, confirm the checkbox tracks state.
+        await autoApply.check();
+        await expect(autoApply).toBeChecked();
+        await autoApply.uncheck();
+        await expect(autoApply).not.toBeChecked();
+
+        await page.keyboard.press('Escape');
+    });
+
+    test('CEA Char: send a turn, preview reflects pending change (requires connection profile)', async ({ page }) => {
+        await awaitMainUI(page);
+        await ensureConnectionProfile(page);
+        const avatar = await ensureActiveCharacter(page);
+
+        await page.evaluate(async (avatarId) => {
+            const ctx = window.SillyTavern?.getContext?.();
+            const settings = ctx?.extensionSettings?.['character-editor-assistant'];
+            if (settings && typeof settings === 'object') {
+                settings.replaceLorebookSyncEnabled = true;
+            }
+            const eventTypes = ctx?.event_types || {};
+            const evtName = eventTypes.CHARACTER_REPLACED || 'character_replaced';
+            const character = ctx?.characters?.find(c => String(c?.avatar) === avatarId) || { avatar: avatarId };
+            const evt = new CustomEvent(evtName, { detail: { character } });
+            await ctx?.eventSource?.emit?.(evtName, evt);
+        }, avatar);
+
+        const popup = page.locator('.cea_charit_popup.luker-iter-workspace').first();
+        await expect(popup).toBeVisible({ timeout: 15000 });
+
+        await popup.locator('[data-cea-charit-input]').fill('Add to the character description that she has bright green eyes.');
+        await popup.locator('[data-cea-charit-action="send"]').click();
+
+        // Wait for pending edits to surface — CEA char emits fine-grained
+        // `card.<field>` edits, so the preview's per-field change detection
+        // runs against applyEdits directly (no empty-path fallback needed).
+        await expect(popup.locator('.cea_charit_pending')).toBeVisible({ timeout: 60000 });
+        await expect(popup.locator('[data-iter-preview-pane] .pending-change')).toBeVisible({ timeout: 5000 });
+
+        await page.keyboard.press('Escape');
+    });
+});
