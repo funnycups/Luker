@@ -56,10 +56,8 @@ jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
     UNSET_VALUE: Symbol('UNSET_VALUE'),
 }));
 
-jest.unstable_mockModule('../../public/scripts/iteration-studio/index.js', () => ({
-    open: () => {},
-    defineAdapter: () => {},
-    createSettingsBackedHistoryStore: () => ({ push: () => {}, list: () => [] }),
+jest.unstable_mockModule('../../public/scripts/extensions/memory-graph/schema-iteration/studio.js', () => ({
+    openSchemaIterationStudio: () => Promise.resolve(),
 }));
 
 jest.unstable_mockModule('../../public/scripts/power-user.js', () => ({
@@ -271,6 +269,44 @@ describe('write-api upsertLinks / deleteLinks', () => {
         const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
         await expect(api.upsertLinks({})).rejects.toThrow();
         await expect(api.upsertLinks({ source: { id: 'a' } })).rejects.toThrow();
+    });
+
+    test('upsertLinks accepts target: { id } shape (docs-symmetric with deleteLinks)', async () => {
+        const ctx = makeContext({
+            nodes: {
+                a: { id: 'a', type: 'character_sheet', level: 'semantic', title: 'A', fields: {} },
+                b: { id: 'b', type: 'character_sheet', level: 'semantic', title: 'B', fields: {} },
+            },
+            edges: [],
+            seqCounter: 0,
+        });
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
+        const res = await api.upsertLinks({
+            source: { id: 'a' },
+            links: [{ target: { id: 'b' }, relation: 'mentions', direction: 'outgoing' }],
+        });
+        expect(res.applied).toBeGreaterThan(0);
+        const edge = ctx.__memoryStore.edges.find(e => e.from === 'a' && e.to === 'b' && e.type === 'mentions');
+        expect(edge).toBeDefined();
+    });
+
+    test('upsertLinks still accepts targetNodeId shape (orchestrator/LLM tool path)', async () => {
+        const ctx = makeContext({
+            nodes: {
+                a: { id: 'a', type: 'character_sheet', level: 'semantic', title: 'A', fields: {} },
+                b: { id: 'b', type: 'character_sheet', level: 'semantic', title: 'B', fields: {} },
+            },
+            edges: [],
+            seqCounter: 0,
+        });
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
+        const res = await api.upsertLinks({
+            source: { id: 'a' },
+            links: [{ targetNodeId: 'b', relation: 'mentions', direction: 'outgoing' }],
+        });
+        expect(res.applied).toBeGreaterThan(0);
+        const edge = ctx.__memoryStore.edges.find(e => e.from === 'a' && e.to === 'b' && e.type === 'mentions');
+        expect(edge).toBeDefined();
     });
 
     test('deleteLinks requires source/target/relation', async () => {

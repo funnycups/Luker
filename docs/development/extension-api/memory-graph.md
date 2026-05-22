@@ -5,7 +5,7 @@
 > Entry points:
 > - **Recommended:** `getExtensionApi('memory-graph').openSession(context)` from `public/scripts/extensions.js` (session facade)
 > - Lower-level: `getMemoryGraphReadApi(store, context)` from `public/scripts/extensions/memory-graph/read-api.js` (read factory)
-> - Lower-level: `getMemoryGraphWriteApi(store, context)` from `public/scripts/extensions/memory-graph/write-api.js` (write factory)
+> - Lower-level: `getMemoryGraphWriteApi(store, context, options?)` from `public/scripts/extensions/memory-graph/write-api.js` (write factory; `options.onCommit` flushes mutations to floor-state)
 
 ## Session API (recommended entry)
 
@@ -29,12 +29,12 @@ const matches = session.findByName({ query: 'Alice' });
 const ranked = session.keywordSearch({ query: 'sword fight in the inn', k: 5 });
 const semantic = await session.vectorSearch({ query: 'betrayal', k: 5 });
 
-// Write
-const { id } = session.createNode({ type: 'event', title: 'Alice draws her sword', fields: { what: '...' } });
-session.editNode({ id, setFields: { who: ['Alice', 'Bob'] } });
-session.upsertLinks({ source: { id }, links: [{ to: 'alice_node', relation: 'about' }] });
-session.deleteLinks({ source: { id }, target: { id: 'bob_node' }, relation: 'about' });
-session.compactNodes({ type: 'event', childIds: [...], summary: '...' });
+// Write — every write method is async; await the promise to get the result.
+const { id } = await session.createNode({ type: 'event', title: 'Alice draws her sword', fields: { what: '...' } });
+await session.editNode({ id, setFields: { who: ['Alice', 'Bob'] } });
+await session.upsertLinks({ source: { id }, links: [{ target: { id: 'alice_node' }, relation: 'about' }] });
+await session.deleteLinks({ source: { id }, target: { id: 'bob_node' }, relation: 'about' });
+await session.compactNodes({ type: 'event', childIds: [...], summary: '...' });
 ```
 
 The `'memory-graph'` extension api is published via Luker's `registerExtensionApi(name, api)` mechanism — the same one `card-app` and other Luker extensions use. Third-party extensions that integrate with memory-graph should always go through `getExtensionApi('memory-graph')`, never import `memory-graph/*.js` directly.
@@ -50,7 +50,8 @@ A chat that has never had extraction run still gets a writable session. Read met
 ### When `openSession` returns `null`
 
 - Memory-graph extension is not loaded (`getExtensionApi('memory-graph')` returned `undefined`).
-- The context lacks `createFloorState` (typical for test runners that didn't mock the SillyTavern context fully).
+- The context cannot be resolved to a chat target (no `chatId`, or `createFloorState` is missing — typical for test runners that didn't mock the SillyTavern context fully).
+- The runtime store failed to load from floor-state (rare; logged as `console.warn`).
 
 The orchestrator's `memory_*` loop tools translate a `null` session into `ToolError(MEMORY_DISABLED)` so agents can pivot.
 
@@ -180,11 +181,11 @@ A neighbour as seen from a specific source node. `direction` is relative to the 
 interface EdgeSummaryView {
     degree: number;
     relations: ReadonlyArray<{ relation: string; direction: 'in' | 'out'; count: number }>;
-    sample_neighbors: ReadonlyArray<{ id: string; type: string; title: string }>;
+    sample_neighbors: ReadonlyArray<{ id: string; type: string; title: string; to_seq: number }>;
 }
 ```
 
-The compact edge view the native recall LLM sees per candidate row. Counts are aggregated per `(relation, direction)` pair; `sample_neighbors` is a bounded sample (default 8) of distinct neighbour nodes. Field names are snake_case to match the native LLM prompt block.
+The compact edge view the native recall LLM sees per candidate row. Counts are aggregated per `(relation, direction)` pair; `sample_neighbors` is a bounded sample (default 8) of distinct neighbour nodes, each carrying a `to_seq` so callers can sort by recency. Field names are snake_case to match the native LLM prompt block.
 
 ### InjectionState
 
@@ -742,15 +743,21 @@ The full equivalence guarantee — `candidateRows` field-by-field and order-by-o
 
 The write API is the Layer-1 entry for third-party agents that want to edit the memory graph directly — for example a curator agent that runs between turns instead of relying on the built-in extractor. The session facade exposes the common write methods; the lower-level `getMemoryGraphWriteApi(store, context)` factory is what `openSession` wraps internally.
 
-### Factory: getMemoryGraphWriteApi(store, context)
+### Factory: getMemoryGraphWriteApi(store, context, options?)
 
 ```js
 import { getMemoryGraphWriteApi } from '/scripts/extensions/memory-graph/write-api.js';
 
 const writeApi = getMemoryGraphWriteApi(store, context);
+// Optional: pass an onCommit hook to persist after each successful mutation —
+// `openSession` wires this to `commitSessionMutation` internally so writes
+// flush through the same floor-state path as the native extraction pipeline.
+const persistingApi = getMemoryGraphWriteApi(store, context, {
+    onCommit: async (s) => { await myFlush(s); },
+});
 ```
 
-Returns a frozen object exposing the methods documented below. The factory binds to the supplied `store` reference — pass the live store you obtained from the floor-state loader. Methods throw `{ code: 'MEMORY_STORE_MISSING' }` when invoked against a `null` store. Third-party extensions should normally use `openSession` instead of constructing this factory directly.
+Returns a frozen object exposing the methods documented below. The factory binds to the supplied `store` reference — pass the live store you obtained from the floor-state loader. Methods throw `{ code: 'MEMORY_STORE_MISSING' }` when invoked against a `null` store. Third-party extensions should normally use `openSession` instead of constructing this factory directly — it wires `onCommit` for you. Callers that omit `onCommit` get the legacy in-memory semantics (mutations stay in `store` but are never persisted).
 
 ### Recommended entry: applyExtractionBatch(options)
 
@@ -773,7 +780,7 @@ Returns a frozen object exposing the methods documented below. The factory binds
 **Minimal example:**
 
 ```js
-const { applied, rejected } = writeApi.applyExtractionBatch({
+const { applied, rejected } = await writeApi.applyExtractionBatch({
     ops: [
         { op: 'create', type: 'character_sheet', ref: 'c1', fields: { name: 'Eileen', aliases: ['艾琳'] } },
         { op: 'link_upsert', sourceRef: 'c1', links: [{ targetNodeId: 'event_42', relation: 'mentions' }] },
@@ -797,7 +804,7 @@ console.log(applied.length, 'applied;', rejected.length, 'rejected');
 **Minimal example:**
 
 ```js
-const { id } = writeApi.createNode({
+const { id } = await writeApi.createNode({
     type: 'character_sheet',
     title: 'Eileen',
     fields: { name: 'Eileen', aliases: ['艾琳'] },
@@ -819,7 +826,7 @@ const { id } = writeApi.createNode({
 **Minimal example:**
 
 ```js
-const { ok } = writeApi.editNode({
+const { ok } = await writeApi.editNode({
     id: 'n_eileen',
     setFields: { profession: 'healer' },
 });
@@ -839,7 +846,7 @@ const { ok } = writeApi.editNode({
 **Minimal example:**
 
 ```js
-const { ok } = writeApi.deleteNode({ id: 'n_obsolete' });
+const { ok } = await writeApi.deleteNode({ id: 'n_obsolete' });
 ```
 
 ### upsertLinks(options)
@@ -858,7 +865,7 @@ const { ok } = writeApi.deleteNode({ id: 'n_obsolete' });
 **Minimal example:**
 
 ```js
-const { applied } = writeApi.upsertLinks({
+const { applied } = await writeApi.upsertLinks({
     source: { id: 'n_eileen' },
     links: [
         { target: { id: 'event_42' }, relation: 'mentions' },
@@ -882,7 +889,7 @@ const { applied } = writeApi.upsertLinks({
 **Minimal example:**
 
 ```js
-const { removed } = writeApi.deleteLinks({
+const { removed } = await writeApi.deleteLinks({
     source: { id: 'n_eileen' },
     target: { id: 'event_42' },
     relation: 'mentions',
@@ -912,7 +919,7 @@ if (groups.length > 0) {
     const group = groups[0];
     const briefs = group.childIds.map(id => readApi.getNodeBrief(id));
     const summary = await myLLM.summarize(briefs);
-    const { rollupNodeId } = writeApi.compactNodes({
+    const { rollupNodeId } = await writeApi.compactNodes({
         type: 'event',
         childIds: group.childIds,
         summary,
@@ -924,7 +931,7 @@ if (groups.length > 0) {
 
 - `external-api.js` legacy exports (`getCurrentlyInjectedNodeIds`, `__recordInjectedNodeIds`, `applyMemoryGraphInjectionUpdate`, `createEmptyInjectionState`) remain in place — existing plugins do not need to change.
 - `getMemoryGraphInjectionState(context)` is re-exported from `read-api.js` for symmetry: it returns the same shape (`alwaysInjectIds`, `recallSelectedIds`, `visibleIds`) as `getInjectionState()`.
-- The factories `getMemoryGraphReadApi(store, context)` and `getMemoryGraphWriteApi(store, context)` do not pollute the legacy namespace; importing them has no side effects beyond loading the respective module.
+- The factories `getMemoryGraphReadApi(store, context)` and `getMemoryGraphWriteApi(store, context, options?)` do not pollute the legacy namespace; importing them has no side effects beyond loading the respective module.
 - Both APIs are marked `@experimental` for 2-3 minor versions per spec §9. Breaking changes during that window are permitted; field semantics will be preserved, but field names and signatures may shift in response to real-world plugin usage before the API is frozen.
 
 ## Performance

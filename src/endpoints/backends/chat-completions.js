@@ -2655,7 +2655,16 @@ router.post('/status', async function (request, statusResponse) {
                 }
             }
         } else {
-            console.error('Chat Completion status check failed. Either Access Token is incorrect or API endpoint is down.');
+            let bodySnippet = '';
+            try {
+                const bodyText = await response.text();
+                bodySnippet = bodyText.length > 500 ? bodyText.slice(0, 500) + '…' : bodyText;
+            } catch { /* body may already be consumed or unreadable */ }
+            console.error(
+                `Chat Completion status check failed (GET ${modelsUrl.toString()} -> ${response.status} ${response.statusText}).`,
+                'Either Access Token is incorrect or API endpoint is down.',
+                bodySnippet ? `Response body: ${bodySnippet}` : '',
+            );
             statusResponse.send({ error: true, data: { data: [] } });
         }
     } catch (e) {

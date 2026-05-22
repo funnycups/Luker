@@ -901,6 +901,8 @@ function renderTraceDetailLines(details = {}) {
  * @property {string} worldInfoString - Complete world info string
  * @property {string[]} worldInfoBeforeEntries - Raw world info entries that go before the prompt
  * @property {string[]} worldInfoAfterEntries - Raw world info entries that go after the prompt
+ * @property {string} [worldInfoBefore] - @deprecated Use worldInfoBeforeEntries. Retained as a joined-string alias for third-party plugin compatibility.
+ * @property {string} [worldInfoAfter] - @deprecated Use worldInfoAfterEntries. Retained as a joined-string alias for third-party plugin compatibility.
  * @property {Array} worldInfoExamples - Array of example entries
  * @property {Array} worldInfoDepth - Array of depth entries
  * @property {Array} anBefore - Array of entries before Author's Note
@@ -912,6 +914,8 @@ function renderTraceDetailLines(details = {}) {
  * @typedef {object} WIActivated
  * @property {string[]} worldInfoBeforeEntries The raw world info entries before the chat.
  * @property {string[]} worldInfoAfterEntries The raw world info entries after the chat.
+ * @property {string} [worldInfoBefore] @deprecated Use worldInfoBeforeEntries. Joined-string alias retained for third-party plugin compatibility.
+ * @property {string} [worldInfoAfter] @deprecated Use worldInfoAfterEntries. Joined-string alias retained for third-party plugin compatibility.
  * @property {any[]} EMEntries The entries for examples.
  * @property {any[]} WIDepthEntries The depth entries.
  * @property {any[]} ANBeforeEntries The entries before Author's Note.
@@ -1816,6 +1820,8 @@ export async function getWorldInfoPrompt(chat, maxContext, isDryRun, globalScanD
         worldInfoString,
         worldInfoBeforeEntries,
         worldInfoAfterEntries,
+        worldInfoBefore: worldInfoBeforeEntries.join('\n'),
+        worldInfoAfter: worldInfoAfterEntries.join('\n'),
         worldInfoExamples: activatedWorldInfo.EMEntries ?? [],
         worldInfoDepth: activatedWorldInfo.WIDepthEntries ?? [],
         anBefore: activatedWorldInfo.ANBeforeEntries ?? [],
@@ -8805,6 +8811,8 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
         return {
             worldInfoBeforeEntries: [],
             worldInfoAfterEntries: [],
+            worldInfoBefore: '',
+            worldInfoAfter: '',
             WIDepthEntries: [],
             EMEntries: [],
             ANBeforeEntries: [],
@@ -9587,6 +9595,8 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
     return {
         worldInfoBeforeEntries: [...WIBeforeEntries],
         worldInfoAfterEntries: [...WIAfterEntries],
+        worldInfoBefore: WIBeforeEntries.length ? WIBeforeEntries.join('\n') : '',
+        worldInfoAfter: WIAfterEntries.length ? WIAfterEntries.join('\n') : '',
         EMEntries,
         WIDepthEntries,
         ANBeforeEntries: ANTopEntries,

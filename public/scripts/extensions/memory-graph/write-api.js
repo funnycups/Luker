@@ -18,6 +18,36 @@
 
 import { applyExtractionOpsImpl, createRollupWithChildren } from './main.js';
 
+// Accept both the Layer-1 public shape `{ target: { id, ref }, relation, direction }`
+// (symmetric with deleteLinks and documented in extension-api/memory-graph.md)
+// and the lower-level ExtractionOp shape `{ targetNodeId, targetRef, relation, direction }`
+// that `applyExtractedLinks` ultimately consumes. The LLM tool-call path
+// (orchestrator memory_link_upsert) feeds us the latter; third-party agents
+// reading the docs feed us the former. Normalize to ExtractionOp shape before
+// handing off so downstream stays single-shape.
+function normalizeLinkSpec(link) {
+    if (!link || typeof link !== 'object') return link;
+    if (link.target && typeof link.target === 'object'
+        && (link.target.id || link.target.ref)
+        && link.targetNodeId === undefined
+        && link.targetRef === undefined
+        && link.target_node_id === undefined
+        && link.target_ref === undefined) {
+        const { target, ...rest } = link;
+        return {
+            ...rest,
+            targetNodeId: target.id || '',
+            targetRef: target.ref || '',
+        };
+    }
+    return link;
+}
+
+function normalizeLinkList(links) {
+    if (!Array.isArray(links)) return links;
+    return links.map(normalizeLinkSpec);
+}
+
 export function getMemoryGraphWriteApi(store, context = null, { onCommit = null } = {}) {
     function resolveStore() {
         return (store && typeof store === 'object') ? store : null;
@@ -54,7 +84,7 @@ export function getMemoryGraphWriteApi(store, context = null, { onCommit = null 
             type,
             title: title || '',
             fields: fields || {},
-            ...(Array.isArray(links) ? { links } : {}),
+            ...(Array.isArray(links) ? { links: normalizeLinkList(links) } : {}),
             ...(ref ? { ref } : {}),
         };
         const { store: mutated, result } = applyOne('createNode', op);
@@ -101,7 +131,7 @@ export function getMemoryGraphWriteApi(store, context = null, { onCommit = null 
             op: 'link_upsert',
             sourceNodeId: source.id || '',
             sourceRef: source.ref || '',
-            links,
+            links: normalizeLinkList(links),
         };
         const { result } = applyOne('upsertLinks', op);
         const applied = result.applied.length;

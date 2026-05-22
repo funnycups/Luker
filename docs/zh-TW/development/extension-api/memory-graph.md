@@ -5,7 +5,7 @@
 > 入口：
 > - **推薦：** `getExtensionApi('memory-graph').openSession(context)`，來自 `public/scripts/extensions.js`（會話外觀）
 > - 底層：`getMemoryGraphReadApi(store, context)`，來自 `public/scripts/extensions/memory-graph/read-api.js`（讀工廠）
-> - 底層：`getMemoryGraphWriteApi(store, context)`，來自 `public/scripts/extensions/memory-graph/write-api.js`（寫工廠）
+> - 底層：`getMemoryGraphWriteApi(store, context, options?)`，來自 `public/scripts/extensions/memory-graph/write-api.js`（寫工廠；`options.onCommit` 把變更刷到 floor-state）
 
 ## 會話 API（推薦入口）
 
@@ -29,12 +29,12 @@ const matches = session.findByName({ query: 'Alice' });
 const ranked = session.keywordSearch({ query: 'sword fight in the inn', k: 5 });
 const semantic = await session.vectorSearch({ query: 'betrayal', k: 5 });
 
-// Write
-const { id } = session.createNode({ type: 'event', title: 'Alice draws her sword', fields: { what: '...' } });
-session.editNode({ id, setFields: { who: ['Alice', 'Bob'] } });
-session.upsertLinks({ source: { id }, links: [{ to: 'alice_node', relation: 'about' }] });
-session.deleteLinks({ source: { id }, target: { id: 'bob_node' }, relation: 'about' });
-session.compactNodes({ type: 'event', childIds: [...], summary: '...' });
+// Write —— 每個寫方法都是 async；await 拿到結果。
+const { id } = await session.createNode({ type: 'event', title: 'Alice draws her sword', fields: { what: '...' } });
+await session.editNode({ id, setFields: { who: ['Alice', 'Bob'] } });
+await session.upsertLinks({ source: { id }, links: [{ target: { id: 'alice_node' }, relation: 'about' }] });
+await session.deleteLinks({ source: { id }, target: { id: 'bob_node' }, relation: 'about' });
+await session.compactNodes({ type: 'event', childIds: [...], summary: '...' });
 ```
 
 `'memory-graph'` 這個 extension api 透過 Luker 的 `registerExtensionApi(name, api)` 機制發布 —— `card-app` 等其他 Luker 擴充用的是同一套。第三方擴充接入記憶圖時應統一走 `getExtensionApi('memory-graph')`，不要直接 import `memory-graph/*.js`。
@@ -50,7 +50,8 @@ session.compactNodes({ type: 'event', childIds: [...], summary: '...' });
 ### `openSession` 回傳 `null` 的情境
 
 - 記憶圖擴充沒載入（`getExtensionApi('memory-graph')` 回傳了 `undefined`）。
-- context 缺少 `createFloorState`（典型情況是測試執行器沒有把 SillyTavern context mock 完整）。
+- context 無法解析出聊天目標（缺 `chatId`，或缺 `createFloorState` —— 典型情況是測試執行器沒有把 SillyTavern context mock 完整）。
+- 從 floor-state 載入執行期 store 失敗（罕見；會以 `console.warn` 記錄）。
 
 orchestrator 的 `memory_*` loop 工具會把 `null` 會話翻譯成 `ToolError(MEMORY_DISABLED)`，以便 agent 改走別的路線。
 
@@ -180,11 +181,11 @@ interface NeighborView {
 interface EdgeSummaryView {
     degree: number;
     relations: ReadonlyArray<{ relation: string; direction: 'in' | 'out'; count: number }>;
-    sample_neighbors: ReadonlyArray<{ id: string; type: string; title: string }>;
+    sample_neighbors: ReadonlyArray<{ id: string; type: string; title: string; to_seq: number }>;
 }
 ```
 
-原生召回 LLM 每列候選看到的精簡邊 view。按 `(relation, direction)` 配對聚合計數；`sample_neighbors` 是去重後的鄰居節點的有限取樣（預設 8 個）。欄位名用 snake_case 以匹配原生 LLM prompt 區塊。
+原生召回 LLM 每列候選看到的精簡邊 view。按 `(relation, direction)` 配對聚合計數；`sample_neighbors` 是去重後的鄰居節點的有限取樣（預設 8 個），每項帶 `to_seq`，呼叫端據此按時間近度排序。欄位名用 snake_case 以匹配原生 LLM prompt 區塊。
 
 ### InjectionState
 
@@ -742,15 +743,21 @@ const candidateRows = candidates.map(view => api.getNodeBrief(view.id, {
 
 寫 API 是給想要直接編輯記憶圖的第三方 agent 準備的 Layer-1 入口 —— 例如在兩輪之間執行、不依賴內建 extractor 的 curator agent。會話外觀暴露了常用寫方法；底層的 `getMemoryGraphWriteApi(store, context)` 工廠就是 `openSession` 內部封裝的物件。
 
-### 工廠：getMemoryGraphWriteApi(store， context)
+### 工廠：getMemoryGraphWriteApi(store， context， options?)
 
 ```js
 import { getMemoryGraphWriteApi } from '/scripts/extensions/memory-graph/write-api.js';
 
 const writeApi = getMemoryGraphWriteApi(store, context);
+// 可選：傳入 onCommit 鉤子，在每次寫成功後持久化 ——
+// `openSession` 內部就是把它接到 `commitSessionMutation`，
+// 讓寫經過與原生 extraction 流水線一樣的 floor-state 路徑落盤。
+const persistingApi = getMemoryGraphWriteApi(store, context, {
+    onCommit: async (s) => { await myFlush(s); },
+});
 ```
 
-回傳一個凍結物件，暴露下文記錄的方法。工廠綁定到傳入的 `store` 參照 —— 傳入你從 floor-state 載入器拿到的 live store。對 `null` store 呼叫方法會丟出 `{ code: 'MEMORY_STORE_MISSING' }`。第三方擴充通常應該用 `openSession`，而不是直接建構這個工廠。
+回傳一個凍結物件，暴露下文記錄的方法。工廠綁定到傳入的 `store` 參照 —— 傳入你從 floor-state 載入器拿到的 live store。對 `null` store 呼叫方法會丟出 `{ code: 'MEMORY_STORE_MISSING' }`。第三方擴充通常應該用 `openSession`，而不是直接建構這個工廠 —— `openSession` 已經替你接好了 `onCommit`。省略 `onCommit` 的呼叫端拿到的是舊版純記憶體語意（變更停留在 `store`，但不會持久化）。
 
 ### 推薦入口：applyExtractionBatch(options)
 
@@ -773,7 +780,7 @@ const writeApi = getMemoryGraphWriteApi(store, context);
 **最小範例：**
 
 ```js
-const { applied, rejected } = writeApi.applyExtractionBatch({
+const { applied, rejected } = await writeApi.applyExtractionBatch({
     ops: [
         { op: 'create', type: 'character_sheet', ref: 'c1', fields: { name: 'Eileen', aliases: ['艾琳'] } },
         { op: 'link_upsert', sourceRef: 'c1', links: [{ targetNodeId: 'event_42', relation: 'mentions' }] },
@@ -797,7 +804,7 @@ console.log(applied.length, 'applied;', rejected.length, 'rejected');
 **最小範例：**
 
 ```js
-const { id } = writeApi.createNode({
+const { id } = await writeApi.createNode({
     type: 'character_sheet',
     title: 'Eileen',
     fields: { name: 'Eileen', aliases: ['艾琳'] },
@@ -819,7 +826,7 @@ const { id } = writeApi.createNode({
 **最小範例：**
 
 ```js
-const { ok } = writeApi.editNode({
+const { ok } = await writeApi.editNode({
     id: 'n_eileen',
     setFields: { profession: 'healer' },
 });
@@ -839,7 +846,7 @@ const { ok } = writeApi.editNode({
 **最小範例：**
 
 ```js
-const { ok } = writeApi.deleteNode({ id: 'n_obsolete' });
+const { ok } = await writeApi.deleteNode({ id: 'n_obsolete' });
 ```
 
 ### upsertLinks(options)
@@ -858,7 +865,7 @@ const { ok } = writeApi.deleteNode({ id: 'n_obsolete' });
 **最小範例：**
 
 ```js
-const { applied } = writeApi.upsertLinks({
+const { applied } = await writeApi.upsertLinks({
     source: { id: 'n_eileen' },
     links: [
         { target: { id: 'event_42' }, relation: 'mentions' },
@@ -882,7 +889,7 @@ const { applied } = writeApi.upsertLinks({
 **最小範例：**
 
 ```js
-const { removed } = writeApi.deleteLinks({
+const { removed } = await writeApi.deleteLinks({
     source: { id: 'n_eileen' },
     target: { id: 'event_42' },
     relation: 'mentions',
@@ -912,7 +919,7 @@ if (groups.length > 0) {
     const group = groups[0];
     const briefs = group.childIds.map(id => readApi.getNodeBrief(id));
     const summary = await myLLM.summarize(briefs);
-    const { rollupNodeId } = writeApi.compactNodes({
+    const { rollupNodeId } = await writeApi.compactNodes({
         type: 'event',
         childIds: group.childIds,
         summary,
@@ -924,7 +931,7 @@ if (groups.length > 0) {
 
 - `external-api.js` 的舊匯出（`getCurrentlyInjectedNodeIds`、`__recordInjectedNodeIds`、`applyMemoryGraphInjectionUpdate`、`createEmptyInjectionState`）仍然保留 —— 既有外掛無需更動。
 - `getMemoryGraphInjectionState(context)` 也從 `read-api.js` 重新匯出以保持對稱：它回傳與 `getInjectionState()` 同形態（`alwaysInjectIds`、`recallSelectedIds`、`visibleIds`）的結果。
-- 工廠 `getMemoryGraphReadApi(store, context)` 與 `getMemoryGraphWriteApi(store, context)` 不汙染舊命名空間；import 它們除了載入對應模組之外沒有任何副作用。
+- 工廠 `getMemoryGraphReadApi(store, context)` 與 `getMemoryGraphWriteApi(store, context, options?)` 不汙染舊命名空間；import 它們除了載入對應模組之外沒有任何副作用。
 - 兩個 API 都依規範 §9 被標記為 `@experimental`，持續 2-3 個 minor 版本。該視窗內允許破壞性變更；欄位語意會保留，但欄位名與簽名可能根據真實外掛使用回饋而調整，直到 API 凍結為止。
 
 ## 效能
