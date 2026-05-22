@@ -126,3 +126,73 @@ test.describe('Iter-studio workspace split — CPA', () => {
         await page.keyboard.press('Escape');
     });
 });
+
+test.describe('Iter-studio workspace split — MG Schema', () => {
+    test.setTimeout(90000);
+
+    test('MG Schema: workspace mounts with split layout + preview + auto-apply control', async ({ page }) => {
+        await awaitMainUI(page);
+        await ensureExtensionsDrawerOpen(page);
+        await ensureInlineDrawerOpen(page, 'memory_graph_settings');
+
+        const openBtn = page.locator('#luker_rpg_memory_open_schema_studio');
+        await expect(openBtn).toBeVisible({ timeout: 10000 });
+        await openBtn.click();
+
+        const popup = page.locator('.mg_schema_it_popup.luker-iter-workspace').first();
+        await expect(popup).toBeVisible({ timeout: 10000 });
+
+        // Structural assertions: split grid + chat pane + preview pane + resizer.
+        await expect(popup.locator('.luker-iter-workspace-grid')).toBeVisible();
+        await expect(popup.locator('.luker-iter-workspace-chat')).toBeVisible();
+        await expect(popup.locator('[data-iter-preview-pane]')).toBeVisible();
+        await expect(popup.locator('.luker-iter-workspace-resizer')).toHaveCount(1);
+
+        // Auto-apply control is mounted in the composer row, unchecked by default.
+        const autoApply = popup.locator('[data-mg-schema-it-action="toggle-auto-apply"]');
+        await expect(autoApply).toHaveCount(1);
+        await expect(autoApply).not.toBeChecked();
+
+        // Tab bar exists (display: none on desktop, but the elements are mounted).
+        await expect(popup.locator('[data-iter-action="switch-tab"][data-iter-tab="chat"]')).toHaveCount(1);
+        await expect(popup.locator('[data-iter-action="switch-tab"][data-iter-tab="preview"]')).toHaveCount(1);
+
+        // Preview pane has content — at minimum the Schema heading (or the
+        // 'No schema loaded' fallback). The active locale may be en/zh-cn/zh-tw.
+        const previewText = await popup.locator('[data-iter-preview-pane]').textContent();
+        expect(previewText || '').toMatch(/Schema|分类|分類|No schema loaded|未加载|未載入/);
+
+        // Toggle auto-apply, confirm the checkbox tracks state.
+        await autoApply.check();
+        await expect(autoApply).toBeChecked();
+        await autoApply.uncheck();
+        await expect(autoApply).not.toBeChecked();
+
+        await page.keyboard.press('Escape');
+    });
+
+    test('MG Schema: send a turn, preview reflects pending change (requires connection profile)', async ({ page }) => {
+        await awaitMainUI(page);
+        await ensureConnectionProfile(page);
+
+        await ensureExtensionsDrawerOpen(page);
+        await ensureInlineDrawerOpen(page, 'memory_graph_settings');
+
+        const openBtn = page.locator('#luker_rpg_memory_open_schema_studio');
+        await openBtn.click();
+
+        const popup = page.locator('.mg_schema_it_popup.luker-iter-workspace').first();
+        await expect(popup).toBeVisible({ timeout: 10000 });
+
+        await popup.locator('[data-mg-schema-it-input]').fill('Add a new column called "mood" of type string to the character category');
+        await popup.locator('[data-mg-schema-it-action="send"]').click();
+
+        // Wait for pending edits to surface. The MG sandbox-diff emits a single
+        // coarse set('', newSchema) so the preview's per-category change
+        // detection runs against the JSON-equality fallback path.
+        await expect(popup.locator('.mg_schema_it_pending')).toBeVisible({ timeout: 60000 });
+        await expect(popup.locator('[data-iter-preview-pane] .pending-change')).toBeVisible({ timeout: 5000 });
+
+        await page.keyboard.press('Escape');
+    });
+});

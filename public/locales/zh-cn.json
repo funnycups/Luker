@@ -5456,4 +5456,7 @@
     ,"Pending applied (preview):": "应用后(预览):"
     ,"Resize columns": "拖动调整宽度"
     ,"New messages while you were on Preview": "在预览页面时收到的新消息"
+    ,"Schema": "Schema"
+    ,"${0} fields": "${0} 个字段"
+    ,"No schema loaded.": "未加载 Schema。"
 }

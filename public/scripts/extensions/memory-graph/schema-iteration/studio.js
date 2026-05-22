@@ -53,6 +53,7 @@
 import { Popup, POPUP_TYPE } from '../../../popup.js';
 import {
     applyEdits,
+    bindIterWorkspaceResizer,
     render as ITER_RENDER,
     runner as ITER_RUNNER,
     textDiff as ITER_TEXT_DIFF,
@@ -96,13 +97,199 @@ function makeSessionId() {
     return `sess_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Workspace preview-pane renderer + diff helpers (file-local).
+//
+// These run at module scope (not inside `openSchemaIterationStudio`) so unit
+// tests can import `_testOnly_renderMgSchemaPreviewPane` directly without
+// instantiating the popup. The renderer is pure: given `live` (schema array)
+// + pending edits, return preview HTML. Snippets B + C from the
+// implementation plan; duplicated rather than extracted per spec §B because
+// the other 4 popups (CPA / Orchestrator / CEA char / CEA editor) each get
+// their own copy.
+//
+// MG sandbox-diff caveat: a single tool call produces one coarse
+// `set('', newSchema)` edit. `computeChangedPathSet` therefore returns
+// `Set([''])` for any non-empty edit batch; the renderer must fall back to
+// per-category JSON equality to figure out which row is actually changed.
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * Apply a single coarse `{ op: 'set', path: '', newValue }` edit by replacing
+ * `live` outright with a deep clone of `newValue`. The shared `applyEdits`
+ * engine is lodash-backed and `lodash.set(target, '', value)` is a no-op, so
+ * sandbox-diff edits would otherwise silently skip — leaving both the manual
+ * Apply button and composer-row auto-apply as UI-only with no commit. Pure
+ * function; caller owns the resulting object.
+ *
+ * @param {*} _live   Current live value (unused; only the new value matters
+ *                    when the engine emits a full-replacement edit).
+ * @param {{op:string, path:string, newValue:*}} edit  The empty-path set edit.
+ * @returns {*} A `structuredClone` of `edit.newValue`.
+ */
+function applyEmptyPathSet(_live, edit) {
+    return structuredClone(edit.newValue);
+}
+
+function computeChangedPathSet(live, pendingEdits) {
+    if (!Array.isArray(pendingEdits) || pendingEdits.length === 0) return new Set();
+    // MG sandbox-diff emits `{ op: 'set', path: '', oldValue, newValue }` for
+    // every tool call. The engine's lodash-backed apply treats path=='' as a
+    // no-op (lodash.set on empty path), and detectConflict reports
+    // `value_drifted`. To get a usable diff for the preview, short-circuit:
+    // if any edit has `path === ''` and a `newValue`, walk `live` vs that
+    // value directly. This bypass is renderer-local — the actual apply path
+    // is unaffected.
+    const emptyPathEdit = pendingEdits.find(e => e?.op === 'set' && e?.path === '' && typeof e?.newValue !== 'undefined');
+    if (emptyPathEdit) {
+        const changed = new Set();
+        walkDiff('', live, emptyPathEdit.newValue, changed);
+        return changed;
+    }
+    let next;
+    try {
+        const cloned = structuredClone(live);
+        const result = applyEdits(pendingEdits, cloned);
+        next = result?.newLive ?? cloned;
+    } catch {
+        return new Set();
+    }
+    const changed = new Set();
+    walkDiff('', live, next, changed);
+    return changed;
+}
+
+function walkDiff(path, a, b, out) {
+    if (a === b) return;
+    if (typeof a !== typeof b || a === null || b === null || typeof a !== 'object') {
+        out.add(path);
+        return;
+    }
+    const keys = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
+    for (const k of keys) {
+        const childPath = path ? `${path}.${k}` : k;
+        walkDiff(childPath, a?.[k], b?.[k], out);
+    }
+}
+
+function truncateForPreview(str, max = 200) {
+    if (typeof str !== 'string') str = String(str ?? '');
+    return str.length > max ? str.slice(0, max) + '…' : str;
+}
+
+/**
+ * Render the right-pane HTML for the MG schema workspace preview. Pure
+ * function. Tolerates both the unit-test fixture shape (`name`, `fields[]`
+ * objects) and the real production shape (`label`, `tableColumns[]` strings)
+ * — the latter is what `normalizeNodeTypeSchema` actually emits.
+ *
+ * @param {Array|null} live         The current schema array, or null.
+ * @param {Array} pendingEdits      Edits from the latest LLM round.
+ * @param {Function} [tFn]          Optional i18n function (string → string).
+ * @returns {string} HTML.
+ */
+function renderMgSchemaPreviewPane(live, pendingEdits, tFn) {
+    const t = typeof tFn === 'function' ? tFn : (s) => String(s ?? '');
+    if (!live || (Array.isArray(live) && live.length === 0)) {
+        return `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('No schema loaded.'))}</div>`;
+    }
+    const edits = Array.isArray(pendingEdits) ? pendingEdits : [];
+    const changed = computeChangedPathSet(live, edits);
+    let next = live;
+    const emptyPathEdit = edits.find(e => e?.op === 'set' && e?.path === '' && typeof e?.newValue !== 'undefined');
+    if (emptyPathEdit) {
+        next = emptyPathEdit.newValue;
+    } else {
+        try {
+            if (edits.length > 0) {
+                const cloned = structuredClone(live);
+                const r = applyEdits(edits, cloned);
+                next = r?.newLive ?? cloned;
+            }
+        } catch { /* fall back to live */ }
+    }
+
+    const categories = Array.isArray(live) ? live : [];
+    // For MG sandbox-diff: any change marks the whole schema dirty;
+    // also do a per-category JSON-equality check against `next`.
+    function categoryChanged(cat, idx) {
+        if (changed.size === 0) return false;
+        if (!changed.has('')) {
+            // Granular diff was emitted — defer to it.
+            // Any path starting with the category index counts.
+            for (const p of changed) {
+                if (p === '' || p === String(idx) || p.startsWith(`${idx}.`)) return true;
+            }
+            return false;
+        }
+        // Coarse sandbox-diff: compare this category against the corresponding
+        // slot in `next` (matched by id when possible, else by index).
+        let nextCat = null;
+        if (Array.isArray(next)) {
+            const id = cat?.id;
+            if (id) {
+                nextCat = next.find(c => c?.id === id) || null;
+            }
+            if (!nextCat) {
+                nextCat = next[idx] || null;
+            }
+        }
+        try { return JSON.stringify(cat) !== JSON.stringify(nextCat); } catch { return true; }
+    }
+
+    function fieldEntries(cat) {
+        if (Array.isArray(cat?.fields)) return cat.fields;
+        if (Array.isArray(cat?.tableColumns)) {
+            return cat.tableColumns.map((col) => ({
+                id: col,
+                label: col,
+                type: 'string',
+                description: '',
+            }));
+        }
+        return [];
+    }
+
+    const catBlocks = categories.slice(0, 50).map((cat, idx) => {
+        const isChanged = categoryChanged(cat, idx);
+        const cls = isChanged
+            ? 'luker-iter-workspace-preview-row pending-change'
+            : 'luker-iter-workspace-preview-row';
+        const fields = fieldEntries(cat);
+        const fieldRows = fields.slice(0, 30).map((f) => {
+            const fid = typeof f === 'string' ? f : (f?.id || '');
+            const label = typeof f === 'string' ? f : (f?.label || '');
+            const type = typeof f === 'string' ? 'string' : (f?.type || '');
+            const desc = truncateForPreview(typeof f === 'string' ? '' : (f?.description || ''), 80);
+            return `<div class="luker-iter-workspace-preview-row-body" style="margin:2px 0 2px 12px;">${escapeHtmlLocal(fid)} <span class="luker-iter-workspace-preview-row-meta">[${escapeHtmlLocal(type)}]</span> - ${escapeHtmlLocal(label)}${desc ? `<br><span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(desc)}</span>` : ''}</div>`;
+        }).join('');
+        const catName = cat?.name || cat?.label || cat?.id || '?';
+        const fieldCount = fields.length;
+        const fieldsTpl = t('${0} fields');
+        const fieldsLabel = String(fieldsTpl).replace(/\$\{(\d+)\}/g, (_, i) => Number(i) === 0 ? String(fieldCount) : '');
+        return `<details class="${cls}"${idx < 5 ? ' open' : ''}><summary><span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(catName)}</span> <span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(fieldsLabel)}</span></summary>${fieldRows}</details>`;
+    }).join('');
+
+    return `
+        <div class="luker-iter-workspace-preview-section">
+            <div class="luker-iter-workspace-preview-section-title">${escapeHtmlLocal(t('Schema'))}</div>
+            ${catBlocks}
+        </div>
+    `;
+}
+
+export {
+    renderMgSchemaPreviewPane as _testOnly_renderMgSchemaPreviewPane,
+    applyEmptyPathSet as _testOnly_applyEmptyPathSet,
+};
+
 function createNewSession() {
     const now = Date.now();
     return {
         id: makeSessionId(),
         title: '',
         messages: [],
-        surfaceState: { historyOpen: false },
+        surfaceState: { historyOpen: false, autoApply: false },
         updatedAt: now,
         createdAt: now,
         summary: '',
@@ -114,9 +301,24 @@ function createNewSession() {
  * to subordinate `[data-mg-schema-it-*]` slots so we never re-mount the
  * textarea (which would lose focus + the in-progress draft).
  */
-function buildPopupHtml({ popupId, title, historyOpen, historyLabel, newSessionLabel, clearAllLabel, sendLabel, composerPlaceholder }) {
+function buildPopupHtml({
+    popupId,
+    title,
+    historyOpen,
+    historyLabel,
+    newSessionLabel,
+    clearAllLabel,
+    sendLabel,
+    composerPlaceholder,
+    autoApply,
+    autoApplyLabel,
+    chatTabLabel,
+    previewTabLabel,
+    chatBadgeAriaLabel,
+    resizerAriaLabel,
+}) {
     return `
-<div id="${popupId}" class="mg_schema_it_popup">
+<div id="${popupId}" class="mg_schema_it_popup luker-iter-workspace" data-iter-layout="split" data-iter-active-tab="chat">
     <div class="mg_schema_it_title">${escapeHtmlLocal(title)}</div>
     <details class="mg_schema_it_history" data-mg-schema-it-history${historyOpen ? ' open' : ''}>
         <summary>${escapeHtmlLocal(historyLabel)}</summary>
@@ -126,11 +328,36 @@ function buildPopupHtml({ popupId, title, historyOpen, historyLabel, newSessionL
             <button class="menu_button menu_button_small" data-mg-schema-it-action="clear-history">${escapeHtmlLocal(clearAllLabel)}</button>
         </div>
     </details>
-    <div class="mg_schema_it_messages" data-mg-schema-it-messages></div>
-    <div class="mg_schema_it_pending" data-mg-schema-it-pending hidden></div>
-    <div class="mg_schema_it_composer">
-        <textarea class="text_pole" rows="2" data-mg-schema-it-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
-        <button class="menu_button" data-mg-schema-it-action="send">${escapeHtmlLocal(sendLabel)}</button>
+
+    <div class="luker-iter-workspace-tabs" role="tablist">
+        <button type="button" class="luker-iter-workspace-tab active" role="tab" aria-selected="true" data-iter-action="switch-tab" data-iter-tab="chat">
+            <span class="luker-iter-workspace-tab-label">${escapeHtmlLocal(chatTabLabel)}</span>
+            <span class="luker-iter-workspace-tab-badge" data-iter-chat-badge hidden aria-label="${escapeHtmlLocal(chatBadgeAriaLabel)}"></span>
+        </button>
+        <button type="button" class="luker-iter-workspace-tab" role="tab" aria-selected="false" data-iter-action="switch-tab" data-iter-tab="preview">
+            <span class="luker-iter-workspace-tab-label">${escapeHtmlLocal(previewTabLabel)}</span>
+        </button>
+    </div>
+
+    <div class="luker-iter-workspace-grid">
+        <div class="luker-iter-workspace-chat" data-iter-pane="chat">
+            <div class="mg_schema_it_messages" data-mg-schema-it-messages></div>
+            <div class="mg_schema_it_pending" data-mg-schema-it-pending hidden></div>
+            <div class="mg_schema_it_composer">
+                <textarea class="text_pole" rows="2" data-mg-schema-it-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
+                <div class="mg_schema_it_composer_actions">
+                    <label class="mg_schema_it_composer_auto_apply">
+                        <input type="checkbox" data-mg-schema-it-action="toggle-auto-apply"${autoApply ? ' checked' : ''}>
+                        <span>${escapeHtmlLocal(autoApplyLabel)}</span>
+                    </label>
+                    <div class="mg_schema_it_composer_buttons">
+                        <button class="menu_button" data-mg-schema-it-action="send">${escapeHtmlLocal(sendLabel)}</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="luker-iter-workspace-resizer" data-iter-resizer aria-label="${escapeHtmlLocal(resizerAriaLabel)}"></div>
+        <div class="luker-iter-workspace-preview" data-iter-pane="preview" data-iter-preview-pane></div>
     </div>
 </div>`;
 }
@@ -263,9 +490,13 @@ export async function openSchemaIterationStudio(deps) {
     async function loadSession(id) {
         const loaded = await sessionStore.load(id);
         if (!loaded) return;
+        const surface = loaded.surfaceState || {};
         state.session = {
             ...loaded,
-            surfaceState: { historyOpen: false, ...(loaded.surfaceState || {}) },
+            surfaceState: {
+                historyOpen: !!surface.historyOpen,
+                autoApply: !!surface.autoApply,
+            },
         };
         state.pendingEdits = [];
         await render();
@@ -448,6 +679,26 @@ export async function openSchemaIterationStudio(deps) {
         // Send / Stop button label
         const $sendBtn = $root.find('[data-mg-schema-it-action="send"]');
         $sendBtn.text(state.isBusy ? t('Stop') : t('Send'));
+
+        // Workspace preview pane. Wrapped in try/catch so a malformed live
+        // schema or edit shape can't blank the workspace.
+        try {
+            const $previewPane = $root.find('[data-iter-preview-pane]');
+            if ($previewPane.length) {
+                const previewHtml = renderMgSchemaPreviewPane(
+                    state.live,
+                    state.pendingEdits || [],
+                    t,
+                );
+                $previewPane.html(previewHtml);
+            }
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(`[${MODULE}] preview render failed`, err);
+            $root.find('[data-iter-preview-pane]').html(
+                `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('Preview unavailable'))}</div>`,
+            );
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -603,6 +854,24 @@ export async function openSchemaIterationStudio(deps) {
                 content: t('Suggested actions: ') + names,
             });
         }
+
+        // Mobile workspace: if the user was on the Preview tab, bump the
+        // chat-tab badge so they know new assistant content arrived without
+        // forcing a tab switch.
+        bumpChatBadge();
+
+        // Composer-row auto-apply: if enabled AND this turn produced edits,
+        // apply immediately. Errors are caught locally so the runner's
+        // outer finally still resets isBusy + persists the session.
+        const autoApplyOn = Boolean(state.session.surfaceState?.autoApply);
+        if (autoApplyOn && state.pendingEdits.length > 0) {
+            try {
+                await applyPendingEdits();
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] auto-apply failed`, err);
+            }
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -616,8 +885,20 @@ export async function openSchemaIterationStudio(deps) {
     async function applyPendingEdits() {
         if (state.pendingEdits.length === 0) return;
         await loadLive();
-        const result = applyEdits(state.pendingEdits, state.live);
-        state.live = result?.newLive ?? state.live;
+        // Sandbox-diff emits a single coarse {op:'set', path:'', newValue:<whole schema>}.
+        // lodash.set with empty path is a no-op, so route empty-path edits
+        // around the engine via applyEmptyPathSet — otherwise auto-apply and
+        // the manual Apply button both silently skip the commit.
+        const onlyEdit = state.pendingEdits.length === 1 ? state.pendingEdits[0] : null;
+        const emptyPathEdit = onlyEdit && onlyEdit.op === 'set' && onlyEdit.path === '' && typeof onlyEdit.newValue !== 'undefined'
+            ? onlyEdit
+            : null;
+        if (emptyPathEdit) {
+            state.live = applyEmptyPathSet(state.live, emptyPathEdit);
+        } else {
+            const result = applyEdits(state.pendingEdits, state.live);
+            state.live = result?.newLive ?? state.live;
+        }
         state.pendingEdits = [];
         try {
             await commitLiveToSchema();
@@ -693,6 +974,12 @@ export async function openSchemaIterationStudio(deps) {
         clearAllLabel: t('Clear all'),
         sendLabel: t('Send'),
         composerPlaceholder: t('Describe what to change in the schema...'),
+        autoApply: Boolean(state.session.surfaceState?.autoApply),
+        autoApplyLabel: t('Auto-apply edits'),
+        chatTabLabel: t('Chat'),
+        previewTabLabel: t('Preview'),
+        chatBadgeAriaLabel: t('New messages while you were on Preview'),
+        resizerAriaLabel: t('Resize columns'),
     });
     const popup = new Popup(popupHtml, POPUP_TYPE.DISPLAY, '', {
         wider: true,
@@ -778,11 +1065,79 @@ export async function openSchemaIterationStudio(deps) {
         }
     });
 
+    // ── Workspace events ──────────────────────────────────────────────
+    // Mobile tab switcher — only relevant when the < 900px media query
+    // collapses the grid; on desktop both panes are mounted simultaneously
+    // and the tab bar is hidden via CSS.
+    $root.on('click.mgSchemaIt', '[data-iter-action="switch-tab"]', (e) => {
+        const tab = e.currentTarget?.dataset?.iterTab;
+        if (!tab) return;
+        e.preventDefault();
+        setActiveTab(tab);
+    });
+
+    // Composer-row auto-apply toggle. Persists per-session via surfaceState.
+    // Toggling ON when edits are already pending applies them immediately,
+    // matching the orchestrator's existing behavior.
+    $root.on('change.mgSchemaIt', '[data-mg-schema-it-action="toggle-auto-apply"]', async (e) => {
+        const checked = Boolean(e.currentTarget?.checked);
+        state.session.surfaceState = {
+            ...(state.session.surfaceState || {}),
+            autoApply: checked,
+        };
+        await persistSession();
+        if (checked && state.pendingEdits.length > 0) {
+            try {
+                await applyPendingEdits();
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] auto-apply on toggle failed`, err);
+            }
+        }
+    });
+
+    function setActiveTab(tab) {
+        const root = $root?.[0];
+        if (!root) return;
+        root.dataset.iterActiveTab = tab;
+        root.querySelectorAll('[data-iter-action="switch-tab"]').forEach(btn => {
+            const isActive = btn.dataset.iterTab === tab;
+            btn.classList.toggle('active', isActive);
+            btn.setAttribute('aria-selected', String(isActive));
+        });
+        if (tab === 'chat') {
+            const badge = root.querySelector('[data-iter-chat-badge]');
+            if (badge) {
+                badge.hidden = true;
+                badge.textContent = '';
+            }
+        }
+    }
+
+    function bumpChatBadge() {
+        const root = $root?.[0];
+        if (!root || root.dataset?.iterActiveTab !== 'preview') return;
+        const badge = root.querySelector('[data-iter-chat-badge]');
+        if (!badge) return;
+        const next = (Number(badge.textContent) || 0) + 1;
+        badge.textContent = String(next);
+        badge.hidden = false;
+    }
+
+    // Bind the column resizer. Returns a no-op when grid/splitter are
+    // missing (e.g. during teardown), so the unbind call below is safe
+    // regardless of mount state.
+    const unbindResizer = bindIterWorkspaceResizer($root[0]);
+
     await render();
 
     // Block until the user dismisses the popup. Persist one final time so
     // any in-flight composer / surfaceState changes survive close.
-    await popupPromise;
+    try {
+        await popupPromise;
+    } finally {
+        try { unbindResizer(); } catch { /* ignore */ }
+    }
     try { state.abortController?.abort(); } catch { /* ignore */ }
     try { zoomOverlayUnbind?.(); } catch { /* ignore */ }
     await persistSession();

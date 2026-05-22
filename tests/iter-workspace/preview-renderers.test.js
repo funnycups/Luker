@@ -40,10 +40,15 @@ jest.unstable_mockModule('../../public/scripts/lib/iter-tool-calling.js', () => 
 jest.unstable_mockModule('../../public/scripts/lib/abort-utils.js', () => ({}));
 
 let _testOnly_renderCpaPreviewPane;
+let _testOnly_renderMgSchemaPreviewPane;
+let _testOnly_applyEmptyPathSet;
 
 beforeAll(async () => {
     const mod = await import('../../public/scripts/extensions/completion-preset-assistant/cpa-iteration/studio.js');
     _testOnly_renderCpaPreviewPane = mod._testOnly_renderCpaPreviewPane;
+    const mgMod = await import('../../public/scripts/extensions/memory-graph/schema-iteration/studio.js');
+    _testOnly_renderMgSchemaPreviewPane = mgMod._testOnly_renderMgSchemaPreviewPane;
+    _testOnly_applyEmptyPathSet = mgMod._testOnly_applyEmptyPathSet;
 });
 
 describe('renderCpaPreviewPane', () => {
@@ -97,5 +102,92 @@ describe('renderCpaPreviewPane', () => {
         expect(html).toContain('PresetB');
         expect(html).toContain('data-cpa-it-preview-action="ref-pick"');
         expect(html).toContain('data-cpa-it-ref-name="PresetA"');
+    });
+});
+
+describe('renderMgSchemaPreviewPane', () => {
+    const sampleSchema = [
+        { id: 'character', name: 'Character', fields: [
+            { id: 'name', label: 'Name', type: 'string', description: 'Display name' },
+            { id: 'goals', label: 'Goals', type: 'array', description: 'Current goals' },
+        ] },
+        { id: 'location', name: 'Location', fields: [
+            { id: 'name', label: 'Name', type: 'string', description: '' },
+        ] },
+    ];
+
+    test('renders all categories and field counts', () => {
+        const html = _testOnly_renderMgSchemaPreviewPane(sampleSchema, []);
+        expect(html).toContain('Character');
+        expect(html).toContain('Location');
+        expect(html).toMatch(/2.*field|2.*个字段|2.*個欄位/);
+    });
+
+    test('highlights category when pending edit changes it', () => {
+        // MG sandbox-diff emits `{ op: 'set', path: '', oldValue, newValue }`
+        // (see schema-iteration/tools.js:256-259). The set-op apply uses
+        // `newValue`, not `value`.
+        const edit = {
+            op: 'set',
+            path: '',
+            oldValue: sampleSchema,
+            newValue: [
+                { id: 'character', name: 'Character', fields: [
+                    { id: 'name', label: 'Renamed', type: 'string', description: 'New' },
+                ] },
+                sampleSchema[1],
+            ],
+        };
+        const html = _testOnly_renderMgSchemaPreviewPane(sampleSchema, [edit]);
+        expect(html).toContain('pending-change');
+    });
+
+    test('empty-state when schema is null/empty', () => {
+        const html = _testOnly_renderMgSchemaPreviewPane(null, []);
+        expect(html).toMatch(/no schema|未加载|未載入/i);
+    });
+
+    test('MG: renders production shape (label + tableColumns) correctly', () => {
+        const productionSchema = [
+            { id: 'event', label: 'Event', tableColumns: ['summary', 'mood'], description: 'Things that happen' },
+        ];
+        const html = _testOnly_renderMgSchemaPreviewPane(productionSchema, []);
+        expect(html).toContain('Event');
+        expect(html).toContain('summary');
+        expect(html).toContain('mood');
+        // Should also report the field count from tableColumns
+        expect(html).toMatch(/2\s*fields|2\s*个字段|2\s*個欄位/);
+    });
+});
+
+describe('applyEmptyPathSet (auto-apply unblock)', () => {
+    test('returns a deep clone of newValue (NOT the same reference)', () => {
+        const live = [{ id: 'a', label: 'A', tableColumns: ['x'] }];
+        const newValue = [{ id: 'a', label: 'A renamed', tableColumns: ['x', 'y'] }];
+        const edit = { op: 'set', path: '', oldValue: live, newValue };
+        const result = _testOnly_applyEmptyPathSet(live, edit);
+        expect(result).toEqual(newValue);
+        expect(result).not.toBe(newValue); // structuredClone => different reference
+        // Mutating the clone must NOT touch the source newValue.
+        result[0].label = 'mutated';
+        expect(newValue[0].label).toBe('A renamed');
+    });
+
+    test('actually changes state.live (proves the lodash empty-path no-op is bypassed)', () => {
+        // Simulate the applyPendingEdits flow: hold the prior live, then
+        // replace via the helper. This is the assertion that would FAIL on
+        // the pre-fix codebase where applyEdits silently returns the same ref.
+        let live = [{ id: 'event', label: 'Event', tableColumns: ['summary'] }];
+        const before = live;
+        const newSchema = [
+            { id: 'event', label: 'Event', tableColumns: ['summary', 'mood'] },
+            { id: 'place', label: 'Place', tableColumns: ['name'] },
+        ];
+        const edit = { op: 'set', path: '', oldValue: live, newValue: newSchema };
+        live = _testOnly_applyEmptyPathSet(live, edit);
+        expect(live).not.toBe(before);
+        expect(live).toHaveLength(2);
+        expect(live[0].tableColumns).toEqual(['summary', 'mood']);
+        expect(live[1].id).toBe('place');
     });
 });

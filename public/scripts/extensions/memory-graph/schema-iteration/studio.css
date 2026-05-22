@@ -470,3 +470,24 @@
     .mg_schema_it_toolbar_label { flex-basis: 100%; }
     .mg_schema_it_msg { max-width: 95%; }
 }
+
+/* ── Workspace integration (section 24 host) ───────────────────────────
+   When the popup is mounted in the new split workspace, the composer
+   needs to stack textarea on top of the actions row (auto-apply + Send),
+   instead of the old single-row textarea + button layout. The shared
+   `_composer_actions` rule in luker-studio.css §24 styles the inner row
+   itself; this stanza only flips the outer composer to column flow.
+   --------------------------------------------------------------------- */
+
+.mg_schema_it_popup.luker-iter-workspace .mg_schema_it_composer {
+    flex-direction: column;
+    align-items: stretch;
+}
+
+.mg_schema_it_popup.luker-iter-workspace .mg_schema_it_composer textarea {
+    width: 100%;
+}
+
+.mg_schema_it_popup.luker-iter-workspace .mg_schema_it_composer button {
+    align-self: auto;
+}
