@@ -2612,7 +2612,7 @@ function buildAiIterationSystemPrompt(settings, session = null) {
             'The canonical mutation sub-agent shipped with the default profile is `memory_curator`. It runs post-draft, observes the just-committed turn, queries the memory graph to check what already exists, then writes node/link updates and (if warranted) compacts old events into rollups. Its systemPrompt teaches a specific workflow:',
             '',
             '1. **Phase A — recon + write**: query `memory_schema` / `memory_find_by_name` / `memory_node_brief` to understand current state, then call `memory_node_create / memory_node_edit / memory_node_delete / memory_link_upsert / memory_link_delete` for each grounded change.',
-            '2. **Phase B — compact**: query `memory_compaction_candidates`, judge KEEP/FOLD/DROP, call `memory_compact_nodes`.',
+            '2. **Phase B — compact**: query `memory_compaction_candidates`, for each group run the event summary writing standard\'s 7-step CoT in the response, then call `memory_compact_nodes` (one tool call per group, no batching).',
             '3. **Phase C — done**: emit a terminal no-tool-call round so the main agent gets back control.',
             '',
             'When you design or edit a mutation sub-agent (whether memory_curator itself or a user-authored variant), keep these principles in mind:',

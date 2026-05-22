@@ -11,11 +11,11 @@
 
 export const DEFAULT_PER_TYPE_INSTRUCTIONS = {
     event: [
-        'Event decision: MANDATORY — exactly ONE event node per batch. Even routine turns (路过/休整/闲聊/单次场景) produce a one-line event; compression\'s KEEP/FOLD/DROP filter handles noise at rollup.',
+        'Event decision: MANDATORY — exactly ONE event node per batch. Even routine turns (路过/休整/闲聊/单次场景) produce an event (final summary string can be one line for routine; but the writing standard\'s 7-step CoT in <thought> [1] is still mandatory before the tool call); compression handles routine noise at rollup via the writing standard\'s event retention judgment.',
         'If multiple sub-events happened, merge into one coherent summary.',
         'High-consequence events (契约/誓言/婚约/师徒关系 建立或破裂、不可逆物理状态变化、长期身份/立场变更、新角色登场并被命名、新地点建立长期 controller、获得/转让重要物品) get full causal detail.',
-        'Routine events (单次场景姿态/当前心情/临时性服务关系/对话氛围/被某 KEEP 包含的子动作) get a brief one-line summary so the timeline is continuous; their detail will be dropped at compression.',
-        'Summary must start with "时间：<具体时间>；" using complete in-world date/time and follow the event style standard.',
+        'Routine events (单次场景姿态/当前心情/临时性服务关系/对话氛围/已被某主线事件因果包含的子动作) get a brief final summary string (one line) so the timeline is continuous; their detail will be dropped at compression.',
+        'Summary must start with "时间：<具体时间>；" using complete in-world date/time and follow the event summary writing standard.',
         'Never copy quoted dialogue verbatim into summary — paraphrase to action description.',
     ].join('\n'),
     character_sheet: [
