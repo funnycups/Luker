@@ -5323,4 +5323,13 @@
     ,"Bound lorebook": "綁定世界書"
     ,"No character loaded.": "未載入角色。"
     ,"(click to expand)": "(點擊展開)"
+    ,"World book: ${0}": "世界書：${0}"
+    ,"Auto-apply AI proposed changes": "自動套用 AI 提議的變更"
+    ,"Draft (not applied)": "草稿（未套用）"
+    ,"Recently applied": "最近套用"
+    ,"Entry UID: ${0}": "條目 UID：${0}"
+    ,"Position: ${0}": "位置：${0}"
+    ,"Keys: ${0}": "關鍵詞：${0}"
+    ,"No entries yet.": "暫無條目。"
+    ,"No world book bound": "未綁定世界書"
 }

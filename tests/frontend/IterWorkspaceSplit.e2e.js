@@ -376,3 +376,134 @@ test.describe('Iter-studio workspace split — CEA Character Iteration', () => {
         await page.keyboard.press('Escape');
     });
 });
+
+test.describe('Iter-studio workspace split — CEA Editor', () => {
+    test.setTimeout(90000);
+
+    test('CEA Editor: workspace mounts with split layout + world book viewer + composer-row auto-apply', async ({ page }) => {
+        await awaitMainUI(page);
+        await ensureExtensionsDrawerOpen(page);
+        await ensureInlineDrawerOpen(page, 'character_editor_assistant_settings');
+
+        const openBtn = page.locator('#cea_open_editor_popup');
+        await expect(openBtn).toBeVisible({ timeout: 10000 });
+        await openBtn.click();
+
+        const popup = page.locator('.cea_sync_popup.luker-iter-workspace').first();
+        await expect(popup).toBeVisible({ timeout: 15000 });
+
+        // Structural assertions: split grid + chat pane + preview pane + resizer.
+        await expect(popup.locator('.luker-iter-workspace-grid')).toBeVisible();
+        await expect(popup.locator('.luker-iter-workspace-chat')).toBeVisible();
+        await expect(popup.locator('[data-iter-preview-pane]')).toBeVisible();
+        await expect(popup.locator('.luker-iter-workspace-resizer')).toHaveCount(1);
+
+        // Auto-apply control is mounted in the composer row, unchecked by default.
+        // The CEA editor uses its own naming convention (`-auto-approve` instead
+        // of `-action="toggle-auto-apply"`) because the underlying flow approves
+        // a *batch* of operations, not edits.
+        const autoApply = popup.locator('[data-cea-editor-auto-approve]');
+        await expect(autoApply).toHaveCount(1);
+
+        // Tab bar exists (display: none on desktop, but the elements are mounted).
+        await expect(popup.locator('[data-iter-action="switch-tab"][data-iter-tab="chat"]')).toHaveCount(1);
+        await expect(popup.locator('[data-iter-action="switch-tab"][data-iter-tab="preview"]')).toHaveCount(1);
+
+        // Preview pane content — either the World book section header (if the
+        // active character has a bound lorebook) or the unbound fallback.
+        // Active locale may be en/zh-cn/zh-tw.
+        const previewText = await popup.locator('[data-iter-preview-pane]').textContent();
+        expect(previewText || '').toMatch(/World book|世界书|世界書|No world book|未绑定|未綁定/);
+
+        // Toggle auto-apply, confirm the checkbox tracks state.
+        await autoApply.check();
+        await expect(autoApply).toBeChecked();
+        await autoApply.uncheck();
+        await expect(autoApply).not.toBeChecked();
+
+        await page.keyboard.press('Escape');
+    });
+
+    test('CEA Editor: send a turn, pending block surfaces (requires connection profile)', async ({ page }) => {
+        await awaitMainUI(page);
+        await ensureConnectionProfile(page);
+        await ensureExtensionsDrawerOpen(page);
+        await ensureInlineDrawerOpen(page, 'character_editor_assistant_settings');
+
+        const openBtn = page.locator('#cea_open_editor_popup');
+        await openBtn.click();
+
+        const popup = page.locator('.cea_sync_popup.luker-iter-workspace').first();
+        await expect(popup).toBeVisible({ timeout: 15000 });
+
+        await popup.locator('[data-cea-editor-input]').fill('Add a brief lorebook entry about a forest.');
+        await popup.locator('[data-cea-editor-send]').click();
+
+        // The pending block appears when the LLM responds with operations
+        // ready for approval. Use a wide timeout because the editor calls
+        // tools sequentially per round.
+        await expect(popup.locator('[data-cea-editor-pending]')).not.toBeEmpty({ timeout: 60000 });
+
+        await page.keyboard.press('Escape');
+    });
+});
+
+test.describe('Iter-studio workspace — mobile tab layout', () => {
+    // Pure layout test — uses CPA because it always mounts the workspace
+    // shell and the only dependency is opening the popup. No LLM, no
+    // connection profile, no character — runs on any env with Playwright.
+    test('CPA at 360px viewport: tab bar visible, Chat default, switch to Preview works', async ({ page }) => {
+        await page.setViewportSize({ width: 360, height: 740 });
+        await awaitMainUI(page);
+
+        await ensureExtensionsDrawerOpen(page);
+        await ensureInlineDrawerOpen(page, 'completion_preset_assistant_settings');
+
+        const openBtn = page.locator('#completion_preset_assistant_open');
+        await expect(openBtn).toBeVisible({ timeout: 10000 });
+        await openBtn.click();
+
+        const popup = page.locator('.cpa_it_popup.luker-iter-workspace').first();
+        await expect(popup).toBeVisible({ timeout: 10000 });
+
+        // Tab bar surfaces only on viewports < 900px.
+        const tabBar = popup.locator('.luker-iter-workspace-tabs');
+        await expect(tabBar).toBeVisible();
+
+        // Initial state: data-iter-active-tab="chat", chat tab marked active.
+        await expect(popup).toHaveAttribute('data-iter-active-tab', 'chat');
+        const chatTab = popup.locator('[data-iter-action="switch-tab"][data-iter-tab="chat"]');
+        const previewTab = popup.locator('[data-iter-action="switch-tab"][data-iter-tab="preview"]');
+        await expect(chatTab).toHaveClass(/active/);
+        await expect(previewTab).not.toHaveClass(/active/);
+
+        await expect(popup.locator('[data-iter-pane="chat"]')).toBeVisible();
+        await expect(popup.locator('[data-iter-pane="preview"]')).toBeHidden();
+
+        // Resizer is desktop-only — hidden on mobile via @media (max-width: 900px).
+        await expect(popup.locator('.luker-iter-workspace-resizer')).toBeHidden();
+
+        // Touch target for the auto-apply label must be at least 44x44 px
+        // (the CSS in section 24 enforces min-height: 44px on the label).
+        const autoApply = popup.locator('[data-cpa-it-action="toggle-auto-apply"]');
+        await expect(autoApply).toBeVisible();
+        const autoApplyLabel = popup.locator('.cpa_it_composer_auto_apply');
+        const labelBox = await autoApplyLabel.boundingBox();
+        expect(labelBox).not.toBeNull();
+        expect(labelBox.height).toBeGreaterThanOrEqual(44);
+
+        // Switch to Preview: dataset attr updates, classes flip, panes swap.
+        await previewTab.click();
+        await expect(popup).toHaveAttribute('data-iter-active-tab', 'preview');
+        await expect(previewTab).toHaveClass(/active/);
+        await expect(chatTab).not.toHaveClass(/active/);
+        await expect(popup.locator('[data-iter-pane="preview"]')).toBeVisible();
+        await expect(popup.locator('[data-iter-pane="chat"]')).toBeHidden();
+
+        // Switch back.
+        await chatTab.click();
+        await expect(popup.locator('[data-iter-pane="chat"]')).toBeVisible();
+
+        await page.keyboard.press('Escape');
+    });
+});

@@ -5484,4 +5484,13 @@
     ,"Bound lorebook": "绑定世界书"
     ,"No character loaded.": "未加载角色。"
     ,"(click to expand)": "(点击展开)"
+    ,"World book: ${0}": "世界书：${0}"
+    ,"Auto-apply AI proposed changes": "自动应用 AI 提议的变更"
+    ,"Draft (not applied)": "草稿（未应用）"
+    ,"Recently applied": "最近应用"
+    ,"Entry UID: ${0}": "条目 UID：${0}"
+    ,"Position: ${0}": "位置：${0}"
+    ,"Keys: ${0}": "关键词：${0}"
+    ,"No entries yet.": "暂无条目。"
+    ,"No world book bound": "未绑定世界书"
 }

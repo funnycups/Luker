@@ -45,6 +45,7 @@ let _testOnly_applyEmptyPathSet;
 let _testOnly_renderOrchPreviewPane;
 let _testOnly_orchApplyEmptyPathSet;
 let _testOnly_renderCeaCharPreviewPane;
+let _testOnly_renderCeaEditorPreviewPane;
 
 beforeAll(async () => {
     const mod = await import('../../public/scripts/extensions/completion-preset-assistant/cpa-iteration/studio.js');
@@ -57,6 +58,8 @@ beforeAll(async () => {
     _testOnly_orchApplyEmptyPathSet = orchMod._testOnly_applyEmptyPathSet;
     const ceaCharMod = await import('../../public/scripts/extensions/character-editor-assistant/character-iteration/studio.js');
     _testOnly_renderCeaCharPreviewPane = ceaCharMod._testOnly_renderCeaCharPreviewPane;
+    const ceaEditorMod = await import('../../public/scripts/extensions/character-editor-assistant/editor-preview.js');
+    _testOnly_renderCeaEditorPreviewPane = ceaEditorMod._testOnly_renderCeaEditorPreviewPane;
 });
 
 describe('renderCpaPreviewPane', () => {
@@ -436,5 +439,46 @@ describe('renderCeaCharPreviewPane', () => {
     test('empty-state when live is null', () => {
         const html = _testOnly_renderCeaCharPreviewPane(null, []);
         expect(html).toMatch(/no character|未加载|未載入/i);
+    });
+});
+
+describe('renderCeaEditorPreviewPane', () => {
+    const sampleWi = {
+        name: 'Alice Lore',
+        entries: {
+            '1': { uid: 1, key: ['forest'], position: 0, content: 'A dense woodland east of the village.' },
+            '2': { uid: 2, key: ['dawn'], position: 1, content: 'Morning light through the canopy.' },
+        },
+    };
+
+    test('renders title with world book name', () => {
+        const html = _testOnly_renderCeaEditorPreviewPane(sampleWi, null);
+        expect(html).toContain('Alice Lore');
+    });
+
+    test('renders entry rows for each entry', () => {
+        const html = _testOnly_renderCeaEditorPreviewPane(sampleWi, null);
+        expect(html).toContain('forest');
+        expect(html).toContain('dawn');
+    });
+
+    test('flags pending entries with draft class', () => {
+        // upsert_entry on uid=3 (new) and uid=1 (existing) — the existing entry
+        // gets `pending-change` on its row; the new entry renders as a draft row.
+        const pending = {
+            messageId: 'm1',
+            operations: [
+                { op: 'upsert_entry', payload: { uid: 3, key: ['mist'], content: 'thick mist' } },
+                { op: 'upsert_entry', payload: { uid: 1, key: ['forest'], content: 'A dark forest.' } },
+            ],
+        };
+        const html = _testOnly_renderCeaEditorPreviewPane(sampleWi, pending);
+        expect(html).toContain('mist');
+        expect(html).toContain('pending-change');
+    });
+
+    test('empty-state when no world book bound', () => {
+        const html = _testOnly_renderCeaEditorPreviewPane(null, null);
+        expect(html).toMatch(/no world book|未绑定|未綁定/i);
     });
 });

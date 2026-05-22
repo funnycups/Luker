@@ -57,7 +57,7 @@ export function createCharacterEditorUi(deps) {
         const characterName = String(record?.character?.name || '').trim() || '(unknown)';
         const primaryBook = String(getPrimaryLorebookName(record?.character || {}) || i18n('(empty)'));
         return `
-<div class="luker-studio cea_sync_popup">
+<div class="luker-studio cea_sync_popup luker-iter-workspace" data-iter-layout="split" data-iter-active-tab="chat">
     <div class="luker-studio-header">
         <div class="luker-studio-title">${escapeHtml(i18n('Character Editor'))}</div>
         <div class="luker-studio-meta">
@@ -65,19 +65,40 @@ export function createCharacterEditorUi(deps) {
             <div class="luker-studio-meta-item"><b>${escapeHtml(i18n('Target lorebook'))}:</b> ${escapeHtml(primaryBook)}</div>
         </div>
     </div>
-    <div class="luker-studio-chat" data-cea-editor-chat></div>
-    <div class="luker-studio-composer">
-        <textarea class="text_pole textarea_compact" rows="4" data-cea-editor-input placeholder="${escapeHtml(i18n('Type your requirement to continue this conversation...'))}"></textarea>
-        <div class="luker-studio-composer-buttons">
-            <div class="menu_button menu_button_small luker-studio-primary" data-cea-editor-send>${escapeHtml(i18n('Send'))}</div>
-            <div class="menu_button menu_button_small disabled" data-cea-editor-stop>${escapeHtml(i18n('Stop'))}</div>
-        </div>
+    <div class="luker-iter-workspace-tabs" role="tablist">
+        <button type="button" class="luker-iter-workspace-tab active" role="tab" aria-selected="true" data-iter-action="switch-tab" data-iter-tab="chat">
+            <span class="luker-iter-workspace-tab-label">${escapeHtml(i18n('Chat'))}</span>
+            <span class="luker-iter-workspace-tab-badge" data-iter-chat-badge hidden></span>
+        </button>
+        <button type="button" class="luker-iter-workspace-tab" role="tab" aria-selected="false" data-iter-action="switch-tab" data-iter-tab="preview">
+            <span class="luker-iter-workspace-tab-label">${escapeHtml(i18n('Preview'))}</span>
+        </button>
     </div>
-    <div data-cea-editor-pending></div>
-    <details class="luker-studio-history">
-        <summary>${escapeHtml(i18n('Conversation history'))}</summary>
-        <div class="luker-studio-history-list" data-cea-editor-history></div>
-    </details>
+    <div class="luker-iter-workspace-grid">
+        <div class="luker-iter-workspace-chat" data-iter-pane="chat">
+            <div class="luker-studio-chat" data-cea-editor-chat></div>
+            <div class="luker-studio-composer">
+                <textarea class="text_pole textarea_compact" rows="4" data-cea-editor-input placeholder="${escapeHtml(i18n('Type your requirement to continue this conversation...'))}"></textarea>
+                <div class="luker-studio-composer-actions">
+                    <label class="luker-studio-composer-auto-apply">
+                        <input type="checkbox" data-cea-editor-auto-approve>
+                        <span>${escapeHtml(i18n('Auto-apply AI proposed changes'))}</span>
+                    </label>
+                    <div class="luker-studio-composer-buttons">
+                        <div class="menu_button menu_button_small luker-studio-primary" data-cea-editor-send>${escapeHtml(i18n('Send'))}</div>
+                        <div class="menu_button menu_button_small disabled" data-cea-editor-stop>${escapeHtml(i18n('Stop'))}</div>
+                    </div>
+                </div>
+            </div>
+            <div data-cea-editor-pending></div>
+            <details class="luker-studio-history">
+                <summary>${escapeHtml(i18n('Conversation history'))}</summary>
+                <div class="luker-studio-history-list" data-cea-editor-history></div>
+            </details>
+        </div>
+        <div class="luker-iter-workspace-resizer" data-iter-resizer aria-label="${escapeHtml(i18n('Resize columns'))}"></div>
+        <div class="luker-iter-workspace-preview" data-iter-pane="preview" data-iter-preview-pane></div>
+    </div>
 </div>`;
     }
 

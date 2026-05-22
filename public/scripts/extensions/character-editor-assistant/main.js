@@ -26,6 +26,8 @@ import {
 import { openCharacterIterationStudio } from './character-iteration/studio.js';
 import { createCharacterEditorDiffUi } from './diff-ui.js';
 import { createCharacterEditorUi } from './editor-ui.js';
+import { renderCeaEditorPreviewPane } from './editor-preview.js';
+import { bindIterWorkspaceResizer } from '../../iteration-library/index.js';
 
 const MODULE_NAME = 'character_editor_assistant';
 const UI_BLOCK_ID = 'character_editor_assistant_settings';
@@ -3529,6 +3531,7 @@ async function openCharacterEditorPopup(context = getContext()) {
     let pendingApproval = null;
     let isSending = false;
     let activeRequestAbortController = null;
+    let unbindResizer = () => {};
     const rejectedOperationKeys = new Set();
     try {
         sessionStore = await loadCharacterEditorSessionStore(context, avatar);
@@ -3596,6 +3599,142 @@ async function openCharacterEditorPopup(context = getContext()) {
                 };
                 const renderHistory = () => {
                     history.innerHTML = renderCharacterEditorConversationHistoryItems(sessionStore, currentSessionId);
+                };
+
+                // ── World book preview + workspace shell wiring ───────────────
+                // Section 24 of luker-studio.css mounts this popup as a split
+                // grid; we own the preview pane content (world-book viewer),
+                // the per-popup tab switcher (mobile only), and the auto-apply
+                // checkbox that bypasses the manual "Approve batch" click.
+                const lorebookName = String(getPrimaryLorebookName(record?.character || {}) || '').trim();
+                let currentWorldInfo = null;
+                const refreshWorldInfo = async () => {
+                    if (!lorebookName || typeof context?.loadWorldInfo !== 'function') {
+                        currentWorldInfo = null;
+                        return;
+                    }
+                    try {
+                        const loaded = await context.loadWorldInfo(lorebookName);
+                        currentWorldInfo = loaded && typeof loaded === 'object'
+                            ? { name: lorebookName, entries: loaded.entries || {}, ...loaded }
+                            : null;
+                    } catch (error) {
+                        console.warn(`[${MODULE_NAME}] World info load failed for '${lorebookName}'`, error);
+                        currentWorldInfo = null;
+                    }
+                };
+                const workspaceRoot = instance?.content?.querySelector?.('.cea_sync_popup');
+                const previewSlot = instance?.content?.querySelector?.('[data-iter-preview-pane]');
+                const renderPreview = () => {
+                    if (!previewSlot) return;
+                    try {
+                        previewSlot.innerHTML = renderCeaEditorPreviewPane(currentWorldInfo, pendingApproval, i18n);
+                    } catch (error) {
+                        console.warn(`[${MODULE_NAME}] Preview render failed`, error);
+                        previewSlot.innerHTML = `<div class="luker-iter-workspace-preview-empty">${escapeHtml(i18n('Preview unavailable'))}</div>`;
+                    }
+                };
+                const bumpChatBadge = () => {
+                    if (!workspaceRoot || workspaceRoot.dataset.iterActiveTab !== 'preview') return;
+                    const badge = workspaceRoot.querySelector('[data-iter-chat-badge]');
+                    if (!badge) return;
+                    const next = (Number(badge.textContent) || 0) + 1;
+                    badge.textContent = String(next);
+                    badge.hidden = false;
+                };
+                if (workspaceRoot) {
+                    try {
+                        unbindResizer = bindIterWorkspaceResizer(workspaceRoot) || (() => {});
+                    } catch (error) {
+                        console.warn(`[${MODULE_NAME}] Resizer bind failed`, error);
+                    }
+                    workspaceRoot.querySelectorAll('[data-iter-action="switch-tab"]').forEach((btn) => {
+                        btn.addEventListener('click', (event) => {
+                            const tab = btn.dataset.iterTab;
+                            if (!tab) return;
+                            event.preventDefault();
+                            workspaceRoot.dataset.iterActiveTab = tab;
+                            workspaceRoot.querySelectorAll('[data-iter-action="switch-tab"]').forEach((other) => {
+                                const isActive = other.dataset.iterTab === tab;
+                                other.classList.toggle('active', isActive);
+                                other.setAttribute('aria-selected', String(isActive));
+                            });
+                            if (tab === 'chat') {
+                                const badge = workspaceRoot.querySelector('[data-iter-chat-badge]');
+                                if (badge) {
+                                    badge.hidden = true;
+                                    badge.textContent = '';
+                                }
+                            }
+                        });
+                    });
+                }
+
+                // Auto-approve persisted at extension_settings[MODULE_NAME].editorAutoApply.
+                // Toggling on while a batch is pending triggers it immediately.
+                let autoApprove = Boolean(extension_settings?.[MODULE_NAME]?.editorAutoApply);
+                const autoApproveCheckbox = instance?.content?.querySelector?.('[data-cea-editor-auto-approve]');
+                if (autoApproveCheckbox instanceof HTMLInputElement) {
+                    autoApproveCheckbox.checked = autoApprove;
+                    autoApproveCheckbox.addEventListener('change', () => {
+                        autoApprove = Boolean(autoApproveCheckbox.checked);
+                        if (extension_settings && typeof extension_settings === 'object') {
+                            extension_settings[MODULE_NAME] = extension_settings[MODULE_NAME] || {};
+                            extension_settings[MODULE_NAME].editorAutoApply = autoApprove;
+                            try { saveSettingsDebounced(); } catch { /* save failures are non-fatal */ }
+                        }
+                        if (autoApprove && pendingApproval) {
+                            const snapshot = pendingApproval;
+                            void runApproveBatch(snapshot);
+                        }
+                    });
+                }
+
+                // Shared approve-batch executor — called from the click handler
+                // AND from the auto-approve hook (set right after the LLM round
+                // populates `pendingApproval`).
+                const runApproveBatch = async (snapshot) => {
+                    if (!snapshot || isSending) {
+                        return;
+                    }
+                    pendingApproval = null;
+                    renderPending();
+                    renderPreview();
+                    isSending = true;
+                    syncComposerState();
+                    renderConversation(true, i18n('Applying approved changes...'));
+                    try {
+                        const result = await submitGeneratedOperations(
+                            context,
+                            snapshot.operations,
+                            'character_editor_popup',
+                            { targetAvatar: avatar },
+                        );
+                        const targetMessage = findConversationMessageById(conversationMessages, snapshot?.messageId);
+                        if (targetMessage) {
+                            targetMessage.tool_results = buildToolResultsFromOperationSubmission(snapshot?.toolCalls || [], result);
+                            targetMessage.toolSummary = result.failed > 0
+                                ? i18nFormat('Apply failed: ${0}', String(result.errors[0] || 'unknown error'))
+                                : i18n('Changes applied.');
+                            targetMessage.toolState = result.failed > 0 ? 'partial' : 'completed';
+                            targetMessage.executionResults = clone(result?.results || []);
+                        }
+                        await persistCurrentSession();
+                        await refreshUiState(context);
+                        renderHistory();
+                        await primeActiveCharacterLorebookSnapshot(context);
+                        await refreshWorldInfo();
+                    } catch (error) {
+                        pendingApproval = snapshot;
+                        renderPending();
+                        conversationMessages.push({ role: 'assistant', content: i18nFormat('Apply failed: ${0}', String(error?.message || error || '')) });
+                        await persistCurrentSession();
+                    } finally {
+                        isSending = false;
+                        syncComposerState();
+                        renderConversation(false);
+                        renderPreview();
+                    }
                 };
                 const persistCurrentSession = async ({ setCurrent = true } = {}) => {
                     if (!currentSessionId) {
@@ -3688,6 +3827,15 @@ async function openCharacterEditorPopup(context = getContext()) {
                         } : null;
                         await persistCurrentSession();
                         renderPending();
+                        renderPreview();
+                        bumpChatBadge();
+                        if (autoApprove && pendingApproval) {
+                            const snapshot = pendingApproval;
+                            // Defer to next microtask so the loading state from
+                            // this turn fully unwinds (finally block resets
+                            // isSending) before runApproveBatch tries to set it.
+                            queueMicrotask(() => { void runApproveBatch(snapshot); });
+                        }
                         return true;
                     } catch (error) {
                         conversationMessages.push(isAbortError(error, controller.signal)
@@ -3700,6 +3848,7 @@ async function openCharacterEditorPopup(context = getContext()) {
                                 content: i18nFormat('Model reply failed: ${0}', String(error?.message || error || '')),
                             });
                         await persistCurrentSession();
+                        bumpChatBadge();
                         return false;
                     } finally {
                         if (activeRequestAbortController === controller) {
@@ -3783,6 +3932,7 @@ async function openCharacterEditorPopup(context = getContext()) {
                     isSending = true;
                     syncComposerState();
                     renderPending();
+                    renderPreview();
                     renderConversation(true, i18n('Regenerating message...'));
                     try {
                         await rollbackCharacterEditorConversationMessages(context, removedMessages, { avatar });
@@ -3792,9 +3942,12 @@ async function openCharacterEditorPopup(context = getContext()) {
                         await refreshUiState(context);
                         renderHistory();
                         await primeActiveCharacterLorebookSnapshot(context);
+                        await refreshWorldInfo();
+                        renderPreview();
                     } catch (error) {
                         pendingApproval = previousPendingApproval;
                         renderPending();
+                        renderPreview();
                         notifyError(i18nFormat('Regenerate failed: ${0}', String(error?.message || error || '')));
                         renderConversation(false);
                         return;
@@ -3830,46 +3983,13 @@ async function openCharacterEditorPopup(context = getContext()) {
                         pendingApproval = null;
                         await persistCurrentSession();
                         renderPending();
+                        renderPreview();
                         renderConversation(false);
                         return;
                     }
                     if (action === 'approve-batch') {
                         const snapshot = pendingApproval;
-                        pendingApproval = null;
-                        renderPending();
-                        isSending = true;
-                        syncComposerState();
-                        renderConversation(true, i18n('Applying approved changes...'));
-                        try {
-                            const result = await submitGeneratedOperations(
-                                context,
-                                snapshot.operations,
-                                'character_editor_popup',
-                                { targetAvatar: avatar },
-                            );
-                            const targetMessage = findConversationMessageById(conversationMessages, snapshot?.messageId);
-                            if (targetMessage) {
-                                targetMessage.tool_results = buildToolResultsFromOperationSubmission(snapshot?.toolCalls || [], result);
-                                targetMessage.toolSummary = result.failed > 0
-                                    ? i18nFormat('Apply failed: ${0}', String(result.errors[0] || 'unknown error'))
-                                    : i18n('Changes applied.');
-                                targetMessage.toolState = result.failed > 0 ? 'partial' : 'completed';
-                                targetMessage.executionResults = clone(result?.results || []);
-                            }
-                            await persistCurrentSession();
-                            await refreshUiState(context);
-                            renderHistory();
-                            await primeActiveCharacterLorebookSnapshot(context);
-                        } catch (error) {
-                            pendingApproval = snapshot;
-                            renderPending();
-                            conversationMessages.push({ role: 'assistant', content: i18nFormat('Apply failed: ${0}', String(error?.message || error || '')) });
-                            await persistCurrentSession();
-                        } finally {
-                            isSending = false;
-                            syncComposerState();
-                            renderConversation(false);
-                        }
+                        await runApproveBatch(snapshot);
                     }
                 });
                 history.addEventListener('click', async (event) => {
@@ -3898,6 +4018,7 @@ async function openCharacterEditorPopup(context = getContext()) {
                             sessionStore = upsertCharacterEditorSession(sessionStore, savedSession);
                             renderHistory();
                             renderPending();
+                            renderPreview();
                             renderConversation(false);
                             notifySuccess(i18n('New session'));
                             return;
@@ -3920,6 +4041,7 @@ async function openCharacterEditorPopup(context = getContext()) {
                                 rejectedOperationKeys.add(String(key || '').trim());
                             }
                             renderPending();
+                            renderPreview();
                             renderConversation(false);
                             renderHistory();
                             notifySuccess(i18n('Session loaded.'));
@@ -3944,6 +4066,7 @@ async function openCharacterEditorPopup(context = getContext()) {
                                 rejectedOperationKeys.add(String(key || '').trim());
                             }
                             renderPending();
+                            renderPreview();
                             renderConversation(false);
                             renderHistory();
                             notifySuccess(i18n('Conversation session deleted.'));
@@ -3961,12 +4084,17 @@ async function openCharacterEditorPopup(context = getContext()) {
                 renderPending();
                 syncComposerState();
                 renderHistory();
+                // Initial preview render with optimistic empty state; the async
+                // refresh below replaces it once the lorebook loads.
+                renderPreview();
+                void refreshWorldInfo().then(renderPreview);
             },
             onClosing: () => {
                 if (isSending) {
                     notifyWarning(i18n('Assistant is thinking...'));
                     return false;
                 }
+                try { unbindResizer(); } catch { /* unbind failures non-fatal */ }
                 return true;
             },
         },
