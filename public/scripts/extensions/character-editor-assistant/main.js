@@ -23,8 +23,7 @@ import {
     TOOL_PROTOCOL_STYLE,
     validateParsedToolCalls,
 } from '../function-call-runtime.js';
-import { openIterationStudio } from '../../iteration-studio/index.js';
-import { createCharacterEditorAdapter } from './character-editor-adapter.js';
+import { openCharacterIterationStudio } from './character-iteration/studio.js';
 import { createCharacterEditorDiffUi } from './diff-ui.js';
 import { createCharacterEditorUi } from './editor-ui.js';
 
@@ -107,6 +106,7 @@ function registerLocaleData() {
         'Load': '加载',
         'Current': '当前',
         'New session': '新建会话',
+        '${0} msgs': '${0} 条消息',
         'Session loaded.': '会话已加载。',
         'Delete this conversation session?': '删除这条对话历史？',
         'Conversation session deleted.': '对话历史已删除。',
@@ -194,12 +194,36 @@ function registerLocaleData() {
         '(Current API config)': '（当前 API 配置）',
         '(missing)': '（缺失）',
         // CardApp Studio
-        'CardApp Studio': '卡片应用工作室',
+        'CardApp Studio': 'CardApp Studio',
         'Open CardApp Studio': '打开 CardApp Studio',
         'No character selected or character has no avatar.': '未选择角色或角色没有头像。',
         'CardApp Studio is already open.': 'CardApp Studio 已经打开了。',
         'Live preview shows behind this popup. Use the reload button to refresh.': '实时预览显示在弹窗背景中。使用重新加载按钮刷新。',
         'Reload preview': '重新加载预览',
+        'No files.': '没有文件。',
+        'Code editor unavailable in this build.': '当前构建中代码编辑器不可用。',
+        'Create a new file': '创建新文件',
+        'File already exists: ${0}': '文件已存在：${0}',
+        'Previous lorebook (before this character was last opened)': '上一次的世界书（在本角色被重新打开之前）',
+        'No entries to compare.': '没有条目可对比。',
+        'No differences from reference.': '与参考没有差异。',
+        'File history': '文件历史',
+        'Refresh': '刷新',
+        'Click ↻ to load history': '点击 ↻ 加载历史',
+        'No history yet': '暂无历史',
+        'Loading...': '加载中…',
+        'Rollback to this version': '回滚到此版本',
+        'Rollback to this version? This cannot be undone.': '回滚到此版本？此操作无法撤销。',
+        'Rolled back successfully': '回滚成功',
+        'Rollback failed: ${0}': '回滚失败：${0}',
+        'Failed to load history: ${0}': '加载历史失败：${0}',
+        'AI': '对话',
+        'Code': '代码',
+        'Preview': '预览',
+        'Auto-apply': '自动应用',
+        'Auto-apply: skip approval, apply AI edits immediately': '自动应用：跳过审批，AI 编辑立即生效',
+        'Auto-apply enabled: AI edits will apply without approval.': '自动应用已开启：AI 编辑将无需审批直接生效。',
+        'Auto-apply disabled: AI edits will require approval.': '自动应用已关闭：AI 编辑需要先审批。',
         'Saved ${0}': '已保存 ${0}',
         'Failed to save: ${0}': '保存失败：${0}',
         'Created ${0}': '已创建 ${0}',
@@ -267,6 +291,7 @@ function registerLocaleData() {
         'Load': '載入',
         'Current': '當前',
         'New session': '新建會話',
+        '${0} msgs': '${0} 則訊息',
         'Session loaded.': '會話已載入。',
         'Delete this conversation session?': '刪除這條對話歷史？',
         'Conversation session deleted.': '對話歷史已刪除。',
@@ -354,12 +379,36 @@ function registerLocaleData() {
         '(Current API config)': '（目前 API 配置）',
         '(missing)': '（缺失）',
         // CardApp Studio
-        'CardApp Studio': '卡片應用工作室',
+        'CardApp Studio': 'CardApp Studio',
         'Open CardApp Studio': '開啟 CardApp Studio',
         'No character selected or character has no avatar.': '未選擇角色或角色沒有頭像。',
         'CardApp Studio is already open.': 'CardApp Studio 已經開啟了。',
         'Live preview shows behind this popup. Use the reload button to refresh.': '即時預覽顯示在彈窗背景中。使用重新載入按鈕刷新。',
         'Reload preview': '重新載入預覽',
+        'No files.': '沒有檔案。',
+        'Code editor unavailable in this build.': '目前建置中程式碼編輯器不可用。',
+        'Create a new file': '建立新檔案',
+        'File already exists: ${0}': '檔案已存在：${0}',
+        'Previous lorebook (before this character was last opened)': '上次的世界書（在本角色被重新開啟之前）',
+        'No entries to compare.': '沒有條目可對比。',
+        'No differences from reference.': '與參考沒有差異。',
+        'File history': '檔案歷史',
+        'Refresh': '重新整理',
+        'Click ↻ to load history': '點擊 ↻ 載入歷史',
+        'No history yet': '暫無歷史',
+        'Loading...': '載入中…',
+        'Rollback to this version': '回滾到此版本',
+        'Rollback to this version? This cannot be undone.': '回滾到此版本？此操作無法復原。',
+        'Rolled back successfully': '回滾成功',
+        'Rollback failed: ${0}': '回滾失敗：${0}',
+        'Failed to load history: ${0}': '載入歷史失敗：${0}',
+        'AI': '對話',
+        'Code': '程式碼',
+        'Preview': '預覽',
+        'Auto-apply': '自動套用',
+        'Auto-apply: skip approval, apply AI edits immediately': '自動套用：跳過審批，AI 編輯立即生效',
+        'Auto-apply enabled: AI edits will apply without approval.': '自動套用已開啟：AI 編輯將無需審批直接生效。',
+        'Auto-apply disabled: AI edits will require approval.': '自動套用已關閉：AI 編輯需要先審批。',
         'Saved ${0}': '已儲存 ${0}',
         'Failed to save: ${0}': '儲存失敗：${0}',
         'Created ${0}': '已建立 ${0}',
@@ -4757,17 +4806,21 @@ function bindHistoryUiActions() {
  */
 async function openCharacterEditorIteration(avatar) {
     const context = getContext();
-    const settings = getSettings();
     const safeAvatar = String(avatar || '').trim();
 
-    const adapter = createCharacterEditorAdapter({
+    const deps = {
         avatar: safeAvatar,
+        context,
         i18n,
         i18nFormat,
         escapeHtml,
         readCard: () => {
             const record = getActiveCharacterRecord(context, { avatar: safeAvatar });
-            return structuredClone(record?.character ?? {});
+            // SillyTavern character objects contain non-cloneable fields
+            // (cached chat instances, DOM-side references, etc.) so structuredClone
+            // throws. JSON round-trip drops everything that isn't serializable,
+            // which is exactly what we want for the adapter's `card` live view.
+            return JSON.parse(JSON.stringify(record?.character ?? {}));
         },
         readLorebook: async () => {
             const record = getActiveCharacterRecord(context, { avatar: safeAvatar });
@@ -4784,10 +4837,13 @@ async function openCharacterEditorIteration(avatar) {
         },
         getSettings,
         saveSettingsDebounced,
-        getContext: () => context,
-    });
+        // Surface the user-configured Lorebook-Sync request preset so
+        // the adapter's `getRequestPresetOptions` hook can return it to
+        // the shell runner.
+        getRequestPresetOptions: () => getLorebookSyncRequestPresetOptions(),
+    };
 
-    await openIterationStudio(adapter, context, settings);
+    await openCharacterIterationStudio(safeAvatar, deps);
 }
 
 jQuery(async () => {

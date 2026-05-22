@@ -11,6 +11,7 @@ export function createCharacterEditorUi(deps) {
         getPrimaryLorebookName,
         getSettings,
         i18n,
+        i18nFormat,
         loadOperationState,
         openCeaExpandedDiff,
         openCharacterEditorPopup,
@@ -42,7 +43,7 @@ export function createCharacterEditorUi(deps) {
 <div class="cea_sync_history_item${isCurrent ? ' active' : ''}">
     <div class="cea_sync_history_item_main">
         <div class="cea_sync_history_item_summary">${escapeHtml(summary)}${isCurrent ? ` <span class="cea_sync_history_item_current">${escapeHtml(i18n('Current'))}</span>` : ''}</div>
-        <div class="cea_sync_history_item_time">${escapeHtml(new Date(Number(item?.updatedAt || Date.now())).toLocaleString())} · ${escapeHtml(String(messageCount))} msgs${pending}</div>
+        <div class="cea_sync_history_item_time">${escapeHtml(new Date(Number(item?.updatedAt || Date.now())).toLocaleString())} · ${escapeHtml(i18nFormat('${0} msgs', String(messageCount)))}${pending}</div>
     </div>
     <div class="cea_sync_history_item_actions">
         ${!isCurrent && sessionId ? `<div class="menu_button menu_button_small" data-cea-editor-history-action="load" data-cea-editor-session-id="${escapeHtml(sessionId)}">${escapeHtml(i18n('Load'))}</div>` : ''}
@@ -59,16 +60,16 @@ export function createCharacterEditorUi(deps) {
 <div class="luker-studio cea_sync_popup">
     <div class="luker-studio-header">
         <div class="luker-studio-title">${escapeHtml(i18n('Character Editor'))}</div>
-    </div>
-    <div class="luker-studio-meta">
-        <div class="luker-studio-meta-item"><b>Character:</b> ${escapeHtml(characterName)}</div>
-        <div class="luker-studio-meta-item"><b>${escapeHtml(i18n('Target lorebook'))}:</b> ${escapeHtml(primaryBook)}</div>
+        <div class="luker-studio-meta">
+            <div class="luker-studio-meta-item"><b>${escapeHtml(i18n('Character'))}:</b> ${escapeHtml(characterName)}</div>
+            <div class="luker-studio-meta-item"><b>${escapeHtml(i18n('Target lorebook'))}:</b> ${escapeHtml(primaryBook)}</div>
+        </div>
     </div>
     <div class="luker-studio-chat" data-cea-editor-chat></div>
     <div class="luker-studio-composer">
         <textarea class="text_pole textarea_compact" rows="4" data-cea-editor-input placeholder="${escapeHtml(i18n('Type your requirement to continue this conversation...'))}"></textarea>
         <div class="luker-studio-composer-buttons">
-            <div class="menu_button menu_button_small" data-cea-editor-send>${escapeHtml(i18n('Send'))}</div>
+            <div class="menu_button menu_button_small luker-studio-primary" data-cea-editor-send>${escapeHtml(i18n('Send'))}</div>
             <div class="menu_button menu_button_small disabled" data-cea-editor-stop>${escapeHtml(i18n('Stop'))}</div>
         </div>
     </div>
@@ -117,11 +118,32 @@ export function createCharacterEditorUi(deps) {
     align-items: center;
     justify-content: center;
 }
-/* CEA-specific: chat message scrollable container */
-.popup .cea_sync_popup .luker-studio-chat { max-height:none; }
-.popup .cea_sync_chat_msg { border:1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 16%, transparent); border-radius:12px; padding:10px 12px; max-height:40vh; overflow-y:auto; overflow-x:hidden; text-align:left; -webkit-overflow-scrolling:touch; touch-action:pan-y; }
-.popup .cea_sync_chat_msg_assistant { background:color-mix(in oklab, var(--SmartThemeBodyColor) 8%, transparent); }
-.popup .cea_sync_chat_msg_user { background:color-mix(in oklab, var(--SmartThemeBodyColor) 18%, transparent); margin-left:12%; }
+/* CEA-specific: chat message scrollable container.
+   The shared .luker-studio-chat caps the list height; inside CEA we let
+   the list grow and scroll each message body individually, because round
+   diffs + tool summaries make individual messages tall. */
+.popup .cea_sync_popup .luker-studio-chat { max-height:none; padding:var(--ls-space-md, 14px); }
+.popup .cea_sync_chat_msg {
+    border: 1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 14%, transparent);
+    border-left: 3px solid transparent;
+    border-radius: 12px;
+    padding: 10px 14px;
+    max-height: 40vh;
+    overflow-y: auto;
+    overflow-x: hidden;
+    text-align: left;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+    transition: border-color 120ms ease;
+}
+.popup .cea_sync_chat_msg_assistant {
+    border-left-color: color-mix(in oklab, #3aab7d 70%, transparent);
+    background: color-mix(in oklab, #3aab7d 6%, transparent);
+}
+.popup .cea_sync_chat_msg_user {
+    border-left-color: color-mix(in oklab, #5b8def 70%, transparent);
+    background: color-mix(in oklab, #5b8def 7%, transparent);
+}
 .popup .cea_sync_chat_msg_user pre { margin:0; white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere; font-family:inherit; }
 .popup .cea_sync_chat_msg_loading { display:flex; align-items:center; gap:8px; opacity:0.9; }
 .popup .cea_sync_analysis_error { color:var(--crimson70); font-weight:600; }
