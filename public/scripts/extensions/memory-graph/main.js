@@ -37,8 +37,7 @@ import {
     buildSchemaExportPayload,
     parseSchemaImportPayload,
 } from './import-export.js';
-import { createSchemaIterationAdapter } from './schema-adapter.js';
-import { open as openIterationStudio } from '../../iteration-studio/index.js';
+import { openSchemaIterationStudio } from './schema-iteration/studio.js';
 import { performFuzzySearch } from '../../power-user.js';
 import { download, getFileText, getStringHash } from '../../utils.js';
 import { newWorldInfoEntryTemplate, setGlobalWorldInfoSelection, world_info_position } from '../../world-info.js';
@@ -13771,7 +13770,10 @@ function bindUi() {
         await openAdvancedSettingsPopup(context, settings, root);
     });
     root.find('#luker_rpg_memory_open_schema_studio').off('click').on('click', async function () {
-        const adapter = createSchemaIterationAdapter({
+        await openSchemaIterationStudio({
+            context,
+            settings,
+            root,
             normalizeNodeTypeSchema,
             getEffectiveNodeTypeSchema,
             persistCharacterSchemaOverride,
@@ -13787,7 +13789,6 @@ function bindUi() {
                 updateSchemaScopeIndicator(uiRoot, nextScopeInfo);
             },
         });
-        await openIterationStudio(adapter, context, settings, root);
     });
     root.find('#luker_rpg_memory_advanced_save_global').off('click').on('click', async function () {
         const info = getAdvancedScopeInfo(context, settings);

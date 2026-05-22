@@ -1,0 +1,472 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later
+ * Copyright (C) 2026 FunnyCups
+ *
+ * Memory Graph Schema — AI iteration popup styles.
+ *
+ * Design language mirrors luker-studio.css (the shared shell stylesheet)
+ * via local tokens — kept namespaced (`mg_schema_it_*`) so the popup remains
+ * self-contained without depending on luker-studio class wrappers.
+ *
+ * Theme-aware: all colors flow through color-mix() of --SmartTheme*
+ * variables with sensible fallbacks for testbed environments.
+ */
+
+.mg_schema_it_popup {
+    --it-space-2xs: 3px;
+    --it-space-xs: 6px;
+    --it-space-sm: 10px;
+    --it-space-md: 14px;
+    --it-space-lg: 18px;
+
+    --it-radius-sm: 6px;
+    --it-radius-md: 10px;
+    --it-radius-lg: 14px;
+    --it-radius-pill: 999px;
+
+    --it-panel-bg: color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 4%, transparent);
+    --it-card-bg: color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 6%, transparent);
+    --it-chip-bg: color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 9%, transparent);
+    --it-hover-bg: color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 12%, transparent);
+
+    --it-border-soft: 1px solid color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 10%, transparent);
+    --it-border: 1px solid color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 16%, transparent);
+    --it-divider: color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 14%, transparent);
+
+    --it-accent-user: #5b8def;
+    --it-accent-assistant: #3aab7d;
+    --it-accent-system: #d99c3a;
+    --it-accent-primary: var(--SmartThemeQuoteColor, #5b8def);
+    --it-accent-danger: #d95560;
+
+    --it-text-strong: 1;
+    --it-text-default: 0.94;
+    --it-text-muted: 0.74;
+
+    --it-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+    --it-motion-fast: 120ms var(--it-ease);
+    --it-motion: 180ms var(--it-ease);
+
+    display: flex;
+    flex-direction: column;
+    max-height: 80vh;
+    min-width: 560px;
+    gap: var(--it-space-md);
+    text-align: start;
+    color: var(--SmartThemeBodyColor, inherit);
+}
+
+.mg_schema_it_popup,
+.mg_schema_it_popup :is(p, ul, ol, li, h1, h2, h3, h4, pre, code, table, th, td, summary, label) {
+    text-align: start;
+}
+
+/* ── Title ─────────────────────────────────────────────────────────── */
+
+.mg_schema_it_title {
+    font-weight: 700;
+    font-size: 1.16rem;
+    line-height: 1.25;
+    letter-spacing: -0.005em;
+    padding-bottom: var(--it-space-sm);
+    border-bottom: 1px solid var(--it-divider);
+}
+
+/* ── History (collapsible) ─────────────────────────────────────────── */
+
+.mg_schema_it_history {
+    flex: 0 0 auto;
+    border: var(--it-border);
+    border-radius: var(--it-radius-lg);
+    padding: var(--it-space-sm) var(--it-space-md);
+    background: var(--it-panel-bg);
+}
+
+.mg_schema_it_history > summary {
+    cursor: pointer;
+    padding: 2px 0;
+    font-weight: 600;
+    list-style: none;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: var(--it-space-xs);
+    opacity: var(--it-text-default);
+}
+.mg_schema_it_history > summary::-webkit-details-marker {
+    display: none;
+}
+.mg_schema_it_history > summary::before {
+    content: '\f078';
+    font-family: 'Font Awesome 6 Free';
+    font-weight: 900;
+    font-size: 0.78em;
+    display: inline-block;
+    opacity: var(--it-text-muted);
+    transition: transform var(--it-motion-fast);
+}
+.mg_schema_it_history[open] > summary::before {
+    transform: rotate(-180deg);
+}
+
+.mg_schema_it_history_items {
+    max-height: 240px;
+    overflow-y: auto;
+    margin: var(--it-space-xs) 0 var(--it-space-xs);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-right: 2px;
+}
+
+.mg_schema_it_history_item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--it-space-xs) var(--it-space-sm);
+    cursor: pointer;
+    border-radius: var(--it-radius-md);
+    border: var(--it-border-soft);
+    background: var(--it-card-bg);
+    gap: var(--it-space-xs);
+    transition: background-color var(--it-motion-fast), border-color var(--it-motion-fast);
+}
+.mg_schema_it_history_item:hover {
+    background: var(--it-hover-bg);
+    border-color: color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 22%, transparent);
+}
+.mg_schema_it_history_item_active {
+    background: color-mix(in oklab, var(--it-accent-primary) 12%, transparent);
+    border-color: color-mix(in oklab, var(--it-accent-primary) 55%, transparent);
+    font-weight: 600;
+}
+
+.mg_schema_it_history_title {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.93rem;
+}
+
+.mg_schema_it_history_delete {
+    flex: 0 0 auto;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--it-accent-danger);
+    font-size: 1.15em;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: var(--it-radius-sm);
+    opacity: 0.55;
+    transition: opacity var(--it-motion-fast), background-color var(--it-motion-fast);
+}
+.mg_schema_it_history_delete:hover {
+    opacity: 1;
+    background: color-mix(in oklab, var(--it-accent-danger) 14%, transparent);
+}
+
+.mg_schema_it_history_empty {
+    padding: var(--it-space-xs) var(--it-space-sm);
+    opacity: var(--it-text-muted);
+    font-style: italic;
+    font-size: 0.9em;
+}
+
+.mg_schema_it_history_actions {
+    margin-top: var(--it-space-xs);
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--it-space-xs);
+}
+
+/* ── Toolbar (reference picker + mode selector) ─────────────────────── */
+
+.mg_schema_it_toolbar {
+    flex: 0 0 auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--it-space-md);
+    padding: var(--it-space-sm) var(--it-space-md);
+    border: var(--it-border);
+    border-radius: var(--it-radius-lg);
+    background: var(--it-panel-bg);
+    align-items: center;
+}
+
+.mg_schema_it_toolbar_label {
+    display: flex;
+    align-items: center;
+    gap: var(--it-space-xs);
+    font-size: 0.92em;
+    min-width: 0;
+    flex: 1 1 260px;
+}
+
+.mg_schema_it_toolbar_label_text {
+    font-weight: 600;
+    opacity: var(--it-text-muted);
+    white-space: nowrap;
+    color: inherit;
+}
+
+.mg_schema_it_reference_select,
+.mg_schema_it_mode_select {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 320px;
+    font-family: inherit;
+    font-size: 0.95em;
+    border-radius: var(--it-radius-sm);
+    transition: border-color var(--it-motion-fast);
+}
+
+.mg_schema_it_reference_select:focus,
+.mg_schema_it_mode_select:focus {
+    border-color: color-mix(in oklab, var(--it-accent-primary) 55%, transparent);
+}
+
+/* ── Message list (chat) ───────────────────────────────────────────── */
+
+.mg_schema_it_messages {
+    flex: 1 1 auto;
+    min-height: 260px;
+    overflow-y: auto;
+    padding: var(--it-space-md);
+    display: flex;
+    flex-direction: column;
+    gap: var(--it-space-sm);
+    border: var(--it-border);
+    border-radius: var(--it-radius-lg);
+    background: color-mix(in oklab, var(--SmartThemeBlurTintColor, #1a1a1a) 96%, transparent);
+    scroll-behavior: smooth;
+}
+
+.mg_schema_it_msg {
+    position: relative;
+    padding: 10px 14px;
+    border-radius: var(--it-radius-md);
+    border: var(--it-border);
+    border-left: 3px solid transparent;
+    max-width: 88%;
+    word-break: break-word;
+    line-height: 1.5;
+    background: var(--it-card-bg);
+    transition: border-color var(--it-motion-fast);
+}
+
+.mg_schema_it_msg_user {
+    align-self: flex-end;
+    margin-left: auto;
+    border-left-color: color-mix(in oklab, var(--it-accent-user) 70%, transparent);
+    background: color-mix(in oklab, var(--it-accent-user) 9%, transparent);
+}
+
+.mg_schema_it_msg_assistant {
+    align-self: flex-start;
+    margin-right: auto;
+    border-left-color: color-mix(in oklab, var(--it-accent-assistant) 70%, transparent);
+    background: color-mix(in oklab, var(--it-accent-assistant) 7%, transparent);
+}
+.mg_schema_it_msg_assistant p:first-child { margin-top: 0; }
+.mg_schema_it_msg_assistant p:last-child { margin-bottom: 0; }
+.mg_schema_it_msg_assistant pre {
+    background: color-mix(in oklab, var(--SmartThemeBlurTintColor, #000) 86%, transparent);
+    padding: 8px 10px;
+    border-radius: var(--it-radius-sm);
+    overflow-x: auto;
+    font-size: 0.9em;
+    font-family: var(--monoFontFamily, ui-monospace, monospace);
+}
+.mg_schema_it_msg_assistant code {
+    background: color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 12%, transparent);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.92em;
+    font-family: var(--monoFontFamily, ui-monospace, monospace);
+}
+
+.mg_schema_it_msg_system {
+    align-self: center;
+    background: color-mix(in oklab, var(--it-accent-system) 9%, transparent);
+    border: 1px dashed color-mix(in oklab, var(--it-accent-system) 50%, transparent);
+    border-left: 3px solid color-mix(in oklab, var(--it-accent-system) 65%, transparent);
+    font-style: italic;
+    font-size: 0.9em;
+    max-width: 95%;
+    white-space: pre-wrap;
+}
+
+/* ── Pending edits ─────────────────────────────────────────────────── */
+
+.mg_schema_it_pending {
+    flex: 0 0 auto;
+    border: 1px solid color-mix(in oklab, var(--it-accent-system) 40%, transparent);
+    border-left: 3px solid color-mix(in oklab, var(--it-accent-system) 70%, transparent);
+    padding: var(--it-space-sm) var(--it-space-md);
+    margin: 0;
+    border-radius: var(--it-radius-md);
+    background: color-mix(in oklab, var(--it-accent-system) 7%, transparent);
+    max-height: 320px;
+    overflow-y: auto;
+}
+
+.mg_schema_it_pending_title {
+    font-weight: 700;
+    margin-bottom: var(--it-space-xs);
+    font-size: 0.96em;
+    opacity: var(--it-text-strong);
+}
+
+.mg_schema_it_pending_card {
+    margin: var(--it-space-xs) 0;
+    padding: var(--it-space-xs) var(--it-space-sm);
+    background: color-mix(in oklab, var(--SmartThemeBlurTintColor, #000) 90%, transparent);
+    border-radius: var(--it-radius-sm);
+    font-size: 0.92em;
+    border: var(--it-border-soft);
+    line-height: 1.5;
+}
+
+.mg_schema_it_pending_card .op {
+    font-weight: 700;
+    margin-right: var(--it-space-xs);
+    color: color-mix(in oklab, var(--it-accent-primary) 75%, var(--SmartThemeBodyColor, #ddd));
+    text-transform: uppercase;
+    font-size: 0.82em;
+    letter-spacing: 0.06em;
+}
+
+.mg_schema_it_pending_card code {
+    background: color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 10%, transparent);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.95em;
+    font-family: var(--monoFontFamily, ui-monospace, monospace);
+}
+
+.mg_schema_it_pending_card .diff_old {
+    color: var(--it-accent-danger);
+    text-decoration: line-through;
+    word-break: break-word;
+}
+
+.mg_schema_it_pending_card .diff_new {
+    color: var(--it-accent-assistant);
+    word-break: break-word;
+}
+
+.mg_schema_it_pending_card .diff_anchor {
+    opacity: var(--it-text-muted);
+    word-break: break-word;
+    font-style: italic;
+}
+
+.mg_schema_it_pending_card .diff_arrow {
+    margin: 0 6px;
+    opacity: var(--it-text-muted);
+}
+
+.mg_schema_it_pending_row {
+    margin: 2px 0 2px 1em;
+}
+
+.mg_schema_it_pending_note {
+    opacity: var(--it-text-muted);
+    font-size: 0.86em;
+    font-style: italic;
+}
+
+.mg_schema_it_pending_actions {
+    margin-top: var(--it-space-sm);
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--it-space-xs);
+}
+
+/* MG schema-specific: list wrapper + per-entry diff folded under each pending card */
+
+.mg_schema_it_pending_list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--it-space-xs);
+}
+
+.mg_schema_it_pending_entry_diff {
+    margin: 4px 0 4px 1em;
+    padding: 4px 0 4px var(--it-space-sm);
+    border-left: 2px solid var(--it-divider);
+}
+.mg_schema_it_pending_entry_diff > summary {
+    cursor: pointer;
+    padding: 2px 0;
+    font-size: 0.88em;
+    opacity: var(--it-text-muted);
+}
+.mg_schema_it_pending_entry_diff[open] > summary {
+    opacity: var(--it-text-default);
+    font-weight: 600;
+}
+.mg_schema_it_pending_entry_diff > summary code {
+    background: transparent;
+    padding: 0;
+}
+
+/* ── Composer ──────────────────────────────────────────────────────── */
+
+.mg_schema_it_composer {
+    flex: 0 0 auto;
+    display: flex;
+    gap: var(--it-space-xs);
+    padding: var(--it-space-md);
+    border: var(--it-border);
+    border-radius: var(--it-radius-lg);
+    background: var(--it-panel-bg);
+    align-items: stretch;
+}
+
+.mg_schema_it_composer textarea {
+    flex: 1 1 auto;
+    min-height: 60px;
+    max-height: 240px;
+    resize: vertical;
+    font-family: inherit;
+    border-radius: var(--it-radius-md);
+    background: color-mix(in oklab, var(--SmartThemeBlurTintColor, #000) 90%, transparent);
+    transition: border-color var(--it-motion-fast);
+}
+
+.mg_schema_it_composer textarea:focus {
+    border-color: color-mix(in oklab, var(--it-accent-primary) 60%, transparent);
+}
+
+.mg_schema_it_composer button {
+    flex: 0 0 auto;
+    min-width: 80px;
+    align-self: stretch;
+    background: color-mix(in oklab, var(--it-accent-primary) 18%, transparent);
+    border-color: color-mix(in oklab, var(--it-accent-primary) 55%, transparent);
+    font-weight: 600;
+    transition: background-color var(--it-motion-fast), border-color var(--it-motion-fast), transform var(--it-motion-fast);
+}
+
+.mg_schema_it_composer button:hover:not(:disabled) {
+    background: color-mix(in oklab, var(--it-accent-primary) 28%, transparent);
+    border-color: color-mix(in oklab, var(--it-accent-primary) 75%, transparent);
+    transform: translateY(-1px);
+}
+
+.mg_schema_it_composer button:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+/* ── Narrow viewport ───────────────────────────────────────────────── */
+
+@media (max-width: 720px) {
+    .mg_schema_it_popup {
+        min-width: 0;
+        gap: var(--it-space-sm);
+    }
+    .mg_schema_it_toolbar_label { flex-basis: 100%; }
+    .mg_schema_it_msg { max-width: 95%; }
+}
