@@ -22,6 +22,8 @@ An Iteration Studio session is a popup chat between the user and an LLM that emi
 
 The shell does not carry a working copy of the artifact. `adapter.live()` is the single authority, called fresh whenever the shell needs the current value.
 
+**When iteration-studio doesn't fit:** if your surface needs viewport ownership (fullscreen IDE, mobile takeover) or already has a mature standalone UI you want to preserve, use **edits-lib Path 2** instead. Path 2 lets you import `applyEdits` / `inverseEdit` / `showConflictResolution` directly without going through the shell. See `edits-lib.md` "Path 2: library-only" — CardApp Studio (`extensions/character-editor-assistant/studio/`) is the in-tree reference.
+
 ## Quick start: minimal adapter
 
 ```js
@@ -119,6 +121,26 @@ Both reference adapters use this pattern. It is good enough to ship but produces
 
 Control tools (continue / finalize) are handled by the shell directly. Override `executeControlToolCall(call, ctx, signal)` only if you want extra behavior on continue or finalize.
 
+## Runner settings
+
+The runner has three knobs that affect every LLM round-trip — retries, requests-per-minute cap, and streaming transport. Adapters opt in via `getRunnerSettings`:
+
+```ts
+getRunnerSettings(settings): RunnerSettings | null
+```
+
+`settings` is the same blob you passed to `openIterationStudio`. The return shape:
+
+```ts
+type RunnerSettings = {
+    toolCallRetryMax?: number;       // default 0 — retries for malformed / missing tool calls
+    rpmLimit?: number;               // default 0 — per-iteration-studio shared RPM cap (0 = unbounded)
+    useStreamingTransport?: boolean; // default false — use generateTaskStream() instead of generateTask()
+};
+```
+
+Returning `null` / `undefined` / `{}` keeps all three defaults. The shell does not read raw fields from your settings blob — this hook is the only path. That lets each adapter expose its own settings UI (CPA surfaces all three; CardApp Studio surfaces only `useStreamingTransport`) without the shell having to know your storage path.
+
 ## Session storage
 
 The adapter owns session persistence. Four hooks:
@@ -155,7 +177,11 @@ Slot hooks the shell calls into:
 | `renderHistoryItem(meta)` | Each session in the history list | yes |
 | `renderPreviewPane(state)` | Right pane of `split` layout | required for `split` |
 | `renderToolbarSlots(state)` | Extra `{start, end}` HTML for the toolbar | optional |
-| `handleAction(actionId, ctx)` | Any click on `[data-iter-action="<id>"]` inside the popup | optional |
+| `handleAction(actionId, ctx)` | Any click / change on `[data-iter-custom-action="<id>"]` inside the popup | optional |
+
+## Preview pane
+
+`renderPreviewPane(state) => string` returns HTML for the right pane in `split` layout. The shell wholesale-replaces the preview pane on every rerender (every chat tick, busy-state toggle, AI tool call, etc.). Good fit: field summaries, tab placeholders, read-only diff lists. Adapters that hold widget state needing to survive rerenders (CodeMirror, charts, etc.) should keep that surface outside the iteration-studio shell (Path 2 library-only — see `edits-lib.md`).
 
 ## Reference
 
@@ -233,7 +259,7 @@ Read these for working end-to-end examples of the contract:
 
 - `public/scripts/extensions/orchestrator/iteration-adapter.js` — wraps the orchestrator's pre-existing mutator with the sandbox-diff pattern. Layout `split`, per-mode session buckets, runtime world-info resolution, custom control tool names.
 - `public/scripts/extensions/memory-graph/schema-adapter.js` — node-type schema editor built directly on the v2 contract. Layout `split`, global-only sessions, apply-to-global / apply-to-character action buttons in the preview pane.
-- `public/scripts/extensions/character-editor-assistant/studio/adapter.js` — CardApp Studio, the per-character custom-frontend editor. Layout `split`, per-character session scope `char_<avatar>`. The live preview is the host CardApp behind the popup (reloaded via the `card-app` extension API); the adapter renders the file tree + CM6 editor in the right pane. All file CRUD goes through the existing `fetchFileList / saveFileContent / deleteFile / renameFile` helpers; the 4 write tools route through `normalizeToolCallToEdit`, the 2 read tools through `executeControlToolCall`.
 - **CEA Character Editor** — `public/scripts/extensions/character-editor-assistant/character-editor-adapter.js`, layout `split`, per-character session scope `char_<avatar>`. Live shape is `{ card, lorebook: { bookName, entries: { [uid]: entry } } }`. Edits character card fields via `mergeCharacterAttributes` and lorebooks via `context.saveWorldInfo`. Registers 3 custom ops (`lorebook_entry_add / update / remove`) keyed by entry uid.
+- **CPA (Completion Preset Assistant)** — `public/scripts/extensions/completion-preset-assistant/cpa-iteration-adapter.js`, layout `popup`, per-preset session scope `preset_<name>`. The live target is the user's currently-selected OpenAI preset (via `context.presets.get`); `commit()` writes back via `context.presets.save(..., { select: true })`. Tool catalog is 7 editable ops (1:1 with edits-lib built-ins) + 3 read-only inspection tools. No preview pane — the per-message edit summary in the chat is the diff.
 
 The adapter contract JSDoc lives in `public/scripts/iteration-studio/adapter.js` — that file is the canonical source for required vs optional fields and exact signatures.

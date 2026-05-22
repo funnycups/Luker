@@ -2219,6 +2219,28 @@ export async function setCharacterState(avatar, namespace, data) {
 }
 
 /**
+ * Remove a per-character state sidecar entry entirely. Use when an
+ * adapter wants to wipe a legacy namespace; `setCharacterState(...null)`
+ * is rejected by the server (the /state/set endpoint requires an object).
+ *
+ * @param {string} avatar
+ * @param {string} namespace
+ * @returns {Promise<void>}
+ */
+export async function deleteCharacterState(avatar, namespace) {
+    const response = await fetch('/api/characters/state/delete', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({ avatar_url: avatar, namespace }),
+        cache: 'no-cache',
+    });
+    if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        throw new Error(`Character state delete failed (${response.status}): ${detail || response.statusText}`);
+    }
+}
+
+/**
  * @typedef {object} BulkExtensionFieldResult
  * @property {string[]} updated  Avatar filenames that were successfully updated
  * @property {string[]} skipped  Avatar filenames skipped (filter didn't match or unreadable)

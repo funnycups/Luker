@@ -162,6 +162,55 @@ To honor user decisions, re-build the edits array with resolved values and
 call `applyEdits` again (the result should have no conflicts if user
 chose deterministic resolutions).
 
+## Path 2: library-only (custom UI / fullscreen)
+
+If your extension already owns a popup or wants to take over the viewport
+(e.g. an IDE-style editor), you can use edits-lib without the
+iteration-studio shell. Import the three primitives directly:
+
+```js
+import { applyEdits, inverseEdit, registerOp } from '/scripts/lib/edits/index.js';
+import { showConflictResolution } from '/scripts/lib/edits/conflict-ui.js';
+```
+
+Your code owns the UI, lifecycle, session storage, tool dispatch, and
+approval flow. edits-lib gives you:
+
+- **Op-typed Edit batches** — opaque to your business code, semantic
+  enough for inverse + conflict detection.
+- **Drift-aware apply** — `applyEdits(edits, live)` returns
+  `{ newLive, clean, conflicts, alreadyDone }`. Conflicts surface what the
+  user changed under the AI's nose, ready for `showConflictResolution`.
+- **Inverse ops** — `inverseEdit(edit)` produces the undo for any single
+  edit. Walk a message's stored `appliedEdits` in reverse to undo a turn.
+- **Custom ops** — `registerOp('myCustomOp', handler)` lets you extend
+  the lib with domain-specific semantics (file patching, lorebook entry
+  CRUD, etc.) and have your custom op participate in conflict / inverse
+  alongside the built-ins.
+
+**Reference example**: `extensions/character-editor-assistant/studio/`.
+The CardApp Studio is a fullscreen IDE (two `position:fixed` panels +
+CodeMirror 6 + file tree + mobile tab bar) that owns the viewport. File
+operations from the AI route through `applyEdits` + a custom
+`cardapp_patch_file` op (registered at boot from `index.js`), with the
+studio's own approval card showing per-file DiffMatchPatch diffs before
+commit.
+
+**When to choose Path 2 vs Path 1 (iteration-studio shell adapter):**
+
+| Need | Path |
+|---|---|
+| Short artifact, popup-friendly UI | Path 1 |
+| Shell handles session / history / abort / retry / auto-continue | Path 1 |
+| Want to ship fast with one adapter file | Path 1 |
+| Need viewport ownership (IDE, mobile takeover) | Path 2 |
+| Already have a mature standalone UI to preserve | Path 2 |
+| Want full control of every UX detail | Path 2 |
+
+The two paths are not mutually exclusive at the codebase level — they
+share edits-lib. A Path 2 surface can later adopt Path 1 (or vice-versa)
+by swapping just the UI host.
+
 ## Out-of-scope reminders
 
 - The lib does NOT manage edit history, journals, undo stacks, or sessions.

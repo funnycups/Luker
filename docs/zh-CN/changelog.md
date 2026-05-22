@@ -38,6 +38,11 @@
 
 ## 近期破坏性变更
 
+- **CardApp Studio 回滚到独立全屏 UI**（2026 年 5 月短暂上线的"接入迭代工作台外壳"版本失去了 viewport 所有权，UX 明显退化）。Studio 现在通过两块 `position:fixed` 面板再次接管 viewport，配合移动端 tab、文件树、CodeMirror 6 编辑器与对话流内联的审批卡片 —— 跟 SP-2 之前用户熟悉的 UX 一致。文件操作仍然享受 edits-lib 的漂移检测与单条 inverse —— 这是原独立版本没有的新能力。短暂期间的 session 桶（`cardapp_studio_sessions_v2`）首次打开时清空；磁盘上的 CardApp 文件不受影响。
+
+- **edits-lib 用法现在有两条文档化的路径**：Path 1（迭代工作台外壳适配器）适合弹窗形式的界面；Path 2（library-only）适合全屏 / 自定义 UI。参见 `docs/zh-CN/development/extension-api/edits-lib.md` 的「Path 2: library-only」一节。CardApp Studio 是 Path 2 的仓库内参考实现。
+
+- **CPA 基于迭代工作台外壳重构**（适配器迁移 SP-4，Plan 2 收官）。309 行的 `dialog-ui.js` 被删除；CPA 既有的 IDE 风格业务辅助函数（`handleApplyDraft`、`handleRollbackToMessage`、`handleMessageDiff`）保持不变，现在运行于共享外壳之上。SP-4 落地后，Luker 中全部五个 AI 驱动的编辑面（编排器、记忆图、CEA CardApp Studio、CEA 角色编辑器、CPA）共享同一个外壳、同一种存储模型、同一套 edits-lib 与同一个冲突解决 UI。
 - **CEA 角色编辑器基于迭代工作台外壳重构**（适配器迁移 SP-3）。世界书同步分析弹窗被多轮迭代会话替代。一个适配器同时编辑角色卡与世界书；新增 3 个 CEA 自有的 edits-lib 自定义 op（`lorebook_entry_add / update / remove`），以条目 uid 为键。外壳现每次打开时调用一次 `adapter.registerCustomOps(registry)`。旧的 `lorebookSyncHistory` 设置项会在首次打开时被清除；磁盘上的角色卡与世界书数据不受影响。
 - **迭代工作台适配器合约 v2（IDE 风格）。** Shell 不再持有 `workingProfile` 快照；适配器的 `live()` 为唯一权威源。已迁移内置 orchestrator + memory-graph 适配器。外部适配器需要相应升级（参见 `docs/zh-CN/development/extension-api/iteration-studio.md`）。升级后首次打开时按适配器清空一次旧的迭代工作台会话数据；实时数据（预设文件、角色卡、设置）不受影响。CEA 与 CPA 适配器将在后续版本提供。
 

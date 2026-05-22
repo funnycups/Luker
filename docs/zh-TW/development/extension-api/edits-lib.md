@@ -158,6 +158,37 @@ splice 掉 `index` 處的元素。`expected_value` 用於防範外部的偏移�
 `applyEdits`（如果使用者選擇的是確定性的解決方案，結果中應該不會再
 有衝突）。
 
+## Path 2: library-only（自定義 UI / 全屏）
+
+如果你的擴充套件已經擁有自己的彈窗，或者想接管 viewport（例如 IDE 風格的編輯器），可以不走 iteration-studio 外殼直接用 edits-lib。直接 import 三個原語：
+
+```js
+import { applyEdits, inverseEdit, registerOp } from '/scripts/lib/edits/index.js';
+import { showConflictResolution } from '/scripts/lib/edits/conflict-ui.js';
+```
+
+UI、生命週期、會話儲存、工具分發、審批流程全歸你。edits-lib 給你的能力：
+
+- **Op 類型化的 Edit 批次** —— 對你的業務程式碼不透明，但語義足以支援 inverse 與衝突檢測。
+- **感知漂移的 apply** —— `applyEdits(edits, live)` 回傳 `{ newLive, clean, conflicts, alreadyDone }`。衝突會暴露「使用者在 AI 提案之後又改了什麼」，可直接交給 `showConflictResolution`。
+- **Inverse op** —— `inverseEdit(edit)` 給任意一條 edit 生成撤銷操作。倒序遍歷一條訊息上的 `appliedEdits` 就能 undo 一整輪。
+- **自定義 op** —— `registerOp('myCustomOp', handler)` 讓你給 lib 加上業務專用語義（檔案 patch、世界書 entry 增刪等），並讓自定義 op 跟內建 op 一起參與 conflict / inverse。
+
+**參考實作**：`extensions/character-editor-assistant/studio/`。CardApp Studio 是一個全屏 IDE（兩塊 `position:fixed` 面板 + CodeMirror 6 + 檔案樹 + 行動端 tab bar），接管 viewport。AI 的檔案操作走 `applyEdits` + 自定義 `cardapp_patch_file` op（在 `index.js` 模組載入時註冊），由 studio 自己的審批卡片在 commit 前顯示逐檔案 DiffMatchPatch diff。
+
+**Path 2 vs Path 1（iteration-studio 外殼適配器）選哪條：**
+
+| 需求 | Path |
+|---|---|
+| 工件短，彈窗形式合適 | Path 1 |
+| 讓外殼處理會話 / 歷史 / abort / 重試 / 自動續寫 | Path 1 |
+| 想用一個適配器檔案快速 ship | Path 1 |
+| 需要 viewport 所有權（IDE、行動端接管） | Path 2 |
+| 已經有一套成熟獨立 UI 想保留 | Path 2 |
+| 想完全掌控 UX 細節 | Path 2 |
+
+兩條路徑在程式碼層並不互斥 —— 它們共享 edits-lib。Path 2 的介面以後想換成 Path 1（或反過來），只需替換 UI 宿主。
+
 ## 範圍外提醒
 
 - 本函式庫**不**管理編輯歷史、journal、復原堆疊或會話 —— 這是您擴充的
