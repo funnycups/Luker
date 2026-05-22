@@ -135,7 +135,7 @@ export function ensureStyles(uiBlockId) {
 .luker_orch_iter_diff_popup .luker_object_diff_text {
     min-width: 0;
 }
-.luker_orch_iter_diff_popup .luker_object_diff_text .luker_orch_line_diff {
+.luker_orch_iter_diff_popup .luker_object_diff_text .luker_iter_diff {
     margin: 0;
 }
 .luker_orch_iter_diff_title {
@@ -154,12 +154,12 @@ export function ensureStyles(uiBlockId) {
     font-size: 0.92rem;
     opacity: 0.86;
 }
-.luker_orch_line_diff {
+.luker_iter_diff {
     border: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.3));
     border-radius: 6px;
     background: rgba(0,0,0,0.2);
 }
-.luker_orch_line_diff > summary {
+.luker_iter_diff > summary {
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -168,17 +168,17 @@ export function ensureStyles(uiBlockId) {
     padding: 6px 8px;
     font-size: 0.9rem;
 }
-.luker_orch_line_diff_summary_main {
+.luker_iter_diff_summary_main {
     display: inline-flex;
     align-items: center;
     gap: 8px;
     min-width: 0;
 }
-.luker_orch_line_diff_meta {
+.luker_iter_diff_meta {
     opacity: 0.78;
     font-size: 0.88rem;
 }
-.luker_orch_line_diff_expand_btn {
+.luker_iter_diff_expand_btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -187,8 +187,8 @@ export function ensureStyles(uiBlockId) {
     padding: 0;
     line-height: 1;
 }
-.luker_orch_line_diff_expand_btn i { pointer-events: none; }
-.luker_orch_line_diff_pre {
+.luker_iter_diff_expand_btn i { pointer-events: none; }
+.luker_iter_diff_pre {
     margin: 0;
     padding: 6px;
     border-top: 1px dashed var(--SmartThemeBorderColor, rgba(130,130,130,0.3));
@@ -204,36 +204,36 @@ export function ensureStyles(uiBlockId) {
 .luker_orch_iter_diff_item,
 .luker_orch_iter_diff_fields,
 .luker_orch_iter_diff_field,
-.luker_orch_line_diff,
-.luker_orch_line_diff_pre { min-width: 0; max-width: 100%; box-sizing: border-box; }
+.luker_iter_diff,
+.luker_iter_diff_pre { min-width: 0; max-width: 100%; box-sizing: border-box; }
 .luker_orch_iter_conversation,
 .luker_orch_iter_profile { -webkit-overflow-scrolling: touch; touch-action: pan-y; }
-.luker_orch_line_diff_dual { --luker-orch-split-left: 50%; --luker-orch-splitter-width: 12px; display: grid; grid-template-columns: minmax(0, var(--luker-orch-split-left)) var(--luker-orch-splitter-width) minmax(0, calc(100% - var(--luker-orch-split-left) - var(--luker-orch-splitter-width))); gap: 0; width: 100%; min-width: 0; align-items: stretch; }
-.luker_orch_line_diff_splitter { position: relative; cursor: col-resize; touch-action: none; user-select: none; background: transparent; }
-.luker_orch_line_diff_splitter::before { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-50%); border-radius: 999px; background: color-mix(in oklab, var(--SmartThemeBodyColor) 20%, transparent); transition: background-color .12s ease; }
-.luker_orch_line_diff_splitter:hover::before,
-.luker_orch_line_diff_splitter.active::before { background: color-mix(in oklab, var(--SmartThemeBodyColor) 38%, transparent); }
-.luker_orch_line_diff_side { border: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.32)); border-radius: 6px; background: rgba(0,0,0,0.12); min-width: 0; overflow: hidden; }
-.luker_orch_line_diff_side_scroll { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; touch-action: auto; }
-.luker_orch_line_diff_table {
+.luker_iter_diff_dual { --luker-iter-split-left: 50%; --luker-iter-splitter-width: 12px; display: grid; grid-template-columns: minmax(0, var(--luker-iter-split-left)) var(--luker-iter-splitter-width) minmax(0, calc(100% - var(--luker-iter-split-left) - var(--luker-iter-splitter-width))); gap: 0; width: 100%; min-width: 0; align-items: stretch; }
+.luker_iter_diff_splitter { position: relative; cursor: col-resize; touch-action: none; user-select: none; background: transparent; }
+.luker_iter_diff_splitter::before { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-50%); border-radius: 999px; background: color-mix(in oklab, var(--SmartThemeBodyColor) 20%, transparent); transition: background-color .12s ease; }
+.luker_iter_diff_splitter:hover::before,
+.luker_iter_diff_splitter.active::before { background: color-mix(in oklab, var(--SmartThemeBodyColor) 38%, transparent); }
+.luker_iter_diff_side { border: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.32)); border-radius: 6px; background: rgba(0,0,0,0.12); min-width: 0; overflow: hidden; }
+.luker_iter_diff_side_scroll { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; touch-action: auto; }
+.luker_iter_diff_table {
     width: max-content;
     min-width: 100%;
     border-collapse: collapse;
     table-layout: fixed;
     font-size: 0.82rem;
 }
-.luker_orch_line_diff_pre,
-.luker_orch_line_diff_table,
-.luker_orch_line_diff_row td,
-.luker_orch_line_diff_text,
-.luker_orch_line_diff_text_inner { text-align: left; }
-.luker_orch_line_diff_row td {
+.luker_iter_diff_pre,
+.luker_iter_diff_table,
+.luker_iter_diff_row td,
+.luker_iter_diff_text,
+.luker_iter_diff_text_inner { text-align: left; }
+.luker_iter_diff_row td {
     border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.24));
     padding: 2px 6px;
     vertical-align: top;
 }
-.luker_orch_line_diff_row:last-child td { border-bottom: none; }
-.luker_orch_line_diff_ln {
+.luker_iter_diff_row:last-child td { border-bottom: none; }
+.luker_iter_diff_ln {
     width: 3.8em;
     text-align: right;
     color: color-mix(in oklab, var(--SmartThemeBodyColor) 72%, transparent);
@@ -246,11 +246,11 @@ export function ensureStyles(uiBlockId) {
     background-image: none;
     opacity: 1;
 }
-.luker_orch_line_diff_text {
+.luker_iter_diff_text {
     width: auto;
     min-width: 0;
 }
-.luker_orch_line_diff_text_inner {
+.luker_iter_diff_text_inner {
     white-space: pre;
     word-break: normal;
     overflow-wrap: normal;
@@ -258,21 +258,21 @@ export function ensureStyles(uiBlockId) {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     min-width: max-content;
 }
-.luker_orch_line_diff_word_add {
+.luker_iter_diff_word_add {
     background: color-mix(in oklab, #4caf50 30%, transparent);
     border-radius: 3px;
     padding: 0 1px;
 }
-.luker_orch_line_diff_word_del {
+.luker_iter_diff_word_del {
     background: color-mix(in oklab, #d9534f 30%, transparent);
     border-radius: 3px;
     padding: 0 1px;
 }
-.luker_orch_line_diff_row_add .luker_orch_line_diff_text.new { background: color-mix(in oklab, #4caf50 12%, transparent); }
-.luker_orch_line_diff_row_del .luker_orch_line_diff_text.old { background: color-mix(in oklab, #d9534f 12%, transparent); }
-.luker_orch_line_diff_row_mod .luker_orch_line_diff_text.old { background: color-mix(in oklab, #d9534f 10%, transparent); }
-.luker_orch_line_diff_row_mod .luker_orch_line_diff_text.new { background: color-mix(in oklab, #4caf50 10%, transparent); }
-.luker_orch_line_diff_zoom_overlay {
+.luker_iter_diff_row_add .luker_iter_diff_text.new { background: color-mix(in oklab, #4caf50 12%, transparent); }
+.luker_iter_diff_row_del .luker_iter_diff_text.old { background: color-mix(in oklab, #d9534f 12%, transparent); }
+.luker_iter_diff_row_mod .luker_iter_diff_text.old { background: color-mix(in oklab, #d9534f 10%, transparent); }
+.luker_iter_diff_row_mod .luker_iter_diff_text.new { background: color-mix(in oklab, #4caf50 10%, transparent); }
+.luker_iter_diff_zoom_overlay {
     position: fixed;
     inset: 0;
     z-index: 10010;
@@ -280,12 +280,12 @@ export function ensureStyles(uiBlockId) {
     align-items: center;
     justify-content: center;
 }
-.luker_orch_line_diff_zoom_backdrop {
+.luker_iter_diff_zoom_backdrop {
     position: absolute;
     inset: 0;
     background: color-mix(in oklab, #000 70%, transparent);
 }
-.luker_orch_line_diff_zoom_dialog {
+.luker_iter_diff_zoom_dialog {
     position: relative;
     z-index: 1;
     width: min(1280px, 95vw);
@@ -298,7 +298,7 @@ export function ensureStyles(uiBlockId) {
     overflow: hidden;
     box-shadow: 0 12px 36px rgba(0,0,0,0.45);
 }
-.luker_orch_line_diff_zoom_header {
+.luker_iter_diff_zoom_header {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -306,13 +306,13 @@ export function ensureStyles(uiBlockId) {
     padding: 10px 12px;
     border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.24));
 }
-.luker_orch_line_diff_zoom_title {
+.luker_iter_diff_zoom_title {
     font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.luker_orch_line_diff_zoom_close {
+.luker_iter_diff_zoom_close {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -321,13 +321,13 @@ export function ensureStyles(uiBlockId) {
     padding: 0;
     line-height: 1;
 }
-.luker_orch_line_diff_zoom_body {
+.luker_iter_diff_zoom_body {
     flex: 1;
     min-height: 0;
     overflow: auto;
     padding: 10px;
 }
-.luker_orch_line_diff_zoom_body .luker_orch_line_diff_pre { max-height: none; height: auto; }
+.luker_iter_diff_zoom_body .luker_iter_diff_pre { max-height: none; height: auto; }
 .luker_orch_iter_diff_raw summary {
     cursor: pointer;
     font-size: 0.9rem;
@@ -572,7 +572,7 @@ export function ensureStyles(uiBlockId) {
     .luker_orch_iter_col {
         min-height: 320px;
     }
-    .luker_orch_line_diff_ln {
+    .luker_iter_diff_ln {
         width: 3.2em;
     }
 }

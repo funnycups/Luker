@@ -232,15 +232,11 @@ import {
     persistGlobalLoopEditorFrom,
     persistOrchestratorCharacterExtension,
 } from './editor-persist.js';
-import { createOrchestratorIterationAdapter } from './iteration-adapter.js';
-import { open as openIterationStudio } from '../../iteration-studio/index.js';
+import { openOrchestratorIterationStudio } from './iter-studio/studio.js';
 
 const MODULE_NAME = 'orchestrator';
 const ORCH_RESULT_EVENT = 'luker.orchestrator.result';
 const UI_BLOCK_ID = 'orchestrator_settings';
-const ORCH_CHARACTER_ITERATION_HISTORY_NAMESPACE = 'orchestrator_iteration_history';
-const ORCH_GLOBAL_ITERATION_HISTORY_KEY = 'global_iteration_history';
-const ORCH_CHARACTER_ITERATION_HISTORY_LIMIT = 24;
 // Module-scope cache for the director content payload captured at
 // GENERATE_TAKEOVER_DISPATCH. Director's main + sub agents read from this
 // to build their taskMessages — single source of truth across the whole
@@ -519,14 +515,14 @@ async function openOrchestrationRuntimeTrace(context) {
         },
     );
 
-    jQuery(document).on(`click${namespace}`, `${selector} [data-luker-orch-action="expand-line-diff"]`, function (event) {
+    jQuery(document).on(`click${namespace}`, `${selector} [data-luker-iter-action="expand-line-diff"]`, function (event) {
         event.preventDefault();
         event.stopPropagation();
         const rootElement = document.querySelector(selector);
         openOrchExpandedDiff(rootElement, this);
     });
 
-    jQuery(document).on(`click${namespace}`, `${selector} [data-luker-orch-action="close-line-diff-zoom"], ${selector} .luker_orch_line_diff_zoom_backdrop`, function (event) {
+    jQuery(document).on(`click${namespace}`, `${selector} [data-luker-iter-action="close-line-diff-zoom"], ${selector} .luker_iter_diff_zoom_backdrop`, function (event) {
         event.preventDefault();
         event.stopPropagation();
         const rootElement = document.querySelector(selector);
@@ -538,7 +534,7 @@ async function openOrchestrationRuntimeTrace(context) {
             return;
         }
         const rootElement = document.querySelector(selector);
-        const overlay = rootElement?.querySelector?.('.luker_orch_line_diff_zoom_overlay');
+        const overlay = rootElement?.querySelector?.('.luker_iter_diff_zoom_overlay');
         if (!(overlay instanceof HTMLElement)) {
             return;
         }
@@ -547,7 +543,7 @@ async function openOrchestrationRuntimeTrace(context) {
         closeOrchExpandedDiff(rootElement);
     });
 
-    jQuery(document).on(`pointerdown${namespace}`, `${selector} .luker_orch_line_diff_splitter`, function (event) {
+    jQuery(document).on(`pointerdown${namespace}`, `${selector} .luker_iter_diff_splitter`, function (event) {
         beginOrchLineDiffResize(this, event.originalEvent || event);
     });
 
@@ -2228,22 +2224,6 @@ function cloneDirectorWorkingProfileFromEditor(editor) {
     return sanitizeDirectorProfile(editor || {});
 }
 
-function cloneAiIterationWorkingProfile(mode, workingProfile) {
-    if (String(mode || '') === ORCH_EXECUTION_MODE_AGENDA) {
-        return sanitizeAgendaWorkingProfile(structuredClone(workingProfile || {}));
-    }
-    if (String(mode || '') === ORCH_EXECUTION_MODE_LOOP) {
-        return sanitizeLoopProfile(structuredClone(workingProfile || {}));
-    }
-    if (String(mode || '') === ORCH_EXECUTION_MODE_DIRECTOR) {
-        return sanitizeDirectorProfile(structuredClone(workingProfile || {}));
-    }
-    return {
-        spec: sanitizeSpec(structuredClone(workingProfile?.spec || { stages: [] })),
-        presets: sanitizePresetMap(structuredClone(workingProfile?.presets || {})),
-    };
-}
-
 function summarizeStageForUi(stage) {
     const nodes = Array.isArray(stage?.nodes) ? stage.nodes : [];
     const nodeSummary = nodes.map((node) => {
@@ -2262,37 +2242,37 @@ function closeOrchExpandedDiff(rootElement) {
     if (!(root instanceof HTMLElement)) {
         return;
     }
-    root.querySelectorAll('.luker_orch_line_diff_zoom_overlay').forEach((overlay) => overlay.remove());
+    root.querySelectorAll('.luker_iter_diff_zoom_overlay').forEach((overlay) => overlay.remove());
 }
 
 function openOrchExpandedDiff(rootElement, triggerElement) {
     const root = rootElement instanceof Element ? rootElement : null;
     const trigger = triggerElement instanceof Element ? triggerElement : null;
-    const diffRoot = trigger?.closest?.('.luker_orch_line_diff');
-    const diffBody = diffRoot?.querySelector?.('.luker_orch_line_diff_pre');
+    const diffRoot = trigger?.closest?.('.luker_iter_diff');
+    const diffBody = diffRoot?.querySelector?.('.luker_iter_diff_pre');
     if (!(root instanceof HTMLElement) || !(diffBody instanceof HTMLElement)) {
         return;
     }
 
     closeOrchExpandedDiff(root);
 
-    const diffLabel = String(diffBody.getAttribute('data-luker-orch-diff-label') || i18n('Line diff'));
+    const diffLabel = String(diffBody.getAttribute('data-luker-iter-diff-label') || i18n('Line diff'));
     const closeLabel = escapeHtml(i18n('Close expanded diff'));
     const overlay = document.createElement('div');
-    overlay.className = 'luker_orch_line_diff_zoom_overlay';
+    overlay.className = 'luker_iter_diff_zoom_overlay';
     overlay.innerHTML = `
-<div class="luker_orch_line_diff_zoom_backdrop" data-luker-orch-action="close-line-diff-zoom"></div>
-<div class="luker_orch_line_diff_zoom_dialog" role="dialog" aria-modal="true">
-    <div class="luker_orch_line_diff_zoom_header">
-        <div class="luker_orch_line_diff_zoom_title">${escapeHtml(diffLabel)}</div>
-        <button type="button" class="menu_button menu_button_small luker_orch_line_diff_zoom_close" data-luker-orch-action="close-line-diff-zoom" title="${closeLabel}" aria-label="${closeLabel}">
+<div class="luker_iter_diff_zoom_backdrop" data-luker-iter-action="close-line-diff-zoom"></div>
+<div class="luker_iter_diff_zoom_dialog" role="dialog" aria-modal="true">
+    <div class="luker_iter_diff_zoom_header">
+        <div class="luker_iter_diff_zoom_title">${escapeHtml(diffLabel)}</div>
+        <button type="button" class="menu_button menu_button_small luker_iter_diff_zoom_close" data-luker-iter-action="close-line-diff-zoom" title="${closeLabel}" aria-label="${closeLabel}">
             <i class="fa-solid fa-xmark" aria-hidden="true"></i>
         </button>
     </div>
-    <div class="luker_orch_line_diff_zoom_body"></div>
+    <div class="luker_iter_diff_zoom_body"></div>
 </div>`;
 
-    const zoomBody = overlay.querySelector('.luker_orch_line_diff_zoom_body');
+    const zoomBody = overlay.querySelector('.luker_iter_diff_zoom_body');
     if (zoomBody instanceof HTMLElement) {
         zoomBody.append(diffBody.cloneNode(true));
     }
@@ -2303,7 +2283,7 @@ function openOrchExpandedDiff(rootElement, triggerElement) {
 function beginOrchLineDiffResize(splitterElement, pointerEvent) {
     const splitter = splitterElement instanceof HTMLElement ? splitterElement : null;
     const pointer = pointerEvent instanceof PointerEvent ? pointerEvent : null;
-    const dual = splitter?.closest?.('.luker_orch_line_diff_dual');
+    const dual = splitter?.closest?.('.luker_iter_diff_dual');
     if (!(splitter instanceof HTMLElement) || !(pointer instanceof PointerEvent) || !(dual instanceof HTMLElement)) {
         return;
     }
@@ -2323,7 +2303,7 @@ function beginOrchLineDiffResize(splitterElement, pointerEvent) {
     const applySplitAt = (clientX) => {
         const nextPercent = ((clientX - bounds.left) / bounds.width) * 100;
         const clampedPercent = Math.max(minPercent, Math.min(maxPercent, nextPercent));
-        dual.style.setProperty('--luker-orch-split-left', `${clampedPercent}%`);
+        dual.style.setProperty('--luker-iter-split-left', `${clampedPercent}%`);
     };
 
     const cleanup = () => {
@@ -4717,12 +4697,6 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
 }
 
 async function openAiIterationStudio(context, settings, root) {
-    // Body migrated to the IterationStudio shell. The orchestrator-specific
-    // mode-branched behavior lives in iteration-adapter.js, which wraps the
-    // mode-aware helpers (buildAiIterationToolSet, executeAiIterationToolCalls,
-    // applyAiIterationSessionToGlobal, etc.) into a ProfileAdapter the shell
-    // can consume. The shell handles popup lifecycle, abort plumbing, session
-    // history, auto-continue, and the per-popup Auto-apply preference.
     const executionMode = getExecutionMode(settings);
     const SUPPORTED_STUDIO_MODES = new Set([
         ORCH_EXECUTION_MODE_LOOP,
@@ -4732,7 +4706,11 @@ async function openAiIterationStudio(context, settings, root) {
     const studioMode = SUPPORTED_STUDIO_MODES.has(executionMode)
         ? executionMode
         : ORCH_EXECUTION_MODE_SPEC;
-    const adapter = createOrchestratorIterationAdapter(studioMode, {
+    await openOrchestratorIterationStudio({
+        mode: studioMode,
+        context,
+        settings,
+        root,
         i18n,
         i18nFormat,
         getIterationDefaultScope,
@@ -4745,11 +4723,8 @@ async function openAiIterationStudio(context, settings, root) {
         cloneAgendaWorkingProfileFromEditor,
         cloneDirectorWorkingProfileFromEditor,
         sanitizeLoopProfile,
-        sanitizeSpec,
-        sanitizePresetMap,
         sanitizeAgendaWorkingProfile,
         sanitizeDirectorProfile,
-        cloneAiIterationWorkingProfile,
         buildAiIterationToolSet,
         buildAiIterationSystemPrompt,
         buildAiIterationUserPrompt,
@@ -4766,11 +4741,7 @@ async function openAiIterationStudio(context, settings, root) {
             DIRECTOR: ORCH_EXECUTION_MODE_DIRECTOR,
         },
         MODULE_NAME,
-        ORCH_GLOBAL_ITERATION_HISTORY_KEY,
-        ORCH_CHARACTER_ITERATION_HISTORY_NAMESPACE,
-        ORCH_CHARACTER_ITERATION_HISTORY_LIMIT,
     });
-    await openIterationStudio(adapter, context, settings, root);
 }
 
 function bindUi() {
