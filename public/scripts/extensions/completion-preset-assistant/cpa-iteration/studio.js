@@ -59,6 +59,7 @@ import { Popup, POPUP_TYPE } from '../../../popup.js';
 import { lodash } from '../../../../lib.js';
 import {
     applyEdits,
+    bindIterWorkspaceResizer,
     render as ITER_RENDER,
     runner as ITER_RUNNER,
     textDiff as ITER_TEXT_DIFF,
@@ -109,6 +110,164 @@ function makeSessionId() {
     return `sess_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Live target preview — shared helpers + CPA renderer.
+//
+// These run at module scope (not inside `openCpaIterationStudio`) so unit
+// tests can import `_testOnly_renderCpaPreviewPane` directly without
+// instantiating the popup. The renderer is pure: given `live` + pending
+// edits, return preview HTML. Snippets B + C from the implementation plan.
+//
+// `computeChangedPathSet`, `walkDiff`, `truncateForPreview`,
+// `fmtPendingChangeInline` are intentionally file-local. The other 4
+// popups (MG schema / Orchestrator / CEA char / CEA editor) duplicate
+// them rather than extract to iteration-library, per spec §B.
+// ──────────────────────────────────────────────────────────────────────────
+
+function computeChangedPathSet(live, pendingEdits) {
+    if (!Array.isArray(pendingEdits) || pendingEdits.length === 0) return new Set();
+    let next;
+    try {
+        const cloned = structuredClone(live);
+        const result = applyEdits(pendingEdits, cloned);
+        next = result?.newLive ?? cloned;
+    } catch {
+        return new Set();
+    }
+    const changed = new Set();
+    walkDiff('', live, next, changed);
+    return changed;
+}
+
+function walkDiff(path, a, b, out) {
+    if (a === b) return;
+    if (typeof a !== typeof b || a === null || b === null || typeof a !== 'object') {
+        out.add(path);
+        return;
+    }
+    const keys = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
+    for (const k of keys) {
+        const childPath = path ? `${path}.${k}` : k;
+        walkDiff(childPath, a?.[k], b?.[k], out);
+    }
+}
+
+function truncateForPreview(str, max = 200) {
+    if (typeof str !== 'string') str = String(str ?? '');
+    return str.length > max ? str.slice(0, max) + '…' : str;
+}
+
+/**
+ * Format a `(was oldVal → now newVal)` inline diff span. Substitutes
+ * `${0}` / `${1}` against the truncated values; lookup against an
+ * optional `tFn` lets the production popup substitute the localized
+ * template ("(待修改:..."). When `tFn` is omitted we fall back to the
+ * English template so the marker is still legible in tests.
+ */
+function fmtPendingChangeInline(oldVal, newVal, tFn) {
+    const oldDisp = truncateForPreview(String(oldVal ?? '(unset)'), 60);
+    const newDisp = truncateForPreview(String(newVal ?? '(unset)'), 60);
+    const template = '(was ${0} → now ${1})';
+    const localized = typeof tFn === 'function' ? String(tFn(template) ?? template) : template;
+    const filled = localized.replace(/\$\{(\d+)\}/g, (_, idx) => String([oldDisp, newDisp][Number(idx)] ?? ''));
+    return `<span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(filled)}</span>`;
+}
+
+/**
+ * Render the right-pane HTML for the CPA workspace preview. Pure function.
+ *
+ * @param {object|null} live              The current preset body, or null.
+ * @param {Array} pendingEdits            Edits from the latest LLM round.
+ * @param {string[]} [savedPresets=[]]    Names of presets shown in the aside.
+ * @param {string}  [activeRefName='']    Currently-selected reference.
+ * @param {Function} [tFn]                Optional i18n function (string → string).
+ * @returns {string} HTML.
+ */
+function renderCpaPreviewPane(live, pendingEdits, savedPresets = [], activeRefName = '', tFn) {
+    const t = typeof tFn === 'function' ? tFn : (s) => String(s ?? '');
+    if (!live) {
+        return `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('No preset loaded.'))}</div>`;
+    }
+    const edits = Array.isArray(pendingEdits) ? pendingEdits : [];
+    const changed = computeChangedPathSet(live, edits);
+    let nextLive = live;
+    if (edits.length > 0) {
+        try {
+            const cloned = structuredClone(live);
+            const r = applyEdits(edits, cloned);
+            nextLive = r?.newLive ?? cloned;
+        } catch { /* fall back to live */ }
+    }
+
+    const sampleFields = [
+        ['temperature', 'Temperature'],
+        ['top_p', 'Top P'],
+        ['top_k', 'Top K'],
+        ['freq_pen', 'Frequency penalty'],
+        ['pres_pen', 'Presence penalty'],
+        ['max_context_unlocked', 'Max context unlocked'],
+        ['stream_openai', 'Stream'],
+    ];
+
+    const samplingRows = sampleFields
+        .filter(([k]) => Object.prototype.hasOwnProperty.call(live, k))
+        .map(([k, label]) => {
+            const isChanged = changed.has(k);
+            const oldVal = live[k];
+            const newVal = nextLive?.[k];
+            const inlineDiff = isChanged ? fmtPendingChangeInline(oldVal, newVal, t) : '';
+            const cls = isChanged
+                ? 'luker-iter-workspace-preview-row pending-change'
+                : 'luker-iter-workspace-preview-row';
+            return `<div class="${cls}"><div class="luker-iter-workspace-preview-row-head"><span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(label)}</span><span>${escapeHtmlLocal(String(oldVal ?? ''))}</span>${inlineDiff}</div></div>`;
+        }).join('');
+
+    const prompts = Array.isArray(live.prompts) ? live.prompts : [];
+    const promptRows = prompts.slice(0, 6).map((p, idx) => {
+        const path = `prompts.${idx}.content`;
+        const isChanged = changed.has(path) || changed.has(`prompts.${idx}`);
+        const cls = isChanged
+            ? 'luker-iter-workspace-preview-row pending-change'
+            : 'luker-iter-workspace-preview-row';
+        const name = p?.name || p?.identifier || `#${idx}`;
+        const role = p?.role || '';
+        const body = truncateForPreview(p?.content || '', 200);
+        const bodyHtml = body
+            ? escapeHtmlLocal(body)
+            : `<span class="muted">${escapeHtmlLocal(t('(empty)'))}</span>`;
+        return `<div class="${cls}"><div class="luker-iter-workspace-preview-row-head"><span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(name)}</span><span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(role)}</span></div><div class="luker-iter-workspace-preview-row-body">${bodyHtml}</div></div>`;
+    }).join('');
+
+    const presetNames = Array.isArray(savedPresets) ? savedPresets : [];
+    const presetRowsHtml = presetNames.map(name => {
+        const isActive = name === activeRefName;
+        const cls = isActive
+            ? 'luker-iter-workspace-preview-row changed'
+            : 'luker-iter-workspace-preview-row';
+        return `<div class="${cls}" data-cpa-it-preview-action="ref-pick" data-cpa-it-ref-name="${escapeHtmlLocal(name)}"><div class="luker-iter-workspace-preview-row-head"><span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(name)}</span>${isActive ? `<span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(t('Reference'))}</span>` : ''}</div></div>`;
+    }).join('');
+    const refsHtml = presetNames.length > 0 ? `
+        <div class="luker-iter-workspace-aside">
+            <div class="luker-iter-workspace-aside-title">${escapeHtmlLocal(t('Saved presets'))}</div>
+            ${presetRowsHtml}
+        </div>
+    ` : '';
+
+    return `
+        <div class="luker-iter-workspace-preview-section">
+            <div class="luker-iter-workspace-preview-section-title">${escapeHtmlLocal(t('Sampling params'))}</div>
+            ${samplingRows || `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('No data'))}</div>`}
+        </div>
+        <div class="luker-iter-workspace-preview-section">
+            <div class="luker-iter-workspace-preview-section-title">${escapeHtmlLocal(t('Prompts'))}</div>
+            ${promptRows || `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('No data'))}</div>`}
+        </div>
+        ${refsHtml}
+    `;
+}
+
+export { renderCpaPreviewPane as _testOnly_renderCpaPreviewPane };
+
 function createNewSession() {
     const now = Date.now();
     return {
@@ -119,6 +278,7 @@ function createNewSession() {
             historyOpen: false,
             referencePresetName: '',
             sessionMode: SESSION_MODE_DEFAULT,
+            autoApply: false,
         },
         updatedAt: now,
         createdAt: now,
@@ -131,9 +291,28 @@ function createNewSession() {
  * to subordinate `[data-cpa-it-*]` slots so we never re-mount the textarea
  * (which would lose focus + the in-progress draft).
  */
-function buildPopupHtml({ popupId, title, historyOpen, historyLabel, newSessionLabel, clearAllLabel, sendLabel, composerPlaceholder, referenceLabel, noneLabel, modeLabel, modeOptions }) {
+function buildPopupHtml({
+    popupId,
+    title,
+    historyOpen,
+    historyLabel,
+    newSessionLabel,
+    clearAllLabel,
+    sendLabel,
+    composerPlaceholder,
+    referenceLabel,
+    noneLabel,
+    modeLabel,
+    modeOptions,
+    autoApply,
+    autoApplyLabel,
+    chatTabLabel,
+    previewTabLabel,
+    chatBadgeAriaLabel,
+    resizerAriaLabel,
+}) {
     return `
-<div id="${popupId}" class="cpa_it_popup">
+<div id="${popupId}" class="cpa_it_popup luker-iter-workspace" data-iter-layout="split" data-iter-active-tab="chat">
     <div class="cpa_it_title">${escapeHtmlLocal(title)}</div>
     <details class="cpa_it_history" data-cpa-it-history${historyOpen ? ' open' : ''}>
         <summary>${escapeHtmlLocal(historyLabel)}</summary>
@@ -143,6 +322,17 @@ function buildPopupHtml({ popupId, title, historyOpen, historyLabel, newSessionL
             <button class="menu_button menu_button_small" data-cpa-it-action="clear-history">${escapeHtmlLocal(clearAllLabel)}</button>
         </div>
     </details>
+
+    <div class="luker-iter-workspace-tabs" role="tablist">
+        <button type="button" class="luker-iter-workspace-tab active" role="tab" aria-selected="true" data-iter-action="switch-tab" data-iter-tab="chat">
+            <span class="luker-iter-workspace-tab-label">${escapeHtmlLocal(chatTabLabel)}</span>
+            <span class="luker-iter-workspace-tab-badge" data-iter-chat-badge hidden aria-label="${escapeHtmlLocal(chatBadgeAriaLabel)}"></span>
+        </button>
+        <button type="button" class="luker-iter-workspace-tab" role="tab" aria-selected="false" data-iter-action="switch-tab" data-iter-tab="preview">
+            <span class="luker-iter-workspace-tab-label">${escapeHtmlLocal(previewTabLabel)}</span>
+        </button>
+    </div>
+
     <div class="cpa_it_toolbar">
         <label class="cpa_it_toolbar_label">
             <span class="cpa_it_toolbar_label_text">${escapeHtmlLocal(referenceLabel)}</span>
@@ -157,11 +347,26 @@ function buildPopupHtml({ popupId, title, historyOpen, historyLabel, newSessionL
             </select>
         </label>
     </div>
-    <div class="cpa_it_messages" data-cpa-it-messages></div>
-    <div class="cpa_it_pending" data-cpa-it-pending hidden></div>
-    <div class="cpa_it_composer">
-        <textarea class="text_pole" rows="2" data-cpa-it-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
-        <button class="menu_button" data-cpa-it-action="send">${escapeHtmlLocal(sendLabel)}</button>
+
+    <div class="luker-iter-workspace-grid">
+        <div class="luker-iter-workspace-chat" data-iter-pane="chat">
+            <div class="cpa_it_messages" data-cpa-it-messages></div>
+            <div class="cpa_it_pending" data-cpa-it-pending hidden></div>
+            <div class="cpa_it_composer">
+                <textarea class="text_pole" rows="2" data-cpa-it-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
+                <div class="cpa_it_composer_actions">
+                    <label class="cpa_it_composer_auto_apply">
+                        <input type="checkbox" data-cpa-it-action="toggle-auto-apply"${autoApply ? ' checked' : ''}>
+                        <span>${escapeHtmlLocal(autoApplyLabel)}</span>
+                    </label>
+                    <div class="cpa_it_composer_buttons">
+                        <button class="menu_button" data-cpa-it-action="send">${escapeHtmlLocal(sendLabel)}</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="luker-iter-workspace-resizer" data-iter-resizer aria-label="${escapeHtmlLocal(resizerAriaLabel)}"></div>
+        <div class="luker-iter-workspace-preview" data-iter-pane="preview" data-iter-preview-pane></div>
     </div>
 </div>`;
 }
@@ -283,10 +488,12 @@ export async function openCpaIterationStudio(deps) {
                 historyOpen: false,
                 referencePresetName: '',
                 sessionMode: SESSION_MODE_DEFAULT,
+                autoApply: false,
                 ...(loaded.surfaceState || {}),
             },
         };
         state.session.surfaceState.sessionMode = sanitizeSessionMode(state.session.surfaceState.sessionMode);
+        state.session.surfaceState.autoApply = !!state.session.surfaceState.autoApply;
         state.pendingEdits = [];
         await reloadReference();
         await sessionStore.setCurrentSessionId(state.session.id);
@@ -666,6 +873,34 @@ export async function openCpaIterationStudio(deps) {
         // Send / Stop button label
         const $sendBtn = $root.find('[data-cpa-it-action="send"]');
         $sendBtn.text(state.isBusy ? t('Stop') : t('Send'));
+
+        // Live target preview pane (right column on desktop, Preview tab on
+        // mobile). Pure render against state.live + pendingEdits — the
+        // renderer wraps applyEdits in try/catch so a malformed pending
+        // edit shape can't blank the workspace.
+        try {
+            const $previewPane = $root.find('[data-iter-preview-pane]');
+            if ($previewPane.length) {
+                const savedPresetNames = typeof getReferencePresets === 'function'
+                    ? (getReferencePresets() || []).map(p => p?.name || '').filter(Boolean)
+                    : [];
+                const activeRef = state.session.surfaceState?.referencePresetName || '';
+                const previewHtml = renderCpaPreviewPane(
+                    state.live,
+                    state.pendingEdits || [],
+                    savedPresetNames,
+                    activeRef,
+                    t,
+                );
+                $previewPane.html(previewHtml);
+            }
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(`[${MODULE}] preview render failed`, err);
+            $root.find('[data-iter-preview-pane]').html(
+                `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('Preview unavailable'))}</div>`,
+            );
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -861,6 +1096,24 @@ export async function openCpaIterationStudio(deps) {
                 content: t('AI requested inspection (not auto-executed): ') + '\n' + lines.join('\n'),
             });
         }
+
+        // Mobile workspace: if the user was on the Preview tab, bump the
+        // chat-tab badge so they know new assistant content arrived without
+        // forcing a tab switch.
+        bumpChatBadge();
+
+        // Composer-row auto-apply: if enabled AND this turn produced edits,
+        // apply immediately. Errors land in the chat as a system note —
+        // applyPendingEdits already wraps commitLiveToPreset in try/catch.
+        const autoApplyOn = Boolean(state.session.surfaceState?.autoApply);
+        if (autoApplyOn && state.pendingEdits.length > 0) {
+            try {
+                await applyPendingEdits();
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] auto-apply failed`, err);
+            }
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -948,10 +1201,12 @@ export async function openCpaIterationStudio(deps) {
                         historyOpen: false,
                         referencePresetName: '',
                         sessionMode: SESSION_MODE_DEFAULT,
+                        autoApply: false,
                         ...(loaded.surfaceState || {}),
                     },
                 };
                 state.session.surfaceState.sessionMode = sanitizeSessionMode(state.session.surfaceState.sessionMode);
+                state.session.surfaceState.autoApply = !!state.session.surfaceState.autoApply;
                 await reloadReference();
                 return;
             }
@@ -999,6 +1254,12 @@ export async function openCpaIterationStudio(deps) {
         noneLabel: t('(none)'),
         modeLabel: t('Editing mode:'),
         modeOptions,
+        autoApply: Boolean(state.session.surfaceState?.autoApply),
+        autoApplyLabel: t('Auto-apply edits'),
+        chatTabLabel: t('Chat'),
+        previewTabLabel: t('Preview'),
+        chatBadgeAriaLabel: t('New messages while you were on Preview'),
+        resizerAriaLabel: t('Resize columns'),
     });
     const popup = new Popup(popupHtml, POPUP_TYPE.DISPLAY, '', {
         wider: true,
@@ -1102,11 +1363,93 @@ export async function openCpaIterationStudio(deps) {
         }
     });
 
+    // ── Workspace events ──────────────────────────────────────────────
+    // Mobile tab switcher — only relevant when the < 900px media query
+    // collapses the grid; on desktop both panes are mounted simultaneously
+    // and the tab bar is hidden via CSS.
+    $root.on('click.cpaIt', '[data-iter-action="switch-tab"]', (e) => {
+        const tab = e.currentTarget?.dataset?.iterTab;
+        if (!tab) return;
+        e.preventDefault();
+        setActiveTab(tab);
+    });
+
+    // Composer-row auto-apply toggle. Persists per-session via surfaceState.
+    // Toggling ON when edits are already pending applies them immediately,
+    // matching the orchestrator's existing behavior.
+    $root.on('change.cpaIt', '[data-cpa-it-action="toggle-auto-apply"]', async (e) => {
+        const checked = Boolean(e.currentTarget?.checked);
+        state.session.surfaceState = {
+            ...(state.session.surfaceState || {}),
+            autoApply: checked,
+        };
+        await persistSession();
+        if (checked && state.pendingEdits.length > 0) {
+            try {
+                await applyPendingEdits();
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] auto-apply on toggle failed`, err);
+            }
+        }
+    });
+
+    // Preview aside — clicking a saved-preset row switches the reference
+    // (same effect as picking from the toolbar dropdown).
+    $root.on('click.cpaIt', '[data-cpa-it-preview-action="ref-pick"]', async (e) => {
+        const name = String(e.currentTarget?.dataset?.cpaItRefName || '');
+        if (!name) return;
+        state.session.surfaceState = {
+            ...(state.session.surfaceState || {}),
+            referencePresetName: name,
+        };
+        await reloadReference();
+        await persistSession();
+        await render();
+    });
+
+    function setActiveTab(tab) {
+        const root = $root?.[0];
+        if (!root) return;
+        root.dataset.iterActiveTab = tab;
+        root.querySelectorAll('[data-iter-action="switch-tab"]').forEach(btn => {
+            const isActive = btn.dataset.iterTab === tab;
+            btn.classList.toggle('active', isActive);
+            btn.setAttribute('aria-selected', String(isActive));
+        });
+        if (tab === 'chat') {
+            const badge = root.querySelector('[data-iter-chat-badge]');
+            if (badge) {
+                badge.hidden = true;
+                badge.textContent = '';
+            }
+        }
+    }
+
+    function bumpChatBadge() {
+        const root = $root?.[0];
+        if (!root || root.dataset?.iterActiveTab !== 'preview') return;
+        const badge = root.querySelector('[data-iter-chat-badge]');
+        if (!badge) return;
+        const next = (Number(badge.textContent) || 0) + 1;
+        badge.textContent = String(next);
+        badge.hidden = false;
+    }
+
+    // Bind the column resizer. Returns a no-op when grid/splitter are
+    // missing (e.g. during teardown), so the unbind call below is safe
+    // regardless of mount state.
+    const unbindResizer = bindIterWorkspaceResizer($root[0]);
+
     await render();
 
     // Block until the user dismisses the popup. Persist one final time so
     // any in-flight composer / surfaceState changes survive close.
-    await popupPromise;
+    try {
+        await popupPromise;
+    } finally {
+        try { unbindResizer(); } catch { /* ignore */ }
+    }
     try { state.abortController?.abort(); } catch { /* ignore */ }
     try { zoomOverlayUnbind?.(); } catch { /* ignore */ }
     await persistSession();

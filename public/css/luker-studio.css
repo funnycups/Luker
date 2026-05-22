@@ -1680,3 +1680,282 @@
         font-size: 1.08rem;
     }
 }
+
+/* ═════════════════════════════════════════════════════════════════════
+   24 · ITER WORKSPACE — split layout for iter-studio popups
+   Used by: CPA / MG schema / Orchestrator / CEA char iter / CEA editor.
+   Each popup keeps its own namespaced classes for content inside the chat
+   and preview slots; this layer only owns the split layout + resizer.
+   ═════════════════════════════════════════════════════════════════════ */
+
+.popup .luker-iter-workspace {
+    --luker-iter-split: 50%;
+    --luker-iter-resizer-width: 12px;
+    min-width: min(960px, 92vw);
+}
+
+.popup .luker-iter-workspace-grid {
+    display: grid;
+    grid-template-columns:
+        minmax(0, var(--luker-iter-split))
+        var(--luker-iter-resizer-width)
+        minmax(0, calc(100% - var(--luker-iter-split) - var(--luker-iter-resizer-width)));
+    gap: 0;
+    flex: 1 1 auto;
+    min-height: 360px;
+    align-items: stretch;
+}
+
+.popup .luker-iter-workspace-chat,
+.popup .luker-iter-workspace-preview {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ls-space-sm, 10px);
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.popup .luker-iter-workspace-preview {
+    padding: var(--ls-space-md, 14px);
+    border: 1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 16%, transparent);
+    border-radius: var(--ls-radius-lg, 14px);
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 4%, transparent);
+    overflow-y: auto;
+}
+
+.popup .luker-iter-workspace-resizer {
+    position: relative;
+    cursor: col-resize;
+    touch-action: none;
+    user-select: none;
+}
+.popup .luker-iter-workspace-resizer::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    transform: translateX(-50%);
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 20%, transparent);
+    transition: background-color 120ms ease;
+}
+.popup .luker-iter-workspace-resizer:hover::before,
+.popup .luker-iter-workspace-resizer.active::before {
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 38%, transparent);
+}
+
+.popup .luker-iter-workspace-preview-empty,
+.popup .luker-iter-workspace-preview-loading {
+    opacity: 0.74;
+    padding: var(--ls-space-md, 14px);
+    text-align: center;
+}
+
+.popup .luker-iter-workspace-preview-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ls-space-xs, 6px);
+}
+
+.popup .luker-iter-workspace-preview-section-title {
+    font-weight: 700;
+    font-size: 0.95rem;
+    line-height: 1.3;
+    padding-bottom: 4px;
+    border-bottom: 1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 14%, transparent);
+}
+
+.popup .luker-iter-workspace-preview-row {
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 10%, transparent);
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 5%, transparent);
+}
+
+.popup .luker-iter-workspace-preview-row-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.9rem;
+    flex-wrap: wrap;
+}
+
+.popup .luker-iter-workspace-preview-row-label {
+    font-weight: 600;
+}
+
+.popup .luker-iter-workspace-preview-row-meta {
+    opacity: 0.74;
+    font-size: 0.82em;
+}
+
+.popup .luker-iter-workspace-preview-row-body {
+    margin-top: 4px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    color: color-mix(in oklab, var(--SmartThemeBodyColor) 90%, transparent);
+}
+
+.popup .luker-iter-workspace-preview-row-body.muted {
+    opacity: 0.6;
+    font-style: italic;
+}
+
+.popup .luker-iter-workspace-preview-row.changed {
+    border-color: color-mix(in oklab, #5b8def 50%, transparent);
+    background: color-mix(in oklab, #5b8def 8%, transparent);
+}
+
+.popup .luker-iter-workspace-preview-row.pending-change {
+    border-color: color-mix(in oklab, #d99c3a 55%, transparent);
+    background: color-mix(in oklab, #d99c3a 10%, transparent);
+}
+
+.popup .luker-iter-workspace-aside {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ls-space-xs, 6px);
+    margin-top: var(--ls-space-md, 14px);
+    padding-top: var(--ls-space-md, 14px);
+    border-top: 1px dashed color-mix(in oklab, var(--SmartThemeBodyColor) 18%, transparent);
+}
+
+.popup .luker-iter-workspace-aside-title {
+    font-size: 0.86rem;
+    font-weight: 600;
+    opacity: 0.85;
+}
+
+/* Clickable saved-preset rows in the aside (CPA "Reference" picker). */
+
+.popup .luker-iter-workspace-preview-row[data-cpa-it-preview-action] {
+    cursor: pointer;
+}
+
+/* Mobile tab bar (only < 900px; desktop two-column stays mounted) */
+
+.popup .luker-iter-workspace-tabs {
+    display: none;
+    gap: 4px;
+    margin-bottom: var(--ls-space-xs, 6px);
+    padding: 4px;
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 8%, transparent);
+}
+
+.popup .luker-iter-workspace-tab {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 8px 12px;
+    border: none;
+    background: transparent;
+    color: color-mix(in oklab, var(--SmartThemeBodyColor) 70%, transparent);
+    font-size: 0.92rem;
+    font-weight: 600;
+    border-radius: 999px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    transition: background 120ms ease, color 120ms ease;
+    min-height: 44px;
+}
+
+.popup .luker-iter-workspace-tab.active {
+    background: color-mix(in oklab, var(--SmartThemeQuoteColor, #5b8def) 22%, transparent);
+    color: var(--SmartThemeBodyColor);
+}
+
+.popup .luker-iter-workspace-tab:active {
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 14%, transparent);
+}
+
+.popup .luker-iter-workspace-tab-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: color-mix(in oklab, #d95560 80%, transparent);
+    color: #fff;
+    font-size: 0.74rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.popup .luker-iter-workspace-tab-badge[hidden] {
+    display: none;
+}
+
+/* Composer-row auto-apply visual rules (both underscore and hyphen naming) */
+
+.popup .luker-iter-workspace [class*="_composer_actions"],
+.popup .luker-iter-workspace [class*="-composer-actions"] {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ls-space-sm, 10px);
+    align-items: center;
+    justify-content: space-between;
+    margin-top: var(--ls-space-xs, 6px);
+}
+
+.popup .luker-iter-workspace [class*="_composer_auto_apply"],
+.popup .luker-iter-workspace [class*="-composer-auto-apply"] {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 0.92rem;
+    opacity: 0.92;
+}
+
+.popup .luker-iter-workspace [class*="_composer_buttons"],
+.popup .luker-iter-workspace [class*="-composer-buttons"] {
+    display: inline-flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-left: auto;
+}
+
+@media (max-width: 900px) {
+    .popup .luker-iter-workspace-tabs {
+        display: flex;
+    }
+    .popup .luker-iter-workspace-grid {
+        grid-template-columns: minmax(0, 1fr);
+        grid-auto-rows: auto;
+    }
+    .popup .luker-iter-workspace-resizer {
+        display: none;
+    }
+    .popup .luker-iter-workspace[data-iter-active-tab="chat"] .luker-iter-workspace-preview {
+        display: none;
+    }
+    .popup .luker-iter-workspace[data-iter-active-tab="preview"] .luker-iter-workspace-chat {
+        display: none;
+    }
+    .popup .luker-iter-workspace-preview {
+        max-height: none;
+    }
+    .popup .luker-iter-workspace [class*="_composer_actions"],
+    .popup .luker-iter-workspace [class*="-composer-actions"] {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+    }
+    .popup .luker-iter-workspace [class*="_composer_buttons"],
+    .popup .luker-iter-workspace [class*="-composer-buttons"] {
+        margin-left: 0;
+        justify-content: flex-end;
+    }
+}
