@@ -42,6 +42,8 @@ jest.unstable_mockModule('../../public/scripts/lib/abort-utils.js', () => ({}));
 let _testOnly_renderCpaPreviewPane;
 let _testOnly_renderMgSchemaPreviewPane;
 let _testOnly_applyEmptyPathSet;
+let _testOnly_renderOrchPreviewPane;
+let _testOnly_orchApplyEmptyPathSet;
 
 beforeAll(async () => {
     const mod = await import('../../public/scripts/extensions/completion-preset-assistant/cpa-iteration/studio.js');
@@ -49,6 +51,9 @@ beforeAll(async () => {
     const mgMod = await import('../../public/scripts/extensions/memory-graph/schema-iteration/studio.js');
     _testOnly_renderMgSchemaPreviewPane = mgMod._testOnly_renderMgSchemaPreviewPane;
     _testOnly_applyEmptyPathSet = mgMod._testOnly_applyEmptyPathSet;
+    const orchMod = await import('../../public/scripts/extensions/orchestrator/iter-studio/studio.js');
+    _testOnly_renderOrchPreviewPane = orchMod._testOnly_renderOrchPreviewPane;
+    _testOnly_orchApplyEmptyPathSet = orchMod._testOnly_applyEmptyPathSet;
 });
 
 describe('renderCpaPreviewPane', () => {
@@ -189,5 +194,190 @@ describe('applyEmptyPathSet (auto-apply unblock)', () => {
         expect(live).toHaveLength(2);
         expect(live[0].tableColumns).toEqual(['summary', 'mood']);
         expect(live[1].id).toBe('place');
+    });
+});
+
+describe('orchestrator applyEmptyPathSet (auto-apply unblock)', () => {
+    test('returns structuredClone of newValue (clone identity)', () => {
+        const next = { mode: 'spec', spec: { stages: [{ id: 's1', mode: 'serial', nodes: [] }] } };
+        const result = _testOnly_orchApplyEmptyPathSet({}, { op: 'set', path: '', newValue: next });
+        expect(result).toEqual(next);
+        expect(result).not.toBe(next);
+        expect(result.spec).not.toBe(next.spec);
+    });
+
+    test('mutation isolation: editing result does not mutate input', () => {
+        const next = { mode: 'spec', spec: { stages: [] } };
+        const result = _testOnly_orchApplyEmptyPathSet({}, { op: 'set', path: '', newValue: next });
+        result.spec.stages.push({ id: 'x' });
+        expect(next.spec.stages).toEqual([]);
+    });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// Orchestrator preview renderer — 4 modes (spec / loop / agenda / director).
+//
+// Profile shapes verified against:
+//   - public/scripts/extensions/orchestrator/spec-schema.js#sanitizeSpec
+//     SPEC clone: {spec: {stages: [{id, mode, nodes: [{id, preset, type}]}],
+//                  defaultTools}, presets: {<id>: {systemPrompt, ...}}}
+//   - public/scripts/extensions/orchestrator/persistence.js#sanitizeLoopProfile
+//     LOOP (FLAT): {mode, apiPresetName, promptPresetName, system_prompt,
+//                   tools, max_rounds, wall_clock_budget_ms, capsule_inject}
+//   - public/scripts/extensions/orchestrator/agenda-profile.js
+//     AGENDA: {planner: {systemPrompt, userPromptTemplate, apiPresetName,
+//              promptPresetName, tools}, agents: {<id>: {...}}, finalAgentId,
+//              limits, defaultTools}
+//     NB: agents is a MAP keyed by id (not an array)
+//   - public/scripts/extensions/orchestrator/director-defaults.js
+//     DIRECTOR: {mode, director: {mainAgent: {promptPresetName, apiPresetName,
+//                systemPrompt}, subAgents: [{id, description, systemPrompt,
+//                promptPresetName, apiPresetName}], maxRounds, ...}}
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('renderOrchPreviewPane', () => {
+    test('spec mode: renders stages and nodes', () => {
+        const profile = {
+            spec: {
+                stages: [
+                    {
+                        id: 'stage_1',
+                        mode: 'serial',
+                        nodes: [
+                            { id: 'planner', preset: 'planner_preset', type: 'agent' },
+                            { id: 'reviewer', preset: 'review_preset', type: 'review' },
+                        ],
+                    },
+                ],
+                defaultTools: null,
+            },
+            presets: {
+                planner_preset: { systemPrompt: '', userPromptTemplate: '', apiPresetName: '', promptPresetName: '' },
+                review_preset: { systemPrompt: '', userPromptTemplate: '', apiPresetName: '', promptPresetName: '' },
+            },
+        };
+        const html = _testOnly_renderOrchPreviewPane(profile, [], 'spec');
+        expect(html).toContain('stage_1');
+        expect(html).toContain('planner');
+        expect(html).toContain('reviewer');
+        expect(html).toMatch(/serial/i);
+    });
+
+    test('loop mode: renders loop config (flat shape, no agent wrapper)', () => {
+        const profile = {
+            mode: 'loop',
+            apiPresetName: 'gpt4_api',
+            promptPresetName: 'rp_director',
+            system_prompt: 'You are a director.',
+            tools: {},
+            max_rounds: 8,
+            wall_clock_budget_ms: 60000,
+            capsule_inject: { position: 'after_main', depth: 0, role: 'system', customInstruction: '' },
+        };
+        const html = _testOnly_renderOrchPreviewPane(profile, [], 'loop');
+        // The loop preview surfaces the preset names + the max_rounds limit.
+        expect(html).toContain('rp_director');
+        expect(html).toMatch(/8/);
+    });
+
+    test('agenda mode: renders planner and agents (agents is a map)', () => {
+        const profile = {
+            planner: {
+                systemPrompt: 'plan things',
+                userPromptTemplate: 'Make a plan for ${0}',
+                apiPresetName: 'planner_api',
+                promptPresetName: 'planner_prompt',
+            },
+            agents: {
+                researcher: {
+                    systemPrompt: 'research',
+                    userPromptTemplate: '',
+                    apiPresetName: 'rsh_api',
+                    promptPresetName: 'rsh_prompt',
+                },
+                finalizer: {
+                    systemPrompt: 'finalize',
+                    userPromptTemplate: '',
+                    apiPresetName: 'fin_api',
+                    promptPresetName: 'fin_prompt',
+                },
+            },
+            finalAgentId: 'finalizer',
+            limits: { plannerMaxRounds: 6, maxConcurrentAgents: 3, maxTotalRuns: 24 },
+            defaultTools: null,
+        };
+        const html = _testOnly_renderOrchPreviewPane(profile, [], 'agenda');
+        // Planner identification + at least one agent id.
+        expect(html).toMatch(/Planner|planner_prompt/);
+        expect(html).toContain('researcher');
+        expect(html).toContain('finalizer');
+    });
+
+    test('director mode: renders main + sub-agents (nested under director, subAgents is array)', () => {
+        const profile = {
+            mode: 'director',
+            director: {
+                mainAgent: {
+                    promptPresetName: 'main_prompt',
+                    apiPresetName: 'main_api',
+                    systemPrompt: 'You orchestrate everything.',
+                },
+                subAgents: [
+                    { id: 'researcher', description: 'looks up facts', systemPrompt: 'research', promptPresetName: 'rsh_prompt', apiPresetName: 'rsh_api' },
+                    { id: 'critic', description: '', systemPrompt: 'critique', promptPresetName: 'crit_prompt', apiPresetName: 'crit_api' },
+                ],
+                maxRounds: 5,
+                maxConcurrentSubagents: 2,
+                maxTotalSubagentRuns: 10,
+                tools: {},
+                discardOnAbort: false,
+            },
+        };
+        const html = _testOnly_renderOrchPreviewPane(profile, [], 'director');
+        // Main agent + at least one sub-agent id.
+        expect(html).toMatch(/Main|main_prompt/i);
+        expect(html).toContain('researcher');
+        expect(html).toContain('critic');
+    });
+
+    test('empty-state when profile is null', () => {
+        const html = _testOnly_renderOrchPreviewPane(null, [], 'spec');
+        expect(html).toMatch(/no profile|未加载|未載入/i);
+    });
+
+    test('marks rows as pending-change when a coarse set("",profile) edit alters them', () => {
+        // Orch's sandbox-diff emits one coarse `set('', newProfile)` per turn
+        // (orchestrator/iter-studio/studio.js:586-591). The renderer should
+        // mark changed paths visually.
+        const before = {
+            spec: {
+                stages: [
+                    { id: 'stage_1', mode: 'serial', nodes: [{ id: 'planner', preset: 'p1', type: 'agent' }] },
+                ],
+                defaultTools: null,
+            },
+            presets: {},
+        };
+        const after = {
+            spec: {
+                stages: [
+                    { id: 'stage_1', mode: 'parallel', nodes: [{ id: 'planner', preset: 'p1', type: 'agent' }] },
+                ],
+                defaultTools: null,
+            },
+            presets: {},
+        };
+        const edit = { op: 'set', path: '', oldValue: before, newValue: after };
+        const html = _testOnly_renderOrchPreviewPane(before, [edit], 'spec');
+        expect(html).toContain('pending-change');
+    });
+
+    test('unknown mode falls back to spec rendering without throwing', () => {
+        const profile = {
+            spec: { stages: [{ id: 'stage_x', mode: 'serial', nodes: [{ id: 'n', preset: 'p' }] }], defaultTools: null },
+            presets: {},
+        };
+        const html = _testOnly_renderOrchPreviewPane(profile, [], 'unknown_mode');
+        expect(html).toContain('stage_x');
     });
 });

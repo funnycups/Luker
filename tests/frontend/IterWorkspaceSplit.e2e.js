@@ -196,3 +196,77 @@ test.describe('Iter-studio workspace split — MG Schema', () => {
         await page.keyboard.press('Escape');
     });
 });
+
+test.describe('Iter-studio workspace split — Orchestrator', () => {
+    test.setTimeout(90000);
+
+    test('Orch: workspace mounts with split layout + composer-row auto-apply (orch_it_toolbar removed)', async ({ page }) => {
+        await awaitMainUI(page);
+        await ensureExtensionsDrawerOpen(page);
+        await ensureInlineDrawerOpen(page, 'orchestrator_settings');
+
+        // The orchestrator surfaces 4 mode-specific boards; whichever is
+        // visible owns the working "Open AI Iteration Studio" button. Use the
+        // first visible one to stay agnostic about the current execution mode.
+        const openBtn = page.locator('#orchestrator_settings [data-luker-action="ai-iterate-open"]:visible').first();
+        await expect(openBtn).toBeVisible({ timeout: 10000 });
+        await openBtn.click();
+
+        const popup = page.locator('.orch_it_popup.luker-iter-workspace').first();
+        await expect(popup).toBeVisible({ timeout: 10000 });
+
+        // Structural assertions: split grid + chat pane + preview pane + resizer.
+        await expect(popup.locator('.luker-iter-workspace-grid')).toBeVisible();
+        await expect(popup.locator('.luker-iter-workspace-chat')).toBeVisible();
+        await expect(popup.locator('[data-iter-preview-pane]')).toBeVisible();
+        await expect(popup.locator('.luker-iter-workspace-resizer')).toHaveCount(1);
+
+        // The legacy `orch_it_toolbar` block (which housed the auto-apply
+        // checkbox in its own row) is gone — replaced by the composer-row
+        // auto-apply label.
+        await expect(popup.locator('.orch_it_toolbar')).toHaveCount(0);
+
+        // Auto-apply control is mounted in the composer row, unchecked by default.
+        const autoApply = popup.locator('.orch_it_composer [data-orch-it-action="toggle-auto-apply"]');
+        await expect(autoApply).toHaveCount(1);
+        await expect(autoApply).not.toBeChecked();
+
+        // Tab bar exists (display: none on desktop, but the elements are mounted).
+        await expect(popup.locator('[data-iter-action="switch-tab"][data-iter-tab="chat"]')).toHaveCount(1);
+        await expect(popup.locator('[data-iter-action="switch-tab"][data-iter-tab="preview"]')).toHaveCount(1);
+
+        // Preview pane has content — at minimum a Pipeline / Loop / Agents
+        // section title (depending on the active execution mode) or the
+        // 'No profile loaded' fallback. The active locale may be en/zh-cn/zh-tw.
+        const previewText = await popup.locator('[data-iter-preview-pane]').textContent();
+        expect(previewText || '').toMatch(/Pipeline|Loop|Agents|Main|流水线|流水線|循环|循環|代理|主代理|No profile loaded|未加载|未載入/);
+
+        // Toggle auto-apply, confirm the checkbox tracks state.
+        await autoApply.check();
+        await expect(autoApply).toBeChecked();
+        await autoApply.uncheck();
+        await expect(autoApply).not.toBeChecked();
+
+        await page.keyboard.press('Escape');
+    });
+
+    test('Orch: send a turn, pending block surfaces (requires connection profile)', async ({ page }) => {
+        await awaitMainUI(page);
+        await ensureConnectionProfile(page);
+        await ensureExtensionsDrawerOpen(page);
+        await ensureInlineDrawerOpen(page, 'orchestrator_settings');
+
+        const openBtn = page.locator('#orchestrator_settings [data-luker-action="ai-iterate-open"]:visible').first();
+        await openBtn.click();
+
+        const popup = page.locator('.orch_it_popup.luker-iter-workspace').first();
+        await expect(popup).toBeVisible({ timeout: 10000 });
+
+        await popup.locator('[data-orch-it-input]').fill('Add a new stage named "review" to the pipeline');
+        await popup.locator('[data-orch-it-action="send"]').click();
+
+        await expect(popup.locator('.orch_it_pending')).toBeVisible({ timeout: 60000 });
+
+        await page.keyboard.press('Escape');
+    });
+});

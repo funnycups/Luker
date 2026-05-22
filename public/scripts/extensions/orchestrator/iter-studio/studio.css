@@ -423,6 +423,7 @@
 .orch_it_composer {
     flex: 0 0 auto;
     display: flex;
+    flex-direction: column;
     gap: var(--it-space-xs);
     padding: var(--it-space-md);
     border: var(--it-border);
@@ -449,7 +450,6 @@
 .orch_it_composer button {
     flex: 0 0 auto;
     min-width: 80px;
-    align-self: stretch;
     background: color-mix(in oklab, var(--it-accent-primary) 18%, transparent);
     border-color: color-mix(in oklab, var(--it-accent-primary) 55%, transparent);
     font-weight: 600;

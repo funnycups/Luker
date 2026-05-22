@@ -32,16 +32,20 @@
  *   - continue → if no pending edits, schedule another runIterationTurn
  *   - finalize → render a banner, disable composer
  *
- * Layout per sub-spec §4:
+ * Layout — split workspace (chat + live preview):
  *
- *   ┌────────────────────────────────────────────────────┐
- *   │ <details> History … New, Clear      </details>    │
- *   │ <div> Toolbar: Auto-apply checkbox  </div>        │
- *   │ <div> message list (chat)           </div>        │
- *   │ <div> finalized banner (when set)   </div>        │
- *   │ <div> pending edits + Apply Global/Char  </div>   │
- *   │ <div> composer textarea + Send      </div>        │
- *   └────────────────────────────────────────────────────┘
+ *   ┌────────────────────────────────────────────────────────────────┐
+ *   │ <details> History … New, Clear                </details>       │
+ *   │ <div> Tab bar (Chat | Preview) — mobile only </div>            │
+ *   │ ┌─ chat pane ──────────────────┐ │ ┌─ preview pane ────────┐  │
+ *   │ │ message list                 │ │ │ live profile          │  │
+ *   │ │ finalized banner (when set)  │ │ │ (Pipeline / Loop /    │  │
+ *   │ │ pending edits + Apply G/Char │R│ │  Agenda / Director,   │  │
+ *   │ │ composer:                    │ │ │  mode-dependent)      │  │
+ *   │ │   textarea                   │ │ │                       │  │
+ *   │ │   [✓] auto-apply  [Send]     │ │ │                       │  │
+ *   │ └──────────────────────────────┘ │ └───────────────────────┘  │
+ *   └────────────────────────────────────────────────────────────────┘
  *
  * The popup is mounted via `new Popup(..., POPUP_TYPE.DISPLAY)` so it has no
  * built-in OK / Cancel buttons; the user dismisses it via the dialog's close
@@ -79,6 +83,7 @@
 import { Popup, POPUP_TYPE } from '../../../popup.js';
 import {
     applyEdits,
+    bindIterWorkspaceResizer,
     render as ITER_RENDER,
     runner as ITER_RUNNER,
     textDiff as ITER_TEXT_DIFF,
@@ -129,6 +134,368 @@ function escapeHtmlLocal(s) {
     return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' }[c]));
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Live target preview — file-local helpers + 4-mode dispatcher.
+//
+// Module-scope so unit tests can `import { _testOnly_renderOrchPreviewPane }`
+// without instantiating the popup. Pure functions: given `live` + pending
+// edits + mode, return preview HTML. Snippets B + C from the implementation
+// plan, duplicated rather than extracted to iteration-library per spec §B.
+//
+// Profile shapes (per source-of-truth, not the plan's best-guesses):
+//   - SPEC:     {spec: {stages: [{id, mode, nodes: [{id, preset, type}]}],
+//                       defaultTools}, presets: {<id>: {...}}}
+//   - LOOP:     FLAT — {mode, apiPresetName, promptPresetName, system_prompt,
+//                       tools, max_rounds, wall_clock_budget_ms, capsule_inject}
+//   - AGENDA:   {planner, agents: {<id>: {...}} (map), finalAgentId, limits}
+//   - DIRECTOR: {mode, director: {mainAgent, subAgents: [...] (array), ...}}
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * Apply a single coarse `{ op: 'set', path: '', newValue }` edit by replacing
+ * `live` outright with a deep clone of `newValue`. The shared `applyEdits`
+ * engine is lodash-backed and `lodash.set(target, '', value)` is a no-op, so
+ * sandbox-diff edits would otherwise silently skip — leaving both the manual
+ * Apply button and composer-row auto-apply as UI-only with no commit. Pure
+ * function; caller owns the resulting object.
+ *
+ * @param {*} _live   Current live value (unused; only the new value matters
+ *                    when the engine emits a full-replacement edit).
+ * @param {{op:string, path:string, newValue:*}} edit  The empty-path set edit.
+ * @returns {*} A `structuredClone` of `edit.newValue`.
+ */
+function applyEmptyPathSet(_live, edit) {
+    return structuredClone(edit.newValue);
+}
+
+function computeChangedPathSet(live, pendingEdits) {
+    if (!Array.isArray(pendingEdits) || pendingEdits.length === 0) return new Set();
+    // Orchestrator sandbox-diff emits `{ op: 'set', path: '', oldValue,
+    // newValue }` per tool call (see normalizeToolCallToEditInline below).
+    // The shared `applyEdits` engine is lodash-backed and treats path='' as
+    // a no-op, so we'd see live === newLive and the diff would be empty.
+    // Short-circuit: if any edit has `path === ''` with a `newValue`, walk
+    // live vs that value directly. Renderer-local bypass — the actual apply
+    // path is untouched (the orchestrator's coarse `set('',profile)` shape
+    // would also exhibit MG's empty-path no-op bug, but that's out of scope
+    // for the workspace-upgrade and the user has working manual Apply +
+    // auto-apply via the per-mode global/character apply helpers anyway).
+    const emptyPathEdit = pendingEdits.find(e => e?.op === 'set' && e?.path === '' && typeof e?.newValue !== 'undefined');
+    if (emptyPathEdit) {
+        const changed = new Set();
+        walkDiff('', live, emptyPathEdit.newValue, changed);
+        return changed;
+    }
+    let next;
+    try {
+        const cloned = structuredClone(live);
+        const result = applyEdits(pendingEdits, cloned);
+        next = result?.newLive ?? cloned;
+    } catch {
+        return new Set();
+    }
+    const changed = new Set();
+    walkDiff('', live, next, changed);
+    return changed;
+}
+
+function walkDiff(path, a, b, out) {
+    if (a === b) return;
+    if (typeof a !== typeof b || a === null || b === null || typeof a !== 'object') {
+        out.add(path);
+        return;
+    }
+    const keys = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
+    for (const k of keys) {
+        const childPath = path ? `${path}.${k}` : k;
+        walkDiff(childPath, a?.[k], b?.[k], out);
+    }
+}
+
+function truncateForPreview(str, max = 200) {
+    if (typeof str !== 'string') str = String(str ?? '');
+    return str.length > max ? str.slice(0, max) + '…' : str;
+}
+
+/**
+ * Return true if any element of `changed` (a Set of dotted paths) is a
+ * descendant of (or exactly equal to) `prefix`. Used to bubble "this stage
+ * was modified" up to the stage row without computing a per-field highlight
+ * for every node.
+ */
+function isPrefixInChangedSet(changed, prefix) {
+    if (!(changed instanceof Set) || changed.size === 0) return false;
+    if (changed.has(prefix)) return true;
+    const dotted = prefix + '.';
+    for (const p of changed) {
+        if (typeof p === 'string' && p.startsWith(dotted)) return true;
+    }
+    return false;
+}
+
+function rowClass(isChanged) {
+    return isChanged
+        ? 'luker-iter-workspace-preview-row pending-change'
+        : 'luker-iter-workspace-preview-row';
+}
+
+/**
+ * Render the right-pane HTML for the Orchestrator workspace preview. Pure
+ * function; dispatches on `mode` to a per-mode sub-renderer. Wraps each
+ * sub-renderer in try/catch so a malformed profile (e.g. half-applied edit
+ * leaving the working profile in an inconsistent state) can't blank the
+ * workspace.
+ *
+ * @param {object|null} live          Mode-dependent working profile, or null.
+ * @param {Array}       pendingEdits  Edits from the latest LLM round.
+ * @param {string}      mode          One of 'spec' | 'loop' | 'agenda' | 'director'.
+ * @param {Function}    [tFn]         Optional i18n function (string → string).
+ * @returns {string} HTML.
+ */
+function renderOrchPreviewPane(live, pendingEdits, mode, tFn) {
+    const t = typeof tFn === 'function' ? tFn : (s) => String(s ?? '');
+    if (!live) {
+        return `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('No profile loaded.'))}</div>`;
+    }
+    try {
+        const changed = computeChangedPathSet(live, pendingEdits);
+        if (mode === 'loop') return renderOrchLoopPreview(live, changed, t);
+        if (mode === 'agenda') return renderOrchAgendaPreview(live, changed, t);
+        if (mode === 'director') return renderOrchDirectorPreview(live, changed, t);
+        return renderOrchSpecPreview(live, changed, t);
+    } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[orch-iteration] preview renderer failed', err);
+        return `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('Preview unavailable'))}</div>`;
+    }
+}
+
+/**
+ * SPEC mode renderer — surface stages, modes, nodes (with preset names).
+ * Reads the real shape `{spec: {stages, defaultTools}, presets}`. The
+ * `spec.mode === 'director'` carve-out handled by `sanitizeSpec` is
+ * irrelevant here — the popup's outer dispatcher routes by `state.session.mode`
+ * not by the profile shape.
+ */
+function renderOrchSpecPreview(profile, changed, t) {
+    const stages = Array.isArray(profile?.spec?.stages) ? profile.spec.stages : [];
+    const presetMap = (profile?.presets && typeof profile.presets === 'object') ? profile.presets : {};
+    const stageRows = stages.map((s, stageIdx) => {
+        const nodes = Array.isArray(s?.nodes) ? s.nodes : [];
+        const stagePath = `spec.stages.${stageIdx}`;
+        const stageChanged = isPrefixInChangedSet(changed, stagePath);
+        const nodeBlocks = nodes.map((n, nodeIdx) => {
+            const nodePath = `${stagePath}.nodes.${nodeIdx}`;
+            const nodeChanged = isPrefixInChangedSet(changed, nodePath);
+            const presetKey = String(n?.preset || n?.id || '');
+            const preset = presetMap[presetKey] || null;
+            const presetLabel = preset
+                ? (preset.apiPresetName || preset.promptPresetName || presetKey)
+                : presetKey;
+            const typeLabel = n?.type && n.type !== 'agent' ? `[${escapeHtmlLocal(n.type)}]` : '';
+            return `<div class="luker-iter-workspace-preview-row-body${nodeChanged ? ' pending-change' : ''}" style="margin-left:12px;">
+                <span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(n?.id || '?')}</span>
+                <span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(presetLabel)} ${typeLabel}</span>
+            </div>`;
+        }).join('');
+        return `<div class="${rowClass(stageChanged)}">
+            <div class="luker-iter-workspace-preview-row-head">
+                <span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(s?.id || '?')}</span>
+                <span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(s?.mode || 'serial')}</span>
+            </div>
+            ${nodeBlocks}
+        </div>`;
+    }).join('');
+    return `
+        <div class="luker-iter-workspace-preview-section">
+            <div class="luker-iter-workspace-preview-section-title">${escapeHtmlLocal(t('Pipeline'))}</div>
+            ${stageRows || `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('No stages'))}</div>`}
+        </div>
+    `;
+}
+
+/**
+ * LOOP mode renderer — surfaces the FLAT loop profile (preset names,
+ * max_rounds, wall-clock budget). The plan's `{loop: {agent}}` fixture is
+ * a best-guess; the real shape is flat (sanitizeLoopProfile in
+ * persistence.js:363+).
+ */
+function renderOrchLoopPreview(profile, changed, t) {
+    const apiPreset = String(profile?.apiPresetName ?? '');
+    const promptPreset = String(profile?.promptPresetName ?? '');
+    const maxRounds = Number(profile?.max_rounds ?? 0);
+    const wallClockMs = Number(profile?.wall_clock_budget_ms ?? 0);
+    const systemPrompt = truncateForPreview(String(profile?.system_prompt ?? ''), 200);
+
+    const rows = [
+        { label: t('Prompt preset'), value: promptPreset, path: 'promptPresetName' },
+        { label: t('API preset'), value: apiPreset, path: 'apiPresetName' },
+        { label: t('Max rounds'), value: String(maxRounds), path: 'max_rounds' },
+        { label: t('Wall-clock budget (s)'), value: String(Math.round(wallClockMs / 1000)), path: 'wall_clock_budget_ms' },
+    ].map(({ label, value, path }) => {
+        const isChanged = changed.has(path);
+        const displayValue = value || `<span class="muted">${escapeHtmlLocal(t('(unset)'))}</span>`;
+        return `<div class="${rowClass(isChanged)}">
+            <div class="luker-iter-workspace-preview-row-head">
+                <span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(label)}</span>
+                <span class="luker-iter-workspace-preview-row-meta">${value ? escapeHtmlLocal(value) : displayValue}</span>
+            </div>
+        </div>`;
+    }).join('');
+
+    const systemPromptChanged = changed.has('system_prompt');
+    const systemPromptHtml = systemPrompt
+        ? `<div class="${rowClass(systemPromptChanged)}">
+            <div class="luker-iter-workspace-preview-row-head">
+                <span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(t('System prompt'))}</span>
+            </div>
+            <div class="luker-iter-workspace-preview-row-body">${escapeHtmlLocal(systemPrompt)}</div>
+        </div>`
+        : '';
+
+    return `
+        <div class="luker-iter-workspace-preview-section">
+            <div class="luker-iter-workspace-preview-section-title">${escapeHtmlLocal(t('Loop agent'))}</div>
+            ${rows}
+            ${systemPromptHtml}
+        </div>
+    `;
+}
+
+/**
+ * AGENDA mode renderer — surfaces the planner block + each agent (map,
+ * keyed by id; the plan's `[{id, presetName}]` array fixture is wrong).
+ */
+function renderOrchAgendaPreview(profile, changed, t) {
+    const planner = profile?.planner && typeof profile.planner === 'object' ? profile.planner : {};
+    const agents = profile?.agents && typeof profile.agents === 'object' ? profile.agents : {};
+    const finalAgentId = String(profile?.finalAgentId ?? '');
+    const limits = profile?.limits && typeof profile.limits === 'object' ? profile.limits : {};
+
+    const plannerChanged = isPrefixInChangedSet(changed, 'planner');
+    const plannerSubtitle = [planner.promptPresetName, planner.apiPresetName].filter(Boolean).join(' / ');
+    const plannerBlock = `
+        <div class="${rowClass(plannerChanged)}">
+            <div class="luker-iter-workspace-preview-row-head">
+                <span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(t('Planner'))}</span>
+                <span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(plannerSubtitle || '')}</span>
+            </div>
+        </div>
+    `;
+
+    const agentEntries = Object.entries(agents);
+    const agentRows = agentEntries.map(([id, agent]) => {
+        const agentPath = `agents.${id}`;
+        const agentChanged = isPrefixInChangedSet(changed, agentPath);
+        const subtitle = [agent?.promptPresetName, agent?.apiPresetName].filter(Boolean).join(' / ');
+        const isFinal = id === finalAgentId ? ` [${escapeHtmlLocal(t('(final)'))}]` : '';
+        return `<div class="${rowClass(agentChanged)}">
+            <div class="luker-iter-workspace-preview-row-head">
+                <span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(id)}${isFinal}</span>
+                <span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(subtitle || '')}</span>
+            </div>
+        </div>`;
+    }).join('');
+
+    const limitsChanged = isPrefixInChangedSet(changed, 'limits');
+    const limitsBlock = `
+        <div class="${rowClass(limitsChanged)}">
+            <div class="luker-iter-workspace-preview-row-head">
+                <span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(t('Limits'))}</span>
+                <span class="luker-iter-workspace-preview-row-meta">
+                    ${escapeHtmlLocal(t('planner rounds'))}: ${escapeHtmlLocal(String(limits.plannerMaxRounds ?? ''))} ·
+                    ${escapeHtmlLocal(t('concurrent agents'))}: ${escapeHtmlLocal(String(limits.maxConcurrentAgents ?? ''))} ·
+                    ${escapeHtmlLocal(t('total runs'))}: ${escapeHtmlLocal(String(limits.maxTotalRuns ?? ''))}
+                </span>
+            </div>
+        </div>
+    `;
+
+    return `
+        <div class="luker-iter-workspace-preview-section">
+            <div class="luker-iter-workspace-preview-section-title">${escapeHtmlLocal(t('Pipeline'))}</div>
+            ${plannerBlock}
+        </div>
+        <div class="luker-iter-workspace-preview-section">
+            <div class="luker-iter-workspace-preview-section-title">${escapeHtmlLocal(t('Agents'))}</div>
+            ${agentRows || `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('No agents'))}</div>`}
+        </div>
+        <div class="luker-iter-workspace-preview-section">
+            ${limitsBlock}
+        </div>
+    `;
+}
+
+/**
+ * DIRECTOR mode renderer — surfaces the main agent + each sub-agent.
+ * Real shape nests under `director` (sanitizeDirectorProfile in
+ * director-defaults.js:1008); the plan's flat `{main, subAgents}` fixture
+ * is a best-guess.
+ */
+function renderOrchDirectorPreview(profile, changed, t) {
+    const director = profile?.director && typeof profile.director === 'object' ? profile.director : {};
+    const main = director.mainAgent && typeof director.mainAgent === 'object' ? director.mainAgent : {};
+    const subs = Array.isArray(director.subAgents) ? director.subAgents : [];
+
+    const mainChanged = isPrefixInChangedSet(changed, 'director.mainAgent');
+    const mainSubtitle = [main.promptPresetName, main.apiPresetName].filter(Boolean).join(' / ');
+    const mainBlock = `
+        <div class="${rowClass(mainChanged)}">
+            <div class="luker-iter-workspace-preview-row-head">
+                <span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(t('Main agent'))}</span>
+                <span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(mainSubtitle || '')}</span>
+            </div>
+        </div>
+    `;
+
+    const subRows = subs.map((a, idx) => {
+        const path = `director.subAgents.${idx}`;
+        const isChanged = isPrefixInChangedSet(changed, path);
+        const subtitle = [a?.promptPresetName, a?.apiPresetName, a?.description].filter(Boolean).join(' · ');
+        return `<div class="${rowClass(isChanged)}">
+            <div class="luker-iter-workspace-preview-row-head">
+                <span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(a?.id || '?')}</span>
+                <span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(subtitle || '')}</span>
+            </div>
+        </div>`;
+    }).join('');
+
+    const limitsChanged = isPrefixInChangedSet(changed, 'director.maxRounds')
+        || isPrefixInChangedSet(changed, 'director.maxConcurrentSubagents')
+        || isPrefixInChangedSet(changed, 'director.maxTotalSubagentRuns');
+    const limitsBlock = `
+        <div class="${rowClass(limitsChanged)}">
+            <div class="luker-iter-workspace-preview-row-head">
+                <span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(t('Limits'))}</span>
+                <span class="luker-iter-workspace-preview-row-meta">
+                    ${escapeHtmlLocal(t('rounds'))}: ${escapeHtmlLocal(String(director.maxRounds ?? ''))} ·
+                    ${escapeHtmlLocal(t('concurrent subagents'))}: ${escapeHtmlLocal(String(director.maxConcurrentSubagents ?? ''))} ·
+                    ${escapeHtmlLocal(t('total subagent runs'))}: ${escapeHtmlLocal(String(director.maxTotalSubagentRuns ?? ''))}
+                </span>
+            </div>
+        </div>
+    `;
+
+    return `
+        <div class="luker-iter-workspace-preview-section">
+            <div class="luker-iter-workspace-preview-section-title">${escapeHtmlLocal(t('Pipeline'))}</div>
+            ${mainBlock}
+        </div>
+        <div class="luker-iter-workspace-preview-section">
+            <div class="luker-iter-workspace-preview-section-title">${escapeHtmlLocal(t('Sub-agents'))}</div>
+            ${subRows || `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('No sub-agents'))}</div>`}
+        </div>
+        <div class="luker-iter-workspace-preview-section">
+            ${limitsBlock}
+        </div>
+    `;
+}
+
+export {
+    renderOrchPreviewPane as _testOnly_renderOrchPreviewPane,
+    applyEmptyPathSet as _testOnly_applyEmptyPathSet,
+};
+
 function makeSessionId() {
     return `sess_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -152,9 +519,24 @@ function createNewSession(mode) {
  * to subordinate `[data-orch-it-*]` slots so we never re-mount the
  * textarea (which would lose focus + the in-progress draft).
  */
-function buildPopupHtml({ popupId, title, historyOpen, historyLabel, newSessionLabel, clearAllLabel, autoApply, sendLabel, composerPlaceholder, autoApplyLabel }) {
+function buildPopupHtml({
+    popupId,
+    title,
+    historyOpen,
+    historyLabel,
+    newSessionLabel,
+    clearAllLabel,
+    autoApply,
+    sendLabel,
+    composerPlaceholder,
+    autoApplyLabel,
+    chatTabLabel,
+    previewTabLabel,
+    chatBadgeAriaLabel,
+    resizerAriaLabel,
+}) {
     return `
-<div id="${popupId}" class="orch_it_popup">
+<div id="${popupId}" class="orch_it_popup luker-iter-workspace" data-iter-layout="split" data-iter-active-tab="chat">
     <div class="orch_it_title">${escapeHtmlLocal(title)}</div>
     <details class="orch_it_history" data-orch-it-history${historyOpen ? ' open' : ''}>
         <summary>${escapeHtmlLocal(historyLabel)}</summary>
@@ -164,18 +546,37 @@ function buildPopupHtml({ popupId, title, historyOpen, historyLabel, newSessionL
             <button class="menu_button menu_button_small" data-orch-it-action="clear-history">${escapeHtmlLocal(clearAllLabel)}</button>
         </div>
     </details>
-    <div class="orch_it_toolbar">
-        <label class="orch_it_toolbar_label">
-            <input type="checkbox" data-orch-it-action="toggle-auto-apply"${autoApply ? ' checked' : ''}>
-            <span class="orch_it_toolbar_label_text">${escapeHtmlLocal(autoApplyLabel)}</span>
-        </label>
+
+    <div class="luker-iter-workspace-tabs" role="tablist">
+        <button type="button" class="luker-iter-workspace-tab active" role="tab" aria-selected="true" data-iter-action="switch-tab" data-iter-tab="chat">
+            <span class="luker-iter-workspace-tab-label">${escapeHtmlLocal(chatTabLabel)}</span>
+            <span class="luker-iter-workspace-tab-badge" data-iter-chat-badge hidden aria-label="${escapeHtmlLocal(chatBadgeAriaLabel)}"></span>
+        </button>
+        <button type="button" class="luker-iter-workspace-tab" role="tab" aria-selected="false" data-iter-action="switch-tab" data-iter-tab="preview">
+            <span class="luker-iter-workspace-tab-label">${escapeHtmlLocal(previewTabLabel)}</span>
+        </button>
     </div>
-    <div class="orch_it_messages" data-orch-it-messages></div>
-    <div class="orch_it_finalized" data-orch-it-finalized hidden></div>
-    <div class="orch_it_pending" data-orch-it-pending hidden></div>
-    <div class="orch_it_composer">
-        <textarea class="text_pole" rows="2" data-orch-it-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
-        <button class="menu_button" data-orch-it-action="send">${escapeHtmlLocal(sendLabel)}</button>
+
+    <div class="luker-iter-workspace-grid">
+        <div class="luker-iter-workspace-chat" data-iter-pane="chat">
+            <div class="orch_it_messages" data-orch-it-messages></div>
+            <div class="orch_it_finalized" data-orch-it-finalized hidden></div>
+            <div class="orch_it_pending" data-orch-it-pending hidden></div>
+            <div class="orch_it_composer">
+                <textarea class="text_pole" rows="2" data-orch-it-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
+                <div class="orch_it_composer_actions">
+                    <label class="orch_it_composer_auto_apply">
+                        <input type="checkbox" data-orch-it-action="toggle-auto-apply"${autoApply ? ' checked' : ''}>
+                        <span>${escapeHtmlLocal(autoApplyLabel)}</span>
+                    </label>
+                    <div class="orch_it_composer_buttons">
+                        <button class="menu_button" data-orch-it-action="send">${escapeHtmlLocal(sendLabel)}</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="luker-iter-workspace-resizer" data-iter-resizer aria-label="${escapeHtmlLocal(resizerAriaLabel)}"></div>
+        <div class="luker-iter-workspace-preview" data-iter-pane="preview" data-iter-preview-pane></div>
     </div>
 </div>`;
 }
@@ -548,6 +949,29 @@ export async function openOrchestratorIterationStudio(deps) {
             $sendBtn.prop('disabled', false);
             $textarea.prop('disabled', false);
         }
+
+        // Live target preview pane (right column on desktop, Preview tab on
+        // mobile). Pure render against state.live + pendingEdits — the
+        // renderer wraps each per-mode sub-renderer in try/catch so a
+        // malformed pending edit shape can't blank the workspace.
+        try {
+            const $previewPane = $root.find('[data-iter-preview-pane]');
+            if ($previewPane.length) {
+                const previewHtml = renderOrchPreviewPane(
+                    state.live,
+                    state.pendingEdits || [],
+                    state.session.mode || mode,
+                    t,
+                );
+                $previewPane.html(previewHtml);
+            }
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(`[${MODULE}:${mode}] preview render failed`, err);
+            $root.find('[data-iter-preview-pane]').html(
+                `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('Preview unavailable'))}</div>`,
+            );
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -760,6 +1184,11 @@ export async function openOrchestratorIterationStudio(deps) {
             });
         }
 
+        // Mobile workspace: if the user was on the Preview tab, bump the
+        // chat-tab badge so they know new assistant content arrived without
+        // forcing a tab switch.
+        bumpChatBadge();
+
         // Mode-aware auto-apply: when checked AND new edits arrived AND
         // we are not finalized, apply immediately. (Order: apply BEFORE
         // evaluating auto-continue so the next turn sees the new live.)
@@ -802,8 +1231,21 @@ export async function openOrchestratorIterationStudio(deps) {
     async function applyPendingEdits({ skipRender = false, target = 'global' } = {}) {
         if (state.pendingEdits.length === 0) return;
         loadLive();
-        const result = applyEdits(state.pendingEdits, state.live);
-        state.live = result?.newLive ?? state.live;
+        // Sandbox-diff emits a single coarse {op:'set', path:'', newValue:<whole profile>}.
+        // lodash.set with empty path is a no-op, so route empty-path edits
+        // around the engine via applyEmptyPathSet — otherwise auto-apply and
+        // the manual Apply button both silently skip the commit. Mirrors the
+        // same fix shipped for memory-graph in 3fc75b35.
+        const onlyEdit = state.pendingEdits.length === 1 ? state.pendingEdits[0] : null;
+        const emptyPathEdit = onlyEdit && onlyEdit.op === 'set' && onlyEdit.path === '' && typeof onlyEdit.newValue !== 'undefined'
+            ? onlyEdit
+            : null;
+        if (emptyPathEdit) {
+            state.live = applyEmptyPathSet(state.live, emptyPathEdit);
+        } else {
+            const result = applyEdits(state.pendingEdits, state.live);
+            state.live = result?.newLive ?? state.live;
+        }
         state.pendingEdits = [];
         try {
             if (target === 'character') {
@@ -904,6 +1346,10 @@ export async function openOrchestratorIterationStudio(deps) {
         sendLabel: t('Send'),
         composerPlaceholder: t('Describe what to change in the profile...'),
         autoApplyLabel: t('Auto-apply edits'),
+        chatTabLabel: t('Chat'),
+        previewTabLabel: t('Preview'),
+        chatBadgeAriaLabel: t('New messages while you were on Preview'),
+        resizerAriaLabel: t('Resize columns'),
     });
     const popup = new Popup(popupHtml, POPUP_TYPE.DISPLAY, '', {
         wider: true,
@@ -1006,11 +1452,59 @@ export async function openOrchestratorIterationStudio(deps) {
         }
     });
 
+    // ── Workspace events ──────────────────────────────────────────────
+    // Mobile tab switcher — only relevant when the < 900px media query
+    // collapses the grid; on desktop both panes are mounted simultaneously
+    // and the tab bar is hidden via CSS.
+    $root.on('click.orchIt', '[data-iter-action="switch-tab"]', (e) => {
+        const tab = e.currentTarget?.dataset?.iterTab;
+        if (!tab) return;
+        e.preventDefault();
+        setActiveTab(tab);
+    });
+
+    function setActiveTab(tab) {
+        const root = $root?.[0];
+        if (!root) return;
+        root.dataset.iterActiveTab = tab;
+        root.querySelectorAll('[data-iter-action="switch-tab"]').forEach(btn => {
+            const isActive = btn.dataset.iterTab === tab;
+            btn.classList.toggle('active', isActive);
+            btn.setAttribute('aria-selected', String(isActive));
+        });
+        if (tab === 'chat') {
+            const badge = root.querySelector('[data-iter-chat-badge]');
+            if (badge) {
+                badge.hidden = true;
+                badge.textContent = '';
+            }
+        }
+    }
+
+    function bumpChatBadge() {
+        const root = $root?.[0];
+        if (!root || root.dataset?.iterActiveTab !== 'preview') return;
+        const badge = root.querySelector('[data-iter-chat-badge]');
+        if (!badge) return;
+        const next = (Number(badge.textContent) || 0) + 1;
+        badge.textContent = String(next);
+        badge.hidden = false;
+    }
+
+    // Bind the column resizer. Returns a no-op when grid/splitter are
+    // missing (e.g. during teardown), so the unbind call below is safe
+    // regardless of mount state.
+    const unbindResizer = bindIterWorkspaceResizer($root[0]);
+
     await render();
 
     // Block until the user dismisses the popup. Persist one final time so
     // any in-flight composer / surfaceState changes survive close.
-    await popupPromise;
+    try {
+        await popupPromise;
+    } finally {
+        try { unbindResizer(); } catch { /* ignore */ }
+    }
     try { state.abortController?.abort(); } catch { /* ignore */ }
     try { zoomOverlayUnbind?.(); } catch { /* ignore */ }
     await persistSession();
