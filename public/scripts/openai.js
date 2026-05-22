@@ -5819,10 +5819,14 @@ async function syncCharacterBoundPresetJsonData(characterId, boundPreset) {
             const responsePromise = new Promise((resolve, reject) => {
                 characterJsonDataWorkerPending.set(requestId, { resolve, reject });
             });
+            // boundPreset may carry Promises / Proxies / function getters from
+            // upstream callers (e.g. CPA commit after applyEdits). worker.postMessage
+            // uses structuredClone, which would reject them. Round-trip through
+            // JSON to drop non-data fields before sending.
             worker.postMessage({
                 id: requestId,
                 jsonData: sourceJsonData,
-                boundPreset,
+                boundPreset: JSON.parse(JSON.stringify(boundPreset)),
             });
             nextJsonData = await responsePromise;
         }

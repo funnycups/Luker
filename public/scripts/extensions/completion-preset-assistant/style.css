@@ -58,17 +58,3 @@
     width: fit-content;
     max-width: none;
 }
-
-/* CPA-specific: allow text controls inside toolbar/composer to shrink
-   below their intrinsic content width in flex contexts. The composer is
-   a vertical flex column, so do NOT set flex-basis here — it would be
-   interpreted as a minimum height and bloat the textarea. */
-.popup .cpa_dialog .luker-studio-toolbar .text_pole,
-.popup .cpa_dialog .luker-studio-composer .text_pole {
-    min-width: 0;
-}
-
-/* CPA-specific: busy state dims interactive elements */
-.popup .cpa_dialog.is_busy [data-cpa-action="send-or-stop"] {
-    /* Visual indicator handled by button text change */
-}
