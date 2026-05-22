@@ -1,0 +1,190 @@
+/* iteration-library — inline text-diff styling.
+ *
+ * Side-by-side LCS diff renderer styling. Lifted from the deleted
+ * `luker-studio.css` (rules at lines 562-734 of the Stage-5 ship), with
+ * the prefix renamed from `luker_iter_diff_*` to `luker_lib_diff_*` so
+ * the rules are namespaced to the library, not the shell. The
+ * `--luker-iter-split-left` CSS var was renamed to `--luker-lib-split-left`.
+ *
+ * Loaded lazily on first call to `renderInlineTextDiffHtml` (or via
+ * explicit `ensureStylesheetInjected()` from a popup's mount path); the
+ * stylesheet is link-injected once per page.
+ */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Inline text-diff (full table style with line numbers + splitter + zoom)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.luker_lib_diff {
+    border: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.3));
+    border-radius: 6px;
+    background: rgba(0,0,0,0.2);
+}
+.luker_lib_diff > summary {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    font-size: 0.9rem;
+}
+.luker_lib_diff_summary_main {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.luker_lib_diff_meta {
+    opacity: 0.78;
+    font-size: 0.88rem;
+}
+.luker_lib_diff_expand_btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.2em;
+    width: 2.2em;
+    padding: 0;
+    line-height: 1;
+}
+.luker_lib_diff_expand_btn i { pointer-events: none; }
+.luker_lib_diff_pre {
+    margin: 0;
+    padding: 6px;
+    border-top: 1px dashed var(--SmartThemeBorderColor, rgba(130,130,130,0.3));
+    max-height: 320px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+}
+.luker_lib_diff,
+.luker_lib_diff_pre { min-width: 0; max-width: 100%; box-sizing: border-box; }
+.luker_lib_diff_dual { --luker-lib-split-left: 50%; --luker-lib-splitter-width: 12px; display: grid; grid-template-columns: minmax(0, var(--luker-lib-split-left)) var(--luker-lib-splitter-width) minmax(0, calc(100% - var(--luker-lib-split-left) - var(--luker-lib-splitter-width))); gap: 0; width: 100%; min-width: 0; align-items: stretch; }
+.luker_lib_diff_splitter { position: relative; cursor: col-resize; touch-action: none; user-select: none; background: transparent; }
+.luker_lib_diff_splitter::before { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-50%); border-radius: 999px; background: color-mix(in oklab, var(--SmartThemeBodyColor) 20%, transparent); transition: background-color .12s ease; }
+.luker_lib_diff_splitter:hover::before,
+.luker_lib_diff_splitter.active::before { background: color-mix(in oklab, var(--SmartThemeBodyColor) 38%, transparent); }
+.luker_lib_diff_side { border: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.32)); border-radius: 6px; background: rgba(0,0,0,0.12); min-width: 0; overflow: hidden; }
+.luker_lib_diff_side_scroll { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; touch-action: auto; }
+.luker_lib_diff_table {
+    width: max-content;
+    min-width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 0.82rem;
+}
+.luker_lib_diff_pre,
+.luker_lib_diff_table,
+.luker_lib_diff_row td,
+.luker_lib_diff_text,
+.luker_lib_diff_text_inner { text-align: left; }
+.luker_lib_diff_row td {
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.24));
+    padding: 2px 6px;
+    vertical-align: top;
+}
+.luker_lib_diff_row:last-child td { border-bottom: none; }
+.luker_lib_diff_ln {
+    width: 3.8em;
+    text-align: right;
+    color: color-mix(in oklab, var(--SmartThemeBodyColor) 72%, transparent);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    position: sticky;
+    left: 0;
+    z-index: 3;
+    background-color: var(--SmartThemeBlurTintColor);
+    box-shadow: 1px 0 0 var(--SmartThemeBorderColor);
+    background-image: none;
+    opacity: 1;
+}
+.luker_lib_diff_text {
+    width: auto;
+    min-width: 0;
+}
+.luker_lib_diff_text_inner {
+    white-space: pre;
+    word-break: normal;
+    overflow-wrap: normal;
+    user-select: text;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    min-width: max-content;
+}
+.luker_lib_diff_word_add {
+    background: color-mix(in oklab, #4caf50 30%, transparent);
+    border-radius: 3px;
+    padding: 0 1px;
+}
+.luker_lib_diff_word_del {
+    background: color-mix(in oklab, #d9534f 30%, transparent);
+    border-radius: 3px;
+    padding: 0 1px;
+}
+.luker_lib_diff_row_add .luker_lib_diff_text.new { background: color-mix(in oklab, #4caf50 12%, transparent); }
+.luker_lib_diff_row_del .luker_lib_diff_text.old { background: color-mix(in oklab, #d9534f 12%, transparent); }
+.luker_lib_diff_row_mod .luker_lib_diff_text.old { background: color-mix(in oklab, #d9534f 10%, transparent); }
+.luker_lib_diff_row_mod .luker_lib_diff_text.new { background: color-mix(in oklab, #4caf50 10%, transparent); }
+.luker_lib_diff_zoom_overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10010;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.luker_lib_diff_zoom_backdrop {
+    position: absolute;
+    inset: 0;
+    background: color-mix(in oklab, #000 70%, transparent);
+}
+.luker_lib_diff_zoom_dialog {
+    position: relative;
+    z-index: 1;
+    width: min(1280px, 95vw);
+    height: min(92vh, 920px);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 10px;
+    background-color: var(--SmartThemeBlurTintColor);
+    /* Stack the tint with itself so backdrop-filter drops during
+       touch-scroll don't visually empty the dialog. Same idea the shell
+       used; see deleted .luker-studio-diff-zoom-dialog history. */
+    background-image:
+        linear-gradient(var(--SmartThemeBlurTintColor), var(--SmartThemeBlurTintColor)),
+        linear-gradient(var(--SmartThemeBlurTintColor), var(--SmartThemeBlurTintColor));
+    isolation: isolate;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 12px 36px rgba(0,0,0,0.45);
+}
+.luker_lib_diff_zoom_header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.24));
+}
+.luker_lib_diff_zoom_title {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.luker_lib_diff_zoom_close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.2em;
+    width: 2.2em;
+    padding: 0;
+    line-height: 1;
+}
+.luker_lib_diff_zoom_body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 10px;
+}
+.luker_lib_diff_zoom_body .luker_lib_diff_pre { max-height: none; height: auto; }

@@ -155,54 +155,26 @@ import { createMessageEditorHandle, TakeoverError } from './message-takeover.js'
 import { generateHorde } from './horde.js';
 import { getKoboldGenerationData, kai_settings, koboldai_settings, koboldai_setting_names } from './kai-settings.js';
 import { getNovelGenerationData, nai_settings, novelai_settings, novelai_setting_names } from './nai-settings.js';
-import {
-    openIterationStudio,
-    defineAdapter as defineIterationStudioAdapter,
-    createEmptyHistoryState as createIterationStudioHistoryState,
-    makeSessionId as makeIterationStudioSessionId,
-    sanitizeSession as sanitizeIterationStudioSession,
-    sanitizeSessionMessage as sanitizeIterationStudioMessage,
-    findMessageById as findIterationStudioMessage,
-    buildControlToolDefs as buildIterationStudioControlTools,
-    getControlToolNames as getIterationStudioControlNames,
-    runIterationTurn as runIterationStudioTurn,
-    executeToolCalls as executeIterationStudioTools,
-    stagePendingApproval as stageIterationStudioPendingApproval,
-    applyPendingApproval as applyIterationStudioPendingApproval,
-    rejectPendingApproval as rejectIterationStudioPendingApproval,
-    rollbackToMessage as rollbackIterationStudioMessage,
-    buildAutoContinuePrompt as buildIterationStudioAutoContinue,
-    ensureStorageWipeOnce as ensureIterationStudioStorageWipe,
-} from './iteration-studio/index.js';
 import * as EDITS_API from './lib/edits/index.js';
+import * as ITERATION_LIBRARY_API_NS from './iteration-library/index.js';
 
 /**
- * Layer 2 export of the shared IterationStudio shell. Third-party
- * extensions consume it as `SillyTavern.getContext().iterationStudio` so
- * they don't need to know the source file path. The same functions are
- * also importable directly via `/scripts/iteration-studio/index.js` for
- * in-tree extensions that prefer the static import path. See
- * `docs/development/extension-api/iteration-studio.md` for the contract.
+ * Layer 2 / Layer 3 export of the iteration-library surface (spec section 15).
+ * Plugin-owned popups (CEA Character, CPA, MG Schema, Orchestrator) consume
+ * this directly. The shell-era `iterationStudio` field was removed in Stage 6
+ * of the iter-studio library overhaul.
  */
-const ITERATION_STUDIO_API = Object.freeze({
-    open: openIterationStudio,
-    openIterationStudio,
-    defineAdapter: defineIterationStudioAdapter,
-    createEmptyHistoryState: createIterationStudioHistoryState,
-    makeSessionId: makeIterationStudioSessionId,
-    sanitizeSession: sanitizeIterationStudioSession,
-    sanitizeSessionMessage: sanitizeIterationStudioMessage,
-    findMessageById: findIterationStudioMessage,
-    buildControlToolDefs: buildIterationStudioControlTools,
-    getControlToolNames: getIterationStudioControlNames,
-    runIterationTurn: runIterationStudioTurn,
-    executeToolCalls: executeIterationStudioTools,
-    stagePendingApproval: stageIterationStudioPendingApproval,
-    applyPendingApproval: applyIterationStudioPendingApproval,
-    rejectPendingApproval: rejectIterationStudioPendingApproval,
-    rollbackToMessage: rollbackIterationStudioMessage,
-    buildAutoContinuePrompt: buildIterationStudioAutoContinue,
-    ensureStorageWipeOnce: ensureIterationStudioStorageWipe,
+const ITERATION_LIBRARY_API = Object.freeze({
+    applyEdits: ITERATION_LIBRARY_API_NS.applyEdits,
+    inverseEdit: ITERATION_LIBRARY_API_NS.inverseEdit,
+    registerOp: ITERATION_LIBRARY_API_NS.registerOp,
+    BUILT_IN_OPS: ITERATION_LIBRARY_API_NS.BUILT_IN_OPS,
+    showConflictResolution: ITERATION_LIBRARY_API_NS.showConflictResolution,
+    render: ITERATION_LIBRARY_API_NS.render,
+    runner: ITERATION_LIBRARY_API_NS.runner,
+    storage: ITERATION_LIBRARY_API_NS.storage,
+    textDiff: ITERATION_LIBRARY_API_NS.textDiff,
+    zoomOverlay: ITERATION_LIBRARY_API_NS.zoomOverlay,
 });
 
 function safeClone(value, fallback = {}) {
@@ -2230,7 +2202,7 @@ export function getContext() {
         getPastCharacterChats,
         deleteCharacterChat: deleteCharacterChatByName,
         saveSettingsDebounced,
-        iterationStudio: ITERATION_STUDIO_API,
+        iterationLibrary: ITERATION_LIBRARY_API,
         edits: EDITS_API,
         onlineStatus: online_status,
         maxContext: Number(max_context),
