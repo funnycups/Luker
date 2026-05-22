@@ -23,6 +23,9 @@ import {
 } from './utils.js';
 import { BIAS_CACHE, createNewLogitBiasEntry, displayLogitBias, getLogitBiasListResult } from './logit-bias.js';
 import { SECRET_KEYS, secret_state, writeSecret } from './secrets.js';
+import { t } from './i18n.js';
+import { withRetry } from './request-retry.js';
+import { getMaxRequestRetries } from './extensions/connection-manager/max-retries.js';
 
 const default_preamble = '[ Style: chat, complex, sensory, visceral ]';
 const default_order = [1, 5, 0, 2, 3, 4];
@@ -748,11 +751,26 @@ function tryParseStreamingError(response, decoded) {
 export async function generateNovelWithStreaming(generate_data, signal, { onLukerMeta = null } = {}) {
     generate_data.streaming = nai_settings.streaming_novel;
 
-    const response = await fetch('/api/novelai/generate', {
-        headers: getRequestHeaders(),
-        body: JSON.stringify(generate_data),
-        method: 'POST',
-        signal: signal,
+    const maxRetries = getMaxRequestRetries();
+
+    const response = await withRetry(async () => {
+        return await fetch('/api/novelai/generate', {
+            headers: getRequestHeaders(),
+            body: JSON.stringify(generate_data),
+            method: 'POST',
+            signal: signal,
+        });
+    }, {
+        maxRetries,
+        signal,
+        label: 'novelai',
+        onAttempt: (attempt) => {
+            toastr.info(
+                t`Retrying request… (${attempt}/${maxRetries})`,
+                t`Request failed`,
+                { timeOut: 3000 },
+            );
+        },
     });
 
     const generationId = response.headers.get('x-luker-generation-id');

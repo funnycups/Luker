@@ -21,6 +21,7 @@ import { performFuzzySearch } from '/scripts/power-user.js';
 import { StreamingDisplay } from '/scripts/streaming-display.js';
 import { ConnectionManagerRequestService } from '../shared.js';
 import { formatReasoning } from '/scripts/reasoning.js';
+import { clampMaxRetries } from './max-retries.js';
 import {
     createEmbeddingProfileStub,
     deleteEmbeddingProfile,
@@ -62,6 +63,7 @@ const CC_COMMANDS = [
     'function-calling-plain-text',
     'function-calling-plain-text-error-retry',
     'function-calling-plain-text-error-retry-max-attempts',
+    'max-request-retries',
     'claude-enable-system-prompt-cache',
     'claude-extended-ttl',
     'claude-caching-at-depth',
@@ -155,6 +157,7 @@ const FANCY_NAMES = {
     'vertexai-auth-mode': 'Vertex AI Auth Mode',
     'vertexai-express-project-id': 'Vertex AI Express Project',
     'rpm-limit': 'Requests per minute',
+    'max-request-retries': 'Max request retries',
 };
 
 /**
@@ -259,6 +262,7 @@ const profilesProvider = () => [
  * @property {string} [api-url] Server URL
  * @property {string} [secret-id] Secret ID
  * @property {number} [rpm-limit] Requests-per-minute limit. 0/missing = no limit.
+ * @property {number} [max-request-retries] Network-layer retry count (0-5). 0/missing = disabled.
  * @property {string[]} [exclude] Commands to exclude
  */
 
@@ -1166,6 +1170,7 @@ export async function init() {
     const plainTextFunctionCallingErrorRetryToggle = document.getElementById('connection_profile_function_calling_plain_text_error_retry');
     const plainTextFunctionCallingRetryAttemptsInput = document.getElementById('connection_profile_function_calling_plain_text_error_retry_max_attempts');
     const rpmLimitInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_rpm_limit'));
+    const maxRequestRetriesInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_max_request_retries'));
     const claudeEnableSystemPromptCacheToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_claude_enable_system_prompt_cache'));
     const claudeExtendedTtlToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_claude_extended_ttl'));
     const claudeCachingAtDepthInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_claude_caching_at_depth'));
@@ -1235,6 +1240,15 @@ export async function init() {
             rpmLimitInput.disabled = !supportedForRpm;
             if (document.activeElement !== rpmLimitInput) {
                 rpmLimitInput.value = String(rpmValue);
+            }
+        }
+
+        if (maxRequestRetriesInput) {
+            const supportedForRetries = !!profile && (profileMode === 'cc' || profileMode === 'tc');
+            const retriesValue = profile ? clampMaxRetries(profile['max-request-retries']) : 0;
+            maxRequestRetriesInput.disabled = !supportedForRetries;
+            if (document.activeElement !== maxRequestRetriesInput) {
+                maxRequestRetriesInput.value = String(retriesValue);
             }
         }
 
@@ -1431,6 +1445,35 @@ export async function init() {
                 delete profile['rpm-limit'];
             } else {
                 profile['rpm-limit'] = value;
+            }
+            saveSettingsDebounced();
+            await renderDetailsContent(detailsContent);
+            await eventSource.emit(event_types.CONNECTION_PROFILE_UPDATED, oldProfile, profile);
+            syncProfileEditorControls();
+        });
+    }
+
+    if (maxRequestRetriesInput) {
+        maxRequestRetriesInput.addEventListener('change', async () => {
+            const value = clampMaxRetries(maxRequestRetriesInput.value);
+            maxRequestRetriesInput.value = String(value);
+
+            const profile = getSelectedProfile();
+            if (!profile) {
+                syncProfileEditorControls();
+                return;
+            }
+            const mode = resolveProfileMode(profile);
+            if (mode !== 'cc' && mode !== 'tc') {
+                syncProfileEditorControls();
+                return;
+            }
+
+            const oldProfile = structuredClone(profile);
+            if (value <= 0) {
+                delete profile['max-request-retries'];
+            } else {
+                profile['max-request-retries'] = value;
             }
             saveSettingsDebounced();
             await renderDetailsContent(detailsContent);

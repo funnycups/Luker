@@ -16,6 +16,8 @@ import {
 } from '../script.js';
 import { t } from './i18n.js';
 import { autoSelectInstructPreset } from './instruct-mode.js';
+import { withRetry } from './request-retry.js';
+import { getMaxRequestRetries } from './extensions/connection-manager/max-retries.js';
 
 import {
     power_user,
@@ -230,11 +232,26 @@ function tryParseStreamingError(response, decoded) {
 }
 
 export async function generateKoboldWithStreaming(generate_data, signal, { onLukerMeta = null } = {}) {
-    const response = await fetch('/api/backends/kobold/generate', {
-        headers: getRequestHeaders(),
-        body: JSON.stringify(unescapeMacroBracesInRequestData(generate_data)),
-        method: 'POST',
-        signal: signal,
+    const maxRetries = getMaxRequestRetries();
+
+    const response = await withRetry(async () => {
+        return await fetch('/api/backends/kobold/generate', {
+            headers: getRequestHeaders(),
+            body: JSON.stringify(unescapeMacroBracesInRequestData(generate_data)),
+            method: 'POST',
+            signal: signal,
+        });
+    }, {
+        maxRetries,
+        signal,
+        label: 'kobold',
+        onAttempt: (attempt) => {
+            toastr.info(
+                t`Retrying request… (${attempt}/${maxRetries})`,
+                t`Request failed`,
+                { timeOut: 3000 },
+            );
+        },
     });
 
     const generationId = response.headers.get('x-luker-generation-id');

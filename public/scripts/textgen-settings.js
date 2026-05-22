@@ -18,6 +18,8 @@ import {
 import { deriveTemplatesFromChatTemplate } from './chat-templates.js';
 import { t } from './i18n.js';
 import { autoSelectInstructPreset, selectContextPreset, selectInstructPreset } from './instruct-mode.js';
+import { withRetry } from './request-retry.js';
+import { getMaxRequestRetries } from './extensions/connection-manager/max-retries.js';
 import { BIAS_CACHE, createNewLogitBiasEntry, displayLogitBias, getLogitBiasListResult } from './logit-bias.js';
 import { unescapeMacroBracesInRequestData } from './macros/util/escape.js';
 
@@ -1314,13 +1316,28 @@ function setSettingByName(setting, value, trigger) {
 export async function generateTextGenWithStreaming(generate_data, signal, { onLukerMeta = null } = {}) {
     generate_data.stream = true;
 
-    const response = await fetch('/api/backends/text-completions/generate', {
-        headers: {
-            ...getRequestHeaders(),
+    const maxRetries = getMaxRequestRetries();
+
+    const response = await withRetry(async () => {
+        return await fetch('/api/backends/text-completions/generate', {
+            headers: {
+                ...getRequestHeaders(),
+            },
+            body: JSON.stringify(unescapeMacroBracesInRequestData(generate_data)),
+            method: 'POST',
+            signal: signal,
+        });
+    }, {
+        maxRetries,
+        signal,
+        label: 'textgen',
+        onAttempt: (attempt) => {
+            toastr.info(
+                t`Retrying request… (${attempt}/${maxRetries})`,
+                t`Request failed`,
+                { timeOut: 3000 },
+            );
         },
-        body: JSON.stringify(unescapeMacroBracesInRequestData(generate_data)),
-        method: 'POST',
-        signal: signal,
     });
 
     const generationId = response.headers.get('x-luker-generation-id');

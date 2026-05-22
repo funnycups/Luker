@@ -51,6 +51,13 @@
             <label for="connection_profile_rpm_limit" data-i18n="Requests per minute (0 = unlimited)">Requests per minute (0 = unlimited)</label>
             <input id="connection_profile_rpm_limit" class="text_pole widthUnset" type="number" min="0" step="1" value="0" />
         </div>
+        <div id="connection_profile_max_request_retries_block" class="flex-container alignItemsCenter gap10 marginTop10">
+            <label for="connection_profile_max_request_retries" data-i18n="Max request retries (0 = disabled)">Max request retries (0 = disabled)</label>
+            <input id="connection_profile_max_request_retries" class="text_pole widthUnset" type="number" min="0" max="5" step="1" value="0" />
+        </div>
+        <div id="connection_profile_max_request_retries_hint_block" class="marginTop5">
+            <small class="opacity50p" data-i18n="Retries on network errors and HTTP 429 / 5xx with exponential backoff. Streaming responses are not retried after the stream begins.">Retries on network errors and HTTP 429 / 5xx with exponential backoff. Streaming responses are not retried after the stream begins.</small>
+        </div>
         <div id="connection_profile_claude_cache_block" class="marginTop10" data-source="claude">
             <h4 class="margin0" data-i18n="Claude Prompt Caching">Claude Prompt Caching</h4>
             <small class="opacity50p" data-i18n="Only effective when the prompt prefix is stable across requests (no in-chat lorebook injections or random macros). Cache writes cost 1.25× base (5m) or 2× base (1h)\; reads cost 0.1×.">Only effective when the prompt prefix is stable across requests (no in-chat lorebook injections or random macros). Cache writes cost 1.25× base (5m) or 2× base (1h); reads cost 0.1×.</small>

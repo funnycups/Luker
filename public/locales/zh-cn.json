@@ -5412,4 +5412,11 @@
     ,"📑 List docs": "📑 列出文档"
     ,"📖 Read doc": "📖 读取文档"
     ,"🔌 Toggle CardApp": "🔌 启用/停用 CardApp"
+    ,"Max request retries (0 = disabled)": "请求重试次数上限（0 表示关闭）"
+    ,"Retries on network errors and HTTP 429 / 5xx with exponential backoff. Streaming responses are not retried after the stream begins.": "在网络错误以及 HTTP 429 / 5xx 时按指数退避重试。流式响应开始后断开不会重试。"
+    ,"Max request retries": "请求重试次数上限"
+    ,"Request failed": "请求失败"
+    ,"Image generation failed": "图像生成失败"
+    ,"Retrying request… (${0}/${1})": "正在重试请求……（第 ${0}/${1} 次）"
+    ,"Retrying image generation… (${0}/${1})": "正在重试图像生成……（第 ${0}/${1} 次）"
 }

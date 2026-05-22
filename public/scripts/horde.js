@@ -15,6 +15,8 @@ import { autoSelectInstructPreset } from './instruct-mode.js';
 import { t } from './i18n.js';
 import { callGenericPopup, POPUP_TYPE } from './popup.js';
 import { kai_settings } from './kai-settings.js';
+import { withRetry } from './request-retry.js';
+import { getMaxRequestRetries } from './extensions/connection-manager/max-retries.js';
 
 export {
     MIN_LENGTH,
@@ -218,10 +220,26 @@ export async function generateHorde(prompt, params, signal, reportProgress) {
         'models': horde_settings.models,
     };
 
-    const response = await fetch('/api/horde/generate-text', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify(payload),
+    const maxRetries = getMaxRequestRetries();
+
+    const response = await withRetry(async () => {
+        return await fetch('/api/horde/generate-text', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify(payload),
+            signal,
+        });
+    }, {
+        maxRetries,
+        signal,
+        label: 'horde',
+        onAttempt: (attempt) => {
+            toastr.info(
+                t`Retrying request… (${attempt}/${maxRetries})`,
+                t`Request failed`,
+                { timeOut: 3000 },
+            );
+        },
     });
 
     if (!response.ok) {

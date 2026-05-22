@@ -49,6 +49,8 @@ import { forceCharacterEditorTokenize, getCustomStoppingStrings, persona_descrip
 import { SECRET_KEYS, secret_state, writeSecret } from './secrets.js';
 import { extension_settings } from './extensions.js';
 import { acquire as acquireRequestSlot } from './extensions/connection-manager/request-throttler.js';
+import { getMaxRequestRetries } from './extensions/connection-manager/max-retries.js';
+import { withRetry } from './request-retry.js';
 
 import { getEventSourceStream } from './sse-stream.js';
 import {
@@ -3863,11 +3865,27 @@ function applyParsedPlainTextToolCallsToResponse(responseData, inspection) {
 }
 
 async function postChatCompletionGenerateRequest(requestBody, signal, { quietErrors = false } = {}) {
-    const response = await fetch('/api/backends/chat-completions/generate', {
-        method: 'POST',
-        body: JSON.stringify(unescapeMacroBracesInRequestData(requestBody)),
-        headers: getRequestHeaders(),
+    const maxRetries = getMaxRequestRetries();
+
+    const response = await withRetry(async () => {
+        return await fetch('/api/backends/chat-completions/generate', {
+            method: 'POST',
+            body: JSON.stringify(unescapeMacroBracesInRequestData(requestBody)),
+            headers: getRequestHeaders(),
+            signal,
+        });
+    }, {
+        maxRetries,
         signal,
+        label: 'chat-completion',
+        onAttempt: (attempt) => {
+            if (quietErrors) return;
+            toastr.info(
+                t`Retrying request… (${attempt}/${maxRetries})`,
+                t`Request failed`,
+                { timeOut: 3000 },
+            );
+        },
     });
 
     if (!response.ok) {
