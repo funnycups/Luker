@@ -14,6 +14,7 @@ let EDITABLE_TOOL_NAMES;
 let classifyToolCall;
 let normalizeToolCallToEdit;
 let TOOL_DISPLAY;
+let isCpaControlCall;
 
 beforeAll(async () => {
     ({
@@ -22,6 +23,7 @@ beforeAll(async () => {
         classifyToolCall,
         normalizeToolCallToEdit,
         TOOL_DISPLAY,
+        isCpaControlCall,
     } = await import('../../public/scripts/extensions/completion-preset-assistant/cpa-iteration/tools.js'));
 });
 
@@ -90,5 +92,36 @@ describe('CPA — tools', () => {
         const bad = { function: { name: 'preset_set_field', arguments: '{not json' } };
         const edits = await normalizeToolCallToEdit(bad, { live: {} });
         expect(edits).toBeNull();
+    });
+});
+
+describe('CPA control tools — multi-round support', () => {
+    test('buildToolCatalog includes luker_cpa_continue_iteration', () => {
+        const catalog = buildToolCatalog({ hasReference: true });
+        const names = catalog.map(d => d.function?.name);
+        expect(names).toContain('luker_cpa_continue_iteration');
+    });
+
+    test('buildToolCatalog includes luker_cpa_finalize_iteration', () => {
+        const catalog = buildToolCatalog({ hasReference: true });
+        const names = catalog.map(d => d.function?.name);
+        expect(names).toContain('luker_cpa_finalize_iteration');
+    });
+
+    test('control tools appear even when hasReference=false (always available)', () => {
+        const catalog = buildToolCatalog({ hasReference: false });
+        const names = catalog.map(d => d.function?.name);
+        expect(names).toContain('luker_cpa_continue_iteration');
+        expect(names).toContain('luker_cpa_finalize_iteration');
+    });
+
+    test('isCpaControlCall returns true for control tools and false for edit tools', () => {
+        expect(isCpaControlCall({ name: 'luker_cpa_continue_iteration' })).toBe(true);
+        expect(isCpaControlCall({ name: 'luker_cpa_finalize_iteration' })).toBe(true);
+        expect(isCpaControlCall({ name: 'preset_set_field' })).toBe(false);
+        expect(isCpaControlCall({ name: '' })).toBe(false);
+        expect(isCpaControlCall({})).toBe(false);
+        expect(isCpaControlCall(null)).toBe(false);
+        expect(isCpaControlCall(undefined)).toBe(false);
     });
 });

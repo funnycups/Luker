@@ -82,7 +82,7 @@ import {
     SESSION_MODES,
     SESSION_MODE_DEFAULT,
 } from './system-prompts.js';
-import { createCpaIterationSessionStore } from './session-store.js';
+import { createCpaIterationSessionStore, makeMessageId, normalizeMessageShape } from './session-store.js';
 
 const MODULE = 'cpa-iteration';
 const STYLESHEET_ID = 'cpa_it_studio_stylesheet';
@@ -116,38 +116,6 @@ function escapeHtmlLocal(s) {
 
 function makeSessionId() {
     return `sess_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function makeMessageId() {
-    return `cpa_msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-/**
- * Normalize a message read from disk into the shape rendered today.
- * Legacy sessions persisted only `{role, content}`; the upgraded schema
- * adds `id`, `at`, optional `toolCalls`, `edits`, `appliedAt`,
- * `appliedTarget`, `rolledBackAt`, and an `auto` flag for synthetic
- * auto-continue user messages.
- *
- * Tolerance: missing `id` regenerates one, missing `at` falls back to
- * the session's updatedAt, missing arrays stay undefined (renderer
- * uses Array.isArray as the visibility gate).
- */
-function normalizeMessageShape(m, fallbackAt = Date.now()) {
-    if (!m || typeof m !== 'object') return m;
-    const out = {
-        id: typeof m.id === 'string' && m.id ? m.id : makeMessageId(),
-        role: String(m.role || 'user'),
-        content: String(m.content ?? ''),
-        at: typeof m.at === 'number' ? m.at : Number(fallbackAt) || Date.now(),
-    };
-    if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) out.toolCalls = m.toolCalls;
-    if (Array.isArray(m.edits) && m.edits.length > 0) out.edits = m.edits;
-    if (typeof m.appliedAt === 'number') out.appliedAt = m.appliedAt;
-    if (m.appliedTarget) out.appliedTarget = String(m.appliedTarget);
-    if (typeof m.rolledBackAt === 'number') out.rolledBackAt = m.rolledBackAt;
-    if (m.auto) out.auto = true;
-    return out;
 }
 
 /**
@@ -898,12 +866,12 @@ export async function openCpaIterationStudio(deps) {
 
         let trailHtml = '';
         if (hasTrail) {
-            const headerLabel = tf('本轮工具调用 + 变更 (${0})', String(toolCalls.length + edits.length));
+            const headerLabel = tf('Tools and edits this round (${0})', String(toolCalls.length + edits.length));
             const statusHtml = rolledBack
-                ? `<span class="cpa_it_msg_rolled_back">${escapeHtml(tf('已回退 ${0}', formatTime(message.rolledBackAt)))}</span>`
+                ? `<span class="cpa_it_msg_rolled_back">${escapeHtml(tf('Rolled back at ${0}', formatTime(message.rolledBackAt)))}</span>`
                 : (applied
                     ? `
-                        <span class="cpa_it_msg_applied">${escapeHtml(tf('✓ 已应用至 ${0} ${1}', t('preset'), formatTime(message.appliedAt)))}</span>
+                        <span class="cpa_it_msg_applied">${escapeHtml(tf('✓ Applied to ${0} at ${1}', t('preset'), formatTime(message.appliedAt)))}</span>
                         <button class="menu_button menu_button_small" data-cpa-it-custom-action="rollback-batch" data-cpa-it-msg-id="${escapeHtml(message.id || '')}">
                             ${escapeHtml(t('Rollback'))}
                         </button>
@@ -1298,13 +1266,17 @@ export async function openCpaIterationStudio(deps) {
             },
         );
 
-        // The runner already filtered controls into onControlCall, so
-        // `result.toolCalls` only contains non-control calls — but we use
-        // the callback-collected list as the canonical source so the
-        // assistant message records exactly what the user saw fire.
+        // Prefer `collectedToolCalls` — populated by `onToolCall`, which the
+        // runner only fires for non-control calls (it routes controls through
+        // `onControlCall` instead). When the per-event callbacks didn't land
+        // (e.g. an older runner version), fall back to `result.toolCalls`, but
+        // filter out control calls explicitly so they never leak into the
+        // persisted `assistantMsg.toolCalls`.
         const editToolCalls = collectedToolCalls.length > 0
             ? collectedToolCalls
-            : (Array.isArray(result?.toolCalls) ? result.toolCalls : []);
+            : (Array.isArray(result?.toolCalls)
+                ? result.toolCalls.filter((c) => !isCpaControlCall(c))
+                : []);
         const assistantText = firstAssistantText.trim();
 
         // Normalize edit-tools → edits. Each editable tool runs through
@@ -1334,7 +1306,7 @@ export async function openCpaIterationStudio(deps) {
                 state.session.messages.push({
                     id: makeMessageId(),
                     role: 'system',
-                    content: t('Edit error: ') + String(err?.message || err),
+                    content: tf('Edit error: ${0}', String(err?.message || err)),
                     at: Date.now(),
                 });
             }
@@ -1351,10 +1323,10 @@ export async function openCpaIterationStudio(deps) {
                 .map(c => TOOL_DISPLAY[String(c?.name || '')] || String(c?.name || ''))
                 .filter(Boolean)
                 .join(', ');
-            content = t('Suggested actions: ') + names;
+            content = tf('Suggested actions: ${0}', names);
         }
         if (!content && (wantsAutoContinue || finalizeSummary)) {
-            content = finalizeSummary || t('Continuing…');
+            content = finalizeSummary || t('Continuing...');
         }
         const assistantMsg = {
             id: makeMessageId(),
@@ -1442,7 +1414,7 @@ export async function openCpaIterationStudio(deps) {
             state.session.messages.push({
                 id: makeMessageId(),
                 role: 'system',
-                content: t('Failed to save preset: ') + String(err?.message || err),
+                content: tf('Failed to save preset: ${0}', String(err?.message || err)),
                 at: Date.now(),
             });
             await persistSession();
@@ -1616,7 +1588,7 @@ export async function openCpaIterationStudio(deps) {
                 state.session.messages.push({
                     id: makeMessageId(),
                     role: 'system',
-                    content: t('Error: ') + String(err?.message || err),
+                    content: tf('Error: ${0}', String(err?.message || err)),
                     at: Date.now(),
                 });
             }
