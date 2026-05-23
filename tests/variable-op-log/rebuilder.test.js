@@ -187,3 +187,29 @@ describe('rebuilder: computeReplayedState', () => {
         expect(computeReplayedState([blank(), blank()])).toEqual({});
     });
 });
+
+describe('rebuilder: path-aware survival', () => {
+    test('surviving path ops replay correctly after a deletion', () => {
+        const state = {};
+        const chat = [
+            { extra: { var_ops: [{ op: 'setvar', key: 'roster', path: 'alice.hp', value: '50' }] } },
+            { extra: { var_ops: [{ op: 'pushvar', key: 'roster', path: 'alice.inv', value: 'sword' }] } },
+            { extra: { var_ops: [{ op: 'setvar', key: 'roster', path: 'alice.hp', value: '40' }] } },
+        ];
+        rebuildVariables(chat, state);
+        expect(JSON.parse(state.roster)).toEqual({ alice: { hp: 40, inv: ['sword'] } });
+
+        // Now drop the middle message (the inventory push) and rebuild
+        chat.splice(1, 1);
+        rebuildVariables(chat, state);
+        expect(JSON.parse(state.roster)).toEqual({ alice: { hp: 40 } });
+    });
+
+    test('trackedKeys are roots, not paths', () => {
+        const chat = [
+            { extra: { var_ops: [{ op: 'setvar', key: 'roster', path: 'alice.hp', value: '50' }] } },
+        ];
+        const keys = getTrackedKeys(chat);
+        expect([...keys]).toEqual(['roster']);
+    });
+});

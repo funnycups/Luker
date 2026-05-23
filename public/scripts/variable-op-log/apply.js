@@ -15,11 +15,14 @@
  * AI, by hand, or replayed.
  */
 
+import { applyPathOp } from './path-ops.js';
+
 /**
  * @typedef {Object} VarOp
- * @property {'setvar'|'addvar'|'incvar'|'decvar'|'deletevar'} op
- * @property {string} key
- * @property {string} [value] - For setvar/addvar, the resolved literal value
+ * @property {'setvar'|'addvar'|'incvar'|'decvar'|'deletevar'|'pushvar'|'popvar'} op
+ * @property {string} key - Top-level variable name (root)
+ * @property {string} [path] - Optional dotted path inside a structured value
+ * @property {string} [value] - For setvar/addvar/pushvar, the resolved literal value
  */
 
 /**
@@ -42,6 +45,14 @@
 export function applyOp(state, op) {
     if (!state || typeof state !== 'object') return undefined;
     if (!op || typeof op !== 'object' || typeof op.key !== 'string' || !op.key) return undefined;
+
+    const hasPath = typeof op.path === 'string' && op.path.length > 0;
+    const isArrayOp = op.op === 'pushvar' || op.op === 'popvar';
+    const pathFlavored = (op.op === 'setvar' || op.op === 'deletevar' || op.op === 'incvar' || op.op === 'decvar') && hasPath;
+
+    if (isArrayOp || pathFlavored) {
+        return applyPathOp(state, op);
+    }
 
     switch (op.op) {
         case 'setvar':

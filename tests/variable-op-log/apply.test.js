@@ -138,3 +138,64 @@ describe('apply: applyAll', () => {
         expect(() => applyAll({}, null)).not.toThrow();
     });
 });
+
+describe('apply: path-flavored ops dispatch to applyPathOp', () => {
+    test('setvar with path writes nested structure', () => {
+        const state = {};
+        applyOp(state, { op: 'setvar', key: 'roster', path: 'alice.hp', value: '50' });
+        expect(JSON.parse(state.roster)).toEqual({ alice: { hp: 50 } });
+    });
+
+    test('flat setvar (no path) keeps original flat behavior', () => {
+        const state = {};
+        applyOp(state, { op: 'setvar', key: 'hp', value: '50' });
+        expect(state.hp).toBe('50');
+    });
+
+    test('deletevar with path removes a leaf, keeps siblings', () => {
+        const state = { roster: JSON.stringify({ alice: { hp: 50 }, bob: { hp: 30 } }) };
+        applyOp(state, { op: 'deletevar', key: 'roster', path: 'bob' });
+        expect(JSON.parse(state.roster)).toEqual({ alice: { hp: 50 } });
+    });
+
+    test('flat deletevar (no path) removes the key entirely', () => {
+        const state = { roster: JSON.stringify({ alice: {} }) };
+        applyOp(state, { op: 'deletevar', key: 'roster' });
+        expect('roster' in state).toBe(false);
+    });
+
+    test('pushvar without path creates root array', () => {
+        const state = {};
+        applyOp(state, { op: 'pushvar', key: 'queue', value: 'first' });
+        expect(JSON.parse(state.queue)).toEqual(['first']);
+    });
+
+    test('pushvar with path appends to nested array', () => {
+        const state = { roster: JSON.stringify({ alice: { inv: ['sword'] } }) };
+        applyOp(state, { op: 'pushvar', key: 'roster', path: 'alice.inv', value: 'shield' });
+        expect(JSON.parse(state.roster)).toEqual({ alice: { inv: ['sword', 'shield'] } });
+    });
+
+    test('popvar pops from root array', () => {
+        const state = { queue: JSON.stringify(['a', 'b']) };
+        applyOp(state, { op: 'popvar', key: 'queue' });
+        expect(JSON.parse(state.queue)).toEqual(['a']);
+    });
+
+    test('incvar with path increments leaf', () => {
+        const state = { roster: JSON.stringify({ alice: { hp: 49 } }) };
+        applyOp(state, { op: 'incvar', key: 'roster', path: 'alice.hp' });
+        expect(JSON.parse(state.roster)).toEqual({ alice: { hp: 50 } });
+    });
+
+    test('flat incvar (no path) keeps original numeric behavior', () => {
+        const state = { coins: '5' };
+        applyOp(state, { op: 'incvar', key: 'coins' });
+        expect(state.coins).toBe(6);
+    });
+
+    test('unknown op returns undefined', () => {
+        const state = {};
+        expect(applyOp(state, { op: 'frobnicate', key: 'x' })).toBeUndefined();
+    });
+});

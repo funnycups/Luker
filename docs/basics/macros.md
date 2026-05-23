@@ -243,6 +243,8 @@ Missing variables produce the empty string.
 | <span v-pre>`{{incvar::name}}`</span> | <span v-pre>`{{.name++}}`</span> | +1 |
 | <span v-pre>`{{decvar::name}}`</span> | <span v-pre>`{{.name--}}`</span> | -1 |
 | <span v-pre>`{{deletevar::name}}`</span> (alias `flushvar`) | — | Remove |
+| <span v-pre>`{{pushvar::name::value}}`</span> | — | Push `value` onto the JSON array stored in `name`. Auto-creates `[]` when missing. Supports dotted paths (`roster.alice.inv`). |
+| <span v-pre>`{{popvar::name}}`</span> | — | Pop the last element from the JSON array at `name`. No-op when empty or missing. Supports dotted paths. |
 
 `setglobalvar` / `addglobalvar` / `incglobalvar` / `decglobalvar` / `deleteglobalvar` are the global-scope equivalents.
 
@@ -262,6 +264,20 @@ A variable can hold any JSON-serializable value. When a variable's value is a JS
 {{getvar::npcs.alice}}        → {"hp":40}
 {{getvar::list.0}}            → first element of `list`
 ```
+
+**Writes can take a path too.** <span v-pre>`{{setvar}}`</span>, <span v-pre>`{{deletevar}}`</span>, <span v-pre>`{{pushvar}}`</span>, and <span v-pre>`{{popvar}}`</span> all accept a dotted name, so a single structured variable can be maintained across turns without rewriting the whole blob.
+
+```text
+{{setvar::roster.alice.hp::50}}              <!-- introduce Alice with 50 HP -->
+{{setvar::roster.alice.mood::cautious}}      <!-- set her mood -->
+{{pushvar::roster.alice.inventory::dagger}}  <!-- give her a dagger -->
+{{pushvar::roster.alice.inventory::potion}}
+{{incvar::roster.alice.hp}}                  <!-- heal 1 HP -->
+{{popvar::roster.alice.inventory}}           <!-- she uses an item -->
+{{deletevar::roster.alice.mood}}             <!-- mood reset -->
+```
+
+Intermediate nodes are created on demand. A pure-numeric path segment creates an array index (e.g. <span v-pre>`{{setvar::log.0::An old man arrives}}`</span> writes to index 0 of `log`).
 
 Path lookups against non-JSON values fall back to a literal flat-key lookup, so a variable literally named `a.b` still works.
 

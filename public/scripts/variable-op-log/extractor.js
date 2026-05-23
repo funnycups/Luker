@@ -76,15 +76,15 @@ export function extractFromText(text, state, envFactory) {
         // happens *after* prior ops in this message have been applied to
         // state (because we're iterating in order and applyOp below mutates
         // state synchronously).
-        let value;
-        if (m.op === 'setvar' || m.op === 'addvar') {
-            value = resolveDisplayMacros(m.rawValue ?? '', envFactory ? envFactory() : {});
-        }
+        const carriesValue = m.op === 'setvar' || m.op === 'addvar' || m.op === 'pushvar';
+        const value = carriesValue && m.rawValue !== undefined
+            ? resolveDisplayMacros(m.rawValue, envFactory ? envFactory() : {})
+            : undefined;
 
         /** @type {VarOp} */
-        const op = (m.op === 'setvar' || m.op === 'addvar')
-            ? { op: m.op, key: m.key, value }
-            : { op: m.op, key: m.key };
+        const op = { op: m.op, key: m.key };
+        if (typeof m.path === 'string' && m.path.length > 0) op.path = m.path;
+        if (carriesValue && value !== undefined) op.value = value;
 
         applyOp(state, op);
         ops.push(op);

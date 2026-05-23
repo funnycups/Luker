@@ -21,11 +21,11 @@ import { callGenericPopup, POPUP_TYPE } from '../popup.js';
 import { t, translate } from '../i18n.js';
 import { rebuildVariablesFromChat } from './index.js';
 
-const OP_TYPES = ['setvar', 'addvar', 'incvar', 'decvar', 'deletevar'];
+const OP_TYPES = ['setvar', 'addvar', 'incvar', 'decvar', 'deletevar', 'pushvar', 'popvar'];
 
 /** @returns {boolean} true if op type carries a value field */
 function opHasValue(opType) {
-    return opType === 'setvar' || opType === 'addvar';
+    return opType === 'setvar' || opType === 'addvar' || opType === 'pushvar';
 }
 
 /**
@@ -87,7 +87,9 @@ export async function openVarOpsPanel(messageId) {
             opSelect.append(`<option value="${opType}"${opType === op.op ? ' selected' : ''}>${opType}</option>`);
         }
         opSelect.on('change', function () {
+            /** @type {any} */
             const next = { op: this.value, key: op.key };
+            if (op.path) next.path = op.path;
             if (opHasValue(this.value)) next.value = op.value ?? '';
             onChange(next);
         });
@@ -100,11 +102,24 @@ export async function openVarOpsPanel(messageId) {
             onChange(next);
         });
 
+        const pathInput = $('<input type="text" class="var-ops-panel__path text_pole"/>')
+            .attr('placeholder', translate('path', 'var_ops_panel.placeholder.path'))
+            .val(op.path ?? '');
+        pathInput.on('change', function () {
+            const trimmed = String(this.value).trim();
+            const next = { ...op };
+            if (trimmed) next.path = trimmed;
+            else delete next.path;
+            onChange(next);
+        });
+
         const row1 = $('<div class="var-ops-panel__row-line"></div>')
             .append($('<span class="var-ops-panel__label"></span>').text(translate('op', 'var_ops_panel.label.op')))
             .append(opSelect)
             .append($('<span class="var-ops-panel__label"></span>').text(translate('key', 'var_ops_panel.label.key')))
-            .append(keyInput);
+            .append(keyInput)
+            .append($('<span class="var-ops-panel__label"></span>').text(translate('path', 'var_ops_panel.label.path')))
+            .append(pathInput);
 
         row.append(row1);
 
@@ -148,11 +163,16 @@ export async function openVarOpsPanel(messageId) {
 
     // Sanitize — drop ops with empty keys, normalize value field
     const cleaned = workingOps
-        .map(op => ({
-            op: OP_TYPES.includes(op.op) ? op.op : 'setvar',
-            key: typeof op.key === 'string' ? op.key.trim() : '',
-            ...(opHasValue(op.op) ? { value: op.value ?? '' } : {}),
-        }))
+        .map(op => {
+            const out = {
+                op: OP_TYPES.includes(op.op) ? op.op : 'setvar',
+                key: typeof op.key === 'string' ? op.key.trim() : '',
+            };
+            const pathVal = typeof op.path === 'string' ? op.path.trim() : '';
+            if (pathVal) out.path = pathVal;
+            if (opHasValue(out.op)) out.value = op.value ?? '';
+            return out;
+        })
         .filter(op => op.key.length > 0);
 
     message.extra.var_ops = cleaned;

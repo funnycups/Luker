@@ -14,7 +14,7 @@ Luker 的解法：在儲存 AI / 使用者訊息時把副作用宏從文字裡�
 direction: down
 
 AI: "AI 回覆 / 使用者訊息儲存"
-EXTRACT: "掃描 mes 提取副作用宏\nsetvar / addvar / incvar / decvar / deletevar" {
+EXTRACT: "掃描 mes 提取副作用宏\nsetvar / addvar / incvar / decvar / deletevar / pushvar / popvar" {
   style.fill: "#e1f5ff"
 }
 EVAL: "巢狀展示型宏求值\n{{user}} / {{getvar}} / {{time}} ..."
@@ -54,6 +54,10 @@ REPLAY -> REBUILD
 - <code v-pre>{{incvar::name}}</code>
 - <code v-pre>{{decvar::name}}</code>
 - <code v-pre>{{deletevar::name}}</code>
+- <code v-pre>{{pushvar::name::value}}</code>
+- <code v-pre>{{popvar::name}}</code>
+
+每一種被識別的 op 都接受點號路徑名（<code v-pre>{{setvar::roster.alice.hp::50}}</code>）——見下文的 [結構化物件工作流程](#structured-objects)。
 
 按出現順序逐個處理：
 
@@ -153,6 +157,7 @@ chat[i] = {
     "extra": {
         "var_ops": [
             { "op": "setvar", "key": "hp", "value": "50" },
+            { "op": "setvar", "key": "roster", "path": "alice.hp", "value": "50" },
             { "op": "incvar", "key": "turn" }
         ]
     },
@@ -164,6 +169,24 @@ chat[i] = {
 ```
 
 `chat_metadata.variables` 仍是 SillyTavern 原生快取，是 <code v-pre>{{getvar}}</code> 的真源。op 日誌是我們擁有的那部分值的 *來源*；快取是所有來源合併後的執行時視圖。
+
+當 op 帶有 `path` 時，`op.key` 仍然是頂層變數名——`path` 是那個變數 JSON 值內部的子選擇器。op 日誌把回滾單位保持在頂層 key。詳見下文 [結構化物件工作流程](#structured-objects)。
+
+## 結構化物件工作流程 {#structured-objects}
+
+帶路徑的 op 讓一個變數裝得下完整的結構化載荷——NPC 名冊、物品字典、任務日誌——AI 在對話過程中逐葉修改。不必每輪重寫整盤（重寫會丟掉 op 日誌的粒度，讓 swipe 看起來像整狀態重寫），AI 每次只發出一條 op：
+
+```text
+{{setvar::roster.alice.hp::50}}              <!-- Alice 登場 -->
+{{setvar::roster.alice.mood::cautious}}      <!-- 描述她的狀態 -->
+{{pushvar::roster.alice.inventory::dagger}}  <!-- 給她一把匕首 -->
+{{setvar::roster.alice.hp::40}}              <!-- 她受了傷 -->
+{{deletevar::roster.bob}}                    <!-- Bob 離隊 -->
+```
+
+`op.key` 永遠是頂層變數名（上例裡是 `roster`），所以 tracked-keys／重播／swipe 還原邏輯把整個結構當成一個單位。刪掉某個寫過某片葉子的訊息時，結構會從存活的 op 重建，那片葉子自然回退——`roster` 整體跟存活時間線保持一致。
+
+任何由 AI 跨輪維護的結構化集合都推薦這條路：NPC 名冊、隊伍物品、任務日誌、關係圖、地點狀態等。逐葉粒度給刪除／swipe／分支提供了最小的回滾單元，也能配合 <code v-pre>{{each::roster}}…{{/each}}</code> 直接從頂層 key 下掛的 JSON 物件渲染出來。
 
 ## 渲染結構化變數 — `{{each}}` 與 `loop_value`
 

@@ -217,3 +217,53 @@ describe('scanner: stripSideEffectMacros', () => {
         expect(stripSideEffectMacros(undefined)).toBeUndefined();
     });
 });
+
+describe('scanner: pushvar/popvar recognition', () => {
+    test('recognizes pushvar with value', () => {
+        const m = findNextSideEffectMacro('{{pushvar::queue::sword}}');
+        expect(m).toMatchObject({ op: 'pushvar', key: 'queue', rawValue: 'sword' });
+    });
+
+    test('recognizes popvar without value', () => {
+        const m = findNextSideEffectMacro('{{popvar::queue}}');
+        expect(m).toMatchObject({ op: 'popvar', key: 'queue' });
+        expect(m.rawValue).toBeUndefined();
+    });
+
+    test('pushvar key prefix is not truncated to push', () => {
+        const m = findNextSideEffectMacro('{{pushvar::q::x}}');
+        expect(m.op).toBe('pushvar');
+    });
+});
+
+describe('scanner: dotted path in key', () => {
+    test('setvar with path returns split root and path', () => {
+        const m = findNextSideEffectMacro('{{setvar::roster.alice.hp::50}}');
+        expect(m).toMatchObject({ op: 'setvar', key: 'roster', path: 'alice.hp', rawValue: '50' });
+    });
+
+    test('deletevar with path returns split root and path', () => {
+        const m = findNextSideEffectMacro('{{deletevar::roster.alice}}');
+        expect(m).toMatchObject({ op: 'deletevar', key: 'roster', path: 'alice' });
+    });
+
+    test('pushvar with path', () => {
+        const m = findNextSideEffectMacro('{{pushvar::roster.alice.inv::sword}}');
+        expect(m).toMatchObject({ op: 'pushvar', key: 'roster', path: 'alice.inv', rawValue: 'sword' });
+    });
+
+    test('flat key has empty path field (undefined or empty)', () => {
+        const m = findNextSideEffectMacro('{{setvar::hp::50}}');
+        expect(m).toMatchObject({ op: 'setvar', key: 'hp', rawValue: '50' });
+        expect(m.path === undefined || m.path === '').toBe(true);
+    });
+
+    test('value with embedded dot in macro is not mis-split', () => {
+        // The body's `.` inside a nested {{...}} should not be treated as a
+        // path separator on the key — only the literal key portion (before `::`).
+        const m = findNextSideEffectMacro('{{pushvar::queue::{{getvar::other.field}}}}');
+        expect(m.op).toBe('pushvar');
+        expect(m.key).toBe('queue');
+        expect(m.path === undefined || m.path === '').toBe(true);
+    });
+});

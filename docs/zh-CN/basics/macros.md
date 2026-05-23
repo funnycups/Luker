@@ -243,6 +243,8 @@ body 里：
 | <code v-pre>{{incvar::name}}</code> | <code v-pre>{{.name++}}</code> | +1 |
 | <code v-pre>{{decvar::name}}</code> | <code v-pre>{{.name--}}</code> | -1 |
 | <code v-pre>{{deletevar::name}}</code>（别名 `flushvar`） | — | 删除 |
+| <code v-pre>{{pushvar::name::value}}</code> | — | 把 `value` 推入 `name` 中存储的 JSON 数组；缺失时自动建为 `[]`。支持点号路径（如 `roster.alice.inv`）。 |
+| <code v-pre>{{popvar::name}}</code> | — | 从 `name` 的 JSON 数组弹出最后一个元素；空或缺失时为无操作。支持点号路径。 |
 
 全局对应的有 `setglobalvar` / `addglobalvar` / `incglobalvar` / `decglobalvar` / `deleteglobalvar`。
 
@@ -262,6 +264,20 @@ body 里：
 {{getvar::npcs.alice}}        → {"hp":40}
 {{getvar::list.0}}            → list 的第一个元素
 ```
+
+**写入也支持点号路径。** <code v-pre>{{setvar}}</code>、<code v-pre>{{deletevar}}</code>、<code v-pre>{{pushvar}}</code>、<code v-pre>{{popvar}}</code> 都接受点号路径名，因此可以在多轮叙事中维护同一个结构化变量，不必每次重写整盘。
+
+```text
+{{setvar::roster.alice.hp::50}}              <!-- 引入 Alice，初始 50 HP -->
+{{setvar::roster.alice.mood::cautious}}      <!-- 设置她的情绪 -->
+{{pushvar::roster.alice.inventory::dagger}}  <!-- 给她一把匕首 -->
+{{pushvar::roster.alice.inventory::potion}}
+{{incvar::roster.alice.hp}}                  <!-- 回 1 HP -->
+{{popvar::roster.alice.inventory}}           <!-- 她使用了一件物品 -->
+{{deletevar::roster.alice.mood}}             <!-- 情绪重置 -->
+```
+
+中间节点按需自动创建。纯数字路径段产生数组下标（例如 <code v-pre>{{setvar::log.0::一位老人到来}}</code> 写入 `log` 的第 0 个元素）。
 
 对非 JSON 值用点号路径时，会 fallback 到字面键查找——名字真的就是 `a.b` 的变量也能读到。
 

@@ -191,3 +191,44 @@ describe('extractor: extractFromMessage', () => {
         expect(extractFromMessage({}, {}, () => ({}))).toEqual([]);
     });
 });
+
+describe('extractor: path field propagates from match into op record', () => {
+    test('setvar with path produces op with path', () => {
+        const state = {};
+        const { ops } = extractFromText('Pre {{setvar::roster.alice.hp::50}} post', state, () => ({}));
+        expect(ops).toEqual([{ op: 'setvar', key: 'roster', path: 'alice.hp', value: '50' }]);
+        expect(JSON.parse(state.roster)).toEqual({ alice: { hp: 50 } });
+    });
+
+    test('pushvar with value yields op carrying value', () => {
+        const state = {};
+        const { ops } = extractFromText('{{pushvar::queue::a}}', state, () => ({}));
+        expect(ops).toEqual([{ op: 'pushvar', key: 'queue', value: 'a' }]);
+        expect(JSON.parse(state.queue)).toEqual(['a']);
+    });
+
+    test('popvar yields op without value', () => {
+        const state = { queue: JSON.stringify(['a', 'b']) };
+        const { ops } = extractFromText('{{popvar::queue}}', state, () => ({}));
+        expect(ops).toEqual([{ op: 'popvar', key: 'queue' }]);
+        expect(JSON.parse(state.queue)).toEqual(['a']);
+    });
+
+    test('chained path ops in one message all run forward', () => {
+        const state = {};
+        const { ops } = extractFromText(
+            '{{setvar::roster.alice.hp::50}} {{pushvar::roster.alice.inv::sword}} {{deletevar::roster.alice.hp}}',
+            state,
+            () => ({}),
+        );
+        expect(ops.length).toBe(3);
+        expect(JSON.parse(state.roster)).toEqual({ alice: { inv: ['sword'] } });
+    });
+
+    test('flat ops still produce path-free records', () => {
+        const state = {};
+        const { ops } = extractFromText('{{setvar::hp::50}}', state, () => ({}));
+        expect(ops).toEqual([{ op: 'setvar', key: 'hp', value: '50' }]);
+        expect(ops[0].path).toBeUndefined();
+    });
+});

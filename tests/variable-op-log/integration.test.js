@@ -288,3 +288,37 @@ describe('integration: edge cases', () => {
         expect(state.greeted).toBe('true');
     });
 });
+
+describe('integration: structured object across multiple turns', () => {
+    test('AI mutates roster across turns; deleting a message prunes only that op', () => {
+        const state = {};
+        const chat = [];
+
+        function turn(text, swipeId = 0) {
+            const message = { mes: text, swipe_id: swipeId, swipes: [text], swipe_info: [{ extra: {} }] };
+            chat.push(message);
+            extractFromMessage(message, state, () => ({}));
+        }
+
+        turn('Alice joins. {{setvar::roster.alice.hp::50}}');
+        turn('Alice picks up a sword. {{pushvar::roster.alice.inv::sword}}');
+        turn('Alice picks up a shield. {{pushvar::roster.alice.inv::shield}}');
+        turn('Alice drops a thing. {{popvar::roster.alice.inv}}');
+        turn('Bob joins. {{setvar::roster.bob.hp::30}}');
+        turn('Alice was hit. {{setvar::roster.alice.hp::40}}');
+
+        expect(JSON.parse(state.roster)).toEqual({
+            alice: { hp: 40, inv: ['sword'] },
+            bob: { hp: 30 },
+        });
+
+        // Delete the "Alice was hit" message (last). Rebuild — hp should
+        // revert to 50, inventory unchanged.
+        chat.pop();
+        rebuildVariables(chat, state);
+        expect(JSON.parse(state.roster)).toEqual({
+            alice: { hp: 50, inv: ['sword'] },
+            bob: { hp: 30 },
+        });
+    });
+});

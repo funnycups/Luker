@@ -14,7 +14,7 @@ Luker 的解法：在保存 AI / 用户消息时把副作用宏从文本里提�
 direction: down
 
 AI: "AI 回复 / 用户消息保存"
-EXTRACT: "扫描 mes 提取副作用宏\nsetvar / addvar / incvar / decvar / deletevar" {
+EXTRACT: "扫描 mes 提取副作用宏\nsetvar / addvar / incvar / decvar / deletevar / pushvar / popvar" {
   style.fill: "#e1f5ff"
 }
 EVAL: "嵌套展示型宏求值\n{{user}} / {{getvar}} / {{time}} ..."
@@ -54,6 +54,10 @@ REPLAY -> REBUILD
 - <code v-pre>{{incvar::name}}</code>
 - <code v-pre>{{decvar::name}}</code>
 - <code v-pre>{{deletevar::name}}</code>
+- <code v-pre>{{pushvar::name::value}}</code>
+- <code v-pre>{{popvar::name}}</code>
+
+每一种被识别的 op 都接受点号路径名（<code v-pre>{{setvar::roster.alice.hp::50}}</code>）——见下文的 [结构化对象工作流](#structured-objects)。
 
 按出现顺序逐个处理：
 
@@ -153,6 +157,7 @@ chat[i] = {
     "extra": {
         "var_ops": [
             { "op": "setvar", "key": "hp", "value": "50" },
+            { "op": "setvar", "key": "roster", "path": "alice.hp", "value": "50" },
             { "op": "incvar", "key": "turn" }
         ]
     },
@@ -164,6 +169,24 @@ chat[i] = {
 ```
 
 `chat_metadata.variables` 仍是 SillyTavern 原生缓存，是 <code v-pre>{{getvar}}</code> 的真源。op 日志是我们拥有的那部分值的 *来源*；缓存是所有来源合并后的运行时视图。
+
+当 op 带有 `path` 时，`op.key` 仍然是顶层变量名——`path` 是那个变量 JSON 值内部的子选择器。op 日志把回滚单位保持在顶层 key。详见下文 [结构化对象工作流](#structured-objects)。
+
+## 结构化对象工作流 {#structured-objects}
+
+带路径的 op 让一个变量装得下完整的结构化载荷——NPC 名册、物品字典、任务日志——AI 在对话过程中逐叶修改。不必每轮重写整盘（重写会丢掉 op 日志的粒度，让 swipe 看起来像整状态重写），AI 每次只发出一条 op：
+
+```text
+{{setvar::roster.alice.hp::50}}              <!-- Alice 登场 -->
+{{setvar::roster.alice.mood::cautious}}      <!-- 描述她的状态 -->
+{{pushvar::roster.alice.inventory::dagger}}  <!-- 给她一把匕首 -->
+{{setvar::roster.alice.hp::40}}              <!-- 她受了伤 -->
+{{deletevar::roster.bob}}                    <!-- Bob 离队 -->
+```
+
+`op.key` 永远是顶层变量名（上例里是 `roster`），所以 tracked-keys／重放／swipe 还原逻辑把整个结构当成一个单位。删掉某个写过某片叶子的消息时，结构会从存活的 op 重建，那片叶子自然回退——`roster` 整体跟存活时间线保持一致。
+
+任何由 AI 跨轮维护的结构化集合都推荐这条路：NPC 名册、队伍物品、任务日志、关系图、地点状态等。逐叶粒度给删除／swipe／分支提供了最小的回滚单元，也能配合 <code v-pre>{{each::roster}}…{{/each}}</code> 直接从顶层 key 下挂的 JSON 对象渲染出来。
 
 ## 渲染结构化变量 — `{{each}}` 与 `loop_value`
 

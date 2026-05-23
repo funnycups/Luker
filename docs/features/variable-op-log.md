@@ -14,7 +14,7 @@ Luker fixes this by extracting side-effect macros out of AI / user messages at s
 direction: down
 
 AI: "AI reply / user message saved"
-EXTRACT: "Scan mes for side-effect macros\nsetvar / addvar / incvar / decvar / deletevar" {
+EXTRACT: "Scan mes for side-effect macros\nsetvar / addvar / incvar / decvar / deletevar / pushvar / popvar" {
   style.fill: "#e1f5ff"
 }
 EVAL: "Resolve nested display macros\n{{user}} / {{getvar}} / {{time}} ..."
@@ -54,6 +54,10 @@ When a message is saved (AI reply, continue, regenerate, swipe, or user message)
 - <code v-pre>{{incvar::name}}</code>
 - <code v-pre>{{decvar::name}}</code>
 - <code v-pre>{{deletevar::name}}</code>
+- <code v-pre>{{pushvar::name::value}}</code>
+- <code v-pre>{{popvar::name}}</code>
+
+Every recognized op also accepts a dotted name (<code v-pre>{{setvar::roster.alice.hp::50}}</code>) — see the [structured object workflow](#structured-objects) below.
 
 For each match in source order:
 
@@ -153,6 +157,7 @@ chat[i] = {
     "extra": {
         "var_ops": [
             { "op": "setvar", "key": "hp", "value": "50" },
+            { "op": "setvar", "key": "roster", "path": "alice.hp", "value": "50" },
             { "op": "incvar", "key": "turn" }
         ]
     },
@@ -164,6 +169,24 @@ chat[i] = {
 ```
 
 `chat_metadata.variables` remains the SillyTavern-native cache and the source of truth for <code v-pre>{{getvar}}</code>. The op-log is the *origin* of the values that we own; the cache is the runtime view of all sources combined.
+
+When an op carries a `path`, `op.key` is still the top-level variable name — the path is a sub-selector inside the JSON-encoded value of that variable. The op log keeps the rollback unit at the top-level key. See [structured object workflow](#structured-objects) below.
+
+## Structured object workflow {#structured-objects}
+
+Path-aware ops let one variable carry an entire structured payload — an NPC roster, an inventory dict, a quest journal — that the AI mutates one leaf at a time across the conversation. Instead of rewriting the whole blob each turn (which would lose granularity in the op log and make swipes look like full-state rewrites), the AI emits one op per change:
+
+```text
+{{setvar::roster.alice.hp::50}}              <!-- introduce Alice -->
+{{setvar::roster.alice.mood::cautious}}      <!-- describe her state -->
+{{pushvar::roster.alice.inventory::dagger}}  <!-- give her a dagger -->
+{{setvar::roster.alice.hp::40}}              <!-- she takes damage -->
+{{deletevar::roster.bob}}                    <!-- Bob leaves the party -->
+```
+
+`op.key` is always the top-level variable name (`roster` in the example above), so the tracked-keys / replay / swipe-restore logic treats the whole structure as one unit. Deleting the message that wrote a particular leaf rebuilds the structure from the surviving ops, naturally reverting that leaf — `roster` as a whole stays consistent with whatever the surviving timeline says.
+
+This is the recommended pattern for any variable that holds a structured collection an AI maintains across turns: NPC rosters, party inventories, quest logs, relationship maps, location states. The per-leaf granularity gives delete / swipe / branch the smallest possible unit of rollback, and renders naturally with <code v-pre>{{each::roster}}…{{/each}}</code> against the JSON object stored under the top-level key.
 
 ## Rendering structured variables — `{{each}}` and `loop_value`
 

@@ -7,6 +7,13 @@
  *   {{incvar::name}}
  *   {{decvar::name}}
  *   {{deletevar::name}}
+ *   {{pushvar::name::value}}
+ *   {{popvar::name}}
+ *
+ * Keys may be dotted to address nested paths inside an object/array root
+ * (e.g. `{{setvar::roster.alice.hp::50}}` ⇒ key=`roster`, path=`alice.hp`).
+ * Scanner returns the root and the dotted remainder separately; downstream
+ * consumers reassemble or interpret the path.
  *
  * This is a pure module — no DOM, no globals, no SillyTavern dependencies.
  * Scans must be deterministic and idempotent: a string with no recognized
@@ -19,9 +26,10 @@
 
 /**
  * @typedef {Object} MacroMatch
- * @property {'setvar'|'addvar'|'incvar'|'decvar'|'deletevar'} op
- * @property {string} key
- * @property {string} [rawValue] - Unresolved value template (for setvar/addvar)
+ * @property {'setvar'|'addvar'|'incvar'|'decvar'|'deletevar'|'pushvar'|'popvar'} op
+ * @property {string} key - Top-level variable name (root)
+ * @property {string} [path] - Dotted remainder of the key; empty / absent when flat
+ * @property {string} [rawValue] - Unresolved value template (for setvar/addvar/pushvar)
  * @property {number} start - Inclusive start index in source text
  * @property {number} end - Exclusive end index in source text
  * @property {string} literal - The exact substring that matched
@@ -140,15 +148,12 @@ export function stripSideEffectMacros(text) {
  * @returns {{ op: MacroMatch['op'], headEnd: number } | null}
  */
 function matchOpHead(text, from) {
-    // Try in length-descending order to avoid 'setvar' matching 'set'
-    const ops = /** @type {const} */ (['deletevar', 'setvar', 'addvar', 'incvar', 'decvar']);
+    // Length-descending to avoid 'setvar' matching 'set' (and 'pushvar' before any future 'push').
+    const ops = /** @type {const} */ (['deletevar', 'pushvar', 'popvar', 'setvar', 'addvar', 'incvar', 'decvar']);
     for (const op of ops) {
         const end = from + op.length;
         if (end > text.length) continue;
         if (text.slice(from, end).toLowerCase() !== op) continue;
-        // Op name must be followed by '::' (setvar/addvar/deletevar) or '::' / '}}' (incvar/decvar)
-        // Actually all five accept '::' followed by at least one segment, except
-        // incvar/decvar/deletevar which take just '::name' or 'name'.
         const next = text.slice(end, end + 2);
         if (next === '::') return { op, headEnd: end + 2 };
     }
@@ -201,9 +206,17 @@ function parseMacroBody(text, openIdx, bodyStart, op) {
  * Shapes:
  *   setvar::name::value        — key + value
  *   addvar::name::value        — key + value
+ *   pushvar::name::value       — key + value (value optional)
+ *   pushvar::name              — key only (value defaults to undefined)
  *   incvar::name               — key only
  *   decvar::name               — key only
  *   deletevar::name            — key only
+ *   popvar::name               — key only
+ *
+ * The literal `key` may itself be dotted (e.g. `roster.alice.hp`). We split
+ * on the first `.` and surface `{ key: <root>, path: <remainder> }`. The
+ * `path` field is omitted entirely when the key is flat — keeping the match
+ * record clean for the common case.
  *
  * @param {MacroMatch['op']} op
  * @param {string} body
@@ -213,18 +226,49 @@ function parseMacroBody(text, openIdx, bodyStart, op) {
  * @returns {MacroMatch | null}
  */
 function buildMacro(op, body, start, end, literal) {
-    if (op === 'setvar' || op === 'addvar') {
+    if (op === 'setvar' || op === 'addvar' || op === 'pushvar') {
         const sep = findTopLevelSeparator(body);
-        if (sep < 0) return null;
-        const key = body.slice(0, sep).trim();
+        if (sep < 0) {
+            // pushvar with no value is legal — fall through to key-only shape.
+            // setvar/addvar without a value are malformed and skipped.
+            if (op === 'pushvar') {
+                const rawKey = body.trim();
+                if (!rawKey) return null;
+                const { root, path } = splitKey(rawKey);
+                return path
+                    ? { op, key: root, path, start, end, literal }
+                    : { op, key: root, start, end, literal };
+            }
+            return null;
+        }
+        const rawKey = body.slice(0, sep).trim();
         const rawValue = body.slice(sep + 2);
-        if (!key) return null;
-        return { op, key, rawValue, start, end, literal };
+        if (!rawKey) return null;
+        const { root, path } = splitKey(rawKey);
+        return path
+            ? { op, key: root, path, rawValue, start, end, literal }
+            : { op, key: root, rawValue, start, end, literal };
     }
-    // incvar / decvar / deletevar
-    const key = body.trim();
-    if (!key) return null;
-    return { op, key, start, end, literal };
+    // incvar / decvar / deletevar / popvar
+    const rawKey = body.trim();
+    if (!rawKey) return null;
+    const { root, path } = splitKey(rawKey);
+    return path
+        ? { op, key: root, path, start, end, literal }
+        : { op, key: root, start, end, literal };
+}
+
+/**
+ * Splits a dotted key into (root, path). Returns `{ root: key, path: '' }`
+ * when the key is flat (no `.`).
+ *
+ * @param {string} key
+ * @returns {{ root: string, path: string }}
+ */
+function splitKey(key) {
+    const dot = key.indexOf('.');
+    if (dot < 0) return { root: key, path: '' };
+    return { root: key.slice(0, dot), path: key.slice(dot + 1) };
 }
 
 /**
