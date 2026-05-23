@@ -156,19 +156,20 @@ export async function requestToolCallWithRetry(context, settings, {
     throw lastError || new Error(`Tool call '${fnName}' failed.`);
 }
 
-// Control-flow tool names recognized by the iteration popups. These do
+// Control-flow tool calls (e.g. continue / finalize an iteration loop) do
 // not represent edits to apply; they steer the runner / iteration loop
-// itself (continue another round, finalize the session, etc.) and are
-// routed to `onControlCall` instead of `onToolCall` so popups can update
-// their state machine without treating them as user-visible operations.
-const RUNNER_CONTROL_NAMES = new Set([
-    'continue',
-    'finalize',
-    'finalize_iteration',
-    'orch_continue',
-    'orch_finalize',
-]);
-
+// itself and are routed to `onControlCall` instead of `onToolCall` so
+// popups can update their state machine without treating them as
+// user-visible operations.
+//
+// Detection is delegated to the caller via `opts.isControlCall` because
+// every popup uses its own namespaced control tool names — orchestrator
+// emits `luker_orch_continue_iteration` / `luker_orch_finalize_iteration`,
+// memory-graph schema iteration emits `luker_mg_schema_continue_iteration`
+// / `_finalize_iteration`, CPA and CEA popups have none. A single hardcoded
+// allowlist in the shared runner would silently misroute calls. When
+// `isControlCall` is omitted the runner treats every call as non-control,
+// so popups without control tools opt out by simply not passing it.
 export async function requestToolCallsWithRetry(context, settings, {
     taskMessages = [],
     runtimeWorldInfo = null,
@@ -183,6 +184,7 @@ export async function requestToolCallsWithRetry(context, settings, {
     onAssistantText = null,
     onToolCall = null,
     onControlCall = null,
+    isControlCall = null,
 } = {}) {
     if (!Array.isArray(tools) || tools.length === 0) {
         throw new Error('Tools are required.');
@@ -258,16 +260,31 @@ export async function requestToolCallsWithRetry(context, settings, {
             // target. A callback that throws must not derail the runner —
             // these are observers, not gating hooks.
             if (typeof onAssistantText === 'function' && assistantText) {
-                try { onAssistantText(assistantText); }
-                catch (cbErr) { console.warn('[iter-tool-calling] onAssistantText threw', cbErr); }
+                try {
+                    onAssistantText(assistantText);
+                } catch (cbErr) {
+                    console.warn('[iter-tool-calling] onAssistantText threw', cbErr);
+                }
             }
             if (filteredCalls.length > 0 && (typeof onToolCall === 'function' || typeof onControlCall === 'function')) {
+                const detectControl = typeof isControlCall === 'function' ? isControlCall : null;
                 for (const call of filteredCalls) {
-                    const isControl = RUNNER_CONTROL_NAMES.has(String(call?.name || ''));
+                    let isControl = false;
+                    if (detectControl) {
+                        try {
+                            isControl = !!detectControl(call);
+                        } catch (predErr) {
+                            console.warn('[iter-tool-calling] isControlCall threw; treating as non-control', predErr);
+                            isControl = false;
+                        }
+                    }
                     const cb = isControl ? onControlCall : onToolCall;
                     if (typeof cb === 'function') {
-                        try { cb(call); }
-                        catch (cbErr) { console.warn('[iter-tool-calling] onToolCall threw', cbErr); }
+                        try {
+                            cb(call);
+                        } catch (cbErr) {
+                            console.warn(`[iter-tool-calling] ${isControl ? 'onControlCall' : 'onToolCall'} threw`, cbErr);
+                        }
                     }
                 }
             }

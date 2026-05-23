@@ -6,14 +6,22 @@
  * stream *before* applying edits to the live target.
  *
  * To support that without each popup re-implementing the parsing, the
- * runner accepts three optional callbacks invoked once per successful
- * round (after validation, before return):
+ * runner accepts these optional hooks invoked once per successful round
+ * (after validation, before return):
  *
  *   - `onAssistantText(text)`     fires once if non-empty text was produced
  *   - `onToolCall(call)`          fires once per non-control tool call, in order
- *   - `onControlCall(call)`       fires for `continue` / `finalize` /
- *                                 `finalize_iteration` / `orch_continue` /
- *                                 `orch_finalize`
+ *   - `onControlCall(call)`       fires for any call the caller's
+ *                                 `isControlCall(toolCall)` predicate
+ *                                 returns truthy for. Without a predicate
+ *                                 every call routes to `onToolCall`.
+ *
+ * Control-call detection lives in the caller, not the runner, because the
+ * production control tool names are namespaced per popup (orchestrator
+ * uses `luker_orch_continue_iteration` / `_finalize_iteration`,
+ * memory-graph schema iteration uses `luker_mg_schema_continue_iteration`
+ * / `_finalize_iteration`, CPA and CEA popups have none). Hardcoding a
+ * single allowlist in the shared runner would silently misroute calls.
  *
  * Adding these callbacks is purely additive: callers that pass nothing get
  * the existing behavior (return-only). A throwing callback must not crash
@@ -117,16 +125,66 @@ describe('requestToolCallsWithRetry — per-round callbacks', () => {
         expect(onToolCall.mock.calls[2][0].name).toBe('do_c');
     });
 
-    test('onControlCall fires for control names; onToolCall does NOT', async () => {
+    test('onControlCall fires when isControlCall predicate returns true; onToolCall does NOT', async () => {
+        const onToolCall = jest.fn();
+        const onControlCall = jest.fn();
+        // Use stable namespaced names that match the real production tool
+        // names (orchestrator's `luker_orch_*_iteration`, memory-graph's
+        // `luker_mg_schema_*_iteration`). The predicate inspects the full
+        // toolCall, not just the name, so callers can route on args if
+        // they ever need to.
+        const isControlCall = (tc) => (
+            tc.name === 'luker_orch_continue_iteration'
+            || tc.name === 'luker_orch_finalize_iteration'
+            || tc.name === 'luker_mg_schema_continue_iteration'
+            || tc.name === 'luker_mg_schema_finalize_iteration'
+        );
+        const ctx = makeContext({
+            toolCalls: [
+                { name: 'do_a', args: {} },
+                { name: 'luker_orch_continue_iteration', args: {} },
+                { name: 'luker_orch_finalize_iteration', args: {} },
+                { name: 'luker_mg_schema_continue_iteration', args: {} },
+                { name: 'luker_mg_schema_finalize_iteration', args: {} },
+            ],
+            assistantText: '',
+        });
+        await requestToolCallsWithRetry(ctx, SETTINGS, {
+            tools: TOOLS,
+            onToolCall,
+            onControlCall,
+            isControlCall,
+        });
+        // Only the single non-control call fires onToolCall.
+        expect(onToolCall).toHaveBeenCalledTimes(1);
+        expect(onToolCall.mock.calls[0][0].name).toBe('do_a');
+        // All four namespaced control names fire onControlCall, in order.
+        expect(onControlCall).toHaveBeenCalledTimes(4);
+        const controlNames = onControlCall.mock.calls.map(c => c[0].name);
+        expect(controlNames).toEqual([
+            'luker_orch_continue_iteration',
+            'luker_orch_finalize_iteration',
+            'luker_mg_schema_continue_iteration',
+            'luker_mg_schema_finalize_iteration',
+        ]);
+    });
+
+    test('without isControlCall predicate, every call routes to onToolCall', async () => {
+        // Single-turn popups (CPA, CEA char-iter, CEA editor) have no
+        // continue/finalize tools and should not opt into control routing.
+        // The default must be "treat every call as non-control" so the
+        // popup's onToolCall observer fires for every tool, with nothing
+        // silently misrouted to a missing onControlCall handler.
         const onToolCall = jest.fn();
         const onControlCall = jest.fn();
         const ctx = makeContext({
             toolCalls: [
-                { name: 'do_a', args: {} },
+                { name: 'cea_replace_field', args: {} },
+                // Even names that LOOK like control names (e.g. literal
+                // `continue` from the old hardcoded set) must NOT route
+                // to onControlCall absent a predicate, because the caller
+                // has not opted in.
                 { name: 'continue', args: {} },
-                { name: 'finalize', args: {} },
-                { name: 'orch_continue', args: {} },
-                { name: 'orch_finalize', args: {} },
                 { name: 'finalize_iteration', args: {} },
             ],
             assistantText: '',
@@ -135,23 +193,13 @@ describe('requestToolCallsWithRetry — per-round callbacks', () => {
             tools: TOOLS,
             onToolCall,
             onControlCall,
+            // isControlCall intentionally omitted.
         });
-        // Only the single non-control call fires onToolCall.
-        expect(onToolCall).toHaveBeenCalledTimes(1);
-        expect(onToolCall.mock.calls[0][0].name).toBe('do_a');
-        // All five control names fire onControlCall.
-        expect(onControlCall).toHaveBeenCalledTimes(5);
-        const controlNames = onControlCall.mock.calls.map(c => c[0].name);
-        expect(controlNames).toEqual([
-            'continue',
-            'finalize',
-            'orch_continue',
-            'orch_finalize',
-            'finalize_iteration',
-        ]);
+        expect(onToolCall).toHaveBeenCalledTimes(3);
+        expect(onControlCall).not.toHaveBeenCalled();
     });
 
-    test('a throwing callback does not break the runner', async () => {
+    test('a throwing onToolCall / onAssistantText does not break the runner', async () => {
         const onAssistantText = jest.fn(() => { throw new Error('boom1'); });
         const onToolCall = jest.fn(() => { throw new Error('boom2'); });
         const ctx = makeContext({
@@ -170,5 +218,40 @@ describe('requestToolCallsWithRetry — per-round callbacks', () => {
         // Both callbacks were attempted exactly once.
         expect(onAssistantText).toHaveBeenCalledTimes(1);
         expect(onToolCall).toHaveBeenCalledTimes(1);
+    });
+
+    test('a throwing onControlCall does not break the runner; onAssistantText still fires', async () => {
+        // Mirror of the onToolCall-throwing test for control routing. If the
+        // popup's onControlCall raises (e.g. state-machine bug), the round
+        // must still return its parsed calls and onAssistantText must still
+        // observe the assistant turn.
+        const onAssistantText = jest.fn();
+        const onToolCall = jest.fn();
+        const onControlCall = jest.fn(() => { throw new Error('boom_ctrl'); });
+        const ctx = makeContext({
+            toolCalls: [
+                { name: 'do_a', args: { ok: true } },
+                { name: 'orch_ctrl', args: { phase: 'continue' } },
+            ],
+            assistantText: 'pondering',
+        });
+        const result = await requestToolCallsWithRetry(ctx, SETTINGS, {
+            tools: TOOLS,
+            onAssistantText,
+            onToolCall,
+            onControlCall,
+            isControlCall: (tc) => tc.name === 'orch_ctrl',
+        });
+        expect(Array.isArray(result)).toBe(true);
+        expect(result).toHaveLength(2);
+        // onAssistantText fired despite the later throw.
+        expect(onAssistantText).toHaveBeenCalledTimes(1);
+        expect(onAssistantText).toHaveBeenCalledWith('pondering');
+        // Non-control call observed normally.
+        expect(onToolCall).toHaveBeenCalledTimes(1);
+        expect(onToolCall.mock.calls[0][0].name).toBe('do_a');
+        // Control call was attempted once, even though it threw.
+        expect(onControlCall).toHaveBeenCalledTimes(1);
+        expect(onControlCall.mock.calls[0][0].name).toBe('orch_ctrl');
     });
 });
