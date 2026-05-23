@@ -11050,6 +11050,41 @@ export function cloneJsonValue(value) {
     return serialized === undefined ? undefined : JSON.parse(serialized);
 }
 
+/**
+ * Clones a value through a JSON round-trip so the result matches what the
+ * server would see if we fetch()'d this payload right now.
+ *
+ * Why this exists separately from cloneJsonValue: structuredClone preserves
+ * sparse-array slots and `undefined` fields, but JSON.stringify collapses both
+ * to `null` (sparse slot) or removes them (undefined object field). Server
+ * never sees the structured form — it only sees the wire bytes. So if FE
+ * snapshot is built with structuredClone, it captures a JS-only shape that
+ * server's stored copy cannot match, and the next JSON Patch test against /N
+ * fails because snapshot.swipe_info[0] is {empty slot} while server holds
+ * null.
+ *
+ * Use this for any state that will be compared against server-stored form:
+ * the chat-write snapshot caches and patch-op build pipeline. Display /
+ * mutation code paths should keep using cloneJsonValue.
+ */
+export function cloneAsJsonWire(value) {
+    try {
+        const serialized = JSON.stringify(value);
+        return serialized === undefined ? undefined : JSON.parse(serialized);
+    } catch {
+        // Exotic values (functions, symbols, bigints, circular refs) — fall back
+        // to the safer serializer that strips those, then JSON-normalize again
+        // so the output is still in wire form (sparse → null, undefined dropped).
+        const safe = cloneJsonValue(value);
+        try {
+            const serialized = JSON.stringify(safe);
+            return serialized === undefined ? undefined : JSON.parse(serialized);
+        } catch {
+            return safe;
+        }
+    }
+}
+
 function normalizeJsonObject(value) {
     const normalized = cloneJsonValue(value);
     return isPlainObject(normalized) ? normalized : {};
@@ -11349,7 +11384,12 @@ function attachChatMessagePatchTests(previousMessages, operations) {
             guardedOperations.push({
                 op: 'test',
                 path: `/${index}`,
-                value: cloneJsonValue(workingMessages[index]),
+                // Wire-form the test value so it matches the bytes server holds.
+                // simulate-apply earlier in this loop can splice raw operation
+                // values (sparse arrays, undefined fields) into workingMessages;
+                // a structured-form test value would never match the JSON-parsed
+                // shape server reads back.
+                value: cloneAsJsonWire(workingMessages[index]),
             });
             lastTestedIndex = index;
         }
@@ -11375,7 +11415,11 @@ function attachChatMessagePatchTests(previousMessages, operations) {
 
 export function buildChatMessagePatchOperations(previousMessages, nextMessages) {
     const previous = Array.isArray(previousMessages) ? previousMessages : [];
-    const next = Array.isArray(nextMessages) ? nextMessages : [];
+    // Wire-form the next side so compare matches what server would see, not
+    // the structured shape that mutated chat[] still carries (sparse slots,
+    // undefined fields). previous is already wire-form because
+    // rememberChatMessageSnapshot writes it that way.
+    const next = Array.isArray(nextMessages) ? cloneAsJsonWire(nextMessages) : [];
     const operations = compareJsonPatch(previous, next);
     return attachChatMessagePatchTests(previous, operations);
 }
@@ -11436,7 +11480,14 @@ function rememberChatMessageSnapshot(target = resolveChatStateTarget(), messages
         chatMessageSnapshotCache.delete(key);
         return;
     }
-    chatMessageSnapshotCache.set(key, cloneJsonValue(messages));
+    // Wire-format clone (not structured clone): snapshot mirrors what server
+    // holds, which is the result of JSON-parsing our last sent wire payload.
+    // Stock ST helpers occasionally produce sparse swipe_info / variables
+    // arrays in chat[i]; structuredClone preserves those slots verbatim, but
+    // JSON.stringify on the network path collapses them to null. Diffing a
+    // structured-form snapshot against a wire-form server state then ships
+    // phantom replace ops or fires false test failures (the conflict toast).
+    chatMessageSnapshotCache.set(key, cloneAsJsonWire(messages));
 }
 
 export function seedChatMessageSnapshot(target = null, messages = chat) {
