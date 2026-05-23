@@ -5513,5 +5513,8 @@
     ,"Continuing...": "继续中……"
     ,"Failed to save preset: ${0}": "保存预设失败：${0}"
     ,"Failed to save schema: ${0}": "保存结构失败：${0}"
+    ,"Failed to save profile: ${0}": "保存配置失败：${0}"
+    ,"Session finalized": "会话已完成"
+    ,"No presets": "暂无预设"
     ,"Error: ${0}": "错误：${0}"
 }

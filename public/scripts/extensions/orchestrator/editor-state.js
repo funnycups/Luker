@@ -141,7 +141,6 @@ export function loadCharacterEditorState(context, avatar) {
     return {
         avatar: safeAvatar,
         enabled: useOverride ? Boolean(override?.enabled) : false,
-        notes: useOverride ? String(override?.notes || '') : '',
         spec,
         presets,
     };
@@ -161,7 +160,6 @@ export function loadCharacterAgendaEditorState(context, avatar) {
     return {
         avatar: safeAvatar,
         enabled: Boolean(agendaOverride?.enabled),
-        notes: String(agendaOverride?.notes || ''),
         planner: profile.planner,
         agents: profile.agents,
         finalAgentId: profile.finalAgentId,
@@ -206,8 +204,8 @@ export function loadGlobalLoopEditorState() {
  * Load the per-character loop editor draft. When the character has a
  * persisted loop override, use it; otherwise seed from the global loop
  * profile so the editor has a sensible starting point. The returned
- * draft carries `enabled` + `notes` like the spec/agenda character
- * editors, so save / clear flows can roundtrip those fields.
+ * draft carries `enabled` like the spec/agenda character editors, so
+ * save / clear flows can roundtrip that field.
  */
 export function loadCharacterLoopEditorState(context, avatar) {
     const settings = getSettings();
@@ -220,7 +218,6 @@ export function loadCharacterLoopEditorState(context, avatar) {
         ...baseProfile,
         avatar: safeAvatar,
         enabled: Boolean(loopOverride?.enabled),
-        notes: String(loopOverride?.notes || ''),
     };
 }
 
@@ -232,8 +229,8 @@ export function loadCharacterLoopEditorState(context, avatar) {
  * `editor.director.mainAgent.systemPrompt` etc. without optional-chain
  * fallback noise. The sanitizer is the single source of truth for the
  * shape — we mutate the editor object in place to match the sanitizer
- * output, preserving any non-director fields (avatar / enabled / notes)
- * that ride along on character-scope editors.
+ * output, preserving any non-director fields (avatar / enabled) that
+ * ride along on character-scope editors.
  */
 export function ensureDirectorEditorIntegrity(editor) {
     if (!editor || typeof editor !== 'object') {
@@ -262,8 +259,8 @@ export function loadGlobalDirectorEditorState() {
  * Load the per-character director editor draft. When the character has
  * a persisted director override, use it; otherwise seed from the global
  * director profile so the editor has a sensible starting point. The
- * returned draft carries `enabled` + `notes` like the spec/agenda/loop
- * character editors, so save / clear flows can roundtrip those fields.
+ * returned draft carries `enabled` like the spec/agenda/loop character
+ * editors, so save / clear flows can roundtrip that field.
  */
 export function loadCharacterDirectorEditorState(context, avatar) {
     const settings = getSettings();
@@ -276,7 +273,6 @@ export function loadCharacterDirectorEditorState(context, avatar) {
         ...baseProfile,
         avatar: safeAvatar,
         enabled: Boolean(directorOverride?.enabled),
-        notes: String(directorOverride?.notes || ''),
     };
 }
 

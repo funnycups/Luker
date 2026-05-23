@@ -5352,5 +5352,8 @@
     ,"Continuing...": "繼續中……"
     ,"Failed to save preset: ${0}": "儲存預設失敗：${0}"
     ,"Failed to save schema: ${0}": "儲存結構失敗：${0}"
+    ,"Failed to save profile: ${0}": "儲存設定失敗：${0}"
+    ,"Session finalized": "會話已完成"
+    ,"No presets": "暫無預設"
     ,"Error: ${0}": "錯誤：${0}"
 }

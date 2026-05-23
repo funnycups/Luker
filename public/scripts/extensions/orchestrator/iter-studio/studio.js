@@ -84,12 +84,17 @@ import { Popup, POPUP_TYPE } from '../../../popup.js';
 import {
     applyEdits,
     bindIterWorkspaceResizer,
+    inverseEdit,
     render as ITER_RENDER,
     runner as ITER_RUNNER,
     textDiff as ITER_TEXT_DIFF,
     zoomOverlay as ITER_ZOOM_OVERLAY,
 } from '../../../iteration-library/index.js';
-import { createOrchestratorIterationSessionStore } from './session-store.js';
+import {
+    createOrchestratorIterationSessionStore,
+    makeMessageId,
+    normalizeMessageShape,
+} from './session-store.js';
 
 const MODULE = 'orch-iteration';
 const STYLESHEET_ID = 'orch_it_studio_stylesheet';
@@ -100,6 +105,68 @@ const CONTROL_TOOL_NAMES = Object.freeze({
     finalize: 'luker_orch_finalize_iteration',
 });
 const CONTROL_TOOL_NAME_SET = new Set([CONTROL_TOOL_NAMES.continue, CONTROL_TOOL_NAMES.finalize]);
+
+/**
+ * Predicate the runner uses (via `isControlCall`) to route a tool call to
+ * `onControlCall` instead of `onToolCall`. Keeps the shared runner
+ * plugin-agnostic; the popup decides what counts as a control call.
+ */
+function isOrchControlCall(toolCall) {
+    return CONTROL_TOOL_NAME_SET.has(String(toolCall?.name || ''));
+}
+
+/**
+ * OpenAI-style function definitions for the two control tools that drive
+ * the multi-round auto-continue loop. The orchestrator's
+ * `buildAiIterationToolSet` already returns the edit-tools catalog for the
+ * active mode; we splice these in alongside, but route them through
+ * `onControlCall` so they never reach the sandbox executor.
+ */
+const CONTROL_TOOL_DEFS = [
+    {
+        type: 'function',
+        function: {
+            name: CONTROL_TOOL_NAMES.continue,
+            description: 'Request one automatic follow-up round after the current tools have run. Use only when more iteration is genuinely needed; otherwise call luker_orch_finalize_iteration.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    note: { type: 'string', description: 'Optional rationale visible to the user.' },
+                },
+                additionalProperties: false,
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: CONTROL_TOOL_NAMES.finalize,
+            description: 'Finalize this iteration turn with a concise summary. The popup stops auto-continuing after this call.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    summary: { type: 'string', description: 'Short user-facing summary of what changed.' },
+                },
+                additionalProperties: false,
+            },
+        },
+    },
+];
+
+/**
+ * Loose AbortError detector. The runner may throw a DOMException with name
+ * AbortError, a plain Error with "aborted" in the message, or rethrow our
+ * AbortController's signal. Treat any of those as a user-driven Stop so
+ * handleSendMessage's catch block doesn't push an error bubble.
+ */
+function isAbortError(err, signal) {
+    if (!err) return false;
+    if (err.name === 'AbortError') return true;
+    const msg = String(err?.message || err);
+    if (/abort(ed)?/i.test(msg)) return true;
+    if (signal?.aborted) return true;
+    return false;
+}
 
 const TITLES_BY_MODE = Object.freeze({
     spec: 'AI Iteration Studio — Spec',
@@ -271,11 +338,19 @@ function renderOrchPreviewPane(live, pendingEdits, mode, tFn) {
 }
 
 /**
- * SPEC mode renderer — surface stages, modes, nodes (with preset names).
- * Reads the real shape `{spec: {stages, defaultTools}, presets}`. The
+ * SPEC mode renderer — surface stages, modes, nodes (with preset names),
+ * then a Presets section that surfaces preset-level changes (旧-8). Reads
+ * the real shape `{spec: {stages, defaultTools}, presets}`. The
  * `spec.mode === 'director'` carve-out handled by `sanitizeSpec` is
  * irrelevant here — the popup's outer dispatcher routes by `state.session.mode`
  * not by the profile shape.
+ *
+ * Without the Presets section, `presets.*` paths in the diff (e.g. a tool
+ * call that bumped a preset's apiPresetName or systemPrompt) had no row to
+ * highlight, so the preview pane was mute for changes that affected presets
+ * but no stage was structurally re-laid-out. The Presets section uses
+ * `isPrefixInChangedSet(changed, 'presets.<id>')` to light up the
+ * specific preset rows whose subtree mutated.
  */
 function renderOrchSpecPreview(profile, changed, t) {
     const stages = Array.isArray(profile?.spec?.stages) ? profile.spec.stages : [];
@@ -306,10 +381,34 @@ function renderOrchSpecPreview(profile, changed, t) {
             ${nodeBlocks}
         </div>`;
     }).join('');
+
+    // Presets section — one row per preset, lit up when any `presets.<id>.*`
+    // path is in the changed set. The summary line shows the api / prompt
+    // preset names like the node label does, so the user can correlate
+    // which presets the stage rows referenced.
+    const presetEntries = Object.entries(presetMap);
+    const presetRows = presetEntries.map(([id, preset]) => {
+        const presetPath = `presets.${id}`;
+        const presetChanged = isPrefixInChangedSet(changed, presetPath);
+        const apiName = String(preset?.apiPresetName || '');
+        const promptName = String(preset?.promptPresetName || '');
+        const subtitle = [promptName, apiName].filter(Boolean).join(' / ');
+        return `<div class="${rowClass(presetChanged)}">
+            <div class="luker-iter-workspace-preview-row-head">
+                <span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(id)}</span>
+                <span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(subtitle)}</span>
+            </div>
+        </div>`;
+    }).join('');
+
     return `
         <div class="luker-iter-workspace-preview-section">
             <div class="luker-iter-workspace-preview-section-title">${escapeHtmlLocal(t('Pipeline'))}</div>
             ${stageRows || `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('No stages'))}</div>`}
+        </div>
+        <div class="luker-iter-workspace-preview-section">
+            <div class="luker-iter-workspace-preview-section-title">${escapeHtmlLocal(t('Presets'))}</div>
+            ${presetRows || `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('No presets'))}</div>`}
         </div>
     `;
 }
@@ -506,7 +605,22 @@ function createNewSession(mode) {
         id: makeSessionId(),
         title: '',
         messages: [],
-        surfaceState: { historyOpen: false, autoApply: false },
+        // Per-session surface preferences + finalize state. isFinalized +
+        // finalizeSummary now ride on surfaceState (single source of truth)
+        // so popup close / reload preserves them — previously they were
+        // closure-local (state.isFinalized) and a popup reopen would lose
+        // them on the same session.
+        surfaceState: {
+            historyOpen: false,
+            autoApply: false,
+            isFinalized: false,
+            finalizeSummary: '',
+        },
+        // Top-level mirror of pendingEdits so a popup close mid-turn (before
+        // Apply) reloads with the same pending batch. The runtime state
+        // (state.pendingEdits) is the live source; persistSession writes a
+        // structured-clone of it onto state.session.pendingEdits before save.
+        pendingEdits: [],
         mode,
         updatedAt: now,
         createdAt: now,
@@ -601,6 +715,7 @@ export async function openOrchestratorIterationStudio(deps) {
         i18n,
         i18nFormat,
         getIterationDefaultScope,
+        getCharacterDisplayNameByAvatar,
         getEditorByScope,
         getAgendaEditorByScope,
         getLoopEditorByScope,
@@ -689,8 +804,13 @@ export async function openOrchestratorIterationStudio(deps) {
 
     // ──────────────────────────────────────────────────────────────────
     // Closure-local state. `live` is the working profile cloned from the
-    // active editor. `pendingEdits` always contains 0 or 1 entries since
-    // the sandbox-diff emits one coarse `set('', newProfile)` per turn.
+    // active editor. `pendingEdits` mirrors state.session.pendingEdits so
+    // popup close mid-batch reloads the same staged edits; it usually
+    // holds 0 or 1 entries since the sandbox-diff emits one coarse
+    // `set('', newProfile)` per turn but multi-tool turns can stack.
+    //
+    // isFinalized + finalizeSummary live on state.session.surfaceState
+    // (not on `state` itself) so they persist across popup close / reopen.
     // ──────────────────────────────────────────────────────────────────
     const state = {
         mode,
@@ -699,8 +819,6 @@ export async function openOrchestratorIterationStudio(deps) {
         pendingEdits: [],
         isBusy: false,
         abortController: null,
-        isFinalized: false,
-        finalizeSummary: '',
     };
 
     function loadLive() {
@@ -724,9 +842,9 @@ export async function openOrchestratorIterationStudio(deps) {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // Commit live → orchestrator settings via the existing global apply
-    // helper. Per-character apply is a separate button (see action
-    // handler below).
+    // Commit live → orchestrator settings. Apply chooses between these
+    // via `getIterationDefaultScope(context)` — there's no separate
+    // global vs character button anymore.
     // ──────────────────────────────────────────────────────────────────
     async function commitLiveToGlobal() {
         const fakeSession = buildHelperSession(sanitizeForMode(state.live));
@@ -746,8 +864,19 @@ export async function openOrchestratorIterationStudio(deps) {
     async function persistSession() {
         state.session.updatedAt = Date.now();
         state.session.mode = mode;
+        // Mirror runtime pendingEdits onto the persisted session so a popup
+        // close mid-batch reloads with the same staged edits. Structured-
+        // clone so a subsequent in-place mutation can't poison the saved
+        // copy via the same reference.
+        try {
+            state.session.pendingEdits = Array.isArray(state.pendingEdits)
+                ? structuredClone(state.pendingEdits)
+                : [];
+        } catch {
+            state.session.pendingEdits = Array.isArray(state.pendingEdits) ? state.pendingEdits.slice() : [];
+        }
         if (!state.session.title) {
-            const firstUser = state.session.messages.find(m => m.role === 'user');
+            const firstUser = state.session.messages.find(m => m.role === 'user' && !m.auto);
             if (firstUser) {
                 state.session.title = String(firstUser.content || '').slice(0, 50);
             }
@@ -758,22 +887,32 @@ export async function openOrchestratorIterationStudio(deps) {
     async function loadSession(id) {
         const loaded = await sessionStore.load(id);
         if (!loaded) return;
+        const fallbackAt = Number(loaded.updatedAt) || Date.now();
+        const loadedMessages = Array.isArray(loaded.messages) ? loaded.messages : [];
         state.session = {
             ...loaded,
             mode,
-            surfaceState: { historyOpen: false, autoApply: false, ...(loaded.surfaceState || {}) },
+            surfaceState: {
+                historyOpen: false,
+                autoApply: false,
+                isFinalized: false,
+                finalizeSummary: '',
+                ...(loaded.surfaceState || {}),
+            },
+            messages: loadedMessages.map(m => normalizeMessageShape(m, fallbackAt)),
+            pendingEdits: Array.isArray(loaded.pendingEdits) ? loaded.pendingEdits.slice() : [],
         };
-        state.pendingEdits = [];
-        state.isFinalized = false;
-        state.finalizeSummary = '';
+        state.pendingEdits = state.session.pendingEdits.slice();
+        // Re-read live so a parallel editor doesn't leave the popup with
+        // stale state when the user reopens an older session.
+        loadLive();
         await render();
     }
 
     async function startNewSession() {
         state.session = createNewSession(mode);
         state.pendingEdits = [];
-        state.isFinalized = false;
-        state.finalizeSummary = '';
+        loadLive();
         await sessionStore.save(state.session);
         await render();
     }
@@ -825,27 +964,145 @@ export async function openOrchestratorIterationStudio(deps) {
         </div>`;
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    // Chat-message rendering. Q2 + Q7:
-    //   - assistant messages route through the library's markdown renderer
-    //     (sanitized via DOMPurify, so embedding via `innerHTML` is XSS-safe).
-    //   - user / assistant / system messages get distinct CSS classes.
-    // ──────────────────────────────────────────────────────────────────
-    function renderMessage(message) {
-        const role = String(message?.role || 'user');
-        const content = message?.content || '';
+    function formatTime(ts) {
+        try {
+            const d = new Date(Number(ts) || Date.now());
+            return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        } catch { return ''; }
+    }
+
+    function renderToolCallChip(tc) {
+        const name = String(tc?.name || '');
+        let argsText;
+        try { argsText = JSON.stringify(tc?.args ?? {}, null, 2); } catch { argsText = String(tc?.args ?? ''); }
+        return `
+            <div class="orch_it_msg_toolcall">
+                <div class="orch_it_msg_toolcall_name">${escapeHtmlLocal(name || t('(tool)'))}</div>
+                <pre class="orch_it_msg_toolcall_args">${escapeHtmlLocal(argsText)}</pre>
+            </div>`;
+    }
+
+    function renderEditChip(edit) {
+        // Reuse the pending-card renderer so the per-message audit trail
+        // and the active pending block look visually identical — the user
+        // doesn't have to learn two diff visual languages.
+        return renderPendingEditCard(edit);
+    }
+
+    /**
+     * Resolve the apply scope label for the current context. Reused by both
+     * the pending block button and the per-message "✓ Applied to ..." chip
+     * so they stay in sync.
+     */
+    function getApplyScopeLabel() {
+        const scope = getIterationDefaultScope(context);
+        if (scope === 'character') {
+            const avatar = String(context?.characters?.[context?.characterId]?.avatar || '').trim();
+            const display = typeof getCharacterDisplayNameByAvatar === 'function'
+                ? (getCharacterDisplayNameByAvatar(context, avatar) || '')
+                : '';
+            return display || avatar || t('current character');
+        }
+        return t('global');
+    }
+
+    /**
+     * Resolve the apply scope label that should be persisted on the
+     * applied message. Distinct from the live UI label because the
+     * persisted value should survive the user switching characters
+     * later — we record `appliedTarget = 'character' | 'global'` so the
+     * Rollback button knows what scope to revert. For display, we
+     * resolve `appliedTarget` back to a human label at render time.
+     */
+    function resolveAppliedTargetLabel(appliedTarget) {
+        if (appliedTarget === 'character') return t('character');
+        if (appliedTarget === 'global') return t('global');
+        return String(appliedTarget || '');
+    }
+
+    function renderMessageCard(message, idx, allMessages) {
+        if (!message) return '';
+        const role = String(message.role || 'user');
+        const content = String(message.content || '');
         let bodyHtml;
         if (role === 'assistant') {
+            // sanitized by DOMPurify inside renderMessageMarkdown
             bodyHtml = ITER_RENDER.renderMessageMarkdown(content);
         } else {
-            bodyHtml = escapeHtmlLocal(String(content)).replace(/\n/g, '<br>');
+            bodyHtml = escapeHtmlLocal(content).replace(/\n/g, '<br>');
         }
         const roleCls = role === 'user'
             ? 'orch_it_msg_user'
             : role === 'assistant'
                 ? 'orch_it_msg_assistant'
                 : 'orch_it_msg_system';
-        return `<div class="orch_it_msg ${roleCls}">${bodyHtml}</div>`;
+        const autoCls = message.auto ? ' orch_it_msg_auto' : '';
+
+        const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
+        const edits = Array.isArray(message.edits) ? message.edits : [];
+        const hasTrail = toolCalls.length > 0 || edits.length > 0;
+        const applied = Boolean(message.appliedAt) && !message.rolledBackAt;
+        const rolledBack = Boolean(message.rolledBackAt);
+        const detailsOpen = hasTrail && !applied && !rolledBack;
+
+        let trailHtml = '';
+        if (hasTrail) {
+            const headerLabel = tf('Tools and edits this round (${0})', String(toolCalls.length + edits.length));
+            const targetLabel = resolveAppliedTargetLabel(message.appliedTarget);
+            const statusHtml = rolledBack
+                ? `<span class="orch_it_msg_rolled_back">${escapeHtmlLocal(tf('Rolled back at ${0}', formatTime(message.rolledBackAt)))}</span>`
+                : (applied
+                    ? `
+                        <span class="orch_it_msg_applied">${escapeHtmlLocal(tf('✓ Applied to ${0} at ${1}', targetLabel, formatTime(message.appliedAt)))}</span>
+                        <button class="menu_button menu_button_small" data-orch-it-custom-action="rollback-batch" data-orch-it-msg-id="${escapeHtmlLocal(message.id || '')}">
+                            ${escapeHtmlLocal(t('Rollback'))}
+                        </button>
+                    `
+                    : '');
+
+            const toolsHtml = toolCalls.map(renderToolCallChip).join('');
+            const editsHtml = edits.map(renderEditChip).join('');
+
+            trailHtml = `
+                <details class="orch_it_msg_trail" ${detailsOpen ? 'open' : ''}>
+                    <summary>${escapeHtmlLocal(headerLabel)}</summary>
+                    <div class="orch_it_msg_trail_body">
+                        ${toolsHtml}
+                        ${editsHtml}
+                    </div>
+                    ${statusHtml ? `<div class="orch_it_msg_trail_status">${statusHtml}</div>` : ''}
+                </details>
+            `;
+        }
+
+        // Regenerate is per-assistant-message, only when it's not the
+        // current tail (otherwise just hit Send again to re-run from the
+        // same prompt). We also skip auto-continue synthetic assistants;
+        // their prompt was synthesized so regen would just truncate to
+        // the prior human turn anyway — semantically identical to
+        // regenerating that prior turn.
+        const isLastAssistant = (() => {
+            if (role !== 'assistant') return false;
+            for (let j = (allMessages?.length || 0) - 1; j > idx; j--) {
+                if (allMessages[j]?.role === 'assistant') return false;
+            }
+            return true;
+        })();
+        const showRegenerate = role === 'assistant' && !isLastAssistant && !message.auto;
+        const actionsHtml = showRegenerate
+            ? `
+                <div class="orch_it_msg_actions">
+                    <button class="menu_button menu_button_small" data-orch-it-custom-action="regenerate" data-orch-it-msg-id="${escapeHtmlLocal(message.id || '')}">
+                        ${escapeHtmlLocal(t('Regenerate'))}
+                    </button>
+                </div>`
+            : '';
+
+        return `<div class="orch_it_msg ${roleCls}${autoCls}" data-orch-it-msg-id="${escapeHtmlLocal(message.id || '')}">
+            ${bodyHtml}
+            ${trailHtml}
+            ${actionsHtml}
+        </div>`;
     }
 
     function renderHistoryItem(meta) {
@@ -876,7 +1133,9 @@ export async function openOrchestratorIterationStudio(deps) {
             }
         }
 
-        // Auto-apply checkbox: sync to persisted preference.
+        // Auto-apply checkbox: sync to persisted preference. render() is the
+        // single source of truth so a session switch (different auto-apply
+        // pref) updates the checkbox without separate plumbing.
         const $autoApply = $root.find('[data-orch-it-action="toggle-auto-apply"]');
         if ($autoApply.length) {
             const wantChecked = Boolean(state.session.surfaceState?.autoApply);
@@ -891,10 +1150,17 @@ export async function openOrchestratorIterationStudio(deps) {
             || `<div class="orch_it_history_empty">${escapeHtmlLocal(t('No saved sessions'))}</div>`;
         $root.find('[data-orch-it-history-items]').html(historyHtml);
 
-        // Messages
-        const messagesHtml = (state.session.messages || []).map(renderMessage).join('');
+        // Messages — pass index + full array so renderMessageCard can decide
+        // whether to render Regenerate (only on non-last assistant turns).
+        const allMsgs = state.session.messages || [];
+        const messagesHtml = allMsgs.map((m, i) => renderMessageCard(m, i, allMsgs)).join('');
         const $msgs = $root.find('[data-orch-it-messages]');
-        $msgs.html(messagesHtml);
+        // Loading bubble: append (don't overwrite) so the just-finished
+        // user turn stays visible while the LLM call is in flight.
+        const loadingHtml = state.isBusy
+            ? `<div class="orch_it_msg orch_it_msg_assistant orch_it_msg_loading"><i class="fa-solid fa-spinner fa-spin"></i> ${escapeHtmlLocal(t('AI is thinking...'))}</div>`
+            : '';
+        $msgs.html(messagesHtml + loadingHtml);
         // Auto-scroll so newly-appended messages are visible.
         try {
             const node = $msgs[0];
@@ -903,11 +1169,13 @@ export async function openOrchestratorIterationStudio(deps) {
             }
         } catch { /* DOM not attached (test) */ }
 
-        // Finalized banner
+        // Finalized banner — sourced from surfaceState (persists across reload).
+        const isFinalized = Boolean(state.session.surfaceState?.isFinalized);
+        const finalizeSummary = String(state.session.surfaceState?.finalizeSummary || '');
         const $fin = $root.find('[data-orch-it-finalized]');
-        if (state.isFinalized) {
-            const summary = state.finalizeSummary
-                ? escapeHtmlLocal(state.finalizeSummary)
+        if (isFinalized) {
+            const summary = finalizeSummary
+                ? escapeHtmlLocal(finalizeSummary)
                 : escapeHtmlLocal(t('Session finalized'));
             $fin.html(`
                 <span class="orch_it_finalized_label">${escapeHtmlLocal(t('Session finalized'))}</span>
@@ -917,32 +1185,32 @@ export async function openOrchestratorIterationStudio(deps) {
             $fin.html('').hide().attr('hidden', '');
         }
 
-        // Pending edits
+        // Pending edits — single Apply button per spec §3.4. The label
+        // resolves to the active iteration scope (character name when a card
+        // is selected, "global" otherwise). One handler ('apply') decides
+        // commit target via getIterationDefaultScope() so the button can't
+        // commit to the wrong scope after a parallel character switch.
         const $pending = $root.find('[data-orch-it-pending]');
         if (state.pendingEdits.length > 0) {
             const cardsHtml = state.pendingEdits.map(renderPendingEditCard).join('');
-            const hasAvatar = Boolean(
-                String(context?.characters?.[context?.characterId]?.avatar || '').trim(),
-            );
-            const charBtnAttrs = hasAvatar ? '' : ' disabled title="' + escapeHtmlLocal(t('No active character')) + '"';
+            const applyLabel = tf('Apply to ${0}', getApplyScopeLabel());
             $pending.html(`
                 <div class="orch_it_pending_title">${escapeHtmlLocal(t('Pending changes'))}</div>
                 <div class="orch_it_pending_list">${cardsHtml}</div>
                 <div class="orch_it_pending_actions">
-                    <button class="menu_button" data-orch-it-action="apply-global">${escapeHtmlLocal(t('Apply to global'))}</button>
-                    <button class="menu_button" data-orch-it-action="apply-character"${charBtnAttrs}>${escapeHtmlLocal(t('Apply to character'))}</button>
-                    <button class="menu_button" data-orch-it-action="discard-edits">${escapeHtmlLocal(t('Discard'))}</button>
+                    <button class="menu_button luker-iter-pending-apply" data-orch-it-action="apply">${escapeHtmlLocal(applyLabel)}</button>
+                    <button class="menu_button menu_button_small" data-orch-it-action="discard-edits">${escapeHtmlLocal(t('Discard'))}</button>
                 </div>
             `).show().attr('hidden', null);
         } else {
             $pending.html('').hide().attr('hidden', '');
         }
 
-        // Composer: disable when finalized or busy; Send label flips to Stop.
+        // Composer: disable when finalized; Send label flips to Stop while busy.
         const $sendBtn = $root.find('[data-orch-it-action="send"]');
         $sendBtn.text(state.isBusy ? t('Stop') : t('Send'));
         const $textarea = $root.find('[data-orch-it-input]');
-        if (state.isFinalized) {
+        if (isFinalized) {
             $sendBtn.prop('disabled', true);
             $textarea.prop('disabled', true);
         } else {
@@ -1051,21 +1319,17 @@ export async function openOrchestratorIterationStudio(deps) {
     }
 
     /**
-     * Strip control tools from the catalog so the LLM sees one canonical
-     * set of definitions. The mode-aware `buildAiIterationToolSet`
-     * includes continue/finalize tools as part of every catalog; the
-     * popup handles them explicitly (see runIterationTurn) but doesn't
-     * need them present in the catalog the runner ships to the model.
-     *
-     * NB: keeping the control tools IN the catalog is harmless (the
-     * filter step that follows handles them either way) but stripping
-     * them prevents the model from seeing duplicate definitions if a
-     * future executor refactor injects them from another source.
+     * Build the catalog the runner advertises to the LLM. The mode-aware
+     * `buildAiIterationToolSet` returns the per-mode edit tools; we splice
+     * the two popup-side control tools (continue / finalize) alongside.
+     * The runner's `isControlCall` predicate (passed below) routes them to
+     * onControlCall instead of onToolCall so they never reach the sandbox
+     * executor.
      */
     function buildToolCatalog() {
         const helperSession = buildHelperSession(state.live);
-        const all = buildAiIterationToolSet(helperSession) || [];
-        return all;
+        const editTools = buildAiIterationToolSet(helperSession) || [];
+        return [...editTools, ...CONTROL_TOOL_DEFS];
     }
 
     async function resolveRuntimeWorldInfo(signal) {
@@ -1103,9 +1367,13 @@ export async function openOrchestratorIterationStudio(deps) {
             lastUserOpts = { auto: true };
             // Push a synthetic user message into the visible history so the
             // model has context AND the user can see the auto-continue turn.
+            // Marked `auto:true` so Regenerate skips them when walking back
+            // to the human user turn.
             state.session.messages.push({
+                id: makeMessageId(),
                 role: 'user',
                 content: lastUserText,
+                at: Date.now(),
                 auto: true,
             });
         }
@@ -1124,6 +1392,18 @@ export async function openOrchestratorIterationStudio(deps) {
             rpmLimit: settings?.rpmLimit,
         };
 
+        // Per-round callback bookkeeping. The runner fires onAssistantText
+        // once (after validation, before return) and onToolCall once per
+        // non-control call in array order. Control tools (continue /
+        // finalize) route to onControlCall via the isControlCall predicate,
+        // so they never pollute the edit-tool list.
+        let firstAssistantText = '';
+        const collectedToolCalls = [];
+        let wantsAutoContinue = false;
+        let sawFinalize = false;
+        let finalizeSummary = '';
+        let continueNote = '';
+
         const result = await ITER_RUNNER.requestToolCallsWithRetry(
             context,
             runnerSettings,
@@ -1136,67 +1416,132 @@ export async function openOrchestratorIterationStudio(deps) {
                 abortSignal: ac.signal,
                 includeAssistantText: true,
                 allowNoToolCalls: true,
+                isControlCall: isOrchControlCall,
+                onAssistantText: (text) => {
+                    firstAssistantText = String(text || '');
+                },
+                onToolCall: (call) => {
+                    collectedToolCalls.push(call);
+                },
+                onControlCall: (call) => {
+                    const name = String(call?.name || '');
+                    if (name === CONTROL_TOOL_NAMES.continue) {
+                        // Finalize is sticky: if the model emits both controls
+                        // in one turn (continue, finalize OR finalize, continue)
+                        // the iteration ends. Order of call arrival should not
+                        // change the outcome.
+                        if (!sawFinalize) {
+                            wantsAutoContinue = true;
+                            continueNote = String(call?.args?.note || '');
+                        }
+                    } else if (name === CONTROL_TOOL_NAMES.finalize) {
+                        sawFinalize = true;
+                        wantsAutoContinue = false;
+                        finalizeSummary = String(call?.args?.summary || '');
+                    }
+                },
             },
         );
 
-        const toolCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
-        const assistantText = String(result?.assistantText || '').trim();
-
-        // Partition tool calls: control tools drive popup flow; edit tools
-        // go through sandbox-diff normalize.
-        let wantsAutoContinue = false;
-        const editToolCalls = [];
-        for (const call of toolCalls) {
-            const name = String(call?.name || '');
-            if (name === CONTROL_TOOL_NAMES.continue) {
-                wantsAutoContinue = true;
-            } else if (name === CONTROL_TOOL_NAMES.finalize) {
-                state.isFinalized = true;
-                state.finalizeSummary = String(call?.args?.summary || '').trim();
-            } else {
-                editToolCalls.push(call);
-            }
-        }
+        // Prefer `collectedToolCalls` — populated by `onToolCall`, which the
+        // runner only fires for non-control calls. When the per-event
+        // callbacks didn't land (e.g. an older runner version), fall back to
+        // `result.toolCalls`, but filter out control calls explicitly so
+        // they never leak into the persisted `assistantMsg.toolCalls`.
+        const editToolCalls = collectedToolCalls.length > 0
+            ? collectedToolCalls
+            : (Array.isArray(result?.toolCalls)
+                ? result.toolCalls.filter((c) => !isOrchControlCall(c))
+                : []);
+        const assistantText = firstAssistantText.trim();
 
         // Normalize edit-tools → edits via sandbox-diff. Multiple edit
         // calls in the same turn stack as separate edits, but Apply
         // collapses them via applyEdits's sequential application.
         const edits = [];
         for (const call of editToolCalls) {
-            const normalized = await normalizeToolCallToEditInline(call);
-            if (Array.isArray(normalized)) {
-                edits.push(...normalized);
+            try {
+                const normalized = await normalizeToolCallToEditInline(call);
+                if (Array.isArray(normalized)) {
+                    edits.push(...normalized);
+                }
+                // null (executor failure) → skip silently; the AI can retry.
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}:${mode}] normalizeToolCallToEditInline failed for ${String(call?.name || '')}`, err);
+                state.session.messages.push({
+                    id: makeMessageId(),
+                    role: 'system',
+                    content: tf('Edit error: ${0}', String(err?.message || err)),
+                    at: Date.now(),
+                });
             }
-            // null (executor failure) → skip silently.
         }
-        state.pendingEdits = edits;
 
-        // Push assistant message (visible). If the model returned text,
-        // use it; if not but produced tool calls, synthesize a brief
-        // stand-in so the chat doesn't have empty bubbles.
-        if (assistantText) {
-            state.session.messages.push({ role: 'assistant', content: assistantText });
-        } else if (toolCalls.length > 0) {
-            const names = toolCalls.map(c => String(c?.name || '')).filter(Boolean).join(', ');
-            state.session.messages.push({
-                role: 'assistant',
-                content: t('Suggested actions: ') + names,
-            });
+        // Persist finalize state on surfaceState (single source of truth) so
+        // popup close / reload retains it. `sawFinalize` is set in the
+        // onControlCall callback above for the finalize branch — true even
+        // when finalizeSummary is an empty string.
+        if (sawFinalize) {
+            state.session.surfaceState = state.session.surfaceState || {};
+            state.session.surfaceState.isFinalized = true;
+            state.session.surfaceState.finalizeSummary = finalizeSummary;
         }
+
+        // Stage the assistant message with the full per-round audit trail.
+        // Falls back to a synthesized summary when the model emitted tool
+        // calls without text so the chat doesn't have empty bubbles. The
+        // toolCalls + edits + appliedAt fields drive renderMessageCard's
+        // collapsible details block, Apply marker, and Rollback button.
+        let content = assistantText;
+        if (!content && editToolCalls.length > 0) {
+            const names = editToolCalls
+                .map(c => String(c?.name || ''))
+                .filter(Boolean)
+                .join(', ');
+            content = tf('Suggested actions: ${0}', names);
+        }
+        if (!content && (wantsAutoContinue || finalizeSummary)) {
+            content = finalizeSummary || t('Continuing...');
+        }
+        const assistantMsg = {
+            id: makeMessageId(),
+            role: 'assistant',
+            content: content || '',
+            at: Date.now(),
+        };
+        if (editToolCalls.length > 0) {
+            assistantMsg.toolCalls = editToolCalls.map(tc => ({
+                id: String(tc?.id || ''),
+                name: String(tc?.name || ''),
+                args: tc?.args ?? {},
+            }));
+        }
+        if (edits.length > 0) {
+            assistantMsg.edits = edits.slice();
+        }
+        state.session.messages.push(assistantMsg);
+
+        // Replace pendingEdits with this round's batch. We don't append:
+        // staging is per-round so the user can Apply or Discard cleanly
+        // before the next AI request fires.
+        state.pendingEdits = edits;
 
         // Mobile workspace: if the user was on the Preview tab, bump the
         // chat-tab badge so they know new assistant content arrived without
         // forcing a tab switch.
         bumpChatBadge();
 
-        // Mode-aware auto-apply: when checked AND new edits arrived AND
-        // we are not finalized, apply immediately. (Order: apply BEFORE
-        // evaluating auto-continue so the next turn sees the new live.)
-        const autoApply = Boolean(state.session.surfaceState?.autoApply);
-        if (autoApply && state.pendingEdits.length > 0 && !state.isFinalized) {
+        // Composer-row auto-apply: if enabled AND this turn produced edits,
+        // AND we are not finalized, apply immediately. Errors are caught
+        // locally so the runner's outer finally still resets isBusy +
+        // persists the session.
+        const autoApplyOn = Boolean(state.session.surfaceState?.autoApply);
+        if (autoApplyOn && state.pendingEdits.length > 0 && !state.session.surfaceState?.isFinalized) {
             try {
                 await applyPendingEdits({ skipRender: true });
             } catch (err) {
+                // eslint-disable-next-line no-console
                 console.warn(`[${MODULE}:${mode}] auto-apply failed`, err);
             }
         }
@@ -1209,10 +1554,12 @@ export async function openOrchestratorIterationStudio(deps) {
             actions: [],
             simulations: [],
             toolResults: [],
-            finalized: state.isFinalized,
-            finalizeSummary: state.finalizeSummary,
+            finalized: Boolean(state.session.surfaceState?.isFinalized),
+            finalizeSummary: String(state.session.surfaceState?.finalizeSummary || ''),
             continueRequested: wantsAutoContinue,
+            continueNote,
             changed: edits.length > 0,
+            hasPending: edits.length > 0,
         };
 
         return {
@@ -1226,16 +1573,30 @@ export async function openOrchestratorIterationStudio(deps) {
     // `{ newLive, clean, conflicts, alreadyDone }`. Per sub-spec §6 / §9
     // we do NOT surface a conflict UI: just commit `newLive` and silently
     // drop any conflicting / already-done edits. The pre-call live is
-    // re-read so a parallel editor doesn't blow away their work.
+    // re-read so a parallel editor (e.g. user swapped characters) doesn't
+    // blow away their work.
+    //
+    // `state.live` is snapshotted before applyEdits/applyEmptyPathSet so
+    // a commit failure restores the pre-apply value — otherwise the
+    // preview would lie about what's on disk until the next loadLive()
+    // reload. `state.pendingEdits` is cleared only after commit resolves
+    // so a failed save leaves the staged batch for the user to retry.
+    //
+    // Scope is derived from `getIterationDefaultScope(context)` so the
+    // single Apply button can't commit to the wrong target after a parallel
+    // character switch — character scope when an avatar is selected, global
+    // otherwise. On success we toast the user and mark the most recent
+    // unapplied assistant message so renderMessageCard can show the
+    // Applied label and a Rollback button.
     // ──────────────────────────────────────────────────────────────────
-    async function applyPendingEdits({ skipRender = false, target = 'global' } = {}) {
-        if (state.pendingEdits.length === 0) return;
-        loadLive();
+    async function applyPendingEdits({ skipRender = false } = {}) {
+        if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) return;
+        if (!state.live) await loadLive();
+        const liveSnapshot = state.live;
         // Sandbox-diff emits a single coarse {op:'set', path:'', newValue:<whole profile>}.
         // lodash.set with empty path is a no-op, so route empty-path edits
         // around the engine via applyEmptyPathSet — otherwise auto-apply and
-        // the manual Apply button both silently skip the commit. Mirrors the
-        // same fix shipped for memory-graph in 3fc75b35.
+        // the manual Apply button both silently skip the commit.
         const onlyEdit = state.pendingEdits.length === 1 ? state.pendingEdits[0] : null;
         const emptyPathEdit = onlyEdit && onlyEdit.op === 'set' && onlyEdit.path === '' && typeof onlyEdit.newValue !== 'undefined'
             ? onlyEdit
@@ -1246,27 +1607,165 @@ export async function openOrchestratorIterationStudio(deps) {
             const result = applyEdits(state.pendingEdits, state.live);
             state.live = result?.newLive ?? state.live;
         }
-        state.pendingEdits = [];
+
+        const scope = getIterationDefaultScope(context);
         try {
-            if (target === 'character') {
+            if (scope === 'character') {
                 await commitLiveToCharacter();
             } else {
                 await commitLiveToGlobal();
             }
         } catch (err) {
+            state.live = liveSnapshot;
             // eslint-disable-next-line no-console
             console.warn(`[${MODULE}:${mode}] commit failed`, err);
+            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* toastr may be unavailable in tests */ }
             state.session.messages.push({
+                id: makeMessageId(),
                 role: 'system',
-                content: t('Failed to apply changes: ') + String(err?.message || err),
+                content: tf('Failed to save profile: ${0}', String(err?.message || err)),
+                at: Date.now(),
             });
+            await persistSession();
+            if (!skipRender) await render();
+            return;
         }
+
+        try { toastr.success(tf('Applied to ${0}', getApplyScopeLabel())); } catch { /* ignore */ }
+
+        // Mark the most recent unapplied assistant message that owns these
+        // edits. We scan back from the end because the just-rendered turn
+        // is the typical target; rare cases (user clicks Apply on a stale
+        // session reopened with persisted pendingEdits) still hit a sane
+        // candidate as long as one exists.
+        const messages = state.session.messages || [];
+        for (let i = messages.length - 1; i >= 0; i--) {
+            const m = messages[i];
+            if (m.role === 'assistant' && Array.isArray(m.edits) && m.edits.length > 0 && !m.appliedAt) {
+                m.appliedAt = Date.now();
+                m.appliedTarget = scope;
+                break;
+            }
+        }
+
+        state.pendingEdits = [];
         await persistSession();
         if (!skipRender) await render();
     }
 
     async function discardPendingEdits() {
         state.pendingEdits = [];
+        await persistSession();
+        await render();
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Per-message actions.
+    //
+    // regenerateFromMessage(msgId): truncate the chat back to the user
+    // turn that prompted this assistant message, drop staged pendingEdits
+    // (they belonged to the discarded turn), refill the textarea with the
+    // original prompt, and re-fire the send pipeline.
+    //
+    // rollbackBatch(msgId): inverse-apply each edit in the message's
+    // batch against state.live (right-to-left, so dependent ops unwind in
+    // creation order), commit the result, mark the message rolledBackAt.
+    // Bails on the first edit whose op lacks an inverse — partial
+    // rollback would leave the profile in an inconsistent state.
+    // ──────────────────────────────────────────────────────────────────
+    async function regenerateFromMessage(messageId) {
+        if (state.isBusy) return;
+        const messages = state.session.messages || [];
+        const idx = messages.findIndex(m => m && m.id === messageId);
+        if (idx < 0) return;
+        // Walk back to the user message that prompted this assistant turn.
+        // Skip auto-continue synthetic users (`m.auto === true`) so the
+        // resend refills the textarea with the human's original text.
+        let userIdx = -1;
+        for (let i = idx - 1; i >= 0; i--) {
+            const m = messages[i];
+            if (m && m.role === 'user' && !m.auto) { userIdx = i; break; }
+        }
+        if (userIdx < 0) return;
+        const userText = String(messages[userIdx].content || '');
+        // Truncate before the user message; the resend will push it again.
+        state.session.messages = messages.slice(0, userIdx);
+        state.pendingEdits = [];
+        // Drop finalize state too — a regenerate is a "rewind" so the
+        // surface state should match the pre-finalize point.
+        if (state.session.surfaceState) {
+            state.session.surfaceState.isFinalized = false;
+            state.session.surfaceState.finalizeSummary = '';
+        }
+        await persistSession();
+        await render();
+        const $textarea = $root.find('[data-orch-it-input]');
+        $textarea.val(userText);
+        await handleSendMessage();
+    }
+
+    async function rollbackBatch(messageId) {
+        if (state.isBusy) return;
+        const msg = (state.session.messages || []).find(m => m && m.id === messageId);
+        if (!msg) return;
+        if (!msg.appliedAt || msg.rolledBackAt) return;
+        if (!Array.isArray(msg.edits) || msg.edits.length === 0) return;
+        // eslint-disable-next-line no-alert
+        if (!confirm(t('Roll back this batch? The changes will be reversed in the target.'))) return;
+
+        loadLive();
+        let working = state.live;
+        // Build inverses up-front so an unsupported op fails BEFORE we
+        // partial-apply anything. Right-to-left inversion handles dependent
+        // edits (e.g. set then list_insert) cleanly.
+        const inverses = [];
+        for (const edit of msg.edits.slice().reverse()) {
+            try {
+                inverses.push(inverseEdit(edit));
+            } catch (err) {
+                console.warn(`[${MODULE}:${mode}] inverseEdit failed`, edit, err);
+                try { toastr.error(tf('Cannot rollback edit type: ${0}', String(edit?.op || 'unknown'))); } catch { /* ignore */ }
+                return;
+            }
+        }
+        try {
+            // Orch sandbox-diff uses empty-path set edits; inverse is the same
+            // shape with oldValue/newValue swapped. Route the same way Apply
+            // does so the engine's lodash.set("") no-op doesn't strand us.
+            const allEmptyPath = inverses.length > 0
+                && inverses.every(e => e?.op === 'set' && e?.path === '' && typeof e?.newValue !== 'undefined');
+            if (allEmptyPath) {
+                for (const inv of inverses) {
+                    working = applyEmptyPathSet(working, inv);
+                }
+            } else {
+                const result = applyEdits(inverses, working);
+                working = result?.newLive ?? working;
+            }
+        } catch (err) {
+            console.warn(`[${MODULE}:${mode}] applyEdits(inverses) failed`, err);
+            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* ignore */ }
+            return;
+        }
+        state.live = working;
+        // Route the commit through the same scope chooser as Apply.
+        const scope = msg.appliedTarget === 'character' || msg.appliedTarget === 'global'
+            ? msg.appliedTarget
+            : getIterationDefaultScope(context);
+        try {
+            if (scope === 'character') {
+                await commitLiveToCharacter();
+            } else {
+                await commitLiveToGlobal();
+            }
+        } catch (err) {
+            console.warn(`[${MODULE}:${mode}] commit(rollback) failed`, err);
+            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* ignore */ }
+            return;
+        }
+        msg.rolledBackAt = Date.now();
+        await persistSession();
+        try { toastr.success(t('Rolled back')); } catch { /* ignore */ }
         await render();
     }
 
@@ -1275,47 +1774,63 @@ export async function openOrchestratorIterationStudio(deps) {
     // BEFORE the await so the user sees their own input before the LLM
     // wait spinner starts. Errors surface as system messages.
     //
-    // Auto-continue loop: when the model emits a `continue` control tool
-    // AND no edits are pending (so we don't preempt the user's apply
-    // decision), the popup schedules another turn with the synthesized
-    // auto-continue prompt. Loop bounded by `maxAutoContinueRounds` to
-    // prevent runaway costs.
+    // Multi-round auto-continue: when the AI emits
+    // `luker_orch_continue_iteration`, runIterationTurn returns
+    // `wantsAutoContinue: true` and the loop fires another round (after
+    // rendering the previous round so the user sees progressive output).
+    // The ONLY exits are:
+    //   1. The model called `luker_orch_finalize_iteration` (no continue).
+    //   2. The model did neither (e.g. produced edits + stopped).
+    //   3. The user clicked Stop (abortController fires; isAbortError
+    //      catches the resulting error in the catch block).
+    //   4. The model is staging edits and the user hasn't applied them yet
+    //      (pendingEdits non-empty halts the auto-continue so the user gets
+    //      to apply before the next round mutates `live`).
+    // There is NO hard round cap — runaway loops are the user's problem
+    // and a single Stop click ends them.
     // ──────────────────────────────────────────────────────────────────
-    const MAX_AUTO_CONTINUE_ROUNDS = 6;
-
     async function handleSendMessage() {
         if (state.isBusy) {
+            // Stop request: abort the in-flight runner call.
             try { state.abortController?.abort(); } catch { /* ignore */ }
             return;
         }
-        if (state.isFinalized) return;
+        if (state.session.surfaceState?.isFinalized) return;
         const $textarea = $root.find('[data-orch-it-input]');
         const text = String($textarea.val() || '').trim();
         if (!text) return;
         $textarea.val('');
-        state.session.messages.push({ role: 'user', content: text });
+        state.session.messages.push({
+            id: makeMessageId(),
+            role: 'user',
+            content: text,
+            at: Date.now(),
+        });
         state.isBusy = true;
         await persistSession();
         await render();   // Q6: user message visible before LLM wait
         try {
             let turn = await runIterationTurn();
-            let rounds = 0;
-            while (turn.wantsAutoContinue
+            while (turn?.wantsAutoContinue
                 && state.pendingEdits.length === 0
-                && !state.isFinalized
-                && rounds < MAX_AUTO_CONTINUE_ROUNDS) {
-                rounds++;
+                && !state.session.surfaceState?.isFinalized) {
                 await persistSession();
-                await render();
+                await render();   // progressive: prior round visible before next
+                if (state.abortController?.signal?.aborted) break;
                 turn = await runIterationTurn({ autoContinueFromResult: turn.executionResult });
             }
         } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn(`[${MODULE}:${mode}]`, err);
-            state.session.messages.push({
-                role: 'system',
-                content: t('Error: ') + String(err?.message || err),
-            });
+            // Stop button → don't push an error bubble; user knows they cancelled.
+            if (!isAbortError(err, state.abortController?.signal)) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}:${mode}]`, err);
+                state.session.messages.push({
+                    id: makeMessageId(),
+                    role: 'system',
+                    content: tf('Error: ${0}', String(err?.message || err)),
+                    at: Date.now(),
+                });
+            }
         } finally {
             state.isBusy = false;
             state.abortController = null;
@@ -1402,31 +1917,40 @@ export async function openOrchestratorIterationStudio(deps) {
         await persistSession();
         // If we just enabled it and we already have pending edits, apply
         // them immediately (consistent with the during-turn behavior).
-        if (checked && state.pendingEdits.length > 0 && !state.isFinalized) {
-            await applyPendingEdits();
+        if (checked && state.pendingEdits.length > 0 && !state.session.surfaceState?.isFinalized) {
+            try {
+                await applyPendingEdits();
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}:${mode}] auto-apply on toggle failed`, err);
+            }
         }
     });
 
-    $root.on('click.orchIt', '[data-orch-it-action="apply-global"]', async (e) => {
+    $root.on('click.orchIt', '[data-orch-it-action="apply"]', async (e) => {
         e.preventDefault();
-        await applyPendingEdits({ target: 'global' });
-    });
-    $root.on('click.orchIt', '[data-orch-it-action="apply-character"]', async (e) => {
-        e.preventDefault();
-        if (e.currentTarget?.disabled) return;
-        await applyPendingEdits({ target: 'character' });
+        await applyPendingEdits();
     });
     $root.on('click.orchIt', '[data-orch-it-action="discard-edits"]', async (e) => {
         e.preventDefault();
         await discardPendingEdits();
     });
+
+    // Session-switch handlers — abort in-flight LLM + reset busy flag before
+    // the swap so a stale response can't land in the newly-loaded session.
     $root.on('click.orchIt', '[data-orch-it-action="new-session"]', async (e) => {
         e.preventDefault();
+        try { state.abortController?.abort(); } catch { /* ignore */ }
+        state.isBusy = false;
+        state.abortController = null;
         await startNewSession();
     });
     // Q9: clear-history lives inside the <details>; same delegation root.
     $root.on('click.orchIt', '[data-orch-it-action="clear-history"]', async (e) => {
         e.preventDefault();
+        try { state.abortController?.abort(); } catch { /* ignore */ }
+        state.isBusy = false;
+        state.abortController = null;
         await clearAllHistory();
     });
     $root.on('click.orchIt', '[data-orch-it-action="load-session"]', async (e) => {
@@ -1436,6 +1960,9 @@ export async function openOrchestratorIterationStudio(deps) {
         if (target && target.matches?.('[data-orch-it-action="delete-session"]')) return;
         const id = String(e.currentTarget?.dataset?.orchItId || '');
         if (id && id !== state.session.id) {
+            try { state.abortController?.abort(); } catch { /* ignore */ }
+            state.isBusy = false;
+            state.abortController = null;
             await loadSession(id);
         }
     });
@@ -1444,12 +1971,36 @@ export async function openOrchestratorIterationStudio(deps) {
         e.stopPropagation();
         const id = String(e.currentTarget?.dataset?.orchItId || '');
         if (!id) return;
+        // Deleting the active session also tears down any in-flight LLM
+        // call so the response can't land in the recreated next session.
+        if (id === state.session?.id) {
+            try { state.abortController?.abort(); } catch { /* ignore */ }
+            state.isBusy = false;
+            state.abortController = null;
+        }
         await sessionStore.delete(id);
         if (state.session.id === id) {
             await startNewSession();
         } else {
             await render();
         }
+    });
+
+    // Per-message custom actions (Regenerate / Rollback). Use
+    // `data-orch-it-custom-action` rather than `data-orch-it-action` so the
+    // legacy delegation selectors above can't accidentally fire on these —
+    // matches the iter-studio shell gotcha pattern.
+    $root.on('click.orchIt', '[data-orch-it-custom-action="regenerate"]', async (e) => {
+        e.preventDefault();
+        const msgId = String(e.currentTarget?.dataset?.orchItMsgId || '');
+        if (!msgId) return;
+        await regenerateFromMessage(msgId);
+    });
+    $root.on('click.orchIt', '[data-orch-it-custom-action="rollback-batch"]', async (e) => {
+        e.preventDefault();
+        const msgId = String(e.currentTarget?.dataset?.orchItMsgId || '');
+        if (!msgId) return;
+        await rollbackBatch(msgId);
     });
 
     // ── Workspace events ──────────────────────────────────────────────
@@ -1494,23 +2045,26 @@ export async function openOrchestratorIterationStudio(deps) {
     // Bind the column resizer. Returns a no-op when grid/splitter are
     // missing (e.g. during teardown), so the unbind call below is safe
     // regardless of mount state.
-    const unbindResizer = bindIterWorkspaceResizer($root[0]);
-
-    await render();
-
-    // Block until the user dismisses the popup. Persist one final time so
-    // any in-flight composer / surfaceState changes survive close.
+    //
+    // Both the bind and the initial render are inside the try block so a
+    // throw at either step still hits the finally cleanup (no leaked
+    // resizer / pending abortController / unpersisted session).
+    let unbindResizer = () => {};
     try {
+        unbindResizer = bindIterWorkspaceResizer($root[0]);
+        await render();
+        // Block until the user dismisses the popup. The single try/finally
+        // ensures every teardown step (resizer unbind, zoom-overlay unbind,
+        // in-flight abort, final persist) runs even if rendering throws or
+        // the popup is force-closed; ordering puts persistSession LAST so
+        // the abort flag is cleared before disk write.
         await popupPromise;
     } finally {
         try { unbindResizer(); } catch { /* ignore */ }
+        try { zoomOverlayUnbind?.(); } catch { /* ignore */ }
+        try { state.abortController?.abort(); } catch { /* ignore */ }
+        state.isBusy = false;
+        state.abortController = null;
+        try { await persistSession(); } catch { /* ignore */ }
     }
-    try { state.abortController?.abort(); } catch { /* ignore */ }
-    try { zoomOverlayUnbind?.(); } catch { /* ignore */ }
-    await persistSession();
-
-    // Silence unused-import lint for tf in environments where i18nFormat
-    // isn't surfaced through any rendered string yet. (Kept threaded
-    // through deps so callers can swap in localized formats later.)
-    void tf;
 }

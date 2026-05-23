@@ -378,6 +378,51 @@ describe('renderOrchPreviewPane', () => {
         expect(html).toContain('pending-change');
     });
 
+    test('spec mode: surfaces a Presets section that lights up rows when presets.* paths change (旧-8)', () => {
+        // The renderer must walk `presets.*` in the changed-path set so a
+        // preset-only edit (e.g. bumping a preset's apiPresetName via the
+        // sandbox-diff) lights up the matching preset row even when the
+        // stage layout is unchanged.
+        const before = {
+            spec: {
+                stages: [
+                    { id: 'stage_1', mode: 'serial', nodes: [{ id: 'planner', preset: 'planner_preset', type: 'agent' }] },
+                ],
+                defaultTools: null,
+            },
+            presets: {
+                planner_preset: { systemPrompt: '', userPromptTemplate: '', apiPresetName: 'old_api', promptPresetName: 'old_prompt' },
+                review_preset: { systemPrompt: '', userPromptTemplate: '', apiPresetName: 'r_api', promptPresetName: 'r_prompt' },
+            },
+        };
+        const after = {
+            spec: {
+                stages: [
+                    { id: 'stage_1', mode: 'serial', nodes: [{ id: 'planner', preset: 'planner_preset', type: 'agent' }] },
+                ],
+                defaultTools: null,
+            },
+            presets: {
+                planner_preset: { systemPrompt: '', userPromptTemplate: '', apiPresetName: 'new_api', promptPresetName: 'new_prompt' },
+                review_preset: { systemPrompt: '', userPromptTemplate: '', apiPresetName: 'r_api', promptPresetName: 'r_prompt' },
+            },
+        };
+        const edit = { op: 'set', path: '', oldValue: before, newValue: after };
+        const html = _testOnly_renderOrchPreviewPane(before, [edit], 'spec');
+        // The Presets section header should be present, and the
+        // planner_preset row should be marked pending-change while
+        // review_preset stays unmarked.
+        expect(html).toMatch(/Presets|预设|預設/);
+        expect(html).toContain('planner_preset');
+        expect(html).toContain('review_preset');
+        // The HTML should mark the planner_preset row's wrapper with
+        // pending-change. The stage row above is unchanged (same id /
+        // mode / nodes) so its row class should be the plain variant —
+        // we don't assert on that to keep the test resilient to small
+        // CSS class renames.
+        expect(html).toContain('pending-change');
+    });
+
     test('unknown mode falls back to spec rendering without throwing', () => {
         const profile = {
             spec: { stages: [{ id: 'stage_x', mode: 'serial', nodes: [{ id: 'n', preset: 'p' }] }], defaultTools: null },

@@ -28,7 +28,7 @@
  *      that runtime callers expect alongside spec-mode profiles.
  *   6. `ensureAgendaEditorIntegrity` — in-place mutator that re-applies
  *      `sanitizeAgendaWorkingProfile` to an editor draft and preserves
- *      the editor-only fields (`avatar`, `enabled`, `notes`).
+ *      the editor-only fields (`avatar`, `enabled`).
  */
 
 import { extension_settings } from '../../extensions.js';
@@ -134,9 +134,6 @@ export function ensureAgendaEditorIntegrity(editor) {
     }
     if ('enabled' in editor) {
         editor.enabled = Boolean(editor.enabled);
-    }
-    if ('notes' in editor) {
-        editor.notes = String(editor.notes || '');
     }
 }
 

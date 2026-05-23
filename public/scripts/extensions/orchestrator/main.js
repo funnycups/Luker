@@ -4594,7 +4594,6 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
             ...profile,
             avatar,
             enabled: true,
-            notes: '',
         };
         const ok = await persistCharacterLoopEditor(context, settings, avatar, {
             editor: importedEditor,
@@ -4622,7 +4621,6 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
         const importedEditor = {
             ...cloneAgendaWorkingProfileFromEditor(session?.workingProfile || {}),
             enabled: true,
-            notes: '',
         };
         const ok = await persistCharacterAgendaEditor(context, settings, avatar, {
             editor: importedEditor,
@@ -4651,7 +4649,6 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
             ...sanitizedProfile,
             avatar,
             enabled: true,
-            notes: '',
         };
         const ok = await persistCharacterDirectorEditor(context, settings, avatar, {
             editor: importedEditor,
@@ -4680,7 +4677,6 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
         editor: {
             ...importedEditor,
             enabled: true,
-            notes: '',
         },
         forceEnabled: true,
     });
@@ -4714,6 +4710,7 @@ async function openAiIterationStudio(context, settings, root) {
         i18n,
         i18nFormat,
         getIterationDefaultScope,
+        getCharacterDisplayNameByAvatar,
         getEditorByScope,
         getAgendaEditorByScope,
         getLoopEditorByScope,
@@ -5924,7 +5921,6 @@ function bindUi() {
                                 maxTotalRuns: imported.agenda.limits.maxTotalRuns,
                             },
                             enabled: true,
-                            notes: '',
                         };
                         const ok = await persistCharacterAgendaEditor(context, settings, avatar, {
                             editor: importedEditor,
@@ -5989,7 +5985,6 @@ function bindUi() {
                         spec: toEditableSpec(imported.spec, toEditablePresetMap(imported.presets)),
                         presets: toEditablePresetMap(imported.presets),
                         enabled: true,
-                        notes: '',
                     };
                     const ok = await persistCharacterEditor(context, settings, avatar, {
                         editor: importedEditor,

@@ -109,7 +109,6 @@ export async function persistGlobalDirectorEditorFrom(settings, editor) {
 export async function persistCharacterEditor(context, settings, avatar, {
     editor,
     forceEnabled = null,
-    notes = null,
 } = {}) {
     void settings;
     const target = String(avatar || '');
@@ -124,7 +123,6 @@ export async function persistCharacterEditor(context, settings, avatar, {
     ensureEditorIntegrity(editor);
     const characterPresets = serializeEditorPresetMap(editor.presets);
     const sourceEnabled = typeof editor?.enabled === 'boolean' ? editor.enabled : true;
-    const sourceNotes = notes === null ? String(editor?.notes || '') : String(notes || '');
     const previous = getCharacterExtensionDataByAvatar(context, target);
     const previousOverride = previous?.override && typeof previous.override === 'object'
         ? structuredClone(previous.override)
@@ -137,7 +135,6 @@ export async function persistCharacterEditor(context, settings, avatar, {
         presets: characterPresets,
         updatedAt: Date.now(),
         name: getCharacterDisplayNameByAvatar(context, target),
-        notes: sourceNotes,
     };
     delete overridePayload.presetPatch;
 
@@ -151,7 +148,6 @@ export async function persistCharacterEditor(context, settings, avatar, {
 export async function persistCharacterAgendaEditor(context, settings, avatar, {
     editor,
     forceEnabled = null,
-    notes = null,
 } = {}) {
     void settings;
     const target = String(avatar || '');
@@ -165,7 +161,6 @@ export async function persistCharacterAgendaEditor(context, settings, avatar, {
 
     ensureAgendaEditorIntegrity(editor);
     const sourceEnabled = typeof editor?.enabled === 'boolean' ? editor.enabled : true;
-    const sourceNotes = notes === null ? String(editor?.notes || '') : String(notes || '');
     const previous = getCharacterExtensionDataByAvatar(context, target);
     const previousOverride = previous?.override && typeof previous.override === 'object'
         ? structuredClone(previous.override)
@@ -185,7 +180,6 @@ export async function persistCharacterAgendaEditor(context, settings, avatar, {
             },
             updatedAt: Date.now(),
             name: getCharacterDisplayNameByAvatar(context, target),
-            notes: sourceNotes,
         },
     };
 
@@ -204,13 +198,12 @@ export async function persistCharacterAgendaEditor(context, settings, avatar, {
  *
  * The loop sub-payload runs through `sanitizeLoopProfile` so the on-card
  * shape matches the V3 schema regardless of how the editor mutated the
- * draft, then carries the editor's `enabled`, `notes`, and `name` fields
- * alongside the V3 profile fields.
+ * draft, then carries the editor's `enabled` and `name` fields alongside
+ * the V3 profile fields.
  */
 export async function persistCharacterLoopEditor(context, settings, avatar, {
     editor,
     forceEnabled = null,
-    notes = null,
 } = {}) {
     void settings;
     const target = String(avatar || '');
@@ -223,7 +216,6 @@ export async function persistCharacterLoopEditor(context, settings, avatar, {
     }
 
     const sourceEnabled = typeof editor?.enabled === 'boolean' ? editor.enabled : true;
-    const sourceNotes = notes === null ? String(editor?.notes || '') : String(notes || '');
     const previous = getCharacterExtensionDataByAvatar(context, target);
     const previousOverride = previous?.override && typeof previous.override === 'object'
         ? structuredClone(previous.override)
@@ -237,7 +229,6 @@ export async function persistCharacterLoopEditor(context, settings, avatar, {
             enabled: forceEnabled === null ? Boolean(sourceEnabled) : Boolean(forceEnabled),
             updatedAt: Date.now(),
             name: getCharacterDisplayNameByAvatar(context, target),
-            notes: sourceNotes,
         },
     };
 
@@ -257,13 +248,12 @@ export async function persistCharacterLoopEditor(context, settings, avatar, {
  *
  * The director sub-payload runs through `sanitizeDirectorProfile` so
  * the on-card shape matches the canonical schema regardless of how the
- * editor mutated the draft, then carries the editor's `enabled`,
- * `notes`, and `name` fields alongside the profile fields.
+ * editor mutated the draft, then carries the editor's `enabled` and
+ * `name` fields alongside the profile fields.
  */
 export async function persistCharacterDirectorEditor(context, settings, avatar, {
     editor,
     forceEnabled = null,
-    notes = null,
 } = {}) {
     void settings;
     const target = String(avatar || '');
@@ -276,7 +266,6 @@ export async function persistCharacterDirectorEditor(context, settings, avatar, 
     }
 
     const sourceEnabled = typeof editor?.enabled === 'boolean' ? editor.enabled : true;
-    const sourceNotes = notes === null ? String(editor?.notes || '') : String(notes || '');
     const previous = getCharacterExtensionDataByAvatar(context, target);
     const previousOverride = previous?.override && typeof previous.override === 'object'
         ? structuredClone(previous.override)
@@ -295,7 +284,6 @@ export async function persistCharacterDirectorEditor(context, settings, avatar, 
             enabled: forceEnabled === null ? Boolean(sourceEnabled) : Boolean(forceEnabled),
             updatedAt: Date.now(),
             name: getCharacterDisplayNameByAvatar(context, target),
-            notes: sourceNotes,
         },
     };
 
