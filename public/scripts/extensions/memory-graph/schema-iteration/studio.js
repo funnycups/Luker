@@ -53,15 +53,23 @@
 import { Popup, POPUP_TYPE } from '../../../popup.js';
 import {
     applyEdits,
+    inverseEdit,
     bindIterWorkspaceResizer,
     render as ITER_RENDER,
     runner as ITER_RUNNER,
     textDiff as ITER_TEXT_DIFF,
     zoomOverlay as ITER_ZOOM_OVERLAY,
 } from '../../../iteration-library/index.js';
-import { TOOL_DEFS, TOOL_DISPLAY, normalizeToolCallToEdit } from './tools.js';
+import {
+    TOOL_DEFS,
+    TOOL_DISPLAY,
+    buildToolCatalog,
+    normalizeToolCallToEdit,
+    CONTROL_TOOL_NAMES,
+    isMgSchemaControlCall,
+} from './tools.js';
 import { buildSystemPrompt } from './system-prompt.js';
-import { createMgSchemaSessionStore } from './session-store.js';
+import { createMgSchemaSessionStore, makeMessageId, normalizeMessageShape } from './session-store.js';
 
 const MODULE = 'mg-schema-iteration';
 const STYLESHEET_ID = 'mg_schema_it_studio_stylesheet';
@@ -95,6 +103,20 @@ function escapeHtmlLocal(s) {
 
 function makeSessionId() {
     return `sess_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Treat AbortController abort and the runner's "Orchestration aborted."
+ * error as the user's Stop button rather than an LLM failure. The runner
+ * throws a plain Error with that message when the abortSignal trips
+ * (see `iter-tool-calling.js#throwIfAborted`).
+ */
+function isAbortError(err, signal) {
+    if (signal?.aborted) return true;
+    if (!err) return false;
+    if (err.name === 'AbortError') return true;
+    const msg = String(err.message || err);
+    return /aborted|Aborted/.test(msg);
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -289,6 +311,7 @@ function createNewSession() {
         id: makeSessionId(),
         title: '',
         messages: [],
+        pendingEdits: [],
         surfaceState: { historyOpen: false, autoApply: false },
         updatedAt: now,
         createdAt: now,
@@ -383,6 +406,7 @@ export async function openSchemaIterationStudio(deps) {
         persistCharacterSchemaOverride,
         saveSettings,
         i18n,
+        i18nFormat,
         refreshRootUi,
     } = deps;
 
@@ -397,6 +421,9 @@ export async function openSchemaIterationStudio(deps) {
     }
 
     const t = typeof i18n === 'function' ? i18n : (s) => String(s ?? '');
+    const tf = typeof i18nFormat === 'function'
+        ? i18nFormat
+        : (s, ...vals) => String(s ?? '').replace(/\$\{(\d+)\}/g, (_m, n) => String(vals[Number(n)] ?? ''));
 
     // Inject the popup stylesheet on first open. Idempotent; subsequent
     // calls are no-ops because the <link> element is id-keyed.
@@ -478,6 +505,11 @@ export async function openSchemaIterationStudio(deps) {
     // ──────────────────────────────────────────────────────────────────
     async function persistSession() {
         state.session.updatedAt = Date.now();
+        // Mirror the top-level pendingEdits cache into the persisted bucket
+        // so closing mid-conversation preserves staged-but-not-applied edits
+        // (e.g. AI proposed changes, user closes the popup without clicking
+        // Apply or Discard — reopening shows the same pending block).
+        state.session.pendingEdits = Array.isArray(state.pendingEdits) ? state.pendingEdits.slice() : [];
         if (!state.session.title) {
             const firstUser = state.session.messages.find(m => m.role === 'user');
             if (firstUser) {
@@ -490,6 +522,13 @@ export async function openSchemaIterationStudio(deps) {
     async function loadSession(id) {
         const loaded = await sessionStore.load(id);
         if (!loaded) return;
+        // Abort any in-flight LLM call from the previous session so a slow
+        // response doesn't land in the newly-loaded session's history.
+        try { state.abortController?.abort(); } catch { /* ignore */ }
+        state.isBusy = false;
+        state.abortController = null;
+
+        const fallbackAt = Number(loaded.updatedAt) || Date.now();
         const surface = loaded.surfaceState || {};
         state.session = {
             ...loaded,
@@ -497,14 +536,26 @@ export async function openSchemaIterationStudio(deps) {
                 historyOpen: !!surface.historyOpen,
                 autoApply: !!surface.autoApply,
             },
+            messages: Array.isArray(loaded.messages)
+                ? loaded.messages.map(m => normalizeMessageShape(m, fallbackAt))
+                : [],
+            pendingEdits: Array.isArray(loaded.pendingEdits) ? loaded.pendingEdits.slice() : [],
         };
-        state.pendingEdits = [];
+        state.pendingEdits = state.session.pendingEdits.slice();
+        // Re-read the schema so the new session's preview + next-turn
+        // oldValue snapshots reflect disk state, not the prior session's
+        // staged live (N4 fix).
+        await loadLive();
         await render();
     }
 
     async function startNewSession() {
+        try { state.abortController?.abort(); } catch { /* ignore */ }
+        state.isBusy = false;
+        state.abortController = null;
         state.session = createNewSession();
         state.pendingEdits = [];
+        await loadLive();
         await sessionStore.save(state.session);
         await render();
     }
@@ -598,23 +649,121 @@ export async function openSchemaIterationStudio(deps) {
     //     DOMPurify, so embedding via `innerHTML` is XSS-safe.
     //   - user / assistant / system messages get distinct CSS classes for
     //     visual distinction (alignment, background, etc.).
+    //
+    // Assistant messages may carry persisted `toolCalls` + `edits` arrays;
+    // when present, they render inside a collapsible <details> block so
+    // the per-round audit trail stays browseable after Apply. The block
+    // also hosts the per-message Rollback button (visible when applied)
+    // and the Regenerate button (visible on non-last assistant turns).
     // ──────────────────────────────────────────────────────────────────
-    function renderMessage(message) {
-        const role = String(message?.role || 'user');
-        const content = message?.content || '';
+    function formatTime(ts) {
+        try {
+            const d = new Date(Number(ts) || Date.now());
+            return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        } catch { return ''; }
+    }
+
+    function renderToolCallChip(tc) {
+        const name = String(tc?.name || '');
+        const label = TOOL_DISPLAY[name] || name || t('(tool)');
+        let argsText;
+        try { argsText = JSON.stringify(tc?.args ?? {}, null, 2); } catch { argsText = String(tc?.args ?? ''); }
+        return `
+            <div class="mg_schema_it_msg_toolcall">
+                <div class="mg_schema_it_msg_toolcall_name">${escapeHtmlLocal(label)}</div>
+                <pre class="mg_schema_it_msg_toolcall_args">${escapeHtmlLocal(argsText)}</pre>
+            </div>`;
+    }
+
+    function renderEditChip(edit) {
+        // Reuse the pending-card renderer so the per-message audit trail
+        // and the active pending block look visually identical — the user
+        // doesn't have to learn two diff visual languages.
+        return renderPendingEditCard(edit);
+    }
+
+    function renderMessageCard(message, idx, allMessages) {
+        if (!message) return '';
+        const role = String(message.role || 'user');
+        const content = String(message.content || '');
         let bodyHtml;
         if (role === 'assistant') {
             // sanitized by DOMPurify inside renderMessageMarkdown
             bodyHtml = ITER_RENDER.renderMessageMarkdown(content);
         } else {
-            bodyHtml = escapeHtmlLocal(String(content)).replace(/\n/g, '<br>');
+            bodyHtml = escapeHtmlLocal(content).replace(/\n/g, '<br>');
         }
         const roleCls = role === 'user'
             ? 'mg_schema_it_msg_user'
             : role === 'assistant'
                 ? 'mg_schema_it_msg_assistant'
                 : 'mg_schema_it_msg_system';
-        return `<div class="mg_schema_it_msg ${roleCls}">${bodyHtml}</div>`;
+        const autoCls = message.auto ? ' mg_schema_it_msg_auto' : '';
+
+        const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
+        const edits = Array.isArray(message.edits) ? message.edits : [];
+        const hasTrail = toolCalls.length > 0 || edits.length > 0;
+        const applied = Boolean(message.appliedAt) && !message.rolledBackAt;
+        const rolledBack = Boolean(message.rolledBackAt);
+        const detailsOpen = hasTrail && !applied && !rolledBack;
+
+        let trailHtml = '';
+        if (hasTrail) {
+            const headerLabel = tf('Tools and edits this round (${0})', String(toolCalls.length + edits.length));
+            const statusHtml = rolledBack
+                ? `<span class="mg_schema_it_msg_rolled_back">${escapeHtmlLocal(tf('Rolled back at ${0}', formatTime(message.rolledBackAt)))}</span>`
+                : (applied
+                    ? `
+                        <span class="mg_schema_it_msg_applied">${escapeHtmlLocal(tf('✓ Applied to ${0} at ${1}', t('schema'), formatTime(message.appliedAt)))}</span>
+                        <button class="menu_button menu_button_small" data-mg-schema-it-custom-action="rollback-batch" data-mg-schema-it-msg-id="${escapeHtmlLocal(message.id || '')}">
+                            ${escapeHtmlLocal(t('Rollback'))}
+                        </button>
+                    `
+                    : '');
+
+            const toolsHtml = toolCalls.map(renderToolCallChip).join('');
+            const editsHtml = edits.map(renderEditChip).join('');
+
+            trailHtml = `
+                <details class="mg_schema_it_msg_trail" ${detailsOpen ? 'open' : ''}>
+                    <summary>${escapeHtmlLocal(headerLabel)}</summary>
+                    <div class="mg_schema_it_msg_trail_body">
+                        ${toolsHtml}
+                        ${editsHtml}
+                    </div>
+                    ${statusHtml ? `<div class="mg_schema_it_msg_trail_status">${statusHtml}</div>` : ''}
+                </details>
+            `;
+        }
+
+        // Regenerate is per-assistant-message, only when it's not the
+        // current tail (otherwise just hit Send again to re-run from the
+        // same prompt). We also skip auto-continue synthetic assistants;
+        // their prompt was synthesized so regen would just truncate to
+        // the prior human turn anyway — semantically identical to
+        // regenerating that prior turn.
+        const isLastAssistant = (() => {
+            if (role !== 'assistant') return false;
+            for (let j = (allMessages?.length || 0) - 1; j > idx; j--) {
+                if (allMessages[j]?.role === 'assistant') return false;
+            }
+            return true;
+        })();
+        const showRegenerate = role === 'assistant' && !isLastAssistant && !message.auto;
+        const actionsHtml = showRegenerate
+            ? `
+                <div class="mg_schema_it_msg_actions">
+                    <button class="menu_button menu_button_small" data-mg-schema-it-custom-action="regenerate" data-mg-schema-it-msg-id="${escapeHtmlLocal(message.id || '')}">
+                        ${escapeHtmlLocal(t('Regenerate'))}
+                    </button>
+                </div>`
+            : '';
+
+        return `<div class="mg_schema_it_msg ${roleCls}${autoCls}" data-mg-schema-it-msg-id="${escapeHtmlLocal(message.id || '')}">
+            ${bodyHtml}
+            ${trailHtml}
+            ${actionsHtml}
+        </div>`;
     }
 
     function renderHistoryItem(meta) {
@@ -648,10 +797,17 @@ export async function openSchemaIterationStudio(deps) {
             || `<div class="mg_schema_it_history_empty">${escapeHtmlLocal(t('No saved sessions'))}</div>`;
         $root.find('[data-mg-schema-it-history-items]').html(historyHtml);
 
-        // Messages
-        const messagesHtml = (state.session.messages || []).map(renderMessage).join('');
+        // Messages — pass index + full array so renderMessageCard can decide
+        // whether to render Regenerate (only on non-last assistant turns).
+        const allMsgs = state.session.messages || [];
+        const messagesHtml = allMsgs.map((m, i) => renderMessageCard(m, i, allMsgs)).join('');
         const $msgs = $root.find('[data-mg-schema-it-messages]');
-        $msgs.html(messagesHtml);
+        // Loading bubble: append (don't overwrite) so the just-finished
+        // user turn stays visible while the LLM call is in flight.
+        const loadingHtml = state.isBusy
+            ? `<div class="mg_schema_it_msg mg_schema_it_msg_assistant mg_schema_it_msg_loading"><i class="fa-solid fa-spinner fa-spin"></i> ${escapeHtmlLocal(t('AI is thinking...'))}</div>`
+            : '';
+        $msgs.html(messagesHtml + loadingHtml);
         // Auto-scroll to bottom so newly-appended messages are visible.
         try {
             const node = $msgs[0];
@@ -660,16 +816,20 @@ export async function openSchemaIterationStudio(deps) {
             }
         } catch { /* DOM not attached (test) */ }
 
-        // Pending edits
+        // Pending edits — single Apply button per spec §3.4 (MG scope is
+        // always "schema" since MG edits the active node-type schema; the
+        // sandbox-diff emits one coarse edit per tool call, but Apply
+        // collapses them in one shot).
         const $pending = $root.find('[data-mg-schema-it-pending]');
         if (state.pendingEdits.length > 0) {
             const cardsHtml = state.pendingEdits.map(renderPendingEditCard).join('');
+            const applyLabel = tf('Apply to ${0}', t('schema'));
             $pending.html(`
                 <div class="mg_schema_it_pending_title">${escapeHtmlLocal(t('Pending changes'))}</div>
                 <div class="mg_schema_it_pending_list">${cardsHtml}</div>
                 <div class="mg_schema_it_pending_actions">
-                    <button class="menu_button" data-mg-schema-it-action="apply-edits">${escapeHtmlLocal(t('Apply'))}</button>
-                    <button class="menu_button" data-mg-schema-it-action="discard-edits">${escapeHtmlLocal(t('Discard'))}</button>
+                    <button class="menu_button luker-iter-pending-apply" data-mg-schema-it-action="apply-edits">${escapeHtmlLocal(applyLabel)}</button>
+                    <button class="menu_button menu_button_small" data-mg-schema-it-action="discard-edits">${escapeHtmlLocal(t('Discard'))}</button>
                 </div>
             `).show().attr('hidden', null);
         } else {
@@ -679,6 +839,17 @@ export async function openSchemaIterationStudio(deps) {
         // Send / Stop button label
         const $sendBtn = $root.find('[data-mg-schema-it-action="send"]');
         $sendBtn.text(state.isBusy ? t('Stop') : t('Send'));
+
+        // Sync auto-apply checkbox state — render() is the single source of
+        // truth, so a session switch (different auto-apply pref) updates the
+        // checkbox without separate plumbing.
+        const $autoApply = $root.find('[data-mg-schema-it-action="toggle-auto-apply"]');
+        if ($autoApply.length) {
+            const want = !!state.session.surfaceState?.autoApply;
+            if ($autoApply.prop('checked') !== want) {
+                $autoApply.prop('checked', want);
+            }
+        }
 
         // Workspace preview pane. Wrapped in try/catch so a malformed live
         // schema or edit shape can't blank the workspace.
@@ -786,13 +957,37 @@ export async function openSchemaIterationStudio(deps) {
         return messages;
     }
 
-    async function runIterationTurn() {
+    async function runIterationTurn({ autoContinueFromResult = null } = {}) {
         const ac = new AbortController();
         state.abortController = ac;
 
         await loadLive();   // re-read so the next batch sees external edits
 
         const systemPrompt = buildSystemPrompt();
+
+        // For auto-continue rounds, splice a synthetic user message into the
+        // visible history so the model has a fresh prompt to react to and the
+        // chat doesn't look like the model spoke twice in a row. The prompt
+        // is conservative — auto-continue is the AI's request, so we just
+        // ask it to proceed; the model's prior tool calls/results stay in
+        // the context window.
+        if (autoContinueFromResult) {
+            const noteLines = [
+                'Continue with the next iteration step.',
+            ];
+            if (autoContinueFromResult?.continueNote) {
+                noteLines.push(`Prior note: ${String(autoContinueFromResult.continueNote)}`);
+            }
+            noteLines.push('Call luker_mg_schema_finalize_iteration once the request is fully addressed.');
+            state.session.messages.push({
+                id: makeMessageId(),
+                role: 'user',
+                content: noteLines.join('\n'),
+                at: Date.now(),
+                auto: true,
+            });
+        }
+
         const taskMessages = buildTaskMessages(systemPrompt);
 
         const apiPresetName = String(settings?.schemaIterationApiPresetName || '').trim();
@@ -804,6 +999,18 @@ export async function openSchemaIterationStudio(deps) {
             rpmLimit: settings?.rpmLimit,
         };
 
+        // Per-round callback bookkeeping. The runner fires onAssistantText
+        // once (after validation, before return) and onToolCall once per
+        // non-control call in array order. Control tools (continue /
+        // finalize) route to onControlCall via the isControlCall predicate,
+        // so they never pollute the edit-tool list.
+        let firstAssistantText = '';
+        const collectedToolCalls = [];
+        let wantsAutoContinue = false;
+        let sawFinalize = false;
+        let finalizeSummary = '';
+        let continueNote = '';
+
         const result = await ITER_RUNNER.requestToolCallsWithRetry(
             context,
             runnerSettings,
@@ -812,48 +1019,118 @@ export async function openSchemaIterationStudio(deps) {
                 runtimeWorldInfo: null,
                 apiPresetName,
                 llmPresetName,
-                tools: TOOL_DEFS,
+                tools: buildToolCatalog(),
                 abortSignal: ac.signal,
                 includeAssistantText: true,
                 allowNoToolCalls: true,
+                isControlCall: isMgSchemaControlCall,
+                onAssistantText: (text) => {
+                    firstAssistantText = String(text || '');
+                },
+                onToolCall: (call) => {
+                    collectedToolCalls.push(call);
+                },
+                onControlCall: (call) => {
+                    const name = String(call?.name || '');
+                    if (name === CONTROL_TOOL_NAMES.continue) {
+                        // Finalize is sticky: if the model emits both controls
+                        // in one turn (continue, finalize OR finalize, continue)
+                        // the iteration ends. Order of call arrival should not
+                        // change the outcome.
+                        if (!sawFinalize) {
+                            wantsAutoContinue = true;
+                            continueNote = String(call?.args?.note || '');
+                        }
+                    } else if (name === CONTROL_TOOL_NAMES.finalize) {
+                        sawFinalize = true;
+                        wantsAutoContinue = false;
+                        finalizeSummary = String(call?.args?.summary || '');
+                    }
+                },
             },
         );
 
-        const toolCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
-        const assistantText = String(result?.assistantText || '').trim();
+        // Prefer `collectedToolCalls` — populated by `onToolCall`, which the
+        // runner only fires for non-control calls (it routes controls through
+        // `onControlCall` instead). When the per-event callbacks didn't land
+        // (e.g. an older runner version), fall back to `result.toolCalls`, but
+        // filter out control calls explicitly so they never leak into the
+        // persisted `assistantMsg.toolCalls`.
+        const editToolCalls = collectedToolCalls.length > 0
+            ? collectedToolCalls
+            : (Array.isArray(result?.toolCalls)
+                ? result.toolCalls.filter((c) => !isMgSchemaControlCall(c))
+                : []);
+        const assistantText = firstAssistantText.trim();
 
-        // Normalize tool calls → edits. The MG sandbox-diff emits one bulk
+        // Normalize edit-tools → edits. The MG sandbox-diff emits one bulk
         // `set('', newSchema)` per call; multiple calls in the same turn
         // would stack as separate edits, but Apply collapses them via
         // applyEdits's sequential application.
         const edits = [];
-        for (const call of toolCalls) {
-            const normalized = await normalizeToolCallToEdit(
-                wrapToolCallForNormalize(call),
-                {
-                    live: state.live,
-                    normalizeNodeTypeSchema,
-                },
-            );
-            if (Array.isArray(normalized)) {
-                edits.push(...normalized);
+        for (const call of editToolCalls) {
+            try {
+                const normalized = await normalizeToolCallToEdit(
+                    wrapToolCallForNormalize(call),
+                    {
+                        live: state.live,
+                        normalizeNodeTypeSchema,
+                    },
+                );
+                if (Array.isArray(normalized)) {
+                    edits.push(...normalized);
+                }
+                // null (executor failure) → skip silently; the AI can retry.
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] normalizeToolCallToEdit failed for ${String(call?.name || '')}`, err);
+                state.session.messages.push({
+                    id: makeMessageId(),
+                    role: 'system',
+                    content: tf('Edit error: ${0}', String(err?.message || err)),
+                    at: Date.now(),
+                });
             }
-            // null (executor failure) → skip silently; the AI can retry.
         }
-        state.pendingEdits = edits;
 
-        // Push assistant message. If the model returned text, use it; if
-        // not but produced tool calls, synthesize a brief stand-in so the
-        // chat doesn't have empty bubbles between user inputs.
-        if (assistantText) {
-            state.session.messages.push({ role: 'assistant', content: assistantText });
-        } else if (toolCalls.length > 0) {
-            const names = toolCalls.map(c => TOOL_DISPLAY[String(c?.name || '')] || String(c?.name || '')).join(', ');
-            state.session.messages.push({
-                role: 'assistant',
-                content: t('Suggested actions: ') + names,
-            });
+        // Stage the assistant message with the full per-round audit trail.
+        // Falls back to a synthesized summary when the model emitted tool
+        // calls without text so the chat doesn't have empty bubbles. The
+        // toolCalls + edits + appliedAt fields drive renderMessageCard's
+        // collapsible details block, Apply marker, and Rollback button.
+        let content = assistantText;
+        if (!content && editToolCalls.length > 0) {
+            const names = editToolCalls
+                .map(c => TOOL_DISPLAY[String(c?.name || '')] || String(c?.name || ''))
+                .filter(Boolean)
+                .join(', ');
+            content = tf('Suggested actions: ${0}', names);
         }
+        if (!content && (wantsAutoContinue || finalizeSummary)) {
+            content = finalizeSummary || t('Continuing...');
+        }
+        const assistantMsg = {
+            id: makeMessageId(),
+            role: 'assistant',
+            content: content || '',
+            at: Date.now(),
+        };
+        if (editToolCalls.length > 0) {
+            assistantMsg.toolCalls = editToolCalls.map(tc => ({
+                id: String(tc?.id || ''),
+                name: String(tc?.name || ''),
+                args: tc?.args ?? {},
+            }));
+        }
+        if (edits.length > 0) {
+            assistantMsg.edits = edits.slice();
+        }
+        state.session.messages.push(assistantMsg);
+
+        // Replace pendingEdits with this round's batch. We don't append:
+        // staging is per-round so the user can Apply or Discard cleanly
+        // before the next AI request fires.
+        state.pendingEdits = edits;
 
         // Mobile workspace: if the user was on the Preview tab, bump the
         // chat-tab badge so they know new assistant content arrived without
@@ -866,25 +1143,45 @@ export async function openSchemaIterationStudio(deps) {
         const autoApplyOn = Boolean(state.session.surfaceState?.autoApply);
         if (autoApplyOn && state.pendingEdits.length > 0) {
             try {
-                await applyPendingEdits();
+                await applyPendingEdits({ skipRender: true });
             } catch (err) {
                 // eslint-disable-next-line no-console
                 console.warn(`[${MODULE}] auto-apply failed`, err);
             }
         }
+
+        return {
+            wantsAutoContinue,
+            executionResult: {
+                finalized: Boolean(finalizeSummary) || (!wantsAutoContinue && edits.length === 0),
+                finalizeSummary,
+                continueRequested: wantsAutoContinue,
+                continueNote,
+                changed: edits.length > 0,
+                hasPending: edits.length > 0,
+            },
+        };
     }
 
     // ──────────────────────────────────────────────────────────────────
     // Apply pending edits. `applyEdits(edits, live)` returns
     // `{ newLive, clean, conflicts, alreadyDone }`. Per sub-spec §6 / §9
     // we do NOT surface a conflict UI: just commit `newLive` and silently
-    // drop any conflicting / already-done edits. The pre-call live is
-    // re-read so a parallel editor (e.g. user swapped characters) doesn't
-    // blow away their work.
+    // drop any conflicting / already-done edits.
+    //
+    // `state.pendingEdits` is cleared only after `commitLiveToSchema`
+    // resolves; on failure the staged batch and the pre-apply `state.live`
+    // snapshot are both restored so the user can retry instead of losing
+    // the iteration.
+    //
+    // On success we toast the user, then mark the most recent unapplied
+    // assistant message so renderMessageCard can show the Applied label
+    // and a Rollback button.
     // ──────────────────────────────────────────────────────────────────
-    async function applyPendingEdits() {
-        if (state.pendingEdits.length === 0) return;
-        await loadLive();
+    async function applyPendingEdits({ skipRender = false } = {}) {
+        if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) return;
+        if (!state.live) await loadLive();
+        const liveSnapshot = state.live;
         // Sandbox-diff emits a single coarse {op:'set', path:'', newValue:<whole schema>}.
         // lodash.set with empty path is a no-op, so route empty-path edits
         // around the engine via applyEmptyPathSet — otherwise auto-apply and
@@ -899,23 +1196,147 @@ export async function openSchemaIterationStudio(deps) {
             const result = applyEdits(state.pendingEdits, state.live);
             state.live = result?.newLive ?? state.live;
         }
-        state.pendingEdits = [];
         try {
             await commitLiveToSchema();
         } catch (err) {
+            state.live = liveSnapshot;
             // eslint-disable-next-line no-console
             console.warn(`[${MODULE}] commitLiveToSchema failed`, err);
+            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* toastr may be unavailable in tests */ }
             state.session.messages.push({
+                id: makeMessageId(),
                 role: 'system',
-                content: t('Failed to save schema: ') + String(err?.message || err),
+                content: tf('Failed to save schema: ${0}', String(err?.message || err)),
+                at: Date.now(),
             });
+            await persistSession();
+            if (!skipRender) await render();
+            return;
         }
+
+        try { toastr.success(tf('Applied to ${0}', t('schema'))); } catch { /* ignore */ }
+
+        // Mark the most recent unapplied assistant message that owns these
+        // edits. We scan back from the end because the just-rendered turn
+        // is the typical target; rare cases (user clicks Apply on a stale
+        // session reopened with persisted pendingEdits) still hit a sane
+        // candidate as long as one exists.
+        const messages = state.session.messages || [];
+        for (let i = messages.length - 1; i >= 0; i--) {
+            const m = messages[i];
+            if (m.role === 'assistant' && Array.isArray(m.edits) && m.edits.length > 0 && !m.appliedAt) {
+                m.appliedAt = Date.now();
+                m.appliedTarget = 'schema';
+                break;
+            }
+        }
+
+        state.pendingEdits = [];
         await persistSession();
-        await render();
+        if (!skipRender) await render();
     }
 
     async function discardPendingEdits() {
         state.pendingEdits = [];
+        await persistSession();
+        await render();
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Per-message actions.
+    //
+    // regenerateFromMessage(msgId): truncate the chat back to the user
+    // turn that prompted this assistant message, drop staged pendingEdits
+    // (they belonged to the discarded turn), refill the textarea with the
+    // original prompt, and re-fire the send pipeline.
+    //
+    // rollbackBatch(msgId): inverse-apply each edit in the message's
+    // batch against state.live (right-to-left, so dependent ops unwind in
+    // creation order), commit the result, mark the message rolledBackAt.
+    // Bails on the first edit whose op lacks an inverse — partial rollback
+    // would leave the schema in an inconsistent state.
+    // ──────────────────────────────────────────────────────────────────
+    async function regenerateFromMessage(messageId) {
+        if (state.isBusy) return;
+        const messages = state.session.messages || [];
+        const idx = messages.findIndex(m => m && m.id === messageId);
+        if (idx < 0) return;
+        // Walk back to the user message that prompted this assistant turn.
+        // Skip auto-continue synthetic users (`m.auto === true`) so the
+        // resend refills the textarea with the human's original text.
+        let userIdx = -1;
+        for (let i = idx - 1; i >= 0; i--) {
+            const m = messages[i];
+            if (m && m.role === 'user' && !m.auto) { userIdx = i; break; }
+        }
+        if (userIdx < 0) return;
+        const userText = String(messages[userIdx].content || '');
+        // Truncate before the user message; the resend will push it again.
+        state.session.messages = messages.slice(0, userIdx);
+        state.pendingEdits = [];
+        state.session.pendingEdits = [];
+        await persistSession();
+        await render();
+        const $textarea = $root.find('[data-mg-schema-it-input]');
+        $textarea.val(userText);
+        await handleSendMessage();
+    }
+
+    async function rollbackBatch(messageId) {
+        if (state.isBusy) return;
+        const msg = (state.session.messages || []).find(m => m && m.id === messageId);
+        if (!msg) return;
+        if (!msg.appliedAt || msg.rolledBackAt) return;
+        if (!Array.isArray(msg.edits) || msg.edits.length === 0) return;
+        // eslint-disable-next-line no-alert
+        if (!confirm(t('Roll back this batch? The changes will be reversed in the target.'))) return;
+
+        await loadLive();
+        let working = state.live;
+        // Build inverses up-front so an unsupported op fails BEFORE we
+        // partial-apply anything. Right-to-left inversion handles dependent
+        // edits (e.g. set then list_insert) cleanly.
+        const inverses = [];
+        for (const edit of msg.edits.slice().reverse()) {
+            try {
+                inverses.push(inverseEdit(edit));
+            } catch (err) {
+                console.warn(`[${MODULE}] inverseEdit failed`, edit, err);
+                try { toastr.error(tf('Cannot rollback edit type: ${0}', String(edit?.op || 'unknown'))); } catch { /* ignore */ }
+                return;
+            }
+        }
+        try {
+            // MG sandbox-diff uses empty-path set edits; inverse is the same
+            // shape with oldValue/newValue swapped. Route the same way Apply
+            // does so the engine's lodash.set("") no-op doesn't strand us.
+            const allEmptyPath = inverses.length > 0
+                && inverses.every(e => e?.op === 'set' && e?.path === '' && typeof e?.newValue !== 'undefined');
+            if (allEmptyPath) {
+                // Apply each inverse in order (later inverses are applied last).
+                for (const inv of inverses) {
+                    working = applyEmptyPathSet(working, inv);
+                }
+            } else {
+                const result = applyEdits(inverses, working);
+                working = result?.newLive ?? working;
+            }
+        } catch (err) {
+            console.warn(`[${MODULE}] applyEdits(inverses) failed`, err);
+            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* ignore */ }
+            return;
+        }
+        state.live = working;
+        try {
+            await commitLiveToSchema();
+        } catch (err) {
+            console.warn(`[${MODULE}] commitLiveToSchema(rollback) failed`, err);
+            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* ignore */ }
+            return;
+        }
+        msg.rolledBackAt = Date.now();
+        await persistSession();
+        try { toastr.success(t('Rolled back')); } catch { /* ignore */ }
         await render();
     }
 
@@ -923,6 +1344,18 @@ export async function openSchemaIterationStudio(deps) {
     // Send-message handler. Q6: user message is pushed AND rendered
     // BEFORE the await so the user sees their own input before the LLM
     // wait spinner starts. Errors surface as system messages.
+    //
+    // Multi-round auto-continue: when the AI emits
+    // `luker_mg_schema_continue_iteration`, runIterationTurn returns
+    // `wantsAutoContinue: true` and the loop fires another round (after
+    // rendering the previous round so the user sees progressive output).
+    // The ONLY exits are:
+    //   1. The model called `luker_mg_schema_finalize_iteration` (no continue).
+    //   2. The model did neither (e.g. produced edits + stopped).
+    //   3. The user clicked Stop (abortController fires; isAbortError
+    //      catches the resulting error in the catch block).
+    // There is NO hard round cap — runaway loops are the user's problem
+    // and a single Stop click ends them.
     // ──────────────────────────────────────────────────────────────────
     async function handleSendMessage() {
         if (state.isBusy) {
@@ -934,19 +1367,35 @@ export async function openSchemaIterationStudio(deps) {
         const text = String($textarea.val() || '').trim();
         if (!text) return;
         $textarea.val('');
-        state.session.messages.push({ role: 'user', content: text });
+        state.session.messages.push({
+            id: makeMessageId(),
+            role: 'user',
+            content: text,
+            at: Date.now(),
+        });
         state.isBusy = true;
         await persistSession();
         await render();   // Q6: user message visible before LLM wait
         try {
-            await runIterationTurn();
+            let turn = await runIterationTurn();
+            while (turn?.wantsAutoContinue) {
+                await persistSession();
+                await render();   // progressive: prior round visible before next
+                if (state.abortController?.signal?.aborted) break;
+                turn = await runIterationTurn({ autoContinueFromResult: turn.executionResult });
+            }
         } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn(`[${MODULE}]`, err);
-            state.session.messages.push({
-                role: 'system',
-                content: t('Error: ') + String(err?.message || err),
-            });
+            // Stop button → don't push an error bubble; user knows they cancelled.
+            if (!isAbortError(err, state.abortController?.signal)) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}]`, err);
+                state.session.messages.push({
+                    id: makeMessageId(),
+                    role: 'system',
+                    content: tf('Error: ${0}', String(err?.message || err)),
+                    at: Date.now(),
+                });
+            }
         } finally {
             state.isBusy = false;
             state.abortController = null;
@@ -1057,12 +1506,36 @@ export async function openSchemaIterationStudio(deps) {
         e.stopPropagation();
         const id = String(e.currentTarget?.dataset?.mgSchemaItId || '');
         if (!id) return;
+        // Deleting the active session also tears down any in-flight LLM call
+        // so the response can't land in the recreated next session.
+        if (id === state.session?.id) {
+            try { state.abortController?.abort(); } catch { /* ignore */ }
+            state.isBusy = false;
+            state.abortController = null;
+        }
         await sessionStore.delete(id);
         if (state.session.id === id) {
             await startNewSession();
         } else {
             await render();
         }
+    });
+
+    // Per-message custom actions (Regenerate / Rollback). Use
+    // `data-mg-schema-it-custom-action` rather than `data-mg-schema-it-action`
+    // so the legacy delegation selectors above can't accidentally fire on
+    // these — matches the iter-studio shell gotcha pattern.
+    $root.on('click.mgSchemaIt', '[data-mg-schema-it-custom-action="regenerate"]', async (e) => {
+        e.preventDefault();
+        const msgId = String(e.currentTarget?.dataset?.mgSchemaItMsgId || '');
+        if (!msgId) return;
+        await regenerateFromMessage(msgId);
+    });
+    $root.on('click.mgSchemaIt', '[data-mg-schema-it-custom-action="rollback-batch"]', async (e) => {
+        e.preventDefault();
+        const msgId = String(e.currentTarget?.dataset?.mgSchemaItMsgId || '');
+        if (!msgId) return;
+        await rollbackBatch(msgId);
     });
 
     // ── Workspace events ──────────────────────────────────────────────
@@ -1127,20 +1600,28 @@ export async function openSchemaIterationStudio(deps) {
     // Bind the column resizer. Returns a no-op when grid/splitter are
     // missing (e.g. during teardown), so the unbind call below is safe
     // regardless of mount state.
-    const unbindResizer = bindIterWorkspaceResizer($root[0]);
-
-    await render();
-
-    // Block until the user dismisses the popup. Persist one final time so
-    // any in-flight composer / surfaceState changes survive close.
+    //
+    // Both the bind and the initial render are inside the try block so a
+    // throw at either step still hits the finally cleanup (no leaked
+    // resizer / pending abortController / unpersisted session).
+    let unbindResizer = () => {};
     try {
+        unbindResizer = bindIterWorkspaceResizer($root[0]);
+        await render();
+        // Block until the user dismisses the popup. The single try/finally
+        // ensures every teardown step (resizer unbind, zoom-overlay unbind,
+        // in-flight abort, final persist) runs even if rendering throws or
+        // the popup is force-closed; ordering puts persistSession LAST so
+        // the abort flag is cleared before disk write.
         await popupPromise;
     } finally {
         try { unbindResizer(); } catch { /* ignore */ }
+        try { zoomOverlayUnbind?.(); } catch { /* ignore */ }
+        try { state.abortController?.abort(); } catch { /* ignore */ }
+        state.isBusy = false;
+        state.abortController = null;
+        try { await persistSession(); } catch { /* ignore */ }
     }
-    try { state.abortController?.abort(); } catch { /* ignore */ }
-    try { zoomOverlayUnbind?.(); } catch { /* ignore */ }
-    await persistSession();
 }
 
 // Re-export the small surface from peer modules so importers don't need to

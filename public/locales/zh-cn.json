@@ -5506,10 +5506,12 @@
     ,"Rollback": "回退"
     ,"Cannot rollback edit type: ${0}": "无法回退此类编辑：${0}"
     ,"preset": "预设"
+    ,"schema": "结构"
     ,"Apply failed: ${0}": "应用失败：${0}"
     ,"Edit error: ${0}": "编辑错误：${0}"
     ,"Suggested actions: ${0}": "建议操作：${0}"
     ,"Continuing...": "继续中……"
     ,"Failed to save preset: ${0}": "保存预设失败：${0}"
+    ,"Failed to save schema: ${0}": "保存结构失败：${0}"
     ,"Error: ${0}": "错误：${0}"
 }

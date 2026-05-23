@@ -26,6 +26,45 @@ import { createExtensionSettingsSessionStorage } from '../../../iteration-librar
 import { SESSIONS_BUCKET_KEY } from './tools.js';
 
 /**
+ * Generate a stable per-message id. The studio renders messages keyed by
+ * id (so React-style diff updates work), and persisted messages keep
+ * their id across reloads. The shape — `mg_msg_<timestamp36>_<rand>` —
+ * mirrors the session id format and is recognized as MG-origin by
+ * downstream consumers (mirrors the CPA `cpa_msg_*` convention).
+ */
+export function makeMessageId() {
+    return `mg_msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Normalize a message read from disk into the shape rendered today.
+ * Legacy sessions persisted only `{role, content}`; the upgraded schema
+ * adds `id`, `at`, optional `toolCalls`, `edits`, `appliedAt`,
+ * `appliedTarget`, `rolledBackAt`, and an `auto` flag for synthetic
+ * auto-continue user messages.
+ *
+ * Tolerance: missing `id` regenerates one, missing `at` falls back to
+ * the session's updatedAt, missing arrays stay undefined (renderer
+ * uses Array.isArray as the visibility gate).
+ */
+export function normalizeMessageShape(m, fallbackAt = Date.now()) {
+    if (!m || typeof m !== 'object') return m;
+    const out = {
+        id: typeof m.id === 'string' && m.id ? m.id : makeMessageId(),
+        role: String(m.role || 'user'),
+        content: String(m.content ?? ''),
+        at: typeof m.at === 'number' ? m.at : Number(fallbackAt) || Date.now(),
+    };
+    if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) out.toolCalls = m.toolCalls;
+    if (Array.isArray(m.edits) && m.edits.length > 0) out.edits = m.edits;
+    if (typeof m.appliedAt === 'number') out.appliedAt = m.appliedAt;
+    if (m.appliedTarget) out.appliedTarget = String(m.appliedTarget);
+    if (typeof m.rolledBackAt === 'number') out.rolledBackAt = m.rolledBackAt;
+    if (m.auto) out.auto = true;
+    return out;
+}
+
+/**
  * @param {object} args
  * @param {() => object} args.getMgSettingsRoot
  *        Returns the mutable Memory Graph extension settings root. The

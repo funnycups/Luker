@@ -51,6 +51,11 @@ export function buildSystemPrompt() {
         '- latestOnly is for replaceable state, not append-only events.',
         '- Use compression: hierarchical for event-like types that accumulate; threshold of 8–12 leaves is a reasonable default.',
         '',
+        'Edit scope:',
+        '- Match the user\'s edit scope. If they ask for a small adjustment ("tighten the column hints on character_sheet", "rename one field", "add a keyword"), change only what that asks for; leave everything else byte-identical.',
+        '- Do not delete, restructure, or rewrite node types the user did not name. When an existing type already covers a topic the user just refined, keep its surrounding fields and edit in place.',
+        '- Only rewrite broadly when the user explicitly asks for a rewrite / overhaul / redesign.',
+        '',
         'When the user asks for a change, call the appropriate tools to enact it. If multiple changes apply, you may emit multiple tool calls in one turn. After editing, call the finalize tool with a short summary; if more rounds are needed, call the continue tool.',
     ].join('\n');
 }
