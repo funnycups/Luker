@@ -78,6 +78,12 @@ Two ops in the same message that depend on each other work as expected:
 After extraction: `a = 1`, `b = 1`. Each macro is fully resolved and applied before the next is processed.
 :::
 
+::: info JSON-shaped values
+A value ending in a literal `}` (typical for `{"x":1}` or `[1,2]` payloads) puts three `}` in a row at the end of the macro — one for the JSON, two for the macro close. The scanner treats the **last** `}}` in any trailing run as the macro close, so `{{setvar::config::{"x":1}}}` parses as expected without escaping.
+
+The flip side: a macro followed by a literal `}` in narrative text (e.g. `... {{macro}}}`) absorbs that `}` into the value. Insert whitespace (`{{macro}} }`) when you need the macro and the trailing `}` to stay separate.
+:::
+
 ### Replay on structural changes
 
 When something changes the chat structure, Luker rebuilds the relevant parts of the variable cache:

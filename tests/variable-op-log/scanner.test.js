@@ -267,3 +267,82 @@ describe('scanner: dotted path in key', () => {
         expect(m.path === undefined || m.path === '').toBe(true);
     });
 });
+
+describe('scanner: JSON-shaped value with trailing }', () => {
+    // The macro-close `}}` and a JSON value's own closing `}` are visually
+    // adjacent in inputs like `{{setvar::a::{"x":1}}}`. A naive `}}` close
+    // would eat the JSON's last `}`. The scanner's rule: when at depth 0
+    // and the next char after `}}` is *also* `}`, the first `}` is value
+    // content and the macro close is the LAST `}}` in the run.
+
+    test('setvar with flat JSON object value preserves the JSON close', () => {
+        const m = findNextSideEffectMacro('{{setvar::config::{"x":1}}}');
+        expect(m.op).toBe('setvar');
+        expect(m.key).toBe('config');
+        expect(m.rawValue).toBe('{"x":1}');
+        expect(m.literal).toBe('{{setvar::config::{"x":1}}}');
+    });
+
+    test('setvar at path with JSON object value', () => {
+        const m = findNextSideEffectMacro('{{setvar::roster.alice::{"hp":50}}}');
+        expect(m).toMatchObject({
+            op: 'setvar',
+            key: 'roster',
+            path: 'alice',
+            rawValue: '{"hp":50}',
+        });
+    });
+
+    test('setvar with nested-JSON value (two trailing })', () => {
+        // Value: {"a":{"b":1}} — JSON has 2 trailing `}`s + macro close = 4 `}`s in a row.
+        const m = findNextSideEffectMacro('{{setvar::data::{"a":{"b":1}}}}');
+        expect(m.op).toBe('setvar');
+        expect(m.rawValue).toBe('{"a":{"b":1}}');
+    });
+
+    test('pushvar with JSON object value', () => {
+        const m = findNextSideEffectMacro('{{pushvar::roster::{"name":"Alice"}}}');
+        expect(m.op).toBe('pushvar');
+        expect(m.key).toBe('roster');
+        expect(m.rawValue).toBe('{"name":"Alice"}');
+    });
+
+    test('setvar with JSON array value', () => {
+        const m = findNextSideEffectMacro('{{setvar::inv::[1,2,3]}}');
+        expect(m.rawValue).toBe('[1,2,3]');
+    });
+
+    test('JSON value with a literal } inside a string is preserved', () => {
+        // The `}` inside "hello }" is content; the rule still picks the
+        // rightmost `}}` as the close.
+        const m = findNextSideEffectMacro('{{setvar::a::{"k":"hello }"}}}');
+        expect(m.op).toBe('setvar');
+        expect(m.rawValue).toBe('{"k":"hello }"}');
+    });
+
+    test('macro followed by literal } in narrative absorbs into value (documented regression)', () => {
+        // Documented limitation of the trailing-run rule: a `}` immediately
+        // after the macro is treated as value content. Authors needing this
+        // shape should put whitespace between the macro and the trailing `}`.
+        const m = findNextSideEffectMacro('{{setvar::mood::happy}}} more');
+        expect(m.rawValue).toBe('happy}');
+    });
+
+    test('macro followed by space then } is not absorbed', () => {
+        const m = findNextSideEffectMacro('{{setvar::mood::happy}} } more');
+        expect(m.rawValue).toBe('happy');
+        expect(m.literal).toBe('{{setvar::mood::happy}}');
+    });
+
+    test('empty value with no trailing } closes normally', () => {
+        const m = findNextSideEffectMacro('{{setvar::flag::}}');
+        expect(m.rawValue).toBe('');
+    });
+
+    test('rawValue runs back-to-back with another macro after it', () => {
+        const matches = scanAllSideEffectMacros('{{setvar::a::{"x":1}}}{{incvar::n}}');
+        expect(matches).toHaveLength(2);
+        expect(matches[0]).toMatchObject({ op: 'setvar', key: 'a', rawValue: '{"x":1}' });
+        expect(matches[1]).toMatchObject({ op: 'incvar', key: 'n' });
+    });
+});

@@ -183,6 +183,16 @@ function parseMacroBody(text, openIdx, bodyStart, op) {
         }
         if (text[i] === '}' && text[i + 1] === '}') {
             if (depth === 0) {
+                // Trailing-run disambiguation: if the next character is
+                // still `}`, the value ended in a literal `}` (typically
+                // the close of a JSON object/array passed as the macro
+                // value) and the macro close is the LAST `}}` in the run.
+                // Without this rule, `{{setvar::a::{"x":1}}}` would parse
+                // body as `a::{"x":1`, lopping off the JSON close.
+                if (text[i + 2] === '}') {
+                    i += 1;
+                    continue;
+                }
                 // Found terminating `}}`
                 const body = text.slice(bodyStart, i);
                 const macro = buildMacro(op, body, openIdx, i + 2, text.slice(openIdx, i + 2));
