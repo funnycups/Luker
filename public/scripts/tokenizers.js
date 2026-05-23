@@ -443,8 +443,7 @@ function callTokenizer(type, str) {
  * @returns {Promise<number>} Token count.
  */
 // Maps the local tokenizer enum to model names used by client-tokenizers/index.js.
-// Sentencepiece families (LLAMA, MISTRAL, YI, GEMMA, JAMBA, NERD*) intentionally
-// omitted — they stay on HTTP pending a follow-up spec for sentencepiece-js.
+// Covers all enum values whose tokenization is implemented client-side.
 const TOKENIZER_TYPE_TO_CLIENT_MODEL = {
     [tokenizers.LLAMA3]: 'llama3',
     [tokenizers.CLAUDE]: 'claude',
@@ -453,6 +452,13 @@ const TOKENIZER_TYPE_TO_CLIENT_MODEL = {
     [tokenizers.COMMAND_A]: 'command-a',
     [tokenizers.NEMO]: 'nemo',
     [tokenizers.DEEPSEEK]: 'deepseek',
+    [tokenizers.LLAMA]: 'llama',
+    [tokenizers.MISTRAL]: 'mistral',
+    [tokenizers.YI]: 'yi',
+    [tokenizers.GEMMA]: 'gemma',
+    [tokenizers.JAMBA]: 'jamba',
+    [tokenizers.NERD]: 'nerdstash',
+    [tokenizers.NERD2]: 'nerdstash_v2',
 };
 
 function callTokenizerAsync(type, str) {

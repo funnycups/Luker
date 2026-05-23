@@ -378,7 +378,7 @@ function getTiktokenBundle() {
 app.get('/lib/tokenizers/js-tiktoken-bundle.js', (_req, res) => {
     try {
         res.type('application/javascript')
-            .set('Cache-Control', 'public, max-age=604800, immutable')
+            .set('Cache-Control', 'public, max-age=3600, must-revalidate')
             .send(getTiktokenBundle());
     } catch (err) {
         console.error('Failed to synthesize js-tiktoken bundle:', err);
@@ -386,15 +386,69 @@ app.get('/lib/tokenizers/js-tiktoken-bundle.js', (_req, res) => {
     }
 });
 
+// @agnai/sentencepiece-js ships pure CommonJS (`var fs = require('fs')` and
+// `exports.SentencePieceProcessor = ...`), which browsers can't load natively.
+// Wrap the raw dist in an ESM module with local `require`/`exports`/`module`/
+// `__filename`/`__dirname` shims. The NODE-only branches inside Emscripten's
+// init never execute in browser, so the fs stub never gets called.
+let __sentencepieceBundle = null;
+function getSentencepieceBundle() {
+    if (__sentencepieceBundle) return __sentencepieceBundle;
+    const src = fs.readFileSync(
+        path.join(serverDirectory, 'node_modules/@agnai/sentencepiece-js/dist/index.js'),
+        'utf8',
+    );
+    const wrapped = [
+        '// Auto-synthesized ESM wrapper around @agnai/sentencepiece-js CommonJS dist.',
+        '// __spFileCache lets the adapter pre-stash model bytes by URL, so the inner',
+        '// `.load(url)` -> `fs__namespace.readFileSync(url)` sync call resolves to a',
+        '// real buffer instead of throwing.',
+        'const __spFileCache = new Map();',
+        'const __fsShim = {',
+        '    readFileSync(url) {',
+        '        const buf = __spFileCache.get(url);',
+        '        if (!buf) throw new Error("sentencepiece-js fs shim: no cached buffer for " + url + " — adapter must prefetch via __spFileCache.set() before sp.load()");',
+        '        return buf;',
+        '    },',
+        '};',
+        'const exports = {};',
+        'const module = { exports };',
+        'const __filename = "";',
+        'const __dirname = "";',
+        'const require = (id) => {',
+        '    if (id === "fs") return __fsShim;',
+        '    if (id === "path" || id === "url" || id === "module") return {};',
+        '    throw new Error("sentencepiece-js bundle: unshimmed require(" + JSON.stringify(id) + ")");',
+        '};',
+        src,
+        'const __SP_Processor = exports.SentencePieceProcessor;',
+        'const __SP_cleanText = exports.cleanText;',
+        'export { __SP_Processor as SentencePieceProcessor, __SP_cleanText as cleanText, __spFileCache };',
+        'export default exports.default ?? exports;',
+    ].join('\n');
+    __sentencepieceBundle = wrapped;
+    return __sentencepieceBundle;
+}
+app.get('/lib/tokenizers/sentencepiece-js-bundle.js', (_req, res) => {
+    try {
+        res.type('application/javascript')
+            .set('Cache-Control', 'public, max-age=3600, must-revalidate')
+            .send(getSentencepieceBundle());
+    } catch (err) {
+        console.error('Failed to synthesize sentencepiece-js bundle:', err);
+        res.status(500).type('text/plain').send('// sentencepiece-js bundle synthesis failed: ' + err.message);
+    }
+});
+
 // Same-origin proxy for tokenizer data files hosted on GitHub raw. Browsers
 // can't fetch those URLs directly (CORS); we proxy through. Server cached via
 // HTTP cache headers + getPathToTokenizer's disk cache.
 const REMOTE_TOKENIZERS = {
-    'qwen2.json.gz': 'https://github.com/SillyTavern/SillyTavern-Tokenizers/raw/main/qwen2.json.gz',
-    'command-r.json.gz': 'https://github.com/SillyTavern/SillyTavern-Tokenizers/raw/main/command-r.json.gz',
-    'command-a.json.gz': 'https://github.com/SillyTavern/SillyTavern-Tokenizers/raw/main/command-a.json.gz',
-    'nemo.json.gz': 'https://github.com/SillyTavern/SillyTavern-Tokenizers/raw/main/nemo.json.gz',
-    'deepseek.json.gz': 'https://github.com/SillyTavern/SillyTavern-Tokenizers/raw/main/deepseek.json.gz',
+    'qwen2.json.gz': 'https://raw.githubusercontent.com/SillyTavern/SillyTavern-Tokenizers/main/qwen2.json.gz',
+    'command-r.json.gz': 'https://raw.githubusercontent.com/SillyTavern/SillyTavern-Tokenizers/main/command-r.json.gz',
+    'command-a.json.gz': 'https://raw.githubusercontent.com/SillyTavern/SillyTavern-Tokenizers/main/command-a.json.gz',
+    'nemo.json.gz': 'https://raw.githubusercontent.com/SillyTavern/SillyTavern-Tokenizers/main/nemo.json.gz',
+    'deepseek.json.gz': 'https://raw.githubusercontent.com/SillyTavern/SillyTavern-Tokenizers/main/deepseek.json.gz',
 };
 app.get('/tokenizers-remote/:file', async (req, res) => {
     const url = REMOTE_TOKENIZERS[req.params.file];

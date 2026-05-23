@@ -1,13 +1,14 @@
 // public/scripts/client-tokenizers/index.js
 //
 // Single entry point for client-side tokenization. Routes by model name to one
-// of the two adapters; returns null from countMessages/encode/decode if no
+// of the three adapters; returns null from countMessages/encode/decode if no
 // client adapter handles this model, so callers can fall back to HTTP.
 
 import * as tiktoken     from './tiktoken-adapter.js';
 import * as webTokenizer from './web-tokenizer-adapter.js';
+import * as sentencepiece from './sentencepiece-adapter.js';
 
-const ADAPTERS = [tiktoken, webTokenizer];
+const ADAPTERS = [tiktoken, webTokenizer, sentencepiece];
 
 function pick(model) {
     return ADAPTERS.find(a => a.supports(model)) ?? null;
