@@ -306,25 +306,104 @@ function buildResponseBodyHtml(detail, q) {
  return blocks.join('\n');
 }
 
-function buildChatDetailBody(detail) {
- const q = currentDetailSearch;
- let messagesHtml = '';
- if (Array.isArray(detail.fullMessages)) {
- for (let i = 0; i < detail.fullMessages.length; i++) {
- const msg = detail.fullMessages[i];
+function renderMessageItem(msg, index, q) {
  const role = msg?.role || '?';
  const content = formatMessage(msg);
  const charLen = content.length;
  const hit = q && content.toLowerCase().includes(q.trim().toLowerCase());
- messagesHtml += `
+ const indexHtml = index != null ? `<span class="ri-msg-index">#${index}</span>` : '';
+ return `
  <details class="ri-msg${hit ? ' ri-msg-hit' : ''}"${hit ? ' open' : ''}>
  <summary class="ri-msg-summary">
- <span class="ri-msg-index">#${i}</span>
+ ${indexHtml}
  <span class="ri-msg-role ri-role-${escapeHtml(role)}">${escapeHtml(role)}</span>
  <span class="ri-msg-len">${charLen.toLocaleString()} ${t`chars`}</span>
  </summary>
  <pre class="ri-msg-content">${highlightHtml(content || t`(empty)`, q)}</pre>
  </details>`;
+}
+
+// Pull a `{ systemText, items, otherKeys }` view out of a wire request body.
+// Handles three known shapes:
+//   - Claude:  { system: [{type,text}] | string, messages: [{role,content}], ... }
+//   - OpenAI:  { messages: [{role,content}], ... }   (system rides inside messages)
+//   - Gemini:  { contents: [{role,parts:[{text}]}], systemInstruction: {parts}, ... }
+function extractWireMessages(wr) {
+ let systemText = null;
+ if (typeof wr.system === 'string') {
+ systemText = wr.system;
+ } else if (Array.isArray(wr.system)) {
+ systemText = wr.system.map(s => typeof s === 'string' ? s : (s?.text ?? '')).join('\n\n');
+ } else {
+ const si = wr.systemInstruction || wr.system_instruction;
+ if (typeof si === 'string') {
+ systemText = si;
+ } else if (Array.isArray(si?.parts)) {
+ systemText = si.parts.map(p => p?.text ?? '').join('\n\n');
+ } else if (typeof si?.text === 'string') {
+ systemText = si.text;
+ }
+ }
+
+ const items = [];
+ const rawMessages = Array.isArray(wr.messages) ? wr.messages : (Array.isArray(wr.contents) ? wr.contents : []);
+ for (const m of rawMessages) {
+ if (!m) continue;
+ const role = m.role || '?';
+ // Claude/OAI carry `content`; Gemini carries `parts` — pass through, formatMessageContent handles both.
+ const content = (m.content != null) ? m.content : (Array.isArray(m.parts) ? m.parts : '');
+ items.push({ role, content });
+ }
+
+ const consumedKeys = new Set(['messages', 'contents', 'system', 'systemInstruction', 'system_instruction']);
+ const otherKeys = Object.keys(wr).filter(k => !consumedKeys.has(k));
+ return { systemText, items, otherKeys };
+}
+
+function buildWireRequestHtml(detail, q) {
+ const wr = detail.wireRequest;
+ if (!wr || typeof wr !== 'object') {
+ return `
+ <div class="ri-detail-section">
+ <h4>${t`Wire Request`}</h4>
+ <div class="ri-empty">${t`No wire request captured.`}</div>
+ </div>`;
+ }
+
+ const { systemText, items, otherKeys } = extractWireMessages(wr);
+ const blocks = [];
+ if (systemText) {
+ blocks.push(renderMessageItem({ role: 'system', content: systemText }, null, q));
+ }
+ items.forEach((m, i) => {
+ blocks.push(renderMessageItem({ role: m.role, content: m.content }, i, q));
+ });
+
+ const otherJson = otherKeys.length
+ ? JSON.stringify(Object.fromEntries(otherKeys.map(k => [k, wr[k]])), null, 2)
+ : '';
+
+ const count = (systemText ? 1 : 0) + items.length;
+ return `
+ <div class="ri-detail-section">
+ <h4>${t`Wire Request`} (${count})</h4>
+ <div class="ri-messages">
+ ${blocks.join('\n') || `<div class="ri-empty">${t`No wire messages.`}</div>`}
+ </div>
+ ${otherJson ? `
+ <details class="ri-wire-meta">
+ <summary>${t`Other Params`}</summary>
+ <pre class="ri-msg-content">${highlightHtml(otherJson, q)}</pre>
+ </details>` : ''}
+ </div>`;
+}
+
+function buildChatDetailBody(detail) {
+ const q = currentDetailSearch;
+ let sourceMessagesHtml = '';
+ if (Array.isArray(detail.fullMessages)) {
+ for (let i = 0; i < detail.fullMessages.length; i++) {
+ sourceMessagesHtml += renderMessageItem(detail.fullMessages[i], i, q);
  }
  }
 
@@ -342,10 +421,12 @@ function buildChatDetailBody(detail) {
  ${buildResponseBodyHtml(detail, q)}
  </div>
 
+ ${buildWireRequestHtml(detail, q)}
+
  <div class="ri-detail-section">
- <h4>${t`Messages`} (${detail.messageCount})</h4>
+ <h4>${t`Source Messages`} (${detail.messageCount})</h4>
  <div class="ri-messages">
- ${messagesHtml || `<div class="ri-empty">${t`No messages captured.`}</div>`}
+ ${sourceMessagesHtml || `<div class="ri-empty">${t`No messages captured.`}</div>`}
  </div>
  </div>`;
 }

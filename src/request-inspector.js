@@ -64,15 +64,32 @@ function sanitizeEndpointUrl(endpoint) {
  * current inspection entry. Call this right before fetching the upstream
  * provider from any send*Request function.
  *
+ * If `wirePayload` is provided, a deep-cloned snapshot of the outbound request
+ * body is recorded as `entry.wireRequest` so the Inspector UI can show what
+ * actually went on the wire after post-processing and provider-specific
+ * conversion (e.g. Claude `system:` extraction). The `fullMessages` snapshot
+ * captured by `startInspection` is the pre-conversion input; this snapshot is
+ * the post-conversion output.
+ *
  * @param {import('express').Request} request
  * @param {string|URL} endpoint Full URL that the server is about to hit
  * @param {string} apiKey Plaintext API key (never stored)
+ * @param {object} [wirePayload] Optional outbound request body to snapshot.
  */
-export function attachInspectionEndpoint(request, endpoint, apiKey) {
+export function attachInspectionEndpoint(request, endpoint, apiKey, wirePayload) {
  const entry = findEntry(request);
  if (!entry) return;
  entry.endpoint = sanitizeEndpointUrl(endpoint);
  entry.apiKeyFingerprint = fingerprintApiKey(apiKey);
+ if (wirePayload && typeof wirePayload === 'object') {
+ try {
+ entry.wireRequest = typeof structuredClone === 'function'
+ ? structuredClone(wirePayload)
+ : JSON.parse(JSON.stringify(wirePayload));
+ } catch {
+ try { entry.wireRequest = JSON.parse(JSON.stringify(wirePayload)); } catch { /* skip */ }
+ }
+ }
 }
 
 /**
