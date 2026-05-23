@@ -390,11 +390,11 @@ app.get('/lib/tokenizers/js-tiktoken-bundle.js', (_req, res) => {
 // can't fetch those URLs directly (CORS); we proxy through. Server cached via
 // HTTP cache headers + getPathToTokenizer's disk cache.
 const REMOTE_TOKENIZERS = {
-    'qwen2.json.gz':     'https://github.com/SillyTavern/SillyTavern-Tokenizers/raw/main/qwen2.json.gz',
+    'qwen2.json.gz': 'https://github.com/SillyTavern/SillyTavern-Tokenizers/raw/main/qwen2.json.gz',
     'command-r.json.gz': 'https://github.com/SillyTavern/SillyTavern-Tokenizers/raw/main/command-r.json.gz',
     'command-a.json.gz': 'https://github.com/SillyTavern/SillyTavern-Tokenizers/raw/main/command-a.json.gz',
-    'nemo.json.gz':      'https://github.com/SillyTavern/SillyTavern-Tokenizers/raw/main/nemo.json.gz',
-    'deepseek.json.gz':  'https://github.com/SillyTavern/SillyTavern-Tokenizers/raw/main/deepseek.json.gz',
+    'nemo.json.gz': 'https://github.com/SillyTavern/SillyTavern-Tokenizers/raw/main/nemo.json.gz',
+    'deepseek.json.gz': 'https://github.com/SillyTavern/SillyTavern-Tokenizers/raw/main/deepseek.json.gz',
 };
 app.get('/tokenizers-remote/:file', async (req, res) => {
     const url = REMOTE_TOKENIZERS[req.params.file];

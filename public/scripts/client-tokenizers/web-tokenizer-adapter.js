@@ -14,16 +14,16 @@ const LIB_URL = '/lib/tokenizers/web-tokenizers/index.js';
 // Model name -> tokenizer.json URL on our static mount.
 // Matches dispatch in src/endpoints/tokenizers.js:920-982.
 const TOKENIZER_URLS = {
-    claude:      '/tokenizers/claude.json',
-    llama3:      '/tokenizers/llama3.json',
-    'llama-3':   '/tokenizers/llama3.json',
+    claude: '/tokenizers/claude.json',
+    llama3: '/tokenizers/llama3.json',
+    'llama-3': '/tokenizers/llama3.json',
     // Remote-hosted upstream — proxied through ST server (/tokenizers-remote/*)
     // to avoid CORS on browser direct-fetch from GitHub raw.
-    qwen2:       '/tokenizers-remote/qwen2.json.gz',
+    qwen2: '/tokenizers-remote/qwen2.json.gz',
     'command-r': '/tokenizers-remote/command-r.json.gz',
     'command-a': '/tokenizers-remote/command-a.json.gz',
-    nemo:        '/tokenizers-remote/nemo.json.gz',
-    deepseek:    '/tokenizers-remote/deepseek.json.gz',
+    nemo: '/tokenizers-remote/nemo.json.gz',
+    deepseek: '/tokenizers-remote/deepseek.json.gz',
 };
 
 const instanceCache = new Map();
@@ -68,13 +68,7 @@ function convertClaudePromptForCount(messages) {
             if (m.tool_calls) m.content += JSON.stringify(m.tool_calls);
         });
         messages[0].role = 'system';
-        let hasUser = false;
-        const firstAssistantIndex = messages.findIndex((message, i) => {
-            if (i >= 0 && (message.role === 'user' || message.content.includes('\n\nHuman: '))) {
-                hasUser = true;
-            }
-            return message.role === 'assistant' && i > 0;
-        });
+        const firstAssistantIndex = messages.findIndex((message, i) => message.role === 'assistant' && i > 0);
         // withSysPromptSupport && useSystemPrompt both false -> else branch
         messages[0].role = 'user';
         if (firstAssistantIndex > 0) {

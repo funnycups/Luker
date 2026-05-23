@@ -446,13 +446,13 @@ function callTokenizer(type, str) {
 // Sentencepiece families (LLAMA, MISTRAL, YI, GEMMA, JAMBA, NERD*) intentionally
 // omitted — they stay on HTTP pending a follow-up spec for sentencepiece-js.
 const TOKENIZER_TYPE_TO_CLIENT_MODEL = {
-    [tokenizers.LLAMA3]:    'llama3',
-    [tokenizers.CLAUDE]:    'claude',
-    [tokenizers.QWEN2]:     'qwen2',
+    [tokenizers.LLAMA3]: 'llama3',
+    [tokenizers.CLAUDE]: 'claude',
+    [tokenizers.QWEN2]: 'qwen2',
     [tokenizers.COMMAND_R]: 'command-r',
     [tokenizers.COMMAND_A]: 'command-a',
-    [tokenizers.NEMO]:      'nemo',
-    [tokenizers.DEEPSEEK]:  'deepseek',
+    [tokenizers.NEMO]: 'nemo',
+    [tokenizers.DEEPSEEK]: 'deepseek',
 };
 
 function callTokenizerAsync(type, str) {
