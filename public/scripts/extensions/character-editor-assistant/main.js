@@ -1219,6 +1219,7 @@ async function resolveTargetLorebook(context, record, {
                 },
             });
             record.character = context.characters?.[record.characterIndex] || record.character;
+            await syncWorldBindingUi(context, ensured);
         }
         return ensured;
     }
@@ -1241,6 +1242,7 @@ async function resolveTargetLorebook(context, record, {
         },
     });
     record.character = context.characters?.[record.characterIndex] || record.character;
+    await syncWorldBindingUi(context, created);
     return created;
 }
 
