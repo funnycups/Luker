@@ -156,6 +156,19 @@ export async function requestToolCallWithRetry(context, settings, {
     throw lastError || new Error(`Tool call '${fnName}' failed.`);
 }
 
+// Control-flow tool names recognized by the iteration popups. These do
+// not represent edits to apply; they steer the runner / iteration loop
+// itself (continue another round, finalize the session, etc.) and are
+// routed to `onControlCall` instead of `onToolCall` so popups can update
+// their state machine without treating them as user-visible operations.
+const RUNNER_CONTROL_NAMES = new Set([
+    'continue',
+    'finalize',
+    'finalize_iteration',
+    'orch_continue',
+    'orch_finalize',
+]);
+
 export async function requestToolCallsWithRetry(context, settings, {
     taskMessages = [],
     runtimeWorldInfo = null,
@@ -167,6 +180,9 @@ export async function requestToolCallsWithRetry(context, settings, {
     abortSignal = null,
     includeAssistantText = false,
     allowNoToolCalls = false,
+    onAssistantText = null,
+    onToolCall = null,
+    onControlCall = null,
 } = {}) {
     if (!Array.isArray(tools) || tools.length === 0) {
         throw new Error('Tools are required.');
@@ -217,31 +233,46 @@ export async function requestToolCallsWithRetry(context, settings, {
                 ? normalizedCalls.filter(call => allowedSet.has(call.name))
                 : normalizedCalls;
             const assistantText = String(result?.assistantText || '');
+            let returnValue;
             if (filteredCalls.length === 0) {
                 if (allowNoToolCalls && assistantText) {
-                    if (includeAssistantText) {
-                        return {
-                            toolCalls: [],
-                            assistantText,
-                            rawAssistantText: assistantText,
-                        };
-                    }
-                    return [];
+                    returnValue = includeAssistantText
+                        ? { toolCalls: [], assistantText, rawAssistantText: assistantText }
+                        : [];
+                } else {
+                    throw new Error('Model response did not contain any matching tool calls.');
                 }
-                throw new Error('Model response did not contain any matching tool calls.');
+            } else {
+                const validationError = validateParsedToolCalls(filteredCalls, tools);
+                if (validationError) {
+                    throw new Error(validationError);
+                }
+                returnValue = includeAssistantText
+                    ? { toolCalls: filteredCalls, assistantText, rawAssistantText: assistantText }
+                    : filteredCalls;
             }
-            const validationError = validateParsedToolCalls(filteredCalls, tools);
-            if (validationError) {
-                throw new Error(validationError);
+
+            // Per-round callbacks fire AFTER validation and BEFORE return, so
+            // a popup can rely on having seen the assistant turn and its
+            // tool calls in order before applying anything to the live
+            // target. A callback that throws must not derail the runner —
+            // these are observers, not gating hooks.
+            if (typeof onAssistantText === 'function' && assistantText) {
+                try { onAssistantText(assistantText); }
+                catch (cbErr) { console.warn('[iter-tool-calling] onAssistantText threw', cbErr); }
             }
-            if (includeAssistantText) {
-                return {
-                    toolCalls: filteredCalls,
-                    assistantText,
-                    rawAssistantText: assistantText,
-                };
+            if (filteredCalls.length > 0 && (typeof onToolCall === 'function' || typeof onControlCall === 'function')) {
+                for (const call of filteredCalls) {
+                    const isControl = RUNNER_CONTROL_NAMES.has(String(call?.name || ''));
+                    const cb = isControl ? onControlCall : onToolCall;
+                    if (typeof cb === 'function') {
+                        try { cb(call); }
+                        catch (cbErr) { console.warn('[iter-tool-calling] onToolCall threw', cbErr); }
+                    }
+                }
             }
-            return filteredCalls;
+
+            return returnValue;
         } catch (error) {
             if (isAbortError(error, abortSignal)) {
                 throw error;

@@ -51,6 +51,12 @@ export function bindIterWorkspaceResizer(workspaceRoot) {
     }
 
     function onPointerDown(e) {
+        // Ignore subsequent pointerdown events while a drag is in flight.
+        // Multi-pointer scenarios (touch + stylus, synthetic events) would
+        // otherwise overwrite `pointerId` mid-drag and leave the original
+        // pointer unable to release its capture cleanly — the `active`
+        // class would stick and pointermove tracking would jump.
+        if (pointerId !== null) return;
         e.preventDefault();
         e.stopPropagation();
         bounds = grid.getBoundingClientRect();

@@ -1691,7 +1691,9 @@
 .popup .luker-iter-workspace {
     --luker-iter-split: 50%;
     --luker-iter-resizer-width: 12px;
-    min-width: min(960px, 92vw);
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
 }
 
 .popup .luker-iter-workspace-grid {
@@ -1957,5 +1959,23 @@
     .popup .luker-iter-workspace [class*="-composer-buttons"] {
         margin-left: 0;
         justify-content: flex-end;
+    }
+    /* On mobile, the Preview tab is a dedicated viewport — hide the
+       chat-side history and toolbar that belong to the Chat tab so the
+       preview gets the full popup width. Class names mirror the actual
+       render output of each popup (verified before adding):
+       CPA  → details.cpa_it_history
+       MG   → details.mg_schema_it_history
+       Orch → details.orch_it_history
+       CEA char-iter → details.cea_charit_history
+       CEA editor    → details.luker-studio-history
+       Only CPA renders a toolbar inside the workspace (.cpa_it_toolbar). */
+    .popup .luker-iter-workspace[data-iter-active-tab="preview"] details.cpa_it_history,
+    .popup .luker-iter-workspace[data-iter-active-tab="preview"] details.mg_schema_it_history,
+    .popup .luker-iter-workspace[data-iter-active-tab="preview"] details.orch_it_history,
+    .popup .luker-iter-workspace[data-iter-active-tab="preview"] details.cea_charit_history,
+    .popup .luker-iter-workspace[data-iter-active-tab="preview"] details.luker-studio-history,
+    .popup .luker-iter-workspace[data-iter-active-tab="preview"] .cpa_it_toolbar {
+        display: none;
     }
 }

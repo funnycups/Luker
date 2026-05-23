@@ -173,4 +173,39 @@ describe('bindIterWorkspaceResizer', () => {
         window.dispatchEvent(new StubPointerEvent('pointermove', { pointerId: 3, clientX: 300 }));
         expect(grid.style.getPropertyValue('--luker-iter-split')).toBe('');
     });
+
+    test('second pointerdown during an active drag is ignored', () => {
+        // Regression test for a multi-pointer capture leak: if a second
+        // pointerdown lands while the first drag is still in flight (e.g.
+        // a stylus + finger on a tablet, or a synthetic test event),
+        // `pointerId` would be overwritten and the original drag would
+        // become unable to terminate cleanly — releasePointerCapture
+        // would target the wrong pointer and the active class would be
+        // stuck. The resizer must ignore subsequent pointerdown events
+        // until the current drag ends.
+        const { root, grid, splitter } = buildWorkspace();
+        const unbind = bindIterWorkspaceResizer(root);
+
+        splitter.dispatchEvent(new StubPointerEvent('pointerdown', { pointerId: 11, clientX: 500 }));
+        // Drag is in progress; original pointer drives the split.
+        window.dispatchEvent(new StubPointerEvent('pointermove', { pointerId: 11, clientX: 600 }));
+        expect(grid.style.getPropertyValue('--luker-iter-split')).toBe('60%');
+
+        // Second pointerdown should be a no-op — original pointerId 11
+        // stays in control.
+        splitter.dispatchEvent(new StubPointerEvent('pointerdown', { pointerId: 22, clientX: 200 }));
+        // Original pointer continues to drive split (still 60%, not 20%).
+        // The second pointerdown must NOT switch tracking to pointerId 22.
+        window.dispatchEvent(new StubPointerEvent('pointermove', { pointerId: 22, clientX: 200 }));
+        // Move for pointer 22 is ignored because it isn't the tracked id.
+        expect(grid.style.getPropertyValue('--luker-iter-split')).toBe('60%');
+
+        // Original pointer can still move and end its drag normally.
+        window.dispatchEvent(new StubPointerEvent('pointermove', { pointerId: 11, clientX: 700 }));
+        expect(grid.style.getPropertyValue('--luker-iter-split')).toBe('70%');
+        window.dispatchEvent(new StubPointerEvent('pointerup', { pointerId: 11, clientX: 700 }));
+        expect(splitter.classList.contains('active')).toBe(false);
+
+        unbind();
+    });
 });

@@ -175,6 +175,7 @@ const ITERATION_LIBRARY_API = Object.freeze({
     storage: ITERATION_LIBRARY_API_NS.storage,
     textDiff: ITERATION_LIBRARY_API_NS.textDiff,
     zoomOverlay: ITERATION_LIBRARY_API_NS.zoomOverlay,
+    bindIterWorkspaceResizer: ITERATION_LIBRARY_API_NS.bindIterWorkspaceResizer,
 });
 
 function safeClone(value, fallback = {}) {
