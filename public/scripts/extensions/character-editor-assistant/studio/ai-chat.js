@@ -1566,7 +1566,7 @@ Never have CardApp runtime parse world-book entries to discover abilities — th
 ## Three layers of variable writes
 
 Variables the AI sees go through one of three writers:
-1. **AI in its reply** — \`{{setvar::name::value}}\` / \`{{addvar}}\` macros. Through op-log automatically. Right for storyline-meaningful state (HP changed because something happened, character was affected by an ability, NPC met).
+1. **AI in its reply** — \`{{setvar::name::value}}\` / \`{{addvar}}\` / \`{{pushvar}}\` / \`{{popvar}}\` macros. Writes can target a dotted path inside a structured variable — \`{{setvar::roster.alice.hp::50}}\` updates one leaf without rewriting the whole blob. Through op-log automatically. Right for storyline-meaningful state (HP changed because something happened, character was affected by an ability, NPC met).
 2. **first_mes** — embed \`{{setvar::name::initial}}\` so the seed binds to floor 0. Right for initial values.
 3. **CardApp, bound to a floor** — \`ctx.setVariable(key, value, { floor: latestMessageId })\` appends a setvar op to that floor's var_ops; swipe/delete/branch reconcile it like an AI-written macro. Right for UI-driven micro-edits the AI also cares about (a +1 affinity button, inline typo fix in a description).
 
@@ -1582,10 +1582,10 @@ Most users are hobbyist roleplayers, often non-programmers, often Chinese-speaki
 |-----------|----------------------|------------|
 | 好感度 / affinity / 关系度 / 信任度 | Persona's feelings toward user, AI-aware, always visible | UI bar reading \`{{getvar::affinity}}\`; AI emits \`{{addvar::affinity::N}}\` per reply; constant state-injection WI entry |
 | 状态栏 / HP / MP / 体力 / 饱食度 | Numeric stats, always-visible, AI-aware | Same shape — UI + chat variables + state-injection WI |
-| 背包 / 物品栏 / inventory | List AI sees and mutates | Single inventory-text variable AI rewrites via \`{{setvar::inv::治愈药水x2, 锈剑}}\`, OR per-slot vars for known item types |
+| 背包 / 物品栏 / inventory | List AI sees and mutates | Single \`inventory\` variable holding a JSON array; AI calls \`{{pushvar::inventory::治愈药水}}\` / \`{{popvar::inventory}}\`; UI reads via \`{{getvar::inventory}}\` (an each-loop renders) |
 | 战斗 / 战斗系统 | Combat with stats, damage, enemies | Status pattern + per-monster keyword WI entries + combat-rules keyword WI gated on combat keywords |
 | 存档 / 多存档 / 存档管理 | Switch / create / leave chat | \`ctx.getChatList\` + \`switchChat\` + \`newChat\` + \`closeChat\` (already required by Required UX) |
-| 添加 NPC / 加角色 / 多角色 | Side character with own voice/lore | Keyword WI entry per NPC (key=name+aliases); per-character namespaced state vars (\`npc_alice_*\`) if stat-bearing |
+| 添加 NPC / 加角色 / 多角色 | Side character with own voice/lore | Keyword WI entry per NPC (key=name+aliases); stat-bearing characters use per-character namespaced vars (\`npc_alice_*\`) OR a single \`characters\` object updated via \`{{setvar::characters.alice.hp::N}}\` / \`{{deletevar::characters.bob}}\` |
 | 让她记住 / memory / 记忆系统 | AI retains user-stated facts/preferences | \`{{setvar::user_*::...}}\` for facts the AI emits; surface in state-injection entry |
 | 章节进度 / 案件阶段 / 任务推进 / 当前地点 / 进度状态 | Narrative-header markers tracking where the story sits right now | Chat variables (op-log shape, but **not** stat-shaped — see "Narrative-header progression cards" below). Triple producer-consumer: \`first_mes\` setvar bootstrap + constant WI entry instructing AI when to advance them + read via \`getvar\` from CardApp + state-injection entry. Skipping any of the three leaves the panel rendering empty header forever. |
 | VN / 视觉小说 / 选项分支 | Scenes, sprites, multiple-choice buttons | CardApp UI work + quick-action buttons whose text is a full sentence; scene-keyword WI entries for location lore |
