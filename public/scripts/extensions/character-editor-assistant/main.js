@@ -536,6 +536,38 @@ function getSettings() {
     return extension_settings[MODULE_NAME];
 }
 
+/**
+ * Per-avatar auto-approve preference for the CEA editor popup.
+ *
+ * Previously `extension_settings[MODULE_NAME].editorAutoApply` was a single
+ * boolean — switching characters left the previous character's choice in
+ * effect, which surprised users with auto-approve flipping itself on for
+ * cards they hadn't opted in on. Now persisted as a per-avatar map at
+ * `extension_settings[MODULE_NAME].editorAutoApplyByAvatar` (旧-4).
+ *
+ * No migration: the previous single bool simply disappears; each character
+ * starts on a fresh per-avatar slate, mirroring the spec's explicit
+ * direction "users get a fresh per-avatar slate".
+ */
+function getAutoApplyForAvatar(avatar) {
+    const settings = extension_settings?.[MODULE_NAME];
+    if (!settings) return false;
+    const map = settings.editorAutoApplyByAvatar;
+    if (!map || typeof map !== 'object') return false;
+    return !!map[String(avatar || '')];
+}
+
+function persistAutoApproveForAvatar(avatar, value) {
+    if (!extension_settings || typeof extension_settings !== 'object') return;
+    extension_settings[MODULE_NAME] = extension_settings[MODULE_NAME] || {};
+    const settings = extension_settings[MODULE_NAME];
+    if (!settings.editorAutoApplyByAvatar || typeof settings.editorAutoApplyByAvatar !== 'object') {
+        settings.editorAutoApplyByAvatar = {};
+    }
+    settings.editorAutoApplyByAvatar[String(avatar || '')] = !!value;
+    try { saveSettingsDebounced(); } catch { /* save failures are non-fatal */ }
+}
+
 function getConnectionProfiles() {
     return getChatCompletionConnectionProfiles();
 }
@@ -3530,6 +3562,7 @@ async function openCharacterEditorPopup(context = getContext()) {
     let currentSessionId = '';
     let pendingApproval = null;
     let isSending = false;
+    let isAbortPending = false;
     let activeRequestAbortController = null;
     let unbindResizer = () => {};
     const rejectedOperationKeys = new Set();
@@ -3615,8 +3648,13 @@ async function openCharacterEditorPopup(context = getContext()) {
                     }
                     try {
                         const loaded = await context.loadWorldInfo(lorebookName);
+                        // Spread loaded FIRST so the explicit name + entries
+                        // win — without this, the original `name: lorebookName`
+                        // and `entries: loaded.entries || {}` get clobbered by
+                        // any `loaded.name` / `loaded.entries` further along
+                        // the spread (旧-1).
                         currentWorldInfo = loaded && typeof loaded === 'object'
-                            ? { name: lorebookName, entries: loaded.entries || {}, ...loaded }
+                            ? { ...loaded, name: lorebookName, entries: loaded.entries || {} }
                             : null;
                     } catch (error) {
                         console.warn(`[${MODULE_NAME}] World info load failed for '${lorebookName}'`, error);
@@ -3648,9 +3686,17 @@ async function openCharacterEditorPopup(context = getContext()) {
                     } catch (error) {
                         console.warn(`[${MODULE_NAME}] Resizer bind failed`, error);
                     }
-                    workspaceRoot.querySelectorAll('[data-iter-action="switch-tab"]').forEach((btn) => {
-                        btn.addEventListener('click', (event) => {
-                            const tab = btn.dataset.iterTab;
+                    // 旧-13: previously each open() bound a fresh click
+                    // listener per switch-tab button via raw
+                    // `btn.addEventListener` — closing + reopening the
+                    // popup leaked listeners on the same DOM nodes. A
+                    // jQuery delegated namespaced binding (off + on
+                    // .ceaEditor) idempotently re-binds.
+                    const $workspaceRoot = jQuery(workspaceRoot);
+                    $workspaceRoot
+                        .off('click.ceaEditor', '[data-iter-action="switch-tab"]')
+                        .on('click.ceaEditor', '[data-iter-action="switch-tab"]', function (event) {
+                            const tab = this?.dataset?.iterTab;
                             if (!tab) return;
                             event.preventDefault();
                             workspaceRoot.dataset.iterActiveTab = tab;
@@ -3667,28 +3713,64 @@ async function openCharacterEditorPopup(context = getContext()) {
                                 }
                             }
                         });
-                    });
                 }
 
-                // Auto-approve persisted at extension_settings[MODULE_NAME].editorAutoApply.
+                // Auto-approve persisted per-avatar at
+                // extension_settings[MODULE_NAME].editorAutoApplyByAvatar[avatar].
                 // Toggling on while a batch is pending triggers it immediately.
-                let autoApprove = Boolean(extension_settings?.[MODULE_NAME]?.editorAutoApply);
+                //
+                // Race tolerance (旧-3): while a request is in flight
+                // (`isSending`), checkbox changes used to be a hard no-op,
+                // which felt like the toggle was dead. Now the desired
+                // value is parked on `pendingAutoApproveSet`; the
+                // post-send finalize block reads it and commits.
+                let autoApprove = getAutoApplyForAvatar(avatar);
+                let pendingAutoApproveSet;
                 const autoApproveCheckbox = instance?.content?.querySelector?.('[data-cea-editor-auto-approve]');
+                const onAutoApproveToggle = async () => {
+                    if (!(autoApproveCheckbox instanceof HTMLInputElement)) return;
+                    const desired = Boolean(autoApproveCheckbox.checked);
+                    if (isSending) {
+                        // One microtask tick — covers the brief window between
+                        // request-issued and isSending-cleared.
+                        await Promise.resolve();
+                        if (isSending) {
+                            pendingAutoApproveSet = desired;
+                            return;
+                        }
+                    }
+                    autoApprove = desired;
+                    persistAutoApproveForAvatar(avatar, autoApprove);
+                    if (autoApprove && pendingApproval) {
+                        const snapshot = pendingApproval;
+                        void runApproveBatch(snapshot);
+                    }
+                };
                 if (autoApproveCheckbox instanceof HTMLInputElement) {
                     autoApproveCheckbox.checked = autoApprove;
                     autoApproveCheckbox.addEventListener('change', () => {
-                        autoApprove = Boolean(autoApproveCheckbox.checked);
-                        if (extension_settings && typeof extension_settings === 'object') {
-                            extension_settings[MODULE_NAME] = extension_settings[MODULE_NAME] || {};
-                            extension_settings[MODULE_NAME].editorAutoApply = autoApprove;
-                            try { saveSettingsDebounced(); } catch { /* save failures are non-fatal */ }
-                        }
-                        if (autoApprove && pendingApproval) {
-                            const snapshot = pendingApproval;
-                            void runApproveBatch(snapshot);
-                        }
+                        void onAutoApproveToggle();
                     });
                 }
+
+                // Pull a parked auto-approve toggle into effect after the
+                // current LLM round resolves. Called from both
+                // `runAssistantTurn`'s finally and `runApproveBatch`'s
+                // finally so the toggle never gets stuck waiting for the
+                // user to flip it a second time.
+                const drainPendingAutoApprove = () => {
+                    if (pendingAutoApproveSet === undefined) return;
+                    autoApprove = !!pendingAutoApproveSet;
+                    persistAutoApproveForAvatar(avatar, autoApprove);
+                    pendingAutoApproveSet = undefined;
+                    if (autoApproveCheckbox instanceof HTMLInputElement) {
+                        autoApproveCheckbox.checked = autoApprove;
+                    }
+                    if (autoApprove && pendingApproval) {
+                        const snapshot = pendingApproval;
+                        void runApproveBatch(snapshot);
+                    }
+                };
 
                 // Shared approve-batch executor — called from the click handler
                 // AND from the auto-approve hook (set right after the LLM round
@@ -3734,6 +3816,7 @@ async function openCharacterEditorPopup(context = getContext()) {
                         syncComposerState();
                         renderConversation(false);
                         renderPreview();
+                        drainPendingAutoApprove();
                     }
                 };
                 const persistCurrentSession = async ({ setCurrent = true } = {}) => {
@@ -3857,6 +3940,7 @@ async function openCharacterEditorPopup(context = getContext()) {
                         isSending = false;
                         syncComposerState();
                         renderConversation(false);
+                        drainPendingAutoApprove();
                     }
                 };
                 const handleSend = async () => {
@@ -3968,7 +4052,7 @@ async function openCharacterEditorPopup(context = getContext()) {
                     const action = String(target.getAttribute('data-cea-editor-action') || '').trim();
                     if (action === 'reject-batch') {
                         const snapshot = pendingApproval;
-                        for (const operation of pendingApproval.operations) {
+                        for (const operation of snapshot.operations) {
                             const key = buildCharacterEditorOperationKey(operation);
                             if (key) {
                                 rejectedOperationKeys.add(key);
@@ -4089,12 +4173,22 @@ async function openCharacterEditorPopup(context = getContext()) {
                 renderPreview();
                 void refreshWorldInfo().then(renderPreview);
             },
-            onClosing: () => {
-                if (isSending) {
-                    notifyWarning(i18n('Assistant is thinking...'));
-                    return false;
+            onClosing: async () => {
+                // N10 race fix: previously this returned false outright
+                // while `isSending` was true, so a user who hit Stop +
+                // immediately tried to close would get stuck — the Stop
+                // had aborted the request but isSending hadn't unwound
+                // yet. Now we gate on `isAbortPending` so the first close
+                // attempt during an in-flight call fires the abort and
+                // returns true; the popup itself unwinds via the
+                // outer try/finally.
+                if (isSending && !isAbortPending) {
+                    isAbortPending = true;
+                    try { activeRequestAbortController?.abort(); } catch { /* abort failures non-fatal */ }
+                    // Give the in-flight turn a chance to unwind cleanly
+                    // before letting the popup close.
+                    await Promise.resolve();
                 }
-                try { unbindResizer(); } catch { /* unbind failures non-fatal */ }
                 return true;
             },
         },
@@ -4103,6 +4197,12 @@ async function openCharacterEditorPopup(context = getContext()) {
     try {
         await popup.show();
     } finally {
+        // Single try/finally lifecycle: even if popup.show() throws or
+        // the popup is force-closed, the resizer unbind + abort + lock
+        // cleanup all run. Previously the resizer unbind lived in
+        // onClosing and would skip in the force-close path.
+        try { unbindResizer(); } catch { /* unbind failures non-fatal */ }
+        try { activeRequestAbortController?.abort(); } catch { /* abort failures non-fatal */ }
         editorStudioDialogLocks.delete(avatar);
     }
 }

@@ -12,6 +12,54 @@ function parseArgs(call) {
 }
 
 /**
+ * Control tools that drive the multi-round auto-continue loop. The studio
+ * splices these alongside `TOOL_DEFS` when calling the runner, and routes
+ * them through `onControlCall` (via `isCeaCharControlCall`) so they never
+ * reach `normalizeToolCallToEdit`. Exported here so the test suite can
+ * import them without instantiating studio.js (which depends on Popup).
+ */
+export const CONTROL_TOOL_NAMES = Object.freeze({
+    continue: 'luker_cea_charit_continue_iteration',
+    finalize: 'luker_cea_charit_finalize_iteration',
+});
+const CONTROL_TOOL_NAME_SET = new Set([CONTROL_TOOL_NAMES.continue, CONTROL_TOOL_NAMES.finalize]);
+
+export const CONTROL_TOOL_DEFS = [
+    {
+        type: 'function',
+        function: {
+            name: CONTROL_TOOL_NAMES.continue,
+            description: 'Request one automatic follow-up round after the current tools have run. Use only when more iteration is genuinely needed; otherwise call luker_cea_charit_finalize_iteration.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    note: { type: 'string', description: 'Optional rationale visible to the user.' },
+                },
+                additionalProperties: false,
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: CONTROL_TOOL_NAMES.finalize,
+            description: 'Finalize this iteration turn with a concise summary. The popup stops auto-continuing after this call.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    summary: { type: 'string', description: 'Short user-facing summary of what changed.' },
+                },
+                additionalProperties: false,
+            },
+        },
+    },
+];
+
+export function isCeaCharControlCall(toolCall) {
+    return CONTROL_TOOL_NAME_SET.has(String(toolCall?.name || ''));
+}
+
+/**
  * Static tool catalog for the CEA Character Editor adapter.
  *
  * Six tools span the two halves of `live`:

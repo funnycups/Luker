@@ -41,6 +41,7 @@ import { Popup, POPUP_TYPE } from '../../../popup.js';
 import {
     applyEdits,
     bindIterWorkspaceResizer,
+    inverseEdit,
     registerOp,
     render as ITER_RENDER,
     runner as ITER_RUNNER,
@@ -52,12 +53,38 @@ import {
     createLorebookEntryUpdateOp,
     createLorebookEntryRemoveOp,
 } from '../lorebook-ops.js';
-import { TOOL_DEFS, TOOL_DISPLAY, normalizeToolCallToEdit } from './tools.js';
-import { createCharacterIterationSessionStore } from './session-store.js';
+import {
+    TOOL_DEFS,
+    TOOL_DISPLAY,
+    normalizeToolCallToEdit,
+    CONTROL_TOOL_NAMES,
+    CONTROL_TOOL_DEFS,
+    isCeaCharControlCall,
+} from './tools.js';
+import {
+    createCharacterIterationSessionStore,
+    makeMessageId,
+    normalizeMessageShape,
+} from './session-store.js';
 
 const MODULE = 'cea-character-iteration';
 const STYLESHEET_ID = 'cea_charit_studio_stylesheet';
 const STYLESHEET_HREF = '/scripts/extensions/character-editor-assistant/character-iteration/studio.css';
+
+/**
+ * Loose AbortError detector. The runner may throw a DOMException with name
+ * AbortError, a plain Error with "aborted" in the message, or rethrow our
+ * AbortController's signal. Treat any of those as a user-driven Stop so
+ * handleSendMessage's catch block doesn't push an error bubble.
+ */
+function isAbortError(err, signal) {
+    if (!err) return false;
+    if (err.name === 'AbortError') return true;
+    const msg = String(err?.message || err);
+    if (/abort(ed)?/i.test(msg)) return true;
+    if (signal?.aborted) return true;
+    return false;
+}
 
 function ensureStylesheetInjected() {
     if (typeof document === 'undefined') return;
@@ -308,7 +335,18 @@ function createNewSession() {
         id: makeSessionId(),
         title: '',
         messages: [],
-        surfaceState: { historyOpen: false, autoApply: false },
+        // Per-session surface preferences + finalize state. isFinalized +
+        // finalizeSummary ride on surfaceState so popup close / reopen
+        // preserves them.
+        surfaceState: {
+            historyOpen: false,
+            autoApply: false,
+            isFinalized: false,
+            finalizeSummary: '',
+        },
+        // Top-level mirror of pendingEdits so a popup close mid-turn
+        // (before Apply) reloads with the same pending batch.
+        pendingEdits: [],
         updatedAt: now,
         createdAt: now,
     };
@@ -334,6 +372,7 @@ export async function openCharacterIterationStudio(avatar, deps) {
     const {
         context,
         i18n,
+        i18nFormat,
         readCard,
         readLorebook,
         mergeCharacterAttributes,
@@ -347,6 +386,9 @@ export async function openCharacterIterationStudio(avatar, deps) {
         ? depsEscapeHtml
         : escapeHtmlLocal;
     const t = typeof i18n === 'function' ? i18n : (s) => String(s ?? '');
+    const tf = typeof i18nFormat === 'function'
+        ? i18nFormat
+        : (template, ...values) => String(t(template) ?? template).replace(/\$\{(\d+)\}/g, (_, idx) => String(values[Number(idx)] ?? ''));
 
     // ──────────────────────────────────────────────────────────────────
     // Custom op registration. `registerOp` overwrites if already
@@ -406,11 +448,21 @@ export async function openCharacterIterationStudio(avatar, deps) {
     // messages, and a derived title (first 50 chars of the first user
     // message). Calling this is cheap — the inner store uses
     // `saveSettingsDebounced` so the actual flush is batched.
+    //
+    // Mirrors runtime pendingEdits onto the persisted session so popup
+    // close mid-batch reloads with the same staged edits.
     // ──────────────────────────────────────────────────────────────────
     async function persistSession() {
         state.session.updatedAt = Date.now();
+        try {
+            state.session.pendingEdits = Array.isArray(state.pendingEdits)
+                ? structuredClone(state.pendingEdits)
+                : [];
+        } catch {
+            state.session.pendingEdits = Array.isArray(state.pendingEdits) ? state.pendingEdits.slice() : [];
+        }
         if (!state.session.title) {
-            const firstUser = state.session.messages.find(m => m.role === 'user');
+            const firstUser = state.session.messages.find(m => m.role === 'user' && !m.auto);
             if (firstUser) {
                 state.session.title = String(firstUser.content || '').slice(0, 50);
             }
@@ -421,18 +473,32 @@ export async function openCharacterIterationStudio(avatar, deps) {
     async function loadSession(id) {
         const loaded = await sessionStore.load(id);
         if (!loaded) return;
+        const fallbackAt = Number(loaded.updatedAt) || Date.now();
+        const loadedMessages = Array.isArray(loaded.messages) ? loaded.messages : [];
         state.session = {
             ...loaded,
-            surfaceState: { historyOpen: false, autoApply: false, ...(loaded.surfaceState || {}) },
+            surfaceState: {
+                historyOpen: false,
+                autoApply: false,
+                isFinalized: false,
+                finalizeSummary: '',
+                ...(loaded.surfaceState || {}),
+            },
+            messages: loadedMessages.map(m => normalizeMessageShape(m, fallbackAt)),
+            pendingEdits: Array.isArray(loaded.pendingEdits) ? loaded.pendingEdits.slice() : [],
         };
         state.session.surfaceState.autoApply = !!state.session.surfaceState.autoApply;
-        state.pendingEdits = [];
+        state.pendingEdits = state.session.pendingEdits.slice();
+        // Re-read live so a parallel character edit doesn't leave the
+        // popup with stale state when the user reopens an older session.
+        await ensureLive(true);
         await render();
     }
 
     async function startNewSession() {
         state.session = createNewSession();
         state.pendingEdits = [];
+        await ensureLive(true);
         await sessionStore.save(state.session);
         await render();
     }
@@ -639,23 +705,123 @@ export async function openCharacterIterationStudio(avatar, deps) {
     //     DOMPurify, so embedding via `innerHTML` is XSS-safe
     //   - user / assistant / system messages get distinct CSS classes
     //     for visual distinction (alignment, background, etc.)
+    //
+    // Each assistant message also surfaces a collapsible details block
+    // listing the round's tool calls + edit cards, plus per-message
+    // Regenerate (on non-last assistant) and Rollback (on applied,
+    // not-yet-rolled-back) buttons.
     // ──────────────────────────────────────────────────────────────────
-    function renderMessage(message) {
-        const role = String(message?.role || 'user');
-        const content = message?.content || '';
+    function formatTime(ts) {
+        try {
+            const d = new Date(Number(ts) || Date.now());
+            return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        } catch { return ''; }
+    }
+
+    function renderToolCallChip(tc) {
+        const name = String(tc?.name || '');
+        const label = TOOL_DISPLAY[name] || name || t('(tool)');
+        let argsText;
+        try { argsText = JSON.stringify(tc?.args ?? {}, null, 2); } catch { argsText = String(tc?.args ?? ''); }
+        return `
+            <div class="cea_charit_msg_toolcall">
+                <div class="cea_charit_msg_toolcall_name">${escapeHtml(label)}</div>
+                <pre class="cea_charit_msg_toolcall_args">${escapeHtml(argsText)}</pre>
+            </div>`;
+    }
+
+    function renderEditChip(edit) {
+        // Reuse the pending-card renderer so the per-message audit trail
+        // and the active pending block look visually identical.
+        return renderPendingEditCard(edit);
+    }
+
+    function resolveAppliedTargetLabel(appliedTarget) {
+        if (appliedTarget === 'character') return t('character');
+        return String(appliedTarget || t('character'));
+    }
+
+    function renderMessageCard(message, idx, allMessages) {
+        if (!message) return '';
+        const role = String(message.role || 'user');
+        const content = String(message.content || '');
         let bodyHtml;
         if (role === 'assistant') {
             // sanitized by DOMPurify inside renderMessageMarkdown
             bodyHtml = ITER_RENDER.renderMessageMarkdown(content);
         } else {
-            bodyHtml = escapeHtml(String(content)).replace(/\n/g, '<br>');
+            bodyHtml = escapeHtml(content).replace(/\n/g, '<br>');
         }
         const roleCls = role === 'user'
             ? 'cea_charit_msg_user'
             : role === 'assistant'
                 ? 'cea_charit_msg_assistant'
                 : 'cea_charit_msg_system';
-        return `<div class="cea_charit_msg ${roleCls}">${bodyHtml}</div>`;
+        const autoCls = message.auto ? ' cea_charit_msg_auto' : '';
+
+        const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
+        const edits = Array.isArray(message.edits) ? message.edits : [];
+        const hasTrail = toolCalls.length > 0 || edits.length > 0;
+        const applied = Boolean(message.appliedAt) && !message.rolledBackAt;
+        const rolledBack = Boolean(message.rolledBackAt);
+        const detailsOpen = hasTrail && !applied && !rolledBack;
+
+        let trailHtml = '';
+        if (hasTrail) {
+            const headerLabel = tf('Tools and edits this round (${0})', String(toolCalls.length + edits.length));
+            const targetLabel = resolveAppliedTargetLabel(message.appliedTarget);
+            const statusHtml = rolledBack
+                ? `<span class="cea_charit_msg_rolled_back">${escapeHtml(tf('Rolled back at ${0}', formatTime(message.rolledBackAt)))}</span>`
+                : (applied
+                    ? `
+                        <span class="cea_charit_msg_applied">${escapeHtml(tf('✓ Applied to ${0} at ${1}', targetLabel, formatTime(message.appliedAt)))}</span>
+                        <button class="menu_button menu_button_small" data-cea-charit-custom-action="rollback-batch" data-cea-charit-msg-id="${escapeHtml(message.id || '')}">
+                            ${escapeHtml(t('Rollback'))}
+                        </button>
+                    `
+                    : '');
+
+            const toolsHtml = toolCalls.map(renderToolCallChip).join('');
+            const editsHtml = edits.map(renderEditChip).join('');
+
+            trailHtml = `
+                <details class="cea_charit_msg_trail" ${detailsOpen ? 'open' : ''}>
+                    <summary>${escapeHtml(headerLabel)}</summary>
+                    <div class="cea_charit_msg_trail_body">
+                        ${toolsHtml}
+                        ${editsHtml}
+                    </div>
+                    ${statusHtml ? `<div class="cea_charit_msg_trail_status">${statusHtml}</div>` : ''}
+                </details>
+            `;
+        }
+
+        // Regenerate is per-assistant-message, only when it's not the
+        // current tail (otherwise just hit Send again). Skip auto-continue
+        // synthetic assistants; their prompt was synthesized so regen
+        // would just truncate to the prior human turn anyway.
+        const isLastAssistant = (() => {
+            if (role !== 'assistant') return false;
+            for (let j = (allMessages?.length || 0) - 1; j > idx; j--) {
+                if (allMessages[j]?.role === 'assistant') return false;
+            }
+            return true;
+        })();
+        const showRegenerate = role === 'assistant' && !isLastAssistant && !message.auto;
+        const actionsHtml = showRegenerate
+            ? `
+                <div class="cea_charit_msg_actions">
+                    <button class="menu_button menu_button_small" data-cea-charit-custom-action="regenerate" data-cea-charit-msg-id="${escapeHtml(message.id || '')}">
+                        ${escapeHtml(t('Regenerate'))}
+                    </button>
+                </div>`
+            : '';
+
+        return `<div class="cea_charit_msg ${roleCls}${autoCls}" data-cea-charit-msg-id="${escapeHtml(message.id || '')}">
+            ${bodyHtml}
+            ${trailHtml}
+            ${actionsHtml}
+        </div>`;
     }
 
     function renderHistoryItem(meta) {
@@ -702,10 +868,18 @@ export async function openCharacterIterationStudio(avatar, deps) {
             || `<div class="cea_charit_history_empty">${escapeHtml(t('No saved sessions'))}</div>`;
         $root.find('[data-cea-charit-history-items]').html(historyHtml);
 
-        // Messages
-        const messagesHtml = (state.session.messages || []).map(renderMessage).join('');
+        // Messages — pass index + full array so renderMessageCard can
+        // decide whether to render Regenerate (only on non-last assistant
+        // turns).
+        const allMsgs = state.session.messages || [];
+        const messagesHtml = allMsgs.map((m, i) => renderMessageCard(m, i, allMsgs)).join('');
         const $msgs = $root.find('[data-cea-charit-messages]');
-        $msgs.html(messagesHtml);
+        // Loading bubble: append (don't overwrite) so the just-finished
+        // user turn stays visible while the LLM call is in flight.
+        const loadingHtml = state.isBusy
+            ? `<div class="cea_charit_msg cea_charit_msg_assistant cea_charit_msg_loading"><i class="fa-solid fa-spinner fa-spin"></i> ${escapeHtml(t('AI is thinking...'))}</div>`
+            : '';
+        $msgs.html(messagesHtml + loadingHtml);
         // Auto-scroll to bottom after each render so newly-appended
         // user / assistant messages are visible without manual scroll.
         try {
@@ -715,16 +889,19 @@ export async function openCharacterIterationStudio(avatar, deps) {
             }
         } catch { /* DOM not attached (test) */ }
 
-        // Pending edits
+        // Pending edits — single Apply button per spec §3.4. The label
+        // resolves to the character display name. One handler ('apply')
+        // commits to the character.
         const $pending = $root.find('[data-cea-charit-pending]');
         if (state.pendingEdits.length > 0) {
             const cardsHtml = state.pendingEdits.map(renderPendingEditCard).join('');
+            const applyLabel = tf('Apply to ${0}', getApplyScopeLabel());
             $pending.html(`
                 <div class="cea_charit_pending_title">${escapeHtml(t('Pending changes'))}</div>
                 ${cardsHtml}
                 <div class="cea_charit_pending_actions">
-                    <button class="menu_button" data-cea-charit-action="apply-pending">${escapeHtml(t('Apply'))}</button>
-                    <button class="menu_button" data-cea-charit-action="reject-pending">${escapeHtml(t('Reject'))}</button>
+                    <button class="menu_button luker-iter-pending-apply" data-cea-charit-action="apply-pending">${escapeHtml(applyLabel)}</button>
+                    <button class="menu_button menu_button_small" data-cea-charit-action="reject-pending">${escapeHtml(t('Reject'))}</button>
                 </div>
             `).show().attr('hidden', null);
         } else {
@@ -774,7 +951,16 @@ export async function openCharacterIterationStudio(avatar, deps) {
 - Character card fields (name, description, personality, scenario, first_mes, mes_example).
 - Lorebook entries (each identified by a numeric uid).
 - Lorebook metadata (bookName etc.).
-Use the cea_* tools to propose each edit. Each edit becomes a reviewable change the user can apply or reject.`;
+Use the cea_* tools to propose each edit. Each edit becomes a reviewable change the user can apply or reject.
+
+Edit scope:
+- Match the user's edit scope. If they ask for a small adjustment ("punchier", "tighten", "5% shorter", "fix this line"), change only what that asks for; leave everything else byte-identical.
+- Do not delete, restructure, or rewrite fields or lorebook entries the user did not name. When existing content already covers a topic the user just refined, keep its surrounding text and edit in place.
+- Only rewrite broadly when the user explicitly asks for a rewrite / overhaul / redesign.
+
+To drive the multi-round loop:
+- Call ${CONTROL_TOOL_NAMES.continue} when more iteration is genuinely needed; the popup will fire one more round after the user has seen this round's output.
+- Call ${CONTROL_TOOL_NAMES.finalize} with a concise summary when the work is complete. The popup will stop auto-continuing after this call.`;
     }
 
     function buildTaskMessages(systemPrompt, userText) {
@@ -806,11 +992,58 @@ Use the cea_* tools to propose each edit. Each edit becomes a reviewable change 
         };
     }
 
-    async function runIterationTurn() {
+    /**
+     * Build the catalog the runner advertises to the LLM. CEA's static
+     * `TOOL_DEFS` already covers card / lorebook edits; we splice the two
+     * popup-side control tools (continue / finalize) alongside. The
+     * runner's `isControlCall` predicate routes them to onControlCall so
+     * they never reach `normalizeToolCallToEdit`.
+     */
+    function buildToolCatalog() {
+        return [...TOOL_DEFS, ...CONTROL_TOOL_DEFS];
+    }
+
+    /**
+     * Resolve the apply scope label. CEA char-iter is character-only by
+     * design — the scope label is always the character display name
+     * (which `state.live.card.name` carries). Fallback to the avatar
+     * filename, then a generic 'current character' so the user always
+     * sees something meaningful.
+     */
+    function getApplyScopeLabel() {
+        const cardName = String(state.live?.card?.name || '').trim();
+        if (cardName) return cardName;
+        if (avatar) return String(avatar);
+        return t('current character');
+    }
+
+    async function runIterationTurn({ autoContinueFromResult = null } = {}) {
         const ac = new AbortController();
         state.abortController = ac;
 
         await ensureLive(true);   // re-read so the next batch sees external edits
+
+        // Auto-continue prelude: synthesize a follow-up `(auto-continue)`
+        // user message marked `auto: true`. The synthesized prompt nudges
+        // the model toward iteration vs. echoing the human user text —
+        // re-pushing the original prompt verbatim every round causes
+        // quadratic token growth and confuses the conversation history.
+        if (autoContinueFromResult) {
+            const noteLines = [
+                'Continue with the next iteration step.',
+            ];
+            if (autoContinueFromResult?.continueNote) {
+                noteLines.push(`Prior note: ${String(autoContinueFromResult.continueNote)}`);
+            }
+            noteLines.push(`Call ${CONTROL_TOOL_NAMES.finalize} once the request is fully addressed.`);
+            state.session.messages.push({
+                id: makeMessageId(),
+                role: 'user',
+                content: noteLines.join('\n'),
+                at: Date.now(),
+                auto: true,
+            });
+        }
 
         const settings = getSettings();
         const presetOptions = typeof getRequestPresetOptions === 'function'
@@ -822,6 +1055,18 @@ Use the cea_* tools to propose each edit. Each edit becomes a reviewable change 
         const systemPrompt = buildSystemPrompt();
         const taskMessages = buildTaskMessages(systemPrompt, '');
 
+        // Per-round callback bookkeeping. The runner fires onAssistantText
+        // once and onToolCall once per non-control call in array order.
+        // Control tools (continue / finalize) route to onControlCall via
+        // the isControlCall predicate so they never pollute the edit-tool
+        // list.
+        let firstAssistantText = '';
+        const collectedToolCalls = [];
+        let wantsAutoContinue = false;
+        let continueNote = '';
+        let sawFinalize = false;
+        let finalizeSummary = '';
+
         const result = await ITER_RUNNER.requestToolCallsWithRetry(
             context,
             { useStreamingTransport: Boolean(settings?.useStreamingTransport), toolCallRetryMax: settings?.toolCallRetryMax, rpmLimit: settings?.rpmLimit },
@@ -830,42 +1075,118 @@ Use the cea_* tools to propose each edit. Each edit becomes a reviewable change 
                 runtimeWorldInfo: null,
                 apiPresetName,
                 llmPresetName,
-                tools: TOOL_DEFS,
+                tools: buildToolCatalog(),
                 abortSignal: ac.signal,
                 includeAssistantText: true,
                 allowNoToolCalls: true,
+                isControlCall: isCeaCharControlCall,
+                onAssistantText: (text) => {
+                    firstAssistantText = String(text || '');
+                },
+                onToolCall: (call) => {
+                    collectedToolCalls.push(call);
+                },
+                onControlCall: (call) => {
+                    const name = String(call?.name || '');
+                    if (name === CONTROL_TOOL_NAMES.continue) {
+                        // Finalize is sticky: if the model emits both controls
+                        // in one turn (continue, finalize OR finalize, continue)
+                        // the iteration ends. Order of call arrival should not
+                        // change the outcome.
+                        if (!sawFinalize) {
+                            wantsAutoContinue = true;
+                            continueNote = String(call?.args?.note || '');
+                        }
+                    } else if (name === CONTROL_TOOL_NAMES.finalize) {
+                        sawFinalize = true;
+                        wantsAutoContinue = false;
+                        finalizeSummary = String(call?.args?.summary || '');
+                    }
+                },
             },
         );
 
-        const toolCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
-        const assistantText = String(result?.assistantText || '').trim();
+        // Prefer `collectedToolCalls` — populated by `onToolCall`, which
+        // the runner only fires for non-control calls. When the per-event
+        // callbacks didn't land (e.g. an older runner version), fall back
+        // to `result.toolCalls` but filter out control calls explicitly so
+        // they never leak into the persisted `assistantMsg.toolCalls`.
+        const editToolCalls = collectedToolCalls.length > 0
+            ? collectedToolCalls
+            : (Array.isArray(result?.toolCalls)
+                ? result.toolCalls.filter(c => !isCeaCharControlCall(c))
+                : []);
+        const assistantText = firstAssistantText.trim();
 
         // Normalize tool calls → edits, accumulating per-call output.
         const edits = [];
-        for (const call of toolCalls) {
-            const normalized = await normalizeToolCallToEdit(
-                wrapToolCallForNormalize(call),
-                { live: state.live },
-            );
-            if (Array.isArray(normalized)) {
-                edits.push(...normalized);
+        for (const call of editToolCalls) {
+            try {
+                const normalized = await normalizeToolCallToEdit(
+                    wrapToolCallForNormalize(call),
+                    { live: state.live },
+                );
+                if (Array.isArray(normalized)) {
+                    edits.push(...normalized);
+                }
+                // null (malformed JSON) or empty array → skip silently
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] normalizeToolCallToEdit failed for ${String(call?.name || '')}`, err);
+                state.session.messages.push({
+                    id: makeMessageId(),
+                    role: 'system',
+                    content: tf('Edit error: ${0}', String(err?.message || err)),
+                    at: Date.now(),
+                });
             }
-            // null (malformed JSON) or empty array → skip silently
         }
-        state.pendingEdits = edits;
 
-        // Push assistant message. If the model returned text, use it; if
-        // not but produced tool calls, synthesize a brief stand-in so the
-        // chat doesn't have empty bubbles between user inputs.
-        if (assistantText) {
-            state.session.messages.push({ role: 'assistant', content: assistantText });
-        } else if (toolCalls.length > 0) {
-            const names = toolCalls.map(c => TOOL_DISPLAY[String(c?.name || '')] || String(c?.name || '')).join(', ');
-            state.session.messages.push({
-                role: 'assistant',
-                content: t('Suggested edits: ') + names,
-            });
+        // Persist finalize state on surfaceState so popup close / reload
+        // retains it.
+        if (sawFinalize) {
+            state.session.surfaceState = state.session.surfaceState || {};
+            state.session.surfaceState.isFinalized = true;
+            state.session.surfaceState.finalizeSummary = finalizeSummary;
         }
+
+        // Stage the assistant message with the full per-round audit trail.
+        // Falls back to a synthesized summary when the model emitted tool
+        // calls without text. The toolCalls + edits + appliedAt fields
+        // drive renderMessageCard's collapsible details block.
+        let content = assistantText;
+        if (!content && editToolCalls.length > 0) {
+            const names = editToolCalls
+                .map(c => TOOL_DISPLAY[String(c?.name || '')] || String(c?.name || ''))
+                .filter(Boolean)
+                .join(', ');
+            content = tf('Suggested actions: ${0}', names);
+        }
+        if (!content && (wantsAutoContinue || finalizeSummary)) {
+            content = finalizeSummary || t('Continuing...');
+        }
+        const assistantMsg = {
+            id: makeMessageId(),
+            role: 'assistant',
+            content: content || '',
+            at: Date.now(),
+        };
+        if (editToolCalls.length > 0) {
+            assistantMsg.toolCalls = editToolCalls.map(tc => ({
+                id: String(tc?.id || ''),
+                name: String(tc?.name || ''),
+                args: tc?.args ?? {},
+            }));
+        }
+        if (edits.length > 0) {
+            assistantMsg.edits = edits.slice();
+        }
+        state.session.messages.push(assistantMsg);
+
+        // Replace pendingEdits with this round's batch. We don't append:
+        // staging is per-round so the user can Apply or Discard cleanly
+        // before the next AI request fires.
+        state.pendingEdits = edits;
 
         // Mobile workspace: if the user was on the Preview tab, bump the
         // chat-tab badge so they know new assistant content arrived without
@@ -873,18 +1194,29 @@ Use the cea_* tools to propose each edit. Each edit becomes a reviewable change 
         bumpChatBadge();
 
         // Composer-row auto-apply: when enabled AND this turn produced
-        // edits, apply immediately. Errors land via applyPendingEdits's
-        // own try/catch (which currently doesn't push a system note — CEA
-        // char keeps the rejection path silent, mirroring its manual Apply).
+        // edits AND we are not finalized, apply immediately. Errors land
+        // via applyPendingEdits's own try/catch.
         const autoApply = Boolean(state.session.surfaceState?.autoApply);
-        if (autoApply && state.pendingEdits.length > 0) {
+        if (autoApply && state.pendingEdits.length > 0 && !state.session.surfaceState?.isFinalized) {
             try {
-                await applyPendingEdits();
+                await applyPendingEdits({ skipRender: true });
             } catch (err) {
                 // eslint-disable-next-line no-console
                 console.warn(`[${MODULE}] auto-apply failed`, err);
             }
         }
+
+        return {
+            wantsAutoContinue,
+            executionResult: {
+                assistantText,
+                edits,
+                editToolCalls,
+                continueNote,
+                finalized: Boolean(state.session.surfaceState?.isFinalized),
+                finalizeSummary: String(state.session.surfaceState?.finalizeSummary || ''),
+            },
+        };
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -893,18 +1225,156 @@ Use the cea_* tools to propose each edit. Each edit becomes a reviewable change 
     // do NOT surface a conflict UI for CEA Character (edits are
     // sequential, no concurrent writer): just commit `newLive` and
     // drop any conflicting / already-done edits silently.
+    //
+    // `state.live` is snapshotted before applyEdits so a commit failure
+    // restores the pre-apply value — otherwise the preview would lie
+    // about what's on disk until the next ensureLive() reload.
+    //
+    // Scope label is the character's display name (derived via
+    // getApplyScopeLabel) — CEA char-iter is character-only by design.
+    // On success we toast the user and mark the most recent unapplied
+    // assistant message so renderMessageCard can show the Applied label
+    // and a Rollback button.
     // ──────────────────────────────────────────────────────────────────
-    async function applyPendingEdits() {
-        if (state.pendingEdits.length === 0) return;
-        const result = applyEdits(state.pendingEdits, state.live);
-        state.live = result.newLive;
+    async function applyPendingEdits({ skipRender = false } = {}) {
+        if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) return;
+        const liveSnapshot = state.live;
+        try {
+            const result = applyEdits(state.pendingEdits, state.live);
+            state.live = result?.newLive ?? state.live;
+            await commitLiveToCharacter();
+        } catch (err) {
+            state.live = liveSnapshot;
+            // eslint-disable-next-line no-console
+            console.warn(`[${MODULE}] applyPendingEdits failed`, err);
+            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* toastr may be unavailable in tests */ }
+            state.session.messages.push({
+                id: makeMessageId(),
+                role: 'system',
+                content: tf('Failed to save character: ${0}', String(err?.message || err)),
+                at: Date.now(),
+            });
+            await persistSession();
+            if (!skipRender) await render();
+            return;
+        }
+
+        const scopeLabel = getApplyScopeLabel();
+        try { toastr.success(tf('Applied to ${0}', scopeLabel)); } catch { /* ignore */ }
+
+        // Mark the most recent unapplied assistant message that owns these
+        // edits. We scan back from the end because the just-rendered turn
+        // is the typical target.
+        const messages = state.session.messages || [];
+        for (let i = messages.length - 1; i >= 0; i--) {
+            const m = messages[i];
+            if (m.role === 'assistant' && Array.isArray(m.edits) && m.edits.length > 0 && !m.appliedAt) {
+                m.appliedAt = Date.now();
+                m.appliedTarget = 'character';
+                break;
+            }
+        }
+
         state.pendingEdits = [];
-        await commitLiveToCharacter();
-        await render();
+        await persistSession();
+        if (!skipRender) await render();
     }
 
     async function rejectPendingEdits() {
         state.pendingEdits = [];
+        await persistSession();
+        await render();
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Per-message actions.
+    //
+    // regenerateFromMessage(msgId): truncate the chat back to the user
+    // turn that prompted this assistant message, drop staged pendingEdits,
+    // refill the textarea with the original prompt, and re-fire send.
+    //
+    // rollbackBatch(msgId): inverse-apply each edit in the message's
+    // batch against state.live (right-to-left), commit the result, mark
+    // the message rolledBackAt. Builds inverses up-front so an
+    // unsupported op fails BEFORE we partial-apply anything.
+    // ──────────────────────────────────────────────────────────────────
+    async function regenerateFromMessage(messageId) {
+        if (state.isBusy) return;
+        const messages = state.session.messages || [];
+        const idx = messages.findIndex(m => m && m.id === messageId);
+        if (idx < 0) return;
+        // Walk back to the user message that prompted this assistant turn.
+        // Skip auto-continue synthetic users (`m.auto === true`) so the
+        // resend refills the textarea with the human's original text.
+        let userIdx = -1;
+        for (let i = idx - 1; i >= 0; i--) {
+            const m = messages[i];
+            if (m && m.role === 'user' && !m.auto) { userIdx = i; break; }
+        }
+        if (userIdx < 0) return;
+        const userText = String(messages[userIdx].content || '');
+        // Truncate before the user message; the resend will push it again.
+        state.session.messages = messages.slice(0, userIdx);
+        state.pendingEdits = [];
+        // Drop finalize state — a regenerate is a "rewind" so surface state
+        // should match the pre-finalize point.
+        if (state.session.surfaceState) {
+            state.session.surfaceState.isFinalized = false;
+            state.session.surfaceState.finalizeSummary = '';
+        }
+        await persistSession();
+        await render();
+        const $textarea = $root.find('[data-cea-charit-input]');
+        $textarea.val(userText);
+        await handleSendMessage();
+    }
+
+    async function rollbackBatch(messageId) {
+        if (state.isBusy) return;
+        const msg = (state.session.messages || []).find(m => m && m.id === messageId);
+        if (!msg) return;
+        if (!msg.appliedAt || msg.rolledBackAt) return;
+        if (!Array.isArray(msg.edits) || msg.edits.length === 0) return;
+        // eslint-disable-next-line no-alert
+        if (!confirm(t('Roll back this batch? The changes will be reversed in the target.'))) return;
+
+        // Re-read live so a parallel edit doesn't blow the rollback away.
+        await ensureLive(true);
+        let working = state.live;
+        // Build inverses up-front so an unsupported op fails BEFORE we
+        // partial-apply anything. Right-to-left handles dependent edits.
+        const inverses = [];
+        for (const edit of msg.edits.slice().reverse()) {
+            try {
+                inverses.push(inverseEdit(edit));
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] inverseEdit failed`, edit, err);
+                try { toastr.error(tf('Cannot rollback edit type: ${0}', String(edit?.op || 'unknown'))); } catch { /* ignore */ }
+                return;
+            }
+        }
+        try {
+            const result = applyEdits(inverses, working);
+            working = result?.newLive ?? working;
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(`[${MODULE}] applyEdits(inverses) failed`, err);
+            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* ignore */ }
+            return;
+        }
+        state.live = working;
+        try {
+            await commitLiveToCharacter();
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(`[${MODULE}] commit(rollback) failed`, err);
+            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* ignore */ }
+            return;
+        }
+        msg.rolledBackAt = Date.now();
+        await persistSession();
+        try { toastr.success(t('Rolled back')); } catch { /* ignore */ }
         await render();
     }
 
@@ -912,6 +1382,21 @@ Use the cea_* tools to propose each edit. Each edit becomes a reviewable change 
     // Send-message handler. Q6: user message is pushed AND rendered
     // BEFORE the await so the user sees their own input before the LLM
     // wait spinner starts. Errors surface as system messages.
+    //
+    // Multi-round auto-continue: when the AI emits
+    // `luker_cea_charit_continue_iteration`, runIterationTurn returns
+    // `wantsAutoContinue: true` and the loop fires another round (after
+    // rendering the previous round so the user sees progressive output).
+    // The ONLY exits are:
+    //   1. The model called `luker_cea_charit_finalize_iteration`.
+    //   2. The model did neither (e.g. produced edits + stopped).
+    //   3. The user clicked Stop (abortController fires; isAbortError
+    //      catches the resulting error in the catch block).
+    //   4. The model is staging edits and the user hasn't applied them yet
+    //      (pendingEdits non-empty halts the auto-continue so the user gets
+    //      to apply before the next round mutates `live`).
+    // There is NO hard round cap — runaway loops are the user's problem
+    // and a single Stop click ends them.
     // ──────────────────────────────────────────────────────────────────
     async function handleSendMessage() {
         if (state.isBusy) {
@@ -919,23 +1404,42 @@ Use the cea_* tools to propose each edit. Each edit becomes a reviewable change 
             try { state.abortController?.abort(); } catch { /* ignore */ }
             return;
         }
+        if (state.session.surfaceState?.isFinalized) return;
         const $textarea = $root.find('[data-cea-charit-input]');
         const text = String($textarea.val() || '').trim();
         if (!text) return;
         $textarea.val('');
-        state.session.messages.push({ role: 'user', content: text });
+        state.session.messages.push({
+            id: makeMessageId(),
+            role: 'user',
+            content: text,
+            at: Date.now(),
+        });
         state.isBusy = true;
         await persistSession();
         await render();   // Q6: user message visible before LLM wait
         try {
-            await runIterationTurn();
+            let turn = await runIterationTurn();
+            while (turn?.wantsAutoContinue
+                && state.pendingEdits.length === 0
+                && !state.session.surfaceState?.isFinalized) {
+                await persistSession();
+                await render();   // progressive: prior round visible before next
+                if (state.abortController?.signal?.aborted) break;
+                turn = await runIterationTurn({ autoContinueFromResult: turn.executionResult });
+            }
         } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn(`[${MODULE}]`, err);
-            state.session.messages.push({
-                role: 'system',
-                content: t('Error: ') + String(err?.message || err),
-            });
+            // Stop button → don't push an error bubble; user knows they cancelled.
+            if (!isAbortError(err, state.abortController?.signal)) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}]`, err);
+                state.session.messages.push({
+                    id: makeMessageId(),
+                    role: 'system',
+                    content: tf('Error: ${0}', String(err?.message || err)),
+                    at: Date.now(),
+                });
+            }
         } finally {
             state.isBusy = false;
             state.abortController = null;
@@ -1021,13 +1525,23 @@ Use the cea_* tools to propose each edit. Each edit becomes a reviewable change 
         e.preventDefault();
         await rejectPendingEdits();
     });
+
+    // Session-switch handlers — abort in-flight LLM + reset busy flag
+    // before the swap so a stale response can't land in the newly-loaded
+    // session.
     $root.on('click.ceaCharIt', '[data-cea-charit-action="new-session"]', async (e) => {
         e.preventDefault();
+        try { state.abortController?.abort(); } catch { /* ignore */ }
+        state.isBusy = false;
+        state.abortController = null;
         await startNewSession();
     });
     // Q9: clear-history lives inside the <details>; same delegation root.
     $root.on('click.ceaCharIt', '[data-cea-charit-action="clear-history"]', async (e) => {
         e.preventDefault();
+        try { state.abortController?.abort(); } catch { /* ignore */ }
+        state.isBusy = false;
+        state.abortController = null;
         await clearAllHistory();
     });
     $root.on('click.ceaCharIt', '[data-cea-charit-action="load-session"]', async (e) => {
@@ -1037,6 +1551,9 @@ Use the cea_* tools to propose each edit. Each edit becomes a reviewable change 
         if (target && target.matches?.('[data-cea-charit-action="delete-session"]')) return;
         const id = String(e.currentTarget?.dataset?.ceaCharitId || '');
         if (id && id !== state.session.id) {
+            try { state.abortController?.abort(); } catch { /* ignore */ }
+            state.isBusy = false;
+            state.abortController = null;
             await loadSession(id);
         }
     });
@@ -1045,12 +1562,36 @@ Use the cea_* tools to propose each edit. Each edit becomes a reviewable change 
         e.stopPropagation();
         const id = String(e.currentTarget?.dataset?.ceaCharitId || '');
         if (!id) return;
+        // Deleting the active session also tears down any in-flight LLM
+        // call so the response can't land in the recreated next session.
+        if (id === state.session?.id) {
+            try { state.abortController?.abort(); } catch { /* ignore */ }
+            state.isBusy = false;
+            state.abortController = null;
+        }
         await sessionStore.delete(id);
         if (state.session.id === id) {
             await startNewSession();
         } else {
             await render();
         }
+    });
+
+    // Per-message custom actions (Regenerate / Rollback). Use
+    // `data-cea-charit-custom-action` rather than `data-cea-charit-action`
+    // so legacy delegation selectors can't accidentally fire on these —
+    // matches the iter-studio shell gotcha pattern.
+    $root.on('click.ceaCharIt', '[data-cea-charit-custom-action="regenerate"]', async (e) => {
+        e.preventDefault();
+        const msgId = String(e.currentTarget?.dataset?.ceaCharitMsgId || '');
+        if (!msgId) return;
+        await regenerateFromMessage(msgId);
+    });
+    $root.on('click.ceaCharIt', '[data-cea-charit-custom-action="rollback-batch"]', async (e) => {
+        e.preventDefault();
+        const msgId = String(e.currentTarget?.dataset?.ceaCharitMsgId || '');
+        if (!msgId) return;
+        await rollbackBatch(msgId);
     });
 
     // ── Workspace events ──────────────────────────────────────────────
@@ -1074,7 +1615,7 @@ Use the cea_* tools to propose each edit. Each edit becomes a reviewable change 
             autoApply: checked,
         };
         await persistSession();
-        if (checked && state.pendingEdits.length > 0) {
+        if (checked && state.pendingEdits.length > 0 && !state.session.surfaceState?.isFinalized) {
             try {
                 await applyPendingEdits();
             } catch (err) {
@@ -1115,18 +1656,26 @@ Use the cea_* tools to propose each edit. Each edit becomes a reviewable change 
     // Bind the column resizer. Returns a no-op when grid/splitter are
     // missing (e.g. during teardown), so the unbind call below is safe
     // regardless of mount state.
-    const unbindResizer = bindIterWorkspaceResizer($root[0]);
-
-    await render();
-
-    // Block until the user dismisses the popup. Persist one final time
-    // so any in-flight composer / surfaceState changes survive close.
+    //
+    // Both the bind and the initial render are inside the try block so a
+    // throw at either step still hits the finally cleanup (no leaked
+    // resizer / pending abortController / unpersisted session).
+    let unbindResizer = () => {};
     try {
+        unbindResizer = bindIterWorkspaceResizer($root[0]);
+        await render();
+        // Block until the user dismisses the popup. The single try/finally
+        // ensures every teardown step (resizer unbind, zoom-overlay unbind,
+        // in-flight abort, final persist) runs even if rendering throws or
+        // the popup is force-closed; ordering puts persistSession LAST so
+        // the abort flag is cleared before disk write.
         await popupPromise;
     } finally {
         try { unbindResizer(); } catch { /* ignore */ }
+        try { zoomOverlayUnbind?.(); } catch { /* ignore */ }
+        try { state.abortController?.abort(); } catch { /* ignore */ }
+        state.isBusy = false;
+        state.abortController = null;
+        try { await persistSession(); } catch { /* ignore */ }
     }
-    try { state.abortController?.abort(); } catch { /* ignore */ }
-    try { zoomOverlayUnbind?.(); } catch { /* ignore */ }
-    await persistSession();
 }

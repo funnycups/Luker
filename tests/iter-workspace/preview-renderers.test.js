@@ -526,4 +526,38 @@ describe('renderCeaEditorPreviewPane', () => {
         const html = _testOnly_renderCeaEditorPreviewPane(null, null);
         expect(html).toMatch(/no world book|未绑定|未綁定/i);
     });
+
+    test('Array-shaped entries (旧-7): upsert_entry on existing uid renders as pending-change, not draft', () => {
+        // Modern world-info shape: `entries` is an Array, each entry carries
+        // its own `uid`. The fix builds a uid-keyed view regardless of source
+        // shape so existsInSnapshot resolves correctly. Without the fix,
+        // every upsert-by-uid against an Array landed in the draft row at
+        // the top instead of marking the existing row pending-change.
+        const liveWi = {
+            name: 'Eldoria',
+            entries: [
+                { uid: 1, comment: 'Forest Grove', content: 'Old content', key: ['forest'] },
+                { uid: 2, comment: 'Lake', content: 'Lake content', key: ['lake'] },
+            ],
+        };
+        const pendingApproval = {
+            messageId: 'm1',
+            operations: [
+                { op: 'upsert_entry', payload: { uid: 1, content: 'New forest content' } },
+            ],
+        };
+        const html = _testOnly_renderCeaEditorPreviewPane(liveWi, pendingApproval, (s) => s);
+        // Existing uid=1 row gets pending-change.
+        expect(html).toContain('pending-change');
+        // ...but NOT as a draft (i.e. no additional draft row at top).
+        // We look for the draft-row badge text the renderer emits.
+        const draftMatches = html.match(/Draft \(not applied\)/g) || [];
+        // Existing-uid row's pending-change badge IS labeled "Draft (not applied)",
+        // so we expect exactly 1 match (the existing row), NOT 2 (which would
+        // indicate a phantom draft row at the top).
+        expect(draftMatches.length).toBe(1);
+        // Existing uid="1" should be present in the body — it didn't get
+        // re-emitted as a draft new entry.
+        expect(html).toMatch(/uid:\s*1|UID:\s*1|UID：\s*1/i);
+    });
 });

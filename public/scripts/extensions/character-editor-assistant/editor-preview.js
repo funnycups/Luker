@@ -53,6 +53,14 @@ export function renderCeaEditorPreviewPane(worldInfo, pendingApproval, tFn) {
     const name = worldInfo.name || worldInfo.book_name || '';
     const entries = worldInfo.entries || {};
     const entryArray = Array.isArray(entries) ? entries.slice() : Object.values(entries);
+    // Build a uid-keyed view of existing entries so existsInSnapshot checks
+    // work whether the source was an Array (modern world-info shape) or
+    // an object map (legacy). Without this, Array-shaped entries always
+    // fell through the existsInSnapshot branch and rendered as drafts
+    // even when the AI was targeting an existing uid (旧-7).
+    const entriesObj = Array.isArray(entries)
+        ? Object.fromEntries(entries.map((e) => [String(e?.uid ?? e?.id ?? ''), e]))
+        : entries;
 
     // Identify pending entries by uid; treat anything without a matching uid
     // as a brand-new draft (rendered as a separate row at the top).
@@ -63,16 +71,17 @@ export function renderCeaEditorPreviewPane(worldInfo, pendingApproval, tFn) {
         const payload = op?.payload || op?.data || op?.args || {};
         const uid = payload?.uid;
         const key = uid == null ? null : String(uid);
-        const isCreate = op?.op === 'upsert_entry' || op?.op === 'create_entry' || op?.op === 'add_entry';
-        const entriesObj = !Array.isArray(entries) ? entries : null;
-        const existsInSnapshot = key != null && entriesObj && Object.prototype.hasOwnProperty.call(entriesObj, key);
+        const opName = String(op?.op || '');
+        const isCreate = opName === 'upsert_entry' || opName === 'create_entry' || opName === 'add_entry';
+        const existsInSnapshot = key != null && Object.prototype.hasOwnProperty.call(entriesObj, key);
         if (existsInSnapshot) {
             pendingByUid.set(key, op);
         } else if (isCreate || key != null) {
             // upsert/create on unknown uid → draft row at the top.
-            // delete/update on missing uid also shows up as a draft so the
-            // user sees the AI is referencing a non-existent entry.
-            pendingNewEntries.push(payload);
+            // delete/update on missing uid renders as a separate
+            // "referencing non-existent entry" row so the user can tell it
+            // apart from a legitimate new draft.
+            pendingNewEntries.push({ op: opName, payload, isCreate });
         }
     }
 
@@ -90,19 +99,42 @@ export function renderCeaEditorPreviewPane(worldInfo, pendingApproval, tFn) {
         const draftBadge = isPending
             ? `<span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(t('Draft (not applied)'))}</span>`
             : '';
-        return `<div class="${cls}"><div class="luker-iter-workspace-preview-row-head"><span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(tFormat('Entry UID: ${0}', uid))}</span><span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(tFormat('Position: ${0}', pos))}</span>${draftBadge}</div><div class="luker-iter-workspace-preview-row-body">${escapeHtmlLocal(tFormat('Keys: ${0}', keys))}<br>${content ? escapeHtmlLocal(content) : '<span class="muted">(empty)</span>'}</div></div>`;
-    }).join('');
+        return {
+            isPending,
+            html: `<div class="${cls}"><div class="luker-iter-workspace-preview-row-head"><span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(tFormat('Entry UID: ${0}', uid))}</span><span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(tFormat('Position: ${0}', pos))}</span>${draftBadge}</div><div class="luker-iter-workspace-preview-row-body">${escapeHtmlLocal(tFormat('Keys: ${0}', keys))}<br>${content ? escapeHtmlLocal(content) : '<span class="muted">(empty)</span>'}</div></div>`,
+        };
+    });
 
-    const newEntryRows = pendingNewEntries.map((payload) => {
+    // Pending-changed rows always render expanded (the user is reviewing
+    // those). Clean rows render the first N inline + collapse the rest into
+    // a <details> so a 500-entry book doesn't lay out 3000 DOM nodes upfront
+    // — closed <details> subtrees skip paint cost in modern browsers.
+    const VISIBLE_CLEAN_LIMIT = 50;
+    const pendingChangedHtml = entryRows.filter((r) => r.isPending).map((r) => r.html).join('');
+    const cleanRows = entryRows.filter((r) => !r.isPending);
+    const visibleClean = cleanRows.slice(0, VISIBLE_CLEAN_LIMIT);
+    const hiddenClean = cleanRows.slice(VISIBLE_CLEAN_LIMIT);
+    const visibleCleanHtml = visibleClean.map((r) => r.html).join('');
+    const hiddenCleanHtml = hiddenClean.length > 0
+        ? `<details class="luker-iter-workspace-preview-more"><summary>${escapeHtmlLocal(tFormat('Show ${0} more entries', String(hiddenClean.length)))}</summary>${hiddenClean.map((r) => r.html).join('')}</details>`
+        : '';
+
+    const newEntryRows = pendingNewEntries.map(({ op, payload, isCreate }) => {
         const keys = (Array.isArray(payload?.key) ? payload.key : (Array.isArray(payload?.keys) ? payload.keys : []))
             .slice(0, 3)
             .join(', ');
         const content = truncateForPreview(payload?.content || '', 200);
         const uidLabel = payload?.uid != null ? String(payload.uid) : t('(new)');
+        if (!isCreate) {
+            // Delete / update on missing uid — flag the misreference explicitly
+            // instead of rendering an empty "draft" that looks legitimate.
+            const opLabel = op || 'op';
+            return `<div class="luker-iter-workspace-preview-row pending-change"><div class="luker-iter-workspace-preview-row-head"><span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(tFormat('Entry UID: ${0}', uidLabel))}</span><span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(tFormat('${0} references missing entry', opLabel))}</span></div></div>`;
+        }
         return `<div class="luker-iter-workspace-preview-row pending-change"><div class="luker-iter-workspace-preview-row-head"><span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(tFormat('Entry UID: ${0}', uidLabel))}</span><span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(t('Draft (not applied)'))}</span></div><div class="luker-iter-workspace-preview-row-body">${escapeHtmlLocal(tFormat('Keys: ${0}', keys))}<br>${escapeHtmlLocal(content)}</div></div>`;
     }).join('');
 
-    const bodyRows = `${newEntryRows}${entryRows}`
+    const bodyRows = `${newEntryRows}${pendingChangedHtml}${visibleCleanHtml}${hiddenCleanHtml}`
         || `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('No entries yet.'))}</div>`;
 
     return `
