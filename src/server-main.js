@@ -343,6 +343,74 @@ app.use(webpackMiddleware);
 app.use(userCssMiddleware);
 app.use(express.static(path.join(serverDirectory, 'public'), {}));
 
+// Tokenizer libs and data — let the browser run tokenization directly instead
+// of going through /api/tokenizers/* for every count. Read-only static assets.
+app.use('/lib/tokenizers/web-tokenizers', express.static(
+    path.join(serverDirectory, 'node_modules/@agnai/web-tokenizers/lib'),
+    { maxAge: '7d', immutable: true },
+));
+app.use('/lib/tokenizers/js-tiktoken', express.static(
+    path.join(serverDirectory, 'node_modules/js-tiktoken/dist'),
+    { maxAge: '7d', immutable: true },
+));
+app.use('/tokenizers', express.static(
+    path.join(serverDirectory, 'src/tokenizers'),
+    { maxAge: '7d', immutable: true },
+));
+
+// js-tiktoken's chunk module does `import base64 from 'base64-js'` (bare specifier),
+// which browsers can't resolve without an import map or bundler. Synthesize a
+// single-file ESM that inlines base64-js as an IIFE shim. Computed once, cached
+// in memory, auto-updates when js-tiktoken / base64-js change on disk.
+let __tiktokenBundle = null;
+function getTiktokenBundle() {
+    if (__tiktokenBundle) return __tiktokenBundle;
+    const distDir = path.join(serverDirectory, 'node_modules/js-tiktoken/dist');
+    const chunkName = fs.readdirSync(distDir).find(f => f.startsWith('chunk-') && f.endsWith('.js'));
+    if (!chunkName) throw new Error('Could not locate js-tiktoken chunk file');
+    const base64js = fs.readFileSync(path.join(serverDirectory, 'node_modules/base64-js/index.js'), 'utf8');
+    let chunk = fs.readFileSync(path.join(distDir, chunkName), 'utf8');
+    const shim = `const base64 = (() => { const exports = {}; const module = { exports };\n${base64js}\nreturn module.exports; })();`;
+    chunk = chunk.replace(/^import base64 from 'base64-js';/m, shim);
+    __tiktokenBundle = chunk;
+    return __tiktokenBundle;
+}
+app.get('/lib/tokenizers/js-tiktoken-bundle.js', (_req, res) => {
+    try {
+        res.type('application/javascript')
+            .set('Cache-Control', 'public, max-age=604800, immutable')
+            .send(getTiktokenBundle());
+    } catch (err) {
+        console.error('Failed to synthesize js-tiktoken bundle:', err);
+        res.status(500).type('text/plain').send('// js-tiktoken bundle synthesis failed: ' + err.message);
+    }
+});
+
+// Same-origin proxy for tokenizer data files hosted on GitHub raw. Browsers
+// can't fetch those URLs directly (CORS); we proxy through. Server cached via
+// HTTP cache headers + getPathToTokenizer's disk cache.
+const REMOTE_TOKENIZERS = {
+    'qwen2.json.gz':     'https://github.com/SillyTavern/SillyTavern-Tokenizers/raw/main/qwen2.json.gz',
+    'command-r.json.gz': 'https://github.com/SillyTavern/SillyTavern-Tokenizers/raw/main/command-r.json.gz',
+    'command-a.json.gz': 'https://github.com/SillyTavern/SillyTavern-Tokenizers/raw/main/command-a.json.gz',
+    'nemo.json.gz':      'https://github.com/SillyTavern/SillyTavern-Tokenizers/raw/main/nemo.json.gz',
+    'deepseek.json.gz':  'https://github.com/SillyTavern/SillyTavern-Tokenizers/raw/main/deepseek.json.gz',
+};
+app.get('/tokenizers-remote/:file', async (req, res) => {
+    const url = REMOTE_TOKENIZERS[req.params.file];
+    if (!url) return res.status(404).end();
+    try {
+        const upstream = await fetch(url);
+        if (!upstream.ok) return res.status(502).type('text/plain').send(`upstream ${upstream.status}`);
+        const buf = Buffer.from(await upstream.arrayBuffer());
+        res.type('application/octet-stream')
+            .set('Cache-Control', 'public, max-age=604800, immutable')
+            .send(buf);
+    } catch (err) {
+        res.status(502).type('text/plain').send(err.message);
+    }
+});
+
 // Public API
 app.use('/api/users', usersPublicRouter);
 

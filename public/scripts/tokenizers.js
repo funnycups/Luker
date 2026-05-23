@@ -7,6 +7,7 @@ import { getStringHash } from './utils.js';
 import { kai_flags, kai_settings } from './kai-settings.js';
 import { textgen_types, textgenerationwebui_settings as textgen_settings, getTextGenServer, getTextGenModel } from './textgen-settings.js';
 import { getCurrentDreamGenModelTokenizer, getCurrentOpenRouterModelTokenizer, openRouterModels } from './textgen-models.js';
+import { clientCountTokens, hasClientTokenizer } from './client-tokenizers/index.js';
 export { BYTES_PER_TOKEN as CHARACTERS_PER_TOKEN_RATIO };
 
 export const BYTES_PER_TOKEN = 3.35;
@@ -441,6 +442,19 @@ function callTokenizer(type, str) {
  * @param {string} str String to tokenize.
  * @returns {Promise<number>} Token count.
  */
+// Maps the local tokenizer enum to model names used by client-tokenizers/index.js.
+// Sentencepiece families (LLAMA, MISTRAL, YI, GEMMA, JAMBA, NERD*) intentionally
+// omitted — they stay on HTTP pending a follow-up spec for sentencepiece-js.
+const TOKENIZER_TYPE_TO_CLIENT_MODEL = {
+    [tokenizers.LLAMA3]:    'llama3',
+    [tokenizers.CLAUDE]:    'claude',
+    [tokenizers.QWEN2]:     'qwen2',
+    [tokenizers.COMMAND_R]: 'command-r',
+    [tokenizers.COMMAND_A]: 'command-a',
+    [tokenizers.NEMO]:      'nemo',
+    [tokenizers.DEEPSEEK]:  'deepseek',
+};
+
 function callTokenizerAsync(type, str) {
     return new Promise(resolve => {
         if (type === tokenizers.NONE) {
@@ -451,23 +465,39 @@ function callTokenizerAsync(type, str) {
             return resolve(guesstimate(str));
         }
 
-        switch (type) {
-            case tokenizers.API_CURRENT:
-                return callTokenizerAsync(currentRemoteTokenizerAPI(), str).then(resolve);
-            case tokenizers.API_KOBOLD:
-                return countTokensFromKoboldAPI(str, resolve);
-            case tokenizers.API_TEXTGENERATIONWEBUI:
-                return countTokensFromTextgenAPI(str, resolve);
-            default: {
-                const endpointUrl = TOKENIZER_URLS[type]?.count;
-                if (!endpointUrl) {
-                    console.warn('Unknown tokenizer type', type);
-                    return resolve(apiFailureTokenCount(str));
+        const clientModel = TOKENIZER_TYPE_TO_CLIENT_MODEL[type];
+        if (clientModel && hasClientTokenizer(clientModel)) {
+            clientCountTokens(clientModel, { role: 'user', content: str }).then(count => {
+                if (typeof count === 'number' && Number.isFinite(count)) {
+                    return resolve(count);
                 }
-                return countTokensFromServer(endpointUrl, str, resolve);
-            }
+                // Adapter returned null — fall through to HTTP path
+                callServerTokenizer(type, str, resolve);
+            });
+            return;
         }
+
+        callServerTokenizer(type, str, resolve);
     });
+}
+
+function callServerTokenizer(type, str, resolve) {
+    switch (type) {
+        case tokenizers.API_CURRENT:
+            return callTokenizerAsync(currentRemoteTokenizerAPI(), str).then(resolve);
+        case tokenizers.API_KOBOLD:
+            return countTokensFromKoboldAPI(str, resolve);
+        case tokenizers.API_TEXTGENERATIONWEBUI:
+            return countTokensFromTextgenAPI(str, resolve);
+        default: {
+            const endpointUrl = TOKENIZER_URLS[type]?.count;
+            if (!endpointUrl) {
+                console.warn('Unknown tokenizer type', type);
+                return resolve(apiFailureTokenCount(str));
+            }
+            return countTokensFromServer(endpointUrl, str, resolve);
+        }
+    }
 }
 
 /**
@@ -919,41 +949,56 @@ async function getOpenAITokenCountsRawAsync(messages, model) {
     }
 
     if (uncachedMessages.length > 0) {
-        try {
-            const batchData = await jQuery.ajax({
-                async: true,
-                type: 'POST',
-                url: tokenizerBatchEndpoint,
-                data: JSON.stringify(uncachedMessages),
-                dataType: 'json',
-                contentType: 'application/json',
-            });
-
-            if (!Array.isArray(batchData?.token_counts) || batchData.token_counts.length !== uncachedMessages.length) {
-                throw new Error('Token batch response is malformed.');
-            }
-
+        const fillFromCounts = (counts) => {
             for (let i = 0; i < uncachedMessages.length; i++) {
-                const count = Number(batchData.token_counts[i]);
+                const count = Number(counts[i]);
                 rawCounts[uncachedIndices[i]] = count;
                 cacheObject[uncachedCacheKeys[i]] = count;
             }
-        } catch (error) {
-            console.warn('Failed to batch count OpenAI tokens, falling back to per-message requests.', error);
-            for (let i = 0; i < uncachedMessages.length; i++) {
-                const message = uncachedMessages[i];
-                const data = await jQuery.ajax({
+        };
+
+        let handled = false;
+        if (hasClientTokenizer(model)) {
+            const counts = await Promise.all(uncachedMessages.map(m => clientCountTokens(model, [m])));
+            if (counts.every(c => typeof c === 'number' && Number.isFinite(c))) {
+                fillFromCounts(counts);
+                handled = true;
+            }
+        }
+
+        if (!handled) {
+            try {
+                const batchData = await jQuery.ajax({
                     async: true,
                     type: 'POST',
-                    url: tokenizerEndpoint,
-                    data: JSON.stringify([message]),
+                    url: tokenizerBatchEndpoint,
+                    data: JSON.stringify(uncachedMessages),
                     dataType: 'json',
                     contentType: 'application/json',
                 });
 
-                const count = Number(data.token_count);
-                rawCounts[uncachedIndices[i]] = count;
-                cacheObject[uncachedCacheKeys[i]] = count;
+                if (!Array.isArray(batchData?.token_counts) || batchData.token_counts.length !== uncachedMessages.length) {
+                    throw new Error('Token batch response is malformed.');
+                }
+
+                fillFromCounts(batchData.token_counts);
+            } catch (error) {
+                console.warn('Failed to batch count OpenAI tokens, falling back to per-message requests.', error);
+                for (let i = 0; i < uncachedMessages.length; i++) {
+                    const message = uncachedMessages[i];
+                    const data = await jQuery.ajax({
+                        async: true,
+                        type: 'POST',
+                        url: tokenizerEndpoint,
+                        data: JSON.stringify([message]),
+                        dataType: 'json',
+                        contentType: 'application/json',
+                    });
+
+                    const count = Number(data.token_count);
+                    rawCounts[uncachedIndices[i]] = count;
+                    cacheObject[uncachedCacheKeys[i]] = count;
+                }
             }
         }
     }
