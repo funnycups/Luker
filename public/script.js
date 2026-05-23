@@ -11703,7 +11703,12 @@ export async function setVariable(name, value, options = {}) {
     if (!Number.isInteger(messageId) || messageId < 0 || messageId >= chat.length) {
         throw new Error(`[setVariable] floor ${floorOption} out of range (chat length ${chat.length})`);
     }
-    pushFloorVarOp(messageId, { op: 'setvar', key: name, value: String(value ?? '') });
+    const dot = name.indexOf('.');
+    /** @type {import('./scripts/variable-op-log/apply.js').VarOp} */
+    const op = dot >= 0
+        ? { op: 'setvar', key: name.slice(0, dot), path: name.slice(dot + 1), value: String(value ?? '') }
+        : { op: 'setvar', key: name, value: String(value ?? '') };
+    pushFloorVarOp(messageId, op);
     await saveChatConditional();
     return value;
 }

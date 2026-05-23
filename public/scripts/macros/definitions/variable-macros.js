@@ -56,6 +56,50 @@ export function registerVariableMacros() {
         },
     });
 
+    // {{pushvar::name::value}} -> '' (side-effect: push onto a JSON array)
+    // Dotted names are supported: {{pushvar::roster.alice.inv::sword}}.
+    MacroRegistry.registerMacro('pushvar', {
+        category: MacroCategory.VARIABLE,
+        unnamedArgs: [
+            {
+                name: 'name',
+                type: MacroValueType.STRING,
+                description: 'The local variable to push onto. Supports dotted paths into a structured value (e.g. "roster.alice.inventory").',
+            },
+            {
+                name: 'value',
+                type: [MacroValueType.STRING, MacroValueType.NUMBER],
+                description: 'The value to push.',
+            },
+        ],
+        description: 'Pushes a value onto a local variable that holds a JSON array. Auto-creates the array if missing.',
+        returns: '',
+        exampleUsage: ['{{pushvar::inventory::sword}}', '{{pushvar::roster.alice.inventory::shield}}'],
+        handler: ({ unnamedArgs: [name, value] }) => {
+            ctx.variables.local.push(name, value);
+            return '';
+        },
+    });
+
+    // {{popvar::name}} -> '' (side-effect: pop last element of a JSON array)
+    MacroRegistry.registerMacro('popvar', {
+        category: MacroCategory.VARIABLE,
+        unnamedArgs: [
+            {
+                name: 'name',
+                type: MacroValueType.STRING,
+                description: 'The local variable to pop from. Supports dotted paths.',
+            },
+        ],
+        description: 'Pops the last value from a local variable that holds a JSON array. No-op when the variable is missing, empty, or not an array.',
+        returns: '',
+        exampleUsage: ['{{popvar::inventory}}', '{{popvar::roster.alice.inventory}}'],
+        handler: ({ unnamedArgs: [name] }) => {
+            ctx.variables.local.pop(name);
+            return '';
+        },
+    });
+
     // {{incvar::name}} -> returns new value
     MacroRegistry.registerMacro('incvar', {
         category: MacroCategory.VARIABLE,

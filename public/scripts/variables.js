@@ -13,6 +13,8 @@ import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { slashCommandReturnHelper } from './slash-commands/SlashCommandReturnHelper.js';
 import { SlashCommandScope } from './slash-commands/SlashCommandScope.js';
 import { isFalseBoolean, convertValueType, isTrueBoolean } from './utils.js';
+import { applyPathOp, splitRootAndPath } from './variable-op-log/path-ops.js';
+import { resolveVarPath } from './macros/util/var-path.js';
 
 /** @typedef {import('./slash-commands/SlashCommandParser.js').NamedArguments} NamedArguments */
 /** @typedef {import('./slash-commands/SlashCommand.js').UnnamedArguments} UnnamedArguments */
@@ -24,21 +26,36 @@ export function getLocalVariable(name, args = {}) {
         chat_metadata.variables = {};
     }
 
-    let localVariable = chat_metadata?.variables[args.key ?? name];
-    if (args.index !== undefined) {
-        try {
-            localVariable = JSON.parse(localVariable);
-            const numIndex = Number(args.index);
-            if (Number.isNaN(numIndex)) {
-                localVariable = localVariable[args.index];
-            } else {
-                localVariable = localVariable[Number(args.index)];
+    let localVariable;
+    if (typeof name === 'string' && name.includes('.') && args.index === undefined && !args.key) {
+        // Dotted-name read uses the same resolver as the {{getvar::a.b}} macro
+        // so behavior stays in sync. The getter returns '' for missing keys —
+        // matching the macro-side contract — so that a missing head triggers
+        // resolveVarPath's literal flat-key fallback (e.g. when the var store
+        // contains a literal `a.b` key but no `a`).
+        localVariable = resolveVarPath(
+            (n) => Object.prototype.hasOwnProperty.call(chat_metadata.variables, n)
+                ? chat_metadata.variables[n]
+                : '',
+            name,
+        );
+    } else {
+        localVariable = chat_metadata?.variables[args.key ?? name];
+        if (args.index !== undefined) {
+            try {
+                localVariable = JSON.parse(localVariable);
+                const numIndex = Number(args.index);
+                if (Number.isNaN(numIndex)) {
+                    localVariable = localVariable[args.index];
+                } else {
+                    localVariable = localVariable[Number(args.index)];
+                }
+                if (typeof localVariable == 'object') {
+                    localVariable = JSON.stringify(localVariable);
+                }
+            } catch {
+                // that didn't work
             }
-            if (typeof localVariable == 'object') {
-                localVariable = JSON.stringify(localVariable);
-            }
-        } catch {
-            // that didn't work
         }
     }
 
@@ -52,6 +69,16 @@ export function setLocalVariable(name, value, args = {}) {
 
     if (!chat_metadata.variables) {
         chat_metadata.variables = {};
+    }
+
+    // Dotted name → path op. The `args.index` single-layer behavior is
+    // preserved for flat names so legacy /setvar key=ages index=John usage
+    // continues to work.
+    if (typeof name === 'string' && name.includes('.')) {
+        const { root, path } = splitRootAndPath(name);
+        applyPathOp(chat_metadata.variables, { op: 'setvar', key: root, path, value: String(value ?? '') });
+        saveMetadataDebounced();
+        return value;
     }
 
     if (args.index !== undefined) {
@@ -161,6 +188,46 @@ export function addLocalVariable(name, value) {
 
     setLocalVariable(name, newValue);
     return newValue;
+}
+
+/**
+ * Push `value` onto the array at `name` (which may be a dotted path inside
+ * a structured variable). Auto-creates the array if missing. Returns the
+ * stringified new top-level value.
+ *
+ * @param {string} name
+ * @param {any} value
+ * @returns {string|undefined}
+ */
+export function pushLocalVariable(name, value) {
+    if (!name) throw new Error('Variable name cannot be empty or undefined.');
+    if (!chat_metadata.variables) chat_metadata.variables = {};
+    const { root, path } = splitRootAndPath(name);
+    /** @type {import('./variable-op-log/apply.js').VarOp} */
+    const op = { op: 'pushvar', key: root, value: String(value ?? '') };
+    if (path) op.path = path;
+    const out = applyPathOp(chat_metadata.variables, op);
+    saveMetadataDebounced();
+    return out;
+}
+
+/**
+ * Pop the last element from the array at `name`. Returns the new
+ * stringified top-level value (or undefined when nothing changed).
+ *
+ * @param {string} name
+ * @returns {string|undefined}
+ */
+export function popLocalVariable(name) {
+    if (!name) throw new Error('Variable name cannot be empty or undefined.');
+    if (!chat_metadata.variables) chat_metadata.variables = {};
+    const { root, path } = splitRootAndPath(name);
+    /** @type {import('./variable-op-log/apply.js').VarOp} */
+    const op = { op: 'popvar', key: root };
+    if (path) op.path = path;
+    const out = applyPathOp(chat_metadata.variables, op);
+    saveMetadataDebounced();
+    return out;
 }
 
 export function addGlobalVariable(name, value) {
@@ -590,6 +657,16 @@ async function executeSubCommands(command, scope = null, parserFlags = null, abo
  * @returns {string} Empty string
  */
 export function deleteLocalVariable(name) {
+    if (typeof name === 'string' && name.includes('.')) {
+        const { root, path } = splitRootAndPath(name);
+        if (!Object.prototype.hasOwnProperty.call(chat_metadata.variables ?? {}, root)) {
+            console.warn(`The local variable "${name}" does not exist.`);
+            return '';
+        }
+        applyPathOp(chat_metadata.variables, { op: 'deletevar', key: root, path });
+        saveMetadataDebounced();
+        return '';
+    }
     if (!existsLocalVariable(name)) {
         console.warn(`The local variable "${name}" does not exist.`);
         return '';
@@ -975,6 +1052,10 @@ export function registerVariableCommands() {
                     <li>
                         <pre><code class="language-stscript">/setvar key=ages index=John as=number 21</code></pre>
                     </li>
+                    <li>
+                        <pre><code class="language-stscript">/setvar key=roster.alice.hp 50</code></pre>
+                        sets <code>roster.alice.hp</code> inside the structured variable <code>roster</code>.
+                    </li>
                 </ul>
             </div>
         `,
@@ -1233,6 +1314,75 @@ export function registerVariableCommands() {
                 <ul>
                     <li>
                         <pre><code class="language-stscript">/decvar score</code></pre>
+                    </li>
+                </ul>
+            </div>
+        `,
+    }));
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'pushvar',
+        callback: (args, value) => String(pushLocalVariable(args.key || args.name, value) ?? ''),
+        returns: 'the new variable value (JSON-stringified)',
+        namedArgumentList: [
+            SlashCommandNamedArgument.fromProps({
+                name: 'key',
+                description: 'variable name (supports dotted paths into structured values, e.g. "roster.alice.inventory")',
+                typeList: [ARGUMENT_TYPE.VARIABLE_NAME],
+                isRequired: true,
+                enumProvider: commonEnumProviders.variables('local'),
+                forceEnum: false,
+            }),
+        ],
+        unnamedArgumentList: [
+            new SlashCommandArgument(
+                'value to push onto the variable array',
+                [ARGUMENT_TYPE.STRING, ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.BOOLEAN, ARGUMENT_TYPE.LIST, ARGUMENT_TYPE.DICTIONARY],
+                true,
+            ),
+        ],
+        helpString: `
+            <div>
+                Push a value onto a local variable that holds a JSON array. The variable is auto-created as an array if missing. Supports dotted paths to push onto an array nested inside a structured variable.
+            </div>
+            <div>
+                <strong>Example:</strong>
+                <ul>
+                    <li>
+                        <pre><code class="language-stscript">/pushvar key=inventory sword</code></pre>
+                    </li>
+                    <li>
+                        <pre><code class="language-stscript">/pushvar key=roster.alice.inventory shield</code></pre>
+                    </li>
+                </ul>
+            </div>
+        `,
+    }));
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'popvar',
+        callback: (_, value) => String(popLocalVariable(String(value)) ?? ''),
+        returns: 'the new variable value (JSON-stringified)',
+        unnamedArgumentList: [
+            SlashCommandNamedArgument.fromProps({
+                name: 'key',
+                description: 'variable name (supports dotted paths)',
+                typeList: [ARGUMENT_TYPE.VARIABLE_NAME],
+                isRequired: true,
+                enumProvider: commonEnumProviders.variables('local'),
+                forceEnum: false,
+            }),
+        ],
+        helpString: `
+            <div>
+                Pop the last value from a local variable that holds a JSON array. No-op when the variable is missing, empty, or not an array. Supports dotted paths.
+            </div>
+            <div>
+                <strong>Example:</strong>
+                <ul>
+                    <li>
+                        <pre><code class="language-stscript">/popvar inventory</code></pre>
+                    </li>
+                    <li>
+                        <pre><code class="language-stscript">/popvar roster.alice.inventory</code></pre>
                     </li>
                 </ul>
             </div>

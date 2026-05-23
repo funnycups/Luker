@@ -106,6 +106,7 @@ const def = ctx.macros.registry.getMacro('greet');
 | <span v-pre>`{{idleDuration}}`</span> / <span v-pre>`{{timeDiff}}`</span> | 時間差 |
 | <span v-pre>`{{getvar::name}}`</span> / <span v-pre>`{{setvar::name::value}}`</span> / <span v-pre>`{{addvar::name::value}}`</span> | 本地變數 |
 | <span v-pre>`{{incvar::name}}`</span> / <span v-pre>`{{decvar::name}}`</span> / <span v-pre>`{{hasvar::name}}`</span> / <span v-pre>`{{deletevar::name}}`</span> | 本地變數 |
+| <span v-pre>`{{pushvar::name::value}}`</span> / <span v-pre>`{{popvar::name}}`</span> | 本地變數——陣列 push / pop。缺失時自動建為 `[]`；支援點號路徑 |
 | <span v-pre>`{{getglobalvar::name}}`</span> / <span v-pre>`{{setglobalvar::name::value}}`</span> / ... | 全域變數 |
 | <span v-pre>`{{if::cond::then::else}}`</span> / <span v-pre>`{{else::...}}`</span> / <span v-pre>`{{each::...}}`</span> | 控制流 |
 | <span v-pre>`{{trim}}`</span> / <span v-pre>`{{newline}}`</span> / <span v-pre>`{{space}}`</span> / <span v-pre>`{{noop}}`</span> | 空白輔助 |
@@ -179,6 +180,8 @@ context.variables.local.inc(name: string): any
 context.variables.local.dec(name: string): any
 context.variables.local.del(name: string): ''
 context.variables.local.has(name: string): boolean
+context.variables.local.push(name: string, value: any): string | undefined
+context.variables.local.pop(name: string): string | undefined
 ```
 
 | 方法 | 說明 |
@@ -189,6 +192,10 @@ context.variables.local.has(name: string): boolean
 | `inc` / `dec` | `add(name, ±1)` 的捷徑 |
 | `del` | 移除變數。回傳 `''` |
 | `has` | 布林存在性檢查 |
+| `push` | 把 `value` 推入 `name` 處的 JSON 陣列。缺失時自動建為 `[]`。對應巨集形式 <span v-pre>`{{pushvar::name::value}}`</span> |
+| `pop` | 從 `name` 處的 JSON 陣列彈出最後一個元素。空或缺失時為無操作。對應巨集形式 <span v-pre>`{{popvar::name}}`</span> |
+
+上述每個方法的 `name` 都接受點號路徑（例如 `roster.alice.hp`），用於讀寫一個結構化變數內部的某片葉子。寫入類方法直接就地修改 `chat_metadata.variables[root]`，跟巨集側的 <span v-pre>`{{setvar::roster.alice.hp::value}}`</span> 行為一致；中間節點按需自動建立。
 
 `get` / `set` 上可選的 `args` 參數支援：
 - `args.key` —— 替代變數名（覆寫 `name`）
@@ -256,6 +263,7 @@ context.setVariable(
 - **值會被強轉成字串**——`extra.var_ops` 的格式只承載字串（<span v-pre>`{{getvar}}`</span> 取回的也是字串）。需要存結構化物件請改用 `createFloorState`（見 [樓層級結構化 state](./chat-and-state.md#createfloorstate)）。
 - **是重放，不是覆寫**——swipe / 刪樓 / 建分支時，rebuilder 會按當前活動 swipe 上所有 var_ops 的寫入順序，把它們觸碰過的 key 在 `chat_metadata.variables` 上重放一遍；沒被任何 var_op 寫過的 key（world-info 副作用、slash 命令、其他擴充寫的值）會原樣保留。所以一次 floor 寫入並不直接修改儲存，而是為後續每次重放貢獻一條指令。
 - **`floor` 必須是有效樓層索引**(`0 <= floor < chat.length`)，越界會拋錯。
+- **點號路徑名同樣支援樓層級寫入**——`setVariable('roster.alice.hp', 50, { floor })` 會在第一個 `.` 處拆分，把 `path` 透傳進 op 記錄。`op.key` 仍然是頂層變數名，重播時把整個結構當成一個單位。
 
 ```js
 const ctx = Luker.getContext();

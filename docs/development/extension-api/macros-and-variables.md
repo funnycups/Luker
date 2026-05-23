@@ -106,6 +106,7 @@ A non-exhaustive list of macros registered by core. See the source under `public
 | <span v-pre>`{{idleDuration}}`</span> / <span v-pre>`{{timeDiff}}`</span> | Time deltas |
 | <span v-pre>`{{getvar::name}}`</span> / <span v-pre>`{{setvar::name::value}}`</span> / <span v-pre>`{{addvar::name::value}}`</span> | Local variables |
 | <span v-pre>`{{incvar::name}}`</span> / <span v-pre>`{{decvar::name}}`</span> / <span v-pre>`{{hasvar::name}}`</span> / <span v-pre>`{{deletevar::name}}`</span> | Local variables |
+| <span v-pre>`{{pushvar::name::value}}`</span> / <span v-pre>`{{popvar::name}}`</span> | Local variables — array push / pop. Auto-creates `[]` when missing; supports dotted paths |
 | <span v-pre>`{{getglobalvar::name}}`</span> / <span v-pre>`{{setglobalvar::name::value}}`</span> / ... | Global variables |
 | <span v-pre>`{{if::cond::then::else}}`</span> / <span v-pre>`{{else::...}}`</span> / <span v-pre>`{{each::...}}`</span> | Control flow |
 | <span v-pre>`{{trim}}`</span> / <span v-pre>`{{newline}}`</span> / <span v-pre>`{{space}}`</span> / <span v-pre>`{{noop}}`</span> | Whitespace helpers |
@@ -179,6 +180,8 @@ context.variables.local.inc(name: string): any
 context.variables.local.dec(name: string): any
 context.variables.local.del(name: string): ''
 context.variables.local.has(name: string): boolean
+context.variables.local.push(name: string, value: any): string | undefined
+context.variables.local.pop(name: string): string | undefined
 ```
 
 | Method | Description |
@@ -189,6 +192,10 @@ context.variables.local.has(name: string): boolean
 | `inc` / `dec` | Shortcuts for `add(name, ±1)` |
 | `del` | Removes the variable. Returns `''` |
 | `has` | Boolean existence check |
+| `push` | Pushes `value` onto the JSON array at `name`. Auto-creates `[]` when missing. The macro form is <span v-pre>`{{pushvar::name::value}}`</span> |
+| `pop` | Pops the last element from the JSON array at `name`. No-op when empty or missing. The macro form is <span v-pre>`{{popvar::name}}`</span> |
+
+`name` on every method above accepts a dotted path (e.g. `roster.alice.hp`) to read or write a leaf inside a structured variable. The write methods mutate `chat_metadata.variables[root]` in place, the same way the macro-side <span v-pre>`{{setvar::roster.alice.hp::value}}`</span> does; intermediate nodes are created on demand.
 
 The optional `args` parameter on `get` / `set` supports:
 - `args.key` — alternative variable name (overrides `name`)
@@ -256,6 +263,7 @@ Details when `floor` is set:
 - **The value is coerced to a string** — `extra.var_ops` entries only carry strings (since <span v-pre>`{{getvar}}`</span> also returns strings). For structured state, use `createFloorState` instead (see [floor-bound structured state](./chat-and-state.md#createfloorstate)).
 - **It's a replay, not an overwrite** — on swipe / delete / branch, the rebuilder walks every surviving var_op in write order and replays the keys those ops touch onto `chat_metadata.variables`. Keys that no surviving var_op writes (world-info side effects, slash commands, third-party extension writes) are left untouched. A floor write doesn't mutate storage directly; it contributes one instruction to every future replay.
 - **`floor` must be a valid floor index** (`0 <= floor < chat.length`); out-of-range throws.
+- **Dotted names work the same way for floor-bound writes** — `setVariable('roster.alice.hp', 50, { floor })` splits on the first `.` and forwards `path` into the op record. `op.key` stays as the top-level variable name, so replay treats the whole structure as one unit.
 
 ```js
 const ctx = Luker.getContext();
