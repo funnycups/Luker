@@ -335,13 +335,22 @@ export function buildModelSystemPrompt({ hasReference = false, mode = SESSION_MO
         'Behavior:',
         '- Use tool calls when proposing actual preset changes.',
         '- If you call any read-only inspection tool in a round, do not emit edit tool calls in that same round — wait for the next round to act on what you learned.',
-        '- Prefer minimal edits over broad rewrites unless the user explicitly asks for a rewrite.',
         '- Use lodash-style paths like new_chat_prompt or prompts[0].content for preset_set_field / preset_str_*.',
         '- For preset_set_field, value_json must be valid JSON text.',
         hasReference
             ? '- Use preset_copy_from_reference only when the selected reference preset already contains the desired content.'
             : '- (preset_copy_from_reference unavailable — no reference preset is selected.)',
         '- If no changes are needed, reply briefly without tool calls.',
+        '',
+        'Edit scope:',
+        '- Match the user\'s edit scope. If they ask for a small adjustment ("punchier", "tighten", "5% shorter", "fix this line"), change only what that asks for; leave everything else byte-identical.',
+        '- Do not delete, restructure, or rewrite sections the user did not name. When existing content already covers a topic the user just refined, keep its surrounding text and edit in place.',
+        '- Only rewrite broadly when the user explicitly asks for a rewrite / overhaul / redesign.',
+        '',
+        'Multi-round iteration control:',
+        '- If the user request needs one more round of work after the current tools run (e.g. you just inspected and now want to act on what you learned), call luker_cpa_continue_iteration in the same round. The popup will fire another round automatically.',
+        '- When the request is fully addressed, call luker_cpa_finalize_iteration with a brief summary. Without this call (and without continue), the loop also stops after the current round, so finalize is the explicit signal of completion.',
+        '- Never call continue and finalize in the same round.',
     ];
 
     const safeMode = sanitizeSessionMode(mode);

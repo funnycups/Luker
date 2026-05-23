@@ -56,7 +56,31 @@ export const TOOL_DISPLAY = Object.freeze({
     preset_diff_reference:           '🔍 Diff reference',
     preset_simulate:                 '🧪 Simulate prompt',
     preset_clone_to_new:             '🌱 Clone to new preset',
+    luker_cpa_continue_iteration:    '↻ Continue iteration',
+    luker_cpa_finalize_iteration:    '✓ Finalize iteration',
 });
+
+/**
+ * Control-tool names used to steer the multi-round auto-continue loop.
+ * Filtered OUT of `editToolCalls` so they never normalize to edits, and
+ * passed to the runner via `isControlCall` so the runner can route them
+ * to `onControlCall` instead of `onToolCall` in per-event callbacks.
+ *
+ * Names are namespaced `luker_cpa_*` to match the orchestrator's
+ * `luker_orch_*` pattern (and memory-graph's `luker_mg_*`), so the
+ * shared runner has no hardcoded allowlist.
+ */
+export const CONTROL_TOOL_NAMES = Object.freeze({
+    continue: 'luker_cpa_continue_iteration',
+    finalize: 'luker_cpa_finalize_iteration',
+});
+export const CONTROL_TOOL_NAME_SET = new Set([
+    CONTROL_TOOL_NAMES.continue,
+    CONTROL_TOOL_NAMES.finalize,
+]);
+export function isCpaControlCall(toolCall) {
+    return CONTROL_TOOL_NAME_SET.has(String(toolCall?.name || ''));
+}
 
 function parseArgs(call) {
     try { return JSON.parse(call?.function?.arguments ?? '{}'); }
@@ -547,6 +571,40 @@ export function buildToolCatalog({ hasReference = false } = {}) {
             },
         });
     }
+
+    // Control tools — these steer the multi-round auto-continue loop. They
+    // never normalize to edits (filtered out via CONTROL_TOOL_NAME_SET in the
+    // popup) and are passed to the runner's `isControlCall` predicate so the
+    // runner routes them to `onControlCall` for popup-state mutation rather
+    // than the assistant message body.
+    tools.push({
+        type: 'function',
+        function: {
+            name: CONTROL_TOOL_NAMES.continue,
+            description: 'Request one automatic follow-up round after the current tools have run. Use only when more iteration is genuinely needed; otherwise call luker_cpa_finalize_iteration.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    note: { type: 'string', description: 'Optional rationale visible to the user.' },
+                },
+                additionalProperties: false,
+            },
+        },
+    });
+    tools.push({
+        type: 'function',
+        function: {
+            name: CONTROL_TOOL_NAMES.finalize,
+            description: 'Finalize this iteration turn with a concise summary. The popup stops auto-continuing after this call.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    summary: { type: 'string', description: 'Short user-facing summary of what changed.' },
+                },
+                additionalProperties: false,
+            },
+        },
+    });
 
     return tools;
 }

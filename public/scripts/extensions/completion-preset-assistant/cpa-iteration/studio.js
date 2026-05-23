@@ -59,13 +59,21 @@ import { Popup, POPUP_TYPE } from '../../../popup.js';
 import { lodash } from '../../../../lib.js';
 import {
     applyEdits,
+    inverseEdit,
     bindIterWorkspaceResizer,
     render as ITER_RENDER,
     runner as ITER_RUNNER,
     textDiff as ITER_TEXT_DIFF,
     zoomOverlay as ITER_ZOOM_OVERLAY,
 } from '../../../iteration-library/index.js';
-import { buildToolCatalog, normalizeToolCallToEdit, TOOL_DISPLAY, EDITABLE_TOOL_NAMES } from './tools.js';
+import {
+    buildToolCatalog,
+    normalizeToolCallToEdit,
+    TOOL_DISPLAY,
+    EDITABLE_TOOL_NAMES,
+    CONTROL_TOOL_NAMES,
+    isCpaControlCall,
+} from './tools.js';
 import {
     buildModelSystemPrompt,
     buildPresetSettingsOutlineText,
@@ -108,6 +116,52 @@ function escapeHtmlLocal(s) {
 
 function makeSessionId() {
     return `sess_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function makeMessageId() {
+    return `cpa_msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Normalize a message read from disk into the shape rendered today.
+ * Legacy sessions persisted only `{role, content}`; the upgraded schema
+ * adds `id`, `at`, optional `toolCalls`, `edits`, `appliedAt`,
+ * `appliedTarget`, `rolledBackAt`, and an `auto` flag for synthetic
+ * auto-continue user messages.
+ *
+ * Tolerance: missing `id` regenerates one, missing `at` falls back to
+ * the session's updatedAt, missing arrays stay undefined (renderer
+ * uses Array.isArray as the visibility gate).
+ */
+function normalizeMessageShape(m, fallbackAt = Date.now()) {
+    if (!m || typeof m !== 'object') return m;
+    const out = {
+        id: typeof m.id === 'string' && m.id ? m.id : makeMessageId(),
+        role: String(m.role || 'user'),
+        content: String(m.content ?? ''),
+        at: typeof m.at === 'number' ? m.at : Number(fallbackAt) || Date.now(),
+    };
+    if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) out.toolCalls = m.toolCalls;
+    if (Array.isArray(m.edits) && m.edits.length > 0) out.edits = m.edits;
+    if (typeof m.appliedAt === 'number') out.appliedAt = m.appliedAt;
+    if (m.appliedTarget) out.appliedTarget = String(m.appliedTarget);
+    if (typeof m.rolledBackAt === 'number') out.rolledBackAt = m.rolledBackAt;
+    if (m.auto) out.auto = true;
+    return out;
+}
+
+/**
+ * Treat AbortController abort and the runner's "Orchestration aborted."
+ * error as the user's Stop button rather than an LLM failure. The runner
+ * throws a plain Error with that message when the abortSignal trips
+ * (see `iter-tool-calling.js#throwIfAborted`).
+ */
+function isAbortError(err, signal) {
+    if (signal?.aborted) return true;
+    if (!err) return false;
+    if (err.name === 'AbortError') return true;
+    const msg = String(err.message || err);
+    return /aborted|Aborted/.test(msg);
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -215,11 +269,16 @@ function renderCpaPreviewPane(live, pendingEdits, savedPresets = [], activeRefNa
             const isChanged = changed.has(k);
             const oldVal = live[k];
             const newVal = nextLive?.[k];
+            // When unchanged: render the live value. When pending change:
+            // render the NEW value as the main display and decorate with
+            // `(was <old>)`, so we don't double-display the old value on
+            // both sides of the diff arrow.
+            const displayVal = isChanged ? newVal : oldVal;
             const inlineDiff = isChanged ? fmtPendingChangeInline(oldVal, newVal, t) : '';
             const cls = isChanged
                 ? 'luker-iter-workspace-preview-row pending-change'
                 : 'luker-iter-workspace-preview-row';
-            return `<div class="${cls}"><div class="luker-iter-workspace-preview-row-head"><span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(label)}</span><span>${escapeHtmlLocal(String(oldVal ?? ''))}</span>${inlineDiff}</div></div>`;
+            return `<div class="${cls}"><div class="luker-iter-workspace-preview-row-head"><span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(label)}</span><span>${escapeHtmlLocal(String(displayVal ?? ''))}</span>${inlineDiff}</div></div>`;
         }).join('');
 
     const prompts = Array.isArray(live.prompts) ? live.prompts : [];
@@ -274,6 +333,7 @@ function createNewSession() {
         id: makeSessionId(),
         title: '',
         messages: [],
+        pendingEdits: [],
         surfaceState: {
             historyOpen: false,
             referencePresetName: '',
@@ -385,6 +445,7 @@ export async function openCpaIterationStudio(deps) {
     }
     const {
         i18n,
+        i18nFormat,
         escapeHtml: depsEscapeHtml,
         getContext,
         getTargetRef,
@@ -403,6 +464,9 @@ export async function openCpaIterationStudio(deps) {
 
     const escapeHtml = typeof depsEscapeHtml === 'function' ? depsEscapeHtml : escapeHtmlLocal;
     const t = typeof i18n === 'function' ? i18n : (s) => String(s ?? '');
+    const tf = typeof i18nFormat === 'function'
+        ? i18nFormat
+        : (s, ...vals) => String(s ?? '').replace(/\$\{(\d+)\}/g, (_m, n) => String(vals[Number(n)] ?? ''));
 
     // Inject the popup stylesheet on first open. Idempotent; subsequent
     // calls are no-ops because the <link> element is id-keyed.
@@ -470,6 +534,11 @@ export async function openCpaIterationStudio(deps) {
     // ──────────────────────────────────────────────────────────────────
     async function persistSession() {
         state.session.updatedAt = Date.now();
+        // Mirror the top-level pendingEdits cache into the persisted bucket
+        // so closing mid-conversation preserves staged-but-not-applied edits
+        // (e.g. AI proposed changes, user closes the popup without clicking
+        // Apply or Discard — reopening shows the same pending block).
+        state.session.pendingEdits = Array.isArray(state.pendingEdits) ? state.pendingEdits.slice() : [];
         if (!state.session.title) {
             const firstUser = state.session.messages.find(m => m.role === 'user');
             if (firstUser) {
@@ -482,6 +551,13 @@ export async function openCpaIterationStudio(deps) {
     async function loadSession(id) {
         const loaded = await sessionStore.load(id);
         if (!loaded) return;
+        // Abort any in-flight LLM call from the previous session so a slow
+        // response doesn't land in the newly-loaded session's history.
+        try { state.abortController?.abort(); } catch { /* ignore */ }
+        state.isBusy = false;
+        state.abortController = null;
+
+        const fallbackAt = Number(loaded.updatedAt) || Date.now();
         state.session = {
             ...loaded,
             surfaceState: {
@@ -491,19 +567,31 @@ export async function openCpaIterationStudio(deps) {
                 autoApply: false,
                 ...(loaded.surfaceState || {}),
             },
+            messages: Array.isArray(loaded.messages)
+                ? loaded.messages.map(m => normalizeMessageShape(m, fallbackAt))
+                : [],
+            pendingEdits: Array.isArray(loaded.pendingEdits) ? loaded.pendingEdits.slice() : [],
         };
         state.session.surfaceState.sessionMode = sanitizeSessionMode(state.session.surfaceState.sessionMode);
         state.session.surfaceState.autoApply = !!state.session.surfaceState.autoApply;
-        state.pendingEdits = [];
+        state.pendingEdits = state.session.pendingEdits.slice();
+        // Re-read the preset body so the new session's preview + next-turn
+        // oldValue snapshots reflect disk state, not the prior session's
+        // staged live (N4 fix).
+        await loadLive();
         await reloadReference();
         await sessionStore.setCurrentSessionId(state.session.id);
         await render();
     }
 
     async function startNewSession() {
+        try { state.abortController?.abort(); } catch { /* ignore */ }
+        state.isBusy = false;
+        state.abortController = null;
         state.session = createNewSession();
         state.pendingEdits = [];
         state.reference = null;
+        await loadLive();
         await sessionStore.save(state.session);
         await sessionStore.setCurrentSessionId(state.session.id);
         await render();
@@ -750,23 +838,121 @@ export async function openCpaIterationStudio(deps) {
     //     embedding via `innerHTML` is XSS-safe.
     //   - user / assistant / system messages get distinct CSS classes for
     //     visual distinction (alignment, background, etc.).
+    //
+    // Assistant messages may carry persisted `toolCalls` + `edits` arrays;
+    // when present, they render inside a collapsible <details> block so
+    // the per-round audit trail stays browseable after Apply. The block
+    // also hosts the per-message Rollback button (visible when applied)
+    // and the Regenerate button (visible on non-last assistant turns).
     // ──────────────────────────────────────────────────────────────────
-    function renderMessage(message) {
-        const role = String(message?.role || 'user');
-        const content = message?.content || '';
+    function formatTime(ts) {
+        try {
+            const d = new Date(Number(ts) || Date.now());
+            return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        } catch { return ''; }
+    }
+
+    function renderToolCallChip(tc) {
+        const name = String(tc?.name || '');
+        const label = TOOL_DISPLAY[name] || name || t('(tool)');
+        let argsText;
+        try { argsText = JSON.stringify(tc?.args ?? {}, null, 2); } catch { argsText = String(tc?.args ?? ''); }
+        return `
+            <div class="cpa_it_msg_toolcall">
+                <div class="cpa_it_msg_toolcall_name">${escapeHtml(label)}</div>
+                <pre class="cpa_it_msg_toolcall_args">${escapeHtml(argsText)}</pre>
+            </div>`;
+    }
+
+    function renderEditChip(edit) {
+        // Reuse the pending-card renderer so the per-message audit trail
+        // and the active pending block look visually identical — the user
+        // doesn't have to learn two diff visual languages.
+        return renderPendingEditCard(edit);
+    }
+
+    function renderMessageCard(message, idx, allMessages) {
+        if (!message) return '';
+        const role = String(message.role || 'user');
+        const content = String(message.content || '');
         let bodyHtml;
         if (role === 'assistant') {
             // sanitized by DOMPurify inside renderMessageMarkdown
             bodyHtml = ITER_RENDER.renderMessageMarkdown(content);
         } else {
-            bodyHtml = escapeHtml(String(content)).replace(/\n/g, '<br>');
+            bodyHtml = escapeHtml(content).replace(/\n/g, '<br>');
         }
         const roleCls = role === 'user'
             ? 'cpa_it_msg_user'
             : role === 'assistant'
                 ? 'cpa_it_msg_assistant'
                 : 'cpa_it_msg_system';
-        return `<div class="cpa_it_msg ${roleCls}">${bodyHtml}</div>`;
+        const autoCls = message.auto ? ' cpa_it_msg_auto' : '';
+
+        const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
+        const edits = Array.isArray(message.edits) ? message.edits : [];
+        const hasTrail = toolCalls.length > 0 || edits.length > 0;
+        const applied = Boolean(message.appliedAt) && !message.rolledBackAt;
+        const rolledBack = Boolean(message.rolledBackAt);
+        const detailsOpen = hasTrail && !applied && !rolledBack;
+
+        let trailHtml = '';
+        if (hasTrail) {
+            const headerLabel = tf('本轮工具调用 + 变更 (${0})', String(toolCalls.length + edits.length));
+            const statusHtml = rolledBack
+                ? `<span class="cpa_it_msg_rolled_back">${escapeHtml(tf('已回退 ${0}', formatTime(message.rolledBackAt)))}</span>`
+                : (applied
+                    ? `
+                        <span class="cpa_it_msg_applied">${escapeHtml(tf('✓ 已应用至 ${0} ${1}', t('preset'), formatTime(message.appliedAt)))}</span>
+                        <button class="menu_button menu_button_small" data-cpa-it-custom-action="rollback-batch" data-cpa-it-msg-id="${escapeHtml(message.id || '')}">
+                            ${escapeHtml(t('Rollback'))}
+                        </button>
+                    `
+                    : '');
+
+            const toolsHtml = toolCalls.map(renderToolCallChip).join('');
+            const editsHtml = edits.map(renderEditChip).join('');
+
+            trailHtml = `
+                <details class="cpa_it_msg_trail" ${detailsOpen ? 'open' : ''}>
+                    <summary>${escapeHtml(headerLabel)}</summary>
+                    <div class="cpa_it_msg_trail_body">
+                        ${toolsHtml}
+                        ${editsHtml}
+                    </div>
+                    ${statusHtml ? `<div class="cpa_it_msg_trail_status">${statusHtml}</div>` : ''}
+                </details>
+            `;
+        }
+
+        // Regenerate is per-assistant-message, only when it's not the
+        // current tail (otherwise just hit Send again to re-run from the
+        // same prompt). We also skip auto-continue synthetic assistants;
+        // their prompt was synthesized so regen would just truncate to
+        // the prior human turn anyway — semantically identical to
+        // regenerating that prior turn.
+        const isLastAssistant = (() => {
+            if (role !== 'assistant') return false;
+            for (let j = (allMessages?.length || 0) - 1; j > idx; j--) {
+                if (allMessages[j]?.role === 'assistant') return false;
+            }
+            return true;
+        })();
+        const showRegenerate = role === 'assistant' && !isLastAssistant && !message.auto;
+        const actionsHtml = showRegenerate
+            ? `
+                <div class="cpa_it_msg_actions">
+                    <button class="menu_button menu_button_small" data-cpa-it-custom-action="regenerate" data-cpa-it-msg-id="${escapeHtml(message.id || '')}">
+                        ${escapeHtml(t('Regenerate'))}
+                    </button>
+                </div>`
+            : '';
+
+        return `<div class="cpa_it_msg ${roleCls}${autoCls}" data-cpa-it-msg-id="${escapeHtml(message.id || '')}">
+            ${bodyHtml}
+            ${trailHtml}
+            ${actionsHtml}
+        </div>`;
     }
 
     function renderHistoryItem(meta) {
@@ -842,10 +1028,17 @@ export async function openCpaIterationStudio(deps) {
         renderReferenceOptions();
         syncModeSelect();
 
-        // Messages
-        const messagesHtml = (state.session.messages || []).map(renderMessage).join('');
+        // Messages — pass index + full array so renderMessageCard can decide
+        // whether to render Regenerate (only on non-last assistant turns).
+        const allMsgs = state.session.messages || [];
+        const messagesHtml = allMsgs.map((m, i) => renderMessageCard(m, i, allMsgs)).join('');
         const $msgs = $root.find('[data-cpa-it-messages]');
-        $msgs.html(messagesHtml);
+        // Loading bubble: append (don't overwrite) so the just-finished
+        // user turn stays visible while the LLM call is in flight.
+        const loadingHtml = state.isBusy
+            ? `<div class="cpa_it_msg cpa_it_msg_assistant cpa_it_msg_loading"><i class="fa-solid fa-spinner fa-spin"></i> ${escapeHtml(t('AI is thinking...'))}</div>`
+            : '';
+        $msgs.html(messagesHtml + loadingHtml);
         // Auto-scroll to bottom so newly-appended messages are visible.
         try {
             const node = $msgs[0];
@@ -854,16 +1047,20 @@ export async function openCpaIterationStudio(deps) {
             }
         } catch { /* DOM not attached (test) */ }
 
-        // Pending edits
+        // Pending edits — single Apply button per spec §3.4 (CPA scope is
+        // always "preset" since CPA edits preset bodies; no character /
+        // global split). Discard stays available as a per-batch escape
+        // hatch for users who don't trust the AI's proposed change.
         const $pending = $root.find('[data-cpa-it-pending]');
         if (state.pendingEdits.length > 0) {
             const cardsHtml = state.pendingEdits.map(renderPendingEditCard).join('');
+            const applyLabel = tf('Apply to ${0}', t('preset'));
             $pending.html(`
                 <div class="cpa_it_pending_title">${escapeHtml(t('Pending changes'))}</div>
                 ${cardsHtml}
                 <div class="cpa_it_pending_actions">
-                    <button class="menu_button" data-cpa-it-action="apply-edits">${escapeHtml(t('Apply'))}</button>
-                    <button class="menu_button" data-cpa-it-action="discard-edits">${escapeHtml(t('Discard'))}</button>
+                    <button class="menu_button luker-iter-pending-apply" data-cpa-it-action="apply-edits">${escapeHtml(applyLabel)}</button>
+                    <button class="menu_button menu_button_small" data-cpa-it-action="discard-edits">${escapeHtml(t('Discard'))}</button>
                 </div>
             `).show().attr('hidden', null);
         } else {
@@ -873,6 +1070,17 @@ export async function openCpaIterationStudio(deps) {
         // Send / Stop button label
         const $sendBtn = $root.find('[data-cpa-it-action="send"]');
         $sendBtn.text(state.isBusy ? t('Stop') : t('Send'));
+
+        // Sync auto-apply checkbox state — render() is the single source of
+        // truth, so a session switch (different auto-apply pref) updates the
+        // checkbox without separate plumbing.
+        const $autoApply = $root.find('[data-cpa-it-action="toggle-auto-apply"]');
+        if ($autoApply.length) {
+            const want = !!state.session.surfaceState?.autoApply;
+            if ($autoApply.prop('checked') !== want) {
+                $autoApply.prop('checked', want);
+            }
+        }
 
         // Live target preview pane (right column on desktop, Preview tab on
         // mobile). Pure render against state.live + pendingEdits — the
@@ -989,7 +1197,7 @@ export async function openCpaIterationStudio(deps) {
         return messages;
     }
 
-    async function runIterationTurn() {
+    async function runIterationTurn({ autoContinueFromResult = null } = {}) {
         const ac = new AbortController();
         state.abortController = ac;
 
@@ -1000,6 +1208,29 @@ export async function openCpaIterationStudio(deps) {
         const mode = sanitizeSessionMode(state.session.surfaceState?.sessionMode);
         const systemPrompt = buildModelSystemPrompt({ hasReference, mode });
         const tools = buildToolCatalog({ hasReference });
+
+        // For auto-continue rounds, splice a synthetic user message into the
+        // visible history so the model has a fresh prompt to react to and the
+        // chat doesn't look like the model spoke twice in a row. The prompt
+        // is conservative — auto-continue is the AI's request, so we just
+        // ask it to proceed; the model's prior tool calls/results stay in
+        // the context window.
+        if (autoContinueFromResult) {
+            const noteLines = [
+                'Continue with the next iteration step.',
+            ];
+            if (autoContinueFromResult?.continueNote) {
+                noteLines.push(`Prior note: ${String(autoContinueFromResult.continueNote)}`);
+            }
+            noteLines.push('Call luker_cpa_finalize_iteration once the request is fully addressed.');
+            state.session.messages.push({
+                id: makeMessageId(),
+                role: 'user',
+                content: noteLines.join('\n'),
+                at: Date.now(),
+                auto: true,
+            });
+        }
 
         const taskMessages = buildTaskMessages(systemPrompt);
 
@@ -1016,6 +1247,18 @@ export async function openCpaIterationStudio(deps) {
             rpmLimit: settings.rpmLimit,
         };
 
+        // Per-round callback bookkeeping. The runner fires onAssistantText
+        // once (after validation, before return) and onToolCall once per
+        // non-control call in array order. Control tools (continue /
+        // finalize) route to onControlCall via the isControlCall predicate,
+        // so they never pollute the edit-tool list.
+        let firstAssistantText = '';
+        const collectedToolCalls = [];
+        let wantsAutoContinue = false;
+        let sawFinalize = false;
+        let finalizeSummary = '';
+        let continueNote = '';
+
         const result = await ITER_RUNNER.requestToolCallsWithRetry(
             getContext(),
             runnerSettings,
@@ -1028,74 +1271,113 @@ export async function openCpaIterationStudio(deps) {
                 abortSignal: ac.signal,
                 includeAssistantText: true,
                 allowNoToolCalls: true,
+                isControlCall: isCpaControlCall,
+                onAssistantText: (text) => {
+                    firstAssistantText = String(text || '');
+                },
+                onToolCall: (call) => {
+                    collectedToolCalls.push(call);
+                },
+                onControlCall: (call) => {
+                    const name = String(call?.name || '');
+                    if (name === CONTROL_TOOL_NAMES.continue) {
+                        // Finalize is sticky: if the model emits both controls
+                        // in one turn (continue, finalize OR finalize, continue)
+                        // the iteration ends. Order of call arrival should not
+                        // change the outcome.
+                        if (!sawFinalize) {
+                            wantsAutoContinue = true;
+                            continueNote = String(call?.args?.note || '');
+                        }
+                    } else if (name === CONTROL_TOOL_NAMES.finalize) {
+                        sawFinalize = true;
+                        wantsAutoContinue = false;
+                        finalizeSummary = String(call?.args?.summary || '');
+                    }
+                },
             },
         );
 
-        const toolCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
-        const assistantText = String(result?.assistantText || '').trim();
+        // The runner already filtered controls into onControlCall, so
+        // `result.toolCalls` only contains non-control calls — but we use
+        // the callback-collected list as the canonical source so the
+        // assistant message records exactly what the user saw fire.
+        const editToolCalls = collectedToolCalls.length > 0
+            ? collectedToolCalls
+            : (Array.isArray(result?.toolCalls) ? result.toolCalls : []);
+        const assistantText = firstAssistantText.trim();
 
-        // Normalize tool calls → edits. Control tools (read / diff /
-        // simulate / clone) return [] from the normalizer; we surface them
-        // as a system message so the user sees the AI's inspection attempt
-        // wasn't wasted, but we do NOT round-trip the result back to the
-        // LLM — single-turn architecture per spec.
+        // Normalize edit-tools → edits. Each editable tool runs through
+        // `normalizeToolCallToEdit` which can return one or more engine ops
+        // (e.g. upsert_prompt_entry returns paired prompts[] + prompt_order
+        // edits). Failures push a system message so the user sees the
+        // attempted operation didn't translate cleanly.
         const edits = [];
-        const controlCalls = [];
-        for (const call of toolCalls) {
+        for (const call of editToolCalls) {
             const name = String(call?.name || '');
-            if (EDITABLE_TOOL_NAMES.has(name)) {
-                try {
-                    const normalized = await normalizeToolCallToEdit(
-                        wrapToolCallForNormalize(call),
-                        {
-                            live: state.live,
-                            session: state.session,
-                            getReferencePresetBody,
-                        },
-                    );
-                    if (Array.isArray(normalized)) {
-                        edits.push(...normalized);
-                    }
-                } catch (err) {
-                    // eslint-disable-next-line no-console
-                    console.warn(`[${MODULE}] normalizeToolCallToEdit failed for ${name}`, err);
-                    state.session.messages.push({
-                        role: 'system',
-                        content: t('Edit error: ') + String(err?.message || err),
-                    });
+            if (!EDITABLE_TOOL_NAMES.has(name)) continue; // defensive
+            try {
+                const normalized = await normalizeToolCallToEdit(
+                    wrapToolCallForNormalize(call),
+                    {
+                        live: state.live,
+                        session: state.session,
+                        getReferencePresetBody,
+                    },
+                );
+                if (Array.isArray(normalized)) {
+                    edits.push(...normalized);
                 }
-            } else {
-                controlCalls.push(call);
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] normalizeToolCallToEdit failed for ${name}`, err);
+                state.session.messages.push({
+                    id: makeMessageId(),
+                    role: 'system',
+                    content: t('Edit error: ') + String(err?.message || err),
+                    at: Date.now(),
+                });
             }
         }
+
+        // Stage the assistant message with the full per-round audit trail.
+        // Falls back to a synthesized summary when the model emitted tool
+        // calls without text so the chat doesn't have empty bubbles. The
+        // toolCalls + edits + appliedAt fields drive renderMessageCard's
+        // collapsible details block, Apply marker, and Rollback button.
+        let content = assistantText;
+        if (!content && editToolCalls.length > 0) {
+            const names = editToolCalls
+                .map(c => TOOL_DISPLAY[String(c?.name || '')] || String(c?.name || ''))
+                .filter(Boolean)
+                .join(', ');
+            content = t('Suggested actions: ') + names;
+        }
+        if (!content && (wantsAutoContinue || finalizeSummary)) {
+            content = finalizeSummary || t('Continuing…');
+        }
+        const assistantMsg = {
+            id: makeMessageId(),
+            role: 'assistant',
+            content: content || '',
+            at: Date.now(),
+        };
+        if (editToolCalls.length > 0) {
+            assistantMsg.toolCalls = editToolCalls.map(tc => ({
+                id: String(tc?.id || ''),
+                name: String(tc?.name || ''),
+                args: tc?.args ?? {},
+            }));
+        }
+        if (edits.length > 0) {
+            assistantMsg.edits = edits.slice();
+        }
+        state.session.messages.push(assistantMsg);
+
+        // Replace pendingEdits with this round's batch. We don't append:
+        // staging is per-round so the user can Apply or Discard cleanly
+        // before the next AI request fires.
         state.pendingEdits = edits;
-
-        // Push assistant message. If the model returned text, use it; if
-        // not but produced tool calls, synthesize a brief stand-in so the
-        // chat doesn't have empty bubbles between user inputs.
-        if (assistantText) {
-            state.session.messages.push({ role: 'assistant', content: assistantText });
-        } else if (toolCalls.length > 0) {
-            const names = toolCalls.map(c => TOOL_DISPLAY[String(c?.name || '')] || String(c?.name || '')).join(', ');
-            state.session.messages.push({
-                role: 'assistant',
-                content: t('Suggested actions: ') + names,
-            });
-        }
-
-        // Note control-tool calls inline so the user sees what the AI
-        // tried to inspect. The user can re-ask with the inspection data
-        // visible (or paste it into the prompt) for follow-up turns.
-        if (controlCalls.length > 0) {
-            const lines = controlCalls.map(c => {
-                const label = TOOL_DISPLAY[String(c?.name || '')] || String(c?.name || '');
-                return `${label}: ${JSON.stringify(c?.args ?? {})}`;
-            });
-            state.session.messages.push({
-                role: 'system',
-                content: t('AI requested inspection (not auto-executed): ') + '\n' + lines.join('\n'),
-            });
-        }
 
         // Mobile workspace: if the user was on the Preview tab, bump the
         // chat-tab badge so they know new assistant content arrived without
@@ -1108,44 +1390,177 @@ export async function openCpaIterationStudio(deps) {
         const autoApplyOn = Boolean(state.session.surfaceState?.autoApply);
         if (autoApplyOn && state.pendingEdits.length > 0) {
             try {
-                await applyPendingEdits();
+                await applyPendingEdits({ skipRender: true });
             } catch (err) {
                 // eslint-disable-next-line no-console
                 console.warn(`[${MODULE}] auto-apply failed`, err);
             }
         }
+
+        return {
+            wantsAutoContinue,
+            executionResult: {
+                finalized: Boolean(finalizeSummary) || (!wantsAutoContinue && edits.length === 0),
+                finalizeSummary,
+                continueRequested: wantsAutoContinue,
+                continueNote,
+                changed: edits.length > 0,
+                hasPending: edits.length > 0,
+            },
+        };
     }
 
     // ──────────────────────────────────────────────────────────────────
     // Apply pending edits. `applyEdits(edits, live)` returns
     // `{ newLive, clean, conflicts, alreadyDone }`. Per sub-spec §6 / §9
     // we do NOT surface a conflict UI: just commit `newLive` and silently
-    // drop any conflicting / already-done edits. The pre-call live is
-    // re-read so a parallel editor (e.g. user saved another preset that
-    // overwrote ours) doesn't blow away their work.
+    // drop any conflicting / already-done edits.
+    //
+    // `state.pendingEdits` is cleared only after `commitLiveToPreset`
+    // resolves, so a failed save leaves the staged edits in place for the
+    // user to retry instead of vanishing into the void. `state.live`
+    // snapshot is taken upfront for the same reason on the catch path.
+    //
+    // On success we toast the user, then mark the most recent unapplied
+    // assistant message so renderMessageCard can show the Applied label
+    // and a Rollback button.
     // ──────────────────────────────────────────────────────────────────
-    async function applyPendingEdits() {
-        if (state.pendingEdits.length === 0) return;
+    async function applyPendingEdits({ skipRender = false } = {}) {
+        if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) return;
         if (!state.live) await loadLive();
-        const result = applyEdits(state.pendingEdits, state.live);
+        const liveSnapshot = state.live;
+        const editsBatch = state.pendingEdits.slice();
+        const result = applyEdits(editsBatch, state.live);
         state.live = result?.newLive ?? state.live;
-        state.pendingEdits = [];
         try {
             await commitLiveToPreset();
         } catch (err) {
+            state.live = liveSnapshot;
             // eslint-disable-next-line no-console
             console.warn(`[${MODULE}] commitLiveToPreset failed`, err);
+            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* toastr may be unavailable in tests */ }
             state.session.messages.push({
+                id: makeMessageId(),
                 role: 'system',
                 content: t('Failed to save preset: ') + String(err?.message || err),
+                at: Date.now(),
             });
+            await persistSession();
+            if (!skipRender) await render();
+            return;
         }
+
+        try { toastr.success(tf('Applied to ${0}', t('preset'))); } catch { /* ignore */ }
+
+        // Mark the most recent unapplied assistant message that owns these
+        // edits. We scan back from the end because the just-rendered turn
+        // is the typical target; rare cases (user clicks Apply on a stale
+        // session reopened with persisted pendingEdits) still hit a sane
+        // candidate as long as one exists.
+        const messages = state.session.messages || [];
+        for (let i = messages.length - 1; i >= 0; i--) {
+            const m = messages[i];
+            if (m.role === 'assistant' && Array.isArray(m.edits) && m.edits.length > 0 && !m.appliedAt) {
+                m.appliedAt = Date.now();
+                m.appliedTarget = 'preset';
+                break;
+            }
+        }
+
+        state.pendingEdits = [];
         await persistSession();
-        await render();
+        if (!skipRender) await render();
     }
 
     async function discardPendingEdits() {
         state.pendingEdits = [];
+        await persistSession();
+        await render();
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Per-message actions.
+    //
+    // regenerateFromMessage(msgId): truncate the chat back to the user
+    // turn that prompted this assistant message, drop staged pendingEdits
+    // (they belonged to the discarded turn), refill the textarea with the
+    // original prompt, and re-fire the send pipeline.
+    //
+    // rollbackBatch(msgId): inverse-apply each edit in the message's
+    // batch against state.live (right-to-left, so dependent ops unwind in
+    // creation order), commit the result, mark the message rolledBackAt.
+    // Bails on the first edit whose op lacks an inverse — partial rollback
+    // would leave the preset in an inconsistent state.
+    // ──────────────────────────────────────────────────────────────────
+    async function regenerateFromMessage(messageId) {
+        if (state.isBusy) return;
+        const messages = state.session.messages || [];
+        const idx = messages.findIndex(m => m && m.id === messageId);
+        if (idx < 0) return;
+        // Walk back to the user message that prompted this assistant turn.
+        // Skip auto-continue synthetic users (`m.auto === true`) so the
+        // resend refills the textarea with the human's original text.
+        let userIdx = -1;
+        for (let i = idx - 1; i >= 0; i--) {
+            const m = messages[i];
+            if (m && m.role === 'user' && !m.auto) { userIdx = i; break; }
+        }
+        if (userIdx < 0) return;
+        const userText = String(messages[userIdx].content || '');
+        // Truncate before the user message; the resend will push it again.
+        state.session.messages = messages.slice(0, userIdx);
+        state.pendingEdits = [];
+        state.session.pendingEdits = [];
+        await persistSession();
+        await render();
+        const $textarea = $root.find('[data-cpa-it-input]');
+        $textarea.val(userText);
+        await handleSendMessage();
+    }
+
+    async function rollbackBatch(messageId) {
+        if (state.isBusy) return;
+        const msg = (state.session.messages || []).find(m => m && m.id === messageId);
+        if (!msg) return;
+        if (!msg.appliedAt || msg.rolledBackAt) return;
+        if (!Array.isArray(msg.edits) || msg.edits.length === 0) return;
+        // eslint-disable-next-line no-alert
+        if (!confirm(t('Roll back this batch? The changes will be reversed in the target.'))) return;
+
+        await loadLive();
+        let working = state.live;
+        // Build inverses up-front so an unsupported op fails BEFORE we
+        // partial-apply anything. Right-to-left inversion handles dependent
+        // edits (e.g. set then list_insert) cleanly.
+        const inverses = [];
+        for (const edit of msg.edits.slice().reverse()) {
+            try {
+                inverses.push(inverseEdit(edit));
+            } catch (err) {
+                console.warn(`[${MODULE}] inverseEdit failed`, edit, err);
+                try { toastr.error(tf('Cannot rollback edit type: ${0}', String(edit?.op || 'unknown'))); } catch { /* ignore */ }
+                return;
+            }
+        }
+        try {
+            const result = applyEdits(inverses, working);
+            working = result?.newLive ?? working;
+        } catch (err) {
+            console.warn(`[${MODULE}] applyEdits(inverses) failed`, err);
+            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* ignore */ }
+            return;
+        }
+        state.live = working;
+        try {
+            await commitLiveToPreset();
+        } catch (err) {
+            console.warn(`[${MODULE}] commitLiveToPreset(rollback) failed`, err);
+            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* ignore */ }
+            return;
+        }
+        msg.rolledBackAt = Date.now();
+        await persistSession();
+        try { toastr.success(t('Rolled back')); } catch { /* ignore */ }
         await render();
     }
 
@@ -1153,6 +1568,18 @@ export async function openCpaIterationStudio(deps) {
     // Send-message handler. Q6: user message is pushed AND rendered
     // BEFORE the await so the user sees their own input before the LLM
     // wait spinner starts. Errors surface as system messages.
+    //
+    // Multi-round auto-continue: when the AI emits
+    // `luker_cpa_continue_iteration`, runIterationTurn returns
+    // `wantsAutoContinue: true` and the loop fires another round (after
+    // rendering the previous round so the user sees progressive output).
+    // The ONLY exits are:
+    //   1. The model called `luker_cpa_finalize_iteration` (no continue).
+    //   2. The model did neither (e.g. produced edits + stopped).
+    //   3. The user clicked Stop (abortController fires; isAbortError
+    //      catches the resulting error in the catch block).
+    // There is NO hard round cap — runaway loops are the user's problem
+    // and a single Stop click ends them.
     // ──────────────────────────────────────────────────────────────────
     async function handleSendMessage() {
         if (state.isBusy) {
@@ -1164,19 +1591,35 @@ export async function openCpaIterationStudio(deps) {
         const text = String($textarea.val() || '').trim();
         if (!text) return;
         $textarea.val('');
-        state.session.messages.push({ role: 'user', content: text });
+        state.session.messages.push({
+            id: makeMessageId(),
+            role: 'user',
+            content: text,
+            at: Date.now(),
+        });
         state.isBusy = true;
         await persistSession();
         await render();   // Q6: user message visible before LLM wait
         try {
-            await runIterationTurn();
+            let turn = await runIterationTurn();
+            while (turn?.wantsAutoContinue) {
+                await persistSession();
+                await render();   // progressive: prior round visible before next
+                if (state.abortController?.signal?.aborted) break;
+                turn = await runIterationTurn({ autoContinueFromResult: turn.executionResult });
+            }
         } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn(`[${MODULE}]`, err);
-            state.session.messages.push({
-                role: 'system',
-                content: t('Error: ') + String(err?.message || err),
-            });
+            // Stop button → don't push an error bubble; user knows they cancelled.
+            if (!isAbortError(err, state.abortController?.signal)) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}]`, err);
+                state.session.messages.push({
+                    id: makeMessageId(),
+                    role: 'system',
+                    content: t('Error: ') + String(err?.message || err),
+                    at: Date.now(),
+                });
+            }
         } finally {
             state.isBusy = false;
             state.abortController = null;
@@ -1195,6 +1638,7 @@ export async function openCpaIterationStudio(deps) {
         if (currentId) {
             const loaded = await sessionStore.load(currentId);
             if (loaded) {
+                const fallbackAt = Number(loaded.updatedAt) || Date.now();
                 state.session = {
                     ...loaded,
                     surfaceState: {
@@ -1204,9 +1648,14 @@ export async function openCpaIterationStudio(deps) {
                         autoApply: false,
                         ...(loaded.surfaceState || {}),
                     },
+                    messages: Array.isArray(loaded.messages)
+                        ? loaded.messages.map(m => normalizeMessageShape(m, fallbackAt))
+                        : [],
+                    pendingEdits: Array.isArray(loaded.pendingEdits) ? loaded.pendingEdits.slice() : [],
                 };
                 state.session.surfaceState.sessionMode = sanitizeSessionMode(state.session.surfaceState.sessionMode);
                 state.session.surfaceState.autoApply = !!state.session.surfaceState.autoApply;
+                state.pendingEdits = state.session.pendingEdits.slice();
                 await reloadReference();
                 return;
             }
@@ -1355,12 +1804,36 @@ export async function openCpaIterationStudio(deps) {
         e.stopPropagation();
         const id = String(e.currentTarget?.dataset?.cpaItId || '');
         if (!id) return;
+        // Deleting the active session also tears down any in-flight LLM call
+        // so the response can't land in the recreated next session.
+        if (id === state.session?.id) {
+            try { state.abortController?.abort(); } catch { /* ignore */ }
+            state.isBusy = false;
+            state.abortController = null;
+        }
         await sessionStore.delete(id);
         if (state.session.id === id) {
             await startNewSession();
         } else {
             await render();
         }
+    });
+
+    // Per-message custom actions (Regenerate / Rollback). Use
+    // `data-cpa-it-custom-action` rather than `data-cpa-it-action` so the
+    // legacy delegation selectors above can't accidentally fire on these
+    // — matches the iter-studio shell gotcha pattern.
+    $root.on('click.cpaIt', '[data-cpa-it-custom-action="regenerate"]', async (e) => {
+        e.preventDefault();
+        const msgId = String(e.currentTarget?.dataset?.cpaItMsgId || '');
+        if (!msgId) return;
+        await regenerateFromMessage(msgId);
+    });
+    $root.on('click.cpaIt', '[data-cpa-it-custom-action="rollback-batch"]', async (e) => {
+        e.preventDefault();
+        const msgId = String(e.currentTarget?.dataset?.cpaItMsgId || '');
+        if (!msgId) return;
+        await rollbackBatch(msgId);
     });
 
     // ── Workspace events ──────────────────────────────────────────────
@@ -1439,20 +1912,28 @@ export async function openCpaIterationStudio(deps) {
     // Bind the column resizer. Returns a no-op when grid/splitter are
     // missing (e.g. during teardown), so the unbind call below is safe
     // regardless of mount state.
-    const unbindResizer = bindIterWorkspaceResizer($root[0]);
-
-    await render();
-
-    // Block until the user dismisses the popup. Persist one final time so
-    // any in-flight composer / surfaceState changes survive close.
+    //
+    // Both the bind and the initial render are inside the try block so a
+    // throw at either step still hits the finally cleanup (no leaked
+    // resizer / pending abortController / unpersisted session).
+    let unbindResizer = () => {};
     try {
+        unbindResizer = bindIterWorkspaceResizer($root[0]);
+        await render();
+        // Block until the user dismisses the popup. The single try/finally
+        // ensures every teardown step (resizer unbind, zoom-overlay unbind,
+        // in-flight abort, final persist) runs even if rendering throws or
+        // the popup is force-closed; ordering puts persistSession LAST so
+        // the abort flag is cleared before disk write.
         await popupPromise;
     } finally {
         try { unbindResizer(); } catch { /* ignore */ }
+        try { zoomOverlayUnbind?.(); } catch { /* ignore */ }
+        try { state.abortController?.abort(); } catch { /* ignore */ }
+        state.isBusy = false;
+        state.abortController = null;
+        try { await persistSession(); } catch { /* ignore */ }
     }
-    try { state.abortController?.abort(); } catch { /* ignore */ }
-    try { zoomOverlayUnbind?.(); } catch { /* ignore */ }
-    await persistSession();
 }
 
 // Re-export the small surface from peer modules so importers don't need to
