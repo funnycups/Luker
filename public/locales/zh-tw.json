@@ -5358,5 +5358,8 @@
     ,"Failed to save character: ${0}": "儲存角色失敗：${0}"
     ,"Session finalized": "會話已完成"
     ,"No presets": "暫無預設"
+    ,"Field updated: ${0}": "欄位已更新:${0}"
+    ,"Show ${0} more entries": "展開剩餘 ${0} 條"
+    ,"Working profile reset to a blank shell — building this card's orchestration from scratch.": "工作中的設定已重置為空白範本,將從零開始為這張角色卡編寫編排。"
     ,"Error: ${0}": "錯誤：${0}"
 }

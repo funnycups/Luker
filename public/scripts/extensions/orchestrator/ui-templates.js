@@ -608,12 +608,13 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
             </div>
         </div>
         <div class="luker-studio-editor-topbar-right">
-            <textarea class="text_pole textarea_compact" rows="1" data-luker-ai-goal-input placeholder="${escapeHtml(i18n('AI build goal (optional)'))}">${escapeHtml(String(uiState.aiGoal || ''))}</textarea>
             <div class="menu_button menu_button_small" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
         </div>
     </div>
     <div class="luker-studio-actions-bar">
         <div class="menu_button" data-luker-action="reload-current">${escapeHtml(i18n('Reload Current'))}</div>
+        <div class="menu_button" data-luker-action="export-profile">${escapeHtml(i18n('Export Profile'))}</div>
+        <div class="menu_button" data-luker-action="import-profile">${escapeHtml(i18n('Import Profile'))}</div>
         <div class="menu_button" data-luker-action="reset-global">${escapeHtml(i18n('Reset Global'))}</div>
         <div class="menu_button" data-luker-action="save-global">${escapeHtml(i18n('Save To Global'))}</div>
         ${hasActiveCharacter ? `<div class="menu_button" data-luker-action="save-character">${escapeHtml(i18n('Save To Character Override'))}</div>` : ''}
@@ -648,12 +649,13 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
             </div>
         </div>
         <div class="luker-studio-editor-topbar-right">
-            <textarea class="text_pole textarea_compact" rows="1" data-luker-ai-goal-input placeholder="${escapeHtml(i18n('AI build goal (optional)'))}">${escapeHtml(String(uiState.aiGoal || ''))}</textarea>
             <div class="menu_button menu_button_small" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
         </div>
     </div>
     <div class="luker-studio-actions-bar">
         <div class="menu_button" data-luker-action="reload-current">${escapeHtml(i18n('Reload Current'))}</div>
+        <div class="menu_button" data-luker-action="export-profile">${escapeHtml(i18n('Export Profile'))}</div>
+        <div class="menu_button" data-luker-action="import-profile">${escapeHtml(i18n('Import Profile'))}</div>
         <div class="menu_button" data-luker-action="reset-global">${escapeHtml(i18n('Reset Global'))}</div>
         <div class="menu_button" data-luker-action="save-global">${escapeHtml(i18n('Save To Global'))}</div>
         ${hasActiveCharacter ? `<div class="menu_button" data-luker-action="save-character">${escapeHtml(i18n('Save To Character Override'))}</div>` : ''}
@@ -688,7 +690,6 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
             </div>
         </div>
         <div class="luker-studio-editor-topbar-right">
-            <textarea class="text_pole textarea_compact" rows="1" data-luker-ai-goal-input placeholder="${escapeHtml(i18n('AI build goal (optional)'))}">${escapeHtml(String(uiState.aiGoal || ''))}</textarea>
             <div class="menu_button menu_button_small" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
         </div>
     </div>
@@ -729,8 +730,6 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
             </div>
         </div>
         <div class="luker-studio-editor-topbar-right">
-            <textarea class="text_pole textarea_compact" rows="1" data-luker-ai-goal-input placeholder="${escapeHtml(i18n('AI build goal (optional)'))}">${escapeHtml(String(uiState.aiGoal || ''))}</textarea>
-            <div class="menu_button menu_button_small" data-luker-action="ai-suggest-character">${escapeHtml(i18n('AI Quick Build'))}</div>
             <div class="menu_button menu_button_small" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
         </div>
     </div>
@@ -858,7 +857,6 @@ export function buildOrchestratorSettingsHtml(deps) {
                     <div class="menu_button" data-luker-action="spec-copy-from-agenda">${escapeHtml(i18n('Copy Agenda Agents To Spec'))}</div>
                     <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
                     <div class="menu_button" data-luker-action="view-runtime-trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
-                    <div class="menu_button" data-luker-action="ai-suggest-character">${escapeHtml(i18n('AI Quick Build'))}</div>
                     <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
                 </div>
             </div>

@@ -336,9 +336,9 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         maxConcurrentSubagents: Number(director.maxConcurrentSubagents) > 0 ? Number(director.maxConcurrentSubagents) : 4,
         maxTotalSubagentRuns: Number(director.maxTotalSubagentRuns) > 0 ? Number(director.maxTotalSubagentRuns) : 16,
     };
-    // Same range/parsing as ai-build.js + tool-calling.js so user-facing
-    // semantics of "Tool-call retries (on invalid/missing)" are uniform
-    // across orchestrator modes. 0 = no retry (one shot, then throw).
+    // Same range/parsing as tool-calling.js so user-facing semantics of
+    // "Tool-call retries (on invalid/missing)" are uniform across
+    // orchestrator modes. 0 = no retry (one shot, then throw).
     const maxNoToolRetries = Math.max(0, Math.min(10, Math.floor(Number(deps?.settings?.toolCallRetryMax) || 0)));
     // Empty systemPrompt sends an empty instruction — defaults are
     // materialized into the profile at creation/reset time (see

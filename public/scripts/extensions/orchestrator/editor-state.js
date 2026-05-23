@@ -9,12 +9,11 @@
  * editor between global and character views.
  *
  * `uiState` intentionally bundles editor fields with non-editor
- * UI-session fields (`aiGoal`, `aiIterationSession`,
- * `orchEditorPopupContentId`) — the popups share a single state object
- * so the orchestrator UI can be rebuilt with one snapshot. Editor-only
- * consumers read the four `*Editor` fields and the two `*DisplayedScope`
- * fields; non-editor consumers manage their own slots on the same
- * object.
+ * UI-session fields (`aiIterationSession`, `orchEditorPopupContentId`) —
+ * the popups share a single state object so the orchestrator UI can be
+ * rebuilt with one snapshot. Editor-only consumers read the four
+ * `*Editor` fields and the two `*DisplayedScope` fields; non-editor
+ * consumers manage their own slots on the same object.
  *
  * Read-only display helpers (label formatting, scope-from-element)
  * live in `editor-display.js`. Persist + portable-profile creation
@@ -67,7 +66,6 @@ function getSettings() {
 
 export const uiState = {
     selectedAvatar: '',
-    aiGoal: '',
     globalEditor: null,
     characterEditor: null,
     globalAgendaEditor: null,
@@ -134,10 +132,21 @@ export function loadCharacterEditorState(context, avatar) {
     const safeAvatar = String(avatar || '');
     const override = getCharacterOverrideByAvatar(context, safeAvatar);
     const useOverride = hasCharacterSpecOverride(context, safeAvatar);
+    // Always merge override on top of the global base so partial overrides
+    // inherit missing fields instead of getting filled with empty defaults
+    // by the sanitizers. resolveOverridePresetMap already merges presets;
+    // here we also fall back the top-level spec object key-by-key.
     const presets = useOverride
         ? toEditablePresetMap(resolveOverridePresetMap(override, settings.presets))
         : toEditablePresetMap(settings.presets);
-    const spec = toEditableSpec(useOverride ? override?.spec : settings.orchestrationSpec, presets);
+    const globalSpecSource = settings.orchestrationSpec || defaultSpec;
+    const overrideSpec = useOverride && override?.spec && typeof override.spec === 'object'
+        ? override.spec
+        : null;
+    const specSource = overrideSpec
+        ? { ...globalSpecSource, ...overrideSpec }
+        : globalSpecSource;
+    const spec = toEditableSpec(specSource, presets);
     return {
         avatar: safeAvatar,
         enabled: useOverride ? Boolean(override?.enabled) : false,
@@ -154,9 +163,15 @@ export function loadCharacterAgendaEditorState(context, avatar) {
     const settings = getSettings();
     const safeAvatar = String(avatar || '');
     const agendaOverride = getCharacterAgendaOverrideByAvatar(context, safeAvatar);
+    // Override merged on top of global base — fields the override doesn't
+    // specify inherit from the global profile. Without this, a partial
+    // override (e.g. only `{ enabled: true, planner: { systemPrompt } }`)
+    // would replace the global agents with the sanitizer's default
+    // single-finalizer fallback instead of keeping the global agent set.
+    const globalBase = cloneAgendaWorkingProfileFromSettings(settings);
     const profile = agendaOverride
-        ? sanitizeAgendaWorkingProfile(agendaOverride)
-        : cloneAgendaWorkingProfileFromSettings(settings);
+        ? sanitizeAgendaWorkingProfile({ ...globalBase, ...agendaOverride })
+        : globalBase;
     return {
         avatar: safeAvatar,
         enabled: Boolean(agendaOverride?.enabled),
@@ -211,9 +226,13 @@ export function loadCharacterLoopEditorState(context, avatar) {
     const settings = getSettings();
     const safeAvatar = String(avatar || '');
     const loopOverride = getCharacterLoopOverrideByAvatar(context, safeAvatar);
+    // Override merged on top of global base — fields the override doesn't
+    // specify (system_prompt, tools, max_rounds, etc.) inherit from the
+    // global loop profile instead of falling back to LOOP_PROFILE_DEFAULTS.
+    const globalBase = sanitizeLoopProfile(settings?.loopProfile || defaultLoopProfile);
     const baseProfile = loopOverride
-        ? sanitizeLoopProfile(loopOverride)
-        : sanitizeLoopProfile(settings?.loopProfile || defaultLoopProfile);
+        ? sanitizeLoopProfile({ ...globalBase, ...loopOverride })
+        : globalBase;
     return {
         ...baseProfile,
         avatar: safeAvatar,
@@ -266,13 +285,49 @@ export function loadCharacterDirectorEditorState(context, avatar) {
     const settings = getSettings();
     const safeAvatar = String(avatar || '');
     const directorOverride = getCharacterDirectorOverrideByAvatar(context, safeAvatar);
-    const baseProfile = directorOverride
-        ? sanitizeDirectorProfile(directorOverride)
-        : sanitizeDirectorProfile(settings?.directorProfile || createDefaultDirectorProfile());
+    // Override merged on top of global base. Without this, a partial
+    // override (e.g. only `{ enabled: true, director: { mainAgent: {} } }`)
+    // would land with an empty mainAgent.systemPrompt and zero sub-agents
+    // because sanitizeDirectorProfile fills missing slots with empty
+    // defaults rather than inheriting from the global director profile.
+    const globalSource = settings?.directorProfile && typeof settings.directorProfile === 'object'
+        ? settings.directorProfile
+        : createDefaultDirectorProfile();
+    const globalBase = sanitizeDirectorProfile(globalSource);
+    if (!directorOverride) {
+        return {
+            ...globalBase,
+            avatar: safeAvatar,
+            enabled: false,
+        };
+    }
+    const sanitizedOverride = sanitizeDirectorProfile(directorOverride);
+    const mergedDirector = {
+        ...globalBase.director,
+        ...sanitizedOverride.director,
+        mainAgent: {
+            ...globalBase.director.mainAgent,
+            ...sanitizedOverride.director.mainAgent,
+            // Empty mainAgent.systemPrompt → fall back to global. The user
+            // never wants a blank prompt out of a partial override; if they
+            // truly want to disable the main agent they'd unbind the
+            // override (Reset Character) rather than write `''` explicitly.
+            systemPrompt: String(sanitizedOverride.director.mainAgent.systemPrompt || '').trim()
+                ? sanitizedOverride.director.mainAgent.systemPrompt
+                : globalBase.director.mainAgent.systemPrompt,
+        },
+        // Empty subAgents (override cleared or contained only invalid
+        // entries) → fall back to global so the inherited sub-agent set
+        // survives partial overrides.
+        subAgents: Array.isArray(sanitizedOverride.director.subAgents) && sanitizedOverride.director.subAgents.length > 0
+            ? sanitizedOverride.director.subAgents
+            : globalBase.director.subAgents,
+    };
     return {
-        ...baseProfile,
+        ...sanitizedOverride,
+        director: mergedDirector,
         avatar: safeAvatar,
-        enabled: Boolean(directorOverride?.enabled),
+        enabled: Boolean(directorOverride.enabled),
     };
 }
 

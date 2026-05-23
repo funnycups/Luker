@@ -5519,5 +5519,8 @@
     ,"Failed to save character: ${0}": "保存角色失败：${0}"
     ,"Session finalized": "会话已完成"
     ,"No presets": "暂无预设"
+    ,"Field updated: ${0}": "字段已更新:${0}"
+    ,"Show ${0} more entries": "展开剩余 ${0} 条"
+    ,"Working profile reset to a blank shell — building this card's orchestration from scratch.": "工作中的配置已重置为空白模板,将从零开始为这张角色卡编写编排。"
     ,"Error: ${0}": "错误：${0}"
 }

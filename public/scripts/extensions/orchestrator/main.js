@@ -180,10 +180,7 @@ import {
     LOOP_ITERATION_CONTRACT_LINES,
     applyLoopProfilePatchArgs,
 } from './loop-iteration.js';
-import {
-    buildAiOrchestrationProfile,
-    sanitizeProfileForAiPrompt,
-} from './ai-build.js';
+import { sanitizeProfileForAiPrompt } from './profile-projection.js';
 import {
     createNewStage,
     ensureDirectorEditorIntegrity,
@@ -324,9 +321,7 @@ function restorePureSyntheticPresetOverride() {
 }
 let orchInFlight = false;
 let activeRunInfoToast = null;
-let activeAiBuildToast = null;
 let activeOrchRunAbortController = null;
-let activeAiBuildAbortController = null;
 
 function ensureSettings() {
     if (!extension_settings[MODULE_NAME] || typeof extension_settings[MODULE_NAME] !== 'object') {
@@ -830,71 +825,6 @@ function getEffectiveProfile(context) {
         mode: ORCH_EXECUTION_MODE_SPEC,
         spec: sanitizeSpec(settings.orchestrationSpec),
         presets: sanitizePresetMap(settings.presets),
-    };
-}
-
-async function runAiCharacterProfileBuild(context, settings, { abortSignal = null } = {}) {
-    syncCharacterEditorWithActiveAvatar(context);
-    const avatar = String(getCurrentAvatar(context) || '').trim();
-    const isCharacterMode = Boolean(avatar);
-    const characterCard = isCharacterMode
-        ? getCharacterCardSnapshot(context, avatar)
-        : {
-            avatar: '',
-            name: 'Global Orchestration Profile',
-            description: 'Build a reusable global orchestration profile that works across character cards.',
-            personality: '',
-            scenario: '',
-            system: '',
-            first_mes: '',
-            mes_example: '',
-            creator_notes: '',
-        };
-    if (isCharacterMode && !characterCard.name) {
-        throw new Error('Selected character card is invalid.');
-    }
-
-    updateUiStatus(i18nFormat('Generating orchestration profile for ${0}...', characterCard.name));
-
-    const parsed = await buildAiOrchestrationProfile(context, settings, {
-        characterCard,
-        currentSpec: sanitizeSpec(settings.orchestrationSpec),
-        currentPresets: serializeEditorPresetMap(settings.presets),
-        overrideGoal: String(uiState.aiGoal || ''),
-        abortSignal,
-    });
-
-    const suggestedSpec = sanitizeSpec(parsed.orchestrationSpec);
-    const suggestedPatch = parsed.presetPatch && typeof parsed.presetPatch === 'object' ? parsed.presetPatch : {};
-    const mergedPresets = mergePresetMaps(serializeEditorPresetMap(settings.presets), suggestedPatch);
-
-    if (isCharacterMode) {
-        uiState.characterEditor.spec = toEditableSpec(suggestedSpec, mergedPresets);
-        uiState.characterEditor.presets = toEditablePresetMap(mergedPresets);
-        uiState.characterEditor.enabled = true;
-        const persisted = await persistCharacterEditor(context, settings, avatar, {
-            editor: uiState.characterEditor,
-            forceEnabled: true,
-        });
-        if (!persisted) {
-            throw new Error(i18n('Failed to persist character override.'));
-        }
-        return {
-            scope: 'character',
-            avatar,
-            name: getCharacterDisplayNameByAvatar(context, avatar) || characterCard.name,
-        };
-    }
-
-    uiState.globalEditor.spec = toEditableSpec(suggestedSpec, mergedPresets);
-    uiState.globalEditor.presets = toEditablePresetMap(mergedPresets);
-    await persistGlobalEditorFrom(settings, uiState.globalEditor);
-    uiState.globalEditor = loadGlobalEditorState();
-    ensureEditorIntegrity(uiState.globalEditor);
-    return {
-        scope: 'global',
-        avatar: '',
-        name: i18n('Global profile'),
     };
 }
 
@@ -1733,7 +1663,6 @@ function renderDynamicPanels(root, context) {
     const hasLastRun = Boolean(getLatestOrchestrationEntry(context));
     root.find('[data-luker-action="view-last-run"]').toggleClass('luker_orch_button_disabled', !hasLastRun);
     root.find('#luker_orch_last_run_state').text(buildLatestOrchestrationStateSummary(context));
-    root.find('[data-luker-ai-goal-input]').val(String(uiState.aiGoal || ''));
     root.find('#luker_orch_spec_board').toggle(!singleModeEnabled && !agendaModeEnabled && !loopModeEnabled && !directorModeEnabled);
     root.find('#luker_orch_agenda_board').toggle(agendaModeEnabled);
     root.find('#luker_orch_loop_board').toggle(loopModeEnabled);
@@ -1891,50 +1820,6 @@ function clearRunInfoToast() {
     }
     toastr.clear(activeRunInfoToast);
     activeRunInfoToast = null;
-}
-
-function showAiBuildToast(message, { stopLabel = '', onStop = null } = {}) {
-    if (typeof toastr === 'undefined') {
-        return;
-    }
-    if (activeAiBuildToast) {
-        toastr.clear(activeAiBuildToast);
-        activeAiBuildToast = null;
-    }
-    activeAiBuildToast = toastr.info(String(message || ''), '', {
-        timeOut: 0,
-        extendedTimeOut: 0,
-        tapToDismiss: false,
-        closeButton: true,
-        progressBar: false,
-    });
-    if (activeAiBuildToast && typeof onStop === 'function') {
-        const toastBody = activeAiBuildToast.find('.toast-message');
-        if (toastBody.length > 0) {
-            const button = jQuery('<button type="button" class="menu_button menu_button_small luker-toast-stop-button"></button>');
-            button.text(String(stopLabel || i18n('Stop')));
-            button.on('click', (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                button.prop('disabled', true);
-                const toastElement = button.closest('.toast');
-                clearAiBuildToast();
-                if (toastElement && toastElement.length > 0) {
-                    toastElement.remove();
-                }
-                onStop();
-            });
-            toastBody.append(button);
-        }
-    }
-}
-
-function clearAiBuildToast() {
-    if (typeof toastr === 'undefined' || !activeAiBuildToast) {
-        return;
-    }
-    toastr.clear(activeAiBuildToast);
-    activeAiBuildToast = null;
 }
 
 async function persistCopiedProfileTarget(context, settings, mode, scope) {
@@ -2202,6 +2087,20 @@ function isLoopIterationSession(session) {
 
 function isDirectorIterationSession(session) {
     return String(session?.mode || '') === ORCH_EXECUTION_MODE_DIRECTOR;
+}
+
+/**
+ * Dispatch helper for "does this character have an override for the mode
+ * the iteration popup is currently editing?". Used by the iter popup to
+ * decide whether to inject the "scope hint" system-prompt addendum that
+ * tells the AI it's starting from a seeded global copy rather than an
+ * existing override.
+ */
+function hasCharacterOverrideForCurrentMode(context, avatar, mode) {
+    if (mode === ORCH_EXECUTION_MODE_DIRECTOR) return hasCharacterDirectorOverride(context, avatar);
+    if (mode === ORCH_EXECUTION_MODE_LOOP) return hasCharacterLoopOverride(context, avatar);
+    if (mode === ORCH_EXECUTION_MODE_AGENDA) return hasCharacterAgendaOverride(context, avatar);
+    return hasCharacterSpecOverride(context, avatar);
 }
 
 // Director profile is stored at settings.directorProfile (global) and
@@ -4711,6 +4610,7 @@ async function openAiIterationStudio(context, settings, root) {
         i18nFormat,
         getIterationDefaultScope,
         getCharacterDisplayNameByAvatar,
+        hasCharacterOverrideForCurrentMode,
         getEditorByScope,
         getAgendaEditorByScope,
         getLoopEditorByScope,
@@ -5244,10 +5144,6 @@ function bindUi() {
         settings.capsuleCustomInstruction = String(jQuery(this).val() || '').trim();
         reapplyLatestCapsuleInjection(getContext());
         saveSettingsDebounced();
-    });
-
-    jQuery(document).on('input.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-ai-goal-input], .luker_orch_editor_popup [data-luker-ai-goal-input]`, function () {
-        uiState.aiGoal = String(jQuery(this).val() || '');
     });
 
     jQuery(document).on('input.lukerOrchEditor change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-field], .luker_orch_editor_popup [data-luker-field]`, function () {
@@ -6143,48 +6039,6 @@ function bindUi() {
             renderDynamicPanels(root, context);
             notifyInfo(i18n('Character orchestration override removed.'));
             updateUiStatus(i18nFormat('Removed character override for ${0}.', getCharacterDisplayNameByAvatar(context, avatar)));
-            return;
-        }
-
-        if (action === 'ai-suggest-character') {
-            const avatar = String(getCurrentAvatar(context) || '').trim();
-            const displayName = avatar
-                ? (getCharacterDisplayNameByAvatar(context, avatar) || i18n('(No character selected)'))
-                : i18n('Global profile');
-            const aiBuildAbortController = new AbortController();
-            activeAiBuildAbortController = aiBuildAbortController;
-            showAiBuildToast(i18nFormat('Generating orchestration profile for ${0}...', displayName), {
-                stopLabel: i18n('Stop'),
-                onStop: () => {
-                    if (!aiBuildAbortController.signal.aborted) {
-                        aiBuildAbortController.abort();
-                    }
-                },
-            });
-            try {
-                const result = await runAiCharacterProfileBuild(context, settings, { abortSignal: aiBuildAbortController.signal });
-                renderDynamicPanels(root, context);
-                if (result?.scope === 'global') {
-                    notifySuccess(i18n('Global orchestration profile generated by AI.'));
-                    updateUiStatus(i18nFormat('AI profile generated for ${0}.', i18n('Global profile')));
-                } else {
-                    notifySuccess(i18n('Character orchestration profile generated by AI.'));
-                    const doneName = result?.name || getCharacterDisplayNameByAvatar(context, getCurrentAvatar(context));
-                    updateUiStatus(i18nFormat('AI profile generated for ${0}.', doneName));
-                }
-            } catch (error) {
-                if (isAbortError(error, aiBuildAbortController.signal)) {
-                    updateUiStatus(i18n('AI profile generation cancelled.'));
-                } else {
-                    notifyError(i18nFormat('AI profile generation failed: ${0}', error?.message || error));
-                    updateUiStatus(i18n('AI profile generation failed.'));
-                }
-            } finally {
-                if (activeAiBuildAbortController === aiBuildAbortController) {
-                    activeAiBuildAbortController = null;
-                }
-                clearAiBuildToast();
-            }
             return;
         }
 

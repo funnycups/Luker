@@ -103,8 +103,13 @@ const STYLESHEET_HREF = '/scripts/extensions/orchestrator/iter-studio/studio.css
 const CONTROL_TOOL_NAMES = Object.freeze({
     continue: 'luker_orch_continue_iteration',
     finalize: 'luker_orch_finalize_iteration',
+    resetToBlank: 'luker_orch_reset_live_to_blank',
 });
-const CONTROL_TOOL_NAME_SET = new Set([CONTROL_TOOL_NAMES.continue, CONTROL_TOOL_NAMES.finalize]);
+const CONTROL_TOOL_NAME_SET = new Set([
+    CONTROL_TOOL_NAMES.continue,
+    CONTROL_TOOL_NAMES.finalize,
+    CONTROL_TOOL_NAMES.resetToBlank,
+]);
 
 /**
  * Predicate the runner uses (via `isControlCall`) to route a tool call to
@@ -146,6 +151,20 @@ const CONTROL_TOOL_DEFS = [
                 type: 'object',
                 properties: {
                     summary: { type: 'string', description: 'Short user-facing summary of what changed.' },
+                },
+                additionalProperties: false,
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: CONTROL_TOOL_NAMES.resetToBlank,
+            description: 'Replace the working profile with a minimal blank shell for the current mode, discarding the global-profile copy seeded in. Use ONLY when the user wants to author a brand-new orchestration for this character from scratch (not when adjusting the existing setup). The popup only injects this affordance when scope is character AND no character override exists yet — ignore it otherwise.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    reason: { type: 'string', description: 'Optional rationale visible to the user.' },
                 },
                 additionalProperties: false,
             },
@@ -716,6 +735,7 @@ export async function openOrchestratorIterationStudio(deps) {
         i18nFormat,
         getIterationDefaultScope,
         getCharacterDisplayNameByAvatar,
+        hasCharacterOverrideForCurrentMode,
         getEditorByScope,
         getAgendaEditorByScope,
         getLoopEditorByScope,
@@ -832,13 +852,64 @@ export async function openOrchestratorIterationStudio(deps) {
     // popup's session metadata + the current live profile through.
     // ──────────────────────────────────────────────────────────────────
     function buildHelperSession(workingProfile) {
+        const scope = typeof getIterationDefaultScope === 'function'
+            ? getIterationDefaultScope(context)
+            : 'global';
+        const avatar = String(context?.characters?.[context?.characterId]?.avatar || '');
+        const hasOverride = scope === 'character' && typeof hasCharacterOverrideForCurrentMode === 'function'
+            ? Boolean(hasCharacterOverrideForCurrentMode(context, avatar, mode))
+            : false;
+        const characterDisplayName = scope === 'character' && typeof getCharacterDisplayNameByAvatar === 'function'
+            ? String(getCharacterDisplayNameByAvatar(context, avatar) || '')
+            : '';
         return {
             id: state.session.id,
             title: state.session.title,
             messages: state.session.messages,
             workingProfile: workingProfile != null ? workingProfile : state.live,
             mode,
+            scope,
+            hasOverride,
+            characterDisplayName,
         };
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Per-mode blank profile for the reset-to-blank control tool. Used
+    // ONLY when scope is character + no override exists yet AND the AI
+    // decides the user wants to author from scratch rather than adjust
+    // the seeded global copy.
+    // ──────────────────────────────────────────────────────────────────
+    function createBlankProfileForMode() {
+        if (mode === ORCH_EXECUTION_MODES.DIRECTOR) {
+            return sanitizeDirectorProfile({});
+        }
+        if (mode === ORCH_EXECUTION_MODES.LOOP) {
+            return sanitizeLoopProfile({});
+        }
+        if (mode === ORCH_EXECUTION_MODES.AGENDA) {
+            return sanitizeAgendaWorkingProfile({});
+        }
+        return { spec: { stages: [], defaultTools: null }, presets: {} };
+    }
+
+    function appendScopeHintIfNeeded(basePrompt, helperSession) {
+        if (helperSession?.scope !== 'character' || helperSession?.hasOverride) {
+            return basePrompt;
+        }
+        const display = String(helperSession?.characterDisplayName || '').trim() || 'this character';
+        return [
+            basePrompt,
+            '',
+            '# Iteration scope',
+            `You are iterating on the character override for "${display}". This card has NO character override yet.`,
+            '',
+            'Two paths exist; decide from the user\'s first message which applies:',
+            '- Adjust the existing setup: the working profile starts as a copy of the GLOBAL profile. Make targeted edits as you normally would. This is the default path.',
+            `- Author from scratch: call \`${CONTROL_TOOL_NAMES.resetToBlank}\` once to discard the global copy and start with a minimal blank shell. If you already called it earlier this session, the working profile is already blank — continue authoring from there without calling reset again.`,
+            '',
+            'Do not call the reset tool unless the user clearly wants a brand-new orchestration.',
+        ].join('\n');
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -935,29 +1006,61 @@ export async function openOrchestratorIterationStudio(deps) {
     // large profiles).
     // ──────────────────────────────────────────────────────────────────
     // Bulk-set edits on the working profile collapse the entire delta
-    // into one `set('', oldProfile, newProfile)` edit. Rather than dump
-    // the full JSON we surface a side-by-side LCS diff using the
-    // iteration-library renderer — the user sees the byte delta in the
-    // header and can drill into the line-level diff via the embedded
-    // `<details>`.
+    // into one `set('', oldProfile, newProfile)` edit. We split that
+    // upfront into one virtual `set(<leafPath>, oldLeaf, newLeaf)` card
+    // per changed leaf so the user sees per-field diffs instead of one
+    // giant JSON blob. When >20 leaves changed (rare — usually means a
+    // structural rewrite the user asked for), fall back to the original
+    // whole-object render to avoid card flood.
+    function getByPath(obj, path) {
+        if (!path) return obj;
+        let cur = obj;
+        for (const seg of String(path).split('.')) {
+            if (cur == null) return undefined;
+            cur = cur[seg];
+        }
+        return cur;
+    }
+
+    function renderSetEditCard(path, oldValue, newValue) {
+        const isWholeObject = path === '';
+        const beforeText = typeof oldValue === 'string' ? oldValue : JSON.stringify(oldValue, null, 2);
+        const afterText = typeof newValue === 'string' ? newValue : JSON.stringify(newValue, null, 2);
+        const beforeBytes = beforeText.length;
+        const afterBytes = afterText.length;
+        const bytesDelta = afterBytes - beforeBytes;
+        const sign = bytesDelta >= 0 ? '+' : '';
+        const fileLabel = isWholeObject ? 'working profile' : path;
+        const libDiffHtml = ITER_TEXT_DIFF.renderInlineTextDiffHtml(beforeText, afterText, {
+            fileLabel,
+            i18n: t,
+            forceOpen: true,
+        });
+        const headerLabel = isWholeObject ? t('Profile updated') : tf('Field updated: ${0}', path);
+        return `<div class="orch_it_pending_card">
+            <span class="op">${escapeHtmlLocal(headerLabel)}</span>
+            <span class="diff_delta">(${sign}${bytesDelta} bytes)</span>
+            ${libDiffHtml}
+        </div>`;
+    }
+
     function renderPendingEditCard(edit) {
-        if (edit?.op === 'set' && edit.path === '' && edit.oldValue && edit.newValue) {
-            const beforeJson = JSON.stringify(edit.oldValue, null, 2);
-            const afterJson = JSON.stringify(edit.newValue, null, 2);
-            const beforeBytes = JSON.stringify(edit.oldValue).length;
-            const afterBytes = JSON.stringify(edit.newValue).length;
-            const bytesDelta = afterBytes - beforeBytes;
-            const sign = bytesDelta >= 0 ? '+' : '';
-            const libDiffHtml = ITER_TEXT_DIFF.renderInlineTextDiffHtml(beforeJson, afterJson, {
-                fileLabel: 'working profile',
-                i18n: t,
-                forceOpen: true,
-            });
-            return `<div class="orch_it_pending_card">
-                <span class="op">${escapeHtmlLocal(t('Profile updated'))}</span>
-                <span class="diff_delta">(${sign}${bytesDelta} bytes)</span>
-                ${libDiffHtml}
-            </div>`;
+        if (edit?.op === 'set' && edit.path === ''
+            && edit.oldValue && edit.newValue
+            && typeof edit.oldValue === 'object' && typeof edit.newValue === 'object') {
+            const changed = new Set();
+            walkDiff('', edit.oldValue, edit.newValue, changed);
+            if (changed.size > 0 && changed.size <= 20) {
+                return [...changed].map((leafPath) => renderSetEditCard(
+                    leafPath,
+                    getByPath(edit.oldValue, leafPath),
+                    getByPath(edit.newValue, leafPath),
+                )).join('');
+            }
+            return renderSetEditCard('', edit.oldValue, edit.newValue);
+        }
+        if (edit?.op === 'set' && edit.oldValue !== undefined && edit.newValue !== undefined) {
+            return renderSetEditCard(String(edit.path || ''), edit.oldValue, edit.newValue);
         }
         return `<div class="orch_it_pending_card">
             <span class="op">${escapeHtmlLocal(String(edit?.op || t('(unknown op)')))}</span>
@@ -1355,7 +1458,10 @@ export async function openOrchestratorIterationStudio(deps) {
         loadLive();   // re-read so each turn sees external edits
 
         const helperSession = buildHelperSession(state.live);
-        const systemPrompt = buildAiIterationSystemPrompt(settings, helperSession);
+        const systemPrompt = appendScopeHintIfNeeded(
+            buildAiIterationSystemPrompt(settings, helperSession),
+            helperSession,
+        );
 
         // For auto-continue turns, the user-facing "latest user text" is
         // replaced with the synthesized auto-continue prompt; the rest of
@@ -1438,6 +1544,23 @@ export async function openOrchestratorIterationStudio(deps) {
                         sawFinalize = true;
                         wantsAutoContinue = false;
                         finalizeSummary = String(call?.args?.summary || '');
+                    } else if (name === CONTROL_TOOL_NAMES.resetToBlank) {
+                        // Only accept the reset when scope is character + no
+                        // override exists yet — otherwise the AI shouldn't have
+                        // called it and the system prompt explicitly says so.
+                        // Ignoring silently avoids clobbering an existing
+                        // override the user is actively editing.
+                        const helper = buildHelperSession(state.live);
+                        if (helper.scope === 'character' && !helper.hasOverride) {
+                            state.live = createBlankProfileForMode();
+                            state.pendingEdits = [];
+                            state.session.messages.push({
+                                id: makeMessageId(),
+                                role: 'system',
+                                content: t('Working profile reset to a blank shell — building this card\'s orchestration from scratch.'),
+                                at: Date.now(),
+                            });
+                        }
                     }
                 },
             },
