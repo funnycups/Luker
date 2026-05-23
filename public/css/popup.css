@@ -19,10 +19,17 @@ dialog {
        touch-scroll inside the popup, exposing the page underneath. Stack
        the same tint as a gradient overlay so the effective alpha rises
        compoundly (e.g. α=0.6 → ~94% over three layers) without altering
-       hue. For opaque tints this stack is a no-op. */
+       hue. The bottommost layer uses relative color syntax to force
+       alpha=1 derived from the tint's RGB so even an α=0.1 theme renders
+       with a fully opaque base behind the translucent layers above. For
+       opaque tints this stack is a no-op. */
     background-image:
         linear-gradient(var(--SmartThemeBlurTintColor), var(--SmartThemeBlurTintColor)),
-        linear-gradient(var(--SmartThemeBlurTintColor), var(--SmartThemeBlurTintColor));
+        linear-gradient(var(--SmartThemeBlurTintColor), var(--SmartThemeBlurTintColor)),
+        linear-gradient(
+            rgb(from var(--SmartThemeBlurTintColor) r g b / 1),
+            rgb(from var(--SmartThemeBlurTintColor) r g b / 1)
+        );
     /* Isolate compositing so the popup's stacking context doesn't share
        layers with the ::backdrop, reducing the chance Chromium drops the
        backdrop-filter rasterization while the user scrolls inside. */

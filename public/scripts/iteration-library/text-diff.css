@@ -148,10 +148,17 @@
     background-color: var(--SmartThemeBlurTintColor);
     /* Stack the tint with itself so backdrop-filter drops during
        touch-scroll don't visually empty the dialog. Same idea the shell
-       used; see deleted .luker-studio-diff-zoom-dialog history. */
+       used; see deleted .luker-studio-diff-zoom-dialog history.
+       Bottommost layer forces alpha=1 from the tint's RGB so even an
+       α=0.1 theme renders with a fully opaque base behind the
+       translucent layers above. */
     background-image:
         linear-gradient(var(--SmartThemeBlurTintColor), var(--SmartThemeBlurTintColor)),
-        linear-gradient(var(--SmartThemeBlurTintColor), var(--SmartThemeBlurTintColor));
+        linear-gradient(var(--SmartThemeBlurTintColor), var(--SmartThemeBlurTintColor)),
+        linear-gradient(
+            rgb(from var(--SmartThemeBlurTintColor) r g b / 1),
+            rgb(from var(--SmartThemeBlurTintColor) r g b / 1)
+        );
     isolation: isolate;
     display: flex;
     flex-direction: column;
