@@ -297,6 +297,23 @@
     white-space: pre-wrap;
 }
 
+/* Loading bubble — shown while a runner round is in flight, styled to match
+   the assistant bubble accent but with a dashed border + lower opacity so
+   it reads as "pending" not "delivered". Mirrors CEA editor's
+   .cea_editor_msg_loading visual language. */
+.cpa_it_msg_loading {
+    align-self: flex-start;
+    padding: 8px 12px;
+    border-radius: var(--it-radius-md);
+    border: 1px dashed color-mix(in oklab, var(--it-accent-primary) 35%, transparent);
+    background: color-mix(in oklab, var(--it-accent-primary) 7%, transparent);
+    font-size: 0.92em;
+    opacity: var(--it-text-default);
+    display: inline-flex;
+    align-items: center;
+    gap: var(--it-space-xs);
+}
+
 /* ── Pending edits ─────────────────────────────────────────────────── */
 
 .cpa_it_pending {

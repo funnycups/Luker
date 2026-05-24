@@ -55,7 +55,7 @@ export const TOOL_DISPLAY = Object.freeze({
     preset_read_reference_fields:    '📖 Read reference fields',
     preset_diff_reference:           '🔍 Diff reference',
     preset_simulate:                 '🧪 Simulate prompt',
-    preset_clone_to_new:             '🌱 Clone to new preset',
+    preset_clone_to_new:             '📋 Clone to new preset',
     luker_cpa_continue_iteration:    '↻ Continue iteration',
     luker_cpa_finalize_iteration:    '✓ Finalize iteration',
 });
@@ -82,6 +82,22 @@ export function isCpaControlCall(toolCall) {
     return CONTROL_TOOL_NAME_SET.has(String(toolCall?.name || ''));
 }
 
+export const READ_TOOL_NAMES = new Set([
+    'preset_read_live_fields',
+    'preset_read_reference_fields',
+    'preset_diff_reference',
+    'preset_simulate',
+    // preset_clone_to_new isn't pure inspection — it saves a new preset and
+    // swaps the popup target. We still route it through the read-tool
+    // dispatcher so the executor's result threads back into the next round
+    // as a `role: 'tool'` reply (the model needs to learn whether the clone
+    // succeeded before continuing). Treat as a side-effecting read.
+    'preset_clone_to_new',
+]);
+export function isCpaReadTool(name) {
+    return READ_TOOL_NAMES.has(String(name || ''));
+}
+
 function parseArgs(call) {
     try { return JSON.parse(call?.function?.arguments ?? '{}'); }
     catch { return null; }
@@ -89,6 +105,43 @@ function parseArgs(call) {
 
 function isPlainObject(v) {
     return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+function escapeRegex(str) {
+    return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function countOccurrences(haystack, needle) {
+    if (!needle) return 0;
+    const re = new RegExp(escapeRegex(needle), 'g');
+    return (String(haystack).match(re) || []).length;
+}
+
+/**
+ * Pre-flight uniqueness check for str_insert / str_delete. The engine's
+ * str_* ops already enforce uniqueness via `anchor_ambiguous`, but they
+ * hardcode expected_count = 1. CPA's tool schemas accept `expected_count`
+ * so the AI can declare its intent ("I know this text appears N times,
+ * that's expected"); throwing here surfaces the mismatch to the assistant
+ * message + chat UI instead of waiting for the engine's conflict tracker.
+ *
+ * When expected_count is omitted, defaults to 1 (the engine's invariant).
+ * The lib's engine only edits the FIRST match, so expected_count > 1 is
+ * disallowed: it would imply multi-edit semantics the underlying op
+ * doesn't support.
+ */
+function assertStrOpUniqueness({ path, value, needle, expected_count, opLabel }) {
+    if (typeof value !== 'string') {
+        throw new Error(`${opLabel} expects a string at ${path}, got ${typeof value}.`);
+    }
+    const expected = Number.isInteger(expected_count) && expected_count >= 1 ? expected_count : 1;
+    if (expected !== 1) {
+        throw new Error(`${opLabel} only supports expected_count = 1 (got ${expected}); the underlying engine edits a unique anchor.`);
+    }
+    const actual = countOccurrences(value, needle);
+    if (actual !== expected) {
+        throw new Error(`${opLabel} expected ${expected} match(es) of "${String(needle).slice(0, 40)}" in ${path}, found ${actual}.`);
+    }
 }
 
 function normalizePromptIdentifier(value, fallback = '') {
@@ -244,6 +297,14 @@ function removePromptOrderItemFromBody(body, characterId, identifier) {
  * Emit coarse `set` edits for whichever of {prompts, prompt_order} the
  * sandbox actually changed compared to live. Same-content arrays are
  * skipped so no-op tool calls don't pollute the staged-edit list.
+ *
+ * TODO(CPA-7): refactor to emit per-entry edits (one `set` op per modified
+ * prompts[i] / prompt_order[i].order[j]) instead of a single full-array
+ * dump. The current full-array `set` keeps conflict resolution simple but
+ * makes the diff card show the entire array as "changed" even when only
+ * one entry moved. The shared library's per-leaf split for non-empty
+ * paths (C-LIB-3) will cover most of this once it lands; until then,
+ * preserving the full-array shape avoids regressing the existing flow.
  */
 function buildPromptAwareEdits(live, sandbox) {
     const edits = [];
@@ -307,13 +368,14 @@ export function buildToolCatalog({ hasReference = false } = {}) {
             type: 'function',
             function: {
                 name: 'preset_str_insert',
-                description: 'Insert text immediately after a unique anchor substring in a string-valued preset field.',
+                description: 'Insert text immediately after a unique anchor substring in a string-valued preset field. `after_text` must occur exactly expected_count times (default 1).',
                 parameters: {
                     type: 'object',
                     properties: {
                         path: { type: 'string' },
                         after_text: { type: 'string' },
                         insert_text: { type: 'string' },
+                        expected_count: { type: 'integer', minimum: 1, default: 1, description: 'Number of expected matches for "after_text" (default 1). The op fails if matches != expected_count.' },
                         reason: { type: 'string' },
                     },
                     required: ['path', 'after_text', 'insert_text'],
@@ -324,12 +386,13 @@ export function buildToolCatalog({ hasReference = false } = {}) {
             type: 'function',
             function: {
                 name: 'preset_str_delete',
-                description: 'Remove a unique substring from a string-valued preset field.',
+                description: 'Remove a unique substring from a string-valued preset field. `find` must occur exactly expected_count times (default 1).',
                 parameters: {
                     type: 'object',
                     properties: {
                         path: { type: 'string' },
                         find: { type: 'string' },
+                        expected_count: { type: 'integer', minimum: 1, default: 1, description: 'Number of expected matches for "find" (default 1). The op fails if matches != expected_count.' },
                         reason: { type: 'string' },
                     },
                     required: ['path', 'find'],
@@ -542,14 +605,15 @@ export function buildToolCatalog({ hasReference = false } = {}) {
             type: 'function',
             function: {
                 name: 'preset_clone_to_new',
-                description: 'Clone the current live preset under a new name and switch the dialog target to it. Use when the user agrees to derive a new preset rather than editing the original. Fails if new_name already exists.',
+                description: 'Clone the current live preset under a new name and switch the popup target to the clone. Use before destructive edits when the user wants to keep the original intact. Fails if new_name already exists.',
                 parameters: {
                     type: 'object',
                     properties: {
-                        new_name: { type: 'string' },
-                        reason: { type: 'string' },
+                        new_name: { type: 'string', description: 'Name for the cloned preset. Must be unique.' },
+                        reason: { type: 'string', description: 'Why deriving instead of editing in place.' },
                     },
                     required: ['new_name'],
+                    additionalProperties: false,
                 },
             },
         },
@@ -613,6 +677,248 @@ export function classifyToolCall(call) {
     return EDITABLE_TOOL_NAMES.has(call?.function?.name) ? 'editable' : 'control';
 }
 
+/**
+ * Execute one read tool synchronously and return its result. The studio
+ * loop runs this inline per read call so the next round's taskMessages
+ * carry the tool_result (mirroring CEA editor + Orchestrator iter popups).
+ *
+ * Resolves `{ ok: true, result: <payload> }` on success and `{ ok: false,
+ * error: string }` on a known failure (no reference selected, missing
+ * paths, etc.). The studio wraps unknown throws into `{ ok: false }` too.
+ *
+ * ctx shape:
+ *   - live              the current live preset body (state.live)
+ *   - reference         the loaded reference preset body, or null
+ *   - referenceName     name of the reference preset, or ''
+ *   - presetName        name of the live preset (state.targetName)
+ *   - context           SillyTavern context (used by preset_simulate)
+ *   - getContext        optional callable that returns the SillyTavern context
+ */
+export async function runCpaReadTool(call, ctx = {}) {
+    const name = String(call?.name || '');
+    const args = (call?.args && typeof call.args === 'object') ? call.args : {};
+
+    if (name === 'preset_read_live_fields') {
+        const paths = normalizeReadPaths(args);
+        if (paths.length === 0) {
+            return { ok: false, error: 'preset_read_live_fields requires at least one path.' };
+        }
+        const live = isPlainObject(ctx?.live) ? ctx.live : {};
+        return {
+            ok: true,
+            result: {
+                presetName: String(ctx?.presetName || '').trim(),
+                source: 'live',
+                values: buildPresetFieldReadResult(live, paths),
+            },
+        };
+    }
+
+    if (name === 'preset_read_reference_fields') {
+        const reference = isPlainObject(ctx?.reference) ? ctx.reference : null;
+        if (!reference) {
+            return { ok: false, error: 'No reference preset is selected.' };
+        }
+        const paths = normalizeReadPaths(args);
+        if (paths.length === 0) {
+            return { ok: false, error: 'preset_read_reference_fields requires at least one path.' };
+        }
+        return {
+            ok: true,
+            result: {
+                presetName: String(ctx?.referenceName || '').trim(),
+                source: 'reference',
+                values: buildPresetFieldReadResult(reference, paths),
+            },
+        };
+    }
+
+    if (name === 'preset_diff_reference') {
+        const reference = isPlainObject(ctx?.reference) ? ctx.reference : null;
+        if (!reference) {
+            return { ok: false, error: 'No reference preset is selected.' };
+        }
+        const live = isPlainObject(ctx?.live) ? ctx.live : {};
+        const narrowPaths = normalizeReadPaths(args);
+        const differing_paths = computeDifferingPaths(live, reference, narrowPaths);
+        return {
+            ok: true,
+            result: {
+                livePresetName: String(ctx?.presetName || '').trim(),
+                referencePresetName: String(ctx?.referenceName || '').trim(),
+                differing_paths,
+                live_outline: buildPromptLayoutOutline(live),
+                reference_outline: buildPromptLayoutOutline(reference),
+            },
+        };
+    }
+
+    if (name === 'preset_simulate') {
+        const stContext = ctx?.context || (typeof ctx?.getContext === 'function' ? ctx.getContext() : null);
+        if (!stContext || typeof stContext.buildPresetAwarePromptMessages !== 'function') {
+            return { ok: false, error: 'Prompt preset simulator is unavailable in this environment.' };
+        }
+        const text = String(args.text || '').trim();
+        const messages = Array.isArray(args.messages) ? args.messages : null;
+        const source = buildSimulateSourceMessages(stContext, { text, messages });
+        if (!source || source.messages.length === 0) {
+            return { ok: false, error: 'preset_simulate requires either text or messages.' };
+        }
+        try {
+            const runtimeWorldInfo = typeof stContext.resolveWorldInfoForMessages === 'function'
+                ? await stContext.resolveWorldInfoForMessages(source.messages, {
+                    type: 'quiet',
+                    fallbackToCurrentChat: false,
+                })
+                : {};
+            const promptMessages = stContext.buildPresetAwarePromptMessages({
+                messages: source.messages,
+                envelopeOptions: { includeCharacterCard: true, api: 'openai' },
+                runtimeWorldInfo,
+            });
+            const assembled_length = Array.isArray(promptMessages)
+                ? promptMessages.reduce((sum, m) => sum + String(m?.content || '').length, 0)
+                : 0;
+            return {
+                ok: true,
+                result: {
+                    mode: source.mode,
+                    sourceMessages: source.messages,
+                    promptMessages,
+                    assembled_length,
+                },
+            };
+        } catch (err) {
+            return { ok: false, error: String(err?.message || err || 'simulate failed') };
+        }
+    }
+
+    if (name === 'preset_clone_to_new') {
+        const newName = String(args?.new_name || '').trim();
+        if (!newName) return { ok: false, error: 'preset_clone_to_new requires a non-empty new_name.' };
+        if (typeof ctx?.cloneAndSwitchTarget !== 'function') {
+            return { ok: false, error: 'preset_clone_to_new is not wired in this popup (deps.cloneAndSwitchTarget missing).' };
+        }
+        try {
+            const out = await ctx.cloneAndSwitchTarget(newName);
+            if (out?.ok) return { ok: true, result: { new_name: newName, cloned: true } };
+            return { ok: false, error: String(out?.error || 'clone failed') };
+        } catch (err) {
+            return { ok: false, error: String(err?.message || err || 'clone failed') };
+        }
+    }
+
+    return { ok: false, error: `Unknown read tool: ${name}` };
+}
+
+function normalizeReadPaths(args) {
+    const list = Array.isArray(args?.paths) ? args.paths : [];
+    const seen = new Set();
+    for (const item of list) {
+        const trimmed = String(item || '').trim();
+        if (trimmed) seen.add(trimmed);
+    }
+    return [...seen];
+}
+
+function buildPresetFieldReadResult(body, paths) {
+    return paths.map((path) => ({
+        path,
+        exists: lodash.has(body, path),
+        value: cloneJsonish(lodash.get(body, path)),
+    }));
+}
+
+function cloneJsonish(value) {
+    if (value === undefined) return null;
+    try {
+        return structuredClone(value);
+    } catch {
+        try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
+    }
+}
+
+function computeDifferingPaths(live, reference, narrowPaths) {
+    const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+    const out = [];
+    function walk(prefix, a, b) {
+        if (a === b) return;
+        const aIsObj = isObj(a);
+        const bIsObj = isObj(b);
+        if (!aIsObj || !bIsObj) {
+            // Leaf or container-shape change.
+            if (JSON.stringify(a) !== JSON.stringify(b)) {
+                out.push(prefix || '(root)');
+            }
+            return;
+        }
+        const keys = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
+        for (const k of keys) {
+            walk(prefix ? `${prefix}.${k}` : k, a?.[k], b?.[k]);
+        }
+    }
+    if (narrowPaths.length > 0) {
+        for (const p of narrowPaths) {
+            const aSub = lodash.get(live, p);
+            const bSub = lodash.get(reference, p);
+            walk(p, aSub, bSub);
+        }
+    } else {
+        walk('', live, reference);
+    }
+    return out;
+}
+
+function buildPromptLayoutOutline(body) {
+    const prompts = Array.isArray(body?.prompts) ? body.prompts : [];
+    const promptIndex = new Map();
+    for (const p of prompts) {
+        const id = normalizePromptIdentifier(p?.identifier, p?.id);
+        if (!id) continue;
+        promptIndex.set(id, {
+            identifier: id,
+            role: String(p?.role || 'system'),
+            name: String(p?.name || ''),
+            content_length: String(p?.content || '').length,
+        });
+    }
+    const groups = Array.isArray(body?.prompt_order) ? body.prompt_order : [];
+    return groups.map((group) => ({
+        character_id: group?.character_id ?? null,
+        order: (Array.isArray(group?.order) ? group.order : []).map((item) => {
+            const id = normalizePromptIdentifier(item?.identifier);
+            const meta = promptIndex.get(id);
+            return {
+                identifier: id,
+                enabled: item?.enabled !== false,
+                role: meta?.role || 'system',
+                name: meta?.name || '',
+                content_length: meta?.content_length || 0,
+            };
+        }),
+    }));
+}
+
+function buildSimulateSourceMessages(context, { text, messages }) {
+    if (messages && messages.length > 0) {
+        return { mode: 'messages', messages };
+    }
+    if (text) {
+        const existingChat = Array.isArray(context?.chat) ? context.chat : [];
+        const carry = existingChat
+            .filter((m) => m && typeof m === 'object')
+            .map((m) => ({
+                role: m.is_user ? 'user' : (m.is_system ? 'system' : 'assistant'),
+                content: String(m.mes || ''),
+            }));
+        return {
+            mode: 'text',
+            messages: [...carry, { role: 'user', content: text }],
+        };
+    }
+    return { mode: 'empty', messages: [] };
+}
+
 export async function normalizeToolCallToEdit(call, ctx) {
     const name = call?.function?.name;
     const args = parseArgs(call);
@@ -645,6 +951,13 @@ export async function normalizeToolCallToEdit(call, ctx) {
         }];
     }
     if (name === 'preset_str_insert') {
+        assertStrOpUniqueness({
+            path: args.path,
+            value: lodash.get(live, args.path),
+            needle: args.after_text,
+            expected_count: args.expected_count,
+            opLabel: 'preset_str_insert',
+        });
         return [{
             op: 'str_insert',
             path: args.path,
@@ -653,6 +966,13 @@ export async function normalizeToolCallToEdit(call, ctx) {
         }];
     }
     if (name === 'preset_str_delete') {
+        assertStrOpUniqueness({
+            path: args.path,
+            value: lodash.get(live, args.path),
+            needle: args.find,
+            expected_count: args.expected_count,
+            opLabel: 'preset_str_delete',
+        });
         return [{
             op: 'str_delete',
             path: args.path,

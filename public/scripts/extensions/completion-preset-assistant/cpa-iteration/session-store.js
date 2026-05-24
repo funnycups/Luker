@@ -63,6 +63,7 @@ export function normalizeMessageShape(m, fallbackAt = Date.now()) {
         at: typeof m.at === 'number' ? m.at : Number(fallbackAt) || Date.now(),
     };
     if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) out.toolCalls = m.toolCalls;
+    if (Array.isArray(m.toolResults) && m.toolResults.length > 0) out.toolResults = m.toolResults;
     if (Array.isArray(m.edits) && m.edits.length > 0) out.edits = m.edits;
     if (typeof m.appliedAt === 'number') out.appliedAt = m.appliedAt;
     if (m.appliedTarget) out.appliedTarget = String(m.appliedTarget);

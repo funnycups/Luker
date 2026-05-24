@@ -273,6 +273,20 @@ async function openCpaIteration() {
             llmPresetName: String(getSettings()?.requestLlmPresetName || '').trim(),
             apiPresetName: String(getSettings()?.requestApiProfileName || '').trim(),
         }),
+        // `preset_clone_to_new` tool wiring. The real implementation needs a
+        // SillyTavern preset-save + popup-target swap; until that's plumbed,
+        // the stub returns a structured failure so the model's tool result
+        // surfaces an actionable message in chat ("save a copy manually
+        // via Save As, then re-run") rather than silently no-op'ing. The
+        // prompt-side safety-net intent (suggest derivation before
+        // destructive edits) is preserved either way — the AI sees the
+        // unavailability and can still suggest the manual fallback.
+        cloneAndSwitchTarget: async (_newName) => {
+            return {
+                ok: false,
+                error: 'Auto-clone is not wired yet. Please save a copy manually via the preset dropdown\'s Save As button, then re-run.',
+            };
+        },
     });
 }
 

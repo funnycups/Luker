@@ -56,23 +56,23 @@
  */
 
 import { Popup, POPUP_TYPE } from '../../../popup.js';
-import { lodash } from '../../../../lib.js';
 import {
     applyEdits,
     inverseEdit,
     bindIterWorkspaceResizer,
     render as ITER_RENDER,
     runner as ITER_RUNNER,
-    textDiff as ITER_TEXT_DIFF,
     zoomOverlay as ITER_ZOOM_OVERLAY,
+    ui as ITER_UI,
 } from '../../../iteration-library/index.js';
 import {
     buildToolCatalog,
     normalizeToolCallToEdit,
-    TOOL_DISPLAY,
+    runCpaReadTool,
     EDITABLE_TOOL_NAMES,
     CONTROL_TOOL_NAMES,
     isCpaControlCall,
+    isCpaReadTool,
 } from './tools.js';
 import {
     buildModelSystemPrompt,
@@ -83,6 +83,7 @@ import {
     SESSION_MODE_DEFAULT,
 } from './system-prompts.js';
 import { createCpaIterationSessionStore, makeMessageId, normalizeMessageShape } from './session-store.js';
+import { CPA_TOOL_DISPLAY } from './tool-display.js';
 
 const MODULE = 'cpa-iteration';
 const STYLESHEET_ID = 'cpa_it_studio_stylesheet';
@@ -423,6 +424,14 @@ export async function openCpaIterationStudio(deps) {
         getRequestPresetOptions,
     } = deps;
 
+    // Optional wiring for the `preset_clone_to_new` tool. When the host plugin
+    // supplies a `cloneAndSwitchTarget(newName)` callable, the AI can derive a
+    // safe copy before destructive edits. When omitted (e.g. tests, or a host
+    // that hasn't implemented the save-as flow yet), the tool returns a
+    // structured error to the model so it can fall back to suggesting a
+    // manual clone via the preset dropdown.
+    const cloneAndSwitchTarget = deps.cloneAndSwitchTarget || null;
+
     if (typeof getTargetRef !== 'function') {
         throw new TypeError('openCpaIterationStudio: deps.getTargetRef is required');
     }
@@ -439,6 +448,10 @@ export async function openCpaIterationStudio(deps) {
     // Inject the popup stylesheet on first open. Idempotent; subsequent
     // calls are no-ops because the <link> element is id-keyed.
     ensureStylesheetInjected();
+    // Inject the shared iteration-library/ui stylesheet so the chip + diff
+    // classes (luker_lib_toolcall*, etc.) resolve once renderToolCallChip
+    // delegates to the shared component.
+    ITER_UI.ensureUiStylesheetInjected();
 
     // ──────────────────────────────────────────────────────────────────
     // Per-preset session store (bucket = presets.state[SESSION_NAMESPACE]).
@@ -587,269 +600,43 @@ export async function openCpaIterationStudio(deps) {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // Pending-edit cards — Q8: per-op real-diff rendering. CPA has more
-    // edit shapes than CEA Character; each branch matches the op shape
-    // emitted by `tools.js#normalizeToolCallToEdit`.
-    //
-    // String-shape edits (`set` on a string field, `str_replace`,
-    // `str_insert`) route through the iteration-library's side-by-side
-    // LCS diff renderer so the user sees the change in context rather
-    // than `<old> → <new>` next to each other. The 120-char threshold
-    // matches the original inline form for short values where the
-    // compact `→` arrow already reads well.
+    // Pending-edit card. Delegates to `iteration-library/ui/diff` so the
+    // visual diff language matches the other three iter-library popups
+    // (CEA char, MG schema, Orchestrator) and the upcoming unified CEA
+    // editor (M2). The shared component handles `set` ops with whole-
+    // object → per-changed-leaf splitting (previously hand-rolled in
+    // CPA), and falls back to a compact op + path chip for non-`set`
+    // ops. Prompt-aware tools normalize to `set` edits inside
+    // `tools.js#buildPromptAwareEdits` before reaching this renderer,
+    // so the rich library-diff path covers the common case.
     // ──────────────────────────────────────────────────────────────────
-    const LIB_DIFF_MIN_LEN = 120;
-    const STR_REPLACE_PREVIEW_MAX = 2000;
-
-    function truncateValue(v, max = 80) {
-        if (v === null || v === undefined) return '';
-        const s = typeof v === 'string' ? v : JSON.stringify(v);
-        return s.length > max ? s.slice(0, max) + '…' : s;
-    }
-
-    function truncateForDiff(text) {
-        const s = String(text ?? '');
-        return s.length > STR_REPLACE_PREVIEW_MAX
-            ? s.slice(0, STR_REPLACE_PREVIEW_MAX) + '\n…(truncated)'
-            : s;
-    }
-
-    function shouldUseLibraryDiff(oldValue, newValue) {
-        if (typeof oldValue !== 'string' || typeof newValue !== 'string') return false;
-        return oldValue.length > LIB_DIFF_MIN_LEN || newValue.length > LIB_DIFF_MIN_LEN;
-    }
-
-    function renderLibraryDiff(before, after, fileLabel) {
-        return ITER_TEXT_DIFF.renderInlineTextDiffHtml(before, after, {
-            fileLabel,
-            i18n: t,
-            forceOpen: true,
+    function renderPendingEditCard(edit) {
+        return ITER_UI.diff.renderDiffCard([edit], {
+            i18n: tf,
         });
     }
 
-    function renderPendingEditCard(edit) {
-        const op = String(edit?.op || '');
-        const path = String(edit?.path || '');
-        if (op === 'set') {
-            if (shouldUseLibraryDiff(edit.oldValue, edit.newValue)) {
-                return `<div class="cpa_it_pending_card">
-                    <span class="op">${escapeHtml(t('set'))}</span>
-                    <code>${escapeHtml(path)}</code>
-                    ${renderLibraryDiff(String(edit.oldValue ?? ''), String(edit.newValue ?? ''), path)}
-                </div>`;
-            }
-            const oldStr = truncateValue(edit.oldValue);
-            const newStr = truncateValue(edit.newValue);
-            return `<div class="cpa_it_pending_card">
-                <span class="op">${escapeHtml(t('set'))}</span>
-                <code>${escapeHtml(path)}</code>:
-                <span class="diff_old">${escapeHtml(oldStr)}</span>
-                <span class="diff_arrow">→</span>
-                <span class="diff_new">${escapeHtml(newStr)}</span>
-            </div>`;
-        }
-        if (op === 'str_replace') {
-            const find = String(edit.find ?? '');
-            const replaceWith = String(edit.replace ?? '');
-            // Surface the change in context: simulate the replace against
-            // the live snapshot (lodash.get handles bracket-notation paths
-            // like `prompts[0].content`), then library-diff before-vs-after
-            // so the surrounding paragraph shows up too.
-            const before = path && state.live ? lodash.get(state.live, path) : undefined;
-            if (typeof before === 'string') {
-                const after = before.replace(find, replaceWith);
-                const count = Number(edit?.expected_count);
-                const countNote = Number.isInteger(count) && count > 0
-                    ? ` <span class="cpa_it_pending_note">(×${count})</span>`
-                    : '';
-                return `<div class="cpa_it_pending_card">
-                    <span class="op">${escapeHtml(t('replace'))}</span>
-                    <code>${escapeHtml(path)}</code>${countNote}
-                    ${renderLibraryDiff(truncateForDiff(before), truncateForDiff(after), `${path} (str_replace)`)}
-                </div>`;
-            }
-            const count = Number(edit?.expected_count);
-            const countNote = Number.isInteger(count) && count > 0
-                ? ` <span class="cpa_it_pending_note">(×${count})</span>`
-                : '';
-            return `<div class="cpa_it_pending_card">
-                <span class="op">${escapeHtml(t('replace'))}</span>
-                <code>${escapeHtml(path)}</code>${countNote}:
-                <span class="diff_old">${escapeHtml(truncateValue(find))}</span>
-                <span class="diff_arrow">→</span>
-                <span class="diff_new">${escapeHtml(truncateValue(replaceWith))}</span>
-            </div>`;
-        }
-        if (op === 'str_insert') {
-            const afterText = String(edit.after_text ?? '');
-            const insertText = String(edit.insert_text ?? '');
-            // Same simulate-the-replacement approach as str_replace: paste
-            // the insert_text immediately after the first occurrence of
-            // after_text in the live value. When the field isn't a string
-            // we fall through to the legacy inline form.
-            const beforeRaw = path && state.live ? lodash.get(state.live, path) : undefined;
-            if (typeof beforeRaw === 'string') {
-                const at = beforeRaw.indexOf(afterText);
-                const after = at >= 0
-                    ? beforeRaw.slice(0, at + afterText.length) + insertText + beforeRaw.slice(at + afterText.length)
-                    : beforeRaw + insertText;
-                return `<div class="cpa_it_pending_card">
-                    <span class="op">${escapeHtml(t('insert'))}</span>
-                    <code>${escapeHtml(path)}</code>
-                    ${renderLibraryDiff(truncateForDiff(beforeRaw), truncateForDiff(after), `${path} (str_insert)`)}
-                </div>`;
-            }
-            return `<div class="cpa_it_pending_card">
-                <span class="op">${escapeHtml(t('insert'))}</span>
-                <code>${escapeHtml(path)}</code>:
-                <div class="cpa_it_pending_row">
-                    ${escapeHtml(t('after'))}:
-                    <span class="diff_anchor">${escapeHtml(truncateValue(edit.after_text))}</span>
-                </div>
-                <div class="cpa_it_pending_row">
-                    ${escapeHtml(t('insert'))}:
-                    <span class="diff_new">${escapeHtml(truncateValue(edit.insert_text))}</span>
-                </div>
-            </div>`;
-        }
-        if (op === 'str_delete') {
-            return `<div class="cpa_it_pending_card">
-                <span class="op">${escapeHtml(t('delete text'))}</span>
-                <code>${escapeHtml(path)}</code>:
-                <span class="diff_old">${escapeHtml(truncateValue(edit.find))}</span>
-            </div>`;
-        }
-        if (op === 'list_insert') {
-            const anchor = edit?.anchor || {};
-            const anchorDesc = Object.hasOwn(anchor, 'after')
-                ? t('after index ') + String(anchor.after)
-                : Object.hasOwn(anchor, 'before')
-                    ? t('before index ') + String(anchor.before)
-                    : '';
-            return `<div class="cpa_it_pending_card">
-                <span class="op">${escapeHtml(t('list insert'))}</span>
-                <code>${escapeHtml(path)}</code>
-                ${escapeHtml(anchorDesc)}:
-                <span class="diff_new">${escapeHtml(truncateValue(edit.value))}</span>
-            </div>`;
-        }
-        if (op === 'list_remove') {
-            return `<div class="cpa_it_pending_card">
-                <span class="op">${escapeHtml(t('list remove'))}</span>
-                <code>${escapeHtml(path)}</code>
-                ${escapeHtml(t('index ') + String(edit?.index ?? ''))}:
-                <span class="diff_old">${escapeHtml(truncateValue(edit.expected_value))}</span>
-            </div>`;
-        }
-        if (op === 'list_move') {
-            return `<div class="cpa_it_pending_card">
-                <span class="op">${escapeHtml(t('list move'))}</span>
-                <code>${escapeHtml(path)}</code>:
-                ${escapeHtml(t('from ') + String(edit?.from_index ?? ''))}
-                <span class="diff_arrow">→</span>
-                ${escapeHtml(t('to ') + String(edit?.to_index ?? ''))}
-                <span class="diff_old">${escapeHtml(truncateValue(edit.expected_value))}</span>
-            </div>`;
-        }
-        // Prompt-aware tools translate into coarse `set` edits on
-        // prompts / prompt_order in `tools.js#buildPromptAwareEdits`, so
-        // they hit the `set` branch above. The branches below cover the
-        // direct opcodes in case future refactors emit them.
-        if (op === 'upsert_prompt_entry') {
-            const content = String(edit.content ?? '');
-            if (content.length > LIB_DIFF_MIN_LEN) {
-                return `<div class="cpa_it_pending_card">
-                    <span class="op">${escapeHtml(t('upsert prompt entry'))}</span>
-                    <code>${escapeHtml(String(edit.identifier || ''))}</code>
-                    ${renderLibraryDiff('', content, String(edit.identifier || 'content'))}
-                </div>`;
-            }
-            return `<div class="cpa_it_pending_card">
-                <span class="op">${escapeHtml(t('upsert prompt entry'))}</span>
-                <code>${escapeHtml(String(edit.identifier || ''))}</code>:
-                <span class="diff_new">${escapeHtml(truncateValue(edit.content))}</span>
-            </div>`;
-        }
-        if (op === 'remove_prompt_entry') {
-            return `<div class="cpa_it_pending_card">
-                <span class="op">${escapeHtml(t('remove prompt entry'))}</span>
-                <code>${escapeHtml(String(edit.identifier || ''))}</code>
-            </div>`;
-        }
-        if (op === 'upsert_prompt_order_item') {
-            return `<div class="cpa_it_pending_card">
-                <span class="op">${escapeHtml(t('place in prompt order'))}</span>
-                <code>${escapeHtml(String(edit.identifier || ''))}</code>
-                @ ${escapeHtml(t('group ') + String(edit.character_id ?? '(default)'))}
-                ${edit.enabled === false ? `<span class="cpa_it_pending_note">${escapeHtml(t('(disabled)'))}</span>` : ''}
-            </div>`;
-        }
-        if (op === 'remove_prompt_order_item') {
-            return `<div class="cpa_it_pending_card">
-                <span class="op">${escapeHtml(t('remove from prompt order'))}</span>
-                <code>${escapeHtml(String(edit.identifier || ''))}</code>
-                @ ${escapeHtml(t('group ') + String(edit.character_id ?? '(default)'))}
-            </div>`;
-        }
-        // Unknown op fallback — still render the path so users see what
-        // the model attempted, even if the engine wouldn't apply it.
-        return `<div class="cpa_it_pending_card">
-            <span class="op">${escapeHtml(op || t('(unknown op)'))}</span>
-            <code>${escapeHtml(path)}</code>
-        </div>`;
-    }
-
     // ──────────────────────────────────────────────────────────────────
-    // Chat-message rendering. Q2 + Q7:
-    //   - assistant messages route through the library's markdown renderer
-    //     (`render.renderMessageMarkdown`) which sanitizes via DOMPurify, so
-    //     embedding via `innerHTML` is XSS-safe.
-    //   - user / assistant / system messages get distinct CSS classes for
-    //     visual distinction (alignment, background, etc.).
+    // Chat-message rendering. CPA delegates to
+    // `iteration-library/ui/message.renderMessageCard` (M1.4) so the
+    // four iter-library popups (CPA, MG schema, Orch, CEA char) share
+    // one visual language for tool-call chips, per-round edit cards,
+    // applied/rolled-back stamps, and the Regenerate / Rollback row.
     //
-    // Assistant messages may carry persisted `toolCalls` + `edits` arrays;
-    // when present, they render inside a collapsible <details> block so
-    // the per-round audit trail stays browseable after Apply. The block
-    // also hosts the per-message Rollback button (visible when applied)
-    // and the Regenerate button (visible on non-last assistant turns).
+    // CPA preserves only the outer `<div class="cpa_it_msg ...">`
+    // wrapper around the shared component, because studio.css's
+    // flex-row alignment / accent colors / max-widths key on
+    // `.cpa_it_msg_user` / `_assistant` / `_system`. The inner
+    // `<div class="luker_lib_message ...">` emitted by the shared
+    // component carries the rest of the structure (markdown body,
+    // read-only-round hint when all calls are read-type, tool chips,
+    // edit cards via renderPendingEditCard, applied/rolled-back stamp,
+    // Regenerate button). Click delegation accepts msgId from either
+    // `data-cpa-it-msg-id` (outer) or `data-luker-lib-msg-id` (inner).
     // ──────────────────────────────────────────────────────────────────
-    function formatTime(ts) {
-        try {
-            const d = new Date(Number(ts) || Date.now());
-            return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-        } catch { return ''; }
-    }
-
-    function renderToolCallChip(tc) {
-        const name = String(tc?.name || '');
-        const label = TOOL_DISPLAY[name] || name || t('(tool)');
-        let argsText;
-        try { argsText = JSON.stringify(tc?.args ?? {}, null, 2); } catch { argsText = String(tc?.args ?? ''); }
-        return `
-            <div class="cpa_it_msg_toolcall">
-                <div class="cpa_it_msg_toolcall_name">${escapeHtml(label)}</div>
-                <pre class="cpa_it_msg_toolcall_args">${escapeHtml(argsText)}</pre>
-            </div>`;
-    }
-
-    function renderEditChip(edit) {
-        // Reuse the pending-card renderer so the per-message audit trail
-        // and the active pending block look visually identical — the user
-        // doesn't have to learn two diff visual languages.
-        return renderPendingEditCard(edit);
-    }
-
     function renderMessageCard(message, idx, allMessages) {
         if (!message) return '';
         const role = String(message.role || 'user');
-        const content = String(message.content || '');
-        let bodyHtml;
-        if (role === 'assistant') {
-            // sanitized by DOMPurify inside renderMessageMarkdown
-            bodyHtml = ITER_RENDER.renderMessageMarkdown(content);
-        } else {
-            bodyHtml = escapeHtml(content).replace(/\n/g, '<br>');
-        }
         const roleCls = role === 'user'
             ? 'cpa_it_msg_user'
             : role === 'assistant'
@@ -857,70 +644,40 @@ export async function openCpaIterationStudio(deps) {
                 : 'cpa_it_msg_system';
         const autoCls = message.auto ? ' cpa_it_msg_auto' : '';
 
-        const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
-        const edits = Array.isArray(message.edits) ? message.edits : [];
-        const hasTrail = toolCalls.length > 0 || edits.length > 0;
-        const applied = Boolean(message.appliedAt) && !message.rolledBackAt;
-        const rolledBack = Boolean(message.rolledBackAt);
-        const detailsOpen = hasTrail && !applied && !rolledBack;
-
-        let trailHtml = '';
-        if (hasTrail) {
-            const headerLabel = tf('Tools and edits this round (${0})', String(toolCalls.length + edits.length));
-            const statusHtml = rolledBack
-                ? `<span class="cpa_it_msg_rolled_back">${escapeHtml(tf('Rolled back at ${0}', formatTime(message.rolledBackAt)))}</span>`
-                : (applied
-                    ? `
-                        <span class="cpa_it_msg_applied">${escapeHtml(tf('✓ Applied to ${0} at ${1}', t('preset'), formatTime(message.appliedAt)))}</span>
-                        <button class="menu_button menu_button_small" data-cpa-it-custom-action="rollback-batch" data-cpa-it-msg-id="${escapeHtml(message.id || '')}">
-                            ${escapeHtml(t('Rollback'))}
-                        </button>
-                    `
-                    : '');
-
-            const toolsHtml = toolCalls.map(renderToolCallChip).join('');
-            const editsHtml = edits.map(renderEditChip).join('');
-
-            trailHtml = `
-                <details class="cpa_it_msg_trail" ${detailsOpen ? 'open' : ''}>
-                    <summary>${escapeHtml(headerLabel)}</summary>
-                    <div class="cpa_it_msg_trail_body">
-                        ${toolsHtml}
-                        ${editsHtml}
-                    </div>
-                    ${statusHtml ? `<div class="cpa_it_msg_trail_status">${statusHtml}</div>` : ''}
-                </details>
-            `;
+        // Last-assistant predicate: true only when this assistant turn has
+        // no later assistant in the visible message list. Trailing user /
+        // system / auto-continue turns are skipped so the actual final
+        // assistant reply (the one whose prompt is the live tail) hides
+        // its Regenerate button — re-sending from the same composer text
+        // is semantically equivalent.
+        let isLast = false;
+        if (role === 'assistant' && !message.auto) {
+            isLast = true;
+            for (let j = (allMessages?.length || 0) - 1; j > idx; j--) {
+                if (allMessages[j]?.role === 'assistant' && !allMessages[j]?.auto) { isLast = false; break; }
+            }
         }
 
-        // Regenerate is per-assistant-message, only when it's not the
-        // current tail (otherwise just hit Send again to re-run from the
-        // same prompt). We also skip auto-continue synthetic assistants;
-        // their prompt was synthesized so regen would just truncate to
-        // the prior human turn anyway — semantically identical to
-        // regenerating that prior turn.
-        const isLastAssistant = (() => {
-            if (role !== 'assistant') return false;
-            for (let j = (allMessages?.length || 0) - 1; j > idx; j--) {
-                if (allMessages[j]?.role === 'assistant') return false;
-            }
-            return true;
-        })();
-        const showRegenerate = role === 'assistant' && !isLastAssistant && !message.auto;
-        const actionsHtml = showRegenerate
-            ? `
-                <div class="cpa_it_msg_actions">
-                    <button class="menu_button menu_button_small" data-cpa-it-custom-action="regenerate" data-cpa-it-msg-id="${escapeHtml(message.id || '')}">
-                        ${escapeHtml(t('Regenerate'))}
-                    </button>
-                </div>`
-            : '';
+        const innerHtml = ITER_UI.message.renderMessageCard(message, {
+            toolDisplay: CPA_TOOL_DISPLAY,
+            renderEditCard: renderPendingEditCard,
+            isLast,
+            i18n: tf,
+            renderMarkdown: ITER_RENDER.renderMessageMarkdown,
+            actionAttribute: 'data-cpa-it-action',
+        });
 
-        return `<div class="cpa_it_msg ${roleCls}${autoCls}" data-cpa-it-msg-id="${escapeHtml(message.id || '')}">
-            ${bodyHtml}
-            ${trailHtml}
-            ${actionsHtml}
-        </div>`;
+        // The shared renderer returns '' for auto-continue user messages
+        // (internal plumbing, no user-visible content). Skip the outer
+        // wrapper too so the chat doesn't show empty padded cards.
+        if (!innerHtml) return '';
+
+        // Preserve CPA's outer flex-row container so the popup's
+        // alignment / accent-color / max-width rules in studio.css still
+        // apply. The shared component emits its own `<div
+        // class="luker_lib_message">` inner wrapper; click delegation
+        // resolves msgId from both attributes (see handler block below).
+        return `<div class="cpa_it_msg ${roleCls}${autoCls}" data-cpa-it-msg-id="${escapeHtml(message.id || '')}">${innerHtml}</div>`;
     }
 
     function renderHistoryItem(meta) {
@@ -1015,21 +772,29 @@ export async function openCpaIterationStudio(deps) {
             }
         } catch { /* DOM not attached (test) */ }
 
-        // Pending edits — single Apply button per spec §3.4 (CPA scope is
-        // always "preset" since CPA edits preset bodies; no character /
-        // global split). Discard stays available as a per-batch escape
-        // hatch for users who don't trust the AI's proposed change.
+        // Pending edits — delegates the apply/discard row to the shared
+        // `iteration-library/ui/apply` component so it stays visually in
+        // sync with the other iter-library popups (M1.7). The shared
+        // component emits `${actionAttribute}="apply-batch"` and
+        // `discard-batch` buttons; CPA's click delegation matches those
+        // values too (see handler block below). `pendingMessage` is a
+        // virtual carrier — the popup's pending block is owned by the
+        // session, not by a specific assistant turn, so we synthesize
+        // a message-shape with the staged edits and no applied/rolledback
+        // stamps so renderApplyControls falls into the "pending" branch.
         const $pending = $root.find('[data-cpa-it-pending]');
         if (state.pendingEdits.length > 0) {
             const cardsHtml = state.pendingEdits.map(renderPendingEditCard).join('');
-            const applyLabel = tf('Apply to ${0}', t('preset'));
+            const pendingMessage = { id: '', edits: state.pendingEdits };
+            const applyHtml = ITER_UI.apply.renderApplyControls(pendingMessage, {
+                i18n: tf,
+                applyLabel: tf('Apply to ${0}', t('preset')),
+                actionAttribute: 'data-cpa-it-action',
+            });
             $pending.html(`
                 <div class="cpa_it_pending_title">${escapeHtml(t('Pending changes'))}</div>
                 ${cardsHtml}
-                <div class="cpa_it_pending_actions">
-                    <button class="menu_button luker-iter-pending-apply" data-cpa-it-action="apply-edits">${escapeHtml(applyLabel)}</button>
-                    <button class="menu_button menu_button_small" data-cpa-it-action="discard-edits">${escapeHtml(t('Discard'))}</button>
-                </div>
+                ${applyHtml}
             `).show().attr('hidden', null);
         } else {
             $pending.html('').hide().attr('hidden', '');
@@ -1140,6 +905,12 @@ export async function openCpaIterationStudio(deps) {
      * raw user text since they're already part of an ongoing conversation
      * the model has been steering.
      */
+    function serializeToolResultContent(result) {
+        if (typeof result === 'string') return result;
+        if (result === null || result === undefined) return '';
+        try { return JSON.stringify(result, null, 2); } catch { return String(result); }
+    }
+
     function buildTaskMessages(systemPrompt) {
         const messages = [{ role: 'system', content: systemPrompt }];
         const history = (state.session.messages || []).filter(m => {
@@ -1160,7 +931,39 @@ export async function openCpaIterationStudio(deps) {
             const content = idx === lastUserIdx && role === 'user'
                 ? buildAugmentedUserPrompt(String(m.content || ''))
                 : String(m.content || '');
-            messages.push({ role, content });
+            // OpenAI-protocol replay: if this assistant turn ran read tools,
+            // surface them as `tool_calls` on the assistant message + one
+            // `role: 'tool'` reply per tool_call_id. Without this, a model
+            // that read in round N has no record of WHAT it read by round
+            // N+1 and re-emits the same read call (or worse, hallucinates).
+            const toolCalls = Array.isArray(m?.toolCalls) ? m.toolCalls : [];
+            const toolResults = Array.isArray(m?.toolResults) ? m.toolResults : [];
+            const readCallIds = new Set(toolResults.map(r => String(r?.tool_call_id || '')));
+            const readToolCalls = toolCalls.filter(c => readCallIds.has(String(c?.id || '')));
+            if (role === 'assistant' && readToolCalls.length > 0) {
+                messages.push({
+                    role: 'assistant',
+                    content,
+                    tool_calls: readToolCalls.map(c => ({
+                        id: String(c.id || ''),
+                        type: 'function',
+                        function: {
+                            name: String(c.name || ''),
+                            arguments: JSON.stringify(c.args || {}),
+                        },
+                    })),
+                });
+                for (const r of toolResults) {
+                    if (!readCallIds.has(String(r?.tool_call_id || ''))) continue;
+                    messages.push({
+                        role: 'tool',
+                        tool_call_id: String(r.tool_call_id || ''),
+                        content: serializeToolResultContent(r?.content),
+                    });
+                }
+            } else {
+                messages.push({ role, content });
+            }
         });
         return messages;
     }
@@ -1272,12 +1075,75 @@ export async function openCpaIterationStudio(deps) {
         // (e.g. an older runner version), fall back to `result.toolCalls`, but
         // filter out control calls explicitly so they never leak into the
         // persisted `assistantMsg.toolCalls`.
-        const editToolCalls = collectedToolCalls.length > 0
+        const nonControlCalls = collectedToolCalls.length > 0
             ? collectedToolCalls
             : (Array.isArray(result?.toolCalls)
                 ? result.toolCalls.filter((c) => !isCpaControlCall(c))
                 : []);
+        // Split: read tools run inline (synchronously) so their results land
+        // in the next round's taskMessages; edit tools normalize into pending
+        // edits the user reviews + applies later.
+        const readCalls = nonControlCalls.filter(c => isCpaReadTool(String(c?.name || '')));
+        const editToolCalls = nonControlCalls.filter(c => !isCpaReadTool(String(c?.name || '')));
         const assistantText = firstAssistantText.trim();
+
+        // Execute read tools synchronously. Each result is bound to the
+        // call's tool_call_id so the next round's `role: 'tool'` reply
+        // matches the assistant's `tool_calls` entry. Failures persist as
+        // `{ error }` with status='fail' so the shared chip renders the
+        // ❌ status icon and the model sees the error in the next round.
+        const persistedToolResults = [];
+        const readsForTaskHistory = [];
+        const ctxForReads = {
+            live: state.live,
+            reference: state.reference || null,
+            referenceName: String(state.session?.surfaceState?.referencePresetName || ''),
+            presetName: String(getTargetRef?.()?.name || ''),
+            context: getContext(),
+            // Side-effecting clone hook for the `preset_clone_to_new` read
+            // tool. We wrap the host-provided callable to re-prime live /
+            // reference / preview state after a successful clone, so the
+            // next round's taskMessages already reflect the new target.
+            // Missing callable → null; the tool reports unavailable.
+            cloneAndSwitchTarget: cloneAndSwitchTarget
+                ? async (newName) => {
+                    const result = await cloneAndSwitchTarget(newName);
+                    if (result?.ok) {
+                        await loadLive();
+                        await reloadReference();
+                        await render();
+                    }
+                    return result;
+                }
+                : null,
+        };
+        for (const call of readCalls) {
+            const callId = String(call?.id || `read_${persistedToolResults.length}_${Date.now().toString(36)}`);
+            const args = call?.args && typeof call.args === 'object' ? call.args : {};
+            let resultPayload;
+            let statusLabel = 'ok';
+            try {
+                const out = await runCpaReadTool({ id: callId, name: call?.name, args }, ctxForReads);
+                if (out?.ok) {
+                    resultPayload = out.result;
+                } else {
+                    resultPayload = { error: String(out?.error || 'unknown error') };
+                    statusLabel = 'fail';
+                }
+            } catch (err) {
+                resultPayload = { error: String(err?.message || err || 'unknown error') };
+                statusLabel = 'fail';
+            }
+            persistedToolResults.push({
+                tool_call_id: callId,
+                content: resultPayload,
+                status: statusLabel,
+            });
+            readsForTaskHistory.push({ id: callId, name: String(call?.name || ''), args, result: resultPayload });
+            // Back-fill call.id so the persisted assistant message references
+            // the same id the tool result is keyed under.
+            call.id = callId;
+        }
 
         // Normalize edit-tools → edits. Each editable tool runs through
         // `normalizeToolCallToEdit` which can return one or more engine ops
@@ -1312,15 +1178,28 @@ export async function openCpaIterationStudio(deps) {
             }
         }
 
+        // Implicit auto-continue on pure-read rounds: the model called only
+        // read tools and didn't emit finalize / continue control. The reads
+        // are now in taskMessages as `role: 'tool'` results, so the model
+        // needs another turn to act on what it just read. Without this the
+        // loop exits on `edits.length === 0` and the popup stalls.
+        if (!sawFinalize && !wantsAutoContinue && edits.length === 0 && readCalls.length > 0) {
+            wantsAutoContinue = true;
+        }
+
         // Stage the assistant message with the full per-round audit trail.
         // Falls back to a synthesized summary when the model emitted tool
         // calls without text so the chat doesn't have empty bubbles. The
         // toolCalls + edits + appliedAt fields drive renderMessageCard's
         // collapsible details block, Apply marker, and Rollback button.
         let content = assistantText;
-        if (!content && editToolCalls.length > 0) {
-            const names = editToolCalls
-                .map(c => TOOL_DISPLAY[String(c?.name || '')] || String(c?.name || ''))
+        if (!content && (readCalls.length > 0 || editToolCalls.length > 0)) {
+            const names = [...readCalls, ...editToolCalls]
+                .map(c => {
+                    const name = String(c?.name || '');
+                    const label = CPA_TOOL_DISPLAY[name]?.label || name;
+                    return label ? t(label) : '';
+                })
                 .filter(Boolean)
                 .join(', ');
             content = tf('Suggested actions: ${0}', names);
@@ -1334,12 +1213,16 @@ export async function openCpaIterationStudio(deps) {
             content: content || '',
             at: Date.now(),
         };
-        if (editToolCalls.length > 0) {
-            assistantMsg.toolCalls = editToolCalls.map(tc => ({
+        const allCallsForMsg = [...readCalls, ...editToolCalls];
+        if (allCallsForMsg.length > 0) {
+            assistantMsg.toolCalls = allCallsForMsg.map(tc => ({
                 id: String(tc?.id || ''),
                 name: String(tc?.name || ''),
                 args: tc?.args ?? {},
             }));
+        }
+        if (persistedToolResults.length > 0) {
+            assistantMsg.toolResults = persistedToolResults;
         }
         if (edits.length > 0) {
             assistantMsg.edits = edits.slice();
@@ -1478,6 +1361,8 @@ export async function openCpaIterationStudio(deps) {
             if (m && m.role === 'user' && !m.auto) { userIdx = i; break; }
         }
         if (userIdx < 0) return;
+        // eslint-disable-next-line no-alert
+        if (!confirm(t('Regenerate this turn? Subsequent rounds will be discarded.'))) return;
         const userText = String(messages[userIdx].content || '');
         // Truncate before the user message; the resend will push it again.
         state.session.messages = messages.slice(0, userIdx);
@@ -1744,11 +1629,17 @@ export async function openCpaIterationStudio(deps) {
         await persistSession();
     });
 
-    $root.on('click.cpaIt', '[data-cpa-it-action="apply-edits"]', async (e) => {
+    // Apply / Discard the staged batch. Selectors use `apply-batch` /
+    // `discard-batch` because the row is rendered by
+    // `iteration-library/ui/apply.renderApplyControls`, which emits those
+    // values via the `actionAttribute: 'data-cpa-it-action'` opt — the
+    // same convention M1.4's `renderMessageCard` uses for per-message
+    // rollback/regenerate buttons (handlers further down).
+    $root.on('click.cpaIt', '[data-cpa-it-action="apply-batch"]', async (e) => {
         e.preventDefault();
         await applyPendingEdits();
     });
-    $root.on('click.cpaIt', '[data-cpa-it-action="discard-edits"]', async (e) => {
+    $root.on('click.cpaIt', '[data-cpa-it-action="discard-batch"]', async (e) => {
         e.preventDefault();
         await discardPendingEdits();
     });
@@ -1791,19 +1682,26 @@ export async function openCpaIterationStudio(deps) {
         }
     });
 
-    // Per-message custom actions (Regenerate / Rollback). Use
-    // `data-cpa-it-custom-action` rather than `data-cpa-it-action` so the
-    // legacy delegation selectors above can't accidentally fire on these
-    // — matches the iter-studio shell gotcha pattern.
-    $root.on('click.cpaIt', '[data-cpa-it-custom-action="regenerate"]', async (e) => {
+    // Per-message Regenerate / Rollback. Both buttons are rendered by
+    // `iteration-library/ui/message.renderMessageCard`, which emits them
+    // with `data-cpa-it-action="regenerate"` / `="rollback-batch"` (via
+    // the actionAttribute opt) and `data-luker-lib-msg-id="..."`. The
+    // msgId resolver accepts both attribute names so a future CPA-only
+    // override that still tags `data-cpa-it-msg-id` keeps working.
+    function resolveMsgId(target) {
+        if (!target) return '';
+        // dataset is camelCase: cpaItMsgId / lukerLibMsgId
+        return String(target.dataset?.cpaItMsgId || target.dataset?.lukerLibMsgId || '');
+    }
+    $root.on('click.cpaIt', '[data-cpa-it-action="regenerate"]', async (e) => {
         e.preventDefault();
-        const msgId = String(e.currentTarget?.dataset?.cpaItMsgId || '');
+        const msgId = resolveMsgId(e.currentTarget);
         if (!msgId) return;
         await regenerateFromMessage(msgId);
     });
-    $root.on('click.cpaIt', '[data-cpa-it-custom-action="rollback-batch"]', async (e) => {
+    $root.on('click.cpaIt', '[data-cpa-it-action="rollback-batch"]', async (e) => {
         e.preventDefault();
-        const msgId = String(e.currentTarget?.dataset?.cpaItMsgId || '');
+        const msgId = resolveMsgId(e.currentTarget);
         if (!msgId) return;
         await rollbackBatch(msgId);
     });
