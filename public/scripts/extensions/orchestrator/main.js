@@ -48,7 +48,9 @@ import {
     getCriticPromptReminderLines,
     getCriticReviewNodeContractShape,
     getDefaultRequestSystemPrompt,
+    getLegacyDefaultRequestSystemPromptForMigration,
     LOREBOOK_READ_GUIDANCE_LINES,
+    SPEC_DEFAULT_GUIDANCE_LINES,
 } from './defaults.js';
 import {
     isAbortError,
@@ -431,7 +433,26 @@ function ensureSettings() {
     }
     delete extension_settings[MODULE_NAME].capsuleRenderFormat;
     extension_settings[MODULE_NAME].capsuleCustomInstruction = String(extension_settings[MODULE_NAME].capsuleCustomInstruction || '').trim();
-    extension_settings[MODULE_NAME].requestSystemPrompt = String(extension_settings[MODULE_NAME].requestSystemPrompt || '').trim() || getDefaultRequestSystemPrompt();
+    {
+        // requestSystemPrompt migration. The default used to be a 70-line
+        // spec-flavored prompt; users who never customized this setting
+        // have it pre-filled with that exact text. The new default is a
+        // small mode-agnostic generic base, with spec-isms now living in
+        // SPEC_DEFAULT_GUIDANCE_LINES (prepended to the spec contract
+        // block inside buildAiIterationSystemPrompt). Reset the stored
+        // value when it matches the legacy default exactly — that
+        // catches the "never customized" users so they pick up the new
+        // base. Users who customized keep their text; they may want to
+        // clean up spec-isms manually.
+        const current = String(extension_settings[MODULE_NAME].requestSystemPrompt || '').trim();
+        if (current === getLegacyDefaultRequestSystemPromptForMigration()) {
+            extension_settings[MODULE_NAME].requestSystemPrompt = getDefaultRequestSystemPrompt();
+        } else if (!current) {
+            extension_settings[MODULE_NAME].requestSystemPrompt = getDefaultRequestSystemPrompt();
+        } else {
+            extension_settings[MODULE_NAME].requestSystemPrompt = current;
+        }
+    }
     delete extension_settings[MODULE_NAME].capsuleIncludeRawJson;
     extension_settings[MODULE_NAME].toolCallRetryMax = Math.max(
         0,
@@ -2670,10 +2691,7 @@ function buildAiIterationSystemPrompt(settings, session = null) {
         '- Do not create back-to-back review stages or consecutive critics with no worker layer between them.',
         `- Use luker_orch_set_node with type="${ORCH_NODE_TYPE_REVIEW}" when a node should behave as a reviewer.`,
         '- If user asks to test, call luker_orch_simulate with suitable input.',
-        '- If you need one more autonomous step right after current execution, call luker_orch_continue_iteration.',
-        '- If you need user decision or clarification, do not call continue/finalize. Stop and wait for user.',
-        '- When iteration is complete, call luker_orch_finalize_iteration.',
-        '- If you call both luker_orch_continue_iteration and luker_orch_finalize_iteration in the same round, finalize wins.',
+        '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
         '- Keep output practical and concise for real RP usage.',
     ].join('\n');
 }

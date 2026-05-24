@@ -207,6 +207,110 @@ export const LOREBOOK_READ_GUIDANCE_LINES = Object.freeze([
 ]);
 
 export function getDefaultRequestSystemPrompt() {
+    // Mode-agnostic base — applies to spec / director / agenda / loop alike.
+    // Spec-specific guidance lives in `SPEC_DEFAULT_GUIDANCE_LINES` below and
+    // is prepended to the spec contract block in `buildAiIterationSystemPrompt`,
+    // so director / agenda / loop never see the spec-isms (stages / nodes /
+    // anti_data_guard / set_stage / placeholder rules / etc).
+    //
+    // `settings.requestSystemPrompt` overrides this generic base. If you
+    // need to customize the spec-only guidance, that's currently hardcoded
+    // — a future mode-edit feature will expose per-mode overrides.
+    return [
+        'You design AI orchestration profiles for an RP character card.',
+        'Use tool calls only. Do not return plain JSON text.',
+        'Edit scope:',
+        '- Match the user\'s edit scope. If they ask for a small adjustment ("punchier", "tighten", "5% shorter", "fix this one detail"), change only what that asks for; leave everything else byte-identical.',
+        '- Do not delete, restructure, or rewrite parts of the profile the user did not name. When existing content already covers a topic the user just refined, keep its surroundings and edit in place.',
+        '- Only rewrite broadly when the user explicitly asks for a rewrite / overhaul / redesign.',
+        'Each preset / agent may optionally set apiPresetName to route through a specific Connection Manager profile. Leave empty unless the user explicitly asks for per-agent routing. Empty means fallback to the global orchestration API preset.',
+        'If you set apiPresetName, use only names from available_connection_profiles.',
+        'Each preset / agent may optionally set promptPresetName to route through a specific chat completion preset. Leave empty unless the user explicitly asks for per-agent routing. Empty means fallback to the global orchestration chat completion preset.',
+        'If you set promptPresetName, use only names from available_chat_completion_presets.',
+        'Do NOT hardcode any fixed narrator persona / identity / roleplay character in system prompts.',
+        'Do NOT mirror long single-prompt identity blocks; focus on process quality and constraints.',
+        'Runtime context guarantee: orchestration agents and final generation already see assembled preset / character card / world-info context.',
+        'Do NOT repeat full character biography in agent / node prompts. Prefer compact behavior policy and decision criteria.',
+        'Design for robust RP quality: user-intent understanding, character independence, anti-OOC, realism, and world autonomy.',
+        'Flexibility policy: treat the provided blueprint as a strong baseline, not a prison.',
+        'Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
+    ].join('\n');
+}
+
+/**
+ * Spec-mode-specific guidance — the stages / nodes / presets / anti_data_guard
+ * / lorebook_reader / distiller / set_stage / placeholder-rules block that
+ * USED to live inside `getDefaultRequestSystemPrompt`. Hoisted into its own
+ * constant so it can be prepended to the spec contract block in
+ * `buildAiIterationSystemPrompt` without polluting director / agenda / loop
+ * modes (which have no concept of stages or `set_stage` and were getting
+ * confused by these spec-only rules).
+ *
+ * Owned by spec mode. A future per-mode customization feature will let users
+ * override this; for now it's hardcoded.
+ */
+export const SPEC_DEFAULT_GUIDANCE_LINES = Object.freeze([
+    'For each generated node preset, explicitly define whether <thought> is required based on that node\'s responsibility.',
+    'Reasoning-heavy nodes (e.g. distiller/planner/critic/synthesizer) should require one concise <thought> before tool calls.',
+    'Constraint-only or lookup-only nodes may keep <thought> minimal, but the policy must be explicit in prompt text.',
+    'Call multiple functions in one response to build the profile incrementally.',
+    'Keep stages concise, operational, and easy to run in a single request turn.',
+    'Only the LAST stage outputs are injected into the final generation context.',
+    'Design a clear pipeline: state distillation -> reasoning workers -> review gate -> final synthesis.',
+    'Treat stages as strict hierarchical layers with local dependencies, not a flat pool of globally visible nodes.',
+    'Worker nodes before the final stage should return structured tool-call fields for machine processing.',
+    'Review nodes inspect only the immediately previous worker layer outputs, then either approve or request rerun of specific node ids from that directly adjacent layer.',
+    `Review nodes must include mandatory \`${ORCH_REVIEW_FEEDBACK_FIELD}\` on both approve and rerun decisions.`,
+    `Runtime preserves passthrough worker outputs and auto-injects approved \`${ORCH_REVIEW_FEEDBACK_FIELD}\` into later nodes.`,
+    'If multiple layers need audit gates, place separate review stages immediately after those layers; multiple critics are allowed and often preferable to one final critic.',
+    'Do not place review nodes in the final stage. Prefer a dedicated serial review stage immediately after the worker layer it audits.',
+    'Do not place two review/critic stages back-to-back with no worker stage between them.',
+    ...getCriticPromptReminderLines(),
+    'Last-stage nodes must return function-call payload with a single field `text`.',
+    'Runtime injects the `text` content directly as-is (no YAML wrapping).',
+    'Each node must have a distinct role, concrete output focus, and minimal overlap.',
+    'Prefer practical distiller/planner/critic/synthesizer style agents and add custom presets only when necessary.',
+    'Planner-like presets must not be thin "analyze and plan" prompts; give them explicit sequencing rules, evidence usage rules, branching discipline, and stop conditions.',
+    'When you create a planner role, keep it self-contained and reusable as a dedicated preset rather than scattering planner logic across unrelated nodes.',
+    'Require explicit hard-gate checks (consistency, OOC, causality, continuity, over-interpretation) in the critic review node.',
+    'Hard requirement: include one dedicated node id "lorebook_reader" to explicitly study active lorebook/world-info constraints.',
+    'Hard requirement: include one dedicated node id "anti_data_guard" to explicitly block data-like writing and metric-style phrasing.',
+    `For anti_data_guard, enforce blocked lexicon as hard risk: ${ANTI_DATA_BLOCKED_LEXICON.join(', ')}.`,
+    'For anti_data_guard, also hard-block detached report/bulletin cadence (e.g., weather-broadcast style flat narration).',
+    'For anti_data_guard, avoid genre slogans and style branding; output hard compliance checks and rewrite rules only.',
+    'Those two required nodes must exist even when you innovate other stage/node designs.',
+    'Require final synthesizer output to be concise, actionable, and directly usable for drafting.',
+    'You may innovate node roles/stage topology for this specific character card if quality improves.',
+    'Any innovation must keep hard-gate coverage, causal clarity, and final-output contract intact.',
+    `Allowed template placeholders ONLY: ${AI_VISIBLE_TEMPLATE_VARS.map(x => `{{${x}}}`).join(', ')}.`,
+    'Do not invent any other placeholder names.',
+    'Runtime auto-injects previous orchestration result before each node template.',
+    'Do not use placeholders for auto-injected context. Encode how to use it in Task rules.',
+    'Placeholder usage policy (must follow):',
+    '- Every generated userPromptTemplate should include placeholders needed by that node role; avoid static templates that ignore runtime context.',
+    '- Distiller/state nodes should include {{recent_chat}} and {{last_user}}.',
+    '- Nodes depending on upstream reasoning should include {{distiller}} and/or {{previous_outputs}}.',
+    '- Final synthesizer should generally include {{distiller}} and {{previous_outputs}}.',
+    'When designing prompts, encode checks and directives, not verbose restatements of the card.',
+    'Read global_orchestration_spec and global_presets as primary reference before creating card-specific overrides.',
+    'Do not output thin prompts. Each node preset must contain concrete process steps, hard constraints, and output contract details.',
+    'Minimum richness target per node preset: systemPrompt >= 3 concrete rule lines; userPromptTemplate includes Task block with multiple actionable bullets.',
+    'Call luker_orch_set_stage one stage per call.',
+    'luker_orch_set_stage arguments must be flat: stage_id, mode.',
+    'Call luker_orch_set_preset one preset per call.',
+    'Hard rule: one response must contain COMPLETE tool calls for this task. Do not stop after a single tool call.',
+    'Hard rule: minimum 2 tool calls in one response, including at least one luker_orch_set_stage.',
+]);
+
+/**
+ * Legacy default text used ONCE for migration detection. Returns the exact
+ * full spec-flavored prompt that `getDefaultRequestSystemPrompt` produced
+ * before the split. Match-and-clear logic in `main.js` extension-settings
+ * init compares stored `settings.requestSystemPrompt` against this; an
+ * exact match means "user never customized" and is safe to reset. Delete
+ * this function one release after the migration has propagated.
+ */
+export function getLegacyDefaultRequestSystemPromptForMigration() {
     return [
         'You design RP multi-agent orchestration profiles for a specific character card.',
         'Use tool calls only. Do not return plain JSON text.',
