@@ -1661,17 +1661,18 @@ function renderDynamicPanels(root, context) {
     root.find('#luker_orch_loop_profile_mode').text(
         getDisplayedScopeLabel(isLoopCharacterScope, hasLoopCharacterOverride, isLoopOverrideEnabled),
     );
-    // Director board: MVP slot is global-only (no character override yet),
-    // so the chips just echo the active card name + a static "Global profile"
-    // editing label. When character-override support lands this block will
-    // mirror the loop branch above.
+    const directorOverride = activeAvatar ? getCharacterDirectorOverrideByAvatar(context, activeAvatar) : null;
+    const directorScope = getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR);
+    const isDirectorCharacterScope = directorScope === 'character';
+    const hasDirectorCharacterOverride = hasCharacterDirectorOverride(context, activeAvatar);
+    const isDirectorOverrideEnabled = Boolean(directorOverride?.enabled);
     root.find('#luker_orch_director_profile_target').text(
         activeAvatar
             ? (getCharacterDisplayNameByAvatar(context, activeAvatar) || activeAvatar)
             : i18n('(No character card)'),
     );
     root.find('#luker_orch_director_profile_mode').text(
-        getDisplayedScopeLabel(false, false, false),
+        getDisplayedScopeLabel(isDirectorCharacterScope, hasDirectorCharacterOverride, isDirectorOverrideEnabled),
     );
     const hasLastRun = Boolean(getLatestOrchestrationEntry(context));
     root.find('[data-luker-action="view-last-run"]').toggleClass('luker_orch_button_disabled', !hasLastRun);
