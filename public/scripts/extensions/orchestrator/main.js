@@ -6075,23 +6075,25 @@ jQuery(() => {
                     return;
                 }
 
-                // Capture ST's assembled messages as the content payload for
-                // all director agents in this session. Director assumes the
-                // user picked a pure-instruction / empty preset (see UI lint
-                // in director-preset-lint.js); the captured messages should
-                // therefore contain only content (character / persona / WI /
-                // chat / extension injections) with no preset-level
-                // instruction text to pollute downstream agent prompts.
+                // Capture the GENERATE_TAKEOVER_DISPATCH eventData reference
+                // (not a messages snapshot) so the cache resolves
+                // `eventData.generateData.prompt` lazily on each get().
+                // CHAT_COMPLETION_SETTINGS_READY is emitted from the takeover
+                // branch in script.js *after* this listener runs (the order
+                // is forced by the takeover protocol — core can only know a
+                // takeover happened by emitting dispatch first). A
+                // chat-completion hook firing in that later emit may replace
+                // `generate_data.prompt` with a new array (e.g.
+                // ST-Prompt-Template's @INJECT splicing); lazy resolution
+                // ensures director agents reading the cache later in the
+                // turn see that replacement.
                 // ST's Generate() stores the chat-completion messages array
                 // on `generate_data.prompt` — legacy name carried over from
                 // the text-completion path (`prepareOpenAIMessages` returns
                 // `[chat, counts]` and script.js:8162 does
                 // `generate_data = { prompt: prompt }`).
-                const messages = Array.isArray(eventData?.generateData?.prompt)
-                    ? eventData.generateData.prompt
-                    : null;
-                if (messages) {
-                    directorContentCache.set({ messages });
+                if (Array.isArray(eventData?.generateData?.prompt)) {
+                    directorContentCache.set({ eventData });
                 } else {
                     console.warn(`[${MODULE_NAME}] GENERATE_TAKEOVER_DISPATCH missing generateData.prompt — director will run with empty story context`);
                     directorContentCache.clear();
