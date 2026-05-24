@@ -1217,6 +1217,40 @@ async function mergeCharacterAttributes(context, avatar, patch) {
  */
 export async function commitCharacterEditorOperations(context, avatar, edits, opts = {}) {
     if (!Array.isArray(edits) || edits.length === 0) return;
+    // Defensive: reject edits that target a field the LLM invented. The
+    // tool schemas declare `field` as an enum, but providers occasionally
+    // ignore enum constraints, and the engine would otherwise route a
+    // `str_replace` on an unknown field through `anchor_missing` — a
+    // confusing error message for "field doesn't exist." The set of
+    // accepted fields matches `CEA_CARD_FIELD_ENUM` in
+    // `editor-iteration/tools.js`; keep both in sync.
+    const KNOWN_FIELDS = new Set([
+        ...CHARACTER_EDITOR_ROOT_TEXT_FIELDS,
+        ...CHARACTER_EDITOR_DATA_TEXT_FIELDS,
+        ...CHARACTER_EDITOR_DATA_ARRAY_FIELDS,
+    ]);
+    const unknownFields = [];
+    for (const edit of edits) {
+        const path = String(edit?.path || '').trim();
+        if (!path) continue;
+        // The CEA editor's tools.js emits paths like `description` or
+        // `card.description` (the latter rebased to bare by studio.js,
+        // but defensive double-checks here in case the rebase missed).
+        const field = path.startsWith('card.') ? path.slice('card.'.length) : path;
+        // Skip nested paths (anything past the first dot) — those are
+        // valid for sub-field edits and don't map to top-level enum.
+        if (field.includes('.')) continue;
+        if (!KNOWN_FIELDS.has(field)) {
+            unknownFields.push(field);
+        }
+    }
+    if (unknownFields.length > 0) {
+        const unique = [...new Set(unknownFields)];
+        throw new Error(
+            `Apply rejected: unknown character card field(s) ${unique.map(f => `"${f}"`).join(', ')}. `
+            + `Valid fields are: ${[...KNOWN_FIELDS].join(', ')}.`,
+        );
+    }
     const before = opts?.liveCharacter ? clone(opts.liveCharacter) : {};
     const result = applyEdits(edits, before) || {};
     if (Array.isArray(result.conflicts) && result.conflicts.length > 0) {

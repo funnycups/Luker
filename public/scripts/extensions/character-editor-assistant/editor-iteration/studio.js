@@ -812,21 +812,22 @@ async function runIterationTurn(state, opts = {}) {
         }
 
         // Exit conditions, in priority order:
-        //   1. Finalize is sticky — stop immediately even if continue
-        //      also fired this round (handled in onControlCall above,
-        //      double-checked here).
-        //   2. Abort signal — same.
-        //   3. Auto-continue: only when the model EXPLICITLY asked for it
-        //      OR the round was pure-read (the model needs another turn
-        //      to act on the read results).
-        //   4. Otherwise stop — the user reviews pendingEdits.
-        if (outcome.isFinalized) break;
+        //   1. Abort signal — user clicked Stop.
+        //   2. Pending edits awaiting review — pause so the user can Approve
+        //      / Reject before the AI fires another round. Without this gate
+        //      the model would stack more edits on top of unreviewed ones,
+        //      compounding drift risk and surprising the user (they'd come
+        //      back to N rounds of changes instead of the one they expected
+        //      to review).
+        //   3. Auto-continue: any tool call this round triggers another
+        //      round so the model can react to tool results. Pure-read
+        //      rounds (no edits) still continue — they leave pendingEdits
+        //      empty so the gate above is a no-op.
+        //   4. Otherwise stop — the model responded with plain text and no
+        //      tools, signalling it's done.
         if (abortSignal?.aborted) break;
-
-        const explicitContinue = outcome.wantsAutoContinue;
-        const pureReadRound = outcome.hadReads && !outcome.hadEdits && !sawFinalize;
-        const shouldAutoContinue = explicitContinue || pureReadRound;
-        if (!shouldAutoContinue) break;
+        if (Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0) break;
+        if (!outcome.hadAnyToolCall) break;
     }
 }
 
@@ -848,6 +849,101 @@ async function runIterationTurn(state, opts = {}) {
  * bookName-less lorebook target when the upstream args were missing
  * `book_name`; production callers always supply one.)
  */
+/**
+ * Pick a human-readable display name for a lorebook entry. Falls back
+ * through `comment` (the user-curated label most cards use), then the
+ * first activation `key`, then `name`, finally the bare uid. The diff
+ * renderer uses this through the `fieldLabels` map so cards show
+ * "Entry Name.content (+13 字节)" instead of the opaque
+ * "entries.21.content".
+ */
+function pickEntryDisplayName(entry, uid) {
+    if (entry && typeof entry === 'object') {
+        const comment = String(entry.comment ?? '').trim();
+        if (comment) return comment;
+        if (Array.isArray(entry.key) && entry.key.length > 0) {
+            const firstKey = String(entry.key[0] ?? '').trim();
+            if (firstKey) return firstKey;
+        }
+        const name = String(entry.name ?? '').trim();
+        if (name) return name;
+    }
+    return `#${uid ?? '?'}`;
+}
+
+/**
+ * Build a `fieldLabels` map keyed by the path strings the shared diff
+ * renderer emits. Currently relabels:
+ *   - `lorebook_entry_update` per-key paths → friendly entry name (.comment
+ *     or first key fallback). Default path is opaque uid-keyed:
+ *     `entries.${uid}.${k}`; we surface "EntryName.${k}" instead.
+ *   - Character-card `set` / `str_replace` paths (`card.<field>`) → the
+ *     i18n'd field label ("description" → "描述", "creator_notes" →
+ *     "作者注释"). The renderer's default `humanizePath` only replaces
+ *     `_` with space and prefixes `card.`, producing "card.creator notes"
+ *     which doesn't surface as a translated label in zh-cn/zh-tw.
+ *
+ * Returns an empty object for ops that don't need relabelling so the
+ * caller can pass it unconditionally.
+ */
+function computeEditFieldLabels(edit, live, i18nFn) {
+    const labels = {};
+    if (!edit || typeof edit !== 'object') return labels;
+    const i18n = typeof i18nFn === 'function' ? i18nFn : (s) => String(s ?? '');
+
+    if (edit.op === 'lorebook_entry_update') {
+        const bookName = String(edit?.target?.bookName ?? '').trim();
+        const uid = edit?.uid;
+        if (!bookName || uid == null) return labels;
+        const liveBook = live?.lorebooks?.[bookName];
+        const entry = liveBook?.entries?.[uid];
+        const display = pickEntryDisplayName(entry, uid);
+        for (const k of Object.keys(edit?.patch || {})) {
+            labels[`entries.${uid}.${k}`] = `${display}.${k}`;
+        }
+        return labels;
+    }
+
+    // Character-card paths: `card.<field>` from `cea_set_card_field` /
+    // `cea_str_replace_card_field` (after rebasePathToTarget the `card.`
+    // prefix is stripped, but the renderer sees the pre-strip path here).
+    // Map both shapes so the lookup hits regardless of where the renderer
+    // pulls path from.
+    if (edit.op === 'set' || edit.op === 'str_replace') {
+        const path = String(edit.path || '');
+        if (path.startsWith('card.')) {
+            const field = path.slice('card.'.length);
+            const label = CARD_FIELD_LABEL_KEYS[field];
+            if (label) {
+                const translated = String(i18n(label) ?? label);
+                labels[path] = translated;
+                labels[field] = translated;
+            }
+        }
+        return labels;
+    }
+
+    return labels;
+}
+
+// English i18n source strings for the canonical character-card fields. The
+// diff renderer's `fieldLabels` lookup feeds these through the popup's
+// i18n binding so "card.creator_notes" surfaces as "作者注释" in zh-cn
+// (matching the preview-pane section) instead of the renderer's
+// fallback humanization "card.creator notes".
+const CARD_FIELD_LABEL_KEYS = Object.freeze({
+    name: 'Character name',
+    description: 'Description',
+    personality: 'Personality',
+    scenario: 'Scenario',
+    first_mes: 'First message',
+    mes_example: 'Example dialogue',
+    system_prompt: 'Main prompt',
+    post_history_instructions: 'Post-history instructions',
+    creator_notes: 'Creator notes',
+    alternate_greetings: 'Alternate greetings',
+});
+
 function groupEditsByTarget(edits) {
     const groups = { character: [], lorebooks: {} };
     if (!Array.isArray(edits)) return groups;
@@ -1492,7 +1588,10 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         const html = messages
             .map((m, idx) => ITER_UI.message.renderMessageCard(m, {
                 toolDisplay: CEA_EDITOR_TOOL_DISPLAY,
-                renderEditCard: (e) => ITER_UI.diff.renderDiffCard([e], { i18n: tf }),
+                renderEditCard: (e) => ITER_UI.diff.renderDiffCard([e], {
+                    i18n: tf,
+                    fieldLabels: computeEditFieldLabels(e, state.live, t),
+                }),
                 renderApplyControls: (msg) => {
                     const isLatestUnapplied = String(msg?.id || '') === state.__latestUnappliedAssistantId;
                     // Latest unapplied message: prefer the runtime state.pendingEdits
@@ -1510,7 +1609,16 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                         { ...msg, edits: passthroughEdits },
                         {
                             i18n: tf,
-                            applyLabel: computeApplyLabel(passthroughEdits, tf),
+                            // computeApplyLabel does its own ${N} substitution
+                            // against the values it passes, so it needs the
+                            // RAW translate function (one-arg `t`). Passing
+                            // `tf` here would double-substitute: tf's own
+                            // pass eats the `${0}` / `${1}` placeholders
+                            // (with empty values, since tf was called with
+                            // no values) before computeApplyLabel's pass
+                            // ever runs — and the user sees a half-rendered
+                            // "将 应用到 「」" with both slots stripped.
+                            applyLabel: computeApplyLabel(passthroughEdits, t),
                             actionAttribute: 'data-cea-editor-action',
                         },
                     );
@@ -1562,6 +1670,74 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         return operations.length > 0 ? { messageId, operations } : null;
     }
 
+    /**
+     * Render the character-card section that sits above the lorebook
+     * sections in the preview pane. Shows the major card fields (name,
+     * description, personality, scenario, first_mes, system_prompt) with
+     * a per-field pending-change indicator when there's an unapplied
+     * card-targeted edit for that field.
+     *
+     * Inline styles mirror the world-info section's approach (see
+     * editor-preview.js comment) — class-based styling kept losing flex
+     * alignment to specificity issues inside the popup shell. The
+     * SmartTheme CSS variables keep theme adaptation working.
+     */
+    function renderCharacterPreviewSection(character, pendingEdits, tFn) {
+        const tx = typeof tFn === 'function' ? tFn : (s) => String(s ?? '');
+        if (!character || typeof character !== 'object') {
+            return `<div style="padding:14px 16px;margin-bottom:12px;border:1px dashed color-mix(in srgb, var(--SmartThemeBodyColor, #888) 18%, transparent);border-radius:10px;opacity:0.75;text-align:center;">${escapeAttr(tx('No character bound'))}</div>`;
+        }
+        const pendingCharEdits = (Array.isArray(pendingEdits) ? pendingEdits : [])
+            .filter(e => e?.target?.kind === 'character');
+        const pendingFieldSet = new Set();
+        for (const e of pendingCharEdits) {
+            const path = String(e?.path || '');
+            // After `rebasePathToTarget` runs at apply time, character edits
+            // sit at `card.<field>` or `<field>` depending on normalize
+            // source. Strip the optional `card.` prefix when matching.
+            const field = path.startsWith('card.') ? path.slice('card.'.length) : path;
+            if (field) pendingFieldSet.add(field);
+        }
+
+        const name = String(character?.name || character?.data?.name || '').trim() || tx('(unnamed character)');
+        const fields = [
+            { key: 'description', label: tx('Description') },
+            { key: 'personality', label: tx('Personality') },
+            { key: 'scenario', label: tx('Scenario') },
+            { key: 'first_mes', label: tx('First message') },
+            { key: 'mes_example', label: tx('Example dialogue') },
+            { key: 'system_prompt', label: tx('Main prompt') },
+            { key: 'post_history_instructions', label: tx('Post-history instructions') },
+            { key: 'creator_notes', label: tx('Creator notes') },
+        ];
+
+        const fieldsHtml = fields.map(({ key, label }) => {
+            const rawValue = character?.[key]
+                ?? character?.data?.[key]
+                ?? '';
+            const value = String(rawValue ?? '').trim();
+            if (!value && !pendingFieldSet.has(key)) return '';
+            const truncated = value.length > 280 ? `${value.slice(0, 280)}…` : value;
+            const pendingChip = pendingFieldSet.has(key)
+                ? `<span style="margin-left:6px;padding:1px 6px;font-size:11px;border-radius:4px;background:color-mix(in srgb, var(--SmartThemeQuoteColor, #ffb74d) 22%, transparent);color:var(--SmartThemeQuoteColor, #ffb74d);">${escapeAttr(tx('pending change'))}</span>`
+                : '';
+            return `<div style="margin-top:8px;">
+                <div style="font-weight:600;font-size:12px;opacity:0.85;display:flex;align-items:center;">${escapeAttr(label)}${pendingChip}</div>
+                <div style="margin-top:2px;font-size:13px;white-space:pre-wrap;word-break:break-word;opacity:0.92;">${value ? escapeAttr(truncated) : `<span style="opacity:0.5;">${escapeAttr(tx('(empty)'))}</span>`}</div>
+            </div>`;
+        }).filter(Boolean).join('');
+
+        return `<div style="padding:12px 14px;margin-bottom:12px;border:1px solid color-mix(in srgb, var(--SmartThemeBorderColor, #555) 35%, transparent);border-radius:10px;background:color-mix(in srgb, var(--SmartThemeBodyColor, #888) 4%, transparent);">
+            <div style="display:flex;align-items:center;gap:8px;">
+                <span style="font-weight:700;font-size:14px;">${escapeAttr(name)}</span>
+                ${pendingCharEdits.length > 0
+                    ? `<span style="font-size:11px;padding:1px 6px;border-radius:4px;background:color-mix(in srgb, var(--SmartThemeQuoteColor, #ffb74d) 22%, transparent);color:var(--SmartThemeQuoteColor, #ffb74d);">${escapeAttr(tx('${0} pending edit(s)').replace('${0}', String(pendingCharEdits.length)))}</span>`
+                    : ''}
+            </div>
+            ${fieldsHtml || `<div style="margin-top:6px;font-size:12px;opacity:0.6;">${escapeAttr(tx('All card fields empty.'))}</div>`}
+        </div>`;
+    }
+
     function getPreviewView(bookName) {
         const surface = state.session?.surfaceState || {};
         const map = surface.previewView && typeof surface.previewView === 'object' ? surface.previewView : {};
@@ -1589,10 +1765,19 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         try {
             const lorebooks = state.live?.lorebooks || {};
             const bookNames = Object.keys(lorebooks);
+
+            // Character-card section sits above the lorebook sections so the
+            // user sees both halves of the live snapshot the AI is editing,
+            // not just the world book. Without this the preview pane felt
+            // half-empty when the AI was working on card fields (description,
+            // personality, scenario, first_mes) — the diff cards in the chat
+            // were the only visible signal of card-side edits.
+            const characterSection = renderCharacterPreviewSection(state.live?.character, state.pendingEdits, t);
+
             if (bookNames.length === 0) {
-                // No bound lorebook — render the renderer's own empty state
-                // (handles `worldInfo === null`).
-                $preview.html(renderCeaEditorPreviewPane(null, null, t));
+                // No bound lorebook — still show the character section, with
+                // the renderer's own empty state for the world book half.
+                $preview.html(characterSection + renderCeaEditorPreviewPane(null, null, t));
                 return;
             }
             // Render one section per bound lorebook so multi-book characters
@@ -1608,7 +1793,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                 const viewOptions = getPreviewView(bookName);
                 return renderCeaEditorPreviewPane(worldInfo, pendingApproval, t, viewOptions);
             });
-            $preview.html(sections.join(''));
+            $preview.html(characterSection + sections.join(''));
         } catch (err) {
             // eslint-disable-next-line no-console
             console.warn(`[${MODULE}] preview render failed`, err);
@@ -1814,6 +1999,71 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         }
     }
 
+    /**
+     * Fire the next AI round after the user reviewed a paused batch
+     * (clicked Apply or Discard). The loop in `runIterationTurn` exits
+     * the moment it sees pendingEdits, so without this resumer the AI
+     * never sees the outcome — even though its prior round was clearly
+     * "propose edits, then continue based on review". This pushes a
+     * synthetic user message describing the decision and re-enters the
+     * loop, mirroring the IDE pattern (approve → tool result lands →
+     * agent continues; reject → agent reconsiders).
+     */
+    async function continueAfterReviewDecision({ action, count }) {
+        if (state.isBusy) return;
+        const userText = action === 'apply'
+            ? `[User reviewed and applied ${count} pending edit(s). Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]`
+            : `[User reviewed and discarded ${count} pending edit(s). Reconsider your approach — propose different edits or respond with plain text and no tool calls when finished.]`;
+
+        state.session.messages.push({
+            id: makeMessageId(),
+            role: 'user',
+            content: userText,
+            at: Date.now(),
+            auto: true,
+        });
+
+        state.isBusy = true;
+        const ac = new AbortController();
+        state.abortController = ac;
+        await persistSession();
+        await render();
+
+        try {
+            await runIterationTurn(state, {
+                userText,
+                context,
+                settings,
+                helperApis,
+                abortSignal: ac.signal,
+                hasSearchTools,
+                i18n: { t, tf },
+                onTurnUpdate: async () => {
+                    await persistSession();
+                    await render();
+                },
+            });
+        } catch (err) {
+            if (!isAbortError(err, ac.signal)) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] continueAfterReviewDecision`, err);
+                state.session.messages.push({
+                    id: makeMessageId(),
+                    role: 'system',
+                    content: tf('Error: ${0}', String(err?.message || err)),
+                    at: Date.now(),
+                });
+            }
+        } finally {
+            state.isBusy = false;
+            state.abortController = null;
+            await persistSession();
+            const autoApplied = await maybeAutoApply();
+            bumpChatBadge();
+            if (!autoApplied) await render();
+        }
+    }
+
     if ($root && $root.length > 0) {
         $root.on('click.ceaEditor', '[data-cea-editor-action="send"]', async (e) => {
             e.preventDefault();
@@ -1827,6 +2077,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         });
         $root.on('click.ceaEditor', '[data-cea-editor-action="apply-batch"]', async (e) => {
             e.preventDefault();
+            const pendingCount = Array.isArray(state.pendingEdits) ? state.pendingEdits.length : 0;
             await applyPendingEdits(state, {
                 persistSession,
                 render,
@@ -1835,10 +2086,32 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                 settings,
                 avatar,
             });
+            // After the user reviewed + applied a paused batch, fire the
+            // next AI round with a synthetic "user approved the edits"
+            // message. Without this the loop would stay dead until the
+            // user typed a new prompt — but the AI WAS in the middle of
+            // iterating; its previous round only stopped because the
+            // pendingEdits gate paused for human approval. Mirroring the
+            // IDE pattern: approve → next round fires with the outcome,
+            // AI either does more or wraps up with plain text.
+            if (pendingCount > 0
+                && (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0)
+                && !state.isBusy) {
+                await continueAfterReviewDecision({ action: 'apply', count: pendingCount });
+            }
         });
         $root.on('click.ceaEditor', '[data-cea-editor-action="discard-batch"]', async (e) => {
             e.preventDefault();
+            const pendingCount = Array.isArray(state.pendingEdits) ? state.pendingEdits.length : 0;
             await discardPendingEdits(state, { persistSession, render });
+            // Mirror the apply-batch resume — discard is the AI's signal
+            // to reconsider, not to stop entirely. The user can still
+            // close the popup or click Stop if they're truly done.
+            if (pendingCount > 0
+                && (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0)
+                && !state.isBusy) {
+                await continueAfterReviewDecision({ action: 'discard', count: pendingCount });
+            }
         });
         $root.on('click.ceaEditor', '[data-cea-editor-action="rollback-batch"]', async (e) => {
             e.preventDefault();
