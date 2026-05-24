@@ -1,17 +1,21 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later
  * Copyright (C) 2026 FunnyCups
  *
- * CEA Character Editor — AI iteration popup styles.
+ * CEA Character Editor — unified AI iteration popup styles.
  *
  * Design language mirrors luker-studio.css (the shared shell stylesheet)
- * via local tokens — kept namespaced (`cea_charit_*`) so the popup remains
+ * via local tokens — kept namespaced (`cea_editor_*`) so the popup remains
  * self-contained without depending on luker-studio class wrappers.
  *
  * Theme-aware: all colors flow through color-mix() of --SmartTheme*
  * variables with sensible fallbacks for testbed environments.
+ *
+ * Message/diff/apply chrome is rendered by `iteration-library/ui` and
+ * styled by its own stylesheet (`luker_lib_*` classes) — this file only
+ * styles the popup shell, history list, pending wrapper, and composer.
  */
 
-.cea_charit_popup {
+.cea_editor_studio {
     --it-space-2xs: 3px;
     --it-space-xs: 6px;
     --it-space-sm: 10px;
@@ -25,17 +29,14 @@
 
     --it-panel-bg: color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 4%, transparent);
     --it-card-bg: color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 6%, transparent);
-    --it-chip-bg: color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 9%, transparent);
     --it-hover-bg: color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 12%, transparent);
 
     --it-border-soft: 1px solid color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 10%, transparent);
     --it-border: 1px solid color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 16%, transparent);
     --it-divider: color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 14%, transparent);
 
-    --it-accent-user: #5b8def;
-    --it-accent-assistant: #3aab7d;
-    --it-accent-system: #d99c3a;
     --it-accent-primary: var(--SmartThemeQuoteColor, #5b8def);
+    --it-accent-system: #d99c3a;
     --it-accent-danger: #d95560;
 
     --it-text-strong: 1;
@@ -49,20 +50,20 @@
     display: flex;
     flex-direction: column;
     max-height: 80vh;
-    min-width: 560px;
+    min-width: 0;
     gap: var(--it-space-md);
     text-align: start;
     color: var(--SmartThemeBodyColor, inherit);
 }
 
-.cea_charit_popup,
-.cea_charit_popup :is(p, ul, ol, li, h1, h2, h3, h4, pre, code, table, th, td, summary, label) {
+.cea_editor_studio,
+.cea_editor_studio :is(p, ul, ol, li, h1, h2, h3, h4, pre, code, table, th, td, summary, label) {
     text-align: start;
 }
 
 /* ── Title ─────────────────────────────────────────────────────────── */
 
-.cea_charit_title {
+.cea_editor_title {
     font-weight: 700;
     font-size: 1.16rem;
     line-height: 1.25;
@@ -73,7 +74,7 @@
 
 /* ── History (collapsible) ─────────────────────────────────────────── */
 
-.cea_charit_history {
+.cea_editor_history {
     flex: 0 0 auto;
     border: var(--it-border);
     border-radius: var(--it-radius-lg);
@@ -81,7 +82,7 @@
     background: var(--it-panel-bg);
 }
 
-.cea_charit_history > summary {
+.cea_editor_history > summary {
     cursor: pointer;
     padding: 2px 0;
     font-weight: 600;
@@ -92,10 +93,10 @@
     gap: var(--it-space-xs);
     opacity: var(--it-text-default);
 }
-.cea_charit_history > summary::-webkit-details-marker {
+.cea_editor_history > summary::-webkit-details-marker {
     display: none;
 }
-.cea_charit_history > summary::before {
+.cea_editor_history > summary::before {
     content: '\f078';
     font-family: 'Font Awesome 6 Free';
     font-weight: 900;
@@ -104,11 +105,11 @@
     opacity: var(--it-text-muted);
     transition: transform var(--it-motion-fast);
 }
-.cea_charit_history[open] > summary::before {
+.cea_editor_history[open] > summary::before {
     transform: rotate(-180deg);
 }
 
-.cea_charit_history_items {
+.cea_editor_history_items {
     max-height: 240px;
     overflow-y: auto;
     margin: var(--it-space-xs) 0 var(--it-space-xs);
@@ -118,29 +119,63 @@
     padding-right: 2px;
 }
 
-.cea_charit_history_item {
+.cea_editor_history_item {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: var(--it-space-xs) var(--it-space-sm);
-    cursor: pointer;
+    align-items: stretch;
+    padding: 0;
+    cursor: default;
     border-radius: var(--it-radius-md);
     border: var(--it-border-soft);
     background: var(--it-card-bg);
-    gap: var(--it-space-xs);
+    gap: 0;
+    overflow: hidden;
     transition: background-color var(--it-motion-fast), border-color var(--it-motion-fast);
 }
-.cea_charit_history_item:hover {
+.cea_editor_history_item:hover {
     background: var(--it-hover-bg);
     border-color: color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 22%, transparent);
 }
-.cea_charit_history_item_active {
+.cea_editor_history_item_active {
     background: color-mix(in oklab, var(--it-accent-primary) 12%, transparent);
     border-color: color-mix(in oklab, var(--it-accent-primary) 55%, transparent);
+}
+.cea_editor_history_item_active .cea_editor_history_item_title {
     font-weight: 600;
 }
 
-.cea_charit_history_title {
+.cea_editor_history_item_load {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--it-space-xs);
+    padding: var(--it-space-xs) var(--it-space-sm);
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    text-align: start;
+    min-width: 0;
+}
+
+.cea_editor_history_item_delete {
+    flex: 0 0 auto;
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    border-left: 1px solid color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 14%, transparent);
+    color: var(--it-accent-danger);
+    font-size: 1.05em;
+    line-height: 1;
+    padding: 2px 10px;
+    opacity: 0.55;
+    transition: opacity var(--it-motion-fast), background-color var(--it-motion-fast);
+}
+.cea_editor_history_item_delete:hover {
+    opacity: 1;
+    background: color-mix(in oklab, var(--it-accent-danger) 14%, transparent);
+}
+
+.cea_editor_history_item_title {
     flex: 1 1 auto;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -148,88 +183,30 @@
     font-size: 0.93rem;
 }
 
-.cea_charit_history_delete {
+.cea_editor_history_item_at {
     flex: 0 0 auto;
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    color: var(--it-accent-danger);
-    font-size: 1.15em;
-    line-height: 1;
-    padding: 2px 6px;
-    border-radius: var(--it-radius-sm);
-    opacity: 0.55;
-    transition: opacity var(--it-motion-fast), background-color var(--it-motion-fast);
-}
-.cea_charit_history_delete:hover {
-    opacity: 1;
-    background: color-mix(in oklab, var(--it-accent-danger) 14%, transparent);
+    opacity: var(--it-text-muted);
+    font-size: 0.82em;
+    margin-left: var(--it-space-xs);
 }
 
-.cea_charit_history_empty {
+.cea_editor_history_empty {
     padding: var(--it-space-xs) var(--it-space-sm);
     opacity: var(--it-text-muted);
     font-style: italic;
     font-size: 0.9em;
 }
 
-.cea_charit_history_actions,
-.cea_charit_history_clear {
+.cea_editor_history_actions {
     margin-top: var(--it-space-xs);
     display: flex;
     justify-content: flex-end;
     gap: var(--it-space-xs);
 }
 
-/* ── Toolbar (reference picker + mode selector) ─────────────────────── */
-
-.cea_charit_toolbar {
-    flex: 0 0 auto;
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--it-space-md);
-    padding: var(--it-space-sm) var(--it-space-md);
-    border: var(--it-border);
-    border-radius: var(--it-radius-lg);
-    background: var(--it-panel-bg);
-    align-items: center;
-}
-
-.cea_charit_toolbar_label {
-    display: flex;
-    align-items: center;
-    gap: var(--it-space-xs);
-    font-size: 0.92em;
-    min-width: 0;
-    flex: 1 1 260px;
-}
-
-.cea_charit_toolbar_label_text {
-    font-weight: 600;
-    opacity: var(--it-text-muted);
-    white-space: nowrap;
-    color: inherit;
-}
-
-.cea_charit_reference_select,
-.cea_charit_mode_select {
-    flex: 1 1 auto;
-    min-width: 0;
-    max-width: 320px;
-    font-family: inherit;
-    font-size: 0.95em;
-    border-radius: var(--it-radius-sm);
-    transition: border-color var(--it-motion-fast);
-}
-
-.cea_charit_reference_select:focus,
-.cea_charit_mode_select:focus {
-    border-color: color-mix(in oklab, var(--it-accent-primary) 55%, transparent);
-}
-
 /* ── Message list (chat) ───────────────────────────────────────────── */
 
-.cea_charit_messages {
+.cea_editor_messages {
     flex: 1 1 auto;
     min-height: 260px;
     overflow-y: auto;
@@ -243,64 +220,9 @@
     scroll-behavior: smooth;
 }
 
-.cea_charit_msg {
-    position: relative;
-    padding: 10px 14px;
-    border-radius: var(--it-radius-md);
-    border: var(--it-border);
-    border-left: 3px solid transparent;
-    max-width: 88%;
-    word-break: break-word;
-    line-height: 1.5;
-    background: var(--it-card-bg);
-    transition: border-color var(--it-motion-fast);
-}
-
-.cea_charit_msg_user {
-    align-self: flex-end;
-    margin-left: auto;
-    border-left-color: color-mix(in oklab, var(--it-accent-user) 70%, transparent);
-    background: color-mix(in oklab, var(--it-accent-user) 9%, transparent);
-}
-
-.cea_charit_msg_assistant {
-    align-self: flex-start;
-    margin-right: auto;
-    border-left-color: color-mix(in oklab, var(--it-accent-assistant) 70%, transparent);
-    background: color-mix(in oklab, var(--it-accent-assistant) 7%, transparent);
-}
-.cea_charit_msg_assistant p:first-child { margin-top: 0; }
-.cea_charit_msg_assistant p:last-child { margin-bottom: 0; }
-.cea_charit_msg_assistant pre {
-    background: color-mix(in oklab, var(--SmartThemeBlurTintColor, #000) 86%, transparent);
-    padding: 8px 10px;
-    border-radius: var(--it-radius-sm);
-    overflow-x: auto;
-    font-size: 0.9em;
-    font-family: var(--monoFontFamily, ui-monospace, monospace);
-}
-.cea_charit_msg_assistant code {
-    background: color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 12%, transparent);
-    padding: 1px 5px;
-    border-radius: 4px;
-    font-size: 0.92em;
-    font-family: var(--monoFontFamily, ui-monospace, monospace);
-}
-
-.cea_charit_msg_system {
-    align-self: center;
-    background: color-mix(in oklab, var(--it-accent-system) 9%, transparent);
-    border: 1px dashed color-mix(in oklab, var(--it-accent-system) 50%, transparent);
-    border-left: 3px solid color-mix(in oklab, var(--it-accent-system) 65%, transparent);
-    font-style: italic;
-    font-size: 0.9em;
-    max-width: 95%;
-    white-space: pre-wrap;
-}
-
 /* ── Pending edits ─────────────────────────────────────────────────── */
 
-.cea_charit_pending {
+.cea_editor_pending {
     flex: 0 0 auto;
     border: 1px solid color-mix(in oklab, var(--it-accent-system) 40%, transparent);
     border-left: 3px solid color-mix(in oklab, var(--it-accent-system) 70%, transparent);
@@ -312,84 +234,12 @@
     overflow-y: auto;
 }
 
-.cea_charit_pending_title {
-    font-weight: 700;
-    margin-bottom: var(--it-space-xs);
-    font-size: 0.96em;
-    opacity: var(--it-text-strong);
-}
-
-.cea_charit_pending_card {
-    margin: var(--it-space-xs) 0;
-    padding: var(--it-space-xs) var(--it-space-sm);
-    background: color-mix(in oklab, var(--SmartThemeBlurTintColor, #000) 90%, transparent);
-    border-radius: var(--it-radius-sm);
-    font-size: 0.92em;
-    border: var(--it-border-soft);
-    line-height: 1.5;
-}
-
-.cea_charit_pending_card .op {
-    font-weight: 700;
-    margin-right: var(--it-space-xs);
-    color: color-mix(in oklab, var(--it-accent-primary) 75%, var(--SmartThemeBodyColor, #ddd));
-    text-transform: uppercase;
-    font-size: 0.82em;
-    letter-spacing: 0.06em;
-}
-
-.cea_charit_pending_card code {
-    background: color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 10%, transparent);
-    padding: 1px 5px;
-    border-radius: 4px;
-    font-size: 0.95em;
-    font-family: var(--monoFontFamily, ui-monospace, monospace);
-}
-
-.cea_charit_pending_card .diff_old {
-    color: var(--it-accent-danger);
-    text-decoration: line-through;
-    word-break: break-word;
-}
-
-.cea_charit_pending_card .diff_new {
-    color: var(--it-accent-assistant);
-    word-break: break-word;
-}
-
-.cea_charit_pending_card .diff_anchor {
-    opacity: var(--it-text-muted);
-    word-break: break-word;
-    font-style: italic;
-}
-
-.cea_charit_pending_card .diff_arrow {
-    margin: 0 6px;
-    opacity: var(--it-text-muted);
-}
-
-.cea_charit_pending_row {
-    margin: 2px 0 2px 1em;
-}
-
-.cea_charit_pending_note {
-    opacity: var(--it-text-muted);
-    font-size: 0.86em;
-    font-style: italic;
-}
-
-.cea_charit_pending_actions {
-    margin-top: var(--it-space-sm);
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--it-space-xs);
-}
-
 /* ── Composer ──────────────────────────────────────────────────────── */
 
-.cea_charit_composer {
+.cea_editor_composer {
     flex: 0 0 auto;
     display: flex;
+    flex-direction: column;
     gap: var(--it-space-xs);
     padding: var(--it-space-md);
     border: var(--it-border);
@@ -398,10 +248,11 @@
     align-items: stretch;
 }
 
-.cea_charit_composer textarea {
+.cea_editor_composer textarea {
     flex: 1 1 auto;
     min-height: 60px;
     max-height: 240px;
+    width: 100%;
     resize: vertical;
     font-family: inherit;
     border-radius: var(--it-radius-md);
@@ -409,37 +260,84 @@
     transition: border-color var(--it-motion-fast);
 }
 
-.cea_charit_composer textarea:focus {
+.cea_editor_composer textarea:focus {
     border-color: color-mix(in oklab, var(--it-accent-primary) 60%, transparent);
 }
 
-.cea_charit_composer button {
-    flex: 0 0 auto;
+.cea_editor_composer_actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--it-space-xs);
+}
+
+.cea_editor_composer_auto_apply {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--it-space-2xs);
+    font-size: 0.9em;
+    opacity: var(--it-text-default);
+    user-select: none;
+}
+
+.cea_editor_composer_auto_apply input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
+}
+
+.cea_editor_composer_buttons {
+    display: flex;
+    gap: var(--it-space-xs);
+}
+
+.cea_editor_composer_buttons button {
     min-width: 80px;
-    align-self: stretch;
     background: color-mix(in oklab, var(--it-accent-primary) 18%, transparent);
     border-color: color-mix(in oklab, var(--it-accent-primary) 55%, transparent);
     font-weight: 600;
     transition: background-color var(--it-motion-fast), border-color var(--it-motion-fast), transform var(--it-motion-fast);
 }
 
-.cea_charit_composer button:hover:not(:disabled) {
+.cea_editor_composer_buttons button:hover:not(:disabled) {
     background: color-mix(in oklab, var(--it-accent-primary) 28%, transparent);
     border-color: color-mix(in oklab, var(--it-accent-primary) 75%, transparent);
     transform: translateY(-1px);
 }
 
-.cea_charit_composer button:active:not(:disabled) {
+.cea_editor_composer_buttons button:active:not(:disabled) {
     transform: translateY(0);
+}
+
+/* ── Loading bubble (transient, lives outside session.messages) ────── */
+
+.cea_editor_msg_loading {
+    align-self: flex-start;
+    padding: 8px 12px;
+    border-radius: var(--it-radius-md);
+    border: 1px dashed color-mix(in oklab, var(--it-accent-primary) 35%, transparent);
+    background: color-mix(in oklab, var(--it-accent-primary) 7%, transparent);
+    font-size: 0.92em;
+    opacity: var(--it-text-default);
+    display: inline-flex;
+    align-items: center;
+    gap: var(--it-space-xs);
+}
+
+/* ── Preview pane content ──────────────────────────────────────────── */
+
+.cea_editor_preview_empty {
+    padding: var(--it-space-md);
+    opacity: var(--it-text-muted);
+    font-style: italic;
+    text-align: center;
 }
 
 /* ── Narrow viewport ───────────────────────────────────────────────── */
 
 @media (max-width: 720px) {
-    .cea_charit_popup {
+    .cea_editor_studio {
         min-width: 0;
         gap: var(--it-space-sm);
     }
-    .cea_charit_toolbar_label { flex-basis: 100%; }
-    .cea_charit_msg { max-width: 95%; }
 }

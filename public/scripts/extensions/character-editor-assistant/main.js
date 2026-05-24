@@ -12,7 +12,7 @@ import {
     getCharacterScenario,
     saveSettingsDebounced,
 } from '../../../script.js';
-import { DOMPurify } from '../../../lib.js';
+import { DOMPurify, lodash } from '../../../lib.js';
 import { extension_settings, getContext, getCharacterState, setCharacterState } from '../../extensions.js';
 import { addLocaleData, translate } from '../../i18n.js';
 import { POPUP_TYPE, Popup } from '../../popup.js';
@@ -23,11 +23,11 @@ import {
     TOOL_PROTOCOL_STYLE,
     validateParsedToolCalls,
 } from '../function-call-runtime.js';
-import { openCharacterIterationStudio } from './character-iteration/studio.js';
 import { createCharacterEditorDiffUi } from './diff-ui.js';
 import { createCharacterEditorUi } from './editor-ui.js';
-import { renderCeaEditorPreviewPane } from './editor-preview.js';
-import { bindIterWorkspaceResizer } from '../../iteration-library/index.js';
+import { openUnifiedCharacterEditorPopup } from './editor-iteration/studio.js';
+import { applyEdits } from '../../iteration-library/index.js';
+
 
 const MODULE_NAME = 'character_editor_assistant';
 const UI_BLOCK_ID = 'character_editor_assistant_settings';
@@ -536,38 +536,6 @@ function getSettings() {
     return extension_settings[MODULE_NAME];
 }
 
-/**
- * Per-avatar auto-approve preference for the CEA editor popup.
- *
- * Previously `extension_settings[MODULE_NAME].editorAutoApply` was a single
- * boolean — switching characters left the previous character's choice in
- * effect, which surprised users with auto-approve flipping itself on for
- * cards they hadn't opted in on. Now persisted as a per-avatar map at
- * `extension_settings[MODULE_NAME].editorAutoApplyByAvatar` (旧-4).
- *
- * No migration: the previous single bool simply disappears; each character
- * starts on a fresh per-avatar slate, mirroring the spec's explicit
- * direction "users get a fresh per-avatar slate".
- */
-function getAutoApplyForAvatar(avatar) {
-    const settings = extension_settings?.[MODULE_NAME];
-    if (!settings) return false;
-    const map = settings.editorAutoApplyByAvatar;
-    if (!map || typeof map !== 'object') return false;
-    return !!map[String(avatar || '')];
-}
-
-function persistAutoApproveForAvatar(avatar, value) {
-    if (!extension_settings || typeof extension_settings !== 'object') return;
-    extension_settings[MODULE_NAME] = extension_settings[MODULE_NAME] || {};
-    const settings = extension_settings[MODULE_NAME];
-    if (!settings.editorAutoApplyByAvatar || typeof settings.editorAutoApplyByAvatar !== 'object') {
-        settings.editorAutoApplyByAvatar = {};
-    }
-    settings.editorAutoApplyByAvatar[String(avatar || '')] = !!value;
-    try { saveSettingsDebounced(); } catch { /* save failures are non-fatal */ }
-}
-
 function getConnectionProfiles() {
     return getChatCompletionConnectionProfiles();
 }
@@ -881,6 +849,82 @@ async function loadCharacterEditorSessionStore(context, avatar) {
     return normalizeCharacterEditorSessionStore(raw || createEmptyCharacterEditorSessionStore());
 }
 
+/**
+ * Read the raw legacy CEA editor session bundle for an avatar. Returns the
+ * underlying `sessions[]` array exactly as it was persisted on the character
+ * card (no normalization beyond what the legacy store applied at write time),
+ * so the M4 migration converter can introspect every original field.
+ *
+ * Used only by the unified popup's first-open migration path
+ * (`editor-iteration/studio.js`). Returns `[]` on any read error so the
+ * popup's session list still loads (migration is best-effort).
+ *
+ * @param {object} context - SillyTavern context (currently unused; reserved
+ *   for symmetry with `loadCharacterEditorSessionStore`).
+ * @param {string} avatar - Character avatar key.
+ * @returns {Promise<Array<object>>}
+ */
+export async function readLegacyCeaEditorSessions(context, avatar) {
+    try {
+        const raw = await getCharacterState(avatar, CHARACTER_EDITOR_SESSION_NAMESPACE);
+        const sessions = Array.isArray(raw?.sessions) ? raw.sessions : [];
+        // Return a shallow clone so downstream mutation can't corrupt the
+        // persisted card state if the migrator decides to mutate-in-place.
+        return sessions.map(s => (s && typeof s === 'object') ? { ...s } : s);
+    } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[character-editor-assistant] readLegacyCeaEditorSessions failed', err);
+        return [];
+    }
+}
+
+/**
+ * Read the raw legacy character-iteration popup session bucket for an avatar.
+ *
+ * The deleted CHARACTER_REPLACED auto-popup persisted sessions to
+ * `extension_settings.character_editor_assistant.popupSessionsV2[char_<avatar>]`
+ * (Stage 2 spec). After M3 removed that popup, those sessions became orphans
+ * the new unified-popup migration ignored. This reader gives the migrator a
+ * second source so that history is recovered on first open.
+ *
+ * The bucket shape is `{ [sessionId]: sessionObject }`. We return an array of
+ * session objects (shallow-cloned) — the convertLegacyMessage / migrator
+ * downstream handles the same conversationMessages / pendingApproval shape
+ * that the editor popup used, so no separate adapter is needed.
+ *
+ * Returns `[]` on any read error so the migration's outer empty-check still
+ * works gracefully.
+ *
+ * @param {object} context - SillyTavern context (currently unused; reserved
+ *   for symmetry with `readLegacyCeaEditorSessions`).
+ * @param {string} avatar - Character avatar key.
+ * @returns {Promise<Array<object>>}
+ */
+export async function readLegacyCharIterPopupSessions(context, avatar) {
+    try {
+        const root = context?.extensionSettings?.character_editor_assistant
+            || (typeof globalThis !== 'undefined' && globalThis.extension_settings && globalThis.extension_settings.character_editor_assistant)
+            || null;
+        if (!root || typeof root !== 'object') return [];
+        const v2 = root.popupSessionsV2;
+        if (!v2 || typeof v2 !== 'object') return [];
+        const scope = `char_${avatar}`;
+        const bucket = v2[scope];
+        if (!bucket) return [];
+        if (Array.isArray(bucket)) {
+            return bucket.filter(s => s && typeof s === 'object').map(s => ({ ...s }));
+        }
+        if (typeof bucket === 'object') {
+            return Object.values(bucket).filter(s => s && typeof s === 'object').map(s => ({ ...s }));
+        }
+        return [];
+    } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[character-editor-assistant] readLegacyCharIterPopupSessions failed', err);
+        return [];
+    }
+}
+
 async function persistCharacterEditorSessionStore(context, avatar, store) {
     await setCharacterState(
         avatar,
@@ -1130,6 +1174,114 @@ async function mergeCharacterAttributes(context, avatar, patch) {
     for (const [topKey, value] of Object.entries(extPatchesByTopKey)) {
         await context.writeExtensionField(characterIndex, topKey, value);
     }
+}
+
+/**
+ * Apply a batch of Edit ops scoped to the character card and persist via
+ * `mergeCharacterAttributes`. Used by the unified CEA editor's Apply commit
+ * (editor-iteration/studio.js → _internalApplyPendingEdits). Studio.js
+ * pre-groups its `pendingEdits` by `target.kind === 'character'` and hands
+ * the slice here together with the live character snapshot the edits were
+ * authored against.
+ *
+ * Diff-against-original guard: we only forward the per-key delta to
+ * `mergeCharacterAttributes`, so a batch that no-ops (every key already
+ * matches) skips the `updateCharacterData` round-trip entirely.
+ *
+ * @param {Object} context  SillyTavern context.
+ * @param {string} avatar   Target character avatar.
+ * @param {Array}  edits    Iter-library Edit[] scoped to the character.
+ * @param {Object} [opts]
+ * @param {Object} [opts.liveCharacter]  Pre-edit snapshot the edits were
+ *                                       authored against. Defaults to {}.
+ */
+export async function commitCharacterEditorOperations(context, avatar, edits, opts = {}) {
+    if (!Array.isArray(edits) || edits.length === 0) return;
+    const before = opts?.liveCharacter ? structuredClone(opts.liveCharacter) : {};
+    const result = applyEdits(edits, before) || {};
+    if (Array.isArray(result.conflicts) && result.conflicts.length > 0) {
+        // eslint-disable-next-line no-console
+        console.warn(`[${MODULE_NAME}] commitCharacterEditorOperations conflicts`, result.conflicts);
+        const reasons = result.conflicts
+            .map(c => `${c?.edit?.path || c?.edit?.op || '(edit)'}: ${c?.reason || 'conflict'}`)
+            .slice(0, 3)
+            .join('; ');
+        throw new Error(`Apply blocked by ${result.conflicts.length} conflict(s) on character fields. ${reasons || 'The live state has drifted since edits were authored.'}`);
+    }
+    const after = result.newLive || before;
+    const patch = {};
+    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+    for (const k of keys) {
+        if (!lodash.isEqual(before[k], after[k])) patch[k] = after[k];
+    }
+    if (Object.keys(patch).length === 0) return;
+    await mergeCharacterAttributes(context, avatar, patch);
+}
+
+/**
+ * Apply a batch of Edit ops scoped to a single lorebook and persist via
+ * `context.saveWorldInfo`. Used by the unified CEA editor's Apply commit
+ * (editor-iteration/studio.js → _internalApplyPendingEdits). Studio.js
+ * pre-groups its `pendingEdits` by `target.kind === 'lorebook'` AND
+ * `target.bookName`, then calls this helper once per book.
+ *
+ * No-op guard: when the post-apply book is byte-identical to the pre-apply
+ * snapshot we skip `saveWorldInfo` entirely. `saveWorldInfo` bumps mtime
+ * even on no-op writes, so downstream consumers (notably the world-info
+ * preview pane) would otherwise see spurious change events.
+ *
+ * @param {string} bookName Target lorebook name (first arg by design — the
+ *                          per-book commit is the dominant axis; context is
+ *                          a context bag).
+ * @param {Object} liveBook Pre-edit snapshot for this book — typically
+ *                          `state.live.lorebooks[bookName]` shaped as
+ *                          `{ entries, ...meta }`.
+ * @param {Array}  edits    Iter-library Edit[] scoped to this single book.
+ * @param {Object} [opts]
+ * @param {Object} opts.context  SillyTavern context (for saveWorldInfo).
+ */
+export async function commitLorebookOperations(bookName, liveBook, edits, opts = {}) {
+    if (!Array.isArray(edits) || edits.length === 0) return;
+    const safeName = String(bookName || '').trim();
+    if (!safeName) return;
+    const context = opts?.context;
+    if (!context || typeof context.saveWorldInfo !== 'function') {
+        throw new TypeError('commitLorebookOperations: opts.context.saveWorldInfo is required');
+    }
+    // Detect a bookName-rename edit (cea_set_lorebook_metadata with key
+    // `bookName`). The live-state apply path can only `saveWorldInfo(name, …)`
+    // — it has no helper for the rename-then-delete-old-name dance that
+    // `renameWorldInfo` in world-info.js performs (and that helper isn't
+    // exposed on `context`). Without this guard the rename would silently
+    // save the new content under the OLD filename, leaving the user staring
+    // at unchanged data. Surface the limitation loudly so callers can route
+    // the user to the world-info panel for now.
+    const renameEdit = edits.find(e =>
+        e && e.op === 'set'
+        && (e.path === 'bookName' || e.path === 'lorebook.bookName')
+        && String(e.newValue || '').trim() !== ''
+        && String(e.newValue || '').trim() !== safeName,
+    );
+    if (renameEdit) {
+        throw new Error(
+            `Renaming lorebooks via cea_set_lorebook_metadata is not supported. `
+            + `Use the world-info panel to rename "${safeName}" → "${String(renameEdit.newValue).trim()}".`,
+        );
+    }
+    const before = liveBook ? structuredClone(liveBook) : { entries: {} };
+    const result = applyEdits(edits, before) || {};
+    if (Array.isArray(result.conflicts) && result.conflicts.length > 0) {
+        // eslint-disable-next-line no-console
+        console.warn(`[${MODULE_NAME}] commitLorebookOperations conflicts for ${safeName}`, result.conflicts);
+        const reasons = result.conflicts
+            .map(c => `${c?.edit?.uid != null ? `#${c.edit.uid}` : c?.edit?.path || c?.edit?.op || '(edit)'}: ${c?.reason || 'conflict'}`)
+            .slice(0, 3)
+            .join('; ');
+        throw new Error(`Apply blocked by ${result.conflicts.length} conflict(s) on "${safeName}". ${reasons || 'The live state has drifted since edits were authored.'}`);
+    }
+    const after = result.newLive || before;
+    if (lodash.isEqual(before, after)) return;
+    await context.saveWorldInfo(safeName, after, true);
 }
 
 async function syncWorldBindingUi(context, worldName = '') {
@@ -2075,54 +2227,62 @@ function buildLorebookDraftDiffPreview(operation, targetBook, beforeEntry, after
         rawArgs: clone(args || {}),
     };
 
+    // Field specs are diff-driven (compare normalized before vs after) rather
+    // than args-driven. The AI tool schema permits passing the entry as a
+    // nested `{ entry: {...} }` object instead of flat keys; the old
+    // touched-args path missed every field in that case and fell through to a
+    // useless full-JSON diff. Comparing the normalized snapshot pair sidesteps
+    // that — we render exactly the fields that actually changed regardless of
+    // how the AI shaped its call.
+    const FIELD_SPECS = [
+        { label: 'comment', key: 'comment' },
+        { label: 'content', key: 'content' },
+        { label: 'keywords', key: 'key' },
+        { label: 'secondary keywords', key: 'keysecondary' },
+        { label: 'selective logic', key: 'selectiveLogic' },
+        { label: 'order', key: 'order' },
+        { label: 'position', key: 'position' },
+        { label: 'depth', key: 'depth' },
+        { label: 'probability', key: 'probability' },
+        { label: 'enabled', key: 'enabled' },
+        { label: 'constant', key: 'constant' },
+        { label: 'vectorized', key: 'vectorized' },
+        { label: 'excludeRecursion', key: 'excludeRecursion' },
+        { label: 'preventRecursion', key: 'preventRecursion' },
+        { label: 'group', key: 'group' },
+        { label: 'role', key: 'role' },
+    ];
+
     if (kind === 'lorebook_delete_entry') {
-        pushDiffField(preview.fields, 'entry', beforeEntry ? 'exists' : '', i18n('(deleted)'), { force: true });
-        if (beforeEntry) {
-            pushDiffField(preview.fields, 'keywords', getEntryPreviewValue(beforeEntry, 'key'), i18n('(deleted)'), { force: true });
-            pushDiffField(preview.fields, 'secondary keywords', getEntryPreviewValue(beforeEntry, 'keysecondary'), i18n('(deleted)'), { force: true });
-            pushDiffField(preview.fields, 'comment', getEntryPreviewValue(beforeEntry, 'comment'), i18n('(deleted)'), { force: true });
-            pushDiffField(preview.fields, 'content', getEntryPreviewValue(beforeEntry, 'content'), i18n('(deleted)'), { force: true });
+        // Pre-deletion snapshot of the key user-facing fields, force-rendered
+        // (before may be the same as the synthetic "(deleted)" if the field
+        // was empty) so the user sees what's about to disappear.
+        const summaryKeys = ['comment', 'content', 'key', 'keysecondary'];
+        for (const key of summaryKeys) {
+            const spec = FIELD_SPECS.find((s) => s.key === key);
+            if (!spec) continue;
+            const beforeValue = getEntryPreviewValue(beforeNormalized, spec.key);
+            pushDiffField(preview.fields, spec.label, beforeValue, i18n('(deleted)'), { force: true });
         }
         return preview;
     }
 
-    const fieldSpecs = [
-        { label: 'comment', key: 'comment', touched: Object.hasOwn(args, 'comment') },
-        { label: 'content', key: 'content', touched: Object.hasOwn(args, 'content') },
-        { label: 'keywords', key: 'key', touched: Object.hasOwn(args, 'key_csv') },
-        { label: 'secondary keywords', key: 'keysecondary', touched: Object.hasOwn(args, 'secondary_key_csv') },
-        { label: 'selective logic', key: 'selectiveLogic', touched: Object.hasOwn(args, 'selective_logic') || Object.hasOwn(args, 'secondary_key_csv') },
-        { label: 'order', key: 'order', touched: Object.hasOwn(args, 'order') },
-        { label: 'position', key: 'position', touched: Object.hasOwn(args, 'position') },
-        { label: 'depth', key: 'depth', touched: Object.hasOwn(args, 'depth') },
-        { label: 'enabled', key: 'enabled', touched: Object.hasOwn(args, 'enabled') || Object.hasOwn(args, 'disable') },
-        { label: 'constant', key: 'constant', touched: Object.hasOwn(args, 'constant') },
-    ];
-    for (const spec of fieldSpecs) {
-        if (!spec.touched) {
-            continue;
-        }
+    for (const spec of FIELD_SPECS) {
         const beforeValue = beforeNormalized ? getEntryPreviewValue(beforeNormalized, spec.key) : '';
-        const afterValue = afterNormalized ? getEntryPreviewValue(afterNormalized, spec.key) : i18n('(deleted)');
-        pushDiffField(preview.fields, spec.label, beforeValue, afterValue, { force: !beforeNormalized });
+        const afterValue = afterNormalized ? getEntryPreviewValue(afterNormalized, spec.key) : '';
+        // Force-render every populated field on a brand-new entry so the user
+        // can review what they're about to add (no `before` to diff against).
+        const forceForNewEntry = !beforeNormalized && afterValue !== '' && afterValue != null
+            && !(Array.isArray(afterValue) && afterValue.length === 0);
+        pushDiffField(preview.fields, spec.label, beforeValue, afterValue, { force: forceForNewEntry });
     }
 
     if (preview.fields.length === 0) {
-        if (beforeNormalized && afterNormalized && !areLorebookEntriesEqualForSync(beforeNormalized, afterNormalized)) {
-            pushDiffField(
-                preview.fields,
-                'entry',
-                JSON.stringify(beforeNormalized, null, 2),
-                JSON.stringify(afterNormalized, null, 2),
-                { force: true },
-            );
-            return preview;
-        }
-        if (!beforeNormalized && afterNormalized) {
-            pushDiffField(preview.fields, 'entry', '', 'exists', { force: true });
-            return preview;
-        }
-        return null;
+        // Both sides materially identical except for ordering / whitespace —
+        // surface a one-line "no effective change" hint instead of dumping the
+        // entry JSON. Caller-side filtering usually catches this case via
+        // areLorebookEntriesEqualForSync above, so we rarely land here.
+        pushDiffField(preview.fields, 'entry', i18n('(no effective change)'), i18n('(no effective change)'), { force: true });
     }
     return preview;
 }
@@ -2336,197 +2496,6 @@ const {
     sanitizeDiffPlaceholderValue,
 });
 
-function findPreviousConversationUserMessageIndex(messages, startIndex) {
-    const list = Array.isArray(messages) ? messages : [];
-    const index = Math.min(list.length - 1, Math.max(-1, Math.floor(Number(startIndex) || -1)));
-    for (let i = index - 1; i >= 0; i--) {
-        if (String(list[i]?.role || '').trim().toLowerCase() === 'user') {
-            return i;
-        }
-    }
-    return -1;
-}
-
-function canRefreshConversationAssistantMessage(messages, messageIndex, { allowAuto = true } = {}) {
-    const list = Array.isArray(messages) ? messages : [];
-    const index = Math.floor(Number(messageIndex));
-    if (!Number.isInteger(index) || index < 0 || index >= list.length) {
-        return false;
-    }
-    const item = list[index];
-    if (String(item?.role || '').trim().toLowerCase() !== 'assistant') {
-        return false;
-    }
-    if (!allowAuto && Boolean(item?.auto)) {
-        return false;
-    }
-    return findPreviousConversationUserMessageIndex(list, index) >= 0;
-}
-
-function renderConversationMessageRefreshAction(attributeName, messageIndex, messages, options = {}) {
-    const allowAuto = options && Object.hasOwn(options, 'allowAuto') ? Boolean(options.allowAuto) : true;
-    if (!canRefreshConversationAssistantMessage(messages, messageIndex, { allowAuto })) {
-        return '';
-    }
-    return `
-<div class="cea_sync_msg_actions">
-    <div class="menu_button menu_button_small" ${attributeName}="refresh-message" data-cea-sync-message-index="${messageIndex}">${escapeHtml(i18n('Regenerate'))}</div>
-</div>`;
-}
-
-async function requestLorebookToolCallsWithRetry(context, settings, {
-    systemPrompt = '',
-    userPrompt = '',
-    historyMessages = null,
-    apiPresetName = '',
-    promptPresetName = '',
-    tools = [],
-    allowedNames = null,
-    abortSignal = null,
-} = {}) {
-    if (!Array.isArray(tools) || tools.length === 0) {
-        return {
-            calls: [],
-            assistantText: '',
-        };
-    }
-    if (!context || typeof context.generateTask !== 'function') {
-        throw new Error('context.generateTask is unavailable.');
-    }
-
-    const systemText = String(systemPrompt || '').trim();
-    const userText = String(userPrompt || '').trim();
-    const taskMessages = [
-        ...(Array.isArray(historyMessages) ? historyMessages.map(message => ({ ...message })) : []),
-        { role: 'system', content: systemText },
-        { role: 'user', content: userText },
-    ].filter((item) => {
-        if (!item || typeof item !== 'object') {
-            return false;
-        }
-        if (Array.isArray(item.tool_calls) && item.tool_calls.length > 0) {
-            return true;
-        }
-        if (String(item.role || '').trim().toLowerCase() === 'tool' && String(item.tool_call_id || '').trim()) {
-            return true;
-        }
-        return Boolean(item.content);
-    });
-
-    const retries = Math.max(0, Math.min(10, Math.floor(Number(settings?.toolCallRetryMax || 0) || 0)));
-    const allowSet = allowedNames instanceof Set
-        ? allowedNames
-        : Array.isArray(allowedNames)
-            ? new Set(allowedNames.map(name => String(name || '').trim()).filter(Boolean))
-            : null;
-
-    let lastError = null;
-    for (let attempt = 0; attempt <= retries; attempt++) {
-        throwIfAborted(abortSignal, 'Character editor request aborted.');
-        try {
-            const generateTaskOpts = {
-                taskMessages,
-                includeCharacterCard: true,
-                worldInfoSource: 'none',
-                runtimeWorldInfo: {},
-                apiPresetName: String(apiPresetName || '').trim(),
-                llmPresetName: String(promptPresetName || '').trim(),
-                tools,
-                toolChoice: 'auto',
-                functionCallMode: 'auto',
-                functionCallOptions: {
-                    protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
-                },
-                abortSignal: abortSignal || undefined,
-                // Authoring scope: AI is editing source text containing literal
-                // {{user}}/{{char}}/{{getvar::}} placeholders that must remain
-                // unrendered for the analysis/diff to be accurate.
-                substituteMacros: false,
-            };
-            const result = settings?.useStreamingTransport
-                ? await context.generateTaskStream(generateTaskOpts).result
-                : await context.generateTask(generateTaskOpts);
-            throwIfAborted(abortSignal, 'Character editor request aborted.');
-            const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
-            const normalizedCalls = rawCalls.map((call) => {
-                const rawId = String(call?.raw?.id || '').trim();
-                return {
-                    id: rawId || makeRuntimeToolCallId(),
-                    name: String(call?.name || '').trim(),
-                    args: call?.args && typeof call.args === 'object' ? call.args : {},
-                    raw: call?.raw || null,
-                };
-            });
-            const filteredCalls = allowSet
-                ? normalizedCalls.filter(call => allowSet.has(call.name))
-                : normalizedCalls;
-            const validationError = validateParsedToolCalls(filteredCalls, tools);
-            if (validationError) {
-                throw new Error(validationError);
-            }
-            return {
-                calls: filteredCalls,
-                assistantText: String(result?.assistantText || ''),
-            };
-        } catch (error) {
-            lastError = error;
-            if (isAbortError(error, abortSignal)) {
-                throw error;
-            }
-            if (attempt >= retries) {
-                throw error;
-            }
-            console.warn(`[${MODULE_NAME}] Lorebook tool call request failed. Retrying (${attempt + 1}/${retries})...`, error);
-        }
-    }
-
-    if (lastError) {
-        throw lastError;
-    }
-    return {
-        calls: [],
-        assistantText: '',
-    };
-}
-
-async function submitGeneratedOperations(context, operationSpecs, source = 'character_update_lorebook_sync', { targetAvatar = '' } = {}) {
-    const specs = Array.isArray(operationSpecs) ? operationSpecs : [];
-    const avatar = String(targetAvatar || '').trim();
-    let applied = 0;
-    let failed = 0;
-    const errors = [];
-    const results = [];
-    for (const spec of specs) {
-        try {
-            const state = await loadOperationState(context, { avatar });
-            const operation = createOperationEnvelope(state, spec.kind, spec.args, source, { targetAvatar: avatar });
-            await persistOperationState(context, state, { avatar });
-            const submission = await submitOperation(context, operation, { avatar });
-            applied++;
-            results.push({
-                ok: true,
-                kind: String(spec?.kind || ''),
-                args: clone(spec?.args || {}),
-                summary: buildOperationSummary(spec),
-                operationId: String(submission?.operation_id || operation?.id || ''),
-                journalId: String(submission?.journal_id || ''),
-            });
-        } catch (error) {
-            failed++;
-            const errorText = String(error?.message || error);
-            errors.push(errorText);
-            results.push({
-                ok: false,
-                kind: String(spec?.kind || ''),
-                args: clone(spec?.args || {}),
-                error: errorText,
-                summary: buildOperationSummary(spec),
-            });
-        }
-    }
-    return { applied, failed, errors, results };
-}
-
 function splitCharacterEditorToolCalls(rawCalls, helperToolApis = []) {
     const editCalls = [];
     const helperCalls = [];
@@ -2561,7 +2530,10 @@ function getCharacterEditorSearchApi() {
     return api;
 }
 
-async function runCharacterEditorHelperToolCall(call, helperToolApis = []) {
+// Exported so editor-iteration/tools.js (unified CEA editor) can dispatch
+// short-name read tool calls (`lorebook_query`, `simulate_prompt`, etc.) to
+// the existing legacy helper-tool APIs without reimplementing them.
+export async function runCharacterEditorHelperToolCall(call, helperToolApis = []) {
     const name = String(call?.name || '').trim();
     const api = (Array.isArray(helperToolApis) ? helperToolApis : [])
         .find(item => typeof item?.isToolName === 'function' && item.isToolName(name));
@@ -2571,26 +2543,78 @@ async function runCharacterEditorHelperToolCall(call, helperToolApis = []) {
     return await api.invoke(call);
 }
 
+/**
+ * Build the helper-tool API array the unified CEA editor's read tools
+ * (`lorebook_query`, `lorebook_list`, `lorebook_get`, `world_book_list`,
+ * `simulate_prompt`, `web_search`) dispatch through. Assembles the same
+ * helper-tool surface the legacy editor used so the unified popup keeps
+ * tool parity without re-exporting each individual factory.
+ *
+ * Returned shape is an Array so it's drop-in compatible with
+ * `runCharacterEditorHelperToolCall(call, helperToolApis)` and with the
+ * unified popup's `runCeaEditorReadTool(call, { helperApis })` consumer
+ * (both iterate the array via `isToolName`).
+ *
+ * @param {Object} context  SillyTavern context (characters, loadWorldInfo, …).
+ * @param {Object} [opts]
+ * @param {string} [opts.avatar='']  Character avatar — scopes the lorebook /
+ *                                   world-book-list APIs to the right card.
+ * @returns {Array<Object>} Helper-tool API objects (lorebook, simulate,
+ *                          worldBookList, plus optional search when
+ *                          `globalThis.Luker.searchTools` is wired).
+ */
+export function buildCharacterEditorHelperApis(context, opts = {}) {
+    const avatar = String(opts?.avatar || '').trim();
+    const searchApi = getCharacterEditorSearchApi();
+    return [
+        createCharacterEditorLorebookToolApi(context, { avatar }),
+        createCharacterEditorSimulateToolApi(context),
+        createCharacterEditorWorldBookListToolApi(context, { avatar }),
+        ...(searchApi ? [searchApi] : []),
+    ];
+}
+
+/**
+ * Build a `state.live` snapshot for the unified CEA editor popup. The popup
+ * holds this snapshot to back its apply commit — `state.live.character` is
+ * the per-character field bundle the card-field edits apply against, and
+ * `state.live.lorebooks[bookName]` is the per-book object lorebook edits
+ * apply against (and what `commitLorebookOperations` then writes back via
+ * `saveWorldInfo`).
+ *
+ * Scope: pre-loads the primary lorebook only (the one bound at
+ * `character.data.extensions.world`). Auxiliary / chat / global books are
+ * still editable through the AI's tool calls — the popup will hit
+ * `commitLorebookOperations` with whatever book the AI named. Pre-loading
+ * every visible book up front would be wasteful (global books can be huge)
+ * and a stale snapshot would risk clobbering concurrent edits.
+ *
+ * @param {Object} context  SillyTavern context (characters, loadWorldInfo, …).
+ * @param {string} avatar   Character avatar — resolves to the card.
+ * @returns {Promise<{ character: Object, lorebooks: Object }>}
+ */
+export async function buildUnifiedCharacterEditorLiveSnapshot(context, avatar = '') {
+    const state = await loadCharacterEditorPrimaryLorebookState(context, { avatar });
+    const character = state?.character || {};
+    const lorebooks = {};
+    const bookName = String(state?.bookName || '').trim();
+    if (bookName) {
+        // `loadCharacterEditorPrimaryLorebookState` already loaded the
+        // primary book — reuse that payload so we don't double-fetch.
+        const data = state?.lorebookData;
+        if (data && typeof data === 'object') {
+            lorebooks[bookName] = data;
+        }
+    }
+    return { character, lorebooks };
+}
+
 function makeRuntimeToolCallId() {
     return `call_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function makeConversationMessageId(prefix = 'cea_msg') {
     return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function serializeToolResultContent(result) {
-    if (typeof result === 'string') {
-        return result;
-    }
-    if (result === null || result === undefined) {
-        return '';
-    }
-    try {
-        return JSON.stringify(result, null, 2);
-    } catch {
-        return String(result);
-    }
 }
 
 function createPersistentToolCallPayload(name, args = {}, id = '') {
@@ -2607,12 +2631,6 @@ function createPersistentToolCallPayload(name, args = {}, id = '') {
             arguments: JSON.stringify(safeArgs),
         },
     };
-}
-
-function buildPersistentToolCallsFromRawCalls(rawCalls = []) {
-    return (Array.isArray(rawCalls) ? rawCalls : [])
-        .map((call) => createPersistentToolCallPayload(call?.name, call?.args, call?.id))
-        .filter(Boolean);
 }
 
 function normalizePersistentToolCalls(message) {
@@ -2653,285 +2671,9 @@ function normalizePersistentToolResults(message, toolCalls = []) {
         .filter(item => item.tool_call_id && toolCallIds.has(item.tool_call_id));
 }
 
-function createPersistentToolTurnMessage({
-    messageId = '',
-    assistantText = '',
-    toolCalls = [],
-    toolResults = [],
-    toolSummary = '',
-    toolState = '',
-    extra = {},
-} = {}) {
-    const message = {
-        id: String(messageId || '').trim() || makeConversationMessageId(),
-        role: 'assistant',
-        content: String(assistantText || '').trim(),
-        ...(extra && typeof extra === 'object' ? extra : {}),
-    };
-    const normalizedToolCalls = normalizePersistentToolCalls({ tool_calls: toolCalls });
-    const normalizedToolResults = normalizePersistentToolResults({ tool_results: toolResults }, normalizedToolCalls);
-    if (normalizedToolCalls.length > 0) {
-        message.tool_calls = normalizedToolCalls;
-    }
-    if (normalizedToolResults.length > 0) {
-        message.tool_results = normalizedToolResults;
-    }
-    if (toolSummary) {
-        message.toolSummary = String(toolSummary);
-    }
-    if (toolState) {
-        message.toolState = String(toolState);
-    }
-    return message;
-}
-
-function buildPersistentToolHistoryMessages(messages = []) {
-    const history = [];
-    for (const item of Array.isArray(messages) ? messages : []) {
-        if (String(item?.role || '').trim().toLowerCase() !== 'assistant') {
-            continue;
-        }
-        const toolCalls = normalizePersistentToolCalls(item);
-        const toolResults = normalizePersistentToolResults(item, toolCalls);
-        if (toolCalls.length === 0 || toolResults.length === 0) {
-            continue;
-        }
-        history.push({
-            role: 'assistant',
-            content: String(item?.content || '').trim(),
-            tool_calls: toolCalls,
-        });
-        for (const toolResult of toolResults) {
-            history.push({
-                role: 'tool',
-                tool_call_id: toolResult.tool_call_id,
-                content: toolResult.content,
-            });
-        }
-    }
-    return history;
-}
-
-function findConversationMessageById(messages, messageId) {
-    const id = String(messageId || '').trim();
-    if (!id || !Array.isArray(messages)) {
-        return null;
-    }
-    return messages.find(item => String(item?.id || '').trim() === id) || null;
-}
-
-function buildCharacterEditorToolCallsFromOperations(operations = []) {
-    const toolCalls = [];
-    for (const operation of Array.isArray(operations) ? operations : []) {
-        const kind = String(operation?.kind || '').trim();
-        const args = operation?.args && typeof operation.args === 'object' ? clone(operation.args) : {};
-        let payload = null;
-        if (kind === 'character_fields') {
-            payload = createPersistentToolCallPayload(TOOL_NAMES.UPDATE_FIELDS, args);
-        } else if (kind === 'set_primary_lorebook') {
-            payload = createPersistentToolCallPayload(TOOL_NAMES.SET_PRIMARY_BOOK, args);
-        } else if (kind === 'lorebook_upsert_entry') {
-            payload = createPersistentToolCallPayload(TOOL_NAMES.UPSERT_ENTRY, args);
-        } else if (kind === 'lorebook_delete_entry') {
-            payload = createPersistentToolCallPayload(TOOL_NAMES.DELETE_ENTRY, args);
-        }
-        if (payload) {
-            toolCalls.push(payload);
-        }
-    }
-    return toolCalls;
-}
-
 const CHARACTER_EDITOR_ROOT_TEXT_FIELDS = ['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example'];
 const CHARACTER_EDITOR_DATA_TEXT_FIELDS = ['system_prompt', 'post_history_instructions', 'creator_notes'];
 const CHARACTER_EDITOR_DATA_ARRAY_FIELDS = ['alternate_greetings'];
-
-function buildToolCallSummary(toolCalls = []) {
-    const names = (Array.isArray(toolCalls) ? toolCalls : [])
-        .map(call => String(call?.function?.name || '').trim())
-        .filter(Boolean);
-    if (names.length === 0) {
-        return '';
-    }
-    return `Tools: ${names.join(', ')}`;
-}
-
-function buildToolResultsFromOperationSubmission(toolCalls = [], submissionResult = null) {
-    const details = Array.isArray(submissionResult?.results) ? submissionResult.results : [];
-    return toolCalls.map((toolCall, index) => ({
-        tool_call_id: String(toolCall?.id || '').trim(),
-        content: serializeToolResultContent(details[index] || {
-            ok: false,
-            error: 'Missing operation execution result.',
-        }),
-    })).filter(item => item.tool_call_id);
-}
-
-function buildPendingToolResults(toolCalls = [], summaryText = '') {
-    return toolCalls.map((toolCall) => ({
-        tool_call_id: String(toolCall?.id || '').trim(),
-        content: serializeToolResultContent({
-            ok: true,
-            pending: true,
-            summary: String(summaryText || 'Pending review.'),
-        }),
-    })).filter(item => item.tool_call_id);
-}
-
-function buildRejectedToolResults(toolCalls = [], summaryText = '') {
-    return toolCalls.map((toolCall) => ({
-        tool_call_id: String(toolCall?.id || '').trim(),
-        content: serializeToolResultContent({
-            ok: false,
-            rejected: true,
-            summary: String(summaryText || 'Rejected by user.'),
-        }),
-    })).filter(item => item.tool_call_id);
-}
-
-function appendStandardToolRoundMessages(targetMessages, executedCalls, assistantText = '') {
-    if (!Array.isArray(targetMessages) || !Array.isArray(executedCalls) || executedCalls.length === 0) {
-        return;
-    }
-
-    const toolCalls = executedCalls.map((call) => {
-        const id = String(call?.id || '').trim() || makeRuntimeToolCallId();
-        const name = String(call?.name || '').trim();
-        const args = call?.args && typeof call.args === 'object' ? call.args : {};
-        return {
-            id,
-            type: 'function',
-            function: {
-                name,
-                arguments: JSON.stringify(args),
-            },
-            _result: call?.result,
-        };
-    }).filter(call => call.function.name);
-
-    if (toolCalls.length === 0) {
-        return;
-    }
-
-    targetMessages.push({
-        role: 'assistant',
-        content: String(assistantText || ''),
-        tool_calls: toolCalls.map(({ _result, ...toolCall }) => toolCall),
-    });
-
-    for (const toolCall of toolCalls) {
-        targetMessages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: serializeToolResultContent(toolCall._result),
-        });
-    }
-}
-
-function buildCharacterEditorModelTools({ helperToolApis = [] } = {}) {
-    const tools = [
-        {
-            type: 'function',
-            function: {
-                name: TOOL_NAMES.UPDATE_FIELDS,
-                description: 'Update current character card fields.',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        name: { type: 'string' },
-                        description: { type: 'string' },
-                        personality: { type: 'string' },
-                        scenario: { type: 'string' },
-                        first_mes: { type: 'string' },
-                        mes_example: { type: 'string' },
-                        system_prompt: { type: 'string' },
-                        post_history_instructions: { type: 'string' },
-                        creator_notes: { type: 'string' },
-                        alternate_greetings: {
-                            type: 'array',
-                            items: { type: 'string' },
-                        },
-                    },
-                    additionalProperties: false,
-                },
-            },
-        },
-        {
-            type: 'function',
-            function: {
-                name: TOOL_NAMES.SET_PRIMARY_BOOK,
-                description: 'Set or clear current character primary lorebook binding.',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        book_name: { type: 'string' },
-                        create_if_missing: { type: 'boolean' },
-                    },
-                    additionalProperties: false,
-                },
-            },
-        },
-        {
-            type: 'function',
-            function: {
-                name: TOOL_NAMES.UPSERT_ENTRY,
-                description: `Create or update one lorebook entry in a world book. Call ${TOOL_NAMES.LIST_WORLD_BOOKS} first to know which book names exist.`,
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        book_name: {
-                            type: 'string',
-                            description: 'Required. Target world book.',
-                        },
-                        create_if_missing: { type: 'boolean' },
-                        entry_uid: { type: 'integer' },
-                        key_csv: { type: 'string' },
-                        secondary_key_csv: { type: 'string' },
-                        comment: { type: 'string' },
-                        content: { type: 'string' },
-                        selective_logic: { type: 'integer' },
-                        order: { type: 'integer' },
-                        position: { type: 'integer' },
-                        depth: { type: 'integer' },
-                        enabled: { type: 'boolean' },
-                        disable: { type: 'boolean' },
-                        constant: { type: 'boolean' },
-                        exclude_recursion: { type: 'boolean', description: 'Non-recursable: this entry will NOT be triggered by other entries\' content during recursive scans.' },
-                        prevent_recursion: { type: 'boolean', description: 'Prevent further recursion: once this entry fires, do NOT recurse into other entries from its content.' },
-                        delay_until_recursion: { type: 'integer', description: 'Delay-until-recursion level: 0=fire on first scan as normal; 1=skip first scan and only fire from recursion level 1; 2+ = wait until that level.' },
-                    },
-                    required: ['book_name', 'entry_uid'],
-                    additionalProperties: false,
-                },
-            },
-        },
-        {
-            type: 'function',
-            function: {
-                name: TOOL_NAMES.DELETE_ENTRY,
-                description: `Delete one lorebook entry by UID from a world book. Call ${TOOL_NAMES.LIST_WORLD_BOOKS} first to know which book names exist.`,
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        book_name: {
-                            type: 'string',
-                            description: 'Required. Target world book.',
-                        },
-                        entry_uid: { type: 'integer' },
-                    },
-                    required: ['book_name', 'entry_uid'],
-                    additionalProperties: false,
-                },
-            },
-        },
-    ];
-    for (const api of Array.isArray(helperToolApis) ? helperToolApis : []) {
-        if (typeof api?.getToolDefs === 'function') {
-            tools.push(...api.getToolDefs());
-        }
-    }
-    return tools;
-}
 
 function normalizeCharacterEditorOperationsFromCalls(rawCalls) {
     const output = [];
@@ -3047,1170 +2789,27 @@ function buildCharacterEditorOperationKey(operation) {
     return `${kind}:${JSON.stringify(operation?.args || {})}`;
 }
 
-async function buildCharacterEditorContextPayload(context, avatar = '') {
-    const state = await loadCharacterEditorPrimaryLorebookState(context, { avatar });
-    const record = state.record;
-    const character = state.character || {};
-    const primaryBook = state.bookName;
-    const lorebookData = state.lorebookData || { entries: {} };
-    const operationState = await loadOperationState(context, { avatar: record.avatar });
-    const recentJournal = Array.isArray(operationState?.journal) ? operationState.journal : [];
-    const lorebookStats = buildCharacterEditorLorebookStats(lorebookData.entries || {});
-    return {
-        avatar: record.avatar,
-        name: String(getCharacterName(character) || ''),
-        fields: {
-            description: String(getCharacterDescription(character) || ''),
-            personality: String(getCharacterPersonality(character) || ''),
-            scenario: String(getCharacterScenario(character) || ''),
-            first_mes: String(getCharacterFirstMessage(character) || ''),
-            mes_example: String(getCharacterMesExample(character) || ''),
-            system_prompt: String(character?.data?.system_prompt || ''),
-            post_history_instructions: String(character?.data?.post_history_instructions || ''),
-            creator_notes: String(character?.data?.creator_notes || ''),
-            alternate_greetings: Array.isArray(character?.data?.alternate_greetings)
-                ? clone(character.data.alternate_greetings)
-                : [],
-        },
-        primary_lorebook: {
-            name: primaryBook,
-            entry_count: Number(lorebookStats.entry_count || 0),
-            max_entry_uid: Number(lorebookStats.max_entry_uid ?? -1),
-            enabled_entry_count: Number(lorebookStats.enabled_entry_count || 0),
-            constant_entry_count: Number(lorebookStats.constant_entry_count || 0),
-            secondary_key_entry_count: Number(lorebookStats.secondary_key_entry_count || 0),
-        },
-        recent_journal: recentJournal.map(item => ({
-            kind: String(item?.kind || ''),
-            summary: String(item?.summary || ''),
-        })),
-    };
-}
-
-async function requestModelCharacterEditorConversationReply(context, conversationMessages, { avatar = '', rejectedOperationKeys = [], abortSignal = null } = {}) {
-    const payload = await buildCharacterEditorContextPayload(context, avatar);
-    const history = (Array.isArray(conversationMessages) ? conversationMessages : [])
-        .map(item => ({
-            role: String(item?.role || ''),
-            content: String(item?.content || '').trim(),
-        }))
-        .filter(item => (item.role === 'assistant' || item.role === 'user') && item.content);
-    const lorebookToolApi = createCharacterEditorLorebookToolApi(context, { avatar });
-    const simulateToolApi = createCharacterEditorSimulateToolApi(context);
-    const worldBookListToolApi = createCharacterEditorWorldBookListToolApi(context, { avatar });
-    const searchApi = getCharacterEditorSearchApi();
-    const hasSearchTools = Boolean(searchApi);
-    const helperToolApis = [
-        lorebookToolApi,
-        simulateToolApi,
-        worldBookListToolApi,
-        ...(searchApi ? [searchApi] : []),
-    ];
-    const modelTools = buildCharacterEditorModelTools({ helperToolApis });
-    const availableToolNames = modelTools.map(tool => String(tool?.function?.name || '').trim()).filter(Boolean);
-    const searchToolNames = hasSearchTools
-        ? [
-            String(searchApi.toolNames.SEARCH || '').trim(),
-            String(searchApi.toolNames.VISIT || '').trim(),
-        ].filter(Boolean)
-        : [];
-    const lorebookToolNames = [
-        String(lorebookToolApi?.toolNames?.LIST || '').trim(),
-        String(lorebookToolApi?.toolNames?.QUERY || '').trim(),
-        String(lorebookToolApi?.toolNames?.GET || '').trim(),
-    ].filter(Boolean);
-    const simulateToolName = String(simulateToolApi?.toolNames?.SIMULATE || '').trim();
-    const worldBookListToolName = String(worldBookListToolApi?.toolNames?.LIST_WORLD_BOOKS || '').trim();
-    const systemPrompt = [
-        'You are editing the current character card and the world books visible to it.',
-        'Continue the conversation naturally, and propose edits only when needed.',
-        'Use tool calls for concrete edits.',
-        `Available tools: ${availableToolNames.join(', ')}`,
-        `World book tools all require a \`book_name\` argument. Call ${worldBookListToolName} first to enumerate the visible books and their scopes (\`character\` = card primary at extensions.world, \`character_aux\` = auxiliary books bound via Luker's lorebook editor, \`chat\` = active chat, \`global\` = every chat). Use the names returned there as \`book_name\` for the read and write tools below.`,
-        `Read tools: ${lorebookToolNames[0]} returns a compact uid/name/enabled index for one book. Use ${lorebookToolNames[1]} to keyword-search a book and ${lorebookToolNames[2]} to fetch full entries by uid after narrowing.`,
-        `Write tools (${TOOL_NAMES.UPSERT_ENTRY} / ${TOOL_NAMES.DELETE_ENTRY}) require \`book_name\` plus \`entry_uid\`. The card's primary book is the one tagged \`character\` in the scope map; you can also edit \`character_aux\` / \`chat\` / \`global\` books directly when the user asks.`,
-        `${simulateToolName} can simulate current prompt assembly with world info and character card included.`,
-        `For ${simulateToolName}, prefer the text argument so the tool appends that user text to the current chat. Use the messages array only when the user explicitly supplied structured records/messages.`,
-        'If you call any helper tool in a round, do not emit edit tool calls in that same round.',
-        'Do not repeat rejected operation keys unless user explicitly asks to reconsider.',
-        'In any text you generate that lands inside the card or its bound world book (description, personality, scenario, first_mes, mes_example, alternate_greetings, system_prompt, world book entry bodies, regex replacement templates), reference the user as {{user}} and the primary character as {{char}}. Never hardcode literal names for these two roles. Cards are shared: the importer\'s persona name is unknown ahead of time and the character can be renamed at import, so writing `<character name> smiles at <persona name>` only renders correctly in the current author\'s environment, while `{{char}} smiles at {{user}}` works for every importer.',
-        hasSearchTools
-            ? [
-                `You may call ${searchToolNames.join(' and ')} when you need external facts.`,
-                'When search results are provided in follow-up context, use them to produce concrete edit tool calls.',
-            ].join(' ')
-            : 'Search tools are unavailable in this runtime. Do not call web-search tools.',
-    ].join('\n');
-    const requestPresetOptions = getLorebookSyncRequestPresetOptions();
-    const settings = getSettings();
-    const allowedToolNames = new Set(availableToolNames);
-    const conversationHistory = history.map(item => ({ role: item.role, content: item.content }));
-    const runtimeToolMessages = buildPersistentToolHistoryMessages(conversationMessages);
-    const helperTurnMessages = [];
-    let lastAssistantText = '';
-
-    for (let round = 1; ; round++) {
-        throwIfAborted(abortSignal, 'Character editor request aborted.');
-        const userPrompt = [
-            'Character editor conversation payload:',
-            JSON.stringify({
-                context: payload,
-                conversation_history: conversationHistory,
-                rejected_operation_keys: Array.isArray(rejectedOperationKeys) ? rejectedOperationKeys : [],
-                helper_tools_available: {
-                    lorebook_query: true,
-                    simulate_prompt: true,
-                    world_book_list: true,
-                    web_search: hasSearchTools,
-                },
-                tool_round: round,
-            }),
-        ].join('\n\n');
-        const { calls: rawCalls, assistantText } = await requestLorebookToolCallsWithRetry(
-            context,
-            settings,
-            {
-                systemPrompt,
-                userPrompt,
-                historyMessages: runtimeToolMessages,
-                apiPresetName: requestPresetOptions.apiPresetName,
-                promptPresetName: requestPresetOptions.llmPresetName,
-                tools: modelTools,
-                allowedNames: allowedToolNames,
-                abortSignal,
-            },
-        );
-        lastAssistantText = String(assistantText || '').trim();
-
-        const { editCalls, helperCalls } = splitCharacterEditorToolCalls(rawCalls, helperToolApis);
-        if (helperCalls.length === 0) {
-            throwIfAborted(abortSignal, 'Character editor request aborted.');
-            return {
-                assistantText: lastAssistantText,
-                operations: normalizeCharacterEditorOperationsFromCalls(editCalls),
-                helperTurnMessages,
-            };
-        }
-
-        const executedHelperCalls = [];
-        for (const call of helperCalls) {
-            throwIfAborted(abortSignal, 'Character editor request aborted.');
-            const name = String(call?.name || '').trim();
-            const args = call?.args && typeof call.args === 'object' ? call.args : {};
-            const callId = String(call?.id || '').trim() || makeRuntimeToolCallId();
-            try {
-                const result = await runCharacterEditorHelperToolCall(call, helperToolApis);
-                executedHelperCalls.push({
-                    id: callId,
-                    name,
-                    args,
-                    result: {
-                        ok: true,
-                        result,
-                    },
-                });
-            } catch (error) {
-                executedHelperCalls.push({
-                    id: callId,
-                    name,
-                    args,
-                    result: {
-                        ok: false,
-                        error: String(error?.message || error || 'helper tool failed'),
-                    },
-                });
-            }
-        }
-
-        if (lastAssistantText) {
-            conversationHistory.push({
-                role: 'assistant',
-                content: lastAssistantText,
-            });
-        }
-        const helperToolCalls = buildPersistentToolCallsFromRawCalls(executedHelperCalls);
-        helperTurnMessages.push(createPersistentToolTurnMessage({
-            assistantText: lastAssistantText,
-            toolCalls: helperToolCalls,
-            toolResults: executedHelperCalls.map((call) => ({
-                tool_call_id: String(call?.id || '').trim(),
-                content: serializeToolResultContent(call?.result),
-            })),
-            toolSummary: lastAssistantText ? '' : buildToolCallSummary(helperToolCalls),
-            toolState: 'completed',
-        }));
-        appendStandardToolRoundMessages(runtimeToolMessages, executedHelperCalls, lastAssistantText);
-    }
-
-}
-
-function buildCharacterFieldsDiffPreview(operation, draftCharacter) {
-    const args = operation?.args && typeof operation.args === 'object' ? operation.args : {};
-    const preview = { title: buildOperationSummary(operation), fields: [], meta: [], rawArgs: clone(args) };
-    for (const key of CHARACTER_EDITOR_ROOT_TEXT_FIELDS) {
-        if (!Object.hasOwn(args, key)) {
-            continue;
-        }
-        const beforeValue = String(draftCharacter?.[key] ?? '');
-        const afterValue = String(args[key] ?? '');
-        pushDiffField(preview.fields, key, beforeValue, afterValue);
-        if (beforeValue === afterValue) {
-            continue;
-        }
-        draftCharacter[key] = afterValue;
-    }
-    const data = draftCharacter?.data && typeof draftCharacter.data === 'object' ? draftCharacter.data : {};
-    if (!draftCharacter.data || typeof draftCharacter.data !== 'object') {
-        draftCharacter.data = data;
-    }
-    for (const key of CHARACTER_EDITOR_DATA_TEXT_FIELDS) {
-        if (!Object.hasOwn(args, key)) {
-            continue;
-        }
-        const beforeValue = String(data?.[key] ?? '');
-        const afterValue = String(args[key] ?? '');
-        pushDiffField(preview.fields, key, beforeValue, afterValue);
-        if (beforeValue === afterValue) {
-            continue;
-        }
-        data[key] = afterValue;
-    }
-    for (const key of CHARACTER_EDITOR_DATA_ARRAY_FIELDS) {
-        if (!Object.hasOwn(args, key)) {
-            continue;
-        }
-        const beforeValue = Array.isArray(data?.[key]) ? clone(data[key]) : [];
-        const afterValue = Array.isArray(args[key]) ? clone(args[key]) : [];
-        pushDiffField(preview.fields, key, beforeValue, afterValue);
-        data[key] = clone(afterValue);
-    }
-    if (preview.fields.length === 0) {
-        return null;
-    }
-    return preview;
-}
-
-function buildPrimaryLorebookDiffPreview(operation, draftCharacter) {
-    const args = operation?.args && typeof operation.args === 'object' ? operation.args : {};
-    const beforeName = getPrimaryLorebookName(draftCharacter);
-    const afterName = String(args.book_name || '').trim();
-    const preview = {
-        title: buildOperationSummary(operation),
-        fields: [],
-        meta: [],
-        rawArgs: clone(args),
-    };
-    pushDiffField(preview.fields, 'primary lorebook', beforeName || '', afterName || '');
-    if (preview.fields.length === 0) {
-        return null;
-    }
-    if (!draftCharacter.data || typeof draftCharacter.data !== 'object') {
-        draftCharacter.data = {};
-    }
-    if (!draftCharacter.data.extensions || typeof draftCharacter.data.extensions !== 'object') {
-        draftCharacter.data.extensions = {};
-    }
-    draftCharacter.data.extensions.world = afterName;
-    return preview;
-}
-
-async function buildCharacterEditorDiffPreviews(context, operations, { avatar = '' } = {}) {
-    const record = getActiveCharacterRecord(context, { avatar });
-    const draftCharacter = clone(record.character || {});
-    const lorebookCache = new Map();
-    const getDraftLorebook = async (bookName) => {
-        const key = String(bookName || '').trim();
-        if (!key) {
-            return null;
-        }
-        if (lorebookCache.has(key)) {
-            return lorebookCache.get(key);
-        }
-        const loaded = await loadLorebookData(context, key);
-        const cached = clone(loaded || { entries: {} }) || { entries: {} };
-        if (!cached.entries || typeof cached.entries !== 'object') {
-            cached.entries = {};
-        }
-        lorebookCache.set(key, cached);
-        return cached;
-    };
-
-    const previews = [];
-    const filteredOperations = [];
-    for (const operation of Array.isArray(operations) ? operations : []) {
-        const kind = String(operation?.kind || '').trim();
-        if (kind === 'character_fields') {
-            const preview = buildCharacterFieldsDiffPreview(operation, draftCharacter);
-            if (!preview) {
-                continue;
-            }
-            filteredOperations.push({ kind, args: clone(operation?.args || {}) });
-            previews.push(preview);
-            continue;
-        }
-        if (kind === 'set_primary_lorebook') {
-            const preview = buildPrimaryLorebookDiffPreview(operation, draftCharacter);
-            if (!preview) {
-                continue;
-            }
-            filteredOperations.push({ kind, args: clone(operation?.args || {}) });
-            previews.push(preview);
-            continue;
-        }
-        if (kind === 'lorebook_upsert_entry' || kind === 'lorebook_delete_entry') {
-            const args = operation?.args && typeof operation.args === 'object' ? operation.args : {};
-            const entryUid = asFiniteInteger(args.entry_uid, null);
-            const bookName = String(args.book_name || '').trim() || getPrimaryLorebookName(draftCharacter);
-            if (!bookName || !Number.isInteger(entryUid) || entryUid < 0) {
-                previews.push({
-                    title: buildOperationSummary(operation),
-                    fields: [{ label: 'operation', before: '', after: 'invalid args' }],
-                    meta: [],
-                    rawArgs: clone(args),
-                });
-                filteredOperations.push({ kind, args: clone(args) });
-                continue;
-            }
-            const lorebookData = await getDraftLorebook(bookName);
-            const beforeEntry = getLorebookEntryByUid(lorebookData?.entries, entryUid);
-            let afterEntry = beforeEntry ? clone(beforeEntry) : null;
-            if (kind === 'lorebook_upsert_entry') {
-                afterEntry = applyLorebookEntryArgs(beforeEntry, args, entryUid);
-                if (
-                    beforeEntry
-                    && afterEntry
-                    && areLorebookEntriesEqualForSync(
-                        normalizeLorebookEntryForSync(beforeEntry, entryUid),
-                        normalizeLorebookEntryForSync(afterEntry, entryUid),
-                    )
-                ) {
-                    continue;
-                }
-                lorebookData.entries[String(entryUid)] = clone(afterEntry);
-            } else {
-                if (!beforeEntry) {
-                    continue;
-                }
-                delete lorebookData.entries[String(entryUid)];
-                afterEntry = null;
-            }
-            const normalizedOperation = { kind, args: { ...clone(args), book_name: bookName, entry_uid: entryUid } };
-            const preview = buildLorebookDraftDiffPreview(
-                normalizedOperation,
-                bookName,
-                beforeEntry,
-                afterEntry,
-            );
-            if (!preview) {
-                continue;
-            }
-            previews.push(preview);
-            filteredOperations.push(normalizedOperation);
-            continue;
-        }
-        previews.push({
-            title: buildOperationSummary(operation),
-            fields: [{ label: 'operation', before: '', after: '' }],
-            meta: [],
-            rawArgs: clone(operation?.args || {}),
-        });
-        filteredOperations.push({ kind, args: clone(operation?.args || {}) });
-    }
-    return {
-        operations: filteredOperations,
-        previews,
-    };
-}
-
-function renderCharacterEditorBatchDiffItems(previews, operations, { executionResults = [], messageIndex = -1 } = {}) {
-    const safePreviews = Array.isArray(previews) ? previews : [];
-    const safeOperations = Array.isArray(operations) ? operations : [];
-    const safeExecutionResults = Array.isArray(executionResults) ? executionResults : [];
-    return safePreviews.map((preview, index) => {
-        const fields = Array.isArray(preview?.fields) ? preview.fields : [];
-        const meta = Array.isArray(preview?.meta) ? preview.meta : [];
-        const operation = safeOperations[index] || null;
-        const rawArgs = operation?.args || preview?.rawArgs || {};
-        const executionResult = safeExecutionResults[index] && typeof safeExecutionResults[index] === 'object'
-            ? safeExecutionResults[index]
-            : null;
-        const journalId = String(executionResult?.journalId || executionResult?.journal_id || '').trim();
-        const rolledBack = Boolean(executionResult?.rolledBackAt);
-        const canRollback = Number.isInteger(messageIndex) && messageIndex >= 0 && journalId && !rolledBack;
-        return `
-<div class="cea_sync_turn_diff_item">
-    <div class="cea_sync_turn_diff_title">${escapeHtml(i18nFormat('Operation ${0}', index + 1))}: ${escapeHtml(String(preview?.title || ''))}</div>
-    ${(canRollback || rolledBack) ? `
-    <div class="cea_sync_turn_diff_actions">
-        ${rolledBack ? `<div class="cea_sync_turn_diff_status rejected">${escapeHtml(i18n('Rolled back'))}</div>` : ''}
-        ${canRollback ? `<div class="menu_button menu_button_small" data-cea-editor-action="rollback-diff" data-cea-sync-message-index="${messageIndex}" data-cea-sync-op-index="${index}">${escapeHtml(i18n('Rollback'))}</div>` : ''}
-    </div>` : ''}
-    ${meta.length > 0 ? `<div class="cea_sync_turn_diff_meta">${meta.map(item => `
-        <div class="cea_sync_turn_diff_meta_item"><b>${escapeHtml(String(item?.label || ''))}:</b> ${escapeHtml(String(item?.value || ''))}</div>
-    `).join('')}</div>` : ''}
-    <div class="cea_sync_turn_diff_fields">
-        ${fields.map(field => `
-<div class="cea_sync_turn_diff_field">
-    <div class="cea_sync_turn_diff_label">${escapeHtml(String(field?.label || 'field'))}</div>
-    ${renderLineDiffHtml(field?.before ?? '', field?.after ?? '', String(field?.label || 'field'))}
-</div>`).join('')}
-    </div>
-    <details class="cea_sync_turn_diff_raw">
-        <summary>${escapeHtml(i18n('Raw arguments'))}</summary>
-        <pre>${escapeHtml(JSON.stringify(rawArgs, null, 2))}</pre>
-    </details>
-</div>`;
-    }).join('');
-}
-
-function renderCharacterEditorRoundDiffHtml(previews, operations, { open = true, executionResults = [], messageIndex = -1 } = {}) {
-    const safePreviews = Array.isArray(previews) ? previews : [];
-    const summary = safePreviews.length > 0
-        ? i18nFormat('Round diff (${0} operations)', safePreviews.length)
-        : i18n('Round diff');
-    if (safePreviews.length === 0) {
-        return `
-<details class="cea_sync_turn_diff"${open ? ' open' : ''}>
-    <summary>${escapeHtml(summary)}</summary>
-    <div class="cea_sync_turn_diff_empty">${escapeHtml(i18n('No draft operations proposed in this round.'))}</div>
-</details>`;
-    }
-    return `
-<details class="cea_sync_turn_diff"${open ? ' open' : ''}>
-    <summary>${escapeHtml(summary)}</summary>
-    <div class="cea_sync_turn_diff_list">
-        ${renderCharacterEditorBatchDiffItems(safePreviews, operations, { executionResults, messageIndex })}
-    </div>
-</details>`;
-}
-
-function renderCharacterEditorChatMessages(messages, { loading = false, loadingText = '', pendingMessageId = '' } = {}) {
-    const list = Array.isArray(messages) ? messages : [];
-    const currentPendingMessageId = String(pendingMessageId || '').trim();
-    const html = list.map((item, index) => {
-        const role = String(item?.role || 'assistant');
-        const text = String(item?.content || '').trim();
-        const toolSummary = String(item?.toolSummary || '').trim();
-        const previews = Array.isArray(item?.diffPreviews) ? item.diffPreviews : [];
-        const operations = Array.isArray(item?.operations) ? item.operations : [];
-        const executionResults = Array.isArray(item?.executionResults) ? item.executionResults : [];
-        const hasDiffData = (previews.length > 0 || operations.length > 0) && String(item?.id || '').trim() !== currentPendingMessageId;
-        if (!text && !hasDiffData && !toolSummary) {
-            return '';
-        }
-        if (role === 'user') {
-            return `
-<div class="cea_sync_chat_msg cea_sync_chat_msg_user">
-    <pre>${escapeHtml(text)}</pre>
-</div>`;
-        }
-        return `
-<div class="cea_sync_chat_msg cea_sync_chat_msg_assistant">
-    ${text ? `<div class="cea_sync_chat_text">${renderLorebookSyncAnalysisMarkdown(text)}</div>` : ''}
-    ${hasDiffData ? renderCharacterEditorRoundDiffHtml(previews, operations, { open: false, executionResults, messageIndex: index }) : ''}
-    ${toolSummary ? `<div class="cea_sync_tool_summary">${escapeHtml(toolSummary)}</div>` : ''}
-    ${renderConversationMessageRefreshAction('data-cea-editor-action', index, list)}
-</div>`;
-    }).join('');
-    if (!loading) {
-        return html;
-    }
-    const loadingLabel = String(loadingText || i18n('Assistant is thinking...'));
-    return `${html}
-<div class="cea_sync_chat_msg cea_sync_chat_msg_assistant cea_sync_chat_msg_loading">
-    <i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i>
-    <span>${escapeHtml(loadingLabel)}</span>
-</div>`;
-}
-
-function renderCharacterEditorPendingHtml(pending) {
-    if (!pending || typeof pending !== 'object') {
-        return '';
-    }
-    const previews = Array.isArray(pending.diffPreviews) ? pending.diffPreviews : [];
-    const operations = Array.isArray(pending.operations) ? pending.operations : [];
-    return `
-<div class="cea_editor_pending">
-    <div class="cea_editor_pending_hint">${escapeHtml(i18n('AI proposed changes are waiting for approval.'))}</div>
-    ${renderCharacterEditorRoundDiffHtml(previews, operations, { open: true })}
-    <div class="cea_editor_pending_actions">
-        <div class="menu_button" data-cea-editor-action="approve-batch">${escapeHtml(i18n('Approve batch'))}</div>
-        <div class="menu_button" data-cea-editor-action="reject-batch">${escapeHtml(i18n('Reject batch'))}</div>
-    </div>
-</div>`;
-}
-
-async function openCharacterEditorPopup(context = getContext()) {
-    let record;
-    try {
-        record = getActiveCharacterRecord(context);
-    } catch {
-        notifyWarning(i18n('Current chat has no active character.'));
-        return;
-    }
-    const avatar = String(record.avatar || '').trim();
+async function openCharacterEditorPopup(context = getContext(), opts = {}) {
+    const character = context?.characters?.[context?.characterId] || null;
+    const avatarFromCtx = String(character?.avatar || '').trim();
+    const avatar = String(opts?.avatar || avatarFromCtx).trim();
     if (!avatar) {
-        notifyWarning(i18n('Current chat has no active character.'));
+        notifyWarning(i18n('No character selected or character has no avatar.'));
         return;
     }
     if (editorStudioDialogLocks.has(avatar)) {
-        notifyWarning(i18n('An editor is already open for this character.'));
+        notifyWarning(i18n('A character editor dialog is already open for this character.'));
         return;
     }
     editorStudioDialogLocks.add(avatar);
-
-    const conversationMessages = [];
-    let sessionStore = createEmptyCharacterEditorSessionStore();
-    let currentSessionId = '';
-    let pendingApproval = null;
-    let isSending = false;
-    let isAbortPending = false;
-    let activeRequestAbortController = null;
-    let unbindResizer = () => {};
-    const rejectedOperationKeys = new Set();
     try {
-        sessionStore = await loadCharacterEditorSessionStore(context, avatar);
-        const session = sessionStore.sessions.length > 0
-            ? sessionStore.sessions[sessionStore.sessions.length - 1]
-            : normalizeCharacterEditorSession({
-                id: makeCharacterEditorSessionId(),
-                avatar,
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-                messages: [],
-                pendingApproval: null,
-                rejectedOperationKeys: [],
-            });
-        currentSessionId = String(session?.id || '').trim();
-        conversationMessages.push(...clone(session?.messages || []));
-        pendingApproval = clone(session?.pendingApproval || null);
-        rebuildCharacterEditorRejectedOperationKeys(conversationMessages, rejectedOperationKeys);
-        for (const key of Array.isArray(session?.rejectedOperationKeys) ? session.rejectedOperationKeys : []) {
-            rejectedOperationKeys.add(String(key || '').trim());
-        }
-        const savedSession = await saveCharacterEditorConversationSession(context, {
-            ...session,
-            id: currentSessionId,
-            messages: conversationMessages,
-            pendingApproval,
-            rejectedOperationKeys: Array.from(rejectedOperationKeys.values()),
-        }, { avatar, setCurrent: true });
-        sessionStore = upsertCharacterEditorSession(sessionStore, savedSession);
-        currentSessionId = String(savedSession?.id || currentSessionId).trim();
-    } catch (error) {
-        console.warn(`[${MODULE_NAME}] Failed to load persisted editor conversation session`, error);
-    }
-
-    const popup = new Popup(
-        buildCharacterEditorPopupHtml(record),
-        POPUP_TYPE.TEXT,
-        i18n('Character Editor'),
-        {
-            wide: true,
-            wider: true,
-            large: true,
-            allowVerticalScrolling: true,
-            okButton: i18n('Close'),
-            onOpen: (instance) => {
-                const chat = instance?.content?.querySelector('[data-cea-editor-chat]');
-                const input = instance?.content?.querySelector('[data-cea-editor-input]');
-                const sendBtn = instance?.content?.querySelector('[data-cea-editor-send]');
-                const stopBtn = instance?.content?.querySelector('[data-cea-editor-stop]');
-                const pendingSlot = instance?.content?.querySelector('[data-cea-editor-pending]');
-                const history = instance?.content?.querySelector('[data-cea-editor-history]');
-                if (!(chat instanceof HTMLElement) || !(input instanceof HTMLTextAreaElement) || !(sendBtn instanceof HTMLElement) || !(stopBtn instanceof HTMLElement) || !(pendingSlot instanceof HTMLElement) || !(history instanceof HTMLElement)) {
-                    return;
-                }
-                const renderConversation = (loading = false, loadingText = '') => {
-                    chat.innerHTML = renderCharacterEditorChatMessages(conversationMessages, {
-                        loading,
-                        loadingText,
-                        pendingMessageId: String(pendingApproval?.messageId || '').trim(),
-                    });
-                    chat.scrollTop = chat.scrollHeight;
-                };
-                const renderPending = () => {
-                    pendingSlot.innerHTML = renderCharacterEditorPendingHtml(pendingApproval);
-                };
-                const renderHistory = () => {
-                    history.innerHTML = renderCharacterEditorConversationHistoryItems(sessionStore, currentSessionId);
-                };
-
-                // ── World book preview + workspace shell wiring ───────────────
-                // Section 24 of luker-studio.css mounts this popup as a split
-                // grid; we own the preview pane content (world-book viewer),
-                // the per-popup tab switcher (mobile only), and the auto-apply
-                // checkbox that bypasses the manual "Approve batch" click.
-                const lorebookName = String(getPrimaryLorebookName(record?.character || {}) || '').trim();
-                let currentWorldInfo = null;
-                const refreshWorldInfo = async () => {
-                    if (!lorebookName || typeof context?.loadWorldInfo !== 'function') {
-                        currentWorldInfo = null;
-                        return;
-                    }
-                    try {
-                        const loaded = await context.loadWorldInfo(lorebookName);
-                        // Spread loaded FIRST so the explicit name + entries
-                        // win — without this, the original `name: lorebookName`
-                        // and `entries: loaded.entries || {}` get clobbered by
-                        // any `loaded.name` / `loaded.entries` further along
-                        // the spread (旧-1).
-                        currentWorldInfo = loaded && typeof loaded === 'object'
-                            ? { ...loaded, name: lorebookName, entries: loaded.entries || {} }
-                            : null;
-                    } catch (error) {
-                        console.warn(`[${MODULE_NAME}] World info load failed for '${lorebookName}'`, error);
-                        currentWorldInfo = null;
-                    }
-                };
-                const workspaceRoot = instance?.content?.querySelector?.('.cea_sync_popup');
-                const previewSlot = instance?.content?.querySelector?.('[data-iter-preview-pane]');
-                const renderPreview = () => {
-                    if (!previewSlot) return;
-                    try {
-                        previewSlot.innerHTML = renderCeaEditorPreviewPane(currentWorldInfo, pendingApproval, i18n);
-                    } catch (error) {
-                        console.warn(`[${MODULE_NAME}] Preview render failed`, error);
-                        previewSlot.innerHTML = `<div class="luker-iter-workspace-preview-empty">${escapeHtml(i18n('Preview unavailable'))}</div>`;
-                    }
-                };
-                const bumpChatBadge = () => {
-                    if (!workspaceRoot || workspaceRoot.dataset.iterActiveTab !== 'preview') return;
-                    const badge = workspaceRoot.querySelector('[data-iter-chat-badge]');
-                    if (!badge) return;
-                    const next = (Number(badge.textContent) || 0) + 1;
-                    badge.textContent = String(next);
-                    badge.hidden = false;
-                };
-                if (workspaceRoot) {
-                    try {
-                        unbindResizer = bindIterWorkspaceResizer(workspaceRoot) || (() => {});
-                    } catch (error) {
-                        console.warn(`[${MODULE_NAME}] Resizer bind failed`, error);
-                    }
-                    // 旧-13: previously each open() bound a fresh click
-                    // listener per switch-tab button via raw
-                    // `btn.addEventListener` — closing + reopening the
-                    // popup leaked listeners on the same DOM nodes. A
-                    // jQuery delegated namespaced binding (off + on
-                    // .ceaEditor) idempotently re-binds.
-                    const $workspaceRoot = jQuery(workspaceRoot);
-                    $workspaceRoot
-                        .off('click.ceaEditor', '[data-iter-action="switch-tab"]')
-                        .on('click.ceaEditor', '[data-iter-action="switch-tab"]', function (event) {
-                            const tab = this?.dataset?.iterTab;
-                            if (!tab) return;
-                            event.preventDefault();
-                            workspaceRoot.dataset.iterActiveTab = tab;
-                            workspaceRoot.querySelectorAll('[data-iter-action="switch-tab"]').forEach((other) => {
-                                const isActive = other.dataset.iterTab === tab;
-                                other.classList.toggle('active', isActive);
-                                other.setAttribute('aria-selected', String(isActive));
-                            });
-                            if (tab === 'chat') {
-                                const badge = workspaceRoot.querySelector('[data-iter-chat-badge]');
-                                if (badge) {
-                                    badge.hidden = true;
-                                    badge.textContent = '';
-                                }
-                            }
-                        });
-                }
-
-                // Auto-approve persisted per-avatar at
-                // extension_settings[MODULE_NAME].editorAutoApplyByAvatar[avatar].
-                // Toggling on while a batch is pending triggers it immediately.
-                //
-                // Race tolerance (旧-3): while a request is in flight
-                // (`isSending`), checkbox changes used to be a hard no-op,
-                // which felt like the toggle was dead. Now the desired
-                // value is parked on `pendingAutoApproveSet`; the
-                // post-send finalize block reads it and commits.
-                let autoApprove = getAutoApplyForAvatar(avatar);
-                let pendingAutoApproveSet;
-                const autoApproveCheckbox = instance?.content?.querySelector?.('[data-cea-editor-auto-approve]');
-                const onAutoApproveToggle = async () => {
-                    if (!(autoApproveCheckbox instanceof HTMLInputElement)) return;
-                    const desired = Boolean(autoApproveCheckbox.checked);
-                    if (isSending) {
-                        // One microtask tick — covers the brief window between
-                        // request-issued and isSending-cleared.
-                        await Promise.resolve();
-                        if (isSending) {
-                            pendingAutoApproveSet = desired;
-                            return;
-                        }
-                    }
-                    autoApprove = desired;
-                    persistAutoApproveForAvatar(avatar, autoApprove);
-                    if (autoApprove && pendingApproval) {
-                        const snapshot = pendingApproval;
-                        void runApproveBatch(snapshot);
-                    }
-                };
-                if (autoApproveCheckbox instanceof HTMLInputElement) {
-                    autoApproveCheckbox.checked = autoApprove;
-                    autoApproveCheckbox.addEventListener('change', () => {
-                        void onAutoApproveToggle();
-                    });
-                }
-
-                // Pull a parked auto-approve toggle into effect after the
-                // current LLM round resolves. Called from both
-                // `runAssistantTurn`'s finally and `runApproveBatch`'s
-                // finally so the toggle never gets stuck waiting for the
-                // user to flip it a second time.
-                const drainPendingAutoApprove = () => {
-                    if (pendingAutoApproveSet === undefined) return;
-                    autoApprove = !!pendingAutoApproveSet;
-                    persistAutoApproveForAvatar(avatar, autoApprove);
-                    pendingAutoApproveSet = undefined;
-                    if (autoApproveCheckbox instanceof HTMLInputElement) {
-                        autoApproveCheckbox.checked = autoApprove;
-                    }
-                    if (autoApprove && pendingApproval) {
-                        const snapshot = pendingApproval;
-                        void runApproveBatch(snapshot);
-                    }
-                };
-
-                // Shared approve-batch executor — called from the click handler
-                // AND from the auto-approve hook (set right after the LLM round
-                // populates `pendingApproval`).
-                const runApproveBatch = async (snapshot) => {
-                    if (!snapshot || isSending) {
-                        return;
-                    }
-                    pendingApproval = null;
-                    renderPending();
-                    renderPreview();
-                    isSending = true;
-                    syncComposerState();
-                    renderConversation(true, i18n('Applying approved changes...'));
-                    try {
-                        const result = await submitGeneratedOperations(
-                            context,
-                            snapshot.operations,
-                            'character_editor_popup',
-                            { targetAvatar: avatar },
-                        );
-                        const targetMessage = findConversationMessageById(conversationMessages, snapshot?.messageId);
-                        if (targetMessage) {
-                            targetMessage.tool_results = buildToolResultsFromOperationSubmission(snapshot?.toolCalls || [], result);
-                            targetMessage.toolSummary = result.failed > 0
-                                ? i18nFormat('Apply failed: ${0}', String(result.errors[0] || 'unknown error'))
-                                : i18n('Changes applied.');
-                            targetMessage.toolState = result.failed > 0 ? 'partial' : 'completed';
-                            targetMessage.executionResults = clone(result?.results || []);
-                        }
-                        await persistCurrentSession();
-                        await refreshUiState(context);
-                        renderHistory();
-                        await primeActiveCharacterLorebookSnapshot(context);
-                        await refreshWorldInfo();
-                    } catch (error) {
-                        pendingApproval = snapshot;
-                        renderPending();
-                        conversationMessages.push({ role: 'assistant', content: i18nFormat('Apply failed: ${0}', String(error?.message || error || '')) });
-                        await persistCurrentSession();
-                    } finally {
-                        isSending = false;
-                        syncComposerState();
-                        renderConversation(false);
-                        renderPreview();
-                        drainPendingAutoApprove();
-                    }
-                };
-                const persistCurrentSession = async ({ setCurrent = true } = {}) => {
-                    if (!currentSessionId) {
-                        return;
-                    }
-                    const savedSession = await saveCharacterEditorConversationSession(context, {
-                        id: currentSessionId,
-                        messages: conversationMessages,
-                        pendingApproval,
-                        rejectedOperationKeys: Array.from(rejectedOperationKeys.values()),
-                    }, { avatar, setCurrent });
-                    sessionStore = upsertCharacterEditorSession(sessionStore, savedSession);
-                    currentSessionId = String(savedSession?.id || currentSessionId).trim();
-                    renderHistory();
-                };
-                const syncComposerState = () => {
-                    const disabled = Boolean(isSending);
-                    const canStop = Boolean(activeRequestAbortController && !activeRequestAbortController.signal.aborted);
-                    input.disabled = disabled;
-                    sendBtn.classList.toggle('disabled', disabled);
-                    stopBtn.classList.toggle('disabled', !canStop);
-                };
-                const runAssistantTurn = async (userText, { appendUserMessage = true, loadingText = '' } = {}) => {
-                    const safeUserText = String(userText || '').trim();
-                    if (isSending || input.disabled) {
-                        return false;
-                    }
-                    if (pendingApproval) {
-                        notifyWarning(i18n('Please approve or reject pending changes first.'));
-                        return false;
-                    }
-                    if (!safeUserText) {
-                        notifyWarning(i18n('Message cannot be empty.'));
-                        return false;
-                    }
-                    if (appendUserMessage) {
-                        conversationMessages.push({ role: 'user', content: safeUserText });
-                        input.value = '';
-                    }
-                    const controller = new AbortController();
-                    activeRequestAbortController = controller;
-                    isSending = true;
-                    syncComposerState();
-                    renderConversation(true, loadingText || i18n('Assistant is thinking...'));
-                    try {
-                        const reply = await requestModelCharacterEditorConversationReply(
-                            context,
-                            conversationMessages,
-                            {
-                                avatar,
-                                rejectedOperationKeys: Array.from(rejectedOperationKeys.values()),
-                                abortSignal: controller.signal,
-                            },
-                        );
-                        throwIfAborted(controller.signal, 'Character editor request aborted.');
-                        const rawOperations = Array.isArray(reply?.operations) ? reply.operations : [];
-                        const round = rawOperations.length > 0
-                            ? await buildCharacterEditorDiffPreviews(context, rawOperations, { avatar })
-                            : { operations: [], previews: [] };
-                        throwIfAborted(controller.signal, 'Character editor request aborted.');
-                        const operations = Array.isArray(round?.operations) ? round.operations : [];
-                        const diffPreviews = Array.isArray(round?.previews) ? round.previews : [];
-                        const assistantText = String(reply?.assistantText || '').trim()
-                            || (operations.length > 0
-                                ? i18nFormat('Proposed ${0} operations in this round.', operations.length)
-                                : i18n('No draft operations proposed in this round.'));
-                        const helperTurnMessages = Array.isArray(reply?.helperTurnMessages) ? reply.helperTurnMessages : [];
-                        if (helperTurnMessages.length > 0) {
-                            conversationMessages.push(...helperTurnMessages);
-                        }
-                        const toolCalls = buildCharacterEditorToolCallsFromOperations(operations);
-                        const assistantMessage = createPersistentToolTurnMessage({
-                            messageId: makeConversationMessageId(),
-                            assistantText,
-                            toolCalls,
-                            toolResults: toolCalls.length > 0 ? buildPendingToolResults(toolCalls, i18n('AI proposed changes are waiting for approval.')) : [],
-                            toolSummary: toolCalls.length > 0 ? i18n('AI proposed changes are waiting for approval.') : '',
-                            toolState: toolCalls.length > 0 ? 'pending' : '',
-                        });
-                        if (operations.length > 0) {
-                            assistantMessage.operations = operations;
-                            assistantMessage.diffPreviews = diffPreviews;
-                        }
-                        conversationMessages.push(assistantMessage);
-                        pendingApproval = operations.length > 0 ? {
-                            messageId: assistantMessage.id,
-                            operations,
-                            diffPreviews,
-                            toolCalls,
-                        } : null;
-                        await persistCurrentSession();
-                        renderPending();
-                        renderPreview();
-                        bumpChatBadge();
-                        if (autoApprove && pendingApproval) {
-                            const snapshot = pendingApproval;
-                            // Defer to next microtask so the loading state from
-                            // this turn fully unwinds (finally block resets
-                            // isSending) before runApproveBatch tries to set it.
-                            queueMicrotask(() => { void runApproveBatch(snapshot); });
-                        }
-                        return true;
-                    } catch (error) {
-                        conversationMessages.push(isAbortError(error, controller.signal)
-                            ? {
-                                role: 'assistant',
-                                content: i18n('Request cancelled.'),
-                            }
-                            : {
-                                role: 'assistant',
-                                content: i18nFormat('Model reply failed: ${0}', String(error?.message || error || '')),
-                            });
-                        await persistCurrentSession();
-                        bumpChatBadge();
-                        return false;
-                    } finally {
-                        if (activeRequestAbortController === controller) {
-                            activeRequestAbortController = null;
-                        }
-                        isSending = false;
-                        syncComposerState();
-                        renderConversation(false);
-                        drainPendingAutoApprove();
-                    }
-                };
-                const handleSend = async () => {
-                    await runAssistantTurn(String(input.value || '').trim(), {
-                        appendUserMessage: true,
-                    });
-                };
-
-                sendBtn.addEventListener('click', () => void handleSend());
-                stopBtn.addEventListener('click', () => {
-                    if (activeRequestAbortController && !activeRequestAbortController.signal.aborted) {
-                        activeRequestAbortController.abort();
-                        syncComposerState();
-                    }
-                });
-                chat.addEventListener('click', async (event) => {
-                    const target = event.target instanceof Element ? event.target.closest('[data-cea-editor-action]') : null;
-                    if (!(target instanceof HTMLElement) || isSending) {
-                        return;
-                    }
-                    const action = String(target.getAttribute('data-cea-editor-action') || '').trim();
-                    const messageIndex = asFiniteInteger(target.getAttribute('data-cea-sync-message-index'), -1);
-                    if (!Number.isInteger(messageIndex) || messageIndex < 0 || messageIndex >= conversationMessages.length) {
-                        return;
-                    }
-                    if (action === 'rollback-diff') {
-                        const opIndex = asFiniteInteger(target.getAttribute('data-cea-sync-op-index'), -1);
-                        if (!Number.isInteger(opIndex) || opIndex < 0) {
-                            return;
-                        }
-                        const message = conversationMessages[messageIndex];
-                        const executionResults = Array.isArray(message?.executionResults) ? message.executionResults : [];
-                        const result = executionResults[opIndex];
-                        const journalId = String(result?.journalId || result?.journal_id || '').trim();
-                        if (!journalId || result?.rolledBackAt) {
-                            return;
-                        }
-                        try {
-                            await rollbackJournalEntryWithLog(context, journalId, {
-                                avatar,
-                                source: 'message_diff',
-                            });
-                            executionResults[opIndex] = {
-                                ...clone(result || {}),
-                                rolledBackAt: Date.now(),
-                            };
-                            if (message && typeof message === 'object') {
-                                message.executionResults = executionResults;
-                            }
-                            await persistCurrentSession();
-                            await refreshUiState(context);
-                            await primeActiveCharacterLorebookSnapshot(context);
-                            renderHistory();
-                            renderConversation(false);
-                            notifySuccess(i18n('Rollback completed.'));
-                        } catch (error) {
-                            notifyError(i18nFormat('Rollback failed: ${0}', String(error?.message || error || '')));
-                        }
-                        return;
-                    }
-                    if (action !== 'refresh-message') {
-                        return;
-                    }
-                    const userIndex = findPreviousConversationUserMessageIndex(conversationMessages, messageIndex);
-                    if (userIndex < 0) {
-                        notifyWarning(i18n('This message cannot be regenerated.'));
-                        return;
-                    }
-                    const userText = String(conversationMessages[userIndex]?.content || '').trim();
-                    const removedMessages = conversationMessages.slice(messageIndex);
-                    const previousPendingApproval = pendingApproval;
-                    pendingApproval = null;
-                    isSending = true;
-                    syncComposerState();
-                    renderPending();
-                    renderPreview();
-                    renderConversation(true, i18n('Regenerating message...'));
-                    try {
-                        await rollbackCharacterEditorConversationMessages(context, removedMessages, { avatar });
-                        conversationMessages.splice(messageIndex);
-                        rebuildCharacterEditorRejectedOperationKeys(conversationMessages, rejectedOperationKeys);
-                        await persistCurrentSession();
-                        await refreshUiState(context);
-                        renderHistory();
-                        await primeActiveCharacterLorebookSnapshot(context);
-                        await refreshWorldInfo();
-                        renderPreview();
-                    } catch (error) {
-                        pendingApproval = previousPendingApproval;
-                        renderPending();
-                        renderPreview();
-                        notifyError(i18nFormat('Regenerate failed: ${0}', String(error?.message || error || '')));
-                        renderConversation(false);
-                        return;
-                    } finally {
-                        isSending = false;
-                        syncComposerState();
-                    }
-                    await runAssistantTurn(userText, {
-                        appendUserMessage: false,
-                        loadingText: i18n('Regenerating message...'),
-                    });
-                });
-                pendingSlot.addEventListener('click', async (event) => {
-                    const target = event.target instanceof Element ? event.target.closest('[data-cea-editor-action]') : null;
-                    if (!(target instanceof HTMLElement) || !pendingApproval || isSending) {
-                        return;
-                    }
-                    const action = String(target.getAttribute('data-cea-editor-action') || '').trim();
-                    if (action === 'reject-batch') {
-                        const snapshot = pendingApproval;
-                        for (const operation of snapshot.operations) {
-                            const key = buildCharacterEditorOperationKey(operation);
-                            if (key) {
-                                rejectedOperationKeys.add(key);
-                            }
-                        }
-                        const targetMessage = findConversationMessageById(conversationMessages, snapshot?.messageId);
-                        if (targetMessage) {
-                            targetMessage.tool_results = buildRejectedToolResults(snapshot?.toolCalls || [], i18n('Changes rejected.'));
-                            targetMessage.toolSummary = i18n('Changes rejected.');
-                            targetMessage.toolState = 'rejected';
-                        }
-                        pendingApproval = null;
-                        await persistCurrentSession();
-                        renderPending();
-                        renderPreview();
-                        renderConversation(false);
-                        return;
-                    }
-                    if (action === 'approve-batch') {
-                        const snapshot = pendingApproval;
-                        await runApproveBatch(snapshot);
-                    }
-                });
-                history.addEventListener('click', async (event) => {
-                    const target = event.target instanceof Element ? event.target.closest('[data-cea-editor-history-action]') : null;
-                    if (!(target instanceof HTMLElement)) {
-                        return;
-                    }
-                    const action = String(target.getAttribute('data-cea-editor-history-action') || '').trim();
-                    const sessionId = String(target.getAttribute('data-cea-editor-session-id') || '').trim();
-                    try {
-                        if (action === 'new-session') {
-                            const nextSession = normalizeCharacterEditorSession({
-                                id: makeCharacterEditorSessionId(),
-                                avatar,
-                                createdAt: Date.now(),
-                                updatedAt: Date.now(),
-                                messages: [],
-                                pendingApproval: null,
-                                rejectedOperationKeys: [],
-                            });
-                            currentSessionId = String(nextSession?.id || '').trim();
-                            conversationMessages.splice(0, conversationMessages.length);
-                            pendingApproval = null;
-                            rejectedOperationKeys.clear();
-                            const savedSession = await saveCharacterEditorConversationSession(context, nextSession, { avatar, setCurrent: true });
-                            sessionStore = upsertCharacterEditorSession(sessionStore, savedSession);
-                            renderHistory();
-                            renderPending();
-                            renderPreview();
-                            renderConversation(false);
-                            notifySuccess(i18n('New session'));
-                            return;
-                        }
-                        if (!sessionId) {
-                            return;
-                        }
-                        if (action === 'load') {
-                            const loaded = await setCurrentCharacterEditorConversationSessionId(context, sessionId, { avatar });
-                            if (!loaded) {
-                                throw new Error('Session not found.');
-                            }
-                            currentSessionId = String(loaded.id || '').trim();
-                            sessionStore = upsertCharacterEditorSession(sessionStore, loaded);
-                            conversationMessages.splice(0, conversationMessages.length, ...clone(loaded.messages || []));
-                            pendingApproval = clone(loaded.pendingApproval || null);
-                            rejectedOperationKeys.clear();
-                            rebuildCharacterEditorRejectedOperationKeys(conversationMessages, rejectedOperationKeys);
-                            for (const key of Array.isArray(loaded.rejectedOperationKeys) ? loaded.rejectedOperationKeys : []) {
-                                rejectedOperationKeys.add(String(key || '').trim());
-                            }
-                            renderPending();
-                            renderPreview();
-                            renderConversation(false);
-                            renderHistory();
-                            notifySuccess(i18n('Session loaded.'));
-                            return;
-                        }
-                        if (action === 'delete') {
-                            if (!window.confirm(i18n('Delete this conversation session?'))) {
-                                return;
-                            }
-                            const nextSession = await deleteCharacterEditorConversationSession(context, sessionId, { avatar });
-                            if (!nextSession) {
-                                throw new Error('Session not found.');
-                            }
-                            sessionStore = deleteCharacterEditorSession(sessionStore, sessionId);
-                            sessionStore = upsertCharacterEditorSession(sessionStore, nextSession);
-                            currentSessionId = String(nextSession.id || '').trim();
-                            conversationMessages.splice(0, conversationMessages.length, ...clone(nextSession.messages || []));
-                            pendingApproval = clone(nextSession.pendingApproval || null);
-                            rejectedOperationKeys.clear();
-                            rebuildCharacterEditorRejectedOperationKeys(conversationMessages, rejectedOperationKeys);
-                            for (const key of Array.isArray(nextSession.rejectedOperationKeys) ? nextSession.rejectedOperationKeys : []) {
-                                rejectedOperationKeys.add(String(key || '').trim());
-                            }
-                            renderPending();
-                            renderPreview();
-                            renderConversation(false);
-                            renderHistory();
-                            notifySuccess(i18n('Conversation session deleted.'));
-                        }
-                    } catch (error) {
-                        if (action === 'delete') {
-                            notifyError(i18nFormat('Conversation delete failed: ${0}', error?.message || error));
-                            return;
-                        }
-                        notifyError(i18nFormat('Load failed: ${0}', error?.message || error));
-                    }
-                });
-
-                renderConversation(false);
-                renderPending();
-                syncComposerState();
-                renderHistory();
-                // Initial preview render with optimistic empty state; the async
-                // refresh below replaces it once the lorebook loads.
-                renderPreview();
-                void refreshWorldInfo().then(renderPreview);
-            },
-            onClosing: async () => {
-                // N10 race fix: previously this returned false outright
-                // while `isSending` was true, so a user who hit Stop +
-                // immediately tried to close would get stuck — the Stop
-                // had aborted the request but isSending hadn't unwound
-                // yet. Now we gate on `isAbortPending` so the first close
-                // attempt during an in-flight call fires the abort and
-                // returns true; the popup itself unwinds via the
-                // outer try/finally.
-                if (isSending && !isAbortPending) {
-                    isAbortPending = true;
-                    try { activeRequestAbortController?.abort(); } catch { /* abort failures non-fatal */ }
-                    // Give the in-flight turn a chance to unwind cleanly
-                    // before letting the popup close.
-                    await Promise.resolve();
-                }
-                return true;
-            },
-        },
-    );
-
-    try {
-        await popup.show();
+        await openUnifiedCharacterEditorPopup(context, { i18n, i18nFormat, ...opts, avatar });
     } finally {
-        // Single try/finally lifecycle: even if popup.show() throws or
-        // the popup is force-closed, the resizer unbind + abort + lock
-        // cleanup all run. Previously the resizer unbind lived in
-        // onClosing and would skip in the force-close path.
-        try { unbindResizer(); } catch { /* unbind failures non-fatal */ }
-        try { activeRequestAbortController?.abort(); } catch { /* abort failures non-fatal */ }
         editorStudioDialogLocks.delete(avatar);
     }
 }
 
 const {
-    buildCharacterEditorPopupHtml,
     ensureUi,
     refreshUiState,
     renderCharacterEditorConversationHistoryItems,
@@ -4223,7 +2822,6 @@ const {
     defaultSettings,
     escapeHtml,
     getContext,
-    getPrimaryLorebookName,
     getSettings,
     i18n,
     i18nFormat,
@@ -5027,55 +3625,6 @@ function bindHistoryUiActions() {
     });
 }
 
-/**
- * Open the iteration-studio popup wired to the CEA character adapter. This is
- * the SP-3 replacement for the old `cea_sync_popup` analyze-then-apply flow:
- * the shell drives a multi-turn editing session over the card fields and the
- * primary lorebook in one adapter. State is read from / written to the live
- * SillyTavern character via `mergeCharacterAttributes` and `saveWorldInfo`.
- */
-async function openCharacterEditorIteration(avatar) {
-    const context = getContext();
-    const safeAvatar = String(avatar || '').trim();
-
-    const deps = {
-        avatar: safeAvatar,
-        context,
-        i18n,
-        i18nFormat,
-        escapeHtml,
-        readCard: () => {
-            const record = getActiveCharacterRecord(context, { avatar: safeAvatar });
-            // SillyTavern character objects contain non-cloneable fields
-            // (cached chat instances, DOM-side references, etc.) so structuredClone
-            // throws. JSON round-trip drops everything that isn't serializable,
-            // which is exactly what we want for the adapter's `card` live view.
-            return JSON.parse(JSON.stringify(record?.character ?? {}));
-        },
-        readLorebook: async () => {
-            const record = getActiveCharacterRecord(context, { avatar: safeAvatar });
-            const bookName = getPrimaryLorebookName(record.character);
-            const data = bookName ? await loadLorebookData(context, bookName) : { entries: {} };
-            return { bookName, entries: data?.entries ?? {} };
-        },
-        mergeCharacterAttributes,
-        saveLorebook: async (bookName, data) => {
-            if (!String(bookName || '').trim()) {
-                return;
-            }
-            await context.saveWorldInfo(bookName, data, true);
-        },
-        getSettings,
-        saveSettingsDebounced,
-        // Surface the user-configured Lorebook-Sync request preset so
-        // the adapter's `getRequestPresetOptions` hook can return it to
-        // the shell runner.
-        getRequestPresetOptions: () => getLorebookSyncRequestPresetOptions(),
-    };
-
-    await openCharacterIterationStudio(safeAvatar, deps);
-}
-
 jQuery(async () => {
     registerLocaleData();
     ensureSettings();
@@ -5110,6 +3659,11 @@ jQuery(async () => {
     const characterReplacedEvent = eventTypes?.CHARACTER_REPLACED || 'character_replaced';
     eventSource.on(characterReplacedEvent, async (event) => {
         const settings = getSettings();
+        // Note: this gate also controls auto-open of the editor popup on
+        // import. The setting name is historically about lorebook sync;
+        // the editor auto-trigger was bolted on without a dedicated flag.
+        // Renaming the field now would orphan any user who already toggled
+        // it on, so the conflation lives on under the original key.
         if (!settings.replaceLorebookSyncEnabled) {
             return;
         }
@@ -5118,18 +3672,15 @@ jQuery(async () => {
         if (!avatar) {
             return;
         }
-        if (editorStudioDialogLocks.has(avatar)) {
-            notifyWarning(i18n('A character editor dialog is already open for this character.'));
-            return;
-        }
-        editorStudioDialogLocks.add(avatar);
         try {
-            await openCharacterEditorIteration(avatar);
+            await openCharacterEditorPopup(getContext(), {
+                avatar,
+                seedSystemMessage: i18n('Just imported this card — review the baseline and suggest tweaks.'),
+                autoSend: true,
+            });
         } catch (error) {
             console.warn(`[${MODULE_NAME}] Character editor iteration failed`, error);
             notifyError(String(error?.message || error));
-        } finally {
-            editorStudioDialogLocks.delete(avatar);
         }
     });
 });

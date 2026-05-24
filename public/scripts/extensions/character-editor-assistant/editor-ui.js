@@ -8,7 +8,6 @@ export function createCharacterEditorUi(deps) {
         defaultSettings,
         escapeHtml,
         getContext,
-        getPrimaryLorebookName,
         getSettings,
         i18n,
         i18nFormat,
@@ -51,55 +50,6 @@ export function createCharacterEditorUi(deps) {
     </div>
 </div>`;
         }).join('')}`;
-    }
-
-    function buildCharacterEditorPopupHtml(record) {
-        const characterName = String(record?.character?.name || '').trim() || '(unknown)';
-        const primaryBook = String(getPrimaryLorebookName(record?.character || {}) || i18n('(empty)'));
-        return `
-<div class="luker-studio cea_sync_popup luker-iter-workspace" data-iter-layout="split" data-iter-active-tab="chat">
-    <div class="luker-studio-header">
-        <div class="luker-studio-title">${escapeHtml(i18n('Character Editor'))}</div>
-        <div class="luker-studio-meta">
-            <div class="luker-studio-meta-item"><b>${escapeHtml(i18n('Character'))}:</b> ${escapeHtml(characterName)}</div>
-            <div class="luker-studio-meta-item"><b>${escapeHtml(i18n('Target lorebook'))}:</b> ${escapeHtml(primaryBook)}</div>
-        </div>
-    </div>
-    <div class="luker-iter-workspace-tabs" role="tablist">
-        <button type="button" class="luker-iter-workspace-tab active" role="tab" aria-selected="true" data-iter-action="switch-tab" data-iter-tab="chat">
-            <span class="luker-iter-workspace-tab-label">${escapeHtml(i18n('Chat'))}</span>
-            <span class="luker-iter-workspace-tab-badge" data-iter-chat-badge hidden></span>
-        </button>
-        <button type="button" class="luker-iter-workspace-tab" role="tab" aria-selected="false" data-iter-action="switch-tab" data-iter-tab="preview">
-            <span class="luker-iter-workspace-tab-label">${escapeHtml(i18n('Preview'))}</span>
-        </button>
-    </div>
-    <div class="luker-iter-workspace-grid">
-        <div class="luker-iter-workspace-chat" data-iter-pane="chat">
-            <div class="luker-studio-chat" data-cea-editor-chat></div>
-            <div class="luker-studio-composer">
-                <textarea class="text_pole textarea_compact" rows="4" data-cea-editor-input placeholder="${escapeHtml(i18n('Type your requirement to continue this conversation...'))}"></textarea>
-                <div class="luker-studio-composer-actions">
-                    <label class="luker-studio-composer-auto-apply">
-                        <input type="checkbox" data-cea-editor-auto-approve>
-                        <span>${escapeHtml(i18n('Auto-apply AI proposed changes'))}</span>
-                    </label>
-                    <div class="luker-studio-composer-buttons">
-                        <div class="menu_button menu_button_small luker-studio-primary" data-cea-editor-send>${escapeHtml(i18n('Send'))}</div>
-                        <div class="menu_button menu_button_small disabled" data-cea-editor-stop>${escapeHtml(i18n('Stop'))}</div>
-                    </div>
-                </div>
-            </div>
-            <div data-cea-editor-pending></div>
-            <details class="luker-studio-history">
-                <summary>${escapeHtml(i18n('Conversation history'))}</summary>
-                <div class="luker-studio-history-list" data-cea-editor-history></div>
-            </details>
-        </div>
-        <div class="luker-iter-workspace-resizer" data-iter-resizer aria-label="${escapeHtml(i18n('Resize columns'))}"></div>
-        <div class="luker-iter-workspace-preview" data-iter-pane="preview" data-iter-preview-pane></div>
-    </div>
-</div>`;
     }
 
     function ensureStyles() {
@@ -171,6 +121,17 @@ export function createCharacterEditorUi(deps) {
 .popup .cea_sync_analysis_empty { opacity:0.8; }
 .popup .cea_sync_chat_text { margin-bottom:6px; }
 .popup .cea_sync_tool_summary { margin-top:8px; padding:8px 10px; border-radius:8px; background:color-mix(in oklab, var(--SmartThemeBodyColor) 12%, transparent); white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere; }
+.popup .cea_sync_chat_tools { margin-top:8px; border:1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 14%, transparent); border-radius:10px; padding:6px 10px; }
+.popup .cea_sync_chat_tools > summary { cursor:pointer; font-weight:600; opacity:0.85; list-style:none; padding:2px 0; }
+.popup .cea_sync_chat_tools > summary::-webkit-details-marker { display:none; }
+.popup .cea_sync_chat_tools > summary::before { content:'\f078'; font-family:'Font Awesome 6 Free'; font-weight:900; font-size:0.78em; display:inline-block; margin-right:6px; opacity:0.6; transition:transform 120ms; }
+.popup .cea_sync_chat_tools[open] > summary::before { transform:rotate(-180deg); }
+.popup .cea_sync_chat_tools_body { display:flex; flex-direction:column; gap:6px; margin-top:6px; }
+.popup .cea_sync_chat_toolcall { border:1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 12%, transparent); border-radius:8px; padding:6px 8px; background:color-mix(in oklab, var(--SmartThemeBodyColor) 5%, transparent); }
+.popup .cea_sync_chat_toolcall_name { font-weight:600; font-size:0.88rem; margin-bottom:4px; opacity:0.92; }
+.popup .cea_sync_chat_toolcall_args { margin:0; font-size:0.82rem; line-height:1.4; white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere; padding:6px 8px; border-radius:6px; background:color-mix(in oklab, var(--SmartThemeBlurTintColor, #000) 80%, transparent); font-family:var(--monoFontFamily, ui-monospace, monospace); max-height:240px; overflow-y:auto; }
+.popup .cea_sync_chat_applied_stamp { margin-top:8px; font-size:0.82rem; opacity:0.78; color:color-mix(in oklab, #4caf50 80%, var(--SmartThemeBodyColor)); }
+.popup .cea_sync_chat_batch_actions { margin-top:6px; display:flex; justify-content:flex-end; gap:6px; }
 .popup .cea_sync_msg_actions { margin-top:8px; display:flex; justify-content:flex-end; }
 .popup .cea_sync_chat_msg :is(p, ul, ol, pre, table, h1, h2, h3, h4) { margin:0 0 8px; }
 .popup .cea_sync_chat_msg :is(pre, code) { white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere; }
@@ -182,17 +143,25 @@ export function createCharacterEditorUi(deps) {
 .popup .cea_sync_turn_diff > summary { cursor:pointer; font-weight:600; opacity:0.9; }
 .popup .cea_sync_turn_actions { margin-top:8px; display:flex; justify-content:flex-end; }
 .popup .cea_sync_turn_diff_list { display:flex; flex-direction:column; gap:8px; margin-top:8px; }
-.popup .cea_sync_turn_diff_item { border:1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 15%, transparent); border-radius:10px; padding:8px; }
-.popup .cea_sync_turn_diff_title { font-weight:600; margin-bottom:6px; }
+.popup .cea_sync_turn_diff_item { border:1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 15%, transparent); border-radius:10px; padding:8px 10px; transition:border-color 180ms, box-shadow 180ms; }
+.popup .cea_sync_turn_diff_item:hover { border-color:color-mix(in oklab, var(--SmartThemeBodyColor) 22%, transparent); }
+.popup .cea_sync_turn_diff_item_rolledback { opacity:0.55; }
+.popup .cea_sync_turn_diff_item_rolledback:hover { opacity:0.85; }
+.popup .cea_sync_turn_diff_title { display:flex; align-items:center; gap:8px; font-weight:600; margin-bottom:8px; min-width:0; }
+.popup .cea_sync_turn_diff_icon { flex:0 0 auto; font-size:1.05em; line-height:1; }
+.popup .cea_sync_turn_diff_title_text { flex:1 1 auto; min-width:0; overflow-wrap:anywhere; }
+.popup .cea_sync_turn_diff_badge_rolledback { flex:0 0 auto; background:color-mix(in oklab, #d9534f 18%, transparent) !important; border-color:color-mix(in oklab, #d9534f 50%, transparent) !important; }
+.popup .cea_sync_turn_diff_rollback_btn { flex:0 0 auto; }
 .popup .cea_sync_turn_diff_actions { display:flex; align-items:center; gap:6px; margin-bottom:8px; flex-wrap:wrap; }
 .popup .cea_sync_turn_diff_status { padding:3px 8px; border-radius:999px; font-size:0.85em; line-height:1.2; border:1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 22%, transparent); }
 .popup .cea_sync_turn_diff_status.approved { background:color-mix(in oklab, #4caf50 18%, transparent); }
 .popup .cea_sync_turn_diff_status.rejected { background:color-mix(in oklab, #d9534f 16%, transparent); }
 .popup .cea_sync_turn_diff_status.pending { background:color-mix(in oklab, var(--SmartThemeBodyColor) 10%, transparent); }
-.popup .cea_sync_turn_diff_meta { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px; }
-.popup .cea_sync_turn_diff_meta_item { padding:4px 8px; border-radius:8px; background:color-mix(in oklab, var(--SmartThemeBodyColor) 10%, transparent); }
+.popup .cea_sync_turn_diff_meta { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px; }
+.popup .cea_sync_turn_diff_meta_chip { padding:1px 8px !important; font-size:0.78rem; line-height:1.5; }
+.popup .cea_sync_turn_diff_meta_chip b { font-weight:600; opacity:0.78; }
 .popup .cea_sync_turn_diff_fields { display:flex; flex-direction:column; gap:8px; }
-.popup .cea_sync_turn_diff_label { font-weight:600; margin-bottom:4px; }
+.popup .cea_sync_turn_diff_label { font-weight:600; margin-bottom:4px; font-size:0.85rem; opacity:0.78; text-transform:uppercase; letter-spacing:0.02em; }
 .popup .cea_line_diff { border:1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 14%, transparent); border-radius:8px; background:color-mix(in oklab, var(--SmartThemeBodyColor) 5%, transparent); }
 .popup .cea_line_diff > summary { cursor:pointer; padding:6px 8px; font-size:0.9em; display:flex; gap:8px; align-items:center; justify-content:space-between; }
 .popup .cea_line_diff_summary_main { display:inline-flex; align-items:center; gap:8px; min-width:0; }
@@ -247,6 +216,14 @@ export function createCharacterEditorUi(deps) {
 .popup .cea_editor_pending { margin-top:8px; border:1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 15%, transparent); border-radius:10px; padding:8px; display:flex; flex-direction:column; gap:8px; background:color-mix(in oklab, var(--SmartThemeBodyColor) 8%, transparent); }
 .popup .cea_editor_pending_hint { opacity:0.92; font-weight:600; }
 .popup .cea_editor_pending_actions { display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end; }
+
+/* Generic pending-change ring for any wi-card-entry inside a popup — used by
+   the world-book preview pane's draft / pending rows. Layout for those cards
+   lives inline-styled inside editor-preview.js to dodge popup-cascade quirks
+   that broke flex-row alignment in an earlier pass. */
+.popup .wi-card-entry.pending-change { border-color:color-mix(in srgb, var(--SmartThemeQuoteColor, #5b8def) 72%, var(--SmartThemeBorderColor)); box-shadow:0 0 0 1px color-mix(in srgb, var(--SmartThemeQuoteColor, #5b8def) 24%, transparent); }
+.popup .wi-card-entry.pending-change.disabledWIEntry { opacity:0.7; }
+
 @media (max-width: 900px) {
     #${UI_BLOCK_ID} .cea_diff_blocks { grid-template-columns:1fr; }
     .popup .cea_line_diff_ln { width:3.2em; }
@@ -427,7 +404,6 @@ export function createCharacterEditorUi(deps) {
 
     return {
         bindUi,
-        buildCharacterEditorPopupHtml,
         ensureStyles,
         ensureUi,
         refreshUiState,

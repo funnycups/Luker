@@ -1,0 +1,165 @@
+/**
+ * Unified CEA editor tool-display map — feeds `renderToolCallChip`'s
+ * `opts.toolDisplay`. Keys are the tool names the model produces in this
+ * adapter (the 6 `cea_*` edit verbs, the 6 short-name read tools, and
+ * the 2 `luker_cea_editor_*` control tools); values are
+ * `{ icon, label, type, summarize?(args, result, i18n) }`.
+ *
+ * Three `type`s drive the shared chip renderer:
+ *   - `'edit'`    → applied to state.live via applyPendingEdits
+ *   - `'read'`    → produces a tool_result for the next round
+ *   - `'control'` → steers the auto-continue loop (not user-visible state)
+ *
+ * Both `label` and the templates inside `summarize` are the English
+ * source strings. `renderToolCallChip` threads the popup's runtime
+ * `i18n` translator into both — into `label` via a direct lookup and
+ * into `summarize` via the third callback argument — so this file
+ * declares the i18n keys, never the localized text.
+ *
+ * Drift is enforced against tools.js (`CONTROL_TOOL_NAMES`, the read-tool
+ * predicate, and the character-iteration edit-tool defs) in
+ * `tests/cea-editor-unified/tools.test.js`.
+ */
+
+function fmt(i18n, template, ...values) {
+    const translated = (typeof i18n === 'function' ? i18n(template) : template) || template;
+    return String(translated).replace(/\$\{(\d+)\}/g, (_, idx) => String(values[Number(idx)] ?? ''));
+}
+
+export const CEA_EDITOR_TOOL_DISPLAY = {
+    // ----- Edit (character card) -------------------------------------------
+    cea_set_card_field: {
+        icon: '✏️',
+        label: 'Set card field',
+        type: 'edit',
+        summarize: (a) => a?.field || '',
+    },
+    cea_str_replace_card_field: {
+        icon: '🔄',
+        label: 'Replace text in card field',
+        type: 'edit',
+        summarize: (a) => a?.field || '',
+    },
+
+    // ----- Edit (lorebook) -------------------------------------------------
+    cea_add_lorebook_entry: {
+        icon: '➕',
+        label: 'Add lorebook entry',
+        type: 'edit',
+        summarize: (a) => a?.entry?.comment || (a?.entry?.uid != null ? `#${a.entry.uid}` : ''),
+    },
+    cea_update_lorebook_entry: {
+        icon: '✏️',
+        label: 'Update lorebook entry',
+        type: 'edit',
+        summarize: (a) => (a?.uid != null ? `#${a.uid}` : ''),
+    },
+    cea_remove_lorebook_entry: {
+        icon: '🗑️',
+        label: 'Remove lorebook entry',
+        type: 'edit',
+        summarize: (a) => (a?.uid != null ? `#${a.uid}` : ''),
+    },
+    cea_set_lorebook_metadata: {
+        icon: '⚙️',
+        label: 'Set lorebook metadata',
+        type: 'edit',
+        summarize: (a) => a?.key || '',
+    },
+
+    // ----- Read ------------------------------------------------------------
+    lorebook_query: {
+        icon: '🔍',
+        label: 'Search lorebook',
+        type: 'read',
+        summarize: (a, r, i18n) => {
+            if (r && typeof r === 'object') {
+                const count = Array.isArray(r.matches) ? r.matches.length : Number(r.count || 0);
+                return fmt(i18n, '${0} hits', count);
+            }
+            const book = a?.book_name ? String(a.book_name) : '';
+            const text = a?.text ? String(a.text) : (a?.query ? String(a.query) : '');
+            return [book, text].filter(Boolean).join(' ');
+        },
+    },
+    lorebook_list: {
+        icon: '📋',
+        label: 'List lorebook entries',
+        type: 'read',
+        summarize: (a, r, i18n) => {
+            if (r && typeof r === 'object') {
+                const count = Array.isArray(r.entries) ? r.entries.length : Number(r.count || 0);
+                return fmt(i18n, '${0} entries', count);
+            }
+            return a?.book_name ? String(a.book_name) : '';
+        },
+    },
+    lorebook_get: {
+        icon: '📖',
+        label: 'Read lorebook entries',
+        type: 'read',
+        summarize: (a, r, i18n) => {
+            if (r && typeof r === 'object') {
+                const count = Array.isArray(r.entries) ? r.entries.length : 1;
+                return fmt(i18n, '${0} entries', count);
+            }
+            const uids = Array.isArray(a?.uids) ? a.uids.join(',') : '';
+            const book = a?.book_name ? String(a.book_name) : '';
+            return [book, uids].filter(Boolean).join(' ');
+        },
+    },
+    world_book_list: {
+        icon: '📚',
+        label: 'List world books',
+        type: 'read',
+        summarize: (a, r, i18n) => {
+            if (r && typeof r === 'object') {
+                const count = Array.isArray(r.books) ? r.books.length : Number(r.count || 0);
+                return fmt(i18n, '${0} books', count);
+            }
+            return '';
+        },
+    },
+    web_search: {
+        icon: '🌐',
+        label: 'Web search',
+        type: 'read',
+        summarize: (a, r, i18n) => {
+            if (r && typeof r === 'object') {
+                const count = Array.isArray(r.results) ? r.results.length : Number(r.count || 0);
+                return fmt(i18n, '${0} results', count);
+            }
+            return a?.query ? String(a.query) : '';
+        },
+    },
+    simulate_prompt: {
+        icon: '🧪',
+        label: 'Simulate prompt',
+        type: 'read',
+        summarize: (a, r, i18n) => {
+            if (r && typeof r === 'object') {
+                const len = Number(
+                    r.assembled_length
+                    ?? (typeof r.simulated_text === 'string' ? r.simulated_text.length : 0),
+                );
+                return fmt(i18n, '${0} chars', len);
+            }
+            return '';
+        },
+    },
+
+    // ----- Control ---------------------------------------------------------
+    // Control tools route through `onControlCall`, not through
+    // `normalizeToolCallToEdit`, but still appear in the tool-call chip
+    // strip so the user can see the AI's continue / finalize decisions.
+    luker_cea_editor_continue_iteration: {
+        icon: '➡️',
+        label: 'Continue iteration',
+        type: 'control',
+    },
+    luker_cea_editor_finalize_iteration: {
+        icon: '✅',
+        label: 'Finalize iteration',
+        type: 'control',
+    },
+};
