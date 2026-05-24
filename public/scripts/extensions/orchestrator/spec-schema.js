@@ -20,10 +20,11 @@
  *     readers with sensible defaults; both fall back to live
  *     `extension_settings.orchestrator` when the caller passes no arg.
  *
- * `sanitizePresetMap` / `mergePresetMaps` / `ensureSettings` stay in
- * main.js for now because they call into editor draft helpers
- * (`createPresetDraft`, `sanitizeIdentifierToken`, etc.) that haven't
- * moved yet.
+ * `sanitizePresetMap` / `mergePresetMaps` / `ensureSettings` live in
+ * main.js because they call into editor draft helpers
+ * (`createPresetDraft`, `sanitizeIdentifierToken`, etc.) that own the
+ * preset-editor UI state — they belong with the editor surface, not
+ * with the spec schema.
  */
 
 import { extension_settings } from '../../extensions.js';

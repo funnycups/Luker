@@ -21,10 +21,10 @@
  *      (`buildPreviousOutputsMarkdown`, `buildDistillerOutputMarkdown`).
  *
  * `createStageOutputSnapshot`, `collectPriorNodeEntries`, and
- * `resolveReviewTargetEntries` stay in main.js for now because they
- * call `normalizeNodeSpec` / `isReviewNodeSpec` / `getStageRuntimeMode`
- * — those will move with `spec-schema.js` later, after which the
- * remaining helpers can follow.
+ * `resolveReviewTargetEntries` live in main.js because they call
+ * `normalizeNodeSpec` / `isReviewNodeSpec` / `getStageRuntimeMode` —
+ * spec-walking helpers that depend on the runtime's full
+ * `latestOrchestrationSnapshot` / per-chat state.
  */
 
 import { yaml } from '../../../lib.js';

@@ -42,9 +42,9 @@ export function makeMessageId() {
 /**
  * Normalize a message read from disk into the shape rendered today.
  * Legacy sessions persisted only `{role, content}`; the upgraded schema
- * adds `id`, `at`, optional `toolCalls`, `edits`, `appliedAt`,
- * `appliedTarget`, `rolledBackAt`, and an `auto` flag for synthetic
- * auto-continue user messages.
+ * adds `id`, `at`, optional `toolCalls`, `toolResults`, `edits`,
+ * `appliedAt`, `appliedTarget`, `rolledBackAt`, and an `auto` flag for
+ * synthetic auto-continue user messages.
  *
  * Tolerance: missing `id` regenerates one, missing `at` falls back to
  * the session's updatedAt, missing arrays stay undefined (renderer
@@ -59,6 +59,7 @@ export function normalizeMessageShape(m, fallbackAt = Date.now()) {
         at: typeof m.at === 'number' ? m.at : Number(fallbackAt) || Date.now(),
     };
     if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) out.toolCalls = m.toolCalls;
+    if (Array.isArray(m.toolResults) && m.toolResults.length > 0) out.toolResults = m.toolResults;
     if (Array.isArray(m.edits) && m.edits.length > 0) out.edits = m.edits;
     if (typeof m.appliedAt === 'number') out.appliedAt = m.appliedAt;
     if (m.appliedTarget) out.appliedTarget = String(m.appliedTarget);

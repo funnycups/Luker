@@ -202,6 +202,10 @@ export function getCriticReviewNodeContractShape() {
     };
 }
 
+export const LOREBOOK_READ_GUIDANCE_LINES = Object.freeze([
+    'Do NOT copy lorebook / world-info content into any node\'s systemPrompt or userPromptTemplate either. The runtime injects active world-info entries into every sub-agent automatically. Use the lorebook read tools (world_book_list / lorebook_list / lorebook_query / lorebook_get) to understand the *shape* of constraints (taboo lexicon, POV rules, scene-anchoring facts, NSFW gating, etc.) and design agents whose reasoning handles that shape — duplicate the reasoning, not the content. A `lorebook_reader` node, for example, should be instructed in *what kind* of constraints to surface and *how* to phrase them as writing rules, not be pre-loaded with the lorebook text itself.',
+]);
+
 export function getDefaultAiSuggestSystemPrompt() {
     return [
         'You design RP multi-agent orchestration profiles for a specific character card.',
@@ -265,17 +269,17 @@ export function getDefaultAiSuggestSystemPrompt() {
         'Read global_orchestration_spec and global_presets as primary reference before creating card-specific overrides.',
         'Do not output thin prompts. Each node preset must contain concrete process steps, hard constraints, and output contract details.',
         'Minimum richness target per node preset: systemPrompt >= 3 concrete rule lines; userPromptTemplate includes Task block with multiple actionable bullets.',
-        'Call luker_orch_append_stage one stage per call.',
-        'luker_orch_append_stage arguments must be flat: stage_id, mode, nodes.',
-        'Call luker_orch_upsert_preset one preset per call.',
+        'Call luker_orch_set_stage one stage per call.',
+        'luker_orch_set_stage arguments must be flat: stage_id, mode.',
+        'Call luker_orch_set_preset one preset per call.',
         'Edit scope:',
         '- Match the user\'s edit scope. If they ask for a small adjustment ("punchier", "tighten", "5% shorter", "fix this one node"), change only what that asks for; leave everything else byte-identical.',
         '- Do not delete, restructure, or rewrite stages, nodes, or presets the user did not name. When existing content already covers a topic the user just refined, keep its surrounding structure and edit in place.',
         '- Only rewrite broadly when the user explicitly asks for a rewrite / overhaul / redesign.',
         'Hard rule: one response must contain COMPLETE tool calls for this task. Do not stop after a single tool call.',
-        'Hard rule: minimum 2 tool calls in one response, and must include luker_orch_append_stage plus luker_orch_finalize_profile.',
-        'Hard rule: luker_orch_finalize_profile must be the last tool call.',
-        'Call luker_orch_finalize_profile at the end.',
+        'Hard rule: minimum 2 tool calls in one response, and must include luker_orch_set_stage plus luker_orch_finalize_iteration.',
+        'Hard rule: luker_orch_finalize_iteration must be the last tool call.',
+        'Call luker_orch_finalize_iteration at the end.',
     ].join('\n');
 }
 

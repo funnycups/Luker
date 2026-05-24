@@ -19,9 +19,9 @@
  *      after-anchor entries so callers that don't honor depth still see
  *      the content.
  *
- * `injectCapsuleToPayload` still calls the append helpers from main.js
- * via import; it stays there for now and will move with
- * `capsule-injection.js`.
+ * The capsule-injection counterpart (`injectCapsuleToPayload`) lives in
+ * `capsule-injection.js` and consumes the append helpers from this
+ * module by import.
  */
 
 import { wi_anchor_position } from '../../world-info.js';

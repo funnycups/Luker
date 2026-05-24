@@ -90,6 +90,15 @@ describe('LOOP_ITERATION_CONTRACT_LINES', () => {
         expect(text).not.toMatch(/luker_orch_set_node/);
         expect(text).not.toMatch(/luker_orch_set_preset/);
     });
+
+    test('documents finalize-sticky ordering so the LLM knows finalize wins over continue in the same round', () => {
+        // Sticky-finalize: if the model calls both continue + finalize in
+        // a single round, the popup's onControlCall handler treats finalize
+        // as the terminator and ends the loop. This assertion guards the
+        // doc line that surfaces the rule in the prompt itself so the
+        // model can plan accordingly.
+        expect(text.toLowerCase()).toMatch(/finalize wins/);
+    });
 });
 
 describe('applyLoopProfilePatchArgs partial-merge contract', () => {

@@ -77,7 +77,6 @@
  *   - applyAiIterationSessionToGlobal(ctx, settings, session, root)
  *   - applyAiIterationSessionToCharacter(ctx, settings, session, root)
  *   - ORCH_EXECUTION_MODES                { SPEC, LOOP, AGENDA, DIRECTOR }
- *   - MODULE_NAME
  */
 
 import { Popup, POPUP_TYPE } from '../../../popup.js';
@@ -87,7 +86,7 @@ import {
     inverseEdit,
     render as ITER_RENDER,
     runner as ITER_RUNNER,
-    textDiff as ITER_TEXT_DIFF,
+    ui as ITER_UI,
     zoomOverlay as ITER_ZOOM_OVERLAY,
 } from '../../../iteration-library/index.js';
 import {
@@ -95,20 +94,172 @@ import {
     makeMessageId,
     normalizeMessageShape,
 } from './session-store.js';
+import { ORCH_TOOL_DISPLAY } from './tool-display.js';
+import {
+    buildCharacterEditorHelperApis,
+    runCharacterEditorHelperToolCall,
+} from '../../character-editor-assistant/main.js';
 
 const MODULE = 'orch-iteration';
 const STYLESHEET_ID = 'orch_it_studio_stylesheet';
 const STYLESHEET_HREF = '/scripts/extensions/orchestrator/iter-studio/studio.css';
 
+// ──────────────────────────────────────────────────────────────────────────
+// Lorebook read tools (borrowed from the unified CEA editor's surface).
+//
+// The orchestration designer often needs to read lorebook content while
+// shaping nodes — e.g. to decide what kind of constraints a `lorebook_reader`
+// node should enforce, or to confirm that the active world books actually
+// contain the categories of facts a node assumes. These four read-tools
+// give the iteration AI the same lorebook visibility the CEA editor has.
+//
+// Implementation: identical wire-format to the CEA editor (short canonical
+// names → legacy `luker_card_*` names dispatched via main.js's
+// runCharacterEditorHelperToolCall). The legacy adapter takes the active
+// character avatar from `helperApis`, so the tools are gated on the popup
+// being scoped to a character (no avatar → no lorebook to read).
+//
+// IMPORTANT: results are read-only and informational. They are NOT
+// duplicated into any generated node's systemPrompt — the runtime already
+// auto-injects active world-info into every sub-agent. The system prompt
+// instructs the AI to use these tools to understand the *shape* of
+// constraints, not to copy lorebook text into prompts.
+// ──────────────────────────────────────────────────────────────────────────
+const LOREBOOK_READ_TOOL_LEGACY_NAMES = Object.freeze({
+    lorebook_list: 'luker_card_list_lorebook_entries',
+    lorebook_query: 'luker_card_query_lorebook_entries',
+    lorebook_get: 'luker_card_get_lorebook_entries',
+    world_book_list: 'luker_card_list_world_books',
+});
+const LOREBOOK_READ_TOOL_NAME_SET = new Set(Object.keys(LOREBOOK_READ_TOOL_LEGACY_NAMES));
+
+// `luker_orch_simulate` is classified as a read tool too (it runs a
+// throwaway orchestration against the working profile and returns the
+// stage outputs — the working profile itself is not mutated). The
+// runtime executor for simulate lives in main.js's
+// executeAiIterationToolCalls; the popup recognizes the name here so
+// the call routes to the read-path persistence below (toolResults +
+// pure-read auto-continue) instead of the silent-drop edit-tool path
+// where lastSimulation gets written to a throwaway sandbox.
+const SIMULATE_TOOL_NAME = 'luker_orch_simulate';
+
+function isLorebookReadTool(name) {
+    return LOREBOOK_READ_TOOL_NAME_SET.has(String(name || ''));
+}
+
+function isSimulateTool(name) {
+    return String(name || '') === SIMULATE_TOOL_NAME;
+}
+
+function isReadTool(name) {
+    return isLorebookReadTool(name) || isSimulateTool(name);
+}
+
+const LOREBOOK_READ_TOOL_DEFS = [
+    {
+        type: 'function',
+        function: {
+            name: 'world_book_list',
+            description: 'List world book names visible to the character being designed, tagged with their scope (character, character_aux, chat, global). Call before lorebook_list / lorebook_query / lorebook_get to know which book names exist.',
+            parameters: { type: 'object', properties: {}, additionalProperties: false },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'lorebook_list',
+            description: 'List compact lorebook entry index rows (uid, name, enabled) for a world book. Optional range narrows the inclusive UID window, for example 0~100.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    book_name: { type: 'string', description: 'Required. Target world book.' },
+                    range: { type: 'string', description: 'Optional inclusive UID range such as 0~100, 50~, ~100, or a single uid like 42.' },
+                },
+                required: ['book_name'],
+                additionalProperties: false,
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'lorebook_query',
+            description: 'Search a world book and return lightweight matching entries. Use this before lorebook_get to narrow candidates.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    book_name: { type: 'string', description: 'Required. Target world book.' },
+                    text: { type: 'string' },
+                    search_mode: { type: 'string', enum: ['any', 'activation'] },
+                    constant: { type: 'boolean' },
+                    enabled: { type: 'boolean' },
+                    limit: { type: 'integer', minimum: 1, maximum: 20 },
+                },
+                required: ['book_name'],
+                additionalProperties: false,
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'lorebook_get',
+            description: 'Fetch full lorebook entries from a world book by uid after narrowing candidates with lorebook_query.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    book_name: { type: 'string', description: 'Required. Target world book.' },
+                    uids: { type: 'array', items: { type: 'integer' }, minItems: 1, maxItems: 10 },
+                },
+                required: ['book_name', 'uids'],
+                additionalProperties: false,
+            },
+        },
+    },
+];
+
+/**
+ * Execute one lorebook read tool. Translates the short canonical name to the
+ * legacy `luker_card_*` wire name + dispatches through main.js's helper-tool
+ * runner. Returns `{ ok: true, result }` on success and `{ ok: false, error }`
+ * on failure so the runIterationTurn loop can persist a tool_result either way.
+ *
+ * Caller is responsible for building helperApis (per-character — see
+ * buildCharacterEditorHelperApis in character-editor-assistant/main.js).
+ */
+async function runLorebookReadTool(call, helperApis = []) {
+    const shortName = String(call?.name || '');
+    if (!isLorebookReadTool(shortName)) {
+        return { ok: false, error: `Not a lorebook read tool: ${shortName || '(empty)'}` };
+    }
+    const legacyName = LOREBOOK_READ_TOOL_LEGACY_NAMES[shortName];
+    const legacyCall = {
+        id: call?.id,
+        name: legacyName,
+        args: call?.args && typeof call.args === 'object' ? call.args : {},
+    };
+    try {
+        const raw = await runCharacterEditorHelperToolCall(legacyCall, helperApis);
+        const result = raw && typeof raw === 'object' && Object.hasOwn(raw, 'result')
+            ? raw.result
+            : raw;
+        return { ok: true, result };
+    } catch (err) {
+        return { ok: false, error: String(err?.message || err || 'unknown error') };
+    }
+}
+
 const CONTROL_TOOL_NAMES = Object.freeze({
     continue: 'luker_orch_continue_iteration',
     finalize: 'luker_orch_finalize_iteration',
     resetToBlank: 'luker_orch_reset_live_to_blank',
+    resetToGlobal: 'luker_orch_reset_live_to_global',
 });
 const CONTROL_TOOL_NAME_SET = new Set([
     CONTROL_TOOL_NAMES.continue,
     CONTROL_TOOL_NAMES.finalize,
     CONTROL_TOOL_NAMES.resetToBlank,
+    CONTROL_TOOL_NAMES.resetToGlobal,
 ]);
 
 /**
@@ -170,6 +321,20 @@ const CONTROL_TOOL_DEFS = [
             },
         },
     },
+    {
+        type: 'function',
+        function: {
+            name: CONTROL_TOOL_NAMES.resetToGlobal,
+            description: 'Replace the working profile with a fresh clone of the current GLOBAL profile for this mode, discarding the existing character-override copy seeded in. Use ONLY when the user wants to wipe their character override and restart from the current global setup. The popup only injects this affordance when scope is character AND a character override already exists — ignore it otherwise.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    reason: { type: 'string', description: 'Optional rationale visible to the user.' },
+                },
+                additionalProperties: false,
+            },
+        },
+    },
 ];
 
 /**
@@ -187,6 +352,14 @@ function isAbortError(err, signal) {
     return false;
 }
 
+/**
+ * Per-mode popup titles. Resolved ONCE at mount and baked into the
+ * popup shell HTML; the title is not re-rendered when the host's
+ * executionMode changes externally. Closing + reopening the popup
+ * picks up the new title. This is intentional — the popup's
+ * session-bucket key is mode-scoped, so a mid-popup mode switch
+ * already would not affect the running session anyway.
+ */
 const TITLES_BY_MODE = Object.freeze({
     spec: 'AI Iteration Studio — Spec',
     loop: 'AI Iteration Studio — Loop',
@@ -348,7 +521,7 @@ function renderOrchPreviewPane(live, pendingEdits, mode, tFn) {
         if (mode === 'loop') return renderOrchLoopPreview(live, changed, t);
         if (mode === 'agenda') return renderOrchAgendaPreview(live, changed, t);
         if (mode === 'director') return renderOrchDirectorPreview(live, changed, t);
-        return renderOrchSpecPreview(live, changed, t);
+        return renderOrchSpecPreview(live, changed, t, pendingEdits);
     } catch (err) {
         // eslint-disable-next-line no-console
         console.warn('[orch-iteration] preview renderer failed', err);
@@ -371,7 +544,7 @@ function renderOrchPreviewPane(live, pendingEdits, mode, tFn) {
  * `isPrefixInChangedSet(changed, 'presets.<id>')` to light up the
  * specific preset rows whose subtree mutated.
  */
-function renderOrchSpecPreview(profile, changed, t) {
+function renderOrchSpecPreview(profile, changed, t, pendingEdits) {
     const stages = Array.isArray(profile?.spec?.stages) ? profile.spec.stages : [];
     const presetMap = (profile?.presets && typeof profile.presets === 'object') ? profile.presets : {};
     const stageRows = stages.map((s, stageIdx) => {
@@ -405,6 +578,25 @@ function renderOrchSpecPreview(profile, changed, t) {
     // path is in the changed set. The summary line shows the api / prompt
     // preset names like the node label does, so the user can correlate
     // which presets the stage rows referenced.
+    //
+    // Removed presets (ORCH-19): pull the pre-edit preset names off the
+    // pending edits' oldValue so a deletion shows a strikethrough "(deleted)"
+    // row instead of vanishing silently. Without this, a remove_preset
+    // tool call had no preview affordance at all — the user had no clue
+    // anything happened until they applied + re-rendered.
+    const removedPresetIds = (() => {
+        if (!Array.isArray(pendingEdits) || pendingEdits.length === 0) return [];
+        const out = [];
+        for (const e of pendingEdits) {
+            if (e?.op !== 'set' || e?.path !== '' || !e?.oldValue || !e?.newValue) continue;
+            const oldPresets = e.oldValue?.presets && typeof e.oldValue.presets === 'object' ? e.oldValue.presets : {};
+            const newPresets = e.newValue?.presets && typeof e.newValue.presets === 'object' ? e.newValue.presets : {};
+            for (const id of Object.keys(oldPresets)) {
+                if (!Object.hasOwn(newPresets, id) && !out.includes(id)) out.push(id);
+            }
+        }
+        return out;
+    })();
     const presetEntries = Object.entries(presetMap);
     const presetRows = presetEntries.map(([id, preset]) => {
         const presetPath = `presets.${id}`;
@@ -419,6 +611,12 @@ function renderOrchSpecPreview(profile, changed, t) {
             </div>
         </div>`;
     }).join('');
+    const removedRows = removedPresetIds.map(id => `<div class="luker-iter-workspace-preview-row pending-change">
+        <div class="luker-iter-workspace-preview-row-head">
+            <span class="luker-iter-workspace-preview-row-label" style="text-decoration:line-through;">${escapeHtmlLocal(id)}</span>
+            <span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(t('(deleted)'))}</span>
+        </div>
+    </div>`).join('');
 
     return `
         <div class="luker-iter-workspace-preview-section">
@@ -428,6 +626,7 @@ function renderOrchSpecPreview(profile, changed, t) {
         <div class="luker-iter-workspace-preview-section">
             <div class="luker-iter-workspace-preview-section-title">${escapeHtmlLocal(t('Presets'))}</div>
             ${presetRows || `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('No presets'))}</div>`}
+            ${removedRows}
         </div>
     `;
 }
@@ -471,12 +670,60 @@ function renderOrchLoopPreview(profile, changed, t) {
         </div>`
         : '';
 
+    // Tools section — surfaces nested `tools.<namespace>.<verb>` flags.
+    // The flag tree is sparse (some namespaces are simple booleans like
+    // `tools.finalize: true`, others are object trees), so we walk
+    // shallowly to one level of nesting and check each leaf against
+    // `changed` for the per-row highlight. `tools` itself is also
+    // checked so a coarse delete/replace of the whole tree highlights
+    // the section header.
+    const toolsObj = profile?.tools && typeof profile.tools === 'object' ? profile.tools : null;
+    const toolsSectionChanged = isPrefixInChangedSet(changed, 'tools');
+    let toolsHtml = '';
+    if (toolsObj) {
+        const namespaceRows = Object.entries(toolsObj).map(([ns, value]) => {
+            const nsPath = `tools.${ns}`;
+            if (value && typeof value === 'object') {
+                const verbs = Object.entries(value).map(([verb, on]) => {
+                    const verbPath = `${nsPath}.${verb}`;
+                    const verbChanged = changed.has(verbPath);
+                    const label = `${ns}.${verb}`;
+                    return `<div class="luker-iter-workspace-preview-row-body${verbChanged ? ' pending-change' : ''}" style="margin-left:12px;">
+                        <span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(label)}</span>
+                        <span class="luker-iter-workspace-preview-row-meta">${on ? '✓' : '✗'}</span>
+                    </div>`;
+                }).join('');
+                const nsChanged = isPrefixInChangedSet(changed, nsPath);
+                return `<div class="${rowClass(nsChanged)}">
+                    <div class="luker-iter-workspace-preview-row-head">
+                        <span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(ns)}</span>
+                    </div>
+                    ${verbs}
+                </div>`;
+            }
+            const isChanged = changed.has(nsPath);
+            return `<div class="${rowClass(isChanged)}">
+                <div class="luker-iter-workspace-preview-row-head">
+                    <span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(ns)}</span>
+                    <span class="luker-iter-workspace-preview-row-meta">${value ? '✓' : '✗'}</span>
+                </div>
+            </div>`;
+        }).join('');
+        toolsHtml = `
+            <div class="luker-iter-workspace-preview-section">
+                <div class="luker-iter-workspace-preview-section-title${toolsSectionChanged ? ' pending-change' : ''}">${escapeHtmlLocal(t('Tools'))}</div>
+                ${namespaceRows}
+            </div>
+        `;
+    }
+
     return `
         <div class="luker-iter-workspace-preview-section">
             <div class="luker-iter-workspace-preview-section-title">${escapeHtmlLocal(t('Loop agent'))}</div>
             ${rows}
             ${systemPromptHtml}
         </div>
+        ${toolsHtml}
     `;
 }
 
@@ -770,6 +1017,10 @@ export async function openOrchestratorIterationStudio(deps) {
 
     // Inject the popup stylesheet on first open. Idempotent.
     ensureStylesheetInjected();
+    // Inject the shared iteration-library UI stylesheet (luker_lib_*
+    // selectors that style the message / diff / apply / toolcall HTML
+    // emitted by the components below). Idempotent.
+    ITER_UI.ensureUiStylesheetInjected();
 
     // Read effective live profile by mode, respecting the iteration scope
     // (character override falls through to global).
@@ -893,22 +1144,58 @@ export async function openOrchestratorIterationStudio(deps) {
         return { spec: { stages: [], defaultTools: null }, presets: {} };
     }
 
+    // ──────────────────────────────────────────────────────────────────
+    // Per-mode global profile clone for the reset-to-global control tool.
+    // Used ONLY when scope is character + a character override already
+    // exists AND the AI decides the user wants to wipe that override and
+    // restart from the current global setup. Mirrors `loadLiveProfile`
+    // but forces `scope = 'global'` so the global editor source is read
+    // regardless of the active iteration scope.
+    // ──────────────────────────────────────────────────────────────────
+    function loadGlobalProfileForMode() {
+        try { syncCharacterEditorWithActiveAvatar?.(context); } catch { /* ignore */ }
+        if (isLoop) return sanitizeLoopProfile(getLoopEditorByScope('global'));
+        if (isAgenda) return cloneAgendaWorkingProfileFromEditor(getAgendaEditorByScope('global'));
+        if (isDirector) return cloneDirectorWorkingProfileFromEditor(getDirectorEditorByScope('global'));
+        return cloneWorkingProfileFromEditor(getEditorByScope('global'));
+    }
+
     function appendScopeHintIfNeeded(basePrompt, helperSession) {
-        if (helperSession?.scope !== 'character' || helperSession?.hasOverride) {
-            return basePrompt;
-        }
+        if (helperSession?.scope !== 'character') return basePrompt;
         const display = String(helperSession?.characterDisplayName || '').trim() || 'this character';
+        if (!helperSession.hasOverride) {
+            // 2-path hint: card has no override yet, the working profile
+            // is a copy of the global setup, the AI picks between
+            // "adjust" (default) and "author from scratch" (resetToBlank).
+            return [
+                basePrompt,
+                '',
+                '# Iteration scope',
+                `You are iterating on the character override for "${display}". This card has NO character override yet.`,
+                '',
+                'Two paths exist; decide from the user\'s first message which applies:',
+                '- Adjust the existing setup: the working profile starts as a copy of the GLOBAL profile. Make targeted edits as you normally would. This is the default path.',
+                `- Author from scratch: call \`${CONTROL_TOOL_NAMES.resetToBlank}\` once to discard the global copy and start with a minimal blank shell. If you already called it earlier this session, the working profile is already blank — continue authoring from there without calling reset again.`,
+                '',
+                'Do not call the reset tool unless the user clearly wants a brand-new orchestration.',
+            ].join('\n');
+        }
+        // 3-path hint: card already has an override, the working profile
+        // is a copy of the OVERRIDE, the AI picks between "adjust"
+        // (default), "author from scratch" (resetToBlank), or "match
+        // global" (resetToGlobal).
         return [
             basePrompt,
             '',
             '# Iteration scope',
-            `You are iterating on the character override for "${display}". This card has NO character override yet.`,
+            `You are iterating on the character override for "${display}". This card ALREADY has a character override.`,
             '',
-            'Two paths exist; decide from the user\'s first message which applies:',
-            '- Adjust the existing setup: the working profile starts as a copy of the GLOBAL profile. Make targeted edits as you normally would. This is the default path.',
-            `- Author from scratch: call \`${CONTROL_TOOL_NAMES.resetToBlank}\` once to discard the global copy and start with a minimal blank shell. If you already called it earlier this session, the working profile is already blank — continue authoring from there without calling reset again.`,
+            'Three paths exist; default to the first unless the user clearly asks for one of the others:',
+            '- Continue adjusting the current override: the working profile starts as a copy of the existing OVERRIDE. Make targeted edits as you normally would. This is the default path.',
+            `- Author from scratch: call \`${CONTROL_TOOL_NAMES.resetToBlank}\` once to discard the existing override and start with a minimal blank shell. If you already called it earlier this session, the working profile is already blank — continue authoring from there without calling reset again.`,
+            `- Match the global profile: call \`${CONTROL_TOOL_NAMES.resetToGlobal}\` once to discard the existing override and start with a fresh clone of the current global profile. If you already called it earlier this session, the working profile already matches global — continue adjusting from there without calling reset again.`,
             '',
-            'Do not call the reset tool unless the user clearly wants a brand-new orchestration.',
+            'Do not call either reset tool unless the user clearly asks for that fresh-start path.',
         ].join('\n');
     }
 
@@ -981,7 +1268,14 @@ export async function openOrchestratorIterationStudio(deps) {
     }
 
     async function startNewSession() {
+        // Carry the prior session's autoApply preference forward — the user
+        // sets this at the popup level (a per-session reset would be
+        // surprising). Mirrors the MG-10 carry-forward pattern.
+        const priorAutoApply = Boolean(state.session?.surfaceState?.autoApply);
         state.session = createNewSession(mode);
+        if (priorAutoApply) {
+            state.session.surfaceState.autoApply = true;
+        }
         state.pendingEdits = [];
         loadLive();
         await sessionStore.save(state.session);
@@ -999,99 +1293,38 @@ export async function openOrchestratorIterationStudio(deps) {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // JSON-diff pending-edit card — Q8.
-    //
-    // Sandbox-diff emits a single `set('', newProfile)` per turn; the card
-    // shows the byte delta + collapsible JSON before/after (truncated for
-    // large profiles).
+    // Pending-edit card. Delegates to `iteration-library/ui/diff` so the
+    // visual diff language matches the other three iter-library popups
+    // (CPA preset, MG schema, CEA char). The shared component handles
+    // the coarse `{op:'set', path:''}` sandbox-diff edit that Orch emits
+    // per turn — it splits the whole-object set into one virtual sub-card
+    // per changed leaf (up to 20), then falls back to a single full-JSON
+    // card for the rare structural rewrite case. Non-`set` ops render as
+    // a compact op + path chip. Orchestrator profile shapes are deeply
+    // nested objects, not strings, so the diff component's stringifyValue
+    // helper JSON-stringifies them before running the inline LCS diff.
     // ──────────────────────────────────────────────────────────────────
-    // Bulk-set edits on the working profile collapse the entire delta
-    // into one `set('', oldProfile, newProfile)` edit. We split that
-    // upfront into one virtual `set(<leafPath>, oldLeaf, newLeaf)` card
-    // per changed leaf so the user sees per-field diffs instead of one
-    // giant JSON blob. When >20 leaves changed (rare — usually means a
-    // structural rewrite the user asked for), fall back to the original
-    // whole-object render to avoid card flood.
-    function getByPath(obj, path) {
-        if (!path) return obj;
-        let cur = obj;
-        for (const seg of String(path).split('.')) {
-            if (cur == null) return undefined;
-            cur = cur[seg];
-        }
-        return cur;
-    }
-
-    function renderSetEditCard(path, oldValue, newValue) {
-        const isWholeObject = path === '';
-        const beforeText = typeof oldValue === 'string' ? oldValue : JSON.stringify(oldValue, null, 2);
-        const afterText = typeof newValue === 'string' ? newValue : JSON.stringify(newValue, null, 2);
-        const beforeBytes = beforeText.length;
-        const afterBytes = afterText.length;
-        const bytesDelta = afterBytes - beforeBytes;
-        const sign = bytesDelta >= 0 ? '+' : '';
-        const fileLabel = isWholeObject ? 'working profile' : path;
-        const libDiffHtml = ITER_TEXT_DIFF.renderInlineTextDiffHtml(beforeText, afterText, {
-            fileLabel,
-            i18n: t,
-            forceOpen: true,
-        });
-        const headerLabel = isWholeObject ? t('Profile updated') : tf('Field updated: ${0}', path);
-        return `<div class="orch_it_pending_card">
-            <span class="op">${escapeHtmlLocal(headerLabel)}</span>
-            <span class="diff_delta">(${sign}${bytesDelta} bytes)</span>
-            ${libDiffHtml}
-        </div>`;
-    }
-
     function renderPendingEditCard(edit) {
-        if (edit?.op === 'set' && edit.path === ''
-            && edit.oldValue && edit.newValue
-            && typeof edit.oldValue === 'object' && typeof edit.newValue === 'object') {
-            const changed = new Set();
-            walkDiff('', edit.oldValue, edit.newValue, changed);
-            if (changed.size > 0 && changed.size <= 20) {
-                return [...changed].map((leafPath) => renderSetEditCard(
-                    leafPath,
-                    getByPath(edit.oldValue, leafPath),
-                    getByPath(edit.newValue, leafPath),
-                )).join('');
-            }
-            return renderSetEditCard('', edit.oldValue, edit.newValue);
-        }
-        if (edit?.op === 'set' && edit.oldValue !== undefined && edit.newValue !== undefined) {
-            return renderSetEditCard(String(edit.path || ''), edit.oldValue, edit.newValue);
-        }
-        return `<div class="orch_it_pending_card">
-            <span class="op">${escapeHtmlLocal(String(edit?.op || t('(unknown op)')))}</span>
-        </div>`;
+        return ITER_UI.diff.renderDiffCard([edit], { i18n: tf });
     }
 
-    function formatTime(ts) {
-        try {
-            const d = new Date(Number(ts) || Date.now());
-            return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-        } catch { return ''; }
-    }
-
-    function renderToolCallChip(tc) {
-        const name = String(tc?.name || '');
-        let argsText;
-        try { argsText = JSON.stringify(tc?.args ?? {}, null, 2); } catch { argsText = String(tc?.args ?? ''); }
-        return `
-            <div class="orch_it_msg_toolcall">
-                <div class="orch_it_msg_toolcall_name">${escapeHtmlLocal(name || t('(tool)'))}</div>
-                <pre class="orch_it_msg_toolcall_args">${escapeHtmlLocal(argsText)}</pre>
-            </div>`;
-    }
-
-    function renderEditChip(edit) {
-        // Reuse the pending-card renderer so the per-message audit trail
-        // and the active pending block look visually identical — the user
-        // doesn't have to learn two diff visual languages.
-        return renderPendingEditCard(edit);
-    }
-
+    // ──────────────────────────────────────────────────────────────────
+    // Chat-message rendering. Orchestrator delegates to
+    // `iteration-library/ui/message.renderMessageCard` (M1.4) so the
+    // four iter-library popups (CPA, MG schema, Orch, CEA char) share
+    // one visual language for tool-call chips, per-round edit cards,
+    // applied/rolled-back stamps, and the Regenerate / Rollback row.
+    //
+    // Orch preserves only the outer `<div class="orch_it_msg ...">`
+    // wrapper around the shared component, because studio.css's flex-row
+    // alignment / accent colors / max-widths key on `.orch_it_msg_user`
+    // / `_assistant` / `_system`. The inner `<div class="luker_lib_message ...">`
+    // emitted by the shared component carries the rest of the structure
+    // (markdown body, read-only-round hint when all calls are read-type,
+    // tool chips, edit cards via renderPendingEditCard, applied/rolled-back
+    // stamp, Regenerate button). Click delegation accepts msgId from either
+    // `data-orch-it-msg-id` (outer) or `data-luker-lib-msg-id` (inner).
+    // ──────────────────────────────────────────────────────────────────
     /**
      * Resolve the apply scope label for the current context. Reused by both
      * the pending block button and the per-message "✓ Applied to ..." chip
@@ -1126,14 +1359,6 @@ export async function openOrchestratorIterationStudio(deps) {
     function renderMessageCard(message, idx, allMessages) {
         if (!message) return '';
         const role = String(message.role || 'user');
-        const content = String(message.content || '');
-        let bodyHtml;
-        if (role === 'assistant') {
-            // sanitized by DOMPurify inside renderMessageMarkdown
-            bodyHtml = ITER_RENDER.renderMessageMarkdown(content);
-        } else {
-            bodyHtml = escapeHtmlLocal(content).replace(/\n/g, '<br>');
-        }
         const roleCls = role === 'user'
             ? 'orch_it_msg_user'
             : role === 'assistant'
@@ -1141,71 +1366,52 @@ export async function openOrchestratorIterationStudio(deps) {
                 : 'orch_it_msg_system';
         const autoCls = message.auto ? ' orch_it_msg_auto' : '';
 
-        const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
-        const edits = Array.isArray(message.edits) ? message.edits : [];
-        const hasTrail = toolCalls.length > 0 || edits.length > 0;
-        const applied = Boolean(message.appliedAt) && !message.rolledBackAt;
-        const rolledBack = Boolean(message.rolledBackAt);
-        const detailsOpen = hasTrail && !applied && !rolledBack;
-
-        let trailHtml = '';
-        if (hasTrail) {
-            const headerLabel = tf('Tools and edits this round (${0})', String(toolCalls.length + edits.length));
-            const targetLabel = resolveAppliedTargetLabel(message.appliedTarget);
-            const statusHtml = rolledBack
-                ? `<span class="orch_it_msg_rolled_back">${escapeHtmlLocal(tf('Rolled back at ${0}', formatTime(message.rolledBackAt)))}</span>`
-                : (applied
-                    ? `
-                        <span class="orch_it_msg_applied">${escapeHtmlLocal(tf('✓ Applied to ${0} at ${1}', targetLabel, formatTime(message.appliedAt)))}</span>
-                        <button class="menu_button menu_button_small" data-orch-it-custom-action="rollback-batch" data-orch-it-msg-id="${escapeHtmlLocal(message.id || '')}">
-                            ${escapeHtmlLocal(t('Rollback'))}
-                        </button>
-                    `
-                    : '');
-
-            const toolsHtml = toolCalls.map(renderToolCallChip).join('');
-            const editsHtml = edits.map(renderEditChip).join('');
-
-            trailHtml = `
-                <details class="orch_it_msg_trail" ${detailsOpen ? 'open' : ''}>
-                    <summary>${escapeHtmlLocal(headerLabel)}</summary>
-                    <div class="orch_it_msg_trail_body">
-                        ${toolsHtml}
-                        ${editsHtml}
-                    </div>
-                    ${statusHtml ? `<div class="orch_it_msg_trail_status">${statusHtml}</div>` : ''}
-                </details>
-            `;
+        // Last-assistant predicate: true only when this assistant turn has
+        // no later assistant in the visible message list. Trailing user /
+        // system / auto-continue turns are skipped so the actual final
+        // assistant reply (the one whose prompt is the live tail) hides
+        // its Regenerate button — re-sending from the same composer text
+        // is semantically equivalent.
+        let isLast = false;
+        if (role === 'assistant' && !message.auto) {
+            isLast = true;
+            for (let j = (allMessages?.length || 0) - 1; j > idx; j--) {
+                if (allMessages[j]?.role === 'assistant' && !allMessages[j]?.auto) { isLast = false; break; }
+            }
         }
 
-        // Regenerate is per-assistant-message, only when it's not the
-        // current tail (otherwise just hit Send again to re-run from the
-        // same prompt). We also skip auto-continue synthetic assistants;
-        // their prompt was synthesized so regen would just truncate to
-        // the prior human turn anyway — semantically identical to
-        // regenerating that prior turn.
-        const isLastAssistant = (() => {
-            if (role !== 'assistant') return false;
-            for (let j = (allMessages?.length || 0) - 1; j > idx; j--) {
-                if (allMessages[j]?.role === 'assistant') return false;
-            }
-            return true;
-        })();
-        const showRegenerate = role === 'assistant' && !isLastAssistant && !message.auto;
-        const actionsHtml = showRegenerate
-            ? `
-                <div class="orch_it_msg_actions">
-                    <button class="menu_button menu_button_small" data-orch-it-custom-action="regenerate" data-orch-it-msg-id="${escapeHtmlLocal(message.id || '')}">
-                        ${escapeHtmlLocal(t('Regenerate'))}
-                    </button>
-                </div>`
-            : '';
+        // The shared component renders the applied-target line as
+        // "✓ Applied to ${0} at ${1}" when `message.appliedTarget` is
+        // truthy. Orch persists `appliedTarget = 'character' | 'global'`,
+        // which is the right enum for the rollback flow but not a
+        // user-facing string in zh-CN/zh-TW — we resolve it through
+        // `resolveAppliedTargetLabel` here so the shared component shows
+        // the localized label without leaking the enum.
+        const displayMessage = message.appliedTarget
+            ? { ...message, appliedTarget: resolveAppliedTargetLabel(message.appliedTarget) }
+            : message;
 
-        return `<div class="orch_it_msg ${roleCls}${autoCls}" data-orch-it-msg-id="${escapeHtmlLocal(message.id || '')}">
-            ${bodyHtml}
-            ${trailHtml}
-            ${actionsHtml}
-        </div>`;
+        const innerHtml = ITER_UI.message.renderMessageCard(displayMessage, {
+            toolDisplay: ORCH_TOOL_DISPLAY,
+            renderEditCard: renderPendingEditCard,
+            isLast,
+            i18n: tf,
+            renderMarkdown: ITER_RENDER.renderMessageMarkdown,
+            actionAttribute: 'data-orch-it-action',
+        });
+
+        // The shared component returns '' for auto user messages (the
+        // auto-continue synthetic carrier) and for empty assistant
+        // turns. Skip the outer flex-row wrapper in that case so the
+        // chat doesn't render a padded empty card with accent color.
+        if (!innerHtml) return '';
+
+        // Preserve Orch's outer flex-row container so the popup's
+        // alignment / accent-color / max-width rules in studio.css still
+        // apply. The shared component emits its own `<div
+        // class="luker_lib_message">` inner wrapper; click delegation
+        // resolves msgId from both attributes (see handler block below).
+        return `<div class="orch_it_msg ${roleCls}${autoCls}" data-orch-it-msg-id="${escapeHtmlLocal(message.id || '')}">${innerHtml}</div>`;
     }
 
     function renderHistoryItem(meta) {
@@ -1290,20 +1496,38 @@ export async function openOrchestratorIterationStudio(deps) {
 
         // Pending edits — single Apply button per spec §3.4. The label
         // resolves to the active iteration scope (character name when a card
-        // is selected, "global" otherwise). One handler ('apply') decides
-        // commit target via getIterationDefaultScope() so the button can't
-        // commit to the wrong scope after a parallel character switch.
+        // is selected, "global" otherwise). One handler ('apply-batch')
+        // decides commit target via getIterationDefaultScope() so the button
+        // can't commit to the wrong scope after a parallel character switch.
+        // Delegates to the shared `iteration-library/ui/apply` component
+        // (M1.7) for the row HTML so the four iter-library popups stay
+        // visually synchronized; the component emits
+        // `${actionAttribute}="apply-batch"` / `discard-batch` and the
+        // handlers below match those values. `pendingMessage` is a
+        // synthetic carrier — the popup's pending block is owned by the
+        // session, not by a specific assistant turn, so we synthesize a
+        // message-shape with the staged edits and no applied/rolledback
+        // stamps so renderApplyControls falls into the "pending" branch.
         const $pending = $root.find('[data-orch-it-pending]');
         if (state.pendingEdits.length > 0) {
             const cardsHtml = state.pendingEdits.map(renderPendingEditCard).join('');
-            const applyLabel = tf('Apply to ${0}', getApplyScopeLabel());
+            const pendingMessage = { id: '', edits: state.pendingEdits };
+            // For character scope, the Apply button targets the character's
+            // override (vs the global profile). Spell that out so the user
+            // doesn't have to remember which scope the popup is currently
+            // operating in (especially after a parallel character switch).
+            const applyLabel = getIterationDefaultScope(context) === 'character'
+                ? tf('Apply to ${0} override', getApplyScopeLabel())
+                : tf('Apply to ${0}', getApplyScopeLabel());
+            const applyHtml = ITER_UI.apply.renderApplyControls(pendingMessage, {
+                i18n: tf,
+                applyLabel,
+                actionAttribute: 'data-orch-it-action',
+            });
             $pending.html(`
                 <div class="orch_it_pending_title">${escapeHtmlLocal(t('Pending changes'))}</div>
                 <div class="orch_it_pending_list">${cardsHtml}</div>
-                <div class="orch_it_pending_actions">
-                    <button class="menu_button luker-iter-pending-apply" data-orch-it-action="apply">${escapeHtmlLocal(applyLabel)}</button>
-                    <button class="menu_button menu_button_small" data-orch-it-action="discard-edits">${escapeHtmlLocal(t('Discard'))}</button>
-                </div>
+                ${applyHtml}
             `).show().attr('hidden', null);
         } else {
             $pending.html('').hide().attr('hidden', '');
@@ -1416,6 +1640,58 @@ export async function openOrchestratorIterationStudio(deps) {
                     lastUserOpts || {},
                 )
                 : String(m.content || '');
+
+            // Replay assistant message's tool calls that produced a
+            // persisted tool result — read tools (lorebook + simulate)
+            // AND rejected reset control calls (their fail tool_result
+            // is how the next round's model learns the rejection
+            // reason). Edit tool calls are intentionally NOT replayed:
+            // they're sandbox-diff proposals the user reviews + applies
+            // via the popup, not part of the OpenAI-protocol round-trip
+            // the model expects to see.
+            const readResults = Array.isArray(m?.toolResults) ? m.toolResults : [];
+            const resultIds = new Set(readResults.map(r => String(r?.tool_call_id || '')).filter(Boolean));
+            const readCalls = Array.isArray(m?.toolCalls)
+                ? m.toolCalls.filter(tc => isReadTool(tc?.name) || (tc?.id && resultIds.has(String(tc.id))))
+                : [];
+            if (role === 'assistant' && readCalls.length > 0 && readResults.length > 0) {
+                const toolCallsForHistory = readCalls.map((tc) => ({
+                    id: String(tc?.id || ''),
+                    type: 'function',
+                    function: {
+                        name: String(tc?.name || ''),
+                        arguments: JSON.stringify(tc?.args || {}),
+                    },
+                }));
+                messages.push({
+                    role: 'assistant',
+                    content,
+                    tool_calls: toolCallsForHistory,
+                });
+                const resultById = new Map();
+                for (const r of readResults) {
+                    if (r && r.tool_call_id != null) resultById.set(String(r.tool_call_id), r);
+                }
+                for (const tc of readCalls) {
+                    const r = resultById.get(String(tc?.id || ''));
+                    if (!r) continue;
+                    let serialized = '';
+                    try {
+                        serialized = typeof r.content === 'string'
+                            ? r.content
+                            : JSON.stringify(r.content ?? '');
+                    } catch {
+                        serialized = '';
+                    }
+                    messages.push({
+                        role: 'tool',
+                        tool_call_id: String(tc?.id || ''),
+                        content: serialized,
+                    });
+                }
+                return;
+            }
+
             messages.push({ role, content });
         });
         return messages;
@@ -1432,23 +1708,38 @@ export async function openOrchestratorIterationStudio(deps) {
     function buildToolCatalog() {
         const helperSession = buildHelperSession(state.live);
         const editTools = buildAiIterationToolSet(helperSession) || [];
-        return [...editTools, ...CONTROL_TOOL_DEFS];
-    }
-
-    async function resolveRuntimeWorldInfo(signal) {
-        if (typeof resolveOrchestrationRuntimeWorldInfo !== 'function') return null;
-        try {
-            return await resolveOrchestrationRuntimeWorldInfo(context, settings, {
-                worldInfoMessages: Array.isArray(state.session.messages) ? state.session.messages : [],
-                runtimeWorldInfo: null,
-                forceWorldInfoResimulate: false,
-                worldInfoType: 'quiet',
-                abortSignal: signal,
+        // Dedupe by tool name: the upstream per-mode edit-tool builder also
+        // emits continue/finalize entries (legacy from when control routing
+        // lived in main.js). Popup-side CONTROL_TOOL_DEFS is the single
+        // source of truth now; drop the upstream copies so the provider
+        // doesn't reject the request with "Tool names must be unique."
+        const controlNames = new Set(
+            CONTROL_TOOL_DEFS.map((t) => t?.function?.name).filter(Boolean),
+        );
+        const editToolsDeduped = editTools.filter((t) => {
+            const name = t?.function?.name;
+            return !name || !controlNames.has(name);
+        });
+        // Splice in the lorebook read tools when the popup is scoped to a
+        // character — the legacy helper-tool dispatcher is per-character,
+        // so without an avatar there is nothing to bind these tools to.
+        const lorebookTools = helperSession?.scope === 'character'
+            && String(context?.characters?.[context?.characterId]?.avatar || '').trim()
+            ? LOREBOOK_READ_TOOL_DEFS
+            : [];
+        // Reset tools only make sense in character scope (the scope hint
+        // explicitly tells the AI about them only when scope==='character').
+        // Filter them out of the catalog in global scope so the LLM can't
+        // emit a call that the onControlCall guard would then have to
+        // reject. Continue + finalize stay in every scope.
+        const controlTools = helperSession?.scope === 'character'
+            ? CONTROL_TOOL_DEFS
+            : CONTROL_TOOL_DEFS.filter((t) => {
+                const name = t?.function?.name;
+                return name !== CONTROL_TOOL_NAMES.resetToBlank
+                    && name !== CONTROL_TOOL_NAMES.resetToGlobal;
             });
-        } catch (err) {
-            console.warn(`[${MODULE}:${mode}] resolveOrchestrationRuntimeWorldInfo failed`, err);
-            return null;
-        }
+        return [...editToolsDeduped, ...lorebookTools, ...controlTools];
     }
 
     async function runIterationTurn({ autoContinueFromResult = null } = {}) {
@@ -1487,7 +1778,15 @@ export async function openOrchestratorIterationStudio(deps) {
         const taskMessages = buildTaskMessages(systemPrompt, lastUserText, lastUserOpts);
 
         const tools = buildToolCatalog();
-        const runtimeWorldInfo = await resolveRuntimeWorldInfo(ac.signal);
+        // Iter studio is the orchestration *designer*, not a runtime RP
+        // agent — auto-injecting active world-info entries (the runtime
+        // path) would only feed the model context it should not duplicate
+        // into the profile it's editing. Sibling iter popups (CPA / MG
+        // schema / CEA editor) all pass `runtimeWorldInfo: null` for the
+        // same reason. The AI reaches lorebook content through the
+        // dedicated read tools (world_book_list / lorebook_list / _query /
+        // _get) when shaping a node that actually needs them.
+        const runtimeWorldInfo = null;
 
         const apiPresetName = String(settings?.aiSuggestApiPresetName || '').trim();
         const llmPresetName = String(settings?.aiSuggestPresetName || '').trim();
@@ -1509,6 +1808,12 @@ export async function openOrchestratorIterationStudio(deps) {
         let sawFinalize = false;
         let finalizeSummary = '';
         let continueNote = '';
+        // Reset rejections: each entry holds the original control call +
+        // a localized reason. The popup pushes one system message per
+        // rejection into chat AND emits a `{role:'tool', tool_call_id,
+        // content: {error}}` message so the next round's LLM sees the
+        // reason instead of silently no-opping (ORCH-5).
+        const rejectedResets = [];
 
         const result = await ITER_RUNNER.requestToolCallsWithRetry(
             context,
@@ -1548,8 +1853,10 @@ export async function openOrchestratorIterationStudio(deps) {
                         // Only accept the reset when scope is character + no
                         // override exists yet — otherwise the AI shouldn't have
                         // called it and the system prompt explicitly says so.
-                        // Ignoring silently avoids clobbering an existing
-                        // override the user is actively editing.
+                        // Rejected calls push a system message into chat AND
+                        // emit a tool_result error so the next round's LLM
+                        // sees the rejection reason instead of silently
+                        // no-opping (ORCH-5).
                         const helper = buildHelperSession(state.live);
                         if (helper.scope === 'character' && !helper.hasOverride) {
                             state.live = createBlankProfileForMode();
@@ -1560,6 +1867,33 @@ export async function openOrchestratorIterationStudio(deps) {
                                 content: t('Working profile reset to a blank shell — building this card\'s orchestration from scratch.'),
                                 at: Date.now(),
                             });
+                        } else {
+                            const reason = helper.scope !== 'character'
+                                ? t('Reset rejected: reset_to_blank only applies when iterating a character override.')
+                                : t('Reset rejected: this card already has an override. Use reset_to_global instead, or continue adjusting in place.');
+                            rejectedResets.push({ call, reason });
+                        }
+                    } else if (name === CONTROL_TOOL_NAMES.resetToGlobal) {
+                        // Only accept the reset when scope is character + an
+                        // override DOES exist — otherwise the AI shouldn't have
+                        // called it and the system prompt explicitly says so.
+                        // Rejected calls push a system + tool_result error
+                        // (ORCH-5).
+                        const helper = buildHelperSession(state.live);
+                        if (helper.scope === 'character' && helper.hasOverride) {
+                            state.live = loadGlobalProfileForMode();
+                            state.pendingEdits = [];
+                            state.session.messages.push({
+                                id: makeMessageId(),
+                                role: 'system',
+                                content: t('Working profile reset to match the current global profile — adjust from there.'),
+                                at: Date.now(),
+                            });
+                        } else {
+                            const reason = helper.scope !== 'character'
+                                ? t('Reset rejected: reset_to_global only applies when iterating a character override.')
+                                : t('Reset rejected: this card has no character override yet. Use reset_to_blank instead, or continue adjusting the seeded global copy in place.');
+                            rejectedResets.push({ call, reason });
                         }
                     }
                 },
@@ -1571,12 +1905,116 @@ export async function openOrchestratorIterationStudio(deps) {
         // callbacks didn't land (e.g. an older runner version), fall back to
         // `result.toolCalls`, but filter out control calls explicitly so
         // they never leak into the persisted `assistantMsg.toolCalls`.
-        const editToolCalls = collectedToolCalls.length > 0
+        const nonControlCalls = collectedToolCalls.length > 0
             ? collectedToolCalls
             : (Array.isArray(result?.toolCalls)
                 ? result.toolCalls.filter((c) => !isOrchControlCall(c))
                 : []);
         const assistantText = firstAssistantText.trim();
+
+        // Split non-control calls by read-vs-edit. Read tools execute
+        // synchronously here and their results are persisted on the
+        // assistant message + replayed into the next round's taskMessages
+        // (see buildTaskMessages). Edit tools continue down the
+        // sandbox-diff path that the orch popup has always used.
+        // `luker_orch_simulate` is read-type (it runs a throwaway
+        // orchestration without mutating the profile); its result is
+        // routed to the read-path persistence so the user sees the chip
+        // with a result block instead of silently dropping.
+        const readToolCalls = nonControlCalls.filter((c) => isReadTool(c?.name));
+        const editToolCalls = nonControlCalls.filter((c) => !isReadTool(c?.name));
+
+        // Execute read tools synchronously. Each call gets a stable id so
+        // the persisted tool_result can be matched back to it during chat
+        // rendering AND during the next round's taskMessages replay.
+        //
+        // Two backends:
+        //   - Lorebook reads dispatch through `runLorebookReadTool` (the
+        //     legacy `luker_card_*` helper-tool runner, scoped to the
+        //     active avatar).
+        //   - `luker_orch_simulate` dispatches through the orchestrator's
+        //     own `executeAiIterationToolCalls` against a sandbox profile
+        //     so the simulate runtime executes (and its `simulation`
+        //     payload lands in toolResults) without mutating state.live.
+        //     If the runtime executor throws or `executeAiIterationToolCalls`
+        //     is unavailable, fall back to a `{simulated: true, message}`
+        //     placeholder so the user still sees a chip with a result
+        //     block — better than the previous silent drop.
+        const helperSessionForReads = buildHelperSession(state.live);
+        const avatarForReads = String(context?.characters?.[context?.characterId]?.avatar || '').trim();
+        const helperApisForReads = (helperSessionForReads?.scope === 'character' && avatarForReads)
+            ? buildCharacterEditorHelperApis(context, { avatar: avatarForReads })
+            : [];
+        const persistedToolResults = [];
+        for (const call of readToolCalls) {
+            const callId = String(call?.id || `read_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
+            let resultPayload;
+            let statusLabel = 'ok';
+            try {
+                if (isSimulateTool(call?.name)) {
+                    // Run simulate through the orchestrator's executor against
+                    // a sandbox clone so a malformed simulate call can't
+                    // poison state.live. The executor stamps tool_call_id on
+                    // each pushed tool result; we adopt the callId pre-call
+                    // so the match is deterministic.
+                    const sandbox = state.live != null ? structuredClone(state.live) : state.live;
+                    const fakeSession = buildHelperSession(sandbox);
+                    const execCall = {
+                        id: callId,
+                        name: call?.name,
+                        args: call?.args && typeof call.args === 'object' ? call.args : {},
+                    };
+                    let execOk = false;
+                    try {
+                        const execResult = await executeAiIterationToolCalls(null, fakeSession, [execCall], ac.signal);
+                        const results = Array.isArray(execResult?.toolResults) ? execResult.toolResults : [];
+                        const match = results.find(r => String(r?.tool_call_id || '') === callId) || results[0];
+                        if (match && match.content !== undefined) {
+                            // toolResults' content is serialized JSON
+                            // string per orchestrator's serializeToolResultContent.
+                            // Parse so the message renderer's chip-summary
+                            // hook can pull simulation.summary directly.
+                            let parsed = match.content;
+                            try {
+                                if (typeof parsed === 'string') parsed = JSON.parse(parsed);
+                            } catch { /* leave as-is on parse failure */ }
+                            resultPayload = parsed;
+                            statusLabel = (parsed && parsed.ok === false) ? 'fail' : 'ok';
+                            execOk = true;
+                        }
+                    } catch (err) {
+                        // Fall through to placeholder so the chip still
+                        // renders with a result block.
+                        // eslint-disable-next-line no-console
+                        console.warn(`[${MODULE}:${mode}] simulate executor failed`, err);
+                    }
+                    if (!execOk) {
+                        resultPayload = { simulated: true, message: 'simulation complete' };
+                        statusLabel = 'ok';
+                    }
+                } else {
+                    const out = await runLorebookReadTool({ id: callId, name: call?.name, args: call?.args }, helperApisForReads);
+                    if (out?.ok) {
+                        resultPayload = out.result;
+                    } else {
+                        resultPayload = { error: String(out?.error || 'unknown error') };
+                        statusLabel = 'fail';
+                    }
+                }
+            } catch (err) {
+                resultPayload = { error: String(err?.message || err || 'unknown error') };
+                statusLabel = 'fail';
+            }
+            persistedToolResults.push({
+                tool_call_id: callId,
+                content: resultPayload,
+                status: statusLabel,
+            });
+            // Backfill id on the source call so persistedToolCalls below uses
+            // the same id (otherwise renderMessageCard's tool_call_id ↔ chip
+            // lookup would miss).
+            call.id = callId;
+        }
 
         // Normalize edit-tools → edits via sandbox-diff. Multiple edit
         // calls in the same turn stack as separate edits, but Apply
@@ -1611,14 +2049,43 @@ export async function openOrchestratorIterationStudio(deps) {
             state.session.surfaceState.finalizeSummary = finalizeSummary;
         }
 
+        // Reset-rejection handling (ORCH-5). Reset control calls that were
+        // rejected by the scope/hasOverride guard get a visible system
+        // message AND a fail-status tool result so the next round's
+        // taskMessages replay surfaces the rejection in OpenAI-protocol
+        // shape — the model can then either back off or try the other
+        // path, rather than retrying the same rejected call forever.
+        // These calls are appended to the assistant message's toolCalls
+        // so renderMessageCard renders the chip + result block.
+        const rejectedResetCalls = [];
+        for (const { call, reason } of rejectedResets) {
+            const callId = String(call?.id || `reset_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
+            state.session.messages.push({
+                id: makeMessageId(),
+                role: 'system',
+                content: reason,
+                at: Date.now(),
+            });
+            persistedToolResults.push({
+                tool_call_id: callId,
+                content: { error: reason },
+                status: 'fail',
+            });
+            rejectedResetCalls.push({
+                id: callId,
+                name: String(call?.name || ''),
+                args: call?.args && typeof call.args === 'object' ? call.args : {},
+            });
+        }
+
         // Stage the assistant message with the full per-round audit trail.
         // Falls back to a synthesized summary when the model emitted tool
         // calls without text so the chat doesn't have empty bubbles. The
         // toolCalls + edits + appliedAt fields drive renderMessageCard's
         // collapsible details block, Apply marker, and Rollback button.
         let content = assistantText;
-        if (!content && editToolCalls.length > 0) {
-            const names = editToolCalls
+        if (!content && (editToolCalls.length > 0 || readToolCalls.length > 0)) {
+            const names = [...readToolCalls, ...editToolCalls]
                 .map(c => String(c?.name || ''))
                 .filter(Boolean)
                 .join(', ');
@@ -1633,12 +2100,17 @@ export async function openOrchestratorIterationStudio(deps) {
             content: content || '',
             at: Date.now(),
         };
-        if (editToolCalls.length > 0) {
-            assistantMsg.toolCalls = editToolCalls.map(tc => ({
+        const allCallsForPersist = [...readToolCalls, ...editToolCalls];
+        if (allCallsForPersist.length > 0 || rejectedResetCalls.length > 0) {
+            const fromMain = allCallsForPersist.map(tc => ({
                 id: String(tc?.id || ''),
                 name: String(tc?.name || ''),
                 args: tc?.args ?? {},
             }));
+            assistantMsg.toolCalls = [...fromMain, ...rejectedResetCalls];
+        }
+        if (persistedToolResults.length > 0) {
+            assistantMsg.toolResults = persistedToolResults;
         }
         if (edits.length > 0) {
             assistantMsg.edits = edits.slice();
@@ -1673,6 +2145,16 @@ export async function openOrchestratorIterationStudio(deps) {
         // builder can consume. We pass a minimal shape (`finalized`,
         // `continueRequested`, summary if any) — the orchestrator's
         // builder tolerates missing fields.
+        // Implicit auto-continue: when the model called read tools without
+        // staging any edits AND did not finalize, automatically request
+        // another round so the AI can act on what it just read. The model
+        // doesn't need to call luker_orch_continue_iteration explicitly in
+        // this case — reading lorebook context naturally leads to a
+        // follow-up edit turn. Explicit finalize still wins (sticky).
+        if (!sawFinalize && readToolCalls.length > 0 && edits.length === 0 && !wantsAutoContinue) {
+            wantsAutoContinue = true;
+        }
+
         const syntheticExecutionResult = {
             actions: [],
             simulations: [],
@@ -2050,11 +2532,17 @@ export async function openOrchestratorIterationStudio(deps) {
         }
     });
 
-    $root.on('click.orchIt', '[data-orch-it-action="apply"]', async (e) => {
+    // Apply / Discard the staged batch. Selectors use `apply-batch` /
+    // `discard-batch` because the row is rendered by
+    // `iteration-library/ui/apply.renderApplyControls`, which emits those
+    // values via the `actionAttribute: 'data-orch-it-action'` opt — the
+    // same convention M1.4's `renderMessageCard` uses for per-message
+    // rollback/regenerate buttons (handlers further down).
+    $root.on('click.orchIt', '[data-orch-it-action="apply-batch"]', async (e) => {
         e.preventDefault();
         await applyPendingEdits();
     });
-    $root.on('click.orchIt', '[data-orch-it-action="discard-edits"]', async (e) => {
+    $root.on('click.orchIt', '[data-orch-it-action="discard-batch"]', async (e) => {
         e.preventDefault();
         await discardPendingEdits();
     });
@@ -2109,19 +2597,27 @@ export async function openOrchestratorIterationStudio(deps) {
         }
     });
 
-    // Per-message custom actions (Regenerate / Rollback). Use
-    // `data-orch-it-custom-action` rather than `data-orch-it-action` so the
-    // legacy delegation selectors above can't accidentally fire on these —
-    // matches the iter-studio shell gotcha pattern.
-    $root.on('click.orchIt', '[data-orch-it-custom-action="regenerate"]', async (e) => {
+    // Per-message Regenerate / Rollback. Both buttons are rendered by
+    // `iteration-library/ui/message.renderMessageCard`, which emits them
+    // with `data-orch-it-action="regenerate"` / `="rollback-batch"` (via
+    // the actionAttribute opt) and `data-luker-lib-msg-id="..."`. The
+    // msgId resolver accepts both attribute names so the outer Orch
+    // wrapper's `data-orch-it-msg-id` (preserved on the parent
+    // `.orch_it_msg`) keeps working if a future override taps that path.
+    function resolveMsgId(target) {
+        if (!target) return '';
+        // dataset is camelCase: orchItMsgId / lukerLibMsgId
+        return String(target.dataset?.orchItMsgId || target.dataset?.lukerLibMsgId || '');
+    }
+    $root.on('click.orchIt', '[data-orch-it-action="regenerate"]', async (e) => {
         e.preventDefault();
-        const msgId = String(e.currentTarget?.dataset?.orchItMsgId || '');
+        const msgId = resolveMsgId(e.currentTarget);
         if (!msgId) return;
         await regenerateFromMessage(msgId);
     });
-    $root.on('click.orchIt', '[data-orch-it-custom-action="rollback-batch"]', async (e) => {
+    $root.on('click.orchIt', '[data-orch-it-action="rollback-batch"]', async (e) => {
         e.preventDefault();
-        const msgId = String(e.currentTarget?.dataset?.orchItMsgId || '');
+        const msgId = resolveMsgId(e.currentTarget);
         if (!msgId) return;
         await rollbackBatch(msgId);
     });
@@ -2165,6 +2661,35 @@ export async function openOrchestratorIterationStudio(deps) {
         badge.hidden = false;
     }
 
+    // External character-switch listener — when the user navigates to a
+    // different character (or switches chats) in the main app while a
+    // turn is in flight, abort the request so a stale response can't
+    // land in the popup's now-mismatched context. We do NOT reload
+    // state here: the iteration scope is closure-captured at mount and
+    // the user can dismiss + reopen to pick up the new scope. This is
+    // a safety net for the abort, not a hot-reload feature.
+    let unsubscribeChatChanged = null;
+    try {
+        if (typeof context?.eventSource?.on === 'function'
+            && typeof context?.eventSource?.removeListener === 'function'
+            && context?.eventTypes?.CHAT_CHANGED) {
+            const handler = () => {
+                try {
+                    if (state.abortController?.signal && !state.abortController.signal.aborted) {
+                        state.abortController.abort();
+                    }
+                } catch { /* ignore */ }
+            };
+            context.eventSource.on(context.eventTypes.CHAT_CHANGED, handler);
+            unsubscribeChatChanged = () => {
+                try { context.eventSource.removeListener(context.eventTypes.CHAT_CHANGED, handler); } catch { /* ignore */ }
+            };
+        }
+    } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(`[${MODULE}:${mode}] CHAT_CHANGED listener attach failed`, err);
+    }
+
     // Bind the column resizer. Returns a no-op when grid/splitter are
     // missing (e.g. during teardown), so the unbind call below is safe
     // regardless of mount state.
@@ -2185,6 +2710,7 @@ export async function openOrchestratorIterationStudio(deps) {
     } finally {
         try { unbindResizer(); } catch { /* ignore */ }
         try { zoomOverlayUnbind?.(); } catch { /* ignore */ }
+        try { unsubscribeChatChanged?.(); } catch { /* ignore */ }
         try { state.abortController?.abort(); } catch { /* ignore */ }
         state.isBusy = false;
         state.abortController = null;

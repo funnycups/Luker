@@ -24,10 +24,6 @@
  * concrete user-visible variables (recent_chat, last_user, etc.). It
  * accepts both the new `previous_orchestration` and the legacy
  * `previous_snapshot` so older saved sessions still render.
- *
- * `validateAiBuildTemplateVariables` lives in main.js for now because
- * it touches `sanitizeSpec` / `normalizeNodeSpec`, which haven't moved
- * yet. It will likely follow `spec-schema.js` in a later pass.
  */
 
 import {

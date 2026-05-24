@@ -180,24 +180,6 @@
     gap: var(--it-space-xs);
 }
 
-/* ── Reference + mode pickers ───────────────────────────────────────── */
-
-.orch_it_reference_select,
-.orch_it_mode_select {
-    flex: 1 1 auto;
-    min-width: 0;
-    max-width: 320px;
-    font-family: inherit;
-    font-size: 0.95em;
-    border-radius: var(--it-radius-sm);
-    transition: border-color var(--it-motion-fast);
-}
-
-.orch_it_reference_select:focus,
-.orch_it_mode_select:focus {
-    border-color: color-mix(in oklab, var(--it-accent-primary) 55%, transparent);
-}
-
 /* ── Message list (chat) ───────────────────────────────────────────── */
 
 .orch_it_messages {
@@ -269,6 +251,34 @@
     white-space: pre-wrap;
 }
 
+/* ── Loading bubble (transient, lives outside session.messages) ────── */
+/* Mirrors the CEA editor pattern — dashed border + dim opacity so the
+ * spinner reads as an in-flight indicator rather than a real assistant
+ * turn the user might try to interact with. */
+.orch_it_msg_loading {
+    align-self: flex-start;
+    padding: 8px 12px;
+    border-radius: var(--it-radius-md);
+    border: 1px dashed color-mix(in oklab, var(--it-accent-primary) 35%, transparent);
+    background: color-mix(in oklab, var(--it-accent-primary) 7%, transparent);
+    font-size: 0.92em;
+    opacity: var(--it-text-default);
+    display: inline-flex;
+    align-items: center;
+    gap: var(--it-space-xs);
+}
+
+/* ── Auto-continue synthetic user turn ─────────────────────────────── */
+/* The shared library returns '' for `message.auto === true` user
+ * turns (they're internal plumbing the user should never see). The
+ * orch popup also skips the outer wrapper when the inner is empty
+ * (see renderMessageCard), so this rule is a belt-and-suspenders
+ * safety net: if any orch_it_msg_auto wrapper ever ships content,
+ * keep it visually neutral instead of mimicking a real user bubble. */
+.orch_it_msg_auto {
+    display: none;
+}
+
 /* ── Pending edits ─────────────────────────────────────────────────── */
 
 .orch_it_pending {
@@ -290,70 +300,8 @@
     opacity: var(--it-text-strong);
 }
 
-.orch_it_pending_card {
-    margin: var(--it-space-xs) 0;
-    padding: var(--it-space-xs) var(--it-space-sm);
-    background: color-mix(in oklab, var(--SmartThemeBlurTintColor, #000) 90%, transparent);
-    border-radius: var(--it-radius-sm);
-    font-size: 0.92em;
-    border: var(--it-border-soft);
-    line-height: 1.5;
-}
-
-.orch_it_pending_card .op {
-    font-weight: 700;
-    margin-right: var(--it-space-xs);
-    color: color-mix(in oklab, var(--it-accent-primary) 75%, var(--SmartThemeBodyColor, #ddd));
-    text-transform: uppercase;
-    font-size: 0.82em;
-    letter-spacing: 0.06em;
-}
-
-.orch_it_pending_card code {
-    background: color-mix(in oklab, var(--SmartThemeBodyColor, #ddd) 10%, transparent);
-    padding: 1px 5px;
-    border-radius: 4px;
-    font-size: 0.95em;
-    font-family: var(--monoFontFamily, ui-monospace, monospace);
-}
-
-.orch_it_pending_card .diff_old {
-    color: var(--it-accent-danger);
-    text-decoration: line-through;
-    word-break: break-word;
-}
-
-.orch_it_pending_card .diff_new {
-    color: var(--it-accent-assistant);
-    word-break: break-word;
-}
-
-.orch_it_pending_card .diff_anchor {
-    opacity: var(--it-text-muted);
-    word-break: break-word;
-    font-style: italic;
-}
-
-.orch_it_pending_card .diff_arrow {
-    margin: 0 6px;
-    opacity: var(--it-text-muted);
-}
-
 .orch_it_pending_row {
     margin: 2px 0 2px 1em;
-}
-
-.orch_it_pending_note {
-    opacity: var(--it-text-muted);
-    font-size: 0.86em;
-    font-style: italic;
-}
-
-.orch_it_pending_actions {
-    margin-top: var(--it-space-sm);
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--it-space-xs);
 }
 
 .orch_it_pending_list {

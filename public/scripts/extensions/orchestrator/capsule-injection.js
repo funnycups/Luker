@@ -28,9 +28,10 @@
  *
  * `buildCapsule` (synthesizes the final guidance text from
  * `stageOutputs`) and `reapplyLatestCapsuleInjection` (re-syncs the
- * cached capsule after an edit) stay in main.js for now — they touch
- * `latestOrchestrationSnapshot`, `getChatKey`, and
- * `persistEditedSnapshotToFloorState`, which haven't moved yet.
+ * cached capsule after an edit) live in main.js because they read
+ * `latestOrchestrationSnapshot` / `getChatKey` /
+ * `persistEditedSnapshotToFloorState` — module-level state that the
+ * orchestrator owns at the main.js level.
  */
 
 import { extension_prompt_roles, extension_prompt_types } from '../../../script.js';

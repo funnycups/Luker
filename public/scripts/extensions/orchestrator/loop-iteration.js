@@ -44,6 +44,7 @@ export const LOOP_ITERATION_CONTRACT_LINES = Object.freeze([
     '- If you need one more autonomous step right after current execution, call luker_orch_continue_iteration.',
     '- If you need user decision or clarification, do not call continue or finalize. Stop and wait for user.',
     '- When iteration is complete, call luker_orch_finalize_iteration.',
+    '- If you call both luker_orch_continue_iteration and luker_orch_finalize_iteration in the same round, finalize wins.',
     '- Keep output practical and concise for real RP usage.',
 ]);
 
