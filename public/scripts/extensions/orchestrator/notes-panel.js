@@ -11,19 +11,20 @@
  * Open/Closed tab switcher plus the per-row Close / Edit / Delete
  * actions.
  *
- * KNOWN LIMITATION (follow-up): the `fs` adapter is captured at mount
- * time. When the user switches chats (CHAT_CHANGED), we re-render but
- * do NOT re-attach the floor-state, so the panel may show notes from
- * the previous chat until the page is reloaded. Re-attach on chat
- * change can be a follow-up if it becomes a problem in practice.
+ * The floor-state adapter is re-attached on `CHAT_CHANGED` so the panel
+ * always reflects the active chat's notes — without that re-attach,
+ * switching chats would leave the panel rendering the previous chat's
+ * floor state until reload.
  *
  * UX note: `window.prompt` / `window.confirm` are placeholders for the
- * close-reason input and delete confirmation. A more polished
- * SillyTavern Popup-based UX can replace these in a follow-up task.
+ * close-reason input and delete confirmation. A SillyTavern
+ * Popup-based UX can replace these later without touching this module's
+ * floor-state plumbing.
  */
 
 import { NOTES_PANEL_TEMPLATE } from './ui-templates.js';
 import { attachNotesFloorState } from './loop-runtime.js';
+import { i18n as t } from './i18n.js';
 
 const MODULE_NAME = 'orchestrator';
 
@@ -32,13 +33,31 @@ export async function mountNotesPanel(host, context) {
     host.dataset.luker_notes_mounted = '1';
     host.insertAdjacentHTML('beforeend', NOTES_PANEL_TEMPLATE);
 
-    const adapterCtx = {};
-    await attachNotesFloorState(adapterCtx);
-    const fs = adapterCtx.__floorStateForNotes;
+    let fs = null;
+
+    /**
+     * Rebind to the active chat's floor state. Called once at mount and
+     * again on every CHAT_CHANGED so a chat switch never leaves the
+     * panel reading from a stale floor-state adapter.
+     */
+    async function reattachFloorState() {
+        const adapterCtx = {};
+        try {
+            await attachNotesFloorState(adapterCtx);
+        } catch (err) {
+            console.warn(`[${MODULE_NAME}/notes] attachNotesFloorState failed`, err);
+        }
+        fs = adapterCtx.__floorStateForNotes || null;
+    }
+
+    await reattachFloorState();
     if (!fs) {
         const list = host.querySelector('#luker-notes-list');
         if (list) list.innerHTML = '<li class="luker-notes-empty" data-i18n="No open notes yet">No open notes yet</li>';
-        return;
+        // Even without floor state on mount, still wire the CHAT_CHANGED
+        // handler — when the user switches to a chat that DOES have a
+        // floor state, the next event re-attaches and the panel comes
+        // alive.
     }
 
     let currentTab = 'open';
@@ -55,6 +74,10 @@ export async function mountNotesPanel(host, context) {
     async function rerender() {
         const list = host.querySelector('#luker-notes-list');
         if (!list) return;
+        if (!fs) {
+            list.innerHTML = `<li class="luker-notes-empty" data-i18n="No ${currentTab} notes yet">No ${currentTab} notes yet</li>`;
+            return;
+        }
         const all = await fs.listAcrossFloors();
         const filtered = (Array.isArray(all) ? all : []).filter(e => (e?.status ?? 'open') === currentTab);
         if (filtered.length === 0) {
@@ -84,8 +107,9 @@ export async function mountNotesPanel(host, context) {
         if (!btn) return;
         ev.stopPropagation();
         const action = btn.dataset.action;
+        if (!fs) return;
         if (action === 'close') {
-            const reason = (window.prompt('Closure reason (optional)') || '').trim();
+            const reason = (window.prompt(t('Closure reason (optional)')) || '').trim();
             const r = await fs.updateStatusById(entry.id, 'closed', reason);
             if (!r.ok) console.warn(`[${MODULE_NAME}/notes] close failed:`, r.error);
             await rerender();
@@ -102,18 +126,20 @@ export async function mountNotesPanel(host, context) {
                 textEl.focus();
             }
         } else if (action === 'delete') {
-            if (!window.confirm('Confirm delete (permanent)?')) return;
+            if (!window.confirm(t('Confirm delete (permanent)?'))) return;
             await fs.deleteByIds([entry.id]);
             await rerender();
         }
     }
 
-    // Subscribe to floor-state settle for live update.
-    // NOTE: this rerender uses the stale `fs` reference from mount time —
-    // it will show the previous chat's notes after CHAT_CHANGED. Acceptable
-    // for now; re-attach on chat change is a follow-up.
+    // Re-attach floor state on chat change so the panel always reflects
+    // the active chat. Without this, the panel keeps reading from the
+    // floor-state captured at mount time.
     if (typeof context?.eventSource?.on === 'function' && context?.eventTypes?.CHAT_CHANGED) {
-        context.eventSource.on(context.eventTypes.CHAT_CHANGED, () => { void rerender(); });
+        context.eventSource.on(context.eventTypes.CHAT_CHANGED, async () => {
+            await reattachFloorState();
+            await rerender();
+        });
     }
 
     await rerender();
