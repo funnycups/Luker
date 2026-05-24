@@ -4825,9 +4825,10 @@
     "Default Keyword Search looks for the exact text dragon queen.": "默认关键词搜索会查找完整文本 dragon queen。",
     "With Advanced syntax off, this searches the literal text uid:42.": "关闭高级语法时，这会按字面文本 uid:42 进行搜索。",
     "Enable Advanced syntax to use operators and field prefixes.": "启用“高级语法”后，才能使用运算符和字段前缀。",
-    "title: searches entry titles, memo/comment, and primary/secondary keywords. group:, uid:, and automationId: search only those fields. content: searches entry content only.": "title: 会搜索条目标题、备忘录/备注，以及主/次关键字。group:、uid: 和 automationId: 只搜索各自字段。content: 只搜索条目内容。",
+    "title: searches entry titles, memo/comment, and primary/secondary keywords. group:, uid:, and automationId: search only those fields. content: searches entry content only. role: matches the injection role on @Depth entries only.": "title: 会搜索条目标题、备忘录/备注，以及主/次关键字。group:、uid: 和 automationId: 只搜索各自字段。content: 只搜索条目内容。role: 只匹配「@Depth 注入位置」条目的注入角色。",
     "With Advanced syntax enabled, space-separated terms use AND. Both terms must match.": "启用高级语法后，空格分隔的词默认使用 AND，所有词都必须匹配。",
     "Scope a term to group, UID, or automation ID.": "可将词限定到分组、UID 或自动化 ID。",
+    "Match @Depth entries by injection role (system, user, assistant). Entries with other positions never match.": "匹配「@Depth 注入位置」条目的注入角色（system、user、assistant）。其他注入位置的条目永不命中。",
     "Aliases: name:, comment:, key:, and keywords: map to title:. text: and body: map to content:. id: maps to uid:, while automation_id: and autoid: map to automationId:.": "别名：name:、comment:、key: 和 keywords: 等同于 title:；text: 和 body: 等同于 content:；id: 等同于 uid:；automation_id: 和 autoid: 等同于 automationId:。",
     "Keyword syntax works in editor Keyword Search mode and in the lorebook manager's Search entries/content mode.": "这套关键字语法适用于编辑器的“关键词搜索”模式，以及世界书管理器的“搜索条目/内容”模式。",
     "Quoted phrases, -, OR, |, title:, and content: only work in Keyword Search mode. Fuzzy Match treats the input as plain fuzzy text.": "引号短语、-、OR、|、title: 和 content: 这些语法只在“关键词搜索”模式下生效；“模糊匹配”会把输入当作普通模糊文本。",
@@ -4850,9 +4851,9 @@
     "Keyword search title/content...": "按关键字搜索标题/内容...",
     "Keyword search over entry title and content. Use title: or content: to limit scope.": "按关键字搜索条目标题和内容。可使用 title: 或 content: 限定范围。",
     "Direct keyword match over entry titles, groups, keys, content, UID, and automation ID. Enable Advanced syntax for operators like title:, OR, -, and quotes.": "在条目标题、分组、关键字、内容、UID 和自动化 ID 上执行直接关键字匹配。若要使用 title:、OR、-、引号等语法，请启用“高级语法”。",
-    "Advanced keyword search over entry titles, groups, keys, content, UID, and automation ID. Supports title:, group:, uid:, automationId:, content:, quotes, -, and OR.": "在条目标题、分组、关键字、内容、UID 和自动化 ID 上执行高级关键字搜索。支持 title:、group:、uid:、automationId:、content:、引号、- 和 OR。",
+    "Advanced keyword search over entry titles, groups, keys, content, UID, and automation ID. Supports title:, group:, uid:, automationId:, content:, role:, quotes, -, and OR.": "在条目标题、分组、关键字、内容、UID 和自动化 ID 上执行高级关键字搜索。支持 title:、group:、uid:、automationId:、content:、role:、引号、- 和 OR。",
     "Direct keyword match across entry titles, groups, keys, content, UID, and automation ID in all lorebooks.": "在所有世界书中，对条目标题、分组、关键字、内容、UID 和自动化 ID 执行直接关键字匹配。",
-    "Advanced keyword search across all lorebooks. Supports title:, group:, uid:, automationId:, content:, quotes, -, and OR.": "在所有世界书中执行高级关键字搜索。支持 title:、group:、uid:、automationId:、content:、引号、- 和 OR。",
+    "Advanced keyword search across all lorebooks. Supports title:, group:, uid:, automationId:, content:, role:, quotes, -, and OR.": "在所有世界书中执行高级关键字搜索。支持 title:、group:、uid:、automationId:、content:、role:、引号、- 和 OR。",
     "Fuzzy Match": "模糊匹配",
     "Fuzzy search across entry titles, keys, content, UID, and automation ID.": "在条目标题、关键字、内容、UID 和自动化 ID 上执行模糊搜索。",
     "Select current page lorebooks": "选择当前页世界书",
@@ -5527,5 +5528,147 @@
     ,"Field updated: ${0}": "字段已更新:${0}"
     ,"Show ${0} more entries": "展开剩余 ${0} 条"
     ,"Working profile reset to a blank shell — building this card's orchestration from scratch.": "工作中的配置已重置为空白模板,将从零开始为这张角色卡编写编排。"
+    ,"Working profile reset to match the current global profile — adjust from there.": "工作中的配置已重置为当前全局配置——请在此基础上调整。"
+    ,"Schema reset to a blank shell — building from scratch.": "结构已重置为空白模板——从零开始搭建。"
+    ,"Schema reset to match the current global schema — adjust from there.": "结构已重置为当前全局结构——请在此基础上调整。"
+    ,"Reset working profile to blank": "重置工作配置为空白"
+    ,"Reset working profile to global": "重置工作配置为全局"
+    ,"Reset schema to blank": "重置结构为空白"
+    ,"Reset schema to global": "重置结构为全局"
+    ,"✓ Applied at ${0}": "✓ 已应用于 ${0}"
+    ,"Apply ${0}": "应用 ${0}"
+    ,"Rollback this round": "回退本轮"
+    ,"Roll back ${0} change(s) from this round?": "确认回退本轮的 ${0} 项变更?"
+    ,"Rolled back ${0} change(s).": "已回退 ${0} 项变更。"
+    ,"Batch rollback finished with ${0} failure(s).": "批量回退完成,${0} 项失败。"
+    ,"(untitled entry)": "(无标题条目)"
+    ,"${0} entries": "${0} 条"
+    ,"${0} pending": "${0} 项待批准"
+    ,"${0} draft": "${0} 项草稿"
     ,"Error: ${0}": "错误：${0}"
+    ,"Auto-continue": "自动续轮"
+    ,"AI read the indicated data and is waiting to act on the result next round.": "AI 读取了相关数据,等待下一轮根据结果调整。"
+    ,"Just imported this card — review the baseline and suggest tweaks.": "刚导入这张卡——回顾基础设定并提出调整建议。"
+
+    ,"Continue iteration": "继续迭代"
+    ,"Finalize iteration": "结束迭代"
+
+    ,"Set preset field": "设置预设字段"
+    ,"Replace field text": "替换字段文本"
+    ,"Insert into field": "向字段中插入"
+    ,"Delete inside field": "从字段中删除"
+    ,"List insert": "列表插入"
+    ,"List remove": "列表移除"
+    ,"List move": "列表移动"
+    ,"Set prompt entry": "设置提示条目"
+    ,"Adjust prompt order": "调整提示顺序"
+    ,"Remove prompt entry": "移除提示条目"
+    ,"Remove prompt order item": "移除提示顺序项"
+    ,"Clone to new preset": "克隆为新预设"
+    ,"Copy from reference": "从参考预设复制"
+    ,"Read preset fields": "读取预设字段"
+    ,"Read reference fields": "读取参考字段"
+    ,"Diff against reference": "与参考预设对比"
+    ,"Simulate prompt assembly": "模拟提示组装"
+
+    ,"Returned ${0} values": "返回 ${0} 个值"
+    ,"${0} paths": "${0} 个路径"
+    ,"${0} fields differ": "${0} 个字段不同"
+    ,"Assembled ${0} chars": "组装 ${0} 个字符"
+
+    ,"Set node type": "设置节点类型"
+    ,"Remove node type": "移除节点类型"
+    ,"Reorder node types": "重新排序节点类型"
+
+    ,"Update director main agent": "更新导演主智能体"
+    ,"Upsert director sub-agent": "设置导演子智能体"
+    ,"Remove director sub-agent": "移除导演子智能体"
+    ,"Update director limits": "更新导演限制"
+    ,"Update director tools": "更新导演工具"
+    ,"main agent": "主智能体"
+    ,"limits": "限制"
+    ,"tools": "工具"
+    ,"Update loop profile": "更新循环配置"
+    ,"loop profile": "循环配置"
+    ,"Update agenda planner": "更新议程规划者"
+    ,"Upsert agenda agent": "设置议程智能体"
+    ,"Remove agenda agent": "移除议程智能体"
+    ,"Set agenda final agent": "设置议程终笔智能体"
+    ,"Update agenda limits": "更新议程限制"
+    ,"planner": "规划者"
+    ,"Upsert pipeline stage": "设置流水线阶段"
+    ,"Remove pipeline stage": "移除流水线阶段"
+    ,"Upsert stage node": "设置阶段节点"
+    ,"Remove stage node": "移除阶段节点"
+    ,"Upsert preset": "设置预设"
+    ,"Remove preset": "移除预设"
+    ,"Simulate orchestration": "模拟编排"
+
+    ,"List world books": "列出世界书"
+    ,"List lorebook entries": "列出世界书条目"
+    ,"Search lorebook": "搜索世界书"
+    ,"Read lorebook entries": "读取世界书条目"
+    ,"${0} books": "${0} 本世界书"
+    ,"${0} hits": "${0} 个匹配"
+
+    ,"Set card field": "设置卡片字段"
+    ,"Replace text in card field": "替换卡片字段文本"
+    ,"Add lorebook entry": "新增世界书条目"
+    ,"Update lorebook entry": "更新世界书条目"
+    ,"Remove lorebook entry": "移除世界书条目"
+    ,"Set lorebook metadata": "设置世界书元数据"
+    ,"Web search": "网络搜索"
+    ,"Simulate prompt": "模拟提示"
+    ,"${0} results": "${0} 个结果"
+    ,"${0} chars": "${0} 个字符"
+
+    ,"Arguments": "参数"
+    ,"Result": "结果"
+    ,"Profile updated": "配置已更新"
+    ,"Field updated": "字段已更新"
+    ,"working profile": "当前配置"
+    ,"Line diff": "行级 diff"
+    ,"Line diff (+${0} -${1})": "行级 diff（+${0} -${1}）"
+    ,"Expand diff": "展开 diff"
+    ,"Resize diff columns": "调整 diff 栏宽"
+    ,"Close expanded diff": "关闭展开的 diff"
+    ,"(unknown op)": "（未知操作）"
+    ,"(tool)": "（工具）"
+    ,"(root)": "（根）"
+    ,"(${0}${1} bytes)": "（${0}${1} 字节）"
+    ,"field": "字段"
+
+    ,"General editing": "通用编辑"
+    ,"Adapt for orchestrator": "适配编排器"
+    ,"Jailbreak-only": "仅越狱"
+
+    ,"(no effective change)": "（无实际变更）"
+    ,"Clear all session history?": "清空所有会话历史？"
+
+    ,"Apply ${0} to \"${1}\"": "将 ${0} 应用到「${1}」"
+    ,"Apply ${0} changes (${1})": "应用 ${0} 项变更（${1}）"
+    ,"${0} to character": "${0} 到角色卡"
+    ,"${0} to \"${1}\"": "${0} 到「${1}」"
+    ,"Apply failed (${0}): ${1}": "应用失败（${0}）：${1}"
+    ,"Apply failed for ${0} target(s).": "${0} 个目标应用失败。"
+    ,"Applied ${0} change(s).": "已应用 ${0} 项变更。"
+    ,"Rollback failed (${0}): ${1}": "回退失败（${0}）：${1}"
+    ,"Rollback failed for ${0} target(s).": "${0} 个目标回退失败。"
+    ,"Rolled back.": "已回退。"
+    ,"Resize chat and preview columns": "调整对话与预览栏宽"
+    ,"Unread assistant messages": "未读 AI 消息"
+    ,"(untitled session)": "（无标题会话）"
+    ,"Delete this session?": "删除此会话？"
+    ,"Clear all saved sessions for this character?": "清空此角色卡的所有保存会话？"
+    ,"Finalized.": "已完成。"
+    ,"No saved sessions yet.": "暂无保存的会话。"
+
+    ,"Cloned to ${0}": "已克隆到 ${0}"
+    ,"Apply to ${0} override": "应用到 ${0} 的角色卡覆盖"
+    ,"Regenerate this turn? Subsequent rounds will be discarded.": "重新生成本轮？后续轮次会被丢弃。"
+    ,"(deleted)": "（已删除）"
+    ,"Reset rejected: reset_to_blank only applies when iterating a character override.": "重置被拒：reset_to_blank 仅在迭代角色卡覆盖时可用。"
+    ,"Reset rejected: reset_to_global only applies when iterating a character override.": "重置被拒：reset_to_global 仅在迭代角色卡覆盖时可用。"
+    ,"Reset rejected: this card already has an override. Use reset_to_global instead, or continue adjusting in place.": "重置被拒：这张卡已有覆盖。请改用 reset_to_global，或者直接在现有基础上调整。"
+    ,"Reset rejected: this card has no character override yet. Use reset_to_blank instead, or continue adjusting the seeded global copy in place.": "重置被拒：这张卡还没有角色卡覆盖。请改用 reset_to_blank，或者直接在播种的全局副本上调整。"
 }
