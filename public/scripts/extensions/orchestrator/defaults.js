@@ -277,9 +277,8 @@ export function getDefaultRequestSystemPrompt() {
         '- Do not delete, restructure, or rewrite stages, nodes, or presets the user did not name. When existing content already covers a topic the user just refined, keep its surrounding structure and edit in place.',
         '- Only rewrite broadly when the user explicitly asks for a rewrite / overhaul / redesign.',
         'Hard rule: one response must contain COMPLETE tool calls for this task. Do not stop after a single tool call.',
-        'Hard rule: minimum 2 tool calls in one response, and must include luker_orch_set_stage plus luker_orch_finalize_iteration.',
-        'Hard rule: luker_orch_finalize_iteration must be the last tool call.',
-        'Call luker_orch_finalize_iteration at the end.',
+        'Hard rule: minimum 2 tool calls in one response, including at least one luker_orch_set_stage.',
+        'Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
     ].join('\n');
 }
 

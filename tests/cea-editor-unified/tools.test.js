@@ -31,11 +31,15 @@ beforeAll(async () => {
 });
 
 describe('unified CEA editor tools.js', () => {
-    it('exports CONTROL_TOOL_NAMES and isCeaEditorControlCall', () => {
-        expect(tools.CONTROL_TOOL_NAMES.continue).toBe('luker_cea_editor_continue_iteration');
-        expect(tools.CONTROL_TOOL_NAMES.finalize).toBe('luker_cea_editor_finalize_iteration');
-        expect(tools.isCeaEditorControlCall({ name: 'luker_cea_editor_finalize_iteration' })).toBe(true);
-        expect(tools.isCeaEditorControlCall({ name: 'luker_cea_editor_continue_iteration' })).toBe(true);
+    it('exports CONTROL_TOOL_NAMES and isCeaEditorControlCall (no control tools today)', () => {
+        // CEA editor has no popup-side control tools — the multi-round loop
+        // is program-driven by tool-call presence (any tool call → next
+        // round, none → stop). CONTROL_TOOL_NAMES is empty and
+        // isCeaEditorControlCall returns false for everything.
+        expect(tools.CONTROL_TOOL_NAMES.continue).toBeUndefined();
+        expect(tools.CONTROL_TOOL_NAMES.finalize).toBeUndefined();
+        expect(tools.isCeaEditorControlCall({ name: 'luker_cea_editor_continue_iteration' })).toBe(false);
+        expect(tools.isCeaEditorControlCall({ name: 'luker_cea_editor_finalize_iteration' })).toBe(false);
         expect(tools.isCeaEditorControlCall({ name: 'cea_set_card_field' })).toBe(false);
         expect(tools.isCeaEditorControlCall({})).toBe(false);
         expect(tools.isCeaEditorControlCall(null)).toBe(false);
@@ -163,26 +167,24 @@ describe('unified CEA editor tools.js', () => {
         expect(out.error.length).toBeGreaterThan(0);
     });
 
-    it('CONTROL_TOOL_DEFS contains continue and finalize with name + parameters', () => {
-        expect(tools.CONTROL_TOOL_DEFS.length).toBe(2);
+    it('CONTROL_TOOL_DEFS is empty (no popup-side control tools)', () => {
+        expect(tools.CONTROL_TOOL_DEFS.length).toBe(0);
         const names = tools.CONTROL_TOOL_DEFS.map(d => d.function?.name);
-        expect(names).toContain('luker_cea_editor_continue_iteration');
-        expect(names).toContain('luker_cea_editor_finalize_iteration');
-        for (const def of tools.CONTROL_TOOL_DEFS) {
-            expect(def.type).toBe('function');
-            expect(def.function?.parameters?.type).toBe('object');
-        }
+        expect(names).not.toContain('luker_cea_editor_continue_iteration');
+        expect(names).not.toContain('luker_cea_editor_finalize_iteration');
     });
 
-    it('buildCeaEditorToolSet returns edit + read + control tools', () => {
+    it('buildCeaEditorToolSet returns edit + read tools (no control tools)', () => {
         const set = tools.buildCeaEditorToolSet({}, {}, { live: { character: {}, lorebooks: {} } });
         expect(Array.isArray(set)).toBe(true);
-        expect(set.length).toBeGreaterThanOrEqual(3);
+        expect(set.length).toBeGreaterThanOrEqual(2);
         const names = set.map(t => t.function?.name);
-        // Always present: control tools
-        expect(names).toContain('luker_cea_editor_continue_iteration');
-        expect(names).toContain('luker_cea_editor_finalize_iteration');
-        // At least one of the edit tools should be in the set
+        // No control tools anymore — multi-round loop is program-driven.
+        expect(names).not.toContain('luker_cea_editor_continue_iteration');
+        // Finalize is gone — assert NOT present so a regression that
+        // re-adds it would fail loud.
+        expect(names).not.toContain('luker_cea_editor_finalize_iteration');
+        // At least one of the edit tools should be in the set.
         const ceaEdits = ['cea_set_card_field', 'cea_str_replace_card_field', 'cea_add_lorebook_entry'];
         expect(ceaEdits.some(n => names.includes(n))).toBe(true);
     });
@@ -212,12 +214,13 @@ describe('CEA editor tool-display map', () => {
         ));
     });
 
-    it('classifies all 6 edit tools as edit', () => {
+    it('classifies all 7 edit tools as edit', () => {
         for (const n of [
             'cea_set_card_field',
             'cea_str_replace_card_field',
             'cea_add_lorebook_entry',
             'cea_update_lorebook_entry',
+            'cea_str_replace_lorebook_entry_field',
             'cea_remove_lorebook_entry',
             'cea_set_lorebook_metadata',
         ]) {
@@ -244,9 +247,9 @@ describe('CEA editor tool-display map', () => {
         }
     });
 
-    it('classifies the 2 control tools as control', () => {
-        expect(map.luker_cea_editor_continue_iteration?.type).toBe('control');
-        expect(map.luker_cea_editor_finalize_iteration?.type).toBe('control');
+    it('excludes legacy continue / finalize control tools (program-driven auto-continue)', () => {
+        expect(map.luker_cea_editor_continue_iteration).toBeUndefined();
+        expect(map.luker_cea_editor_finalize_iteration).toBeUndefined();
     });
 
     it('summarize functions handle missing args / results without throwing', () => {
@@ -267,11 +270,11 @@ describe('CEA editor tool-display map', () => {
         expect(String(out)).toContain('2');
     });
 
-    it('contains exactly the 14 tools spec\'d (6 edit + 6 read + 2 control)', () => {
+    it('contains exactly the 13 tools spec\'d (7 edit + 6 read, no control)', () => {
         const keys = Object.keys(map);
-        expect(keys.length).toBe(14);
-        expect(keys.filter(k => map[k].type === 'edit').length).toBe(6);
+        expect(keys.length).toBe(13);
+        expect(keys.filter(k => map[k].type === 'edit').length).toBe(7);
         expect(keys.filter(k => map[k].type === 'read').length).toBe(6);
-        expect(keys.filter(k => map[k].type === 'control').length).toBe(2);
+        expect(keys.filter(k => map[k].type === 'control').length).toBe(0);
     });
 });

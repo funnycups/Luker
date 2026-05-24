@@ -37,12 +37,9 @@
  *           to state.pendingEdits with `target` annotation.
  *        e. Persist round assistant message with
  *           toolCalls / toolResults / edits.
- *        f. If sawFinalize → exit (finalize is sticky — even when the
- *           same round also emitted a continue).
- *        g. Else if (all-read this round AND no finalize) →
- *           auto-continue to next round; the LLM saw a read result and
- *           needs another turn to act on it.
- *        h. Else → exit. User reviews pendingEdits + Apply.
+ *        f. Else if (explicit continue OR all-read this round) →
+ *           auto-continue to next round.
+ *        g. Else → exit. User reviews pendingEdits + Apply.
  *
  * The loop is unbounded by design: only finalize, user abort
  * (Stop button → AbortController), or an upstream throw ends a turn.
@@ -76,7 +73,6 @@ import {
 } from '../main.js';
 import { renderCeaEditorPreviewPane } from '../editor-preview.js';
 import {
-    CONTROL_TOOL_NAMES,
     buildCeaEditorToolSet,
     isCeaEditorControlCall,
     isCeaEditorReadTool,
@@ -183,8 +179,6 @@ function createNewSession(avatar) {
         surfaceState: {
             historyOpen: false,
             autoApply: false,
-            isFinalized: false,
-            finalizeSummary: '',
         },
         pendingEdits: [],
         createdAt: now,
@@ -270,10 +264,18 @@ async function migrateLegacySessionsIfNeeded(context, avatar, sessionStore) {
     for (const legacySession of legacy) {
         try {
             const migratedSession = migrateLegacyCeaEditorSession(legacySession);
-            if (migratedSession && migratedSession.id) {
-                await sessionStore.save(migratedSession);
-                migrated++;
-            }
+            if (!migratedSession || !migratedSession.id) continue;
+            // Skip empty migrated sessions — they would otherwise persist
+            // as phantom history rows the user can't usefully reopen. A
+            // legacy session with zero messages + zero pending edits is
+            // either a stale draft the original popup never finished, or
+            // a corrupted entry; either way the user is better off without
+            // it.
+            const hasMessages = Array.isArray(migratedSession.messages) && migratedSession.messages.length > 0;
+            const hasPendingEdits = Array.isArray(migratedSession.pendingEdits) && migratedSession.pendingEdits.length > 0;
+            if (!hasMessages && !hasPendingEdits) continue;
+            await sessionStore.save(migratedSession);
+            migrated++;
         } catch (err) {
             // Leave the legacy bundle intact and continue with the rest —
             // partial migration is better than zero migration.
@@ -364,14 +366,15 @@ export function _internalSeedSystemMessage(state, opts = {}) {
  *   - `state`               popup state (messages, pendingEdits, live, …)
  *   - `roundCalls`          all tool calls from this round (control + non-control)
  *   - `assistantText`       the LLM's prose for this round (already trimmed)
- *   - `roundFlags`          { wantsAutoContinue, sawFinalize, finalizeSummary, continueNote }
+ *   - `roundFlags`          { hadAnyToolCall } — true when the runner saw any
+ *                           tool call this round (drives outer-loop continue)
  *   - `taskMessages`        the running task-messages list (MUTATED to thread
  *                           tool_result messages back for the next round)
  *   - `context` / `settings` / `helperApis` — runtime for read-tool dispatch
  *   - `i18n` { t, tf }      i18n helpers
  *
- * Returns `{ wantsAutoContinue, hadEdits, isFinalized }` so the outer
- * loop can decide whether to fire another round.
+ * Returns `{ hadAnyToolCall, hadEdits, hadReads }` so the outer loop can decide
+ * whether to fire another round.
  */
 async function processRoundOutcome({
     state,
@@ -385,7 +388,7 @@ async function processRoundOutcome({
     i18n,
 }) {
     const { t, tf } = i18n;
-    const { wantsAutoContinue, sawFinalize, finalizeSummary } = roundFlags;
+    const { hadAnyToolCall } = roundFlags;
 
     // Split the round's non-control calls by read-vs-edit. Calls with an
     // unknown name fall into `editCalls` (the conservative default — they
@@ -476,12 +479,6 @@ async function processRoundOutcome({
         }
     }
 
-    if (sawFinalize) {
-        state.session.surfaceState = state.session.surfaceState || {};
-        state.session.surfaceState.isFinalized = true;
-        state.session.surfaceState.finalizeSummary = String(finalizeSummary || '');
-    }
-
     // Synthesize a user-facing assistant message that carries the full
     // audit trail for the round. The fallback summary kicks in when the
     // model emitted tool calls without any prose — without it the chat
@@ -493,9 +490,7 @@ async function processRoundOutcome({
             .filter(Boolean);
         if (toolNames.length > 0) {
             content = tf('Suggested actions: ${0}', toolNames.join(', '));
-        } else if (sawFinalize) {
-            content = finalizeSummary || t('Finalized.');
-        } else if (wantsAutoContinue) {
+        } else if (hadAnyToolCall) {
             content = t('Continuing...');
         }
     }
@@ -549,10 +544,9 @@ async function processRoundOutcome({
     }
 
     return {
-        wantsAutoContinue,
+        hadAnyToolCall,
         hadEdits: roundEdits.length > 0,
         hadReads: readsForTaskHistory.length > 0,
-        isFinalized: Boolean(state.session.surfaceState?.isFinalized),
     };
 }
 
@@ -635,6 +629,7 @@ const DEFAULT_SYSTEM_PROMPT = [
     '- Lorebook metadata (bookName, scan_depth, etc.).',
     'Use the cea_* tools to propose each edit. Each edit becomes a reviewable change the user can apply or reject.',
     '- Use cea_set_lorebook_metadata to update lorebook top-level fields (bookName, scan_depth, etc.).',
+    '- Prefer cea_str_replace_card_field / cea_str_replace_lorebook_entry_field for small in-place text edits inside a single field; reserve cea_set_card_field / cea_update_lorebook_entry for whole-field or multi-field rewrites.',
     '',
     'You also have read tools:',
     '- world_book_list — list visible world books with their scope tags.',
@@ -656,17 +651,18 @@ const DEFAULT_SYSTEM_PROMPT = [
     '- Do not delete, restructure, or rewrite fields, entries, or books the user did not name. When existing content already covers a topic the user just refined, keep its surrounding text and edit in place.',
     '- Only rewrite broadly when the user explicitly asks for a rewrite / overhaul / redesign.',
     '',
-    'Multi-round flow:',
-    `- Call ${CONTROL_TOOL_NAMES.continue} when you need another automatic round (e.g. you just read a book and want to edit it next).`,
-    `- Call ${CONTROL_TOOL_NAMES.finalize} with a concise summary when the work is complete. The popup stops auto-continuing after this call.`,
-    `- If you call both ${CONTROL_TOOL_NAMES.continue} and ${CONTROL_TOOL_NAMES.finalize} in the same round, finalize wins.`,
+    'Iteration control:',
+    '- The popup auto-continues whenever you emit any tool call this round — your tool results become context for the next round so you can react to them.',
+    '- To end the iteration, simply respond with a plain text message and emit no tool calls. The loop exits and control returns to the user.',
 ].join('\n');
 
 /**
- * Run one user-driven iteration turn. This is the multi-round caller-side
- * loop that drives the LLM through read → edit → finalize. It's factored
- * out of the popup mount so the test harness can drive it directly with
- * a synthetic state object.
+ * Run one user-driven iteration turn. The multi-round caller-side loop is
+ * program-driven by tool-call presence: every round that emits a tool call
+ * (edit or read) triggers another round so the model can react to results.
+ * The loop exits the moment the model responds with plain text and no tool
+ * calls (or the user clicks Stop). Factored out of the popup mount so the
+ * test harness can drive it directly with a synthetic state object.
  *
  * @param {Object} state           popup state object (mutated)
  * @param {Object} opts
@@ -730,24 +726,22 @@ async function runIterationTurn(state, opts = {}) {
         hasSearchTools,
     });
 
-    // Auto-continue keeps firing until the model emits finalize or the
-    // user trips abort (Stop button → AbortController). No platform-side
+    // Auto-continue keeps firing as long as the model asks for it OR a
+    // pure-read round needs a follow-up to act on its results. The user
+    // trips abort via the Stop button (AbortController). No platform-side
     // round cap — long sessions are legitimate, and a silent truncation
     // at round N would drop pending edits the user expected to land.
     while (true) {
         if (abortSignal?.aborted) break;
 
         // Per-round callback bookkeeping. The runner fires onAssistantText
-        // once and onToolCall once per non-control call in array order.
-        // Control tools (continue / finalize) route to onControlCall via
-        // the isControlCall predicate so they never pollute the
-        // edit-tool / read-tool list.
+        // once and onToolCall once per non-control call in array order. CEA
+        // editor has no control tools today, so onControlCall never fires
+        // (kept wired for future control tools and for symmetry with sibling
+        // popups). The outer loop continues whenever ANY tool call landed.
         let firstAssistantText = '';
         const collectedToolCalls = [];
-        let wantsAutoContinue = false;
-        let sawFinalize = false;
-        let finalizeSummary = '';
-        let continueNote = '';
+        let hadAnyToolCall = false;
 
         let result;
         try {
@@ -769,22 +763,10 @@ async function runIterationTurn(state, opts = {}) {
                     },
                     onToolCall: (call) => {
                         collectedToolCalls.push(call);
+                        hadAnyToolCall = true;
                     },
-                    onControlCall: (call) => {
-                        const name = String(call?.name || '');
-                        if (name === CONTROL_TOOL_NAMES.continue) {
-                            // Finalize is sticky: if both controls fire in
-                            // the same round, finalize wins regardless of
-                            // the order they arrive in.
-                            if (!sawFinalize) {
-                                wantsAutoContinue = true;
-                                continueNote = String(call?.args?.note || '');
-                            }
-                        } else if (name === CONTROL_TOOL_NAMES.finalize) {
-                            sawFinalize = true;
-                            wantsAutoContinue = false;
-                            finalizeSummary = String(call?.args?.summary || '');
-                        }
+                    onControlCall: () => {
+                        hadAnyToolCall = true;
                     },
                 },
             );
@@ -812,10 +794,7 @@ async function runIterationTurn(state, opts = {}) {
             roundCalls: editAndReadCalls,
             assistantText: firstAssistantText,
             roundFlags: {
-                wantsAutoContinue,
-                sawFinalize,
-                finalizeSummary,
-                continueNote,
+                hadAnyToolCall,
             },
             taskMessages,
             context,
@@ -1063,6 +1042,32 @@ async function applyPendingEdits(state, { persistSession, render, i18n, context,
     }
 
     state.pendingEdits = [];
+    // Refresh `state.live` from the real source after a successful commit
+    // so the preview pane (and subsequent normalize calls) see the
+    // committed values. Without this, state.live still mirrors the
+    // pre-apply snapshot and the lorebook preview keeps showing stale
+    // content even though saveWorldInfo already wrote the new data.
+    // We refresh whenever at least one target committed cleanly; a
+    // fully-failed apply means the on-disk state didn't move and the
+    // refresh would be a no-op.
+    const totalTargets = (groups.character.length > 0 ? 1 : 0) + Object.keys(groups.lorebooks).length;
+    if (errors.length < totalTargets) {
+        try {
+            const refreshed = await buildUnifiedCharacterEditorLiveSnapshot(
+                context,
+                String(avatar || state.session?.avatar || ''),
+            );
+            if (refreshed && typeof refreshed === 'object') {
+                state.live = {
+                    character: refreshed.character || {},
+                    lorebooks: refreshed.lorebooks || {},
+                };
+            }
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(`[${MODULE}] buildUnifiedCharacterEditorLiveSnapshot threw after apply`, err);
+        }
+    }
     if (typeof persistSession === 'function') await persistSession();
     if (typeof render === 'function') await render();
 }
@@ -1457,7 +1462,13 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         if (!$root || $root.length === 0) return;
         const messagesEl = $root.find('[data-cea-editor-messages]');
         if (!messagesEl || messagesEl.length === 0) return;
-        const messages = state.session.messages || [];
+        // Filter out auto-generated continuation prompts ("[User reviewed
+        // and applied N pending edit(s)…]") from the rendered chat — they
+        // stay in state.session.messages so the LLM still sees them as
+        // context for the next round, but the user shouldn't see them as
+        // chat noise. Mirror this filter on the LLM-history side ONLY by
+        // keeping the messages array unchanged for buildTaskMessages.
+        const messages = (state.session.messages || []).filter(m => !(m?.role === 'user' && m?.auto));
         const lastAssistantIdx = (() => {
             for (let i = messages.length - 1; i >= 0; i--) {
                 const m = messages[i];
@@ -1722,7 +1733,6 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
             try { state.abortController?.abort(); } catch { /* ignore */ }
             return;
         }
-        if (state.session.surfaceState?.isFinalized) return;
         const $textarea = $root?.find('[data-cea-editor-input]');
         const text = $textarea ? String($textarea.val() || '').trim() : '';
         if (!text) return;
@@ -1846,7 +1856,6 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         $root.on('click.ceaEditor', '[data-cea-editor-action="regenerate"]', async (e) => {
             e.preventDefault();
             if (state.isBusy) return;
-            if (state.session.surfaceState?.isFinalized) return;
             const id = String(e.currentTarget?.getAttribute('data-luker-lib-msg-id') || '');
             if (!id) return;
             const messages = state.session.messages || [];
@@ -2028,7 +2037,6 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         // frames the request (no user prompt to push).
         queueMicrotask(async () => {
             if (state.isBusy) return;
-            if (state.session.surfaceState?.isFinalized) return;
             state.isBusy = true;
             const ac = new AbortController();
             state.abortController = ac;

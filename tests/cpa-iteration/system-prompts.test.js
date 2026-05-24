@@ -51,15 +51,16 @@ describe('CPA — system prompts', () => {
         expect(alt).not.toBe(def);
     });
 
-    test('documents finalize-sticky ordering so the LLM knows finalize wins over continue in the same round', () => {
-        // The popup's onControlCall handler treats finalize as sticky: if a
-        // single round emits both continue + finalize, finalize wins and the
-        // loop ends. Surface the rule in the system prompt so the model can
-        // plan accordingly rather than be surprised by the runner.
+    test('documents program-driven auto-continue (any tool call → next round, plain text → stop)', () => {
+        // The CPA iter popup's multi-round loop is program-driven by tool-
+        // call presence: any tool call triggers another round; plain text
+        // with no tool calls ends the iteration. Surface both halves of the
+        // contract in the system prompt.
         const out = buildModelSystemPrompt();
-        expect(out).toMatch(/luker_cpa_continue_iteration/);
-        expect(out).toMatch(/luker_cpa_finalize_iteration/);
-        expect(out.toLowerCase()).toMatch(/finalize wins/);
+        expect(out).not.toMatch(/luker_cpa_continue_iteration/);
+        expect(out).not.toMatch(/luker_cpa_finalize_iteration/);
+        expect(out.toLowerCase()).toMatch(/auto-continue|tool call/);
+        expect(out.toLowerCase()).toMatch(/plain text|no tool calls/);
     });
 
     test('mentions preset_clone_to_new in the Session-target tools section', () => {

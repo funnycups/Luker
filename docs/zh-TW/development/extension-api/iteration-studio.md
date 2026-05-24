@@ -14,11 +14,11 @@
 一個迭代工作台會話，是用戶與 LLM 之間的彈窗對話，LLM 輸出**描述編輯動作的工具呼叫**。每一輪：
 
 1. 用戶輸入請求並點擊發送。
-2. 外殼帶著適配器的工具集（外加外殼自動注入的 `continue` / `finalize` 控制工具）請求 LLM。
-3. 對每個返回的工具呼叫，適配器將其歸一化為一組 op 類型化的 `Edit`（見 `edits-lib.md`）。
-4. 外殼透過 edits 庫把編輯應用到 `adapter.live()`，在應用時逐條做漂移檢測。
+2. 外殼帶著適配器的工具集(外加適配器自己宣告的任何控制工具)請求 LLM。
+3. 對每個返回的工具呼叫,適配器將其歸一化為一組 op 類型化的 `Edit`(見 `edits-lib.md`)。
+4. 外殼透過 edits 庫把編輯應用到 `adapter.live()`,在應用時逐條做漂移檢測。
 5. 批准的變更透過 `adapter.commit(newLive)` 提交回去。
-6. 若 LLM 標記了 `continueRequested`，外殼帶著自動續寫 prompt 進入下一輪。
+6. 只要這一輪發出過任何工具呼叫,外殼就會自動續到下一輪(程式按工具呼叫是否存在判定)。一旦 AI 改回純文字、不再發工具,迭代就結束,控制權回到用戶。
 
 外殼不持有工件的工作副本。`adapter.live()` 是唯一權威源，外殼每次需要當前值時都重新呼叫它。
 
@@ -94,32 +94,25 @@ await openIterationStudio(adapter, SillyTavern.getContext(), settings, document.
 
 ## 工具分發
 
-`buildToolCatalog(session)` 只返回適配器自己的可編輯工具加上自定義控制工具。外殼自動注入兩個控制工具：
+`buildToolCatalog(session)` 返回適配器自己的可編輯工具加上自定義控制工具。外殼不再注入 continue / finalize 控制工具——多輪自動續輪由程式判定:這一輪發出過任意工具呼叫就續到下一輪,只回純文字不呼叫工具就停下來。如果你的適配器需要 popup 側控制工具(比如重置狀態、切模式),自行在 catalog 裡宣告,透過 `classifyToolCall` / `executeControlToolCall` 走和普通適配器特定控制工具一樣的路徑。
 
-| 工具 | 預設名 | 效果 |
-|---|---|---|
-| Continue | `iter_continue` | 用自動續寫 prompt 再跑一輪 LLM。 |
-| Finalize | `iter_finalize` | 乾淨結束迭代，附帶總結。 |
-
-如果需要命名空間隔離，可透過 `controlToolNames: { continue, finalize }` 覆寫預設值（兩個參考適配器都覆寫了 —— `luker_orch_continue_iteration`、`luker_mg_schema_continue_iteration` 等）。
-
-每個 LLM 工具呼叫先經過 `classifyToolCall(call)`（預設：不匹配控制名的都是可編輯）。可編輯呼叫進入：
+每個 LLM 工具呼叫先經過 `classifyToolCall(call)`(預設:不匹配適配器宣告的控制名的都是可編輯)。可編輯呼叫進入:
 
 ```ts
 normalizeToolCallToEdit(call, { session, live }): Edit[] | null | Promise<Edit[] | null>
 ```
 
-返回 op 類型化編輯（op 形態見 `edits-lib.md`）。返回 `null` 跳過此呼叫。
+返回 op 類型化編輯(op 形態見 `edits-lib.md`)。返回 `null` 跳過此呼叫。
 
-**sandbox-diff 模式** —— 當你已經有一個原地變更器時，這是快速 bootstrap 的方式：
+**sandbox-diff 模式** —— 當你已經有一個原地變更器時,這是快速 bootstrap 的方式:
 
 1. 把 `live` 克隆成一個 sandbox profile。
 2. 在 sandbox 上跑現有變更器。
 3. 發射一條粗粒度的 `{ op: 'set', path: '', oldValue: live, newValue: sandbox }` 編輯。
 
-兩個參考適配器都用此模式。它足夠上線，但產出 profile 級衝突（任何併發變更都會與整批衝突）。要做生產級衝突解決，應當把每個工具呼叫歸一化成逐欄位 op（`set` / `str_replace` / `list_insert` 等）。
+兩個參考適配器都用此模式。它足夠上線,但產出 profile 級衝突(任何併發變更都會與整批衝突)。要做生產級衝突解決,應當把每個工具呼叫歸一化成逐欄位 op(`set` / `str_replace` / `list_insert` 等)。
 
-控制工具（continue / finalize）由外殼直接處理。僅當你想在 continue 或 finalize 上加額外行為時，才覆寫 `executeControlToolCall(call, ctx, signal)`。
+適配器宣告的控制工具(重置、切模式等)透過 runner 的 `isControlCall` 謂詞路由到你的 `onControlCall` 處理函式,不走 normalize-to-edit 路徑。外殼把它們也算成「這一輪有工具呼叫」——任意控制工具發射都會觸發下一輪。
 
 ## Runner 設定
 

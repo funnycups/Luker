@@ -164,10 +164,12 @@ function computeChangedPathSet(live, pendingEdits) {
     // every tool call. The engine's lodash-backed apply treats path=='' as a
     // no-op (lodash.set on empty path), and detectConflict reports
     // `value_drifted`. To get a usable diff for the preview, short-circuit:
-    // if any edit has `path === ''` and a `newValue`, walk `live` vs that
-    // value directly. This bypass is renderer-local — the actual apply path
-    // is unaffected.
-    const emptyPathEdit = pendingEdits.find(e => e?.op === 'set' && e?.path === '' && typeof e?.newValue !== 'undefined');
+    // walk `live` vs the LAST empty-path edit's newValue — multi-tool-call
+    // rounds chain their newValues (edit N's newValue = original + all calls
+    // up to N), so the cumulative state lives in the last edit. Using `find`
+    // would render only the first tool call's mutation. This bypass is
+    // renderer-local — the actual apply path is unaffected.
+    const emptyPathEdit = pendingEdits.findLast(e => e?.op === 'set' && e?.path === '' && typeof e?.newValue !== 'undefined');
     if (emptyPathEdit) {
         const changed = new Set();
         walkDiff('', live, emptyPathEdit.newValue, changed);
@@ -223,7 +225,10 @@ function renderMgSchemaPreviewPane(live, pendingEdits, tFn) {
     const edits = Array.isArray(pendingEdits) ? pendingEdits : [];
     const changed = computeChangedPathSet(live, edits);
     let next = live;
-    const emptyPathEdit = edits.find(e => e?.op === 'set' && e?.path === '' && typeof e?.newValue !== 'undefined');
+    // findLast: chained multi-edit rounds put cumulative state in the last
+    // path:'' edit; using `find` would render only the first tool call's
+    // mutation in the right-pane preview.
+    const emptyPathEdit = edits.findLast(e => e?.op === 'set' && e?.path === '' && typeof e?.newValue !== 'undefined');
     if (emptyPathEdit) {
         next = emptyPathEdit.newValue;
     } else {
@@ -322,6 +327,13 @@ function createNewSession() {
         updatedAt: now,
         createdAt: now,
         summary: '',
+        // Skip-persist marker for empty draft sessions. persistSession's
+        // guard reads this and short-circuits when the session has no
+        // messages + no pending edits — without it, mount-time popup
+        // open + close (without sending anything) would write a phantom
+        // row to the history list. Cleared in persistSession the first
+        // time the session has meaningful content.
+        _transient: true,
     };
 }
 
@@ -916,7 +928,11 @@ export async function openSchemaIterationStudio(deps) {
         // whether to render Regenerate (only on non-last assistant turns).
         // Pre-compute latest-unapplied id so inline Apply/Reject row only
         // attaches to the most recent unapplied assistant turn.
-        const allMsgs = state.session.messages || [];
+        // Filter auto-generated continuation prompts ("AUTO CONTINUE…")
+        // out of the rendered chat — they stay in state.session.messages
+        // for buildTaskMessages to feed the LLM, but the user shouldn't
+        // see them as chat noise.
+        const allMsgs = (state.session.messages || []).filter(m => !(m?.role === 'user' && m?.auto));
         let latestUnappliedAssistantId = '';
         for (let i = allMsgs.length - 1; i >= 0; i--) {
             const m = allMsgs[i];
@@ -1099,22 +1115,15 @@ export async function openSchemaIterationStudio(deps) {
 
         // For auto-continue rounds, splice a synthetic user message into the
         // visible history so the model has a fresh prompt to react to and the
-        // chat doesn't look like the model spoke twice in a row. The prompt
-        // is conservative — auto-continue is the AI's request, so we just
-        // ask it to proceed; the model's prior tool calls/results stay in
-        // the context window.
+        // chat doesn't look like the model spoke twice in a row. Auto-continue
+        // fires whenever the prior round emitted any tool call — the runner
+        // already preserves prior tool_calls/tool_results in context, so this
+        // synthetic prompt just nudges the model to proceed or stop.
         if (autoContinueFromResult) {
-            const noteLines = [
-                'Continue with the next iteration step.',
-            ];
-            if (autoContinueFromResult?.continueNote) {
-                noteLines.push(`Prior note: ${String(autoContinueFromResult.continueNote)}`);
-            }
-            noteLines.push('Call luker_mg_schema_finalize_iteration once the request is fully addressed.');
             state.session.messages.push({
                 id: makeMessageId(),
                 role: 'user',
-                content: noteLines.join('\n'),
+                content: 'Continue with the next iteration step. Respond with plain text and no tool calls when the request is fully addressed.',
                 at: Date.now(),
                 auto: true,
             });
@@ -1133,15 +1142,14 @@ export async function openSchemaIterationStudio(deps) {
 
         // Per-round callback bookkeeping. The runner fires onAssistantText
         // once (after validation, before return) and onToolCall once per
-        // non-control call in array order. Control tools (continue /
-        // finalize) route to onControlCall via the isControlCall predicate,
-        // so they never pollute the edit-tool list.
+        // non-control call in array order. Control tools (reset_*) route
+        // to onControlCall via the isControlCall predicate, so they never
+        // pollute the edit-tool list. The outer loop continues whenever
+        // ANY tool call landed (edit OR control) — program-driven by
+        // tool-call presence, not by an AI-emitted continue flag.
         let firstAssistantText = '';
         const collectedToolCalls = [];
-        let wantsAutoContinue = false;
-        let sawFinalize = false;
-        let finalizeSummary = '';
-        let continueNote = '';
+        let hadAnyToolCall = false;
 
         const result = await ITER_RUNNER.requestToolCallsWithRetry(
             context,
@@ -1151,7 +1159,7 @@ export async function openSchemaIterationStudio(deps) {
                 runtimeWorldInfo: null,
                 apiPresetName,
                 llmPresetName,
-                tools: buildToolCatalog(),
+                tools: buildCatalogForScope(turnSnapshot),
                 abortSignal: ac.signal,
                 includeAssistantText: true,
                 allowNoToolCalls: true,
@@ -1161,23 +1169,12 @@ export async function openSchemaIterationStudio(deps) {
                 },
                 onToolCall: (call) => {
                     collectedToolCalls.push(call);
+                    hadAnyToolCall = true;
                 },
                 onControlCall: (call) => {
                     const name = String(call?.name || '');
-                    if (name === CONTROL_TOOL_NAMES.continue) {
-                        // Finalize is sticky: if the model emits both controls
-                        // in one turn (continue, finalize OR finalize, continue)
-                        // the iteration ends. Order of call arrival should not
-                        // change the outcome.
-                        if (!sawFinalize) {
-                            wantsAutoContinue = true;
-                            continueNote = String(call?.args?.note || '');
-                        }
-                    } else if (name === CONTROL_TOOL_NAMES.finalize) {
-                        sawFinalize = true;
-                        wantsAutoContinue = false;
-                        finalizeSummary = String(call?.args?.summary || '');
-                    } else if (name === CONTROL_TOOL_NAMES.resetToBlank) {
+                    hadAnyToolCall = true;
+                    if (name === CONTROL_TOOL_NAMES.resetToBlank) {
                         // Accept when scope is character — the system prompt
                         // invites resetToBlank in BOTH the "no override yet"
                         // (fork-from-global → blank) and "has override"
@@ -1271,15 +1268,15 @@ export async function openSchemaIterationStudio(deps) {
         // toolCalls + edits + appliedAt fields drive renderMessageCard's
         // collapsible details block, Apply marker, and Rollback button.
         let content = assistantText;
-        if (!content && editToolCalls.length > 0) {
-            const names = editToolCalls
-                .map(c => TOOL_DISPLAY[String(c?.name || '')] || String(c?.name || ''))
+        if (!content && (readToolCalls.length > 0 || editToolCalls.length > 0)) {
+            const names = [...readToolCalls, ...editToolCalls]
+                .map(c => TOOL_DISPLAY[String(c?.name || '')] || MG_SCHEMA_TOOL_DISPLAY[String(c?.name || '')]?.label || String(c?.name || ''))
                 .filter(Boolean)
                 .join(', ');
             content = tf('Suggested actions: ${0}', names);
         }
-        if (!content && (wantsAutoContinue || finalizeSummary)) {
-            content = finalizeSummary || t('Continuing...');
+        if (!content && hadAnyToolCall) {
+            content = t('Continuing...');
         }
         const assistantMsg = {
             id: makeMessageId(),
@@ -1287,12 +1284,16 @@ export async function openSchemaIterationStudio(deps) {
             content: content || '',
             at: Date.now(),
         };
-        if (editToolCalls.length > 0) {
-            assistantMsg.toolCalls = editToolCalls.map(tc => ({
+        const allCallsForPersist = [...readToolCalls, ...editToolCalls];
+        if (allCallsForPersist.length > 0) {
+            assistantMsg.toolCalls = allCallsForPersist.map(tc => ({
                 id: String(tc?.id || ''),
                 name: String(tc?.name || ''),
                 args: tc?.args ?? {},
             }));
+        }
+        if (persistedToolResults.length > 0) {
+            assistantMsg.toolResults = persistedToolResults;
         }
         if (edits.length > 0) {
             assistantMsg.edits = edits.slice();
@@ -1323,12 +1324,9 @@ export async function openSchemaIterationStudio(deps) {
         }
 
         return {
-            wantsAutoContinue,
+            hadAnyToolCall,
             executionResult: {
-                finalized: Boolean(finalizeSummary) || (!wantsAutoContinue && edits.length === 0),
-                finalizeSummary,
-                continueRequested: wantsAutoContinue,
-                continueNote,
+                finalized: !hadAnyToolCall,
                 changed: edits.length > 0,
                 hasPending: edits.length > 0,
             },
@@ -1519,14 +1517,12 @@ export async function openSchemaIterationStudio(deps) {
     // BEFORE the await so the user sees their own input before the LLM
     // wait spinner starts. Errors surface as system messages.
     //
-    // Multi-round auto-continue: when the AI emits
-    // `luker_mg_schema_continue_iteration`, runIterationTurn returns
-    // `wantsAutoContinue: true` and the loop fires another round (after
-    // rendering the previous round so the user sees progressive output).
-    // The ONLY exits are:
-    //   1. The model called `luker_mg_schema_finalize_iteration` (no continue).
-    //   2. The model did neither (e.g. produced edits + stopped).
-    //   3. The user clicked Stop (abortController fires; isAbortError
+    // Multi-round auto-continue is program-driven by tool-call presence:
+    // whenever a round emits any tool call (edit OR control), the loop
+    // fires another round (after rendering the previous round so the user
+    // sees progressive output). The ONLY exits are:
+    //   1. The model responded with plain text and no tool calls.
+    //   2. The user clicked Stop (abortController fires; isAbortError
     //      catches the resulting error in the catch block).
     // There is NO hard round cap — runaway loops are the user's problem
     // and a single Stop click ends them.
@@ -1552,7 +1548,7 @@ export async function openSchemaIterationStudio(deps) {
         await render();   // Q6: user message visible before LLM wait
         try {
             let turn = await runIterationTurn();
-            while (turn?.wantsAutoContinue) {
+            while (turn?.hadAnyToolCall && state.pendingEdits.length === 0) {
                 await persistSession();
                 await render();   // progressive: prior round visible before next
                 if (state.abortController?.signal?.aborted) break;

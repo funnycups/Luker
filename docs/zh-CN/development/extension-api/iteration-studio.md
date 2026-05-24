@@ -14,11 +14,11 @@
 一个迭代工作台会话，是用户与 LLM 之间的弹窗对话，LLM 输出**描述编辑动作的工具调用**。每一轮：
 
 1. 用户输入请求并点击发送。
-2. 外壳带着适配器的工具集（外加外壳自动注入的 `continue` / `finalize` 控制工具）请求 LLM。
-3. 对每个返回的工具调用，适配器将其归一化为一组 op 类型化的 `Edit`（见 `edits-lib.md`）。
-4. 外壳通过 edits 库把编辑应用到 `adapter.live()`，在应用时逐条做漂移检测。
+2. 外壳带着适配器的工具集(外加适配器自己声明的任何控制工具)请求 LLM。
+3. 对每个返回的工具调用,适配器将其归一化为一组 op 类型化的 `Edit`(见 `edits-lib.md`)。
+4. 外壳通过 edits 库把编辑应用到 `adapter.live()`,在应用时逐条做漂移检测。
 5. 批准的变更通过 `adapter.commit(newLive)` 提交回去。
-6. 若 LLM 标记了 `continueRequested`，外壳带着自动续写 prompt 进入下一轮。
+6. 只要这一轮发出过任何工具调用,外壳就会自动续到下一轮(程序按工具调用是否存在判定)。一旦 AI 改回纯文本、不再发工具,迭代就结束,控制权回到用户。
 
 外壳不持有工件的工作副本。`adapter.live()` 是唯一权威源，外壳每次需要当前值时都重新调用它。
 
@@ -94,32 +94,25 @@ await openIterationStudio(adapter, SillyTavern.getContext(), settings, document.
 
 ## 工具分发
 
-`buildToolCatalog(session)` 只返回适配器自己的可编辑工具加上自定义控制工具。外壳自动注入两个控制工具：
+`buildToolCatalog(session)` 返回适配器自己的可编辑工具加上自定义控制工具。外壳不再注入 continue / finalize 控制工具——多轮自动续轮由程序判定:这一轮发出过任意工具调用就续到下一轮,只回纯文本不调工具就停下来。如果你的适配器需要 popup 侧控制工具(比如重置状态、切模式),自行在 catalog 里声明,通过 `classifyToolCall` / `executeControlToolCall` 走和普通适配器特定控制工具一样的路径。
 
-| 工具 | 默认名 | 效果 |
-|---|---|---|
-| Continue | `iter_continue` | 用自动续写 prompt 再跑一轮 LLM。 |
-| Finalize | `iter_finalize` | 干净结束迭代，附带总结。 |
-
-如果需要命名空间隔离，可通过 `controlToolNames: { continue, finalize }` 覆写默认值（两个参考适配器都覆写了 —— `luker_orch_continue_iteration`、`luker_mg_schema_continue_iteration` 等）。
-
-每个 LLM 工具调用先经过 `classifyToolCall(call)`（默认：不匹配控制名的都是可编辑）。可编辑调用进入：
+每个 LLM 工具调用先经过 `classifyToolCall(call)`(默认:不匹配适配器声明的控制名的都是可编辑)。可编辑调用进入:
 
 ```ts
 normalizeToolCallToEdit(call, { session, live }): Edit[] | null | Promise<Edit[] | null>
 ```
 
-返回 op 类型化编辑（op 形态见 `edits-lib.md`）。返回 `null` 跳过此调用。
+返回 op 类型化编辑(op 形态见 `edits-lib.md`)。返回 `null` 跳过此调用。
 
-**sandbox-diff 模式** —— 当你已经有一个原地变更器时，这是快速 bootstrap 的方式：
+**sandbox-diff 模式** —— 当你已经有一个原地变更器时,这是快速 bootstrap 的方式:
 
 1. 把 `live` 克隆成一个 sandbox profile。
 2. 在 sandbox 上跑现有变更器。
 3. 发射一条粗粒度的 `{ op: 'set', path: '', oldValue: live, newValue: sandbox }` 编辑。
 
-两个参考适配器都用此模式。它足够上线，但产出 profile 级冲突（任何并发变更都会与整批冲突）。要做生产级冲突解决，应当把每个工具调用归一化成逐字段 op（`set` / `str_replace` / `list_insert` 等）。
+两个参考适配器都用此模式。它足够上线,但产出 profile 级冲突(任何并发变更都会与整批冲突)。要做生产级冲突解决,应当把每个工具调用归一化成逐字段 op(`set` / `str_replace` / `list_insert` 等)。
 
-控制工具（continue / finalize）由外壳直接处理。仅当你想在 continue 或 finalize 上加额外行为时，才覆写 `executeControlToolCall(call, ctx, signal)`。
+适配器声明的控制工具(重置、切模式等)通过 runner 的 `isControlCall` 谓词路由到你的 `onControlCall` 处理函数,不走 normalize-to-edit 路径。外壳把它们也算成"这一轮有工具调用"——任意控制工具发射都会触发下一轮。
 
 ## Runner 设置
 

@@ -14,10 +14,6 @@
 const TOOL_SET_NODE_TYPE = 'mg_schema_set_node_type';
 const TOOL_REMOVE_NODE_TYPE = 'mg_schema_remove_node_type';
 const TOOL_REORDER_NODE_TYPES = 'mg_schema_reorder_node_types';
-// Control tool names duplicated from tools.js (kept literal to keep this
-// module pure / dep-free). If the names change, update both places.
-const CONTROL_TOOL_CONTINUE = 'luker_mg_schema_continue_iteration';
-const CONTROL_TOOL_FINALIZE = 'luker_mg_schema_finalize_iteration';
 
 export function buildSystemPrompt() {
     return [
@@ -69,8 +65,7 @@ export function buildSystemPrompt() {
         'When the user asks for a change, call the appropriate tools to enact it. If multiple changes apply, you may emit multiple tool calls in one turn.',
         '',
         'Multi-round iteration control:',
-        `- If the user request needs one more round of work after the current tools run (e.g. you just inspected and now want to act on what you learned), call ${CONTROL_TOOL_CONTINUE} in the same round. The popup will fire another round automatically.`,
-        `- When the request is fully addressed, call ${CONTROL_TOOL_FINALIZE} with a brief summary. Without this call (and without continue), the loop also stops after the current round, so finalize is the explicit signal of completion.`,
-        `- Never call continue and finalize in the same round. If you call both ${CONTROL_TOOL_CONTINUE} and ${CONTROL_TOOL_FINALIZE} in the same round, finalize wins.`,
+        '- The popup auto-continues whenever you emit any tool call this round — your tool results become context for the next round so you can react to them.',
+        '- To end the iteration, simply respond with a plain text message and emit no tool calls. The loop exits and control returns to the user.',
     ].join('\n');
 }

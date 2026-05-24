@@ -24,12 +24,46 @@
 
 import { runCharacterEditorHelperToolCall } from '../main.js';
 
+// Canonical list of character-card fields the unified editor knows how to
+// commit. Mirrors the union of:
+//   - CHARACTER_EDITOR_ROOT_TEXT_FIELDS  (name / description / personality /
+//                                         scenario / first_mes / mes_example)
+//   - CHARACTER_EDITOR_DATA_TEXT_FIELDS  (system_prompt /
+//                                         post_history_instructions /
+//                                         creator_notes)
+//   - CHARACTER_EDITOR_DATA_ARRAY_FIELDS (alternate_greetings — array-typed,
+//                                         AI should set as JSON string when
+//                                         the tool API allows; this enum
+//                                         lets unknown names fail fast at
+//                                         schema validation instead of at
+//                                         commit time)
+// Defined in `extensions/character-editor-assistant/main.js`. Adding new
+// fields requires updating both sides — `commitCharacterEditorOperations`
+// will silently skip unknown fields otherwise.
+export const CEA_CARD_FIELD_ENUM = Object.freeze([
+    'name',
+    'description',
+    'personality',
+    'scenario',
+    'first_mes',
+    'mes_example',
+    'system_prompt',
+    'post_history_instructions',
+    'creator_notes',
+    'alternate_greetings',
+]);
+
+export function isKnownCardField(name) {
+    return CEA_CARD_FIELD_ENUM.includes(String(name || ''));
+}
+
 // ---------------------------------------------------------------------------
 // Edit tools (cea_*)
 //
-// Six tools span the two halves of `live`:
+// Seven tools span the two halves of `live`:
 //   - card-field tools route to the built-in `set` / `str_replace` ops
 //   - lorebook-entry tools route to the CEA-registered custom ops keyed by uid
+//     (add / update / remove / str_replace-per-field)
 //   - `cea_set_lorebook_metadata` covers top-level lorebook fields (e.g.
 //     scan_depth, recursive_scan). Note: renaming a lorebook via `bookName`
 //     is rejected at commit time (see `commitLorebookOperations` in main.js);
@@ -41,16 +75,20 @@ import { runCharacterEditorHelperToolCall } from '../main.js';
 // forwarded to any provider that consumes the function-calling format.
 // ---------------------------------------------------------------------------
 
-const CHAR_ITER_EDIT_TOOL_DEFS = [
+const CEA_EDIT_TOOL_DEFS = [
     {
         type: 'function',
         function: {
             name: 'cea_set_card_field',
-            description: 'Set a character card field to a new value.',
+            description: 'Set a character card field to a new value. `field` is restricted to the canonical card fields enum.',
             parameters: {
                 type: 'object',
                 properties: {
-                    field: { type: 'string', description: 'Card field name (e.g. name, description, personality).' },
+                    field: {
+                        type: 'string',
+                        enum: [...CEA_CARD_FIELD_ENUM],
+                        description: 'Card field name. Restricted to: name / description / personality / scenario / first_mes / mes_example / system_prompt / post_history_instructions / creator_notes / alternate_greetings.',
+                    },
                     value: { type: 'string', description: 'New value for the field.' },
                 },
                 required: ['field', 'value'],
@@ -61,11 +99,15 @@ const CHAR_ITER_EDIT_TOOL_DEFS = [
         type: 'function',
         function: {
             name: 'cea_str_replace_card_field',
-            description: 'Find-and-replace a substring inside a character card field.',
+            description: 'Find-and-replace a substring inside a character card field. `field` is restricted to the canonical card fields enum.',
             parameters: {
                 type: 'object',
                 properties: {
-                    field: { type: 'string', description: 'Card field name.' },
+                    field: {
+                        type: 'string',
+                        enum: [...CEA_CARD_FIELD_ENUM],
+                        description: 'Card field name. Restricted to the canonical card fields enum (see cea_set_card_field).',
+                    },
                     find: { type: 'string', description: 'Substring to locate.' },
                     replace: { type: 'string', description: 'Replacement text.' },
                 },
@@ -95,7 +137,7 @@ const CHAR_ITER_EDIT_TOOL_DEFS = [
         type: 'function',
         function: {
             name: 'cea_update_lorebook_entry',
-            description: 'Patch fields of an existing lorebook entry, identified by uid. book_name selects which world book to target.',
+            description: 'Patch fields of an existing lorebook entry, identified by uid. book_name selects which world book to target. Prefer cea_str_replace_lorebook_entry_field for partial text edits within a single field.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -107,6 +149,25 @@ const CHAR_ITER_EDIT_TOOL_DEFS = [
                     },
                 },
                 required: ['book_name', 'uid', 'patch'],
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'cea_str_replace_lorebook_entry_field',
+            description: 'Find-and-replace a substring inside a single field of a lorebook entry. Mirrors cea_str_replace_card_field for lorebook entries — preferred over cea_update_lorebook_entry when you only want to tweak a portion of one field (typically `content`) without resending the entire field. Bails out without staging an edit when `find` is not present in the current value or when `expected_count` is supplied and the occurrence count does not match.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    book_name: { type: 'string', description: 'Target world book name.' },
+                    uid: { type: 'integer', description: 'uid of the entry to edit.' },
+                    field: { type: 'string', description: 'Entry field to edit (commonly `content`; also valid: `comment`, `key`, etc.).' },
+                    find: { type: 'string', description: 'Substring to locate inside the field.' },
+                    replace: { type: 'string', description: 'Replacement text.' },
+                    expected_count: { type: 'integer', minimum: 1, description: 'Optional. When supplied, the edit is staged only if `find` occurs exactly this many times in the field — guards against unintended over-replacement on common substrings.' },
+                },
+                required: ['book_name', 'uid', 'field', 'find', 'replace'],
             },
         },
     },
@@ -161,22 +222,33 @@ function parseArgs(call) {
  * `live` snapshot. Returns `null` only when args fail to parse; an empty
  * array means "valid call but no edits" (e.g. unrecognized tool name).
  *
- * Operates on the character-iteration shape — `live.card` and `live.lorebook`.
- * The unified editor's per-target wrapper (`normalizeToolCallToEdit` below)
- * remaps `live.character` / `live.lorebooks[name]` onto this shape, calls
- * here, then annotates the edits with `target` metadata.
+ * Operates on the unified editor's `live` shape:
+ *   - `live.character`             — the active character card fields
+ *   - `live.lorebooks[bookName]`   — per-book entries + meta, keyed by
+ *                                    `args.book_name`
+ *
+ * Path scheme:
+ *   - card-field ops emit `card.<field>` (rebased to bare `<field>` by
+ *     studio.js's `rebasePathToTarget` at commit time)
+ *   - lorebook ops emit `lorebook.entries` / `lorebook.<meta>` (likewise
+ *     rebased to `entries` / `<meta>` against the per-book commit slot)
+ * The path strings are deliberately decoupled from the live-shape lookup
+ * so the lookup can read the right `live.lorebooks[name]` slot while the
+ * commit still routes through the legacy rebase contract.
  */
-async function charIterNormalizeToolCallToEdit(call, ctx) {
+async function normalizeUnifiedToolCallToEdit(call, ctx) {
     const name = call?.function?.name;
     const args = parseArgs(call);
     if (args === null) return null;
     const live = ctx?.live ?? {};
+    const bookName = String(args?.book_name ?? '').trim();
+    const liveBook = bookName ? (live?.lorebooks?.[bookName] ?? null) : null;
 
     if (name === 'cea_set_card_field') {
         return [{
             op: 'set',
             path: `card.${args.field}`,
-            oldValue: live.card?.[args.field],
+            oldValue: live?.character?.[args.field],
             newValue: args.value,
         }];
     }
@@ -197,10 +269,15 @@ async function charIterNormalizeToolCallToEdit(call, ctx) {
         }];
     }
     if (name === 'cea_update_lorebook_entry') {
-        // Capture `before` from live state at emission time, for only the
+        // Capture `before` from the per-book live snapshot for only the
         // fields the patch touches. This makes the edit self-contained:
-        // inverse(edit) just swaps `patch` and `before`.
-        const cur = live.lorebook?.entries?.[args.uid];
+        // inverse(edit) just swaps `patch` and `before`. The lookup MUST
+        // index by `args.book_name` — the unified editor's live shape is
+        // `lorebooks: { [bookName]: { entries: { [uid]: ... } } }`, not a
+        // singular `lorebook`. A miss leaves `before` populated with
+        // undefineds and the apply-time `value_drifted` conflict detector
+        // rejects the commit.
+        const cur = liveBook?.entries?.[args.uid];
         const before = {};
         for (const k of Object.keys(args.patch || {})) {
             before[k] = cur?.[k];
@@ -213,10 +290,44 @@ async function charIterNormalizeToolCallToEdit(call, ctx) {
             before,
         }];
     }
+    if (name === 'cea_str_replace_lorebook_entry_field') {
+        // Per-field find/replace on a single entry. Lowered to a
+        // `lorebook_entry_update` so the apply / inverse / conflict
+        // detector path can stay shared with the full-update variant.
+        const field = String(args.field ?? '');
+        if (!field) return [];
+        const find = String(args.find ?? '');
+        const replace = String(args.replace ?? '');
+        const cur = liveBook?.entries?.[args.uid];
+        const currentValue = cur && Object.hasOwn(cur, field) ? String(cur[field] ?? '') : '';
+        const expectedCount = Number.isFinite(Number(args.expected_count))
+            ? Number(args.expected_count)
+            : null;
+        if (find === '') return [];
+        // Apply the replacement client-side so we can stage a precise
+        // `{ before, patch }` pair: the apply step won't re-run the find
+        // (it sees this as a plain field update). expected_count gate:
+        // bail out if the count doesn't match — but only when the caller
+        // supplied one. `replaceAll` is safe even when find appears once.
+        const occurrences = currentValue.split(find).length - 1;
+        if (expectedCount != null && occurrences !== expectedCount) {
+            return [];
+        }
+        if (occurrences === 0) return [];
+        const nextValue = currentValue.split(find).join(replace);
+        return [{
+            op: 'lorebook_entry_update',
+            path: 'lorebook.entries',
+            uid: args.uid,
+            patch: { [field]: nextValue },
+            before: { [field]: cur?.[field] },
+        }];
+    }
     if (name === 'cea_remove_lorebook_entry') {
         // Snapshot the live entry so the inverse `lorebook_entry_add`
-        // can faithfully restore it without re-reading state.
-        const entry = live.lorebook?.entries?.[args.uid];
+        // can faithfully restore it without re-reading state. Same
+        // per-book lookup contract as `cea_update_lorebook_entry`.
+        const entry = liveBook?.entries?.[args.uid];
         return [{
             op: 'lorebook_entry_remove',
             path: 'lorebook.entries',
@@ -228,7 +339,7 @@ async function charIterNormalizeToolCallToEdit(call, ctx) {
         return [{
             op: 'set',
             path: `lorebook.${args.key}`,
-            oldValue: live.lorebook?.[args.key],
+            oldValue: liveBook?.[args.key],
             newValue: args.value,
         }];
     }
@@ -237,49 +348,22 @@ async function charIterNormalizeToolCallToEdit(call, ctx) {
 
 // ---------------------------------------------------------------------------
 // Control tools
+//
+// CEA editor currently has no control tools. The multi-round auto-continue
+// loop is program-driven by tool-call presence (any tool call → next round,
+// none → stop). The empty map + predicate stay here so the runner's
+// `isControlCall` callback contract is uniform across popups.
 // ---------------------------------------------------------------------------
 
-export const CONTROL_TOOL_NAMES = Object.freeze({
-    continue: 'luker_cea_editor_continue_iteration',
-    finalize: 'luker_cea_editor_finalize_iteration',
-});
+export const CONTROL_TOOL_NAMES = Object.freeze({});
 
-const CONTROL_TOOL_NAME_SET = new Set(Object.values(CONTROL_TOOL_NAMES));
+const CONTROL_TOOL_NAME_SET = new Set();
 
 export function isCeaEditorControlCall(call) {
     return CONTROL_TOOL_NAME_SET.has(String(call?.name || ''));
 }
 
-export const CONTROL_TOOL_DEFS = [
-    {
-        type: 'function',
-        function: {
-            name: CONTROL_TOOL_NAMES.continue,
-            description: 'Request one automatic follow-up round after the current tools have run. Use only when more iteration is genuinely needed; otherwise call luker_cea_editor_finalize_iteration.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    note: { type: 'string', description: 'Optional rationale visible to the user.' },
-                },
-                additionalProperties: false,
-            },
-        },
-    },
-    {
-        type: 'function',
-        function: {
-            name: CONTROL_TOOL_NAMES.finalize,
-            description: 'Finalize this character/lorebook iteration with a concise summary. The popup stops auto-continuing after this call.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    summary: { type: 'string', description: 'Short user-facing summary of what changed.' },
-                },
-                additionalProperties: false,
-            },
-        },
-    },
-];
+export const CONTROL_TOOL_DEFS = [];
 
 // ---------------------------------------------------------------------------
 // Read tools (short canonical names)
@@ -451,7 +535,7 @@ export function buildCeaEditorToolSet(_context, _settings, opts = {}) {
         ? [...READ_TOOL_DEFS, WEB_SEARCH_TOOL_DEF]
         : READ_TOOL_DEFS.slice();
     return [
-        ...CHAR_ITER_EDIT_TOOL_DEFS,
+        ...CEA_EDIT_TOOL_DEFS,
         ...readTools,
         ...CONTROL_TOOL_DEFS,
     ];
@@ -479,9 +563,9 @@ export function buildCeaEditorToolSet(_context, _settings, opts = {}) {
  * @returns {Promise<Array<Object>|null>}
  */
 export async function normalizeToolCallToEdit(call, opts = {}) {
-    const adapted = adaptCallToCharIterShape(call);
-    const charIterCtx = { live: opts?.live ?? {}, context: opts?.context };
-    const edits = await charIterNormalizeToolCallToEdit(adapted, charIterCtx);
+    const adapted = adaptCallToOpenAiShape(call);
+    const ctx = { live: opts?.live ?? {}, context: opts?.context };
+    const edits = await normalizeUnifiedToolCallToEdit(adapted, ctx);
     if (!Array.isArray(edits)) {
         return null;
     }
@@ -489,13 +573,13 @@ export async function normalizeToolCallToEdit(call, opts = {}) {
 }
 
 /**
- * The local `charIterNormalizeToolCallToEdit` helper reads
- * `call.function.name` and `call.function.arguments` (JSON-string, OpenAI
- * shape). The unified editor's call objects are already parsed into
- * `{ id, name, args }`. Adapter wraps the parsed args back into a JSON
- * string so we can reuse that helper without copying its switch statement.
+ * `normalizeUnifiedToolCallToEdit` reads `call.function.name` and
+ * `call.function.arguments` (JSON-string, OpenAI shape). The unified
+ * editor's call objects are already parsed into `{ id, name, args }`.
+ * Adapter wraps the parsed args back into a JSON string so we can reuse
+ * the helper without copying its switch statement.
  */
-function adaptCallToCharIterShape(call) {
+function adaptCallToOpenAiShape(call) {
     const name = String(call?.name || '');
     const args = call?.args && typeof call.args === 'object' ? call.args : {};
     let argString;
@@ -530,6 +614,12 @@ function annotateTarget(edit, call, live = null) {
     if (name === 'cea_set_card_field' || name === 'cea_str_replace_card_field') {
         return { ...edit, target: { kind: 'character' } };
     }
+    // All lorebook tools share the `cea_*` + `lorebook` substring convention
+    // (cea_add_lorebook_entry, cea_update_lorebook_entry,
+    // cea_str_replace_lorebook_entry_field, cea_remove_lorebook_entry,
+    // cea_set_lorebook_metadata). The single substring check covers every
+    // tool that targets a world book — keep that invariant when adding
+    // future lorebook tools so target routing stays declarative.
     if (name.startsWith('cea_') && name.includes('lorebook')) {
         const args = call?.args && typeof call.args === 'object' ? call.args : {};
         let bookName = String(args.book_name ?? args.world_name ?? '').trim();

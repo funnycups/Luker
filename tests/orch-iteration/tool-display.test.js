@@ -36,9 +36,9 @@ beforeAll(async () => {
 });
 
 describe('Orch tool-display map', () => {
-    it('classifies continue/finalize as control', () => {
-        expect(ORCH_TOOL_DISPLAY.luker_orch_continue_iteration?.type).toBe('control');
-        expect(ORCH_TOOL_DISPLAY.luker_orch_finalize_iteration?.type).toBe('control');
+    it('excludes legacy continue / finalize from iter popup catalog (program-driven auto-continue)', () => {
+        expect(ORCH_TOOL_DISPLAY.luker_orch_continue_iteration).toBeUndefined();
+        expect(ORCH_TOOL_DISPLAY.luker_orch_finalize_iteration).toBeUndefined();
     });
 
     it('classifies reset_to_blank as control', () => {

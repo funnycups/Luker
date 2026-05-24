@@ -17,9 +17,20 @@
  * function applies the substitution.
  */
 
+// Popups thread their `tf` (template + values → translated+substituted)
+// formatter through here as `i18n`. Calling `tf(template)` with no values
+// eats the `${0}` placeholder, so we pass `values` through and only fall
+// back to manual substitution if the result still has unfilled markers
+// (which happens when the caller supplied a plain lookup, or i18n missed
+// the key entirely).
 function fmt(i18n, template, ...values) {
-    const translated = (typeof i18n === 'function' ? i18n(template) : template) || template;
-    return String(translated).replace(/\$\{(\d+)\}/g, (_, idx) => String(values[Number(idx)] ?? ''));
+    if (typeof i18n !== 'function') {
+        return String(template).replace(/\$\{(\d+)\}/g, (_, idx) => String(values[Number(idx)] ?? ''));
+    }
+    const translated = i18n(template, ...values);
+    const base = (typeof translated === 'string' && translated.length > 0) ? translated : String(template);
+    if (!/\$\{\d+\}/.test(base)) return base;
+    return base.replace(/\$\{(\d+)\}/g, (_, idx) => String(values[Number(idx)] ?? ''));
 }
 
 export const CPA_TOOL_DISPLAY = {
@@ -68,13 +79,9 @@ export const CPA_TOOL_DISPLAY = {
         summarize: (a, r, i18n) => {
             if (r && typeof r === 'object' && r.error) return `❌ ${String(r.error).slice(0, 50)}`;
             if (r && typeof r === 'object' && r.new_name) {
-                const tpl = (typeof i18n === 'function' ? i18n('Cloned to ${0}') : 'Cloned to ${0}');
-                return tpl.replace('${0}', String(r.new_name));
+                return fmt(i18n, 'Cloned to ${0}', String(r.new_name));
             }
             return String(a?.new_name || '');
         },
     },
-
-    luker_cpa_continue_iteration:        { icon: '➡️', label: 'Continue iteration',       type: 'control' },
-    luker_cpa_finalize_iteration:        { icon: '✅', label: 'Finalize iteration',       type: 'control' },
 };

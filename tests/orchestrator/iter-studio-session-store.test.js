@@ -101,7 +101,7 @@ describe('Orchestrator iter-studio session — new message schema persistence', 
         });
     });
 
-    test('save+load round-trips id/at/toolCalls/edits/appliedAt/appliedTarget/rolledBackAt/auto + pendingEdits + surfaceState.isFinalized', async () => {
+    test('save+load round-trips id/at/toolCalls/edits/appliedAt/appliedTarget/rolledBackAt/auto + pendingEdits + surfaceState', async () => {
         const session = {
             id: 'rt-1',
             title: 'Round trip',
@@ -112,8 +112,6 @@ describe('Orchestrator iter-studio session — new message schema persistence', 
             surfaceState: {
                 historyOpen: false,
                 autoApply: true,
-                isFinalized: true,
-                finalizeSummary: 'Bumped reviewer max_rounds.',
             },
             messages: [
                 { id: 'm1', role: 'user', content: 'Bump reviewer max_rounds to 4', at: 100 },
@@ -143,9 +141,10 @@ describe('Orchestrator iter-studio session — new message schema persistence', 
         expect(loaded.messages[2].auto).toBe(true);
         // pendingEdits at the session top level survives.
         expect(loaded.pendingEdits).toEqual(session.pendingEdits);
-        // surfaceState round-trips, including the new finalize fields.
-        expect(loaded.surfaceState.isFinalized).toBe(true);
-        expect(loaded.surfaceState.finalizeSummary).toBe('Bumped reviewer max_rounds.');
+        // surfaceState round-trips. The shape no longer carries
+        // isFinalized / finalizeSummary — the iter loop self-terminates
+        // when the model stops calling continue, so a banner-driven
+        // finalize flag is dead persisted state.
         expect(loaded.surfaceState.autoApply).toBe(true);
     });
 

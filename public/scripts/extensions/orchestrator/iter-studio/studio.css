@@ -310,33 +310,6 @@
     gap: var(--it-space-xs);
 }
 
-/* ── Finalized banner (orch-specific: shown after run completes) ────── */
-
-.orch_it_finalized {
-    flex: 0 0 auto;
-    padding: var(--it-space-sm) var(--it-space-md);
-    border-radius: var(--it-radius-md);
-    border: 1px solid color-mix(in oklab, var(--it-accent-assistant) 50%, transparent);
-    border-left: 3px solid color-mix(in oklab, var(--it-accent-assistant) 75%, transparent);
-    background: color-mix(in oklab, var(--it-accent-assistant) 10%, transparent);
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.orch_it_finalized_label {
-    font-weight: 700;
-    color: color-mix(in oklab, var(--it-accent-assistant) 85%, var(--SmartThemeBodyColor, #ddd));
-    text-transform: uppercase;
-    font-size: 0.82em;
-    letter-spacing: 0.06em;
-}
-
-.orch_it_finalized_summary {
-    font-size: 0.95em;
-    white-space: pre-wrap;
-    line-height: 1.5;
-}
 
 /* ── Composer ──────────────────────────────────────────────────────── */
 

@@ -6,13 +6,11 @@
  * falls back to the module-scoped `DEFAULT_SYSTEM_PROMPT` constant. This test
  * pins the parts of that constant that other systems depend on:
  *
- *   - It names the cea_editor scope's continue / finalize tool ids verbatim,
- *     so a tool rename has to update the prompt.
- *   - It documents the finalize-sticky rule (if the model emits BOTH continue
- *     and finalize in the same round, finalize wins and the loop ends). The
- *     behavior itself lives in onControlCall; this assertion guards the doc
- *     line that surfaces the rule in the prompt itself so the model can plan
- *     accordingly.
+ *   - It names the cea_editor scope's continue control tool id verbatim, so a
+ *     tool rename has to update the prompt.
+ *   - It explains the "stop calling continue to terminate" contract instead
+ *     of the older finalize-tool-based exit, so a regression that restores
+ *     the legacy finalize wording would be caught here.
  */
 
 import { jest } from '@jest/globals';
@@ -64,14 +62,13 @@ describe('unified CEA editor — DEFAULT_SYSTEM_PROMPT', () => {
         expect(studio.DEFAULT_SYSTEM_PROMPT.length).toBeGreaterThan(100);
     });
 
-    test('names the cea_editor-scoped continue / finalize control tools verbatim', () => {
+    test('does NOT reference legacy continue / finalize tools (program-driven auto-continue)', () => {
         const prompt = studio.DEFAULT_SYSTEM_PROMPT;
-        expect(prompt).toMatch(/luker_cea_editor_continue_iteration/);
-        expect(prompt).toMatch(/luker_cea_editor_finalize_iteration/);
-    });
-
-    test('documents finalize-sticky ordering so the LLM knows finalize wins over continue in the same round', () => {
-        const prompt = studio.DEFAULT_SYSTEM_PROMPT;
-        expect(prompt.toLowerCase()).toMatch(/finalize wins/);
+        expect(prompt).not.toMatch(/luker_cea_editor_continue_iteration/);
+        expect(prompt).not.toMatch(/luker_cea_editor_finalize_iteration/);
+        // Loose sanity check: prompt should explain program-driven auto-
+        // continue (tool call → next round, plain text → stop).
+        expect(prompt.toLowerCase()).toMatch(/auto-continue|tool call/);
+        expect(prompt.toLowerCase()).toMatch(/plain text|no tool calls/);
     });
 });

@@ -123,32 +123,30 @@ describe('unified CEA editor multi-round read+edit flow', () => {
         expect(typeof studio._testOnly_runIterationTurn).toBe('function');
     });
 
-    it('runs read tool → tool_result → next round, then edits, then finalize', async () => {
+    it('runs read tool → tool_result → next round, then edits, then exits on plain text', async () => {
         scriptRounds([
-            // Round 1: a read tool. No control call → auto-continues because
-            // every call this round was a read (per spec auto-continue logic).
+            // Round 1: a read tool. hadAnyToolCall=true → auto-continues.
             {
                 assistantText: 'reading…',
                 toolCalls: [
                     { id: 'r1', name: 'lorebook_query', args: { book_name: 'BookA', query: 'x' } },
                 ],
             },
-            // Round 2: an edit tool plus an explicit continue control. The
-            // edit lands in pendingEdits; continue routes the loop forward.
+            // Round 2: an edit tool. hadAnyToolCall=true → auto-continues.
+            // (The legacy `luker_cea_editor_continue_iteration` is no longer
+            // a control tool; emitting it here would just be another tool
+            // call. We omit it because it's now noise.)
             {
                 assistantText: 'editing…',
                 toolCalls: [
                     { id: 'e1', name: 'cea_update_lorebook_entry', args: { book_name: 'BookA', uid: 0, patch: { content: 'new' } } },
-                    { id: 'k1', name: 'luker_cea_editor_continue_iteration', args: {} },
                 ],
             },
-            // Round 3: finalize control → loop exits, surfaceState.isFinalized
-            // becomes true and no further requestToolCallsWithRetry fires.
+            // Round 3: plain text, no tool calls → loop exits because
+            // hadAnyToolCall is false.
             {
-                assistantText: 'finalizing…',
-                toolCalls: [
-                    { id: 'f1', name: 'luker_cea_editor_finalize_iteration', args: { summary: 'done' } },
-                ],
+                assistantText: 'all done',
+                toolCalls: [],
             },
         ]);
 
@@ -176,8 +174,11 @@ describe('unified CEA editor multi-round read+edit flow', () => {
             settings: {},
         });
 
-        // The runner was driven through 3 rounds (one mock call per round).
-        expect(requestToolCallsWithRetryMock.mock.calls.length).toBeGreaterThanOrEqual(3);
+        // The runner was driven through 2 rounds (read → edit). Round 2
+        // emits an edit, which lands in pendingEdits — the loop pauses
+        // for human review (Apply / Discard) per the IDE-style approval
+        // gate. Round 3 (the plain-text scripted entry) doesn't fire here.
+        expect(requestToolCallsWithRetryMock.mock.calls.length).toBe(2);
 
         // The edit tool produced at least one entry in pendingEdits, tagged
         // with a lorebook target so the apply step can route correctly.
@@ -185,13 +186,15 @@ describe('unified CEA editor multi-round read+edit flow', () => {
         const editTargets = state.pendingEdits.map(e => e?.target?.kind);
         expect(editTargets).toContain('lorebook');
 
-        // Finalize is sticky on surfaceState.
-        expect(state.session.surfaceState?.isFinalized).toBe(true);
+        // The loop exited because round 3 emitted no tool calls — there is
+        // no separate "isFinalized" surface state in the program-driven
+        // model; a plain-text response just ends the loop.
+        expect(state.session.surfaceState?.isFinalized).toBeFalsy();
 
         // The session messages should record an assistant message per round
         // so the user can see what happened in each step.
         const assistants = state.session.messages.filter(m => m.role === 'assistant');
-        expect(assistants.length).toBeGreaterThanOrEqual(3);
+        expect(assistants.length).toBeGreaterThanOrEqual(2);
 
         // At least one assistant message carries a toolResults entry that
         // references the read tool's id — proves the loop threaded the
@@ -201,24 +204,21 @@ describe('unified CEA editor multi-round read+edit flow', () => {
         expect(hasReadResult).toBe(true);
     });
 
-    it('exits the loop without auto-continuing when a non-read round emits edits but no continue', async () => {
+    it('pauses the loop when an edit-emitting round lands pending edits awaiting human approval', async () => {
         scriptRounds([
-            // Round 1: a single edit tool, NO control call. The loop should
-            // pause here so the user can review pendingEdits before any
-            // further AI activity (matches spec auto-continue gating).
+            // Round 1: a single edit tool → pendingEdits gate triggers,
+            // loop pauses for human review (Apply / Discard).
             {
-                assistantText: 'one-shot edit',
+                assistantText: 'first edit',
                 toolCalls: [
                     { id: 'e1', name: 'cea_set_card_field', args: { field: 'description', value: 'updated' } },
                 ],
             },
-            // Round 2 should never fire — this entry exists only as a guard
-            // to surface a bug if the loop incorrectly auto-continues.
+            // Round 2 (scripted but should never fire) — loop pauses after
+            // round 1 because pendingEdits has entries awaiting approval.
             {
                 assistantText: 'should not run',
-                toolCalls: [
-                    { id: 'f1', name: 'luker_cea_editor_finalize_iteration', args: {} },
-                ],
+                toolCalls: [],
             },
         ]);
 
@@ -236,6 +236,9 @@ describe('unified CEA editor multi-round read+edit flow', () => {
             settings: {},
         });
 
+        // Only 1 round fires — the pendingEdits gate halts the loop so
+        // the user can Apply / Discard before another auto-round mutates
+        // state on top of unreviewed edits.
         expect(requestToolCallsWithRetryMock.mock.calls.length).toBe(1);
         expect(state.pendingEdits.length).toBeGreaterThanOrEqual(1);
         expect(state.pendingEdits[0]?.target?.kind).toBe('character');
@@ -243,18 +246,28 @@ describe('unified CEA editor multi-round read+edit flow', () => {
         expect(state.session.surfaceState?.isFinalized).toBeFalsy();
     });
 
-    it('finalize is sticky even when continue is also emitted in the same round', async () => {
+    it('legacy continue + finalize calls flow through as regular tool calls and the loop continues until a no-tool round', async () => {
         scriptRounds([
+            // Round 1: the legacy continue + finalize tools both fire. They
+            // are no longer control tools — they pass through onToolCall as
+            // unknown tool names that normalizeToolCallToEdit silently no-
+            // ops. hadAnyToolCall is true → loop continues.
             {
-                assistantText: 'both flags',
+                assistantText: 'legacy emissions',
                 toolCalls: [
                     { id: 'k1', name: 'luker_cea_editor_continue_iteration', args: {} },
                     { id: 'f1', name: 'luker_cea_editor_finalize_iteration', args: { summary: 'really done' } },
                 ],
             },
+            // Round 2: a real edit lands.
             {
-                assistantText: 'must not run',
+                assistantText: 'follow-up',
                 toolCalls: [{ id: 'x', name: 'cea_set_card_field', args: { field: 'name', value: 'X' } }],
+            },
+            // Round 3: plain text → loop exits.
+            {
+                assistantText: 'all set',
+                toolCalls: [],
             },
         ]);
 
@@ -272,24 +285,28 @@ describe('unified CEA editor multi-round read+edit flow', () => {
             settings: {},
         });
 
-        expect(requestToolCallsWithRetryMock.mock.calls.length).toBe(1);
-        expect(state.session.surfaceState?.isFinalized).toBe(true);
-        expect(state.pendingEdits.length).toBe(0);
+        // Round 1: legacy continue+finalize names are not control tools
+        // (no pendingEdits produced) → loop continues. Round 2: a real
+        // edit lands → pendingEdits gate halts the loop for human review.
+        // Round 3 (scripted) never fires.
+        expect(requestToolCallsWithRetryMock.mock.calls.length).toBe(2);
+        expect(state.session.surfaceState?.isFinalized).toBeFalsy();
+        // The card-field edit from round 2 lands in pendingEdits.
+        expect(state.pendingEdits.length).toBeGreaterThanOrEqual(1);
     });
 
-    it('auto-continues past the historic 10-round cap when the model keeps reading', async () => {
-        // Pure-read rounds auto-continue (the model needs another turn to
-        // act on the result). Earlier builds capped this at 10 rounds, which
-        // silently truncated long sessions; the cap is gone. Drive 15 read
-        // rounds + a finalize and verify all 16 calls fire — i.e. the loop
-        // is NOT short-circuited at round 10.
+    it('auto-continues past the historic 10-round cap when the model keeps emitting tool calls', async () => {
+        // Long sessions where the model keeps emitting tools must NOT be
+        // short-circuited at any cap. Drive 15 read rounds + a plain-text
+        // exit round and verify all 16 calls fire — i.e. the loop runs
+        // exactly as long as tool calls are emitted, no hidden ceiling.
         const script = Array.from({ length: 15 }, (_, i) => ({
             assistantText: `read round ${i}`,
             toolCalls: [{ id: `r${i}`, name: 'lorebook_list', args: { book_name: 'BookA' } }],
         }));
         script.push({
             assistantText: 'all done',
-            toolCalls: [{ id: 'fin', name: 'luker_cea_editor_finalize_iteration', args: { summary: 'wrapped' } }],
+            toolCalls: [],
         });
         scriptRounds(script);
 
@@ -308,7 +325,8 @@ describe('unified CEA editor multi-round read+edit flow', () => {
         });
 
         expect(requestToolCallsWithRetryMock.mock.calls.length).toBe(16);
-        expect(state.session.surfaceState?.isFinalized).toBe(true);
+        // Loop exited because the final round emitted no tool calls.
+        expect(state.session.surfaceState?.isFinalized).toBeFalsy();
     });
 
     it('aborting mid-loop exits cleanly without throwing', async () => {

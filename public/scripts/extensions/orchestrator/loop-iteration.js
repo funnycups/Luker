@@ -41,10 +41,7 @@ export const LOOP_ITERATION_CONTRACT_LINES = Object.freeze([
     '- If you set apiPresetName, use only a name from available_connection_profiles. If you set promptPresetName, use only a name from available_chat_completion_presets.',
     '- Prefer targeted edits — bumping max_rounds should not rewrite the entire system_prompt.',
     '- If user asks to test, call luker_orch_simulate with suitable input.',
-    '- If you need one more autonomous step right after current execution, call luker_orch_continue_iteration.',
-    '- If you need user decision or clarification, do not call continue or finalize. Stop and wait for user.',
-    '- When iteration is complete, call luker_orch_finalize_iteration.',
-    '- If you call both luker_orch_continue_iteration and luker_orch_finalize_iteration in the same round, finalize wins.',
+    '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
     '- Keep output practical and concise for real RP usage.',
 ]);
 

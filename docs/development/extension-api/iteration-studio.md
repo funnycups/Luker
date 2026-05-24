@@ -14,11 +14,11 @@ This page is the contract and walkthrough for building your own adapter.
 An Iteration Studio session is a popup chat between the user and an LLM that emits **tool calls describing edits**. Each turn:
 
 1. User types a request and clicks Send.
-2. Shell asks the LLM with the adapter's tool catalog (plus shell-injected `continue` / `finalize` control tools).
+2. Shell asks the LLM with the adapter's tool catalog (plus any shell-injected control tools the adapter declares).
 3. For each tool call returned, the adapter normalizes it to a list of op-typed `Edit`s (see `edits-lib.md`).
 4. Shell applies the edits to `adapter.live()` via the edits library, detecting drift per-edit at apply time.
 5. Approved changes are committed back through `adapter.commit(newLive)`.
-6. If the LLM signaled `continueRequested`, the shell loops with an auto-continue prompt.
+6. The shell auto-continues whenever the round emitted any tool call (program-driven by tool-call presence). A plain-text response with no tool calls ends the iteration and returns control to the user.
 
 The shell does not carry a working copy of the artifact. `adapter.live()` is the single authority, called fresh whenever the shell needs the current value.
 
@@ -94,16 +94,9 @@ This means the artifact stays editable outside the studio at all times. The stud
 
 ## Tool dispatch
 
-`buildToolCatalog(session)` returns only the adapter's editable + custom control tools. The shell automatically injects two control tools:
+`buildToolCatalog(session)` returns the adapter's editable + custom control tools. The shell does not inject any continue / finalize control tools — the multi-round auto-continue loop is program-driven by tool-call presence (any tool call → next round, plain text + no tool calls → stop). If your adapter needs popup-side control tools (e.g. reset-state affordances), declare them in your catalog and route them through `classifyToolCall` / `executeControlToolCall` like any other adapter-specific control tool.
 
-| Tool | Default name | Effect |
-|---|---|---|
-| Continue | `iter_continue` | Loop another LLM turn with an auto-continue prompt. |
-| Finalize | `iter_finalize` | End the iteration cleanly with a summary. |
-
-Override the defaults via `controlToolNames: { continue, finalize }` if you need namespacing (both reference adapters do — `luker_orch_continue_iteration`, `luker_mg_schema_continue_iteration`, etc).
-
-Each LLM tool call routes through `classifyToolCall(call)` (default: anything not matching the control names is editable). Editable calls go to:
+Each LLM tool call routes through `classifyToolCall(call)` (default: anything not matching the adapter's declared control names is editable). Editable calls go to:
 
 ```ts
 normalizeToolCallToEdit(call, { session, live }): Edit[] | null | Promise<Edit[] | null>
@@ -119,7 +112,7 @@ Return the op-typed edits (see `edits-lib.md` for op shapes). Return `null` to s
 
 Both reference adapters use this pattern. It is good enough to ship but produces profile-level conflicts (any concurrent change collides with the whole batch). For production-grade conflict resolution, normalize each tool call into per-field ops (`set` / `str_replace` / `list_insert` etc).
 
-Control tools (continue / finalize) are handled by the shell directly. Override `executeControlToolCall(call, ctx, signal)` only if you want extra behavior on continue or finalize.
+Adapter-declared control tools (reset-state, mode-switch, etc) route through the runner's `isControlCall` predicate to your `onControlCall` handler rather than the normalize-to-edit path. The shell counts them as tool calls for auto-continue purposes — any control-tool emission still triggers the next round.
 
 ## Runner settings
 

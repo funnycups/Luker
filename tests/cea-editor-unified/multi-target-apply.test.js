@@ -96,8 +96,6 @@ function makeSession(messages) {
         surfaceState: {
             historyOpen: false,
             autoApply: false,
-            isFinalized: false,
-            finalizeSummary: '',
         },
     };
 }

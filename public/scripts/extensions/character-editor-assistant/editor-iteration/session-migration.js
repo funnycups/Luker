@@ -28,7 +28,10 @@
  *     .operations / .toolSummary / .toolState → dropped (not needed in unified UI)
  *     .executionResults                     → dropped (live state is rebuilt at open time)
  *   pendingApproval.{diffPreviews|operations} → pendingEdits[]
- *   isFinalized / surfaceState              → surfaceState
+ *   isFinalized / finalizeSummary            → dropped (the unified popup no
+ *                                              longer surfaces a finalize banner;
+ *                                              legacy sessions silently lose the
+ *                                              flag on first load)
  *
  * `live` is intentionally left empty: the legacy popup didn't persist the
  * synthetic apply target, so the unified popup rebuilds it from the active
@@ -91,10 +94,11 @@ export function migrateLegacyCeaEditorSession(legacy, opts = {}) {
         // Live state was never persisted in the legacy format — it's rebuilt
         // from the active card/lorebook at popup open time.
         live: { character: {}, lorebooks: {} },
-        surfaceState: {
-            isFinalized: Boolean(legacy.isFinalized || legacy.surfaceState?.isFinalized),
-            finalizeSummary: String(legacy.finalizeSummary || legacy.surfaceState?.finalizeSummary || ''),
-        },
+        // surfaceState in the unified shape no longer carries `isFinalized` /
+        // `finalizeSummary` — the popup's loop self-terminates when the AI
+        // stops calling continue, so a separate finalize flag would just be
+        // dead persisted state. Legacy values are dropped on load.
+        surfaceState: {},
     };
 }
 

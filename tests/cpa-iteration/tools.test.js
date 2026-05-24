@@ -99,29 +99,36 @@ describe('CPA — tools', () => {
     });
 });
 
-describe('CPA control tools — multi-round support', () => {
-    test('buildToolCatalog includes luker_cpa_continue_iteration', () => {
+describe('CPA control tools — program-driven auto-continue', () => {
+    test('buildToolCatalog does NOT include luker_cpa_continue_iteration (legacy, removed)', () => {
         const catalog = buildToolCatalog({ hasReference: true });
         const names = catalog.map(d => d.function?.name);
-        expect(names).toContain('luker_cpa_continue_iteration');
+        // The continue tool was retired — the multi-round loop is now
+        // program-driven by tool-call presence (any tool call → next round,
+        // none → stop).
+        expect(names).not.toContain('luker_cpa_continue_iteration');
     });
 
-    test('buildToolCatalog includes luker_cpa_finalize_iteration', () => {
+    test('buildToolCatalog does NOT include luker_cpa_finalize_iteration (legacy, removed)', () => {
         const catalog = buildToolCatalog({ hasReference: true });
         const names = catalog.map(d => d.function?.name);
-        expect(names).toContain('luker_cpa_finalize_iteration');
+        expect(names).not.toContain('luker_cpa_finalize_iteration');
     });
 
-    test('control tools appear even when hasReference=false (always available)', () => {
+    test('the catalog has no control tools (hasReference is irrelevant for them)', () => {
         const catalog = buildToolCatalog({ hasReference: false });
         const names = catalog.map(d => d.function?.name);
-        expect(names).toContain('luker_cpa_continue_iteration');
-        expect(names).toContain('luker_cpa_finalize_iteration');
+        expect(names).not.toContain('luker_cpa_continue_iteration');
+        expect(names).not.toContain('luker_cpa_finalize_iteration');
     });
 
-    test('isCpaControlCall returns true for control tools and false for edit tools', () => {
-        expect(isCpaControlCall({ name: 'luker_cpa_continue_iteration' })).toBe(true);
-        expect(isCpaControlCall({ name: 'luker_cpa_finalize_iteration' })).toBe(true);
+    test('isCpaControlCall returns false for edit tools and the legacy continue / finalize names', () => {
+        // CPA has no popup-side control tools today. A legacy emission of
+        // continue / finalize from a stale session replay must NOT route
+        // through onControlCall — it should pass through onToolCall and
+        // normalize to a no-op edit.
+        expect(isCpaControlCall({ name: 'luker_cpa_continue_iteration' })).toBe(false);
+        expect(isCpaControlCall({ name: 'luker_cpa_finalize_iteration' })).toBe(false);
         expect(isCpaControlCall({ name: 'preset_set_field' })).toBe(false);
         expect(isCpaControlCall({ name: '' })).toBe(false);
         expect(isCpaControlCall({})).toBe(false);

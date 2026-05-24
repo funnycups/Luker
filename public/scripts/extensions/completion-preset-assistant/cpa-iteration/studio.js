@@ -312,6 +312,16 @@ function createNewSession() {
         updatedAt: now,
         createdAt: now,
         summary: '',
+        // Skip-persist marker for empty draft sessions. persistSession's
+        // guard reads this and short-circuits when the session has no
+        // messages + no pending edits — without it, mount-time popup open
+        // + close (without sending anything) would write a phantom row to
+        // the history list. Cleared in persistSession the first time the
+        // session has meaningful content. startNewSession / initSession
+        // fallback / loadSession-misses keep the flag explicitly for the
+        // same reason. The flag is stripped via `delete` (not set to
+        // false) so the persisted JSON stays clean.
+        _transient: true,
     };
 }
 
@@ -791,7 +801,10 @@ export async function openCpaIterationStudio(deps) {
         // unapplied turns were superseded by a later round and the Apply
         // click handler operates on state.pendingEdits (which mirrors the
         // latest batch).
-        const allMsgs = state.session.messages || [];
+        // Filter auto-generated continuation prompts out of the rendered
+        // chat — they stay in state.session.messages for buildTaskMessages
+        // but shouldn't appear as user-visible chat noise.
+        const allMsgs = (state.session.messages || []).filter(m => !(m?.role === 'user' && m?.auto));
         let latestUnappliedAssistantId = '';
         for (let i = allMsgs.length - 1; i >= 0; i--) {
             const m = allMsgs[i];
@@ -1013,22 +1026,15 @@ export async function openCpaIterationStudio(deps) {
 
         // For auto-continue rounds, splice a synthetic user message into the
         // visible history so the model has a fresh prompt to react to and the
-        // chat doesn't look like the model spoke twice in a row. The prompt
-        // is conservative — auto-continue is the AI's request, so we just
-        // ask it to proceed; the model's prior tool calls/results stay in
-        // the context window.
+        // chat doesn't look like the model spoke twice in a row. Auto-continue
+        // fires whenever the prior round emitted any tool call — the runner
+        // already preserves prior tool_calls/tool_results in context, so this
+        // synthetic prompt just nudges the model to proceed or stop.
         if (autoContinueFromResult) {
-            const noteLines = [
-                'Continue with the next iteration step.',
-            ];
-            if (autoContinueFromResult?.continueNote) {
-                noteLines.push(`Prior note: ${String(autoContinueFromResult.continueNote)}`);
-            }
-            noteLines.push('Call luker_cpa_finalize_iteration once the request is fully addressed.');
             state.session.messages.push({
                 id: makeMessageId(),
                 role: 'user',
-                content: noteLines.join('\n'),
+                content: 'Continue with the next iteration step. Respond with plain text and no tool calls when the request is fully addressed.',
                 at: Date.now(),
                 auto: true,
             });
@@ -1051,15 +1057,13 @@ export async function openCpaIterationStudio(deps) {
 
         // Per-round callback bookkeeping. The runner fires onAssistantText
         // once (after validation, before return) and onToolCall once per
-        // non-control call in array order. Control tools (continue /
-        // finalize) route to onControlCall via the isControlCall predicate,
-        // so they never pollute the edit-tool list.
+        // non-control call in array order. CPA currently has no control
+        // tools — `isCpaControlCall` returns false for all names, so every
+        // call lands in `collectedToolCalls`. The outer loop continues
+        // whenever ANY tool call landed.
         let firstAssistantText = '';
         const collectedToolCalls = [];
-        let wantsAutoContinue = false;
-        let sawFinalize = false;
-        let finalizeSummary = '';
-        let continueNote = '';
+        let hadAnyToolCall = false;
 
         const result = await ITER_RUNNER.requestToolCallsWithRetry(
             getContext(),
@@ -1079,23 +1083,14 @@ export async function openCpaIterationStudio(deps) {
                 },
                 onToolCall: (call) => {
                     collectedToolCalls.push(call);
+                    hadAnyToolCall = true;
                 },
-                onControlCall: (call) => {
-                    const name = String(call?.name || '');
-                    if (name === CONTROL_TOOL_NAMES.continue) {
-                        // Finalize is sticky: if the model emits both controls
-                        // in one turn (continue, finalize OR finalize, continue)
-                        // the iteration ends. Order of call arrival should not
-                        // change the outcome.
-                        if (!sawFinalize) {
-                            wantsAutoContinue = true;
-                            continueNote = String(call?.args?.note || '');
-                        }
-                    } else if (name === CONTROL_TOOL_NAMES.finalize) {
-                        sawFinalize = true;
-                        wantsAutoContinue = false;
-                        finalizeSummary = String(call?.args?.summary || '');
-                    }
+                onControlCall: () => {
+                    // No control tools today; the runner still calls this
+                    // hook when isCpaControlCall returns true (it never does
+                    // now). Mark `hadAnyToolCall` defensively so any future
+                    // control tool participates in the continue signal.
+                    hadAnyToolCall = true;
                 },
             },
         );
@@ -1181,7 +1176,17 @@ export async function openCpaIterationStudio(deps) {
         // (e.g. upsert_prompt_entry returns paired prompts[] + prompt_order
         // edits). Failures push a system message so the user sees the
         // attempted operation didn't translate cleanly.
+        //
+        // Chain the `live` baseline across tool calls: each normalize sees
+        // the previous call's post-mutation state, not a fresh snapshot.
+        // Without this, prompt-aware tools (`preset_upsert_prompt_entry`,
+        // `preset_remove_prompt_entry`, `preset_upsert_prompt_order_item`,
+        // `preset_remove_prompt_order_item`) emit coarse `path:'prompts'`/
+        // `path:'prompt_order'` whole-array sets where the second call's
+        // newValue lacks the first call's mutation — apply runs them in
+        // order and the second wholesale clobbers the first.
         const edits = [];
+        let chainedLive = state.live;
         for (const call of editToolCalls) {
             const name = String(call?.name || '');
             if (!EDITABLE_TOOL_NAMES.has(name)) continue; // defensive
@@ -1189,13 +1194,29 @@ export async function openCpaIterationStudio(deps) {
                 const normalized = await normalizeToolCallToEdit(
                     wrapToolCallForNormalize(call),
                     {
-                        live: state.live,
+                        live: chainedLive,
                         session: state.session,
                         getReferencePresetBody,
                     },
                 );
-                if (Array.isArray(normalized)) {
+                if (Array.isArray(normalized) && normalized.length > 0) {
                     edits.push(...normalized);
+                    // Advance the baseline by applying just this call's
+                    // edits to a clone. The next call's normalize sees the
+                    // composed state so its coarse path:'prompts' sandbox
+                    // is built on top of, not parallel to, prior work.
+                    try {
+                        const clone = structuredClone(chainedLive);
+                        const result = applyEdits(normalized, clone);
+                        chainedLive = result?.newLive ?? clone;
+                    } catch (err) {
+                        // applyEdits choke shouldn't kill the whole turn;
+                        // keep the chain frozen so subsequent calls at
+                        // least don't see corrupted state. The edits are
+                        // still queued for the user to review/Apply.
+                        // eslint-disable-next-line no-console
+                        console.warn(`[${MODULE}] chain advance failed after ${name}`, err);
+                    }
                 }
             } catch (err) {
                 // eslint-disable-next-line no-console
@@ -1209,14 +1230,12 @@ export async function openCpaIterationStudio(deps) {
             }
         }
 
-        // Implicit auto-continue on pure-read rounds: the model called only
-        // read tools and didn't emit finalize / continue control. The reads
-        // are now in taskMessages as `role: 'tool'` results, so the model
-        // needs another turn to act on what it just read. Without this the
-        // loop exits on `edits.length === 0` and the popup stalls.
-        if (!sawFinalize && !wantsAutoContinue && edits.length === 0 && readCalls.length > 0) {
-            wantsAutoContinue = true;
-        }
+        // Pure-read rounds (no edits) still count as a tool-call round — the
+        // model called read tools whose results are now in taskMessages as
+        // `role: 'tool'` entries, so it needs another turn to act on them.
+        // `hadAnyToolCall` is already true here because onToolCall fired for
+        // each read; this branch only documents the case so future readers
+        // understand why no special handling is needed.
 
         // Stage the assistant message with the full per-round audit trail.
         // Falls back to a synthesized summary when the model emitted tool
@@ -1235,8 +1254,8 @@ export async function openCpaIterationStudio(deps) {
                 .join(', ');
             content = tf('Suggested actions: ${0}', names);
         }
-        if (!content && (wantsAutoContinue || finalizeSummary)) {
-            content = finalizeSummary || t('Continuing...');
+        if (!content && hadAnyToolCall) {
+            content = t('Continuing...');
         }
         const assistantMsg = {
             id: makeMessageId(),
@@ -1284,12 +1303,9 @@ export async function openCpaIterationStudio(deps) {
         }
 
         return {
-            wantsAutoContinue,
+            hadAnyToolCall,
             executionResult: {
-                finalized: Boolean(finalizeSummary) || (!wantsAutoContinue && edits.length === 0),
-                finalizeSummary,
-                continueRequested: wantsAutoContinue,
-                continueNote,
+                finalized: !hadAnyToolCall,
                 changed: edits.length > 0,
                 hasPending: edits.length > 0,
             },
@@ -1457,14 +1473,12 @@ export async function openCpaIterationStudio(deps) {
     // BEFORE the await so the user sees their own input before the LLM
     // wait spinner starts. Errors surface as system messages.
     //
-    // Multi-round auto-continue: when the AI emits
-    // `luker_cpa_continue_iteration`, runIterationTurn returns
-    // `wantsAutoContinue: true` and the loop fires another round (after
-    // rendering the previous round so the user sees progressive output).
-    // The ONLY exits are:
-    //   1. The model called `luker_cpa_finalize_iteration` (no continue).
-    //   2. The model did neither (e.g. produced edits + stopped).
-    //   3. The user clicked Stop (abortController fires; isAbortError
+    // Multi-round auto-continue is program-driven by tool-call presence:
+    // whenever a round emits any tool call (read OR edit), the loop fires
+    // another round (after rendering the previous round so the user sees
+    // progressive output). The ONLY exits are:
+    //   1. The model responded with plain text and no tool calls.
+    //   2. The user clicked Stop (abortController fires; isAbortError
     //      catches the resulting error in the catch block).
     // There is NO hard round cap — runaway loops are the user's problem
     // and a single Stop click ends them.
@@ -1490,7 +1504,7 @@ export async function openCpaIterationStudio(deps) {
         await render();   // Q6: user message visible before LLM wait
         try {
             let turn = await runIterationTurn();
-            while (turn?.wantsAutoContinue) {
+            while (turn?.hadAnyToolCall && state.pendingEdits.length === 0) {
                 await persistSession();
                 await render();   // progressive: prior round visible before next
                 if (state.abortController?.signal?.aborted) break;

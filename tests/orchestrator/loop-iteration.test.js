@@ -78,9 +78,9 @@ describe('LOOP_ITERATION_CONTRACT_LINES', () => {
         expect(text).toMatch(/luker_orch_set_loop_profile/);
     });
 
-    test('directs the AI to call continue / finalize iteration tools as appropriate', () => {
-        expect(text).toMatch(/luker_orch_continue_iteration/);
-        expect(text).toMatch(/luker_orch_finalize_iteration/);
+    test('does NOT reference legacy continue / finalize iteration tools (program-driven auto-continue)', () => {
+        expect(text).not.toMatch(/luker_orch_continue_iteration/);
+        expect(text).not.toMatch(/luker_orch_finalize_iteration/);
     });
 
     test('avoids spec-mode-only language about stages, nodes, or presets', () => {
@@ -91,13 +91,14 @@ describe('LOOP_ITERATION_CONTRACT_LINES', () => {
         expect(text).not.toMatch(/luker_orch_set_preset/);
     });
 
-    test('documents finalize-sticky ordering so the LLM knows finalize wins over continue in the same round', () => {
-        // Sticky-finalize: if the model calls both continue + finalize in
-        // a single round, the popup's onControlCall handler treats finalize
-        // as the terminator and ends the loop. This assertion guards the
-        // doc line that surfaces the rule in the prompt itself so the
-        // model can plan accordingly.
-        expect(text.toLowerCase()).toMatch(/finalize wins/);
+    test('documents program-driven auto-continue (any tool call → next round, plain text → stop)', () => {
+        // The loop-mode iter popup auto-continues whenever the AI emits any
+        // tool call this round; a plain-text response with no tool calls
+        // ends the iteration. The legacy "finalize wins over continue"
+        // sticky ordering is gone — neither control tool exists anymore.
+        expect(text.toLowerCase()).toMatch(/auto-continue|tool call/);
+        expect(text.toLowerCase()).toMatch(/plain text|no tool calls/);
+        expect(text.toLowerCase()).not.toMatch(/finalize wins/);
     });
 });
 

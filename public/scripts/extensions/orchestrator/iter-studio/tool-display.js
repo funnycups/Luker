@@ -6,10 +6,13 @@
  *
  * Keys are the `luker_orch_*` tool names registered in
  * `orchestrator/main.js#buildAiIterationToolSet` (one catalog per mode:
- * director / agenda / loop / spec), plus the four control tools that
- * `iter-studio/studio.js` splices into every catalog
- * (`luker_orch_continue_iteration`, `luker_orch_finalize_iteration`,
- * `luker_orch_reset_live_to_blank`, `luker_orch_reset_live_to_global`).
+ * director / agenda / loop / spec), plus the per-mode reset control tools
+ * that `iter-studio/studio.js` splices into character-scope catalogs
+ * (`luker_orch_reset_live_to_blank`, `luker_orch_reset_live_to_global`).
+ * The legacy `luker_orch_continue_iteration` / `luker_orch_finalize_iteration`
+ * tools are NOT exposed by the iter popup at all (catalog + tool-display)
+ * — the multi-round loop is program-driven by tool-call presence, so
+ * AI-driven continue / finalize signals do not participate.
  *
  * Each value is `{ icon, label, type, summarize?(args, result, i18n) }`:
  *   - `type: 'edit'`    — mutates the working profile (sandbox-diff
@@ -43,9 +46,20 @@
  * declares the i18n keys, never the localized text.
  */
 
+// Popups thread their `tf` (template + values → translated+substituted)
+// formatter through here as `i18n`. Calling `tf(template)` with no values
+// eats the `${0}` placeholder, so we pass `values` through and only fall
+// back to manual substitution if the result still has unfilled markers
+// (which happens when the caller supplied a plain lookup, or i18n missed
+// the key entirely).
 function fmt(i18n, template, ...values) {
-    const translated = (typeof i18n === 'function' ? i18n(template) : template) || template;
-    return String(translated).replace(/\$\{(\d+)\}/g, (_, idx) => String(values[Number(idx)] ?? ''));
+    if (typeof i18n !== 'function') {
+        return String(template).replace(/\$\{(\d+)\}/g, (_, idx) => String(values[Number(idx)] ?? ''));
+    }
+    const translated = i18n(template, ...values);
+    const base = (typeof translated === 'string' && translated.length > 0) ? translated : String(template);
+    if (!/\$\{\d+\}/.test(base)) return base;
+    return base.replace(/\$\{(\d+)\}/g, (_, idx) => String(values[Number(idx)] ?? ''));
 }
 
 export const ORCH_TOOL_DISPLAY = {
@@ -170,17 +184,7 @@ export const ORCH_TOOL_DISPLAY = {
         },
     },
 
-    // ── Control tools (every mode) ─────────────────────────────────
-    luker_orch_continue_iteration: {
-        icon: '➡️',
-        label: 'Continue iteration',
-        type: 'control',
-    },
-    luker_orch_finalize_iteration: {
-        icon: '✅',
-        label: 'Finalize iteration',
-        type: 'control',
-    },
+    // ── Control tools (character scope) ───────────────────────────
     luker_orch_reset_live_to_blank: {
         icon: '♻️',
         label: 'Reset working profile to blank',

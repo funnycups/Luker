@@ -27,14 +27,15 @@ describe('MG Schema — system prompt', () => {
         expect(out.toLowerCase()).toMatch(/schema/);
     });
 
-    test('documents finalize-sticky ordering so the LLM knows finalize wins over continue in the same round', () => {
-        // Sticky-finalize: when a round emits both continue + finalize, the
-        // popup ends the iteration (finalize wins). The behavior lives in
-        // onControlCall; this assertion guards the doc line that surfaces
-        // the rule in the prompt itself so the model can plan accordingly.
+    test('documents the program-driven auto-continue contract (any tool call → next round)', () => {
+        // The legacy continue / finalize control tools were removed. The
+        // multi-round loop is now program-driven by tool-call presence —
+        // any tool call triggers another round; plain text + no tool calls
+        // ends the iteration. Surface both halves of the contract.
         const out = buildSystemPrompt();
-        expect(out).toMatch(/luker_mg_schema_continue_iteration/);
-        expect(out).toMatch(/luker_mg_schema_finalize_iteration/);
-        expect(out.toLowerCase()).toMatch(/finalize wins/);
+        expect(out).not.toMatch(/luker_mg_schema_continue_iteration/);
+        expect(out).not.toMatch(/luker_mg_schema_finalize_iteration/);
+        expect(out.toLowerCase()).toMatch(/auto-continue|tool call/);
+        expect(out.toLowerCase()).toMatch(/plain text|no tool calls/);
     });
 });

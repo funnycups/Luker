@@ -21,9 +21,20 @@
  * `tests/cea-editor-unified/tools.test.js`.
  */
 
+// Popups thread their `tf` (template + values → translated+substituted)
+// formatter through here as `i18n`. Calling `tf(template)` with no values
+// eats the `${0}` placeholder, so we pass `values` through and only fall
+// back to manual substitution if the result still has unfilled markers
+// (which happens when the caller supplied a plain lookup, or i18n missed
+// the key entirely).
 function fmt(i18n, template, ...values) {
-    const translated = (typeof i18n === 'function' ? i18n(template) : template) || template;
-    return String(translated).replace(/\$\{(\d+)\}/g, (_, idx) => String(values[Number(idx)] ?? ''));
+    if (typeof i18n !== 'function') {
+        return String(template).replace(/\$\{(\d+)\}/g, (_, idx) => String(values[Number(idx)] ?? ''));
+    }
+    const translated = i18n(template, ...values);
+    const base = (typeof translated === 'string' && translated.length > 0) ? translated : String(template);
+    if (!/\$\{\d+\}/.test(base)) return base;
+    return base.replace(/\$\{(\d+)\}/g, (_, idx) => String(values[Number(idx)] ?? ''));
 }
 
 export const CEA_EDITOR_TOOL_DISPLAY = {
@@ -53,6 +64,16 @@ export const CEA_EDITOR_TOOL_DISPLAY = {
         label: 'Update lorebook entry',
         type: 'edit',
         summarize: (a) => (a?.uid != null ? `#${a.uid}` : ''),
+    },
+    cea_str_replace_lorebook_entry_field: {
+        icon: '🔄',
+        label: 'Replace text in lorebook entry',
+        type: 'edit',
+        summarize: (a) => {
+            const uid = a?.uid != null ? `#${a.uid}` : '';
+            const field = a?.field ? String(a.field) : '';
+            return [uid, field].filter(Boolean).join(' ');
+        },
     },
     cea_remove_lorebook_entry: {
         icon: '🗑️',
@@ -148,18 +169,6 @@ export const CEA_EDITOR_TOOL_DISPLAY = {
         },
     },
 
-    // ----- Control ---------------------------------------------------------
-    // Control tools route through `onControlCall`, not through
-    // `normalizeToolCallToEdit`, but still appear in the tool-call chip
-    // strip so the user can see the AI's continue / finalize decisions.
-    luker_cea_editor_continue_iteration: {
-        icon: '➡️',
-        label: 'Continue iteration',
-        type: 'control',
-    },
-    luker_cea_editor_finalize_iteration: {
-        icon: '✅',
-        label: 'Finalize iteration',
-        type: 'control',
-    },
+    // CEA editor has no control tools; the auto-continue loop is program-
+    // driven by tool-call presence.
 };

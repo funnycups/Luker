@@ -360,9 +360,8 @@ export function buildModelSystemPrompt({ hasReference = false, mode = SESSION_MO
         '- Only rewrite broadly when the user explicitly asks for a rewrite / overhaul / redesign.',
         '',
         'Multi-round iteration control:',
-        '- If the user request needs one more round of work after the current tools run (e.g. you just inspected and now want to act on what you learned), call luker_cpa_continue_iteration in the same round. The popup will fire another round automatically.',
-        '- When the request is fully addressed, call luker_cpa_finalize_iteration with a brief summary. Without this call (and without continue), the loop also stops after the current round, so finalize is the explicit signal of completion.',
-        '- Never call continue and finalize in the same round. If you call both luker_cpa_continue_iteration and luker_cpa_finalize_iteration in the same round, finalize wins.',
+        '- The popup auto-continues whenever you emit any tool call this round — your tool results become context for the next round so you can react to them.',
+        '- To end the iteration, simply respond with a plain text message and emit no tool calls. The loop exits and control returns to the user.',
     ];
 
     const safeMode = sanitizeSessionMode(mode);

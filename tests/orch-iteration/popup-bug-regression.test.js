@@ -158,8 +158,13 @@ describe('ORCH-2 / ORCH-3 / ORCH-4: system prompt references only real tool name
         expect(defaultsSrc).toMatch(/luker_orch_set_preset/);
     });
 
-    test('defaults.js does reference luker_orch_finalize_iteration (real name)', () => {
-        expect(defaultsSrc).toMatch(/luker_orch_finalize_iteration/);
+    test('defaults.js no longer references luker_orch_finalize_iteration (legacy, removed)', () => {
+        // The iter popup catalog removed finalize; the autonomous orch
+        // executor in main.js still handles it for its own loop, but
+        // defaults.js (the director default prompt) was cleaned up to
+        // describe the implicit-termination contract instead. This
+        // regression guard catches a future revert.
+        expect(defaultsSrc).not.toMatch(/luker_orch_finalize_iteration/);
     });
 
     test('main.js macros contract drops luker_orch_str_replace_field (fake name) — ORCH-3', () => {

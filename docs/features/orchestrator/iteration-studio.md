@@ -47,7 +47,7 @@ When the AI says it has nothing more to suggest, click **Apply to Global** (use 
 
 - **Multi-round dialogue.** One sentence of feedback per round, AI proposes a focused change, you review.
 - **Per-change approval (Spec / Agenda).** Each diff entry has its own Approve / Reject. You can take half of a proposal.
-- **AI-driven termination (Loop).** The AI decides when to stop iterating — the `continueRequested` flag is set by the AI through tool calls. **There is no manual Auto-Continue toggle.**
+- **Program-driven auto-continue.** The Studio fires another round whenever the AI emits any tool call this round, and stops the moment the AI responds with plain text and no tool calls. **There is no manual Auto-Continue toggle and no AI-side continue / finalize tool — the loop just reads what the AI did.**
 - **Simulation.** Run the workflow against your actual current chat — exactly as if you'd just sent a new message, World Info activation included — but the result only surfaces in the Studio, *not* in the real chat. Ask "will my Constraint Agent really catch the OOC-prone moments?" and the Studio shows you each node's output.
 - **Sessions.** Up to 24 saved sessions per scope. Different cards or different experiments each get their own thread.
 - **Rollback.** Even after Apply, you can revert.
@@ -84,7 +84,7 @@ Don't want to hand-write the system prompt? Open the Studio in Loop mode and des
 
 > I want this agent to read the last 5 floors first, then look up relevant lorebook entries, then check the memory graph for conflicts, then write the capsule. Don't have it take notes.
 
-The Studio's AI reads your current profile and patches it via tool calls. Each call is either `luker_orch_continue_iteration` (keep refining / partial update) or `luker_orch_finalize_iteration` (this iteration's request is satisfied). The AI decides when to stop.
+The Studio's AI reads your current profile and patches it via tool calls. The Studio auto-continues whenever the AI emits any tool call this round and stops the moment the AI responds with plain text and no tool calls — so iteration just keeps going as long as the AI keeps making changes.
 
 ## Sessions
 

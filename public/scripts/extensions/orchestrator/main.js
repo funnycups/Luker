@@ -2069,7 +2069,7 @@ function buildAiIterationAutoContinuePrompt(executionResult) {
         simulationText,
         '</simulation_results>',
         '',
-        'If all requested work is complete, call luker_orch_finalize_iteration.',
+        'If all requested work is complete, respond with plain text and emit no tool calls — the loop will exit.',
         'Otherwise, emit the next focused tool calls.',
     ].join('\n');
 }
@@ -2611,10 +2611,7 @@ function buildAiIterationSystemPrompt(settings, session = null) {
             '- Use `luker_orch_set_director_limits` for budget changes (maxRounds, maxConcurrentSubagents, maxTotalSubagentRuns, discardOnAbort).',
             '- Use `luker_orch_set_director_tools` to enable / disable specific loop tools. Pass only the verbs you intend to change.',
             '- Prefer targeted edits. Do not rewrite the whole profile unless the user explicitly asks.',
-            '- If you need one more autonomous step right after current execution, call `luker_orch_continue_iteration`.',
-            '- If you need user decision or clarification, do not call continue or finalize. Stop and wait for user.',
-            '- When iteration is complete, call `luker_orch_finalize_iteration`.',
-            '- If you call both `luker_orch_continue_iteration` and `luker_orch_finalize_iteration` in the same round, finalize wins.',
+            '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
             '- Keep output practical and concise for real RP usage.',
         ].join('\n');
     }
@@ -2638,15 +2635,20 @@ function buildAiIterationSystemPrompt(settings, session = null) {
             '- Use luker_orch_set_agenda_final_agent to point final output to an existing agent id.',
             '- Use luker_orch_set_agenda_limits only for real budget changes, not for stylistic edits.',
             '- If user asks to test, call luker_orch_simulate with suitable input.',
-            '- If you need one more autonomous step right after current execution, call luker_orch_continue_iteration.',
-            '- If you need user decision or clarification, do not call continue or finalize. Stop and wait for user.',
-            '- When iteration is complete, call luker_orch_finalize_iteration.',
-            '- If you call both luker_orch_continue_iteration and luker_orch_finalize_iteration in the same round, finalize wins.',
+            '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
             '- Keep output practical and concise for real RP usage.',
         ].join('\n');
     }
+    // Spec mode (fallback): prepend SPEC_DEFAULT_GUIDANCE_LINES — these are
+    // the stages / nodes / anti_data_guard / lorebook_reader / set_stage /
+    // placeholder-rules instructions that USED to live in the shared
+    // requestSystemPrompt default. They're spec-only; hoisting them here
+    // keeps director / agenda / loop modes from inheriting noise that
+    // doesn't apply (no stages, no nodes, no set_stage tool).
     return [
         withMacros,
+        '',
+        ...SPEC_DEFAULT_GUIDANCE_LINES,
         '',
         'Iteration mode contract:',
         '- You are editing an existing orchestration profile incrementally (diff-style).',

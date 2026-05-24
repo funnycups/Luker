@@ -40,14 +40,10 @@ const TOOL_REMOVE_NODE_TYPE = 'mg_schema_remove_node_type';
 const TOOL_REORDER_NODE_TYPES = 'mg_schema_reorder_node_types';
 
 export const CONTROL_TOOL_NAMES = Object.freeze({
-    continue: 'luker_mg_schema_continue_iteration',
-    finalize: 'luker_mg_schema_finalize_iteration',
     resetToBlank: 'luker_mg_schema_reset_live_to_blank',
     resetToGlobal: 'luker_mg_schema_reset_live_to_global',
 });
 const CONTROL_TOOL_NAME_SET = new Set([
-    CONTROL_TOOL_NAMES.continue,
-    CONTROL_TOOL_NAMES.finalize,
     CONTROL_TOOL_NAMES.resetToBlank,
     CONTROL_TOOL_NAMES.resetToGlobal,
 ]);
@@ -65,8 +61,6 @@ export const TOOL_DISPLAY = Object.freeze({
     [TOOL_SET_NODE_TYPE]: 'set node type',
     [TOOL_REMOVE_NODE_TYPE]: 'remove node type',
     [TOOL_REORDER_NODE_TYPES]: 'reorder node types',
-    [CONTROL_TOOL_NAMES.continue]: '↻ Continue iteration',
-    [CONTROL_TOOL_NAMES.finalize]: '✓ Finalize iteration',
     [CONTROL_TOOL_NAMES.resetToBlank]: '♻ Reset schema to blank',
     [CONTROL_TOOL_NAMES.resetToGlobal]: '⬇ Reset schema to global',
 });
@@ -160,41 +154,12 @@ export const TOOL_DEFS = [
 ];
 
 /**
- * OpenAI-style function definitions for the two control tools the popup uses
- * to drive the multi-round auto-continue loop. Kept separate from `TOOL_DEFS`
- * so call sites that import `TOOL_DEFS` directly stay
- * unaffected; the popup imports `buildToolCatalog` instead, which merges
- * both lists.
+ * OpenAI-style function definitions for the schema-reset control tools.
+ * Kept separate from `TOOL_DEFS` so call sites that import `TOOL_DEFS`
+ * directly stay unaffected; the popup imports `buildToolCatalog` instead,
+ * which merges both lists.
  */
 const CONTROL_TOOL_DEFS = [
-    {
-        type: 'function',
-        function: {
-            name: CONTROL_TOOL_NAMES.continue,
-            description: 'Request one automatic follow-up round after the current tools have run. Use only when more iteration is genuinely needed; otherwise call luker_mg_schema_finalize_iteration.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    note: { type: 'string', description: 'Optional rationale visible to the user.' },
-                },
-                additionalProperties: false,
-            },
-        },
-    },
-    {
-        type: 'function',
-        function: {
-            name: CONTROL_TOOL_NAMES.finalize,
-            description: 'Finalize this iteration turn with a concise summary. The popup stops auto-continuing after this call.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    summary: { type: 'string', description: 'Short user-facing summary of what changed.' },
-                },
-                additionalProperties: false,
-            },
-        },
-    },
     {
         type: 'function',
         function: {
@@ -227,8 +192,10 @@ const CONTROL_TOOL_DEFS = [
 
 /**
  * Returns the full tool catalog the popup advertises to the LLM: the three
- * edit tools plus the two control tools (continue / finalize) that drive
- * the multi-round auto-continue loop. Pure function; no side effects.
+ * edit tools plus the two schema-reset control tools. The popup's outer loop
+ * is program-driven by tool-call presence (any tool call → next round, none →
+ * stop), so there is no continue / finalize control tool. Pure function;
+ * no side effects.
  */
 export function buildToolCatalog() {
     return [...TOOL_DEFS, ...CONTROL_TOOL_DEFS];
