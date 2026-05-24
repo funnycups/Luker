@@ -689,6 +689,7 @@ async function runIterationTurn(state, opts = {}) {
         hasSearchTools = false,
         systemPrompt: customSystemPrompt = '',
         i18n: i18nOverride,
+        onTurnUpdate = null,
     } = opts;
     const t = (i18nOverride && typeof i18nOverride.t === 'function') ? i18nOverride.t : (s) => String(s ?? '');
     const tf = (i18nOverride && typeof i18nOverride.tf === 'function')
@@ -696,15 +697,22 @@ async function runIterationTurn(state, opts = {}) {
         : (template, ...values) => String(t(template) ?? template).replace(/\$\{(\d+)\}/g, (_, idx) => String(values[Number(idx)] ?? ''));
 
     // Push the human user message before the LLM round so the model sees
-    // it in the seed taskMessages.
+    // it in the seed taskMessages. When the caller already pushed it
+    // (handleSendMessage does this so the user sees their message before
+    // the LLM call starts), the tail-of-messages check skips the dup.
     const trimmedUserText = String(userText || '').trim();
     if (trimmedUserText) {
-        state.session.messages.push({
-            id: makeMessageId(),
-            role: 'user',
-            content: trimmedUserText,
-            at: Date.now(),
-        });
+        const tail = state.session.messages[state.session.messages.length - 1];
+        const alreadyPushed = tail && tail.role === 'user' && !tail.auto
+            && String(tail.content || '').trim() === trimmedUserText;
+        if (!alreadyPushed) {
+            state.session.messages.push({
+                id: makeMessageId(),
+                role: 'user',
+                content: trimmedUserText,
+                at: Date.now(),
+            });
+        }
     }
 
     const systemPrompt = String(customSystemPrompt || DEFAULT_SYSTEM_PROMPT);
@@ -815,6 +823,14 @@ async function runIterationTurn(state, opts = {}) {
             helperApis,
             i18n: { t, tf },
         });
+
+        // After each LLM round, surface the round's assistant message + edits
+        // to the user immediately. Without this, multi-round loops batch all
+        // assistant messages into a single end-of-loop render — the user
+        // can't see round 1 while round 2 is in flight.
+        if (typeof onTurnUpdate === 'function') {
+            try { await onTurnUpdate(); } catch { /* ignore */ }
+        }
 
         // Exit conditions, in priority order:
         //   1. Finalize is sticky — stop immediately even if continue
@@ -1712,6 +1728,16 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         if (!text) return;
         $textarea.val('');
 
+        // Push the user message + render BEFORE the LLM call so the user
+        // sees their own message immediately — the loading bubble alone
+        // (with no user bubble above it) looks like the input vanished.
+        state.session.messages.push({
+            id: makeMessageId(),
+            role: 'user',
+            content: text,
+            at: Date.now(),
+        });
+
         state.isBusy = true;
         const ac = new AbortController();
         state.abortController = ac;
@@ -1727,6 +1753,10 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                 abortSignal: ac.signal,
                 hasSearchTools,
                 i18n: { t, tf },
+                onTurnUpdate: async () => {
+                    await persistSession();
+                    await render();
+                },
             });
         } catch (err) {
             if (!isAbortError(err, ac.signal)) {
