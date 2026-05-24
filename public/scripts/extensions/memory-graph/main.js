@@ -749,8 +749,8 @@ const defaultSettings = {
     recallFinalizeSystemPrompt: DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT,
     extractApiPresetName: '',
     extractPresetName: '',
-    schemaIterationApiPresetName: '',
-    schemaIterationPresetName: '',
+    requestApiPresetName: '',
+    requestLlmPresetName: '',
     extractSystemPrompt: DEFAULT_EXTRACT_SYSTEM_PROMPT,
     extractBatchTurns: 1,
     extractContextTurns: 2,
@@ -1053,6 +1053,15 @@ function ensureSettings() {
     // private settings.
     migrateLegacyProfileSettings();
 
+    if (extension_settings[MODULE_NAME].schemaIterationApiPresetName !== undefined) {
+        extension_settings[MODULE_NAME].requestApiPresetName ||= String(extension_settings[MODULE_NAME].schemaIterationApiPresetName || '');
+        delete extension_settings[MODULE_NAME].schemaIterationApiPresetName;
+    }
+    if (extension_settings[MODULE_NAME].schemaIterationPresetName !== undefined) {
+        extension_settings[MODULE_NAME].requestLlmPresetName ||= String(extension_settings[MODULE_NAME].schemaIterationPresetName || '');
+        delete extension_settings[MODULE_NAME].schemaIterationPresetName;
+    }
+
     extension_settings[MODULE_NAME].toolCallRetryMax = Math.max(
         0,
         Math.min(10, Math.floor(Number(extension_settings[MODULE_NAME].toolCallRetryMax) || 0)),
@@ -1267,8 +1276,8 @@ function refreshOpenAIPresetSelectors(root, context, settings) {
         ['#luker_rpg_memory_recall_preset', settings.recallPresetName],
         ['#luker_rpg_memory_extract_api_preset', settings.extractApiPresetName],
         ['#luker_rpg_memory_extract_preset', settings.extractPresetName],
-        ['#luker_rpg_memory_schema_iter_api_preset', settings.schemaIterationApiPresetName],
-        ['#luker_rpg_memory_schema_iter_preset', settings.schemaIterationPresetName],
+        ['#luker_rpg_memory_request_api_preset', settings.requestApiPresetName],
+        ['#luker_rpg_memory_request_llm_preset', settings.requestLlmPresetName],
     ];
 
     for (const [selector, value] of selectorValues) {
@@ -13773,8 +13782,8 @@ function bindUi() {
     root.find('#luker_rpg_memory_recall_preset').val(String(settings.recallPresetName || ''));
     root.find('#luker_rpg_memory_extract_api_preset').val(String(settings.extractApiPresetName || ''));
     root.find('#luker_rpg_memory_extract_preset').val(String(settings.extractPresetName || ''));
-    root.find('#luker_rpg_memory_schema_iter_api_preset').val(String(settings.schemaIterationApiPresetName || ''));
-    root.find('#luker_rpg_memory_schema_iter_preset').val(String(settings.schemaIterationPresetName || ''));
+    root.find('#luker_rpg_memory_request_api_preset').val(String(settings.requestApiPresetName || ''));
+    root.find('#luker_rpg_memory_request_llm_preset').val(String(settings.requestLlmPresetName || ''));
     root.find('#luker_rpg_memory_include_world_info').prop('checked', Boolean(settings.includeWorldInfoWithPreset));
     root.find('#luker_rpg_memory_use_streaming_transport').prop('checked', Boolean(settings.useStreamingTransport));
     root.find('#luker_rpg_memory_update_every').val(String(settings.updateEvery));
@@ -13934,13 +13943,13 @@ function bindUi() {
         saveSettingsDebounced();
     });
 
-    root.find('#luker_rpg_memory_schema_iter_api_preset').off('change').on('change', function () {
-        settings.schemaIterationApiPresetName = String(jQuery(this).val() || '').trim();
+    root.find('#luker_rpg_memory_request_api_preset').off('change').on('change', function () {
+        settings.requestApiPresetName = String(jQuery(this).val() || '').trim();
         saveSettingsDebounced();
     });
 
-    root.find('#luker_rpg_memory_schema_iter_preset').off('change').on('change', function () {
-        settings.schemaIterationPresetName = String(jQuery(this).val() || '').trim();
+    root.find('#luker_rpg_memory_request_llm_preset').off('change').on('change', function () {
+        settings.requestLlmPresetName = String(jQuery(this).val() || '').trim();
         saveSettingsDebounced();
     });
 

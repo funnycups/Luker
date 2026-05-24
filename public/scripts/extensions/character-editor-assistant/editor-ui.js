@@ -261,9 +261,9 @@ export function createCharacterEditorUi(deps) {
                 <input id="cea_use_streaming_transport" type="checkbox" />
                 ${escapeHtml(i18n('Use streaming transport (avoid timeout on slow APIs)'))}
             </label>
-            <label for="cea_sync_llm_preset">${escapeHtml(i18n('Model request LLM preset name'))}</label>
+            <label for="cea_sync_llm_preset">${escapeHtml(i18n('Model request LLM preset (params + prompt)'))}</label>
             <select id="cea_sync_llm_preset" class="text_pole"></select>
-            <label for="cea_sync_api_preset">${escapeHtml(i18n('Model request API preset name'))}</label>
+            <label for="cea_sync_api_preset">${escapeHtml(i18n('Model request API preset (Connection profile)'))}</label>
             <select id="cea_sync_api_preset" class="text_pole"></select>
             <label for="cea_tool_retries">${escapeHtml(i18n('Tool-call retries on invalid/missing tool call (N)'))}</label>
             <input id="cea_tool_retries" class="text_pole" type="number" min="0" max="10" step="1"/>
@@ -360,13 +360,13 @@ export function createCharacterEditorUi(deps) {
 
         root.on('change.cea', '#cea_sync_llm_preset', function () {
             const settings = getSettings();
-            settings.lorebookSyncLlmPresetName = String(jQuery(this).val() || '').trim();
+            settings.requestLlmPresetName = String(jQuery(this).val() || '').trim();
             saveSettingsDebounced();
         });
 
         root.on('change.cea', '#cea_sync_api_preset', function () {
             const settings = getSettings();
-            settings.lorebookSyncApiPresetName = String(jQuery(this).val() || '').trim();
+            settings.requestApiPresetName = String(jQuery(this).val() || '').trim();
             saveSettingsDebounced();
         });
 

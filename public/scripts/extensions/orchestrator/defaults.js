@@ -7,7 +7,7 @@
  * has no persisted config. Also holds the rule-text constants and
  * helpers used to build the AI-build system prompt — those live here
  * because the constants and helpers exist solely to seed
- * `defaultSettings.aiSuggestSystemPrompt`.
+ * `defaultSettings.requestSystemPrompt`.
  *
  * Pure data + pure functions: no I/O, no side effects, no `extension_settings`
  * coupling. Constants that govern runtime control flow but aren't part of
@@ -206,7 +206,7 @@ export const LOREBOOK_READ_GUIDANCE_LINES = Object.freeze([
     'Do NOT copy lorebook / world-info content into any node\'s systemPrompt or userPromptTemplate either. The runtime injects active world-info entries into every sub-agent automatically. Use the lorebook read tools (world_book_list / lorebook_list / lorebook_query / lorebook_get) to understand the *shape* of constraints (taboo lexicon, POV rules, scene-anchoring facts, NSFW gating, etc.) and design agents whose reasoning handles that shape — duplicate the reasoning, not the content. A `lorebook_reader` node, for example, should be instructed in *what kind* of constraints to surface and *how* to phrase them as writing rules, not be pre-loaded with the lorebook text itself.',
 ]);
 
-export function getDefaultAiSuggestSystemPrompt() {
+export function getDefaultRequestSystemPrompt() {
     return [
         'You design RP multi-agent orchestration profiles for a specific character card.',
         'Use tool calls only. Do not return plain JSON text.',
@@ -435,9 +435,9 @@ export const defaultSettings = {
     // own `orchestrationSpec` / `agendaPlanner` settings.
     loopProfile: defaultLoopProfile,
     chatOverrides: {},
-    aiSuggestApiPresetName: '',
-    aiSuggestPresetName: '',
-    aiSuggestSystemPrompt: getDefaultAiSuggestSystemPrompt(),
+    requestApiPresetName: '',
+    requestLlmPresetName: '',
+    requestSystemPrompt: getDefaultRequestSystemPrompt(),
     rpmLimit: 0,
     useStreamingTransport: false,
 };

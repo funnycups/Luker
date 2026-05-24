@@ -47,7 +47,7 @@ import {
     defaultSpec,
     getCriticPromptReminderLines,
     getCriticReviewNodeContractShape,
-    getDefaultAiSuggestSystemPrompt,
+    getDefaultRequestSystemPrompt,
     LOREBOOK_READ_GUIDANCE_LINES,
 } from './defaults.js';
 import {
@@ -380,9 +380,21 @@ function ensureSettings() {
     }
     extension_settings[MODULE_NAME].includeWorldInfoWithPreset = extension_settings[MODULE_NAME].includeWorldInfoWithPreset !== false;
     extension_settings[MODULE_NAME].useStreamingTransport = Boolean(extension_settings[MODULE_NAME].useStreamingTransport);
-    extension_settings[MODULE_NAME].aiSuggestApiPresetName = sanitizeConnectionProfileName(extension_settings[MODULE_NAME].aiSuggestApiPresetName || '');
-    if (!String(extension_settings[MODULE_NAME].aiSuggestPresetName || '').trim()) {
-        extension_settings[MODULE_NAME].aiSuggestPresetName = String(extension_settings[MODULE_NAME].aiSuggestPromptPresetName || '').trim();
+    if (extension_settings[MODULE_NAME].aiSuggestApiPresetName !== undefined) {
+        extension_settings[MODULE_NAME].requestApiPresetName ||= String(extension_settings[MODULE_NAME].aiSuggestApiPresetName || '');
+        delete extension_settings[MODULE_NAME].aiSuggestApiPresetName;
+    }
+    if (extension_settings[MODULE_NAME].aiSuggestPresetName !== undefined) {
+        extension_settings[MODULE_NAME].requestLlmPresetName ||= String(extension_settings[MODULE_NAME].aiSuggestPresetName || '');
+        delete extension_settings[MODULE_NAME].aiSuggestPresetName;
+    }
+    if (extension_settings[MODULE_NAME].aiSuggestSystemPrompt !== undefined) {
+        extension_settings[MODULE_NAME].requestSystemPrompt ||= String(extension_settings[MODULE_NAME].aiSuggestSystemPrompt || '');
+        delete extension_settings[MODULE_NAME].aiSuggestSystemPrompt;
+    }
+    extension_settings[MODULE_NAME].requestApiPresetName = sanitizeConnectionProfileName(extension_settings[MODULE_NAME].requestApiPresetName || '');
+    if (!String(extension_settings[MODULE_NAME].requestLlmPresetName || '').trim()) {
+        extension_settings[MODULE_NAME].requestLlmPresetName = String(extension_settings[MODULE_NAME].aiSuggestPromptPresetName || '').trim();
     }
     // Drop legacy API selector fields. API routing now comes from connection profile only.
     delete extension_settings[MODULE_NAME].llmNodeApi;
@@ -419,7 +431,7 @@ function ensureSettings() {
     }
     delete extension_settings[MODULE_NAME].capsuleRenderFormat;
     extension_settings[MODULE_NAME].capsuleCustomInstruction = String(extension_settings[MODULE_NAME].capsuleCustomInstruction || '').trim();
-    extension_settings[MODULE_NAME].aiSuggestSystemPrompt = String(extension_settings[MODULE_NAME].aiSuggestSystemPrompt || '').trim() || getDefaultAiSuggestSystemPrompt();
+    extension_settings[MODULE_NAME].requestSystemPrompt = String(extension_settings[MODULE_NAME].requestSystemPrompt || '').trim() || getDefaultRequestSystemPrompt();
     delete extension_settings[MODULE_NAME].capsuleIncludeRawJson;
     extension_settings[MODULE_NAME].toolCallRetryMax = Math.max(
         0,
@@ -2462,7 +2474,7 @@ const ITER_STUDIO_MACRO_CONTRACT_LINES = [
 ];
 
 function buildAiIterationSystemPrompt(settings, session = null) {
-    const base = normalizeTemplateForAiPrompt(String(settings.aiSuggestSystemPrompt || '').trim()) || getDefaultAiSuggestSystemPrompt();
+    const base = normalizeTemplateForAiPrompt(String(settings.requestSystemPrompt || '').trim()) || getDefaultRequestSystemPrompt();
     const withGuidance = [base, '', ...LOREBOOK_READ_GUIDANCE_LINES].join('\n');
     const withMacros = [withGuidance, '', ...ITER_STUDIO_MACRO_CONTRACT_LINES].join('\n');
     if (isLoopIterationSession(session)) {
@@ -4561,9 +4573,9 @@ function bindUi() {
     root.find('#luker_orch_llm_preset').val(String(settings.llmNodePresetName || ''));
     root.find('#luker_orch_include_world_info').prop('checked', Boolean(settings.includeWorldInfoWithPreset));
     root.find('#luker_orch_use_streaming_transport').prop('checked', Boolean(settings.useStreamingTransport));
-    root.find('#luker_orch_ai_suggest_api_preset').val(String(settings.aiSuggestApiPresetName || ''));
-    root.find('#luker_orch_ai_suggest_preset').val(String(settings.aiSuggestPresetName || ''));
-    root.find('#luker_orch_ai_suggest_system_prompt').val(String(settings.aiSuggestSystemPrompt || ''));
+    root.find('#luker_orch_request_api_preset').val(String(settings.requestApiPresetName || ''));
+    root.find('#luker_orch_request_llm_preset').val(String(settings.requestLlmPresetName || ''));
+    root.find('#luker_orch_request_system_prompt').val(String(settings.requestSystemPrompt || ''));
     root.find('#luker_orch_max_recent_messages').val(String(settings.maxRecentMessages || 14));
     root.find('#luker_orch_node_iterations').val(String(settings.nodeIterationMaxRounds || 3));
     root.find('#luker_orch_review_reruns').val(String(settings.reviewRerunMaxRounds ?? 2));
@@ -4974,29 +4986,29 @@ function bindUi() {
         saveSettingsDebounced();
     });
 
-    root.on('change.lukerOrch', '#luker_orch_ai_suggest_api_preset', function () {
-        settings.aiSuggestApiPresetName = sanitizeConnectionProfileName(jQuery(this).val());
+    root.on('change.lukerOrch', '#luker_orch_request_api_preset', function () {
+        settings.requestApiPresetName = sanitizeConnectionProfileName(jQuery(this).val());
         saveSettingsDebounced();
     });
 
-    root.on('change.lukerOrch', '#luker_orch_ai_suggest_preset', function () {
-        settings.aiSuggestPresetName = String(jQuery(this).val() || '').trim();
+    root.on('change.lukerOrch', '#luker_orch_request_llm_preset', function () {
+        settings.requestLlmPresetName = String(jQuery(this).val() || '').trim();
         saveSettingsDebounced();
     });
 
-    root.on('input.lukerOrch', '#luker_orch_ai_suggest_system_prompt', function () {
-        settings.aiSuggestSystemPrompt = String(jQuery(this).val() || '');
+    root.on('input.lukerOrch', '#luker_orch_request_system_prompt', function () {
+        settings.requestSystemPrompt = String(jQuery(this).val() || '');
         saveSettingsDebounced();
     });
 
     root.on('click.lukerOrch', '#luker_orch_reset_ai_prompt', function () {
-        if (!window.confirm(i18n('Reset AI build prompt to default? This will overwrite current AI build system prompt.'))) {
+        if (!window.confirm(i18n('Reset request system prompt to default? This will overwrite the current request system prompt.'))) {
             return;
         }
-        settings.aiSuggestSystemPrompt = getDefaultAiSuggestSystemPrompt();
-        root.find('#luker_orch_ai_suggest_system_prompt').val(settings.aiSuggestSystemPrompt);
+        settings.requestSystemPrompt = getDefaultRequestSystemPrompt();
+        root.find('#luker_orch_request_system_prompt').val(settings.requestSystemPrompt);
         saveSettingsDebounced();
-        notifySuccess(i18n('Reset AI build prompt'));
+        notifySuccess(i18n('Reset request system prompt'));
     });
 
     root.on('change.lukerOrch', '#luker_orch_max_recent_messages', function () {

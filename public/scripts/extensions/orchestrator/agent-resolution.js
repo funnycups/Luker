@@ -177,8 +177,8 @@ export function refreshOpenAIPresetSelectors(root, context, settings) {
     const selectorValues = [
         ['#luker_orch_llm_api_preset', settings.llmNodeApiPresetName],
         ['#luker_orch_llm_preset', settings.llmNodePresetName],
-        ['#luker_orch_ai_suggest_api_preset', settings.aiSuggestApiPresetName],
-        ['#luker_orch_ai_suggest_preset', settings.aiSuggestPresetName],
+        ['#luker_orch_request_api_preset', settings.requestApiPresetName],
+        ['#luker_orch_request_llm_preset', settings.requestLlmPresetName],
     ];
 
     for (const [selector, value] of selectorValues) {

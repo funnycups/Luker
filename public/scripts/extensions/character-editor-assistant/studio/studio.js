@@ -1352,8 +1352,8 @@ async function handleAISend() {
     try {
         // Read preset config from CEA settings
         const ceaSettings = extension_settings?.character_editor_assistant || {};
-        const llmPresetName = String(ceaSettings.lorebookSyncLlmPresetName || '').trim();
-        const apiProfileName = String(ceaSettings.lorebookSyncApiPresetName || '').trim();
+        const llmPresetName = String(ceaSettings.requestLlmPresetName || '').trim();
+        const apiProfileName = String(ceaSettings.requestApiPresetName || '').trim();
         const result = await sendAIMessage(currentCharId, conversationMessages, userText, {
             abortSignal: controller.signal,
             llmPresetName,

@@ -1103,8 +1103,8 @@ export async function openSchemaIterationStudio(deps) {
 
         const taskMessages = buildTaskMessages(systemPrompt, turnSnapshot);
 
-        const apiPresetName = String(settings?.schemaIterationApiPresetName || '').trim();
-        const llmPresetName = String(settings?.schemaIterationPresetName || '').trim();
+        const apiPresetName = String(settings?.requestApiPresetName || '').trim();
+        const llmPresetName = String(settings?.requestLlmPresetName || '').trim();
 
         const runnerSettings = {
             useStreamingTransport: Boolean(settings?.useStreamingTransport),

@@ -19,7 +19,7 @@ const TOOL_CALL_RETRY_MAX = 10;
 
 const defaultSettings = {
     requestLlmPresetName: '',
-    requestApiProfileName: '',
+    requestApiPresetName: '',
     includeWorldInfo: false,
     toolCallRetryMax: 2,
     useStreamingTransport: false,
@@ -48,8 +48,12 @@ function ensureSettings() {
         extension_settings[MODULE_NAME] = clone(defaultSettings);
     }
     const settings = extension_settings[MODULE_NAME];
+    if (settings.requestApiProfileName !== undefined) {
+        settings.requestApiPresetName ||= String(settings.requestApiProfileName || '');
+        delete settings.requestApiProfileName;
+    }
     settings.requestLlmPresetName = String(settings.requestLlmPresetName || '').trim();
-    settings.requestApiProfileName = String(settings.requestApiProfileName || '').trim();
+    settings.requestApiPresetName = String(settings.requestApiPresetName || '').trim();
     settings.includeWorldInfo = settings.includeWorldInfo === true;
     settings.useStreamingTransport = settings.useStreamingTransport === true;
     settings.toolCallRetryMax = Math.max(0, Math.min(TOOL_CALL_RETRY_MAX, toInteger(settings.toolCallRetryMax, defaultSettings.toolCallRetryMax)));
@@ -71,8 +75,8 @@ function registerLocaleData() {
         'Preset already exists: ${0}': '预设已存在：${0}',
         'Preset created: ${0}': '已创建预设：${0}',
         'Create preset failed.': '创建预设失败。',
-        'Model request LLM preset name': '模型请求提示词预设',
-        'Model request API preset name (Connection profile)': '模型请求 API 预设（连接配置）',
+        'Model request LLM preset (params + prompt)': '模型请求提示词预设（参数+提示词）',
+        'Model request API preset (Connection profile)': '模型请求 API 预设（连接配置）',
         'Include world info (simulate current chat)': '包含世界书信息（按当前聊天重新模拟）',
         'Use streaming transport (avoid timeout on slow APIs)': '使用流式传输（避免慢速 API 超时）',
         'Tool-call retries on invalid/missing tool call (N)': '工具调用重试次数（无效/缺失时）',
@@ -106,8 +110,8 @@ function registerLocaleData() {
         'Preset already exists: ${0}': '預設已存在：${0}',
         'Preset created: ${0}': '已建立預設：${0}',
         'Create preset failed.': '建立預設失敗。',
-        'Model request LLM preset name': '模型請求提示詞預設',
-        'Model request API preset name (Connection profile)': '模型請求 API 預設（連線設定）',
+        'Model request LLM preset (params + prompt)': '模型請求提示詞預設（參數+提示詞）',
+        'Model request API preset (Connection profile)': '模型請求 API 預設（連線設定）',
         'Include world info (simulate current chat)': '包含世界書資訊（按目前聊天重新模擬）',
         'Use streaming transport (avoid timeout on slow APIs)': '使用串流傳輸（避免慢速 API 逾時）',
         'Tool-call retries on invalid/missing tool call (N)': '工具調用重試次數（無效/缺失時）',
@@ -271,7 +275,7 @@ async function openCpaIteration() {
         saveSettingsDebounced,
         getRequestPresetOptions: () => ({
             llmPresetName: String(getSettings()?.requestLlmPresetName || '').trim(),
-            apiPresetName: String(getSettings()?.requestApiProfileName || '').trim(),
+            apiPresetName: String(getSettings()?.requestApiPresetName || '').trim(),
         }),
         // `preset_clone_to_new` tool wiring. The real implementation needs a
         // SillyTavern preset-save + popup-target swap; until that's plumbed,
@@ -308,7 +312,7 @@ function refreshUiState(context = getContext()) {
 
     const settings = getSettings();
     root.find('#cpa_request_llm_preset').html(renderSelectOptions(getOpenAIPresetNames(context), settings.requestLlmPresetName, true, '(current)'));
-    root.find('#cpa_request_api_profile').html(renderSelectOptions(getConnectionProfileNames(), settings.requestApiProfileName, true, '(current)'));
+    root.find('#cpa_request_api_preset').html(renderSelectOptions(getConnectionProfileNames(), settings.requestApiPresetName, true, '(current)'));
     root.find('#cpa_include_world_info').prop('checked', settings.includeWorldInfo === true);
     root.find('#cpa_use_streaming_transport').prop('checked', Boolean(settings.useStreamingTransport));
     root.find('#cpa_tool_retries').val(String(settings.toolCallRetryMax));
@@ -331,8 +335,8 @@ function bindUi() {
         getSettings().requestLlmPresetName = String(jQuery(this).val() || '').trim();
         saveSettingsDebounced();
     });
-    root.on('change.cpa', '#cpa_request_api_profile', function () {
-        getSettings().requestApiProfileName = String(jQuery(this).val() || '').trim();
+    root.on('change.cpa', '#cpa_request_api_preset', function () {
+        getSettings().requestApiPresetName = String(jQuery(this).val() || '').trim();
         saveSettingsDebounced();
     });
     root.on('change.cpa', '#cpa_include_world_info', function () {
@@ -378,10 +382,10 @@ function ensureUi(context = getContext()) {
                 <div id="${CREATE_BUTTON_ID}" class="menu_button">${escapeHtml(i18n('Create New Preset'))}</div>
             </div>
             <div class="cpa_hint">${escapeHtml(i18n('Character-bound runtime presets are not directly editable.'))}</div>
-            <label for="cpa_request_llm_preset">${escapeHtml(i18n('Model request LLM preset name'))}</label>
+            <label for="cpa_request_llm_preset">${escapeHtml(i18n('Model request LLM preset (params + prompt)'))}</label>
             <select id="cpa_request_llm_preset" class="text_pole"></select>
-            <label for="cpa_request_api_profile">${escapeHtml(i18n('Model request API preset name (Connection profile)'))}</label>
-            <select id="cpa_request_api_profile" class="text_pole"></select>
+            <label for="cpa_request_api_preset">${escapeHtml(i18n('Model request API preset (Connection profile)'))}</label>
+            <select id="cpa_request_api_preset" class="text_pole"></select>
             <label class="checkbox_label"><input id="cpa_include_world_info" type="checkbox"/> ${escapeHtml(i18n('Include world info (simulate current chat)'))}</label>
             <label class="checkbox_label">
                 <input id="cpa_use_streaming_transport" type="checkbox" />

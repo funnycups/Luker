@@ -61,8 +61,8 @@ const CHARACTER_EDITOR_SELECTIVE_LOGIC_LABELS = Object.freeze({
 
 const defaultSettings = {
     replaceLorebookSyncEnabled: true,
-    lorebookSyncLlmPresetName: '',
-    lorebookSyncApiPresetName: '',
+    requestLlmPresetName: '',
+    requestApiPresetName: '',
     toolCallRetryMax: 2,
     maxJournalEntries: 120,
     useStreamingTransport: false,
@@ -89,8 +89,8 @@ function registerLocaleData() {
         'Open Editor': '打开编辑器',
         'Character Editor': '角色编辑器',
         'Enable lorebook sync popup after Replace/Update': '替换/更新角色卡后启用世界书同步弹窗',
-        'Model request LLM preset name': '模型请求提示词预设',
-        'Model request API preset name': '模型请求 API 预设',
+        'Model request LLM preset (params + prompt)': '模型请求提示词预设（参数+提示词）',
+        'Model request API preset (Connection profile)': '模型请求 API 预设（连接配置）',
         'Plain-text function-call mode': '纯文本函数调用模式',
         'Tool-call retries on invalid/missing tool call (N)': '工具调用重试次数（无效/缺失时）',
         'Refresh': '刷新',
@@ -274,8 +274,8 @@ function registerLocaleData() {
         'Open Editor': '開啟編輯器',
         'Character Editor': '角色編輯器',
         'Enable lorebook sync popup after Replace/Update': '替換/更新角色卡後啟用世界書同步彈窗',
-        'Model request LLM preset name': '模型請求提示詞預設',
-        'Model request API preset name': '模型請求 API 預設',
+        'Model request LLM preset (params + prompt)': '模型請求提示詞預設（參數+提示詞）',
+        'Model request API preset (Connection profile)': '模型請求 API 預設（連線設定）',
         'Plain-text function-call mode': '純文本函數調用模式',
         'Tool-call retries on invalid/missing tool call (N)': '工具調用重試次數（無效/缺失時）',
         'Refresh': '刷新',
@@ -523,8 +523,16 @@ function ensureSettings() {
     }
     const settings = extension_settings[MODULE_NAME];
     settings.replaceLorebookSyncEnabled = settings.replaceLorebookSyncEnabled !== false;
-    settings.lorebookSyncLlmPresetName = String(settings.lorebookSyncLlmPresetName || '').trim();
-    settings.lorebookSyncApiPresetName = String(settings.lorebookSyncApiPresetName || '').trim();
+    if (settings.lorebookSyncLlmPresetName !== undefined) {
+        settings.requestLlmPresetName ||= String(settings.lorebookSyncLlmPresetName || '');
+        delete settings.lorebookSyncLlmPresetName;
+    }
+    if (settings.lorebookSyncApiPresetName !== undefined) {
+        settings.requestApiPresetName ||= String(settings.lorebookSyncApiPresetName || '');
+        delete settings.lorebookSyncApiPresetName;
+    }
+    settings.requestLlmPresetName = String(settings.requestLlmPresetName || '').trim();
+    settings.requestApiPresetName = String(settings.requestApiPresetName || '').trim();
     delete settings.plainTextFunctionCallMode;
     settings.toolCallRetryMax = Math.max(0, Math.min(10, Math.floor(Number(settings.toolCallRetryMax || defaultSettings.toolCallRetryMax) || 0)));
     settings.maxJournalEntries = Math.max(20, Math.min(500, Number(settings.maxJournalEntries || defaultSettings.maxJournalEntries)));
@@ -543,8 +551,8 @@ function getConnectionProfiles() {
 function getLorebookSyncRequestPresetOptions() {
     const settings = getSettings();
     return {
-        llmPresetName: String(settings.lorebookSyncLlmPresetName || '').trim(),
-        apiPresetName: String(settings.lorebookSyncApiPresetName || '').trim(),
+        llmPresetName: String(settings.requestLlmPresetName || '').trim(),
+        apiPresetName: String(settings.requestApiPresetName || '').trim(),
     };
 }
 
@@ -661,13 +669,13 @@ function renderConnectionProfileOptions(selectedName = '') {
 function refreshPresetSelectors(root, context, settings) {
     const llmSelect = root.find('#cea_sync_llm_preset');
     if (llmSelect.length) {
-        llmSelect.html(renderOpenAIPresetOptions(context, settings.lorebookSyncLlmPresetName));
-        llmSelect.val(String(settings.lorebookSyncLlmPresetName || '').trim());
+        llmSelect.html(renderOpenAIPresetOptions(context, settings.requestLlmPresetName));
+        llmSelect.val(String(settings.requestLlmPresetName || '').trim());
     }
     const apiSelect = root.find('#cea_sync_api_preset');
     if (apiSelect.length) {
-        apiSelect.html(renderConnectionProfileOptions(settings.lorebookSyncApiPresetName));
-        apiSelect.val(String(settings.lorebookSyncApiPresetName || '').trim());
+        apiSelect.html(renderConnectionProfileOptions(settings.requestApiPresetName));
+        apiSelect.val(String(settings.requestApiPresetName || '').trim());
     }
 }
 

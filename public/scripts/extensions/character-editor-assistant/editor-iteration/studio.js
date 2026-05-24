@@ -715,8 +715,8 @@ async function runIterationTurn(state, opts = {}) {
         toolCallRetryMax: settings?.toolCallRetryMax,
         rpmLimit: settings?.rpmLimit,
     };
-    const apiPresetName = String(settings?.aiSuggestApiPresetName || '').trim();
-    const llmPresetName = String(settings?.aiSuggestPresetName || '').trim();
+    const apiPresetName = String(settings?.requestApiPresetName || '').trim();
+    const llmPresetName = String(settings?.requestLlmPresetName || '').trim();
     const tools = buildCeaEditorToolSet(context, settings, {
         live: state.live,
         hasSearchTools,

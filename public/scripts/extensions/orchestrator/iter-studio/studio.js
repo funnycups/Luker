@@ -1788,8 +1788,8 @@ export async function openOrchestratorIterationStudio(deps) {
         // _get) when shaping a node that actually needs them.
         const runtimeWorldInfo = null;
 
-        const apiPresetName = String(settings?.aiSuggestApiPresetName || '').trim();
-        const llmPresetName = String(settings?.aiSuggestPresetName || '').trim();
+        const apiPresetName = String(settings?.requestApiPresetName || '').trim();
+        const llmPresetName = String(settings?.requestLlmPresetName || '').trim();
 
         const runnerSettings = {
             useStreamingTransport: Boolean(settings?.useStreamingTransport),
