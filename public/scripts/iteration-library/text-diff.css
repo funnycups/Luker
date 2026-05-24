@@ -195,3 +195,16 @@
     padding: 10px;
 }
 .luker_lib_diff_zoom_body .luker_lib_diff_pre { max-height: none; height: auto; }
+
+/* Narrow-viewport override (innerWidth < 720, class set by
+   `openExpandedDiff` in `zoom-overlay.js`): stack the dual-column diff
+   into a single column with each panel capped at 45vh and its own
+   scrollbar so the line-number gutter no longer crushes the cells. */
+.luker_lib_diff_zoom_narrow .luker_lib_diff_dual {
+    grid-template-columns: 1fr !important;
+    grid-template-rows: minmax(0, 45vh) auto minmax(0, 45vh);
+}
+.luker_lib_diff_zoom_narrow .luker_lib_diff_side_scroll {
+    max-height: 45vh;
+    overflow: auto;
+}

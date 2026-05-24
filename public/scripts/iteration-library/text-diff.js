@@ -348,8 +348,11 @@ export function renderInlineTextDiffHtml(beforeValue, afterValue, optionsOrLabel
     const options = (typeof optionsOrLabel === 'string')
         ? { fileLabel: optionsOrLabel }
         : (optionsOrLabel && typeof optionsOrLabel === 'object' ? optionsOrLabel : {});
-    const fileLabel = options.fileLabel || 'field';
     const i18n = typeof options.i18n === 'function' ? options.i18n : defaultI18n;
+    // When no caller-supplied fileLabel, fall back to a translated
+    // 'field' default so the overlay header reads correctly in zh /
+    // future locales instead of the bare English source.
+    const fileLabel = options.fileLabel || i18n('field');
     const expandAffordance = options.expandAffordance !== false;
     const forceOpen = options.forceOpen === true;
 
@@ -357,7 +360,21 @@ export function renderInlineTextDiffHtml(beforeValue, afterValue, optionsOrLabel
         sanitizeDiffPlaceholderValue(beforeValue),
         sanitizeDiffPlaceholderValue(afterValue),
     );
-    const summary = applyI18nFormat(i18n('Line diff (+${0} -${1})'), payload.added, payload.removed);
+    // Build the summary defensively: callers pass either a single-arg
+    // translate `t(template) → translation` (we still need `applyI18nFormat`
+    // to substitute the values), or a multi-arg formatter `tf(template, ...)`
+    // that already substitutes. Passing values to both i18n AND
+    // applyI18nFormat lands a correct result in either world:
+    //   - tf: i18n returns substituted; applyI18nFormat no-ops on a string
+    //     without `${N}` left.
+    //   - t:  i18n returns the raw template; applyI18nFormat does the
+    //     substitution.
+    // Before this guard, a tf-style i18n called with no values ate the
+    // `${0}` / `${1}` placeholders (substituted them to empty) and the
+    // diff summary rendered as "Line diff (+ -)" — visually identical to
+    // the apply-label bug fixed in the CEA studio.
+    const translatedSummary = i18n('Line diff (+${0} -${1})', payload.added, payload.removed);
+    const summary = applyI18nFormat(translatedSummary, payload.added, payload.removed);
     const safeLabel = escapeHtml(String(fileLabel));
     const renderedRows = buildLineDiffVisualRows(payload.operations);
     const expandLabel = escapeHtml(i18n('Expand diff'));

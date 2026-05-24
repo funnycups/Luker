@@ -1,0 +1,184 @@
+import { renderToolCallChip } from './toolcall.js';
+
+/**
+ * @param {Object} message - Persisted iter message
+ * @param {string} message.role - 'user' | 'assistant' | 'system'
+ * @param {string} message.content
+ * @param {Array}  [message.toolCalls]
+ * @param {Array}  [message.toolResults]  read-tool results, shape: { tool_call_id, content, status? }
+ * @param {Array}  [message.edits]
+ * @param {number} [message.appliedAt]
+ * @param {string} [message.appliedTarget]  'character' | 'global' | display label
+ * @param {number} [message.rolledBackAt]
+ * @param {boolean} [message.auto]
+ * @param {string} [message.id]
+ * @param {Object} opts
+ * @param {Object} opts.toolDisplay              tool-name → { icon, label, type, summarize }
+ * @param {Function} opts.renderEditCard         (edit) => html
+ * @param {boolean} opts.isLast                  true when this assistant is the LAST ASSISTANT turn
+ *                                               in the visible message list — i.e. no later message
+ *                                               has role === 'assistant'. Caller must skip trailing
+ *                                               user/system/auto messages when computing this.
+ *                                               Drives Regenerate visibility (last assistant cannot
+ *                                               regenerate because re-sending recomputes from the
+ *                                               same prompt anyway).
+ * @param {Function} opts.i18n                   (template, ...args) => string. Templates use
+ *                                               `${0}` / `${1}` positional placeholders. The caller
+ *                                               supplies a function that both translates and
+ *                                               interpolates so word order can vary across locales.
+ * @param {Function} [opts.renderMarkdown]       (text) => sanitized html. Falls back to escape + <br>.
+ * @param {string} [opts.actionAttribute]        e.g. 'data-cpa-it-action'; defaults to 'data-luker-lib-action'
+ * @returns {string} HTML
+ */
+export function renderMessageCard(message, opts = {}) {
+    if (!message) return '';
+    const role = String(message.role || 'user');
+    const i18n = typeof opts.i18n === 'function' ? opts.i18n : (s) => String(s ?? '');
+    const renderMd = typeof opts.renderMarkdown === 'function' ? opts.renderMarkdown : null;
+    const actionAttr = opts.actionAttribute || 'data-luker-lib-action';
+    const msgId = String(message.id || '');
+
+    if (role === 'system') {
+        const sysBody = renderMd
+            ? renderMd(String(message.content || ''))
+            : `<em>${escapeHtml(String(message.content || ''))}</em>`;
+        return `<div class="luker_lib_message luker_lib_message_system" data-luker-lib-msg-id="${escapeHtmlAttr(msgId)}">
+            ${sysBody}
+        </div>`;
+    }
+    if (role === 'user') {
+        // Auto-continue user messages are internal plumbing — they carry
+        // an LLM-facing nudge ("Continue with the next iteration step.
+        // Call luker_*_finalize_iteration once …") that the user should
+        // never see in the chat. The loop's progression is already
+        // visible as the next assistant turn.
+        if (message.auto) return '';
+        const cls = 'luker_lib_message luker_lib_message_user';
+        const body = escapeHtml(String(message.content || '')).replace(/\n/g, '<br>');
+        return `<div class="${cls}" data-luker-lib-msg-id="${escapeHtmlAttr(msgId)}">${body}</div>`;
+    }
+
+    // assistant
+    const content = String(message.content || '');
+    const bodyHtml = renderMd ? renderMd(content) : escapeHtml(content).replace(/\n/g, '<br>');
+
+    const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
+    const toolResults = Array.isArray(message.toolResults) ? message.toolResults : [];
+    const resultById = new Map();
+    for (const r of toolResults) {
+        if (r && r.tool_call_id != null) resultById.set(String(r.tool_call_id), r);
+    }
+    const edits = Array.isArray(message.edits) ? message.edits : [];
+
+    // Empty-card guard: if an assistant turn carries nothing renderable
+    // (no content, no tools, no edits, not applied / rolled back) then
+    // skip the bordered wrapper entirely — otherwise the user sees a
+    // floating empty card that suggests "something is here" when nothing
+    // is. Status / regen affordances still need to trigger a render even
+    // when content + tools + edits are all empty (e.g. an old assistant
+    // turn whose tools were stripped on regen).
+    const hasContent = content.length > 0;
+    const hasTools = toolCalls.length > 0 || toolResults.length > 0;
+    const hasEdits = edits.length > 0;
+    const hasStatus = Boolean(message.appliedAt) || Boolean(message.rolledBackAt);
+    if (!hasContent && !hasTools && !hasEdits && !hasStatus) {
+        return '';
+    }
+
+    const toolDisplay = opts.toolDisplay || {};
+    const toolsHtml = toolCalls.map(tc => {
+        const result = resultById.get(String(tc?.id || ''));
+        return renderToolCallChip(tc, {
+            toolDisplay,
+            result: result ? result.content : undefined,
+            status: result ? (result.status || 'ok') : 'ok',
+            i18n,
+        });
+    }).join('');
+
+    const renderEdit = typeof opts.renderEditCard === 'function' ? opts.renderEditCard : () => '';
+    const editsHtml = edits.map(renderEdit).join('');
+
+    // Read-only round hint: assistant message with content empty AND every tool call is read AND no edits AND not finalized
+    const allRead = toolCalls.length > 0
+        && edits.length === 0
+        && toolCalls.every(tc => toolDisplay[String(tc?.name || '')]?.type === 'read');
+    const readOnlyHint = allRead
+        ? `<div class="luker_lib_message_readonly_hint">${escapeHtml(i18n('AI read the indicated data and is waiting to act on the result next round.'))}</div>`
+        : '';
+
+    const applied = Boolean(message.appliedAt) && !message.rolledBackAt;
+    const rolledBack = Boolean(message.rolledBackAt);
+
+    const statusHtml = (() => {
+        if (rolledBack) {
+            return `<div class="luker_lib_message_status luker_lib_message_status_rolledback">
+                ${escapeHtml(i18n('Rolled back at ${0}', formatTime(message.rolledBackAt)))}
+            </div>`;
+        }
+        if (applied) {
+            const target = String(message.appliedTarget || '');
+            // Translate the target value through i18n so stored English
+            // keys ('preset' / 'schema' / 'character' / 'global') surface in
+            // the user's locale at render time. Targets that fall outside
+            // the known key set pass through unchanged (i18n is identity
+            // for unknown keys).
+            const translatedTarget = target ? i18n(target) : '';
+            const appliedLine = translatedTarget
+                ? i18n('✓ Applied to ${0} at ${1}', translatedTarget, formatTime(message.appliedAt))
+                : i18n('✓ Applied at ${0}', formatTime(message.appliedAt));
+            return `<div class="luker_lib_message_status luker_lib_message_status_applied">
+                <span>${escapeHtml(appliedLine)}</span>
+                <button class="menu_button menu_button_small" ${actionAttr}="rollback-batch" data-luker-lib-msg-id="${escapeHtmlAttr(msgId)}">
+                    ${escapeHtml(i18n('Rollback this round'))}
+                </button>
+            </div>`;
+        }
+        return '';
+    })();
+
+    const showRegen = !opts.isLast && !message.auto;
+    const regenHtml = showRegen
+        ? `<div class="luker_lib_message_actions">
+            <button class="menu_button menu_button_small" ${actionAttr}="regenerate" data-luker-lib-msg-id="${escapeHtmlAttr(msgId)}">
+                ${escapeHtml(i18n('Regenerate'))}
+            </button>
+        </div>`
+        : '';
+
+    return `<div class="luker_lib_message luker_lib_message_assistant" data-luker-lib-msg-id="${escapeHtmlAttr(msgId)}">
+        ${bodyHtml}
+        ${readOnlyHint}
+        ${toolsHtml}
+        ${editsHtml}
+        ${statusHtml}
+        ${regenHtml}
+    </div>`;
+}
+
+function formatTime(ts) {
+    try {
+        const d = new Date(Number(ts) || Date.now());
+        return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    } catch { return ''; }
+}
+
+function escapeHtml(s) {
+    // Same narrowing as toolcall.js: only & < > escaped. Quotes can appear in
+    // text-content positions because we never interpolate user-controlled values
+    // into attribute positions without going through `escapeHtmlAttr`.
+    return String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+
+// Wider escape for attribute interpolation (msg-id, data-attrs, etc.) so
+// any user-controlled string that ends up in an HTML attribute position
+// can't break out of the attribute.
+function escapeHtmlAttr(s) {
+    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        '\'': '&#39;',
+    }[c]));
+}

@@ -74,6 +74,20 @@ export function openExpandedDiff(rootElement, triggerElement, options = {}) {
         zoomBody.append(diffBody.cloneNode(true));
     }
 
+    // Narrow-viewport class: below the 720px breakpoint the dialog stacks
+    // into a single column with each panel capped at 45vh (see
+    // `.luker_lib_diff_zoom_narrow` rules in `text-diff.css`). Sampled at
+    // open-time only — if the user resizes after opening, they can close
+    // and reopen to re-evaluate (intentional; cheaper than wiring a
+    // resize observer).
+    const dialog = overlay.querySelector('.luker_lib_diff_zoom_dialog');
+    if (dialog instanceof HTMLElement
+        && typeof window !== 'undefined'
+        && Number.isFinite(window.innerWidth)
+        && window.innerWidth < 720) {
+        dialog.classList.add('luker_lib_diff_zoom_narrow');
+    }
+
     root.append(overlay);
 }
 
@@ -157,7 +171,7 @@ export function beginLineDiffResize(splitterElement, pointerEvent) {
  * @param {Object} [options]
  *   `namespace` (default `.luker_lib_diff`) — jQuery event namespace
  *   used for delegation. Each popup should pass a distinct namespace
- *   when multiple popups can coexist (e.g. `.cea_charit_diff`).
+ *   when multiple popups can coexist.
  *   `i18n` (default identity) — overlay header labels.
  */
 export function attachZoomOverlay(popupRoot, options = {}) {

@@ -1,0 +1,168 @@
+/*
+ * iteration-library/ui — shared classes for the 5 iter-library popups.
+ *
+ * Prefix convention: luker_lib_<component>_<element>. CSS specificity is
+ * minimum-needed; popup-specific overrides go in the popup's own .css.
+ */
+
+/* M1.2 (toolcall) fills this in. */
+
+/* ── toolcall chip ─────────────────────────────────────────────── */
+.luker_lib_toolcall {
+    margin: 4px 0;
+    padding: 6px 8px;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.32));
+    border-radius: 6px;
+    background: color-mix(in oklab, var(--SmartThemeBlurTintColor, #000) 7%, transparent);
+    font-size: 0.92em;
+}
+.luker_lib_toolcall_summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+}
+.luker_lib_toolcall_status { font-size: 0.95em; }
+.luker_lib_toolcall_icon   { font-size: 1em; }
+.luker_lib_toolcall_label  {
+    font-weight: 600;
+    color: var(--SmartThemeBodyColor);
+}
+.luker_lib_toolcall_summary_text {
+    opacity: 0.78;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+.luker_lib_toolcall_details,
+.luker_lib_toolcall_result {
+    margin-top: 4px;
+}
+.luker_lib_toolcall_details > summary,
+.luker_lib_toolcall_result  > summary {
+    cursor: pointer;
+    opacity: 0.7;
+    font-size: 0.88em;
+}
+.luker_lib_toolcall_arg_rows {
+    display: grid;
+    gap: 4px 8px;
+    grid-template-columns: max-content 1fr;
+    max-height: 240px;
+    overflow-y: auto;
+    margin-top: 4px;
+}
+.luker_lib_toolcall_arg_row {
+    display: contents;
+}
+.luker_lib_toolcall_arg_key {
+    font-family: var(--monoFontFamily, monospace);
+    opacity: 0.75;
+    font-size: 0.85em;
+}
+.luker_lib_toolcall_arg_value { min-width: 0; }
+.luker_lib_toolcall_long_value,
+.luker_lib_toolcall_result_body {
+    max-height: 240px;
+    overflow-y: auto;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: rgba(0,0,0,0.18);
+    border-radius: 4px;
+    padding: 6px;
+    margin: 0;
+}
+.luker_lib_toolcall_obj_value,
+.luker_lib_toolcall_scalar_value,
+.luker_lib_toolcall_short_value {
+    word-break: break-word;
+}
+
+/* Type-tinted left border helps the reader scan rounds: */
+.luker_lib_toolcall_edit    { border-left: 3px solid var(--SmartThemeQuoteColor, #4a90e2); }
+.luker_lib_toolcall_read    { border-left: 3px solid color-mix(in oklab, var(--SmartThemeBodyColor) 35%, transparent); }
+.luker_lib_toolcall_control { border-left: 3px solid #c084fc; }
+
+/* ── message card ──────────────────────────────────────────────── */
+.luker_lib_message {
+    margin: 6px 0;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.32));
+    background: color-mix(in oklab, var(--SmartThemeBlurTintColor, #000) 5%, transparent);
+}
+.luker_lib_message_user      { background: color-mix(in oklab, var(--SmartThemeQuoteColor, #4a90e2) 6%, transparent); }
+.luker_lib_message_system    { opacity: 0.75; font-style: italic; }
+
+.luker_lib_message_readonly_hint {
+    margin: 4px 0;
+    padding: 4px 8px;
+    border-left: 3px solid color-mix(in oklab, var(--SmartThemeBodyColor) 40%, transparent);
+    background: rgba(0,0,0,0.06);
+    font-size: 0.88em;
+    opacity: 0.82;
+}
+
+.luker_lib_message_status {
+    margin-top: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.88em;
+}
+.luker_lib_message_status_applied    { color: var(--SmartThemeQuoteColor, #4a90e2); }
+.luker_lib_message_status_rolledback { opacity: 0.7; font-style: italic; }
+
+.luker_lib_message_actions {
+    margin-top: 6px;
+    display: flex;
+    gap: 6px;
+}
+
+/* ── diff card ─────────────────────────────────────────────────── */
+.luker_lib_diff_card {
+    margin: 4px 0;
+    padding: 6px 8px;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.32));
+    border-radius: 6px;
+    background: rgba(0,0,0,0.04);
+}
+.luker_lib_diff_header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.luker_lib_diff_op    { font-weight: 600; }
+.luker_lib_diff_path  { opacity: 0.7; }
+.luker_lib_diff_delta { opacity: 0.6; font-size: 0.85em; }
+.luker_lib_diff_list_preview {
+    margin: 0;
+    padding: 6px;
+    background: rgba(0,0,0,0.18);
+    border-radius: 4px;
+    max-height: 180px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.85em;
+}
+
+/* Existing luker_lib_diff classes from text-diff.css already handle
+   the inner dual-column. We extend zoom behavior in zoom-overlay.js. */
+
+/* ── apply controls ────────────────────────────────────────────── */
+.luker_lib_apply_controls {
+    margin: 6px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.luker_lib_apply_applied     { color: var(--SmartThemeQuoteColor, #4a90e2); }
+.luker_lib_apply_rolledback  { opacity: 0.7; font-style: italic; }

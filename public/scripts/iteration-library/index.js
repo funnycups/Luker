@@ -25,5 +25,6 @@ export * as runner from './runner.js';
 export * as storage from './storage.js';
 export * as textDiff from './text-diff.js';
 export * as zoomOverlay from './zoom-overlay.js';
+export * as ui from './ui/index.js';
 
 export { bindIterWorkspaceResizer } from './workspace-resizer.js';
