@@ -87,6 +87,7 @@ import {
     inverseEdit,
     render as ITER_RENDER,
     runner as ITER_RUNNER,
+    tools as ITER_TOOLS,
     ui as ITER_UI,
     zoomOverlay as ITER_ZOOM_OVERLAY,
 } from '../../../iteration-library/index.js';
@@ -107,18 +108,19 @@ const STYLESHEET_HREF = '/scripts/extensions/orchestrator/iter-studio/studio.css
 
 // ──────────────────────────────────────────────────────────────────────────
 // Lorebook read tools (borrowed from the unified CEA editor's surface).
+// ──────────────────────────────────────────────────────────────────────────
+// Lorebook read tools
 //
 // The orchestration designer often needs to read lorebook content while
 // shaping nodes — e.g. to decide what kind of constraints a `lorebook_reader`
 // node should enforce, or to confirm that the active world books actually
-// contain the categories of facts a node assumes. These four read-tools
-// give the iteration AI the same lorebook visibility the CEA editor has.
+// contain the categories of facts a node assumes. These read tools give
+// the iteration AI the same lorebook visibility the CEA editor has.
 //
-// Implementation: identical wire-format to the CEA editor (short canonical
-// names → legacy `luker_card_*` names dispatched via main.js's
-// runCharacterEditorHelperToolCall). The legacy adapter takes the active
-// character avatar from `helperApis`, so the tools are gated on the popup
-// being scoped to a character (no avatar → no lorebook to read).
+// Implementation: shared with sibling iter popups (memory-graph schema
+// iter) via `iteration-library/tools/lorebook-reads.js`. The legacy
+// dispatcher (`runCharacterEditorHelperToolCall`) is injected per-call
+// so the shared module stays plugin-agnostic.
 //
 // IMPORTANT: results are read-only and informational. They are NOT
 // duplicated into any generated node's systemPrompt — the runtime already
@@ -126,13 +128,7 @@ const STYLESHEET_HREF = '/scripts/extensions/orchestrator/iter-studio/studio.css
 // instructs the AI to use these tools to understand the *shape* of
 // constraints, not to copy lorebook text into prompts.
 // ──────────────────────────────────────────────────────────────────────────
-const LOREBOOK_READ_TOOL_LEGACY_NAMES = Object.freeze({
-    lorebook_list: 'luker_card_list_lorebook_entries',
-    lorebook_query: 'luker_card_query_lorebook_entries',
-    lorebook_get: 'luker_card_get_lorebook_entries',
-    world_book_list: 'luker_card_list_world_books',
-});
-const LOREBOOK_READ_TOOL_NAME_SET = new Set(Object.keys(LOREBOOK_READ_TOOL_LEGACY_NAMES));
+const { isLorebookReadTool, LOREBOOK_READ_TOOL_DEFS, runLorebookReadTool: runLorebookReadToolShared } = ITER_TOOLS.lorebookReads;
 
 // `luker_orch_simulate` is classified as a read tool too (it runs a
 // throwaway orchestration against the working profile and returns the
@@ -144,10 +140,6 @@ const LOREBOOK_READ_TOOL_NAME_SET = new Set(Object.keys(LOREBOOK_READ_TOOL_LEGAC
 // where lastSimulation gets written to a throwaway sandbox.
 const SIMULATE_TOOL_NAME = 'luker_orch_simulate';
 
-function isLorebookReadTool(name) {
-    return LOREBOOK_READ_TOOL_NAME_SET.has(String(name || ''));
-}
-
 function isSimulateTool(name) {
     return String(name || '') === SIMULATE_TOOL_NAME;
 }
@@ -156,109 +148,24 @@ function isReadTool(name) {
     return isLorebookReadTool(name) || isSimulateTool(name);
 }
 
-const LOREBOOK_READ_TOOL_DEFS = [
-    {
-        type: 'function',
-        function: {
-            name: 'world_book_list',
-            description: 'List world book names visible to the character being designed, tagged with their scope (character, character_aux, chat, global). Call before lorebook_list / lorebook_query / lorebook_get to know which book names exist.',
-            parameters: { type: 'object', properties: {}, additionalProperties: false },
-        },
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'lorebook_list',
-            description: 'List compact lorebook entry index rows (uid, name, enabled) for a world book. Optional range narrows the inclusive UID window, for example 0~100.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    book_name: { type: 'string', description: 'Required. Target world book.' },
-                    range: { type: 'string', description: 'Optional inclusive UID range such as 0~100, 50~, ~100, or a single uid like 42.' },
-                },
-                required: ['book_name'],
-                additionalProperties: false,
-            },
-        },
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'lorebook_query',
-            description: 'Search a world book and return lightweight matching entries. Use this before lorebook_get to narrow candidates.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    book_name: { type: 'string', description: 'Required. Target world book.' },
-                    text: { type: 'string' },
-                    search_mode: { type: 'string', enum: ['any', 'activation'] },
-                    constant: { type: 'boolean' },
-                    enabled: { type: 'boolean' },
-                    limit: { type: 'integer', minimum: 1, maximum: 20 },
-                },
-                required: ['book_name'],
-                additionalProperties: false,
-            },
-        },
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'lorebook_get',
-            description: 'Fetch full lorebook entries from a world book by uid after narrowing candidates with lorebook_query.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    book_name: { type: 'string', description: 'Required. Target world book.' },
-                    uids: { type: 'array', items: { type: 'integer' }, minItems: 1, maxItems: 10 },
-                },
-                required: ['book_name', 'uids'],
-                additionalProperties: false,
-            },
-        },
-    },
-];
-
 /**
- * Execute one lorebook read tool. Translates the short canonical name to the
- * legacy `luker_card_*` wire name + dispatches through main.js's helper-tool
- * runner. Returns `{ ok: true, result }` on success and `{ ok: false, error }`
- * on failure so the runIterationTurn loop can persist a tool_result either way.
- *
- * Caller is responsible for building helperApis (per-character — see
- * buildCharacterEditorHelperApis in character-editor-assistant/main.js).
+ * Execute one lorebook read tool. Thin wrapper that injects the CEA
+ * dispatcher into the shared `iteration-library/tools/lorebook-reads.js`
+ * implementation. Kept as a local helper so existing call sites that pass
+ * `(call, helperApis)` continue to work without restructuring.
  */
 async function runLorebookReadTool(call, helperApis = []) {
-    const shortName = String(call?.name || '');
-    if (!isLorebookReadTool(shortName)) {
-        return { ok: false, error: `Not a lorebook read tool: ${shortName || '(empty)'}` };
-    }
-    const legacyName = LOREBOOK_READ_TOOL_LEGACY_NAMES[shortName];
-    const legacyCall = {
-        id: call?.id,
-        name: legacyName,
-        args: call?.args && typeof call.args === 'object' ? call.args : {},
-    };
-    try {
-        const raw = await runCharacterEditorHelperToolCall(legacyCall, helperApis);
-        const result = raw && typeof raw === 'object' && Object.hasOwn(raw, 'result')
-            ? raw.result
-            : raw;
-        return { ok: true, result };
-    } catch (err) {
-        return { ok: false, error: String(err?.message || err || 'unknown error') };
-    }
+    return runLorebookReadToolShared(call, {
+        dispatch: runCharacterEditorHelperToolCall,
+        helperApis,
+    });
 }
 
 const CONTROL_TOOL_NAMES = Object.freeze({
-    continue: 'luker_orch_continue_iteration',
-    finalize: 'luker_orch_finalize_iteration',
     resetToBlank: 'luker_orch_reset_live_to_blank',
     resetToGlobal: 'luker_orch_reset_live_to_global',
 });
 const CONTROL_TOOL_NAME_SET = new Set([
-    CONTROL_TOOL_NAMES.continue,
-    CONTROL_TOOL_NAMES.finalize,
     CONTROL_TOOL_NAMES.resetToBlank,
     CONTROL_TOOL_NAMES.resetToGlobal,
 ]);

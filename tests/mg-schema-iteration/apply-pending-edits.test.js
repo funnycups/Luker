@@ -63,6 +63,15 @@ jest.unstable_mockModule('../../public/scripts/lib/iter-tool-calling.js', () => 
 
 jest.unstable_mockModule('../../public/scripts/lib/abort-utils.js', () => ({}));
 
+// CEA main.js drags in macros/engine/MacroEnvBuilder.js → /scripts/utils.js
+// which doesn't resolve in jest. MG studio.js imports CEA only for the
+// per-character lorebook helper-tool dispatcher (used by the lorebook read
+// tools). This unit test doesn't exercise reads, so a noop stub is enough.
+jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/main.js', () => ({
+    buildCharacterEditorHelperApis: jest.fn(() => []),
+    runCharacterEditorHelperToolCall: jest.fn(async () => ({ ok: true, result: {} })),
+}));
+
 let _testOnly_applyEmptyPathSet;
 let _testOnly_createNewSession;
 

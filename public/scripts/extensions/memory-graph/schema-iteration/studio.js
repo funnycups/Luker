@@ -61,9 +61,14 @@ import {
     bindIterWorkspaceResizer,
     render as ITER_RENDER,
     runner as ITER_RUNNER,
+    tools as ITER_TOOLS,
     zoomOverlay as ITER_ZOOM_OVERLAY,
     ui as ITER_UI,
 } from '../../../iteration-library/index.js';
+import {
+    buildCharacterEditorHelperApis,
+    runCharacterEditorHelperToolCall,
+} from '../../character-editor-assistant/main.js';
 import {
     TOOL_DEFS,
     TOOL_DISPLAY,
@@ -78,6 +83,18 @@ import { createMgSchemaSessionStore, makeMessageId, normalizeMessageShape } from
 
 const MODULE = 'mg-schema-iteration';
 const STYLESHEET_ID = 'mg_schema_it_studio_stylesheet';
+
+// Shared lorebook read tools (also used by orch iter-studio). The
+// dispatcher is CEA-owned and injected per-call so the shared module
+// stays plugin-agnostic.
+const { isLorebookReadTool, LOREBOOK_READ_TOOL_DEFS, runLorebookReadTool: runLorebookReadToolShared } = ITER_TOOLS.lorebookReads;
+
+async function runLorebookReadTool(call, helperApis = []) {
+    return runLorebookReadToolShared(call, {
+        dispatch: runCharacterEditorHelperToolCall,
+        helperApis,
+    });
+}
 const STYLESHEET_HREF = '/scripts/extensions/memory-graph/schema-iteration/studio.css';
 
 /**
@@ -522,6 +539,24 @@ export async function openSchemaIterationStudio(deps) {
             helperSession,
             globalSchema,
         };
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Tool catalog assembly. The static catalog from `tools.js`
+    // (`buildToolCatalog`) covers schema edits + the two reset control
+    // tools. The lorebook read tools are character-scoped — they dispatch
+    // through the CEA helper API which is per-character, so we splice
+    // them in only when scope is `character` AND an avatar is selected.
+    // Without an avatar `helperApis` would be empty and every read would
+    // return a "no character bound" error, so silently hiding the tools
+    // is clearer than offering them in global scope.
+    // ──────────────────────────────────────────────────────────────────
+    function buildCatalogForScope(turnSnapshot) {
+        const base = buildToolCatalog();
+        if (turnSnapshot?.helperSession?.scope === 'character' && turnSnapshot?.avatar) {
+            return [...base, ...LOREBOOK_READ_TOOL_DEFS];
+        }
+        return base;
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -1075,6 +1110,12 @@ export async function openSchemaIterationStudio(deps) {
      * user/assistant turns so the model has context. Only the last user
      * turn gets the augmented schema-outline prefix so the prompt budget
      * doesn't bloat on every turn.
+     *
+     * Assistant messages that carry `toolCalls` + matching `toolResults`
+     * (read-tool rounds) get the OpenAI tool-protocol replay shape:
+     * `assistant {content, tool_calls}` followed by one `tool` message
+     * per tool_call_id. Without this replay, "act on what you just read"
+     * prompts couldn't see prior read results across user-driven turns.
      */
     function buildTaskMessages(systemPrompt, snapshot) {
         const messages = [{ role: 'system', content: systemPrompt }];
@@ -1094,6 +1135,57 @@ export async function openSchemaIterationStudio(deps) {
             const content = idx === lastUserIdx && role === 'user'
                 ? buildAugmentedUserPrompt(String(m.content || ''), snapshot)
                 : String(m.content || '');
+
+            // Replay read-tool calls + their results for assistant turns
+            // that have them. Edit-tool calls intentionally NOT replayed:
+            // they're sandbox-diff proposals the user reviews + applies
+            // via the popup, not part of the OpenAI-protocol round-trip
+            // the model expects to see.
+            if (role === 'assistant') {
+                const toolResults = Array.isArray(m?.toolResults) ? m.toolResults : [];
+                const resultIds = new Set(toolResults.map(r => String(r?.tool_call_id || '')).filter(Boolean));
+                const readCalls = Array.isArray(m?.toolCalls)
+                    ? m.toolCalls.filter(tc => isLorebookReadTool(tc?.name) || (tc?.id && resultIds.has(String(tc.id))))
+                    : [];
+                if (readCalls.length > 0 && toolResults.length > 0) {
+                    const toolCallsForHistory = readCalls.map((tc) => ({
+                        id: String(tc?.id || ''),
+                        type: 'function',
+                        function: {
+                            name: String(tc?.name || ''),
+                            arguments: JSON.stringify(tc?.args || {}),
+                        },
+                    }));
+                    messages.push({
+                        role: 'assistant',
+                        content,
+                        tool_calls: toolCallsForHistory,
+                    });
+                    const resultById = new Map();
+                    for (const r of toolResults) {
+                        if (r && r.tool_call_id != null) resultById.set(String(r.tool_call_id), r);
+                    }
+                    for (const tc of readCalls) {
+                        const r = resultById.get(String(tc?.id || ''));
+                        if (!r) continue;
+                        let serialized = '';
+                        try {
+                            serialized = typeof r.content === 'string'
+                                ? r.content
+                                : JSON.stringify(r.content ?? '');
+                        } catch {
+                            serialized = '';
+                        }
+                        messages.push({
+                            role: 'tool',
+                            tool_call_id: String(tc?.id || ''),
+                            content: serialized,
+                        });
+                    }
+                    return;
+                }
+            }
+
             messages.push({ role, content });
         });
         return messages;
@@ -1225,29 +1317,81 @@ export async function openSchemaIterationStudio(deps) {
         // (e.g. an older runner version), fall back to `result.toolCalls`, but
         // filter out control calls explicitly so they never leak into the
         // persisted `assistantMsg.toolCalls`.
-        const editToolCalls = collectedToolCalls.length > 0
+        const nonControlCalls = collectedToolCalls.length > 0
             ? collectedToolCalls
             : (Array.isArray(result?.toolCalls)
                 ? result.toolCalls.filter((c) => !isMgSchemaControlCall(c))
                 : []);
+        // Split into read tools (lorebook discovery + retrieval) and edit
+        // tools (schema mutations). Reads execute inline so their results
+        // can be threaded back into the next round's task messages; edits
+        // normalize into pending Edit ops the user reviews + applies.
+        const readToolCalls = nonControlCalls.filter((c) => isLorebookReadTool(c?.name));
+        const editToolCalls = nonControlCalls.filter((c) => !isLorebookReadTool(c?.name));
         const assistantText = firstAssistantText.trim();
 
+        // Execute read tools synchronously. Each call gets a stable id so
+        // the persisted tool_result can be matched back to it during chat
+        // rendering AND during the next round's taskMessages replay. The
+        // helper-tool dispatcher is per-character — `helperApis` is empty
+        // outside character scope, which `runLorebookReadTool` surfaces as
+        // an error result the AI can react to.
+        const helperApisForReads = (turnSnapshot.helperSession?.scope === 'character' && turnSnapshot.avatar)
+            ? buildCharacterEditorHelperApis(context, { avatar: turnSnapshot.avatar })
+            : [];
+        const persistedToolResults = [];
+        for (const call of readToolCalls) {
+            const callId = String(call?.id || `read_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
+            let resultPayload;
+            let statusLabel = 'ok';
+            try {
+                const out = await runLorebookReadTool({ id: callId, name: call?.name, args: call?.args }, helperApisForReads);
+                if (out?.ok) {
+                    resultPayload = out.result;
+                } else {
+                    resultPayload = { error: String(out?.error || 'unknown error') };
+                    statusLabel = 'fail';
+                }
+            } catch (err) {
+                resultPayload = { error: String(err?.message || err || 'unknown error') };
+                statusLabel = 'fail';
+            }
+            persistedToolResults.push({
+                tool_call_id: callId,
+                content: resultPayload,
+                status: statusLabel,
+            });
+            // Backfill id so renderMessageCard's tool_call_id ↔ chip
+            // lookup matches the persisted call.
+            call.id = callId;
+        }
+
         // Normalize edit-tools → edits. The MG sandbox-diff emits one bulk
-        // `set('', newSchema)` per call; multiple calls in the same turn
-        // would stack as separate edits, but Apply collapses them via
-        // applyEdits's sequential application.
+        // `set('', newSchema)` per call. Chain the `live` baseline across
+        // calls so each tool's sandbox starts from the previous call's
+        // newValue, not a fresh snapshot of state.live. Without chaining,
+        // every call's edit shares the same oldValue/baseline and only
+        // mutates its own slice — applyPendingEdits then walks them in
+        // order and each path:'' replace clobbers the prior one. The
+        // apply loop at applyPendingEdits already mirrors this assumption
+        // (it iterates applyEmptyPathSet over every edit and the last
+        // edit's newValue holds the cumulative state).
         const edits = [];
+        let chainedLive = state.live;
         for (const call of editToolCalls) {
             try {
                 const normalized = await normalizeToolCallToEdit(
                     wrapToolCallForNormalize(call),
                     {
-                        live: state.live,
+                        live: chainedLive,
                         normalizeNodeTypeSchema,
                     },
                 );
-                if (Array.isArray(normalized)) {
+                if (Array.isArray(normalized) && normalized.length > 0) {
                     edits.push(...normalized);
+                    // MG normalize only emits path:'' set edits, so the
+                    // cumulative state is just the last edit's newValue.
+                    chainedLive = normalized[normalized.length - 1].newValue;
                 }
                 // null (executor failure) → skip silently; the AI can retry.
             } catch (err) {
