@@ -1449,10 +1449,45 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
             }
             return -1;
         })();
+        // Pre-compute latest-unapplied id so inline Apply/Reject row only
+        // attaches to the most recent unapplied assistant turn.
+        let latestUnappliedAssistantId = '';
+        for (let i = messages.length - 1; i >= 0; i--) {
+            const m = messages[i];
+            if (m && m.role === 'assistant' && !m.auto
+                && Array.isArray(m.edits) && m.edits.length > 0
+                && !m.appliedAt && !m.rolledBackAt) {
+                latestUnappliedAssistantId = String(m.id || '');
+                break;
+            }
+        }
+        state.__latestUnappliedAssistantId = latestUnappliedAssistantId;
         const html = messages
             .map((m, idx) => ITER_UI.message.renderMessageCard(m, {
                 toolDisplay: CEA_EDITOR_TOOL_DISPLAY,
                 renderEditCard: (e) => ITER_UI.diff.renderDiffCard([e], { i18n: tf }),
+                renderApplyControls: (msg) => {
+                    const isLatestUnapplied = String(msg?.id || '') === state.__latestUnappliedAssistantId;
+                    // Latest unapplied message: prefer the runtime state.pendingEdits
+                    // over msg.edits. Pre-fix sessions persisted lorebook edits
+                    // without target.bookName when normalizeEdit treated a
+                    // falsy bookName as "drop the field"; reloading those
+                    // sessions surfaces empty Apply labels ('Apply N to ""')
+                    // and groupEditsByTarget silently drops the entry. The
+                    // in-memory state.pendingEdits is always populated by the
+                    // current round, so it carries the live bookName.
+                    const passthroughEdits = isLatestUnapplied
+                        ? (Array.isArray(state.pendingEdits) ? state.pendingEdits : [])
+                        : (Array.isArray(msg.edits) ? msg.edits : []);
+                    return ITER_UI.apply.renderApplyControls(
+                        { ...msg, edits: passthroughEdits },
+                        {
+                            i18n: tf,
+                            applyLabel: computeApplyLabel(passthroughEdits, tf),
+                            actionAttribute: 'data-cea-editor-action',
+                        },
+                    );
+                },
                 isLast: idx === lastAssistantIdx,
                 i18n: tf,
                 renderMarkdown: ITER_RENDER && typeof ITER_RENDER.renderMessageMarkdown === 'function'
@@ -1581,24 +1616,17 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
     }
 
     function renderApplyRow() {
+        // Apply / Reject affordances now render inline on the assistant
+        // message that produced the pending edits — see renderMessageCard
+        // above (renderApplyControls hook). The bottom apply row is
+        // retired; this helper is a no-op kept so the existing callers
+        // (`render()` flow) keep compiling. Remove once those callers
+        // migrate.
         if (!$root || $root.length === 0) return;
         const pendingEl = $root.find('[data-cea-editor-pending]');
-        if (!pendingEl || pendingEl.length === 0) return;
-        if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) {
+        if (pendingEl && pendingEl.length > 0) {
             pendingEl.empty().attr('hidden', true);
-            return;
         }
-        const virtualMsg = {
-            id: '__cea_editor_pending__',
-            role: 'assistant',
-            edits: state.pendingEdits,
-        };
-        const html = ITER_UI.apply.renderApplyControls(virtualMsg, {
-            i18n: tf,
-            applyLabel: computeApplyLabel(state.pendingEdits, tf),
-            actionAttribute: 'data-cea-editor-action',
-        });
-        pendingEl.html(html).removeAttr('hidden');
     }
 
     async function renderHistory() {

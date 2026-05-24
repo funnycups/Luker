@@ -380,7 +380,6 @@ function buildPopupHtml({
     <div class="luker-iter-workspace-grid">
         <div class="luker-iter-workspace-chat" data-iter-pane="chat">
             <div class="cpa_it_messages" data-cpa-it-messages></div>
-            <div class="cpa_it_pending" data-cpa-it-pending hidden></div>
             <div class="cpa_it_composer">
                 <textarea class="text_pole" rows="2" data-cpa-it-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
                 <div class="cpa_it_composer_actions">
@@ -661,6 +660,23 @@ export async function openCpaIterationStudio(deps) {
         const innerHtml = ITER_UI.message.renderMessageCard(message, {
             toolDisplay: CPA_TOOL_DISPLAY,
             renderEditCard: renderPendingEditCard,
+            renderApplyControls: (m) => {
+                // Render apply/rollback row for applied + rolled-back states
+                // on every assistant message; render the pending Apply/Reject
+                // buttons only on the latest unapplied assistant turn so
+                // earlier unapplied turns (superseded by a later round)
+                // don't show buttons that wouldn't operate on their own edits.
+                const isLatestUnapplied = String(m?.id || '') === state.__latestUnappliedAssistantId;
+                const passthroughEdits = isLatestUnapplied ? m.edits : [];
+                return ITER_UI.apply.renderApplyControls(
+                    { ...m, edits: passthroughEdits },
+                    {
+                        i18n: tf,
+                        applyLabel: tf('Apply to ${0}', t('preset')),
+                        actionAttribute: 'data-cpa-it-action',
+                    },
+                );
+            },
             isLast,
             i18n: tf,
             renderMarkdown: ITER_RENDER.renderMessageMarkdown,
@@ -755,7 +771,23 @@ export async function openCpaIterationStudio(deps) {
 
         // Messages — pass index + full array so renderMessageCard can decide
         // whether to render Regenerate (only on non-last assistant turns).
+        // Pre-compute the most recent unapplied assistant message id so
+        // Apply / Reject buttons only attach to that one turn — earlier
+        // unapplied turns were superseded by a later round and the Apply
+        // click handler operates on state.pendingEdits (which mirrors the
+        // latest batch).
         const allMsgs = state.session.messages || [];
+        let latestUnappliedAssistantId = '';
+        for (let i = allMsgs.length - 1; i >= 0; i--) {
+            const m = allMsgs[i];
+            if (m && m.role === 'assistant' && !m.auto
+                && Array.isArray(m.edits) && m.edits.length > 0
+                && !m.appliedAt && !m.rolledBackAt) {
+                latestUnappliedAssistantId = String(m.id || '');
+                break;
+            }
+        }
+        state.__latestUnappliedAssistantId = latestUnappliedAssistantId;
         const messagesHtml = allMsgs.map((m, i) => renderMessageCard(m, i, allMsgs)).join('');
         const $msgs = $root.find('[data-cpa-it-messages]');
         // Loading bubble: append (don't overwrite) so the just-finished
@@ -777,28 +809,12 @@ export async function openCpaIterationStudio(deps) {
         // sync with the other iter-library popups (M1.7). The shared
         // component emits `${actionAttribute}="apply-batch"` and
         // `discard-batch` buttons; CPA's click delegation matches those
-        // values too (see handler block below). `pendingMessage` is a
-        // virtual carrier — the popup's pending block is owned by the
-        // session, not by a specific assistant turn, so we synthesize
-        // a message-shape with the staged edits and no applied/rolledback
-        // stamps so renderApplyControls falls into the "pending" branch.
-        const $pending = $root.find('[data-cpa-it-pending]');
-        if (state.pendingEdits.length > 0) {
-            const cardsHtml = state.pendingEdits.map(renderPendingEditCard).join('');
-            const pendingMessage = { id: '', edits: state.pendingEdits };
-            const applyHtml = ITER_UI.apply.renderApplyControls(pendingMessage, {
-                i18n: tf,
-                applyLabel: tf('Apply to ${0}', t('preset')),
-                actionAttribute: 'data-cpa-it-action',
-            });
-            $pending.html(`
-                <div class="cpa_it_pending_title">${escapeHtml(t('Pending changes'))}</div>
-                ${cardsHtml}
-                ${applyHtml}
-            `).show().attr('hidden', null);
-        } else {
-            $pending.html('').hide().attr('hidden', '');
-        }
+        // Pending edits + Apply / Reject affordances now render inline on
+        // the assistant message that produced them — see renderMessageCard
+        // above (renderApplyControls hook). The legacy bottom region is
+        // gone; pending edits live next to the diff cards that introduced
+        // them, so the user never has to scroll past the message body to
+        // approve them.
 
         // Send / Stop button label
         const $sendBtn = $root.find('[data-cpa-it-action="send"]');

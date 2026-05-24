@@ -16,37 +16,8 @@ export function renderDiffCard(edits, opts = {}) {
 function renderOneEdit(edit, opts) {
     const i18n = typeof opts.i18n === 'function' ? opts.i18n : (s) => String(s ?? '');
     if (!edit || typeof edit !== 'object') return '';
-    if (edit.op === 'set' && edit.path === ''
-        && edit.oldValue && edit.newValue
-        && typeof edit.oldValue === 'object' && typeof edit.newValue === 'object') {
-        const oldIsArray = Array.isArray(edit.oldValue);
-        const newIsArray = Array.isArray(edit.newValue);
-        // Whole-array-empty-path edit: walk by stable `id` keys when both
-        // sides are arrays and their elements expose a stable id (MG schema
-        // node-types, lorebook entries etc.). Falls back to whole-object
-        // dump otherwise.
-        if (oldIsArray && newIsArray) {
-            if (arraysHaveStableIds(edit.oldValue, edit.newValue)) {
-                return renderArrayByIdDiff(edit.oldValue, edit.newValue, opts);
-            }
-            return renderSubCard('', edit.oldValue, edit.newValue, opts);
-        }
-        if (!oldIsArray && !newIsArray) {
-            const changed = new Set();
-            walkDiff('', edit.oldValue, edit.newValue, changed);
-            if (changed.size > 0 && changed.size <= 20) {
-                return [...changed].map(leafPath => renderSubCard(
-                    leafPath,
-                    getByPath(edit.oldValue, leafPath),
-                    getByPath(edit.newValue, leafPath),
-                    opts,
-                )).join('');
-            }
-            return renderSubCard('', edit.oldValue, edit.newValue, opts);
-        }
-    }
     if (edit.op === 'set') {
-        return renderSubCard(String(edit.path || ''), edit.oldValue, edit.newValue, opts);
+        return renderSetEdit(edit, opts);
     }
     // Text-edit ops produced by the cpa / cea str tools. The args carry
     // `find` + `replace` (or `text` + `position` for inserts); rendering them
@@ -132,6 +103,87 @@ function arraysHaveStableIds(a, b) {
     return hasId(a) && hasId(b);
 }
 
+/**
+ * Render a `set` edit as one or more sub-cards. Goal: never dump a whole
+ * JSON object as text-diff — for object-valued targets (whether at root,
+ * at a leaf path, or at an array index path like `subAgents.8`) emit one
+ * sub-card per changed leaf so the user sees the actual field-level
+ * change instead of a JSON blob.
+ *
+ *   - both sides objects → walkDiff → per-leaf sub-cards
+ *   - both sides arrays with stable `id` → renderArrayByIdDiff
+ *   - new value is object, old missing (insert) → walk leaves of new vs {}
+ *   - old value is object, new missing (delete) → walk leaves of old vs {}
+ *   - scalars / mixed types → single renderSubCard at edit.path
+ *
+ * Cap at 50 leaves so a giant object still falls back to one card instead
+ * of exploding the view — but allows inserts of a few sub-objects (e.g.
+ * adding a sub-agent with several fields) to render per field.
+ */
+function renderSetEdit(edit, opts) {
+    const basePath = String(edit.path || '');
+    const oldV = edit.oldValue;
+    const newV = edit.newValue;
+    const isPlainObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
+    const isArr = (v) => Array.isArray(v);
+    const composePath = (leaf) => basePath
+        ? (leaf ? `${basePath}.${leaf}` : basePath)
+        : leaf;
+
+    if (isArr(oldV) && isArr(newV)) {
+        if (arraysHaveStableIds(oldV, newV)) {
+            return renderArrayByIdDiff(oldV, newV, opts);
+        }
+        return renderSubCard(basePath, oldV, newV, opts);
+    }
+
+    if (isPlainObj(oldV) && isPlainObj(newV)) {
+        const changed = new Set();
+        walkDiff('', oldV, newV, changed);
+        if (changed.size > 0 && changed.size <= 50) {
+            return [...changed].map(leafPath => renderSubCard(
+                composePath(leafPath),
+                getByPath(oldV, leafPath),
+                getByPath(newV, leafPath),
+                opts,
+            )).join('');
+        }
+        return renderSubCard(basePath, oldV, newV, opts);
+    }
+
+    if (isPlainObj(newV) && (oldV === undefined || oldV === null)) {
+        // Insert: walk newV's leaves and render each as "(empty) → leaf value"
+        const changed = new Set();
+        walkDiff('', {}, newV, changed);
+        if (changed.size > 0 && changed.size <= 50) {
+            return [...changed].map(leafPath => renderSubCard(
+                composePath(leafPath),
+                undefined,
+                getByPath(newV, leafPath),
+                opts,
+            )).join('');
+        }
+        return renderSubCard(basePath, oldV, newV, opts);
+    }
+
+    if (isPlainObj(oldV) && (newV === undefined || newV === null)) {
+        // Delete: mirror of insert
+        const changed = new Set();
+        walkDiff('', oldV, {}, changed);
+        if (changed.size > 0 && changed.size <= 50) {
+            return [...changed].map(leafPath => renderSubCard(
+                composePath(leafPath),
+                getByPath(oldV, leafPath),
+                undefined,
+                opts,
+            )).join('');
+        }
+        return renderSubCard(basePath, oldV, newV, opts);
+    }
+
+    return renderSubCard(basePath, oldV, newV, opts);
+}
+
 function renderArrayByIdDiff(oldArr, newArr, opts) {
     const byIdOld = new Map();
     for (const item of oldArr) byIdOld.set(String(item.id), item);
@@ -163,6 +215,12 @@ function renderSubCard(path, oldValue, newValue, opts) {
     const isWholeObject = path === '';
     const beforeText = stringifyValue(oldValue);
     const afterText = stringifyValue(newValue);
+    // Hide no-op leaves. `walkDiff` reaches per-leaf using `===`, which counts
+    // `undefined !== ''` as a change — so inserting a new sub-agent with
+    // default-empty `apiPresetName` (undefined → '') produces a "(+0 bytes)"
+    // header with an empty inline diff that's pure noise. Suppressing here
+    // also catches AI tool calls that set a field to its existing value.
+    if (beforeText === afterText) return '';
     const beforeBytes = beforeText.length;
     const afterBytes = afterText.length;
     const bytesDelta = afterBytes - beforeBytes;
@@ -212,6 +270,23 @@ function walkDiff(prefix, a, b, out, seen, depth) {
         return;
     }
     if (a === b) return;
+    // Insert/delete of an object subtree (one side null/undefined, the
+    // other a plain non-array object) — descend with an empty placeholder
+    // on the missing side so every leaf of the inserted/deleted object
+    // becomes its own changed path. Without this, an inserted
+    // `subAgents[8] = { id, description, systemPrompt, ... }` collapses to
+    // a single leaf whose value is the whole object, and renderSubCard
+    // dumps a raw JSON blob.
+    const aIsObj = a != null && typeof a === 'object' && !Array.isArray(a);
+    const bIsObj = b != null && typeof b === 'object' && !Array.isArray(b);
+    if (aIsObj && (b === null || b === undefined)) {
+        walkDiff(prefix, a, {}, out, seenSet, currentDepth + 1);
+        return;
+    }
+    if (bIsObj && (a === null || a === undefined)) {
+        walkDiff(prefix, {}, b, out, seenSet, currentDepth + 1);
+        return;
+    }
     if (a == null || b == null || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) !== Array.isArray(b)) {
         out.add(prefix || '(root)');
         return;
@@ -228,6 +303,12 @@ function walkDiff(prefix, a, b, out, seen, depth) {
         const av = a[k], bv = b[k];
         if (av === bv) continue;
         if (av && bv && typeof av === 'object' && typeof bv === 'object' && Array.isArray(av) === Array.isArray(bv)) {
+            walkDiff(childPrefix, av, bv, out, seenSet, currentDepth + 1);
+        } else if (
+            (av != null && typeof av === 'object' && !Array.isArray(av) && (bv === null || bv === undefined))
+            || (bv != null && typeof bv === 'object' && !Array.isArray(bv) && (av === null || av === undefined))
+        ) {
+            // Same insert/delete-subtree case as above, but at a child path.
             walkDiff(childPrefix, av, bv, out, seenSet, currentDepth + 1);
         } else {
             out.add(childPrefix);

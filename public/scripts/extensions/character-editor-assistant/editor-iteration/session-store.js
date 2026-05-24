@@ -103,9 +103,11 @@ function normalizeEdit(e) {
         if (kind === 'character') {
             out.target = { kind: 'character' };
         } else if (kind === 'lorebook') {
-            out.target = e.target.bookName
-                ? { kind: 'lorebook', bookName: String(e.target.bookName) }
-                : { kind: 'lorebook' };
+            // Preserve bookName as a string even when falsy — losing it means
+            // a reloaded session can't tell which lorebook the edit targeted,
+            // and Apply / rollback grouping by book name silently drops the
+            // edit (see groupEditsByTarget in studio.js).
+            out.target = { kind: 'lorebook', bookName: String(e.target.bookName || '') };
         }
     }
     return out;

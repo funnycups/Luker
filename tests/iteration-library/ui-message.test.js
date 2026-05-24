@@ -1,8 +1,10 @@
 import { jest } from '@jest/globals';
 import { renderMessageCard } from '../../public/scripts/iteration-library/ui/message.js';
+import { renderApplyControls } from '../../public/scripts/iteration-library/ui/apply.js';
 
 const ident = (s) => s;
 const noopEdit = () => '<div class="edit-card"></div>';
+const applyHook = (i18n) => (m) => renderApplyControls(m, { i18n: i18n || ident });
 
 describe('renderMessageCard', () => {
     it('renders user message body as escaped html with <br>', () => {
@@ -83,7 +85,7 @@ describe('renderMessageCard', () => {
     it('shows ✓ Applied stamp + Rollback button when message.appliedAt is set and not rolled back', () => {
         const html = renderMessageCard(
             { id: 'm7', role: 'assistant', content: 'x', edits: [{ op: 'set', path: 'a', oldValue: 1, newValue: 2 }], appliedAt: Date.now(), appliedTarget: 'character' },
-            { toolDisplay: {}, renderEditCard: noopEdit, isLast: true, i18n: ident },
+            { toolDisplay: {}, renderEditCard: noopEdit, renderApplyControls: applyHook(), isLast: true, i18n: ident },
         );
         expect(html).toMatch(/Applied/);
         expect(html).toContain('rollback');
@@ -92,7 +94,7 @@ describe('renderMessageCard', () => {
     it('shows Rolled back stamp when message.rolledBackAt is set', () => {
         const html = renderMessageCard(
             { id: 'm8', role: 'assistant', content: 'x', edits: [], rolledBackAt: Date.now() },
-            { toolDisplay: {}, renderEditCard: noopEdit, isLast: true, i18n: ident },
+            { toolDisplay: {}, renderEditCard: noopEdit, renderApplyControls: applyHook(), isLast: true, i18n: ident },
         );
         expect(html).toMatch(/Rolled back|回滚|回退/);
     });
@@ -131,7 +133,7 @@ describe('renderMessageCard', () => {
         };
         const html = renderMessageCard(
             { id: 'm12', role: 'assistant', content: 'x', edits: [{ op: 'set' }], appliedAt: Date.now(), appliedTarget: 'preset' },
-            { toolDisplay: {}, renderEditCard: noopEdit, isLast: true, i18n },
+            { toolDisplay: {}, renderEditCard: noopEdit, renderApplyControls: applyHook(i18n), isLast: true, i18n },
         );
         expect(html).toContain('预设');
         expect(html).not.toContain('Applied to preset at');

@@ -15,6 +15,13 @@ import { renderToolCallChip } from './toolcall.js';
  * @param {Object} opts
  * @param {Object} opts.toolDisplay              tool-name → { icon, label, type, summarize }
  * @param {Function} opts.renderEditCard         (edit) => html
+ * @param {Function} [opts.renderApplyControls]  (message) => html. Rendered between
+ *                                               the edit cards and the regen row. Popups
+ *                                               typically wire `renderApplyControls`
+ *                                               from `iteration-library/ui/apply.js`.
+ *                                               When omitted, message turns with edits
+ *                                               do not render Apply/Reject affordances
+ *                                               (suitable for read-only renders or tests).
  * @param {boolean} opts.isLast                  true when this assistant is the LAST ASSISTANT turn
  *                                               in the visible message list — i.e. no later message
  *                                               has role === 'assistant'. Caller must skip trailing
@@ -110,32 +117,14 @@ export function renderMessageCard(message, opts = {}) {
     const applied = Boolean(message.appliedAt) && !message.rolledBackAt;
     const rolledBack = Boolean(message.rolledBackAt);
 
-    const statusHtml = (() => {
-        if (rolledBack) {
-            return `<div class="luker_lib_message_status luker_lib_message_status_rolledback">
-                ${escapeHtml(i18n('Rolled back at ${0}', formatTime(message.rolledBackAt)))}
-            </div>`;
-        }
-        if (applied) {
-            const target = String(message.appliedTarget || '');
-            // Translate the target value through i18n so stored English
-            // keys ('preset' / 'schema' / 'character' / 'global') surface in
-            // the user's locale at render time. Targets that fall outside
-            // the known key set pass through unchanged (i18n is identity
-            // for unknown keys).
-            const translatedTarget = target ? i18n(target) : '';
-            const appliedLine = translatedTarget
-                ? i18n('✓ Applied to ${0} at ${1}', translatedTarget, formatTime(message.appliedAt))
-                : i18n('✓ Applied at ${0}', formatTime(message.appliedAt));
-            return `<div class="luker_lib_message_status luker_lib_message_status_applied">
-                <span>${escapeHtml(appliedLine)}</span>
-                <button class="menu_button menu_button_small" ${actionAttr}="rollback-batch" data-luker-lib-msg-id="${escapeHtmlAttr(msgId)}">
-                    ${escapeHtml(i18n('Rollback this round'))}
-                </button>
-            </div>`;
-        }
-        return '';
-    })();
+    // Apply / Rollback / Rolled-back row. Popups wire renderApplyControls
+    // from iteration-library/ui/apply.js — that helper handles all three
+    // states (pending edits → Apply+Reject; applied → status + Rollback
+    // button; rolled back → muted status). When the hook is omitted, the
+    // message renders without any apply affordance.
+    const applyControlsHtml = typeof opts.renderApplyControls === 'function'
+        ? opts.renderApplyControls(message)
+        : '';
 
     const showRegen = !opts.isLast && !message.auto;
     const regenHtml = showRegen
@@ -151,7 +140,7 @@ export function renderMessageCard(message, opts = {}) {
         ${readOnlyHint}
         ${toolsHtml}
         ${editsHtml}
-        ${statusHtml}
+        ${applyControlsHtml}
         ${regenHtml}
     </div>`;
 }

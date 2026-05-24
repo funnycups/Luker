@@ -156,17 +156,9 @@ function renderResultDetails(result, i18n) {
         && typeof result === 'object'
         && !Array.isArray(result);
     const keyCount = isPlainObject ? Object.keys(result).length : 0;
-    // Open heuristic:
-    //   - primitives (string/number/boolean) → open (one short scalar is fine to show)
-    //   - non-empty array with ≤5 items → open
-    //   - non-empty plain object with ≤5 keys → open
-    //   - empty object/array, null, or larger blobs → closed
-    const open = (() => {
-        if (result == null) return false;
-        if (typeof result !== 'object') return true;
-        if (Array.isArray(result)) return result.length > 0 && result.length <= 5;
-        return keyCount > 0 && keyCount <= 5;
-    })();
+    // Default to closed — tool results are reference material, not the
+    // user's primary focus. They can expand on demand.
+    const open = false;
     const bodyHtml = (isPlainObject && keyCount > 0)
         ? `<div class="luker_lib_toolcall_arg_rows">\n${renderFieldRows(result)}\n</div>`
         : renderArgValue(result);

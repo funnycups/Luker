@@ -99,12 +99,13 @@ describe('renderToolCallChip', () => {
         expect(html).toContain('&lt;script&gt;');
     });
 
-    it('opens result details by default for primitive results', () => {
+    it('keeps result details closed by default (reference material, expand on demand)', () => {
         const html = renderToolCallChip(
             { id: 'cr1', name: 'r', args: {} },
             { toolDisplay: {}, result: 'short string', i18n: ident },
         );
-        expect(html).toMatch(/<details class="luker_lib_toolcall_result" open/);
+        expect(html).toMatch(/<details class="luker_lib_toolcall_result"\s*>/);
+        expect(html).not.toMatch(/<details class="luker_lib_toolcall_result" open/);
     });
 
     it('closes result details for empty object results', () => {

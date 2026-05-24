@@ -71,7 +71,8 @@
     overflow-x: auto;
     white-space: pre-wrap;
     word-break: break-word;
-    background: rgba(0,0,0,0.18);
+    background: rgba(0,0,0,0.06);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.32));
     border-radius: 4px;
     padding: 6px;
     margin: 0;
@@ -129,7 +130,7 @@
     padding: 6px 8px;
     border: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.32));
     border-radius: 6px;
-    background: rgba(0,0,0,0.04);
+    background: transparent;
 }
 .luker_lib_diff_header {
     display: flex;
@@ -144,7 +145,8 @@
 .luker_lib_diff_list_preview {
     margin: 0;
     padding: 6px;
-    background: rgba(0,0,0,0.18);
+    background: rgba(0,0,0,0.06);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.32));
     border-radius: 4px;
     max-height: 180px;
     overflow: auto;

@@ -274,4 +274,39 @@ describe('renderDiffCard', () => {
         // of diff body was emitted).
         expect(html).toContain('luker_lib_diff_dual');
     });
+
+    it('suppresses leaf sub-cards whose before and after stringify identically', () => {
+        // Inserting a new sub-agent at subAgents.8 produces leaves like
+        // apiPresetName: undefined → '' and promptPresetName: undefined → ''.
+        // Both sides stringify to '' so the "+0 bytes" header with an empty
+        // inline diff is pure noise — should be hidden, leaving only the
+        // genuinely changed leaves (id, description, systemPrompt, etc.).
+        const html = renderDiffCard(
+            [{
+                op: 'set',
+                path: 'subAgents.8',
+                oldValue: undefined,
+                newValue: { id: 'newAgent', description: 'D', apiPresetName: '', promptPresetName: '' },
+            }],
+            { i18n: ident },
+        );
+        // 2 real leaves (id, description) — the two empty-string leaves drop out.
+        expect((html.match(/luker_lib_diff_card/g) || []).length).toBe(2);
+        expect(html).not.toContain('apiPresetName');
+        expect(html).not.toContain('promptPresetName');
+    });
+
+    it('returns empty string when every leaf in a set is a no-op', () => {
+        // AI calls a "set" with newValue identical to oldValue (e.g. it
+        // re-emitted the whole director profile but only mutated state we
+        // already had). Every leaf collapses to '' === '' so the entire
+        // edit produces no markup — renderDiffCard's caller then has no
+        // entry to render for this round.
+        const sameObj = { a: 'x', b: 'y' };
+        const html = renderDiffCard(
+            [{ op: 'set', path: '', oldValue: sameObj, newValue: structuredClone(sameObj) }],
+            { i18n: ident },
+        );
+        expect(html).toBe('');
+    });
 });

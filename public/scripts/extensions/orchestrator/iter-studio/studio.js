@@ -941,7 +941,6 @@ function buildPopupHtml({
         <div class="luker-iter-workspace-chat" data-iter-pane="chat">
             <div class="orch_it_messages" data-orch-it-messages></div>
             <div class="orch_it_finalized" data-orch-it-finalized hidden></div>
-            <div class="orch_it_pending" data-orch-it-pending hidden></div>
             <div class="orch_it_composer">
                 <textarea class="text_pole" rows="2" data-orch-it-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
                 <div class="orch_it_composer_actions">
@@ -1394,6 +1393,21 @@ export async function openOrchestratorIterationStudio(deps) {
         const innerHtml = ITER_UI.message.renderMessageCard(displayMessage, {
             toolDisplay: ORCH_TOOL_DISPLAY,
             renderEditCard: renderPendingEditCard,
+            renderApplyControls: (m) => {
+                const isLatestUnapplied = String(m?.id || '') === state.__latestUnappliedAssistantId;
+                const passthroughEdits = isLatestUnapplied ? m.edits : [];
+                const applyLabel = getIterationDefaultScope(context) === 'character'
+                    ? tf('Apply to ${0} override', getApplyScopeLabel())
+                    : tf('Apply to ${0}', getApplyScopeLabel());
+                return ITER_UI.apply.renderApplyControls(
+                    { ...m, edits: passthroughEdits },
+                    {
+                        i18n: tf,
+                        applyLabel,
+                        actionAttribute: 'data-orch-it-action',
+                    },
+                );
+            },
             isLast,
             i18n: tf,
             renderMarkdown: ITER_RENDER.renderMessageMarkdown,
@@ -1461,7 +1475,20 @@ export async function openOrchestratorIterationStudio(deps) {
 
         // Messages — pass index + full array so renderMessageCard can decide
         // whether to render Regenerate (only on non-last assistant turns).
+        // Pre-compute latest-unapplied id so inline Apply/Reject row only
+        // attaches to the most recent unapplied assistant turn.
         const allMsgs = state.session.messages || [];
+        let latestUnappliedAssistantId = '';
+        for (let i = allMsgs.length - 1; i >= 0; i--) {
+            const m = allMsgs[i];
+            if (m && m.role === 'assistant' && !m.auto
+                && Array.isArray(m.edits) && m.edits.length > 0
+                && !m.appliedAt && !m.rolledBackAt) {
+                latestUnappliedAssistantId = String(m.id || '');
+                break;
+            }
+        }
+        state.__latestUnappliedAssistantId = latestUnappliedAssistantId;
         const messagesHtml = allMsgs.map((m, i) => renderMessageCard(m, i, allMsgs)).join('');
         const $msgs = $root.find('[data-orch-it-messages]');
         // Loading bubble: append (don't overwrite) so the just-finished
@@ -1504,34 +1531,9 @@ export async function openOrchestratorIterationStudio(deps) {
         // visually synchronized; the component emits
         // `${actionAttribute}="apply-batch"` / `discard-batch` and the
         // handlers below match those values. `pendingMessage` is a
-        // synthetic carrier — the popup's pending block is owned by the
-        // session, not by a specific assistant turn, so we synthesize a
-        // message-shape with the staged edits and no applied/rolledback
-        // stamps so renderApplyControls falls into the "pending" branch.
-        const $pending = $root.find('[data-orch-it-pending]');
-        if (state.pendingEdits.length > 0) {
-            const cardsHtml = state.pendingEdits.map(renderPendingEditCard).join('');
-            const pendingMessage = { id: '', edits: state.pendingEdits };
-            // For character scope, the Apply button targets the character's
-            // override (vs the global profile). Spell that out so the user
-            // doesn't have to remember which scope the popup is currently
-            // operating in (especially after a parallel character switch).
-            const applyLabel = getIterationDefaultScope(context) === 'character'
-                ? tf('Apply to ${0} override', getApplyScopeLabel())
-                : tf('Apply to ${0}', getApplyScopeLabel());
-            const applyHtml = ITER_UI.apply.renderApplyControls(pendingMessage, {
-                i18n: tf,
-                applyLabel,
-                actionAttribute: 'data-orch-it-action',
-            });
-            $pending.html(`
-                <div class="orch_it_pending_title">${escapeHtmlLocal(t('Pending changes'))}</div>
-                <div class="orch_it_pending_list">${cardsHtml}</div>
-                ${applyHtml}
-            `).show().attr('hidden', null);
-        } else {
-            $pending.html('').hide().attr('hidden', '');
-        }
+        // Pending edits + Apply / Reject affordances render inline on the
+        // assistant message that produced them via renderApplyControls hook
+        // in renderMessageCard. The legacy bottom region has been retired.
 
         // Composer: disable when finalized; Send label flips to Stop while busy.
         const $sendBtn = $root.find('[data-orch-it-action="send"]');
