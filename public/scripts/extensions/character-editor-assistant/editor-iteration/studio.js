@@ -1535,6 +1535,26 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         return operations.length > 0 ? { messageId, operations } : null;
     }
 
+    function getPreviewView(bookName) {
+        const surface = state.session?.surfaceState || {};
+        const map = surface.previewView && typeof surface.previewView === 'object' ? surface.previewView : {};
+        const entry = map[bookName] && typeof map[bookName] === 'object' ? map[bookName] : {};
+        return {
+            search: String(entry.search || ''),
+            page: Math.max(1, Math.floor(Number(entry.page) || 1)),
+        };
+    }
+
+    function setPreviewView(bookName, patch) {
+        const surface = state.session?.surfaceState || (state.session.surfaceState = {});
+        const map = surface.previewView && typeof surface.previewView === 'object' ? surface.previewView : {};
+        const cur = map[bookName] || { search: '', page: 1 };
+        const next = { ...cur, ...patch };
+        next.page = Math.max(1, Math.floor(Number(next.page) || 1));
+        next.search = String(next.search || '');
+        surface.previewView = { ...map, [bookName]: next };
+    }
+
     function renderPreviewPane() {
         if (!$root || $root.length === 0) return;
         const $preview = $root.find('[data-iter-preview-pane]');
@@ -1558,7 +1578,8 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                 const lorebookEdits = (state.pendingEdits || [])
                     .filter(e => e?.target?.kind === 'lorebook' && e.target.bookName === bookName);
                 const pendingApproval = editsToPendingApproval(state.session?.id || '', lorebookEdits);
-                return renderCeaEditorPreviewPane(worldInfo, pendingApproval, t);
+                const viewOptions = getPreviewView(bookName);
+                return renderCeaEditorPreviewPane(worldInfo, pendingApproval, t, viewOptions);
             });
             $preview.html(sections.join(''));
         } catch (err) {
@@ -1867,6 +1888,41 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
             if (!tab) return;
             e.preventDefault();
             setActiveTab(tab);
+        });
+        // Lorebook preview search input — debounced re-render so each keystroke
+        // doesn't tear down the entire preview pane. 200 ms feels responsive
+        // without flooding render() under fast typing.
+        let _previewSearchTimer = null;
+        $root.on('input.ceaEditor', '[data-cea-preview-search]', (e) => {
+            const bookName = String(e.currentTarget?.dataset?.ceaPreviewBook || '');
+            if (!bookName) return;
+            const query = String(e.currentTarget?.value || '');
+            setPreviewView(bookName, { search: query, page: 1 });
+            if (_previewSearchTimer) clearTimeout(_previewSearchTimer);
+            _previewSearchTimer = setTimeout(() => {
+                _previewSearchTimer = null;
+                renderPreviewPane();
+                // Re-focus the input + restore cursor position after re-render
+                // so typing stays uninterrupted.
+                try {
+                    const $input = $root.find(`[data-cea-preview-search][data-cea-preview-book="${jQuery.escapeSelector(bookName)}"]`);
+                    if ($input.length > 0) {
+                        const len = String($input.val() || '').length;
+                        $input.trigger('focus');
+                        $input[0].setSelectionRange?.(len, len);
+                    }
+                } catch { /* best-effort focus restore */ }
+            }, 200);
+        });
+        $root.on('click.ceaEditor', '[data-cea-preview-page]', (e) => {
+            e.preventDefault();
+            const bookName = String(e.currentTarget?.dataset?.ceaPreviewBook || '');
+            const dir = String(e.currentTarget?.dataset?.ceaPreviewPage || '');
+            if (!bookName || !dir) return;
+            const cur = getPreviewView(bookName);
+            const delta = dir === 'next' ? 1 : (dir === 'prev' ? -1 : 0);
+            setPreviewView(bookName, { page: Math.max(1, cur.page + delta) });
+            renderPreviewPane();
         });
         $root.on('click.ceaEditor', '[data-cea-editor-action="new-session"]', async (e) => {
             e.preventDefault();

@@ -201,15 +201,20 @@ function renderEntryCard(t, tFormat, entry, { isPending = false, missingRefOp = 
  * @param {Function} [tFn] Optional i18n function (string → string); defaults to identity.
  * @returns {string} HTML markup
  */
-export function renderCeaEditorPreviewPane(worldInfo, pendingApproval, tFn) {
+export function renderCeaEditorPreviewPane(worldInfo, pendingApproval, tFn, viewOptions) {
     const t = typeof tFn === 'function' ? tFn : (s) => String(s ?? '');
     const tFormat = (template, ...values) => formatTemplate(t(template), ...values);
+    const view = viewOptions && typeof viewOptions === 'object' ? viewOptions : {};
+    const searchQuery = String(view.search || '').trim();
+    const perPage = Math.max(10, Math.min(200, Number(view.perPage) || 50));
+    const rawPage = Math.max(1, Math.floor(Number(view.page) || 1));
 
     if (!worldInfo) {
         return `<div style="padding:14px 16px;border:1px dashed color-mix(in srgb, var(--SmartThemeBodyColor, #888) 18%, transparent);border-radius:10px;opacity:0.75;text-align:center;">${escapeHtmlLocal(t('No world book bound'))}</div>`;
     }
 
     const name = worldInfo.name || worldInfo.book_name || '';
+    const bookNameAttr = escapeHtmlLocal(name);
     const entries = worldInfo.entries || {};
     const entryArray = Array.isArray(entries) ? entries.slice() : Object.values(entries);
     // Build a uid-keyed view of existing entries so existsInSnapshot checks
@@ -236,10 +241,6 @@ export function renderCeaEditorPreviewPane(worldInfo, pendingApproval, tFn) {
         if (existsInSnapshot) {
             pendingByUid.set(key, op);
         } else if (isCreate || key != null) {
-            // upsert/create on unknown uid → draft row at the top.
-            // delete/update on missing uid renders as a separate
-            // "referencing non-existent entry" row so the user can tell it
-            // apart from a legitimate new draft.
             pendingNewEntries.push({ op: opName, payload, isCreate });
         }
     }
@@ -252,32 +253,46 @@ export function renderCeaEditorPreviewPane(worldInfo, pendingApproval, tFn) {
         return renderEntryCard(t, tFormat, payload, { isPending: true, forceTitle: uidLabel });
     }).join('');
 
-    const entryCards = entryArray.map((entry) => {
+    // Pending-change entries always pinned to the top, outside pagination.
+    const pendingChangedCards = [];
+    const cleanEntries = [];
+    for (const entry of entryArray) {
         const uidStr = String(entry?.uid ?? entry?.id ?? '');
-        const isPending = pendingByUid.has(uidStr);
-        return {
-            isPending,
-            html: renderEntryCard(t, tFormat, entry, { isPending }),
-        };
-    });
+        if (pendingByUid.has(uidStr)) {
+            pendingChangedCards.push(renderEntryCard(t, tFormat, entry, { isPending: true }));
+        } else {
+            cleanEntries.push(entry);
+        }
+    }
+    const pendingChangedHtml = pendingChangedCards.join('');
 
-    const VISIBLE_CLEAN_LIMIT = 50;
-    const pendingChangedHtml = entryCards.filter((r) => r.isPending).map((r) => r.html).join('');
-    const cleanCards = entryCards.filter((r) => !r.isPending);
-    const visibleCleanHtml = cleanCards.slice(0, VISIBLE_CLEAN_LIMIT).map((r) => r.html).join('');
-    const hiddenClean = cleanCards.slice(VISIBLE_CLEAN_LIMIT);
-    const hiddenCleanHtml = hiddenClean.length > 0
-        ? `<details style="border:1px dashed color-mix(in srgb, var(--SmartThemeBodyColor, #888) 18%, transparent);border-radius:10px;padding:6px 10px;">
-              <summary style="cursor:pointer;opacity:0.78;padding:2px 0;">${escapeHtmlLocal(tFormat('Show ${0} more entries', String(hiddenClean.length)))}</summary>
-              <div style="display:flex;flex-direction:column;gap:5px;margin-top:6px;">${hiddenClean.map((r) => r.html).join('')}</div>
-          </details>`
-        : '';
+    // Filter clean entries by search query (comment, keys, content, uid).
+    const matchesQuery = (entry) => {
+        if (!searchQuery) return true;
+        const q = searchQuery.toLowerCase();
+        if (String(entry?.comment || '').toLowerCase().includes(q)) return true;
+        const keys = extractKeys(entry).join(' ').toLowerCase();
+        if (keys.includes(q)) return true;
+        if (String(entry?.content || '').toLowerCase().includes(q)) return true;
+        if (String(entry?.uid ?? '').includes(q)) return true;
+        return false;
+    };
+    const filteredClean = searchQuery ? cleanEntries.filter(matchesQuery) : cleanEntries;
+
+    const totalPages = Math.max(1, Math.ceil(filteredClean.length / perPage));
+    const page = Math.min(rawPage, totalPages);
+    const startIdx = (page - 1) * perPage;
+    const pagedClean = filteredClean.slice(startIdx, startIdx + perPage);
+    const pagedCleanHtml = pagedClean.map((entry) => renderEntryCard(t, tFormat, entry, { isPending: false })).join('');
 
     const totalEntries = entryArray.length;
-    const pendingCount = entryCards.filter((r) => r.isPending).length;
+    const pendingCount = pendingChangedCards.length;
     const draftCount = pendingNewEntries.length;
     const summaryPills = [
         `<span style="${PILL_STYLE}">${escapeHtmlLocal(tFormat('${0} entries', String(totalEntries)))}</span>`,
+        searchQuery
+            ? `<span style="${PILL_STYLE}">${escapeHtmlLocal(tFormat('${0} matches', String(filteredClean.length)))}</span>`
+            : '',
         pendingCount > 0
             ? `<span style="${PILL_STYLE_ACTIVE}">${escapeHtmlLocal(tFormat('${0} pending', String(pendingCount)))}</span>`
             : '',
@@ -286,8 +301,34 @@ export function renderCeaEditorPreviewPane(worldInfo, pendingApproval, tFn) {
             : '',
     ].filter(Boolean).join('');
 
-    const bodyRows = `${newDraftHtml}${pendingChangedHtml}${visibleCleanHtml}${hiddenCleanHtml}`
-        || `<div style="padding:14px 16px;border:1px dashed color-mix(in srgb, var(--SmartThemeBodyColor, #888) 18%, transparent);border-radius:10px;opacity:0.75;text-align:center;">${escapeHtmlLocal(t('No entries yet.'))}</div>`;
+    const searchInputHtml = `
+        <div style="display:flex;align-items:center;gap:6px;flex:1 1 auto;min-width:0;">
+            <input type="search" class="text_pole" style="flex:1 1 auto;min-width:0;"
+                placeholder="${escapeHtmlLocal(t('Search entries...'))}"
+                value="${escapeHtmlLocal(searchQuery)}"
+                data-cea-preview-search
+                data-cea-preview-book="${bookNameAttr}">
+        </div>`;
+
+    const pagerHtml = filteredClean.length > perPage
+        ? `<div style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">
+            <button class="menu_button menu_button_small" data-cea-preview-page="prev" data-cea-preview-book="${bookNameAttr}"${page <= 1 ? ' disabled' : ''}>${escapeHtmlLocal(t('Prev'))}</button>
+            <span style="opacity:0.8;font-size:0.85em;">${escapeHtmlLocal(tFormat('Page ${0} / ${1}', String(page), String(totalPages)))}</span>
+            <button class="menu_button menu_button_small" data-cea-preview-page="next" data-cea-preview-book="${bookNameAttr}"${page >= totalPages ? ' disabled' : ''}>${escapeHtmlLocal(t('Next'))}</button>
+        </div>`
+        : (searchQuery
+            ? `<span style="opacity:0.8;font-size:0.85em;">${escapeHtmlLocal(tFormat('Page ${0} / ${1}', String(page), String(totalPages)))}</span>`
+            : '');
+
+    const toolbarHtml = `
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding-top:6px;">
+            ${searchInputHtml}
+            ${pagerHtml}
+        </div>`;
+
+    const emptyState = `<div style="padding:10px 14px;border:1px dashed color-mix(in srgb, var(--SmartThemeBodyColor, #888) 18%, transparent);border-radius:8px;opacity:0.75;text-align:center;">${escapeHtmlLocal(searchQuery ? t('No entries match this search.') : t('No entries yet.'))}</div>`;
+    const cleanBlock = pagedCleanHtml || (pendingChangedHtml || newDraftHtml ? '' : emptyState);
+    const bodyRows = `${newDraftHtml}${pendingChangedHtml}${cleanBlock}`;
 
     return `
         <section class="cea_editor_preview_section" style="display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--SmartThemeBorderColor, rgba(130,130,130,.3));border-radius:12px;">
@@ -295,6 +336,7 @@ export function renderCeaEditorPreviewPane(worldInfo, pendingApproval, tFn) {
                 <strong style="flex:1 1 12rem;min-width:0;font-size:0.96rem;overflow-wrap:anywhere;">${escapeHtmlLocal(tFormat('World book: ${0}', name))}</strong>
                 ${summaryPills}
             </header>
+            ${toolbarHtml}
             <div style="display:flex;flex-direction:column;gap:5px;">${bodyRows}</div>
         </section>
     `;
