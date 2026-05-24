@@ -8284,6 +8284,26 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             await eventSource.emit(event_types.GENERATE_TAKEOVER_DISPATCH, dispatchEvent);
 
             if (dispatchEvent.takeoverHandle) {
+                // Takeover plugins replace the sendOpenAIRequest step, which
+                // is where CHAT_COMPLETION_SETTINGS_READY normally fires for
+                // chat-completion prompt processors (e.g. ST-Prompt-Template's
+                // EJS template engine). On this path the plugin consumes the
+                // messages and ST core never reaches sendOpenAIRequest, so
+                // those hooks would otherwise silently no-op. Emit the event
+                // here as the takeover-path equivalent so the assembled
+                // messages still get a chance to be processed before the
+                // plugin reads them. The hook's expected shape is
+                // `{ messages: [...] }` (the chat-completion request body
+                // shape), so wrap generate_data — which carries the array
+                // under the legacy `prompt` field name on this path
+                // (`generate_data = { prompt: prompt }` at line 8186) — and
+                // write any replacement back so the plugin sees it.
+                if (main_api === 'openai' && Array.isArray(generate_data?.prompt)) {
+                    const hookData = { messages: generate_data.prompt };
+                    await eventSource.emit(event_types.CHAT_COMPLETION_SETTINGS_READY, hookData);
+                    generate_data.prompt = hookData.messages;
+                }
+
                 const handle = dispatchEvent.takeoverHandle;
                 // Snapshot the module-level abortController. A fresh
                 // Generate() replaces it (see the recreate at
