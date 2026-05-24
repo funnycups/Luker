@@ -433,10 +433,6 @@ function pushFrontendLog(level, values, source = 'console') {
     const normalizedLevel = normalizeLevel(level);
     const normalizedSource = String(source || 'console');
 
-    if (normalizedSource === 'console' && !shouldEmitConsoleLevel(normalizedLevel)) {
-        return false;
-    }
-
     const message = Array.isArray(values)
         ? values.map(serializeFrontendLogValue).join(' ')
         : serializeFrontendLogValue(values);
@@ -452,8 +448,6 @@ function pushFrontendLog(level, values, source = 'console') {
     if (frontendLogBuffer.length > FRONTEND_LOG_LIMIT) {
         frontendLogBuffer.splice(0, frontendLogBuffer.length - FRONTEND_LOG_LIMIT);
     }
-
-    return true;
 }
 
 function emitConsoleToBase(level, args) {
@@ -481,7 +475,8 @@ export function installFrontendLogCapture() {
         getBaseConsoleMethod(normalizedLevel);
 
         console[normalizedLevel] = (...args) => {
-            if (!pushFrontendLog(normalizedLevel, args, 'console')) {
+            pushFrontendLog(normalizedLevel, args, 'console');
+            if (!shouldEmitConsoleLevel(normalizedLevel)) {
                 return;
             }
 
