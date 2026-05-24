@@ -86,4 +86,32 @@ describe('MG Schema — tools', () => {
         );
         expect(edits).toEqual([]);
     });
+
+    test('level field is normalized to "semantic" — only valid value per schema', async () => {
+        // The MG schema currently supports a single storage tier: "semantic".
+        // The prod normalizer in main.js coerces falsy `level` to LEVEL.SEMANTIC
+        // (`String(item.level || LEVEL.SEMANTIC)`), so an LLM that emits the
+        // legacy `level: 0` (raw-leaves tier) lands as the string "semantic" by
+        // the time the edit hits the live schema. This guards against a
+        // regression where a tool call leaks a non-string / non-"semantic"
+        // value into committed state.
+        const setTool = TOOL_DEFS.find(d => d.function.name.includes('set'));
+        // Mirror the live normalizer's level coercion: falsy → "semantic",
+        // truthy → stringified. Anything else gets clamped to "semantic" for
+        // this test since downstream code rejects non-"semantic" tiers.
+        const normalize = (schema) => (Array.isArray(schema) ? schema : []).map(entry => ({
+            ...entry,
+            level: String(entry?.level || 'semantic'),
+        }));
+        const edits = await normalizeToolCallToEdit(
+            callFn(setTool.function.name, {
+                node_type: { id: 'event', tableColumns: ['summary'], level: 0 },
+            }),
+            { live: [{ id: 'character', tableColumns: ['name'], level: 'semantic' }], normalizeNodeTypeSchema: normalize },
+        );
+        expect(edits).toHaveLength(1);
+        const eventEntry = edits[0].newValue.find(e => e.id === 'event');
+        expect(eventEntry).toBeDefined();
+        expect(eventEntry.level).toBe('semantic');
+    });
 });

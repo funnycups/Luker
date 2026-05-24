@@ -26,4 +26,15 @@ describe('MG Schema — system prompt', () => {
         expect(out.toLowerCase()).toMatch(/node[- ]?type/);
         expect(out.toLowerCase()).toMatch(/schema/);
     });
+
+    test('documents finalize-sticky ordering so the LLM knows finalize wins over continue in the same round', () => {
+        // Sticky-finalize: when a round emits both continue + finalize, the
+        // popup ends the iteration (finalize wins). The behavior lives in
+        // onControlCall; this assertion guards the doc line that surfaces
+        // the rule in the prompt itself so the model can plan accordingly.
+        const out = buildSystemPrompt();
+        expect(out).toMatch(/luker_mg_schema_continue_iteration/);
+        expect(out).toMatch(/luker_mg_schema_finalize_iteration/);
+        expect(out.toLowerCase()).toMatch(/finalize wins/);
+    });
 });

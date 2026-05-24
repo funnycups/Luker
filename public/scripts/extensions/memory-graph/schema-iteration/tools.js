@@ -4,9 +4,7 @@
 /**
  * Memory Graph Schema — plugin-owned tool catalog + tool-call normalizer.
  *
- * Ported verbatim from schema-adapter.js (the shell-driven adapter that the
- * Stage 4 popup redo retires). This module exposes only the static, side-
- * effect-free pieces:
+ * Static, side-effect-free pieces:
  *
  *   - TOOL_DEFS:                OpenAI-style function definitions for the
  *                               three MG schema editing tools (set / remove /
@@ -15,23 +13,23 @@
  *                               labels are raw English strings; callers that
  *                               want i18n must wrap them at the call site
  *                               (this module is pure and has no i18n binding).
- *   - CONTROL_TOOL_NAMES:       names of the runner-side control tools the
- *                               adapter registered for continue/finalize.
+ *   - CONTROL_TOOL_NAMES:       names of the runner-side control tools used
+ *                               for continue/finalize.
  *   - SESSIONS_BUCKET_KEY:      the extension_settings.memory_graph subkey
  *                               under which iteration sessions live. Exposed
  *                               so the session-store wrapper can derive the
  *                               bucket location from a single source.
  *   - applyToolCallToSandbox:   mutates `sandboxSession.workingProfile.schema`
- *                               per the legacy v1 logic. Returns true if the
+ *                               per the executor logic. Returns true if the
  *                               list was changed, false otherwise.
  *   - normalizeToolCallToEdit:  async; runs the call through the sandbox and
  *                               emits a single coarse `set('', newSchema)`
- *                               edits-lib op (matches the Task 17 sandbox-diff
- *                               pattern).
+ *                               edits-lib op (sandbox-diff pattern: builds a
+ *                               coarse {op:'set', path:''} edit from before /
+ *                               after snapshots).
  *
  * `normalizeNodeTypeSchema` is the in-extension normalizer that lives in
- * primitives.js. It used to be captured from the adapter's deps closure;
- * after extraction it flows in via the per-call `ctx` argument so this
+ * primitives.js. It flows in via the per-call `ctx` argument so this
  * module stays pure and decoupled from main.js.
  */
 
@@ -44,10 +42,14 @@ const TOOL_REORDER_NODE_TYPES = 'mg_schema_reorder_node_types';
 export const CONTROL_TOOL_NAMES = Object.freeze({
     continue: 'luker_mg_schema_continue_iteration',
     finalize: 'luker_mg_schema_finalize_iteration',
+    resetToBlank: 'luker_mg_schema_reset_live_to_blank',
+    resetToGlobal: 'luker_mg_schema_reset_live_to_global',
 });
 const CONTROL_TOOL_NAME_SET = new Set([
     CONTROL_TOOL_NAMES.continue,
     CONTROL_TOOL_NAMES.finalize,
+    CONTROL_TOOL_NAMES.resetToBlank,
+    CONTROL_TOOL_NAMES.resetToGlobal,
 ]);
 
 /**
@@ -65,6 +67,8 @@ export const TOOL_DISPLAY = Object.freeze({
     [TOOL_REORDER_NODE_TYPES]: 'reorder node types',
     [CONTROL_TOOL_NAMES.continue]: '↻ Continue iteration',
     [CONTROL_TOOL_NAMES.finalize]: '✓ Finalize iteration',
+    [CONTROL_TOOL_NAMES.resetToBlank]: '♻ Reset schema to blank',
+    [CONTROL_TOOL_NAMES.resetToGlobal]: '⬇ Reset schema to global',
 });
 
 function compressionParams() {
@@ -95,9 +99,9 @@ function nodeTypeSchemaParams() {
             columnHints: { type: 'object', additionalProperties: { type: 'string' }, description: 'Per-column extraction hints handed to the extraction LLM.' },
             requiredColumns: { type: 'array', items: { type: 'string' }, description: 'Columns the extractor must always fill.' },
             primaryKeyColumns: { type: 'array', items: { type: 'string' }, description: 'Columns that form the natural identity for upsert.' },
-            forceUpdate: { type: 'object', additionalProperties: { type: 'boolean' }, description: 'Columns that should overwrite on update rather than merge.' },
+            forceUpdate: { type: 'boolean', description: 'If true, this node type fully overwrites on update instead of merging columns. Default false.' },
             editable: { type: 'boolean', description: 'Whether end-users may edit entries in the graph viewer.' },
-            level: { type: 'integer', minimum: 0, description: 'Storage tier (0 = leaf, higher = summary).' },
+            level: { type: 'string', enum: ['semantic'], description: 'Storage tier identifier. Currently only "semantic" is supported; omit to use the default.' },
             extractHint: { type: 'string', description: 'Overall hint for the extraction LLM about when to emit this node type.' },
             extractionInstructions: { type: 'string', description: 'Per-type detailed instructions appended to the extraction system prompt when this type is active this round. Use for type-specific rules (e.g. "at most one event per batch"). Empty = no type-specific appendix.' },
             extractEveryN: { type: 'integer', minimum: 1, description: 'Cadence: this type is extracted only when latestSeq % extractEveryN === 0. 1 (default) = every extraction pass. Larger N for slow-changing tables (e.g. location_state) saves LLM calls.' },
@@ -158,7 +162,7 @@ export const TOOL_DEFS = [
 /**
  * OpenAI-style function definitions for the two control tools the popup uses
  * to drive the multi-round auto-continue loop. Kept separate from `TOOL_DEFS`
- * so legacy adapter call sites that still import `TOOL_DEFS` directly stay
+ * so call sites that import `TOOL_DEFS` directly stay
  * unaffected; the popup imports `buildToolCatalog` instead, which merges
  * both lists.
  */
@@ -191,6 +195,34 @@ const CONTROL_TOOL_DEFS = [
             },
         },
     },
+    {
+        type: 'function',
+        function: {
+            name: CONTROL_TOOL_NAMES.resetToBlank,
+            description: 'Replace the working schema with a minimal blank shell, discarding the schema copy seeded in. Use ONLY when the user wants to design a brand-new node-type schema for this character from scratch (not when adjusting the existing one). The popup only injects this affordance when scope is character — both the fork-from-global case (no override yet) and the discard-override case offer this path; ignore it otherwise.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    reason: { type: 'string', description: 'Optional rationale visible to the user.' },
+                },
+                additionalProperties: false,
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: CONTROL_TOOL_NAMES.resetToGlobal,
+            description: 'Replace the working schema with a fresh clone of the current GLOBAL schema, discarding the existing character-override copy seeded in. Use ONLY when the user wants to wipe their character override and restart from the current global schema. The popup only injects this affordance when scope is character AND a character override already exists — ignore it otherwise.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    reason: { type: 'string', description: 'Optional rationale visible to the user.' },
+                },
+                additionalProperties: false,
+            },
+        },
+    },
 ];
 
 /**
@@ -204,7 +236,7 @@ export function buildToolCatalog() {
 
 /**
  * Sandbox-side executor: mutates the provided `sandboxSession.workingProfile.schema`
- * per the legacy v1 logic. Returns true if the list was changed, false otherwise.
+ * per the executor logic. Returns true if the list was changed, false otherwise.
  *
  * `ctx.normalizeNodeTypeSchema` is the in-extension normalizer (primitives.js).
  * Both the upsert/remove/reorder branches normalize the new list before
@@ -282,7 +314,7 @@ export function applyToolCallToSandbox(call, sandboxSession, ctx) {
 /**
  * Translate a tool call into an edits-lib op array suitable for the runner.
  *
- * Uses the sandbox-diff pattern: clone live → run the legacy executor against
+ * Uses the sandbox-diff pattern: clone live → run the executor against
  * a fake `{ workingProfile: { schema } }` session → emit one coarse
  * `set('', newSchema)` edit. Returns:
  *   - `null` on executor failure (caller treats this distinctly from "no edits")

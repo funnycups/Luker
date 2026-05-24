@@ -4,8 +4,8 @@
 /**
  * Memory Graph Schema — AI iteration popup (plugin-owned).
  *
- * Stage 4 replacement for the legacy iteration-studio adapter
- * (`schema-adapter.js`). Single-column chat surface that wires
+ * Replacement for the legacy iteration-studio adapter (now removed).
+ * Single-column chat surface that wires
  * `iteration-library/*` helpers directly:
  *   - storage  (global-scoped MG session bucket via `session-store.js`)
  *   - runner   (`requestToolCallsWithRetry` from `lib/iter-tool-calling.js`)
@@ -43,6 +43,10 @@
  *   - normalizeNodeTypeSchema(input)   pure normalizer (primitives.js)
  *   - getEffectiveNodeTypeSchema(ctx, settings)
  *                                       reads schema; per-character override falls through to global
+ *   - getSchemaScopeInfo(ctx, settings)
+ *                                       optional; returns { scope, hasOverride, characterName, ... }.
+ *                                       Used to drive the appendScopeHintIfNeeded 3-path system-prompt
+ *                                       hint and to gate the two reset control tools.
  *   - persistCharacterSchemaOverride(ctx, avatar, normalized)
  *                                       writes per-character override; returns ok/false
  *   - saveSettings()                   persists global settings
@@ -57,8 +61,8 @@ import {
     bindIterWorkspaceResizer,
     render as ITER_RENDER,
     runner as ITER_RUNNER,
-    textDiff as ITER_TEXT_DIFF,
     zoomOverlay as ITER_ZOOM_OVERLAY,
+    ui as ITER_UI,
 } from '../../../iteration-library/index.js';
 import {
     TOOL_DEFS,
@@ -68,6 +72,7 @@ import {
     CONTROL_TOOL_NAMES,
     isMgSchemaControlCall,
 } from './tools.js';
+import { MG_SCHEMA_TOOL_DISPLAY } from './tool-display.js';
 import { buildSystemPrompt } from './system-prompt.js';
 import { createMgSchemaSessionStore, makeMessageId, normalizeMessageShape } from './session-store.js';
 
@@ -303,6 +308,7 @@ function renderMgSchemaPreviewPane(live, pendingEdits, tFn) {
 export {
     renderMgSchemaPreviewPane as _testOnly_renderMgSchemaPreviewPane,
     applyEmptyPathSet as _testOnly_applyEmptyPathSet,
+    createNewSession as _testOnly_createNewSession,
 };
 
 function createNewSession() {
@@ -403,6 +409,7 @@ export async function openSchemaIterationStudio(deps) {
         root,
         normalizeNodeTypeSchema,
         getEffectiveNodeTypeSchema,
+        getSchemaScopeInfo,
         persistCharacterSchemaOverride,
         saveSettings,
         i18n,
@@ -428,6 +435,11 @@ export async function openSchemaIterationStudio(deps) {
     // Inject the popup stylesheet on first open. Idempotent; subsequent
     // calls are no-ops because the <link> element is id-keyed.
     ensureStylesheetInjected();
+    // Inject the shared iteration-library/ui stylesheet so renderToolCallChip /
+    // renderMessageCard / renderDiffCard / renderApplyControls pick up their
+    // `luker_lib_*` styles. Idempotent (id-keyed); shared across all four
+    // iter-library popups.
+    ITER_UI.ensureUiStylesheetInjected();
 
     // ──────────────────────────────────────────────────────────────────
     // Session store — global-scoped MG bucket
@@ -478,8 +490,123 @@ export async function openSchemaIterationStudio(deps) {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // Commit live → MG settings. Ported from schema-adapter.js L190-L204:
-    // when a character is active, write to per-character override; else
+    // Per-turn snapshot. `runIterationTurn` calls this once at the top so
+    // every helper that follows (system-prompt scope hint, augmented user
+    // prompt, control-tool handlers) reads the SAME view of scope / global
+    // schema / character override even if the user swaps a card or edits
+    // global settings mid-turn. Helpers that previously re-derived these
+    // from context/settings now accept this snapshot as a parameter.
+    // ──────────────────────────────────────────────────────────────────
+    function captureTurnSnapshot() {
+        const avatar = String(context?.characters?.[context?.characterId]?.avatar || '').trim();
+        const characterName = avatar
+            ? String(context?.characters?.[context?.characterId]?.name || avatar)
+            : '';
+        const helperSession = buildHelperSession();
+        const globalSchema = normalizeNodeTypeSchema(settings?.nodeTypeSchema || []);
+        return {
+            avatar,
+            characterName,
+            sourceScope: avatar ? 'character' : 'global',
+            helperSession,
+            globalSchema,
+        };
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Build a "session-shaped" object that mirrors what Orch / CPA /
+    // CEA-editor pass into iteration-library helpers. The MG schema
+    // popup's scope is driven by avatar presence (any selected card =
+    // character scope), and `hasOverride` reflects whether that card
+    // currently has a real `schemaOverride` array in its extension blob.
+    // Both are sourced from `getSchemaScopeInfo` when wired by main.js;
+    // when the dep is missing we fall back to a global-only worldview so
+    // the popup stays usable even on older deps wirings.
+    // ──────────────────────────────────────────────────────────────────
+    function buildHelperSession() {
+        if (typeof getSchemaScopeInfo === 'function') {
+            const info = getSchemaScopeInfo(context, settings);
+            return {
+                scope: info?.scope === 'character' || info?.hasAvatar ? 'character' : 'global',
+                hasOverride: Boolean(info?.hasOverride),
+                characterDisplayName: String(info?.characterName || ''),
+            };
+        }
+        const avatar = String(context?.characters?.[context?.characterId]?.avatar || '').trim();
+        return {
+            scope: avatar ? 'character' : 'global',
+            hasOverride: false,
+            characterDisplayName: avatar
+                ? String(context?.characters?.[context?.characterId]?.name || avatar)
+                : '',
+        };
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Reset-to-blank shell. Returns an empty schema array — the MG
+    // normalizer accepts `[]` as a valid (empty) schema for the working
+    // profile. The AI is then expected to call `mg_schema_set_node_type`
+    // to add fresh types one at a time. Commit time normalizes again, so
+    // a user who abandons mid-author still ends up with a non-empty
+    // schema on disk via the normalizer's default fallback.
+    // ──────────────────────────────────────────────────────────────────
+    function createBlankSchemaShell() {
+        return [];
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Reset-to-global clone. Reads `settings.nodeTypeSchema` directly
+    // (the global schema, bypassing the per-character override) and
+    // runs it through the normalizer so the working profile has the same
+    // shape it would have if the user had no override at all.
+    // ──────────────────────────────────────────────────────────────────
+    function loadGlobalSchemaForReset() {
+        const raw = Array.isArray(settings?.nodeTypeSchema) ? settings.nodeTypeSchema : [];
+        return normalizeNodeTypeSchema(structuredClone(raw));
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // System-prompt scope hint. Mirrors the Orch popup's 2-path / 3-path
+    // hint append:
+    //   - global scope             → no hint, AI sees only base prompt
+    //   - character, no override   → 2-path hint (adjust / blank)
+    //   - character, has override  → 3-path hint (adjust / blank / global)
+    // ──────────────────────────────────────────────────────────────────
+    function appendScopeHintIfNeeded(basePrompt, helperSession) {
+        if (helperSession?.scope !== 'character') return basePrompt;
+        const display = String(helperSession?.characterDisplayName || '').trim() || 'this character';
+        if (!helperSession.hasOverride) {
+            return [
+                basePrompt,
+                '',
+                '# Iteration scope',
+                `You are iterating on the character schema for "${display}". This card has NO schema override yet.`,
+                '',
+                'Two paths exist; decide from the user\'s first message which applies:',
+                '- Adjust the existing setup: the working schema starts as a copy of the GLOBAL schema. Make targeted edits as you normally would. This is the default path.',
+                `- Author from scratch: call \`${CONTROL_TOOL_NAMES.resetToBlank}\` once to discard the global copy and start with a minimal blank shell. If you already called it earlier this session, the working schema is already blank — continue authoring from there without calling reset again.`,
+                '',
+                'Do not call the reset tool unless the user clearly wants a brand-new schema.',
+            ].join('\n');
+        }
+        return [
+            basePrompt,
+            '',
+            '# Iteration scope',
+            `You are iterating on the character schema for "${display}". This card ALREADY has a schema override.`,
+            '',
+            'Three paths exist; default to the first unless the user clearly asks for one of the others:',
+            '- Continue adjusting the current override: the working schema starts as a copy of the existing OVERRIDE. Make targeted edits as you normally would. This is the default path.',
+            `- Author from scratch: call \`${CONTROL_TOOL_NAMES.resetToBlank}\` once to discard the existing override and start with a minimal blank shell. If you already called it earlier this session, the working schema is already blank — continue authoring from there without calling reset again.`,
+            `- Match the global schema: call \`${CONTROL_TOOL_NAMES.resetToGlobal}\` once to discard the existing override and start with a fresh clone of the current global schema. If you already called it earlier this session, the working schema already matches global — continue adjusting from there without calling reset again.`,
+            '',
+            'Do not call either reset tool unless the user clearly asks for that fresh-start path.',
+        ].join('\n');
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Commit live → MG settings: when a character is active, write to
+    // the per-character override path; else
     // fall through to global. After commit, deps.refreshRootUi refreshes
     // the schema summary / scope indicator in the host UI.
     // ──────────────────────────────────────────────────────────────────
@@ -553,7 +680,17 @@ export async function openSchemaIterationStudio(deps) {
         try { state.abortController?.abort(); } catch { /* ignore */ }
         state.isBusy = false;
         state.abortController = null;
+        // Carry the user's auto-apply preference across to the fresh session
+        // so toggling it once persists for the popup lifetime, not just the
+        // session that introduced it.
+        const priorAutoApply = Boolean(state.session?.surfaceState?.autoApply);
         state.session = createNewSession();
+        if (priorAutoApply) {
+            state.session.surfaceState = {
+                ...(state.session.surfaceState || {}),
+                autoApply: true,
+            };
+        }
         state.pendingEdits = [];
         await loadLive();
         await sessionStore.save(state.session);
@@ -563,6 +700,11 @@ export async function openSchemaIterationStudio(deps) {
     async function clearAllHistory() {
         // eslint-disable-next-line no-alert
         if (!confirm(t('Clear all session history?'))) return;
+        // Abort any in-flight LLM call BEFORE deleting so a slow response
+        // can't land in a session that's about to be wiped.
+        try { state.abortController?.abort(); } catch { /* ignore */ }
+        state.isBusy = false;
+        state.abortController = null;
         const metas = await sessionStore.list();
         for (const meta of metas) {
             await sessionStore.delete(meta.id);
@@ -571,31 +713,26 @@ export async function openSchemaIterationStudio(deps) {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // Schema-array diff renderer — Q8.
+    // Schema-array diff renderer — pending edit cards.
     //
     // MG tools all go through the sandbox-diff pattern, which means a tool
-    // call produces a single `set('', newSchema)` edit. The legacy
-    // adapter-driven popup would have shown that as "SET  : <huge JSON>"
-    // which is useless; instead we compare the before/after by id and
-    // emit added/removed/modified counts plus the id lists.
+    // call produces a single `{op:'set', path:'', oldValue:<oldSchema>,
+    // newValue:<newSchema>}` edit where both values are ARRAYS. The shared
+    // `iteration-library/ui/diff.renderDiffCard` only triggers per-leaf
+    // splitting when both values are plain objects, so naively passing the
+    // schema array would render as one giant stringified diff — screenshot
+    // bug #20.
     //
-    // For modified entries we additionally embed a per-entry JSON diff
-    // rendered by the iteration-library so the user can see exactly which
-    // fields changed inside the entry, surrounded by context.
+    // The fix: compare the two arrays by node-type id, then for each
+    // modified entry synthesize an empty-path `set` edit between the two
+    // node-type OBJECTS so renderDiffCard's walk-diff fires per-changed-
+    // field within the node type. Added/removed entries get one card each
+    // showing the whole new/old node-type body — there's no shared "before"
+    // to diff against, so a single-side render is the most truthful view.
     // ──────────────────────────────────────────────────────────────────
-    function renderPerEntryJsonDiff(beforeEntry, afterEntry, id) {
-        const beforeJson = JSON.stringify(beforeEntry ?? null, null, 2);
-        const afterJson = JSON.stringify(afterEntry ?? null, null, 2);
-        return ITER_TEXT_DIFF.renderInlineTextDiffHtml(beforeJson, afterJson, {
-            fileLabel: `nodeTypeSchema entry: ${id}`,
-            i18n: t,
-            forceOpen: true,
-        });
-    }
-
-    function renderSchemaArrayDiff(before, after) {
-        const beforeIds = new Map((Array.isArray(before) ? before : []).map(t => [String(t?.id || ''), t]));
-        const afterIds = new Map((Array.isArray(after) ? after : []).map(t => [String(t?.id || ''), t]));
+    function renderSchemaArrayPendingCards(before, after) {
+        const beforeIds = new Map((Array.isArray(before) ? before : []).map(x => [String(x?.id || ''), x]));
+        const afterIds = new Map((Array.isArray(after) ? after : []).map(x => [String(x?.id || ''), x]));
         const added = [...afterIds.keys()].filter(id => id && !beforeIds.has(id));
         const removed = [...beforeIds.keys()].filter(id => id && !afterIds.has(id));
         const modified = [...afterIds.keys()].filter(id => {
@@ -605,94 +742,89 @@ export async function openSchemaIterationStudio(deps) {
             // emitting the edit), so key order matches.
             return JSON.stringify(beforeIds.get(id)) !== JSON.stringify(afterIds.get(id));
         });
-        const parts = [];
-        if (added.length > 0) {
-            parts.push(`<div><span class="diff_new">${escapeHtmlLocal(t('added'))} (${added.length}):</span> ${added.map(escapeHtmlLocal).join(', ')}</div>`);
+
+        const syntheticEdits = [];
+        const fieldLabels = {};
+        // Modified: empty-path set on the two node-type objects → triggers
+        // the shared component's walkDiff → one sub-card per changed leaf.
+        for (const id of modified) {
+            syntheticEdits.push({
+                op: 'set',
+                path: '',
+                oldValue: beforeIds.get(id),
+                newValue: afterIds.get(id),
+            });
         }
-        if (removed.length > 0) {
-            parts.push(`<div><span class="diff_old">${escapeHtmlLocal(t('removed'))} (${removed.length}):</span> ${removed.map(escapeHtmlLocal).join(', ')}</div>`);
+        // Added / removed: synthesize a path-keyed set so renderDiffCard
+        // takes the non-empty-path branch and labels the card by node-type
+        // id. Empty-path with one side missing wouldn't trigger per-leaf
+        // splitting anyway (the && short-circuits on the missing value), so
+        // a single-card render is cleaner than firing a malformed diff. The
+        // raw `nodeTypeSchema.<id>` path leaks the storage-internal key into
+        // the UI, so a fieldLabels override maps it back to just the id so
+        // the shared humanizePath renders "Field updated: <id>".
+        for (const id of added) {
+            const path = `nodeTypeSchema.${id}`;
+            fieldLabels[path] = id;
+            syntheticEdits.push({
+                op: 'set',
+                path,
+                oldValue: undefined,
+                newValue: afterIds.get(id),
+            });
         }
-        if (modified.length > 0) {
-            parts.push(`<div><span class="op">${escapeHtmlLocal(t('modified'))} (${modified.length}):</span> ${modified.map(escapeHtmlLocal).join(', ')}</div>`);
-            for (const id of modified) {
-                parts.push(`<details class="mg_schema_it_pending_entry_diff">
-                    <summary><code>${escapeHtmlLocal(id)}</code></summary>
-                    ${renderPerEntryJsonDiff(beforeIds.get(id), afterIds.get(id), id)}
-                </details>`);
-            }
+        for (const id of removed) {
+            const path = `nodeTypeSchema.${id}`;
+            fieldLabels[path] = id;
+            syntheticEdits.push({
+                op: 'set',
+                path,
+                oldValue: beforeIds.get(id),
+                newValue: undefined,
+            });
         }
-        if (parts.length === 0) {
-            parts.push(`<div class="mg_schema_it_pending_note">${escapeHtmlLocal(t('(no effective change)'))}</div>`);
+        if (syntheticEdits.length === 0) {
+            return `<div class="mg_schema_it_pending_card"><div class="mg_schema_it_pending_note">${escapeHtmlLocal(t('(no effective change)'))}</div></div>`;
         }
-        return `<div class="mg_schema_it_pending_card">${parts.join('')}</div>`;
+        return ITER_UI.diff.renderDiffCard(syntheticEdits, { i18n: tf, fieldLabels });
     }
 
     function renderPendingEditCard(edit) {
+        // Coarse sandbox-diff path: one {op:'set', path:'', oldValue:<arr>,
+        // newValue:<arr>}. Fan out into per-changed-id sub-cards so the
+        // model's intent shows up as a small number of focused diffs
+        // instead of one massive stringified array (bug #20).
         if (edit?.op === 'set' && edit?.path === ''
             && Array.isArray(edit.oldValue) && Array.isArray(edit.newValue)) {
-            return renderSchemaArrayDiff(edit.oldValue, edit.newValue);
+            return renderSchemaArrayPendingCards(edit.oldValue, edit.newValue);
         }
-        // Defensive fallback — MG normally only emits bulk-set edits
-        // through tools.js, but a future refactor could introduce
-        // fine-grained ops; surface them with the same `<op> <path>` line
-        // the other plugin-owned popups use.
-        return `<div class="mg_schema_it_pending_card">
-            <span class="op">${escapeHtmlLocal(String(edit?.op || t('(unknown op)')))}</span>
-            <code>${escapeHtmlLocal(String(edit?.path || ''))}</code>
-        </div>`;
+        // Future fine-grained-op compatibility: anything else flows
+        // straight through the shared renderer, which already handles
+        // empty-path object sets (per-leaf split) and path-keyed sets.
+        return ITER_UI.diff.renderDiffCard([edit], { i18n: tf });
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // Chat-message rendering. Q2 + Q7:
-    //   - assistant messages route through the library's markdown
-    //     renderer (`render.renderMessageMarkdown`) which sanitizes via
-    //     DOMPurify, so embedding via `innerHTML` is XSS-safe.
-    //   - user / assistant / system messages get distinct CSS classes for
-    //     visual distinction (alignment, background, etc.).
+    // Chat-message rendering. MG delegates to
+    // `iteration-library/ui/message.renderMessageCard` so the four
+    // iter-library popups (CPA, MG schema, Orch, CEA char) share one
+    // visual language for tool-call chips, per-round edit cards, applied/
+    // rolled-back stamps, and the Regenerate / Rollback row.
     //
-    // Assistant messages may carry persisted `toolCalls` + `edits` arrays;
-    // when present, they render inside a collapsible <details> block so
-    // the per-round audit trail stays browseable after Apply. The block
-    // also hosts the per-message Rollback button (visible when applied)
-    // and the Regenerate button (visible on non-last assistant turns).
+    // MG preserves only the outer `<div class="mg_schema_it_msg ...">`
+    // wrapper around the shared component, because studio.css's flex-row
+    // alignment / accent colors / max-widths key on
+    // `.mg_schema_it_msg_user` / `_assistant` / `_system`. The inner
+    // `<div class="luker_lib_message ...">` carries the rest of the
+    // structure (markdown body, read-only-round hint when all calls are
+    // read-type, tool chips, edit cards via renderPendingEditCard,
+    // applied/rolled-back stamp, Regenerate button). Click delegation
+    // accepts msgId from either `data-mg-schema-it-msg-id` (outer) or
+    // `data-luker-lib-msg-id` (inner).
     // ──────────────────────────────────────────────────────────────────
-    function formatTime(ts) {
-        try {
-            const d = new Date(Number(ts) || Date.now());
-            return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-        } catch { return ''; }
-    }
-
-    function renderToolCallChip(tc) {
-        const name = String(tc?.name || '');
-        const label = TOOL_DISPLAY[name] || name || t('(tool)');
-        let argsText;
-        try { argsText = JSON.stringify(tc?.args ?? {}, null, 2); } catch { argsText = String(tc?.args ?? ''); }
-        return `
-            <div class="mg_schema_it_msg_toolcall">
-                <div class="mg_schema_it_msg_toolcall_name">${escapeHtmlLocal(label)}</div>
-                <pre class="mg_schema_it_msg_toolcall_args">${escapeHtmlLocal(argsText)}</pre>
-            </div>`;
-    }
-
-    function renderEditChip(edit) {
-        // Reuse the pending-card renderer so the per-message audit trail
-        // and the active pending block look visually identical — the user
-        // doesn't have to learn two diff visual languages.
-        return renderPendingEditCard(edit);
-    }
-
     function renderMessageCard(message, idx, allMessages) {
         if (!message) return '';
         const role = String(message.role || 'user');
-        const content = String(message.content || '');
-        let bodyHtml;
-        if (role === 'assistant') {
-            // sanitized by DOMPurify inside renderMessageMarkdown
-            bodyHtml = ITER_RENDER.renderMessageMarkdown(content);
-        } else {
-            bodyHtml = escapeHtmlLocal(content).replace(/\n/g, '<br>');
-        }
         const roleCls = role === 'user'
             ? 'mg_schema_it_msg_user'
             : role === 'assistant'
@@ -700,70 +832,32 @@ export async function openSchemaIterationStudio(deps) {
                 : 'mg_schema_it_msg_system';
         const autoCls = message.auto ? ' mg_schema_it_msg_auto' : '';
 
-        const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
-        const edits = Array.isArray(message.edits) ? message.edits : [];
-        const hasTrail = toolCalls.length > 0 || edits.length > 0;
-        const applied = Boolean(message.appliedAt) && !message.rolledBackAt;
-        const rolledBack = Boolean(message.rolledBackAt);
-        const detailsOpen = hasTrail && !applied && !rolledBack;
-
-        let trailHtml = '';
-        if (hasTrail) {
-            const headerLabel = tf('Tools and edits this round (${0})', String(toolCalls.length + edits.length));
-            const statusHtml = rolledBack
-                ? `<span class="mg_schema_it_msg_rolled_back">${escapeHtmlLocal(tf('Rolled back at ${0}', formatTime(message.rolledBackAt)))}</span>`
-                : (applied
-                    ? `
-                        <span class="mg_schema_it_msg_applied">${escapeHtmlLocal(tf('✓ Applied to ${0} at ${1}', t('schema'), formatTime(message.appliedAt)))}</span>
-                        <button class="menu_button menu_button_small" data-mg-schema-it-custom-action="rollback-batch" data-mg-schema-it-msg-id="${escapeHtmlLocal(message.id || '')}">
-                            ${escapeHtmlLocal(t('Rollback'))}
-                        </button>
-                    `
-                    : '');
-
-            const toolsHtml = toolCalls.map(renderToolCallChip).join('');
-            const editsHtml = edits.map(renderEditChip).join('');
-
-            trailHtml = `
-                <details class="mg_schema_it_msg_trail" ${detailsOpen ? 'open' : ''}>
-                    <summary>${escapeHtmlLocal(headerLabel)}</summary>
-                    <div class="mg_schema_it_msg_trail_body">
-                        ${toolsHtml}
-                        ${editsHtml}
-                    </div>
-                    ${statusHtml ? `<div class="mg_schema_it_msg_trail_status">${statusHtml}</div>` : ''}
-                </details>
-            `;
+        // Last-assistant predicate: true only when this assistant turn has
+        // no later assistant in the visible message list. Trailing user /
+        // system / auto-continue turns are skipped so the actual final
+        // assistant reply (whose prompt is the live tail) hides its
+        // Regenerate button — re-sending from the same composer text is
+        // semantically equivalent.
+        let isLast = false;
+        if (role === 'assistant' && !message.auto) {
+            isLast = true;
+            for (let j = (allMessages?.length || 0) - 1; j > idx; j--) {
+                if (allMessages[j]?.role === 'assistant' && !allMessages[j]?.auto) { isLast = false; break; }
+            }
         }
 
-        // Regenerate is per-assistant-message, only when it's not the
-        // current tail (otherwise just hit Send again to re-run from the
-        // same prompt). We also skip auto-continue synthetic assistants;
-        // their prompt was synthesized so regen would just truncate to
-        // the prior human turn anyway — semantically identical to
-        // regenerating that prior turn.
-        const isLastAssistant = (() => {
-            if (role !== 'assistant') return false;
-            for (let j = (allMessages?.length || 0) - 1; j > idx; j--) {
-                if (allMessages[j]?.role === 'assistant') return false;
-            }
-            return true;
-        })();
-        const showRegenerate = role === 'assistant' && !isLastAssistant && !message.auto;
-        const actionsHtml = showRegenerate
-            ? `
-                <div class="mg_schema_it_msg_actions">
-                    <button class="menu_button menu_button_small" data-mg-schema-it-custom-action="regenerate" data-mg-schema-it-msg-id="${escapeHtmlLocal(message.id || '')}">
-                        ${escapeHtmlLocal(t('Regenerate'))}
-                    </button>
-                </div>`
-            : '';
+        const innerHtml = ITER_UI.message.renderMessageCard(message, {
+            toolDisplay: MG_SCHEMA_TOOL_DISPLAY,
+            renderEditCard: renderPendingEditCard,
+            isLast,
+            i18n: tf,
+            renderMarkdown: ITER_RENDER.renderMessageMarkdown,
+            actionAttribute: 'data-mg-schema-it-action',
+        });
 
-        return `<div class="mg_schema_it_msg ${roleCls}${autoCls}" data-mg-schema-it-msg-id="${escapeHtmlLocal(message.id || '')}">
-            ${bodyHtml}
-            ${trailHtml}
-            ${actionsHtml}
-        </div>`;
+        // Preserve MG's outer flex-row container so the popup's alignment
+        // / accent-color / max-width rules in studio.css still apply.
+        return `<div class="mg_schema_it_msg ${roleCls}${autoCls}" data-mg-schema-it-msg-id="${escapeHtmlLocal(message.id || '')}">${innerHtml}</div>`;
     }
 
     function renderHistoryItem(meta) {
@@ -816,21 +910,29 @@ export async function openSchemaIterationStudio(deps) {
             }
         } catch { /* DOM not attached (test) */ }
 
-        // Pending edits — single Apply button per spec §3.4 (MG scope is
-        // always "schema" since MG edits the active node-type schema; the
-        // sandbox-diff emits one coarse edit per tool call, but Apply
-        // collapses them in one shot).
+        // Pending edits — delegates the Apply / Discard row to the shared
+        // `iteration-library/ui/apply` component so it stays in visual
+        // sync with the other iter-library popups (M1.7). The shared
+        // component emits `${actionAttribute}="apply-batch"` and
+        // `discard-batch` buttons; MG's click delegation matches those
+        // values too (see handler block below). `pendingMessage` is a
+        // virtual carrier — the popup's pending block is owned by the
+        // session, not by a specific assistant turn, so we synthesize a
+        // message-shape with the staged edits and no applied/rolledback
+        // stamps so renderApplyControls falls into the "pending" branch.
         const $pending = $root.find('[data-mg-schema-it-pending]');
         if (state.pendingEdits.length > 0) {
             const cardsHtml = state.pendingEdits.map(renderPendingEditCard).join('');
-            const applyLabel = tf('Apply to ${0}', t('schema'));
+            const pendingMessage = { id: '', edits: state.pendingEdits };
+            const applyHtml = ITER_UI.apply.renderApplyControls(pendingMessage, {
+                i18n: tf,
+                applyLabel: tf('Apply to ${0}', t('schema')),
+                actionAttribute: 'data-mg-schema-it-action',
+            });
             $pending.html(`
                 <div class="mg_schema_it_pending_title">${escapeHtmlLocal(t('Pending changes'))}</div>
                 <div class="mg_schema_it_pending_list">${cardsHtml}</div>
-                <div class="mg_schema_it_pending_actions">
-                    <button class="menu_button luker-iter-pending-apply" data-mg-schema-it-action="apply-edits">${escapeHtmlLocal(applyLabel)}</button>
-                    <button class="menu_button menu_button_small" data-mg-schema-it-action="discard-edits">${escapeHtmlLocal(t('Discard'))}</button>
-                </div>
+                ${applyHtml}
             `).show().attr('hidden', null);
         } else {
             $pending.html('').hide().attr('hidden', '');
@@ -890,8 +992,7 @@ export async function openSchemaIterationStudio(deps) {
     }
 
     /**
-     * Build the augmented user prompt — mirrors the legacy adapter's
-     * `buildUserPrompt` (schema-adapter.js L446-L465). Injects:
+     * Build the augmented user prompt. Injects:
      *   - iteration scope (character override vs global)
      *   - current working schema (JSON, what the AI is editing)
      *   - global baseline schema (only when it differs from the current)
@@ -907,14 +1008,20 @@ export async function openSchemaIterationStudio(deps) {
         }
     }
 
-    function buildAugmentedUserPrompt(userText) {
-        const avatar = String(context?.characters?.[context?.characterId]?.avatar || '').trim();
-        const sourceScope = avatar ? 'character' : 'global';
-        const characterName = avatar
-            ? String(context?.characters?.[context?.characterId]?.name || avatar)
-            : '';
+    function buildAugmentedUserPrompt(userText, snapshot) {
+        const sourceScope = snapshot?.sourceScope
+            || (String(context?.characters?.[context?.characterId]?.avatar || '').trim() ? 'character' : 'global');
+        const characterName = typeof snapshot?.characterName === 'string'
+            ? snapshot.characterName
+            : (String(context?.characters?.[context?.characterId]?.avatar || '').trim()
+                ? String(context?.characters?.[context?.characterId]?.name
+                    || context?.characters?.[context?.characterId]?.avatar)
+                : '');
         const currentSchema = stringifyForPrompt(state.live);
-        const baselineSchema = stringifyForPrompt(normalizeNodeTypeSchema(settings?.nodeTypeSchema || []));
+        const baselineSource = Array.isArray(snapshot?.globalSchema)
+            ? snapshot.globalSchema
+            : normalizeNodeTypeSchema(settings?.nodeTypeSchema || []);
+        const baselineSchema = stringifyForPrompt(baselineSource);
         const lines = [
             `[Iteration scope] ${sourceScope}${characterName ? ` — ${characterName}` : ''}`,
             '',
@@ -934,7 +1041,7 @@ export async function openSchemaIterationStudio(deps) {
      * turn gets the augmented schema-outline prefix so the prompt budget
      * doesn't bloat on every turn.
      */
-    function buildTaskMessages(systemPrompt) {
+    function buildTaskMessages(systemPrompt, snapshot) {
         const messages = [{ role: 'system', content: systemPrompt }];
         const history = (state.session.messages || []).filter(m => {
             const role = String(m?.role || '').toLowerCase();
@@ -950,7 +1057,7 @@ export async function openSchemaIterationStudio(deps) {
         history.forEach((m, idx) => {
             const role = String(m.role).toLowerCase();
             const content = idx === lastUserIdx && role === 'user'
-                ? buildAugmentedUserPrompt(String(m.content || ''))
+                ? buildAugmentedUserPrompt(String(m.content || ''), snapshot)
                 : String(m.content || '');
             messages.push({ role, content });
         });
@@ -963,7 +1070,13 @@ export async function openSchemaIterationStudio(deps) {
 
         await loadLive();   // re-read so the next batch sees external edits
 
-        const systemPrompt = buildSystemPrompt();
+        // Snapshot scope + global schema ONCE at the start of the turn. All
+        // downstream helpers (system-prompt scope hint, augmented user
+        // prompt, reset-tool control handlers) read from this snapshot so a
+        // mid-turn character swap or settings edit can't slice the turn
+        // across two different worldviews.
+        const turnSnapshot = captureTurnSnapshot();
+        const systemPrompt = appendScopeHintIfNeeded(buildSystemPrompt(), turnSnapshot.helperSession);
 
         // For auto-continue rounds, splice a synthetic user message into the
         // visible history so the model has a fresh prompt to react to and the
@@ -988,7 +1101,7 @@ export async function openSchemaIterationStudio(deps) {
             });
         }
 
-        const taskMessages = buildTaskMessages(systemPrompt);
+        const taskMessages = buildTaskMessages(systemPrompt, turnSnapshot);
 
         const apiPresetName = String(settings?.schemaIterationApiPresetName || '').trim();
         const llmPresetName = String(settings?.schemaIterationPresetName || '').trim();
@@ -1045,6 +1158,46 @@ export async function openSchemaIterationStudio(deps) {
                         sawFinalize = true;
                         wantsAutoContinue = false;
                         finalizeSummary = String(call?.args?.summary || '');
+                    } else if (name === CONTROL_TOOL_NAMES.resetToBlank) {
+                        // Accept when scope is character — the system prompt
+                        // invites resetToBlank in BOTH the "no override yet"
+                        // (fork-from-global → blank) and "has override"
+                        // (discard override → blank) paths, so gating only on
+                        // scope keeps prompt + handler in agreement. Uses the
+                        // turn-snapshot scope so a mid-turn character swap
+                        // can't change the decision after the system prompt
+                        // already committed to one path.
+                        if (turnSnapshot.helperSession.scope === 'character') {
+                            state.live = createBlankSchemaShell();
+                            state.pendingEdits = [];
+                            state.session.messages.push({
+                                id: makeMessageId(),
+                                role: 'system',
+                                content: t('Schema reset to a blank shell — building from scratch.'),
+                                at: Date.now(),
+                            });
+                        }
+                    } else if (name === CONTROL_TOOL_NAMES.resetToGlobal) {
+                        // Only meaningful when scope is character + an override
+                        // exists. The reset replaces the working profile with
+                        // a clone of the GLOBAL schema so the AI / user can
+                        // re-author from there. Without an override there's
+                        // nothing to overwrite — and the no-override prompt
+                        // never lists resetToGlobal, so silent-drop is fine.
+                        // The global schema clone comes from the turn snapshot
+                        // so a mid-turn settings edit doesn't change what
+                        // "global" means halfway through.
+                        if (turnSnapshot.helperSession.scope === 'character'
+                            && turnSnapshot.helperSession.hasOverride) {
+                            state.live = normalizeNodeTypeSchema(structuredClone(turnSnapshot.globalSchema || []));
+                            state.pendingEdits = [];
+                            state.session.messages.push({
+                                id: makeMessageId(),
+                                role: 'system',
+                                content: t('Schema reset to match the current global schema — adjust from there.'),
+                                at: Date.now(),
+                            });
+                        }
                     }
                 },
             },
@@ -1182,20 +1335,22 @@ export async function openSchemaIterationStudio(deps) {
         if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) return;
         if (!state.live) await loadLive();
         const liveSnapshot = state.live;
-        // Sandbox-diff emits a single coarse {op:'set', path:'', newValue:<whole schema>}.
-        // lodash.set with empty path is a no-op, so route empty-path edits
-        // around the engine via applyEmptyPathSet — otherwise auto-apply and
-        // the manual Apply button both silently skip the commit.
-        const onlyEdit = state.pendingEdits.length === 1 ? state.pendingEdits[0] : null;
-        const emptyPathEdit = onlyEdit && onlyEdit.op === 'set' && onlyEdit.path === '' && typeof onlyEdit.newValue !== 'undefined'
-            ? onlyEdit
-            : null;
-        if (emptyPathEdit) {
-            state.live = applyEmptyPathSet(state.live, emptyPathEdit);
-        } else {
-            const result = applyEdits(state.pendingEdits, state.live);
-            state.live = result?.newLive ?? state.live;
+        // Sandbox-diff emits a coarse {op:'set', path:'', newValue:<whole schema>}
+        // per tool call. lodash.set with empty path is a no-op, so the shared
+        // applyEdits engine silently skips them. Chain-apply each edit so that
+        // batches of 2+ empty-path sets (multiple mg_schema_* calls in one
+        // turn) land both — falling back to applyEdits for any non-empty-path
+        // edit keeps fine-grained ops working too.
+        let liveCursor = state.live;
+        for (const edit of state.pendingEdits) {
+            if (edit?.op === 'set' && edit?.path === '' && typeof edit?.newValue !== 'undefined') {
+                liveCursor = applyEmptyPathSet(liveCursor, edit);
+            } else {
+                const result = applyEdits([edit], liveCursor);
+                liveCursor = result?.newLive ?? liveCursor;
+            }
         }
+        state.live = liveCursor;
         try {
             await commitLiveToSchema();
         } catch (err) {
@@ -1308,18 +1463,18 @@ export async function openSchemaIterationStudio(deps) {
         }
         try {
             // MG sandbox-diff uses empty-path set edits; inverse is the same
-            // shape with oldValue/newValue swapped. Route the same way Apply
-            // does so the engine's lodash.set("") no-op doesn't strand us.
-            const allEmptyPath = inverses.length > 0
-                && inverses.every(e => e?.op === 'set' && e?.path === '' && typeof e?.newValue !== 'undefined');
-            if (allEmptyPath) {
-                // Apply each inverse in order (later inverses are applied last).
-                for (const inv of inverses) {
+            // shape with oldValue/newValue swapped. Chain-apply each inverse
+            // (empty-path edits route around lodash.set's empty-path no-op;
+            // fine-grained ops fall through to the shared applyEdits engine)
+            // so a multi-edit batch unwinds cleanly even when only some edits
+            // are coarse-grained.
+            for (const inv of inverses) {
+                if (inv?.op === 'set' && inv?.path === '' && typeof inv?.newValue !== 'undefined') {
                     working = applyEmptyPathSet(working, inv);
+                } else {
+                    const result = applyEdits([inv], working);
+                    working = result?.newLive ?? working;
                 }
-            } else {
-                const result = applyEdits(inverses, working);
-                working = result?.newLive ?? working;
             }
         } catch (err) {
             console.warn(`[${MODULE}] applyEdits(inverses) failed`, err);
@@ -1474,11 +1629,17 @@ export async function openSchemaIterationStudio(deps) {
         await persistSession();
     });
 
-    $root.on('click.mgSchemaIt', '[data-mg-schema-it-action="apply-edits"]', async (e) => {
+    // Apply / Discard the staged batch. Selectors use `apply-batch` /
+    // `discard-batch` because the row is rendered by
+    // `iteration-library/ui/apply.renderApplyControls`, which emits those
+    // values via the `actionAttribute: 'data-mg-schema-it-action'` opt —
+    // the same convention `renderMessageCard` uses for per-message
+    // rollback / regenerate buttons (handlers further down).
+    $root.on('click.mgSchemaIt', '[data-mg-schema-it-action="apply-batch"]', async (e) => {
         e.preventDefault();
         await applyPendingEdits();
     });
-    $root.on('click.mgSchemaIt', '[data-mg-schema-it-action="discard-edits"]', async (e) => {
+    $root.on('click.mgSchemaIt', '[data-mg-schema-it-action="discard-batch"]', async (e) => {
         e.preventDefault();
         await discardPendingEdits();
     });
@@ -1521,19 +1682,27 @@ export async function openSchemaIterationStudio(deps) {
         }
     });
 
-    // Per-message custom actions (Regenerate / Rollback). Use
-    // `data-mg-schema-it-custom-action` rather than `data-mg-schema-it-action`
-    // so the legacy delegation selectors above can't accidentally fire on
-    // these — matches the iter-studio shell gotcha pattern.
-    $root.on('click.mgSchemaIt', '[data-mg-schema-it-custom-action="regenerate"]', async (e) => {
+    // Per-message Regenerate / Rollback. Both buttons are rendered by
+    // `iteration-library/ui/message.renderMessageCard`, which emits them
+    // with `data-mg-schema-it-action="regenerate"` / `="rollback-batch"`
+    // (via the actionAttribute opt) and `data-luker-lib-msg-id="..."`.
+    // The msgId resolver accepts both attribute names so a future
+    // MG-only override that still tags `data-mg-schema-it-msg-id`
+    // keeps working.
+    function resolveMsgId(target) {
+        if (!target) return '';
+        // dataset is camelCase: mgSchemaItMsgId / lukerLibMsgId
+        return String(target.dataset?.mgSchemaItMsgId || target.dataset?.lukerLibMsgId || '');
+    }
+    $root.on('click.mgSchemaIt', '[data-mg-schema-it-action="regenerate"]', async (e) => {
         e.preventDefault();
-        const msgId = String(e.currentTarget?.dataset?.mgSchemaItMsgId || '');
+        const msgId = resolveMsgId(e.currentTarget);
         if (!msgId) return;
         await regenerateFromMessage(msgId);
     });
-    $root.on('click.mgSchemaIt', '[data-mg-schema-it-custom-action="rollback-batch"]', async (e) => {
+    $root.on('click.mgSchemaIt', '[data-mg-schema-it-action="rollback-batch"]', async (e) => {
         e.preventDefault();
-        const msgId = String(e.currentTarget?.dataset?.mgSchemaItMsgId || '');
+        const msgId = resolveMsgId(e.currentTarget);
         if (!msgId) return;
         await rollbackBatch(msgId);
     });

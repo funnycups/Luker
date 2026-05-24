@@ -9008,23 +9008,55 @@ async function ensureCytoscapeLoaded() {
     const scriptId = 'luker_rpg_memory_cytoscape_script';
     const src = '/lib/cytoscape.min.js';
     cytoscapeLoadPromise = new Promise((resolve, reject) => {
+        // A previous failed attempt may have left a dead <script> in the DOM.
+        // Its load/error events have already fired, so attaching new listeners
+        // would hang forever — just drop it and start over.
         const existing = document.getElementById(scriptId);
         if (existing) {
             if (window.cytoscape) {
                 resolve(window.cytoscape);
                 return;
             }
-            existing.addEventListener('load', () => resolve(window.cytoscape), { once: true });
-            existing.addEventListener('error', () => reject(new Error('Failed to load Cytoscape script')), { once: true });
-            return;
+            existing.remove();
         }
+
+        // Some third-party SillyTavern extensions inject an AMD loader (RequireJS
+        // or similar) at the page level. Cytoscape's UMD wrapper would then take
+        // the `define([], factory)` branch instead of `window.cytoscape = factory()`,
+        // and we'd never see the global. Temporarily mask the CommonJS/AMD hooks
+        // around the script load so the wrapper falls through to the window branch.
+        const hadModule = 'module' in window;
+        const hadExports = 'exports' in window;
+        const hadDefine = 'define' in window;
+        const savedModule = window.module;
+        const savedExports = window.exports;
+        const savedDefine = window.define;
+        window.module = undefined;
+        window.exports = undefined;
+        window.define = undefined;
+
+        const restoreGlobals = () => {
+            if (hadModule) window.module = savedModule; else delete window.module;
+            if (hadExports) window.exports = savedExports; else delete window.exports;
+            if (hadDefine) window.define = savedDefine; else delete window.define;
+        };
 
         const script = document.createElement('script');
         script.id = scriptId;
         script.src = src;
         script.async = true;
-        script.onload = () => resolve(window.cytoscape);
-        script.onerror = () => reject(new Error(`Failed to load Cytoscape from ${src}`));
+        script.onload = () => {
+            restoreGlobals();
+            if (window.cytoscape) {
+                resolve(window.cytoscape);
+            } else {
+                reject(new Error(`Cytoscape script loaded but did not expose window.cytoscape (page may have a CommonJS/AMD shim that intercepted the UMD wrapper)`));
+            }
+        };
+        script.onerror = () => {
+            restoreGlobals();
+            reject(new Error(`Failed to load Cytoscape from ${src}`));
+        };
         document.head.append(script);
     });
 
@@ -13942,6 +13974,7 @@ function bindUi() {
             root,
             normalizeNodeTypeSchema,
             getEffectiveNodeTypeSchema,
+            getSchemaScopeInfo,
             persistCharacterSchemaOverride,
             saveSettings,
             i18n,

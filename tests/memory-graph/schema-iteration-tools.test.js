@@ -1,8 +1,9 @@
 // tests/memory-graph/schema-iteration-tools.test.js
 //
 // Covers the static surface of memory-graph/schema-iteration/tools.js:
-//   - buildToolCatalog merges TOOL_DEFS + control tools (continue / finalize)
-//   - isMgSchemaControlCall recognizes both control names; rejects edit tools
+//   - buildToolCatalog merges TOOL_DEFS + the four control tools
+//     (continue / finalize / resetToBlank / resetToGlobal)
+//   - isMgSchemaControlCall recognizes all four control names; rejects edit tools
 //
 // These tests are pure ESM with no DOM access — they hit only the exported
 // functions of the tools module, which avoids the popup's browser-only deps.
@@ -19,9 +20,9 @@ import {
 } from '../../public/scripts/extensions/memory-graph/schema-iteration/tools.js';
 
 describe('MG schema — buildToolCatalog', () => {
-    test('returns TOOL_DEFS plus the two control tools', () => {
+    test('returns TOOL_DEFS plus the four control tools', () => {
         const catalog = buildToolCatalog();
-        expect(catalog.length).toBe(TOOL_DEFS.length + 2);
+        expect(catalog.length).toBe(TOOL_DEFS.length + 4);
         for (const def of catalog) {
             expect(def.type).toBe('function');
             expect(typeof def.function.name).toBe('string');
@@ -40,6 +41,18 @@ describe('MG schema — buildToolCatalog', () => {
         expect(CONTROL_TOOL_NAMES.finalize).toBe('luker_mg_schema_finalize_iteration');
     });
 
+    test('includes luker_mg_schema_reset_live_to_blank', () => {
+        const names = buildToolCatalog().map(d => d.function?.name);
+        expect(names).toContain(CONTROL_TOOL_NAMES.resetToBlank);
+        expect(CONTROL_TOOL_NAMES.resetToBlank).toBe('luker_mg_schema_reset_live_to_blank');
+    });
+
+    test('includes luker_mg_schema_reset_live_to_global', () => {
+        const names = buildToolCatalog().map(d => d.function?.name);
+        expect(names).toContain(CONTROL_TOOL_NAMES.resetToGlobal);
+        expect(CONTROL_TOOL_NAMES.resetToGlobal).toBe('luker_mg_schema_reset_live_to_global');
+    });
+
     test('every catalog entry has a TOOL_DISPLAY label', () => {
         const catalog = buildToolCatalog();
         for (const def of catalog) {
@@ -51,18 +64,27 @@ describe('MG schema — buildToolCatalog', () => {
         const catalog = buildToolCatalog();
         const cont = catalog.find(d => d.function?.name === CONTROL_TOOL_NAMES.continue);
         const fin = catalog.find(d => d.function?.name === CONTROL_TOOL_NAMES.finalize);
+        const rBlank = catalog.find(d => d.function?.name === CONTROL_TOOL_NAMES.resetToBlank);
+        const rGlobal = catalog.find(d => d.function?.name === CONTROL_TOOL_NAMES.resetToGlobal);
         expect(cont?.function?.parameters?.type).toBe('object');
         expect(fin?.function?.parameters?.type).toBe('object');
+        expect(rBlank?.function?.parameters?.type).toBe('object');
+        expect(rGlobal?.function?.parameters?.type).toBe('object');
         // `note` is the only continue arg; `summary` is the only finalize arg.
+        // Both reset tools take an optional `reason` for parity with Orch.
         expect(cont?.function?.parameters?.properties?.note).toBeTruthy();
         expect(fin?.function?.parameters?.properties?.summary).toBeTruthy();
+        expect(rBlank?.function?.parameters?.properties?.reason).toBeTruthy();
+        expect(rGlobal?.function?.parameters?.properties?.reason).toBeTruthy();
     });
 });
 
 describe('MG schema — isMgSchemaControlCall', () => {
-    test('returns true for both control tool names', () => {
+    test('returns true for all four control tool names', () => {
         expect(isMgSchemaControlCall({ name: 'luker_mg_schema_continue_iteration' })).toBe(true);
         expect(isMgSchemaControlCall({ name: 'luker_mg_schema_finalize_iteration' })).toBe(true);
+        expect(isMgSchemaControlCall({ name: 'luker_mg_schema_reset_live_to_blank' })).toBe(true);
+        expect(isMgSchemaControlCall({ name: 'luker_mg_schema_reset_live_to_global' })).toBe(true);
     });
 
     test('returns false for edit tools', () => {

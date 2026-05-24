@@ -4,7 +4,7 @@
 /**
  * Memory Graph Schema — plugin-owned session store.
  *
- * Thin wrapper around Stage 1's createExtensionSettingsSessionStorage scoped
+ * Thin wrapper around createExtensionSettingsSessionStorage scoped
  * to the global MG bucket at
  *
  *     extension_settings.luker_rpg_memory[SESSIONS_BUCKET_KEY]
@@ -13,10 +13,10 @@
  * we depend on the caller to hand us the right root via getMgSettingsRoot —
  * the wrapper stays agnostic to where the root actually lives.)
  *
- * Preserves the legacy bucket path so existing sessions survive the popup
+ * Preserves the existing bucket path so existing sessions survive the popup
  * migration with no schema change. `clearObsolete` is a no-op (MG has no
- * pre-v2 legacy keys to wipe under the new popup; the legacy key cleanup that
- * the shell-driven adapter used to do for `schemaIterationHistory` is no
+ * obsolete keys to wipe under the new popup; the `schemaIterationHistory`
+ * cleanup that the shell-driven adapter used to do is no
  * longer the popup's job).
  *
  * Pure ESM. No DOM, no jQuery, no globals.
