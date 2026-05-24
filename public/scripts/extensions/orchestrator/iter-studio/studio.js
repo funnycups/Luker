@@ -2500,10 +2500,10 @@ export async function openOrchestratorIterationStudio(deps) {
         i18n: t,
     });
 
-    // Initial persist so the session shows up in the history list right
-    // away (the user might dismiss without sending a message and still
-    // want the empty session as a checkpoint).
-    await sessionStore.save(state.session);
+    // No mount-time persist — the session is _transient until the user
+    // sends their first message. persistSession()'s _transient guard
+    // defers the write so opening + closing the popup without sending
+    // anything does not accumulate empty session rows in the history.
 
     // ── Delegated events ──────────────────────────────────────────────
     $root.on('click.orchIt', '[data-orch-it-action="send"]', async (e) => {

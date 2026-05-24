@@ -583,11 +583,12 @@ export async function openCpaIterationStudio(deps) {
         state.isBusy = false;
         state.abortController = null;
         state.session = createNewSession();
+        state.session._transient = true;
         state.pendingEdits = [];
         state.reference = null;
         await loadLive();
-        await sessionStore.save(state.session);
-        await sessionStore.setCurrentSessionId(state.session.id);
+        // Don't save the blank session yet — persistSession's _transient
+        // guard defers the write until the first user message.
         await render();
     }
 
