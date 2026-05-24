@@ -221,7 +221,7 @@ async function charIterNormalizeToolCallToEdit(call, ctx) {
             op: 'lorebook_entry_remove',
             path: 'lorebook.entries',
             uid: args.uid,
-            entry: entry ? structuredClone(entry) : undefined,
+            entry: entry ? JSON.parse(JSON.stringify(entry)) : undefined,
         }];
     }
     if (name === 'cea_set_lorebook_metadata') {

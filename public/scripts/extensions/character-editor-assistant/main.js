@@ -1205,7 +1205,7 @@ async function mergeCharacterAttributes(context, avatar, patch) {
  */
 export async function commitCharacterEditorOperations(context, avatar, edits, opts = {}) {
     if (!Array.isArray(edits) || edits.length === 0) return;
-    const before = opts?.liveCharacter ? structuredClone(opts.liveCharacter) : {};
+    const before = opts?.liveCharacter ? clone(opts.liveCharacter) : {};
     const result = applyEdits(edits, before) || {};
     if (Array.isArray(result.conflicts) && result.conflicts.length > 0) {
         // eslint-disable-next-line no-console
@@ -1276,7 +1276,7 @@ export async function commitLorebookOperations(bookName, liveBook, edits, opts =
             + `Use the world-info panel to rename "${safeName}" → "${String(renameEdit.newValue).trim()}".`,
         );
     }
-    const before = liveBook ? structuredClone(liveBook) : { entries: {} };
+    const before = liveBook ? clone(liveBook) : { entries: {} };
     const result = applyEdits(edits, before) || {};
     if (Array.isArray(result.conflicts) && result.conflicts.length > 0) {
         // eslint-disable-next-line no-console
