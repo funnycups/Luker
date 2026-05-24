@@ -630,6 +630,14 @@ export async function openSchemaIterationStudio(deps) {
     // a derived title (first 50 chars of the first user message).
     // ──────────────────────────────────────────────────────────────────
     async function persistSession() {
+        const hasMessages = Array.isArray(state.session.messages) && state.session.messages.length > 0;
+        const hasPending = Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0;
+        if (state.session._transient && !hasMessages && !hasPending) {
+            return;
+        }
+        if (state.session._transient) {
+            delete state.session._transient;
+        }
         state.session.updatedAt = Date.now();
         // Mirror the top-level pendingEdits cache into the persisted bucket
         // so closing mid-conversation preserves staged-but-not-applied edits
@@ -684,6 +692,7 @@ export async function openSchemaIterationStudio(deps) {
         // session that introduced it.
         const priorAutoApply = Boolean(state.session?.surfaceState?.autoApply);
         state.session = createNewSession();
+        state.session._transient = true;
         if (priorAutoApply) {
             state.session.surfaceState = {
                 ...(state.session.surfaceState || {}),
@@ -692,7 +701,8 @@ export async function openSchemaIterationStudio(deps) {
         }
         state.pendingEdits = [];
         await loadLive();
-        await sessionStore.save(state.session);
+        // Don't save the blank session yet — persistSession's _transient
+        // guard defers the write until the first user message.
         await render();
     }
 

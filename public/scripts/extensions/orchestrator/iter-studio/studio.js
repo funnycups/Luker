@@ -1219,6 +1219,14 @@ export async function openOrchestratorIterationStudio(deps) {
     // a derived title (first 50 chars of the first user message).
     // ──────────────────────────────────────────────────────────────────
     async function persistSession() {
+        const hasMessages = Array.isArray(state.session.messages) && state.session.messages.length > 0;
+        const hasPending = Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0;
+        if (state.session._transient && !hasMessages && !hasPending) {
+            return;
+        }
+        if (state.session._transient) {
+            delete state.session._transient;
+        }
         state.session.updatedAt = Date.now();
         state.session.mode = mode;
         // Mirror runtime pendingEdits onto the persisted session so a popup
@@ -1272,12 +1280,14 @@ export async function openOrchestratorIterationStudio(deps) {
         // surprising). Mirrors the MG-10 carry-forward pattern.
         const priorAutoApply = Boolean(state.session?.surfaceState?.autoApply);
         state.session = createNewSession(mode);
+        state.session._transient = true;
         if (priorAutoApply) {
             state.session.surfaceState.autoApply = true;
         }
         state.pendingEdits = [];
         loadLive();
-        await sessionStore.save(state.session);
+        // Don't save the blank session yet — persistSession's _transient
+        // guard defers the write until the first user message.
         await render();
     }
 

@@ -513,6 +513,19 @@ export async function openCpaIterationStudio(deps) {
     // call which batches with saveSettingsDebounced under the hood.
     // ──────────────────────────────────────────────────────────────────
     async function persistSession() {
+        // Skip the write when the session is still a transient draft (no
+        // messages, no pending edits). Without this gate, opening the popup
+        // without sending anything would still write an empty session to the
+        // store and bump it into the "recently used" list — accumulating
+        // blank rows across opens.
+        const hasMessages = Array.isArray(state.session.messages) && state.session.messages.length > 0;
+        const hasPending = Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0;
+        if (state.session._transient && !hasMessages && !hasPending) {
+            return;
+        }
+        if (state.session._transient) {
+            delete state.session._transient;
+        }
         state.session.updatedAt = Date.now();
         // Mirror the top-level pendingEdits cache into the persisted bucket
         // so closing mid-conversation preserves staged-but-not-applied edits
@@ -526,6 +539,7 @@ export async function openCpaIterationStudio(deps) {
             }
         }
         await sessionStore.save(state.session);
+        await sessionStore.setCurrentSessionId(state.session.id);
     }
 
     async function loadSession(id) {
@@ -1534,8 +1548,11 @@ export async function openCpaIterationStudio(deps) {
             }
         }
         state.session = createNewSession();
-        await sessionStore.save(state.session);
-        await sessionStore.setCurrentSessionId(state.session.id);
+        state.session._transient = true;
+        // Don't persist or set currentSessionId yet — the session becomes
+        // durable on first user message via persistSession's _transient
+        // guard. This keeps blank drafts from stacking when the user opens
+        // and closes the popup without sending anything.
     }
 
     // ──────────────────────────────────────────────────────────────────
