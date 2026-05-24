@@ -219,6 +219,17 @@ export async function requestToolCallsWithRetry(context, settings, {
                 functionCallOptions: {
                     protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
                 },
+                // Iter studio popups (CPA / MG schema / Orch / CEA editor)
+                // are EDITING source text that still contains literal
+                // {{user}} / {{char}} / {{getvar::}} macros. The model
+                // must see those source templates verbatim so str_replace
+                // anchors land and the model doesn't "fix" template
+                // placeholders into rendered names. Runtime executors
+                // (orch nodes, MG extraction, preset use in chat) want
+                // macros expanded — they call requestToolCallWithRetry
+                // (singular) instead, which inherits generateTask's
+                // default true.
+                substituteMacros: false,
                 abortSignal: attemptSignal,
             };
             const result = settings?.useStreamingTransport
