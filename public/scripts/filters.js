@@ -36,6 +36,7 @@ const WORLD_INFO_KEYWORD_SEARCH_SCOPES = Object.freeze({
     CONTENT: 'content',
     UID: 'uid',
     AUTOMATION_ID: 'automation_id',
+    ROLE: 'role',
 });
 
 const WORLD_INFO_KEYWORD_SEARCH_SCOPE_ALIASES = Object.freeze({
@@ -55,7 +56,13 @@ const WORLD_INFO_KEYWORD_SEARCH_SCOPE_ALIASES = Object.freeze({
     automation_id: WORLD_INFO_KEYWORD_SEARCH_SCOPES.AUTOMATION_ID,
     autoid: WORLD_INFO_KEYWORD_SEARCH_SCOPES.AUTOMATION_ID,
     auto_id: WORLD_INFO_KEYWORD_SEARCH_SCOPES.AUTOMATION_ID,
+    role: WORLD_INFO_KEYWORD_SEARCH_SCOPES.ROLE,
 });
+
+// Mirror of script.js extension_prompt_roles + world-info.js world_info_position.atDepth.
+// Kept literal here to avoid a circular import from filters.js (a low-level module).
+const WI_INJECTION_ROLE_NAMES = Object.freeze({ 0: 'system', 1: 'user', 2: 'assistant' });
+const WI_POSITION_AT_DEPTH = 4;
 
 function normalizeWorldInfoKeywordSearchValue(searchValue) {
     return String(searchValue || '').trim();
@@ -239,6 +246,11 @@ function getWorldInfoKeywordSearchFields(entry) {
     const contentCandidates = normalizeWorldInfoKeywordSearchCandidates(entry?.content);
     const uidCandidates = normalizeWorldInfoKeywordSearchCandidates(entry?.uid);
     const automationIdCandidates = normalizeWorldInfoKeywordSearchCandidates(entry?.automationId);
+    // Injection role only carries meaning on @Depth entries; other positions ignore entry.role
+    // entirely, so we expose no candidates for them and let role:* miss cleanly.
+    const isAtDepth = Number(entry?.position) === WI_POSITION_AT_DEPTH;
+    const roleName = isAtDepth ? WI_INJECTION_ROLE_NAMES[Number(entry?.role ?? 0)] : null;
+    const roleCandidates = roleName ? [roleName] : [];
 
     return {
         titleCandidates,
@@ -246,6 +258,7 @@ function getWorldInfoKeywordSearchFields(entry) {
         contentCandidates,
         uidCandidates,
         automationIdCandidates,
+        roleCandidates,
     };
 }
 
@@ -283,6 +296,12 @@ function getWorldInfoKeywordSearchScore(fields, searchTerm, scope = WORLD_INFO_K
 
     if (scope === WORLD_INFO_KEYWORD_SEARCH_SCOPES.ALL || scope === WORLD_INFO_KEYWORD_SEARCH_SCOPES.AUTOMATION_ID) {
         pushWorldInfoKeywordCandidateScores(scores, fields.automationIdCandidates, searchTerm, 8, 9);
+    }
+
+    // role: is excluded from ALL on purpose — only matches when the user explicitly scopes
+    // with role:, otherwise a generic "system" search would sweep in every @D-system entry.
+    if (scope === WORLD_INFO_KEYWORD_SEARCH_SCOPES.ROLE) {
+        pushWorldInfoKeywordCandidateScores(scores, fields.roleCandidates, searchTerm, 10, 11);
     }
 
     return scores.length > 0 ? Math.min(...scores) : null;

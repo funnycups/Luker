@@ -363,7 +363,7 @@ function updateWorldInfoSearchInputState() {
             isKeywordMode
                 ? (
                     advancedSyntax
-                        ? t`Advanced keyword search over entry titles, groups, keys, content, UID, and automation ID. Supports title:, group:, uid:, automationId:, content:, quotes, -, and OR.`
+                        ? t`Advanced keyword search over entry titles, groups, keys, content, UID, and automation ID. Supports title:, group:, uid:, automationId:, content:, role:, quotes, -, and OR.`
                         : t`Direct keyword match over entry titles, groups, keys, content, UID, and automation ID. Enable Advanced syntax for operators like title:, OR, -, and quotes.`
                 )
                 : t`Fuzzy search across entry titles, keys, content, UID, and automation ID.`,
@@ -419,7 +419,7 @@ function updateWorldInfoManagerSearchInputState() {
             isEntrySearch
                 ? (
                     advancedSyntax
-                        ? t`Advanced keyword search across all lorebooks. Supports title:, group:, uid:, automationId:, content:, quotes, -, and OR.`
+                        ? t`Advanced keyword search across all lorebooks. Supports title:, group:, uid:, automationId:, content:, role:, quotes, -, and OR.`
                         : t`Direct keyword match across entry titles, groups, keys, content, UID, and automation ID in all lorebooks.`
                 )
                 : '',
@@ -463,6 +463,10 @@ function buildWorldInfoSearchSyntaxHelpHtml() {
             query: 'group:lore uid:42 automationId:hero_1',
             description: t`Scope a term to group, UID, or automation ID.`,
         },
+        {
+            query: 'role:assistant',
+            description: t`Match @Depth entries by injection role (system, user, assistant). Entries with other positions never match.`,
+        },
     ];
 
     const syntaxHeader = escapeHtmlText(t`Syntax`);
@@ -492,7 +496,7 @@ function buildWorldInfoSearchSyntaxHelpHtml() {
                 </div>
             </section>
             <p>${escapeHtmlText(t`Enable Advanced syntax to use operators and field prefixes.`)}</p>
-            <p>${escapeHtmlText(t`title: searches entry titles, memo/comment, and primary/secondary keywords. group:, uid:, and automationId: search only those fields. content: searches entry content only.`)}</p>
+            <p>${escapeHtmlText(t`title: searches entry titles, memo/comment, and primary/secondary keywords. group:, uid:, and automationId: search only those fields. content: searches entry content only. role: matches the injection role on @Depth entries only.`)}</p>
             <section class="world_info_search_syntax_section">
                 <h4>${escapeHtmlText(t`Advanced behavior`)}</h4>
                 <div class="world_info_search_syntax_table_wrap">
