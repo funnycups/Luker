@@ -2102,6 +2102,19 @@ async function inheritMemoryStoreForBranch(context, payload) {
         sourceMessageCount: assistantMessageCount,
         lastRecallTrace: [],
         lastRecallProjection: null,
+        // vectorIndexState is intentionally NOT inherited from the source.
+        // The collectionId in buildCollectionId() is chat-id-scoped, so the
+        // branch chat's backend vector collection starts empty regardless
+        // of what the source had embedded. Copying source.nodeToHash here
+        // would map node ids to hashes the branch backend doesn't hold —
+        // a phantom-indexed state that makes subsequent hybrid recall
+        // think nodes are indexed when they aren't. The empty state lets
+        // ensureVectorIndexState lazy-init on first hybrid-recall call,
+        // which goes through the configChanged-purge branch in
+        // syncVectorIndex and produces a fresh state that matches the
+        // (also empty) backend collection. LLM-recall users are
+        // unaffected because that path never touches vectorIndexState.
+        vectorIndexState: null,
     };
     setCachedMeta(targetChatKey, branchMeta);
     if (typeof context.updateChatState === 'function') {
