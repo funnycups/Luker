@@ -1512,6 +1512,32 @@ export async function openCpaIterationStudio(deps) {
         const prefix = autoApply
             ? 'Auto-apply ran'
             : 'User reviewed this round';
+
+        // Translate the raw engine conflict reason into something the AI
+        // can act on directly. The lib-level `value_drifted` on a string
+        // op always means "the path didn't resolve to a string" — most
+        // commonly because the AI keyed prompts[] by identifier
+        // (prompts['uuid'] returns undefined) or computed a stale array
+        // index. anchor_missing means the find text isn't there at all
+        // (often because earlier edits already removed it). anchor_
+        // ambiguous means the find text appears more than expected_count
+        // times. The hints below give the AI a concrete next action
+        // (which tool to try, whether to re-read first) so retries are
+        // productive instead of repeating the same broken call.
+        function explainReason(edit, reason) {
+            const isStrOp = edit?.op === 'str_replace' || edit?.op === 'str_insert' || edit?.op === 'str_delete';
+            if (reason === 'value_drifted' && isStrOp) {
+                return 'path_not_string (the path you targeted does not resolve to a string field; prompts[] is an Array — `prompts[<identifier>]` does not work. Either use the *_in_prompt tool family with the identifier, or look up the correct numeric index from the outline\'s @prompts[N] hint)';
+            }
+            if (reason === 'anchor_missing') {
+                return 'anchor_missing (the `find` / `after_text` substring does not exist in the target content; call preset_read_live_fields on this path before retrying — your prior edits may already have removed it)';
+            }
+            if (reason === 'anchor_ambiguous') {
+                return 'anchor_ambiguous (the substring appears more than expected_count times; pass a longer unique anchor or set expected_count explicitly)';
+            }
+            return reason;
+        }
+
         const lines = [];
         if (skipped === 0) {
             lines.push(`[${prefix}: all ${count} pending edit(s) took effect.`);
@@ -1523,7 +1549,7 @@ export async function openCpaIterationStudio(deps) {
                     const edit = c?.edit || {};
                     const op = String(edit.op || '?');
                     const path = String(edit.path || '<root>');
-                    const reason = String(c?.reason || 'unknown');
+                    const reason = explainReason(edit, String(c?.reason || 'unknown'));
                     lines.push(`  - ${op}(${path}): ${reason}`);
                 }
             }

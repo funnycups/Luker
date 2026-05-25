@@ -28,6 +28,9 @@ export const EDITABLE_TOOL_NAMES = new Set([
     'preset_str_replace',
     'preset_str_insert',
     'preset_str_delete',
+    'preset_str_replace_in_prompt',
+    'preset_str_insert_in_prompt',
+    'preset_str_delete_in_prompt',
     'preset_list_insert',
     'preset_list_remove',
     'preset_list_move',
@@ -43,6 +46,9 @@ export const TOOL_DISPLAY = Object.freeze({
     preset_str_replace:              '🔄 Replace text',
     preset_str_insert:               '➕ Insert text',
     preset_str_delete:               '➖ Delete text',
+    preset_str_replace_in_prompt:    '🔄 Replace text in prompt',
+    preset_str_insert_in_prompt:     '➕ Insert text in prompt',
+    preset_str_delete_in_prompt:     '➖ Delete text in prompt',
     preset_list_insert:              '➕ Insert into list',
     preset_list_remove:              '➖ Remove from list',
     preset_list_move:                '🔀 Move in list',
@@ -414,6 +420,69 @@ export function buildToolCatalog({ hasReference = false } = {}) {
                         reason: { type: 'string' },
                     },
                     required: ['path', 'find'],
+                },
+            },
+        },
+        // ---- Identifier-keyed prompt-content edits ----
+        //
+        // prompts[] is a JS Array — `prompts[<identifier>]` does not resolve.
+        // The path-based preset_str_* tools above require the AI to compute
+        // the correct numeric array index, which is fragile across rounds
+        // (new entries append, the outline orders by prompt_order position
+        // rather than array index). These three tools take the entry's
+        // stable identifier and let the normalize layer resolve the index
+        // exactly once, against the live state at apply time. PREFER these
+        // over preset_str_* when targeting a prompts[] entry's content.
+        {
+            type: 'function',
+            function: {
+                name: 'preset_str_replace_in_prompt',
+                description: 'Replace a unique substring inside a prompts[] entry\'s content, addressed by stable identifier (uuid). Use this instead of preset_str_replace on prompts[N].content — you do not have to compute the array index, and the index resolves at apply time so concurrent reorders cannot drift it. `find` must occur exactly expected_count times (default 1).',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        identifier: { type: 'string', description: 'Stable prompt identifier (the entry.identifier field, e.g. a uuid).' },
+                        find: { type: 'string' },
+                        replace: { type: 'string' },
+                        expected_count: { type: 'integer', minimum: 1, default: 1, description: 'Number of expected matches for "find" (default 1). The op fails if matches != expected_count.' },
+                        reason: { type: 'string' },
+                    },
+                    required: ['identifier', 'find', 'replace'],
+                },
+            },
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'preset_str_insert_in_prompt',
+                description: 'Insert text immediately after a unique anchor substring inside a prompts[] entry\'s content, addressed by stable identifier. Use this instead of preset_str_insert on prompts[N].content. `after_text` must occur exactly expected_count times (default 1).',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        identifier: { type: 'string', description: 'Stable prompt identifier (the entry.identifier field, e.g. a uuid).' },
+                        after_text: { type: 'string' },
+                        insert_text: { type: 'string' },
+                        expected_count: { type: 'integer', minimum: 1, default: 1, description: 'Number of expected matches for "after_text" (default 1). The op fails if matches != expected_count.' },
+                        reason: { type: 'string' },
+                    },
+                    required: ['identifier', 'after_text', 'insert_text'],
+                },
+            },
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'preset_str_delete_in_prompt',
+                description: 'Remove a unique substring from a prompts[] entry\'s content, addressed by stable identifier. Use this instead of preset_str_delete on prompts[N].content. `find` must occur exactly expected_count times (default 1).',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        identifier: { type: 'string', description: 'Stable prompt identifier (the entry.identifier field, e.g. a uuid).' },
+                        find: { type: 'string' },
+                        expected_count: { type: 'integer', minimum: 1, default: 1, description: 'Number of expected matches for "find" (default 1). The op fails if matches != expected_count.' },
+                        reason: { type: 'string' },
+                    },
+                    required: ['identifier', 'find'],
                 },
             },
         },
@@ -960,6 +1029,64 @@ export async function normalizeToolCallToEdit(call, ctx) {
         return [{
             op: 'str_delete',
             path: args.path,
+            find: args.find,
+        }];
+    }
+    // Identifier-keyed prompt-content tools. Resolve the prompt's array
+    // index against the *live* state at normalize time, then delegate to
+    // the same op family as the path-based tools above. If the identifier
+    // doesn't match any entry, throw — the toolResults path surfaces it
+    // as a failed tool reply so the AI learns the identifier is wrong
+    // without having to guess at array indices.
+    if (name === 'preset_str_replace_in_prompt'
+        || name === 'preset_str_insert_in_prompt'
+        || name === 'preset_str_delete_in_prompt') {
+        const identifier = normalizePromptIdentifier(args?.identifier);
+        if (!identifier) {
+            throw new Error(`${name} requires a non-empty identifier.`);
+        }
+        const idx = findPromptEntryIndex(Array.isArray(live?.prompts) ? live.prompts : [], identifier);
+        if (idx < 0) {
+            throw new Error(`${name}: no prompts[] entry with identifier ${identifier}. Use preset_read_live_fields to inspect the current prompts[] catalog.`);
+        }
+        const path = `prompts[${idx}].content`;
+        const value = lodash.get(live, path);
+        if (name === 'preset_str_replace_in_prompt') {
+            assertStrOpUniqueness({
+                path, value, needle: args.find,
+                expected_count: args.expected_count,
+                opLabel: 'preset_str_replace_in_prompt',
+            });
+            return [{
+                op: 'str_replace',
+                path,
+                find: args.find,
+                replace: args.replace,
+                expected_count: args.expected_count,
+            }];
+        }
+        if (name === 'preset_str_insert_in_prompt') {
+            assertStrOpUniqueness({
+                path, value, needle: args.after_text,
+                expected_count: args.expected_count,
+                opLabel: 'preset_str_insert_in_prompt',
+            });
+            return [{
+                op: 'str_insert',
+                path,
+                after_text: args.after_text,
+                insert_text: args.insert_text,
+            }];
+        }
+        // preset_str_delete_in_prompt
+        assertStrOpUniqueness({
+            path, value, needle: args.find,
+            expected_count: args.expected_count,
+            opLabel: 'preset_str_delete_in_prompt',
+        });
+        return [{
+            op: 'str_delete',
+            path,
             find: args.find,
         }];
     }

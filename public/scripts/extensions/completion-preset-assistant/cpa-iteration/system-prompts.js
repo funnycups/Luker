@@ -102,6 +102,14 @@ export function formatPromptPreview(content) {
  * for the AI to read alongside its task. Highlights the prompts[] entries
  * that DO NOT appear in any prompt_order group — those are the silent
  * "exists but does nothing" entries that the bug used to produce.
+ *
+ * Each ordered entry includes an `@prompts[N]` marker, where N is the
+ * entry's index in the live prompts[] array. The path-based string-edit
+ * tools (preset_str_replace etc) need this N when targeting an entry's
+ * content; the *_in_prompt tool family does not, since it takes the
+ * identifier directly. Surfacing N here lets the AI use either tool
+ * family correctly. The marker is intentionally placed at end-of-line so
+ * normal reads (which key off identifier / role / content) ignore it.
  */
 export function buildPresetPromptOutlineText(body) {
     const entries = getPresetPromptEntries(body);
@@ -123,9 +131,12 @@ export function buildPresetPromptOutlineText(body) {
             if (g.order.length === 0) { sections.push('    (empty)'); continue; }
             g.order.forEach((item, i) => {
                 orderedIds.add(item.identifier);
-                const promptEntry = promptMap.get(item.identifier) || { content: '', role: '' };
+                const promptEntry = promptMap.get(item.identifier) || { content: '', role: '', index: -1 };
+                const indexHint = Number.isInteger(promptEntry.index) && promptEntry.index >= 0
+                    ? ` @prompts[${promptEntry.index}]`
+                    : '';
                 sections.push(
-                    `  ${i + 1}. ${item.identifier} [${item.enabled ? 'enabled' : 'disabled'}] role=${promptEntry.role || 'n/a'}`,
+                    `  ${i + 1}. ${item.identifier} [${item.enabled ? 'enabled' : 'disabled'}] role=${promptEntry.role || 'n/a'}${indexHint}`,
                 );
                 sections.push(`     ${formatPromptPreview(promptEntry.content)}`);
             });
@@ -136,7 +147,10 @@ export function buildPresetPromptOutlineText(body) {
     if (orphans.length > 0) {
         sections.push('- prompts NOT in any prompt_order (inert — never reach the model regardless of any other flag):');
         for (const e of orphans) {
-            sections.push(`  - ${e.identifier} role=${e.role || 'n/a'}`);
+            const indexHint = Number.isInteger(e.index) && e.index >= 0
+                ? ` @prompts[${e.index}]`
+                : '';
+            sections.push(`  - ${e.identifier} role=${e.role || 'n/a'}${indexHint}`);
             sections.push(`    ${formatPromptPreview(e.content)}`);
         }
     }
@@ -187,7 +201,7 @@ export function buildPresetSettingsOutlineText(body) {
 export function buildPresetStructureGuideText() {
     return [
         'OpenAI preset structure:',
-        '- prompts[]: catalog of prompt entries. Each: {identifier, name?, content, role?, marker?, injection_position?, injection_depth?, injection_order?}. NOTE: any `enabled` field on prompts[] entries is ignored by the runtime — the authoritative enabled flag lives on prompt_order[*].order[*].enabled.',
+        '- prompts[]: catalog of prompt entries (a JS Array — `prompts[<identifier>]` does NOT resolve; the identifier is a label on each entry, not a lookup key). Each: {identifier, name?, content, role?, marker?, injection_position?, injection_depth?, injection_order?}. NOTE: any `enabled` field on prompts[] entries is ignored by the runtime — the authoritative enabled flag lives on prompt_order[*].order[*].enabled.',
         '- prompt_order[]: per-character activation lists. Each: {character_id, order:[{identifier, enabled}, ...]}. To toggle whether an entry actually takes effect, flip its order item\'s `enabled` — call preset_upsert_prompt_order_item, or for an existing prompt entry call preset_upsert_prompt_entry which routes the `enabled` arg to every order group on your behalf.',
         '- An entry that exists in prompts[] but is NOT referenced in any prompt_order[*].order is silently ignored at generation time — it never reaches the model.',
         '- Top-level prompt fields: new_chat_prompt, new_group_chat_prompt, continue_nudge_prompt, impersonation_prompt, assistant_prefill, continue_prefill, continue_postfix, send_if_empty, wi_format, scenario_format, personality_format, group_nudge_prompt, use_sysprompt, squash_system_messages.',
@@ -529,7 +543,8 @@ export function buildBaseSystemPrompt() {
         '- If the user wants the new entry NOT to be in prompt_order yet, pass auto_add_to_order: false to preset_upsert_prompt_entry, or use preset_upsert_prompt_order_item later to place it explicitly.',
         '',
         'Tool preferences:',
-        '- Long-string fields (e.g., prompts[*].content): use preset_str_replace / preset_str_insert / preset_str_delete instead of resetting the whole field via preset_set_field. Sends only the changed substring and surfaces drift if surrounding text changed externally. `find` / `after_text` must occur exactly `expected_count` times (default 1).',
+        '- Long-string fields on prompts[] entries (prompts[*].content): use the identifier-keyed family — preset_str_replace_in_prompt / preset_str_insert_in_prompt / preset_str_delete_in_prompt. You pass the entry\'s identifier; the array index is resolved server-side. This is more robust than the path-based preset_str_* tools because you do not have to compute prompts[N], and N cannot drift between rounds. The path-based preset_str_replace / _insert / _delete remain available for non-prompts string fields (impersonation_prompt, jailbreak, etc) — for those, use the lodash-style path directly.',
+        '- If you must use the path-based tools on a prompts[] entry anyway (e.g. you also need a regex-style anchor), N is shown in the outline at end of each ordered entry line as `@prompts[N]` — copy that integer, do not invent it, and do not pass the identifier as the array key (`prompts[<identifier>]` does not work because prompts[] is an Array, not a map).',
         '- Object fields: prefer preset_set_field("parent.child", value) over preset_set_field("parent", wholeObject) — finer paths surface conflicts only on actually-overlapping fields.',
         '- Array fields: prefer preset_list_insert / preset_list_remove / preset_list_move over rewriting the whole array via preset_set_field. For the special prompts[] / prompt_order[] arrays, prefer the prompt-specific tools (preset_upsert_prompt_entry, preset_upsert_prompt_order_item, preset_remove_prompt_entry, preset_remove_prompt_order_item).',
         '- For preset_upsert_prompt_order_item, position is 1-based within the target character_id group.',
