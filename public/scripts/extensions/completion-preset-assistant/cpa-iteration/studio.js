@@ -1252,15 +1252,16 @@ export async function openCpaIterationStudio(deps) {
                     // No edits emitted. The most common cause for prompt-
                     // aware tools is "sandbox == live" — the desired state
                     // matches what's already on disk. Tell the model so it
-                    // doesn't loop re-issuing the same no-op. The hint
-                    // about prompt_order is targeted at the upsert/remove
-                    // prompt_entry path, where AIs commonly try to toggle
-                    // an entry's enabled state via `enabled` arg (writing
-                    // an unused field) instead of via preset_upsert_prompt_
-                    // order_item (the runtime's actual enabled gate).
-                    const hint = (name === 'preset_upsert_prompt_entry' || name === 'preset_remove_prompt_entry')
-                        ? 'If you intended to toggle enabled state, note that prompts[].enabled is ignored by the runtime — use preset_upsert_prompt_order_item to flip prompt_order[*].order[*].enabled instead.'
-                        : 'The target was already in the requested state, so no change was produced.';
+                    // doesn't loop re-issuing the same no-op. Most likely
+                    // an earlier round already applied this change (e.g.
+                    // preset_upsert_prompt_entry with `enabled` now routes
+                    // to prompt_order on the AI's behalf, so a follow-up
+                    // preset_upsert_prompt_order_item against the same
+                    // identifier is redundant). The hint deliberately
+                    // avoids prescribing a specific replacement tool —
+                    // older copies pointed at preset_upsert_prompt_order_item
+                    // which sent the AI into a 4-noop loop.
+                    const hint = 'The target state already matches what you requested; an earlier round may have already applied this change. Re-read the live state with preset_read_live_fields before retrying — do not re-issue the same call.';
                     editToolResults.push({
                         tool_call_id: callId,
                         content: { status: 'noop', message: 'No edits produced for this call.', hint },
@@ -1355,6 +1356,7 @@ export async function openCpaIterationStudio(deps) {
                         applied: outcome.applied,
                         conflicts: outcome.conflicts,
                         alreadyDone: outcome.alreadyDone,
+                        cleanEdits: outcome.cleanEdits,
                         autoApply: true,
                     });
                     state.session.messages.push({
@@ -1478,7 +1480,7 @@ export async function openCpaIterationStudio(deps) {
         state.pendingEdits = [];
         await persistSession();
         if (!skipRender) await render();
-        return { proposed: editsBatch.length, applied: appliedCount, conflicts, alreadyDone };
+        return { proposed: editsBatch.length, applied: appliedCount, conflicts, alreadyDone, cleanEdits };
     }
 
     async function discardPendingEdits() {
@@ -1504,9 +1506,10 @@ export async function openCpaIterationStudio(deps) {
      * so the LLM can correct its next round (fix the anchor, re-read
      * the field, etc) instead of looping the same broken call.
      */
-    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, autoApply = false }) {
+    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, autoApply = false }) {
         const conflictArr = Array.isArray(conflicts) ? conflicts : [];
         const alreadyArr = Array.isArray(alreadyDone) ? alreadyDone : [];
+        const cleanArr = Array.isArray(cleanEdits) ? cleanEdits : [];
         const appliedNum = Number.isInteger(applied) ? applied : count;
         const skipped = conflictArr.length + alreadyArr.length;
         const prefix = autoApply
@@ -1538,6 +1541,26 @@ export async function openCpaIterationStudio(deps) {
             return reason;
         }
 
+        // Summarize each clean edit so the model knows *what* changed,
+        // not just *how many*. Coarse `set` on `prompts` / `prompt_order`
+        // is what prompt-aware tools (upsert_prompt_entry,
+        // upsert_prompt_order_item, etc.) collapse into — make those
+        // legible so a later round doesn't re-run the same toggle.
+        function describeClean(edit) {
+            const op = String(edit?.op || '?');
+            const path = String(edit?.path || '<root>');
+            if (op === 'set' && (path === 'prompts' || path === 'prompt_order')) {
+                return `${op}(${path}) — array replaced wholesale by a prompt-aware tool; enabled flags / order positions / entries may all have shifted`;
+            }
+            if (op === 'set' && /^prompts\[\d+\]\.content$/.test(path)) {
+                return `${op}(${path}) — entry content overwritten`;
+            }
+            if ((op === 'str_replace' || op === 'str_insert' || op === 'str_delete') && path) {
+                return `${op}(${path})`;
+            }
+            return `${op}(${path})`;
+        }
+
         const lines = [];
         if (skipped === 0) {
             lines.push(`[${prefix}: all ${count} pending edit(s) took effect.`);
@@ -1563,14 +1586,39 @@ export async function openCpaIterationStudio(deps) {
             }
             lines.push('Revise your approach for any skipped edit that was essential (re-read current state, fix the anchor / path / value).');
         }
+        // List the paths that actually changed so the AI carries a record
+        // of "what state moved this round" into the next turn. Without
+        // this, "all 2 took effect" leaves the AI guessing which paths
+        // mutated, and it commonly re-issues the same toggle in a later
+        // round (the bug that drove the 4-noop sequence in the prior
+        // session).
+        if (cleanArr.length > 0 && appliedNum > 0) {
+            lines.push('Applied paths (state that moved this round):');
+            for (const e of cleanArr) {
+                lines.push(`  - ${describeClean(e)}`);
+            }
+        }
+        lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
+        return lines.join('\n');
+    }
+            if (alreadyArr.length > 0) {
+                lines.push('Already in desired state (no-op):');
+                for (const e of alreadyArr) {
+                    const op = String(e?.op || '?');
+                    const path = String(e?.path || '<root>');
+                    lines.push(`  - ${op}(${path})`);
+                }
+            }
+            lines.push('Revise your approach for any skipped edit that was essential (re-read current state, fix the anchor / path / value).');
+        }
         lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
         return lines.join('\n');
     }
 
-    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone }) {
+    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone, cleanEdits }) {
         if (state.isBusy) return;
         const userText = action === 'apply'
-            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone })
+            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits })
             : `[User reviewed and discarded ${count} pending edit(s). Reconsider your approach — propose different edits or respond with plain text and no tool calls when finished.]`;
 
         state.session.messages.push({
@@ -1933,6 +1981,7 @@ export async function openCpaIterationStudio(deps) {
                 applied: outcome?.applied,
                 conflicts: outcome?.conflicts,
                 alreadyDone: outcome?.alreadyDone,
+                cleanEdits: outcome?.cleanEdits,
             });
         }
     });

@@ -1428,7 +1428,7 @@ export async function openSchemaIterationStudio(deps) {
                     // wrong without a tool-shaped reply, so surface it.
                     editToolResults.push({
                         tool_call_id: callId,
-                        content: { status: 'noop', message: 'No edits produced for this call. The executor returned no change; verify args (node_type identifier, value shape) or read the current schema and retry.' },
+                        content: { status: 'noop', message: 'No edits produced. The target schema state likely already matches what you requested; an earlier round may have already applied this change. Re-read the live schema before retrying — do not re-issue the same call. If you genuinely intended a different result, verify args (node_type identifier, value shape).' },
                         status: 'fail',
                     });
                 }
@@ -1508,6 +1508,7 @@ export async function openSchemaIterationStudio(deps) {
                         applied: outcome.applied,
                         conflicts: outcome.conflicts,
                         alreadyDone: outcome.alreadyDone,
+                        cleanEdits: outcome.cleanEdits,
                         target: 'schema',
                         autoApply: true,
                     });
@@ -1638,7 +1639,7 @@ export async function openSchemaIterationStudio(deps) {
         state.pendingEdits = [];
         await persistSession();
         if (!skipRender) await render();
-        return { proposed: editsBatch.length, applied: appliedCount, conflicts, alreadyDone };
+        return { proposed: editsBatch.length, applied: appliedCount, conflicts, alreadyDone, cleanEdits };
     }
 
     async function discardPendingEdits() {
@@ -1664,9 +1665,10 @@ export async function openSchemaIterationStudio(deps) {
      * so the LLM can correct its next round (fix the path / value / args)
      * instead of looping the same broken call.
      */
-    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, target = 'schema', autoApply = false }) {
+    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, target = 'schema', autoApply = false }) {
         const conflictArr = Array.isArray(conflicts) ? conflicts : [];
         const alreadyArr = Array.isArray(alreadyDone) ? alreadyDone : [];
+        const cleanArr = Array.isArray(cleanEdits) ? cleanEdits : [];
         const appliedNum = Number.isInteger(applied) ? applied : count;
         const skipped = conflictArr.length + alreadyArr.length;
         const prefix = autoApply ? 'Auto-apply ran' : 'User reviewed this round';
@@ -1695,14 +1697,28 @@ export async function openSchemaIterationStudio(deps) {
             }
             lines.push('Revise your approach for any skipped edit that was essential (re-read current state, fix the path / value).');
         }
+        // List the edits that actually changed state so the AI knows what
+        // moved this round. Without this, "all N took effect" leaves the
+        // AI guessing which paths mutated across rounds.
+        if (cleanArr.length > 0 && appliedNum > 0) {
+            lines.push('Applied paths (state that moved this round):');
+            for (const e of cleanArr) {
+                const op = String(e?.op || '?');
+                const path = String(e?.path || '<root>');
+                const note = (op === 'set' && path === '')
+                    ? ' — whole schema replaced by a sandbox-diff tool; node types / fields may have shifted'
+                    : '';
+                lines.push(`  - ${op}(${path || '<root>'})${note}`);
+            }
+        }
         lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
         return lines.join('\n');
     }
 
-    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone }) {
+    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone, cleanEdits }) {
         if (state.isBusy) return;
         const userText = action === 'apply'
-            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, target: 'schema' })
+            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, target: 'schema' })
             : `[User reviewed and discarded ${count} pending edit(s). Reconsider your approach — propose different edits or respond with plain text and no tool calls when finished.]`;
 
         state.session.messages.push({
@@ -1998,6 +2014,7 @@ export async function openSchemaIterationStudio(deps) {
                 applied: outcome?.applied,
                 conflicts: outcome?.conflicts,
                 alreadyDone: outcome?.alreadyDone,
+                cleanEdits: outcome?.cleanEdits,
             });
         }
     });

@@ -1946,7 +1946,7 @@ export async function openOrchestratorIterationStudio(deps) {
                 } else {
                     editToolResults.push({
                         tool_call_id: callId,
-                        content: { status: 'noop', message: 'No edits produced for this call. The executor returned no change; verify args (path / mode / value) or re-read current profile state and retry.' },
+                        content: { status: 'noop', message: 'No edits produced. The target profile state likely already matches what you requested; an earlier round may have already applied this change. Re-read the live profile before retrying — do not re-issue the same call. If you genuinely intended a different result, verify args (path / mode / value).' },
                         status: 'fail',
                     });
                 }
@@ -2056,6 +2056,7 @@ export async function openOrchestratorIterationStudio(deps) {
                         applied: outcome.applied,
                         conflicts: outcome.conflicts,
                         alreadyDone: outcome.alreadyDone,
+                        cleanEdits: outcome.cleanEdits,
                         target: getApplyScopeLabel(),
                         autoApply: true,
                     });
@@ -2222,7 +2223,7 @@ export async function openOrchestratorIterationStudio(deps) {
         state.pendingEdits = [];
         await persistSession();
         if (!skipRender) await render();
-        return { proposed: editsBatch.length, applied: appliedCount, conflicts, alreadyDone };
+        return { proposed: editsBatch.length, applied: appliedCount, conflicts, alreadyDone, cleanEdits };
     }
 
     async function discardPendingEdits() {
@@ -2247,9 +2248,10 @@ export async function openOrchestratorIterationStudio(deps) {
      * this verbatim — keep the per-edit "skipped because X" detail intact
      * so the LLM can correct its next round.
      */
-    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, target = 'profile', autoApply = false }) {
+    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, target = 'profile', autoApply = false }) {
         const conflictArr = Array.isArray(conflicts) ? conflicts : [];
         const alreadyArr = Array.isArray(alreadyDone) ? alreadyDone : [];
+        const cleanArr = Array.isArray(cleanEdits) ? cleanEdits : [];
         const appliedNum = Number.isInteger(applied) ? applied : count;
         const skipped = conflictArr.length + alreadyArr.length;
         const prefix = autoApply ? 'Auto-apply ran' : 'User reviewed this round';
@@ -2278,14 +2280,28 @@ export async function openOrchestratorIterationStudio(deps) {
             }
             lines.push('Revise your approach for any skipped edit that was essential (re-read current state, fix the path / value).');
         }
+        // List the edits that actually moved state this round so the AI
+        // doesn't re-issue toggles it already made in an earlier auto-
+        // apply round.
+        if (cleanArr.length > 0 && appliedNum > 0) {
+            lines.push('Applied paths (state that moved this round):');
+            for (const e of cleanArr) {
+                const op = String(e?.op || '?');
+                const path = String(e?.path || '<root>');
+                const note = (op === 'set' && path === '')
+                    ? ' — whole profile replaced by a sandbox-diff tool; many fields may have shifted'
+                    : '';
+                lines.push(`  - ${op}(${path || '<root>'})${note}`);
+            }
+        }
         lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
         return lines.join('\n');
     }
 
-    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone }) {
+    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone, cleanEdits }) {
         if (state.isBusy) return;
         const userText = action === 'apply'
-            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, target: getApplyScopeLabel() })
+            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, target: getApplyScopeLabel() })
             : `[User reviewed and discarded ${count} pending edit(s). Reconsider your approach — propose different edits or respond with plain text and no tool calls when finished.]`;
 
         state.session.messages.push({
@@ -2609,6 +2625,7 @@ export async function openOrchestratorIterationStudio(deps) {
                 applied: outcome?.applied,
                 conflicts: outcome?.conflicts,
                 alreadyDone: outcome?.alreadyDone,
+                cleanEdits: outcome?.cleanEdits,
             });
         }
     });

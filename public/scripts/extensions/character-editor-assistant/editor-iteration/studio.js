@@ -477,7 +477,7 @@ async function processRoundOutcome({
             } else {
                 editToolResults.push({
                     tool_call_id: callId,
-                    content: { status: 'noop', message: 'No edits produced for this call. The executor returned no change; verify args (path / field / value) or read the current state and retry.' },
+                    content: { status: 'noop', message: 'No edits produced. The target state likely already matches what you requested; an earlier round may have already applied this change. Re-read the live state before retrying — do not re-issue the same call. If you genuinely intended a different result, verify args (path / field / value).' },
                     status: 'fail',
                 });
             }
@@ -1240,9 +1240,28 @@ async function applyPendingEdits(state, { persistSession, render, i18n, context,
             console.warn(`[${MODULE}] buildUnifiedCharacterEditorLiveSnapshot threw after apply`, err);
         }
     }
+    // Compute the edits that actually changed state this round. Each
+    // input edit is in exactly one of {clean, conflicts, alreadyDone};
+    // the commit helpers return the latter two but not an explicit
+    // clean list, so derive it via set-difference against the input.
+    // Reference-identity works because conflicts.edit and alreadyDone
+    // entries point at the same per-target rebased edit objects we
+    // passed into the commits. Skip targets that had IO errors — none
+    // of their edits landed.
+    const erroredTargets = new Set(errors.map(e => String(e.target || '')));
+    const sentEdits = [
+        ...(erroredTargets.has('character') ? [] : groups.character),
+        ...Object.entries(groups.lorebooks)
+            .filter(([name]) => !erroredTargets.has(`lorebook:${name}`))
+            .flatMap(([, list]) => list),
+    ];
+    const skippedSet = new Set(conflicts.map(c => c?.edit).filter(Boolean));
+    for (const e of alreadyDone) skippedSet.add(e);
+    const cleanEdits = sentEdits.filter(e => !skippedSet.has(e));
+
     if (typeof persistSession === 'function') await persistSession();
     if (typeof render === 'function') await render();
-    return { proposed, applied, conflicts, alreadyDone };
+    return { proposed, applied, conflicts, alreadyDone, cleanEdits };
 }
 
 async function discardPendingEdits(state, { persistSession, render } = {}) {
@@ -2087,6 +2106,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                     applied: outcome.applied,
                     conflicts: outcome.conflicts,
                     alreadyDone: outcome.alreadyDone,
+                    cleanEdits: outcome.cleanEdits,
                     autoApply: true,
                 });
                 state.session.messages.push({
@@ -2122,9 +2142,10 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
      * so the LLM can correct its next round (fix the path / args / value)
      * instead of looping the same broken call.
      */
-    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, target = 'character + lorebooks', autoApply = false }) {
+    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, target = 'character + lorebooks', autoApply = false }) {
         const conflictArr = Array.isArray(conflicts) ? conflicts : [];
         const alreadyArr = Array.isArray(alreadyDone) ? alreadyDone : [];
+        const cleanArr = Array.isArray(cleanEdits) ? cleanEdits : [];
         const appliedNum = Number.isInteger(applied) ? applied : count;
         const skipped = conflictArr.length + alreadyArr.length;
         const prefix = autoApply ? 'Auto-apply ran' : 'User reviewed this round';
@@ -2153,14 +2174,24 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
             }
             lines.push('Revise your approach for any skipped edit that was essential (re-read current state, fix the anchor / path / value).');
         }
+        // List the edits that actually moved state this round so the AI
+        // doesn't re-issue toggles it already applied in an earlier round.
+        if (cleanArr.length > 0 && appliedNum > 0) {
+            lines.push('Applied paths (state that moved this round):');
+            for (const e of cleanArr) {
+                const op = String(e?.op || '?');
+                const path = String(e?.path || (e?.uid != null ? `entries.${e.uid}` : '<root>'));
+                lines.push(`  - ${op}(${path})`);
+            }
+        }
         lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
         return lines.join('\n');
     }
 
-    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone }) {
+    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone, cleanEdits }) {
         if (state.isBusy) return;
         const userText = action === 'apply'
-            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone })
+            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits })
             : `[User reviewed and discarded ${count} pending edit(s). Reconsider your approach — propose different edits or respond with plain text and no tool calls when finished.]`;
 
         state.session.messages.push({
@@ -2253,6 +2284,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                     applied: outcome?.applied,
                     conflicts: outcome?.conflicts,
                     alreadyDone: outcome?.alreadyDone,
+                    cleanEdits: outcome?.cleanEdits,
                 });
             }
         });
