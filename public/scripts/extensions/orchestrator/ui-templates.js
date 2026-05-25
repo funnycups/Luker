@@ -788,9 +788,9 @@ export function buildOrchestratorSettingsHtml(deps) {
             <select id="luker_orch_llm_api_preset" class="text_pole"></select>
             <label for="luker_orch_llm_preset">${escapeHtml(i18n('LLM node preset (params + prompt)'))}</label>
             <select id="luker_orch_llm_preset" class="text_pole"></select>
-            <label for="luker_orch_request_api_preset">${escapeHtml(i18n('Model request API preset (Connection profile)'))}</label>
+            <label for="luker_orch_request_api_preset">${escapeHtml(i18n('Iteration AI API preset (Connection profile)'))}</label>
             <select id="luker_orch_request_api_preset" class="text_pole"></select>
-            <label for="luker_orch_request_llm_preset">${escapeHtml(i18n('Model request LLM preset (params + prompt)'))}</label>
+            <label for="luker_orch_request_llm_preset">${escapeHtml(i18n('Iteration AI prompt preset (params + prompt)'))}</label>
             <select id="luker_orch_request_llm_preset" class="text_pole"></select>
             <label class="checkbox_label">
                 <input id="luker_orch_include_world_info" type="checkbox" />
@@ -800,7 +800,7 @@ export function buildOrchestratorSettingsHtml(deps) {
                 <input id="luker_orch_use_streaming_transport" type="checkbox" />
                 ${escapeHtml(i18n('Use streaming transport (avoid timeout on slow APIs)'))}
             </label>
-            <label for="luker_orch_request_system_prompt">${escapeHtml(i18n('Model request system prompt'))}</label>
+            <label for="luker_orch_request_system_prompt">${escapeHtml(i18n('Iteration AI base system prompt'))}</label>
             <textarea id="luker_orch_request_system_prompt" class="text_pole textarea_compact" rows="6"></textarea>
             <div class="flex-container">
                 <div id="luker_orch_reset_ai_prompt" class="menu_button menu_button_small">${escapeHtml(i18n('Reset AI build prompt'))}</div>

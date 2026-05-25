@@ -243,9 +243,9 @@ export function buildMemoryGraphSettingsHtml(deps) {
             <select id="luker_rpg_memory_extract_api_preset" class="text_pole"></select>
             <label for="luker_rpg_memory_extract_preset">${escapeHtml(i18n('Extract preset (params + prompt)'))}</label>
             <select id="luker_rpg_memory_extract_preset" class="text_pole"></select>
-            <label for="luker_rpg_memory_request_api_preset">${escapeHtml(i18n('Model request API preset (Connection profile)'))}</label>
+            <label for="luker_rpg_memory_request_api_preset">${escapeHtml(i18n('Iteration AI API preset (Connection profile)'))}</label>
             <select id="luker_rpg_memory_request_api_preset" class="text_pole"></select>
-            <label for="luker_rpg_memory_request_llm_preset">${escapeHtml(i18n('Model request LLM preset (params + prompt)'))}</label>
+            <label for="luker_rpg_memory_request_llm_preset">${escapeHtml(i18n('Iteration AI prompt preset (params + prompt)'))}</label>
             <select id="luker_rpg_memory_request_llm_preset" class="text_pole"></select>
             <label class="checkbox_label">
                 <input id="luker_rpg_memory_include_world_info" type="checkbox" />
