@@ -1294,9 +1294,10 @@ async function getClientVersion() {
         $('#version_display').text(displayVersion);
         $('#version_display_welcome').text(displayVersion);
 
-        maybeNotifyLukerUpdate(data);
+        return data;
     } catch (err) {
         console.error('Couldn\'t get client version', err);
+        return null;
     }
 }
 
@@ -1790,7 +1791,7 @@ async function firstLoadInit() {
     addDOMPurifyHooks();
     reloadMarkdownProcessor();
     applyBrowserFixes();
-    await clientVersionPromise;
+    const clientVersionData = await clientVersionPromise;
     await initSecrets();
     console.debug('[init] fetching bootstrap snapshot...');
     const bootstrapSnapshot = await bootstrapPromise;
@@ -1800,6 +1801,7 @@ async function firstLoadInit() {
     }
     await readSecretState();
     await initLocales();
+    maybeNotifyLukerUpdate(clientVersionData);
     initChatUtilities();
     initDefaultSlashCommands();
     registerReasoningSlashCommands();
