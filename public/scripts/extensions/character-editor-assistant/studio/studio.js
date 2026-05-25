@@ -1123,11 +1123,11 @@ function renderChatMessage(role, content, toolInfo = null) {
 }
 
 /**
- * Render a pending approval request for a file modification.
- * @param {object} pendingOp - The pending operation object
+ * Render a pending approval request for a batch of file modifications.
+ * @param {object} batch - { items: [{edit, displayPath, tool}, ...], live, newLive }
  * @returns {Promise<boolean>} Promise that resolves to true if approved, false if rejected
  */
-function renderPendingApproval(pendingOp) {
+function renderPendingApproval(batch) {
     return new Promise((resolve) => {
         const chatEl = document.querySelector('[data-studio-chat]');
         if (!chatEl) {
@@ -1137,14 +1137,51 @@ function renderPendingApproval(pendingOp) {
 
         const msgEl = document.createElement('div');
         msgEl.className = 'card-app-studio-chat-msg approval';
-        
-        const diffHtml = generateDiffPreview(pendingOp.old_content, pendingOp.new_content, pendingOp.path);
-        
+
+        const items   = Array.isArray(batch?.items) ? batch.items : [];
+        const live    = batch?.live    || { files: {} };
+        const newLive = batch?.newLive || { files: {} };
+
+        const parseBarePath = (opPath) => {
+            const m = /^files\["?([^"\]]+)"?\]$/.exec(String(opPath || ''));
+            return m ? m[1] : String(opPath || '');
+        };
+
+        const sections = items.map(item => {
+            const edit = item.edit;
+            const displayPath = item.displayPath || '';
+            if (edit.op === 'set') {
+                const bare = parseBarePath(edit.path);
+                const oldContent = bare in (live.files || {}) ? live.files[bare] : null;
+                return generateDiffPreview(oldContent, edit.newValue, displayPath);
+            }
+            if (edit.op === 'cardapp_patch_file') {
+                const oldContent = edit.path in (live.files || {}) ? live.files[edit.path] : null;
+                const newContent = newLive.files?.[edit.path] ?? '';
+                return generateDiffPreview(oldContent, newContent, displayPath);
+            }
+            if (edit.op === 'unset') {
+                return `<div class="card-app-studio-diff-preview">
+                    <div class="diff-header"><span class="diff-badge del">${escapeHtml(t('Delete'))}</span> <strong>${escapeHtml(displayPath)}</strong></div>
+                </div>`;
+            }
+            if (edit.op === 'cardapp_rename_file') {
+                return `<div class="card-app-studio-diff-preview">
+                    <div class="diff-header"><span class="diff-badge mod">${escapeHtml(t('Rename'))}</span> <strong>${escapeHtml(displayPath)}</strong></div>
+                </div>`;
+            }
+            return '';
+        }).join('');
+
+        const headerText = items.length === 1
+            ? t('Approve file change?')
+            : tFormat('Approve ${0} file changes?', items.length);
+
         msgEl.innerHTML = `
             <div class="card-app-studio-approval-header">
-                <span>🔔 ${escapeHtml(t('Approve file change?'))}</span>
+                <span>🔔 ${escapeHtml(headerText)}</span>
             </div>
-            ${diffHtml}
+            ${sections}
             <div class="card-app-studio-approval-actions">
                 <button class="card-app-studio-btn small primary" data-approval-action="approve">${escapeHtml(t('Approve'))}</button>
                 <button class="card-app-studio-btn small" data-approval-action="reject">${escapeHtml(t('Reject'))}</button>
@@ -1386,8 +1423,8 @@ async function handleAISend() {
                 else if (name === TOOL_NAMES.REGEX_DELETE_SCRIPT) detail = `${args?.scope || '?'} / ${args?.id || '?'}`;
                 renderChatMessage('tool', '', { name, detail, ok: toolResult.ok });
             },
-            onPendingApproval: isAutoApplyEnabled() ? null : async (pendingOp) => {
-                return await renderPendingApproval(pendingOp);
+            onPendingApproval: isAutoApplyEnabled() ? null : async (batch) => {
+                return await renderPendingApproval(batch);
             },
         });
         if (loadingEl?.parentNode) loadingEl.remove();

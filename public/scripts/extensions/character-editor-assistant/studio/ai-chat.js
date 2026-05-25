@@ -705,7 +705,7 @@ export function applyPatch(content, oldText, newText) {
  return null;
 }
 
-// ==================== Path 2 helpers (edits-lib integration) ====================
+// ==================== Path 2 helpers (edits-lib batch integration) ====================
 
 /**
  * Parse a CardApp file-op path like `files["index.js"]` back into the bare
@@ -718,67 +718,60 @@ function parseCardAppFilePath(opPath) {
 }
 
 /**
- * Apply one approved file-op Edit through edits-lib (drift detection +
- * inverse + appliedEdits record), then commit by walking the resolved
- * edits via the existing file REST helpers (saveFileContent / deleteFile).
- *
- * Returns a tool-result-shaped object:
- *   { ok: true,  message, appliedEdit }   on success
- *   { ok: false, error }                  on conflict cancel or apply error
+ * Extract the file paths an Edit touches (for modifiedFiles tracking and
+ * UI refresh). cardapp_rename_file emits both from and to.
  */
-async function applyFileOpEdit(charId, edit, displayPath) {
-    // Fresh snapshot — the file may have drifted while the user reviewed
-    // the approval card (CodeMirror edits, external writes, etc).
-    let currentContent = null;
-    try { currentContent = await fetchFileContent(charId, displayPath); }
-    catch { /* file may be absent — that's fine for create ops */ }
-    const live = { files: currentContent !== null ? { [displayPath]: currentContent } : {} };
-
-    let applyResult;
-    try { applyResult = applyEdits([edit], live); }
-    catch (e) {
-        return { ok: false, error: `apply failed: ${String(e?.message || e)}` };
+function extractPathsFromEdit(edit) {
+    if (edit.op === 'set' || edit.op === 'unset') {
+        return [parseCardAppFilePath(edit.path)];
     }
+    if (edit.op === 'cardapp_patch_file') {
+        return [edit.path];
+    }
+    if (edit.op === 'cardapp_rename_file') {
+        return [edit.from, edit.to];
+    }
+    return [];
+}
 
-    if (applyResult.conflicts.length > 0) {
-        const resolutions = await showConflictResolution(applyResult.conflicts);
-        if (!resolutions) {
-            return { ok: false, error: 'User cancelled conflict resolution.' };
-        }
-        const resolved = [...applyResult.clean];
-        for (const r of resolutions) {
-            if (r.decision === 'apply-mine') resolved.push(r.edit);
-            else if (r.decision === 'manual') {
-                if (r.edit.op === 'set') resolved.push({ ...r.edit, newValue: r.newValue });
-                else resolved.push(r.edit);
-            }
-            // 'keep-theirs' = drop
-        }
-        try { applyResult = applyEdits(resolved, live); }
-        catch (e) {
-            return { ok: false, error: `apply after resolution failed: ${String(e?.message || e)}` };
+/**
+ * Build the live snapshot for a round's file-op edit batch by fetching
+ * the current server-side content of every touched path. Absent files are
+ * simply omitted from `live.files` (creating ops will fill them in).
+ */
+async function loadCardAppFilesLive(charId, edits) {
+    const live = { files: {} };
+    const paths = new Set();
+    for (const e of edits) {
+        for (const p of extractPathsFromEdit(e)) {
+            if (p) paths.add(p);
         }
     }
+    for (const p of paths) {
+        try { live.files[p] = await fetchFileContent(charId, p); }
+        catch { /* file absent — OK for create ops */ }
+    }
+    return live;
+}
 
-    // Commit walker: write each resolved edit through the existing file REST helpers.
-    for (const e of applyResult.clean) {
+/**
+ * Commit a clean batch of file-op edits to the server. The edits are the
+ * output of applyEdits() (already drift-checked and ordered); each op
+ * maps back to its corresponding REST call. Rename uses the atomic
+ * server endpoint, not delete-then-create.
+ */
+async function commitFileOpEdits(charId, cleanEdits, newLive) {
+    for (const e of cleanEdits) {
         if (e.op === 'set') {
-            const filePath = parseCardAppFilePath(e.path);
-            await saveFileContent(charId, filePath, e.newValue);
+            await saveFileContent(charId, parseCardAppFilePath(e.path), e.newValue);
         } else if (e.op === 'unset') {
-            const filePath = parseCardAppFilePath(e.path);
-            await deleteFile(charId, filePath);
+            await deleteFile(charId, parseCardAppFilePath(e.path));
         } else if (e.op === 'cardapp_patch_file') {
-            // applyResult.newLive carries the patched content
-            await saveFileContent(charId, e.path, applyResult.newLive.files[e.path]);
+            await saveFileContent(charId, e.path, newLive?.files?.[e.path] ?? '');
+        } else if (e.op === 'cardapp_rename_file') {
+            await renameFile(charId, e.from, e.to);
         }
     }
-
-    return {
-        ok: true,
-        message: `File ${displayPath} written successfully.`,
-        appliedEdit: applyResult.clean[0] || null,
-    };
 }
 
 // ==================== Tool Execution ====================
@@ -789,7 +782,7 @@ async function applyFileOpEdit(charId, edit, displayPath) {
  * @param {string} toolName - Tool name
  * @param {object} args - Tool arguments
  * @param {object} options
- * @param {boolean} [options.deferWriteOps=false] - If true, return pending_approval for write/patch operations
+ * @param {boolean} [options.deferWriteOps=false] - If true, file-op tools return a pending_edit envelope (Edit + display metadata) for round-end batch processing instead of executing immediately.
  * @returns {Promise<object>} Tool result
  */
 async function executeTool(charId, toolName, args, options = {}) {
@@ -806,51 +799,75 @@ async function executeTool(charId, toolName, args, options = {}) {
  }
  case TOOL_NAMES.WRITE_FILE: {
  if (deferWriteOps) {
- // Fetch existing content if any
  let oldContent = null;
- try {
- oldContent = await fetchFileContent(charId, args.path);
- } catch {
- // File doesn't exist, oldContent remains null
- }
+ try { oldContent = await fetchFileContent(charId, args.path); }
+ catch { /* file doesn't exist yet — set will create it */ }
  return {
  ok: true,
- pending_approval: true,
- operation: 'write_file',
- path: args.path,
- old_content: oldContent,
- new_content: args.content,
+ pending_edit: true,
+ edit: {
+ op: 'set',
+ path: `files["${args.path}"]`,
+ oldValue: oldContent,
+ newValue: args.content,
+ },
+ displayPath: args.path,
+ tool: TOOL_NAMES.WRITE_FILE,
  };
  }
  await saveFileContent(charId, args.path, args.content);
  return { ok: true, message: `File ${args.path} written successfully.` };
  }
  case TOOL_NAMES.PATCH_FILE: {
+ if (deferWriteOps) {
+ return {
+ ok: true,
+ pending_edit: true,
+ edit: {
+ op: 'cardapp_patch_file',
+ path: args.path,
+ old_text: args.old_text,
+ new_text: args.new_text,
+ },
+ displayPath: args.path,
+ tool: TOOL_NAMES.PATCH_FILE,
+ };
+ }
  const current = await fetchFileContent(charId, args.path);
  const patched = applyPatch(current, args.old_text, args.new_text);
  if (patched === null) {
  return { ok: false, error: `old_text not found in ${args.path}. Use read_file to check current content.` };
  }
- if (deferWriteOps) {
- return {
- ok: true,
- pending_approval: true,
- operation: 'patch_file',
- path: args.path,
- old_content: current,
- new_content: patched,
- old_text: args.old_text,
- new_text: args.new_text,
- };
- }
  await saveFileContent(charId, args.path, patched);
  return { ok: true, message: `File ${args.path} patched successfully.` };
  }
  case TOOL_NAMES.DELETE_FILE: {
+ if (deferWriteOps) {
+ return {
+ ok: true,
+ pending_edit: true,
+ edit: { op: 'unset', path: `files["${args.path}"]` },
+ displayPath: args.path,
+ tool: TOOL_NAMES.DELETE_FILE,
+ };
+ }
  await deleteFile(charId, args.path);
  return { ok: true, message: `File ${args.path} deleted.` };
  }
  case TOOL_NAMES.RENAME_FILE: {
+ if (deferWriteOps) {
+ return {
+ ok: true,
+ pending_edit: true,
+ edit: {
+ op: 'cardapp_rename_file',
+ from: args.from_path,
+ to: args.to_path,
+ },
+ displayPath: `${args.from_path} → ${args.to_path}`,
+ tool: TOOL_NAMES.RENAME_FILE,
+ };
+ }
  await renameFile(charId, args.from_path, args.to_path);
  return { ok: true, message: `File renamed from ${args.from_path} to ${args.to_path}.` };
  }
@@ -2577,10 +2594,17 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  break;
  }
 
- // Execute tool calls
+ // Execute tool calls — three phases:
+ //  (a) run every tool; file-op tools defer into pendingFileOpItems while
+ //      non-file-op tools resolve immediately.
+ //  (b) resolve the file-op batch at round end: applyEdits → conflict UI →
+ //      single approval card → commit walker.
+ //  (c) append assistant message + tool results.
  const toolCallsForMessage = [];
  const toolResults = [];
+ const pendingFileOpItems = [];
 
+ // Phase (a): execute tools
  for (const call of rawCalls) {
  if (abortSignal?.aborted) {
  throw new Error('Request aborted');
@@ -2590,85 +2614,9 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  const args = call.args && typeof call.args === 'object' ? call.args : {};
  const callId = String(call.id || '').trim() || makeCallId();
 
- const result = await executeTool(charId, name, args, { deferWriteOps: Boolean(onPendingApproval) });
-
- // If pending approval, ask user
- if (result.pending_approval && onPendingApproval) {
- const approved = await onPendingApproval(result);
- if (approved) {
- // Path 2: route the approved write through edits-lib so that
- // (a) drift between approval and commit is detected via a 3-pane
- // conflict UI, and (b) an inverse edit is recorded on the message
- // for future client-side undo.
- let finalResult;
- if (name === TOOL_NAMES.WRITE_FILE) {
- finalResult = await applyFileOpEdit(charId, {
- op: 'set',
- path: `files["${args.path}"]`,
- oldValue: result.old_content,
- newValue: args.content,
- }, args.path);
- } else if (name === TOOL_NAMES.PATCH_FILE) {
- finalResult = await applyFileOpEdit(charId, {
- op: 'cardapp_patch_file',
- path: args.path,
- old_text: args.old_text,
- new_text: args.new_text,
- }, args.path);
- } else {
- // Fallback for any other op that deferred (shouldn't happen
- // pre-SP-2 — only WRITE/PATCH defer — but kept defensively)
- finalResult = await executeTool(charId, name, args, { deferWriteOps: false });
- }
- // Track modified files
- if (finalResult.ok && [TOOL_NAMES.WRITE_FILE, TOOL_NAMES.PATCH_FILE].includes(name)) {
- const filePath = args.path || '';
- if (filePath && !modifiedFiles.includes(filePath)) {
- modifiedFiles.push(filePath);
- }
- }
- if (onToolCall) {
- onToolCall(name, args, finalResult);
- }
- toolCallsForMessage.push({
- id: callId,
- type: 'function',
- function: { name, arguments: JSON.stringify(args) },
- });
- toolResults.push({
- role: 'tool',
- tool_call_id: callId,
- content: JSON.stringify(finalResult),
- });
- } else {
- // User rejected, inform AI
- const rejectionResult = { ok: false, error: 'User rejected the file modification.' };
- if (onToolCall) {
- onToolCall(name, args, rejectionResult);
- }
- toolCallsForMessage.push({
- id: callId,
- type: 'function',
- function: { name, arguments: JSON.stringify(args) },
- });
- toolResults.push({
- role: 'tool',
- tool_call_id: callId,
- content: JSON.stringify(rejectionResult),
- });
- }
- } else {
- // Track modified files
- if (result.ok && [TOOL_NAMES.WRITE_FILE, TOOL_NAMES.PATCH_FILE].includes(name)) {
- const filePath = args.path || '';
- if (filePath && !modifiedFiles.includes(filePath)) {
- modifiedFiles.push(filePath);
- }
- }
-
- if (onToolCall) {
- onToolCall(name, args, result);
- }
+ // file-op tools always defer; the round-end batch handles both
+ // auto-apply and approval modes uniformly through edits-lib.
+ const result = await executeTool(charId, name, args, { deferWriteOps: true });
 
  toolCallsForMessage.push({
  id: callId,
@@ -2676,11 +2624,131 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  function: { name, arguments: JSON.stringify(args) },
  });
 
+ if (result.pending_edit) {
+ const slot = toolResults.length;
+ toolResults.push({ role: 'tool', tool_call_id: callId, content: null });
+ pendingFileOpItems.push({
+ edit: result.edit,
+ displayPath: result.displayPath,
+ tool: result.tool,
+ args,
+ callId,
+ slot,
+ });
+ } else {
+ if (onToolCall) onToolCall(name, args, result);
  toolResults.push({
  role: 'tool',
  tool_call_id: callId,
  content: JSON.stringify(result),
  });
+ }
+ }
+
+ // Phase (b): resolve file-op batch (if any)
+ if (pendingFileOpItems.length > 0) {
+ const batchEdits = pendingFileOpItems.map(it => it.edit);
+ const live = await loadCardAppFilesLive(charId, batchEdits);
+
+ let batchOutcome = '';
+ let batchError = '';
+ let resolvedClean = [];
+ let resolvedNewLive = null;
+
+ let applyResult;
+ try {
+ applyResult = applyEdits(batchEdits, live);
+ resolvedClean = applyResult.clean;
+ resolvedNewLive = applyResult.newLive;
+ } catch (e) {
+ batchOutcome = 'apply_failed';
+ batchError = String(e?.message || e);
+ }
+
+ if (applyResult && applyResult.conflicts.length > 0) {
+ if (!onPendingApproval) {
+ // Auto-apply mode: don't pop a modal mid-stream. Conflicts can't
+ // be silently swallowed — fail the batch so the AI sees it.
+ batchOutcome = 'conflict_cancelled';
+ batchError = 'Auto-apply detected drift between AI proposal and current files.';
+ } else {
+ const resolutions = await showConflictResolution(applyResult.conflicts);
+ if (!resolutions) {
+ batchOutcome = 'conflict_cancelled';
+ batchError = 'User cancelled conflict resolution.';
+ } else {
+ const resolved = [...applyResult.clean];
+ for (const r of resolutions) {
+ if (r.decision === 'apply-mine') resolved.push(r.edit);
+ else if (r.decision === 'manual') {
+ if (r.edit.op === 'set') resolved.push({ ...r.edit, newValue: r.newValue });
+ else resolved.push(r.edit);
+ }
+ // 'keep-theirs' = drop
+ }
+ try {
+ applyResult = applyEdits(resolved, live);
+ resolvedClean = applyResult.clean;
+ resolvedNewLive = applyResult.newLive;
+ } catch (e) {
+ batchOutcome = 'apply_failed';
+ batchError = `apply after resolution failed: ${String(e?.message || e)}`;
+ }
+ }
+ }
+ }
+
+ if (!batchOutcome) {
+ // No conflicts (or all resolved). Ask for approval if a callback is
+ // wired; otherwise auto-commit.
+ const approved = onPendingApproval
+ ? await onPendingApproval({
+ items: pendingFileOpItems.map(it => ({
+ edit: it.edit,
+ displayPath: it.displayPath,
+ tool: it.tool,
+ })),
+ live,
+ newLive: resolvedNewLive,
+ })
+ : true;
+ if (approved) {
+ try {
+ await commitFileOpEdits(charId, resolvedClean, resolvedNewLive);
+ batchOutcome = 'approved';
+ } catch (e) {
+ batchOutcome = 'commit_failed';
+ batchError = String(e?.message || e);
+ }
+ } else {
+ batchOutcome = 'rejected';
+ batchError = 'User rejected the batch of file modifications.';
+ }
+ }
+
+ // Fill toolResults placeholders + fire onToolCall per item.
+ for (const item of pendingFileOpItems) {
+ let r;
+ if (batchOutcome === 'approved') {
+ r = { ok: true, message: `${item.displayPath} applied.` };
+ } else if (batchOutcome === 'commit_failed') {
+ r = { ok: false, error: `commit failed: ${batchError}` };
+ } else if (batchOutcome === 'apply_failed') {
+ r = { ok: false, error: `apply failed: ${batchError}` };
+ } else {
+ r = { ok: false, error: batchError || 'Batch failed.' };
+ }
+ toolResults[item.slot].content = JSON.stringify(r);
+ if (onToolCall) onToolCall(item.tool, item.args, r);
+ }
+
+ // modifiedFiles tracking — derive from applied clean edits.
+ if (batchOutcome === 'approved') {
+ for (const e of resolvedClean) {
+ for (const p of extractPathsFromEdit(e)) {
+ if (p && !modifiedFiles.includes(p)) modifiedFiles.push(p);
+ }
+ }
  }
  }
 
