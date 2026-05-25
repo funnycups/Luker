@@ -308,6 +308,31 @@ describe('director schema fields', () => {
         expect(vc.systemPrompt).toMatch(/\[Hard-fail\]/);
     });
 
+    test('voice_critic systemPrompt also catches Class B platform-frame leakage (上一轮 / turn references)', () => {
+        // Regression: the recurring failure mode where the narrator anchors
+        // past events on the conversation structure ("上一轮", "previous round")
+        // instead of an in-world time frame. Pinning this prevents a future
+        // edit from silently dropping platform-frame coverage and leaving
+        // only the config-label scan.
+        const p = createDefaultDirectorProfile();
+        const vc = p.director.subAgents.find(a => a.id === 'voice_critic');
+        expect(vc).toBeDefined();
+        // Description must advertise the platform-frame class.
+        expect(vc.description).toMatch(/platform-frame|上一轮|previous round/i);
+        expect(vc.description).toMatch(/旁白|narration/i);
+        // systemPrompt must enumerate at least one CJK and one English
+        // turn/round phrase, plus an in-world replacement to show what the
+        // fix should look like.
+        expect(vc.systemPrompt).toMatch(/Class B/);
+        expect(vc.systemPrompt).toMatch(/上一轮|上一回合|本轮/);
+        expect(vc.systemPrompt).toMatch(/previous round|last turn|this turn|last reply/);
+        expect(vc.systemPrompt).toMatch(/昨夜|三天前/);
+        // Narration must be flagged as the higher-risk site so the critic
+        // weights its scan there rather than treating dialogue and narration
+        // symmetrically.
+        expect(vc.systemPrompt).toMatch(/narration|旁白/i);
+    });
+
     test('sanitizeDirectorProfile preserves director.subAgents entries', () => {
         const profile = {
             mode: 'director',

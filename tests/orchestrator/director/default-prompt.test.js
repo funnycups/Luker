@@ -203,4 +203,30 @@ describe('director default system prompt — concrete for the default profile', 
         expect(voiceSection[0]).toMatch(/Hard-fail/i);
         expect(voiceSection[0]).toMatch(/(meta-narration|fourth-wall)/i);
     });
+
+    test('Draft step also bans platform-frame leakage (turn/round references like 上一轮)', () => {
+        // Regression: the recurring failure mode where the narrator anchors
+        // past events on the conversation structure (上一轮, previous round)
+        // rather than on in-world time frames. Class B leakage is most common
+        // in narration / 旁白, less in dialogue — the prompt must call this out
+        // by name, enumerate at least one Chinese and one English platform
+        // phrase, show an in-world replacement, and flag narration as the
+        // higher-risk site.
+        const text = buildDirectorDefaultSystemPrompt();
+        expect(text).toMatch(/上一轮|上一回合|本轮/);
+        expect(text).toMatch(/previous round|this turn|last reply/);
+        expect(text).toMatch(/昨夜|三天前|before the storm/i);
+        expect(text).toMatch(/narration|旁白/i);
+    });
+
+    test('voice_critic description also advertises Class B platform-frame scan', () => {
+        // The voice_critic description in the main agent prompt must
+        // surface the new platform-frame class so the main agent does not
+        // dispatch a redundant inline critic for "上一轮"-style leaks.
+        const text = buildDirectorDefaultSystemPrompt();
+        const voiceSection = text.match(/### voice_critic[\s\S]*?(?=###|\n##\s|$)/);
+        expect(voiceSection).not.toBeNull();
+        expect(voiceSection[0]).toMatch(/上一轮|previous round|platform-frame/i);
+        expect(voiceSection[0]).toMatch(/旁白|narration/i);
+    });
 });
