@@ -1732,7 +1732,6 @@ async function commitMemoryStoreReplaceByChatKey(context, chatKey, store, seq, {
     runtimeStore.lastExtractionDebug = normalizedStore?.lastExtractionDebug && typeof normalizedStore.lastExtractionDebug === 'object'
         ? structuredClone(normalizedStore.lastExtractionDebug)
         : null;
-    runtimeStore.pendingFullRebuild = Boolean(normalizedStore?.pendingFullRebuild);
     memoryStoreCache.set(chatKey, runtimeStore);
 
     if (syncPersistentProjection && chatKey === getChatKey(context)) {
@@ -1837,7 +1836,6 @@ async function commitMemoryStoreDiffByChatKey(context, chatKey, beforeStore, aft
     runtimeStore.lastExtractionDebug = normalizedAfter?.lastExtractionDebug && typeof normalizedAfter.lastExtractionDebug === 'object'
         ? structuredClone(normalizedAfter.lastExtractionDebug)
         : null;
-    runtimeStore.pendingFullRebuild = Boolean(normalizedAfter?.pendingFullRebuild);
     memoryStoreCache.set(chatKey, runtimeStore);
 
     if (syncPersistentProjection && chatKey === getChatKey(context)) {
@@ -2035,7 +2033,6 @@ async function persistMemoryStoreByChatKey(context, chatKey, store, { syncPersis
     nextStore.lastExtractionDebug = store?.lastExtractionDebug && typeof store.lastExtractionDebug === 'object'
         ? structuredClone(store.lastExtractionDebug)
         : null;
-    nextStore.pendingFullRebuild = Boolean(store?.pendingFullRebuild);
     memoryStoreCache.set(chatKey, nextStore);
     await persistMetaForChatKey(context, chatKey, nextStore, target);
     if (syncPersistentProjection && chatKey === getChatKey(context)) {
@@ -2435,7 +2432,6 @@ function computeChatSourceState(context) {
 function updateStoreSourceState(store, context) {
     const source = computeChatSourceState(context);
     store.sourceMessageCount = Number(source.messageCount || 0);
-    store.pendingFullRebuild = false;
 }
 
 function getRollbackHistory(chatKey) {
@@ -7794,6 +7790,16 @@ async function injectMemoryPrompts(context, payload) {
                 schema: effectiveSchema,
                 signal: payload?.signal,
             });
+            // syncVectorIndex mutates store.vectorIndexState in place, which is
+            // a meta-sidecar field after Commit B. Without this persist call
+            // the freshly-built hash map would only live in memoryStoreCache
+            // and the next refreshMemoryStoreCacheFromFloorState would wipe
+            // it — forcing a re-embed on every chat reload.
+            try {
+                await persistMemoryStoreByChatKey(context, chatKey, store, { syncPersistentProjection: false });
+            } catch (persistError) {
+                console.warn(`[${MODULE_NAME}] Failed to persist vectorIndexState after hybrid-recall lazy sync`, persistError);
+            }
         }
 
         const enableRerank = recallMethod === 'hybrid_rerank';
@@ -8190,6 +8196,16 @@ async function runScheduledExtractionPass(chatKey) {
                         signal: extractionAbortController.signal,
                         schema: effectiveSchema,
                     });
+                    // syncVectorIndex mutates effectiveStore.vectorIndexState
+                    // in place. That field is meta-sidecar after Commit B, so
+                    // we explicitly persist here — the preceding
+                    // commitMemoryStoreDiffByChatKey ran *before* the sync and
+                    // already wrote its meta snapshot without the new hashes.
+                    try {
+                        await persistMemoryStoreByChatKey(runtimeContext, chatKey, effectiveStore, { syncPersistentProjection: false });
+                    } catch (persistError) {
+                        console.warn(`[${MODULE_NAME}] Failed to persist vectorIndexState after extraction-tail sync`, persistError);
+                    }
                 }
             } catch (vecError) {
                 if (!isAbortError(vecError, extractionAbortController.signal)) {

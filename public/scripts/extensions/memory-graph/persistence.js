@@ -771,6 +771,32 @@ export function buildRuntimeStoreFromPersistedState(state) {
 }
 
 /**
+ * Coerce a persisted vectorIndexState blob into the runtime shape that
+ * `ensureVectorIndexState` would have produced. Defensive against partial /
+ * malformed data left over from old meta sidecars or interrupted writes.
+ * Returns null when the input has nothing usable (caller falls back to lazy
+ * init via `ensureVectorIndexState`).
+ */
+export function normalizeVectorIndexState(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const nodeToHash = (raw.nodeToHash && typeof raw.nodeToHash === 'object' && !Array.isArray(raw.nodeToHash))
+        ? structuredClone(raw.nodeToHash)
+        : {};
+    const hashToNodeId = (raw.hashToNodeId && typeof raw.hashToNodeId === 'object' && !Array.isArray(raw.hashToNodeId))
+        ? structuredClone(raw.hashToNodeId)
+        : {};
+    return {
+        source: String(raw.source || ''),
+        model: String(raw.model || ''),
+        collectionId: String(raw.collectionId || ''),
+        nodeToHash,
+        hashToNodeId,
+        dirty: Boolean(raw.dirty),
+        lastWarning: String(raw.lastWarning || ''),
+    };
+}
+
+/**
  * Extract the meta-sidecar shape from a runtime store. This is what gets
  * written to `<ns>__meta` on every persist call.
  */
@@ -782,6 +808,7 @@ export function metaFieldsFromStore(store) {
         lastRecallProjection: store?.lastRecallProjection && typeof store.lastRecallProjection === 'object'
             ? structuredClone(store.lastRecallProjection)
             : null,
+        vectorIndexState: normalizeVectorIndexState(store?.vectorIndexState),
     };
 }
 
@@ -833,6 +860,10 @@ export function buildRuntimeStoreFromGraphPayloadAndMeta(payload, meta) {
             ? structuredClone(meta.lastRecallTrace) : [];
         runtime.lastRecallProjection = meta.lastRecallProjection && typeof meta.lastRecallProjection === 'object'
             ? structuredClone(meta.lastRecallProjection) : null;
+        const restoredVectorIndex = normalizeVectorIndexState(meta.vectorIndexState);
+        if (restoredVectorIndex) {
+            runtime.vectorIndexState = restoredVectorIndex;
+        }
     }
     return normalizeStoreForRuntime(runtime);
 }
