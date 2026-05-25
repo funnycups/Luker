@@ -552,6 +552,7 @@ function renderDirectorSubagentCardHtml(entry) {
     const isInline = Boolean(entry?.isInline);
     const task = String(entry?.task || '');
     const outputText = String(entry?.outputText || '');
+    const reasoningText = String(entry?.reasoningText || '');
     const previewText = truncateOrchestrationRuntimePreview(outputText, 240);
     const conversation = entry?.conversation && typeof entry.conversation === 'object'
         ? sanitizeOrchestrationRuntimeConversation(entry.conversation)
@@ -570,6 +571,10 @@ function renderDirectorSubagentCardHtml(entry) {
     ${task ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Task brief'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(task)}</pre>` : ''}
     ${systemPromptPreview ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Inline system prompt (preview)'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(systemPromptPreview)}</pre>` : ''}
     ${entry?.error ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Failed'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(String(entry.error || ''))}</pre>` : ''}
+    ${reasoningText ? `<details class="luker-studio-reasoning-details">
+        <summary>${escapeHtml(i18n('Model reasoning'))}</summary>
+        <pre class="luker-studio-attempt-pre luker-studio-reasoning-pre">${escapeHtml(reasoningText)}</pre>
+    </details>` : ''}
     ${previewText ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Output'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(outputText)}</pre>` : ''}
     ${hasConversation ? `<details class="luker-studio-attempt-convo">
         <summary>${escapeHtml(i18n('Conversation'))} <span class="luker-studio-convo-count">(${escapeHtml(String(conversation.messages.length))})</span></summary>
@@ -586,20 +591,30 @@ function renderDirectorMainAgentRoundsHtml(trace) {
     return rounds.map((r) => {
         const round = Number(r?.round ?? 0);
         const text = String(r?.assistantText || '');
-        const preview = truncateOrchestrationRuntimePreview(text, 240);
+        const reasoning = String(r?.reasoningText || '');
         const calls = Array.isArray(r?.toolCalls) ? r.toolCalls : [];
+        const status = String(r?.status || '').trim();
+        const statusBadge = status
+            ? `<span class="luker-studio-badge luker-studio-badge-failed">${escapeHtml(status)}</span>`
+            : '';
+        const callsBadge = `<span class="luker-studio-badge">${escapeHtml(i18nFormat('${0} tool call(s)', calls.length))}</span>`;
         const callsSummary = calls.length === 0
             ? `<div class="luker-studio-empty-hint">${escapeHtml(i18n('(no tool calls — reasoning-only round)'))}</div>`
             : `<ul class="luker-studio-attempt-tool-list">${
                 calls.map(c => `<li><b>${escapeHtml(String(c?.name || ''))}</b>${c?.args ? `<pre class="luker-studio-attempt-pre">${escapeHtml(toReadableYamlText(c.args, '{}'))}</pre>` : ''}</li>`).join('')
             }</ul>`;
         return `
-<details class="luker-studio-agenda-attempt luker-studio-agenda-attempt-planner"${calls.length === 0 ? '' : ' open'}>
+<details class="luker-studio-agenda-attempt luker-studio-agenda-attempt-planner" open>
     <summary>
         <span class="luker-studio-agenda-attempt-title">${escapeHtml(i18nFormat('Round ${0}', round))}</span>
-        <span class="luker-studio-badge">${escapeHtml(i18nFormat('${0} tool call(s)', calls.length))}</span>
+        ${statusBadge}
+        ${callsBadge}
     </summary>
-    ${preview ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Reasoning / assistant text'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(text)}</pre>` : ''}
+    ${reasoning ? `<details class="luker-studio-reasoning-details">
+        <summary>${escapeHtml(i18n('Model reasoning'))}</summary>
+        <pre class="luker-studio-attempt-pre luker-studio-reasoning-pre">${escapeHtml(reasoning)}</pre>
+    </details>` : ''}
+    ${text ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Assistant text'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(text)}</pre>` : ''}
     <div class="luker-studio-attempt-label">${escapeHtml(i18n('Tool calls'))}</div>
     ${callsSummary}
 </details>`;
@@ -622,18 +637,41 @@ function renderDirectorModePanelsHtml(trace) {
         : `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No main-agent messages recorded yet.'))}</div>`;
 
     return `
-<div class="luker-studio-panel">
-    <div class="luker-studio-panel-title">${escapeHtml(i18n('Main Agent Rounds'))}</div>
-    ${renderDirectorMainAgentRoundsHtml(trace)}
+<div class="luker-studio-columns">
+    <div class="luker-studio-panel">
+        <div class="luker-studio-panel-title">${escapeHtml(i18n('Main Agent Rounds'))}</div>
+        ${renderDirectorMainAgentRoundsHtml(trace)}
+    </div>
+    <div class="luker-studio-panel">
+        <div class="luker-studio-panel-title">${escapeHtml(i18n('Sub-agent Dispatches'))}</div>
+        <div class="luker-studio-agenda-rounds">${subagentsHtml}</div>
+    </div>
 </div>
-<div class="luker-studio-panel">
-    <div class="luker-studio-panel-title">${escapeHtml(i18n('Sub-agent Dispatches'))}</div>
-    <div class="luker-studio-agenda-rounds">${subagentsHtml}</div>
-</div>
-<div class="luker-studio-panel">
-    <div class="luker-studio-panel-title">${escapeHtml(i18n('Main Agent Conversation'))}</div>
-    ${conversationHtml}
-</div>`;
+<details class="luker-studio-raw">
+    <summary>${escapeHtml(i18n('Main agent conversation (raw messages)'))}</summary>
+    <div class="luker-studio-panel">${conversationHtml}</div>
+</details>`;
+}
+
+function renderTraceMetaCardsHtml(trace, mode, isDirectorMode) {
+    const card = (label, value) => `<div class="luker-studio-meta-card"><b>${escapeHtml(label)}</b><span>${escapeHtml(String(value))}</span></div>`;
+    const cards = [
+        card(i18n('Status'), formatOrchestrationRuntimeStatusLabel(trace.status)),
+        card(i18n('Mode'), mode || 'spec'),
+        card(i18n('Generation Type'), String(trace.generationType || 'normal')),
+    ];
+    if (isDirectorMode) {
+        const rounds = Array.isArray(trace?.director?.mainAgent?.rounds) ? trace.director.mainAgent.rounds.length : 0;
+        const subs = Array.isArray(trace?.director?.subagents) ? trace.director.subagents.length : 0;
+        cards.push(card(i18n('Main agent rounds'), rounds));
+        cards.push(card(i18n('Sub-agent dispatches'), subs));
+    } else {
+        cards.push(card(i18n('Target Layer'), String(trace.targetLayer || 0)));
+        cards.push(card(i18n('Node Attempts'), String(Array.isArray(trace.attempts) ? trace.attempts.length : 0)));
+        cards.push(card(i18n('Review Reruns'), String(trace.reviewRerunCount || 0)));
+    }
+    cards.push(card(i18n('Updated At'), formatReadableTimestamp(trace.updatedAt)));
+    return cards.join('');
 }
 
 export function renderOrchestrationRuntimeTraceHtml(context) {
@@ -680,13 +718,7 @@ export function renderOrchestrationRuntimeTraceHtml(context) {
 <div class="luker-studio luker_orch_runtime_popup">
     <div class="luker-studio-notice">${notices.map(item => escapeHtml(String(item || ''))).join('<br />')}</div>
     <div class="luker-studio-meta-grid">
-        <div class="luker-studio-meta-card"><b>${escapeHtml(i18n('Status'))}</b><span>${escapeHtml(formatOrchestrationRuntimeStatusLabel(trace.status))}</span></div>
-        <div class="luker-studio-meta-card"><b>${escapeHtml(i18n('Mode'))}</b><span>${escapeHtml(mode || 'spec')}</span></div>
-        <div class="luker-studio-meta-card"><b>${escapeHtml(i18n('Generation Type'))}</b><span>${escapeHtml(String(trace.generationType || 'normal'))}</span></div>
-        <div class="luker-studio-meta-card"><b>${escapeHtml(i18n('Target Layer'))}</b><span>${escapeHtml(String(trace.targetLayer || 0))}</span></div>
-        <div class="luker-studio-meta-card"><b>${escapeHtml(i18n('Node Attempts'))}</b><span>${escapeHtml(String(Array.isArray(trace.attempts) ? trace.attempts.length : 0))}</span></div>
-        <div class="luker-studio-meta-card"><b>${escapeHtml(i18n('Review Reruns'))}</b><span>${escapeHtml(String(trace.reviewRerunCount || 0))}</span></div>
-        <div class="luker-studio-meta-card"><b>${escapeHtml(i18n('Updated At'))}</b><span>${escapeHtml(formatReadableTimestamp(trace.updatedAt))}</span></div>
+        ${renderTraceMetaCardsHtml(trace, mode, isDirectorMode)}
     </div>
     ${modeSpecificHtml}
     ${!isLoopMode && !isAgendaMode && !isDirectorMode ? '' : `<details class="luker-studio-raw">

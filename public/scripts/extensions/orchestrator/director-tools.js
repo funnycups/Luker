@@ -441,6 +441,7 @@ export function createSubagentDispatcher({
             startedAt: new Date().toISOString(),
             finishedAt: '',
             outputText: '',
+            reasoningText: '',
             error: '',
             conversation: { messages: subMessages },
         };
@@ -448,12 +449,13 @@ export function createSubagentDispatcher({
         return entry;
     }
 
-    function recordSubagentFinish(entry, { status, outputText, error }) {
+    function recordSubagentFinish(entry, { status, outputText, error, reasoningText }) {
         if (!entry) return;
         entry.status = String(status || 'completed');
         entry.finishedAt = new Date().toISOString();
         if (typeof outputText === 'string') entry.outputText = outputText;
         if (typeof error === 'string') entry.error = error;
+        if (typeof reasoningText === 'string') entry.reasoningText = reasoningText;
     }
 
     function recordSubagentSyntheticFailure({ handleId, subagentId, isInline, task, status, error }) {
@@ -473,6 +475,7 @@ export function createSubagentDispatcher({
             startedAt: now,
             finishedAt: now,
             outputText: '',
+            reasoningText: '',
             error: String(error || ''),
             conversation: { messages: [] },
         });
@@ -507,6 +510,7 @@ export function createSubagentDispatcher({
         let transportAttempt = 0;
         while (true) {
             let roundText = '';
+            let roundReasoning = '';
             let roundResult;
             try {
                 if (typeof generateTaskStream === 'function') {
@@ -514,15 +518,22 @@ export function createSubagentDispatcher({
                     for await (const chunk of stream) {
                         if (!chunk || typeof chunk !== 'object') continue;
                         if (typeof chunk.delta !== 'string') continue;
-                        if (chunk.type === 'text' || chunk.type === 'reasoning') {
+                        if (chunk.type === 'text') {
                             roundText += chunk.delta;
                             safeAppendToSection(sectionLabelForChunks, chunk.delta);
+                        } else if (chunk.type === 'reasoning') {
+                            // Reasoning is captured for the trace popup only,
+                            // not the message reasoning fold. The labeled
+                            // section in the fold keeps only the sub-agent's
+                            // assistant output, free of interleaved thinking.
+                            roundReasoning += chunk.delta;
                         }
                     }
                     roundResult = await result;
                 } else {
                     roundResult = await generateTask(callOpts);
                     roundText = String(roundResult?.assistantText ?? '');
+                    roundReasoning = String(roundResult?.reasoning ?? '');
                     if (roundText) safeAppendToSection(sectionLabelForChunks, roundText);
                 }
             } catch (transportErr) {
@@ -536,7 +547,8 @@ export function createSubagentDispatcher({
                 ? roundResult.toolCalls.filter(tc => String(tc?.name || '').trim().length > 0)
                 : [];
             const roundAssistantText = String(roundResult?.assistantText ?? roundText);
-            return { roundAssistantText, roundToolCalls };
+            const roundReasoningText = roundReasoning || String(roundResult?.reasoning ?? '');
+            return { roundAssistantText, roundToolCalls, roundReasoningText };
         }
     }
 
@@ -708,12 +720,17 @@ export function createSubagentDispatcher({
         const promise = (async () => {
             try {
                 let finalText = '';
+                let aggregatedReasoning = '';
                 let converged = false;
                 for (let r = 0; r < SUB_AGENT_MAX_ROUNDS; r++) {
                     if (childSignal.aborted) {
                         break;
                     }
-                    const { roundAssistantText, roundToolCalls } = await runOneRound(subMessages, label, baseOpts, subToolSchemas);
+                    const { roundAssistantText, roundToolCalls, roundReasoningText } = await runOneRound(subMessages, label, baseOpts, subToolSchemas);
+                    if (roundReasoningText) {
+                        if (aggregatedReasoning) aggregatedReasoning += '\n\n';
+                        aggregatedReasoning += roundReasoningText;
+                    }
                     if (roundToolCalls.length === 0) {
                         finalText = roundAssistantText;
                         converged = true;
@@ -774,14 +791,14 @@ export function createSubagentDispatcher({
                     const msg = 'cancelled';
                     safeMarkSectionStatus(label, `error: ${msg}`);
                     completionNotifications.push({ handleId, subagentId: displayId, status: 'cancelled', summary: msg });
-                    recordSubagentFinish(traceEntry, { status: 'cancelled', error: msg });
+                    recordSubagentFinish(traceEntry, { status: 'cancelled', error: msg, reasoningText: aggregatedReasoning });
                     return { handleId, subagentId: displayId, error: msg };
                 }
                 if (!converged) {
                     const msg = `did not converge within ${SUB_AGENT_MAX_ROUNDS} rounds`;
                     safeMarkSectionStatus(label, `error: ${msg}`);
                     completionNotifications.push({ handleId, subagentId: displayId, status: 'failed', summary: msg });
-                    recordSubagentFinish(traceEntry, { status: 'failed', error: msg });
+                    recordSubagentFinish(traceEntry, { status: 'failed', error: msg, reasoningText: aggregatedReasoning });
                     return { handleId, subagentId: displayId, error: msg };
                 }
                 safeMarkSectionStatus(label, '');
@@ -791,7 +808,7 @@ export function createSubagentDispatcher({
                     status: 'completed',
                     summary: `output: ${finalText.length} chars`,
                 });
-                recordSubagentFinish(traceEntry, { status: 'completed', outputText: finalText });
+                recordSubagentFinish(traceEntry, { status: 'completed', outputText: finalText, reasoningText: aggregatedReasoning });
                 return { handleId, subagentId: displayId, outputText: finalText };
             } catch (err) {
                 const isAbort = err?.name === 'AbortError' || childSignal.aborted;
@@ -799,7 +816,7 @@ export function createSubagentDispatcher({
                 const msg = isAbort ? 'cancelled' : String(err?.message || err);
                 safeMarkSectionStatus(label, `error: ${msg}`);
                 completionNotifications.push({ handleId, subagentId: displayId, status, summary: msg });
-                recordSubagentFinish(traceEntry, { status, error: msg });
+                recordSubagentFinish(traceEntry, { status, error: msg, reasoningText: aggregatedReasoning });
                 return { handleId, subagentId: displayId, error: msg };
             } finally {
                 childAborts.delete(handleId);

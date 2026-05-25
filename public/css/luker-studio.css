@@ -135,6 +135,75 @@
     opacity: var(--ls-text-muted);
 }
 
+.popup .luker-studio-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: var(--ls-space-xs);
+    margin-bottom: var(--ls-space-md);
+}
+
+.popup .luker-studio-notice {
+    font-size: 0.86rem;
+    line-height: 1.5;
+    opacity: var(--ls-text-muted);
+    margin-bottom: var(--ls-space-sm);
+}
+
+.popup .luker-studio-notice:empty {
+    display: none;
+}
+
+.popup .luker-studio-meta-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: var(--ls-space-xs) var(--ls-space-sm);
+    border: var(--ls-border-soft);
+    border-radius: var(--ls-radius-md);
+    background: var(--ls-chip-bg);
+    min-width: 0;
+}
+
+.popup .luker-studio-meta-card b {
+    font-weight: 600;
+    font-size: 0.78rem;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    opacity: var(--ls-text-muted);
+}
+
+.popup .luker-studio-meta-card span {
+    font-weight: 600;
+    font-size: 0.92rem;
+    opacity: var(--ls-text-default);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.popup .luker-studio-reasoning-details {
+    margin-top: var(--ls-space-xs);
+    padding: var(--ls-space-xs) var(--ls-space-sm);
+    border-left: 3px solid color-mix(in oklab, var(--ls-accent-system) 60%, transparent);
+    background: color-mix(in oklab, var(--ls-accent-system) 7%, transparent);
+    border-radius: var(--ls-radius-sm);
+}
+
+.popup .luker-studio-reasoning-details > summary {
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.86rem;
+    opacity: var(--ls-text-muted);
+    user-select: none;
+}
+
+.popup .luker-studio-reasoning-pre {
+    margin-top: var(--ls-space-xs);
+    opacity: 0.92;
+    font-size: 0.86rem;
+    line-height: 1.5;
+}
+
 /* ═════════════════════════════════════════════════════════════════════
    4 · TOOLBAR + ACTIONS BAR
    ═════════════════════════════════════════════════════════════════════ */
@@ -1157,7 +1226,29 @@
     border-left: 3px solid color-mix(in oklab, var(--ls-accent-system) 55%, transparent);
     background: color-mix(in oklab, var(--ls-accent-system) 7%, transparent);
     font-size: 0.9rem;
+}
+
+/* `pre-wrap` is only meaningful for the agenda planner block, which
+   wraps raw planner text. The attempt-planner reuses the visual accent
+   for a `<details>` structure, where preserving template whitespace
+   blows up the layout (newlines between summary/body render as blank
+   gaps). Keep the visual treatment but normalize whitespace. */
+.popup .luker-studio-agenda-round-planner {
     white-space: pre-wrap;
+}
+
+/* Agenda + director round/sub-agent cards: the <summary> contents are
+   one or two inline pieces (title + status/count badges). Lay them out
+   inline with a small gap so the disclosure widget + title + badges
+   sit on a single row, instead of the browser default which can stack
+   the marker on its own line and leave loud whitespace around badges. */
+.popup .luker-studio-agenda-attempt > summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ls-space-xs);
+    cursor: pointer;
+    user-select: none;
 }
 
 .popup .luker-studio-agenda-round-agents {

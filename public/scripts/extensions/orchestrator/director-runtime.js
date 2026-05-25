@@ -510,12 +510,18 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         let toolCalls;
         let noToolRetries = 0;
         let mainSectionId;
+        // Reasoning is captured for the trace popup only (per user's
+        // request). It is NOT forwarded into the message reasoning fold
+        // — that channel stays text-only so the user still sees agent
+        // output without internal thinking interleaved.
+        let reasoningAccum = '';
         while (true) {
             mainSectionId = noToolRetries === 0
                 ? `main-${round}`
                 : `main-${round}-r${noToolRetries}`;
             ensureReasoningSection(handle, mainSectionId, { status: 'running' });
             let chunkReceived = false;
+            reasoningAccum = '';
             // Transport-error retry honors `settings.toolCallRetryMax` —
             // the same setting loop/agenda/spec modes already respect via
             // `requestToolCallsWithRetry`. Director's main agent bypasses
@@ -541,6 +547,8 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                             if (chunk?.type === 'text' && typeof chunk.delta === 'string' && chunk.delta.length > 0) {
                                 chunkReceived = true;
                                 appendToReasoningSection(handle, mainSectionId, chunk.delta);
+                            } else if (chunk?.type === 'reasoning' && typeof chunk.delta === 'string' && chunk.delta.length > 0) {
+                                reasoningAccum += chunk.delta;
                             }
                         },
                     });
@@ -587,6 +595,7 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                         round,
                         startedAt: new Date().toISOString(),
                         assistantText: String(result?.assistantText || ''),
+                        reasoningText: reasoningAccum || String(result?.reasoning || ''),
                         toolCalls: [],
                         status: 'failed-no-tool-call',
                     });
@@ -602,6 +611,7 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                 round,
                 startedAt: new Date().toISOString(),
                 assistantText: String(result?.assistantText || ''),
+                reasoningText: reasoningAccum || String(result?.reasoning || ''),
                 toolCalls: Array.isArray(toolCalls) ? structuredClone(toolCalls) : [],
             });
         }
