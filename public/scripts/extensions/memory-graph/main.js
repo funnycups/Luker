@@ -1569,12 +1569,60 @@ async function deleteMemoryStoreByTarget(context, target) {
     }
 }
 
+function formatPersistFailureWithSeq({ op, stage, seq, floor, chatLen, reason }) {
+    return i18nFormat(
+        'Memory graph persist failed [op=${0} stage=${1} seq=${2} floor=${3} chatLen=${4}]: ${5}',
+        String(op || '?'),
+        String(stage || '?'),
+        seq === null || seq === undefined ? 'n/a' : String(seq),
+        floor === null || floor === undefined ? 'n/a' : String(floor),
+        chatLen === null || chatLen === undefined ? 'n/a' : String(chatLen),
+        String(reason || 'unknown'),
+    );
+}
+
+function formatPersistFailureForNamespace({ op, stage, namespace, reason }) {
+    return i18nFormat(
+        'Memory graph persist failed [op=${0} stage=${1} namespace=${2}]: ${3}',
+        String(op || '?'),
+        String(stage || '?'),
+        String(namespace || '?'),
+        String(reason || 'unknown'),
+    );
+}
+
+async function writeChatStateOrThrow(context, namespace, payload, options, { op, stage }) {
+    let result;
+    try {
+        result = await context.updateChatState(namespace, () => payload, options);
+    } catch (error) {
+        throw new Error(formatPersistFailureForNamespace({
+            op,
+            stage,
+            namespace,
+            reason: `updateChatState threw: ${error?.message || error}`,
+        }));
+    }
+    if (!result || result.ok === false) {
+        throw new Error(formatPersistFailureForNamespace({
+            op,
+            stage,
+            namespace,
+            reason: `updateChatState returned ${JSON.stringify(result)} — patch chain rejected (likely concurrent state/patch conflict after retry)`,
+        }));
+    }
+    return result;
+}
+
 /**
  * Direct overwrite of the floor-state log + data namespaces at a given target.
  *
  * Bypasses the FloorState public API because that API is append-only. We
  * still serialise against the singleton's in-flight queue via fs.ready() to
- * avoid races with rematerialize.
+ * avoid races with rematerialize. Every underlying write is checked — any
+ * failure throws a structured persist-failure error so callers see the
+ * exact stage that broke (no silent partial writes that rematerialize would
+ * later clobber).
  */
 async function replaceGraphLogForTarget(context, target, store, seq) {
     const fs = await getFloorStateInstance(context);
@@ -1591,21 +1639,28 @@ async function replaceGraphLogForTarget(context, target, store, seq) {
     const swipeId = floor === null ? 0 : (activeSwipeIdAtFloor(context, floor) ?? 0);
     const buildObjectPatchOperationsAsync = await resolveBuildObjectPatchOperationsAsync(context);
     const patches = await buildObjectPatchOperationsAsync({}, finalPayload);
+    const hasCommit = Array.isArray(patches) && patches.length > 0 && Number.isInteger(floor) && floor >= 0;
 
-    if (Array.isArray(patches) && patches.length > 0 && Number.isInteger(floor) && floor >= 0) {
-        await context.updateChatState(LOG_NAMESPACE, () => ({
+    if (hasCommit) {
+        await writeChatStateOrThrow(context, LOG_NAMESPACE, {
             version: FLOOR_STATE_LOG_VERSION,
             commits: [{ floor, swipeId, patches }],
-        }), targetWriteOption);
-        await context.updateChatState(CHAT_STATE_NAMESPACE, () => finalPayload, targetWriteOption);
+        }, targetWriteOption, { op: 'replace-log', stage: 'log-write' });
+        await writeChatStateOrThrow(context, CHAT_STATE_NAMESPACE, finalPayload, targetWriteOption, {
+            op: 'replace-log',
+            stage: 'data-write',
+        });
     } else {
-        await context.updateChatState(LOG_NAMESPACE, () => ({
+        await writeChatStateOrThrow(context, LOG_NAMESPACE, {
             version: FLOOR_STATE_LOG_VERSION,
             commits: [],
-        }), targetWriteOption);
-        await context.updateChatState(CHAT_STATE_NAMESPACE, () => ({}), targetWriteOption);
+        }, targetWriteOption, { op: 'replace-log', stage: 'log-reset' });
+        await writeChatStateOrThrow(context, CHAT_STATE_NAMESPACE, {}, targetWriteOption, {
+            op: 'replace-log',
+            stage: 'data-reset',
+        });
     }
-    return { payload: finalPayload, hasCommit: Array.isArray(patches) && patches.length > 0 && Number.isInteger(floor) && floor >= 0 };
+    return { payload: finalPayload, hasCommit };
 }
 
 async function loadMemoryStoreByTarget(context, target) {
@@ -1736,17 +1791,40 @@ async function commitMemoryStoreDiffByChatKey(context, chatKey, beforeStore, aft
     }
 
     if (hasGraphChange) {
+        const chatLen = Array.isArray(context?.chat) ? context.chat.length : 0;
         const floor = seqToFloor(context, normalizedSeq);
-        const committed = Number.isInteger(floor) && floor >= 0
-            ? await fs.update(() => afterPayload, { floor })
-            : false;
+        if (!Number.isInteger(floor) || floor < 0) {
+            throw new Error(formatPersistFailureWithSeq({
+                op: 'commit-diff',
+                stage: 'floor-resolution',
+                seq: normalizedSeq,
+                floor: 'invalid',
+                chatLen,
+                reason: 'seq has no matching extractable assistant message in current chat (chat may have been truncated mid-extraction)',
+            }));
+        }
+        let committed;
+        try {
+            committed = await fs.update(() => afterPayload, { floor });
+        } catch (error) {
+            throw new Error(formatPersistFailureWithSeq({
+                op: 'commit-diff',
+                stage: 'log-append',
+                seq: normalizedSeq,
+                floor,
+                chatLen,
+                reason: `fs.update threw: ${error?.message || error}`,
+            }));
+        }
         if (!committed) {
-            // No corresponding floor in current chat (seq past the tail), or
-            // fs.update rejected the override. Write data namespace directly
-            // as a best-effort; subsequent CHAT_CHANGED rematerialize would
-            // clobber this anyway.
-            const targetWriteOption = { target, maxOperations: 16000 };
-            await context.updateChatState(CHAT_STATE_NAMESPACE, () => afterPayload, targetWriteOption);
+            throw new Error(formatPersistFailureWithSeq({
+                op: 'commit-diff',
+                stage: 'log-append',
+                seq: normalizedSeq,
+                floor,
+                chatLen,
+                reason: 'floor-state log append rejected — most likely a state/patch 409 after retry. Check Network tab for /api/chats/state/patch responses on namespace memory_graph__floor_log',
+            }));
         }
     }
 
