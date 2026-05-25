@@ -1386,6 +1386,60 @@ export async function openCpaIterationStudio(deps) {
         await render();
     }
 
+    /**
+     * Fire the next AI round after the user reviewed a paused batch
+     * (clicked Apply or Discard). `handleSendMessage`'s loop exits the
+     * moment the round produces pendingEdits, so without this resumer
+     * the AI never sees the outcome — even though its prior round was
+     * clearly "propose edits, then continue based on review". Pushes a
+     * synthetic user message describing the decision and re-enters the
+     * loop, mirroring the IDE pattern (approve → tool result lands →
+     * agent continues; reject → agent reconsiders).
+     */
+    async function continueAfterReviewDecision({ action, count }) {
+        if (state.isBusy) return;
+        const userText = action === 'apply'
+            ? `[User reviewed and applied ${count} pending edit(s). Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]`
+            : `[User reviewed and discarded ${count} pending edit(s). Reconsider your approach — propose different edits or respond with plain text and no tool calls when finished.]`;
+
+        state.session.messages.push({
+            id: makeMessageId(),
+            role: 'user',
+            content: userText,
+            at: Date.now(),
+            auto: true,
+        });
+
+        state.isBusy = true;
+        await persistSession();
+        await render();
+        try {
+            let turn = await runIterationTurn();
+            while (turn?.hadAnyToolCall && state.pendingEdits.length === 0) {
+                await persistSession();
+                await render();
+                if (state.abortController?.signal?.aborted) break;
+                turn = await runIterationTurn({ autoContinueFromResult: turn.executionResult });
+            }
+        } catch (err) {
+            if (!isAbortError(err, state.abortController?.signal)) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] continueAfterReviewDecision`, err);
+                state.session.messages.push({
+                    id: makeMessageId(),
+                    role: 'system',
+                    content: tf('Error: ${0}', String(err?.message || err)),
+                    at: Date.now(),
+                });
+            }
+        } finally {
+            state.isBusy = false;
+            state.abortController = null;
+            await persistSession();
+            await render();
+        }
+    }
+
     // ──────────────────────────────────────────────────────────────────
     // Per-message actions.
     //
@@ -1691,11 +1745,30 @@ export async function openCpaIterationStudio(deps) {
     // rollback/regenerate buttons (handlers further down).
     $root.on('click.cpaIt', '[data-cpa-it-action="apply-batch"]', async (e) => {
         e.preventDefault();
+        const pendingCount = Array.isArray(state.pendingEdits) ? state.pendingEdits.length : 0;
         await applyPendingEdits();
+        // After the user reviewed + applied a paused batch, fire the next
+        // AI round with a synthetic "user approved" message. The handle-
+        // SendMessage loop only paused because pendingEdits gated human
+        // review; the AI was mid-iteration and expects a result.
+        if (pendingCount > 0
+            && (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0)
+            && !state.isBusy) {
+            await continueAfterReviewDecision({ action: 'apply', count: pendingCount });
+        }
     });
     $root.on('click.cpaIt', '[data-cpa-it-action="discard-batch"]', async (e) => {
         e.preventDefault();
+        const pendingCount = Array.isArray(state.pendingEdits) ? state.pendingEdits.length : 0;
         await discardPendingEdits();
+        // Mirror the apply-batch resume — discard is the AI's signal to
+        // reconsider, not to stop entirely. User can still hit Stop or
+        // close the popup if they're truly done.
+        if (pendingCount > 0
+            && (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0)
+            && !state.isBusy) {
+            await continueAfterReviewDecision({ action: 'discard', count: pendingCount });
+        }
     });
     $root.on('click.cpaIt', '[data-cpa-it-action="new-session"]', async (e) => {
         e.preventDefault();
