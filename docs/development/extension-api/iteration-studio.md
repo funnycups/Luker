@@ -15,14 +15,14 @@ An Iteration Studio session is a popup chat between the user and an LLM that emi
 
 1. User types a request and clicks Send.
 2. Shell asks the LLM with the adapter's tool catalog (plus any shell-injected control tools the adapter declares).
-3. For each tool call returned, the adapter normalizes it to a list of op-typed `Edit`s (see `edits-lib.md`).
+3. For each tool call returned, the adapter normalizes it to a list of op-typed `Edit`s (see [edits-lib](./edits-lib.md)).
 4. Shell applies the edits to `adapter.live()` via the edits library, detecting drift per-edit at apply time.
 5. Approved changes are committed back through `adapter.commit(newLive)`.
 6. The shell auto-continues whenever the round emitted any tool call (program-driven by tool-call presence). A plain-text response with no tool calls ends the iteration and returns control to the user.
 
 The shell does not carry a working copy of the artifact. `adapter.live()` is the single authority, called fresh whenever the shell needs the current value.
 
-**When iteration-studio doesn't fit:** if your surface needs viewport ownership (fullscreen IDE, mobile takeover) or already has a mature standalone UI you want to preserve, use **edits-lib Path 2** instead. Path 2 lets you import `applyEdits` / `inverseEdit` / `showConflictResolution` directly without going through the shell. See `edits-lib.md` "Path 2: library-only" — CardApp Studio (`extensions/character-editor-assistant/studio/`) is the in-tree reference.
+**When iteration-studio doesn't fit:** if your surface needs viewport ownership (fullscreen IDE, mobile takeover) or already has a mature standalone UI you want to preserve, use [edits-lib](./edits-lib.md) directly — import `applyEdits` / `inverseEdit` / `showConflictResolution` from `/scripts/lib/edits/index.js` and own the UI yourself. CardApp Studio (`extensions/character-editor-assistant/studio/`) is the in-tree reference.
 
 ## Quick start: minimal adapter
 
@@ -102,7 +102,7 @@ Each LLM tool call routes through `classifyToolCall(call)` (default: anything no
 normalizeToolCallToEdit(call, { session, live }): Edit[] | null | Promise<Edit[] | null>
 ```
 
-Return the op-typed edits (see `edits-lib.md` for op shapes). Return `null` to skip the call.
+Return the op-typed edits (see [edits-lib](./edits-lib.md) for op shapes). Return `null` to skip the call.
 
 **Sandbox-diff pattern** — quick bootstrap when you already have a working in-place mutator:
 
@@ -174,7 +174,7 @@ Slot hooks the shell calls into:
 
 ## Preview pane
 
-`renderPreviewPane(state) => string` returns HTML for the right pane in `split` layout. The shell wholesale-replaces the preview pane on every rerender (every chat tick, busy-state toggle, AI tool call, etc.). Good fit: field summaries, tab placeholders, read-only diff lists. Adapters that hold widget state needing to survive rerenders (CodeMirror, charts, etc.) should keep that surface outside the iteration-studio shell (Path 2 library-only — see `edits-lib.md`).
+`renderPreviewPane(state) => string` returns HTML for the right pane in `split` layout. The shell wholesale-replaces the preview pane on every rerender (every chat tick, busy-state toggle, AI tool call, etc.). Good fit: field summaries, tab placeholders, read-only diff lists. Adapters that hold widget state needing to survive rerenders (CodeMirror, charts, etc.) should keep that surface outside the iteration-studio shell — use [edits-lib](./edits-lib.md) directly.
 
 ## Reference
 
@@ -207,7 +207,7 @@ registerCustomOps: (registry) => {
 },
 ```
 
-Each handler implements `{ apply, inverse, detectConflict }` — see [edits-lib.md](edits-lib.md) for the full op contract. Use a custom op when an entry shape is keyed by something other than array index (e.g. lorebook `uid`s), where built-in `list_*` ops would silently drift across reorderings.
+Each handler implements `{ apply, inverse, detectConflict }` — see [edits-lib](./edits-lib.md) for the full op contract. Use a custom op when an entry shape is keyed by something other than array index (e.g. lorebook `uid`s), where built-in `list_*` ops would silently drift across reorderings.
 
 ## Migration: clearObsoleteSessions
 

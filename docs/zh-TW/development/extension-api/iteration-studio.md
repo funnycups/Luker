@@ -15,14 +15,14 @@
 
 1. 用戶輸入請求並點擊發送。
 2. 外殼帶著適配器的工具集(外加適配器自己宣告的任何控制工具)請求 LLM。
-3. 對每個返回的工具呼叫,適配器將其歸一化為一組 op 類型化的 `Edit`(見 `edits-lib.md`)。
+3. 對每個返回的工具呼叫,適配器將其歸一化為一組 op 類型化的 `Edit`(見 [edits-lib](./edits-lib.md))。
 4. 外殼透過 edits 庫把編輯應用到 `adapter.live()`,在應用時逐條做漂移檢測。
 5. 批准的變更透過 `adapter.commit(newLive)` 提交回去。
 6. 只要這一輪發出過任何工具呼叫,外殼就會自動續到下一輪(程式按工具呼叫是否存在判定)。一旦 AI 改回純文字、不再發工具,迭代就結束,控制權回到用戶。
 
 外殼不持有工件的工作副本。`adapter.live()` 是唯一權威源，外殼每次需要當前值時都重新呼叫它。
 
-**迭代工作台不合適的時候：** 如果你的介面需要 viewport 所有權（全屏 IDE、行動端接管），或者已經有一套成熟的獨立 UI 想保留，改用 **edits-lib Path 2**。Path 2 讓你直接 import `applyEdits` / `inverseEdit` / `showConflictResolution`，不走外殼。參見 `edits-lib.md` 的「Path 2: library-only」一節 —— CardApp Studio（`extensions/character-editor-assistant/studio/`）是倉庫內的參考實作。
+**迭代工作台不合適的時候：** 如果你的介面需要 viewport 所有權（全屏 IDE、行動端接管），或者已經有一套成熟的獨立 UI 想保留，直接用 [edits-lib](./edits-lib.md) —— 從 `/scripts/lib/edits/index.js` import `applyEdits` / `inverseEdit` / `showConflictResolution`，自己控制 UI。CardApp Studio（`extensions/character-editor-assistant/studio/`）是倉庫內的參考實作。
 
 ## 快速上手：最小適配器
 
@@ -102,7 +102,7 @@ await openIterationStudio(adapter, SillyTavern.getContext(), settings, document.
 normalizeToolCallToEdit(call, { session, live }): Edit[] | null | Promise<Edit[] | null>
 ```
 
-返回 op 類型化編輯(op 形態見 `edits-lib.md`)。返回 `null` 跳過此呼叫。
+返回 op 類型化編輯(op 形態見 [edits-lib](./edits-lib.md))。返回 `null` 跳過此呼叫。
 
 **sandbox-diff 模式** —— 當你已經有一個原地變更器時,這是快速 bootstrap 的方式:
 
@@ -174,7 +174,7 @@ deleteSession(scope, id): Promise<void>
 
 ## 預覽面板
 
-`renderPreviewPane(state) => string` 為 `split` 佈局回傳右側面板的 HTML。外殼每次 rerender（每次聊天 tick、busy 狀態切換、AI 工具呼叫等）都會整體替換預覽面板。適合：欄位摘要、tab 佔位、唯讀 diff 清單。如果轉接器持有需要在 rerender 之間存活的元件狀態（CodeMirror、圖表等），那塊介面應該放在迭代工作台外殼之外（Path 2 library-only —— 參見 `edits-lib.md`）。
+`renderPreviewPane(state) => string` 為 `split` 佈局回傳右側面板的 HTML。外殼每次 rerender（每次聊天 tick、busy 狀態切換、AI 工具呼叫等）都會整體替換預覽面板。適合：欄位摘要、tab 佔位、唯讀 diff 清單。如果轉接器持有需要在 rerender 之間存活的元件狀態（CodeMirror、圖表等），那塊介面應該放在迭代工作台外殼之外 —— 直接用 [edits-lib](./edits-lib.md)。
 
 ## 對比基準
 
@@ -207,7 +207,7 @@ registerCustomOps: (registry) => {
 },
 ```
 
-每個 handler 實作 `{ apply, inverse, detectConflict }` —— 完整 op 契約見 [edits-lib.md](edits-lib.md)。當條目以非陣列索引的方式（如世界書 `uid`）作為鍵時使用自定義 op；這種場景下內建 `list_*` op 會在重新排序時悄然漂移。
+每個 handler 實作 `{ apply, inverse, detectConflict }` —— 完整 op 契約見 [edits-lib](./edits-lib.md)。當條目以非陣列索引的方式（如世界書 `uid`）作為鍵時使用自定義 op；這種場景下內建 `list_*` op 會在重新排序時悄然漂移。
 
 ## 遷移：clearObsoleteSessions
 
