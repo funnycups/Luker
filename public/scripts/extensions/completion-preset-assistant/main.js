@@ -9,6 +9,15 @@ import { escapeHtml } from '../../utils.js';
 import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import { cloneJsonValue, isPlainObject } from '../json-state-journal.js';
 import { openCpaIterationStudio } from './cpa-iteration/studio.js';
+import {
+    buildBaseSystemPrompt,
+    buildOrchestratorOptimizeModeBlock,
+    buildJailbreakOnlyModeBlock,
+} from './cpa-iteration/system-prompts.js';
+
+const DEFAULT_CPA_BASE_SYSTEM_PROMPT = buildBaseSystemPrompt();
+const DEFAULT_CPA_MODE_ORCHESTRATOR_OPTIMIZE = buildOrchestratorOptimizeModeBlock();
+const DEFAULT_CPA_MODE_JAILBREAK_ONLY = buildJailbreakOnlyModeBlock();
 
 const MODULE_NAME = 'completion_preset_assistant';
 const UI_BLOCK_ID = 'completion_preset_assistant_settings';
@@ -23,6 +32,9 @@ const defaultSettings = {
     includeWorldInfo: false,
     toolCallRetryMax: 2,
     useStreamingTransport: false,
+    iterBaseSystemPrompt: DEFAULT_CPA_BASE_SYSTEM_PROMPT,
+    iterModePromptOrchestratorOptimize: DEFAULT_CPA_MODE_ORCHESTRATOR_OPTIMIZE,
+    iterModePromptJailbreakOnly: DEFAULT_CPA_MODE_JAILBREAK_ONLY,
 };
 
 function clone(value, fallback = {}) {
@@ -57,6 +69,10 @@ function ensureSettings() {
     settings.includeWorldInfo = settings.includeWorldInfo === true;
     settings.useStreamingTransport = settings.useStreamingTransport === true;
     settings.toolCallRetryMax = Math.max(0, Math.min(TOOL_CALL_RETRY_MAX, toInteger(settings.toolCallRetryMax, defaultSettings.toolCallRetryMax)));
+    delete settings.iterSystemPrompt;
+    settings.iterBaseSystemPrompt = String(settings.iterBaseSystemPrompt || '').trim() || DEFAULT_CPA_BASE_SYSTEM_PROMPT;
+    settings.iterModePromptOrchestratorOptimize = String(settings.iterModePromptOrchestratorOptimize || '').trim() || DEFAULT_CPA_MODE_ORCHESTRATOR_OPTIMIZE;
+    settings.iterModePromptJailbreakOnly = String(settings.iterModePromptJailbreakOnly || '').trim() || DEFAULT_CPA_MODE_JAILBREAK_ONLY;
 }
 
 function getSettings() {
@@ -80,6 +96,11 @@ function registerLocaleData() {
         'Include world info (simulate current chat)': '包含世界书信息（按当前聊天重新模拟）',
         'Use streaming transport (avoid timeout on slow APIs)': '使用流式传输（避免慢速 API 超时）',
         'Tool-call retries on invalid/missing tool call (N)': '工具调用重试次数（无效/缺失时）',
+        'Iteration System Prompts (advanced)': '迭代系统提示词（高级）',
+        'Base prompt (sent in every mode)': '基础提示词（每种模式都会发送）',
+        'Mode addition — orchestrator-optimize': '模式追加 —— orchestrator-optimize',
+        'Mode addition — jailbreak-only': '模式追加 —— jailbreak-only',
+        'Reset to default': '重置为默认',
         'Current preset is not a stored chat completion preset. Please select a saved preset first.': '当前不是已保存的聊天补全预设，请先选择一个已保存预设。',
         'AI request failed: ${0}': '模型请求失败：${0}',
         '(none)': '（无）',
@@ -115,6 +136,11 @@ function registerLocaleData() {
         'Include world info (simulate current chat)': '包含世界書資訊（按目前聊天重新模擬）',
         'Use streaming transport (avoid timeout on slow APIs)': '使用串流傳輸（避免慢速 API 逾時）',
         'Tool-call retries on invalid/missing tool call (N)': '工具調用重試次數（無效/缺失時）',
+        'Iteration System Prompts (advanced)': '迭代系統提示詞（進階）',
+        'Base prompt (sent in every mode)': '基礎提示詞（每種模式都會傳送）',
+        'Mode addition — orchestrator-optimize': '模式追加 —— orchestrator-optimize',
+        'Mode addition — jailbreak-only': '模式追加 —— jailbreak-only',
+        'Reset to default': '重置為預設',
         'Current preset is not a stored chat completion preset. Please select a saved preset first.': '目前不是已儲存的聊天補全預設，請先選擇一個已儲存預設。',
         'AI request failed: ${0}': '模型請求失敗：${0}',
         '(none)': '（無）',
@@ -316,6 +342,9 @@ function refreshUiState(context = getContext()) {
     root.find('#cpa_include_world_info').prop('checked', settings.includeWorldInfo === true);
     root.find('#cpa_use_streaming_transport').prop('checked', Boolean(settings.useStreamingTransport));
     root.find('#cpa_tool_retries').val(String(settings.toolCallRetryMax));
+    root.find('#cpa_iter_base_system_prompt').val(String(settings.iterBaseSystemPrompt || ''));
+    root.find('#cpa_iter_mode_orchestrator_optimize').val(String(settings.iterModePromptOrchestratorOptimize || ''));
+    root.find('#cpa_iter_mode_jailbreak_only').val(String(settings.iterModePromptJailbreakOnly || ''));
 }
 
 function bindUi() {
@@ -351,6 +380,39 @@ function bindUi() {
         getSettings().toolCallRetryMax = Math.max(0, Math.min(TOOL_CALL_RETRY_MAX, toInteger(jQuery(this).val(), defaultSettings.toolCallRetryMax)));
         saveSettingsDebounced();
         refreshUiState();
+    });
+
+    root.on('input.cpa change.cpa', '#cpa_iter_base_system_prompt', function () {
+        getSettings().iterBaseSystemPrompt = String(jQuery(this).val() || '');
+        saveSettingsDebounced();
+    });
+
+    root.on('input.cpa change.cpa', '#cpa_iter_mode_orchestrator_optimize', function () {
+        getSettings().iterModePromptOrchestratorOptimize = String(jQuery(this).val() || '');
+        saveSettingsDebounced();
+    });
+
+    root.on('input.cpa change.cpa', '#cpa_iter_mode_jailbreak_only', function () {
+        getSettings().iterModePromptJailbreakOnly = String(jQuery(this).val() || '');
+        saveSettingsDebounced();
+    });
+
+    root.on('click.cpa', '#cpa_reset_iter_base_system_prompt', function () {
+        getSettings().iterBaseSystemPrompt = DEFAULT_CPA_BASE_SYSTEM_PROMPT;
+        root.find('#cpa_iter_base_system_prompt').val(DEFAULT_CPA_BASE_SYSTEM_PROMPT);
+        saveSettingsDebounced();
+    });
+
+    root.on('click.cpa', '#cpa_reset_iter_mode_orchestrator_optimize', function () {
+        getSettings().iterModePromptOrchestratorOptimize = DEFAULT_CPA_MODE_ORCHESTRATOR_OPTIMIZE;
+        root.find('#cpa_iter_mode_orchestrator_optimize').val(DEFAULT_CPA_MODE_ORCHESTRATOR_OPTIMIZE);
+        saveSettingsDebounced();
+    });
+
+    root.on('click.cpa', '#cpa_reset_iter_mode_jailbreak_only', function () {
+        getSettings().iterModePromptJailbreakOnly = DEFAULT_CPA_MODE_JAILBREAK_ONLY;
+        root.find('#cpa_iter_mode_jailbreak_only').val(DEFAULT_CPA_MODE_JAILBREAK_ONLY);
+        saveSettingsDebounced();
     });
 
     jQuery(document).on('click.cpaOpen', `#${OPENAI_BUTTON_ID}`, async function () {
@@ -393,6 +455,24 @@ function ensureUi(context = getContext()) {
             </label>
             <label for="cpa_tool_retries">${escapeHtml(i18n('Tool-call retries on invalid/missing tool call (N)'))}</label>
             <input id="cpa_tool_retries" class="text_pole" type="number" min="0" max="${TOOL_CALL_RETRY_MAX}" step="1"/>
+            <details class="cpa_prompt_overrides">
+                <summary>${escapeHtml(i18n('Iteration System Prompts (advanced)'))}</summary>
+                <label for="cpa_iter_base_system_prompt">${escapeHtml(i18n('Base prompt (sent in every mode)'))}</label>
+                <textarea id="cpa_iter_base_system_prompt" class="text_pole textarea_compact" rows="10"></textarea>
+                <div class="cpa_row">
+                    <div class="menu_button" id="cpa_reset_iter_base_system_prompt">${escapeHtml(i18n('Reset to default'))}</div>
+                </div>
+                <label for="cpa_iter_mode_orchestrator_optimize">${escapeHtml(i18n('Mode addition — orchestrator-optimize'))}</label>
+                <textarea id="cpa_iter_mode_orchestrator_optimize" class="text_pole textarea_compact" rows="8"></textarea>
+                <div class="cpa_row">
+                    <div class="menu_button" id="cpa_reset_iter_mode_orchestrator_optimize">${escapeHtml(i18n('Reset to default'))}</div>
+                </div>
+                <label for="cpa_iter_mode_jailbreak_only">${escapeHtml(i18n('Mode addition — jailbreak-only'))}</label>
+                <textarea id="cpa_iter_mode_jailbreak_only" class="text_pole textarea_compact" rows="8"></textarea>
+                <div class="cpa_row">
+                    <div class="menu_button" id="cpa_reset_iter_mode_jailbreak_only">${escapeHtml(i18n('Reset to default'))}</div>
+                </div>
+            </details>
         </div>
     </div>
 </div>`);

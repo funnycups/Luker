@@ -26,6 +26,8 @@ import {
 import { createCharacterEditorDiffUi } from './diff-ui.js';
 import { createCharacterEditorUi } from './editor-ui.js';
 import { openUnifiedCharacterEditorPopup } from './editor-iteration/studio.js';
+import { DEFAULT_SYSTEM_PROMPT as DEFAULT_EDITOR_ITERATION_SYSTEM_PROMPT } from './editor-iteration/studio.js';
+import { DEFAULT_SYSTEM_PROMPT as DEFAULT_CARDAPP_STUDIO_SYSTEM_PROMPT } from './studio/ai-chat.js';
 import { applyEdits } from '../../iteration-library/index.js';
 
 
@@ -66,6 +68,8 @@ const defaultSettings = {
     toolCallRetryMax: 2,
     maxJournalEntries: 120,
     useStreamingTransport: false,
+    editorIterationSystemPrompt: DEFAULT_EDITOR_ITERATION_SYSTEM_PROMPT,
+    cardAppStudioSystemPrompt: DEFAULT_CARDAPP_STUDIO_SYSTEM_PROMPT,
 };
 const CHARACTER_EDITOR_SESSION_NAMESPACE = 'character_editor_assistant_sessions';
 const CHARACTER_EDITOR_SESSION_VERSION = 1;
@@ -93,6 +97,10 @@ function registerLocaleData() {
         'Model request API preset (Connection profile)': '模型请求 API 预设（连接配置）',
         'Plain-text function-call mode': '纯文本函数调用模式',
         'Tool-call retries on invalid/missing tool call (N)': '工具调用重试次数（无效/缺失时）',
+        'Custom System Prompts (advanced)': '自定义系统提示词（高级）',
+        'Editor iteration prompt': '编辑器迭代提示词',
+        'CardApp Studio prompt': 'CardApp Studio 提示词',
+        'Reset to default': '重置为默认',
         'Refresh': '刷新',
         'History': '修改历史',
         'Conversation history': '对话历史',
@@ -284,6 +292,10 @@ function registerLocaleData() {
         'Model request API preset (Connection profile)': '模型請求 API 預設（連線設定）',
         'Plain-text function-call mode': '純文本函數調用模式',
         'Tool-call retries on invalid/missing tool call (N)': '工具調用重試次數（無效/缺失時）',
+        'Custom System Prompts (advanced)': '自訂系統提示詞（進階）',
+        'Editor iteration prompt': '編輯器迭代提示詞',
+        'CardApp Studio prompt': 'CardApp Studio 提示詞',
+        'Reset to default': '重置為預設',
         'Refresh': '刷新',
         'History': '修改歷史',
         'Conversation history': '對話歷史',
@@ -549,6 +561,8 @@ function ensureSettings() {
     settings.toolCallRetryMax = Math.max(0, Math.min(10, Math.floor(Number(settings.toolCallRetryMax || defaultSettings.toolCallRetryMax) || 0)));
     settings.maxJournalEntries = Math.max(20, Math.min(500, Number(settings.maxJournalEntries || defaultSettings.maxJournalEntries)));
     settings.useStreamingTransport = Boolean(settings.useStreamingTransport);
+    settings.editorIterationSystemPrompt = String(settings.editorIterationSystemPrompt || '').trim() || DEFAULT_EDITOR_ITERATION_SYSTEM_PROMPT;
+    settings.cardAppStudioSystemPrompt = String(settings.cardAppStudioSystemPrompt || '').trim() || DEFAULT_CARDAPP_STUDIO_SYSTEM_PROMPT;
 }
 
 function getSettings() {

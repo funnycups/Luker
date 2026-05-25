@@ -805,6 +805,29 @@ export function buildOrchestratorSettingsHtml(deps) {
             <div class="flex-container">
                 <div id="luker_orch_reset_ai_prompt" class="menu_button menu_button_small">${escapeHtml(i18n('Reset AI build prompt'))}</div>
             </div>
+            <details class="luker_orch_iter_mode_prompts">
+                <summary>${escapeHtml(i18n('Iteration mode prompts (by execution mode)'))}</summary>
+                <label for="luker_orch_iter_mode_prompt_spec">${escapeHtml(i18n('Spec mode iteration prompt'))}</label>
+                <textarea id="luker_orch_iter_mode_prompt_spec" class="text_pole textarea_compact" rows="10"></textarea>
+                <div class="flex-container">
+                    <div id="luker_orch_reset_iter_mode_spec" class="menu_button menu_button_small">${escapeHtml(i18n('Reset to default'))}</div>
+                </div>
+                <label for="luker_orch_iter_mode_prompt_loop">${escapeHtml(i18n('Loop mode iteration prompt'))}</label>
+                <textarea id="luker_orch_iter_mode_prompt_loop" class="text_pole textarea_compact" rows="10"></textarea>
+                <div class="flex-container">
+                    <div id="luker_orch_reset_iter_mode_loop" class="menu_button menu_button_small">${escapeHtml(i18n('Reset to default'))}</div>
+                </div>
+                <label for="luker_orch_iter_mode_prompt_director">${escapeHtml(i18n('Director mode iteration prompt'))}</label>
+                <textarea id="luker_orch_iter_mode_prompt_director" class="text_pole textarea_compact" rows="10"></textarea>
+                <div class="flex-container">
+                    <div id="luker_orch_reset_iter_mode_director" class="menu_button menu_button_small">${escapeHtml(i18n('Reset to default'))}</div>
+                </div>
+                <label for="luker_orch_iter_mode_prompt_agenda">${escapeHtml(i18n('Agenda mode iteration prompt'))}</label>
+                <textarea id="luker_orch_iter_mode_prompt_agenda" class="text_pole textarea_compact" rows="10"></textarea>
+                <div class="flex-container">
+                    <div id="luker_orch_reset_iter_mode_agenda" class="menu_button menu_button_small">${escapeHtml(i18n('Reset to default'))}</div>
+                </div>
+            </details>
             <label for="luker_orch_max_recent_messages">${escapeHtml(i18n('Recent assistant turns for orchestration (N)'))}</label>
             <input id="luker_orch_max_recent_messages" class="text_pole" type="number" min="1" max="80" step="1" />
             <label for="luker_orch_node_iterations">${escapeHtml(i18n('Node tool iteration max rounds (N)'))}</label>

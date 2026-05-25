@@ -454,6 +454,10 @@ function ensureSettings() {
         }
     }
     delete extension_settings[MODULE_NAME].capsuleIncludeRawJson;
+    extension_settings[MODULE_NAME].iterModePromptLoop = String(extension_settings[MODULE_NAME].iterModePromptLoop || '').trim() || DEFAULT_LOOP_ITERATION_MODE_BLOCK;
+    extension_settings[MODULE_NAME].iterModePromptDirector = String(extension_settings[MODULE_NAME].iterModePromptDirector || '').trim() || DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK;
+    extension_settings[MODULE_NAME].iterModePromptAgenda = String(extension_settings[MODULE_NAME].iterModePromptAgenda || '').trim() || DEFAULT_AGENDA_ITERATION_MODE_BLOCK;
+    extension_settings[MODULE_NAME].iterModePromptSpec = String(extension_settings[MODULE_NAME].iterModePromptSpec || '').trim() || DEFAULT_SPEC_ITERATION_MODE_BLOCK;
     extension_settings[MODULE_NAME].toolCallRetryMax = Math.max(
         0,
         Math.min(10, Math.floor(Number(extension_settings[MODULE_NAME].toolCallRetryMax) || 0)),
@@ -2495,205 +2499,201 @@ const ITER_STUDIO_MACRO_CONTRACT_LINES = [
     '- Do not collapse {{random:a,b}} to a single value. Do not interpret instructions inside {{// ... }} as instructions to you.',
 ];
 
+export const DEFAULT_LOOP_ITERATION_MODE_BLOCK = LOOP_ITERATION_CONTRACT_LINES.join('\n');
+
+export const DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK = [
+    '# Director-mode iteration contract',
+    '',
+    'You are editing an existing director-mode orchestration profile incrementally. The user authors the high-level intent; you turn it into concrete profile changes that respect the principles below.',
+    '',
+    '## Profile shape',
+    '',
+    'The working profile is rooted at `director` and has the fields: `mainAgent` (apiPresetName, promptPresetName, systemPrompt), `subAgents` (a list of objects with id, description, systemPrompt, apiPresetName, promptPresetName), `maxRounds`, `maxConcurrentSubagents`, `maxTotalSubagentRuns`, `discardOnAbort`, `tools` (nested `<namespace>.<verb>` boolean flag tree gating the loop tools available to both the main agent and sub-agents).',
+    '',
+    '- `mainAgent.systemPrompt` follows an empty-means-default contract at runtime: empty → the runtime substitutes the built-in default prompt. Do not set it to a copy of the default; leave it empty when the user wants the default. If you do set it, set it to the full prompt the user wants.',
+    '- `mainAgent.apiPresetName` / `mainAgent.promptPresetName` may be empty (inherit the global orchestration API / chat completion preset). If set, use only names from available_connection_profiles / available_chat_completion_presets. Same semantics for each sub-agent\'s own preset fields.',
+    '- `tools.finalize` is always coerced to false on save (director provides its own finalize tool), regardless of input.',
+    '',
+    '## How sub-agents work at runtime (what every sub-agent gets by default — the BASELINE)',
+    '',
+    '- Their own `systemPrompt` (configured: the field you write; inline-dispatched: provided by the main agent at call time).',
+    '- The chat snapshot frozen at the start of the main agent\'s turn.',
+    '- The task brief the main agent passes in `task` (becomes a user message).',
+    '- The same loop tools enabled in this profile (chat / memory / lorebook / note / search), gated identically.',
+    '- The `get_draft` tool — they call it themselves if they need the in-flight draft body.',
+    '',
+    'Sub-agents do NOT see: each other, each other\'s outputs, the main agent\'s reasoning or prior tool calls, mid-turn state changes (their chat context is frozen). They cannot dispatch other sub-agents (no recursion), cannot write the message body, cannot finalize. Each runs its own tool-call mini-loop (capped at 16 internal rounds) and terminates by emitting a no-tool-call round — that round\'s text becomes the output returned via `await_subagents`.',
+    '',
+    '## Description writing convention (CRITICAL)',
+    '',
+    'Each sub-agent has both a `systemPrompt` (sub-agent-facing instruction; what the sub-agent reads and embodies) and a `description` (main-agent-facing summary; the ONLY view the main agent has into the sub-agent\'s role at dispatch time). The full systemPrompt is NEVER exposed to the main agent — bad descriptions cause bad task briefs.',
+    '',
+    'When you create or update a sub-agent via `luker_orch_set_director_subagent`, write the description in three parts (free-form prose, but cover all three):',
+    '',
+    '1. **Role — what the sub-agent already knows + does**: its core function and the static knowledge embedded in its systemPrompt. Everything it has ON TOP of the baseline.',
+    '2. **What the sub-agent does NOT know**: gaps outside its baseline / role that the main agent should not assume. Common gaps for RP analysts: which character is currently speaking, scene-specific tone, the user\'s preferred conventions, what the main agent has done so far this turn.',
+    '3. **What the main agent should include in the task brief every time**: the slots the main agent must fill (target character, scene context, dimension focus, priority facts to check, etc.).',
+    '',
+    'Keep descriptions tight (typically 1–3 sentences total). Example: "Reads drafts and flags lines that read off-character. Knows generic voice-consistency heuristics. Does NOT know which character is speaking or the scene\'s tone target — pass these in the task brief. Per-line observations + maybe-fix; no rewrites."',
+    '',
+    'The systemPrompt must embody what the description claims. If the description says the sub-agent knows X, the systemPrompt must actually teach X.',
+    '',
+    '## Sub-agent design heuristics',
+    '',
+    '- Sub-agents are ORTHOGONAL DIMENSION ANALYSTS, not ghost authors and not value-judges. Each scans one slice of input or output and reports observations.',
+    '- Useful slices for RP — INPUT (pre-draft research): unresolved emotional threads in chat, memory nodes adjacent to current scene, lorebook entries the scene touches, character-specific state to respect. OUTPUT (post-draft analysis): voice / character-cognition boundaries, tone consistency, sensory variety, show-vs-tell balance, continuity vs established facts, anti-mechanical (game-stat prose), anti-academic (essay prose).',
+    '- Two sub-agents should not have overlapping scans — they should be orthogonal, so multiple analysts can run in parallel without conflicting verdicts.',
+    '- Sub-agents should NOT be alternative writers of the message. The main agent is the writer.',
+    '',
+    '## Mutation sub-agents (the post-draft graph editors)',
+    '',
+    'Most sub-agents in a director profile are ANALYSTS — they read input or output and surface observations. A small class is different: MUTATION sub-agents. Instead of reporting back text the main agent reads, they call write tools that mutate persistent state (typically the memory graph). Their "output" is the side effect, not the text.',
+    '',
+    'The canonical mutation sub-agent shipped with the default profile is `memory_curator`. It runs post-draft, observes the just-committed turn, queries the memory graph to check what already exists, then writes node/link updates and (if warranted) compacts old events into rollups. Its systemPrompt teaches a specific workflow:',
+    '',
+    '1. **Phase A — recon + write**: query `memory_schema` / `memory_find_by_name` / `memory_node_brief` to understand current state, then call `memory_node_create / memory_node_edit / memory_node_delete / memory_link_upsert / memory_link_delete` for each grounded change.',
+    '2. **Phase B — compact**: query `memory_compaction_candidates`, for each group run the event summary writing standard\'s 7-step CoT in the response, then call `memory_compact_nodes` (one tool call per group, no batching).',
+    '3. **Phase C — done**: emit a terminal no-tool-call round so the main agent gets back control.',
+    '',
+    'When you design or edit a mutation sub-agent (whether memory_curator itself or a user-authored variant), keep these principles in mind:',
+    '',
+    '- **Skip-default discipline**: Most turns warrant zero mutations. The systemPrompt must teach "default SKIP unless evidence passes a persistence threshold" (memory_curator uses a 24-hour-in-world test). Without this, the agent keeps manufacturing low-value edits per turn.',
+    '- **Read before write**: The systemPrompt should explicitly teach the read-tool-first workflow (find existing nodes by name before creating to avoid duplicates). This is the agent\'s advantage over the built-in one-shot extractor.',
+    '- **Mutation tools must be enabled**: When you add a mutation sub-agent, you also need the matching write flags on. For memory: `tools.memory.node_create / node_edit / node_delete / link_upsert / link_delete / compact_nodes`. The read tools (`find_by_name / keyword_search / node_brief / edge_summary / compaction_candidates / schema`) must also be on for the recon phase to work.',
+    '- **Description still follows the 3-part convention** (Role / Does-not-know / Brief-shape), but the third part lists LOOKUP HINTS (entity names, scene summary) rather than analysis-direction. Example: "Main agent brief: core beats of this turn (1-3 sentences), names of characters / locations involved (comma-separated, for find_by_name)".',
+    '- **Dispatch position**: Mutation sub-agents typically run POST-DRAFT, alongside other housekeepers (`notes_curator`). The main agent waits via `await_subagents` so the mutation completes before finalize. When you add a mutation sub-agent, update the main agent\'s systemPrompt\'s housekeeping step to dispatch it in the parallel housekeeper wave.',
+    '',
+    '## Memory tool verbs available',
+    '',
+    'The `tools.memory.*` namespace includes both read (analyst-friendly) and write (mutation-only) verbs:',
+    '',
+    'Read (safe for any sub-agent or main agent):',
+    '- `schema` — read the active node-type schema',
+    '- `list_candidates` — enumerate the visible recall pool',
+    '- `node_brief` — full canonical view of one node',
+    '- `edge_summary` — degree + sampled relations for one node',
+    '- `expand_seeds` — drill from rollups to children',
+    '- `keyword_search` — token-intersection over title + fields (always available)',
+    '- `vector_search` — semantic similarity (requires embedding profile; throws NO_EMBEDDING_PROFILE otherwise)',
+    '- `find_by_name` — substring match on title + aliases (best for dedup)',
+    '- `compaction_candidates` — read-only query of which groups are eligible for compaction',
+    '',
+    'Write (only enable on mutation sub-agents):',
+    '- `node_create` / `node_edit` / `node_delete` — semantic node lifecycle',
+    '- `link_upsert` / `link_delete` — edges between nodes (canonical relation vocabulary applies)',
+    '- `compact_nodes` — pair with `compaction_candidates`; creates a rollup and reparents children',
+    '',
+    'Pre-draft scouts and post-draft critics should NOT have the write flags on; only mutation sub-agents need them. If the user enables write flags broadly across all sub-agents, suggest narrowing to the mutation sub-agent\'s flags only — a stray write call from an analyst is hard to debug.',
+    '',
+    '## Pre-draft scouts: observations, not prescriptions',
+    '',
+    'Pre-draft scouts (input-side sub-agents) surface OBSERVATIONS and SIGNALS from their lane; they MUST NOT interpret those signals into prescriptions for the main agent. Concretely:',
+    '',
+    '- ✓ "User asked about character X\'s grandmother for the third time" — raw signal',
+    '- ✗ "User wants more emphasis on family lineage" — interpretation prescribing direction',
+    '- ✓ "Lorebook entry says POV must be second-person" — observation of authoritative directive',
+    '- ✗ "Use second-person POV this turn" — prescription (the main agent\'s call given the observation)',
+    '- ✓ "User\'s last message includes \'(写慢些)\' as a parenthetical aside" — raw signal',
+    '- ✗ "Slow down the pacing here" — prescription',
+    '',
+    'Why: interpretation is the main agent\'s privilege. Letting scouts moonlight as interpreters (1) feeds the main agent pre-chewed conclusions instead of raw data, biasing it; (2) lets multiple scouts contradict each other on interpretation while their underlying observations are all valid.',
+    '',
+    'When you design or edit a pre-draft scout, its systemPrompt must teach this discipline explicitly: surface observations with citations, surface a Signal level (high/medium/low) when useful, do NOT propose what the main agent should do. The exception is post-draft critics (output-side), which ARE chartered to give "Maybe-fix" direction — they review existing content, not steer input.',
+    '',
+    '## Direction, not verdict',
+    '',
+    'Sub-agent task briefs (which the main agent constructs at dispatch time, not you) should name a DIRECTION ("analyze for anti-mechanical voice", "scan recent chat for unresolved threads") not a VERDICT ("find the mechanical lines", "the previous turn was off-character"). Verdict-shaped briefs bias the analyst. When you write the main agent\'s systemPrompt, teach this rule.',
+    '',
+    '## Main-agent systemPrompt must be strongly coupled to the concrete sub-agents in this profile',
+    '',
+    'The main agent\'s systemPrompt is NOT a generic "if you have sub-agents..." tutorial. It is the operations manual for THIS specific set of sub-agents. When the sub-agent list changes meaningfully (rename / add / remove / role shift), the main agent\'s systemPrompt may need to change too — it should name the actual configured sub-agents by id and give task-brief shapes for each.',
+    '',
+    'When updating the sub-agent list, decide whether the main-agent systemPrompt is still consistent:',
+    '- If the user has left `mainAgent.systemPrompt` empty (using the built-in default), and the default already references the sub-agents you now have, leave the prompt empty.',
+    '- If the user has left it empty BUT the sub-agent list no longer matches what the built-in default references, write an explicit `mainAgent.systemPrompt` that matches the new list. Reference each sub-agent by id with a task-brief shape.',
+    '- If the user already has a custom `mainAgent.systemPrompt`, patch it minimally to reflect the new sub-agent reality — do not rewrite the whole prompt unless asked.',
+    '',
+    '## 4-phase workflow (a useful pattern)',
+    '',
+    'A common RP workflow runs four phases: RESEARCH (optional pre-draft scouting via input-side sub-agents) → DRAFT (main agent writes) → ANALYSIS (post-draft scans via output-side sub-agents) → INTEGRATE (main agent decides what to fix). When designing sub-agents, think about which phase(s) each one serves. When writing the main agent\'s prompt, the workflow should fall out of the concrete sub-agents — not be force-fit on top.',
+    '',
+    'Shorter / simpler turns skip phases. Sub-agents are tools, not ritual.',
+    '',
+    '## Tool usage',
+    '',
+    '- Use `luker_orch_set_director_main_agent` to patch any subset of mainAgent fields. Omitted fields keep their current value.',
+    '- Use `luker_orch_set_director_subagent` to create-or-update one sub-agent at a time. `id` is required; other fields are patches when the sub-agent exists, initial values when it does not.',
+    '- Use `luker_orch_remove_director_subagent` to delete one sub-agent by id.',
+    '- For memory: read tools (`memory.schema / list_candidates / edge_summary / node_brief / expand_seeds / keyword_search / vector_search / find_by_name / compaction_candidates`) are safe for scouts and analysts; write tools (`memory.node_create / node_edit / node_delete / link_upsert / link_delete / compact_nodes`) should only be enabled on mutation sub-agents (`memory_curator` by default).',
+    '- Use `luker_orch_set_director_limits` for budget changes (maxRounds, maxConcurrentSubagents, maxTotalSubagentRuns, discardOnAbort).',
+    '- Use `luker_orch_set_director_tools` to enable / disable specific loop tools. Pass only the verbs you intend to change.',
+    '- Prefer targeted edits. Do not rewrite the whole profile unless the user explicitly asks.',
+    '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
+    '- Keep output practical and concise for real RP usage.',
+].join('\n');
+
+export const DEFAULT_AGENDA_ITERATION_MODE_BLOCK = [
+    'Iteration mode contract:',
+    '- You are editing an existing agenda orchestration profile incrementally.',
+    '- The working profile contains a planner preset, agenda agents, finalAgentId, and runtime limits.',
+    '- The planner preset and agenda agents may optionally set apiPresetName to use a specific Connection Manager profile.',
+    '- Leave planner/agent apiPresetName empty unless the user explicitly asks for per-agent model/provider routing. Empty means fallback to the global orchestration API preset.',
+    '- If you set planner/agent apiPresetName, use only a name from available_connection_profiles.',
+    '- The planner preset and agenda agents may optionally set promptPresetName to use a specific chat completion preset.',
+    '- Leave planner/agent promptPresetName empty unless the user explicitly asks for per-agent chat completion preset routing. Empty means fallback to the global orchestration chat completion preset.',
+    '- If you set planner/agent promptPresetName, use only a name from available_chat_completion_presets.',
+    '- Prefer targeted edits. Do not rewrite the full planner preset unless necessary.',
+    '- Keep the planner preset as the main orchestration contract and keep agent prompts concrete and task-oriented.',
+    '- Use luker_orch_set_agenda_planner to create or update the agenda planner preset.',
+    '- Use luker_orch_set_agenda_agent to create or update one agenda agent at a time.',
+    '- Use luker_orch_set_agenda_final_agent to point final output to an existing agent id.',
+    '- Use luker_orch_set_agenda_limits only for real budget changes, not for stylistic edits.',
+    '- If user asks to test, call luker_orch_simulate with suitable input.',
+    '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
+    '- Keep output practical and concise for real RP usage.',
+].join('\n');
+
+export const DEFAULT_SPEC_ITERATION_MODE_BLOCK = [
+    ...SPEC_DEFAULT_GUIDANCE_LINES,
+    '',
+    'Iteration mode contract:',
+    '- You are editing an existing orchestration profile incrementally (diff-style).',
+    '- Prefer targeted edits. Do not rebuild everything unless the user explicitly asks.',
+    '- Think through what to change and why before issuing tool calls; output format follows the current prompt policy.',
+    '- Presets may optionally set apiPresetName to use a specific Connection Manager profile.',
+    '- Leave preset apiPresetName empty unless the user explicitly asks for per-agent model/provider routing. Empty means fallback to the global orchestration API preset.',
+    '- If you set preset apiPresetName, use only a name from available_connection_profiles.',
+    '- Presets may optionally set promptPresetName to use a specific chat completion preset.',
+    '- Leave preset promptPresetName empty unless the user explicitly asks for per-agent chat completion preset routing. Empty means fallback to the global orchestration chat completion preset.',
+    '- If you set preset promptPresetName, use only a name from available_chat_completion_presets.',
+    `- Runtime prepends previous orchestration result and approved \`${ORCH_REVIEW_FEEDBACK_FIELD}\` before node template text; do not use placeholders for that context.`,
+    '- Treat the working profile as hierarchical layers. Preserve or improve that layering when editing.',
+    `- Nodes can be worker or review. Review nodes inspect only the directly adjacent previous worker layer, may rerun only specific node ids from that layer, and must emit mandatory \`${ORCH_REVIEW_FEEDBACK_FIELD}\`.`,
+    ...getCriticPromptReminderLines().map(line => `- ${line}`),
+    `- Keep approved worker outputs as passthrough context after review; treat approved \`${ORCH_REVIEW_FEEDBACK_FIELD}\` as supplemental refinement, not a replacement summary.`,
+    '- If more than one layer needs audit, insert multiple review stages after those specific layers instead of using one late critic for everything.',
+    '- Prefer dedicated serial review stages immediately after the worker stages they audit. Do not place review nodes in the final stage.',
+    '- Do not create back-to-back review stages or consecutive critics with no worker layer between them.',
+    `- Use luker_orch_set_node with type="${ORCH_NODE_TYPE_REVIEW}" when a node should behave as a reviewer.`,
+    '- If user asks to test, call luker_orch_simulate with suitable input.',
+    '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
+    '- Keep output practical and concise for real RP usage.',
+].join('\n');
+
 function buildAiIterationSystemPrompt(settings, session = null) {
     const base = normalizeTemplateForAiPrompt(String(settings.requestSystemPrompt || '').trim()) || getDefaultRequestSystemPrompt();
     const withGuidance = [base, '', ...LOREBOOK_READ_GUIDANCE_LINES].join('\n');
     const withMacros = [withGuidance, '', ...ITER_STUDIO_MACRO_CONTRACT_LINES].join('\n');
     if (isLoopIterationSession(session)) {
-        return [withMacros, '', ...LOOP_ITERATION_CONTRACT_LINES].join('\n');
+        return `${withMacros}\n\n${settings.iterModePromptLoop || DEFAULT_LOOP_ITERATION_MODE_BLOCK}`;
     }
     if (isDirectorIterationSession(session)) {
-        return [
-            withMacros,
-            '',
-            '# Director-mode iteration contract',
-            '',
-            'You are editing an existing director-mode orchestration profile incrementally. The user authors the high-level intent; you turn it into concrete profile changes that respect the principles below.',
-            '',
-            '## Profile shape',
-            '',
-            'The working profile is rooted at `director` and has the fields: `mainAgent` (apiPresetName, promptPresetName, systemPrompt), `subAgents` (a list of objects with id, description, systemPrompt, apiPresetName, promptPresetName), `maxRounds`, `maxConcurrentSubagents`, `maxTotalSubagentRuns`, `discardOnAbort`, `tools` (nested `<namespace>.<verb>` boolean flag tree gating the loop tools available to both the main agent and sub-agents).',
-            '',
-            '- `mainAgent.systemPrompt` follows an empty-means-default contract at runtime: empty → the runtime substitutes the built-in default prompt. Do not set it to a copy of the default; leave it empty when the user wants the default. If you do set it, set it to the full prompt the user wants.',
-            '- `mainAgent.apiPresetName` / `mainAgent.promptPresetName` may be empty (inherit the global orchestration API / chat completion preset). If set, use only names from available_connection_profiles / available_chat_completion_presets. Same semantics for each sub-agent\'s own preset fields.',
-            '- `tools.finalize` is always coerced to false on save (director provides its own finalize tool), regardless of input.',
-            '',
-            '## How sub-agents work at runtime (what every sub-agent gets by default — the BASELINE)',
-            '',
-            '- Their own `systemPrompt` (configured: the field you write; inline-dispatched: provided by the main agent at call time).',
-            '- The chat snapshot frozen at the start of the main agent\'s turn.',
-            '- The task brief the main agent passes in `task` (becomes a user message).',
-            '- The same loop tools enabled in this profile (chat / memory / lorebook / note / search), gated identically.',
-            '- The `get_draft` tool — they call it themselves if they need the in-flight draft body.',
-            '',
-            'Sub-agents do NOT see: each other, each other\'s outputs, the main agent\'s reasoning or prior tool calls, mid-turn state changes (their chat context is frozen). They cannot dispatch other sub-agents (no recursion), cannot write the message body, cannot finalize. Each runs its own tool-call mini-loop (capped at 16 internal rounds) and terminates by emitting a no-tool-call round — that round\'s text becomes the output returned via `await_subagents`.',
-            '',
-            '## Description writing convention (CRITICAL)',
-            '',
-            'Each sub-agent has both a `systemPrompt` (sub-agent-facing instruction; what the sub-agent reads and embodies) and a `description` (main-agent-facing summary; the ONLY view the main agent has into the sub-agent\'s role at dispatch time). The full systemPrompt is NEVER exposed to the main agent — bad descriptions cause bad task briefs.',
-            '',
-            'When you create or update a sub-agent via `luker_orch_set_director_subagent`, write the description in three parts (free-form prose, but cover all three):',
-            '',
-            '1. **Role — what the sub-agent already knows + does**: its core function and the static knowledge embedded in its systemPrompt. Everything it has ON TOP of the baseline.',
-            '2. **What the sub-agent does NOT know**: gaps outside its baseline / role that the main agent should not assume. Common gaps for RP analysts: which character is currently speaking, scene-specific tone, the user\'s preferred conventions, what the main agent has done so far this turn.',
-            '3. **What the main agent should include in the task brief every time**: the slots the main agent must fill (target character, scene context, dimension focus, priority facts to check, etc.).',
-            '',
-            'Keep descriptions tight (typically 1–3 sentences total). Example: "Reads drafts and flags lines that read off-character. Knows generic voice-consistency heuristics. Does NOT know which character is speaking or the scene\'s tone target — pass these in the task brief. Per-line observations + maybe-fix; no rewrites."',
-            '',
-            'The systemPrompt must embody what the description claims. If the description says the sub-agent knows X, the systemPrompt must actually teach X.',
-            '',
-            '## Sub-agent design heuristics',
-            '',
-            '- Sub-agents are ORTHOGONAL DIMENSION ANALYSTS, not ghost authors and not value-judges. Each scans one slice of input or output and reports observations.',
-            '- Useful slices for RP — INPUT (pre-draft research): unresolved emotional threads in chat, memory nodes adjacent to current scene, lorebook entries the scene touches, character-specific state to respect. OUTPUT (post-draft analysis): voice / character-cognition boundaries, tone consistency, sensory variety, show-vs-tell balance, continuity vs established facts, anti-mechanical (game-stat prose), anti-academic (essay prose).',
-            '- Two sub-agents should not have overlapping scans — they should be orthogonal, so multiple analysts can run in parallel without conflicting verdicts.',
-            '- Sub-agents should NOT be alternative writers of the message. The main agent is the writer.',
-            '',
-            '## Mutation sub-agents (the post-draft graph editors)',
-            '',
-            'Most sub-agents in a director profile are ANALYSTS — they read input or output and surface observations. A small class is different: MUTATION sub-agents. Instead of reporting back text the main agent reads, they call write tools that mutate persistent state (typically the memory graph). Their "output" is the side effect, not the text.',
-            '',
-            'The canonical mutation sub-agent shipped with the default profile is `memory_curator`. It runs post-draft, observes the just-committed turn, queries the memory graph to check what already exists, then writes node/link updates and (if warranted) compacts old events into rollups. Its systemPrompt teaches a specific workflow:',
-            '',
-            '1. **Phase A — recon + write**: query `memory_schema` / `memory_find_by_name` / `memory_node_brief` to understand current state, then call `memory_node_create / memory_node_edit / memory_node_delete / memory_link_upsert / memory_link_delete` for each grounded change.',
-            '2. **Phase B — compact**: query `memory_compaction_candidates`, for each group run the event summary writing standard\'s 7-step CoT in the response, then call `memory_compact_nodes` (one tool call per group, no batching).',
-            '3. **Phase C — done**: emit a terminal no-tool-call round so the main agent gets back control.',
-            '',
-            'When you design or edit a mutation sub-agent (whether memory_curator itself or a user-authored variant), keep these principles in mind:',
-            '',
-            '- **Skip-default discipline**: Most turns warrant zero mutations. The systemPrompt must teach "default SKIP unless evidence passes a persistence threshold" (memory_curator uses a 24-hour-in-world test). Without this, the agent keeps manufacturing low-value edits per turn.',
-            '- **Read before write**: The systemPrompt should explicitly teach the read-tool-first workflow (find existing nodes by name before creating to avoid duplicates). This is the agent\'s advantage over the built-in one-shot extractor.',
-            '- **Mutation tools must be enabled**: When you add a mutation sub-agent, you also need the matching write flags on. For memory: `tools.memory.node_create / node_edit / node_delete / link_upsert / link_delete / compact_nodes`. The read tools (`find_by_name / keyword_search / node_brief / edge_summary / compaction_candidates / schema`) must also be on for the recon phase to work.',
-            '- **Description still follows the 3-part convention** (Role / Does-not-know / Brief-shape), but the third part lists LOOKUP HINTS (entity names, scene summary) rather than analysis-direction. Example: "Main agent brief: core beats of this turn (1-3 sentences), names of characters / locations involved (comma-separated, for find_by_name)".',
-            '- **Dispatch position**: Mutation sub-agents typically run POST-DRAFT, alongside other housekeepers (`notes_curator`). The main agent waits via `await_subagents` so the mutation completes before finalize. When you add a mutation sub-agent, update the main agent\'s systemPrompt\'s housekeeping step to dispatch it in the parallel housekeeper wave.',
-            '',
-            '## Memory tool verbs available',
-            '',
-            'The `tools.memory.*` namespace includes both read (analyst-friendly) and write (mutation-only) verbs:',
-            '',
-            'Read (safe for any sub-agent or main agent):',
-            '- `schema` — read the active node-type schema',
-            '- `list_candidates` — enumerate the visible recall pool',
-            '- `node_brief` — full canonical view of one node',
-            '- `edge_summary` — degree + sampled relations for one node',
-            '- `expand_seeds` — drill from rollups to children',
-            '- `keyword_search` — token-intersection over title + fields (always available)',
-            '- `vector_search` — semantic similarity (requires embedding profile; throws NO_EMBEDDING_PROFILE otherwise)',
-            '- `find_by_name` — substring match on title + aliases (best for dedup)',
-            '- `compaction_candidates` — read-only query of which groups are eligible for compaction',
-            '',
-            'Write (only enable on mutation sub-agents):',
-            '- `node_create` / `node_edit` / `node_delete` — semantic node lifecycle',
-            '- `link_upsert` / `link_delete` — edges between nodes (canonical relation vocabulary applies)',
-            '- `compact_nodes` — pair with `compaction_candidates`; creates a rollup and reparents children',
-            '',
-            'Pre-draft scouts and post-draft critics should NOT have the write flags on; only mutation sub-agents need them. If the user enables write flags broadly across all sub-agents, suggest narrowing to the mutation sub-agent\'s flags only — a stray write call from an analyst is hard to debug.',
-            '',
-            '## Pre-draft scouts: observations, not prescriptions',
-            '',
-            'Pre-draft scouts (input-side sub-agents) surface OBSERVATIONS and SIGNALS from their lane; they MUST NOT interpret those signals into prescriptions for the main agent. Concretely:',
-            '',
-            '- ✓ "User asked about character X\'s grandmother for the third time" — raw signal',
-            '- ✗ "User wants more emphasis on family lineage" — interpretation prescribing direction',
-            '- ✓ "Lorebook entry says POV must be second-person" — observation of authoritative directive',
-            '- ✗ "Use second-person POV this turn" — prescription (the main agent\'s call given the observation)',
-            '- ✓ "User\'s last message includes \'(写慢些)\' as a parenthetical aside" — raw signal',
-            '- ✗ "Slow down the pacing here" — prescription',
-            '',
-            'Why: interpretation is the main agent\'s privilege. Letting scouts moonlight as interpreters (1) feeds the main agent pre-chewed conclusions instead of raw data, biasing it; (2) lets multiple scouts contradict each other on interpretation while their underlying observations are all valid.',
-            '',
-            'When you design or edit a pre-draft scout, its systemPrompt must teach this discipline explicitly: surface observations with citations, surface a Signal level (high/medium/low) when useful, do NOT propose what the main agent should do. The exception is post-draft critics (output-side), which ARE chartered to give "Maybe-fix" direction — they review existing content, not steer input.',
-            '',
-            '## Direction, not verdict',
-            '',
-            'Sub-agent task briefs (which the main agent constructs at dispatch time, not you) should name a DIRECTION ("analyze for anti-mechanical voice", "scan recent chat for unresolved threads") not a VERDICT ("find the mechanical lines", "the previous turn was off-character"). Verdict-shaped briefs bias the analyst. When you write the main agent\'s systemPrompt, teach this rule.',
-            '',
-            '## Main-agent systemPrompt must be strongly coupled to the concrete sub-agents in this profile',
-            '',
-            'The main agent\'s systemPrompt is NOT a generic "if you have sub-agents..." tutorial. It is the operations manual for THIS specific set of sub-agents. When the sub-agent list changes meaningfully (rename / add / remove / role shift), the main agent\'s systemPrompt may need to change too — it should name the actual configured sub-agents by id and give task-brief shapes for each.',
-            '',
-            'When updating the sub-agent list, decide whether the main-agent systemPrompt is still consistent:',
-            '- If the user has left `mainAgent.systemPrompt` empty (using the built-in default), and the default already references the sub-agents you now have, leave the prompt empty.',
-            '- If the user has left it empty BUT the sub-agent list no longer matches what the built-in default references, write an explicit `mainAgent.systemPrompt` that matches the new list. Reference each sub-agent by id with a task-brief shape.',
-            '- If the user already has a custom `mainAgent.systemPrompt`, patch it minimally to reflect the new sub-agent reality — do not rewrite the whole prompt unless asked.',
-            '',
-            '## 4-phase workflow (a useful pattern)',
-            '',
-            'A common RP workflow runs four phases: RESEARCH (optional pre-draft scouting via input-side sub-agents) → DRAFT (main agent writes) → ANALYSIS (post-draft scans via output-side sub-agents) → INTEGRATE (main agent decides what to fix). When designing sub-agents, think about which phase(s) each one serves. When writing the main agent\'s prompt, the workflow should fall out of the concrete sub-agents — not be force-fit on top.',
-            '',
-            'Shorter / simpler turns skip phases. Sub-agents are tools, not ritual.',
-            '',
-            '## Tool usage',
-            '',
-            '- Use `luker_orch_set_director_main_agent` to patch any subset of mainAgent fields. Omitted fields keep their current value.',
-            '- Use `luker_orch_set_director_subagent` to create-or-update one sub-agent at a time. `id` is required; other fields are patches when the sub-agent exists, initial values when it does not.',
-            '- Use `luker_orch_remove_director_subagent` to delete one sub-agent by id.',
-            '- For memory: read tools (`memory.schema / list_candidates / edge_summary / node_brief / expand_seeds / keyword_search / vector_search / find_by_name / compaction_candidates`) are safe for scouts and analysts; write tools (`memory.node_create / node_edit / node_delete / link_upsert / link_delete / compact_nodes`) should only be enabled on mutation sub-agents (`memory_curator` by default).',
-            '- Use `luker_orch_set_director_limits` for budget changes (maxRounds, maxConcurrentSubagents, maxTotalSubagentRuns, discardOnAbort).',
-            '- Use `luker_orch_set_director_tools` to enable / disable specific loop tools. Pass only the verbs you intend to change.',
-            '- Prefer targeted edits. Do not rewrite the whole profile unless the user explicitly asks.',
-            '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
-            '- Keep output practical and concise for real RP usage.',
-        ].join('\n');
+        return `${withMacros}\n\n${settings.iterModePromptDirector || DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK}`;
     }
     if (isAgendaIterationSession(session)) {
-        return [
-            withMacros,
-            '',
-            'Iteration mode contract:',
-            '- You are editing an existing agenda orchestration profile incrementally.',
-            '- The working profile contains a planner preset, agenda agents, finalAgentId, and runtime limits.',
-            '- The planner preset and agenda agents may optionally set apiPresetName to use a specific Connection Manager profile.',
-            '- Leave planner/agent apiPresetName empty unless the user explicitly asks for per-agent model/provider routing. Empty means fallback to the global orchestration API preset.',
-            '- If you set planner/agent apiPresetName, use only a name from available_connection_profiles.',
-            '- The planner preset and agenda agents may optionally set promptPresetName to use a specific chat completion preset.',
-            '- Leave planner/agent promptPresetName empty unless the user explicitly asks for per-agent chat completion preset routing. Empty means fallback to the global orchestration chat completion preset.',
-            '- If you set planner/agent promptPresetName, use only a name from available_chat_completion_presets.',
-            '- Prefer targeted edits. Do not rewrite the full planner preset unless necessary.',
-            '- Keep the planner preset as the main orchestration contract and keep agent prompts concrete and task-oriented.',
-            '- Use luker_orch_set_agenda_planner to create or update the agenda planner preset.',
-            '- Use luker_orch_set_agenda_agent to create or update one agenda agent at a time.',
-            '- Use luker_orch_set_agenda_final_agent to point final output to an existing agent id.',
-            '- Use luker_orch_set_agenda_limits only for real budget changes, not for stylistic edits.',
-            '- If user asks to test, call luker_orch_simulate with suitable input.',
-            '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
-            '- Keep output practical and concise for real RP usage.',
-        ].join('\n');
+        return `${withMacros}\n\n${settings.iterModePromptAgenda || DEFAULT_AGENDA_ITERATION_MODE_BLOCK}`;
     }
-    // Spec mode (fallback): prepend SPEC_DEFAULT_GUIDANCE_LINES — these are
-    // the stages / nodes / anti_data_guard / lorebook_reader / set_stage /
-    // placeholder-rules instructions that USED to live in the shared
-    // requestSystemPrompt default. They're spec-only; hoisting them here
-    // keeps director / agenda / loop modes from inheriting noise that
-    // doesn't apply (no stages, no nodes, no set_stage tool).
-    return [
-        withMacros,
-        '',
-        ...SPEC_DEFAULT_GUIDANCE_LINES,
-        '',
-        'Iteration mode contract:',
-        '- You are editing an existing orchestration profile incrementally (diff-style).',
-        '- Prefer targeted edits. Do not rebuild everything unless the user explicitly asks.',
-        '- Think through what to change and why before issuing tool calls; output format follows the current prompt policy.',
-        '- Presets may optionally set apiPresetName to use a specific Connection Manager profile.',
-        '- Leave preset apiPresetName empty unless the user explicitly asks for per-agent model/provider routing. Empty means fallback to the global orchestration API preset.',
-        '- If you set preset apiPresetName, use only a name from available_connection_profiles.',
-        '- Presets may optionally set promptPresetName to use a specific chat completion preset.',
-        '- Leave preset promptPresetName empty unless the user explicitly asks for per-agent chat completion preset routing. Empty means fallback to the global orchestration chat completion preset.',
-        '- If you set preset promptPresetName, use only a name from available_chat_completion_presets.',
-        `- Runtime prepends previous orchestration result and approved \`${ORCH_REVIEW_FEEDBACK_FIELD}\` before node template text; do not use placeholders for that context.`,
-        '- Treat the working profile as hierarchical layers. Preserve or improve that layering when editing.',
-        `- Nodes can be worker or review. Review nodes inspect only the directly adjacent previous worker layer, may rerun only specific node ids from that layer, and must emit mandatory \`${ORCH_REVIEW_FEEDBACK_FIELD}\`.`,
-        ...getCriticPromptReminderLines().map(line => `- ${line}`),
-        `- Keep approved worker outputs as passthrough context after review; treat approved \`${ORCH_REVIEW_FEEDBACK_FIELD}\` as supplemental refinement, not a replacement summary.`,
-        '- If more than one layer needs audit, insert multiple review stages after those specific layers instead of using one late critic for everything.',
-        '- Prefer dedicated serial review stages immediately after the worker stages they audit. Do not place review nodes in the final stage.',
-        '- Do not create back-to-back review stages or consecutive critics with no worker layer between them.',
-        `- Use luker_orch_set_node with type="${ORCH_NODE_TYPE_REVIEW}" when a node should behave as a reviewer.`,
-        '- If user asks to test, call luker_orch_simulate with suitable input.',
-        '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
-        '- Keep output practical and concise for real RP usage.',
-    ].join('\n');
+    return `${withMacros}\n\n${settings.iterModePromptSpec || DEFAULT_SPEC_ITERATION_MODE_BLOCK}`;
 }
 
 function buildAiIterationUserPrompt(settings, session, userInputText, {
@@ -4597,6 +4597,10 @@ function bindUi() {
     root.find('#luker_orch_request_api_preset').val(String(settings.requestApiPresetName || ''));
     root.find('#luker_orch_request_llm_preset').val(String(settings.requestLlmPresetName || ''));
     root.find('#luker_orch_request_system_prompt').val(String(settings.requestSystemPrompt || ''));
+    root.find('#luker_orch_iter_mode_prompt_spec').val(String(settings.iterModePromptSpec || ''));
+    root.find('#luker_orch_iter_mode_prompt_loop').val(String(settings.iterModePromptLoop || ''));
+    root.find('#luker_orch_iter_mode_prompt_director').val(String(settings.iterModePromptDirector || ''));
+    root.find('#luker_orch_iter_mode_prompt_agenda').val(String(settings.iterModePromptAgenda || ''));
     root.find('#luker_orch_max_recent_messages').val(String(settings.maxRecentMessages || 14));
     root.find('#luker_orch_node_iterations').val(String(settings.nodeIterationMaxRounds || 3));
     root.find('#luker_orch_review_reruns').val(String(settings.reviewRerunMaxRounds ?? 2));
@@ -5030,6 +5034,44 @@ function bindUi() {
         root.find('#luker_orch_request_system_prompt').val(settings.requestSystemPrompt);
         saveSettingsDebounced();
         notifySuccess(i18n('Reset request system prompt'));
+    });
+
+    root.on('input.lukerOrch', '#luker_orch_iter_mode_prompt_spec', function () {
+        settings.iterModePromptSpec = String(jQuery(this).val() || '');
+        saveSettingsDebounced();
+    });
+    root.on('input.lukerOrch', '#luker_orch_iter_mode_prompt_loop', function () {
+        settings.iterModePromptLoop = String(jQuery(this).val() || '');
+        saveSettingsDebounced();
+    });
+    root.on('input.lukerOrch', '#luker_orch_iter_mode_prompt_director', function () {
+        settings.iterModePromptDirector = String(jQuery(this).val() || '');
+        saveSettingsDebounced();
+    });
+    root.on('input.lukerOrch', '#luker_orch_iter_mode_prompt_agenda', function () {
+        settings.iterModePromptAgenda = String(jQuery(this).val() || '');
+        saveSettingsDebounced();
+    });
+
+    root.on('click.lukerOrch', '#luker_orch_reset_iter_mode_spec', function () {
+        settings.iterModePromptSpec = DEFAULT_SPEC_ITERATION_MODE_BLOCK;
+        root.find('#luker_orch_iter_mode_prompt_spec').val(DEFAULT_SPEC_ITERATION_MODE_BLOCK);
+        saveSettingsDebounced();
+    });
+    root.on('click.lukerOrch', '#luker_orch_reset_iter_mode_loop', function () {
+        settings.iterModePromptLoop = DEFAULT_LOOP_ITERATION_MODE_BLOCK;
+        root.find('#luker_orch_iter_mode_prompt_loop').val(DEFAULT_LOOP_ITERATION_MODE_BLOCK);
+        saveSettingsDebounced();
+    });
+    root.on('click.lukerOrch', '#luker_orch_reset_iter_mode_director', function () {
+        settings.iterModePromptDirector = DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK;
+        root.find('#luker_orch_iter_mode_prompt_director').val(DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK);
+        saveSettingsDebounced();
+    });
+    root.on('click.lukerOrch', '#luker_orch_reset_iter_mode_agenda', function () {
+        settings.iterModePromptAgenda = DEFAULT_AGENDA_ITERATION_MODE_BLOCK;
+        root.find('#luker_orch_iter_mode_prompt_agenda').val(DEFAULT_AGENDA_ITERATION_MODE_BLOCK);
+        saveSettingsDebounced();
     });
 
     root.on('change.lukerOrch', '#luker_orch_max_recent_messages', function () {

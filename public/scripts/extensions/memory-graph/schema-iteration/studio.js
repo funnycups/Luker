@@ -78,7 +78,7 @@ import {
     isMgSchemaControlCall,
 } from './tools.js';
 import { MG_SCHEMA_TOOL_DISPLAY } from './tool-display.js';
-import { buildSystemPrompt } from './system-prompt.js';
+import { buildSystemPrompt, DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT } from './system-prompt.js';
 import { createMgSchemaSessionStore, makeMessageId, normalizeMessageShape } from './session-store.js';
 
 const MODULE = 'mg-schema-iteration';
@@ -437,6 +437,7 @@ export async function openSchemaIterationStudio(deps) {
         root,
         normalizeNodeTypeSchema,
         getEffectiveNodeTypeSchema,
+        getEffectiveSettings,
         getSchemaScopeInfo,
         persistCharacterSchemaOverride,
         saveSettings,
@@ -532,12 +533,18 @@ export async function openSchemaIterationStudio(deps) {
             : '';
         const helperSession = buildHelperSession();
         const globalSchema = normalizeNodeTypeSchema(settings?.nodeTypeSchema || []);
+        const effectiveSettings = typeof getEffectiveSettings === 'function'
+            ? (getEffectiveSettings(context, settings) || settings)
+            : settings;
+        const schemaIterSystemPrompt = String(effectiveSettings?.schemaIterSystemPrompt || '').trim()
+            || DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT;
         return {
             avatar,
             characterName,
             sourceScope: avatar ? 'character' : 'global',
             helperSession,
             globalSchema,
+            schemaIterSystemPrompt,
         };
     }
 
@@ -1203,7 +1210,7 @@ export async function openSchemaIterationStudio(deps) {
         // mid-turn character swap or settings edit can't slice the turn
         // across two different worldviews.
         const turnSnapshot = captureTurnSnapshot();
-        const systemPrompt = appendScopeHintIfNeeded(buildSystemPrompt(), turnSnapshot.helperSession);
+        const systemPrompt = appendScopeHintIfNeeded(turnSnapshot.schemaIterSystemPrompt, turnSnapshot.helperSession);
 
         // For auto-continue rounds, splice a synthetic user message into the
         // visible history so the model has a fresh prompt to react to and the

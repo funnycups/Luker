@@ -1395,6 +1395,7 @@ async function handleAISend() {
             abortSignal: controller.signal,
             llmPresetName,
             apiPresetName: apiProfileName,
+            systemPrompt: ceaSettings.cardAppStudioSystemPrompt,
             onAssistantText: (text) => {
                 if (loadingEl?.parentNode) loadingEl.remove();
                 renderChatMessage('assistant', text);

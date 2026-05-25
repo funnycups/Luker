@@ -268,6 +268,20 @@ export function createCharacterEditorUi(deps) {
             <label for="cea_tool_retries">${escapeHtml(i18n('Tool-call retries on invalid/missing tool call (N)'))}</label>
             <input id="cea_tool_retries" class="text_pole" type="number" min="0" max="10" step="1"/>
 
+            <details class="cea_prompt_overrides">
+                <summary>${escapeHtml(i18n('Custom System Prompts (advanced)'))}</summary>
+                <label for="cea_editor_system_prompt">${escapeHtml(i18n('Editor iteration prompt'))}</label>
+                <textarea id="cea_editor_system_prompt" class="text_pole textarea_compact" rows="8"></textarea>
+                <div class="cea_row">
+                    <div class="menu_button" id="cea_reset_editor_system_prompt">${escapeHtml(i18n('Reset to default'))}</div>
+                </div>
+                <label for="cea_cardapp_studio_system_prompt">${escapeHtml(i18n('CardApp Studio prompt'))}</label>
+                <textarea id="cea_cardapp_studio_system_prompt" class="text_pole textarea_compact" rows="8"></textarea>
+                <div class="cea_row">
+                    <div class="menu_button" id="cea_reset_cardapp_studio_system_prompt">${escapeHtml(i18n('Reset to default'))}</div>
+                </div>
+            </details>
+
             <div class="cea_panel">
                 <div class="cea_row">
                     <div class="menu_button" id="cea_refresh">${escapeHtml(i18n('Refresh'))}</div>
@@ -297,6 +311,8 @@ export function createCharacterEditorUi(deps) {
         root.find('#cea_replace_sync').prop('checked', Boolean(settings.replaceLorebookSyncEnabled));
         root.find('#cea_use_streaming_transport').prop('checked', Boolean(settings.useStreamingTransport));
         root.find('#cea_tool_retries').val(String(settings.toolCallRetryMax ?? defaultSettings.toolCallRetryMax));
+        root.find('#cea_editor_system_prompt').val(String(settings.editorIterationSystemPrompt || ''));
+        root.find('#cea_cardapp_studio_system_prompt').val(String(settings.cardAppStudioSystemPrompt || ''));
         refreshPresetSelectors(root, context, settings);
 
         try {
@@ -373,6 +389,32 @@ export function createCharacterEditorUi(deps) {
         root.on('change.cea', '#cea_tool_retries', function () {
             const settings = getSettings();
             settings.toolCallRetryMax = Math.max(0, Math.min(10, Math.floor(Number(jQuery(this).val()) || 0)));
+            saveSettingsDebounced();
+        });
+
+        root.on('input.cea change.cea', '#cea_editor_system_prompt', function () {
+            const settings = getSettings();
+            settings.editorIterationSystemPrompt = String(jQuery(this).val() || '');
+            saveSettingsDebounced();
+        });
+
+        root.on('input.cea change.cea', '#cea_cardapp_studio_system_prompt', function () {
+            const settings = getSettings();
+            settings.cardAppStudioSystemPrompt = String(jQuery(this).val() || '');
+            saveSettingsDebounced();
+        });
+
+        root.on('click.cea', '#cea_reset_editor_system_prompt', function () {
+            const settings = getSettings();
+            settings.editorIterationSystemPrompt = defaultSettings.editorIterationSystemPrompt;
+            root.find('#cea_editor_system_prompt').val(defaultSettings.editorIterationSystemPrompt);
+            saveSettingsDebounced();
+        });
+
+        root.on('click.cea', '#cea_reset_cardapp_studio_system_prompt', function () {
+            const settings = getSettings();
+            settings.cardAppStudioSystemPrompt = defaultSettings.cardAppStudioSystemPrompt;
+            root.find('#cea_cardapp_studio_system_prompt').val(defaultSettings.cardAppStudioSystemPrompt);
             saveSettingsDebounced();
         });
 

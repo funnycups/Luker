@@ -303,8 +303,8 @@ export function buildJailbreakOnlyModeBlock() {
     ].join('\n');
 }
 
-export function buildModelSystemPrompt({ hasReference = false, mode = SESSION_MODE_DEFAULT } = {}) {
-    const baseLines = [
+export function buildBaseSystemPrompt() {
+    return [
         'You are the AI assistant for the Completion Preset Assistant.',
         'You are editing one Luker chat completion preset (OpenAI-style).',
         'Edit prompt-related preset content only.',
@@ -325,12 +325,8 @@ export function buildModelSystemPrompt({ hasReference = false, mode = SESSION_MO
         '',
         'Inspection tools (read-only, no edits proposed):',
         '- preset_read_live_fields — exact values from the current live preset by lodash-style paths.',
-        hasReference
-            ? '- preset_read_reference_fields — exact values from the selected reference preset.'
-            : '- (preset_read_reference_fields unavailable — no reference preset is selected.)',
-        hasReference
-            ? '- preset_diff_reference — structural diff of prompt layout between live and the selected reference.'
-            : '- (preset_diff_reference unavailable — no reference preset is selected.)',
+        '- preset_read_reference_fields — exact values from the selected reference preset (available when a reference preset is selected).',
+        '- preset_diff_reference — structural diff of prompt layout between live and the selected reference (available when a reference preset is selected).',
         '- preset_simulate — simulate prompt assembly for the current preset. Prefer the `text` argument so the tool appends one user message to the current chat context.',
         '',
         'Session-target tools:',
@@ -341,9 +337,7 @@ export function buildModelSystemPrompt({ hasReference = false, mode = SESSION_MO
         '- If you call any read-only inspection tool in a round, do not emit edit tool calls in that same round — wait for the next round to act on what you learned.',
         '- Use lodash-style paths like new_chat_prompt or prompts[0].content for preset_set_field / preset_str_*.',
         '- For preset_set_field, value_json must be valid JSON text.',
-        hasReference
-            ? '- Use preset_copy_from_reference only when the selected reference preset already contains the desired content.'
-            : '- (preset_copy_from_reference unavailable — no reference preset is selected.)',
+        '- Use preset_copy_from_reference only when the selected reference preset already contains the desired content (available when a reference preset is selected).',
         '- For destructive edits (removing prompts, rewriting large sections, structural rework), default to suggesting derivation via preset_clone_to_new so the original stays intact. Apply the destructive edits to the clone unless the user explicitly says to edit in place.',
         '- If no changes are needed, reply briefly without tool calls.',
         '',
@@ -362,16 +356,16 @@ export function buildModelSystemPrompt({ hasReference = false, mode = SESSION_MO
         'Multi-round iteration control:',
         '- The popup auto-continues whenever you emit any tool call this round — your tool results become context for the next round so you can react to them.',
         '- To end the iteration, simply respond with a plain text message and emit no tool calls. The loop exits and control returns to the user.',
-    ];
+    ].join('\n');
+}
 
+export function buildModelSystemPrompt({ mode = SESSION_MODE_DEFAULT } = {}) {
+    const base = buildBaseSystemPrompt();
     const safeMode = sanitizeSessionMode(mode);
     const modeBlock = safeMode === 'orchestrator-optimize'
         ? buildOrchestratorOptimizeModeBlock()
         : safeMode === 'jailbreak-only'
             ? buildJailbreakOnlyModeBlock()
             : '';
-
-    return modeBlock
-        ? `${baseLines.join('\n')}\n${modeBlock}`
-        : baseLines.join('\n');
+    return modeBlock ? `${base}\n${modeBlock}` : base;
 }

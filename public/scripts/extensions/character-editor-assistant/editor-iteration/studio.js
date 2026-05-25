@@ -1947,6 +1947,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                 helperApis,
                 abortSignal: ac.signal,
                 hasSearchTools,
+                systemPrompt: settings?.editorIterationSystemPrompt,
                 i18n: { t, tf },
                 onTurnUpdate: async () => {
                     await persistSession();

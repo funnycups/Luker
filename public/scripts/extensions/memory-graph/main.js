@@ -38,6 +38,7 @@ import {
     parseSchemaImportPayload,
 } from './import-export.js';
 import { openSchemaIterationStudio } from './schema-iteration/studio.js';
+import { DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT } from './schema-iteration/system-prompt.js';
 import { performFuzzySearch } from '../../power-user.js';
 import { download, getFileText, getStringHash } from '../../utils.js';
 import { newWorldInfoEntryTemplate, setGlobalWorldInfoSelection, world_info_position } from '../../world-info.js';
@@ -752,6 +753,7 @@ const defaultSettings = {
     requestApiPresetName: '',
     requestLlmPresetName: '',
     extractSystemPrompt: DEFAULT_EXTRACT_SYSTEM_PROMPT,
+    schemaIterSystemPrompt: DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT,
     extractBatchTurns: 1,
     extractContextTurns: 2,
     extractExcludeRecentTurns: 0,
@@ -1128,6 +1130,7 @@ function ensureSettings() {
     );
     extension_settings[MODULE_NAME].includeWorldInfoWithPreset = extension_settings[MODULE_NAME].includeWorldInfoWithPreset !== false;
     extension_settings[MODULE_NAME].extractSystemPrompt = String(extension_settings[MODULE_NAME].extractSystemPrompt || '').trim() || DEFAULT_EXTRACT_SYSTEM_PROMPT;
+    extension_settings[MODULE_NAME].schemaIterSystemPrompt = String(extension_settings[MODULE_NAME].schemaIterSystemPrompt || '').trim() || DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT;
     extension_settings[MODULE_NAME].recallRouteSystemPrompt = String(extension_settings[MODULE_NAME].recallRouteSystemPrompt || '').trim() || DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT;
     extension_settings[MODULE_NAME].recallFinalizeSystemPrompt = String(extension_settings[MODULE_NAME].recallFinalizeSystemPrompt || '').trim() || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT;
     extension_settings[MODULE_NAME].nodeTypeSchema = normalizeNodeTypeSchema(extension_settings[MODULE_NAME].nodeTypeSchema);
@@ -1193,6 +1196,7 @@ function normalizeAdvancedSettings(source = null, fallbackSource = null) {
             Math.floor(Number.isFinite(rpmLimitRaw) ? rpmLimitRaw : Number(base.rpmLimit ?? defaultSettings.rpmLimit)),
         ),
         extractSystemPrompt: String(input.extractSystemPrompt || '').trim() || String(base.extractSystemPrompt || DEFAULT_EXTRACT_SYSTEM_PROMPT),
+        schemaIterSystemPrompt: String(input.schemaIterSystemPrompt || '').trim() || String(base.schemaIterSystemPrompt || DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT),
         recallRouteSystemPrompt: String(input.recallRouteSystemPrompt || '').trim() || String(base.recallRouteSystemPrompt || DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT),
         recallFinalizeSystemPrompt: String(input.recallFinalizeSystemPrompt || '').trim() || String(base.recallFinalizeSystemPrompt || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT),
     };
@@ -1214,6 +1218,7 @@ function applyAdvancedSettings(target, values) {
     target.recallQueryMessages = normalized.recallQueryMessages;
     target.extractBatchTurns = normalized.extractBatchTurns;
     target.extractSystemPrompt = normalized.extractSystemPrompt;
+    target.schemaIterSystemPrompt = normalized.schemaIterSystemPrompt;
     target.recallRouteSystemPrompt = normalized.recallRouteSystemPrompt;
     target.recallFinalizeSystemPrompt = normalized.recallFinalizeSystemPrompt;
 }
@@ -13251,6 +13256,7 @@ async function openAdvancedSettingsPopup(context, settings, root) {
         DEFAULT_EXTRACT_SYSTEM_PROMPT,
         DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT,
         DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT,
+        DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT,
         defaultSettings,
         escapeHtml,
         i18n,
@@ -13285,6 +13291,7 @@ async function openAdvancedSettingsPopup(context, settings, root) {
         popupRoot.find(`#${popupId}_extract_system_prompt`).val(String(source.extractSystemPrompt || DEFAULT_EXTRACT_SYSTEM_PROMPT));
         popupRoot.find(`#${popupId}_recall_route_prompt`).val(String(source.recallRouteSystemPrompt || DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT));
         popupRoot.find(`#${popupId}_recall_finalize_prompt`).val(String(source.recallFinalizeSystemPrompt || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT));
+        popupRoot.find(`#${popupId}_schema_iter_system_prompt`).val(String(source.schemaIterSystemPrompt || DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT));
     };
     const setPopupScopeUi = (nextScopeInfo) => {
         const popupRoot = getPopupRoot();
@@ -13339,6 +13346,7 @@ async function openAdvancedSettingsPopup(context, settings, root) {
             extractSystemPromptValue: String(popupRoot.find(`#${popupId}_extract_system_prompt`).val() || '').trim(),
             recallRoutePromptValue: String(popupRoot.find(`#${popupId}_recall_route_prompt`).val() || '').trim(),
             recallFinalizePromptValue: String(popupRoot.find(`#${popupId}_recall_finalize_prompt`).val() || '').trim(),
+            schemaIterSystemPromptValue: String(popupRoot.find(`#${popupId}_schema_iter_system_prompt`).val() || '').trim(),
         };
     };
     const buildAdvancedSettingsFromValues = (values, fallbackSettings) => normalizeAdvancedSettings({
@@ -13359,6 +13367,7 @@ async function openAdvancedSettingsPopup(context, settings, root) {
         extractSystemPrompt: values.extractSystemPromptValue,
         recallRouteSystemPrompt: values.recallRoutePromptValue,
         recallFinalizeSystemPrompt: values.recallFinalizePromptValue,
+        schemaIterSystemPrompt: values.schemaIterSystemPromptValue,
     }, fallbackSettings);
 
     const popupPromise = context.callGenericPopup(
@@ -13983,6 +13992,7 @@ function bindUi() {
             root,
             normalizeNodeTypeSchema,
             getEffectiveNodeTypeSchema,
+            getEffectiveSettings,
             getSchemaScopeInfo,
             persistCharacterSchemaOverride,
             saveSettings,

@@ -48,6 +48,7 @@ export function buildAdvancedSettingsPopupHtml(deps, popupId, scopeInfo) {
         DEFAULT_EXTRACT_SYSTEM_PROMPT,
         DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT,
         DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT,
+        DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT,
         defaultSettings,
         escapeHtml,
         i18n,
@@ -58,6 +59,7 @@ export function buildAdvancedSettingsPopupHtml(deps, popupId, scopeInfo) {
     const extractPrompt = String(settings.extractSystemPrompt || defaultSettings.extractSystemPrompt || '');
     const routePrompt = String(settings.recallRouteSystemPrompt || defaultSettings.recallRouteSystemPrompt || '');
     const finalizePrompt = String(settings.recallFinalizeSystemPrompt || defaultSettings.recallFinalizeSystemPrompt || '');
+    const schemaIterPrompt = String(settings.schemaIterSystemPrompt || defaultSettings.schemaIterSystemPrompt || '');
     const scopeText = scopeInfo?.hasOverride
         ? i18nFormat('Advanced scope: character override (${0})', scopeInfo.characterName || scopeInfo.avatar || i18n('(unset)'))
         : i18n('Advanced scope: global');
@@ -118,6 +120,9 @@ export function buildAdvancedSettingsPopupHtml(deps, popupId, scopeInfo) {
     </label>
     <label>${escapeHtml(i18n('Recall Stage 2 Prompt (Finalize)'))}
         <textarea id="${popupId}_recall_finalize_prompt" class="text_pole textarea_compact" rows="8">${escapeHtml(finalizePrompt || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT)}</textarea>
+    </label>
+    <label>${escapeHtml(i18n('Schema Iteration Prompt (schema-editor AI)'))}
+        <textarea id="${popupId}_schema_iter_system_prompt" class="text_pole textarea_compact" rows="8">${escapeHtml(schemaIterPrompt || DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT)}</textarea>
     </label>
     <div class="luker-rpg-memory-advanced-footer">
         <div class="luker-rpg-memory-advanced-footer-meta">

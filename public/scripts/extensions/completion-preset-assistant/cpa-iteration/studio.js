@@ -1021,7 +1021,14 @@ export async function openCpaIterationStudio(deps) {
 
         const hasReference = Boolean(state.reference);
         const mode = sanitizeSessionMode(state.session.surfaceState?.sessionMode);
-        const systemPrompt = buildModelSystemPrompt({ hasReference, mode });
+        const settings = typeof getSettings === 'function' ? (getSettings() || {}) : {};
+        const base = settings.iterBaseSystemPrompt;
+        const modeBlock = mode === 'orchestrator-optimize'
+            ? settings.iterModePromptOrchestratorOptimize
+            : mode === 'jailbreak-only'
+                ? settings.iterModePromptJailbreakOnly
+                : '';
+        const systemPrompt = modeBlock ? `${base}\n${modeBlock}` : base;
         const tools = buildToolCatalog({ hasReference });
 
         // For auto-continue rounds, splice a synthetic user message into the
@@ -1042,7 +1049,6 @@ export async function openCpaIterationStudio(deps) {
 
         const taskMessages = buildTaskMessages(systemPrompt);
 
-        const settings = typeof getSettings === 'function' ? (getSettings() || {}) : {};
         const presetOptions = typeof getRequestPresetOptions === 'function'
             ? (getRequestPresetOptions() || {})
             : {};
