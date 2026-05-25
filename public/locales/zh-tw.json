@@ -5263,7 +5263,7 @@
     ,"📖 Read doc": "📖 讀取文件"
     ,"🔌 Toggle CardApp": "🔌 啟用/停用 CardApp"
     ,"Max request retries (0 = disabled)": "請求重試次數上限（0 表示關閉）"
-    ,"Retries on network errors and HTTP 429 / 5xx with exponential backoff. Streaming responses are not retried after the stream begins.": "在網路錯誤以及 HTTP 429 / 5xx 時按指數退避重試。流式回應開始後斷開不會重試。"
+    ,"Applies to both text and image generation. Retries on network errors and rate-limit / server errors. Streaming responses are not retried after the stream begins.": "對文字生成和影像生成請求都生效。遇到網路錯誤、上游限流或伺服器錯誤時會自動重試。串流回應開始後斷開不會重試。"
     ,"Max request retries": "請求重試次數上限"
     ,"Request failed": "請求失敗"
     ,"Image generation failed": "圖像生成失敗"

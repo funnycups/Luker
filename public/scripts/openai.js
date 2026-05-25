@@ -3864,8 +3864,8 @@ function applyParsedPlainTextToolCallsToResponse(responseData, inspection) {
     return responseData;
 }
 
-async function postChatCompletionGenerateRequest(requestBody, signal, { quietErrors = false } = {}) {
-    const maxRetries = getMaxRequestRetries();
+async function postChatCompletionGenerateRequest(requestBody, signal, { quietErrors = false, apiPresetName = '' } = {}) {
+    const maxRetries = getMaxRequestRetries(apiPresetName);
 
     const response = await withRetry(async () => {
         return await fetch('/api/backends/chat-completions/generate', {
@@ -3915,6 +3915,7 @@ async function attemptPlainTextFunctionCallRetry({
     jsonSchema = null,
     responseLength = null,
     requestSecretId = '',
+    apiPresetName = '',
 } = {}) {
     let currentResponseData = initialResponseData;
     let currentInspection = inspectPlainTextFunctionCallResponse(initialResponseData, runtimeFunctionCallContext);
@@ -3959,7 +3960,7 @@ async function attemptPlainTextFunctionCallRetry({
                 requestBody.secret_id = requestSecretId;
             }
 
-            const retryResponse = await postChatCompletionGenerateRequest(requestBody, signal, { quietErrors: true });
+            const retryResponse = await postChatCompletionGenerateRequest(requestBody, signal, { quietErrors: true, apiPresetName });
             const retryData = await retryResponse.json();
             checkQuotaError(retryData, { quiet: true });
             checkModerationError(retryData, { quiet: true });
@@ -4134,7 +4135,7 @@ async function sendOpenAIRequest(type, messages, signal, {
             });
         }
     }
-    const response = await postChatCompletionGenerateRequest(requestBody, signal);
+    const response = await postChatCompletionGenerateRequest(requestBody, signal, { apiPresetName });
     const generationIdHeader = response.headers.get('x-luker-generation-id');
     if (shouldTrackLukerGenerationState && generationIdHeader) {
         lastOpenAIGenerationId = generationIdHeader;
@@ -4184,6 +4185,7 @@ async function sendOpenAIRequest(type, messages, signal, {
                             jsonSchema,
                             responseLength,
                             requestSecretId,
+                            apiPresetName,
                         });
                         const inspection = retryOutcome.inspection;
                         if (inspection.error) {
@@ -4299,6 +4301,7 @@ async function sendOpenAIRequest(type, messages, signal, {
                 jsonSchema,
                 responseLength,
                 requestSecretId,
+                apiPresetName,
             });
             data = retryOutcome.responseData;
             const inspection = retryOutcome.inspection;
