@@ -160,6 +160,12 @@ const zhCNSidebar = [
   ],
   },
   {
+  text: '实战指南',
+  items: [
+  { text: '多Agent上手：预设、记忆图、网络搜索', link: '/zh-CN/recipes/agent-onboarding' },
+  ],
+  },
+  {
   text: '开发文档',
   items: [
   { text: '前端插件开发', link: '/zh-CN/development/frontend-plugin' },
@@ -285,6 +291,12 @@ const zhTWSidebar = [
     ],
   },
   {
+    text: '實戰指南',
+    items: [
+      { text: '多Agent上手：預設、記憶圖、網路搜尋', link: '/zh-TW/recipes/agent-onboarding' },
+    ],
+  },
+  {
     text: '開發文檔',
     items: [
       { text: '前端外掛開發', link: '/zh-TW/development/frontend-plugin' },
@@ -407,6 +419,12 @@ const enSidebar = [
       { text: 'World Info Activation Trace', link: '/features/world-info-trace' },
       { text: 'Plugin-Registered Regex', link: '/features/regex-provider' },
       { text: 'Other Features', link: '/features/other-features' },
+    ],
+  },
+  {
+    text: 'Recipes',
+    items: [
+      { text: 'Multi-agent setup: presets, memory graph, web search', link: '/recipes/agent-onboarding' },
     ],
   },
   {
