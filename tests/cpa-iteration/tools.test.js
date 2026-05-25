@@ -193,19 +193,19 @@ describe('CPA — preset_clone_to_new (restored as side-effecting read tool)', (
         expect(empty.error).toMatch(/non-empty new_name/);
     });
 
-    test('runCpaReadTool surfaces the host-stub error path to the AI', async () => {
-        // Mirror the production main.js stub that returns { ok: false, error: ... }
-        // (auto-clone wiring is not yet implemented). The dispatcher must
-        // propagate the host's error verbatim instead of throwing.
+    test('runCpaReadTool surfaces the host error path to the AI', async () => {
+        // When the host's cloneAndSwitchTarget returns { ok: false, error },
+        // the dispatcher must propagate that error verbatim instead of
+        // throwing or replacing it — the AI sees the actionable message.
         const ctx = {
             cloneAndSwitchTarget: async () => ({
                 ok: false,
-                error: 'Auto-clone is not wired yet. Please save a copy manually via the preset dropdown\'s Save As button, then re-run.',
+                error: 'Preset save failed: server unreachable.',
             }),
         };
         const out = await runCpaReadTool({ name: 'preset_clone_to_new', args: { new_name: 'foo' } }, ctx);
         expect(out.ok).toBe(false);
-        expect(out.error).toMatch(/Auto-clone is not wired yet/);
+        expect(out.error).toMatch(/server unreachable/);
     });
 
     test('runCpaReadTool catches synchronous throws from cloneAndSwitchTarget', async () => {

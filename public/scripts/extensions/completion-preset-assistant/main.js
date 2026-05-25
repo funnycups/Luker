@@ -303,19 +303,45 @@ async function openCpaIteration() {
             llmPresetName: String(getSettings()?.requestLlmPresetName || '').trim(),
             apiPresetName: String(getSettings()?.requestApiPresetName || '').trim(),
         }),
-        // `preset_clone_to_new` tool wiring. The real implementation needs a
-        // SillyTavern preset-save + popup-target swap; until that's plumbed,
-        // the stub returns a structured failure so the model's tool result
-        // surfaces an actionable message in chat ("save a copy manually
-        // via Save As, then re-run") rather than silently no-op'ing. The
-        // prompt-side safety-net intent (suggest derivation before
-        // destructive edits) is preserved either way — the AI sees the
-        // unavailability and can still suggest the manual fallback.
-        cloneAndSwitchTarget: async (_newName) => {
-            return {
-                ok: false,
-                error: 'Auto-clone is not wired yet. Please save a copy manually via the preset dropdown\'s Save As button, then re-run.',
-            };
+        // `preset_clone_to_new` tool wiring. Snapshots the popup's current
+        // target body (stored on disk, not the sandbox), saves it under
+        // `newName`, and `select: true` flips the popup's target so the
+        // AI's next edits land on the clone — matches the prompt-side
+        // "derive before destructive edit" safety pattern.
+        cloneAndSwitchTarget: async (newName) => {
+            const trimmedName = String(newName || '').trim();
+            if (!trimmedName) {
+                return { ok: false, error: 'New preset name is required.' };
+            }
+            const ctx = getContext();
+            const existing = findCanonicalPresetName(getOpenAIPresetNames(ctx), trimmedName);
+            if (existing) {
+                return { ok: false, error: `Preset already exists: ${existing}` };
+            }
+            const sourceRef = getTargetRef();
+            if (!sourceRef) {
+                return { ok: false, error: 'No source preset to clone.' };
+            }
+            const stored = ctx?.presets?.getStored?.(sourceRef);
+            const sourceBody = isPlainObject(stored?.body)
+                ? stored.body
+                : await ctx.presets.get(sourceRef);
+            if (!isPlainObject(sourceBody)) {
+                return { ok: false, error: 'No source preset body to clone.' };
+            }
+            try {
+                const result = await ctx.presets.save(
+                    { collection: 'openai', name: trimmedName },
+                    clone(sourceBody, {}),
+                    { select: true },
+                );
+                if (!result?.ok || !result?.ref) {
+                    return { ok: false, error: 'Save returned no ref.' };
+                }
+                return { ok: true };
+            } catch (err) {
+                return { ok: false, error: String(err?.message || err || 'clone failed') };
+            }
         },
     });
 }
