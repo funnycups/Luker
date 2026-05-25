@@ -4014,17 +4014,32 @@ async function sendOpenAIRequest(type, messages, signal, {
         signal = new AbortController().signal;
     }
 
-    // RPM throttle gate. Bucket keyed by the currently-selected connection profile;
-    // skipped when no profile is selected or rpm-limit is unset/zero.
+    // RPM throttle gate. When apiPresetName is provided (typical for
+    // generateTask callers), look the named profile up so plugin requests
+    // get throttled against their own profile's bucket rather than the
+    // main-chat profile's. Falls back to selectedProfile otherwise.
+    // Skipped when no profile is resolved or rpm-limit is unset/zero.
     const cmSettings = extension_settings?.connectionManager;
-    const activeProfileId = cmSettings?.selectedProfile;
-    if (activeProfileId) {
-        const activeProfile = cmSettings.profiles?.find(p => p.id === activeProfileId);
-        const activeRpm = Number(activeProfile?.['rpm-limit']) || 0;
+    const cmProfiles = cmSettings?.profiles;
+    let throttleProfile = null;
+    if (Array.isArray(cmProfiles) && cmProfiles.length > 0) {
+        const trimmedName = String(apiPresetName || '').trim();
+        if (trimmedName) {
+            throttleProfile = cmProfiles.find(p => p?.name === trimmedName) || null;
+        }
+        if (!throttleProfile) {
+            const activeProfileId = cmSettings?.selectedProfile;
+            if (activeProfileId) {
+                throttleProfile = cmProfiles.find(p => p.id === activeProfileId) || null;
+            }
+        }
+    }
+    if (throttleProfile) {
+        const activeRpm = Number(throttleProfile['rpm-limit']) || 0;
         if (activeRpm > 0) {
-            await acquireRequestSlot(activeProfileId, activeRpm, {
+            await acquireRequestSlot(throttleProfile.id, activeRpm, {
                 signal,
-                label: activeProfile?.name || activeProfileId,
+                label: throttleProfile.name || throttleProfile.id,
             });
         }
     }
