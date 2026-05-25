@@ -975,14 +975,23 @@ export async function openSchemaIterationStudio(deps) {
         // for buildTaskMessages to feed the LLM, but the user shouldn't
         // see them as chat noise.
         const allMsgs = (state.session.messages || []).filter(m => !(m?.role === 'user' && m?.auto));
+        // `state.pendingEdits` is the source of truth for "this round is
+        // staged and awaiting review". When it's empty (Discard cleared
+        // it, or Apply landed with zero clean edits), no message should
+        // carry an Apply/Reject row — even though `m.edits` is still
+        // retained on the assistant message for diff history / rollback.
+        // Short-circuit before scanning so the inline controls disappear
+        // the moment the batch is resolved.
         let latestUnappliedAssistantId = '';
-        for (let i = allMsgs.length - 1; i >= 0; i--) {
-            const m = allMsgs[i];
-            if (m && m.role === 'assistant' && !m.auto
-                && Array.isArray(m.edits) && m.edits.length > 0
-                && !m.appliedAt && !m.rolledBackAt) {
-                latestUnappliedAssistantId = String(m.id || '');
-                break;
+        if (Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0) {
+            for (let i = allMsgs.length - 1; i >= 0; i--) {
+                const m = allMsgs[i];
+                if (m && m.role === 'assistant' && !m.auto
+                    && Array.isArray(m.edits) && m.edits.length > 0
+                    && !m.appliedAt && !m.rolledBackAt) {
+                    latestUnappliedAssistantId = String(m.id || '');
+                    break;
+                }
             }
         }
         state.__latestUnappliedAssistantId = latestUnappliedAssistantId;
@@ -1383,9 +1392,20 @@ export async function openSchemaIterationStudio(deps) {
         // apply loop at applyPendingEdits already mirrors this assumption
         // (it iterates applyEmptyPathSet over every edit and the last
         // edit's newValue holds the cumulative state).
+        //
+        // Failures and no-op outcomes push a `role: 'tool'`-shaped result
+        // onto the assistant message's toolResults so buildTaskMessages
+        // re-emits them as tool replies in the next round. Previous
+        // versions pushed a `role: 'system'` chat message on error, which
+        // buildTaskMessages filters out — the model never learned that
+        // its tool call failed and would re-emit the same broken call.
         const edits = [];
+        const editToolResults = [];
         let chainedLive = state.live;
         for (const call of editToolCalls) {
+            const name = String(call?.name || '');
+            const callId = String(call?.id || `edit_${editToolResults.length}_${Date.now().toString(36)}`);
+            call.id = callId;
             try {
                 const normalized = await normalizeToolCallToEdit(
                     wrapToolCallForNormalize(call),
@@ -1399,16 +1419,26 @@ export async function openSchemaIterationStudio(deps) {
                     // MG normalize only emits path:'' set edits, so the
                     // cumulative state is just the last edit's newValue.
                     chainedLive = normalized[normalized.length - 1].newValue;
+                    // Successful queued edits don't push a toolResult here —
+                    // the post-review synthetic user message carries the
+                    // real outcome (applied vs skipped). Adding "queued"
+                    // would double the per-tool feedback.
+                } else {
+                    // Executor returned null/empty. AI can't see what went
+                    // wrong without a tool-shaped reply, so surface it.
+                    editToolResults.push({
+                        tool_call_id: callId,
+                        content: { status: 'noop', message: 'No edits produced for this call. The executor returned no change; verify args (node_type identifier, value shape) or read the current schema and retry.' },
+                        status: 'fail',
+                    });
                 }
-                // null (executor failure) → skip silently; the AI can retry.
             } catch (err) {
                 // eslint-disable-next-line no-console
-                console.warn(`[${MODULE}] normalizeToolCallToEdit failed for ${String(call?.name || '')}`, err);
-                state.session.messages.push({
-                    id: makeMessageId(),
-                    role: 'system',
-                    content: tf('Edit error: ${0}', String(err?.message || err)),
-                    at: Date.now(),
+                console.warn(`[${MODULE}] normalizeToolCallToEdit failed for ${name}`, err);
+                editToolResults.push({
+                    tool_call_id: callId,
+                    content: { error: String(err?.message || err || 'normalize failed') },
+                    status: 'fail',
                 });
             }
         }
@@ -1443,8 +1473,8 @@ export async function openSchemaIterationStudio(deps) {
                 args: tc?.args ?? {},
             }));
         }
-        if (persistedToolResults.length > 0) {
-            assistantMsg.toolResults = persistedToolResults;
+        if (persistedToolResults.length > 0 || editToolResults.length > 0) {
+            assistantMsg.toolResults = [...persistedToolResults, ...editToolResults];
         }
         if (edits.length > 0) {
             assistantMsg.edits = edits.slice();
@@ -1462,12 +1492,33 @@ export async function openSchemaIterationStudio(deps) {
         bumpChatBadge();
 
         // Composer-row auto-apply: if enabled AND this turn produced edits,
-        // apply immediately. Errors are caught locally so the runner's
-        // outer finally still resets isBusy + persists the session.
+        // apply immediately. When auto-apply runs we still push a synthetic
+        // apply-outcome user message so the next round's buildTaskMessages
+        // can replay it and the model sees which edits actually took
+        // effect — same truthful signal review-mode gets via continueAfter-
+        // ReviewDecision.
         const autoApplyOn = Boolean(state.session.surfaceState?.autoApply);
         if (autoApplyOn && state.pendingEdits.length > 0) {
+            const autoCount = state.pendingEdits.length;
             try {
-                await applyPendingEdits({ skipRender: true });
+                const outcome = await applyPendingEdits({ skipRender: true });
+                if (outcome) {
+                    const text = buildApplyOutcomeUserText({
+                        count: autoCount,
+                        applied: outcome.applied,
+                        conflicts: outcome.conflicts,
+                        alreadyDone: outcome.alreadyDone,
+                        target: 'schema',
+                        autoApply: true,
+                    });
+                    state.session.messages.push({
+                        id: makeMessageId(),
+                        role: 'user',
+                        content: text,
+                        at: Date.now(),
+                        auto: true,
+                    });
+                }
             } catch (err) {
                 // eslint-disable-next-line no-console
                 console.warn(`[${MODULE}] auto-apply failed`, err);
@@ -1500,63 +1551,94 @@ export async function openSchemaIterationStudio(deps) {
     // and a Rollback button.
     // ──────────────────────────────────────────────────────────────────
     async function applyPendingEdits({ skipRender = false } = {}) {
-        if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) return;
+        if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) {
+            return { proposed: 0, applied: 0, conflicts: [], alreadyDone: [] };
+        }
         if (!state.live) await loadLive();
         const liveSnapshot = state.live;
+        const editsBatch = state.pendingEdits.slice();
         // Sandbox-diff emits a coarse {op:'set', path:'', newValue:<whole schema>}
         // per tool call. lodash.set with empty path is a no-op, so the shared
         // applyEdits engine silently skips them. Chain-apply each edit so that
         // batches of 2+ empty-path sets (multiple mg_schema_* calls in one
         // turn) land both — falling back to applyEdits for any non-empty-path
-        // edit keeps fine-grained ops working too.
+        // edit keeps fine-grained ops working too. Accumulate per-edit
+        // outcomes so the apply truth (clean vs conflict vs already-done)
+        // can travel back to the AI through the synthetic feedback message.
         let liveCursor = state.live;
-        for (const edit of state.pendingEdits) {
+        const cleanEdits = [];
+        const conflicts = [];
+        const alreadyDone = [];
+        for (const edit of editsBatch) {
             if (edit?.op === 'set' && edit?.path === '' && typeof edit?.newValue !== 'undefined') {
                 liveCursor = applyEmptyPathSet(liveCursor, edit);
+                cleanEdits.push(edit);
             } else {
                 const result = applyEdits([edit], liveCursor);
                 liveCursor = result?.newLive ?? liveCursor;
+                if (Array.isArray(result?.clean)) cleanEdits.push(...result.clean);
+                if (Array.isArray(result?.conflicts)) conflicts.push(...result.conflicts);
+                if (Array.isArray(result?.alreadyDone)) alreadyDone.push(...result.alreadyDone);
             }
         }
-        state.live = liveCursor;
-        try {
-            await commitLiveToSchema();
-        } catch (err) {
-            state.live = liveSnapshot;
-            // eslint-disable-next-line no-console
-            console.warn(`[${MODULE}] commitLiveToSchema failed`, err);
-            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* toastr may be unavailable in tests */ }
-            state.session.messages.push({
-                id: makeMessageId(),
-                role: 'system',
-                content: tf('Failed to save schema: ${0}', String(err?.message || err)),
-                at: Date.now(),
-            });
-            await persistSession();
-            if (!skipRender) await render();
-            return;
+        const appliedCount = cleanEdits.length;
+
+        if (appliedCount > 0) {
+            state.live = liveCursor;
+            try {
+                await commitLiveToSchema();
+            } catch (err) {
+                state.live = liveSnapshot;
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] commitLiveToSchema failed`, err);
+                try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* toastr may be unavailable in tests */ }
+                state.session.messages.push({
+                    id: makeMessageId(),
+                    role: 'system',
+                    content: tf('Failed to save schema: ${0}', String(err?.message || err)),
+                    at: Date.now(),
+                });
+                await persistSession();
+                if (!skipRender) await render();
+                return { proposed: editsBatch.length, applied: 0, conflicts, alreadyDone, commitFailed: true };
+            }
         }
 
-        try { toastr.success(tf('Applied to ${0}', t('schema'))); } catch { /* ignore */ }
+        try {
+            if (appliedCount === editsBatch.length) {
+                toastr.success(tf('Applied ${0} edit(s) to ${1}', String(appliedCount), t('schema')));
+            } else if (appliedCount > 0) {
+                toastr.warning(tf('Applied ${0} of ${1} edit(s) to ${2}; ${3} skipped',
+                    String(appliedCount), String(editsBatch.length), t('schema'),
+                    String(conflicts.length + alreadyDone.length)));
+            } else {
+                toastr.warning(tf('No edits applied to ${0}: all ${1} were skipped (conflicts or already in desired state)',
+                    t('schema'), String(editsBatch.length)));
+            }
+        } catch { /* ignore */ }
 
         // Mark the most recent unapplied assistant message that owns these
-        // edits. We scan back from the end because the just-rendered turn
-        // is the typical target; rare cases (user clicks Apply on a stale
-        // session reopened with persisted pendingEdits) still hit a sane
-        // candidate as long as one exists.
-        const messages = state.session.messages || [];
-        for (let i = messages.length - 1; i >= 0; i--) {
-            const m = messages[i];
-            if (m.role === 'assistant' && Array.isArray(m.edits) && m.edits.length > 0 && !m.appliedAt) {
-                m.appliedAt = Date.now();
-                m.appliedTarget = 'schema';
-                break;
+        // edits. Only stamp appliedAt when at least one edit actually
+        // landed — a zero-clean batch should not render the IDE-style "✓
+        // Applied" check.
+        if (appliedCount > 0) {
+            const messages = state.session.messages || [];
+            for (let i = messages.length - 1; i >= 0; i--) {
+                const m = messages[i];
+                if (m.role === 'assistant' && Array.isArray(m.edits) && m.edits.length > 0 && !m.appliedAt) {
+                    m.appliedAt = Date.now();
+                    m.appliedTarget = 'schema';
+                    m.appliedCount = appliedCount;
+                    m.appliedProposed = editsBatch.length;
+                    break;
+                }
             }
         }
 
         state.pendingEdits = [];
         await persistSession();
         if (!skipRender) await render();
+        return { proposed: editsBatch.length, applied: appliedCount, conflicts, alreadyDone };
     }
 
     async function discardPendingEdits() {
@@ -1575,10 +1657,52 @@ export async function openSchemaIterationStudio(deps) {
      * loop, mirroring the IDE pattern (approve → tool result lands →
      * agent continues; reject → agent reconsiders).
      */
-    async function continueAfterReviewDecision({ action, count }) {
+    /**
+     * Build the synthetic user-message text the next round sees after a
+     * batch is applied (review-mode click or auto-apply). The model reads
+     * this verbatim — keep the per-edit "skipped because X" detail intact
+     * so the LLM can correct its next round (fix the path / value / args)
+     * instead of looping the same broken call.
+     */
+    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, target = 'schema', autoApply = false }) {
+        const conflictArr = Array.isArray(conflicts) ? conflicts : [];
+        const alreadyArr = Array.isArray(alreadyDone) ? alreadyDone : [];
+        const appliedNum = Number.isInteger(applied) ? applied : count;
+        const skipped = conflictArr.length + alreadyArr.length;
+        const prefix = autoApply ? 'Auto-apply ran' : 'User reviewed this round';
+        const lines = [];
+        if (skipped === 0) {
+            lines.push(`[${prefix}: all ${count} pending edit(s) took effect on the ${target}.`);
+        } else {
+            lines.push(`[${prefix}: ${appliedNum}/${count} edits took effect on the ${target}, ${skipped} skipped.`);
+            if (conflictArr.length > 0) {
+                lines.push('Skipped (conflicts):');
+                for (const c of conflictArr) {
+                    const edit = c?.edit || {};
+                    const op = String(edit.op || '?');
+                    const path = String(edit.path || '<root>');
+                    const reason = String(c?.reason || 'unknown');
+                    lines.push(`  - ${op}(${path}): ${reason}`);
+                }
+            }
+            if (alreadyArr.length > 0) {
+                lines.push('Already in desired state (no-op):');
+                for (const e of alreadyArr) {
+                    const op = String(e?.op || '?');
+                    const path = String(e?.path || '<root>');
+                    lines.push(`  - ${op}(${path})`);
+                }
+            }
+            lines.push('Revise your approach for any skipped edit that was essential (re-read current state, fix the path / value).');
+        }
+        lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
+        return lines.join('\n');
+    }
+
+    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone }) {
         if (state.isBusy) return;
         const userText = action === 'apply'
-            ? `[User reviewed and applied ${count} pending edit(s). Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]`
+            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, target: 'schema' })
             : `[User reviewed and discarded ${count} pending edit(s). Reconsider your approach — propose different edits or respond with plain text and no tool calls when finished.]`;
 
         state.session.messages.push({
@@ -1858,15 +1982,23 @@ export async function openSchemaIterationStudio(deps) {
     $root.on('click.mgSchemaIt', '[data-mg-schema-it-action="apply-batch"]', async (e) => {
         e.preventDefault();
         const pendingCount = Array.isArray(state.pendingEdits) ? state.pendingEdits.length : 0;
-        await applyPendingEdits();
+        const outcome = await applyPendingEdits();
         // After the user reviewed + applied a paused batch, fire the next
         // AI round with a synthetic "user approved" message. The handle-
         // SendMessage loop only paused because pendingEdits gated human
-        // review; the AI was mid-iteration and expects a result.
+        // review; the AI was mid-iteration and expects a result. Pass the
+        // real outcome (applied / conflicts / alreadyDone) so the AI sees
+        // truthful detail instead of just a proposed-count claim.
         if (pendingCount > 0
             && (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0)
             && !state.isBusy) {
-            await continueAfterReviewDecision({ action: 'apply', count: pendingCount });
+            await continueAfterReviewDecision({
+                action: 'apply',
+                count: pendingCount,
+                applied: outcome?.applied,
+                conflicts: outcome?.conflicts,
+                alreadyDone: outcome?.alreadyDone,
+            });
         }
     });
     $root.on('click.mgSchemaIt', '[data-mg-schema-it-action="discard-batch"]', async (e) => {

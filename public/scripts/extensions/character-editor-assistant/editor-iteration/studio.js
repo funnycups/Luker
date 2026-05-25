@@ -450,15 +450,19 @@ async function processRoundOutcome({
 
     // Edit calls normalize into Edit ops (with `target` annotation) and
     // stack on top of state.pendingEdits. Multi-round flows can accumulate
-    // edits across rounds before the user applies. Per-call failures
-    // surface as a system message so the user can see what went wrong
-    // without the entire send-message turn dying.
+    // edits across rounds before the user applies. Per-call failures and
+    // no-op normalizations push a `role: 'tool'`-shaped result onto the
+    // round's toolResults so buildSeedTaskMessages re-emits them as tool
+    // replies in the next round — the model needs structured feedback to
+    // recover, not a system-message prose snippet that's easy to ignore.
     const persistedEditCalls = [];
     const roundEdits = [];
+    const editToolResults = [];
     for (const call of editCalls) {
         const callId = resolveCallId(call);
         const args = call?.args && typeof call.args === 'object' ? call.args : {};
-        persistedEditCalls.push({ id: callId, name: String(call?.name || ''), args });
+        const name = String(call?.name || '');
+        persistedEditCalls.push({ id: callId, name, args });
         try {
             const normalized = await normalizeToolCallToEdit(
                 { id: callId, name: call?.name, args },
@@ -466,15 +470,24 @@ async function processRoundOutcome({
             );
             if (Array.isArray(normalized) && normalized.length > 0) {
                 roundEdits.push(...normalized);
+                // Successful queued edits get no toolResult — the post-
+                // review synthetic user message carries the real outcome
+                // (applied vs skipped). Adding "queued" would double the
+                // per-tool feedback the model has to digest.
+            } else {
+                editToolResults.push({
+                    tool_call_id: callId,
+                    content: { status: 'noop', message: 'No edits produced for this call. The executor returned no change; verify args (path / field / value) or read the current state and retry.' },
+                    status: 'fail',
+                });
             }
         } catch (err) {
             // eslint-disable-next-line no-console
-            console.warn(`[${MODULE}] normalizeToolCallToEdit failed for ${String(call?.name || '')}`, err);
-            state.session.messages.push({
-                id: makeMessageId(),
-                role: 'system',
-                content: tf('Edit error: ${0}', String(err?.message || err)),
-                at: Date.now(),
+            console.warn(`[${MODULE}] normalizeToolCallToEdit failed for ${name}`, err);
+            editToolResults.push({
+                tool_call_id: callId,
+                content: { error: String(err?.message || err || 'normalize failed') },
+                status: 'fail',
             });
         }
     }
@@ -500,7 +513,7 @@ async function processRoundOutcome({
         role: 'assistant',
         content: content || '',
         toolCalls: [...persistedToolCalls, ...persistedEditCalls],
-        toolResults: persistedToolResults,
+        toolResults: [...persistedToolResults, ...editToolResults],
         edits: roundEdits,
         at: Date.now(),
     });
@@ -1054,9 +1067,12 @@ function rebasePathToTarget(edit) {
  * (e.g. `character + lorebook:BookA + lorebook:BookB`).
  */
 async function applyPendingEdits(state, { persistSession, render, i18n, context, settings, avatar } = {}) {
-    if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) return;
+    if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) {
+        return { proposed: 0, applied: 0, conflicts: [], alreadyDone: [] };
+    }
     const tf = (i18n && typeof i18n.tf === 'function') ? i18n.tf : (s) => String(s ?? '');
 
+    const proposed = state.pendingEdits.length;
     const groupsRaw = groupEditsByTarget(state.pendingEdits);
     // Rebase legacy `card.` / `lorebook.` prefixes off so the per-target
     // commit helper applies paths against the right slot.
@@ -1069,14 +1085,46 @@ async function applyPendingEdits(state, { persistSession, render, i18n, context,
     };
 
     const errors = [];
+    const conflicts = [];
+    const alreadyDone = [];
+    let applied = 0;
+
+    // Tolerant outcome reader: production commits return
+    // `{ applied, conflicts, alreadyDone, persisted }`. Older tests mock
+    // them as `async () => ({ ok: true })` with no per-edit fields — when
+    // the new fields are missing, fall back to "all clean" so the legacy
+    // shape stays equivalent to its old throw-on-conflict-or-fully-applied
+    // semantics. Tests that want to assert truthful counts should update
+    // the mock to return the new shape.
+    function readCommitOutcome(result, groupEdits) {
+        if (!result || typeof result !== 'object') {
+            return { applied: groupEdits.length, conflicts: [], alreadyDone: [] };
+        }
+        const hasNewShape = Number.isInteger(result.applied)
+            || Array.isArray(result.conflicts)
+            || Array.isArray(result.alreadyDone);
+        if (!hasNewShape) {
+            return { applied: groupEdits.length, conflicts: [], alreadyDone: [] };
+        }
+        return {
+            applied: Number.isInteger(result.applied) ? result.applied : 0,
+            conflicts: Array.isArray(result.conflicts) ? result.conflicts : [],
+            alreadyDone: Array.isArray(result.alreadyDone) ? result.alreadyDone : [],
+        };
+    }
+
     if (groups.character.length > 0) {
         try {
-            await commitCharacterEditorOperations(
+            const result = await commitCharacterEditorOperations(
                 context,
                 String(avatar || state.session?.avatar || ''),
                 groups.character,
                 { liveCharacter: state.live?.character || {} },
             );
+            const outcome = readCommitOutcome(result, groups.character);
+            applied += outcome.applied;
+            conflicts.push(...outcome.conflicts);
+            alreadyDone.push(...outcome.alreadyDone);
         } catch (err) {
             // eslint-disable-next-line no-console
             console.warn(`[${MODULE}] commitCharacterEditorOperations failed`, err);
@@ -1086,7 +1134,11 @@ async function applyPendingEdits(state, { persistSession, render, i18n, context,
     for (const [bookName, edits] of Object.entries(groups.lorebooks)) {
         const liveBook = state.live?.lorebooks?.[bookName] || { entries: {} };
         try {
-            await commitLorebookOperations(bookName, liveBook, edits, { context, settings });
+            const result = await commitLorebookOperations(bookName, liveBook, edits, { context, settings });
+            const outcome = readCommitOutcome(result, edits);
+            applied += outcome.applied;
+            conflicts.push(...outcome.conflicts);
+            alreadyDone.push(...outcome.alreadyDone);
         } catch (err) {
             // eslint-disable-next-line no-console
             console.warn(`[${MODULE}] commitLorebookOperations failed for ${bookName}`, err);
@@ -1094,6 +1146,10 @@ async function applyPendingEdits(state, { persistSession, render, i18n, context,
         }
     }
 
+    // Errors keep their existing system-message + toast.error surface
+    // — these are unrecoverable IO / unknown-field / rename-rejection
+    // failures, distinct from per-edit conflicts which now flow back
+    // through the synthetic feedback message.
     if (errors.length > 0) {
         for (const { target, err } of errors) {
             state.session.messages.push({
@@ -1104,9 +1160,21 @@ async function applyPendingEdits(state, { persistSession, render, i18n, context,
             });
         }
         try { toastr.error(tf('Apply failed for ${0} target(s).', String(errors.length))); } catch { /* toastr may be unavailable in tests */ }
-    } else {
-        try { toastr.success(tf('Applied ${0} change(s).', String(state.pendingEdits.length))); } catch { /* ignore */ }
     }
+    try {
+        if (applied === proposed) {
+            toastr.success(tf('Applied ${0} change(s).', String(applied)));
+        } else if (applied > 0) {
+            toastr.warning(tf('Applied ${0} of ${1} change(s); ${2} skipped',
+                String(applied), String(proposed), String(conflicts.length + alreadyDone.length)));
+        } else if (errors.length === 0) {
+            // No errors but no edits landed — every proposal was a conflict
+            // or already-done. Use warning shape (not success) so the user
+            // sees something divergent happened.
+            toastr.warning(tf('No edits applied: all ${0} were skipped (conflicts or already in desired state)',
+                String(proposed)));
+        }
+    } catch { /* ignore */ }
 
     // Mark the most recent unapplied assistant message with the per-group
     // target label, mirroring the character-iteration popup's scheme.
@@ -1125,16 +1193,25 @@ async function applyPendingEdits(state, { persistSession, render, i18n, context,
     // batch. We walk backwards (newest first) and stamp until we hit a
     // message that's already applied or has been rolled back — that earlier
     // batch's stamps are independent and must stay intact.
-    const stampedAt = Date.now();
-    const messages = state.session.messages || [];
-    for (let i = messages.length - 1; i >= 0; i--) {
-        const m = messages[i];
-        if (m?.role !== 'assistant') continue;
-        if (m.appliedAt) break; // hit a prior batch's stamp — stop here
-        if (m.rolledBackAt) break; // rolled-back prior batch — stop here
-        if (!Array.isArray(m.edits) || m.edits.length === 0) continue;
-        m.appliedAt = stampedAt;
-        m.appliedTarget = targetLabel;
+    //
+    // Only stamp when at least one edit actually landed — a zero-clean
+    // batch should not render the IDE-style "✓ Applied" check.
+    if (applied > 0) {
+        const stampedAt = Date.now();
+        const messages = state.session.messages || [];
+        for (let i = messages.length - 1; i >= 0; i--) {
+            const m = messages[i];
+            if (m?.role !== 'assistant') continue;
+            if (m.appliedAt) break; // hit a prior batch's stamp — stop here
+            if (m.rolledBackAt) break; // rolled-back prior batch — stop here
+            if (!Array.isArray(m.edits) || m.edits.length === 0) continue;
+            m.appliedAt = stampedAt;
+            m.appliedTarget = targetLabel;
+            // Also record the per-batch truth so UI / replay can show
+            // "✓ Applied 2/4" when these diverge.
+            m.appliedCount = applied;
+            m.appliedProposed = proposed;
+        }
     }
 
     state.pendingEdits = [];
@@ -1143,11 +1220,10 @@ async function applyPendingEdits(state, { persistSession, render, i18n, context,
     // committed values. Without this, state.live still mirrors the
     // pre-apply snapshot and the lorebook preview keeps showing stale
     // content even though saveWorldInfo already wrote the new data.
-    // We refresh whenever at least one target committed cleanly; a
-    // fully-failed apply means the on-disk state didn't move and the
-    // refresh would be a no-op.
-    const totalTargets = (groups.character.length > 0 ? 1 : 0) + Object.keys(groups.lorebooks).length;
-    if (errors.length < totalTargets) {
+    // We refresh whenever at least one edit actually landed; a fully-
+    // skipped apply (no errors but all conflicts/already-done) means
+    // on-disk state didn't move and the refresh would be a no-op.
+    if (applied > 0) {
         try {
             const refreshed = await buildUnifiedCharacterEditorLiveSnapshot(
                 context,
@@ -1166,6 +1242,7 @@ async function applyPendingEdits(state, { persistSession, render, i18n, context,
     }
     if (typeof persistSession === 'function') await persistSession();
     if (typeof render === 'function') await render();
+    return { proposed, applied, conflicts, alreadyDone };
 }
 
 async function discardPendingEdits(state, { persistSession, render } = {}) {
@@ -1574,14 +1651,21 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         })();
         // Pre-compute latest-unapplied id so inline Apply/Reject row only
         // attaches to the most recent unapplied assistant turn.
+        // `state.pendingEdits` is the source of truth for "staged batch
+        // awaiting review". When it's empty (Discard cleared it, or
+        // Apply landed with zero clean edits), no message should carry
+        // an Apply/Reject row — even though `m.edits` is still retained
+        // on the message for diff history / rollback.
         let latestUnappliedAssistantId = '';
-        for (let i = messages.length - 1; i >= 0; i--) {
-            const m = messages[i];
-            if (m && m.role === 'assistant' && !m.auto
-                && Array.isArray(m.edits) && m.edits.length > 0
-                && !m.appliedAt && !m.rolledBackAt) {
-                latestUnappliedAssistantId = String(m.id || '');
-                break;
+        if (Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0) {
+            for (let i = messages.length - 1; i >= 0; i--) {
+                const m = messages[i];
+                if (m && m.role === 'assistant' && !m.auto
+                    && Array.isArray(m.edits) && m.edits.length > 0
+                    && !m.appliedAt && !m.rolledBackAt) {
+                    latestUnappliedAssistantId = String(m.id || '');
+                    break;
+                }
             }
         }
         state.__latestUnappliedAssistantId = latestUnappliedAssistantId;
@@ -1983,8 +2067,9 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
     async function maybeAutoApply() {
         if (!state.session?.surfaceState?.autoApply) return false;
         if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) return false;
+        const autoCount = state.pendingEdits.length;
         try {
-            await applyPendingEdits(state, {
+            const outcome = await applyPendingEdits(state, {
                 persistSession,
                 render,
                 i18n: { t, tf },
@@ -1992,6 +2077,26 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                 settings,
                 avatar,
             });
+            // Push a synthetic apply-outcome user message so the next
+            // round's buildSeedTaskMessages can replay it and the model
+            // sees which edits actually took effect — same truthful
+            // signal review-mode gets via continueAfterReviewDecision.
+            if (outcome) {
+                const text = buildApplyOutcomeUserText({
+                    count: autoCount,
+                    applied: outcome.applied,
+                    conflicts: outcome.conflicts,
+                    alreadyDone: outcome.alreadyDone,
+                    autoApply: true,
+                });
+                state.session.messages.push({
+                    id: makeMessageId(),
+                    role: 'user',
+                    content: text,
+                    at: Date.now(),
+                    auto: true,
+                });
+            }
             return true;
         } catch (err) {
             // eslint-disable-next-line no-console
@@ -2010,10 +2115,52 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
      * loop, mirroring the IDE pattern (approve → tool result lands →
      * agent continues; reject → agent reconsiders).
      */
-    async function continueAfterReviewDecision({ action, count }) {
+    /**
+     * Build the synthetic user-message text the next round sees after a
+     * batch is applied (review-mode click or auto-apply). The model reads
+     * this verbatim — keep the per-edit "skipped because X" detail intact
+     * so the LLM can correct its next round (fix the path / args / value)
+     * instead of looping the same broken call.
+     */
+    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, target = 'character + lorebooks', autoApply = false }) {
+        const conflictArr = Array.isArray(conflicts) ? conflicts : [];
+        const alreadyArr = Array.isArray(alreadyDone) ? alreadyDone : [];
+        const appliedNum = Number.isInteger(applied) ? applied : count;
+        const skipped = conflictArr.length + alreadyArr.length;
+        const prefix = autoApply ? 'Auto-apply ran' : 'User reviewed this round';
+        const lines = [];
+        if (skipped === 0) {
+            lines.push(`[${prefix}: all ${count} pending edit(s) took effect on the ${target}.`);
+        } else {
+            lines.push(`[${prefix}: ${appliedNum}/${count} edits took effect on the ${target}, ${skipped} skipped.`);
+            if (conflictArr.length > 0) {
+                lines.push('Skipped (conflicts):');
+                for (const c of conflictArr) {
+                    const edit = c?.edit || {};
+                    const op = String(edit.op || '?');
+                    const path = String(edit.path || edit.uid != null ? `entries.${edit.uid}` : '<root>');
+                    const reason = String(c?.reason || 'unknown');
+                    lines.push(`  - ${op}(${path}): ${reason}`);
+                }
+            }
+            if (alreadyArr.length > 0) {
+                lines.push('Already in desired state (no-op):');
+                for (const e of alreadyArr) {
+                    const op = String(e?.op || '?');
+                    const path = String(e?.path || e?.uid != null ? `entries.${e.uid}` : '<root>');
+                    lines.push(`  - ${op}(${path})`);
+                }
+            }
+            lines.push('Revise your approach for any skipped edit that was essential (re-read current state, fix the anchor / path / value).');
+        }
+        lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
+        return lines.join('\n');
+    }
+
+    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone }) {
         if (state.isBusy) return;
         const userText = action === 'apply'
-            ? `[User reviewed and applied ${count} pending edit(s). Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]`
+            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone })
             : `[User reviewed and discarded ${count} pending edit(s). Reconsider your approach — propose different edits or respond with plain text and no tool calls when finished.]`;
 
         state.session.messages.push({
@@ -2079,7 +2226,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         $root.on('click.ceaEditor', '[data-cea-editor-action="apply-batch"]', async (e) => {
             e.preventDefault();
             const pendingCount = Array.isArray(state.pendingEdits) ? state.pendingEdits.length : 0;
-            await applyPendingEdits(state, {
+            const outcome = await applyPendingEdits(state, {
                 persistSession,
                 render,
                 i18n: { t, tf },
@@ -2094,11 +2241,19 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
             // iterating; its previous round only stopped because the
             // pendingEdits gate paused for human approval. Mirroring the
             // IDE pattern: approve → next round fires with the outcome,
-            // AI either does more or wraps up with plain text.
+            // AI either does more or wraps up with plain text. Pass the
+            // real outcome (applied / conflicts / alreadyDone) so the AI
+            // sees truthful detail instead of just a proposed-count claim.
             if (pendingCount > 0
                 && (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0)
                 && !state.isBusy) {
-                await continueAfterReviewDecision({ action: 'apply', count: pendingCount });
+                await continueAfterReviewDecision({
+                    action: 'apply',
+                    count: pendingCount,
+                    applied: outcome?.applied,
+                    conflicts: outcome?.conflicts,
+                    alreadyDone: outcome?.alreadyDone,
+                });
             }
         });
         $root.on('click.ceaEditor', '[data-cea-editor-action="discard-batch"]', async (e) => {

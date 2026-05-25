@@ -805,14 +805,23 @@ export async function openCpaIterationStudio(deps) {
         // chat — they stay in state.session.messages for buildTaskMessages
         // but shouldn't appear as user-visible chat noise.
         const allMsgs = (state.session.messages || []).filter(m => !(m?.role === 'user' && m?.auto));
+        // `state.pendingEdits` is the source of truth for "this round is
+        // staged and awaiting review". When it's empty (Discard cleared
+        // it, or Apply landed with zero clean edits), no message should
+        // carry an Apply/Reject row — even though `m.edits` is still
+        // retained on the assistant message for diff history / rollback.
+        // Short-circuit before scanning so the inline controls disappear
+        // the moment the batch is resolved.
         let latestUnappliedAssistantId = '';
-        for (let i = allMsgs.length - 1; i >= 0; i--) {
-            const m = allMsgs[i];
-            if (m && m.role === 'assistant' && !m.auto
-                && Array.isArray(m.edits) && m.edits.length > 0
-                && !m.appliedAt && !m.rolledBackAt) {
-                latestUnappliedAssistantId = String(m.id || '');
-                break;
+        if (Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0) {
+            for (let i = allMsgs.length - 1; i >= 0; i--) {
+                const m = allMsgs[i];
+                if (m && m.role === 'assistant' && !m.auto
+                    && Array.isArray(m.edits) && m.edits.length > 0
+                    && !m.appliedAt && !m.rolledBackAt) {
+                    latestUnappliedAssistantId = String(m.id || '');
+                    break;
+                }
             }
         }
         state.__latestUnappliedAssistantId = latestUnappliedAssistantId;
@@ -1180,8 +1189,13 @@ export async function openCpaIterationStudio(deps) {
         // Normalize edit-tools → edits. Each editable tool runs through
         // `normalizeToolCallToEdit` which can return one or more engine ops
         // (e.g. upsert_prompt_entry returns paired prompts[] + prompt_order
-        // edits). Failures push a system message so the user sees the
-        // attempted operation didn't translate cleanly.
+        // edits). Failures and no-op outcomes push a `role: 'tool'`-shaped
+        // result onto the assistant message's toolResults so buildTask-
+        // Messages re-emits them as tool replies in the next round — that
+        // is the ONLY channel the model actually reads. Previous versions
+        // pushed a `role: 'system'` chat message on error, which build-
+        // TaskMessages filters out, so the model never learned that its
+        // tool call failed and would re-emit the same broken call.
         //
         // Chain the `live` baseline across tool calls: each normalize sees
         // the previous call's post-mutation state, not a fresh snapshot.
@@ -1192,10 +1206,16 @@ export async function openCpaIterationStudio(deps) {
         // newValue lacks the first call's mutation — apply runs them in
         // order and the second wholesale clobbers the first.
         const edits = [];
+        const editToolResults = [];
         let chainedLive = state.live;
         for (const call of editToolCalls) {
             const name = String(call?.name || '');
             if (!EDITABLE_TOOL_NAMES.has(name)) continue; // defensive
+            const callId = String(call?.id || `edit_${editToolResults.length}_${Date.now().toString(36)}`);
+            // Back-fill call.id so the persisted assistant message and any
+            // future replay reference the same id the tool result is keyed
+            // under. Mirrors the read-tool branch above.
+            call.id = callId;
             try {
                 const normalized = await normalizeToolCallToEdit(
                     wrapToolCallForNormalize(call),
@@ -1223,15 +1243,37 @@ export async function openCpaIterationStudio(deps) {
                         // eslint-disable-next-line no-console
                         console.warn(`[${MODULE}] chain advance failed after ${name}`, err);
                     }
+                    // Don't push a toolResult for queued edits — the
+                    // post-review synthetic user message carries the real
+                    // outcome (applied vs skipped). Adding a "queued"
+                    // reply here would create two pieces of feedback per
+                    // tool call and double the prompt budget.
+                } else {
+                    // No edits emitted. The most common cause for prompt-
+                    // aware tools is "sandbox == live" — the desired state
+                    // matches what's already on disk. Tell the model so it
+                    // doesn't loop re-issuing the same no-op. The hint
+                    // about prompt_order is targeted at the upsert/remove
+                    // prompt_entry path, where AIs commonly try to toggle
+                    // an entry's enabled state via `enabled` arg (writing
+                    // an unused field) instead of via preset_upsert_prompt_
+                    // order_item (the runtime's actual enabled gate).
+                    const hint = (name === 'preset_upsert_prompt_entry' || name === 'preset_remove_prompt_entry')
+                        ? 'If you intended to toggle enabled state, note that prompts[].enabled is ignored by the runtime — use preset_upsert_prompt_order_item to flip prompt_order[*].order[*].enabled instead.'
+                        : 'The target was already in the requested state, so no change was produced.';
+                    editToolResults.push({
+                        tool_call_id: callId,
+                        content: { status: 'noop', message: 'No edits produced for this call.', hint },
+                        status: 'fail',
+                    });
                 }
             } catch (err) {
                 // eslint-disable-next-line no-console
                 console.warn(`[${MODULE}] normalizeToolCallToEdit failed for ${name}`, err);
-                state.session.messages.push({
-                    id: makeMessageId(),
-                    role: 'system',
-                    content: tf('Edit error: ${0}', String(err?.message || err)),
-                    at: Date.now(),
+                editToolResults.push({
+                    tool_call_id: callId,
+                    content: { error: String(err?.message || err || 'normalize failed') },
+                    status: 'fail',
                 });
             }
         }
@@ -1277,8 +1319,8 @@ export async function openCpaIterationStudio(deps) {
                 args: tc?.args ?? {},
             }));
         }
-        if (persistedToolResults.length > 0) {
-            assistantMsg.toolResults = persistedToolResults;
+        if (persistedToolResults.length > 0 || editToolResults.length > 0) {
+            assistantMsg.toolResults = [...persistedToolResults, ...editToolResults];
         }
         if (edits.length > 0) {
             assistantMsg.edits = edits.slice();
@@ -1298,10 +1340,31 @@ export async function openCpaIterationStudio(deps) {
         // Composer-row auto-apply: if enabled AND this turn produced edits,
         // apply immediately. Errors land in the chat as a system note —
         // applyPendingEdits already wraps commitLiveToPreset in try/catch.
+        // When auto-apply is on we still push a synthetic apply-outcome
+        // user message so the next round's buildTaskMessages can replay it
+        // and the model sees which edits actually took effect — same
+        // truthful signal review-mode gets via continueAfterReviewDecision.
         const autoApplyOn = Boolean(state.session.surfaceState?.autoApply);
         if (autoApplyOn && state.pendingEdits.length > 0) {
+            const autoCount = state.pendingEdits.length;
             try {
-                await applyPendingEdits({ skipRender: true });
+                const outcome = await applyPendingEdits({ skipRender: true });
+                if (outcome) {
+                    const text = buildApplyOutcomeUserText({
+                        count: autoCount,
+                        applied: outcome.applied,
+                        conflicts: outcome.conflicts,
+                        alreadyDone: outcome.alreadyDone,
+                        autoApply: true,
+                    });
+                    state.session.messages.push({
+                        id: makeMessageId(),
+                        role: 'user',
+                        content: text,
+                        at: Date.now(),
+                        auto: true,
+                    });
+                }
             } catch (err) {
                 // eslint-disable-next-line no-console
                 console.warn(`[${MODULE}] auto-apply failed`, err);
@@ -1334,50 +1397,88 @@ export async function openCpaIterationStudio(deps) {
     // and a Rollback button.
     // ──────────────────────────────────────────────────────────────────
     async function applyPendingEdits({ skipRender = false } = {}) {
-        if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) return;
+        if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) {
+            return { proposed: 0, applied: 0, conflicts: [], alreadyDone: [] };
+        }
         if (!state.live) await loadLive();
         const liveSnapshot = state.live;
         const editsBatch = state.pendingEdits.slice();
         const result = applyEdits(editsBatch, state.live);
-        state.live = result?.newLive ?? state.live;
-        try {
-            await commitLiveToPreset();
-        } catch (err) {
-            state.live = liveSnapshot;
-            // eslint-disable-next-line no-console
-            console.warn(`[${MODULE}] commitLiveToPreset failed`, err);
-            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* toastr may be unavailable in tests */ }
-            state.session.messages.push({
-                id: makeMessageId(),
-                role: 'system',
-                content: tf('Failed to save preset: ${0}', String(err?.message || err)),
-                at: Date.now(),
-            });
-            await persistSession();
-            if (!skipRender) await render();
-            return;
+        const cleanEdits = Array.isArray(result?.clean) ? result.clean : [];
+        const conflicts = Array.isArray(result?.conflicts) ? result.conflicts : [];
+        const alreadyDone = Array.isArray(result?.alreadyDone) ? result.alreadyDone : [];
+        const appliedCount = cleanEdits.length;
+
+        // Only persist live + commit when at least one edit actually changed
+        // state. When every edit was conflict/already-done, the new live is
+        // identical to the snapshot — committing is harmless but pointless,
+        // and stamping appliedAt would lie about effect.
+        if (appliedCount > 0) {
+            state.live = result?.newLive ?? state.live;
+            try {
+                await commitLiveToPreset();
+            } catch (err) {
+                state.live = liveSnapshot;
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] commitLiveToPreset failed`, err);
+                try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* toastr may be unavailable in tests */ }
+                state.session.messages.push({
+                    id: makeMessageId(),
+                    role: 'system',
+                    content: tf('Failed to save preset: ${0}', String(err?.message || err)),
+                    at: Date.now(),
+                });
+                await persistSession();
+                if (!skipRender) await render();
+                return { proposed: editsBatch.length, applied: 0, conflicts, alreadyDone, commitFailed: true };
+            }
         }
 
-        try { toastr.success(tf('Applied to ${0}', t('preset'))); } catch { /* ignore */ }
+        // Toast wording reflects truth, not intent. The synthetic feedback
+        // message built by `continueAfterReviewDecision` carries the full
+        // per-edit detail back to the AI on the next turn.
+        try {
+            if (appliedCount === editsBatch.length) {
+                toastr.success(tf('Applied ${0} edit(s) to ${1}', String(appliedCount), t('preset')));
+            } else if (appliedCount > 0) {
+                toastr.warning(tf('Applied ${0} of ${1} edit(s) to ${2}; ${3} skipped',
+                    String(appliedCount), String(editsBatch.length), t('preset'),
+                    String(conflicts.length + alreadyDone.length)));
+            } else {
+                toastr.warning(tf('No edits applied to ${0}: all ${1} were skipped (conflicts or already in desired state)',
+                    t('preset'), String(editsBatch.length)));
+            }
+        } catch { /* ignore */ }
 
         // Mark the most recent unapplied assistant message that owns these
         // edits. We scan back from the end because the just-rendered turn
         // is the typical target; rare cases (user clicks Apply on a stale
         // session reopened with persisted pendingEdits) still hit a sane
-        // candidate as long as one exists.
-        const messages = state.session.messages || [];
-        for (let i = messages.length - 1; i >= 0; i--) {
-            const m = messages[i];
-            if (m.role === 'assistant' && Array.isArray(m.edits) && m.edits.length > 0 && !m.appliedAt) {
-                m.appliedAt = Date.now();
-                m.appliedTarget = 'preset';
-                break;
+        // candidate as long as one exists. Only stamp appliedAt when at
+        // least one edit actually landed — a zero-clean batch should not
+        // render the IDE-style "✓ Applied" check.
+        if (appliedCount > 0) {
+            const messages = state.session.messages || [];
+            for (let i = messages.length - 1; i >= 0; i--) {
+                const m = messages[i];
+                if (m.role === 'assistant' && Array.isArray(m.edits) && m.edits.length > 0 && !m.appliedAt) {
+                    m.appliedAt = Date.now();
+                    m.appliedTarget = 'preset';
+                    // Record the truth of the apply: how many of the batch
+                    // actually changed state vs how many were conflicts /
+                    // already-done. UI can show "✓ Applied 2/4" when these
+                    // diverge; existing renderers ignore the extra fields.
+                    m.appliedCount = appliedCount;
+                    m.appliedProposed = editsBatch.length;
+                    break;
+                }
             }
         }
 
         state.pendingEdits = [];
         await persistSession();
         if (!skipRender) await render();
+        return { proposed: editsBatch.length, applied: appliedCount, conflicts, alreadyDone };
     }
 
     async function discardPendingEdits() {
@@ -1396,10 +1497,54 @@ export async function openCpaIterationStudio(deps) {
      * loop, mirroring the IDE pattern (approve → tool result lands →
      * agent continues; reject → agent reconsiders).
      */
-    async function continueAfterReviewDecision({ action, count }) {
+    /**
+     * Build the synthetic user-message text the next round sees after a
+     * batch is applied (review-mode click or auto-apply). The model reads
+     * this verbatim — keep the per-edit "skipped because X" detail intact
+     * so the LLM can correct its next round (fix the anchor, re-read
+     * the field, etc) instead of looping the same broken call.
+     */
+    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, autoApply = false }) {
+        const conflictArr = Array.isArray(conflicts) ? conflicts : [];
+        const alreadyArr = Array.isArray(alreadyDone) ? alreadyDone : [];
+        const appliedNum = Number.isInteger(applied) ? applied : count;
+        const skipped = conflictArr.length + alreadyArr.length;
+        const prefix = autoApply
+            ? 'Auto-apply ran'
+            : 'User reviewed this round';
+        const lines = [];
+        if (skipped === 0) {
+            lines.push(`[${prefix}: all ${count} pending edit(s) took effect.`);
+        } else {
+            lines.push(`[${prefix}: ${appliedNum}/${count} edits took effect, ${skipped} skipped.`);
+            if (conflictArr.length > 0) {
+                lines.push('Skipped (conflicts):');
+                for (const c of conflictArr) {
+                    const edit = c?.edit || {};
+                    const op = String(edit.op || '?');
+                    const path = String(edit.path || '<root>');
+                    const reason = String(c?.reason || 'unknown');
+                    lines.push(`  - ${op}(${path}): ${reason}`);
+                }
+            }
+            if (alreadyArr.length > 0) {
+                lines.push('Already in desired state (no-op):');
+                for (const e of alreadyArr) {
+                    const op = String(e?.op || '?');
+                    const path = String(e?.path || '<root>');
+                    lines.push(`  - ${op}(${path})`);
+                }
+            }
+            lines.push('Revise your approach for any skipped edit that was essential (re-read current state, fix the anchor / path / value).');
+        }
+        lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
+        return lines.join('\n');
+    }
+
+    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone }) {
         if (state.isBusy) return;
         const userText = action === 'apply'
-            ? `[User reviewed and applied ${count} pending edit(s). Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]`
+            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone })
             : `[User reviewed and discarded ${count} pending edit(s). Reconsider your approach — propose different edits or respond with plain text and no tool calls when finished.]`;
 
         state.session.messages.push({
@@ -1746,15 +1891,23 @@ export async function openCpaIterationStudio(deps) {
     $root.on('click.cpaIt', '[data-cpa-it-action="apply-batch"]', async (e) => {
         e.preventDefault();
         const pendingCount = Array.isArray(state.pendingEdits) ? state.pendingEdits.length : 0;
-        await applyPendingEdits();
+        const outcome = await applyPendingEdits();
         // After the user reviewed + applied a paused batch, fire the next
         // AI round with a synthetic "user approved" message. The handle-
         // SendMessage loop only paused because pendingEdits gated human
-        // review; the AI was mid-iteration and expects a result.
+        // review; the AI was mid-iteration and expects a result. Pass the
+        // real outcome (applied / conflicts / alreadyDone) so the AI sees
+        // truthful detail instead of just a proposed-count claim.
         if (pendingCount > 0
             && (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0)
             && !state.isBusy) {
-            await continueAfterReviewDecision({ action: 'apply', count: pendingCount });
+            await continueAfterReviewDecision({
+                action: 'apply',
+                count: pendingCount,
+                applied: outcome?.applied,
+                conflicts: outcome?.conflicts,
+                alreadyDone: outcome?.alreadyDone,
+            });
         }
     });
     $root.on('click.cpaIt', '[data-cpa-it-action="discard-batch"]', async (e) => {

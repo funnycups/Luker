@@ -2727,10 +2727,34 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  }
 
  // Fill toolResults placeholders + fire onToolCall per item.
+ // Per-item outcome reflects the truth of THIS edit's apply:
+ // `clean` ⇒ applied, `alreadyDone` ⇒ target was already in the
+ // desired state (no write), otherwise something dropped via
+ // conflict resolution (keep-theirs or manual replacement). Without
+ // this distinction the model thinks every edit it proposed landed,
+ // even when half the batch was already-done no-ops — same silent-
+ // failure class CPA had pre-fix.
+ const cleanRefs = new Set(resolvedClean);
+ const alreadyDoneRefs = new Set(applyResult?.alreadyDone || []);
  for (const item of pendingFileOpItems) {
  let r;
  if (batchOutcome === 'approved') {
+ if (alreadyDoneRefs.has(item.edit)) {
+ r = { ok: true, alreadyDone: true, message: `${item.displayPath}: no change needed (target was already in the desired state).` };
+ } else if (cleanRefs.has(item.edit)) {
  r = { ok: true, message: `${item.displayPath} applied.` };
+ } else {
+ // Edit isn't in clean or alreadyDone — must have been
+ // dropped via keep-theirs in the conflict modal, or
+ // replaced by a manual-resolution edit at the same path.
+ // Surface the latter as applied (some change landed for
+ // this path), the former as skipped.
+ const resolvedAtPath = item.edit?.path
+ && resolvedClean.some(e => e?.path === item.edit.path);
+ r = resolvedAtPath
+ ? { ok: true, message: `${item.displayPath} applied (via conflict resolution).` }
+ : { ok: true, skipped: true, message: `${item.displayPath}: skipped via conflict resolution (keep-theirs).` };
+ }
  } else if (batchOutcome === 'commit_failed') {
  r = { ok: false, error: `commit failed: ${batchError}` };
  } else if (batchOutcome === 'apply_failed') {

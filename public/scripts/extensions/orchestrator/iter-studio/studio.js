@@ -1373,14 +1373,23 @@ export async function openOrchestratorIterationStudio(deps) {
         // for buildTaskMessages to feed the LLM, but the user shouldn't
         // see them as chat noise.
         const allMsgs = (state.session.messages || []).filter(m => !(m?.role === 'user' && m?.auto));
+        // `state.pendingEdits` is the source of truth for "this round is
+        // staged and awaiting review". When it's empty (Discard cleared
+        // it, or Apply landed with zero clean edits), no message should
+        // carry an Apply/Reject row — even though `m.edits` is still
+        // retained on the assistant message for diff history / rollback.
+        // Short-circuit before scanning so the inline controls disappear
+        // the moment the batch is resolved.
         let latestUnappliedAssistantId = '';
-        for (let i = allMsgs.length - 1; i >= 0; i--) {
-            const m = allMsgs[i];
-            if (m && m.role === 'assistant' && !m.auto
-                && Array.isArray(m.edits) && m.edits.length > 0
-                && !m.appliedAt && !m.rolledBackAt) {
-                latestUnappliedAssistantId = String(m.id || '');
-                break;
+        if (Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0) {
+            for (let i = allMsgs.length - 1; i >= 0; i--) {
+                const m = allMsgs[i];
+                if (m && m.role === 'assistant' && !m.auto
+                    && Array.isArray(m.edits) && m.edits.length > 0
+                    && !m.appliedAt && !m.rolledBackAt) {
+                    latestUnappliedAssistantId = String(m.id || '');
+                    break;
+                }
             }
         }
         state.__latestUnappliedAssistantId = latestUnappliedAssistantId;
@@ -1911,27 +1920,43 @@ export async function openOrchestratorIterationStudio(deps) {
         // state. With chaining the cumulative result lives in the last
         // edit's newValue, which the apply loop at applyPendingEdits
         // reproduces by walking through every empty-path edit.
+        //
+        // Failures and no-op outcomes push a `role: 'tool'`-shaped result
+        // onto the assistant message's toolResults so buildTaskMessages
+        // re-emits them as tool replies in the next round. Previous
+        // versions pushed a `role: 'system'` chat message on error,
+        // which buildTaskMessages filters out — the model never learned
+        // that its tool call failed and would re-emit the same broken
+        // call.
         const edits = [];
+        const editToolResults = [];
         let chainedBefore = null;
         for (const call of editToolCalls) {
+            const name = String(call?.name || '');
+            const callId = String(call?.id || `edit_${editToolResults.length}_${Date.now().toString(36)}`);
+            call.id = callId;
             try {
                 const normalized = await normalizeToolCallToEditInline(call, chainedBefore);
                 if (Array.isArray(normalized) && normalized.length > 0) {
                     edits.push(...normalized);
                     // Advance the chain so the next tool sees the prior
                     // tool's mutations. No-op normalizations return `[]`
-                    // and leave the chain untouched.
+                    // and surface a tool reply below.
                     chainedBefore = normalized[normalized.length - 1].newValue;
+                } else {
+                    editToolResults.push({
+                        tool_call_id: callId,
+                        content: { status: 'noop', message: 'No edits produced for this call. The executor returned no change; verify args (path / mode / value) or re-read current profile state and retry.' },
+                        status: 'fail',
+                    });
                 }
-                // null (executor failure) → skip silently; the AI can retry.
             } catch (err) {
                 // eslint-disable-next-line no-console
-                console.warn(`[${MODULE}:${mode}] normalizeToolCallToEditInline failed for ${String(call?.name || '')}`, err);
-                state.session.messages.push({
-                    id: makeMessageId(),
-                    role: 'system',
-                    content: tf('Edit error: ${0}', String(err?.message || err)),
-                    at: Date.now(),
+                console.warn(`[${MODULE}:${mode}] normalizeToolCallToEditInline failed for ${name}`, err);
+                editToolResults.push({
+                    tool_call_id: callId,
+                    content: { error: String(err?.message || err || 'normalize failed') },
+                    status: 'fail',
                 });
             }
         }
@@ -1996,8 +2021,8 @@ export async function openOrchestratorIterationStudio(deps) {
             }));
             assistantMsg.toolCalls = [...fromMain, ...rejectedResetCalls];
         }
-        if (persistedToolResults.length > 0) {
-            assistantMsg.toolResults = persistedToolResults;
+        if (persistedToolResults.length > 0 || editToolResults.length > 0) {
+            assistantMsg.toolResults = [...persistedToolResults, ...editToolResults];
         }
         if (edits.length > 0) {
             assistantMsg.edits = edits.slice();
@@ -2015,13 +2040,33 @@ export async function openOrchestratorIterationStudio(deps) {
         bumpChatBadge();
 
         // Composer-row auto-apply: if enabled AND this turn produced edits,
-        // AND we are not finalized, apply immediately. Errors are caught
-        // locally so the runner's outer finally still resets isBusy +
-        // persists the session.
+        // AND we are not finalized, apply immediately. When auto-apply runs
+        // we still push a synthetic apply-outcome user message so the next
+        // round's buildTaskMessages can replay it and the model sees which
+        // edits actually took effect — same truthful signal review-mode
+        // gets via continueAfterReviewDecision.
         const autoApplyOn = Boolean(state.session.surfaceState?.autoApply);
         if (autoApplyOn && state.pendingEdits.length > 0) {
+            const autoCount = state.pendingEdits.length;
             try {
-                await applyPendingEdits({ skipRender: true });
+                const outcome = await applyPendingEdits({ skipRender: true });
+                if (outcome) {
+                    const text = buildApplyOutcomeUserText({
+                        count: autoCount,
+                        applied: outcome.applied,
+                        conflicts: outcome.conflicts,
+                        alreadyDone: outcome.alreadyDone,
+                        target: getApplyScopeLabel(),
+                        autoApply: true,
+                    });
+                    state.session.messages.push({
+                        id: makeMessageId(),
+                        role: 'user',
+                        content: text,
+                        at: Date.now(),
+                        auto: true,
+                    });
+                }
             } catch (err) {
                 // eslint-disable-next-line no-console
                 console.warn(`[${MODULE}:${mode}] auto-apply failed`, err);
@@ -2072,9 +2117,12 @@ export async function openOrchestratorIterationStudio(deps) {
     // Applied label and a Rollback button.
     // ──────────────────────────────────────────────────────────────────
     async function applyPendingEdits({ skipRender = false } = {}) {
-        if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) return;
+        if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) {
+            return { proposed: 0, applied: 0, conflicts: [], alreadyDone: [] };
+        }
         if (!state.live) await loadLive();
         const liveSnapshot = state.live;
+        const editsBatch = state.pendingEdits.slice();
         // Sandbox-diff emits coarse `{op:'set', path:'', newValue:<whole profile>}`
         // edits — one per AI tool call, chained so each edit's newValue
         // = previous edit's newValue + this tool's mutation. lodash.set
@@ -2087,60 +2135,94 @@ export async function openOrchestratorIterationStudio(deps) {
         // normalize, the LAST edit's newValue holds the cumulative
         // state, so the loop's final iteration produces the correct
         // result regardless of how many tool calls landed this round.
-        const allEmptyPath = state.pendingEdits.length > 0
-            && state.pendingEdits.every(e => e?.op === 'set' && e?.path === '' && typeof e?.newValue !== 'undefined');
+        //
+        // Track per-edit outcomes so the apply truth (clean vs conflict
+        // vs already-done) can travel back to the AI through the
+        // synthetic feedback message.
+        const allEmptyPath = editsBatch.length > 0
+            && editsBatch.every(e => e?.op === 'set' && e?.path === '' && typeof e?.newValue !== 'undefined');
+        let cleanEdits = [];
+        let conflicts = [];
+        let alreadyDone = [];
         if (allEmptyPath) {
-            for (const edit of state.pendingEdits) {
+            for (const edit of editsBatch) {
                 state.live = applyEmptyPathSet(state.live, edit);
+                cleanEdits.push(edit);
             }
         } else {
-            const result = applyEdits(state.pendingEdits, state.live);
+            const result = applyEdits(editsBatch, state.live);
             state.live = result?.newLive ?? state.live;
+            cleanEdits = Array.isArray(result?.clean) ? result.clean : [];
+            conflicts = Array.isArray(result?.conflicts) ? result.conflicts : [];
+            alreadyDone = Array.isArray(result?.alreadyDone) ? result.alreadyDone : [];
         }
+        const appliedCount = cleanEdits.length;
 
         const scope = getIterationDefaultScope(context);
-        try {
-            if (scope === 'character') {
-                await commitLiveToCharacter();
-            } else {
-                await commitLiveToGlobal();
+        if (appliedCount > 0) {
+            try {
+                if (scope === 'character') {
+                    await commitLiveToCharacter();
+                } else {
+                    await commitLiveToGlobal();
+                }
+            } catch (err) {
+                state.live = liveSnapshot;
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}:${mode}] commit failed`, err);
+                try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* toastr may be unavailable in tests */ }
+                state.session.messages.push({
+                    id: makeMessageId(),
+                    role: 'system',
+                    content: tf('Failed to save profile: ${0}', String(err?.message || err)),
+                    at: Date.now(),
+                });
+                await persistSession();
+                if (!skipRender) await render();
+                return { proposed: editsBatch.length, applied: 0, conflicts, alreadyDone, commitFailed: true };
             }
-        } catch (err) {
+        } else {
+            // Nothing landed → live stayed identical to liveSnapshot, no
+            // commit needed. Restore explicitly in case any partial mutation
+            // slipped through the (unreachable today) non-empty-path branch.
             state.live = liveSnapshot;
-            // eslint-disable-next-line no-console
-            console.warn(`[${MODULE}:${mode}] commit failed`, err);
-            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* toastr may be unavailable in tests */ }
-            state.session.messages.push({
-                id: makeMessageId(),
-                role: 'system',
-                content: tf('Failed to save profile: ${0}', String(err?.message || err)),
-                at: Date.now(),
-            });
-            await persistSession();
-            if (!skipRender) await render();
-            return;
         }
 
-        try { toastr.success(tf('Applied to ${0}', getApplyScopeLabel())); } catch { /* ignore */ }
+        try {
+            if (appliedCount === editsBatch.length) {
+                toastr.success(tf('Applied ${0} edit(s) to ${1}', String(appliedCount), getApplyScopeLabel()));
+            } else if (appliedCount > 0) {
+                toastr.warning(tf('Applied ${0} of ${1} edit(s) to ${2}; ${3} skipped',
+                    String(appliedCount), String(editsBatch.length), getApplyScopeLabel(),
+                    String(conflicts.length + alreadyDone.length)));
+            } else {
+                toastr.warning(tf('No edits applied to ${0}: all ${1} were skipped (conflicts or already in desired state)',
+                    getApplyScopeLabel(), String(editsBatch.length)));
+            }
+        } catch { /* ignore */ }
 
         // Mark the most recent unapplied assistant message that owns these
-        // edits. We scan back from the end because the just-rendered turn
-        // is the typical target; rare cases (user clicks Apply on a stale
-        // session reopened with persisted pendingEdits) still hit a sane
-        // candidate as long as one exists.
-        const messages = state.session.messages || [];
-        for (let i = messages.length - 1; i >= 0; i--) {
-            const m = messages[i];
-            if (m.role === 'assistant' && Array.isArray(m.edits) && m.edits.length > 0 && !m.appliedAt) {
-                m.appliedAt = Date.now();
-                m.appliedTarget = scope;
-                break;
+        // edits. Only stamp appliedAt when at least one edit actually
+        // landed — a zero-clean batch should not render the IDE-style "✓
+        // Applied" check.
+        if (appliedCount > 0) {
+            const messages = state.session.messages || [];
+            for (let i = messages.length - 1; i >= 0; i--) {
+                const m = messages[i];
+                if (m.role === 'assistant' && Array.isArray(m.edits) && m.edits.length > 0 && !m.appliedAt) {
+                    m.appliedAt = Date.now();
+                    m.appliedTarget = scope;
+                    m.appliedCount = appliedCount;
+                    m.appliedProposed = editsBatch.length;
+                    break;
+                }
             }
         }
 
         state.pendingEdits = [];
         await persistSession();
         if (!skipRender) await render();
+        return { proposed: editsBatch.length, applied: appliedCount, conflicts, alreadyDone };
     }
 
     async function discardPendingEdits() {
@@ -2159,10 +2241,51 @@ export async function openOrchestratorIterationStudio(deps) {
      * loop, mirroring the IDE pattern (approve → tool result lands →
      * agent continues; reject → agent reconsiders).
      */
-    async function continueAfterReviewDecision({ action, count }) {
+    /**
+     * Build the synthetic user-message text the next round sees after a
+     * batch is applied (review-mode click or auto-apply). The model reads
+     * this verbatim — keep the per-edit "skipped because X" detail intact
+     * so the LLM can correct its next round.
+     */
+    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, target = 'profile', autoApply = false }) {
+        const conflictArr = Array.isArray(conflicts) ? conflicts : [];
+        const alreadyArr = Array.isArray(alreadyDone) ? alreadyDone : [];
+        const appliedNum = Number.isInteger(applied) ? applied : count;
+        const skipped = conflictArr.length + alreadyArr.length;
+        const prefix = autoApply ? 'Auto-apply ran' : 'User reviewed this round';
+        const lines = [];
+        if (skipped === 0) {
+            lines.push(`[${prefix}: all ${count} pending edit(s) took effect on the ${target}.`);
+        } else {
+            lines.push(`[${prefix}: ${appliedNum}/${count} edits took effect on the ${target}, ${skipped} skipped.`);
+            if (conflictArr.length > 0) {
+                lines.push('Skipped (conflicts):');
+                for (const c of conflictArr) {
+                    const edit = c?.edit || {};
+                    const op = String(edit.op || '?');
+                    const path = String(edit.path || '<root>');
+                    const reason = String(c?.reason || 'unknown');
+                    lines.push(`  - ${op}(${path}): ${reason}`);
+                }
+            }
+            if (alreadyArr.length > 0) {
+                lines.push('Already in desired state (no-op):');
+                for (const e of alreadyArr) {
+                    const op = String(e?.op || '?');
+                    const path = String(e?.path || '<root>');
+                    lines.push(`  - ${op}(${path})`);
+                }
+            }
+            lines.push('Revise your approach for any skipped edit that was essential (re-read current state, fix the path / value).');
+        }
+        lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
+        return lines.join('\n');
+    }
+
+    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone }) {
         if (state.isBusy) return;
         const userText = action === 'apply'
-            ? `[User reviewed and applied ${count} pending edit(s). Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]`
+            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, target: getApplyScopeLabel() })
             : `[User reviewed and discarded ${count} pending edit(s). Reconsider your approach — propose different edits or respond with plain text and no tool calls when finished.]`;
 
         state.session.messages.push({
@@ -2470,15 +2593,23 @@ export async function openOrchestratorIterationStudio(deps) {
     $root.on('click.orchIt', '[data-orch-it-action="apply-batch"]', async (e) => {
         e.preventDefault();
         const pendingCount = Array.isArray(state.pendingEdits) ? state.pendingEdits.length : 0;
-        await applyPendingEdits();
+        const outcome = await applyPendingEdits();
         // After the user reviewed + applied a paused batch, fire the next
         // AI round with a synthetic "user approved" message. The handle-
         // SendMessage loop only paused because pendingEdits gated human
-        // review; the AI was mid-iteration and expects a result.
+        // review; the AI was mid-iteration and expects a result. Pass the
+        // real outcome (applied / conflicts / alreadyDone) so the AI sees
+        // truthful detail instead of just a proposed-count claim.
         if (pendingCount > 0
             && (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0)
             && !state.isBusy) {
-            await continueAfterReviewDecision({ action: 'apply', count: pendingCount });
+            await continueAfterReviewDecision({
+                action: 'apply',
+                count: pendingCount,
+                applied: outcome?.applied,
+                conflicts: outcome?.conflicts,
+                alreadyDone: outcome?.alreadyDone,
+            });
         }
     });
     $root.on('click.orchIt', '[data-orch-it-action="discard-batch"]', async (e) => {

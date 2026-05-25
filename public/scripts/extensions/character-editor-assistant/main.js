@@ -1230,7 +1230,9 @@ async function mergeCharacterAttributes(context, avatar, patch) {
  *                                       authored against. Defaults to {}.
  */
 export async function commitCharacterEditorOperations(context, avatar, edits, opts = {}) {
-    if (!Array.isArray(edits) || edits.length === 0) return;
+    if (!Array.isArray(edits) || edits.length === 0) {
+        return { applied: 0, conflicts: [], alreadyDone: [], persisted: false };
+    }
     // Defensive: reject edits that target a field the LLM invented. The
     // tool schemas declare `field` as an enum, but providers occasionally
     // ignore enum constraints, and the engine would otherwise route a
@@ -1258,6 +1260,12 @@ export async function commitCharacterEditorOperations(context, avatar, edits, op
             unknownFields.push(field);
         }
     }
+    // Unknown-field rejection is a hard input error — the LLM invented a
+    // schema, no edit in this batch can possibly land. Stay as a thrown
+    // exception so studio's outer try/catch routes it to the system-error
+    // path (same shape as IO failures). Only `applyEdits` conflict / drift
+    // outcomes were re-shaped to a returned result so studio can surface
+    // them on a per-edit basis to the AI.
     if (unknownFields.length > 0) {
         const unique = [...new Set(unknownFields)];
         throw new Error(
@@ -1267,14 +1275,12 @@ export async function commitCharacterEditorOperations(context, avatar, edits, op
     }
     const before = opts?.liveCharacter ? clone(opts.liveCharacter) : {};
     const result = applyEdits(edits, before) || {};
-    if (Array.isArray(result.conflicts) && result.conflicts.length > 0) {
+    const conflicts = Array.isArray(result.conflicts) ? result.conflicts : [];
+    const alreadyDone = Array.isArray(result.alreadyDone) ? result.alreadyDone : [];
+    const clean = Array.isArray(result.clean) ? result.clean : [];
+    if (conflicts.length > 0) {
         // eslint-disable-next-line no-console
-        console.warn(`[${MODULE_NAME}] commitCharacterEditorOperations conflicts`, result.conflicts);
-        const reasons = result.conflicts
-            .map(c => `${c?.edit?.path || c?.edit?.op || '(edit)'}: ${c?.reason || 'conflict'}`)
-            .slice(0, 3)
-            .join('; ');
-        throw new Error(`Apply blocked by ${result.conflicts.length} conflict(s) on character fields. ${reasons || 'The live state has drifted since edits were authored.'}`);
+        console.warn(`[${MODULE_NAME}] commitCharacterEditorOperations conflicts`, conflicts);
     }
     const after = result.newLive || before;
     const patch = {};
@@ -1282,8 +1288,12 @@ export async function commitCharacterEditorOperations(context, avatar, edits, op
     for (const k of keys) {
         if (!lodash.isEqual(before[k], after[k])) patch[k] = after[k];
     }
-    if (Object.keys(patch).length === 0) return;
-    await mergeCharacterAttributes(context, avatar, patch);
+    let persisted = false;
+    if (clean.length > 0 && Object.keys(patch).length > 0) {
+        await mergeCharacterAttributes(context, avatar, patch);
+        persisted = true;
+    }
+    return { applied: clean.length, conflicts, alreadyDone, persisted };
 }
 
 /**
@@ -1309,9 +1319,13 @@ export async function commitCharacterEditorOperations(context, avatar, edits, op
  * @param {Object} opts.context  SillyTavern context (for saveWorldInfo).
  */
 export async function commitLorebookOperations(bookName, liveBook, edits, opts = {}) {
-    if (!Array.isArray(edits) || edits.length === 0) return;
+    if (!Array.isArray(edits) || edits.length === 0) {
+        return { applied: 0, conflicts: [], alreadyDone: [], persisted: false };
+    }
     const safeName = String(bookName || '').trim();
-    if (!safeName) return;
+    if (!safeName) {
+        return { applied: 0, conflicts: [], alreadyDone: [], persisted: false };
+    }
     const context = opts?.context;
     if (!context || typeof context.saveWorldInfo !== 'function') {
         throw new TypeError('commitLorebookOperations: opts.context.saveWorldInfo is required');
@@ -1338,18 +1352,20 @@ export async function commitLorebookOperations(bookName, liveBook, edits, opts =
     }
     const before = liveBook ? clone(liveBook) : { entries: {} };
     const result = applyEdits(edits, before) || {};
-    if (Array.isArray(result.conflicts) && result.conflicts.length > 0) {
+    const conflicts = Array.isArray(result.conflicts) ? result.conflicts : [];
+    const alreadyDone = Array.isArray(result.alreadyDone) ? result.alreadyDone : [];
+    const clean = Array.isArray(result.clean) ? result.clean : [];
+    if (conflicts.length > 0) {
         // eslint-disable-next-line no-console
-        console.warn(`[${MODULE_NAME}] commitLorebookOperations conflicts for ${safeName}`, result.conflicts);
-        const reasons = result.conflicts
-            .map(c => `${c?.edit?.uid != null ? `#${c.edit.uid}` : c?.edit?.path || c?.edit?.op || '(edit)'}: ${c?.reason || 'conflict'}`)
-            .slice(0, 3)
-            .join('; ');
-        throw new Error(`Apply blocked by ${result.conflicts.length} conflict(s) on "${safeName}". ${reasons || 'The live state has drifted since edits were authored.'}`);
+        console.warn(`[${MODULE_NAME}] commitLorebookOperations conflicts for ${safeName}`, conflicts);
     }
     const after = result.newLive || before;
-    if (lodash.isEqual(before, after)) return;
-    await context.saveWorldInfo(safeName, after, true);
+    let persisted = false;
+    if (clean.length > 0 && !lodash.isEqual(before, after)) {
+        await context.saveWorldInfo(safeName, after, true);
+        persisted = true;
+    }
+    return { applied: clean.length, conflicts, alreadyDone, persisted };
 }
 
 async function syncWorldBindingUi(context, worldName = '') {
