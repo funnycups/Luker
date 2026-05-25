@@ -170,15 +170,43 @@ function upsertPromptEntryInBody(body, edit) {
     const next = { ...current, identifier };
     if (Object.hasOwn(edit, 'content'))            next.content = String(edit.content ?? '');
     if (Object.hasOwn(edit, 'role'))               next.role = String(edit.role ?? '').trim();
-    if (Object.hasOwn(edit, 'enabled'))            next.enabled = Boolean(edit.enabled);
+    // NOTE: prompts[].enabled is unused by the OpenAI preset runtime — the
+    // authoritative enabled flag lives on prompt_order[*].order[*]. We don't
+    // write entry.enabled here; the `enabled` arg is routed to prompt_order
+    // below (existing entries: flip every referencing group's item; new
+    // entries: stamp the initial orderEntry). Previous versions wrote
+    // next.enabled directly and silently no-op'd the user's intent for
+    // existing entries.
     if (Object.hasOwn(edit, 'name'))               next.name = String(edit.name ?? '').trim();
     if (Object.hasOwn(edit, 'marker'))             next.marker = Boolean(edit.marker);
     if (Object.hasOwn(edit, 'injection_position')) next.injection_position = edit.injection_position;
     if (Object.hasOwn(edit, 'injection_depth'))    next.injection_depth = edit.injection_depth;
     if (Object.hasOwn(edit, 'injection_order'))    next.injection_order = edit.injection_order;
+    // Intentionally do NOT write next.enabled here, even if `current` has
+    // an `enabled` field on disk (some preset files carry it as a legacy
+    // residue). The OpenAI preset runtime ignores prompts[].enabled; the
+    // authoritative flag is prompt_order[*].order[*].enabled. Routing the
+    // user-supplied `enabled` arg there happens below.
 
     if (!isCreate) {
         body.prompts[promptIndex] = next;
+        // For an existing entry, route the `enabled` arg (if provided) to
+        // every prompt_order group that already references this identifier.
+        // Without this, AIs that intend to "disable entry X" by passing
+        // enabled:false silently no-op'd — prompts[i].enabled is ignored at
+        // generation time, so flipping it alone changes nothing observable.
+        if (Object.hasOwn(edit, 'enabled') && Array.isArray(body.prompt_order)) {
+            const wantEnabled = Boolean(edit.enabled);
+            for (const group of body.prompt_order) {
+                if (!group || !Array.isArray(group.order)) continue;
+                for (let i = 0; i < group.order.length; i++) {
+                    const item = group.order[i];
+                    if (item && normalizePromptIdentifier(item.identifier) === identifier) {
+                        group.order[i] = { ...item, enabled: wantEnabled };
+                    }
+                }
+            }
+        }
         return;
     }
     if (!Object.hasOwn(next, 'content')) {
@@ -446,14 +474,14 @@ export function buildToolCatalog({ hasReference = false } = {}) {
             type: 'function',
             function: {
                 name: 'preset_upsert_prompt_entry',
-                description: 'Create or update one prompts[] entry by identifier. When CREATING a new entry, this also inserts {identifier, enabled} into every existing prompt_order group so the new entry is immediately active — pass `position` (1-based) to control where it lands, otherwise it appends to the end. Pass auto_add_to_order: false to skip prompt_order entirely. UPDATES never touch prompt_order. Prefer this over raw preset_list_insert on prompts[] for adding new entries.',
+                description: 'Create or update one prompts[] entry by identifier. When CREATING a new entry, this also inserts {identifier, enabled} into every existing prompt_order group so the new entry is immediately active — pass `position` (1-based) to control where it lands, otherwise it appends to the end. Pass auto_add_to_order: false to skip prompt_order entirely. When UPDATING an existing entry, passing `enabled` flips every prompt_order group\'s item for this identifier (because prompts[].enabled is ignored by the runtime — the authoritative flag lives on prompt_order[*].order[*].enabled). Prefer this over raw preset_list_insert on prompts[] for adding new entries.',
                 parameters: {
                     type: 'object',
                     properties: {
                         identifier: { type: 'string', description: 'Stable prompt identifier (e.g. "main", "nsfw", "jailbreak", or a uuid).' },
                         content: { type: 'string', description: 'Prompt text. Required when creating a new entry.' },
                         role: { type: 'string', description: 'Optional role: system / user / assistant.' },
-                        enabled: { type: 'boolean' },
+                        enabled: { type: 'boolean', description: 'When CREATING: sets the initial prompt_order item.enabled (default true). When UPDATING an existing entry: routed to every prompt_order group\'s item for this identifier — this is the only way to actually toggle whether the entry takes effect at generation. prompts[].enabled is unused by the runtime.' },
                         name: { type: 'string' },
                         marker: { type: 'boolean' },
                         injection_position: { type: 'number' },

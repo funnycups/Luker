@@ -54,11 +54,15 @@ export function getPresetPromptEntries(body) {
         const s = entry && typeof entry === 'object' ? entry : {};
         const identifier = normalizePromptIdentifier(s.identifier, s.id);
         if (!identifier) return null;
+        // Intentionally NOT exposing `entry.enabled` here: the OpenAI preset
+        // runtime ignores prompts[].enabled — the authoritative enabled flag
+        // is prompt_order[*].order[*].enabled. Surfacing it would re-introduce
+        // the bug where outline renderers and consumers reason about a field
+        // the runtime doesn't read.
         return {
             identifier, index,
             content: String(s.content ?? ''),
             role: String(s.role ?? '').trim(),
-            enabled: s.enabled !== false,
             name: String(s.name ?? '').trim(),
             marker: Boolean(s.marker),
             injection_position: s.injection_position ?? null,
@@ -130,9 +134,9 @@ export function buildPresetPromptOutlineText(body) {
 
     const orphans = entries.filter((e) => !orderedIds.has(e.identifier));
     if (orphans.length > 0) {
-        sections.push('- prompts NOT in any prompt_order (will be silently ignored at generation time):');
+        sections.push('- prompts NOT in any prompt_order (inert — never reach the model regardless of any other flag):');
         for (const e of orphans) {
-            sections.push(`  - ${e.identifier} [${e.enabled ? 'enabled' : 'disabled'}] role=${e.role || 'n/a'}`);
+            sections.push(`  - ${e.identifier} role=${e.role || 'n/a'}`);
             sections.push(`    ${formatPromptPreview(e.content)}`);
         }
     }
@@ -183,8 +187,8 @@ export function buildPresetSettingsOutlineText(body) {
 export function buildPresetStructureGuideText() {
     return [
         'OpenAI preset structure:',
-        '- prompts[]: catalog of prompt entries. Each: {identifier, name?, content, role?, enabled?, marker?, injection_position?, injection_depth?, injection_order?}.',
-        '- prompt_order[]: per-character activation lists. Each: {character_id, order:[{identifier, enabled}, ...]}.',
+        '- prompts[]: catalog of prompt entries. Each: {identifier, name?, content, role?, marker?, injection_position?, injection_depth?, injection_order?}. NOTE: any `enabled` field on prompts[] entries is ignored by the runtime — the authoritative enabled flag lives on prompt_order[*].order[*].enabled.',
+        '- prompt_order[]: per-character activation lists. Each: {character_id, order:[{identifier, enabled}, ...]}. To toggle whether an entry actually takes effect, flip its order item\'s `enabled` — call preset_upsert_prompt_order_item, or for an existing prompt entry call preset_upsert_prompt_entry which routes the `enabled` arg to every order group on your behalf.',
         '- An entry that exists in prompts[] but is NOT referenced in any prompt_order[*].order is silently ignored at generation time — it never reaches the model.',
         '- Top-level prompt fields: new_chat_prompt, new_group_chat_prompt, continue_nudge_prompt, impersonation_prompt, assistant_prefill, continue_prefill, continue_postfix, send_if_empty, wi_format, scenario_format, personality_format, group_nudge_prompt, use_sysprompt, squash_system_messages.',
         '- Common generation/context fields: temperature, top_p, top_k, min_p, presence_penalty, frequency_penalty, openai_max_context, openai_max_tokens, names_behavior, function_calling, show_thoughts, reasoning_effort, verbosity, seed, n.',
