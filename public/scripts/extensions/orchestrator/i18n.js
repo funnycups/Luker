@@ -317,10 +317,9 @@ export function registerLocaleData() {
         '(forced on)': '（强制启用）',
         'Loop mode runs a single agent that calls tools in a loop and finalizes when ready.': 'Loop 模式让单个 Agent 反复调用工具，自行决定何时调用 finalize 完成。',
         'Main system prompt': '主代理系统提示词',
-        // Director mode preset hints — long English text with semicolons,
-        // so data-i18n uses custom keys (the i18n parser splits on `;`).
-        'director_preset_help_pure_instruction': '请选择纯指令预设（越狱/NSFW/风格指南）。Director 会单独提供角色卡、人格、世界书、聊天历史，常规 RP 预设会重复注入这些内容。',
-        'director_preset_warning_content_prompts': '该预设包含内容提示词（角色卡/人格/世界书/聊天），Director 已经提供这些内容。建议改用纯指令预设以避免重复。',
+        // Director mode preset hint — long English text with semicolons,
+        // so data-i18n uses a custom key (the i18n parser splits on `;`).
+        'director_preset_help_pure_instruction': '请选择纯指令预设。常规 RP 预设里强制输出格式的指令（强制 CoT、必填 schema 块等）会卡死 agent 的工具调用通道。',
     });
     addLocaleData('zh-tw', {
         'Orchestrator': '多智能體編排',
@@ -618,9 +617,8 @@ export function registerLocaleData() {
         '(forced on)': '（強制啟用）',
         'Loop mode runs a single agent that calls tools in a loop and finalizes when ready.': 'Loop 模式讓單個 Agent 反覆呼叫工具，自行決定何時呼叫 finalize 完成。',
         'Main system prompt': '主代理系統提示詞',
-        // Director mode preset hints — long English text with semicolons,
-        // so data-i18n uses custom keys (the i18n parser splits on `;`).
-        'director_preset_help_pure_instruction': '請選擇純指令預設（越獄/NSFW/風格指南）。Director 會單獨提供角色卡、人格、世界書、聊天歷史，常規 RP 預設會重複注入這些內容。',
-        'director_preset_warning_content_prompts': '此預設包含內容提示詞（角色卡/人格/世界書/聊天），Director 已經提供這些內容。建議改用純指令預設以避免重複。',
+        // Director mode preset hint — long English text with semicolons,
+        // so data-i18n uses a custom key (the i18n parser splits on `;`).
+        'director_preset_help_pure_instruction': '請選擇純指令預設。常規 RP 預設裡強制輸出格式的指令（強制 CoT、必填 schema 塊等）會卡死 agent 的工具呼叫通道。',
     });
 }

@@ -124,7 +124,6 @@ import {
     sanitizeConnectionProfileName,
     sanitizePromptPresetName,
 } from './agent-resolution.js';
-import { presetContainsContentPrompts } from './director-preset-lint.js';
 import {
     applyCharacterExecutionModeForAvatar,
     getCharacterAgendaOverrideByAvatar,
@@ -1730,65 +1729,7 @@ function refreshOrchestrationEditorPopup(context, settings) {
         return;
     }
     mount.html(buildOrchestrationEditorPopupPanelHtml(getOrchestratorUiTemplateDeps(), context, settings));
-    // After the popup HTML is materialized, run the director preset lint
-    // pass so users who already have a content-shaped preset selected
-    // see the warning immediately (rather than only after they touch
-    // the dropdown). Handler binders live in `bindUi`; this helper
-    // just iterates the freshly-rendered `[data-director-preset-select]`
-    // dropdowns and toggles their sibling warning element.
-    refreshDirectorPresetWarnings(context, mount);
 }
-
-/**
- * Look up a chat-completion preset object by name via ST's
- * `getPresetManager('openai')` API. Returns `null` if the manager or
- * lookup method is unavailable, or if the name is empty (which means
- * "inherit the global orchestration preset" — no preset to lint).
- * Mirrors the lookup pattern in `director-runtime.js`.
- */
-function lookupChatCompletionPresetByName(context, name) {
-    const trimmed = String(name || '').trim();
-    if (!trimmed) return null;
-    const manager = context?.getPresetManager?.('openai');
-    if (!manager || typeof manager.getCompletionPresetByName !== 'function') return null;
-    try { return manager.getCompletionPresetByName(trimmed); } catch { return null; }
-}
-
-/**
- * Toggle the `.director-preset-warning` element immediately following
- * the given `<select data-director-preset-select=...>` based on
- * `presetContainsContentPrompts(...)` of its currently-selected name.
- * Empty selection (= inherit global) hides the warning.
- */
-function updateDirectorPresetWarningForSelect(context, selectEl) {
-    const $select = jQuery(selectEl);
-    if (!$select.length) return;
-    const presetName = String($select.val() || '').trim();
-    const $warning = $select.closest('label').find('.director-preset-warning');
-    if (!$warning.length) return;
-    const preset = lookupChatCompletionPresetByName(context, presetName);
-    const shouldWarn = presetContainsContentPrompts(preset);
-    $warning.toggleClass('displayNone', !shouldWarn);
-}
-
-/**
- * Refresh all director-preset warning elements within the given
- * jQuery root (typically the freshly-rendered editor popup mount).
- * Called after `mount.html(...)` so users see the warning state for
- * their pre-existing selection without needing to interact.
- */
-function refreshDirectorPresetWarnings(context, $root) {
-    if (!$root || !$root.length) return;
-    $root.find('[data-director-preset-select]').each(function () {
-        updateDirectorPresetWarningForSelect(context, this);
-    });
-}
-
-// Re-exported so other modules / tests can probe whether a preset
-// will duplicate director's content payload. The implementation lives
-// in `director-preset-lint.js` to keep `main.js` free of standalone
-// pure-utility logic.
-export { presetContainsContentPrompts };
 
 async function openOrchestrationEditorPopup(context, settings) {
     ensureStyles(UI_BLOCK_ID);
@@ -4841,16 +4782,6 @@ function bindUi() {
             return;
         }
         subAgents[index][field] = readDirectorInputValue(this);
-    });
-
-    // Passive lint: when any director preset-name dropdown changes,
-    // toggle the sibling `.director-preset-warning` based on whether
-    // the freshly-selected preset has content-shaped prompts enabled.
-    // Pure UX guard — does not block save, runs independently of the
-    // field-binding handlers above (which persist the value into the
-    // editor state). `change` only; `input` does not fire on <select>.
-    jQuery(document).on('change.lukerOrchEditor', '.luker_orch_editor_popup [data-director-preset-select]', function () {
-        updateDirectorPresetWarningForSelect(getContext(), this);
     });
 
     jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-orch-add-subagent]', function () {

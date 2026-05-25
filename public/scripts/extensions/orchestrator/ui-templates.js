@@ -443,9 +443,8 @@ function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex) {
     </label>
     <label>
         <span data-i18n="Prompt preset">${escapeHtml(i18n('Prompt preset'))}</span>
-        <select class="text_pole" data-orch-subagent-field="promptPresetName" data-subagent-index="${subagentIndex}" data-scope="${safeScope}" data-director-preset-select="subagent">${renderOpenAIPresetOptions(context, promptPresetName, i18n('(Global orchestration prompt preset)'))}</select>
-        <div class="director-preset-help" data-i18n="director_preset_help_pure_instruction">${escapeHtml(i18n('Pick a pure-instruction preset (jailbreak / NSFW / style guide). Director provides character / persona / world info / chat history separately; a normal RP preset will duplicate that content.'))}</div>
-        <div class="director-preset-warning displayNone" data-director-preset-warning="subagent" data-i18n="director_preset_warning_content_prompts">${escapeHtml(i18n('This preset contains content prompts (character / persona / WI / chat) which director already provides. Consider a pure-instruction preset to avoid duplication.'))}</div>
+        <select class="text_pole" data-orch-subagent-field="promptPresetName" data-subagent-index="${subagentIndex}" data-scope="${safeScope}">${renderOpenAIPresetOptions(context, promptPresetName, i18n('(Global orchestration prompt preset)'))}</select>
+        <div class="director-preset-help" data-i18n="director_preset_help_pure_instruction">${escapeHtml(i18n('Pick a pure-instruction preset. Typical RP presets that prescribe an output format (forced CoT, mandatory schema blocks) will block the agent\'s tool calls.'))}</div>
     </label>
 </div>`;
 }
@@ -506,9 +505,8 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
             </label>
             <label>
                 <span data-i18n="Prompt preset">${escapeHtml(i18n('Prompt preset'))}</span>
-                <select class="text_pole" data-orch-director-field="mainAgent.promptPresetName" data-scope="${safeScope}" data-director-preset-select="main">${renderOpenAIPresetOptions(context, String(mainAgent.promptPresetName || ''), i18n('(Global orchestration prompt preset)'))}</select>
-                <div class="director-preset-help" data-i18n="director_preset_help_pure_instruction">${escapeHtml(i18n('Pick a pure-instruction preset (jailbreak / NSFW / style guide). Director provides character / persona / world info / chat history separately; a normal RP preset will duplicate that content.'))}</div>
-                <div class="director-preset-warning displayNone" data-director-preset-warning="main" data-i18n="director_preset_warning_content_prompts">${escapeHtml(i18n('This preset contains content prompts (character / persona / WI / chat) which director already provides. Consider a pure-instruction preset to avoid duplication.'))}</div>
+                <select class="text_pole" data-orch-director-field="mainAgent.promptPresetName" data-scope="${safeScope}">${renderOpenAIPresetOptions(context, String(mainAgent.promptPresetName || ''), i18n('(Global orchestration prompt preset)'))}</select>
+                <div class="director-preset-help" data-i18n="director_preset_help_pure_instruction">${escapeHtml(i18n('Pick a pure-instruction preset. Typical RP presets that prescribe an output format (forced CoT, mandatory schema blocks) will block the agent\'s tool calls.'))}</div>
             </label>
             <label>
                 <span data-i18n="Main system prompt">${escapeHtml(i18n('Main system prompt'))}</span>

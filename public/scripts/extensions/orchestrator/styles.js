@@ -477,16 +477,6 @@ export function ensureStyles(uiBlockId) {
     opacity: 0.7;
     line-height: 1.35;
 }
-.director-preset-warning {
-    margin-top: 4px;
-    padding: 6px 8px;
-    border-radius: 6px;
-    border: 1px solid var(--SmartThemeBorderColor, rgba(220,160,40,0.55));
-    background: rgba(220,160,40,0.12);
-    color: var(--SmartThemeBodyColor, inherit);
-    font-size: 0.85em;
-    line-height: 1.35;
-}
 /* ============================================================== */
 /* Notes panel (consumed by notes-panel.js / ui-templates.js)      */
 /* ============================================================== */
