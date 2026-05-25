@@ -420,16 +420,21 @@ export function createEmptyPersistedMemoryState() {
  * Edge rebuild + parent/child link repair is delegated to
  * `repairStoreAfterRollback`, which uses `cloneRollbackEdgeSnapshot` to
  * normalize edge types and dedupe.
+ *
+ * Always returns a fresh independent object — callers using this for "before
+ * snapshot" patterns (commit-diff's `beforeStore` / `afterStore`, editor's
+ * pre-edit snapshot, extraction's working+committed pair) rely on that
+ * isolation. A previous tag-based short-circuit (returning the same reference
+ * for already-normalized inputs) corrupted those patterns: workingStore and
+ * committedStore aliased the cached store, so mutations leaked into the
+ * "before" snapshot, the diff went empty, and the commit silently became a
+ * no-op while cache kept advancing in memory until the next rematerialize
+ * wiped it back to log state.
  */
-const RUNTIME_NORMALIZED_TAG = Symbol('luker.memoryGraph.runtimeNormalized');
-
 export function normalizeStoreForRuntime(store) {
     const empty = createEmptyStore();
     if (!store || typeof store !== 'object') {
         return empty;
-    }
-    if (store[RUNTIME_NORMALIZED_TAG] === true) {
-        return store;
     }
     const normalized = { ...empty, ...store };
     const rawNodes = (normalized.nodes && typeof normalized.nodes === 'object' && !Array.isArray(normalized.nodes))
@@ -488,12 +493,6 @@ export function normalizeStoreForRuntime(store) {
     normalized.seqCounter = Math.max(normalized.seqCounter, normalized.loggedSeqTo);
 
     repairStoreAfterRollback(normalized);
-    Object.defineProperty(normalized, RUNTIME_NORMALIZED_TAG, {
-        value: true,
-        enumerable: false,
-        configurable: true,
-        writable: true,
-    });
     return normalized;
 }
 
