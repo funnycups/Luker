@@ -2326,40 +2326,59 @@ function renderDirectorIterationWorkingProfile(session, { profileOverride = null
             : session?.workingProfile,
     );
     const d = sanitized.director;
-    const enabledTools = [];
-    if (d.tools?.note?.open) enabledTools.push('note_open');
-    if (d.tools?.note?.close) enabledTools.push('note_close');
-    if (d.tools?.chat?.read_range) enabledTools.push('chat_read_range');
-    if (d.tools?.chat?.search) enabledTools.push('chat_search');
-    if (d.tools?.lorebook?.search) enabledTools.push('lorebook_search');
-    if (d.tools?.lorebook?.get) enabledTools.push('lorebook_get');
-    if (d.tools?.memory?.list_candidates) enabledTools.push('memory_list_candidates');
-    if (d.tools?.memory?.edge_summary) enabledTools.push('memory_edge_summary');
-    if (d.tools?.memory?.node_brief) enabledTools.push('memory_node_brief');
-    if (d.tools?.memory?.expand_seeds) enabledTools.push('memory_expand_seeds');
-    if (d.tools?.memory?.schema) enabledTools.push('memory_schema');
-    if (d.tools?.memory?.keyword_search) enabledTools.push('memory_keyword_search');
-    if (d.tools?.memory?.vector_search) enabledTools.push('memory_vector_search');
-    if (d.tools?.memory?.find_by_name) enabledTools.push('memory_find_by_name');
-    if (d.tools?.memory?.compaction_candidates) enabledTools.push('memory_compaction_candidates');
-    if (d.tools?.memory?.node_create) enabledTools.push('memory_node_create');
-    if (d.tools?.memory?.node_edit) enabledTools.push('memory_node_edit');
-    if (d.tools?.memory?.node_delete) enabledTools.push('memory_node_delete');
-    if (d.tools?.memory?.link_upsert) enabledTools.push('memory_link_upsert');
-    if (d.tools?.memory?.link_delete) enabledTools.push('memory_link_delete');
-    if (d.tools?.memory?.compact_nodes) enabledTools.push('memory_compact_nodes');
-    if (d.tools?.search?.search) enabledTools.push('search_search');
-    if (d.tools?.search?.visit) enabledTools.push('search_visit');
+    const collectEnabledVerbs = (tools) => {
+        const out = [];
+        if (!tools || typeof tools !== 'object') return out;
+        if (tools.note?.open) out.push('note_open');
+        if (tools.note?.close) out.push('note_close');
+        if (tools.chat?.read_range) out.push('chat_read_range');
+        if (tools.chat?.search) out.push('chat_search');
+        if (tools.lorebook?.search) out.push('lorebook_search');
+        if (tools.lorebook?.get) out.push('lorebook_get');
+        if (tools.memory?.schema) out.push('memory_schema');
+        if (tools.memory?.list_candidates) out.push('memory_list_candidates');
+        if (tools.memory?.edge_summary) out.push('memory_edge_summary');
+        if (tools.memory?.node_brief) out.push('memory_node_brief');
+        if (tools.memory?.expand_seeds) out.push('memory_expand_seeds');
+        if (tools.memory?.keyword_search) out.push('memory_keyword_search');
+        if (tools.memory?.vector_search) out.push('memory_vector_search');
+        if (tools.memory?.find_by_name) out.push('memory_find_by_name');
+        if (tools.memory?.compaction_candidates) out.push('memory_compaction_candidates');
+        if (tools.memory?.node_create) out.push('memory_node_create');
+        if (tools.memory?.node_edit) out.push('memory_node_edit');
+        if (tools.memory?.node_delete) out.push('memory_node_delete');
+        if (tools.memory?.link_upsert) out.push('memory_link_upsert');
+        if (tools.memory?.link_delete) out.push('memory_link_delete');
+        if (tools.memory?.compact_nodes) out.push('memory_compact_nodes');
+        if (tools.search?.search) out.push('search_search');
+        if (tools.search?.visit) out.push('search_visit');
+        return out;
+    };
+    const defaultVerbs = collectEnabledVerbs(d.tools);
+    const mainAgentHasOverride = d.mainAgent?.tools && typeof d.mainAgent.tools === 'object';
+    const mainAgentVerbs = mainAgentHasOverride ? collectEnabledVerbs(d.mainAgent.tools) : defaultVerbs;
     const simulationSummary = session?.lastSimulation
         ? `${i18n('Simulation')}: ${String(session.lastSimulation.summary || '')}`
         : '';
-    const subAgentCards = (Array.isArray(d.subAgents) ? d.subAgents : []).map((a) => `
+    const formatVerbsLine = (verbs) => verbs.length ? verbs.join(', ') : '(none)';
+    const subAgentCards = (Array.isArray(d.subAgents) ? d.subAgents : []).map((a) => {
+        const hasOverride = a.tools && typeof a.tools === 'object';
+        const verbs = hasOverride ? collectEnabledVerbs(a.tools) : defaultVerbs;
+        const toolsLabel = hasOverride
+            ? `${i18n('Override')}: ${formatVerbsLine(verbs)}`
+            : `${i18n('Inherit')}: ${formatVerbsLine(verbs)}`;
+        return `
 <div class="luker_orch_iter_stage">
     <div class="luker_orch_iter_stage_title">${escapeHtml(String(a.id || '(sub-agent)'))}</div>
     <div class="luker_orch_iter_stage_mode">${escapeHtml(String(a.description || ''))}</div>
     <div class="luker_orch_iter_stage_nodes">api=${escapeHtml(a.apiPresetName || '(global)')}, preset=${escapeHtml(a.promptPresetName || '(global)')}</div>
-</div>`).join('');
+    <div class="luker_orch_iter_stage_nodes">tools: ${escapeHtml(toolsLabel)}</div>
+</div>`;
+    }).join('');
     const mainSystem = String(d.mainAgent?.systemPrompt || '');
+    const mainAgentToolsLabel = mainAgentHasOverride
+        ? `${i18n('Override')}: ${formatVerbsLine(mainAgentVerbs)}`
+        : `${i18n('Inherit')}: ${formatVerbsLine(mainAgentVerbs)}`;
     return `
 <div class="luker_orch_iter_profile_meta">
     <div><b>${escapeHtml(i18nFormat('Iteration source: ${0}', session?.sourceName || i18n('Global profile')))}</b></div>
@@ -2373,7 +2392,8 @@ function renderDirectorIterationWorkingProfile(session, { profileOverride = null
 <div class="luker_orch_iter_preset_line"><b>${escapeHtml(i18n('Maximum concurrent sub-agents'))}:</b> ${escapeHtml(String(d.maxConcurrentSubagents))}</div>
 <div class="luker_orch_iter_preset_line"><b>${escapeHtml(i18n('Maximum total sub-agent runs per turn'))}:</b> ${escapeHtml(String(d.maxTotalSubagentRuns))}</div>
 <div class="luker_orch_iter_preset_line"><b>${escapeHtml(i18n('Discard partial message on abort'))}:</b> ${d.discardOnAbort ? '✓' : '—'}</div>
-<div class="luker_orch_iter_preset_line"><b>Loop tools:</b> ${escapeHtml(enabledTools.length ? enabledTools.join(', ') : '(none)')}</div>
+<div class="luker_orch_iter_preset_line"><b>${escapeHtml(i18n('Default tools'))}:</b> ${escapeHtml(formatVerbsLine(defaultVerbs))}</div>
+<div class="luker_orch_iter_preset_line"><b>${escapeHtml(i18n('Main agent tools'))}:</b> ${escapeHtml(mainAgentToolsLabel)}</div>
 <details class="luker_orch_iter_diff_raw">
     <summary>${escapeHtml(i18n('Main agent'))} ${escapeHtml(i18n('Main system prompt'))}</summary>
     <pre>${escapeHtml(mainSystem || '(empty)')}</pre>
@@ -2567,7 +2587,11 @@ export const DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK = [
     '- Use `luker_orch_remove_director_subagent` to delete one sub-agent by id.',
     '- For memory: read tools (`memory.schema / list_candidates / edge_summary / node_brief / expand_seeds / keyword_search / vector_search / find_by_name / compaction_candidates`) are safe for scouts and analysts; write tools (`memory.node_create / node_edit / node_delete / link_upsert / link_delete / compact_nodes`) should only be enabled on mutation sub-agents (`memory_curator` by default).',
     '- Use `luker_orch_set_director_limits` for budget changes (maxRounds, maxConcurrentSubagents, maxTotalSubagentRuns, discardOnAbort).',
-    '- Use `luker_orch_set_director_tools` to enable / disable specific loop tools. Pass only the verbs you intend to change.',
+    '- Tool flags cascade: every sub-agent inherits `director.tools` unless it has its own override; the main agent inherits the same default unless `mainAgent.tools` is set. Use:',
+    '    - `luker_orch_set_director_default_tools` to change the profile-level default that everything inherits.',
+    '    - `luker_orch_set_director_mainagent_tools` / `luker_orch_clear_director_mainagent_tools` to give the main agent its own tool set or drop the override.',
+    '    - `luker_orch_set_director_subagent_tools` / `luker_orch_clear_director_subagent_tools` (by id) to give one sub-agent its own tool set or drop the override.',
+    '    Pass only the verbs you intend to change. When a sub-agent or the main agent had no override, the first `set_*_tools` call seeds the override from the current default snapshot before applying the patch.',
     '- Prefer targeted edits. Do not rewrite the whole profile unless the user explicitly asks.',
     '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
     '- Keep output practical and concise for real RP usage.',
@@ -2589,6 +2613,10 @@ export const DEFAULT_AGENDA_ITERATION_MODE_BLOCK = [
     '- Use luker_orch_set_agenda_agent to create or update one agenda agent at a time.',
     '- Use luker_orch_set_agenda_final_agent to point final output to an existing agent id.',
     '- Use luker_orch_set_agenda_limits only for real budget changes, not for stylistic edits.',
+    '- Tool flags cascade: every agenda agent inherits `defaultTools` unless it has its own override. Use:',
+    '    - `luker_orch_set_agenda_default_tools` to change the profile-level default that every agent inherits.',
+    '    - `luker_orch_set_agenda_agent_tools` / `luker_orch_clear_agenda_agent_tools` (by agent_id) to give one agent its own tool set or drop the override.',
+    '    Pass only the verbs you intend to change. When an agent had no override, the first `set_*_tools` call seeds the override from the current default snapshot before applying the patch.',
     '- If user asks to test, call luker_orch_simulate with suitable input.',
     '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
     '- Keep output practical and concise for real RP usage.',
@@ -2616,6 +2644,10 @@ export const DEFAULT_SPEC_ITERATION_MODE_BLOCK = [
     '- Prefer dedicated serial review stages immediately after the worker stages they audit. Do not place review nodes in the final stage.',
     '- Do not create back-to-back review stages or consecutive critics with no worker layer between them.',
     `- Use luker_orch_set_node with type="${ORCH_NODE_TYPE_REVIEW}" when a node should behave as a reviewer.`,
+    '- Tool flags cascade: every node inherits `spec.defaultTools` unless it has its own override. Use:',
+    '    - `luker_orch_set_spec_default_tools` to change the profile-level default that every node inherits.',
+    '    - `luker_orch_set_spec_node_tools` / `luker_orch_clear_spec_node_tools` (by stage_id + node_id) to give one node its own tool set or drop the override.',
+    '    Pass only the verbs you intend to change. When a node had no override, the first `set_*_tools` call seeds the override from the current default snapshot before applying the patch.',
     '- If user asks to test, call luker_orch_simulate with suitable input.',
     '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
     '- Keep output practical and concise for real RP usage.',
@@ -2898,66 +2930,69 @@ function buildAiIterationUserPrompt(settings, session, userInputText, {
 }
 
 function buildAiIterationToolSet(session = null) {
-    if (isDirectorIterationSession(session)) {
-        const toolsFlagSchema = {
-            type: 'object',
-            properties: {
-                note: {
-                    type: 'object',
-                    properties: {
-                        add: { type: 'boolean' },
-                        delete: { type: 'boolean' },
-                    },
-                    additionalProperties: false,
+    // Shared by every mode's tools-edit functions (director / spec / agenda).
+    // Loop mode currently inlines its own copy inside `luker_orch_set_loop_profile`
+    // since it patches `tools` alongside other profile fields.
+    const toolsFlagSchema = {
+        type: 'object',
+        properties: {
+            note: {
+                type: 'object',
+                properties: {
+                    open: { type: 'boolean' },
+                    close: { type: 'boolean' },
                 },
-                chat: {
-                    type: 'object',
-                    properties: {
-                        read_range: { type: 'boolean' },
-                        search: { type: 'boolean' },
-                    },
-                    additionalProperties: false,
-                },
-                lorebook: {
-                    type: 'object',
-                    properties: {
-                        search: { type: 'boolean' },
-                        get: { type: 'boolean' },
-                    },
-                    additionalProperties: false,
-                },
-                memory: {
-                    type: 'object',
-                    properties: {
-                        schema: { type: 'boolean' },
-                        list_candidates: { type: 'boolean' },
-                        edge_summary: { type: 'boolean' },
-                        node_brief: { type: 'boolean' },
-                        expand_seeds: { type: 'boolean' },
-                        keyword_search: { type: 'boolean' },
-                        vector_search: { type: 'boolean' },
-                        find_by_name: { type: 'boolean' },
-                        compaction_candidates: { type: 'boolean' },
-                        node_create: { type: 'boolean' },
-                        node_edit: { type: 'boolean' },
-                        node_delete: { type: 'boolean' },
-                        link_upsert: { type: 'boolean' },
-                        link_delete: { type: 'boolean' },
-                        compact_nodes: { type: 'boolean' },
-                    },
-                    additionalProperties: false,
-                },
-                search: {
-                    type: 'object',
-                    properties: {
-                        search: { type: 'boolean' },
-                        visit: { type: 'boolean' },
-                    },
-                    additionalProperties: false,
-                },
+                additionalProperties: false,
             },
-            additionalProperties: false,
-        };
+            chat: {
+                type: 'object',
+                properties: {
+                    read_range: { type: 'boolean' },
+                    search: { type: 'boolean' },
+                },
+                additionalProperties: false,
+            },
+            lorebook: {
+                type: 'object',
+                properties: {
+                    search: { type: 'boolean' },
+                    get: { type: 'boolean' },
+                },
+                additionalProperties: false,
+            },
+            memory: {
+                type: 'object',
+                properties: {
+                    schema: { type: 'boolean' },
+                    list_candidates: { type: 'boolean' },
+                    edge_summary: { type: 'boolean' },
+                    node_brief: { type: 'boolean' },
+                    expand_seeds: { type: 'boolean' },
+                    keyword_search: { type: 'boolean' },
+                    vector_search: { type: 'boolean' },
+                    find_by_name: { type: 'boolean' },
+                    compaction_candidates: { type: 'boolean' },
+                    node_create: { type: 'boolean' },
+                    node_edit: { type: 'boolean' },
+                    node_delete: { type: 'boolean' },
+                    link_upsert: { type: 'boolean' },
+                    link_delete: { type: 'boolean' },
+                    compact_nodes: { type: 'boolean' },
+                },
+                additionalProperties: false,
+            },
+            search: {
+                type: 'object',
+                properties: {
+                    search: { type: 'boolean' },
+                    visit: { type: 'boolean' },
+                },
+                additionalProperties: false,
+            },
+        },
+        additionalProperties: false,
+    };
+    if (isDirectorIterationSession(session)) {
         return [
             {
                 type: 'function',
@@ -3029,14 +3064,72 @@ function buildAiIterationToolSet(session = null) {
             {
                 type: 'function',
                 function: {
-                    name: 'luker_orch_set_director_tools',
-                    description: 'Toggle director loop tools (chat / lorebook / memory / note / search). Pass only the verbs you intend to change. tools.finalize is always coerced to false on save.',
+                    name: 'luker_orch_set_director_default_tools',
+                    description: 'Patch the director\'s default tool flags. Default tools are inherited by the main agent and every sub-agent that does not have its own override. Pass only the verbs you intend to change; omitted verbs keep their current value. tools.finalize is always coerced to false on save.',
                     parameters: {
                         type: 'object',
                         properties: {
                             tools: toolsFlagSchema,
                         },
                         required: ['tools'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_set_director_mainagent_tools',
+                    description: 'Patch the main agent\'s tools override. When the main agent had no override, this initializes one from the current default snapshot then applies the patch. Pass only the verbs you intend to change; omitted verbs keep their current value. tools.finalize is always coerced to false on save.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            tools: toolsFlagSchema,
+                        },
+                        required: ['tools'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_clear_director_mainagent_tools',
+                    description: 'Drop the main agent\'s tools override so it inherits the default tools again.',
+                    parameters: {
+                        type: 'object',
+                        properties: {},
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_set_director_subagent_tools',
+                    description: 'Patch one sub-agent\'s tools override (by id). When the sub-agent had no override, this initializes one from the current default snapshot then applies the patch. Pass only the verbs you intend to change. tools.finalize is always coerced to false on save.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            id: { type: 'string' },
+                            tools: toolsFlagSchema,
+                        },
+                        required: ['id', 'tools'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_clear_director_subagent_tools',
+                    description: 'Drop one sub-agent\'s tools override (by id) so it inherits the default tools again.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            id: { type: 'string' },
+                        },
+                        required: ['id'],
                         additionalProperties: false,
                     },
                 },
@@ -3219,6 +3312,52 @@ function buildAiIterationToolSet(session = null) {
             {
                 type: 'function',
                 function: {
+                    name: 'luker_orch_set_agenda_default_tools',
+                    description: 'Patch the agenda profile\'s default tool flags. Default tools are inherited by every agenda agent that does not have its own override. Pass only the verbs you intend to change; omitted verbs keep their current value.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            tools: toolsFlagSchema,
+                        },
+                        required: ['tools'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_set_agenda_agent_tools',
+                    description: 'Patch one agenda agent\'s tools override (by id). When the agent had no override, this initializes one from the current default snapshot then applies the patch. Pass only the verbs you intend to change.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            agent_id: { type: 'string' },
+                            tools: toolsFlagSchema,
+                        },
+                        required: ['agent_id', 'tools'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_clear_agenda_agent_tools',
+                    description: 'Drop one agenda agent\'s tools override (by id) so it inherits the default tools again.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            agent_id: { type: 'string' },
+                        },
+                        required: ['agent_id'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
                     name: 'luker_orch_simulate',
                     description: 'Run orchestration simulation against recent chat messages or a custom user message.',
                     parameters: {
@@ -3333,6 +3472,54 @@ function buildAiIterationToolSet(session = null) {
                         preset_id: { type: 'string' },
                     },
                     required: ['preset_id'],
+                    additionalProperties: false,
+                },
+            },
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'luker_orch_set_spec_default_tools',
+                description: 'Patch the spec profile\'s default tool flags. Default tools are inherited by every node that does not have its own override. Pass only the verbs you intend to change; omitted verbs keep their current value.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        tools: toolsFlagSchema,
+                    },
+                    required: ['tools'],
+                    additionalProperties: false,
+                },
+            },
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'luker_orch_set_spec_node_tools',
+                description: 'Patch one spec node\'s tools override (located by stage_id + node_id). When the node had no override, this initializes one from the current default snapshot then applies the patch. Pass only the verbs you intend to change.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        stage_id: { type: 'string' },
+                        node_id: { type: 'string' },
+                        tools: toolsFlagSchema,
+                    },
+                    required: ['stage_id', 'node_id', 'tools'],
+                    additionalProperties: false,
+                },
+            },
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'luker_orch_clear_spec_node_tools',
+                description: 'Drop one spec node\'s tools override so it inherits the default tools again.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        stage_id: { type: 'string' },
+                        node_id: { type: 'string' },
+                    },
+                    required: ['stage_id', 'node_id'],
                     additionalProperties: false,
                 },
             },
@@ -3637,6 +3824,98 @@ async function executeAgendaIterationToolCalls(context, session, toolCalls, abor
             changed = true;
             continue;
         }
+        if (name === 'luker_orch_set_agenda_default_tools') {
+            const profile = session.workingProfile;
+            if (!profile.defaultTools || typeof profile.defaultTools !== 'object') {
+                profile.defaultTools = sanitizeAgentToolFlags({});
+            }
+            const before = JSON.stringify(profile.defaultTools);
+            const incoming = args.tools && typeof args.tools === 'object' ? args.tools : {};
+            for (const [ns, verbs] of Object.entries(incoming)) {
+                if (!verbs || typeof verbs !== 'object') continue;
+                if (!profile.defaultTools[ns] || typeof profile.defaultTools[ns] !== 'object') {
+                    profile.defaultTools[ns] = {};
+                }
+                for (const [verb, value] of Object.entries(verbs)) {
+                    profile.defaultTools[ns][verb] = Boolean(value);
+                }
+            }
+            session.workingProfile = sanitizeAgendaWorkingProfile(profile);
+            const after = JSON.stringify(session.workingProfile.defaultTools);
+            const profileChanged = before !== after;
+            const actionText = profileChanged ? 'Agenda default tools updated.' : 'Agenda default tools patch produced no changes.';
+            actions.push(actionText);
+            pushToolResult({ ok: true, changed: profileChanged, action: actionText, tools: session.workingProfile.defaultTools });
+            if (profileChanged) changed = true;
+            continue;
+        }
+        if (name === 'luker_orch_set_agenda_agent_tools') {
+            const agentId = sanitizeIdentifierToken(args.agent_id, '');
+            if (!agentId) {
+                const actionText = 'Skipped agenda agent tools update: missing agent_id.';
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: actionText });
+                continue;
+            }
+            const agents = session.workingProfile.agents || {};
+            const preset = agents[agentId];
+            if (!preset || typeof preset !== 'object') {
+                const actionText = `Skipped agenda agent tools update: agent_id "${agentId}" not found.`;
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: actionText });
+                continue;
+            }
+            if (!preset.tools || typeof preset.tools !== 'object') {
+                preset.tools = session.workingProfile.defaultTools && typeof session.workingProfile.defaultTools === 'object'
+                    ? JSON.parse(JSON.stringify(session.workingProfile.defaultTools))
+                    : sanitizeAgentToolFlags({});
+            }
+            const before = JSON.stringify(preset.tools);
+            const incoming = args.tools && typeof args.tools === 'object' ? args.tools : {};
+            for (const [ns, verbs] of Object.entries(incoming)) {
+                if (!verbs || typeof verbs !== 'object') continue;
+                if (!preset.tools[ns] || typeof preset.tools[ns] !== 'object') {
+                    preset.tools[ns] = {};
+                }
+                for (const [verb, value] of Object.entries(verbs)) {
+                    preset.tools[ns][verb] = Boolean(value);
+                }
+            }
+            session.workingProfile = sanitizeAgendaWorkingProfile(session.workingProfile);
+            const after = JSON.stringify(session.workingProfile.agents?.[agentId]?.tools || {});
+            const profileChanged = before !== after;
+            const actionText = profileChanged ? `Agenda agent "${agentId}" tools override updated.` : `Agenda agent "${agentId}" tools patch produced no changes.`;
+            actions.push(actionText);
+            pushToolResult({ ok: true, changed: profileChanged, action: actionText, tools: session.workingProfile.agents?.[agentId]?.tools });
+            if (profileChanged) changed = true;
+            continue;
+        }
+        if (name === 'luker_orch_clear_agenda_agent_tools') {
+            const agentId = sanitizeIdentifierToken(args.agent_id, '');
+            if (!agentId) {
+                const actionText = 'Skipped agenda agent tools clear: missing agent_id.';
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: actionText });
+                continue;
+            }
+            const preset = session.workingProfile.agents?.[agentId];
+            if (!preset || typeof preset !== 'object') {
+                const actionText = `Skipped agenda agent tools clear: agent_id "${agentId}" not found.`;
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: actionText });
+                continue;
+            }
+            const hadOverride = preset.tools && typeof preset.tools === 'object';
+            preset.tools = null;
+            session.workingProfile = sanitizeAgendaWorkingProfile(session.workingProfile);
+            const actionText = hadOverride
+                ? `Agenda agent "${agentId}" tools cleared (now inherits default).`
+                : `Agenda agent "${agentId}" tools already inheriting default.`;
+            actions.push(actionText);
+            pushToolResult({ ok: true, changed: hadOverride, action: actionText });
+            if (hadOverride) changed = true;
+            continue;
+        }
         if (name === 'luker_orch_simulate') {
             const simulation = await runAiIterationSimulation(context, session, args, abortSignal);
             simulations.push(simulation);
@@ -3871,6 +4150,7 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, _a
                 systemPrompt: typeof args.systemPrompt === 'string' ? String(args.systemPrompt) : (existing?.systemPrompt || ''),
                 apiPresetName: typeof args.apiPresetName === 'string' ? String(args.apiPresetName) : (existing?.apiPresetName || ''),
                 promptPresetName: typeof args.promptPresetName === 'string' ? String(args.promptPresetName) : (existing?.promptPresetName || ''),
+                tools: existing?.tools ?? null,
             };
             if (existingIndex >= 0) {
                 director.subAgents[existingIndex] = next;
@@ -3935,7 +4215,7 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, _a
             continue;
         }
 
-        if (name === 'luker_orch_set_director_tools') {
+        if (name === 'luker_orch_set_director_default_tools') {
             if (!director.tools || typeof director.tools !== 'object') director.tools = {};
             const before = JSON.stringify(director.tools);
             const incoming = args.tools && typeof args.tools === 'object' ? args.tools : {};
@@ -3948,14 +4228,133 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, _a
                     director.tools[ns][verb] = Boolean(value);
                 }
             }
-            // Re-sanitize so finalize:false is enforced + any defaults filled.
             session.workingProfile = sanitizeDirectorProfile(session.workingProfile);
             const after = JSON.stringify(session.workingProfile.director.tools);
             const profileChanged = before !== after;
-            const actionText = profileChanged ? 'Director tools updated.' : 'Director tools patch produced no changes.';
+            const actionText = profileChanged ? 'Director default tools updated.' : 'Director default tools patch produced no changes.';
             actions.push(actionText);
             pushToolResult({ ok: true, changed: profileChanged, action: actionText, tools: session.workingProfile.director.tools });
             if (profileChanged) changed = true;
+            continue;
+        }
+
+        if (name === 'luker_orch_set_director_mainagent_tools') {
+            if (!director.mainAgent || typeof director.mainAgent !== 'object') director.mainAgent = {};
+            // When the main agent had no override, seed from a snapshot of
+            // the current default so the patch starts from the user's
+            // prior inherited state instead of all-off.
+            if (!director.mainAgent.tools || typeof director.mainAgent.tools !== 'object') {
+                director.mainAgent.tools = director.tools && typeof director.tools === 'object'
+                    ? JSON.parse(JSON.stringify(director.tools))
+                    : {};
+            }
+            const before = JSON.stringify(director.mainAgent.tools);
+            const incoming = args.tools && typeof args.tools === 'object' ? args.tools : {};
+            for (const [ns, verbs] of Object.entries(incoming)) {
+                if (!verbs || typeof verbs !== 'object') continue;
+                if (!director.mainAgent.tools[ns] || typeof director.mainAgent.tools[ns] !== 'object') {
+                    director.mainAgent.tools[ns] = {};
+                }
+                for (const [verb, value] of Object.entries(verbs)) {
+                    director.mainAgent.tools[ns][verb] = Boolean(value);
+                }
+            }
+            session.workingProfile = sanitizeDirectorProfile(session.workingProfile);
+            const after = JSON.stringify(session.workingProfile.director.mainAgent.tools);
+            const profileChanged = before !== after;
+            const actionText = profileChanged ? 'Director main-agent tools override updated.' : 'Director main-agent tools patch produced no changes.';
+            actions.push(actionText);
+            pushToolResult({ ok: true, changed: profileChanged, action: actionText, tools: session.workingProfile.director.mainAgent.tools });
+            if (profileChanged) changed = true;
+            continue;
+        }
+
+        if (name === 'luker_orch_clear_director_mainagent_tools') {
+            const hadOverride = director.mainAgent?.tools && typeof director.mainAgent.tools === 'object';
+            if (director.mainAgent && typeof director.mainAgent === 'object') {
+                director.mainAgent.tools = null;
+            }
+            session.workingProfile = sanitizeDirectorProfile(session.workingProfile);
+            const actionText = hadOverride
+                ? 'Director main-agent tools cleared (now inherits default).'
+                : 'Director main-agent tools already inheriting default.';
+            actions.push(actionText);
+            pushToolResult({ ok: true, changed: hadOverride, action: actionText });
+            if (hadOverride) changed = true;
+            continue;
+        }
+
+        if (name === 'luker_orch_set_director_subagent_tools') {
+            const id = sanitizeIdentifierToken(args.id, '');
+            if (!id) {
+                const actionText = 'Skipped sub-agent tools update: missing id.';
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: actionText });
+                continue;
+            }
+            if (!Array.isArray(director.subAgents)) director.subAgents = [];
+            const subAgentIdx = director.subAgents.findIndex(a => String(a?.id || '') === id);
+            if (subAgentIdx < 0) {
+                const actionText = `Skipped sub-agent tools update: id "${id}" not found.`;
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: actionText });
+                continue;
+            }
+            const subAgent = director.subAgents[subAgentIdx];
+            if (!subAgent.tools || typeof subAgent.tools !== 'object') {
+                subAgent.tools = director.tools && typeof director.tools === 'object'
+                    ? JSON.parse(JSON.stringify(director.tools))
+                    : {};
+            }
+            const before = JSON.stringify(subAgent.tools);
+            const incoming = args.tools && typeof args.tools === 'object' ? args.tools : {};
+            for (const [ns, verbs] of Object.entries(incoming)) {
+                if (!verbs || typeof verbs !== 'object') continue;
+                if (!subAgent.tools[ns] || typeof subAgent.tools[ns] !== 'object') {
+                    subAgent.tools[ns] = {};
+                }
+                for (const [verb, value] of Object.entries(verbs)) {
+                    subAgent.tools[ns][verb] = Boolean(value);
+                }
+            }
+            session.workingProfile = sanitizeDirectorProfile(session.workingProfile);
+            const after = JSON.stringify(session.workingProfile.director.subAgents[subAgentIdx]?.tools || {});
+            const profileChanged = before !== after;
+            const actionText = profileChanged
+                ? `Sub-agent "${id}" tools override updated.`
+                : `Sub-agent "${id}" tools patch produced no changes.`;
+            actions.push(actionText);
+            pushToolResult({ ok: true, changed: profileChanged, action: actionText, tools: session.workingProfile.director.subAgents[subAgentIdx]?.tools });
+            if (profileChanged) changed = true;
+            continue;
+        }
+
+        if (name === 'luker_orch_clear_director_subagent_tools') {
+            const id = sanitizeIdentifierToken(args.id, '');
+            if (!id) {
+                const actionText = 'Skipped sub-agent tools clear: missing id.';
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: actionText });
+                continue;
+            }
+            if (!Array.isArray(director.subAgents)) director.subAgents = [];
+            const subAgentIdx = director.subAgents.findIndex(a => String(a?.id || '') === id);
+            if (subAgentIdx < 0) {
+                const actionText = `Skipped sub-agent tools clear: id "${id}" not found.`;
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: actionText });
+                continue;
+            }
+            const subAgent = director.subAgents[subAgentIdx];
+            const hadOverride = subAgent.tools && typeof subAgent.tools === 'object';
+            subAgent.tools = null;
+            session.workingProfile = sanitizeDirectorProfile(session.workingProfile);
+            const actionText = hadOverride
+                ? `Sub-agent "${id}" tools cleared (now inherits default).`
+                : `Sub-agent "${id}" tools already inheriting default.`;
+            actions.push(actionText);
+            pushToolResult({ ok: true, changed: hadOverride, action: actionText });
+            if (hadOverride) changed = true;
             continue;
         }
 
@@ -4208,6 +4607,105 @@ async function executeAiIterationToolCalls(context, session, toolCalls, abortSig
             actions.push(actionText);
             pendingPresetRemovalActions.get(presetId).push(actions.length - 1);
             pushToolResult({ ok: true, action: actionText, preset_id: presetId });
+            continue;
+        }
+        if (name === 'luker_orch_set_spec_default_tools') {
+            const spec = session.workingProfile.spec;
+            if (!spec.defaultTools || typeof spec.defaultTools !== 'object') {
+                spec.defaultTools = sanitizeAgentToolFlags({});
+            }
+            const before = JSON.stringify(spec.defaultTools);
+            const incoming = args.tools && typeof args.tools === 'object' ? args.tools : {};
+            for (const [ns, verbs] of Object.entries(incoming)) {
+                if (!verbs || typeof verbs !== 'object') continue;
+                if (!spec.defaultTools[ns] || typeof spec.defaultTools[ns] !== 'object') {
+                    spec.defaultTools[ns] = {};
+                }
+                for (const [verb, value] of Object.entries(verbs)) {
+                    spec.defaultTools[ns][verb] = Boolean(value);
+                }
+            }
+            session.workingProfile.spec = sanitizeSpec(session.workingProfile.spec);
+            const after = JSON.stringify(session.workingProfile.spec.defaultTools);
+            const profileChanged = before !== after;
+            const actionText = profileChanged ? 'Spec default tools updated.' : 'Spec default tools patch produced no changes.';
+            actions.push(actionText);
+            pushToolResult({ ok: true, changed: profileChanged, action: actionText, tools: session.workingProfile.spec.defaultTools });
+            if (profileChanged) changed = true;
+            continue;
+        }
+        if (name === 'luker_orch_set_spec_node_tools') {
+            const stageId = sanitizeIdentifierToken(args.stage_id, '');
+            const nodeId = sanitizeIdentifierToken(args.node_id, '');
+            const stage = resolveIterationStage(session, stageId, false);
+            if (!stage || !Array.isArray(stage.nodes)) {
+                const actionText = `Skipped node tools update: stage "${stageId}" not found.`;
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: actionText, stage_id: stageId, node_id: nodeId });
+                continue;
+            }
+            const node = stage.nodes.find(n => String(n?.id || '') === nodeId);
+            if (!node) {
+                const actionText = `Skipped node tools update: node "${nodeId}" not found in stage "${stageId}".`;
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: actionText, stage_id: stageId, node_id: nodeId });
+                continue;
+            }
+            if (!node.tools || typeof node.tools !== 'object') {
+                node.tools = session.workingProfile.spec?.defaultTools && typeof session.workingProfile.spec.defaultTools === 'object'
+                    ? JSON.parse(JSON.stringify(session.workingProfile.spec.defaultTools))
+                    : sanitizeAgentToolFlags({});
+            }
+            const before = JSON.stringify(node.tools);
+            const incoming = args.tools && typeof args.tools === 'object' ? args.tools : {};
+            for (const [ns, verbs] of Object.entries(incoming)) {
+                if (!verbs || typeof verbs !== 'object') continue;
+                if (!node.tools[ns] || typeof node.tools[ns] !== 'object') {
+                    node.tools[ns] = {};
+                }
+                for (const [verb, value] of Object.entries(verbs)) {
+                    node.tools[ns][verb] = Boolean(value);
+                }
+            }
+            session.workingProfile.spec = sanitizeSpec(session.workingProfile.spec);
+            const refreshedStage = (session.workingProfile.spec.stages || []).find(s => String(s?.id || '') === stageId);
+            const refreshedNode = refreshedStage?.nodes?.find(n => String(n?.id || '') === nodeId);
+            const after = JSON.stringify(refreshedNode?.tools || {});
+            const profileChanged = before !== after;
+            const actionText = profileChanged
+                ? `Node "${nodeId}" tools override updated in stage "${stageId}".`
+                : `Node "${nodeId}" tools patch produced no changes.`;
+            actions.push(actionText);
+            pushToolResult({ ok: true, changed: profileChanged, action: actionText, tools: refreshedNode?.tools });
+            if (profileChanged) changed = true;
+            continue;
+        }
+        if (name === 'luker_orch_clear_spec_node_tools') {
+            const stageId = sanitizeIdentifierToken(args.stage_id, '');
+            const nodeId = sanitizeIdentifierToken(args.node_id, '');
+            const stage = resolveIterationStage(session, stageId, false);
+            if (!stage || !Array.isArray(stage.nodes)) {
+                const actionText = `Skipped node tools clear: stage "${stageId}" not found.`;
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: actionText, stage_id: stageId, node_id: nodeId });
+                continue;
+            }
+            const node = stage.nodes.find(n => String(n?.id || '') === nodeId);
+            if (!node) {
+                const actionText = `Skipped node tools clear: node "${nodeId}" not found in stage "${stageId}".`;
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: actionText, stage_id: stageId, node_id: nodeId });
+                continue;
+            }
+            const hadOverride = node.tools && typeof node.tools === 'object';
+            node.tools = null;
+            session.workingProfile.spec = sanitizeSpec(session.workingProfile.spec);
+            const actionText = hadOverride
+                ? `Node "${nodeId}" tools cleared in stage "${stageId}" (now inherits default).`
+                : `Node "${nodeId}" tools already inheriting default.`;
+            actions.push(actionText);
+            pushToolResult({ ok: true, changed: hadOverride, action: actionText });
+            if (hadOverride) changed = true;
             continue;
         }
         if (name === 'luker_orch_simulate') {
@@ -4796,6 +5294,7 @@ function bindUi() {
             systemPrompt: '',
             apiPresetName: '',
             promptPresetName: '',
+            tools: null,
         });
         // Re-render so the new row gets its `data-subagent-index`.
         refreshOrchestrationEditorPopup(getContext(), getSettings());
@@ -4920,6 +5419,140 @@ function bindUi() {
             preset.tools[namespace] = {};
         }
         preset.tools[namespace][verb] = checked;
+    });
+
+    // Director-mode default tools (profile-level, inherited by main agent
+    // + every sub-agent that does not have its own override).
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-director-default-tool], .luker_orch_editor_popup [data-luker-director-default-tool]`, function () {
+        const toolName = String(jQuery(this).attr('data-luker-director-default-tool') || '');
+        const checked = Boolean(jQuery(this).prop('checked'));
+        const { editor } = getDirectorEditorForElement(this);
+        if (!editor?.director) return;
+        if (!editor.director.tools || typeof editor.director.tools !== 'object') {
+            editor.director.tools = sanitizeAgentToolFlags({});
+        }
+        const [namespace, verb] = toolName.split('.');
+        if (!namespace || !verb) return;
+        if (!editor.director.tools[namespace] || typeof editor.director.tools[namespace] !== 'object') {
+            editor.director.tools[namespace] = {};
+        }
+        editor.director.tools[namespace][verb] = checked;
+        editor.director.tools.finalize = false;
+    });
+
+    // Director-mode main-agent tools override (only fires when the user
+    // has flipped the main agent to "override" — otherwise mainAgent.tools
+    // is null and the grid is not rendered).
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-director-mainagent-tool], .luker_orch_editor_popup [data-luker-director-mainagent-tool]`, function () {
+        const toolName = String(jQuery(this).attr('data-luker-director-mainagent-tool') || '');
+        const checked = Boolean(jQuery(this).prop('checked'));
+        const { editor } = getDirectorEditorForElement(this);
+        if (!editor?.director) return;
+        if (!editor.director.mainAgent || typeof editor.director.mainAgent !== 'object') {
+            editor.director.mainAgent = {};
+        }
+        if (!editor.director.mainAgent.tools || typeof editor.director.mainAgent.tools !== 'object') {
+            editor.director.mainAgent.tools = sanitizeAgentToolFlags({});
+        }
+        const [namespace, verb] = toolName.split('.');
+        if (!namespace || !verb) return;
+        if (!editor.director.mainAgent.tools[namespace] || typeof editor.director.mainAgent.tools[namespace] !== 'object') {
+            editor.director.mainAgent.tools[namespace] = {};
+        }
+        editor.director.mainAgent.tools[namespace][verb] = checked;
+        editor.director.mainAgent.tools.finalize = false;
+    });
+
+    // Director-mode per-sub-agent tools override.
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-director-subagent-tool], .luker_orch_editor_popup [data-luker-director-subagent-tool]`, function () {
+        const toolName = String(jQuery(this).attr('data-luker-director-subagent-tool') || '');
+        const checked = Boolean(jQuery(this).prop('checked'));
+        const index = Number(jQuery(this).attr('data-subagent-index'));
+        if (!Number.isInteger(index) || index < 0) return;
+        const { editor } = getDirectorEditorForElement(this);
+        if (!editor?.director) return;
+        const subAgents = editor.director.subAgents;
+        if (!Array.isArray(subAgents) || !subAgents[index] || typeof subAgents[index] !== 'object') return;
+        const subAgent = subAgents[index];
+        if (!subAgent.tools || typeof subAgent.tools !== 'object') {
+            subAgent.tools = sanitizeAgentToolFlags({});
+        }
+        const [namespace, verb] = toolName.split('.');
+        if (!namespace || !verb) return;
+        if (!subAgent.tools[namespace] || typeof subAgent.tools[namespace] !== 'object') {
+            subAgent.tools[namespace] = {};
+        }
+        subAgent.tools[namespace][verb] = checked;
+        subAgent.tools.finalize = false;
+    });
+
+    // Override / reset toggles for director default / mainagent / subagent
+    // tools. "Override" copies the current default snapshot so the user
+    // starts from what they were inheriting; "reset" sets the field to
+    // null so cascade-resolver falls back to the next layer.
+    jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-luker-action="director-default-tools-enable-all"]', function () {
+        const { editor } = getDirectorEditorForElement(this);
+        if (!editor?.director) return;
+        editor.director.tools = sanitizeAgentToolFlags({}, { defaultAllOn: true, forceFinalize: false });
+        editor.director.tools.finalize = false;
+        refreshOrchestrationEditorPopup(getContext(), getSettings());
+    });
+
+    jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-luker-action="director-default-tools-disable-all"]', function () {
+        const { editor } = getDirectorEditorForElement(this);
+        if (!editor?.director) return;
+        editor.director.tools = sanitizeAgentToolFlags({}, { defaultAllOn: false, forceFinalize: false });
+        editor.director.tools.finalize = false;
+        refreshOrchestrationEditorPopup(getContext(), getSettings());
+    });
+
+    jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-luker-action="director-mainagent-tools-override"]', function () {
+        const { editor } = getDirectorEditorForElement(this);
+        if (!editor?.director) return;
+        if (!editor.director.mainAgent || typeof editor.director.mainAgent !== 'object') {
+            editor.director.mainAgent = {};
+        }
+        // Snapshot the current default so the override starts from the
+        // user's prior inherited state instead of all-off.
+        const defaultSnapshot = editor.director.tools && typeof editor.director.tools === 'object'
+            ? editor.director.tools
+            : {};
+        editor.director.mainAgent.tools = sanitizeAgentToolFlags(defaultSnapshot, { defaultAllOn: false, forceFinalize: false });
+        editor.director.mainAgent.tools.finalize = false;
+        refreshOrchestrationEditorPopup(getContext(), getSettings());
+    });
+
+    jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-luker-action="director-mainagent-tools-reset"]', function () {
+        const { editor } = getDirectorEditorForElement(this);
+        if (!editor?.director?.mainAgent) return;
+        editor.director.mainAgent.tools = null;
+        refreshOrchestrationEditorPopup(getContext(), getSettings());
+    });
+
+    jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-luker-action="director-subagent-tools-override"]', function () {
+        const index = Number(jQuery(this).attr('data-subagent-index'));
+        if (!Number.isInteger(index) || index < 0) return;
+        const { editor } = getDirectorEditorForElement(this);
+        if (!editor?.director) return;
+        const subAgents = editor.director.subAgents;
+        if (!Array.isArray(subAgents) || !subAgents[index] || typeof subAgents[index] !== 'object') return;
+        const defaultSnapshot = editor.director.tools && typeof editor.director.tools === 'object'
+            ? editor.director.tools
+            : {};
+        subAgents[index].tools = sanitizeAgentToolFlags(defaultSnapshot, { defaultAllOn: false, forceFinalize: false });
+        subAgents[index].tools.finalize = false;
+        refreshOrchestrationEditorPopup(getContext(), getSettings());
+    });
+
+    jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-luker-action="director-subagent-tools-reset"]', function () {
+        const index = Number(jQuery(this).attr('data-subagent-index'));
+        if (!Number.isInteger(index) || index < 0) return;
+        const { editor } = getDirectorEditorForElement(this);
+        if (!editor?.director) return;
+        const subAgents = editor.director.subAgents;
+        if (!Array.isArray(subAgents) || !subAgents[index] || typeof subAgents[index] !== 'object') return;
+        subAgents[index].tools = null;
+        refreshOrchestrationEditorPopup(getContext(), getSettings());
     });
 
     root.on('change.lukerOrch', '#luker_orch_llm_api_preset', function () {

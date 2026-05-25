@@ -401,7 +401,7 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
  * are normal in-flight (the sanitizer only drops them at runtime), so
  * the renderer does not validate.
  */
-function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex) {
+function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex, directorDefaultTools) {
     const {
         escapeHtml,
         getContext,
@@ -416,6 +416,7 @@ function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex) {
     const systemPrompt = String(safe.systemPrompt ?? '');
     const apiPresetName = String(safe.apiPresetName ?? '');
     const promptPresetName = String(safe.promptPresetName ?? '');
+    const subagentTools = (safe.tools && typeof safe.tools === 'object') ? safe.tools : null;
     const context = getContext();
     return `
 <div class="luker_orch_subagent_row luker-studio-card" data-subagent-row="${escapeHtml(id)}" data-subagent-index="${subagentIndex}" data-scope="${safeScope}">
@@ -446,6 +447,17 @@ function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex) {
         <select class="text_pole" data-orch-subagent-field="promptPresetName" data-subagent-index="${subagentIndex}" data-scope="${safeScope}">${renderOpenAIPresetOptions(context, promptPresetName, i18n('(Global orchestration prompt preset)'))}</select>
         <div class="director-preset-help" data-i18n="director_preset_help_pure_instruction">${escapeHtml(i18n('Pick a pure-instruction preset. Typical RP presets that prescribe an output format (forced CoT, mandatory schema blocks) will block the agent\'s tool calls.'))}</div>
     </label>
+    <details class="luker_orch_tools_section">
+        <summary>${escapeHtml(i18n('Tools'))}</summary>
+        ${renderInheritOrOverridePanel(deps, safeScope, subagentTools, {
+        dataAttrName: 'luker-director-subagent-tool',
+        extraAttrs: { 'subagent-index': subagentIndex },
+        overrideAction: 'director-subagent-tools-override',
+        resetAction: 'director-subagent-tools-reset',
+        inheritedTools: directorDefaultTools || null,
+        kind: 'agent',
+    })}
+    </details>
 </div>`;
 }
 
@@ -489,10 +501,12 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
     const maxConcurrentSubagents = Number.isFinite(Number(director.maxConcurrentSubagents)) ? Number(director.maxConcurrentSubagents) : 4;
     const maxTotalSubagentRuns = Number.isFinite(Number(director.maxTotalSubagentRuns)) ? Number(director.maxTotalSubagentRuns) : 16;
     const discardOnAbort = Boolean(director.discardOnAbort);
+    const directorDefaultTools = (director.tools && typeof director.tools === 'object') ? director.tools : null;
+    const mainAgentTools = (mainAgent.tools && typeof mainAgent.tools === 'object') ? mainAgent.tools : null;
     const context = getContext();
     const subAgentRows = subAgents.length === 0
         ? `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No sub-agents yet.'))}</div>`
-        : subAgents.map((subagent, index) => renderDirectorSubAgentRow(deps, safeScope, subagent, index)).join('');
+        : subAgents.map((subagent, index) => renderDirectorSubAgentRow(deps, safeScope, subagent, index, directorDefaultTools)).join('');
     return `
 <div class="luker-studio-workspace luker_orch_director_block" data-luker-scope-root="${safeScope}" data-orch-mode-block="director">
     <div class="luker-studio-workspace-title" data-i18n="Director Orchestration">${escapeHtml(title || i18n('Director Orchestration'))}</div>
@@ -515,6 +529,16 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
             <div class="flex-container">
                 <div class="menu_button menu_button_small" data-luker-action="director-reset-main-prompt" data-scope="${safeScope}" data-i18n="Reset to default">${escapeHtml(i18n('Reset to default'))}</div>
             </div>
+            <details class="luker_orch_tools_section">
+                <summary>${escapeHtml(i18n('Main agent tools'))}</summary>
+                ${renderInheritOrOverridePanel(deps, safeScope, mainAgentTools, {
+        dataAttrName: 'luker-director-mainagent-tool',
+        overrideAction: 'director-mainagent-tools-override',
+        resetAction: 'director-mainagent-tools-reset',
+        inheritedTools: directorDefaultTools,
+        kind: 'agent',
+    })}
+            </details>
 
             <h4 data-i18n="Limits">${escapeHtml(i18n('Limits'))}</h4>
             <label>
@@ -537,6 +561,15 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
         </div>
         <div class="luker-studio-workspace-col">
             <h4 data-i18n="Sub-agents">${escapeHtml(i18n('Sub-agents'))}</h4>
+            <details class="luker_orch_tools_section">
+                <summary>${escapeHtml(i18n('Default tools for all agents'))}</summary>
+                <div class="luker-studio-empty-hint">${escapeHtml(i18n('Each agent can override these defaults below. The main agent inherits unless it has its own override.'))}</div>
+                ${renderToolFlagsGrid(deps, safeScope, directorDefaultTools || {}, 'luker-director-default-tool')}
+                <div class="luker-studio-actions-row">
+                    <div class="menu_button menu_button_small" data-luker-action="director-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable all'))}</div>
+                    <div class="menu_button menu_button_small" data-luker-action="director-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear'))}</div>
+                </div>
+            </details>
             <div data-orch-subagent-list>${subAgentRows}</div>
             <div class="luker-studio-add-row">
                 <button class="menu_button menu_button_small" type="button" data-orch-add-subagent="1" data-scope="${safeScope}" data-i18n="Add sub-agent">${escapeHtml(i18n('Add sub-agent'))}</button>

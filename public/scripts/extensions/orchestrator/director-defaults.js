@@ -19,7 +19,7 @@
  * would produce two same-named tool schemas in the LLM's tools array.
  */
 
-import { sanitizeAgentToolFlags } from './persistence.js';
+import { sanitizeAgentToolFlags, sanitizeOptionalAgentToolFlags } from './persistence.js';
 import { buildDirectorDefaultSystemPrompt } from './director-default-prompt.js';
 
 // Event summary writing rules (body only). Private to orchestrator — memory-graph
@@ -397,6 +397,10 @@ function buildDefaultDirectorSubAgents() {
             ].join('\n'),
             apiPresetName: '',
             promptPresetName: '',
+            tools: {
+                chat: { read_range: true, search: true },
+                lorebook: { search: true, get: true },
+            },
         },
         {
             id: 'chat_scout',
@@ -430,6 +434,9 @@ function buildDefaultDirectorSubAgents() {
             ].join('\n'),
             apiPresetName: '',
             promptPresetName: '',
+            tools: {
+                chat: { read_range: true, search: true },
+            },
         },
         {
             id: 'memory_scout',
@@ -504,6 +511,18 @@ function buildDefaultDirectorSubAgents() {
             ].join('\n'),
             apiPresetName: '',
             promptPresetName: '',
+            tools: {
+                memory: {
+                    schema: true,
+                    list_candidates: true,
+                    edge_summary: true,
+                    node_brief: true,
+                    expand_seeds: true,
+                    keyword_search: true,
+                    vector_search: true,
+                    find_by_name: true,
+                },
+            },
         },
         {
             id: 'lorebook_scout',
@@ -525,6 +544,9 @@ function buildDefaultDirectorSubAgents() {
             ].join('\n'),
             apiPresetName: '',
             promptPresetName: '',
+            tools: {
+                lorebook: { search: true, get: true },
+            },
         },
         {
             id: 'notes_pickup_scout',
@@ -555,6 +577,9 @@ function buildDefaultDirectorSubAgents() {
             ].join('\n'),
             apiPresetName: '',
             promptPresetName: '',
+            tools: {
+                note: { open: true },
+            },
         },
         {
             id: 'canon_scout',
@@ -577,6 +602,9 @@ function buildDefaultDirectorSubAgents() {
             ].join('\n'),
             apiPresetName: '',
             promptPresetName: '',
+            tools: {
+                search: { search: true, visit: true },
+            },
         },
         {
             id: 'epistemic_scout',
@@ -619,6 +647,15 @@ function buildDefaultDirectorSubAgents() {
             ].join('\n'),
             apiPresetName: '',
             promptPresetName: '',
+            tools: {
+                chat: { read_range: true },
+                lorebook: { search: true, get: true },
+                memory: {
+                    keyword_search: true,
+                    find_by_name: true,
+                    node_brief: true,
+                },
+            },
         },
         {
             id: 'plot_brainstormer',
@@ -648,6 +685,7 @@ function buildDefaultDirectorSubAgents() {
             ].join('\n'),
             apiPresetName: '',
             promptPresetName: '',
+            tools: {},
         },
         {
             id: 'voice_critic',
@@ -749,6 +787,9 @@ function buildDefaultDirectorSubAgents() {
             ].join('\n'),
             apiPresetName: '',
             promptPresetName: '',
+            tools: {
+                chat: { read_range: true },
+            },
         },
         {
             id: 'continuity_critic',
@@ -785,6 +826,13 @@ function buildDefaultDirectorSubAgents() {
             ].join('\n'),
             apiPresetName: '',
             promptPresetName: '',
+            tools: {
+                chat: { read_range: true },
+                memory: {
+                    keyword_search: true,
+                    node_brief: true,
+                },
+            },
         },
         {
             id: 'notes_curator',
@@ -814,6 +862,9 @@ function buildDefaultDirectorSubAgents() {
             ].join('\n'),
             apiPresetName: '',
             promptPresetName: '',
+            tools: {
+                note: { open: true, close: true },
+            },
         },
         {
             id: 'memory_curator',
@@ -957,6 +1008,24 @@ function buildDefaultDirectorSubAgents() {
             ].join('\n'),
             apiPresetName: '',
             promptPresetName: '',
+            tools: {
+                memory: {
+                    schema: true,
+                    list_candidates: true,
+                    edge_summary: true,
+                    node_brief: true,
+                    expand_seeds: true,
+                    keyword_search: true,
+                    find_by_name: true,
+                    compaction_candidates: true,
+                    node_create: true,
+                    node_edit: true,
+                    node_delete: true,
+                    link_upsert: true,
+                    link_delete: true,
+                    compact_nodes: true,
+                },
+            },
         },
     ];
 }
@@ -1003,6 +1072,21 @@ export function sanitizeDirectorProfile(profile) {
 
     const mainAgent = input.mainAgent && typeof input.mainAgent === 'object' ? input.mainAgent : {};
 
+    // Per-agent tools override: null/undefined → inherit `director.tools`
+    // default; object → replace default entirely (not merged). The shared
+    // `sanitizeOptionalAgentToolFlags` returns null for the inherit case
+    // and a fully canonical flag bag for the override case. Director
+    // forces `finalize: false` on every layer (it has its own finalize
+    // tool with the same name).
+    const sanitizeAgentOverride = (toolsInput) => {
+        const sanitized = sanitizeOptionalAgentToolFlags(toolsInput, {
+            defaultAllOn: false,
+            forceFinalize: false,
+        });
+        if (sanitized && typeof sanitized === 'object') sanitized.finalize = false;
+        return sanitized;
+    };
+
     // Dedupe sub-agents by id (last wins), drop invalid entries.
     const subAgentsRaw = Array.isArray(input.subAgents) ? input.subAgents : [];
     const subAgentMap = new Map();
@@ -1017,6 +1101,7 @@ export function sanitizeDirectorProfile(profile) {
             systemPrompt,
             promptPresetName: String(a.promptPresetName ?? '').trim(),
             apiPresetName: String(a.apiPresetName ?? '').trim(),
+            tools: sanitizeAgentOverride(a.tools),
         });
     }
 
@@ -1040,6 +1125,7 @@ export function sanitizeDirectorProfile(profile) {
                 promptPresetName: String(mainAgent.promptPresetName ?? '').trim(),
                 apiPresetName: String(mainAgent.apiPresetName ?? '').trim(),
                 systemPrompt: String(mainAgent.systemPrompt ?? ''),
+                tools: sanitizeAgentOverride(mainAgent.tools),
             },
             subAgents: [...subAgentMap.values()],
             maxRounds: clampInt(input.maxRounds, bounds.maxRounds),

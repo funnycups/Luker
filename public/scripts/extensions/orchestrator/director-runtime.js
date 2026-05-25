@@ -30,6 +30,7 @@
 
 import { ORCH_EXECUTION_MODE_DIRECTOR } from './director-defaults.js';
 import { isAbortError } from './abort-utils.js';
+import { resolveAgentToolFlags } from './persistence.js';
 import { createMessageEditorHandle } from '../../message-takeover.js';
 import {
     buildMainAgentToolSchemas,
@@ -350,7 +351,11 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
 
     const toolSchemas = buildMainAgentToolSchemas({
         subAgents: director.subAgents || [],
-        tools: director.tools || {},
+        // Main agent tools: per-agent override (object) wins; null falls
+        // back to profile-level default. Same cascade sub-agent dispatch
+        // uses, just rooted at director.mainAgent.tools instead of
+        // subAgents[i].tools.
+        tools: resolveAgentToolFlags(director.mainAgent?.tools, director.tools) || {},
     });
 
     // Resolve the cached content payload (captured by

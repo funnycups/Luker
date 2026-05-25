@@ -24,6 +24,7 @@
  */
 
 import { FINALIZE_TOOL_SCHEMA, getEnabledToolSchemas } from './loop-tools.js';
+import { resolveAgentToolFlags } from './persistence.js';
 import {
     appendText,
     applyPatch,
@@ -392,8 +393,6 @@ export function createSubagentDispatcher({
         ? Number(limits.maxTotalSubagentRuns)
         : 16;
 
-    const subToolSchemas = buildSubAgentToolSchemas({ tools: tools || {} });
-
     function newHandleId() {
         return `subagent-${nextHandleId++}`;
     }
@@ -494,7 +493,7 @@ export function createSubagentDispatcher({
         return ctrl;
     }
 
-    async function runOneRound(subMessages, sectionLabelForChunks, baseOpts) {
+    async function runOneRound(subMessages, sectionLabelForChunks, baseOpts, subToolSchemas) {
         const callOpts = {
             ...baseOpts,
             taskMessages: subMessages,
@@ -581,6 +580,7 @@ export function createSubagentDispatcher({
             promptPresetName: resolveAgentPromptPresetName(settings, spec),
             task,
             parentMessages: Array.isArray(__parentMessages) ? __parentMessages : null,
+            agentTools: spec?.tools ?? null,
         });
     }
 
@@ -629,12 +629,18 @@ export function createSubagentDispatcher({
             promptPresetName: resolveAgentPromptPresetName(settings, { promptPresetName }),
             task,
             parentMessages: Array.isArray(__parentMessages) ? __parentMessages : null,
+            agentTools: null,
         });
     }
 
-    async function runDispatchInternal({ handleId, displayId, isInline, label, systemPrompt, apiPresetName, promptPresetName, task, parentMessages }) {
+    async function runDispatchInternal({ handleId, displayId, isInline, label, systemPrompt, apiPresetName, promptPresetName, task, parentMessages, agentTools }) {
         totalRuns++;
         safeEnsureSection(label);
+
+        // Per-dispatch tool schemas: agent's own tools override (object)
+        // wins; null/undefined falls back to profile.tools default.
+        const resolvedTools = resolveAgentToolFlags(agentTools, tools);
+        const subToolSchemas = buildSubAgentToolSchemas({ tools: resolvedTools || {} });
 
         // Splice the takeover-captured messages verbatim between
         // <story_context> open/close system messages. Director hard-codes
@@ -707,7 +713,7 @@ export function createSubagentDispatcher({
                     if (childSignal.aborted) {
                         break;
                     }
-                    const { roundAssistantText, roundToolCalls } = await runOneRound(subMessages, label, baseOpts);
+                    const { roundAssistantText, roundToolCalls } = await runOneRound(subMessages, label, baseOpts, subToolSchemas);
                     if (roundToolCalls.length === 0) {
                         finalText = roundAssistantText;
                         converged = true;

@@ -601,4 +601,86 @@ describe('subagent dispatcher', () => {
         expect(seenToolCtx[0].__memoryGraphSession).toBeUndefined();
         expect(seenToolCtx[0].chat).toBeDefined();
     });
+
+    test('sub-agent with tools override gets its own schemas; sub-agent without override inherits profile defaults', async () => {
+        // Capture the `tools` schema array passed to generateTask so we can
+        // assert what each sub-agent dispatch actually saw.
+        const seenSchemas = [];
+        const fakeGenerate = jest.fn(async (opts) => {
+            const names = (opts.tools || []).map(s => s?.function?.name).filter(Boolean).sort();
+            seenSchemas.push(names);
+            return { assistantText: 'ok', toolCalls: [], reasoning: null, finishReason: 'stop' };
+        });
+
+        const profileTools = {
+            chat: { read_range: true, search: true },
+            lorebook: { search: true, get: true },
+            memory: { node_brief: true },
+            note: { open: false, close: false },
+            search: { search: false, visit: false },
+            finalize: false,
+        };
+        const dispatcher = createSubagentDispatcher({
+            subAgents: [
+                // Inheriting sub-agent: should see chat_* + lorebook_* + memory_node_brief + get_draft.
+                { id: 'inheritor', description: '', systemPrompt: 's' },
+                // Override sub-agent: ONLY note tools enabled, nothing else.
+                {
+                    id: 'overrider',
+                    description: '',
+                    systemPrompt: 's',
+                    tools: {
+                        note: { open: true, close: true },
+                        chat: { read_range: false, search: false },
+                        lorebook: { search: false, get: false },
+                        memory: {},
+                        search: { search: false, visit: false },
+                    },
+                },
+            ],
+            limits: { maxTotalSubagentRuns: 5 },
+            generateTask: fakeGenerate,
+            abortSignal: new AbortController().signal,
+            tools: profileTools,
+        });
+
+        const h1 = await dispatcher.dispatch({ subagentId: 'inheritor', task: 't' });
+        const h2 = await dispatcher.dispatch({ subagentId: 'overrider', task: 't' });
+        await dispatcher.awaitAll([h1, h2]);
+
+        const [inheritorSchemas, overriderSchemas] = seenSchemas;
+        // Inheritor sees the profile-level tools.
+        expect(inheritorSchemas).toContain('chat_read_range');
+        expect(inheritorSchemas).toContain('lorebook_search');
+        expect(inheritorSchemas).toContain('memory_node_brief');
+        expect(inheritorSchemas).not.toContain('note_open');
+        // Overrider sees only its own tools (note) + get_draft.
+        expect(overriderSchemas).toContain('note_open');
+        expect(overriderSchemas).toContain('note_close');
+        expect(overriderSchemas).not.toContain('chat_read_range');
+        expect(overriderSchemas).not.toContain('lorebook_search');
+        expect(overriderSchemas).not.toContain('memory_node_brief');
+    });
+
+    test('inline dispatch uses profile default tools (no per-agent override field)', async () => {
+        const seenSchemas = [];
+        const fakeGenerate = jest.fn(async (opts) => {
+            seenSchemas.push((opts.tools || []).map(s => s?.function?.name).filter(Boolean).sort());
+            return { assistantText: 'ok', toolCalls: [], reasoning: null, finishReason: 'stop' };
+        });
+
+        const dispatcher = createSubagentDispatcher({
+            subAgents: [],
+            limits: { maxTotalSubagentRuns: 3 },
+            generateTask: fakeGenerate,
+            abortSignal: new AbortController().signal,
+            tools: { chat: { read_range: true, search: false }, finalize: false },
+        });
+
+        const h = await dispatcher.dispatchInline({ systemPrompt: 'inline role', task: 't' });
+        await dispatcher.awaitAll([h]);
+
+        expect(seenSchemas[0]).toContain('chat_read_range');
+        expect(seenSchemas[0]).not.toContain('chat_search');
+    });
 });

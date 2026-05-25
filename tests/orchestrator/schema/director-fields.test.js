@@ -439,4 +439,89 @@ describe('director schema fields', () => {
         expect(sanitized.director.maxConcurrentSubagents).toBeGreaterThanOrEqual(1);
         expect(sanitized.director.maxTotalSubagentRuns).toBeLessThanOrEqual(100);
     });
+
+    test('mainAgent.tools null/undefined → inherit (null after sanitize)', () => {
+        const sanitizedNull = sanitizeDirectorProfile({
+            director: { mainAgent: { tools: null }, subAgents: [] },
+        });
+        expect(sanitizedNull.director.mainAgent.tools).toBeNull();
+
+        const sanitizedUndef = sanitizeDirectorProfile({
+            director: { mainAgent: {}, subAgents: [] },
+        });
+        expect(sanitizedUndef.director.mainAgent.tools).toBeNull();
+    });
+
+    test('mainAgent.tools object → override (full canonical shape, finalize:false)', () => {
+        const sanitized = sanitizeDirectorProfile({
+            director: {
+                mainAgent: { tools: { chat: { read_range: true }, finalize: true } },
+                subAgents: [],
+            },
+        });
+        expect(sanitized.director.mainAgent.tools).not.toBeNull();
+        expect(sanitized.director.mainAgent.tools.chat.read_range).toBe(true);
+        // Unspecified verbs default off for override (defaultAllOn:false).
+        expect(sanitized.director.mainAgent.tools.chat.search).toBe(false);
+        // Director always strips loop's finalize.
+        expect(sanitized.director.mainAgent.tools.finalize).toBe(false);
+    });
+
+    test('subAgents[i].tools null → inherit; object → override', () => {
+        const sanitized = sanitizeDirectorProfile({
+            director: {
+                mainAgent: {},
+                subAgents: [
+                    { id: 'inh', description: 'x', systemPrompt: 'x', tools: null },
+                    { id: 'ovr', description: 'x', systemPrompt: 'x', tools: { memory: { keyword_search: true } } },
+                ],
+            },
+        });
+        const inh = sanitized.director.subAgents.find(a => a.id === 'inh');
+        const ovr = sanitized.director.subAgents.find(a => a.id === 'ovr');
+        expect(inh.tools).toBeNull();
+        expect(ovr.tools).not.toBeNull();
+        expect(ovr.tools.memory.keyword_search).toBe(true);
+        expect(ovr.tools.memory.node_create).toBe(false);  // override defaults missing verbs to off
+        expect(ovr.tools.finalize).toBe(false);
+    });
+
+    test('default profile sub-agents carry precise per-role tool overrides', () => {
+        const def = createDefaultDirectorProfile();
+        const byId = new Map(def.director.subAgents.map(a => [a.id, a]));
+
+        // Sanity: every default sub-agent should have an override (not null).
+        for (const [id, agent] of byId) {
+            expect(agent.tools).not.toBeNull();
+            expect(typeof agent.tools).toBe('object');
+        }
+
+        const sanitized = sanitizeDirectorProfile(def);
+        const sById = new Map(sanitized.director.subAgents.map(a => [a.id, a]));
+
+        // intent_scout: chat + lorebook (no memory, no search)
+        expect(sById.get('intent_scout').tools.chat.read_range).toBe(true);
+        expect(sById.get('intent_scout').tools.lorebook.search).toBe(true);
+        expect(sById.get('intent_scout').tools.memory.node_brief).toBe(false);
+
+        // memory_scout: memory reads only, no writes
+        expect(sById.get('memory_scout').tools.memory.list_candidates).toBe(true);
+        expect(sById.get('memory_scout').tools.memory.node_create).toBe(false);
+        expect(sById.get('memory_scout').tools.memory.node_edit).toBe(false);
+
+        // memory_curator: full memory read + write
+        expect(sById.get('memory_curator').tools.memory.node_create).toBe(true);
+        expect(sById.get('memory_curator').tools.memory.compact_nodes).toBe(true);
+
+        // notes_curator: note open + close
+        expect(sById.get('notes_curator').tools.note.open).toBe(true);
+        expect(sById.get('notes_curator').tools.note.close).toBe(true);
+
+        // plot_brainstormer: no tools at all (pure thinker)
+        const pbVerbs = ['note.open', 'note.close', 'chat.read_range', 'chat.search', 'lorebook.search', 'memory.node_brief', 'search.search'];
+        for (const path of pbVerbs) {
+            const [ns, verb] = path.split('.');
+            expect(sById.get('plot_brainstormer').tools[ns][verb]).toBe(false);
+        }
+    });
 });
