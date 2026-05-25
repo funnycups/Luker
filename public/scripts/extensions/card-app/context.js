@@ -104,17 +104,22 @@ export function buildContext(container, charId, config) {
 
         /**
          * Send a message through Luker's message pipeline.
+         *
          * @param {string} text - Message text
          * @param {object} [options] - Options
-         * @param {boolean} [options.silent=false] - If true, don't save to chat history
-         * @returns {Promise<void>}
+         * @param {boolean} [options.silent=false] - If true, the message
+         *   runs as a one-shot quiet prompt: it is NOT written to chat
+         *   history, and the LLM response is returned as a string. If
+         *   false (default), the text appears as a user message in chat
+         *   and the LLM responds visibly.
+         * @returns {Promise<void | string>} silent mode returns the LLM
+         *   response text; non-silent mode resolves to undefined.
          */
         async sendMessage(text, options = {}) {
             if (options.silent) {
-                // TODO: implement silent mode (send to LLM without saving to chat)
-                console.warn('[CardApp] Silent mode not yet implemented, sending normally');
+                const { generateQuietPrompt } = await import('../../../script.js');
+                return await generateQuietPrompt({ quietPrompt: String(text ?? '') });
             }
-            // Write text to the hidden send_textarea and trigger the send flow
             const textarea = document.getElementById('send_textarea');
             if (textarea) {
                 textarea.value = text;
