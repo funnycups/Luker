@@ -56,11 +56,52 @@ function isSameJsonValue(left, right) {
     if (left === right) {
         return true;
     }
-    try {
-        return JSON.stringify(left) === JSON.stringify(right);
-    } catch {
+    if (left === null || right === null) {
         return false;
     }
+    const leftType = typeof left;
+    if (leftType !== typeof right) {
+        return false;
+    }
+    if (leftType !== 'object') {
+        return false; // primitives already handled by ===
+    }
+    const leftIsArray = Array.isArray(left);
+    if (leftIsArray !== Array.isArray(right)) {
+        return false;
+    }
+    if (leftIsArray) {
+        if (left.length !== right.length) {
+            return false;
+        }
+        for (let i = 0; i < left.length; i++) {
+            if (!isSameJsonValue(left[i], right[i])) {
+                return false;
+            }
+        }
+        return true;
+    }
+    // Object equality per RFC 6902 §7.7: two members are equal if their keys
+    // and values match, regardless of insertion order. The previous
+    // `JSON.stringify(left) === JSON.stringify(right)` shortcut compared the
+    // serialized form, which is order-sensitive — so a chat[i] whose `extra`
+    // field had been re-assigned (and thus moved to the end of insertion
+    // order on the FE side) failed the test against a server copy that still
+    // held the on-disk order, even when both were structurally identical.
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    if (leftKeys.length !== rightKeys.length) {
+        return false;
+    }
+    for (const key of leftKeys) {
+        if (!Object.prototype.hasOwnProperty.call(right, key)) {
+            return false;
+        }
+        if (!isSameJsonValue(left[key], right[key])) {
+            return false;
+        }
+    }
+    return true;
 }
 
 function isUnsafePathSegment(segment) {
