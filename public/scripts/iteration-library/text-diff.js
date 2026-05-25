@@ -24,6 +24,19 @@
 const LINE_DIFF_LONG_CHAR_THRESHOLD = 900;
 const LINE_DIFF_LONG_LINE_THRESHOLD = 18;
 const LINE_DIFF_LCS_MAX_CELLS = 240000;
+const NARROW_VIEWPORT_BREAKPOINT = 720;
+
+/**
+ * Below ~720 CSS px the wider iter-popup bubble accumulates several short
+ * diff cards (each maybe 400px tall when open) into a layer that crosses
+ * the Android WebView's GPU single-texture cap. Default to collapsed on
+ * narrow viewports — the user can tap any specific diff to expand. The
+ * companion narrow-viewport rules in `text-diff.css` keep an expanded
+ * card paint-bounded so opening one doesn't fall back into the same bug.
+ */
+function isNarrowViewport() {
+    return typeof window !== 'undefined' && window.innerWidth < NARROW_VIEWPORT_BREAKPOINT;
+}
 
 export const STYLESHEET_ID = 'luker_lib_diff_stylesheet';
 export const STYLESHEET_HREF = '/scripts/iteration-library/text-diff.css';
@@ -385,7 +398,7 @@ export function renderInlineTextDiffHtml(beforeValue, afterValue, optionsOrLabel
         </button>`
         : '';
     return `
-<details class="luker_lib_diff"${(forceOpen || payload.openByDefault) ? ' open' : ''}>
+<details class="luker_lib_diff"${(forceOpen || (payload.openByDefault && !isNarrowViewport())) ? ' open' : ''}>
     <summary>
         <span class="luker_lib_diff_summary_main">
             <span>${escapeHtml(summary)}</span>

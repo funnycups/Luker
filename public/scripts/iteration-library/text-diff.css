@@ -208,3 +208,44 @@
     max-height: 45vh;
     overflow: auto;
 }
+
+/* Narrow-viewport override for *inline* diffs. The zoom-narrow block
+   above is class-scoped (zoom-overlay only) and only adjusts the grid;
+   the inner table still inherits `white-space: pre` + `width: max-content`,
+   which on a ~360px viewport renders the cells thousands of pixels wide
+   and clips most of the content behind the scroll container. This block
+   stacks the dual-column grid into rows, wraps long lines, and bounds the
+   table to its container width. */
+@media (max-width: 720px) {
+    .luker_lib_diff_dual {
+        grid-template-columns: 1fr !important;
+        grid-template-rows: auto auto auto;
+    }
+    .luker_lib_diff_text_inner {
+        white-space: pre-wrap;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+        min-width: 0;
+    }
+    .luker_lib_diff_table {
+        width: 100%;
+        min-width: 0;
+    }
+    .luker_lib_diff_ln {
+        width: 2.4em;
+    }
+}
+
+/* An iter-popup that accumulates many AI iterations builds an assistant
+   bubble with dozens of diff cards stacked vertically. Android GPUs cap
+   single-layer texture at ~8192px; without containment the WebView drops
+   paint of off-screen regions and the user sees gray panels until they
+   long-press text to force a partial re-rasterize. `content-visibility:
+   auto` lets the browser skip rasterizing off-screen rows, keeping the
+   active paint layer small. The intrinsic-size keyword `auto` tells
+   Chromium to remember the measured size after first render so the
+   scrollbar doesn't jump as rows enter and leave viewport. */
+.luker_lib_diff_row {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 28px;
+}
