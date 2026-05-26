@@ -422,7 +422,7 @@ async function analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, target
 }
 
 async function discardRestoreSnapshots(snapshots) {
-    for (const snap of snapshots) {
+    await Promise.all(snapshots.map(async (snap) => {
         try {
             if (snap.type === 'file') {
                 await fsPromises.rm(snap.snapshot, { force: true });
@@ -432,12 +432,11 @@ async function discardRestoreSnapshots(snapshots) {
         } catch (error) {
             console.warn(`Failed to remove restore snapshot ${snap.snapshot}:`, error);
         }
-    }
+    }));
 }
 
 async function rollbackRestoreSnapshots(snapshots) {
-    const orphaned = [];
-    for (const snap of snapshots) {
+    const results = await Promise.all(snapshots.map(async (snap) => {
         try {
             if (snap.type === 'file') {
                 await fsPromises.rm(snap.original, { force: true });
@@ -450,12 +449,13 @@ async function rollbackRestoreSnapshots(snapshots) {
 
         try {
             await fsPromises.rename(snap.snapshot, snap.original);
+            return null;
         } catch (error) {
             console.error(`Failed to roll back snapshot ${snap.snapshot} -> ${snap.original}:`, error);
-            orphaned.push(snap);
+            return snap;
         }
-    }
-    return orphaned;
+    }));
+    return results.filter((snap) => snap !== null);
 }
 
 async function restoreUserBackupArchive(uploadPath, directories, selection, mode, options = {}) {
