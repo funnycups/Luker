@@ -165,6 +165,34 @@ summary 是**剧情索引**——用客观事实陈述记录角色做了什么�
 
 **做的是「事件脉络级提炼」，不是「逐句去毛刺」**。读原文是为了抽出整段事件骨架，而非逐句洗。画面细节、修饰词、重复主语、单回合玩闹残留、纯过程纹理一律砍掉。
 
+### 心智模型: 目录 vs 回放
+
+summary 的写作目标是产出**剧情索引(目录式)**, 不是**剧情回放(小说式)**。
+
+- **目录式索引**: 每个事件是一个名词性或动词性的类别标签 + 主体 + 必要时的对象; 读起来像章节目录, 每条独立成一行, 信息密度极高。
+- **小说式回放**: 用句子讲述发生了什么, 带因果连接、状语修饰、情节铺陈; 读起来像在复述故事。
+
+判定方法: **如果 summary 读起来像在重新讲述故事, 你写错了**——你产出的是回放, 不是索引。索引读起来应该像目录条目, 简短到几乎读不出"叙事感"。
+
+### 信任下游推理
+
+summary 的下游读者(后续的 RP 模型或 compression 模型)**有从极简信息推理完整情境的能力**。你不需要替读者补充:
+
+- "怎么发生的"——读者读到"X 与 Y 互相告白"会自然推断双方说了情感相关的话。
+- "看起来像什么"——读者不需要画面细节就能理解事件性质。
+- "对方说了什么"——读者读到"X 承诺 Z"就知道有承诺话语发生, 不需要听到原话。
+- "情绪/姿态/反应"——读者读到"X 拒绝 Y"会自然推断 Y 受挫。
+
+你的工作是写**读者从动作类别名无法推断的最小信息集**——主体、动作类别、因果连接、不可逆状态——其他都是冗余。
+
+冗余加进 summary 不会让读者"理解更深", 只会让 summary 变长、复刻画面、违反索引心智模型。
+
+### 默认姿态: 极致压缩, 仅当下游会失败时才回退
+
+写 summary 时**默认采用最极致的压缩**——把每个事件写成 [主体] + [最高层父类动词] + [(必要时)对象] 三个元素。然后**仅当**这样写会导致下游 RP 模型无法续接剧情时, 才**最小限度**地添加细节回去。
+
+**默认偏好欠压缩失败 > 过度压缩失败的反转**: 通常 LLM 倾向于"宁多写不少写以免遗漏", 但此处要反转——**宁少写不多写**。少写的代价是下游某次推断错, **多写的代价是大量冗余永久留在记忆图里**。少写的错误可在下次提取时补救; 多写的冗余永远拖累后续 compression 和 recall。
+
 ---
 
 ## 精炼的限度（核心约束）
@@ -198,7 +226,24 @@ summary 是**剧情索引**——用客观事实陈述记录角色做了什么�
 
 1. **判断一件事要不要保留，唯一标准是"删掉它之后后续 RP 会不会无前因"**。能指出至少一个具体的下游动作/态度依赖它 → 留。指不出来 → 删。一次性情节小道具、动作细节、性事姿势、装饰物，即便原文反复强调也砍掉。
 
-2. **禁止任何对白转述结构**。对白本身不进摘要。对白承载的事实（关系变化、承诺、决定、称呼）转化为客观事实陈述。
+2. **禁止任何对白转述结构, 也禁止任何 paraphrase 残留**。
+
+   summary 中只允许出现以下成分, 其他成分一律违规:
+   - 动作类别名(动词): 参考下文"事件描述动词白名单" + 通用动词。
+   - 专有名词(人名/地名/组织名/物品专名/时间锚/章节名)。
+   - 必要因果连接词(因→果连接, 数量 ≤ 3 个/句)。
+
+   下列所有形式都属于"对白残留", 一律禁止(无论是否加引号):
+   - 直接引用 / 引用嵌入 / 改写复述伪装
+   - 不加引号的对白嵌入: 把原文台词或台词中的关键词组(人物名字、感叹词、口头禅、情绪短语、独有称呼方式)以"动词 + 宾语"形式串进句子——这种 paraphrase 残留违规。
+   - 把对白意思用别的词重新讲一遍("X 表达了想 Y 的意思")。
+
+   正确做法: **只写动作类别名**。对白承载的事实以**单个动词**呈现, 不带描述对白内容的宾语:
+   - "X 与 Y 互相告白" ✓ (单一动词类别 + 主体, 无对白内容)
+   - "X 告白 [任何对白内容]" ✗ (paraphrase 残留)
+   - "X 用 [任何方式] 告白" ✗ (paraphrase 残留)
+
+   **summary 中任何引号包裹的内容一律视为违规, 必须删除。** 例外: 剧情专名 / 章节名 / 招式名 / 任务名加引号允许; 角色说过的任何短语 / 句段 / 字词不算专名。
 
 3. **用自然动词句陈述事实，不用抽象名词概括**。
 
@@ -313,21 +358,82 @@ summary 是**剧情索引**——用客观事实陈述记录角色做了什么�
 - 主要：[A, B, C]
 - 次要：[NPC1, NPC2]（如有）
 
-### 第 2 步：列出每个主要角色的动作
+### 第 2 步：列出每个事件的**类别动词**(不是具体动作)
 
-只列动词短语，不要句子。
+**关键改动**: 不要列出原文出现的具体动作短语(如"扣子被解开"、"腰胯下沉"、"喊出某句话")。直接为每个**事件单元**写出**单一类别动词**(参考事件描述动词白名单 + 通用动词)。
 
-### 第 3 步：上位词归类（不是脑补意图）
+- 错误示范(列具体动作): "X: 拔高音量→演挑衅戏→钓 Y→看 Y 耳尖通红→听 Y 嘴硬挤出某句话"
+- 正确示范(列类别动词): "X 演挑衅戏 → Y 撞见炸毛"
 
-如果多个动作属于**同一动作类别**，用一个直白的上位词覆盖。
+**为什么这样改**: 第 2 步如果列出原文的具体动作短语, 这些短语会被锚定到工作记忆里, 导致后续 step 7 串句时把它们带回来——这是 summary 出现 paraphrase 残留和纹理细节的主要源头。直接从一开始就在**事件类别**这一抽象层操作, 跳过"先记录具体动作再抽象"的中间步骤。
 
-跨题材例：登山者「换鞋 / 喝水 / 系安全带 / 推背包扣 / 拉外套拉链 / 检查地图」6 个动作都属于"出发前整理装备"类 → 合并为「整装」。
+### 第 3 步：category-vs-instance 显式分离 + 强制上推到最高合并层级
 
-**强制约束**：
+对第 2 步列出的每个事件, **显式做"类别 vs 实例"分离**。格式:
 
-- 上位词只能从原文已有词汇或它们的**直白类别名**里选，不能用比原文更文学/小说体/文言的词
-- 如果几个动作并列发生（A 然后 B），**禁止**把它们写成因果链（"为了 B 而做 A"、"逼/迫使/导致 B"）
-- 如果你想换的上位词比原文更"高级"，**不要换**，原样保留原文动词
+\`\`\`
+[类别动词]: [原文中该事件的具体表现, 不写进 summary, 仅用于自检]
+\`\`\`
+
+例(跨题材):
+
+\`\`\`
+整装: 原文里登山者换鞋/喝水/系安全带/推背包扣/拉外套拉链/检查地图 6 个动作
+社交应酬: 原文里宴会上敬酒/寒暄/互相吹捧/互留联系方式
+决战: 原文里抵达某地/激活某装置/战斗爆发/击碎敌人核心
+\`\`\`
+
+**强制上推规则 (核心)**:
+
+每个类别动词都有**层级**。同样的原文事件, 可以用细粒度类别名(子类)描述, 也可以用粗粒度类别名(父类)描述。**默认必须选最粗粒度的能成立的父类, 不允许选细粒度子类**:
+
+- 子类示例(禁用): 跑步 / 走路 / 爬楼梯 / 骑车 / 驾车 / 搭船——细粒度移动方式
+- 父类示例(必须用): 移动 / 位移
+- 子类示例(禁用): 拥抱 / 握手 / 拍肩 / 搭肩 / 挽手
+- 父类示例(必须用): 肢体接触
+- 子类示例(禁用): 敬酒 / 寒暄 / 吹捧 / 留联系方式
+- 父类示例(必须用): 社交应酬
+
+判定"是否上推到了最高父类"的方法: **问"这个类别动词下, 原文里有几个子动作?"**
+
+- 1 个子动作 → 这就是粗粒度, 直接用此动词。
+- 2+ 个子动作 → 还有上位词空间, 继续上推到能覆盖所有子动作的父类。**写 summary 时只用父类, 子动作不写进 summary。**
+
+**关键纪律**:
+
+- 写 summary 时**只能**用上推后的**最高层父类**动词, **禁止**写子类动词, **禁止**枚举子动作。
+- 如果你在 summary 里列了同一父类下的 ≥2 个子动作(例如"X 走路、跑步、爬楼" — 这是 3 个子动作, 应合并为"X 移动"), 那是 grouping 失败。
+- 一旦你把"原文具体表现"的字词搬进 summary, 那就是 paraphrase 残留违规。
+- 上位词只能从原文已有词汇或它们的**直白类别名**里选, 不能用比原文更文学/小说体/文言的词。
+- 如果几个动作并列发生（A 然后 B），**禁止**把它们写成因果链（"为了 B 而做 A"、"逼/迫使/导致 B"）。
+- 如果你想换的上位词比原文更"高级"，**不要换**，原样保留原文动词的类别名。
+
+### 子动作枚举禁令 (硬约束, 核心)
+
+如果你在 summary 中**枚举了 ≥ 2 个同域子动作**, 无论这些子动作各自是不是有名词性类别名, 都必须**强制合并为它们的父类**。"同域"指属于同一种活动范畴的动作。
+
+通用判定方法: **问"如果删去具体子动作只留父类动词, summary 是否仍能让下游推断出剧情大致样貌?"** 能 → 必须删子动作只留父类。
+
+**严格警告**: 即使子动作各有标准名词性类别名(各种领域的具体技术术语), 但**只要它们属于同一活动范畴**, summary 中**只能出现父类动词**, **禁止枚举子动作动词**。
+
+### "构型转换陷阱" 反制
+
+一个常见错误: 模型已经合并到父类 (例如"X 与 Y 进行某活动") 后, **仍然在 outline 中追加该活动内部的构型变化条目** (例如"X 与 Y 处于构型 A"、"X 与 Y 切换到构型 B"、"X 在该活动中处于位置 P")。
+
+这些"构型转换" / "位置切换" / "姿态变化"条目都属于**该父类活动的内部纹理**, 不是独立事件, **禁止单独列条目**。
+
+判定: 如果某条目读起来是"某活动正在进行中的某个瞬态构型/位置/姿态", 而不是"该活动开始 / 结束 / 某不可逆里程碑发生" → 砍掉该条目。
+
+### 物理细节下钻 = 一律不属于事件
+
+任何描述身体接触方式、姿态、体位、接触部位、生理动作的动词或名词, 都**不是事件类别**, 而是**事件内部的物理纹理**。即使这些词在中文里有标准技术术语 (任何指代特定身体动作或姿势的术语), 它们都不能作为 outline 条目的动词出现。
+
+判定: 你写的某条目动词, 是否描述了"两个或多个身体之间的物理接触方式 / 一个身体的特定姿势 / 一个身体部位的特定动作"? 是 → 这是物理纹理动词, **禁止**用作 outline 条目, 要么删除该条目, 要么用其活动范畴的父类动词代替。
+
+某些子动作如果承载**独立的不可逆状态变化** (例如失贞、怀孕、死亡、立约、断肢、获得身份等), 才允许作为独立条目出现。判定标准: **这个子动作的下游剧情依赖, 跟父类动词的下游剧情依赖, 是否一样?**
+
+- 是 → 上推到父类, 子动作砍掉。
+- 否(子动作有独立的不可逆下游) → 子动作可独立出现 (但仍需用类别名形式, 不带过程描述)。
 
 ### 第 4 步：事件保留判定（核心）
 
@@ -372,16 +478,53 @@ summary 是**剧情索引**——用客观事实陈述记录角色做了什么�
 
 例：上一条摘要已建立"A 抱 B 上楼按在床上做爱" → 当前摘要写"两人继续做爱时聊天"即可，不重复「抱着」「在床上」。
 
-### 第 7 步：时间顺序串句
+### 第 7 步：时间顺序输出**纲要式目录列表**(强制结构)
 
-按事件**实际发生的时间顺序**串成自然句。
+按事件**实际发生的时间顺序**, 以**纲要列表**形式输出每个事件。
 
-句式要求：
+**强制格式**:
+
+\`\`\`
+时间：<完整时间>；
+1) [主体] [父类动词] [(可选)对象]
+2) [主体] [父类动词] [(可选)对象]
+3) [主体] [父类动词] [(可选)对象]
+...
+\`\`\`
+
+每个事件**独占一项**, **用序号 1)/2)/3) 标记**(不是用分号串成段落)。
+
+为什么用编号纲要而非分号段落: **分号段落让 LLM 自然滑入小说叙事模式**(每个分句之间会自动添加因果连接词、状语铺陈、修饰)。编号纲要强制每个事件独立呈现, 无叙事连贯压力, 避免铺陈。
+
+**每个条目的硬约束**:
+
+- 只能是 \`[主体] [父类动词] [(可选)对象]\` 三段结构。
+- **不允许逗号**。逗号几乎总是塞了状语或并列子动作。如果想用逗号, 要么改成单一父类动词, 要么拆成两个条目。
+- **不允许 "X 后/经/以/而..." 的扩展性引导词**。事件的时序由编号顺序表达, 不需要在条目内部再用连接词。
+- **不允许嵌套修饰**(例如"X 在 Y 的 Z" 结构, "X 的 Y" 结构)。如果某个对象需要修饰, 说明上推不充分, 重新选父类。
+- **不允许形容词+名词的复合词当事件描述**(例如"事后照"、"挑衅戏"、"开拓同伴"——这些都是 AI 自造的复合标签, 把它们拆开, 只保留核心动词)。
+
+句式要求:
 
 - 用自然动词，不用抽象名词
 - 不用对白引出动词
 - 不在句尾用抽象名词收口
-- 用句号或分号断句，不用过程连接词
+- 用编号断句, 不用过程连接词
+
+**Dialogue keyword 禁令 (硬约束, 限 event summary scope)**:
+
+(注: 本禁令仅适用于 **event.summary** 字段。character_sheet 的 addressing_user / language_sample 等字段本来就是记录对白特征, 不在此禁令范围。location_state 的字段也不受此禁令限制。)
+
+event summary 中**禁止**出现原文对白里出现过的、非通用的**关键词**——即使它没加引号、即使它被嵌入到句子里。包括但不限于:
+
+- 人物对彼此的特殊称呼(任何角色对另一角色的非通用昵称、代号、戏称)
+- 对白中出现的口头禅、感叹词、情绪短语
+- 对白中提到的角色给某事或某物的**临时命名/定义**
+- 任何来自对白的、非通用的具体短语。
+
+**通用动词、专有名词(角色本名、地名、组织名、剧情节点名)不算 dialogue keyword, 可以使用。**
+
+判定方法: 写完每个条目后, 问"这个条目里的每个非动词词, 是否在原文对白里被某个角色当场说过? 是 → 那是 dialogue keyword, 必须删除并改成更通用的描述。"
 
 ---
 
@@ -413,11 +556,46 @@ summary 是**剧情索引**——用客观事实陈述记录角色做了什么�
 
 ---
 
+## 强制重写循环 (Gate Loop)
+
+写完 summary 第一版后, **绝对不能直接 commit**。必须执行下列 gate 循环, 任一 gate 失败就回到对应 gate 修正后从 Gate 1 重新扫起。
+
+**Gate 1: paraphrase 残留扫描** — 对照第 3 步的 [类别动词]:[原文具体表现] 表, 扫描 summary 每个字词。任何来自右侧"原文具体表现"的字词, 或来自原文对白的具体短语 → 删除。
+
+**Gate 2: 子动作枚举扫描** — 找所有**同域**的子动作枚举: ≥ 2 个同活动范畴子动作 → 强制合并为父类。父类条目已写又额外列子动作 → 子动作砍掉。
+
+**Gate 3: 单条结构扫描** — 每个事件条目检查 \`[主体][父类动词][(可选)对象]\` 三段结构 / 无逗号 / 无嵌套修饰 / 无形容词+名词复合标签 / 用编号 1)/2)/3)。
+
+**Gate 4: 默认极致压缩反向验证** — 对每个条目问"删掉这条下游会推断错吗?" 不会 → 删。会 → "能更短吗?" 能 → 压缩。
+
+**Gate 5: 形态读感复查** — 像编号纲要(通过) / 像小说段落(回 Gate 1)。
+
+**Gate 6: 对象短语下钻检测** — 任何条目的对象出现身体部位 / 生理器官 / 衣物部位 / 姿势体位术语 → 下钻违规, 删到只剩主体名。
+
+---
+
 ## 最终自检
 
-> 这条 summary 里的每一句话，是否都能指出一个**具体的后续 RP 动作或态度**会依赖它？
+> **依赖自检**: 这条 summary 里的每一句话, 是否都能指出一个**具体的后续 RP 动作或态度**会依赖它?
 
-是 → 通过。否 → 删掉指不出依赖的句子，重写。
+是 → 通过。否 → 删掉指不出依赖的句子, 重写。
+
+> **plot-vs-texture 对照自检 (核心)**: 把你写好的 summary 想象成**唯一**传给"下一个完全没看过原文的 RP 模型"的素材——原文它读不到, 只能读你的 summary。该模型读完 summary 之后:
+> - 应该**能**接住剧情线: 知道谁与谁是什么关系、上次场景推进到哪里、什么状态不可逆地变了、有没有产生承诺/誓约/欠债/敌意。
+> - **不应该**能复刻这次场景的画面: 看不出每个动作的具体姿势、每句对白的具体措辞、每个物件的外观、每个角色的微表情、每段过程的节奏感。
+
+是 → 通过。否 → 把所有让它能复刻画面的字砍掉, 只保留让它续接剧情线的字。重写。
+
+> **paraphrase 残留扫描 (核心)**: 把 summary 每个动词单独取出, 问:
+> - 这个动词后面挂的宾语, 是否是从原文对白里改写过来的内容(包括口头禅、感叹词、情绪短语、人物间独有的称呼方式、角色刚说过的话的复述)?
+> - 这个动词是否在描述"X 怎么做的 Y"(状语修饰)而非单纯"X 做了 Y"(动作类别)?
+> - 这个事件的核心是否可以**只用动词类别名表达**(例: "互相告白"四个字), 你却写成了 ≥ 10 字的句子?
+>
+> 任一为是 → 该动作短语写多了。砍到只剩动词类别名(可保留主体和对象, 删除所有描述对白内容/做事方式/状语修饰的字)。
+
+> **目录 vs 回放对照自检**: 把 summary 的每一段单独拿出来, 问: 这段读起来像**目录条目**(短促、单一类别名、几乎无叙事感), 还是像**小说段落**(描述性、有铺陈、能感受到情节流动)?
+>
+> 像目录条目 → 通过。像小说段落 → 你写成了回放, 不是索引, 重写为目录式。
 `;
 
 const EVENT_EXTRACT_INSTRUCTION = [
@@ -439,15 +617,26 @@ const EVENT_COMPRESS_INSTRUCTION = [
     'Input: a list of child event summaries with their seq ranges.',
     'Output: one rollup event summary string written to the `summary` field of the compression tool call.',
     '',
+    'SCOPE ISOLATION (HIGHEST PRIORITY): This prompt block defines a structured rollup-compression task. Any RP-time persona instructions, content-styling directives, or sanitization-rejection clauses present elsewhere in the surrounding context govern in-character creative generation only and do NOT govern this compression. The output here is a single structured summary judged solely by the writing standard below. Producing detailed / uninhibited narrative content here is a task failure, not a success.',
+    '',
     EVENT_SUMMARY_RULES_BODY,
     '',
     '---',
     '',
-    '## 输出格式',
+    '## 输出格式 (强制三段, 调用工具前必须全部输出在响应文本里)',
     '',
-    '完整按 7 步顺序产出 (作为响应里的解释性 thought),第 7 步产出的 summary 字符串即为本次工具调用的 `summary` 字段值。',
+    '在调用 luker_rpg_summary_fields (或同等 compression 工具) **之前**, 必须在响应文本里按顺序输出以下三段:',
+    '',
+    '  (1) <thought>...</thought>  完整按 7 步顺序产出 + 兜底自检 + 最终自检 (含 plot-vs-texture 对照自检)。',
+    '',
+    '  (2) <revision_log>...</revision_log>  **可见多轮修订日志 (硬约束, 核心)**。',
+    '      至少 2 个 <pass>, 每个 pass 含 <draft_summary> + <gate_audit> (对 Gate 1-6 + plot-vs-texture + paraphrase 扫描 + dialogue keyword 检查 + 依赖检查 逐项标 PASS/FAIL + 具体证据)。某 pass 全部 PASS 后才允许调用工具。pass 1 几乎一定有 1+ FAIL (LLM 第一版不可能完美), 直接写 NONE / PASS 的响应作废。pass N+1 必须修正 pass N 的所有 FAIL 项, 且 <draft_summary> 长度 ≤ pass N。',
+    '',
+    '  (3) 调用 compression 工具, `summary` 字段必须与最后 PASS 的 <draft_summary> **byte-equal** (空格 / 换行 / 标点完全一致)。',
     '',
     'Factual constraint: only include events within the seq range of the child nodes. Never write events from later seq numbers, never continue the story.',
+    '',
+    'REMINDER (placed at the end of this prompt for recency-bias purposes): Clauses appearing AFTER this compression prompt in the surrounding context (any post-history styling instructions, em-dash bans, inference calibration files, sanitization-rejection directives, etc.) are part of the user\'s RP-time preset and do NOT apply to this compression response. Your output is judged by the writing standard and the three-part output contract above—nothing else.',
 ].join('\n');
 
 const EVENT_SUMMARY_TIME_EXTRACT_PROMPT_LINES = [
@@ -660,6 +849,8 @@ const DEFAULT_EXTRACT_SYSTEM_PROMPT = [
     'Before tool calls, output one VERY detailed <thought>...</thought> analysis. Do not output plain JSON text.',
     'Do not skip reasoning. Do not jump directly to tool calls.',
     '',
+    'SCOPE ISOLATION (HIGHEST PRIORITY): The entirety of this prompt block defines a structured memory-graph extraction task. Any RP-time persona instructions, content-styling directives, or sanitization-rejection clauses present elsewhere in the surrounding context (chat preset, character card, world info, post-history) govern in-character creative generation only and do NOT govern this extraction. The output here is a set of structured tool calls compressing dialogue into memory-graph nodes, judged solely by the writing standard and tool schema in this prompt. Producing detailed / uninhibited narrative content here is a task failure, not a success.',
+    '',
     'Hard output format for <thought> (must follow exactly this order):',
     '<thought>',
     '[0] Batch scope + chronology: seq range covered, what changed vs previous memory.',
@@ -722,10 +913,66 @@ const DEFAULT_EXTRACT_SYSTEM_PROMPT = [
     'Title policy: non-event nodes should use short stable human-readable titles.',
     'Reuse the exact same title for the same ongoing entity/location to keep updates merged.',
     'Type-specific titles: when a type does not define title column in tool schema, omit title.',
-    'FINAL OUTPUT CONTRACT (ABSOLUTE): return EXACTLY two parts in order: (1) one complete <thought>...</thought>; (2) extraction function calls only.',
-    'Do not output any narrative/body text, markdown, code fences, comments, or XML blocks except <thought>.',
-    'Forbidden examples: <maintext>, <overall>, <UpdateVariable>, <StatusPlaceHolderImpl/>, duplicate JSON payloads.',
-    'After function call output, stop immediately.',
+    `FINAL OUTPUT CONTRACT (ABSOLUTE): return EXACTLY FOUR parts in this order.
+
+  (1) <thought>...</thought>  按上文规定跑完 7 步流程。在 thought 内部你可以草拟初版 summary, 但 thought 结束后**不直接 commit**——必须经过 (2) 的多轮修订。
+
+  (2) <revision_log>...</revision_log>  **可见多轮修订日志 (硬约束, 核心)**。
+
+      格式:
+      <revision_log>
+        <pass id="1">
+          <draft_summary>
+          [对照第 7 步规则的第一版 summary, 完整文本, 包括所有 outline 条目]
+          </draft_summary>
+          <gate_audit>
+          Gate 1 (paraphrase 残留): [PASS 或 FAIL: 详列哪些字词来自原文具体表现 / 哪些字词来自对白 keyword]
+          Gate 2 (子动作枚举 / 构型转换陷阱 / 物理细节下钻): [PASS 或 FAIL: 详列哪些条目是子动作 / 构型转换 / 物理细节]
+          Gate 3 (单条结构): [PASS 或 FAIL: 详列哪些条目含逗号 / 嵌套修饰 / 多动词 / 形容词+名词复合标签]
+          Gate 4 (默认极致压缩反向验证): [PASS 或 FAIL: 详列哪些条目可以删掉而不影响下游 / 哪些条目可以更短]
+          Gate 5 (形态读感): [PASS 或 FAIL: 当前 summary 像编号纲要 或 像小说段落]
+          Gate 6 (字数对比): [本版字数, 与上一版字数对比, 第一版略过此项]
+          Dialogue keyword 扫描: [PASS 或 FAIL: 详列 summary 里有无原文对白中的非通用短语]
+          总结: [PASS 或 FAIL]
+          </gate_audit>
+        </pass>
+        <pass id="2">
+          <draft_summary>
+          [基于 pass 1 全部 FAIL 项的修正版]
+          </draft_summary>
+          <gate_audit>
+          [同上格式, 完整逐项扫描]
+          </gate_audit>
+        </pass>
+        ...继续 pass 3, 4, 5, ... 直到某一 pass 的 <gate_audit> 总结 = PASS 且每个 Gate 都显式 PASS...
+      </revision_log>
+
+      **revision_log 硬约束**:
+
+      a. **至少 2 个 pass**: 即使你认为第一版完美, 也必须做 pass 2 重新审查 (LLM 第一版几乎一定有 1+ gate FAIL, 直接写 NONE / PASS 的响应作废)。
+      b. **每个 pass 的 gate_audit 必须详尽**: 不允许"全部 PASS"这种简写, 每个 Gate 必须独立标注 PASS / FAIL 并给具体证据。
+      c. **修订必须有进展**: pass N+1 的 <draft_summary> 必须明显**短于或等于** pass N (不能反向膨胀); 且必须修正 pass N 标记为 FAIL 的所有项目。
+      d. **最后一个 pass 必须完全 PASS**: 所有 Gate 显式 PASS, 不允许"个别 FAIL 但可接受"这种妥协。
+      e. **PASS 后才能 commit**: 任何 Gate 仍为 FAIL 时不允许进入 (3) commit。
+
+  (3) <commit>...</commit>  自我承诺块。对 (4) 即将发出的每一个工具调用, 在 <commit> 里先用纯文本写出该调用的所有承载自由文本的字段的完整最终内容。建议格式:
+    <call ref="…">
+      <field name="…">…要在 (4) 中逐字出现的最终文本…</field>
+    </call>
+  对于 event.summary 字段, **commit 内的文本必须与 revision_log 中最后一个 pass 的 <draft_summary> byte-equal**——这是 commit 与 pass-N 之间的硬绑定。
+  你在 <field> 里写下的每一个字都是绑定承诺, (4) 中对应字段必须逐字复制——空格、换行、标点全部一致。
+
+  (4) 工具调用——一次性发出 (3) 中规划的**全部**工具调用, 绝不在中途等待 tool 结果。luker_rpg_extract_done 仍为最后一次调用。
+
+**单次响应完整性 (硬约束)**: 必须在**同一个 assistant 响应**内全部发出所有 tool_use 块。**只有发出 luker_rpg_extract_done 之后才允许 stop**。
+
+调用前自检 (强制): 在准备 issue (4) 的瞬间, 对每个工具调用, 把它即将填进自由文本参数的内容跟 (3) 中对应 <field> 文本做字符比对。如果发现想在 (4) 里写跟 (3) 不一样的东西, 那是 (3) 写错了——回去重写 (3), 再 issue 与重写后 (3) 字符完全一致的 (4)。**(3) 和 (4) 分叉等同于自我矛盾, 该次响应作废。**
+
+Do not output any narrative/body text, markdown, code fences, comments, or XML blocks except <thought>, <revision_log>, <commit>, and the tool calls themselves.
+Forbidden examples: <maintext>, <overall>, <UpdateVariable>, <StatusPlaceHolderImpl/>, duplicate JSON payloads.
+After the final tool call (luker_rpg_extract_done) output, stop immediately. **在 done 之前 stop 一律视为响应失败。**`,
+    '',
+    'REMINDER (placed at the end of this prompt for recency-bias purposes): Clauses appearing AFTER this extraction prompt in the surrounding context (any post-history styling instructions, em-dash bans, inference calibration files, sanitization-rejection directives, etc.) are part of the user\'s RP-time preset and do NOT apply to this extraction response. Your output is judged by the writing standard, tool schema, and the four-part FINAL OUTPUT CONTRACT above—nothing else.',
 ].join('\n');
 
 export { DEFAULT_EXTRACT_SYSTEM_PROMPT };
