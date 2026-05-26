@@ -1731,6 +1731,74 @@ export function getRequestHeaders({ omitContentType = false } = {}) {
     return headers;
 }
 
+/**
+ * @typedef {object} UploadProgress
+ * @property {number} loaded Bytes uploaded so far (1 once upload completes)
+ * @property {number} total  Total bytes to upload (1 once upload completes)
+ * @property {boolean} [done] True once the upload portion of the request has finished
+ */
+
+/**
+ * @typedef {object} UploadResponse
+ * @property {boolean} ok      True if the HTTP status is in 200-299
+ * @property {number} status   HTTP status code
+ * @property {string} text     Raw response body
+ * @property {() => any} json  Lazily parse the body as JSON ({} on parse failure)
+ */
+
+/**
+ * Posts FormData via XMLHttpRequest so the caller can observe upload progress.
+ * Fetch in browsers cannot report request body upload progress today, which made
+ * large user-data restore requests look "stuck" with no feedback.
+ *
+ * @param {string} url
+ * @param {FormData} formData
+ * @param {object} [options]
+ * @param {(progress: UploadProgress) => void} [options.onProgress] Called as bytes are sent, then once with done=true after the upload finishes
+ * @param {Record<string,string>} [options.headers] Overrides the default getRequestHeaders({ omitContentType: true })
+ * @returns {Promise<UploadResponse>}
+ */
+export function uploadWithProgress(url, formData, { onProgress = null, headers = null } = {}) {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+
+        const effectiveHeaders = headers || getRequestHeaders({ omitContentType: true });
+        for (const [name, value] of Object.entries(effectiveHeaders)) {
+            if (value !== undefined && value !== null) {
+                xhr.setRequestHeader(name, String(value));
+            }
+        }
+
+        if (typeof onProgress === 'function' && xhr.upload) {
+            xhr.upload.addEventListener('progress', (event) => {
+                if (event.lengthComputable) {
+                    onProgress({ loaded: event.loaded, total: event.total });
+                }
+            });
+            xhr.upload.addEventListener('load', () => {
+                onProgress({ loaded: 1, total: 1, done: true });
+            });
+        }
+
+        xhr.addEventListener('load', () => {
+            const text = xhr.responseText || '';
+            resolve({
+                ok: xhr.status >= 200 && xhr.status < 300,
+                status: xhr.status,
+                text,
+                json() {
+                    try { return text ? JSON.parse(text) : {}; } catch { return {}; }
+                },
+            });
+        });
+        xhr.addEventListener('error', () => reject(new Error(t`Network error during upload`)));
+        xhr.addEventListener('abort', () => reject(new Error(t`Upload aborted`)));
+
+        xhr.send(formData);
+    });
+}
+
 export function getSlideToggleOptions() {
     return {
         miliseconds: animation_duration * 1.5,
@@ -14021,17 +14089,12 @@ async function doOnboarding(avatarId) {
     }
 }
 
-async function uploadOnboardingImport(url, file) {
+async function uploadOnboardingImport(url, file, { onProgress = null } = {}) {
     const formData = new FormData();
     formData.append('avatar', file);
 
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: getRequestHeaders({ omitContentType: true }),
-        body: formData,
-    });
-
-    const data = await response.json().catch(() => ({}));
+    const response = await uploadWithProgress(url, formData, { onProgress });
+    const data = response.json();
     if (!response.ok) {
         const codes = Array.isArray(data?.codes) ? data.codes : [];
         const localized = codes.map(getConfigValidationMessage).filter(Boolean).join('\n');
@@ -14069,10 +14132,23 @@ function bindOnboardingImportActions(template) {
             return;
         }
 
+        const formatUploadingStatus = (loaded, total) => {
+            const pct = total > 0 ? Math.round((loaded / total) * 100) : 0;
+            return t`Uploading ${label}: ${pct}% (${humanFileSize(loaded, true, 1)} / ${humanFileSize(total, true, 1)})`;
+        };
+
         setBusy(true);
-        setStatus(t`Importing ${label}...`);
+        setStatus(formatUploadingStatus(0, file.size));
         try {
-            const result = await uploadOnboardingImport(endpoint, file);
+            const result = await uploadOnboardingImport(endpoint, file, {
+                onProgress: ({ loaded, total, done }) => {
+                    if (done) {
+                        setStatus(t`Processing ${label}...`);
+                        return;
+                    }
+                    setStatus(formatUploadingStatus(loaded, total));
+                },
+            });
             const message = typeof successTextFactory === 'function' ? successTextFactory(result) : t`Import completed`;
             setStatus(message);
             toastr.success(message, t`Import completed`);

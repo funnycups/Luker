@@ -1,4 +1,4 @@
-import { getRequestHeaders } from '../script.js';
+import { getRequestHeaders, uploadWithProgress } from '../script.js';
 import {
     clearFrontendLogs,
     getFrontendLogsSnapshot,
@@ -727,25 +727,19 @@ function getSelectedRestoreMode(rootElement) {
     return String(selected || 'merge') === 'overwrite' ? 'overwrite' : 'merge';
 }
 
-async function restoreUserData(handle, file, selection, mode, callback) {
+async function restoreUserData(handle, file, selection, mode, callback, { onProgress = null } = {}) {
     const formData = new FormData();
     formData.append('avatar', file);
     formData.append('handle', handle);
     formData.append('mode', mode);
     formData.append('selection', JSON.stringify(selection));
 
-    const response = await fetch('/api/users/restore-backup', {
-        method: 'POST',
-        headers: getRequestHeaders({ omitContentType: true }),
-        body: formData,
-    });
-
+    const response = await uploadWithProgress('/api/users/restore-backup', formData, { onProgress });
+    const data = response.json();
     if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to restore backup');
+        throw new Error(data?.error || 'Failed to restore backup');
     }
 
-    const data = await response.json();
     callback?.(data);
     return data;
 }
@@ -1020,14 +1014,31 @@ async function openBackupManager(handle, callback) {
         }
 
         let progressToast;
+        const updateProgressMessage = (text) => {
+            if (progressToast && typeof progressToast.find === 'function') {
+                progressToast.find('.toast-message').text(text);
+            }
+        };
+        const formatUploadingStatus = (loaded, total) => {
+            const pct = total > 0 ? Math.round((loaded / total) * 100) : 0;
+            return t`Uploading ${file.name}: ${pct}% (${humanFileSize(loaded, true, 1)} / ${humanFileSize(total, true, 1)})`;
+        };
         try {
             progressToast = toastr.info(
-                t`Please wait...`,
+                formatUploadingStatus(0, file.size),
                 t`Backup and Restore`,
                 { timeOut: 0, extendedTimeOut: 0, closeButton: false, tapToDismiss: false },
             );
             setActionBusy(true);
-            const result = await restoreUserData(handle, file, selection, mode);
+            const result = await restoreUserData(handle, file, selection, mode, undefined, {
+                onProgress: ({ loaded, total, done }) => {
+                    if (done) {
+                        updateProgressMessage(t`Processing ${file.name}...`);
+                        return;
+                    }
+                    updateProgressMessage(formatUploadingStatus(loaded, total));
+                },
+            });
             toastr.clear(progressToast);
             progressToast = null;
             const diagnosticReport = buildRestoreDiagnosticReport({ handle, file, mode, selection, result });

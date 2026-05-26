@@ -459,6 +459,13 @@ async function rollbackRestoreSnapshots(snapshots) {
 }
 
 async function restoreUserBackupArchive(uploadPath, directories, selection, mode, options = {}) {
+    const restoreStart = Date.now();
+    let uploadSize = 0;
+    try {
+        uploadSize = (await fsPromises.stat(uploadPath)).size;
+    } catch { /* stat is informational; ignore */ }
+    console.info(`[user-backup] Restore start: handle=${path.basename(directories.root)} mode=${mode} uploadSize=${uploadSize}B`);
+
     const backupTargets = getUserBackupTargets(directories, selection, options);
     const targetRoot = path.resolve(directories.root);
     const targetDirectories = backupTargets.directories.map(dir => path.resolve(dir));
@@ -469,7 +476,9 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
     }
 
     const categoryTargets = buildRestoreCategoryTargets(directories, selection, options);
+    const tAnalyze = Date.now();
     const analysis = await analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, targetDirectories, categoryTargets);
+    const analyzeMs = Date.now() - tAnalyze;
 
     if (mode === 'overwrite' && analysis.report.targetableEntries === 0) {
         throw new Error('Archive does not match selected restore categories. Overwrite was cancelled to protect existing data.');
@@ -477,8 +486,10 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
 
     /** @type {{type: 'file'|'directory', original: string, snapshot: string}[]} */
     const snapshots = [];
+    let snapshotMs = 0;
 
     if (mode === 'overwrite') {
+        const tSnap = Date.now();
         const snapshotSuffix = `.restore-snapshot-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
 
         try {
@@ -508,6 +519,7 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
             }
             throw new Error(`Failed to snapshot existing data before overwrite: ${baseMessage}`);
         }
+        snapshotMs = Date.now() - tSnap;
     }
 
     const result = {
@@ -518,6 +530,9 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
         preflight: analysis.report,
     };
 
+    const tExtract = Date.now();
+    let extractMs = 0;
+    let discardMs = 0;
     try {
         await new Promise((resolve, reject) => {
             yauzl.open(uploadPath, { lazyEntries: true, decodeStrings: true }, (openError, zipfile) => {
@@ -609,11 +624,17 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
                 zipfile.on('error', finish);
             });
         });
+        extractMs = Date.now() - tExtract;
 
         if (mode === 'overwrite') {
+            const tDiscard = Date.now();
             await discardRestoreSnapshots(snapshots);
+            discardMs = Date.now() - tDiscard;
         }
     } catch (extractError) {
+        extractMs = Date.now() - tExtract;
+        const totalMs = Date.now() - restoreStart;
+        console.warn(`[user-backup] Restore failed after ${totalMs}ms (analyze=${analyzeMs}ms snapshot=${snapshotMs}ms extract=${extractMs}ms): ${extractError?.message || extractError}`);
         if (mode === 'overwrite' && snapshots.length > 0) {
             const orphaned = await rollbackRestoreSnapshots(snapshots);
             const baseMessage = extractError instanceof Error ? extractError.message : String(extractError);
@@ -630,6 +651,8 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
         addRestoreReportSample(result.preflight, '(archive)', 'no_restorable_entries_detected');
     }
 
+    const totalMs = Date.now() - restoreStart;
+    console.info(`[user-backup] Restore done: mode=${mode} entries=${result.restoredCount}/${analysis.report.totalEntries} failed=${result.failedCount} analyze=${analyzeMs}ms snapshot=${snapshotMs}ms extract=${extractMs}ms discard=${discardMs}ms total=${totalMs}ms`);
     return result;
 }
 
