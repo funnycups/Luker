@@ -82,7 +82,6 @@ import {
     createEmptyPersistedMemoryState,
     normalizeStoreForRuntime,
     normalizePersistedMemoryState,
-    hasPersistedMemoryStatePayload,
     applyLoggedNodeSnapshot,
     applyMemoryLogEntryToStore,
     buildRuntimeStoreFromPersistedState,
@@ -1593,30 +1592,6 @@ function buildMemoryTargetFromContext(context, explicitTarget = null) {
     return normalizeResolvedMemoryTarget(resolvedTarget);
 }
 
-// Legacy-target fallback was originally meant for chats whose memory-graph
-// sidecar lived under a different file name than the current chat — i.e. a
-// renamed-chat recovery path. In practice the backend's /rename route
-// (renameAllChatStateSidecars in src/endpoints/chats.js) carries sidecars
-// along on rename, so that scenario never produces orphan data.
-//
-// The two candidates this helper used to return were both wrong:
-//   - currentChatId: identical to canonical.file_name, always filtered by
-//     `seen` — dead code.
-//   - chatMetadata.main_chat: in a branch/checkpoint chat this points to the
-//     ACTIVE source chat (the one the user branched from). Returning it as a
-//     legacy candidate caused ensureMemoryStoreLoaded to copy the source's
-//     full (untruncated) graph into the branch and then DELETE the source
-//     sidecar via deleteMemoryStoreByTarget. That bypassed floor-state's
-//     branch truncation and silently corrupted both chats.
-//
-// Branch state inheritance is now owned by floor-state.handleBranchCreated
-// (truncates source commit log to mesId+1 into target log) plus
-// inheritMemoryStoreForBranch (seeds target __meta). No legacy candidate
-// lookup is needed.
-function buildLegacyMemoryTargetCandidates() {
-    return [];
-}
-
 function getLatestAssistantFloorFromContext(context) {
     return Math.max(0, Math.floor(Number(computeChatSourceState(context)?.messageCount || 0)));
 }
@@ -2102,9 +2077,9 @@ export async function ensureMemoryStoreLoaded(context, { force = false, targetHi
     }
 
     const task = (async () => {
-        // Schema migration runs at init/CHAT_CHANGED for current target; legacy
-        // target candidates may still be in v1. Run migration before reading
-        // each candidate so we always read v2 shape.
+        // Schema migration runs at init/CHAT_CHANGED for current target.
+        // Bring the target up to v2 before reading so loadMemoryStoreByTarget
+        // always sees the current shape.
         try {
             await migrateLegacyMemoryGraphState(
                 context,
@@ -2116,56 +2091,11 @@ export async function ensureMemoryStoreLoaded(context, { force = false, targetHi
             console.warn(`[${MODULE_NAME}] Legacy schema migration failed for target`, { target, error });
         }
 
-        let loaded = await loadMemoryStoreByTarget(context, target);
-        let migratedFromTarget = null;
-
-        const targetIsEmpty = !loaded.v2 && !hasPersistedMemoryStatePayload(loaded.state)
-            || (loaded.v2 && !hasPersistedMemoryStatePayload(loaded.state));
-        if (targetIsEmpty) {
-            for (const legacyTarget of buildLegacyMemoryTargetCandidates(context, target, targetHint)) {
-                try {
-                    await migrateLegacyMemoryGraphState(
-                        context,
-                        legacyTarget,
-                        isExtractableAssistantMessage,
-                        applyMemoryLogEntryToStore,
-                    );
-                } catch (error) {
-                    console.warn(`[${MODULE_NAME}] Legacy schema migration failed for legacy target`, { legacyTarget, error });
-                }
-                const legacyLoaded = await loadMemoryStoreByTarget(context, legacyTarget);
-                if (!hasPersistedMemoryStatePayload(legacyLoaded.state)) {
-                    continue;
-                }
-                loaded = legacyLoaded;
-                migratedFromTarget = legacyTarget;
-                console.info(`[${MODULE_NAME}] Migrating memory graph from legacy target`, {
-                    from: legacyTarget,
-                    to: target,
-                });
-                break;
-            }
-        }
+        const loaded = await loadMemoryStoreByTarget(context, target);
 
         setCachedMeta(chatKey, loaded.meta || metaFieldsFromStore(loaded.store));
         memoryStoreCache.set(chatKey, loaded.store);
-        if (migratedFromTarget) {
-            await commitMemoryStoreReplaceByChatKey(
-                context,
-                chatKey,
-                loaded.store,
-                getStoreCoveredSeqTo(loaded.store),
-            );
-            try {
-                await deleteMemoryStoreByTarget(context, migratedFromTarget);
-            } catch (error) {
-                console.warn(`[${MODULE_NAME}] Failed to delete migrated legacy memory target`, {
-                    from: migratedFromTarget,
-                    to: target,
-                    error,
-                });
-            }
-        } else if (loaded.migrated) {
+        if (loaded.migrated) {
             await commitMemoryStoreReplaceByChatKey(
                 context,
                 chatKey,
