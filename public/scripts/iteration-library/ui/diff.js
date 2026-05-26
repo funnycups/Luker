@@ -232,7 +232,6 @@ function renderSubCard(path, oldValue, newValue, opts) {
     const libDiffHtml = textDiff.renderInlineTextDiffHtml(beforeText, afterText, {
         fileLabel,
         i18n,
-        forceOpen: true,
     });
     // Header element uses `luker_lib_diff_header` (NOT `_card_header`) so that
     // `(html.match(/luker_lib_diff_card/g) || []).length` counts one match per
