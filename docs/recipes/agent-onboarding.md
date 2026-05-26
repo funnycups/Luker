@@ -76,6 +76,10 @@ By default it will **derive a new preset** (original name + `-orchestrator` suff
 
 Walk through its diff, approve each entry.
 
+::: tip While you're here, let it tune the preset further
+Adapt for orchestrator is just one of the assistant's three **Editing modes**. Switch the toolbar's **Editing mode** back to the default **General editing**, start a new session, and the same assistant becomes a general-purpose preset editor — useful for things like "add an anti-cliché directive backed by a few negative examples", "tone the prose-style guidance down from purple to restrained close-detail", or "merge these three rules that say the same thing". See [Completion Preset Assistant](/features/preset-assistant) for the full picture.
+:::
+
 ## Step 3 — Switch to Director mode, wire up both API paths
 
 Open the **Multi-Agent Orchestration** panel in the Extensions drawer:
