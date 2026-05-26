@@ -718,9 +718,14 @@ export function createSubagentDispatcher({
         };
 
         const promise = (async () => {
+            // Declared outside the try so the catch arm can include any
+            // reasoning the sub-agent emitted before the throw — without
+            // this, a transport / abort error after the first round
+            // tripped a ReferenceError in the catch's recordSubagentFinish
+            // call (try-block `let` is not visible in catch).
+            let aggregatedReasoning = '';
             try {
                 let finalText = '';
-                let aggregatedReasoning = '';
                 let converged = false;
                 for (let r = 0; r < SUB_AGENT_MAX_ROUNDS; r++) {
                     if (childSignal.aborted) {
