@@ -43,11 +43,13 @@ The memory graph's own "Auto extraction / Auto compaction" no longer fires — t
 ## What you need first
 
 - A working Luker instance where the main chat already produces replies
-- A working [Chat Completion preset](/basics/presets), ideally already tuned with style guidance, jailbreak, and NSFW direction
+- A working [RP preset](/basics/presets), ideally already tuned with style guidance, jailbreak, and NSFW direction
 
 ## Step 1 — Pick a starting preset
 
 Any RP preset you'd normally use is fine. This step just confirms you have a writing preset to start from — the next step derives an agent variant from it.
+
+## Step 2 — Derive an agent-specific preset
 
 ::: tip Why not just use a regular preset for the agents?
 Regular RP presets contain a lot of prompt content that assumes "one LLM writes the whole reply by itself". Dropped into an agent tool loop, those instructions:
@@ -59,9 +61,7 @@ Regular RP presets contain a lot of prompt content that assumes "one LLM writes 
 Deriving a separate preset is the safest move — the original stays untouched, and you can switch back any time.
 :::
 
-## Step 2 — Derive an agent-specific preset
-
-Open the **Completion Preset Assistant**. Set the **Edit mode** dropdown to **Adapt for orchestrator**, then tell it:
+Open the **RP Preset Assistant**. Set the **Edit mode** dropdown to **Adapt for orchestrator**, then tell it:
 
 > Convert this preset into an agent-only preset
 
@@ -77,7 +77,7 @@ By default it will **derive a new preset** (original name + `-orchestrator` suff
 Walk through its diff, approve each entry.
 
 ::: tip While you're here, let it tune the preset further
-Adapt for orchestrator is just one of the assistant's three **Editing modes**. Switch the toolbar's **Editing mode** back to the default **General editing**, start a new session, and the same assistant becomes a general-purpose preset editor — useful for things like "add an anti-cliché directive backed by a few negative examples", "tone the prose-style guidance down from purple to restrained close-detail", or "merge these three rules that say the same thing". See [Completion Preset Assistant](/features/preset-assistant) for the full picture.
+Adapt for orchestrator is just one of the assistant's three **Editing modes**. Switch the toolbar's **Editing mode** back to the default **General editing**, start a new session, and the same assistant becomes a general-purpose preset editor — useful for things like "add an anti-cliché directive backed by a few negative examples", "tone the prose-style guidance down from purple to restrained close-detail", or "merge these three rules that say the same thing". See [RP Preset Assistant](/features/preset-assistant) for the full picture.
 :::
 
 ## Step 3 — Switch to Director mode, wire up both API paths
@@ -196,4 +196,4 @@ Not happy? That reasoning fold is the full agent execution log — pinpoint wher
 - [AI Iteration Studio](/features/orchestrator/iteration-studio) — natural-language tuning of your config
 - [Memory Graph](/features/memory-graph) — node types, recall algorithms, schema customization
 - [Search Tools](/features/search-tools) — engine differences + the standalone working modes
-- [Preset Assistant](/features/preset-assistant) — the other two session modes beyond "Adapt for orchestrator"
+- [RP Preset Assistant](/features/preset-assistant) — the other two session modes beyond "Adapt for orchestrator"

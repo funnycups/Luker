@@ -43,11 +43,13 @@ start -> orch.scouts -> orch.brain -> orch.draft -> orch.curate -> end
 ## 你需要先有什麼
 
 - 已經能跑的 Luker 實例，主對話能正常發回覆
-- 一份能用的 [Chat Completion 預設](/zh-TW/basics/presets)，最好已經調教過文風、越獄、NSFW 指導
+- 一份能用的 [RP 預設](/zh-TW/basics/presets)，最好已經調教過文風、越獄、NSFW 指導
 
 ## Step 1 — 挑一份起點預設
 
 任何你日常用的 RP 預設都行。這一步只是確認你有一份調教好的寫作預設作為起點——下一步要從它派生一份給 Agent 用的變種。
+
+## Step 2 — 派生一份「Agent 專用」預設
 
 ::: tip 為什麼不直接用日常預設跑 Agent
 日常 RP 預設裡大量提示詞假設「主 LLM 一個人獨自寫完整個回覆」，這些指令塞進 Agent 工具迴圈裡會：
@@ -59,9 +61,7 @@ start -> orch.scouts -> orch.brain -> orch.draft -> orch.curate -> end
 派生一份是最安全的——原預設保留不動，你隨時可以切回去。
 :::
 
-## Step 2 — 派生一份「Agent 專用」預設
-
-打開**聊天補全預設助手**，工具列頂部把**編輯模式**切到「**編排器適配**」，然後跟它說：
+打開**RP 預設助手**，工具列頂部把**編輯模式**切到「**編排器適配**」，然後跟它說：
 
 > 幫我把這個預設改成 Agent 專用預設
 
@@ -77,7 +77,7 @@ start -> orch.scouts -> orch.brain -> orch.draft -> orch.curate -> end
 跟著它的草稿 diff 看一遍，逐條點同意即可。
 
 ::: tip 順手讓它再幫你改造預設
-「編排器適配」只是助手三種**編輯模式**裡的一種。把工具列的**編輯模式**切回預設的「**通用編輯**」開一個新會話，同一個助手就是一個通用預設編輯器——可以讓它「新增一個反八股指導並補充反面範例」「把文風指導從濃墨重彩改成克制細膩」「合併幾條意思重複的規則」之類。詳見[補全預設助手](/zh-TW/features/preset-assistant)。
+「編排器適配」只是助手三種**編輯模式**裡的一種。把工具列的**編輯模式**切回預設的「**通用編輯**」開一個新會話，同一個助手就是一個通用預設編輯器——可以讓它「新增一個反八股指導並補充反面範例」「把文風指導從濃墨重彩改成克制細膩」「合併幾條意思重複的規則」之類。詳見[RP 預設助手](/zh-TW/features/preset-assistant)。
 :::
 
 ## Step 3 — 切到 Director 模式，配好兩路 API
@@ -196,4 +196,4 @@ Luker 內建的其他外掛（記憶圖 Schema 工作台、CardApp Studio、預�
 - [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio) — 自然語言指揮工作台 AI 改配置
 - [記憶圖](/zh-TW/features/memory-graph) — 節點類型、召回演算法、Schema 客製
 - [搜尋外掛](/zh-TW/features/search-tools) — 三種搜尋引擎的差異 + 不走 Director 時的工具模式
-- [補全預設助手](/zh-TW/features/preset-assistant) — 「編排器適配」之外的兩種會話模式
+- [RP 預設助手](/zh-TW/features/preset-assistant) — 「編排器適配」之外的兩種會話模式
