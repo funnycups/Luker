@@ -1077,9 +1077,16 @@ export function sanitizeDirectorProfile(profile) {
     // `sanitizeOptionalAgentToolFlags` returns null for the inherit case
     // and a fully canonical flag bag for the override case. Director
     // forces `finalize: false` on every layer (it has its own finalize
-    // tool with the same name).
+    // tool with the same name). Same legacy-collab migration shim as
+    // the director.tools sanitizer below: an override authored before
+    // the `collab` namespace shipped pre-fills both dispatchers on so
+    // the user does not silently lose them.
     const sanitizeAgentOverride = (toolsInput) => {
-        const sanitized = sanitizeOptionalAgentToolFlags(toolsInput, {
+        const migratedInput = (toolsInput && typeof toolsInput === 'object'
+            && (!toolsInput.collab || typeof toolsInput.collab !== 'object'))
+            ? { ...toolsInput, collab: { dispatch_subagent: true, dispatch_inline_subagent: true } }
+            : toolsInput;
+        const sanitized = sanitizeOptionalAgentToolFlags(migratedInput, {
             defaultAllOn: false,
             forceFinalize: false,
         });
@@ -1111,7 +1118,18 @@ export function sanitizeDirectorProfile(profile) {
     // explicit control). We detect "absent" by checking that input.tools
     // is not a plain object.
     const hasToolsBlock = input.tools && typeof input.tools === 'object';
-    const sanitizedTools = sanitizeAgentToolFlags(input.tools, {
+    // Migration shim: profiles persisted before the `collab` namespace
+    // shipped have a tools block but no `collab` key. Treat that as
+    // legacy = both dispatchers on, otherwise existing director users
+    // would silently lose their sub-agent dispatchers on the first load
+    // after upgrading. Profiles that DO have an explicit collab block
+    // pass through unchanged.
+    const toolsInput = hasToolsBlock
+        ? (input.tools.collab && typeof input.tools.collab === 'object'
+            ? input.tools
+            : { ...input.tools, collab: { dispatch_subagent: true, dispatch_inline_subagent: true } })
+        : input.tools;
+    const sanitizedTools = sanitizeAgentToolFlags(toolsInput, {
         defaultAllOn: !hasToolsBlock,
         forceFinalize: false,
     });

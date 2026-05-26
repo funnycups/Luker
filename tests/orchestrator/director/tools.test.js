@@ -124,6 +124,95 @@ describe('tool schemas', () => {
         // Description should instruct the model on context-uniqueness.
         expect(apply.function.description).toMatch(/(unique|surrounding context)/i);
     });
+
+    // ── collab.* gating (main-agent sub-agent dispatchers) ──
+    //
+    // The two dispatcher tools (`dispatch_subagent` by id and
+    // `dispatch_inline_subagent`) are user-toggleable from the main-agent
+    // tool grid via `tools.collab.<verb>`. `await_subagents` /
+    // `cancel_subagent` are companion tools — they only make sense when at
+    // least one dispatcher is enabled (without either, there are no
+    // handles to wait for or cancel). They auto-hide when both
+    // dispatchers are off, auto-show when at least one is on.
+    //
+    // Default (missing collab namespace) preserves legacy behavior:
+    // both dispatchers enabled. Only an explicit `false` disables.
+
+    test('collab.dispatch_subagent: false hides dispatch_subagent even when subAgents are configured', () => {
+        const schemas = buildMainAgentToolSchemas({
+            subAgents: [{ id: 'critic', description: 'crit' }],
+            tools: { collab: { dispatch_subagent: false } },
+        });
+        const names = schemas.map(s => s.function.name);
+        expect(names).not.toContain('dispatch_subagent');
+        // inline + companions still present (inline not disabled)
+        expect(names).toContain('dispatch_inline_subagent');
+        expect(names).toContain('await_subagents');
+        expect(names).toContain('cancel_subagent');
+    });
+
+    test('collab.dispatch_inline_subagent: false hides dispatch_inline_subagent', () => {
+        const schemas = buildMainAgentToolSchemas({
+            subAgents: [{ id: 'critic', description: 'crit' }],
+            tools: { collab: { dispatch_inline_subagent: false } },
+        });
+        const names = schemas.map(s => s.function.name);
+        expect(names).not.toContain('dispatch_inline_subagent');
+        // by-id dispatch + companions still present
+        expect(names).toContain('dispatch_subagent');
+        expect(names).toContain('await_subagents');
+        expect(names).toContain('cancel_subagent');
+    });
+
+    test('both dispatchers disabled hides await_subagents and cancel_subagent (no live handles to act on)', () => {
+        const schemas = buildMainAgentToolSchemas({
+            subAgents: [{ id: 'critic', description: 'crit' }],
+            tools: { collab: { dispatch_subagent: false, dispatch_inline_subagent: false } },
+        });
+        const names = schemas.map(s => s.function.name);
+        expect(names).not.toContain('dispatch_subagent');
+        expect(names).not.toContain('dispatch_inline_subagent');
+        expect(names).not.toContain('await_subagents');
+        expect(names).not.toContain('cancel_subagent');
+        // Message-production tools unaffected.
+        expect(names).toContain('write_message');
+        expect(names).toContain('finalize');
+    });
+
+    test('only inline disabled: by-id dispatch + await + cancel still present', () => {
+        const schemas = buildMainAgentToolSchemas({
+            subAgents: [{ id: 'critic', description: 'crit' }],
+            tools: { collab: { dispatch_inline_subagent: false, dispatch_subagent: true } },
+        });
+        const names = schemas.map(s => s.function.name);
+        expect(names).toContain('dispatch_subagent');
+        expect(names).not.toContain('dispatch_inline_subagent');
+        expect(names).toContain('await_subagents');
+        expect(names).toContain('cancel_subagent');
+    });
+
+    test('missing collab namespace preserves legacy default (both dispatchers + companions enabled)', () => {
+        const schemas = buildMainAgentToolSchemas({
+            subAgents: [{ id: 'critic', description: 'crit' }],
+            tools: {},
+        });
+        const names = schemas.map(s => s.function.name);
+        expect(names).toContain('dispatch_subagent');
+        expect(names).toContain('dispatch_inline_subagent');
+        expect(names).toContain('await_subagents');
+        expect(names).toContain('cancel_subagent');
+    });
+
+    test('sub-agent schemas never include collab tools, regardless of flag values', () => {
+        const subSchemas = buildSubAgentToolSchemas({
+            tools: { collab: { dispatch_subagent: true, dispatch_inline_subagent: true } },
+        });
+        const subNames = subSchemas.map(s => s.function.name);
+        expect(subNames).not.toContain('dispatch_subagent');
+        expect(subNames).not.toContain('dispatch_inline_subagent');
+        expect(subNames).not.toContain('await_subagents');
+        expect(subNames).not.toContain('cancel_subagent');
+    });
 });
 
 describe('get_draft executor', () => {

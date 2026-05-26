@@ -203,6 +203,7 @@ export function sanitizeAgentToolFlags(input, { defaultAllOn = false, forceFinal
     const lorebookIn = tools.lorebook && typeof tools.lorebook === 'object' ? tools.lorebook : {};
     const memoryIn = tools.memory && typeof tools.memory === 'object' ? tools.memory : {};
     const searchIn = tools.search && typeof tools.search === 'object' ? tools.search : {};
+    const collabIn = tools.collab && typeof tools.collab === 'object' ? tools.collab : {};
     return {
         note: {
             // New keys (open/close) win over legacy keys (add/delete). When the
@@ -242,6 +243,16 @@ export function sanitizeAgentToolFlags(input, { defaultAllOn = false, forceFinal
         search: {
             search: readBooleanFlag(searchIn.search, def),
             visit: readBooleanFlag(searchIn.visit, def),
+        },
+        // Director-only collaboration verbs. Sub-agents never see these
+        // tools regardless of flag value (buildSubAgentToolSchemas hard-
+        // excludes them — only the main agent dispatches). For other
+        // modes (loop / spec / agenda) these flags are inert: those
+        // runtimes don't construct the dispatcher schemas, so the field
+        // round-trips through the profile but has no effect.
+        collab: {
+            dispatch_subagent: readBooleanFlag(collabIn.dispatch_subagent, def),
+            dispatch_inline_subagent: readBooleanFlag(collabIn.dispatch_inline_subagent, def),
         },
         // `finalize` is the only tool the agent can use to stop a tool
         // loop. Loop mode (and spec/agenda nodes that opt into tools)

@@ -17,8 +17,15 @@
  * stamps on every checkbox. Per-node / per-agent panels use this to pass
  * the stage/node/agent identifier so the handler can target the right
  * profile location.
+ *
+ * `options.includeCollab` (default false) renders an extra `collab`
+ * fieldset for the two main-agent sub-agent dispatch verbs. Only the
+ * director's main-agent surfaces (`director.tools` default + the
+ * `director.mainAgent.tools` override) opt in — every other surface
+ * (loop / spec / agenda / director sub-agent override) leaves it off
+ * because those runtimes never expose those tools to the LLM.
  */
-function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}) {
+function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}, { includeCollab = false } = {}) {
     const { escapeHtml, i18n } = deps;
     const safeScope = scope === 'character' ? 'character' : 'global';
     const safe = tools && typeof tools === 'object' ? tools : {};
@@ -27,6 +34,7 @@ function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}) 
     const lorebook = safe.lorebook || {};
     const memory = safe.memory || {};
     const search = safe.search || {};
+    const collab = safe.collab || {};
     const extraAttrParts = Object.entries(extraAttrs)
         .map(([key, value]) => `data-${key}="${escapeHtml(String(value))}"`)
         .join(' ');
@@ -37,6 +45,12 @@ function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}) 
             ${escapeHtml(label)}
         </label>`;
     };
+    const collabFieldset = includeCollab ? `
+<fieldset class="luker_orch_loop_tools_group">
+    <legend>${escapeHtml(i18n('collab (sub-agent dispatch — main agent only)'))}</legend>
+    ${cb('collab.dispatch_subagent', collab.dispatch_subagent, 'dispatch_subagent')}
+    ${cb('collab.dispatch_inline_subagent', collab.dispatch_inline_subagent, 'dispatch_inline_subagent')}
+</fieldset>` : '';
     return `
 <fieldset class="luker_orch_loop_tools_group">
     <legend>${escapeHtml(i18n('note (persistent notes)'))}</legend>
@@ -75,7 +89,7 @@ function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}) 
     <legend>${escapeHtml(i18n('search (web search)'))}</legend>
     ${cb('search.search', search.search, 'search_search')}
     ${cb('search.visit', search.visit, 'search_visit')}
-</fieldset>`;
+</fieldset>${collabFieldset}`;
 }
 
 /**
@@ -95,6 +109,7 @@ export function renderInheritOrOverridePanel(deps, scope, tools, {
     resetAction,
     inheritedTools = null,
     kind = 'agent',
+    includeCollab = false,
 }) {
     const { escapeHtml, i18n } = deps;
     const safeScope = scope === 'character' ? 'character' : 'global';
@@ -114,7 +129,7 @@ export function renderInheritOrOverridePanel(deps, scope, tools, {
     }
     return `
 <div class="luker_orch_tools_override_block">
-    ${renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs)}
+    ${renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs, { includeCollab })}
     <div class="menu_button menu_button_small" data-luker-action="${escapeHtml(resetAction)}" data-scope="${safeScope}" ${extraAttrParts}>${escapeHtml(i18n('Reset to inherit'))}</div>
 </div>`;
 }
@@ -537,6 +552,7 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
         resetAction: 'director-mainagent-tools-reset',
         inheritedTools: directorDefaultTools,
         kind: 'agent',
+        includeCollab: true,
     })}
             </details>
 
@@ -564,7 +580,7 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
             <details class="luker_orch_tools_section">
                 <summary>${escapeHtml(i18n('Default tools for all agents'))}</summary>
                 <div class="luker-studio-empty-hint">${escapeHtml(i18n('Each agent can override these defaults below. The main agent inherits unless it has its own override.'))}</div>
-                ${renderToolFlagsGrid(deps, safeScope, directorDefaultTools || {}, 'luker-director-default-tool')}
+                ${renderToolFlagsGrid(deps, safeScope, directorDefaultTools || {}, 'luker-director-default-tool', {}, { includeCollab: true })}
                 <div class="luker-studio-actions-row">
                     <div class="menu_button menu_button_small" data-luker-action="director-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable all'))}</div>
                     <div class="menu_button menu_button_small" data-luker-action="director-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear'))}</div>

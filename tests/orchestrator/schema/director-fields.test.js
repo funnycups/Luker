@@ -41,6 +41,118 @@ describe('sanitizeAgentToolFlags: note flag migration', () => {
     });
 });
 
+describe('sanitizeAgentToolFlags: collab namespace (main-agent dispatchers)', () => {
+    test('explicit collab flags pass through unchanged', () => {
+        const sanitized = sanitizeAgentToolFlags({
+            collab: { dispatch_subagent: false, dispatch_inline_subagent: true },
+        });
+        expect(sanitized.collab).toEqual({
+            dispatch_subagent: false,
+            dispatch_inline_subagent: true,
+        });
+    });
+
+    test('missing collab namespace defaults all off under defaultAllOn:false', () => {
+        const sanitized = sanitizeAgentToolFlags({});
+        expect(sanitized.collab).toEqual({
+            dispatch_subagent: false,
+            dispatch_inline_subagent: false,
+        });
+    });
+
+    test('missing collab namespace defaults all on under defaultAllOn:true', () => {
+        const sanitized = sanitizeAgentToolFlags({}, { defaultAllOn: true });
+        expect(sanitized.collab).toEqual({
+            dispatch_subagent: true,
+            dispatch_inline_subagent: true,
+        });
+    });
+
+    test('partial collab section: specified flag wins, others fall back to default', () => {
+        const sanitized = sanitizeAgentToolFlags(
+            { collab: { dispatch_inline_subagent: false } },
+            { defaultAllOn: true },
+        );
+        expect(sanitized.collab.dispatch_subagent).toBe(true);
+        expect(sanitized.collab.dispatch_inline_subagent).toBe(false);
+    });
+});
+
+describe('sanitizeDirectorProfile: legacy-collab migration', () => {
+    // Pre-existing director profiles persisted before the collab namespace
+    // shipped have a `tools` object with no `collab` key. The director
+    // sanitizer must treat that case as legacy (both dispatchers on),
+    // otherwise upgrading the plugin would silently strip every existing
+    // user's sub-agent dispatchers on the first load. Explicit collab
+    // blocks pass through unchanged.
+
+    test('director.tools with no collab key → both dispatchers on (legacy migration)', () => {
+        const sanitized = sanitizeDirectorProfile({
+            director: {
+                tools: {
+                    chat: { read_range: true, search: false },
+                    // intentionally no `collab` — simulates a pre-upgrade profile
+                },
+            },
+        });
+        expect(sanitized.director.tools.collab).toEqual({
+            dispatch_subagent: true,
+            dispatch_inline_subagent: true,
+        });
+        // Legacy migration must not silently re-enable other explicitly-
+        // disabled flags — only the missing namespace is filled.
+        expect(sanitized.director.tools.chat.read_range).toBe(true);
+        expect(sanitized.director.tools.chat.search).toBe(false);
+    });
+
+    test('director.tools.collab present passes through unchanged (no migration)', () => {
+        const sanitized = sanitizeDirectorProfile({
+            director: {
+                tools: {
+                    collab: { dispatch_subagent: false, dispatch_inline_subagent: false },
+                },
+            },
+        });
+        expect(sanitized.director.tools.collab).toEqual({
+            dispatch_subagent: false,
+            dispatch_inline_subagent: false,
+        });
+    });
+
+    test('mainAgent.tools override with no collab key → both dispatchers on (legacy migration)', () => {
+        const sanitized = sanitizeDirectorProfile({
+            director: {
+                mainAgent: {
+                    tools: {
+                        chat: { read_range: true },
+                        // no collab — legacy override
+                    },
+                },
+            },
+        });
+        expect(sanitized.director.mainAgent.tools.collab).toEqual({
+            dispatch_subagent: true,
+            dispatch_inline_subagent: true,
+        });
+    });
+
+    test('mainAgent.tools override with explicit collab passes through unchanged', () => {
+        const sanitized = sanitizeDirectorProfile({
+            director: {
+                mainAgent: {
+                    tools: {
+                        collab: { dispatch_subagent: false, dispatch_inline_subagent: true },
+                    },
+                },
+            },
+        });
+        expect(sanitized.director.mainAgent.tools.collab).toEqual({
+            dispatch_subagent: false,
+            dispatch_inline_subagent: true,
+        });
+    });
+});
+
 describe('director schema fields', () => {
     test('ORCH_EXECUTION_MODE_DIRECTOR exported as the string "director"', () => {
         expect(ORCH_EXECUTION_MODE_DIRECTOR).toBe('director');

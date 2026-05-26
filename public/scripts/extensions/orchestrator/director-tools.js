@@ -192,19 +192,26 @@ export const CANCEL_SUBAGENT_TOOL = {
 
 export function buildMainAgentToolSchemas({ subAgents, tools }) {
     const hasSubAgents = Array.isArray(subAgents) && subAgents.length > 0;
-    // `dispatch_inline_subagent`, `await_subagents`, and `cancel_subagent`
-    // are ALWAYS available — the main agent can dispatch an ad-hoc
-    // sub-agent role at any time (even when the profile has no
-    // pre-configured sub-agents), and the await / cancel handles work
-    // for any in-flight sub-agent regardless of how it was dispatched.
-    // `dispatch_subagent` (the by-id variant) only appears when there
-    // is at least one configured sub-agent to dispatch — otherwise it
-    // would have no valid targets.
+    // Each dispatcher tool can be turned off via `tools.collab.<verb>` from
+    // the main-agent override panel. Missing namespace (or missing key)
+    // preserves the legacy default — both dispatchers on. Only an explicit
+    // `false` disables. `await_subagents` / `cancel_subagent` are companion
+    // tools: they only appear when at least one dispatcher is enabled
+    // (without either, there are no handles to wait on or cancel).
+    // `dispatch_subagent` (the by-id variant) further requires that the
+    // profile actually has configured sub-agents — an enabled flag with an
+    // empty subAgents list is still hidden because there are no valid
+    // targets.
+    const collabFlags = tools && typeof tools === 'object' && tools.collab && typeof tools.collab === 'object'
+        ? tools.collab
+        : {};
+    const dispatchSubagentEnabled = hasSubAgents && collabFlags.dispatch_subagent !== false;
+    const dispatchInlineEnabled = collabFlags.dispatch_inline_subagent !== false;
+    const anyDispatcherEnabled = dispatchSubagentEnabled || dispatchInlineEnabled;
     const collab = [
-        ...(hasSubAgents ? [DISPATCH_SUBAGENT_TOOL] : []),
-        DISPATCH_INLINE_SUBAGENT_TOOL,
-        AWAIT_SUBAGENTS_TOOL,
-        CANCEL_SUBAGENT_TOOL,
+        ...(dispatchSubagentEnabled ? [DISPATCH_SUBAGENT_TOOL] : []),
+        ...(dispatchInlineEnabled ? [DISPATCH_INLINE_SUBAGENT_TOOL] : []),
+        ...(anyDispatcherEnabled ? [AWAIT_SUBAGENTS_TOOL, CANCEL_SUBAGENT_TOOL] : []),
     ];
     const messageProduction = [WRITE_MESSAGE_TOOL, APPLY_MESSAGE_PATCHES_TOOL, GET_DRAFT_TOOL, FINALIZE_TOOL];
     const loop = loopToolSchemasFor(tools);
