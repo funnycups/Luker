@@ -1593,53 +1593,28 @@ function buildMemoryTargetFromContext(context, explicitTarget = null) {
     return normalizeResolvedMemoryTarget(resolvedTarget);
 }
 
-function buildLegacyMemoryTargetCandidates(context, canonicalTarget, explicitTarget = null) {
-    if (normalizeExplicitChatStateTarget(explicitTarget)) {
-        return [];
-    }
-    const normalizedCanonical = normalizeResolvedMemoryTarget(canonicalTarget);
-    if (!normalizedCanonical || normalizedCanonical.is_group) {
-        return [];
-    }
-
-    const live = getContext();
-    const runtime = live && typeof live === 'object' ? live : context;
-    const candidates = [];
-    const seen = new Set([JSON.stringify(normalizedCanonical)]);
-    const avatar = String(normalizedCanonical.avatar_url || '').trim();
-
-    const pushCandidate = (fileName) => {
-        const normalizedFileName = String(fileName || '').trim();
-        if (!avatar || !normalizedFileName) {
-            return;
-        }
-        const candidate = normalizeExplicitChatStateTarget({
-            is_group: false,
-            avatar_url: avatar,
-            file_name: normalizedFileName,
-        });
-        if (!candidate) {
-            return;
-        }
-        const key = JSON.stringify(candidate);
-        if (seen.has(key)) {
-            return;
-        }
-        seen.add(key);
-        candidates.push(candidate);
-    };
-
-    const currentChatId = String(
-        (typeof runtime?.getCurrentChatId === 'function'
-            ? runtime.getCurrentChatId()
-            : (typeof context?.getCurrentChatId === 'function' ? context.getCurrentChatId() : (runtime?.chatId ?? context?.chatId))) || '',
-    ).trim();
-    const metadataChatId = String(runtime?.chatMetadata?.main_chat || context?.chatMetadata?.main_chat || '').trim();
-
-    pushCandidate(currentChatId);
-    pushCandidate(metadataChatId);
-
-    return candidates;
+// Legacy-target fallback was originally meant for chats whose memory-graph
+// sidecar lived under a different file name than the current chat — i.e. a
+// renamed-chat recovery path. In practice the backend's /rename route
+// (renameAllChatStateSidecars in src/endpoints/chats.js) carries sidecars
+// along on rename, so that scenario never produces orphan data.
+//
+// The two candidates this helper used to return were both wrong:
+//   - currentChatId: identical to canonical.file_name, always filtered by
+//     `seen` — dead code.
+//   - chatMetadata.main_chat: in a branch/checkpoint chat this points to the
+//     ACTIVE source chat (the one the user branched from). Returning it as a
+//     legacy candidate caused ensureMemoryStoreLoaded to copy the source's
+//     full (untruncated) graph into the branch and then DELETE the source
+//     sidecar via deleteMemoryStoreByTarget. That bypassed floor-state's
+//     branch truncation and silently corrupted both chats.
+//
+// Branch state inheritance is now owned by floor-state.handleBranchCreated
+// (truncates source commit log to mesId+1 into target log) plus
+// inheritMemoryStoreForBranch (seeds target __meta). No legacy candidate
+// lookup is needed.
+function buildLegacyMemoryTargetCandidates() {
+    return [];
 }
 
 function getLatestAssistantFloorFromContext(context) {
