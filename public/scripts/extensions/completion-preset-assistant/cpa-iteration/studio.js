@@ -1601,19 +1601,6 @@ export async function openCpaIterationStudio(deps) {
         lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
         return lines.join('\n');
     }
-            if (alreadyArr.length > 0) {
-                lines.push('Already in desired state (no-op):');
-                for (const e of alreadyArr) {
-                    const op = String(e?.op || '?');
-                    const path = String(e?.path || '<root>');
-                    lines.push(`  - ${op}(${path})`);
-                }
-            }
-            lines.push('Revise your approach for any skipped edit that was essential (re-read current state, fix the anchor / path / value).');
-        }
-        lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
-        return lines.join('\n');
-    }
 
     async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone, cleanEdits }) {
         if (state.isBusy) return;
