@@ -47,25 +47,53 @@ The memory graph's own "Auto extraction / Auto compaction" no longer fires — t
 
 ## Step 1 — Pick a starting preset
 
-Any RP preset you'd normally use is fine. This step just confirms you have a writing preset to start from — the next step derives an agent variant from it.
+Any RP preset you'd normally use is fine. This step just confirms you have a writing preset to start from — the next step builds the two preset variants Director needs from it.
 
-## Step 2 — Derive an agent-specific preset
+## Step 2 — Configure the Preset Assistant and derive the two presets Director needs
 
-::: tip Why not just use a regular preset for the agents?
-Regular RP presets contain a lot of prompt content that assumes "one LLM writes the whole reply by itself". Dropped into an agent tool loop, those instructions:
+LLM calls made by Luker's plugins fall into **two broad categories** with very different preset needs. One is **plugins producing RP content** — Director's agent team drafting the body, critic sub-agents reviewing, and so on — which wants a real RP preset with jailbreak / style / anti-cliché guidance. The other is the **iteration AI** that powers various plugins — the Preset Assistant, the Memory Graph schema studio, CardApp Studio, Director's Iteration Studio, and so on — which uses tool calls to edit configs or extract structured data; any RP instructions leaking in will interfere with the model executing the plugin's instructions, so these slots want a **stripped-down preset with only jailbreak left**.
+
+Director's flow touches both categories at once:
+
+| Path | Who uses it | Preset shape |
+|---|---|---|
+| **Agent path** — main agent + sub-agents producing the body | The actual drafters; their output ends up in the chat | A standard RP preset, tuned for tool calling: keeps jailbreak + style + anti-cliché, but drops placeholders / hard schemas that fight the orchestrator |
+| **Iteration Studio path** — the AI you talk to inside the studio when tuning your config | A tool-using config editor; never writes story prose | A **stripped-down preset with only jailbreak left** — no style guidance, no NSFW writing rules, no narrative meta-rules |
+
+::: tip Why not just one preset for both?
+RP presets assume "one LLM writes the whole reply by itself." Drop those instructions into an agent tool loop and they:
 
 - Fight for airtime against the agent's system prompt
-- Cram "must output schema" / "mandatory chain of thought" format constraints into the drafting step, breaking tool calling
-- Re-inject placeholders (character description, persona, world info entries) that the orchestrator's main path already injects
+- Cram "must output schema" / "mandatory chain of thought" constraints into the drafting step, breaking tool calling
+- Re-inject placeholders (character description, persona, world info entries) the orchestrator's main path already injects
 
-Deriving a separate preset is the safest move — the original stays untouched, and you can switch back any time.
+The Iteration Studio is even more sensitive — it doesn't write story prose at all, it edits a JSON config via tool calls. Any RP instruction that leaks in interferes with the model executing the plugin's instructions.
 :::
 
-Open the **RP Preset Assistant**. Set the **Edit mode** dropdown to **Adapt for orchestrator**, then tell it:
+### 2a — Configure the Preset Assistant itself
+
+The Preset Assistant is the tool we'll use in 2b to derive the agent preset, but **it's an LLM-driven tool itself** — it needs its own iteration AI preset and API profile before you can open it.
+
+Open the Extensions drawer (`#extensions_settings2` — the same drawer that holds the Orchestrator, Memory, and Search Tools panels). Find the **Completion Preset Assistant** panel and fill in:
+
+- **Iteration AI prompt preset (params + prompt)** — click the **?** button next to this field
+- **Iteration AI API preset (Connection profile)** — pick any working API profile
+
+![Preset Assistant settings panel — iteration AI preset (with ? button) + iteration AI API preset](/images/recipes/agent-onboarding/step-02a-preset-help-button.png)
+
+The **?** button opens an explainer popup with an **Import plugin-only preset** button at the bottom — one click imports Luker's bundled clean preset and auto-selects it here.
+
+![? button popup — explains what preset belongs in this slot, one-click imports plugin-only](/images/recipes/agent-onboarding/step-02a-help-popup.png)
+
+Other Luker plugins with their own iteration AI (Director's Iteration Studio, Memory Graph schema studio, CardApp Studio, etc.) expose the same **?** button next to their preset selector — the same one-click import works there too.
+
+### 2b — Derive the **agent** preset
+
+Now that the Preset Assistant is configured, click **Open Assistant** in the same panel. In the popup, set the **Edit mode** dropdown to **Adapt for orchestrator**, then tell it:
 
 > Convert this preset into an agent-only preset
 
-![Preset assistant in Adapt-for-orchestrator mode](/images/recipes/agent-onboarding/step-02-preset-assistant.png)
+![Preset Assistant in Adapt-for-orchestrator mode](/images/recipes/agent-onboarding/step-02-preset-assistant.png)
 
 By default it will **derive a new preset** (original name + `-orchestrator` suffix) — the original stays as-is. It automatically:
 
@@ -77,25 +105,16 @@ By default it will **derive a new preset** (original name + `-orchestrator` suff
 Walk through its diff, approve each entry.
 
 ::: tip While you're here, let it tune the preset further
-Adapt for orchestrator is just one of the assistant's three **Editing modes**. Switch the toolbar's **Editing mode** back to the default **General editing**, start a new session, and the same assistant becomes a general-purpose preset editor — useful for things like "add an anti-cliché directive backed by a few negative examples", "tone the prose-style guidance down from purple to restrained close-detail", or "merge these three rules that say the same thing". See [RP Preset Assistant](/features/preset-assistant) for the full picture.
+Adapt for orchestrator is just one of the assistant's three **Editing modes**. Switch the toolbar's **Editing mode** back to the default **General editing**, start a new session, and the same assistant becomes a general-purpose preset editor — useful for things like "add an anti-cliché directive backed by a few negative examples", "tone the prose-style guidance down from purple to restrained close-detail", or "merge these three rules that say the same thing". See [Preset Assistant](/features/preset-assistant) for the full picture.
 :::
 
-## Step 3 — Switch to Director mode, wire up both API paths
+## Step 3 — Switch to Director mode and wire up the two presets
 
 Open the **Multi-Agent Orchestration** panel in the Extensions drawer:
 
 1. Set **Execution mode** to **Director (multi-agent)**
-2. Set the **API preset** + **Chat completion preset** to the `-orchestrator` preset you derived in Step 2
-3. Find the **AI Iteration Studio** section and fill in its **API preset** + **Chat completion preset** too — but here **don't** use `-orchestrator`. Use something **stripped down to just the jailbreak** (the bundled [`plugin-only.json`](/presets/plugin-only.json) is built for exactly this).
-
-::: tip Why two paths?
-| Path | Who uses it | What to pick |
-|---|---|---|
-| **Agent API + Chat completion preset** | The actual main agent + sub-agents the orchestrator runs to produce the body | The `-orchestrator` preset from Step 2 (jailbreak + NSFW + style guidance built in) |
-| **Iteration Studio API + Chat completion preset** | The AI you talk to in the iteration studio when tuning your orchestration | `plugin-only.json` or another clean preset — its job is to modify your orchestrator config, it doesn't need style guidance or jailbreak |
-
-Other Luker plugins that have their own "iteration AI" (memory graph schema studio, CardApp Studio, the preset assistant itself, etc.) also benefit from this stripped-down preset.
-:::
+2. Set the **API preset** + **Chat completion preset** to the `-orchestrator` preset from Step 2b
+3. Find the **AI Iteration Studio** section and set its **API preset** + **Chat completion preset** to the **plugin-only** preset already imported in Step 2a
 
 ## Step 4 — Hand memory extraction and recall over to the agents
 
@@ -171,7 +190,7 @@ Like orchestration configs, schemas have both global and per-card scope — per-
 - Survival: add `inventory_item` nodes, tracking each item's durability and state
 
 ::: tip Don't forget the memory graph's iteration AI preset
-The **Schema Iteration Prompt (schema-editor AI)** field in the Memory panel feeds into the same "iteration AI path" mentioned in Step 3 — `plugin-only.json` (or something similarly stripped down) is a good pick.
+The **Schema Iteration Prompt (schema-editor AI)** field in the Memory panel feeds into the same "iteration AI path" mentioned in Step 2a — its preset selector also has a **?** button; if you already imported plugin-only in Step 2a, just pick it from the dropdown here.
 :::
 
 ## Go play
@@ -196,4 +215,4 @@ Not happy? That reasoning fold is the full agent execution log — pinpoint wher
 - [AI Iteration Studio](/features/orchestrator/iteration-studio) — natural-language tuning of your config
 - [Memory Graph](/features/memory-graph) — node types, recall algorithms, schema customization
 - [Search Tools](/features/search-tools) — engine differences + the standalone working modes
-- [RP Preset Assistant](/features/preset-assistant) — the other two session modes beyond "Adapt for orchestrator"
+- [Preset Assistant](/features/preset-assistant) — the other two session modes beyond "Adapt for orchestrator"
