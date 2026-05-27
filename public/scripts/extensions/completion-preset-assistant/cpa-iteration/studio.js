@@ -56,6 +56,7 @@
  */
 
 import { Popup, POPUP_TYPE } from '../../../popup.js';
+import { stripOpenAIConnectionFieldsFromPreset } from '../../../openai.js';
 import {
     applyEdits,
     inverseEdit,
@@ -500,7 +501,7 @@ export async function openCpaIterationStudio(deps) {
     async function loadLive() {
         const ref = getTargetRef();
         const stored = getContext()?.presets?.getStored?.(ref);
-        state.live = stored?.body ? structuredClone(stored.body) : null;
+        state.live = stored?.body ? stripOpenAIConnectionFieldsFromPreset(stored.body) : null;
     }
 
     /**
@@ -512,7 +513,8 @@ export async function openCpaIterationStudio(deps) {
         if (!name) { state.reference = null; return; }
         if (typeof getReferencePresetBody !== 'function') { state.reference = null; return; }
         try {
-            state.reference = await getReferencePresetBody(name);
+            const refBody = await getReferencePresetBody(name);
+            state.reference = refBody ? stripOpenAIConnectionFieldsFromPreset(refBody) : null;
         } catch (err) {
             // eslint-disable-next-line no-console
             console.warn(`[${MODULE}] Failed to load reference preset "${name}"`, err);
