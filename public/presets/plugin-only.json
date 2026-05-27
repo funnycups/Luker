@@ -119,6 +119,36 @@
             "plugin_extra": false
         },
         {
+            "identifier": "67a96ff2-84da-4b67-aacf-f95c61dd8f00",
+            "system_prompt": false,
+            "enabled": false,
+            "marker": false,
+            "plugin_extra": false,
+            "name": "<story_context>",
+            "role": "system",
+            "content": "<story_context>",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "injection_order": 100,
+            "injection_trigger": [],
+            "forbid_overrides": false
+        },
+        {
+            "identifier": "0db2e2df-d0f2-4603-aec3-6f5c5f4dafc8",
+            "system_prompt": false,
+            "enabled": false,
+            "marker": false,
+            "plugin_extra": false,
+            "name": "</story_context>",
+            "role": "system",
+            "content": "</story_context>",
+            "injection_position": 0,
+            "injection_depth": 4,
+            "injection_order": 100,
+            "injection_trigger": [],
+            "forbid_overrides": false
+        },
+        {
             "identifier": "7cb25d31-4677-438e-bd27-ba727a171eac",
             "system_prompt": false,
             "enabled": false,
@@ -237,6 +267,10 @@
                     "enabled": true
                 },
                 {
+                    "identifier": "67a96ff2-84da-4b67-aacf-f95c61dd8f00",
+                    "enabled": true
+                },
+                {
                     "identifier": "worldInfoBefore",
                     "enabled": true
                 },
@@ -270,6 +304,10 @@
                 },
                 {
                     "identifier": "dialogueExamples",
+                    "enabled": true
+                },
+                {
+                    "identifier": "0db2e2df-d0f2-4603-aec3-6f5c5f4dafc8",
                     "enabled": true
                 },
                 {
