@@ -6654,7 +6654,7 @@ jQuery(() => {
                 if (dryRun) return;
                 if (!extension_settings[MODULE_NAME]?.enabled) return;
                 if (!DIRECTOR_TAKEOVER_GEN_TYPES.has(String(type || ''))) return;
-                const profile = getEffectiveProfile(context);
+                const profile = getEffectiveProfile(getContext());
                 if (!profile || String(profile.mode || '') !== ORCH_EXECUTION_MODE_DIRECTOR) return;
                 applyPureSyntheticPresetOverride();
             } catch (err) {
@@ -6686,6 +6686,14 @@ jQuery(() => {
     // when the active profile is in any other mode.
     if (context.eventTypes.GENERATE_TAKEOVER_DISPATCH) {
         context.eventSource.on(context.eventTypes.GENERATE_TAKEOVER_DISPATCH, async (eventData) => {
+            // Re-resolve the live context on every dispatch. The init-time
+            // closure's `context.chatId` is a snapshot frozen at ST startup
+            // (getContext returns a plain object with `chatId` materialized
+            // from `characters[this_chid].chat`, not a getter), so using it
+            // for `getChatKey` makes the trace bind to the wrong chat and
+            // the popup later fails to look it up. Same reason
+            // `onWorldInfoFinalized` calls `getContext()` per event.
+            const context = getContext();
             try {
                 // Restore oai_settings before doing anything else.
                 // The pure-preset override was applied at GENERATION_STARTED
