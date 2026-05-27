@@ -2080,3 +2080,49 @@
         overflow: visible;
     }
 }
+
+/* ═════════════════════════════════════════════════════════════════════
+   PRESET HELP BUTTON — inline "?" next to prompt-preset selectors
+   ═════════════════════════════════════════════════════════════════════ */
+
+.luker-preset-help {
+    flex: 0 0 auto;
+    padding: 0 4px;
+    margin-left: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: inherit;
+    opacity: 0.55;
+    cursor: help;
+    border-radius: 50%;
+    transition: opacity 0.15s ease, color 0.15s ease;
+    vertical-align: middle;
+}
+
+.luker-preset-help:hover,
+.luker-preset-help:focus-visible {
+    opacity: 1;
+    color: var(--SmartThemeQuoteColor);
+    outline: none;
+}
+
+.luker-preset-help i {
+    font-size: 0.95em;
+}
+
+.luker-preset-help-body p,
+.luker-preset-help-body ul {
+    margin: 0.5em 0;
+    text-align: left;
+}
+
+.luker-preset-help-body ul {
+    padding-left: 1.5em;
+}
+
+.luker-preset-help-body li + li {
+    margin-top: 0.35em;
+}

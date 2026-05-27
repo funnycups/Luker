@@ -1,3 +1,5 @@
+import { renderPresetHelpButton } from '../preset-help.js';
+
 export function createCharacterEditorUi(deps) {
     const {
         MODULE_NAME,
@@ -261,7 +263,7 @@ export function createCharacterEditorUi(deps) {
                 <input id="cea_use_streaming_transport" type="checkbox" />
                 ${escapeHtml(i18n('Use streaming transport (avoid timeout on slow APIs)'))}
             </label>
-            <label for="cea_sync_llm_preset">${escapeHtml(i18n('Iteration AI prompt preset (params + prompt)'))}</label>
+            <label for="cea_sync_llm_preset">${escapeHtml(i18n('Iteration AI prompt preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'iteration', targetSelectId: 'cea_sync_llm_preset' })}</label>
             <select id="cea_sync_llm_preset" class="text_pole"></select>
             <label for="cea_sync_api_preset">${escapeHtml(i18n('Iteration AI API preset (Connection profile)'))}</label>
             <select id="cea_sync_api_preset" class="text_pole"></select>

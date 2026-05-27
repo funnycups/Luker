@@ -1,3 +1,5 @@
+import { renderPresetHelpButton } from '../preset-help.js';
+
 export function createSearchToolsSettingsUi(deps) {
     const {
         DEFAULT_SETTINGS,
@@ -124,7 +126,7 @@ export function createSearchToolsSettingsUi(deps) {
         <input id="search_tools_default_visit_max_chars" class="text_pole" type="number" min="0" max="50000" step="100" />
         <label for="search_tools_agent_api_preset_name">${escapeHtml(i18n('Agent API preset (Connection profile)'))}</label>
         <select id="search_tools_agent_api_preset_name" class="text_pole"></select>
-        <label for="search_tools_agent_preset_name">${escapeHtml(i18n('Agent preset (params + prompt)'))}</label>
+        <label for="search_tools_agent_preset_name">${escapeHtml(i18n('Agent preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'agent' })}</label>
         <select id="search_tools_agent_preset_name" class="text_pole"></select>
         <label class="checkbox_label">
             <input id="search_tools_include_world_info_with_preset" type="checkbox" />

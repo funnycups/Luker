@@ -8,6 +8,7 @@ import { Popup } from '../../popup.js';
 import { escapeHtml } from '../../utils.js';
 import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import { cloneJsonValue, isPlainObject } from '../json-state-journal.js';
+import { renderPresetHelpButton } from '../preset-help.js';
 import { openCpaIterationStudio } from './cpa-iteration/studio.js';
 import {
     buildBaseSystemPrompt,
@@ -470,7 +471,7 @@ function ensureUi(context = getContext()) {
                 <div id="${CREATE_BUTTON_ID}" class="menu_button">${escapeHtml(i18n('Create New Preset'))}</div>
             </div>
             <div class="cpa_hint">${escapeHtml(i18n('Character-bound runtime presets are not directly editable.'))}</div>
-            <label for="cpa_request_llm_preset">${escapeHtml(i18n('Iteration AI prompt preset (params + prompt)'))}</label>
+            <label for="cpa_request_llm_preset">${escapeHtml(i18n('Iteration AI prompt preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'iteration', targetSelectId: 'cpa_request_llm_preset' })}</label>
             <select id="cpa_request_llm_preset" class="text_pole"></select>
             <label for="cpa_request_api_preset">${escapeHtml(i18n('Iteration AI API preset (Connection profile)'))}</label>
             <select id="cpa_request_api_preset" class="text_pole"></select>
