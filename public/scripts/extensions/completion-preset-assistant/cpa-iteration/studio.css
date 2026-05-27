@@ -210,6 +210,43 @@
     color: inherit;
 }
 
+.cpa_it_help {
+    flex: 0 0 auto;
+    padding: 0;
+    width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: inherit;
+    opacity: var(--it-text-muted);
+    cursor: help;
+    border-radius: 50%;
+    transition: opacity var(--it-motion-fast), color var(--it-motion-fast);
+}
+
+.cpa_it_help:hover,
+.cpa_it_help:focus-visible {
+    opacity: 1;
+    color: var(--it-accent-primary);
+    outline: none;
+}
+
+.cpa_it_help i {
+    font-size: 0.95em;
+}
+
+.cpa_it_help_body p,
+.cpa_it_help_body ul {
+    margin: var(--it-space-xs) 0;
+}
+
+.cpa_it_help_body ul {
+    padding-left: var(--it-space-lg);
+}
+
 .cpa_it_reference_select,
 .cpa_it_mode_select {
     flex: 1 1 auto;

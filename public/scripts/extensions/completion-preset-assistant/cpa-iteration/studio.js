@@ -340,6 +340,7 @@ function buildPopupHtml({
     sendLabel,
     composerPlaceholder,
     referenceLabel,
+    referenceHelpLabel,
     noneLabel,
     modeLabel,
     modeOptions,
@@ -375,6 +376,9 @@ function buildPopupHtml({
     <div class="cpa_it_toolbar">
         <label class="cpa_it_toolbar_label">
             <span class="cpa_it_toolbar_label_text">${escapeHtmlLocal(referenceLabel)}</span>
+            <button type="button" class="cpa_it_help" data-cpa-it-action="help-reference" title="${escapeHtmlLocal(referenceHelpLabel)}" aria-label="${escapeHtmlLocal(referenceHelpLabel)}">
+                <i class="fa-solid fa-circle-question"></i>
+            </button>
             <select class="cpa_it_reference_select" data-cpa-it-action="reference-change">
                 <option value="">${escapeHtmlLocal(noneLabel)}</option>
             </select>
@@ -1871,6 +1875,7 @@ export async function openCpaIterationStudio(deps) {
         sendLabel: t('Send'),
         composerPlaceholder: t('Describe what to change in the preset...'),
         referenceLabel: t('Reference preset:'),
+        referenceHelpLabel: t('What is a reference preset?'),
         noneLabel: t('(none)'),
         modeLabel: t('Editing mode:'),
         modeOptions,
@@ -1988,6 +1993,28 @@ export async function openCpaIterationStudio(deps) {
     $root.on('click.cpaIt', '[data-cpa-it-action="new-session"]', async (e) => {
         e.preventDefault();
         await startNewSession();
+    });
+    $root.on('click.cpaIt', '[data-cpa-it-action="help-reference"]', async (e) => {
+        // Sits inside the reference `<label>`; without preventDefault the label
+        // delegation also opens the `<select>` dropdown behind the help popup.
+        e.preventDefault();
+        e.stopPropagation();
+        const helpHtml = `
+            <div class="cpa_it_help_body">
+                <p>${escapeHtmlLocal(t('A reference preset is a separate preset you pick as a comparison baseline. The AI can:'))}</p>
+                <ul>
+                    <li>${escapeHtmlLocal(t('Read its fields (prompts, sampler settings, etc.) as context.'))}</li>
+                    <li>${escapeHtmlLocal(t('Diff your target preset against it to spot differences.'))}</li>
+                    <li>${escapeHtmlLocal(t('Copy specific fields from it into your target preset.'))}</li>
+                </ul>
+                <p>${escapeHtmlLocal(t('You can merge the strengths of different presets, carrying one preset\'s ideas and content into another.'))}</p>
+                <p>${escapeHtmlLocal(t('Pick "(none)" to skip — the AI will edit your target preset alone.'))}</p>
+            </div>`;
+        const helpPopup = new Popup(helpHtml, POPUP_TYPE.TEXT, '', {
+            okButton: t('Got it'),
+            cancelButton: false,
+        });
+        await helpPopup.show();
     });
     // Q9: clear-history lives inside the <details>; same delegation root.
     $root.on('click.cpaIt', '[data-cpa-it-action="clear-history"]', async (e) => {
