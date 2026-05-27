@@ -43,6 +43,25 @@ async function loadMacroAutoCompleteHelpers() {
     return macroAutoCompleteHelpersPromise ??= import('../autocomplete/MacroAutoCompleteHelper.js');
 }
 
+// Sticky-regex cache for testSymbol() — the hot path runs per character
+// against text up to chat-size, so building a fresh RegExp object every
+// call was a measurable allocator cost. Sticky (`y`) flag anchors the
+// match at `lastIndex` without copying the tail through .slice().
+// Keyed by source so identically-shaped literal regexes share one entry.
+const STICKY_REGEX_CACHE = new Map();
+function getStickyRegex(regex) {
+    const source = regex.source;
+    let cached = STICKY_REGEX_CACHE.get(source);
+    if (!cached) {
+        // Drop g/y from the caller's flags (sticky semantics replace both),
+        // keep the rest (i/m/s/u) so character classes etc. behave the same.
+        const flags = (regex.flags || '').replace(/[gy]/g, '') + 'y';
+        cached = new RegExp(source, flags);
+        STICKY_REGEX_CACHE.set(source, cached);
+    }
+    return cached;
+}
+
 export class SlashCommandParser {
     /** @type {Object.<string, SlashCommand>} */ static commands = {};
 
@@ -140,7 +159,19 @@ export class SlashCommandParser {
         return this.text[this.index];
     }
     get endOfText() {
-        return this.index >= this.text.length || (/\s/.test(this.char) && /^\s+$/.test(this.ahead));
+        const len = this.text.length;
+        if (this.index >= len) return true;
+        // Equivalent to `/\s/.test(this.char) && /^\s+$/.test(this.ahead)`
+        // without the O(len - index) `.ahead` slice. The /^\s+$/ test
+        // requires at least one whitespace char in `ahead`, i.e. a non-empty
+        // suffix after this.index. Preserve that: if index is at the last
+        // char, ahead would be empty and /^\s+$/ would fail — return false.
+        // Otherwise every char from this.index onward must be whitespace.
+        if (this.index + 1 >= len) return false;
+        for (let i = this.index; i < len; i++) {
+            if (!/\s/.test(this.text[i])) return false;
+        }
+        return true;
     }
 
 
@@ -603,12 +634,26 @@ export class SlashCommandParser {
         // -> TOAST: *:}* {:
         // -> TOAST: *{:* :}
         const escapeOffset = this.jumpedEscapeSequence ? -1 : 0;
-        const escapes = this.text.slice(this.index + offset + escapeOffset).replace(/^(\\*).*$/s, '$1').length;
-        const test = (sequence instanceof RegExp) ?
-            (text) => new RegExp(`^${sequence.source}`).test(text) :
-            (text) => text.startsWith(sequence)
-        ;
-        if (test(this.text.slice(this.index + offset + escapeOffset + escapes))) {
+        // Count consecutive leading backslashes from start without slicing
+        // the rest of the document. The original code did
+        //   text.slice(start).replace(/^(\\*).*$/s, '$1').length
+        // which copies the entire remainder of `text` on every call and
+        // makes the parser O(N²) over long argument strings. Linear scan
+        // of just the run of '\' is equivalent and runs in O(escapes),
+        // which is ~0–2 in practice.
+        const start = this.index + offset + escapeOffset;
+        const len = this.text.length;
+        let escapes = 0;
+        if (start >= 0) {
+            while (start + escapes < len && this.text.charCodeAt(start + escapes) === 0x5C /* '\\' */) {
+                escapes++;
+            }
+        }
+        const matchAt = start + escapes;
+        const matched = (sequence instanceof RegExp)
+            ? this.#testStickyRegexAt(sequence, matchAt)
+            : (matchAt >= 0 && this.text.startsWith(sequence, matchAt));
+        if (matched) {
             // no backslashes before sequence
             //   -> sequence found
             if (escapes == 0) return true;
@@ -629,12 +674,13 @@ export class SlashCommandParser {
 
     testSymbolLooseyGoosey(sequence, offset = 0) {
         const escapeOffset = this.jumpedEscapeSequence ? -1 : 0;
-        const escapes = this.text[this.index + offset + escapeOffset] == '\\' ? 1 : 0;
-        const test = (sequence instanceof RegExp) ?
-            (text) => new RegExp(`^${sequence.source}`).test(text) :
-            (text) => text.startsWith(sequence)
-        ;
-        if (test(this.text.slice(this.index + offset + escapeOffset + escapes))) {
+        const start = this.index + offset + escapeOffset;
+        const escapes = (start >= 0 && start < this.text.length && this.text.charCodeAt(start) === 0x5C /* '\\' */) ? 1 : 0;
+        const matchAt = start + escapes;
+        const matched = (sequence instanceof RegExp)
+            ? this.#testStickyRegexAt(sequence, matchAt)
+            : (matchAt >= 0 && this.text.startsWith(sequence, matchAt));
+        if (matched) {
             // no backslashes before sequence
             //   -> sequence found
             if (escapes == 0) return true;
@@ -646,6 +692,21 @@ export class SlashCommandParser {
             }
             return false;
         }
+    }
+
+    /**
+     * Sticky-regex match at `at` against this.text without copying the
+     * tail. Replaces `new RegExp('^' + source).test(text.slice(at))` —
+     * which copies O(text.length) bytes per call — with a cached
+     * RegExp using the `y` flag and `lastIndex = at`, which V8 matches
+     * in place. Returns false on negative / out-of-bounds indices to
+     * match the slice-based fallback's behavior for empty inputs.
+     */
+    #testStickyRegexAt(regex, at) {
+        if (at < 0 || at > this.text.length) return false;
+        const sticky = getStickyRegex(regex);
+        sticky.lastIndex = at;
+        return sticky.test(this.text);
     }
 
     replaceGetvar(value) {
@@ -983,16 +1044,23 @@ export class SlashCommandParser {
      * @returns {boolean} True if inside unclosed macro braces.
      */
     isInsideMacroBraces() {
-        const textBehind = this.behind;
+        // Scan the text up to the current index to track macro brace depth.
+        // Previously this read `this.behind` which itself does `text.slice(0, index)`
+        // — an O(N) copy on every call. Each pipe character triggers one call,
+        // so a single long command with many `|` separators became O(N²).
+        // Iterating directly over this.text avoids the copy without changing
+        // semantics; the loop bound stops at this.index.
+        const limit = this.index;
+        const text = this.text;
         let depth = 0;
 
-        // Scan through the text to track macro brace depth
-        for (let i = 0; i < textBehind.length; i++) {
-            if (textBehind[i] === '{' && textBehind[i + 1] === '{') {
+        for (let i = 0; i < limit; i++) {
+            const ch = text.charCodeAt(i);
+            if (ch === 0x7B /* '{' */ && i + 1 < limit && text.charCodeAt(i + 1) === 0x7B) {
                 depth++;
                 i++; // Skip the second {
-            } else if (textBehind[i] === '}' && textBehind[i + 1] === '}') {
-                depth = Math.max(0, depth - 1);
+            } else if (ch === 0x7D /* '}' */ && i + 1 < limit && text.charCodeAt(i + 1) === 0x7D) {
+                if (depth > 0) depth--;
                 i++; // Skip the second }
             }
         }
@@ -1019,7 +1087,19 @@ export class SlashCommandParser {
             this.discardWhitespace();
         }
         this.discardWhitespace();
-        cmd.startUnnamedArgs = this.index - (/\s(\s*)$/s.exec(this.behind)?.[1]?.length ?? 0);
+        // Equivalent to:
+        //   cmd.startUnnamedArgs = this.index - (/\s(\s*)$/s.exec(this.behind)?.[1]?.length ?? 0);
+        // The regex captures all-but-the-first trailing whitespace char of
+        // this.behind (= text[0..index-1]). Counting that directly avoids
+        // the O(index) slice that `this.behind` does on every command.
+        let trailingWs = 0;
+        for (let i = this.index - 1; i >= 0; i--) {
+            if (/\s/.test(this.text[i])) trailingWs++;
+            else break;
+        }
+        // We want all-but-the-first trailing whitespace, matching the
+        // original regex which required at least one \s before the capture.
+        cmd.startUnnamedArgs = this.index - (trailingWs > 0 ? trailingWs - 1 : 0);
         cmd.endUnnamedArgs = this.index;
         if (this.testUnnamedArgument()) {
             const rawQuotesArg = cmd?.namedArgumentList?.find(a => a.name === 'raw');
@@ -1056,7 +1136,28 @@ export class SlashCommandParser {
     }
 
     testNamedArgument() {
-        return /^(\w+)=/.test(`${this.char}${this.ahead}`);
+        // Equivalent to /^(\w+)=/.test(`${this.char}${this.ahead}`) but
+        // without allocating the concatenated string (which is O(rest of
+        // text) per call). \w is the ASCII subset [A-Za-z0-9_]; we scan
+        // forward until the first non-word character and require it to be
+        // '=' with at least one preceding word char.
+        const text = this.text;
+        const len = text.length;
+        let i = this.index;
+        const start = i;
+        while (i < len) {
+            const c = text.charCodeAt(i);
+            // [0-9] | [A-Z] | _ | [a-z]
+            if ((c >= 0x30 && c <= 0x39)
+                || (c >= 0x41 && c <= 0x5A)
+                || c === 0x5F
+                || (c >= 0x61 && c <= 0x7A)) {
+                i++;
+            } else {
+                break;
+            }
+        }
+        return i > start && i < len && text.charCodeAt(i) === 0x3D /* '=' */;
     }
     parseNamedArgument() {
         let assignment = new SlashCommandNamedArgumentAssignment();
