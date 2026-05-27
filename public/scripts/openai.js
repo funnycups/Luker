@@ -83,9 +83,10 @@ import { saveLogprobsForActiveMessage } from './logprobs.js';
 import { persistPreset } from './preset-persistence.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
-import { ARGUMENT_TYPE, SlashCommandArgument } from './slash-commands/SlashCommandArgument.js';
+import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from './slash-commands/SlashCommandArgument.js';
 import { renderTemplateAsync } from './templates.js';
 import { SlashCommandEnumValue } from './slash-commands/SlashCommandEnumValue.js';
+import { commonEnumProviders } from './slash-commands/SlashCommandCommonEnumsProvider.js';
 import { callGenericPopup, Popup, POPUP_RESULT, POPUP_TYPE } from './popup.js';
 import { t } from './i18n.js';
 import { ToolManager } from './tool-calling.js';
@@ -9035,7 +9036,7 @@ function registerConnectionProfileAdditionalParameterSlashCommands() {
     // kebab-case profile keys back into oai_settings when a profile is loaded.
     // Without the registration the profile field exists but never reaches
     // generate_data on the request path.
-    const registerCacheBooleanCommand = (commandName, settingKey, label, help) => {
+    const registerCacheBooleanCommand = (commandName, settingKey, label, help, syncSelector = '') => {
         SlashCommandParser.addCommandObject(SlashCommand.fromProps({
             name: commandName,
             callback: (args, value) => {
@@ -9044,6 +9045,9 @@ function registerConnectionProfileAdditionalParameterSlashCommands() {
                     return String(Boolean(oai_settings[settingKey]));
                 }
                 oai_settings[settingKey] = parseBooleanValue(value);
+                if (syncSelector) {
+                    $(syncSelector).prop('checked', Boolean(oai_settings[settingKey]));
+                }
                 saveSettingsDebounced();
                 return String(Boolean(oai_settings[settingKey]));
             },
@@ -9102,6 +9106,115 @@ function registerConnectionProfileAdditionalParameterSlashCommands() {
             }),
         ],
         helpString: t`Sets Claude caching-at-depth (-1 to disable). Gets current value if no argument is provided.`,
+    }));
+
+    // OpenRouter per-source knobs. Without a slash command they have no
+    // hook into connection-manager's per-profile snapshot/apply pipeline,
+    // so they end up sharing a single global value across profiles.
+    const registerOpenRouterListCommand = (commandName, settingKey, selector, onAfterApply, label, help) => {
+        SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+            name: commandName,
+            callback: (args, value) => {
+                const forceApply = String(args?.force || '').toLowerCase() === 'true';
+                const raw = String(value ?? '').trim();
+                if (!raw && !forceApply) {
+                    return JSON.stringify(Array.isArray(oai_settings[settingKey]) ? oai_settings[settingKey] : []);
+                }
+                const parsed = raw ? (() => { try { return JSON.parse(raw); } catch { return null; } })() : [];
+                if (!Array.isArray(parsed)) {
+                    throw new Error(t`Value must be a JSON-serialized array of strings.`);
+                }
+                const normalized = parsed.map(item => String(item));
+                oai_settings[settingKey] = normalized;
+                $(selector).val(normalized).trigger('change');
+                if (typeof onAfterApply === 'function') {
+                    onAfterApply();
+                }
+                saveSettingsDebounced();
+                return JSON.stringify(oai_settings[settingKey]);
+            },
+            returns: label,
+            namedArgumentList: [
+                SlashCommandNamedArgument.fromProps({
+                    name: 'force',
+                    description: t`force set an empty value`,
+                    typeList: [ARGUMENT_TYPE.BOOLEAN],
+                    defaultValue: 'false',
+                    enumList: commonEnumProviders.boolean('trueFalse')(),
+                }),
+            ],
+            unnamedArgumentList: [
+                SlashCommandArgument.fromProps({
+                    description: t`JSON-encoded list`,
+                    typeList: [ARGUMENT_TYPE.LIST, ARGUMENT_TYPE.STRING],
+                    isRequired: false,
+                }),
+            ],
+            helpString: help,
+        }));
+    };
+
+    registerOpenRouterListCommand(
+        'openrouter-providers',
+        'openrouter_providers',
+        '#openrouter_providers_chat',
+        () => updateOpenRouterProvidersWarning('#openrouter_providers_chat'),
+        t`OpenRouter provider allowlist`,
+        t`Sets the OpenRouter Model Providers allowlist (JSON-encoded array). Gets the current list if no value is provided.`,
+    );
+
+    registerOpenRouterListCommand(
+        'openrouter-quantizations',
+        'openrouter_quantizations',
+        '#openrouter_quantizations_chat',
+        null,
+        t`OpenRouter quantization allowlist`,
+        t`Sets the OpenRouter Model Quantizations allowlist (JSON-encoded array). Gets the current list if no value is provided.`,
+    );
+
+    registerCacheBooleanCommand(
+        'openrouter-allow-fallbacks',
+        'openrouter_allow_fallbacks',
+        t`OpenRouter allow fallback providers state`,
+        t`Sets OpenRouter "Allow fallback providers" on/off. Gets current value if no argument is provided.`,
+        '#openrouter_allow_fallbacks',
+    );
+
+    registerCacheBooleanCommand(
+        'openrouter-use-fallback',
+        'openrouter_use_fallback',
+        t`OpenRouter allow fallback models state`,
+        t`Sets OpenRouter "Allow fallback models" on/off. Gets current value if no argument is provided.`,
+        '#openrouter_use_fallback',
+    );
+
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'openrouter-middleout',
+        callback: (args, value) => {
+            const forceApply = String(args?.force || '').toLowerCase() === 'true';
+            const raw = String(value ?? '').trim().toLowerCase();
+            if (!raw && !forceApply) {
+                return String(oai_settings.openrouter_middleout || openrouter_middleout_types.ON);
+            }
+            const allowed = Object.values(openrouter_middleout_types);
+            if (!allowed.includes(raw)) {
+                throw new Error(t`Value must be one of: ${allowed.join(', ')}.`);
+            }
+            oai_settings.openrouter_middleout = raw;
+            $('#openrouter_middleout').val(raw).trigger('change');
+            saveSettingsDebounced();
+            return String(oai_settings.openrouter_middleout);
+        },
+        returns: t`OpenRouter middle-out transform mode`,
+        unnamedArgumentList: [
+            SlashCommandArgument.fromProps({
+                description: t`auto | on | off`,
+                typeList: [ARGUMENT_TYPE.STRING],
+                isRequired: false,
+                enumList: Object.values(openrouter_middleout_types).map(v => new SlashCommandEnumValue(v)),
+            }),
+        ],
+        helpString: t`Sets the OpenRouter Middle-out transform mode. Gets current value if no argument is provided.`,
     }));
 }
 

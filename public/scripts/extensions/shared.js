@@ -38,6 +38,22 @@ function parseProfileInteger(value) {
     return Math.min(Math.max(Math.round(numeric), 1), 10);
 }
 
+function parseProfileStringList(value) {
+    if (Array.isArray(value)) {
+        return value.map(item => String(item));
+    }
+    const raw = String(value ?? '').trim();
+    if (!raw) {
+        return [];
+    }
+    try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed.map(item => String(item)) : null;
+    } catch {
+        return null;
+    }
+}
+
 /**
  * Generates a caption for an image using a multimodal model.
  * @param {string} base64Img Base64 encoded image
@@ -481,6 +497,18 @@ export class ConnectionManagerRequestService {
                         ? (claudeCachingAtDepthRaw < 0 ? -1 : claudeCachingAtDepthRaw)
                         : null;
                     const geminiEnableSystemPromptCache = parseProfileBoolean(profile['gemini-enable-system-prompt-cache']);
+                    const openrouterProviders = Object.hasOwn(profile, 'openrouter-providers')
+                        ? parseProfileStringList(profile['openrouter-providers'])
+                        : null;
+                    const openrouterQuantizations = Object.hasOwn(profile, 'openrouter-quantizations')
+                        ? parseProfileStringList(profile['openrouter-quantizations'])
+                        : null;
+                    const openrouterAllowFallbacks = parseProfileBoolean(profile['openrouter-allow-fallbacks']);
+                    const openrouterUseFallback = parseProfileBoolean(profile['openrouter-use-fallback']);
+                    const openrouterMiddleoutRaw = String(profile['openrouter-middleout'] ?? '').trim().toLowerCase();
+                    const openrouterMiddleout = ['auto', 'on', 'off'].includes(openrouterMiddleoutRaw)
+                        ? openrouterMiddleoutRaw
+                        : null;
 
                     const messages = Array.isArray(prompt) ? prompt : [{ role: 'user', content: prompt }];
                     return await context.ChatCompletionService.processRequest({
@@ -506,6 +534,11 @@ export class ConnectionManagerRequestService {
                         ...(claudeExtendedTtl !== null ? { claude_extended_ttl: claudeExtendedTtl } : {}),
                         ...(claudeCachingAtDepth !== null ? { claude_caching_at_depth: claudeCachingAtDepth } : {}),
                         ...(geminiEnableSystemPromptCache !== null ? { gemini_enable_system_prompt_cache: geminiEnableSystemPromptCache } : {}),
+                        ...(openrouterProviders !== null ? { provider: openrouterProviders } : {}),
+                        ...(openrouterQuantizations !== null ? { quantizations: openrouterQuantizations } : {}),
+                        ...(openrouterAllowFallbacks !== null ? { allow_fallbacks: openrouterAllowFallbacks } : {}),
+                        ...(openrouterUseFallback !== null ? { use_fallback: openrouterUseFallback } : {}),
+                        ...(openrouterMiddleout !== null ? { middleout: openrouterMiddleout } : {}),
                         ...overridePayload,
                     }, {
                         presetName: includePreset ? profile.preset : undefined,

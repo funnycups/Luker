@@ -157,6 +157,22 @@ function parseProfileInteger(value) {
     return Math.min(Math.max(Math.round(numeric), 1), 10);
 }
 
+function parseProfileStringList(value) {
+    if (Array.isArray(value)) {
+        return value.map(item => String(item));
+    }
+    const raw = String(value ?? '').trim();
+    if (!raw) {
+        return [];
+    }
+    try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed.map(item => String(item)) : null;
+    } catch {
+        return null;
+    }
+}
+
 function buildApiSettingsOverrideFromProfile(profile, fallbackSource = '') {
     if (!profile) {
         return null;
@@ -245,6 +261,41 @@ function buildApiSettingsOverrideFromProfile(profile, fallbackSource = '') {
         const value = parseProfileBoolean(profile['gemini-enable-system-prompt-cache']);
         if (value !== null) {
             overrides.gemini_enable_system_prompt_cache = value;
+        }
+    }
+
+    if (Object.hasOwn(profile, 'openrouter-providers')) {
+        const parsed = parseProfileStringList(profile['openrouter-providers']);
+        if (parsed !== null) {
+            overrides.openrouter_providers = parsed;
+        }
+    }
+
+    if (Object.hasOwn(profile, 'openrouter-quantizations')) {
+        const parsed = parseProfileStringList(profile['openrouter-quantizations']);
+        if (parsed !== null) {
+            overrides.openrouter_quantizations = parsed;
+        }
+    }
+
+    if (Object.hasOwn(profile, 'openrouter-allow-fallbacks')) {
+        const value = parseProfileBoolean(profile['openrouter-allow-fallbacks']);
+        if (value !== null) {
+            overrides.openrouter_allow_fallbacks = value;
+        }
+    }
+
+    if (Object.hasOwn(profile, 'openrouter-use-fallback')) {
+        const value = parseProfileBoolean(profile['openrouter-use-fallback']);
+        if (value !== null) {
+            overrides.openrouter_use_fallback = value;
+        }
+    }
+
+    if (Object.hasOwn(profile, 'openrouter-middleout')) {
+        const raw = String(profile['openrouter-middleout'] ?? '').trim().toLowerCase();
+        if (['auto', 'on', 'off'].includes(raw)) {
+            overrides.openrouter_middleout = raw;
         }
     }
 
