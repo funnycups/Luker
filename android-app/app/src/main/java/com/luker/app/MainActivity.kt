@@ -803,6 +803,76 @@ class MainActivity : AppCompatActivity() {
                 applyImmersiveMode(enabled)
             }
         }
+
+        @JavascriptInterface
+        fun setSystemBarsColor(statusBarColor: String?, navigationBarColor: String?) {
+            val parsedStatus = parseCssColor(statusBarColor)
+            val parsedNavigation = parseCssColor(navigationBarColor) ?: parsedStatus
+            if (parsedStatus == null && parsedNavigation == null) {
+                return
+            }
+            runOnUiThread {
+                applySystemBarsColor(parsedStatus, parsedNavigation)
+            }
+        }
+    }
+
+    private var lastAppliedStatusBarColor: Int? = null
+    private var lastAppliedNavigationBarColor: Int? = null
+
+    private fun applySystemBarsColor(statusBarColor: Int?, navigationBarColor: Int?) {
+        val opaqueStatus = statusBarColor?.let { it or 0xFF000000.toInt() }
+        val opaqueNavigation = navigationBarColor?.let { it or 0xFF000000.toInt() }
+        opaqueStatus?.let { lastAppliedStatusBarColor = it }
+        opaqueNavigation?.let { lastAppliedNavigationBarColor = it }
+        if (immersiveModeEnabled) {
+            return
+        }
+        opaqueStatus?.let { window.statusBarColor = it }
+        opaqueNavigation?.let { window.navigationBarColor = it }
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        opaqueStatus?.let { controller.isAppearanceLightStatusBars = isLightColor(it) }
+        opaqueNavigation?.let { controller.isAppearanceLightNavigationBars = isLightColor(it) }
+    }
+
+    private fun reapplyLastSystemBarsColor() {
+        if (lastAppliedStatusBarColor == null && lastAppliedNavigationBarColor == null) {
+            return
+        }
+        applySystemBarsColor(lastAppliedStatusBarColor, lastAppliedNavigationBarColor)
+    }
+
+    private fun isLightColor(color: Int): Boolean {
+        val r = ((color shr 16) and 0xFF) / 255.0
+        val g = ((color shr 8) and 0xFF) / 255.0
+        val b = (color and 0xFF) / 255.0
+        val luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        return luma > 0.6
+    }
+
+    private fun parseCssColor(raw: String?): Int? {
+        val trimmed = raw?.trim().orEmpty()
+        if (trimmed.isEmpty()) return null
+
+        if (trimmed.startsWith("#")) {
+            return runCatching { android.graphics.Color.parseColor(trimmed) }.getOrNull()
+        }
+
+        val rgbaMatch = Regex(
+            "^rgba?\\(\\s*(\\d+)[ ,]+(\\d+)[ ,]+(\\d+)(?:[ ,/]+([0-9]*\\.?[0-9]+%?))?\\s*\\)$",
+            RegexOption.IGNORE_CASE,
+        ).matchEntire(trimmed) ?: return null
+
+        val r = rgbaMatch.groupValues[1].toIntOrNull()?.coerceIn(0, 255) ?: return null
+        val g = rgbaMatch.groupValues[2].toIntOrNull()?.coerceIn(0, 255) ?: return null
+        val b = rgbaMatch.groupValues[3].toIntOrNull()?.coerceIn(0, 255) ?: return null
+        val alphaRaw = rgbaMatch.groupValues.getOrNull(4)?.takeIf { it.isNotEmpty() }
+        val alpha = when {
+            alphaRaw == null -> 255
+            alphaRaw.endsWith("%") -> ((alphaRaw.removeSuffix("%").toDoubleOrNull() ?: 100.0) / 100.0 * 255.0).toInt().coerceIn(0, 255)
+            else -> ((alphaRaw.toDoubleOrNull() ?: 1.0) * 255.0).toInt().coerceIn(0, 255)
+        }
+        return (alpha shl 24) or (r shl 16) or (g shl 8) or b
     }
 
     private fun showCustomFullscreenView(view: View, callback: WebChromeClient.CustomViewCallback?) {
@@ -870,6 +940,7 @@ class MainActivity : AppCompatActivity() {
             controller.hide(WindowInsetsCompat.Type.systemBars())
         } else {
             controller.show(WindowInsetsCompat.Type.systemBars())
+            reapplyLastSystemBarsColor()
         }
         window.decorView.post {
             ViewCompat.requestApplyInsets(window.decorView)

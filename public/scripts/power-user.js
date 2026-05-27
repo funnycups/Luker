@@ -447,6 +447,27 @@ function canUseAndroidBridgeProgressNotifications() {
         && typeof window.LukerAndroid.clearMessageProgressNotification === 'function';
 }
 
+function canUseAndroidSystemBarsColorBridge() {
+    return typeof window !== 'undefined'
+        && typeof window.LukerAndroid === 'object'
+        && typeof window.LukerAndroid.setSystemBarsColor === 'function';
+}
+
+function syncAndroidSystemBarsColor() {
+    if (!canUseAndroidSystemBarsColorBridge()) {
+        return;
+    }
+    const statusBarColor = power_user.blur_tint_color;
+    if (!statusBarColor) {
+        return;
+    }
+    try {
+        window.LukerAndroid.setSystemBarsColor(statusBarColor, statusBarColor);
+    } catch (error) {
+        console.warn('Failed to sync Android system bars color via bridge', error);
+    }
+}
+
 function shouldSuppressBackgroundNotification() {
     return browser_has_focus && document.visibilityState === 'visible';
 }
@@ -1443,6 +1464,7 @@ function applyThemeColor(type) {
         let metaThemeColor = document.querySelector('meta[name=theme-color]');
         document.documentElement.style.setProperty('--SmartThemeBlurTintColor', power_user.blur_tint_color);
         metaThemeColor.setAttribute('content', power_user.blur_tint_color);
+        syncAndroidSystemBarsColor();
     }
     if (type === 'chatTint') {
         document.documentElement.style.setProperty('--SmartThemeChatTintColor', power_user.chat_tint_color);
@@ -1794,6 +1816,7 @@ export function applyPowerUserSettings() {
     switchUiMode();
     applyFontScale('forced');
     applyThemeColor();
+    syncAndroidSystemBarsColor();
     applyChatWidth('forced');
     applyAvatarStyle();
     applyBlurStrength();
