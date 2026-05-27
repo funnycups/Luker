@@ -2027,6 +2027,7 @@
     .popup .luker-iter-workspace-grid {
         grid-template-columns: minmax(0, 1fr);
         grid-auto-rows: auto;
+        min-height: 0;
     }
     .popup .luker-iter-workspace-resizer {
         display: none;
@@ -2064,5 +2065,18 @@
     .popup .luker-iter-workspace[data-iter-active-tab="preview"] details.orch_it_history,
     .popup .luker-iter-workspace[data-iter-active-tab="preview"] .cpa_it_toolbar {
         display: none;
+    }
+
+    /* Mobile composer-clip prevention: in the collapsed (single-column)
+       grid, the chat pane's row often ends up shorter than its content
+       (per-popup `.xxx_messages { min-height: 260 }` + composer ≈ 180).
+       Default `overflow: hidden` on the chat pane would clip the composer
+       at the bottom with no signal for popup-content's `overflow-y: auto`
+       to scroll — leaving Send unreachable. `overflow: visible` lets the
+       residual overflow propagate so popup-content scrolls it into view.
+       Messages keeps its `min-height: 260` + `overflow-y: auto`, so the
+       in-bubble scroll + auto-scroll-to-bottom on new turns still work. */
+    .popup .luker-iter-workspace-chat {
+        overflow: visible;
     }
 }
