@@ -175,7 +175,7 @@ export async function getVersion() {
         // suppress exception
     }
 
-    const stCompatVersion = String(process.env.LUKER_ST_COMPAT_VERSION || '1.15.0').trim() || '1.15.0';
+    const stCompatVersion = String(process.env.LUKER_ST_COMPAT_VERSION || '1.18.0').trim() || '1.18.0';
     const agent = `Luker:${pkgVersion}:Cohee#1207`;
     const compatAgent = `Luker:${stCompatVersion}:Cohee#1207`;
     const isDockerRuntime = isDocker();
