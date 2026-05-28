@@ -97,6 +97,7 @@ import {
     clearCachedMeta,
     seqToFloor,
     activeSwipeIdAtFloor,
+    resolveInFlightAnchor,
 } from './persistence.js';
 import {
     LEVEL,
@@ -2242,13 +2243,30 @@ export function resolveChatKeyForSession(context, targetHint = null) {
  *   5. Best-effort UI refresh — `refreshUiStats` early-returns when the
  *      popup isn't mounted, so this is safe in headless contexts.
  */
-export async function commitSessionMutation(context, chatKey, store) {
+export async function commitSessionMutation(context, chatKey, beforeStore, afterStore) {
     const key = String(chatKey || '').trim();
+    const store = afterStore;
     if (!key || !store || typeof store !== 'object') return;
     memoryStoreCache.set(key, store);
     clearRollbackHistory(key);
-    const seq = getStoreCoveredSeqTo(store);
-    await replacePersistedGraphWithStore(context, key, store, seq);
+
+    const anchor = resolveInFlightAnchor(context);
+    if (anchor !== null) {
+        // Diff-mode: append one incremental commit at the in-flight floor.
+        // commitMemoryStoreDiffByChatKey resolves floor via seqToFloor(turnSeq)
+        // and runs fs.update(reducer, { floor }) so the commit lands on the
+        // chat tail's slot — tail-truncation on MESSAGE_DELETED removes it.
+        await commitMemoryStoreDiffByChatKey(
+            context, key, beforeStore || store, store, anchor.turnSeq,
+            { syncPersistentProjection: false },
+        );
+    } else {
+        // Legacy replace-flush for callers without an in-flight chat tail
+        // (e.g. test fixtures, future non-orchestrator session consumers).
+        const seq = getStoreCoveredSeqTo(store);
+        await replacePersistedGraphWithStore(context, key, store, seq);
+    }
+
     try {
         await persistMemoryStoreByChatKey(context, key, store, { syncPersistentProjection: true });
     } catch (err) {

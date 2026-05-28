@@ -915,6 +915,38 @@ export function activeSwipeIdAtFloor(context, floor) {
 }
 
 /**
+ * Inspect the in-flight chat tail and return the floor + assistant-seq the
+ * currently-generating turn occupies, or null when there is no in-flight
+ * assistant slot (chat empty, or tail is a user message).
+ *
+ * Anchors memory-graph session writes (orchestrator director / loop sub-agent
+ * tool calls) so their floor-state commits land on the turn that produced them
+ * rather than on the previous turn's floor (which is what `store.seqCounter`
+ * would resolve to — extraction has not run for the in-flight turn yet).
+ *
+ * An empty / whitespace-only assistant placeholder at the tail still counts
+ * as in-flight: the slot exists, the director is writing FOR that slot, and
+ * `turnSeq` here predicts the seq the slot will occupy once extraction reaches
+ * it. `priorSeq` walks chat[0..floor-1] with `isExtractableAssistantMessage`
+ * so a non-extractable placeholder earlier in chat does not inflate the count.
+ *
+ * @param {{ chat?: any[] } | null | undefined} context
+ * @returns {{ floor: number, turnSeq: number } | null}
+ */
+export function resolveInFlightAnchor(context) {
+    const chat = Array.isArray(context?.chat) ? context.chat : null;
+    if (!chat || chat.length === 0) return null;
+    const floor = chat.length - 1;
+    const tail = chat[floor];
+    if (!tail || tail.is_user !== false) return null;
+    let priorSeq = 0;
+    for (let i = 0; i < floor; i++) {
+        if (isExtractableAssistantMessage(chat[i])) priorSeq++;
+    }
+    return { floor, turnSeq: priorSeq + 1 };
+}
+
+/**
  * True when the comparable metadata (coverage watermark, source count,
  * lastRecallTrace, lastRecallProjection) differs between two stores.
  * Used to skip no-op writes — if nothing the persistence layer cares

@@ -549,3 +549,40 @@ describe('write-api compactNodes', () => {
             .rejects.toThrow(/summary/);
     });
 });
+
+describe('write-api stamps seqTo from in-flight anchor when chat tail is an assistant slot', () => {
+    test('createNode stamps seqTo at turnSeq, not at lagging store.seqCounter', async () => {
+        const store = { nodes: {}, edges: [], seqCounter: 1, appliedSeqTo: 1, loggedSeqTo: 1, nodeSeq: 0 };
+        const ctx = {
+            __memoryStore: store,
+            // chat shape: 2 prior assistant turns + an in-flight assistant tail
+            // priorSeq = 2 → turnSeq = 3
+            chat: [
+                { is_user: true, mes: 'u1' },
+                { is_user: false, mes: 'a1' },
+                { is_user: true, mes: 'u2' },
+                { is_user: false, mes: 'a2' },
+                { is_user: true, mes: 'u3' },
+                { is_user: false, mes: 'a3 in flight' },
+            ],
+        };
+        const api = getMemoryGraphWriteApi(store, ctx);
+        const { id } = await api.createNode({ type: 'event', title: 't', fields: { summary: 's' } });
+        expect(store.nodes[id]?.seqTo).toBe(3);
+    });
+
+    test('createNode falls back to store.seqCounter when no in-flight tail', async () => {
+        const store = { nodes: {}, edges: [], seqCounter: 5, appliedSeqTo: 5, loggedSeqTo: 5, nodeSeq: 0 };
+        const ctx = {
+            __memoryStore: store,
+            // chat tail is a user message → no in-flight anchor → fallback path
+            chat: [
+                { is_user: false, mes: 'a1' },
+                { is_user: true, mes: 'u1' },
+            ],
+        };
+        const api = getMemoryGraphWriteApi(store, ctx);
+        const { id } = await api.createNode({ type: 'event', title: 't', fields: { summary: 's' } });
+        expect(store.nodes[id]?.seqTo).toBe(5);
+    });
+});

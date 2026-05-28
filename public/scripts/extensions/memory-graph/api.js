@@ -45,9 +45,11 @@ export async function openSession(context) {
     }
     if (!store) return null;
     const read = getMemoryGraphReadApi(store, context);
+    let beforeStore = structuredClone(store);
     const write = getMemoryGraphWriteApi(store, context, {
-        onCommit: async () => {
-            await commitSessionMutation(context, chatKey, store);
+        onCommit: async (currentStore) => {
+            await commitSessionMutation(context, chatKey, beforeStore, currentStore);
+            beforeStore = structuredClone(currentStore);
         },
     });
     // Curated surface for the agent / third-party consumer. The 16 methods

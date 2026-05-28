@@ -17,6 +17,7 @@
 // semantics.
 
 import { applyExtractionOpsImpl, createRollupWithChildren } from './main.js';
+import { resolveInFlightAnchor } from './persistence.js';
 
 // Accept both the Layer-1 public shape `{ target: { id, ref }, relation, direction }`
 // (symmetric with deleteLinks and documented in extension-api/memory-graph.md)
@@ -65,8 +66,12 @@ export function getMemoryGraphWriteApi(store, context = null, { onCommit = null 
 
     function applyOne(method, op) {
         const resolved = requireStore(method);
+        const anchor = resolveInFlightAnchor(context);
+        const maxSeq = anchor !== null
+            ? anchor.turnSeq
+            : Number(resolved.seqCounter || 0);
         const result = applyExtractionOpsImpl(resolved, [op], {
-            maxSeq: Number(resolved.seqCounter || 0),
+            maxSeq,
             context,
         });
         return { store: resolved, result };
@@ -166,8 +171,12 @@ export function getMemoryGraphWriteApi(store, context = null, { onCommit = null 
             direction: direction || 'bidirectional',
         };
         const resolved = requireStore('deleteLinks');
+        const anchor = resolveInFlightAnchor(context);
+        const maxSeq = anchor !== null
+            ? anchor.turnSeq
+            : Number(resolved.seqCounter || 0);
         const beforeCount = (resolved.edges || []).length;
-        applyExtractionOpsImpl(resolved, [op], { maxSeq: Number(resolved.seqCounter || 0), context });
+        applyExtractionOpsImpl(resolved, [op], { maxSeq, context });
         const removed = beforeCount - (resolved.edges || []).length;
         if (removed > 0) await flushCommit();
         return { removed };
