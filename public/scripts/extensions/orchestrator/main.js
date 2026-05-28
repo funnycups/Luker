@@ -230,6 +230,10 @@ import {
     persistGlobalEditorFrom,
     persistGlobalLoopEditorFrom,
     persistOrchestratorCharacterExtension,
+    setCharacterAgendaOverrideEnabled,
+    setCharacterDirectorOverrideEnabled,
+    setCharacterLoopOverrideEnabled,
+    setCharacterSpecOverrideEnabled,
 } from './editor-persist.js';
 import { openOrchestratorIterationStudio } from './iter-studio/studio.js';
 
@@ -1659,6 +1663,9 @@ function renderDynamicPanels(root, context) {
     root.find('#luker_orch_profile_mode').text(
         getDisplayedScopeLabel(isSpecCharacterScope, hasSpecCharacterOverride, isOverrideEnabled),
     );
+    const specToggleVisible = isSpecCharacterScope && hasSpecCharacterOverride;
+    root.find('#luker_orch_spec_override_toggle').toggle(specToggleVisible);
+    root.find('#luker_orch_spec_override_enabled').prop('checked', isOverrideEnabled);
     root.find('#luker_orch_agenda_profile_target').text(
         activeAvatar
             ? (getCharacterDisplayNameByAvatar(context, activeAvatar) || activeAvatar)
@@ -1667,6 +1674,9 @@ function renderDynamicPanels(root, context) {
     root.find('#luker_orch_agenda_profile_mode').text(
         getDisplayedScopeLabel(isAgendaCharacterScope, hasAgendaCharacterOverride, isAgendaOverrideEnabled),
     );
+    const agendaToggleVisible = isAgendaCharacterScope && hasAgendaCharacterOverride;
+    root.find('#luker_orch_agenda_override_toggle').toggle(agendaToggleVisible);
+    root.find('#luker_orch_agenda_override_enabled').prop('checked', isAgendaOverrideEnabled);
     const loopOverride = activeAvatar ? getCharacterLoopOverrideByAvatar(context, activeAvatar) : null;
     const loopScope = getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP);
     const isLoopCharacterScope = loopScope === 'character';
@@ -1680,6 +1690,9 @@ function renderDynamicPanels(root, context) {
     root.find('#luker_orch_loop_profile_mode').text(
         getDisplayedScopeLabel(isLoopCharacterScope, hasLoopCharacterOverride, isLoopOverrideEnabled),
     );
+    const loopToggleVisible = isLoopCharacterScope && hasLoopCharacterOverride;
+    root.find('#luker_orch_loop_override_toggle').toggle(loopToggleVisible);
+    root.find('#luker_orch_loop_override_enabled').prop('checked', isLoopOverrideEnabled);
     const directorOverride = activeAvatar ? getCharacterDirectorOverrideByAvatar(context, activeAvatar) : null;
     const directorScope = getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR);
     const isDirectorCharacterScope = directorScope === 'character';
@@ -1693,6 +1706,9 @@ function renderDynamicPanels(root, context) {
     root.find('#luker_orch_director_profile_mode').text(
         getDisplayedScopeLabel(isDirectorCharacterScope, hasDirectorCharacterOverride, isDirectorOverrideEnabled),
     );
+    const directorToggleVisible = isDirectorCharacterScope && hasDirectorCharacterOverride;
+    root.find('#luker_orch_director_override_toggle').toggle(directorToggleVisible);
+    root.find('#luker_orch_director_override_enabled').prop('checked', isDirectorOverrideEnabled);
     const hasLastRun = Boolean(getLatestOrchestrationEntry(context));
     root.find('[data-luker-action="view-last-run"]').toggleClass('luker_orch_button_disabled', !hasLastRun);
     root.find('#luker_orch_last_run_state').text(buildLatestOrchestrationStateSummary(context));
@@ -5060,6 +5076,27 @@ function bindUi() {
         settings.enabled = Boolean(jQuery(this).prop('checked'));
         saveSettingsDebounced();
     });
+
+    // Per-character override toggles. Live next to the "Editing: ..." label
+    // for each mode. Each handler flips only the `enabled` field on the
+    // current card's override; runtime falls back to the global profile
+    // automatically (see getEffectiveProfile). Re-render after the write
+    // so the status label and checkbox stay in lockstep — even if the
+    // persist call returned false the panel snaps back to truth.
+    const wireOverrideToggle = (selector, setEnabled) => {
+        root.on('change.lukerOrch', selector, async function () {
+            const nextEnabled = Boolean(jQuery(this).prop('checked'));
+            const avatar = String(getCurrentAvatar(context) || '').trim();
+            if (avatar) {
+                await setEnabled(context, avatar, nextEnabled);
+            }
+            renderDynamicPanels(root, context);
+        });
+    };
+    wireOverrideToggle('#luker_orch_spec_override_enabled', setCharacterSpecOverrideEnabled);
+    wireOverrideToggle('#luker_orch_agenda_override_enabled', setCharacterAgendaOverrideEnabled);
+    wireOverrideToggle('#luker_orch_loop_override_enabled', setCharacterLoopOverrideEnabled);
+    wireOverrideToggle('#luker_orch_director_override_enabled', setCharacterDirectorOverrideEnabled);
 
     root.on('change.lukerOrch', '#luker_orch_execution_mode', function () {
         settings.executionMode = normalizeExecutionMode(jQuery(this).val());

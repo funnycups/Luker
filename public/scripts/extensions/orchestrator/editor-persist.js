@@ -298,6 +298,91 @@ export async function persistCharacterDirectorEditor(context, settings, avatar, 
     return await persistOrchestratorCharacterExtension(context, characterIndex, nextPayload);
 }
 
+/**
+ * Flip the per-character "override enabled" flag for one execution mode
+ * without disturbing the rest of the override payload.
+ *
+ * Runtime resolution (`getEffectiveProfile`) already falls back to the
+ * global profile when `<override>?.enabled` is false, so these helpers
+ * are the minimum surface needed to let the panel offer a switch
+ * alongside the "configured, currently disabled" status label: the
+ * stored spec / agenda / loop / director payload is preserved as-is
+ * for re-enabling later.
+ *
+ *   - Spec mode stores `enabled` at the override root
+ *     (`override.enabled`); the other three modes store it on their
+ *     sub-object (`override.agenda.enabled`, `override.loop.enabled`,
+ *     `override.director.enabled`).
+ *   - Returns `false` and writes nothing when the matching payload is
+ *     absent, so a stray click on a hidden control cannot synthesize
+ *     an empty record.
+ *   - Touches `updatedAt` on the affected layer only.
+ */
+async function setCharacterOverrideEnabledForMode(context, avatar, nextEnabled, {
+    hasPayload,
+    apply,
+}) {
+    const target = String(avatar || '');
+    if (!target) return false;
+    const characterIndex = getCharacterIndexByAvatar(context, target);
+    if (characterIndex < 0) return false;
+    const previous = getCharacterExtensionDataByAvatar(context, target);
+    const previousOverride = previous?.override && typeof previous.override === 'object'
+        ? previous.override
+        : null;
+    if (!previousOverride || !hasPayload(previousOverride)) return false;
+    const nextOverride = structuredClone(previousOverride);
+    apply(nextOverride, Boolean(nextEnabled));
+    const nextPayload = {
+        ...previous,
+        override: normalizeCharacterOverrideMode(nextOverride),
+    };
+    return await persistOrchestratorCharacterExtension(context, characterIndex, nextPayload);
+}
+
+export async function setCharacterSpecOverrideEnabled(context, avatar, nextEnabled) {
+    return setCharacterOverrideEnabledForMode(context, avatar, nextEnabled, {
+        hasPayload: (override) =>
+            (override.spec && typeof override.spec === 'object')
+            || (override.presets && typeof override.presets === 'object')
+            || (override.presetPatch && typeof override.presetPatch === 'object'),
+        apply(override, value) {
+            override.enabled = value;
+            override.updatedAt = Date.now();
+        },
+    });
+}
+
+export async function setCharacterAgendaOverrideEnabled(context, avatar, nextEnabled) {
+    return setCharacterOverrideEnabledForMode(context, avatar, nextEnabled, {
+        hasPayload: (override) => override.agenda && typeof override.agenda === 'object',
+        apply(override, value) {
+            override.agenda.enabled = value;
+            override.agenda.updatedAt = Date.now();
+        },
+    });
+}
+
+export async function setCharacterLoopOverrideEnabled(context, avatar, nextEnabled) {
+    return setCharacterOverrideEnabledForMode(context, avatar, nextEnabled, {
+        hasPayload: (override) => override.loop && typeof override.loop === 'object',
+        apply(override, value) {
+            override.loop.enabled = value;
+            override.loop.updatedAt = Date.now();
+        },
+    });
+}
+
+export async function setCharacterDirectorOverrideEnabled(context, avatar, nextEnabled) {
+    return setCharacterOverrideEnabledForMode(context, avatar, nextEnabled, {
+        hasPayload: (override) => override.director && typeof override.director === 'object',
+        apply(override, value) {
+            override.director.enabled = value;
+            override.director.updatedAt = Date.now();
+        },
+    });
+}
+
 export async function persistOrchestratorCharacterExtension(context, characterIndex, modulePayload) {
     const id = Number(characterIndex);
     const character = Number.isInteger(id) ? context?.characters?.[id] : null;

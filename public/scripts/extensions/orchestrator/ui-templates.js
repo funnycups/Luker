@@ -935,6 +935,10 @@ export function buildOrchestratorSettingsHtml(deps) {
                 <div>
                     <small>${escapeHtml(i18n('Current card:'))} <span id="luker_orch_profile_target">${escapeHtml(i18n('(No character card)'))}</span></small><br />
                     <small>${escapeHtml(i18n('Editing:'))} <span id="luker_orch_profile_mode">${escapeHtml(i18n('Global profile'))}</span></small>
+                    <label id="luker_orch_spec_override_toggle" class="checkbox_label luker_orch_override_toggle" style="display:none;margin-top:4px" title="${escapeHtml(i18n('Off uses the global profile and keeps the override stored on the card.'))}">
+                        <input type="checkbox" id="luker_orch_spec_override_enabled" />
+                        <small>${escapeHtml(i18n('Use this card\'s override'))}</small>
+                    </label>
                 </div>
                 <div class="flex-container">
                     <div class="menu_button" data-luker-action="open-orch-editor">${escapeHtml(i18n('Open Orchestration Editor'))}</div>
@@ -950,6 +954,10 @@ export function buildOrchestratorSettingsHtml(deps) {
                 <div>
                     <small>${escapeHtml(i18n('Current card:'))} <span id="luker_orch_agenda_profile_target">${escapeHtml(i18n('(No character card)'))}</span></small><br />
                     <small>${escapeHtml(i18n('Editing:'))} <span id="luker_orch_agenda_profile_mode">${escapeHtml(i18n('Global profile'))}</span></small>
+                    <label id="luker_orch_agenda_override_toggle" class="checkbox_label luker_orch_override_toggle" style="display:none;margin-top:4px" title="${escapeHtml(i18n('Off uses the global profile and keeps the override stored on the card.'))}">
+                        <input type="checkbox" id="luker_orch_agenda_override_enabled" />
+                        <small>${escapeHtml(i18n('Use this card\'s override'))}</small>
+                    </label>
                 </div>
                 <div class="flex-container">
                     <div class="menu_button" data-luker-action="open-orch-editor">${escapeHtml(i18n('Open Orchestration Editor'))}</div>
@@ -965,6 +973,10 @@ export function buildOrchestratorSettingsHtml(deps) {
                 <div>
                     <small>${escapeHtml(i18n('Current card:'))} <span id="luker_orch_loop_profile_target">${escapeHtml(i18n('(No character card)'))}</span></small><br />
                     <small>${escapeHtml(i18n('Editing:'))} <span id="luker_orch_loop_profile_mode">${escapeHtml(i18n('Global profile'))}</span></small>
+                    <label id="luker_orch_loop_override_toggle" class="checkbox_label luker_orch_override_toggle" style="display:none;margin-top:4px" title="${escapeHtml(i18n('Off uses the global profile and keeps the override stored on the card.'))}">
+                        <input type="checkbox" id="luker_orch_loop_override_enabled" />
+                        <small>${escapeHtml(i18n('Use this card\'s override'))}</small>
+                    </label>
                 </div>
                 <div class="flex-container">
                     <div class="menu_button" data-luker-action="open-orch-editor">${escapeHtml(i18n('Open Orchestration Editor'))}</div>
@@ -979,6 +991,10 @@ export function buildOrchestratorSettingsHtml(deps) {
                 <div>
                     <small><span data-i18n="Current card:">${escapeHtml(i18n('Current card:'))}</span> <span id="luker_orch_director_profile_target" data-i18n="(No character card)">${escapeHtml(i18n('(No character card)'))}</span></small><br />
                     <small><span data-i18n="Editing:">${escapeHtml(i18n('Editing:'))}</span> <span id="luker_orch_director_profile_mode" data-i18n="Global profile">${escapeHtml(i18n('Global profile'))}</span></small>
+                    <label id="luker_orch_director_override_toggle" class="checkbox_label luker_orch_override_toggle" style="display:none;margin-top:4px" title="${escapeHtml(i18n('Off uses the global profile and keeps the override stored on the card.'))}" data-i18n="[title]Off uses the global profile and keeps the override stored on the card.">
+                        <input type="checkbox" id="luker_orch_director_override_enabled" />
+                        <small data-i18n="Use this card's override">${escapeHtml(i18n('Use this card\'s override'))}</small>
+                    </label>
                 </div>
                 <div class="flex-container">
                     <div class="menu_button" data-luker-action="open-orch-editor" data-i18n="Open Orchestration Editor">${escapeHtml(i18n('Open Orchestration Editor'))}</div>
