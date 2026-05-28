@@ -39,6 +39,46 @@ globalThis.document = globalThis.document || {
 
 const extensionSettingsMock = { memory_graph: {} };
 
+// public/lib.js pulls in a webpack-bundled file that can't be resolved under
+// jest. Stub to the bare set of exports memory-graph reaches for at import
+// time (the same shim used by mg-schema-iteration tests).
+jest.unstable_mockModule('../../public/lib.js', async () => {
+    const { default: lodash } = await import('lodash');
+    return {
+        lodash,
+        showdown: { Converter: class { makeHtml(text) { return String(text || ''); } } },
+        DOMPurify: { sanitize: (html) => html },
+    };
+});
+
+// request-compression.js does `import { gzip } from '/lib.js';` — the
+// absolute-path import doesn't resolve under jest. Memory-graph doesn't
+// directly use compression; stub the module to a harmless passthrough.
+jest.unstable_mockModule('../../public/scripts/request-compression.js', () => ({
+    compressRequest: async (req) => req,
+}));
+
+// preset-help.js → popup.js → RossAscends-mods.js → macros engine →
+// /scripts/utils.js bare-spec failure. The UI helpers it exports are only
+// reached by interactive code paths the write-api tests don't exercise.
+jest.unstable_mockModule('../../public/scripts/extensions/preset-help.js', () => ({
+    renderPresetHelpButton: () => '',
+}));
+
+// popup.js pulls the whole UI shell. Stub the parts memory-graph might
+// reach for at import time.
+jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
+    Popup: class { constructor() {} show() { return Promise.resolve(); } },
+    POPUP_TYPE: { DISPLAY: 0, INPUT: 1, CONFIRM: 2 },
+    POPUP_RESULT: { CANCELLED: 0, AFFIRMATIVE: 1 },
+}));
+
+// st-context.js is the editor shim popup.js drags in; same import-time
+// macros chain.
+jest.unstable_mockModule('../../public/scripts/st-context.js', () => ({
+    getContext: () => ({}),
+}));
+
 jest.unstable_mockModule('../../public/script.js', () => ({
     event_types: {},
     eventSource: { on: () => {}, off: () => {}, emit: () => {} },
@@ -260,6 +300,81 @@ describe('write-api editNode / deleteNode', () => {
         expect(ctx.__memoryStore.nodes[id]).toBeDefined();
         const res = await api.deleteNode({ id });
         expect(res.ok).toBe(true);
+    });
+
+    // The LLM-facing memory_node_edit tool schema does NOT include a `type`
+    // field — only node_id + set_fields/clear_fields/title. write-api's
+    // editNode therefore does not synthesize one. applyExtractionOpsImpl had
+    // a guard `targetNode.type === item.type` that silently skipped every
+    // such call (item.type === undefined → '' !== 'character_sheet' →
+    // continue → applied stays empty → ok:false with no diagnostic).
+    // This test pins the contract that a real edit from the write-api path
+    // succeeds and actually mutates the node.
+    test('editNode without an explicit op.type still applies on the addressed node', async () => {
+        const ctx = makeContext({
+            nodes: {
+                n1: {
+                    id: 'n1',
+                    type: 'character_sheet',
+                    level: 'semantic',
+                    title: 'Robin',
+                    fields: { addressing_user: 'you' },
+                    archived: false,
+                },
+            },
+            edges: [],
+            seqCounter: 0,
+            appliedSeqTo: 0,
+            loggedSeqTo: 0,
+            nodeSeq: 1,
+        });
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
+        const res = await api.editNode({
+            id: 'n1',
+            setFields: { addressing_user: 'sir' },
+        });
+        expect(res.ok).toBe(true);
+        expect(ctx.__memoryStore.nodes.n1.fields.addressing_user).toBe('sir');
+    });
+
+    test('editNode on a missing id returns ok:false with a NODE_NOT_FOUND error', async () => {
+        const ctx = makeContext();
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
+        const res = await api.editNode({ id: 'ghost', setFields: { x: 1 } });
+        expect(res.ok).toBe(false);
+        expect(res.error).toBeDefined();
+        expect(String(res.error.code || '')).toBe('NODE_NOT_FOUND');
+        expect(String(res.error.message || '')).toMatch(/ghost/);
+    });
+
+    test('editNode on an archived node returns ok:false with NODE_ARCHIVED', async () => {
+        const ctx = makeContext({
+            nodes: {
+                n1: {
+                    id: 'n1',
+                    type: 'character_sheet',
+                    level: 'semantic',
+                    title: 'old',
+                    fields: {},
+                    archived: true,
+                },
+            },
+            edges: [],
+            seqCounter: 0,
+        });
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
+        const res = await api.editNode({ id: 'n1', setFields: { x: 1 } });
+        expect(res.ok).toBe(false);
+        expect(String(res.error?.code || '')).toBe('NODE_ARCHIVED');
+    });
+
+    test('deleteNode on a missing id returns ok:false with a NODE_NOT_FOUND error', async () => {
+        const ctx = makeContext();
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
+        const res = await api.deleteNode({ id: 'ghost' });
+        expect(res.ok).toBe(false);
+        expect(res.error).toBeDefined();
+        expect(String(res.error.code || '')).toBe('NODE_NOT_FOUND');
     });
 });
 

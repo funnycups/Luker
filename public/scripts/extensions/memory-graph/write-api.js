@@ -113,16 +113,26 @@ export function getMemoryGraphWriteApi(store, context = null, { onCommit = null 
         };
         const { result } = applyOne('editNode', op);
         const ok = result.applied.length > 0;
-        if (ok) await flushCommit();
-        return { ok };
+        if (ok) {
+            await flushCommit();
+            return { ok: true };
+        }
+        const firstReject = Array.isArray(result.rejected) ? result.rejected[0] : null;
+        const error = firstReject?.error || { code: 'OP_FAILED', message: 'editNode produced no change.' };
+        return { ok: false, error };
     }
 
     async function deleteNode({ id } = {}) {
         if (!id) throw new Error('deleteNode: id is required.');
         const { result } = applyOne('deleteNode', { op: 'delete', nodeId: id });
         const ok = result.applied.length > 0;
-        if (ok) await flushCommit();
-        return { ok };
+        if (ok) {
+            await flushCommit();
+            return { ok: true };
+        }
+        const firstReject = Array.isArray(result.rejected) ? result.rejected[0] : null;
+        const error = firstReject?.error || { code: 'OP_FAILED', message: 'deleteNode produced no change.' };
+        return { ok: false, error };
     }
 
     async function upsertLinks({ source, links } = {}) {
@@ -135,8 +145,15 @@ export function getMemoryGraphWriteApi(store, context = null, { onCommit = null 
         };
         const { result } = applyOne('upsertLinks', op);
         const applied = result.applied.length;
-        if (applied > 0) await flushCommit();
-        return { applied };
+        if (applied > 0) {
+            await flushCommit();
+            return { applied };
+        }
+        const firstReject = Array.isArray(result.rejected) ? result.rejected[0] : null;
+        if (firstReject?.error) {
+            return { applied: 0, error: firstReject.error };
+        }
+        return { applied: 0 };
     }
 
     async function deleteLinks({ source, target, relation, direction } = {}) {

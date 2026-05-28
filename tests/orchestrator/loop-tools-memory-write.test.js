@@ -223,3 +223,41 @@ describe('memory write tool execs', () => {
         expect(store.edges.some(e => e.from === result.rollup_node_id && e.to === 'c2')).toBe(true);
     });
 });
+
+// When the underlying session returns { ok: false, error: {...} } the
+// wrapper must forward the error object verbatim. Without this, the
+// LLM only sees `ok: false` and tries the same op repeatedly with no
+// diagnostic — the exact failure mode the orchestrator memory-graph
+// integration was reporting before this contract.
+describe('memory write tool execs — error forwarding', () => {
+    test('execMemoryNodeEdit forwards { ok: false, error } from the session', async () => {
+        const ctx = { __memoryGraphSession: {
+            editNode: async () => ({ ok: false, error: { code: 'NODE_NOT_FOUND', message: 'edit: node ghost does not exist.' } }),
+        } };
+        const result = await execMemoryNodeEdit({ node_id: 'ghost', set_fields: { x: 1 } }, ctx);
+        expect(result.ok).toBe(false);
+        expect(result.error).toBeDefined();
+        expect(result.error.code).toBe('NODE_NOT_FOUND');
+        expect(String(result.error.message || '')).toMatch(/ghost/);
+    });
+
+    test('execMemoryNodeDelete forwards error info on failure', async () => {
+        const ctx = { __memoryGraphSession: {
+            deleteNode: async () => ({ ok: false, error: { code: 'NODE_NOT_FOUND', message: 'delete: node missing does not exist.' } }),
+        } };
+        const { execMemoryNodeDelete } = await import('../../public/scripts/extensions/orchestrator/loop-tools/memory.js');
+        const result = await execMemoryNodeDelete({ node_id: 'missing' }, ctx);
+        expect(result.ok).toBe(false);
+        expect(result.error?.code).toBe('NODE_NOT_FOUND');
+    });
+
+    test('execMemoryLinkUpsert reports zero-applied with an error when session attaches one', async () => {
+        const ctx = { __memoryGraphSession: {
+            upsertLinks: async () => ({ applied: 0, error: { code: 'SOURCE_NOT_FOUND', message: 'upsertLinks: source node "x" does not exist.' } }),
+        } };
+        const result = await execMemoryLinkUpsert({ source_node_id: 'x', links: [{ target_node_id: 'y', relation: 'r' }] }, ctx);
+        expect(result.ok).toBe(false);
+        expect(result.applied).toBe(0);
+        expect(result.error?.code).toBe('SOURCE_NOT_FOUND');
+    });
+});

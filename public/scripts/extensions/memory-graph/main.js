@@ -5772,19 +5772,47 @@ export function applyExtractionOpsImpl(store, operations, {
         try {
             if (op === 'delete') {
                 const nodeId = String(item?.nodeId || '').trim();
-                if (nodeId && store?.nodes?.[nodeId]) {
-                    dropNode(store, nodeId, true);
+                if (!nodeId) {
+                    rejected.push({ op: item, error: { code: 'VALIDATION_SKIP', message: 'delete requires nodeId.' } });
+                    continue;
                 }
+                const targetNode = store?.nodes?.[nodeId];
+                if (!targetNode) {
+                    rejected.push({ op: item, error: { code: 'NODE_NOT_FOUND', message: `delete: node ${nodeId} does not exist.` } });
+                    continue;
+                }
+                dropNode(store, nodeId, true);
                 applied.push(item);
                 continue;
             }
             if (op === 'edit') {
                 const nodeId = String(item?.nodeId || '').trim();
-                const targetNode = nodeId ? store?.nodes?.[nodeId] : null;
-                if (!targetNode || targetNode.archived || targetNode.level !== LEVEL.SEMANTIC) {
+                if (!nodeId) {
+                    rejected.push({ op: item, error: { code: 'VALIDATION_SKIP', message: 'edit requires nodeId.' } });
                     continue;
                 }
-                if (String(targetNode.type || '').toLowerCase() !== String(item?.type || '').toLowerCase()) {
+                const targetNode = store?.nodes?.[nodeId];
+                if (!targetNode) {
+                    rejected.push({ op: item, error: { code: 'NODE_NOT_FOUND', message: `edit: node ${nodeId} does not exist.` } });
+                    continue;
+                }
+                if (targetNode.archived) {
+                    rejected.push({ op: item, error: { code: 'NODE_ARCHIVED', message: `edit: node ${nodeId} is archived.` } });
+                    continue;
+                }
+                if (targetNode.level !== LEVEL.SEMANTIC) {
+                    rejected.push({ op: item, error: { code: 'NODE_NOT_SEMANTIC', message: `edit: node ${nodeId} is not a semantic node (level=${targetNode.level || 'unknown'}).` } });
+                    continue;
+                }
+                // Type-match guard: only enforced when the op explicitly
+                // declares a type. The internal extraction pipeline always
+                // passes one (defensive cross-check against a misaddressed
+                // LLM op); the public write-api path does NOT — the caller
+                // already named the node by id, so re-asserting the type
+                // would just silently drop legitimate edits.
+                const claimedType = String(item?.type || '').trim().toLowerCase();
+                if (claimedType && String(targetNode.type || '').toLowerCase() !== claimedType) {
+                    rejected.push({ op: item, error: { code: 'TYPE_MISMATCH', message: `edit: op type "${claimedType}" does not match node ${nodeId} type "${targetNode.type}".` } });
                     continue;
                 }
                 const setFields = item?.setFields && typeof item.setFields === 'object' && !Array.isArray(item.setFields)

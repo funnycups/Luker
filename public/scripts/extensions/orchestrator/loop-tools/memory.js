@@ -378,7 +378,7 @@ export async function execMemoryNodeCreate(args, context) {
  *
  * @param {{ node_id: string, set_fields?: object, clear_fields?: string[], title?: string }} args
  * @param {object} context
- * @returns {Promise<{ ok: boolean }>}
+ * @returns {Promise<{ ok: boolean, error?: { code: string, message: string } }>}
  */
 export async function execMemoryNodeEdit(args, context) {
     const session = requireSession('memory_node_edit', context);
@@ -388,7 +388,8 @@ export async function execMemoryNodeEdit(args, context) {
         clearFields: Array.isArray(args?.clear_fields) ? args.clear_fields : undefined,
         title: args?.title,
     });
-    return { ok: result.ok };
+    if (result.ok) return { ok: true };
+    return { ok: false, error: result.error || { code: 'OP_FAILED', message: 'edit produced no change.' } };
 }
 
 /**
@@ -396,12 +397,13 @@ export async function execMemoryNodeEdit(args, context) {
  *
  * @param {{ node_id: string }} args
  * @param {object} context
- * @returns {Promise<{ ok: boolean }>}
+ * @returns {Promise<{ ok: boolean, error?: { code: string, message: string } }>}
  */
 export async function execMemoryNodeDelete(args, context) {
     const session = requireSession('memory_node_delete', context);
     const result = await session.deleteNode({ id: String(args?.node_id || '') });
-    return { ok: result.ok };
+    if (result.ok) return { ok: true };
+    return { ok: false, error: result.error || { code: 'OP_FAILED', message: 'delete produced no change.' } };
 }
 
 /**
@@ -409,7 +411,7 @@ export async function execMemoryNodeDelete(args, context) {
  *
  * @param {{ source_node_id?: string, source_ref?: string, links?: object[] }} args
  * @param {object} context
- * @returns {Promise<{ ok: boolean, applied: number }>}
+ * @returns {Promise<{ ok: boolean, applied: number, error?: { code: string, message: string } }>}
  */
 export async function execMemoryLinkUpsert(args, context) {
     const session = requireSession('memory_link_upsert', context);
@@ -420,7 +422,13 @@ export async function execMemoryLinkUpsert(args, context) {
         },
         links: Array.isArray(args?.links) ? args.links : [],
     });
-    return { ok: result.applied > 0, applied: result.applied };
+    const applied = Number(result.applied || 0);
+    if (applied > 0) return { ok: true, applied };
+    return {
+        ok: false,
+        applied: 0,
+        error: result.error || { code: 'OP_FAILED', message: 'link_upsert applied no edges.' },
+    };
 }
 
 /**
