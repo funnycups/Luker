@@ -241,15 +241,14 @@ export function loadCharacterLoopEditorState(context, avatar) {
 }
 
 /**
- * Ensure a director-mode editor draft has the canonical shape (a
- * top-level object with a `director` sub-object holding mainAgent /
- * subAgents / limits / tools). Called before render and after every
- * input mutation so renderers can index into
- * `editor.director.mainAgent.systemPrompt` etc. without optional-chain
- * fallback noise. The sanitizer is the single source of truth for the
- * shape — we mutate the editor object in place to match the sanitizer
- * output, preserving any non-director fields (avatar / enabled) that
- * ride along on character-scope editors.
+ * Ensure a director-mode editor draft has the canonical flat shape
+ * (mainAgent / subAgents / limits / tools at top level). Called before
+ * render and after every input mutation so renderers can index into
+ * `editor.mainAgent.systemPrompt` etc. without optional-chain fallback
+ * noise. The sanitizer is the single source of truth for the shape —
+ * we mutate the editor object in place to match the sanitizer output,
+ * preserving any non-director fields (avatar / enabled) that ride
+ * along on character-scope editors.
  */
 export function ensureDirectorEditorIntegrity(editor) {
     if (!editor || typeof editor !== 'object') {
@@ -257,7 +256,16 @@ export function ensureDirectorEditorIntegrity(editor) {
     }
     const normalized = sanitizeDirectorProfile(editor);
     editor.mode = normalized.mode;
-    editor.director = normalized.director;
+    editor.mainAgent = normalized.mainAgent;
+    editor.subAgents = normalized.subAgents;
+    editor.maxRounds = normalized.maxRounds;
+    editor.maxConcurrentSubagents = normalized.maxConcurrentSubagents;
+    editor.maxTotalSubagentRuns = normalized.maxTotalSubagentRuns;
+    editor.tools = normalized.tools;
+    editor.discardOnAbort = normalized.discardOnAbort;
+    // Stale wrapper from any pre-flatten editor object — strip so the
+    // editor draft is exclusively the new flat shape.
+    delete editor.director;
 }
 
 /**
@@ -286,10 +294,10 @@ export function loadCharacterDirectorEditorState(context, avatar) {
     const safeAvatar = String(avatar || '');
     const directorOverride = getCharacterDirectorOverrideByAvatar(context, safeAvatar);
     // Override merged on top of global base. Without this, a partial
-    // override (e.g. only `{ enabled: true, director: { mainAgent: {} } }`)
-    // would land with an empty mainAgent.systemPrompt and zero sub-agents
-    // because sanitizeDirectorProfile fills missing slots with empty
-    // defaults rather than inheriting from the global director profile.
+    // override (e.g. only `{ enabled: true, mainAgent: {} }`) would land
+    // with an empty mainAgent.systemPrompt and zero sub-agents because
+    // sanitizeDirectorProfile fills missing slots with empty defaults
+    // rather than inheriting from the global director profile.
     const globalSource = settings?.directorProfile && typeof settings.directorProfile === 'object'
         ? settings.directorProfile
         : createDefaultDirectorProfile();
@@ -301,31 +309,34 @@ export function loadCharacterDirectorEditorState(context, avatar) {
             enabled: false,
         };
     }
+    // `directorOverride` is the bare flat sub-object stored on the card
+    // (`override.director`) — `mainAgent` / `subAgents` / `maxRounds` /
+    // etc. at top level. The sanitizer auto-detects the input shape and
+    // lifts to flat output regardless, so we pass it straight through.
     const sanitizedOverride = sanitizeDirectorProfile(directorOverride);
-    const mergedDirector = {
-        ...globalBase.director,
-        ...sanitizedOverride.director,
+    const merged = {
+        ...globalBase,
+        ...sanitizedOverride,
         mainAgent: {
-            ...globalBase.director.mainAgent,
-            ...sanitizedOverride.director.mainAgent,
+            ...globalBase.mainAgent,
+            ...sanitizedOverride.mainAgent,
             // Empty mainAgent.systemPrompt → fall back to global. The user
             // never wants a blank prompt out of a partial override; if they
             // truly want to disable the main agent they'd unbind the
             // override (Reset Character) rather than write `''` explicitly.
-            systemPrompt: String(sanitizedOverride.director.mainAgent.systemPrompt || '').trim()
-                ? sanitizedOverride.director.mainAgent.systemPrompt
-                : globalBase.director.mainAgent.systemPrompt,
+            systemPrompt: String(sanitizedOverride.mainAgent.systemPrompt || '').trim()
+                ? sanitizedOverride.mainAgent.systemPrompt
+                : globalBase.mainAgent.systemPrompt,
         },
         // Empty subAgents (override cleared or contained only invalid
         // entries) → fall back to global so the inherited sub-agent set
         // survives partial overrides.
-        subAgents: Array.isArray(sanitizedOverride.director.subAgents) && sanitizedOverride.director.subAgents.length > 0
-            ? sanitizedOverride.director.subAgents
-            : globalBase.director.subAgents,
+        subAgents: Array.isArray(sanitizedOverride.subAgents) && sanitizedOverride.subAgents.length > 0
+            ? sanitizedOverride.subAgents
+            : globalBase.subAgents,
     };
     return {
-        ...sanitizedOverride,
-        director: mergedDirector,
+        ...merged,
         avatar: safeAvatar,
         enabled: Boolean(directorOverride.enabled),
     };

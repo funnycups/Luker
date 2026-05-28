@@ -327,7 +327,7 @@ const SUB_AGENT_MAX_ROUNDS = 16;
  * this by returning only the loop-tool subset.
  *
  * Deps:
- *   - subAgents: profile.director.subAgents — id → spec lookup.
+ *   - subAgents: profile.subAgents — id → spec lookup.
  *   - limits: { maxTotalSubagentRuns } — budget for the entire turn.
  *   - generateTask: non-streaming fallback (takes opts, returns terminal
  *     result). Always required (used when no stream provider is given,

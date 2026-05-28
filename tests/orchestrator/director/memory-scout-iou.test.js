@@ -136,7 +136,7 @@ describe('extractCitedMemoryIds', () => {
 
 describe('memory_scout content contract (spec 2 §8.3)', () => {
     const profile = createDefaultDirectorProfile();
-    const scout = profile.director.subAgents.find(a => a.id === 'memory_scout');
+    const scout = profile.subAgents.find(a => a.id === 'memory_scout');
 
     test('memory_scout exists in default profile', () => {
         expect(scout).toBeDefined();

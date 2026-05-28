@@ -1318,19 +1318,17 @@ function buildDefaultDirectorSubAgents() {
 export function createDefaultDirectorProfile() {
     return {
         mode: ORCH_EXECUTION_MODE_DIRECTOR,
-        director: {
-            mainAgent: {
-                promptPresetName: '',
-                apiPresetName: '',
-                systemPrompt: buildDirectorDefaultSystemPrompt(),
-            },
-            subAgents: buildDefaultDirectorSubAgents(),
-            maxRounds: DIRECTOR_LIMIT_BOUNDS.maxRounds.default,
-            maxConcurrentSubagents: DIRECTOR_LIMIT_BOUNDS.maxConcurrentSubagents.default,
-            maxTotalSubagentRuns: DIRECTOR_LIMIT_BOUNDS.maxTotalSubagentRuns.default,
-            tools: buildDefaultDirectorTools(),
-            discardOnAbort: false,
+        mainAgent: {
+            promptPresetName: '',
+            apiPresetName: '',
+            systemPrompt: buildDirectorDefaultSystemPrompt(),
         },
+        subAgents: buildDefaultDirectorSubAgents(),
+        maxRounds: DIRECTOR_LIMIT_BOUNDS.maxRounds.default,
+        maxConcurrentSubagents: DIRECTOR_LIMIT_BOUNDS.maxConcurrentSubagents.default,
+        maxTotalSubagentRuns: DIRECTOR_LIMIT_BOUNDS.maxTotalSubagentRuns.default,
+        tools: buildDefaultDirectorTools(),
+        discardOnAbort: false,
     };
 }
 
@@ -1348,14 +1346,38 @@ function clampInt(value, { min, max, default: def }) {
  * shared loop sanitizer so director's tool flags share loop's
  * canonical nested shape.
  *
- * Returns a fresh object preserving any top-level profile fields
- * not owned by the director branch.
+ * Accepts three input shapes interchangeably (auto-detected):
+ *
+ *   1. Flat profile — `{ mode, mainAgent, subAgents, maxRounds, ... }`.
+ *      The current canonical shape. Loop and agenda profiles already use
+ *      this idiom; director matches.
+ *   2. Legacy wrapped profile — `{ mode, director: { mainAgent, ... } }`.
+ *      Older `settings.directorProfile` blobs and V3 portable export files
+ *      use this. Lifted to flat output on read so on-disk data migrates
+ *      transparently — no separate migration script.
+ *   3. Bare director sub-object — `{ mainAgent, subAgents, ... }` with no
+ *      outer envelope. This is what character-card overrides store
+ *      (`override.director = bareSubObject`). The loader can pass it
+ *      straight through.
+ *
+ * Returns a flat object. Non-director top-level fields on the input
+ * (`avatar`, `enabled`, etc. that ride along on editor / portable
+ * profiles) are preserved; the legacy `director:` wrapper is dropped.
  */
 export function sanitizeDirectorProfile(profile) {
-    const input = profile?.director && typeof profile.director === 'object' ? profile.director : {};
+    const safeProfile = profile && typeof profile === 'object' ? profile : {};
+    // Auto-detect: legacy wrapped input nests director fields under
+    // `profile.director`; flat / bare input has them at top level.
+    const directorFields = safeProfile.director && typeof safeProfile.director === 'object'
+        ? safeProfile.director
+        : safeProfile;
+    // Drop the legacy `director:` key from passthrough so the flat output
+    // never carries the old wrapper alongside the new top-level fields.
+    const passthrough = { ...safeProfile };
+    delete passthrough.director;
     const bounds = getDirectorLimitBounds();
 
-    const mainAgent = input.mainAgent && typeof input.mainAgent === 'object' ? input.mainAgent : {};
+    const mainAgent = directorFields.mainAgent && typeof directorFields.mainAgent === 'object' ? directorFields.mainAgent : {};
 
     // Per-agent tools override: null/undefined → inherit `director.tools`
     // default; object → replace default entirely (not merged). The shared
@@ -1380,7 +1402,7 @@ export function sanitizeDirectorProfile(profile) {
     };
 
     // Dedupe sub-agents by id (last wins), drop invalid entries.
-    const subAgentsRaw = Array.isArray(input.subAgents) ? input.subAgents : [];
+    const subAgentsRaw = Array.isArray(directorFields.subAgents) ? directorFields.subAgents : [];
     const subAgentMap = new Map();
     for (const a of subAgentsRaw) {
         if (!a || typeof a !== 'object') continue;
@@ -1402,7 +1424,7 @@ export function sanitizeDirectorProfile(profile) {
     // present but incomplete, missing verbs default off (caller wanted
     // explicit control). We detect "absent" by checking that input.tools
     // is not a plain object.
-    const hasToolsBlock = input.tools && typeof input.tools === 'object';
+    const hasToolsBlock = directorFields.tools && typeof directorFields.tools === 'object';
     // Migration shim: profiles persisted before the `collab` namespace
     // shipped have a tools block but no `collab` key. Treat that as
     // legacy = both dispatchers on, otherwise existing director users
@@ -1410,10 +1432,10 @@ export function sanitizeDirectorProfile(profile) {
     // after upgrading. Profiles that DO have an explicit collab block
     // pass through unchanged.
     const toolsInput = hasToolsBlock
-        ? (input.tools.collab && typeof input.tools.collab === 'object'
-            ? input.tools
-            : { ...input.tools, collab: { dispatch_subagent: true, dispatch_inline_subagent: true } })
-        : input.tools;
+        ? (directorFields.tools.collab && typeof directorFields.tools.collab === 'object'
+            ? directorFields.tools
+            : { ...directorFields.tools, collab: { dispatch_subagent: true, dispatch_inline_subagent: true } })
+        : directorFields.tools;
     const sanitizedTools = sanitizeAgentToolFlags(toolsInput, {
         defaultAllOn: !hasToolsBlock,
         forceFinalize: false,
@@ -1421,21 +1443,19 @@ export function sanitizeDirectorProfile(profile) {
     sanitizedTools.finalize = false;
 
     return {
-        ...profile,
+        ...passthrough,
         mode: ORCH_EXECUTION_MODE_DIRECTOR,
-        director: {
-            mainAgent: {
-                promptPresetName: String(mainAgent.promptPresetName ?? '').trim(),
-                apiPresetName: String(mainAgent.apiPresetName ?? '').trim(),
-                systemPrompt: String(mainAgent.systemPrompt ?? ''),
-                tools: sanitizeAgentOverride(mainAgent.tools),
-            },
-            subAgents: [...subAgentMap.values()],
-            maxRounds: clampInt(input.maxRounds, bounds.maxRounds),
-            maxConcurrentSubagents: clampInt(input.maxConcurrentSubagents, bounds.maxConcurrentSubagents),
-            maxTotalSubagentRuns: clampInt(input.maxTotalSubagentRuns, bounds.maxTotalSubagentRuns),
-            tools: sanitizedTools,
-            discardOnAbort: Boolean(input.discardOnAbort),
+        mainAgent: {
+            promptPresetName: String(mainAgent.promptPresetName ?? '').trim(),
+            apiPresetName: String(mainAgent.apiPresetName ?? '').trim(),
+            systemPrompt: String(mainAgent.systemPrompt ?? ''),
+            tools: sanitizeAgentOverride(mainAgent.tools),
         },
+        subAgents: [...subAgentMap.values()],
+        maxRounds: clampInt(directorFields.maxRounds, bounds.maxRounds),
+        maxConcurrentSubagents: clampInt(directorFields.maxConcurrentSubagents, bounds.maxConcurrentSubagents),
+        maxTotalSubagentRuns: clampInt(directorFields.maxTotalSubagentRuns, bounds.maxTotalSubagentRuns),
+        tools: sanitizedTools,
+        discardOnAbort: Boolean(directorFields.discardOnAbort),
     };
 }

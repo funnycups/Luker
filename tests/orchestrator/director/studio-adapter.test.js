@@ -26,20 +26,20 @@ import {
 describe('director profile round-trip through Studio sanitizer', () => {
     test('a populated director profile survives sanitize round-trip with all fields intact', () => {
         const original = createDefaultDirectorProfile();
-        original.director.mainAgent = {
+        original.mainAgent = {
             systemPrompt: 'custom system prompt',
             apiPresetName: 'openai-main',
             promptPresetName: 'preset-main',
         };
-        original.director.subAgents = [
+        original.subAgents = [
             { id: 'critic', description: 'tonal critic', systemPrompt: 'crit', apiPresetName: 'openai-crit', promptPresetName: 'preset-crit' },
             { id: 'planner', description: 'scene planner', systemPrompt: 'plan', apiPresetName: '', promptPresetName: '' },
         ];
-        original.director.maxRounds = 12;
-        original.director.maxConcurrentSubagents = 3;
-        original.director.maxTotalSubagentRuns = 10;
-        original.director.discardOnAbort = true;
-        original.director.tools = {
+        original.maxRounds = 12;
+        original.maxConcurrentSubagents = 3;
+        original.maxTotalSubagentRuns = 10;
+        original.discardOnAbort = true;
+        original.tools = {
             chat: { read_range: true, search: true },
             memory: {
                 list_candidates: true, edge_summary: false, node_brief: true,
@@ -52,43 +52,44 @@ describe('director profile round-trip through Studio sanitizer', () => {
 
         const after = sanitizeDirectorProfile(original);
 
-        // Mode root preserved.
-        expect(after).toHaveProperty('director');
+        // Flat shape — sanitizer drops the legacy `director:` wrapper.
+        expect(after).not.toHaveProperty('director');
+        expect(after.mode).toBe(ORCH_EXECUTION_MODE_DIRECTOR);
         // Main agent fields preserved.
-        expect(after.director.mainAgent.systemPrompt).toBe('custom system prompt');
-        expect(after.director.mainAgent.apiPresetName).toBe('openai-main');
-        expect(after.director.mainAgent.promptPresetName).toBe('preset-main');
+        expect(after.mainAgent.systemPrompt).toBe('custom system prompt');
+        expect(after.mainAgent.apiPresetName).toBe('openai-main');
+        expect(after.mainAgent.promptPresetName).toBe('preset-main');
         // Sub-agents preserved.
-        expect(after.director.subAgents).toHaveLength(2);
-        expect(after.director.subAgents[0]).toMatchObject({
+        expect(after.subAgents).toHaveLength(2);
+        expect(after.subAgents[0]).toMatchObject({
             id: 'critic', description: 'tonal critic', systemPrompt: 'crit',
             apiPresetName: 'openai-crit', promptPresetName: 'preset-crit',
         });
-        expect(after.director.subAgents[1]).toMatchObject({
+        expect(after.subAgents[1]).toMatchObject({
             id: 'planner', description: 'scene planner', systemPrompt: 'plan',
         });
         // Limits preserved.
-        expect(after.director.maxRounds).toBe(12);
-        expect(after.director.maxConcurrentSubagents).toBe(3);
-        expect(after.director.maxTotalSubagentRuns).toBe(10);
-        expect(after.director.discardOnAbort).toBe(true);
+        expect(after.maxRounds).toBe(12);
+        expect(after.maxConcurrentSubagents).toBe(3);
+        expect(after.maxTotalSubagentRuns).toBe(10);
+        expect(after.discardOnAbort).toBe(true);
         // Tool flags preserved.
-        expect(after.director.tools.chat.read_range).toBe(true);
-        expect(after.director.tools.chat.search).toBe(true);
-        expect(after.director.tools.memory.list_candidates).toBe(true);
-        expect(after.director.tools.memory.edge_summary).toBe(false);
-        expect(after.director.tools.memory.node_brief).toBe(true);
-        expect(after.director.tools.lorebook.search).toBe(true);
+        expect(after.tools.chat.read_range).toBe(true);
+        expect(after.tools.chat.search).toBe(true);
+        expect(after.tools.memory.list_candidates).toBe(true);
+        expect(after.tools.memory.edge_summary).toBe(false);
+        expect(after.tools.memory.node_brief).toBe(true);
+        expect(after.tools.lorebook.search).toBe(true);
         // tools.finalize is forced to false (no leakage between modes).
-        if (after.director.tools.finalize !== undefined) {
-            expect(after.director.tools.finalize).toBe(false);
+        if (after.tools.finalize !== undefined) {
+            expect(after.tools.finalize).toBe(false);
         }
     });
 
     test('sanitizer is idempotent (sanitize twice yields equivalent result)', () => {
         const original = createDefaultDirectorProfile();
-        original.director.mainAgent.systemPrompt = 'two-pass';
-        original.director.subAgents = [
+        original.mainAgent.systemPrompt = 'two-pass';
+        original.subAgents = [
             { id: 'x', description: 'd', systemPrompt: 's', apiPresetName: '', promptPresetName: '' },
         ];
         const once = sanitizeDirectorProfile(original);
@@ -100,12 +101,12 @@ describe('director profile round-trip through Studio sanitizer', () => {
         // This is a known sanitizer behavior: sub-agents without systemPrompt
         // are dropped on save. Studio's diff UI must NOT assume they survive.
         const profile = createDefaultDirectorProfile();
-        profile.director.subAgents = [
+        profile.subAgents = [
             { id: 'keep', description: '', systemPrompt: 'real', apiPresetName: '', promptPresetName: '' },
             { id: 'drop', description: '', systemPrompt: '', apiPresetName: '', promptPresetName: '' },
         ];
         const after = sanitizeDirectorProfile(profile);
-        expect(after.director.subAgents.map(a => a.id)).toEqual(['keep']);
+        expect(after.subAgents.map(a => a.id)).toEqual(['keep']);
     });
 
     test('mode constant matches the value Studio adapter checks against', () => {

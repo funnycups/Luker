@@ -275,12 +275,16 @@ export async function persistCharacterDirectorEditor(context, settings, avatar, 
         ...previousOverride,
         mode: ORCH_EXECUTION_MODE_DIRECTOR,
         director: {
-            // sanitizeDirectorProfile returns { mode, director: {...} }
-            // — we want the inner director object as the sub-payload
-            // (the outer mode is set explicitly above on the override
-            // wrapper). Spread the inner shape, then attach the
-            // character-override metadata.
-            ...sanitizedProfile.director,
+            // Explicitly list the director payload fields so the on-card
+            // shape never accidentally carries editor passthrough (avatar /
+            // mode etc.). Then attach the character-override metadata.
+            mainAgent: sanitizedProfile.mainAgent,
+            subAgents: sanitizedProfile.subAgents,
+            maxRounds: sanitizedProfile.maxRounds,
+            maxConcurrentSubagents: sanitizedProfile.maxConcurrentSubagents,
+            maxTotalSubagentRuns: sanitizedProfile.maxTotalSubagentRuns,
+            tools: sanitizedProfile.tools,
+            discardOnAbort: sanitizedProfile.discardOnAbort,
             enabled: forceEnabled === null ? Boolean(sourceEnabled) : Boolean(forceEnabled),
             updatedAt: Date.now(),
             name: getCharacterDisplayNameByAvatar(context, target),

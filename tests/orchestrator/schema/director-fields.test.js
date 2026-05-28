@@ -95,14 +95,14 @@ describe('sanitizeDirectorProfile: legacy-collab migration', () => {
                 },
             },
         });
-        expect(sanitized.director.tools.collab).toEqual({
+        expect(sanitized.tools.collab).toEqual({
             dispatch_subagent: true,
             dispatch_inline_subagent: true,
         });
         // Legacy migration must not silently re-enable other explicitly-
         // disabled flags — only the missing namespace is filled.
-        expect(sanitized.director.tools.chat.read_range).toBe(true);
-        expect(sanitized.director.tools.chat.search).toBe(false);
+        expect(sanitized.tools.chat.read_range).toBe(true);
+        expect(sanitized.tools.chat.search).toBe(false);
     });
 
     test('director.tools.collab present passes through unchanged (no migration)', () => {
@@ -113,7 +113,7 @@ describe('sanitizeDirectorProfile: legacy-collab migration', () => {
                 },
             },
         });
-        expect(sanitized.director.tools.collab).toEqual({
+        expect(sanitized.tools.collab).toEqual({
             dispatch_subagent: false,
             dispatch_inline_subagent: false,
         });
@@ -130,7 +130,7 @@ describe('sanitizeDirectorProfile: legacy-collab migration', () => {
                 },
             },
         });
-        expect(sanitized.director.mainAgent.tools.collab).toEqual({
+        expect(sanitized.mainAgent.tools.collab).toEqual({
             dispatch_subagent: true,
             dispatch_inline_subagent: true,
         });
@@ -146,7 +146,7 @@ describe('sanitizeDirectorProfile: legacy-collab migration', () => {
                 },
             },
         });
-        expect(sanitized.director.mainAgent.tools.collab).toEqual({
+        expect(sanitized.mainAgent.tools.collab).toEqual({
             dispatch_subagent: false,
             dispatch_inline_subagent: true,
         });
@@ -161,12 +161,11 @@ describe('director schema fields', () => {
     test('createDefaultDirectorProfile returns a usable default', () => {
         const p = createDefaultDirectorProfile();
         expect(p.mode).toBe('director');
-        expect(p.director).toBeDefined();
-        expect(p.director.mainAgent).toEqual(expect.objectContaining({ promptPresetName: '', apiPresetName: '' }));
-        expect(Array.isArray(p.director.subAgents)).toBe(true);
-        expect(p.director.maxRounds).toBeGreaterThan(0);
-        expect(p.director.maxConcurrentSubagents).toBeGreaterThan(0);
-        expect(p.director.maxTotalSubagentRuns).toBeGreaterThan(0);
+        expect(p.mainAgent).toEqual(expect.objectContaining({ promptPresetName: '', apiPresetName: '' }));
+        expect(Array.isArray(p.subAgents)).toBe(true);
+        expect(p.maxRounds).toBeGreaterThan(0);
+        expect(p.maxConcurrentSubagents).toBeGreaterThan(0);
+        expect(p.maxTotalSubagentRuns).toBeGreaterThan(0);
         // Tools use the nested loop-style schema. Default = every verb on,
         // except `finalize` which is forced off (director ships its own).
         // The memory subtree carries the read-api pipeline tools
@@ -175,7 +174,7 @@ describe('director schema fields', () => {
         // tools and the write-api primitives — all default-on so the
         // director's default memory_scout / memory_curator have the full
         // pipeline available.
-        expect(p.director.tools).toEqual(expect.objectContaining({
+        expect(p.tools).toEqual(expect.objectContaining({
             chat: expect.objectContaining({ read_range: expect.any(Boolean), search: expect.any(Boolean) }),
             lorebook: expect.objectContaining({ search: expect.any(Boolean), get: expect.any(Boolean) }),
             memory: expect.objectContaining({
@@ -200,34 +199,34 @@ describe('director schema fields', () => {
             finalize: false,
         }));
         // Default disposition is all-on across namespaces.
-        expect(p.director.tools.chat.read_range).toBe(true);
-        expect(p.director.tools.note.open).toBe(true);
+        expect(p.tools.chat.read_range).toBe(true);
+        expect(p.tools.note.open).toBe(true);
         // Spec 2: read-api pipeline tools ship on by default so memory_scout
         // can run an LLM-grade recall pass out of the box. A regression here
         // would silently demote memory_scout back to legacy substring search.
-        expect(p.director.tools.memory.list_candidates).toBe(true);
-        expect(p.director.tools.memory.edge_summary).toBe(true);
-        expect(p.director.tools.memory.node_brief).toBe(true);
-        expect(p.director.tools.memory.expand_seeds).toBe(true);
-        expect(p.director.tools.memory.schema).toBe(true);
+        expect(p.tools.memory.list_candidates).toBe(true);
+        expect(p.tools.memory.edge_summary).toBe(true);
+        expect(p.tools.memory.node_brief).toBe(true);
+        expect(p.tools.memory.expand_seeds).toBe(true);
+        expect(p.tools.memory.schema).toBe(true);
         // Spec-2 retrieval + compaction tools (replaced the old `rank` aggregate).
-        expect(p.director.tools.memory.keyword_search).toBe(true);
-        expect(p.director.tools.memory.vector_search).toBe(true);
-        expect(p.director.tools.memory.find_by_name).toBe(true);
-        expect(p.director.tools.memory.compaction_candidates).toBe(true);
+        expect(p.tools.memory.keyword_search).toBe(true);
+        expect(p.tools.memory.vector_search).toBe(true);
+        expect(p.tools.memory.find_by_name).toBe(true);
+        expect(p.tools.memory.compaction_candidates).toBe(true);
         // Write-api primitives are default-on so memory_curator can mutate the graph.
-        expect(p.director.tools.memory.node_create).toBe(true);
-        expect(p.director.tools.memory.node_edit).toBe(true);
-        expect(p.director.tools.memory.node_delete).toBe(true);
-        expect(p.director.tools.memory.link_upsert).toBe(true);
-        expect(p.director.tools.memory.link_delete).toBe(true);
-        expect(p.director.tools.memory.compact_nodes).toBe(true);
-        expect(p.director.discardOnAbort).toBe(false);
+        expect(p.tools.memory.node_create).toBe(true);
+        expect(p.tools.memory.node_edit).toBe(true);
+        expect(p.tools.memory.node_delete).toBe(true);
+        expect(p.tools.memory.link_upsert).toBe(true);
+        expect(p.tools.memory.link_delete).toBe(true);
+        expect(p.tools.memory.compact_nodes).toBe(true);
+        expect(p.discardOnAbort).toBe(false);
     });
 
     test('createDefaultDirectorProfile ships with the twelve default RP analyst sub-agents (1 cross-source intent scout + 3 single-source scouts + 1 external scout + 1 epistemic scout + 1 notes pickup scout + 1 brainstormer + 2 critics + 1 notes curator + 1 memory curator)', () => {
         const p = createDefaultDirectorProfile();
-        const ids = p.director.subAgents.map(a => a.id).sort();
+        const ids = p.subAgents.map(a => a.id).sort();
         // The default main-agent prompt (director-default-prompt.js) is
         // strongly coupled to this exact set — it names them by id and
         // gives task-brief shapes for each. Adding / removing / renaming
@@ -248,7 +247,7 @@ describe('director schema fields', () => {
         ]);
         // Each must have a non-empty description and systemPrompt — the
         // sanitizer drops sub-agents missing either field.
-        for (const a of p.director.subAgents) {
+        for (const a of p.subAgents) {
             expect(typeof a.description).toBe('string');
             expect(a.description.length).toBeGreaterThan(0);
             expect(typeof a.systemPrompt).toBe('string');
@@ -261,7 +260,7 @@ describe('director schema fields', () => {
         // Each description should communicate: what the sub-agent
         // knows/does, what it does NOT know, and what the main agent
         // must include in the task brief.
-        for (const a of p.director.subAgents) {
+        for (const a of p.subAgents) {
             // notes_curator and memory_curator are post-draft housekeepers, not knowledge-source
             // scouts — their descriptions intentionally do not use the "does NOT know" /
             // "task brief" shape that the scouts share. Exempt them from this structural check.
@@ -274,8 +273,8 @@ describe('director schema fields', () => {
     test('default sub-agents survive sanitize round-trip (no field gets dropped)', () => {
         const p = createDefaultDirectorProfile();
         const sanitized = sanitizeDirectorProfile(p);
-        expect(sanitized.director.subAgents).toHaveLength(12);
-        const ids = sanitized.director.subAgents.map(a => a.id).sort();
+        expect(sanitized.subAgents).toHaveLength(12);
+        const ids = sanitized.subAgents.map(a => a.id).sort();
         expect(ids).toEqual([
             'canon_scout',
             'chat_scout',
@@ -290,7 +289,7 @@ describe('director schema fields', () => {
             'plot_brainstormer',
             'voice_critic',
         ]);
-        for (const a of sanitized.director.subAgents) {
+        for (const a of sanitized.subAgents) {
             expect(a.description.length).toBeGreaterThan(0);
             expect(a.systemPrompt.length).toBeGreaterThan(0);
         }
@@ -298,7 +297,7 @@ describe('director schema fields', () => {
 
     test('default pre-draft scouts are each scoped to one source (orthogonal — stay in your lane)', () => {
         const p = createDefaultDirectorProfile();
-        const byId = Object.fromEntries(p.director.subAgents.map(a => [a.id, a]));
+        const byId = Object.fromEntries(p.subAgents.map(a => [a.id, a]));
         // Each scout systemPrompt must contain a "stay in your lane"
         // discipline — meaning: don't read from the other sources.
         expect(byId.chat_scout.systemPrompt).toMatch(/stay in your lane/i);
@@ -315,7 +314,7 @@ describe('director schema fields', () => {
         // "is this node a structural hub per the read-api?"; see the
         // dedicated `memory_scout (spec 2)` test below.
         const p = createDefaultDirectorProfile();
-        const byId = Object.fromEntries(p.director.subAgents.map(a => [a.id, a]));
+        const byId = Object.fromEntries(p.subAgents.map(a => [a.id, a]));
         expect(byId.chat_scout.systemPrompt).toMatch(/signal[- ]vs[- ]noise|de-?weight|low signal/i);
     });
 
@@ -334,7 +333,7 @@ describe('director schema fields', () => {
         // so future edits cannot silently regress the scout to the
         // pre-read-api workflow.
         const p = createDefaultDirectorProfile();
-        const byId = Object.fromEntries(p.director.subAgents.map(a => [a.id, a]));
+        const byId = Object.fromEntries(p.subAgents.map(a => [a.id, a]));
         const ms = byId.memory_scout;
 
         // description: enumerate (not traverse).
@@ -364,7 +363,7 @@ describe('director schema fields', () => {
 
     test('canon_scout systemPrompt guards against original-fiction misuse', () => {
         const p = createDefaultDirectorProfile();
-        const canon = p.director.subAgents.find(a => a.id === 'canon_scout');
+        const canon = p.subAgents.find(a => a.id === 'canon_scout');
         expect(canon).toBeDefined();
         // canon_scout is on-demand; its description and systemPrompt
         // must signal that running it for original fiction is a waste.
@@ -374,7 +373,7 @@ describe('director schema fields', () => {
 
     test('epistemic_scout is cross-source by design and outputs omniscience traps', () => {
         const p = createDefaultDirectorProfile();
-        const epi = p.director.subAgents.find(a => a.id === 'epistemic_scout');
+        const epi = p.subAgents.find(a => a.id === 'epistemic_scout');
         expect(epi).toBeDefined();
         // epistemic_scout is the only pre-draft scout that cross-references
         // chat against lorebook + memory — the "stay in your lane" rule
@@ -400,7 +399,7 @@ describe('director schema fields', () => {
         // this; pin both the scan structure and a representative slice of
         // the keyword/pattern list so future edits cannot quietly strip it.
         const p = createDefaultDirectorProfile();
-        const vc = p.director.subAgents.find(a => a.id === 'voice_critic');
+        const vc = p.subAgents.find(a => a.id === 'voice_critic');
         expect(vc).toBeDefined();
         // Description must advertise the Hard-fail mode so the main agent
         // routes meta-leakage to this critic instead of an inline one.
@@ -427,7 +426,7 @@ describe('director schema fields', () => {
         // edit from silently dropping platform-frame coverage and leaving
         // only the config-label scan.
         const p = createDefaultDirectorProfile();
-        const vc = p.director.subAgents.find(a => a.id === 'voice_critic');
+        const vc = p.subAgents.find(a => a.id === 'voice_critic');
         expect(vc).toBeDefined();
         // Description must advertise the platform-frame class.
         expect(vc.description).toMatch(/platform-frame|上一轮|previous round/i);
@@ -474,14 +473,14 @@ describe('director schema fields', () => {
             },
         };
         const sanitized = sanitizeDirectorProfile(profile);
-        expect(sanitized.director.subAgents).toHaveLength(2);
-        expect(sanitized.director.subAgents[0]).toEqual(expect.objectContaining({ id: 'critic' }));
+        expect(sanitized.subAgents).toHaveLength(2);
+        expect(sanitized.subAgents[0]).toEqual(expect.objectContaining({ id: 'critic' }));
         // Tool flags pass through unchanged (sanitizeAgentToolFlags is the
         // canonical contract; we only verify director respects what was set).
-        expect(sanitized.director.tools.chat.read_range).toBe(true);
-        expect(sanitized.director.tools.chat.search).toBe(false);
-        expect(sanitized.director.tools.memory.list_candidates).toBe(true);
-        expect(sanitized.director.tools.finalize).toBe(false);  // director always strips loop's finalize
+        expect(sanitized.tools.chat.read_range).toBe(true);
+        expect(sanitized.tools.chat.search).toBe(false);
+        expect(sanitized.tools.memory.list_candidates).toBe(true);
+        expect(sanitized.tools.finalize).toBe(false);  // director always strips loop's finalize
     });
 
     test('sanitizeDirectorProfile forces tools.finalize to false even if input sets it true', () => {
@@ -495,7 +494,7 @@ describe('director schema fields', () => {
         });
         // Director's own finalize tool has the same name; allowing loop's
         // would create a duplicate in the LLM tools array.
-        expect(sanitized.director.tools.finalize).toBe(false);
+        expect(sanitized.tools.finalize).toBe(false);
     });
 
     test('sanitizeDirectorProfile drops sub-agents with empty id or missing fields', () => {
@@ -513,7 +512,7 @@ describe('director schema fields', () => {
             },
         };
         const sanitized = sanitizeDirectorProfile(profile);
-        const ids = sanitized.director.subAgents.map(a => a.id);
+        const ids = sanitized.subAgents.map(a => a.id);
         expect(ids).toContain('ok');
         expect(ids).not.toContain('');
         expect(ids).not.toContain('ok2');
@@ -531,8 +530,8 @@ describe('director schema fields', () => {
             },
         };
         const sanitized = sanitizeDirectorProfile(profile);
-        expect(sanitized.director.subAgents).toHaveLength(1);
-        expect(sanitized.director.subAgents[0].description).toBe('second');
+        expect(sanitized.subAgents).toHaveLength(1);
+        expect(sanitized.subAgents[0].description).toBe('second');
     });
 
     test('sanitizeDirectorProfile clamps numeric limits to sane ranges', () => {
@@ -547,21 +546,21 @@ describe('director schema fields', () => {
             },
         };
         const sanitized = sanitizeDirectorProfile(profile);
-        expect(sanitized.director.maxRounds).toBeGreaterThanOrEqual(1);
-        expect(sanitized.director.maxConcurrentSubagents).toBeGreaterThanOrEqual(1);
-        expect(sanitized.director.maxTotalSubagentRuns).toBeLessThanOrEqual(100);
+        expect(sanitized.maxRounds).toBeGreaterThanOrEqual(1);
+        expect(sanitized.maxConcurrentSubagents).toBeGreaterThanOrEqual(1);
+        expect(sanitized.maxTotalSubagentRuns).toBeLessThanOrEqual(100);
     });
 
     test('mainAgent.tools null/undefined → inherit (null after sanitize)', () => {
         const sanitizedNull = sanitizeDirectorProfile({
             director: { mainAgent: { tools: null }, subAgents: [] },
         });
-        expect(sanitizedNull.director.mainAgent.tools).toBeNull();
+        expect(sanitizedNull.mainAgent.tools).toBeNull();
 
         const sanitizedUndef = sanitizeDirectorProfile({
             director: { mainAgent: {}, subAgents: [] },
         });
-        expect(sanitizedUndef.director.mainAgent.tools).toBeNull();
+        expect(sanitizedUndef.mainAgent.tools).toBeNull();
     });
 
     test('mainAgent.tools object → override (full canonical shape, finalize:false)', () => {
@@ -571,12 +570,12 @@ describe('director schema fields', () => {
                 subAgents: [],
             },
         });
-        expect(sanitized.director.mainAgent.tools).not.toBeNull();
-        expect(sanitized.director.mainAgent.tools.chat.read_range).toBe(true);
+        expect(sanitized.mainAgent.tools).not.toBeNull();
+        expect(sanitized.mainAgent.tools.chat.read_range).toBe(true);
         // Unspecified verbs default off for override (defaultAllOn:false).
-        expect(sanitized.director.mainAgent.tools.chat.search).toBe(false);
+        expect(sanitized.mainAgent.tools.chat.search).toBe(false);
         // Director always strips loop's finalize.
-        expect(sanitized.director.mainAgent.tools.finalize).toBe(false);
+        expect(sanitized.mainAgent.tools.finalize).toBe(false);
     });
 
     test('subAgents[i].tools null → inherit; object → override', () => {
@@ -589,8 +588,8 @@ describe('director schema fields', () => {
                 ],
             },
         });
-        const inh = sanitized.director.subAgents.find(a => a.id === 'inh');
-        const ovr = sanitized.director.subAgents.find(a => a.id === 'ovr');
+        const inh = sanitized.subAgents.find(a => a.id === 'inh');
+        const ovr = sanitized.subAgents.find(a => a.id === 'ovr');
         expect(inh.tools).toBeNull();
         expect(ovr.tools).not.toBeNull();
         expect(ovr.tools.memory.keyword_search).toBe(true);
@@ -600,7 +599,7 @@ describe('director schema fields', () => {
 
     test('default profile sub-agents carry precise per-role tool overrides', () => {
         const def = createDefaultDirectorProfile();
-        const byId = new Map(def.director.subAgents.map(a => [a.id, a]));
+        const byId = new Map(def.subAgents.map(a => [a.id, a]));
 
         // Sanity: every default sub-agent should have an override (not null).
         for (const [id, agent] of byId) {
@@ -609,7 +608,7 @@ describe('director schema fields', () => {
         }
 
         const sanitized = sanitizeDirectorProfile(def);
-        const sById = new Map(sanitized.director.subAgents.map(a => [a.id, a]));
+        const sById = new Map(sanitized.subAgents.map(a => [a.id, a]));
 
         // intent_scout: chat + lorebook (no memory, no search)
         expect(sById.get('intent_scout').tools.chat.read_range).toBe(true);

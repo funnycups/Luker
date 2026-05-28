@@ -676,16 +676,16 @@ function renderOrchAgendaPreview(profile, changed, t) {
 
 /**
  * DIRECTOR mode renderer — surfaces the main agent + each sub-agent.
- * Real shape nests under `director` (sanitizeDirectorProfile in
- * director-defaults.js:1008); the plan's flat `{main, subAgents}` fixture
- * is a best-guess.
+ * Profile shape is flat (`{mode, mainAgent, subAgents, maxRounds, ...}`)
+ * after the director-shape unification; sandbox-diff change paths emit
+ * top-level keys (mainAgent / subAgents / maxRounds / ...) accordingly.
  */
 function renderOrchDirectorPreview(profile, changed, t) {
-    const director = profile?.director && typeof profile.director === 'object' ? profile.director : {};
+    const director = profile && typeof profile === 'object' ? profile : {};
     const main = director.mainAgent && typeof director.mainAgent === 'object' ? director.mainAgent : {};
     const subs = Array.isArray(director.subAgents) ? director.subAgents : [];
 
-    const mainChanged = isPrefixInChangedSet(changed, 'director.mainAgent');
+    const mainChanged = isPrefixInChangedSet(changed, 'mainAgent');
     const mainSubtitle = [main.promptPresetName, main.apiPresetName].filter(Boolean).join(' / ');
     const mainBlock = `
         <div class="${rowClass(mainChanged)}">
@@ -697,7 +697,7 @@ function renderOrchDirectorPreview(profile, changed, t) {
     `;
 
     const subRows = subs.map((a, idx) => {
-        const path = `director.subAgents.${idx}`;
+        const path = `subAgents.${idx}`;
         const isChanged = isPrefixInChangedSet(changed, path);
         const subtitle = [a?.promptPresetName, a?.apiPresetName, a?.description].filter(Boolean).join(' · ');
         return `<div class="${rowClass(isChanged)}">
@@ -708,9 +708,9 @@ function renderOrchDirectorPreview(profile, changed, t) {
         </div>`;
     }).join('');
 
-    const limitsChanged = isPrefixInChangedSet(changed, 'director.maxRounds')
-        || isPrefixInChangedSet(changed, 'director.maxConcurrentSubagents')
-        || isPrefixInChangedSet(changed, 'director.maxTotalSubagentRuns');
+    const limitsChanged = isPrefixInChangedSet(changed, 'maxRounds')
+        || isPrefixInChangedSet(changed, 'maxConcurrentSubagents')
+        || isPrefixInChangedSet(changed, 'maxTotalSubagentRuns');
     const limitsBlock = `
         <div class="${rowClass(limitsChanged)}">
             <div class="luker-iter-workspace-preview-row-head">

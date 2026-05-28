@@ -784,23 +784,21 @@ function getEffectiveProfile(context) {
         // returning so the runtime sees the canonical shape.
         const characterDirectorOverride = getCharacterDirectorOverrideByAvatar(context, avatar);
         if (characterDirectorOverride?.enabled) {
-            // The override stores the director inner shape (mainAgent,
-            // subAgents, ...) directly. Wrap into the canonical
-            // { mode: 'director', director: {...} } envelope.
-            const wrapped = sanitizeDirectorProfile({ director: characterDirectorOverride });
+            // Card stores the bare director profile (mainAgent / subAgents /
+            // limits / tools / ...). Sanitizer auto-detects + lifts to the
+            // canonical flat shape; spread it into the runtime envelope.
+            const sanitized = sanitizeDirectorProfile(characterDirectorOverride);
             return {
                 source: 'character',
                 key: avatar,
-                mode: ORCH_EXECUTION_MODE_DIRECTOR,
-                director: wrapped.director,
+                ...sanitized,
             };
         }
-        const wrapped = sanitizeDirectorProfile(settings.directorProfile || createDefaultDirectorProfile());
+        const sanitized = sanitizeDirectorProfile(settings.directorProfile || createDefaultDirectorProfile());
         return {
             source: 'global',
             key: 'director',
-            mode: ORCH_EXECUTION_MODE_DIRECTOR,
-            director: wrapped.director,
+            ...sanitized,
         };
     }
     if (executionMode === ORCH_EXECUTION_MODE_SINGLE || settings.singleAgentModeEnabled) {
@@ -1284,10 +1282,7 @@ function getDirectorProfileFromSettings(settings) {
     if (!target.directorProfile || typeof target.directorProfile !== 'object') {
         target.directorProfile = createDefaultDirectorProfile();
     }
-    if (!target.directorProfile.director || typeof target.directorProfile.director !== 'object') {
-        target.directorProfile.director = createDefaultDirectorProfile().director;
-    }
-    const director = target.directorProfile.director;
+    const director = target.directorProfile;
     if (!director.mainAgent || typeof director.mainAgent !== 'object') {
         director.mainAgent = { promptPresetName: '', apiPresetName: '', systemPrompt: '' };
     }
@@ -1297,8 +1292,8 @@ function getDirectorProfileFromSettings(settings) {
     if (!director.tools || typeof director.tools !== 'object') {
         // Re-materialize via the sanitizer (single source of truth for
         // the default-all-on disposition and the finalize:false override).
-        const sanitized = sanitizeDirectorProfile({ director });
-        director.tools = sanitized.director.tools;
+        const sanitized = sanitizeDirectorProfile(director);
+        director.tools = sanitized.tools;
     }
     return target.directorProfile;
 }
@@ -1882,15 +1877,15 @@ function parseImportedProfilePayload(rawText) {
     const isDirectorPayload = mode === ORCH_EXECUTION_MODE_DIRECTOR
         || String(parsed?.format || '') === PORTABLE_PROFILE_FORMAT_V3;
     if (isDirectorPayload) {
-        const directorBlob = profile?.director && typeof profile.director === 'object'
-            ? profile
-            : (profile && typeof profile === 'object' ? { mode: ORCH_EXECUTION_MODE_DIRECTOR, director: profile } : null);
-        if (!directorBlob) {
+        if (!profile || typeof profile !== 'object') {
             throw new Error(i18n('Invalid profile file format.'));
         }
+        // sanitizeDirectorProfile auto-detects legacy wrapped ({director:{...}})
+        // and new flat ({mainAgent, subAgents, ...}) shapes and returns flat,
+        // so old V3 exports keep importing cleanly after the flatten.
         return {
             mode: ORCH_EXECUTION_MODE_DIRECTOR,
-            director: sanitizeDirectorProfile(directorBlob),
+            director: sanitizeDirectorProfile(profile),
         };
     }
 
@@ -2325,7 +2320,7 @@ function renderDirectorIterationWorkingProfile(session, { profileOverride = null
             ? profileOverride
             : session?.workingProfile,
     );
-    const d = sanitized.director;
+    const d = sanitized;
     const collectEnabledVerbs = (tools) => {
         const out = [];
         if (!tools || typeof tools !== 'object') return out;
@@ -4098,10 +4093,7 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, _a
     if (!session.workingProfile || typeof session.workingProfile !== 'object') {
         session.workingProfile = sanitizeDirectorProfile({});
     }
-    if (!session.workingProfile.director || typeof session.workingProfile.director !== 'object') {
-        session.workingProfile.director = sanitizeDirectorProfile({}).director;
-    }
-    const director = session.workingProfile.director;
+    const director = session.workingProfile;
 
     for (const call of Array.isArray(toolCalls) ? toolCalls : []) {
         const name = String(call?.name || '').trim();
@@ -4229,11 +4221,11 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, _a
                 }
             }
             session.workingProfile = sanitizeDirectorProfile(session.workingProfile);
-            const after = JSON.stringify(session.workingProfile.director.tools);
+            const after = JSON.stringify(session.workingProfile.tools);
             const profileChanged = before !== after;
             const actionText = profileChanged ? 'Director default tools updated.' : 'Director default tools patch produced no changes.';
             actions.push(actionText);
-            pushToolResult({ ok: true, changed: profileChanged, action: actionText, tools: session.workingProfile.director.tools });
+            pushToolResult({ ok: true, changed: profileChanged, action: actionText, tools: session.workingProfile.tools });
             if (profileChanged) changed = true;
             continue;
         }
@@ -4260,11 +4252,11 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, _a
                 }
             }
             session.workingProfile = sanitizeDirectorProfile(session.workingProfile);
-            const after = JSON.stringify(session.workingProfile.director.mainAgent.tools);
+            const after = JSON.stringify(session.workingProfile.mainAgent.tools);
             const profileChanged = before !== after;
             const actionText = profileChanged ? 'Director main-agent tools override updated.' : 'Director main-agent tools patch produced no changes.';
             actions.push(actionText);
-            pushToolResult({ ok: true, changed: profileChanged, action: actionText, tools: session.workingProfile.director.mainAgent.tools });
+            pushToolResult({ ok: true, changed: profileChanged, action: actionText, tools: session.workingProfile.mainAgent.tools });
             if (profileChanged) changed = true;
             continue;
         }
@@ -4318,13 +4310,13 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, _a
                 }
             }
             session.workingProfile = sanitizeDirectorProfile(session.workingProfile);
-            const after = JSON.stringify(session.workingProfile.director.subAgents[subAgentIdx]?.tools || {});
+            const after = JSON.stringify(session.workingProfile.subAgents[subAgentIdx]?.tools || {});
             const profileChanged = before !== after;
             const actionText = profileChanged
                 ? `Sub-agent "${id}" tools override updated.`
                 : `Sub-agent "${id}" tools patch produced no changes.`;
             actions.push(actionText);
-            pushToolResult({ ok: true, changed: profileChanged, action: actionText, tools: session.workingProfile.director.subAgents[subAgentIdx]?.tools });
+            pushToolResult({ ok: true, changed: profileChanged, action: actionText, tools: session.workingProfile.subAgents[subAgentIdx]?.tools });
             if (profileChanged) changed = true;
             continue;
         }
@@ -5258,11 +5250,9 @@ function bindUi() {
         if (!dotPath) return;
         const { editor } = getDirectorEditorForElement(this);
         if (!editor || typeof editor !== 'object') return;
-        if (!editor.director || typeof editor.director !== 'object') {
-            editor.director = createDefaultDirectorProfile().director;
-        }
+        ensureDirectorEditorIntegrity(editor);
         const value = readDirectorInputValue(this);
-        setDirectorFieldByDotPath(editor.director, dotPath, value);
+        setDirectorFieldByDotPath(editor, dotPath, value);
     });
 
     jQuery(document).on('input.lukerOrchEditor change.lukerOrchEditor', '.luker_orch_editor_popup [data-orch-subagent-field]', function (event) {
@@ -5274,8 +5264,8 @@ function bindUi() {
         const index = Number($el.attr('data-subagent-index'));
         if (!field || !Number.isInteger(index) || index < 0) return;
         const { editor } = getDirectorEditorForElement(this);
-        if (!editor?.director) return;
-        const subAgents = editor.director.subAgents;
+        if (!editor) return;
+        const subAgents = editor.subAgents;
         if (!Array.isArray(subAgents) || !subAgents[index] || typeof subAgents[index] !== 'object') {
             return;
         }
@@ -5284,11 +5274,11 @@ function bindUi() {
 
     jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-orch-add-subagent]', function () {
         const { editor } = getDirectorEditorForElement(this);
-        if (!editor?.director) return;
-        if (!Array.isArray(editor.director.subAgents)) {
-            editor.director.subAgents = [];
+        if (!editor) return;
+        if (!Array.isArray(editor.subAgents)) {
+            editor.subAgents = [];
         }
-        editor.director.subAgents.push({
+        editor.subAgents.push({
             id: '',
             description: '',
             systemPrompt: '',
@@ -5305,8 +5295,8 @@ function bindUi() {
         const index = Number($el.attr('data-subagent-index'));
         if (!Number.isInteger(index) || index < 0) return;
         const { editor } = getDirectorEditorForElement(this);
-        if (!editor?.director) return;
-        const subAgents = editor.director.subAgents;
+        if (!editor) return;
+        const subAgents = editor.subAgents;
         if (!Array.isArray(subAgents) || index >= subAgents.length) return;
         subAgents.splice(index, 1);
         // Re-render so indices below the removed row shift up correctly.
@@ -5324,15 +5314,15 @@ function bindUi() {
             return;
         }
         const { editor } = getDirectorEditorForElement(this);
-        if (!editor?.director) return;
-        const subAgents = Array.isArray(editor.director.subAgents)
-            ? editor.director.subAgents
+        if (!editor) return;
+        const subAgents = Array.isArray(editor.subAgents)
+            ? editor.subAgents
             : [];
         const defaultText = buildDirectorDefaultSystemPrompt({ subAgents });
-        if (!editor.director.mainAgent || typeof editor.director.mainAgent !== 'object') {
-            editor.director.mainAgent = {};
+        if (!editor.mainAgent || typeof editor.mainAgent !== 'object') {
+            editor.mainAgent = {};
         }
-        editor.director.mainAgent.systemPrompt = defaultText;
+        editor.mainAgent.systemPrompt = defaultText;
         // Refresh so the textarea shows the new value.
         refreshOrchestrationEditorPopup(getContext(), getSettings());
         notifySuccess(i18n('Reset main-agent system prompt to default'));
@@ -5427,17 +5417,17 @@ function bindUi() {
         const toolName = String(jQuery(this).attr('data-luker-director-default-tool') || '');
         const checked = Boolean(jQuery(this).prop('checked'));
         const { editor } = getDirectorEditorForElement(this);
-        if (!editor?.director) return;
-        if (!editor.director.tools || typeof editor.director.tools !== 'object') {
-            editor.director.tools = sanitizeAgentToolFlags({});
+        if (!editor) return;
+        if (!editor.tools || typeof editor.tools !== 'object') {
+            editor.tools = sanitizeAgentToolFlags({});
         }
         const [namespace, verb] = toolName.split('.');
         if (!namespace || !verb) return;
-        if (!editor.director.tools[namespace] || typeof editor.director.tools[namespace] !== 'object') {
-            editor.director.tools[namespace] = {};
+        if (!editor.tools[namespace] || typeof editor.tools[namespace] !== 'object') {
+            editor.tools[namespace] = {};
         }
-        editor.director.tools[namespace][verb] = checked;
-        editor.director.tools.finalize = false;
+        editor.tools[namespace][verb] = checked;
+        editor.tools.finalize = false;
     });
 
     // Director-mode main-agent tools override (only fires when the user
@@ -5447,20 +5437,20 @@ function bindUi() {
         const toolName = String(jQuery(this).attr('data-luker-director-mainagent-tool') || '');
         const checked = Boolean(jQuery(this).prop('checked'));
         const { editor } = getDirectorEditorForElement(this);
-        if (!editor?.director) return;
-        if (!editor.director.mainAgent || typeof editor.director.mainAgent !== 'object') {
-            editor.director.mainAgent = {};
+        if (!editor) return;
+        if (!editor.mainAgent || typeof editor.mainAgent !== 'object') {
+            editor.mainAgent = {};
         }
-        if (!editor.director.mainAgent.tools || typeof editor.director.mainAgent.tools !== 'object') {
-            editor.director.mainAgent.tools = sanitizeAgentToolFlags({});
+        if (!editor.mainAgent.tools || typeof editor.mainAgent.tools !== 'object') {
+            editor.mainAgent.tools = sanitizeAgentToolFlags({});
         }
         const [namespace, verb] = toolName.split('.');
         if (!namespace || !verb) return;
-        if (!editor.director.mainAgent.tools[namespace] || typeof editor.director.mainAgent.tools[namespace] !== 'object') {
-            editor.director.mainAgent.tools[namespace] = {};
+        if (!editor.mainAgent.tools[namespace] || typeof editor.mainAgent.tools[namespace] !== 'object') {
+            editor.mainAgent.tools[namespace] = {};
         }
-        editor.director.mainAgent.tools[namespace][verb] = checked;
-        editor.director.mainAgent.tools.finalize = false;
+        editor.mainAgent.tools[namespace][verb] = checked;
+        editor.mainAgent.tools.finalize = false;
     });
 
     // Director-mode per-sub-agent tools override.
@@ -5470,8 +5460,8 @@ function bindUi() {
         const index = Number(jQuery(this).attr('data-subagent-index'));
         if (!Number.isInteger(index) || index < 0) return;
         const { editor } = getDirectorEditorForElement(this);
-        if (!editor?.director) return;
-        const subAgents = editor.director.subAgents;
+        if (!editor) return;
+        const subAgents = editor.subAgents;
         if (!Array.isArray(subAgents) || !subAgents[index] || typeof subAgents[index] !== 'object') return;
         const subAgent = subAgents[index];
         if (!subAgent.tools || typeof subAgent.tools !== 'object') {
@@ -5492,40 +5482,40 @@ function bindUi() {
     // null so cascade-resolver falls back to the next layer.
     jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-luker-action="director-default-tools-enable-all"]', function () {
         const { editor } = getDirectorEditorForElement(this);
-        if (!editor?.director) return;
-        editor.director.tools = sanitizeAgentToolFlags({}, { defaultAllOn: true, forceFinalize: false });
-        editor.director.tools.finalize = false;
+        if (!editor) return;
+        editor.tools = sanitizeAgentToolFlags({}, { defaultAllOn: true, forceFinalize: false });
+        editor.tools.finalize = false;
         refreshOrchestrationEditorPopup(getContext(), getSettings());
     });
 
     jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-luker-action="director-default-tools-disable-all"]', function () {
         const { editor } = getDirectorEditorForElement(this);
-        if (!editor?.director) return;
-        editor.director.tools = sanitizeAgentToolFlags({}, { defaultAllOn: false, forceFinalize: false });
-        editor.director.tools.finalize = false;
+        if (!editor) return;
+        editor.tools = sanitizeAgentToolFlags({}, { defaultAllOn: false, forceFinalize: false });
+        editor.tools.finalize = false;
         refreshOrchestrationEditorPopup(getContext(), getSettings());
     });
 
     jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-luker-action="director-mainagent-tools-override"]', function () {
         const { editor } = getDirectorEditorForElement(this);
-        if (!editor?.director) return;
-        if (!editor.director.mainAgent || typeof editor.director.mainAgent !== 'object') {
-            editor.director.mainAgent = {};
+        if (!editor) return;
+        if (!editor.mainAgent || typeof editor.mainAgent !== 'object') {
+            editor.mainAgent = {};
         }
         // Snapshot the current default so the override starts from the
         // user's prior inherited state instead of all-off.
-        const defaultSnapshot = editor.director.tools && typeof editor.director.tools === 'object'
-            ? editor.director.tools
+        const defaultSnapshot = editor.tools && typeof editor.tools === 'object'
+            ? editor.tools
             : {};
-        editor.director.mainAgent.tools = sanitizeAgentToolFlags(defaultSnapshot, { defaultAllOn: false, forceFinalize: false });
-        editor.director.mainAgent.tools.finalize = false;
+        editor.mainAgent.tools = sanitizeAgentToolFlags(defaultSnapshot, { defaultAllOn: false, forceFinalize: false });
+        editor.mainAgent.tools.finalize = false;
         refreshOrchestrationEditorPopup(getContext(), getSettings());
     });
 
     jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-luker-action="director-mainagent-tools-reset"]', function () {
         const { editor } = getDirectorEditorForElement(this);
-        if (!editor?.director?.mainAgent) return;
-        editor.director.mainAgent.tools = null;
+        if (!editor?.mainAgent) return;
+        editor.mainAgent.tools = null;
         refreshOrchestrationEditorPopup(getContext(), getSettings());
     });
 
@@ -5533,11 +5523,11 @@ function bindUi() {
         const index = Number(jQuery(this).attr('data-subagent-index'));
         if (!Number.isInteger(index) || index < 0) return;
         const { editor } = getDirectorEditorForElement(this);
-        if (!editor?.director) return;
-        const subAgents = editor.director.subAgents;
+        if (!editor) return;
+        const subAgents = editor.subAgents;
         if (!Array.isArray(subAgents) || !subAgents[index] || typeof subAgents[index] !== 'object') return;
-        const defaultSnapshot = editor.director.tools && typeof editor.director.tools === 'object'
-            ? editor.director.tools
+        const defaultSnapshot = editor.tools && typeof editor.tools === 'object'
+            ? editor.tools
             : {};
         subAgents[index].tools = sanitizeAgentToolFlags(defaultSnapshot, { defaultAllOn: false, forceFinalize: false });
         subAgents[index].tools.finalize = false;
@@ -5548,8 +5538,8 @@ function bindUi() {
         const index = Number(jQuery(this).attr('data-subagent-index'));
         if (!Number.isInteger(index) || index < 0) return;
         const { editor } = getDirectorEditorForElement(this);
-        if (!editor?.director) return;
-        const subAgents = editor.director.subAgents;
+        if (!editor) return;
+        const subAgents = editor.subAgents;
         if (!Array.isArray(subAgents) || !subAgents[index] || typeof subAgents[index] !== 'object') return;
         subAgents[index].tools = null;
         refreshOrchestrationEditorPopup(getContext(), getSettings());

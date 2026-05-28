@@ -413,7 +413,7 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
 /**
  * Render a single sub-agent row for the director editor. Each row binds
  * its inputs to the position-keyed sub-agent entry under
- * `profile.director.subAgents[subagentIndex]`; the main.js binders use
+ * `profile.subAgents[subagentIndex]`; the main.js binders use
  * `data-subagent-index` to locate the entry. Empty `id` / `systemPrompt`
  * are normal in-flight (the sanitizer only drops them at runtime), so
  * the renderer does not validate.
@@ -494,10 +494,10 @@ function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex, directo
  *   } }
  *
  * The binders in main.js consume `[data-orch-director-field=...]`
- * (dot-path under `profile.director.*`) and
+ * (dot-path under `profile.*`) and
  * `[data-orch-subagent-field=...]` (indexed by `data-subagent-index`).
  * `[data-orch-add-subagent]` / `[data-orch-remove-subagent]` mutate
- * `profile.director.subAgents` and trigger a full popup re-render so
+ * `profile.subAgents` and trigger a full popup re-render so
  * the row indices stay aligned with the underlying array.
  */
 export function renderDirectorWorkspace(deps, scope, profile, title = '') {
@@ -509,8 +509,8 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
         renderOpenAIPresetOptions,
     } = deps;
     const safeScope = scope === 'character' ? 'character' : 'global';
-    const director = (profile && typeof profile === 'object' && profile.director && typeof profile.director === 'object')
-        ? profile.director
+    const director = (profile && typeof profile === 'object')
+        ? profile
         : {};
     const mainAgent = director.mainAgent && typeof director.mainAgent === 'object' ? director.mainAgent : {};
     const subAgents = Array.isArray(director.subAgents) ? director.subAgents : [];

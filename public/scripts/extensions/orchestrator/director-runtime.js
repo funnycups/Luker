@@ -310,7 +310,7 @@ export function renderMainAgentSystemPromptWithOpenNotes(systemPrompt, openNotes
  *
  * Tools:
  *   - `dispatch_subagent` / `await_subagents`: routed through the dispatcher
- *     created from `profile.director.subAgents`.
+ *     created from `profile.subAgents`.
  *   - `write_message` / `apply_message_patches` / `finalize`: routed through
  *     the director-tools executors.
  *   - Other tool names: delegated to `deps.executeLoopTool` (the central
@@ -331,7 +331,13 @@ export function renderMainAgentSystemPromptWithOpenNotes(systemPrompt, openNotes
  * legitimate way to exit; `maxRounds` is just the upper bound.
  */
 export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
-    const director = profile?.director || {};
+    // Profile shape post-flatten: top-level mainAgent / subAgents / limits.
+    // Legacy callers may still pass `{ mode, director: {...} }`; auto-detect
+    // so both shapes round-trip cleanly during the migration window.
+    const safeProfile = profile && typeof profile === 'object' ? profile : {};
+    const director = safeProfile.director && typeof safeProfile.director === 'object'
+        ? safeProfile.director
+        : safeProfile;
     const limits = {
         maxRounds: Number(director.maxRounds) > 0 ? Number(director.maxRounds) : 20,
         maxConcurrentSubagents: Number(director.maxConcurrentSubagents) > 0 ? Number(director.maxConcurrentSubagents) : 4,

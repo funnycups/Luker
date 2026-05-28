@@ -73,7 +73,7 @@ describe('director runtime trace', () => {
 
         await runMainAgentLoop({
             handle,
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 5, tools: {} } },
+            profile: { mode: 'director', mainAgent: {}, subAgents: [], maxRounds: 5, tools: {} },
             eventData: ev,
             deps: {
                 generateTaskStreamForMainAgent: fakeStream,
@@ -119,7 +119,7 @@ describe('director runtime trace', () => {
 
         await runMainAgentLoop({
             handle,
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 5, tools: {} } },
+            profile: { mode: 'director', mainAgent: {}, subAgents: [], maxRounds: 5, tools: {} },
             eventData: ev,
             deps: {
                 generateTaskStreamForMainAgent: fakeStream,
@@ -174,14 +174,12 @@ describe('director runtime trace', () => {
             handle,
             profile: {
                 mode: 'director',
-                director: {
-                    mainAgent: {},
-                    subAgents: [{ id: 'critic', description: 'c', systemPrompt: 'c' }],
-                    maxRounds: 5,
-                    maxConcurrentSubagents: 2,
-                    maxTotalSubagentRuns: 5,
-                    tools: {},
-                },
+                mainAgent: {},
+                subAgents: [{ id: 'critic', description: 'c', systemPrompt: 'c' }],
+                maxRounds: 5,
+                maxConcurrentSubagents: 2,
+                maxTotalSubagentRuns: 5,
+                tools: {},
             },
             eventData: ev,
             deps: {
@@ -247,13 +245,11 @@ describe('director runtime trace', () => {
             handle,
             profile: {
                 mode: 'director',
-                director: {
-                    mainAgent: {},
-                    subAgents: [],
-                    maxRounds: 5,
-                    maxTotalSubagentRuns: 5,
-                    tools: {},
-                },
+                mainAgent: {},
+                subAgents: [],
+                maxRounds: 5,
+                maxTotalSubagentRuns: 5,
+                tools: {},
             },
             eventData: ev,
             deps: {
@@ -302,7 +298,7 @@ describe('director runtime trace', () => {
 
         await runMainAgentLoop({
             handle,
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 5, tools: {} } },
+            profile: { mode: 'director', mainAgent: {}, subAgents: [], maxRounds: 5, tools: {} },
             eventData: ev,
             deps: {
                 generateTaskStreamForMainAgent: fakeStream,
@@ -354,7 +350,7 @@ describe('director runtime trace', () => {
 
         await expect(runMainAgentLoop({
             handle,
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 5, tools: {} } },
+            profile: { mode: 'director', mainAgent: {}, subAgents: [], maxRounds: 5, tools: {} },
             eventData: ev,
             deps: {
                 generateTaskStreamForMainAgent: fakeStream,
@@ -411,7 +407,7 @@ describe('director runtime trace', () => {
 
         await expect(runMainAgentLoop({
             handle,
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 5, tools: {} } },
+            profile: { mode: 'director', mainAgent: {}, subAgents: [], maxRounds: 5, tools: {} },
             eventData: ev,
             deps: {
                 generateTaskStreamForMainAgent: fakeStream,
