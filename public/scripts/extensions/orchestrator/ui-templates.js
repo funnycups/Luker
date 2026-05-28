@@ -434,6 +434,14 @@ function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex, directo
     const apiPresetName = String(safe.apiPresetName ?? '');
     const promptPresetName = String(safe.promptPresetName ?? '');
     const subagentTools = (safe.tools && typeof safe.tools === 'object') ? safe.tools : null;
+    // Per-sub-agent runaway cap. `null` (default) means "inherit the
+    // runtime default (16)"; the input shows the placeholder and renders
+    // empty so the user can leave it alone. An explicit integer in
+    // [1, 50] pins the cap for that one sub-agent.
+    const maxRoundsRaw = safe.maxRounds;
+    const maxRoundsValue = Number.isFinite(Number(maxRoundsRaw)) && Number(maxRoundsRaw) > 0
+        ? String(Math.floor(Number(maxRoundsRaw)))
+        : '';
     const context = getContext();
     return `
 <div class="luker_orch_subagent_row luker-studio-card" data-subagent-row="${escapeHtml(id)}" data-subagent-index="${subagentIndex}" data-scope="${safeScope}">
@@ -463,6 +471,11 @@ function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex, directo
         <span data-i18n="Prompt preset">${escapeHtml(i18n('Prompt preset'))}</span>${renderPresetHelpButton({ kind: 'agent' })}
         <select class="text_pole" data-orch-subagent-field="promptPresetName" data-subagent-index="${subagentIndex}" data-scope="${safeScope}">${renderOpenAIPresetOptions(context, promptPresetName, i18n('(Global orchestration prompt preset)'))}</select>
         <div class="director-preset-help" data-i18n="director_preset_help_pure_instruction">${escapeHtml(i18n('Pick a pure-instruction preset. Typical RP presets that prescribe an output format (forced CoT, mandatory schema blocks) will block the agent\'s tool calls.'))}</div>
+    </label>
+    <label>
+        <span data-i18n="Max tool-call rounds (this sub-agent)">${escapeHtml(i18n('Max tool-call rounds (this sub-agent)'))}</span>
+        <input class="text_pole" type="number" min="1" max="50" step="1" placeholder="${escapeHtml(i18n('Inherit default (16)'))}" data-orch-subagent-field="maxRounds" data-subagent-index="${subagentIndex}" data-scope="${safeScope}" value="${escapeHtml(maxRoundsValue)}" />
+        <div class="director-preset-help">${escapeHtml(i18n('Per-sub-agent runaway cap. Leave empty to inherit the default (16). Valid range: 1–50.'))}</div>
     </label>
     <details class="luker_orch_tools_section">
         <summary>${escapeHtml(i18n('Tools'))}</summary>

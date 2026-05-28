@@ -321,6 +321,10 @@ export function registerLocaleData() {
         // Director mode preset hint — long English text with semicolons,
         // so data-i18n uses a custom key (the i18n parser splits on `;`).
         'director_preset_help_pure_instruction': '请选择纯指令预设。常规 RP 预设里强制输出格式的指令（强制 CoT、必填 schema 块等）会卡死 agent 的工具调用通道。',
+        // Per-sub-agent runaway cap (new field on sub-agent profile).
+        'Max tool-call rounds (this sub-agent)': '工具调用最大轮数（此子代理）',
+        'Inherit default (16)': '继承默认值（16）',
+        'Per-sub-agent runaway cap. Leave empty to inherit the default (16). Valid range: 1–50.': '每个子代理独立的失控保护上限。留空使用默认值（16）。有效范围 1–50。',
         // Director runtime trace popup.
         'Model reasoning': '模型推理',
         'Assistant text': '助手输出',
@@ -653,6 +657,10 @@ export function registerLocaleData() {
         // Director mode preset hint — long English text with semicolons,
         // so data-i18n uses a custom key (the i18n parser splits on `;`).
         'director_preset_help_pure_instruction': '請選擇純指令預設。常規 RP 預設裡強制輸出格式的指令（強制 CoT、必填 schema 塊等）會卡死 agent 的工具呼叫通道。',
+        // Per-sub-agent runaway cap (new field on sub-agent profile).
+        'Max tool-call rounds (this sub-agent)': '工具呼叫最大輪數（此子代理）',
+        'Inherit default (16)': '繼承預設值（16）',
+        'Per-sub-agent runaway cap. Leave empty to inherit the default (16). Valid range: 1–50.': '每個子代理獨立的失控保護上限。留空使用預設值（16）。有效範圍 1–50。',
         // Director runtime trace popup.
         'Model reasoning': '模型推理',
         'Assistant text': '助手輸出',

@@ -295,14 +295,17 @@ export async function executeGetDraftTool(handle) {
 // ── Sub-agent dispatcher ──
 
 /**
- * Default cap on the sub-agent's own tool-call mini-loop. Independent
- * from the main agent's `maxRounds` — sub-agents are expected to
- * converge in modest rounds (gather context, then emit a final text
- * response). The cap is a runaway safety net; in practice a short
- * critic finishes in 1-3 rounds, and a recall-style sub-agent
- * (memory_scout / memory_curator) doing schema + a few find_by_name +
- * brief + 1-2 drill calls fits in ~10-12 rounds. 16 gives those a
- * comfortable headroom without letting a runaway burn the whole turn.
+ * Default cap on the sub-agent's own tool-call mini-loop. Used when a
+ * sub-agent profile does not pin its own `maxRounds`. Independent from
+ * the main agent's `maxRounds` — sub-agents are expected to converge in
+ * modest rounds (gather context, then emit a final text response). The
+ * cap is a runaway safety net; in practice a short critic finishes in
+ * 1-3 rounds, and a recall-style sub-agent (memory_scout /
+ * memory_curator) doing schema + a few find_by_name + brief + 1-2 drill
+ * calls fits in ~10-12 rounds. 16 gives those a comfortable headroom
+ * without letting a runaway burn the whole turn. Users / AI iteration
+ * can override per sub-agent via `subAgents[].maxRounds` (clamped to
+ * [1, 50] by the sanitizer); `null` keeps this default.
  */
 const SUB_AGENT_MAX_ROUNDS = 16;
 
@@ -600,6 +603,9 @@ export function createSubagentDispatcher({
             task,
             parentMessages: Array.isArray(__parentMessages) ? __parentMessages : null,
             agentTools: spec?.tools ?? null,
+            agentMaxRounds: Number.isFinite(Number(spec?.maxRounds)) && Number(spec.maxRounds) > 0
+                ? Math.floor(Number(spec.maxRounds))
+                : null,
         });
     }
 
@@ -649,12 +655,21 @@ export function createSubagentDispatcher({
             task,
             parentMessages: Array.isArray(__parentMessages) ? __parentMessages : null,
             agentTools: null,
+            agentMaxRounds: null,
         });
     }
 
-    async function runDispatchInternal({ handleId, displayId, isInline, label, systemPrompt, apiPresetName, promptPresetName, task, parentMessages, agentTools }) {
+    async function runDispatchInternal({ handleId, displayId, isInline, label, systemPrompt, apiPresetName, promptPresetName, task, parentMessages, agentTools, agentMaxRounds }) {
         totalRuns++;
         safeEnsureSection(label);
+        // Effective per-dispatch round cap: per-agent override if pinned,
+        // otherwise the module-level default. Already clamped to [1, 50]
+        // by the sanitizer for configured agents and by the inline-dispatch
+        // tool schema for inline ones; the > 0 guard keeps a defensive
+        // floor in case a caller passes 0 / negative.
+        const effectiveMaxRounds = Number.isFinite(Number(agentMaxRounds)) && Number(agentMaxRounds) > 0
+            ? Math.floor(Number(agentMaxRounds))
+            : SUB_AGENT_MAX_ROUNDS;
 
         // Per-dispatch tool schemas: agent's own tools override (object)
         // wins; null/undefined falls back to profile.tools default.
@@ -734,7 +749,7 @@ export function createSubagentDispatcher({
             try {
                 let finalText = '';
                 let converged = false;
-                for (let r = 0; r < SUB_AGENT_MAX_ROUNDS; r++) {
+                for (let r = 0; r < effectiveMaxRounds; r++) {
                     if (childSignal.aborted) {
                         break;
                     }
@@ -807,7 +822,7 @@ export function createSubagentDispatcher({
                     return { handleId, subagentId: displayId, error: msg };
                 }
                 if (!converged) {
-                    const msg = `did not converge within ${SUB_AGENT_MAX_ROUNDS} rounds`;
+                    const msg = `did not converge within ${effectiveMaxRounds} rounds`;
                     safeMarkSectionStatus(label, `error: ${msg}`);
                     completionNotifications.push({ handleId, subagentId: displayId, status: 'failed', summary: msg });
                     recordSubagentFinish(traceEntry, { status: 'failed', error: msg, reasoningText: aggregatedReasoning });

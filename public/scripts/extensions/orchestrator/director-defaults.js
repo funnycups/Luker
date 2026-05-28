@@ -509,6 +509,10 @@ const DIRECTOR_LIMIT_BOUNDS = Object.freeze({
     maxRounds: { min: 1, max: 50, default: 20 },
     maxConcurrentSubagents: { min: 1, max: 16, default: 4 },
     maxTotalSubagentRuns: { min: 1, max: 100, default: 16 },
+    // Per-sub-agent tool-call cap. Default (`null`) inherits the runtime
+    // hardcoded `SUB_AGENT_MAX_ROUNDS = 16`; explicit numeric values are
+    // clamped into [1, 50] like the main agent's cap.
+    subAgentMaxRounds: { min: 1, max: 50 },
 });
 
 export function getDirectorLimitBounds() {
@@ -1316,7 +1320,10 @@ function buildDefaultDirectorSubAgents() {
 }
 
 export function createDefaultDirectorProfile() {
-    return {
+    // Route the hand-written defaults through the sanitizer so the result
+    // is always canonical (e.g. each sub-agent carries the explicit
+    // `maxRounds: null` "inherit default" sentinel rather than `undefined`).
+    return sanitizeDirectorProfile({
         mode: ORCH_EXECUTION_MODE_DIRECTOR,
         mainAgent: {
             promptPresetName: '',
@@ -1329,7 +1336,7 @@ export function createDefaultDirectorProfile() {
         maxTotalSubagentRuns: DIRECTOR_LIMIT_BOUNDS.maxTotalSubagentRuns.default,
         tools: buildDefaultDirectorTools(),
         discardOnAbort: false,
-    };
+    });
 }
 
 function clampInt(value, { min, max, default: def }) {
@@ -1404,6 +1411,20 @@ export function sanitizeDirectorProfile(profile) {
     // Dedupe sub-agents by id (last wins), drop invalid entries.
     const subAgentsRaw = Array.isArray(directorFields.subAgents) ? directorFields.subAgents : [];
     const subAgentMap = new Map();
+    // Per-sub-agent maxRounds is optional. Sentinel `null` means "inherit
+    // the runtime hardcoded default (SUB_AGENT_MAX_ROUNDS)". A finite
+    // integer in [1, 50] is preserved (after clamp + floor). Anything else
+    // (undefined / NaN / string / 0) collapses to null so the runtime
+    // dispatcher's `spec.maxRounds || SUB_AGENT_MAX_ROUNDS` fallback fires.
+    const clampSubMaxRounds = (raw) => {
+        if (raw === null || raw === undefined) return null;
+        const n = Number(raw);
+        if (!Number.isFinite(n)) return null;
+        const floored = Math.floor(n);
+        if (floored < 1) return bounds.subAgentMaxRounds.min;
+        if (floored > bounds.subAgentMaxRounds.max) return bounds.subAgentMaxRounds.max;
+        return floored;
+    };
     for (const a of subAgentsRaw) {
         if (!a || typeof a !== 'object') continue;
         const id = String(a.id ?? '').trim();
@@ -1416,6 +1437,9 @@ export function sanitizeDirectorProfile(profile) {
             promptPresetName: String(a.promptPresetName ?? '').trim(),
             apiPresetName: String(a.apiPresetName ?? '').trim(),
             tools: sanitizeAgentOverride(a.tools),
+            maxRounds: Object.prototype.hasOwnProperty.call(a, 'maxRounds')
+                ? clampSubMaxRounds(a.maxRounds)
+                : null,
         });
     }
 

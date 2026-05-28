@@ -3009,7 +3009,7 @@ function buildAiIterationToolSet(session = null) {
                 type: 'function',
                 function: {
                     name: 'luker_orch_set_director_subagent',
-                    description: 'Create or update one director sub-agent by id. id is required; other fields patch the existing sub-agent or initialize a new one. Leave apiPresetName and promptPresetName empty unless the user explicitly requests per-sub-agent routing.',
+                    description: 'Create or update one director sub-agent by id. id is required; other fields patch the existing sub-agent or initialize a new one. Leave apiPresetName and promptPresetName empty unless the user explicitly requests per-sub-agent routing. maxRounds caps that sub-agent\'s own tool-call loop ([1, 50]); omit / null to inherit the runtime default (16) — only set when the user asks for a tighter or looser cap.',
                     parameters: {
                         type: 'object',
                         properties: {
@@ -3018,6 +3018,7 @@ function buildAiIterationToolSet(session = null) {
                             systemPrompt: { type: 'string' },
                             apiPresetName: { type: 'string' },
                             promptPresetName: { type: 'string' },
+                            maxRounds: { type: ['integer', 'null'], minimum: 1, maximum: 50 },
                         },
                         required: ['id'],
                         additionalProperties: false,
@@ -4143,6 +4144,14 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, _a
                 apiPresetName: typeof args.apiPresetName === 'string' ? String(args.apiPresetName) : (existing?.apiPresetName || ''),
                 promptPresetName: typeof args.promptPresetName === 'string' ? String(args.promptPresetName) : (existing?.promptPresetName || ''),
                 tools: existing?.tools ?? null,
+                // Explicit `null` from the AI clears the cap (inherit
+                // runtime default); omitting the key keeps whatever the
+                // existing spec had. The sanitizer is the source of
+                // truth for clamping into [1, 50] so the executor
+                // doesn't re-clamp here.
+                maxRounds: Object.prototype.hasOwnProperty.call(args, 'maxRounds')
+                    ? args.maxRounds
+                    : (existing?.maxRounds ?? null),
             };
             if (existingIndex >= 0) {
                 director.subAgents[existingIndex] = next;
@@ -5269,7 +5278,19 @@ function bindUi() {
         if (!Array.isArray(subAgents) || !subAgents[index] || typeof subAgents[index] !== 'object') {
             return;
         }
-        subAgents[index][field] = readDirectorInputValue(this);
+        // maxRounds is an optional number — empty input means "inherit
+        // runtime default" (null), not zero. Special-case the read so a
+        // user clearing the box restores the inherit semantics rather than
+        // pinning the cap to 1 (where the sanitizer would clamp 0).
+        let value;
+        if (field === 'maxRounds') {
+            const raw = String($el.val() ?? '').trim();
+            const n = raw === '' ? null : Number(raw);
+            value = n === null || !Number.isFinite(n) ? null : Math.floor(n);
+        } else {
+            value = readDirectorInputValue(this);
+        }
+        subAgents[index][field] = value;
     });
 
     jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-orch-add-subagent]', function () {
@@ -5285,6 +5306,7 @@ function bindUi() {
             apiPresetName: '',
             promptPresetName: '',
             tools: null,
+            maxRounds: null,
         });
         // Re-render so the new row gets its `data-subagent-index`.
         refreshOrchestrationEditorPopup(getContext(), getSettings());
