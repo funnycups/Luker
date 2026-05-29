@@ -41,6 +41,11 @@ export const LOOP_ITERATION_CONTRACT_LINES = Object.freeze([
     '- If you set apiPresetName, use only a name from available_connection_profiles. If you set promptPresetName, use only a name from available_chat_completion_presets.',
     '- Prefer targeted edits — bumping max_rounds should not rewrite the entire system_prompt.',
     '- If user asks to test, call luker_orch_simulate with suitable input.',
+    'The luker_orch_simulate tool now opens a popup so the user can review the actual orchestration run (per-round agent turns) produced under the current chat, world-info, and preset. The user may annotate parts they\'re unhappy with. The tool result you receive will be a tagged text envelope:',
+    '- <simulation_chain> contains the full chain of rounds and tool calls. Spans wrapped in <<<ANNOTATION id=N>>>...<<</ANNOTATION>>> are flagged by the user.',
+    '- <annotations> lists each [#N] with its location, snippet, and the user\'s comment.',
+    '- <status submitted="false"/> means the user cancelled without annotating.',
+    'Prioritise resolving the annotated points before other improvements.',
     '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
     '- Keep output practical and concise for real RP usage.',
 ]);

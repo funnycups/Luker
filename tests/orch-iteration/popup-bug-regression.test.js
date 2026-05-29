@@ -286,3 +286,77 @@ describe('iter-studio Stop button: race + immediate feedback', () => {
         expect(finallyResets.length).toBeGreaterThanOrEqual(2);
     });
 });
+
+describe('director-mode iteration: luker_orch_simulate is wired through', () => {
+    // Pins the wiring landed when director-mode simulate was enabled. The
+    // earlier shape had `simulations = []  // director skips simulate for v1`
+    // in `executeDirectorIterationToolCalls` and the director tool
+    // catalog had no `luker_orch_simulate` entry, so the workbench-LLM
+    // could not test director profiles via the iteration popup. Each
+    // assertion catches one piece of that wiring regressing.
+
+    let mainSrc;
+    beforeAll(async () => {
+        mainSrc = await readOrch('main.js');
+    });
+
+    test('director executor no longer carries the v1-skip comment', () => {
+        // The old shape was `const simulations = [];  // director skips
+        // simulate for v1`. Catching the comment (rather than the empty
+        // initializer) keeps the assertion robust against legitimate
+        // formatting changes.
+        expect(mainSrc).not.toMatch(/director\s+skips\s+simulate/i);
+    });
+
+    test('director executor routes luker_orch_simulate through runAiIterationSimulation', () => {
+        // The block lives between the director-specific tools and the
+        // shared continue/finalize handlers; verify the dispatch shape
+        // matches what loop/agenda/spec already do.
+        const directorExecBlock = mainSrc.match(
+            /async\s+function\s+executeDirectorIterationToolCalls[\s\S]+?\n}/
+        );
+        expect(directorExecBlock).not.toBeNull();
+        expect(directorExecBlock[0]).toMatch(/name\s*===\s*['"]luker_orch_simulate['"]/);
+        expect(directorExecBlock[0]).toMatch(/runAiIterationSimulation\s*\(/);
+    });
+
+    test('director iteration tool catalog registers luker_orch_simulate', () => {
+        // The catalog is the per-mode array returned from getAiIterationTools
+        // when isDirectorIterationSession(session) is true. The simulate
+        // entry must sit alongside the other luker_orch_set_director_* tools.
+        const directorCatalogBlock = mainSrc.match(
+            /isDirectorIterationSession\(session\)\)\s*\{\s*return\s*\[[\s\S]+?\];\s*\}/
+        );
+        expect(directorCatalogBlock).not.toBeNull();
+        expect(directorCatalogBlock[0]).toMatch(/name:\s*['"]luker_orch_simulate['"]/);
+    });
+
+    test('director iteration system prompt explains the annotation envelope', () => {
+        // Shared contract paragraph spec/agenda/loop already carry.
+        // The director block must teach the workbench-LLM how to read
+        // <simulation_chain> / <annotations> / <status submitted="..."/>
+        // so it can act on user annotations after a simulate call.
+        const directorPromptBlock = mainSrc.match(
+            /DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK\s*=\s*\[[\s\S]+?\]\.join\('\\n'\);/
+        );
+        expect(directorPromptBlock).not.toBeNull();
+        expect(directorPromptBlock[0]).toMatch(/luker_orch_simulate/);
+        expect(directorPromptBlock[0]).toMatch(/<simulation_chain>/);
+        expect(directorPromptBlock[0]).toMatch(/<<<ANNOTATION/);
+        expect(directorPromptBlock[0]).toMatch(/submitted="false"/);
+    });
+
+    test('runAiIterationSimulation has a director branch that invokes runMainAgentLoop', () => {
+        // Director can't go through `runOrchestration` because production
+        // director runs claim SillyTavern's takeover handle from the
+        // kernel — there is no callable runDirectorOrchestration. The
+        // simulation path mints a throwaway editor handle and calls
+        // runMainAgentLoop directly. Lock in that wiring.
+        expect(mainSrc).toMatch(/runMainAgentLoop/);
+        expect(mainSrc).toMatch(/createMessageEditorHandle/);
+        // The director branch flows the trace it built into the existing
+        // exportDirectorPayload adapter via the same `trace` accumulator
+        // the agenda/loop/spec branches already use.
+        expect(mainSrc).toMatch(/isDirectorIterationSession\(session\)\s*\)\s*\{[\s\S]+?runDirectorSimulationLoop/);
+    });
+});

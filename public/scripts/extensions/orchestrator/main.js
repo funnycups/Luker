@@ -164,7 +164,8 @@ import {
 import { runAgendaOrchestration } from './agenda-runtime.js';
 import { runSpecOrchestration } from './spec-runtime.js';
 import { runLoopOrchestration, attachNotesFloorState, attachMemoryGraphSession } from './loop-runtime.js';
-import { handleDirectorDispatch } from './director-runtime.js';
+import { handleDirectorDispatch, runMainAgentLoop } from './director-runtime.js';
+import { createMessageEditorHandle } from '../../message-takeover.js';
 import { buildDirectorDefaultSystemPrompt } from './director-default-prompt.js';
 import { createContentPayloadCache } from './director-content-payload.js';
 import { executeLoopTool } from './loop-tools.js';
@@ -236,6 +237,13 @@ import {
     setCharacterSpecOverrideEnabled,
 } from './editor-persist.js';
 import { openOrchestratorIterationStudio } from './iter-studio/studio.js';
+import { openSimulationReview } from '../../iteration-library/simulation-review/index.js';
+import {
+    exportSpecPayload,
+    exportAgendaPayload,
+    exportLoopPayload,
+    exportDirectorPayload,
+} from './simulation-payload-adapter.js';
 
 const MODULE_NAME = 'orchestrator';
 const ORCH_RESULT_EVENT = 'luker.orchestrator.result';
@@ -2007,6 +2015,10 @@ function stringifyIterationSimulationForPrompt(simulation) {
     if (!simulation || typeof simulation !== 'object') {
         return '(none)';
     }
+    if (typeof simulation.toolResultText === 'string' && simulation.toolResultText) {
+        return simulation.toolResultText;
+    }
+    // Legacy fallback for older snapshots stored before this upgrade.
     try {
         return JSON.stringify({
             ok: Boolean(simulation.ok),
@@ -2023,15 +2035,7 @@ function stringifyIterationSimulationListForPrompt(simulations) {
     if (list.length === 0) {
         return '(none)';
     }
-    try {
-        return JSON.stringify(list.map(item => ({
-            ok: Boolean(item?.ok),
-            summary: String(item?.summary || ''),
-            detail: item?.detail && typeof item.detail === 'object' ? item.detail : {},
-        })));
-    } catch {
-        return list.map(item => String(item?.summary || '(simulation)')).join('\n');
-    }
+    return list.map(item => stringifyIterationSimulationForPrompt(item)).join('\n\n---\n\n');
 }
 
 function buildAiIterationAutoContinuePrompt(executionResult) {
@@ -2604,6 +2608,12 @@ export const DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK = [
     '    - `luker_orch_set_director_subagent_tools` / `luker_orch_clear_director_subagent_tools` (by id) to give one sub-agent its own tool set or drop the override.',
     '    Pass only the verbs you intend to change. When a sub-agent or the main agent had no override, the first `set_*_tools` call seeds the override from the current default snapshot before applying the patch.',
     '- Prefer targeted edits. Do not rewrite the whole profile unless the user explicitly asks.',
+    '- If user asks to test, call `luker_orch_simulate` with suitable input.',
+    'The `luker_orch_simulate` tool now opens a popup so the user can review the actual director orchestration run (main-agent rounds + sub-agent dispatches) produced under the current chat, world-info, and preset. The user may annotate parts they\'re unhappy with. The tool result you receive will be a tagged text envelope:',
+    '- <simulation_chain> contains the full chain of main-agent turns, sub-agent dispatches, and tool calls. Spans wrapped in <<<ANNOTATION id=N>>>...<<</ANNOTATION>>> are flagged by the user.',
+    '- <annotations> lists each [#N] with its location, snippet, and the user\'s comment.',
+    '- <status submitted="false"/> means the user cancelled without annotating.',
+    'Prioritise resolving the annotated points before other improvements.',
     '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
     '- Keep output practical and concise for real RP usage.',
 ].join('\n');
@@ -2629,6 +2639,11 @@ export const DEFAULT_AGENDA_ITERATION_MODE_BLOCK = [
     '    - `luker_orch_set_agenda_agent_tools` / `luker_orch_clear_agenda_agent_tools` (by agent_id) to give one agent its own tool set or drop the override.',
     '    Pass only the verbs you intend to change. When an agent had no override, the first `set_*_tools` call seeds the override from the current default snapshot before applying the patch.',
     '- If user asks to test, call luker_orch_simulate with suitable input.',
+    'The luker_orch_simulate tool now opens a popup so the user can review the actual orchestration run (planner / dispatches / finalizer) produced under the current chat, world-info, and preset. The user may annotate parts they\'re unhappy with. The tool result you receive will be a tagged text envelope:',
+    '- <simulation_chain> contains the full chain of agent turns and tool calls. Spans wrapped in <<<ANNOTATION id=N>>>...<<</ANNOTATION>>> are flagged by the user.',
+    '- <annotations> lists each [#N] with its location, snippet, and the user\'s comment.',
+    '- <status submitted="false"/> means the user cancelled without annotating.',
+    'Prioritise resolving the annotated points before other improvements.',
     '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
     '- Keep output practical and concise for real RP usage.',
 ].join('\n');
@@ -2660,6 +2675,11 @@ export const DEFAULT_SPEC_ITERATION_MODE_BLOCK = [
     '    - `luker_orch_set_spec_node_tools` / `luker_orch_clear_spec_node_tools` (by stage_id + node_id) to give one node its own tool set or drop the override.',
     '    Pass only the verbs you intend to change. When a node had no override, the first `set_*_tools` call seeds the override from the current default snapshot before applying the patch.',
     '- If user asks to test, call luker_orch_simulate with suitable input.',
+    'The luker_orch_simulate tool now opens a popup so the user can review the actual orchestration run (stage-by-stage worker / review nodes) produced under the current chat, world-info, and preset. The user may annotate parts they\'re unhappy with. The tool result you receive will be a tagged text envelope:',
+    '- <simulation_chain> contains the full chain of node turns and tool calls. Spans wrapped in <<<ANNOTATION id=N>>>...<<</ANNOTATION>>> are flagged by the user.',
+    '- <annotations> lists each [#N] with its location, snippet, and the user\'s comment.',
+    '- <status submitted="false"/> means the user cancelled without annotating.',
+    'Prioritise resolving the annotated points before other improvements.',
     '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
     '- Keep output practical and concise for real RP usage.',
 ].join('\n');
@@ -3146,6 +3166,22 @@ function buildAiIterationToolSet(session = null) {
                     },
                 },
             },
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_simulate',
+                    description: 'Run director orchestration simulation against recent chat messages or a custom user message. Opens a review popup so the user can inspect the main-agent rounds + sub-agent dispatches the current profile produced and annotate parts they\'re unhappy with.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            recent_messages_n: { type: 'integer' },
+                            simulation_text: { type: 'string' },
+                            trigger: { type: 'string', enum: ['normal', 'regenerate', 'continue'] },
+                        },
+                        additionalProperties: false,
+                    },
+                },
+            },
         ];
     }
     if (isLoopIterationSession(session)) {
@@ -3561,6 +3597,203 @@ function getChatMessagesForSimulation(context, recentMessagesN) {
     return normalizeWorldInfoResolverMessages(all.slice(Math.max(0, all.length - n)));
 }
 
+/**
+ * Run a director-mode simulation by invoking `runMainAgentLoop` directly
+ * with a throwaway editor handle and a synthesized eventData / deps shape.
+ *
+ * Director's production entry point is the GENERATE_TAKEOVER_DISPATCH
+ * subscriber in `init()` below — there is no callable
+ * `runDirectorOrchestration(context, payload, messages, profile)` like
+ * spec / agenda / loop expose, because director claims the assistant
+ * message body from SillyTavern's core `Generate()` and writes through
+ * an editor handle. For simulation we don't want to touch the live chat,
+ * so we mint a throwaway handle whose updates flow into a discarded
+ * buffer; the runtime still goes through write/patch/finalize on that
+ * buffer and the trace records every main-agent round + sub-agent
+ * dispatch exactly as a real turn would. That trace is what
+ * `exportDirectorPayload` reshapes for the simulation-review popup.
+ *
+ * Deps mirror the GENERATE_TAKEOVER_DISPATCH wiring below — the same
+ * generateTask router (honouring useStreamingTransport), the same
+ * notes / memory-graph adapter overlays, the same executeLoopTool entry
+ * point — so a simulation run exercises the production code path. The
+ * trace returned is the one the caller hands to the review popup.
+ *
+ * @param {object} context           SillyTavern context.
+ * @param {object} session           Iteration session (director mode).
+ * @param {Array<object>} simulationMessages  Recent-chat snapshot used as story_context.
+ * @param {AbortSignal|null} abortSignal      User cancel surface.
+ * @returns {Promise<object|null>}   Finalized director trace (with `director.mainAgent.rounds`,
+ *                                   `director.subagents`, `finalMessage`), or null on early exit.
+ */
+async function runDirectorSimulationLoop(context, session, simulationMessages, abortSignal) {
+    // Sanitize the working profile and ensure it carries the director
+    // mode marker — `runMainAgentLoop` auto-detects `{director: {...}}`
+    // wrapping vs. flat-shape, but the safer form is the flat shape with
+    // a `mode` marker so it matches what
+    // `getEffectiveProfile()` returns in production.
+    const directorProfile = sanitizeDirectorProfile(session?.workingProfile);
+    const profileForRuntime = {
+        mode: ORCH_EXECUTION_MODE_DIRECTOR,
+        ...directorProfile,
+    };
+    const settings = extension_settings[MODULE_NAME];
+
+    // Throwaway handle: production seeds originalText / originalReasoning
+    // from the chat slot the kernel will write into; for simulation we
+    // start clean — the runtime will write / patch / finalize against an
+    // empty buffer that nobody else reads. The setOnUpdate listener is a
+    // no-op so chat[] is never touched.
+    const handle = createMessageEditorHandle({
+        generationType: 'normal',
+        originalText: '',
+        originalReasoning: '',
+        abortSignal,
+        owner: 'orchestrator-director-simulate',
+    });
+    handle.setOnUpdate(() => { /* simulation: discard handle updates */ });
+
+    // Synthesize the GENERATE_TAKEOVER_DISPATCH eventData the runtime
+    // expects. `eventData.generateData.prompt` is the chat-completion
+    // messages array that director splices between <story_context>
+    // open/close — we use the simulation-message snapshot here so the
+    // main agent sees the same recent chat slice the workbench-LLM
+    // asked us to simulate against.
+    const eventData = {
+        type: 'normal',
+        placeholderMessageId: 0,
+        generateData: { prompt: simulationMessages },
+        takeoverHandle: handle,
+        abortSignal,
+    };
+
+    // Build a fresh director trace (same shape and lifecycle as the
+    // production handler) so `exportDirectorPayload` can reshape it for
+    // the review popup. Clear any prior trace first to avoid the popup
+    // looking up a stale one if the runtime errors before populating.
+    clearLatestOrchestrationRuntimeTrace(context);
+    const trace = createOrchestrationRuntimeTrace(
+        context,
+        { type: 'normal' },
+        [],
+        { mode: 'director' },
+    );
+    attachOrchestrationRuntimeDirectorState(trace, {
+        mainAgent: {
+            rounds: [],
+            conversation: { messages: [] },
+        },
+        subagents: [],
+    });
+
+    // Mirror the GENERATE_TAKEOVER_DISPATCH `generateTaskRouter` so
+    // simulation honours the same streaming-transport toggle real runs
+    // use. Director-runtime invokes this twice (main agent + sub-agent
+    // dispatcher) so we share one router rather than two near-identical
+    // closures.
+    const generateTaskRouter = async ({ onChunk, ...opts } = {}) => {
+        if (settings?.useStreamingTransport && typeof context?.generateTaskStream === 'function') {
+            const { stream, result } = context.generateTaskStream(opts);
+            if (typeof onChunk === 'function') {
+                (async () => {
+                    try {
+                        for await (const chunk of stream) {
+                            try { onChunk(chunk); } catch (_) { /* best-effort */ }
+                        }
+                    } catch (_) { /* errors surface through `result` */ }
+                })();
+            }
+            return await result;
+        }
+        return await context.generateTask(opts);
+    };
+
+    // Notes + memory-graph adapter overlays — same prototype-chain trick
+    // the production handler uses so the loop-tool dispatcher reaches the
+    // live floor-state / memory-session factories. A bare `{}` here would
+    // short-circuit memory_* to MEMORY_DISABLED and notes lookups to [].
+    const contextForNotes = await (async () => {
+        const notesCtx = Object.create(context);
+        try { await attachNotesFloorState(notesCtx); } catch (_) { /* best-effort */ }
+        return notesCtx;
+    })();
+    const contextForSession = await (async () => {
+        const memCtx = Object.create(context);
+        try { await attachMemoryGraphSession(memCtx); } catch (_) { /* best-effort */ }
+        return memCtx;
+    })();
+
+    try {
+        await runMainAgentLoop({
+            handle,
+            profile: profileForRuntime,
+            eventData,
+            deps: {
+                generateTask: generateTaskRouter,
+                generateTaskStreamForMainAgent: generateTaskRouter,
+                generateTaskStream: settings?.useStreamingTransport && typeof context?.generateTaskStream === 'function'
+                    ? (opts) => context.generateTaskStream(opts)
+                    : null,
+                executeLoopTool: (name, callArgs, callDeps) => executeLoopTool(name, callArgs, callDeps),
+                // `getContentPayload` is what the runtime calls to fetch
+                // the story-context messages director splices between
+                // <story_context> open/close. In production this resolves
+                // via `directorContentCache.get()` (which reads
+                // `eventData.generateData.prompt` lazily); for simulation
+                // we close over the simulation snapshot directly so the
+                // main agent and any sub-agent it dispatches see the same
+                // recent-chat window the workbench-LLM is testing against.
+                getContentPayload: () => ({ messages: simulationMessages }),
+                // `chat` is what the loop-tool dispatcher reads for the
+                // chat namespace (read_range / search). Same simulation
+                // slice so chat reads see the framed window, not the live
+                // chat tail (which could have shifted since the
+                // workbench-LLM captured it).
+                chat: simulationMessages,
+                trace,
+                settings,
+                contextForNotes,
+                contextForSession,
+            },
+        });
+        // Natural completion: commit the handle so handle.complete
+        // settles. Nothing reads the committed buffer — the throwaway
+        // setOnUpdate discards updates — but settling the promise lets
+        // future call sites (and the trace finalize below) read the
+        // outcome cleanly.
+        if (!handle.complete._settled) {
+            try { await handle.commit(); } catch (_) { /* best-effort */ }
+        }
+    } catch (err) {
+        // Same error-handling contract as the production wrapper: user
+        // aborts settle as abort; other errors settle as commit so the
+        // partial trace is still visible. Either way the trace records
+        // every round completed before the throw.
+        if (!handle.complete._settled) {
+            try { await handle.discard(); } catch (_) { /* best-effort */ }
+        }
+        console.warn(`[${MODULE_NAME}] director simulation main loop threw:`, err);
+    } finally {
+        // Resolve the trace's terminal status from the handle outcome —
+        // committed → completed (natural / max_rounds), aborted →
+        // cancelled (user stop), discarded → cancelled (we discarded on
+        // throw above). Mirrors the takeover dispatch handler's finalize
+        // path so the popup shows a consistent terminal status across
+        // simulation and real runs.
+        let traceStatus = 'completed';
+        try {
+            const outcome = await handle.complete;
+            const handleStatus = String(outcome?.status || '');
+            if (handleStatus === 'aborted' || handleStatus === 'discarded') traceStatus = 'cancelled';
+            else if (handleStatus && handleStatus !== 'committed') traceStatus = handleStatus;
+        } catch (_) {
+            traceStatus = 'failed';
+        }
+        try { finalizeOrchestrationRuntimeTrace(trace, traceStatus, {}); } catch (_) { /* trace is best-effort */ }
+    }
+    return trace;
+}
+
 async function runAiIterationSimulation(context, session, args = {}, abortSignal = null) {
     await loadOrchestratorChatState(context);
     const snapshotBefore = normalizeOrchestrationSnapshot(getActiveSnapshot());
@@ -3582,81 +3815,106 @@ async function runAiIterationSimulation(context, session, args = {}, abortSignal
             detail: {},
         };
     }
-    const profile = isAgendaIterationSession(session)
-        ? buildAgendaProfileForRuntime(session?.workingProfile)
-        : isLoopIterationSession(session)
-            ? sanitizeLoopProfile(session?.workingProfile)
-            : {
-                spec: sanitizeSpec(session?.workingProfile?.spec),
-                presets: sanitizePresetMap(session?.workingProfile?.presets),
-            };
-    const payload = {
-        type: String(args?.trigger || 'normal').trim().toLowerCase() || 'normal',
-        coreChat: simulationMessages,
-        signal: abortSignal,
-        forceWorldInfoResimulate: true,
-    };
     let run = null;
-    try {
-        run = await runOrchestration(context, payload, structuredClone(simulationMessages), profile);
-    } finally {
-        setActiveSnapshot(snapshotBefore ? structuredClone(snapshotBefore) : null);
+    let directorTrace = null;
+    if (isDirectorIterationSession(session)) {
+        // Director runs via the GENERATE_TAKEOVER_DISPATCH hook in
+        // production, not through `runOrchestration`. We can't pretend to
+        // be the kernel here — instead invoke `runMainAgentLoop` directly
+        // with a throwaway editor handle and a synthesized eventData /
+        // deps wiring that mirrors the production handler at
+        // GENERATE_TAKEOVER_DISPATCH below. The trace produced has the
+        // same shape as a real director turn, so `exportDirectorPayload`
+        // and the simulation-review popup work unchanged.
+        directorTrace = await runDirectorSimulationLoop(context, session, simulationMessages, abortSignal);
+    } else {
+        const profile = isAgendaIterationSession(session)
+            ? buildAgendaProfileForRuntime(session?.workingProfile)
+            : isLoopIterationSession(session)
+                ? sanitizeLoopProfile(session?.workingProfile)
+                : {
+                    spec: sanitizeSpec(session?.workingProfile?.spec),
+                    presets: sanitizePresetMap(session?.workingProfile?.presets),
+                };
+        const payload = {
+            type: String(args?.trigger || 'normal').trim().toLowerCase() || 'normal',
+            coreChat: simulationMessages,
+            signal: abortSignal,
+            forceWorldInfoResimulate: true,
+        };
+        try {
+            run = await runOrchestration(context, payload, structuredClone(simulationMessages), profile);
+        } finally {
+            setActiveSnapshot(snapshotBefore ? structuredClone(snapshotBefore) : null);
+        }
     }
+    const i18nFn = (k, fb) => (typeof context?.t === 'function' ? context.t(k, fb) : fb || k);
+    const trace = directorTrace
+        || run?.runtimeTrace
+        || getLatestOrchestrationRuntimeTrace(context)
+        || null;
+    let kind, payloadForReview;
     if (isAgendaIterationSession(session)) {
-        const agendaState = run?.agendaState && typeof run.agendaState === 'object' ? run.agendaState : {};
+        kind = 'orch-agenda';
+        payloadForReview = trace
+            ? exportAgendaPayload(trace)
+            : { rounds: [], finalizer: { turns: [], output: '' }, finalComposedOutput: '' };
+    } else if (isLoopIterationSession(session)) {
+        kind = 'orch-loop';
+        payloadForReview = trace
+            ? exportLoopPayload(trace)
+            : { rounds: [], terminationReason: 'max_rounds' };
+    } else if (isDirectorIterationSession(session)) {
+        kind = 'orch-director';
+        payloadForReview = trace
+            ? exportDirectorPayload(trace)
+            : { mainAgent: { rounds: [] }, subagents: [], finalMessage: '' };
+    } else {
+        kind = 'orch-spec';
+        payloadForReview = trace
+            ? exportSpecPayload(trace)
+            : { stages: [] };
+    }
+    const worldInfoHits = extractOrchestratorSimulationWorldInfoHits(trace);
+    let review;
+    try {
+        review = await openSimulationReview({
+            kind,
+            payload: payloadForReview,
+            worldInfoHits,
+            i18n: i18nFn,
+            abortSignal,
+        });
+    } catch (err) {
         return {
-            ok: true,
-            summary: `Simulated agenda: ${Number(agendaState?.plannerRounds || 0)} planner rounds, ${Array.isArray(agendaState?.runs) ? agendaState.runs.length : 0} runs.`,
-            detail: {
-                planner_rounds: Number(agendaState?.plannerRounds || 0),
-                todo_count: Array.isArray(agendaState?.todos) ? agendaState.todos.length : 0,
-                run_count: Array.isArray(agendaState?.runs) ? agendaState.runs.length : 0,
-                final_guidance: String(agendaState?.finalGuidance || ''),
-                agenda_state: agendaState,
-                input: {
-                    recent_messages_n: Math.max(1, Math.min(60, Math.floor(Number(args?.recent_messages_n) || 12))),
-                    simulation_text_used: Boolean(customText),
-                },
-            },
+            ok: false,
+            cancelled: false,
+            toolResultText: `<simulation_result kind="${kind}" ok="false">\n\n<error reason="simulation_failed">\n${String(err?.message || err)}\n</error>\n\n</simulation_result>`,
+            summary: `Simulation failed: ${String(err?.message || err)}`,
+            detail: {},
         };
     }
-    if (isLoopIterationSession(session)) {
-        const stageOutputs = compactStageOutputs(run?.stageOutputs || []);
-        const finalStage = getFinalStageSnapshot(run?.stageOutputs || []);
-        const finalNodes = Array.isArray(finalStage?.nodes) ? finalStage.nodes : [];
-        const capsuleText = finalNodes.map(node => String(node?.output || '')).filter(Boolean).join('\n\n');
-        return {
-            ok: true,
-            summary: capsuleText
-                ? `Simulated loop turn produced a finalize capsule (${capsuleText.length} chars).`
-                : 'Simulated loop turn ended without a capsule (agent did not call finalize).',
-            detail: {
-                capsule_text: capsuleText,
-                stage_outputs: stageOutputs,
-                input: {
-                    recent_messages_n: Math.max(1, Math.min(60, Math.floor(Number(args?.recent_messages_n) || 12))),
-                    simulation_text_used: Boolean(customText),
-                },
-            },
-        };
-    }
-    const allStageOutputs = compactStageOutputs(run?.stageOutputs || []);
-    const finalStage = getFinalStageSnapshot(run?.stageOutputs || []);
-    const finalNodes = Array.isArray(finalStage?.nodes) ? finalStage.nodes : [];
     return {
-        ok: true,
-        summary: `Simulated ${Number(run?.stageOutputs?.length || 0)} stages with ${finalNodes.length} final outputs.`,
-        detail: {
-            stage_count: Number(run?.stageOutputs?.length || 0),
-            final_stage_id: String(finalStage?.id || ''),
-            final_stage_mode: String(finalStage?.mode || 'serial'),
-            all_stage_outputs: allStageOutputs,
-            input: {
-                recent_messages_n: Math.max(1, Math.min(60, Math.floor(Number(args?.recent_messages_n) || 12))),
-                simulation_text_used: Boolean(customText),
-            },
-        },
+        ok: review.ok,
+        cancelled: review.cancelled,
+        toolResultText: review.toolResultText,
+        // Legacy fields kept for the iteration system prompt + log printing.
+        // The new tagged-text envelope on toolResultText is the canonical
+        // workbench-LLM channel.
+        summary: review.cancelled
+            ? 'Simulation cancelled by user.'
+            : `Simulation reviewed with ${review.annotations.length} annotation(s).`,
+        detail: { kind, annotations: review.annotations },
     };
+}
+
+function extractOrchestratorSimulationWorldInfoHits(trace) {
+    // The orchestrator's runtime-trace doesn't centralize WI hits today;
+    // each agent resolves WI in its own scope. For Stage 4 we return an
+    // empty list — the popup gracefully handles []. A follow-up can
+    // surface per-agent WI hits if needed.
+    void trace;
+    return [];
 }
 
 function resolveIterationStage(session, stageId, createIfMissing = false) {
@@ -4097,9 +4355,9 @@ async function executeLoopIterationToolCalls(context, session, toolCalls, abortS
     };
 }
 
-async function executeDirectorIterationToolCalls(context, session, toolCalls, _abortSignal = null) {
+async function executeDirectorIterationToolCalls(context, session, toolCalls, abortSignal = null) {
     const actions = [];
-    const simulations = [];  // director skips simulate for v1
+    const simulations = [];
     const toolResults = [];
     let finalized = false;
     let finalizeSummary = '';
@@ -4372,6 +4630,22 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, _a
             actions.push(actionText);
             pushToolResult({ ok: true, changed: hadOverride, action: actionText });
             if (hadOverride) changed = true;
+            continue;
+        }
+
+        if (name === 'luker_orch_simulate') {
+            const simulation = await runAiIterationSimulation(context, session, args, abortSignal);
+            simulations.push(simulation);
+            session.lastSimulation = simulation;
+            const actionText = simulation.ok
+                ? `Simulation finished: ${simulation.summary}`
+                : `Simulation failed: ${simulation.summary}`;
+            actions.push(actionText);
+            pushToolResult({
+                ok: Boolean(simulation?.ok),
+                action: actionText,
+                simulation,
+            });
             continue;
         }
 
