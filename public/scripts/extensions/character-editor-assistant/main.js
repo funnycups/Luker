@@ -31,6 +31,7 @@ import { DEFAULT_SYSTEM_PROMPT as DEFAULT_EDITOR_ITERATION_SYSTEM_PROMPT } from 
 import { DEFAULT_SYSTEM_PROMPT as DEFAULT_CARDAPP_STUDIO_SYSTEM_PROMPT } from './studio/ai-chat.js';
 import { applyEdits } from '../../iteration-library/index.js';
 import { openSimulationReview } from '../../iteration-library/simulation-review/index.js';
+import { ensureSimulationReviewLocaleData } from '../../iteration-library/simulation-review/i18n/index.js';
 
 
 const MODULE_NAME = 'character_editor_assistant';
@@ -2111,7 +2112,17 @@ function createCharacterEditorSimulateToolApi(context) {
         isToolName: (name) => String(name || '').trim() === toolNames.SIMULATE,
         invoke: async (call) => {
             const args = call?.args && typeof call.args === 'object' ? call.args : {};
-            const i18nFn = (k, fb) => (typeof context?.t === 'function' ? context.t(k, fb) : fb || k);
+            // SillyTavern's context.t is the template-tag function
+            // t(strings, ...values); the simulation-review module needs a
+            // (key, fallback)-shaped helper. context.translate(text, key)
+            // looks the fallback string up by key and returns the
+            // fallback unchanged when no translation exists.
+            const translateFn = typeof context?.translate === 'function'
+                ? context.translate
+                : (typeof globalThis !== 'undefined' && globalThis.__i18n && typeof globalThis.__i18n.translate === 'function'
+                    ? globalThis.__i18n.translate
+                    : null);
+            const i18nFn = (k, fb) => (translateFn ? translateFn(fb || k, k) : (fb || k));
             const source = buildCharacterEditorSimulationSourceMessages(context, {
                 text: String(args.text || '').trim(),
                 messages: Array.isArray(args.messages) ? args.messages : null,
@@ -3822,6 +3833,7 @@ function bindHistoryUiActions() {
 
 jQuery(async () => {
     registerLocaleData();
+    ensureSimulationReviewLocaleData();
     ensureSettings();
     registerTools(getContext());
     ensureUi();

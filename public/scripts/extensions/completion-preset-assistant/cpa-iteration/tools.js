@@ -813,7 +813,17 @@ export async function runCpaReadTool(call, ctx = {}) {
         if (!stContext || typeof stContext.buildPresetAwarePromptMessages !== 'function') {
             return { ok: false, error: 'Prompt preset simulator is unavailable in this environment.' };
         }
-        const i18nFn = (k, fb) => (typeof stContext?.t === 'function' ? stContext.t(k, fb) : fb || k);
+        // SillyTavern's stContext.t is the template-tag function
+        // t(strings, ...values); the simulation-review module needs a
+        // (key, fallback)-shaped helper. stContext.translate(text, key)
+        // looks the fallback string up by key and returns the fallback
+        // unchanged when no translation exists.
+        const translateFn = typeof stContext?.translate === 'function'
+            ? stContext.translate
+            : (typeof globalThis !== 'undefined' && globalThis.__i18n && typeof globalThis.__i18n.translate === 'function'
+                ? globalThis.__i18n.translate
+                : null);
+        const i18nFn = (k, fb) => (translateFn ? translateFn(fb || k, k) : (fb || k));
         const text = String(args.text || '').trim();
         const messages = Array.isArray(args.messages) ? args.messages : null;
         const source = buildSimulateSourceMessages(stContext, { text, messages });

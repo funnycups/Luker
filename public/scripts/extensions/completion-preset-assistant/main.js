@@ -4,6 +4,7 @@
 import { saveSettingsDebounced } from '../../../script.js';
 import { extension_settings, getContext } from '../../extensions.js';
 import { addLocaleData, translate } from '../../i18n.js';
+import { ensureSimulationReviewLocaleData } from '../../iteration-library/simulation-review/i18n/index.js';
 import { Popup } from '../../popup.js';
 import { escapeHtml } from '../../utils.js';
 import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
@@ -514,6 +515,7 @@ function getPresetEventCollection(event = null) {
 
 jQuery(async () => {
     registerLocaleData();
+    ensureSimulationReviewLocaleData();
     ensureSettings();
     ensureUi();
     const context = getContext();
