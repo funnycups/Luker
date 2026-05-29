@@ -1,0 +1,139 @@
+.luker-sim-review-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-height: 80vh;
+    overflow: hidden;
+}
+
+.luker-sim-review-title {
+    margin: 0;
+    font-size: 1.1rem;
+    border-bottom: 1px solid rgba(127, 127, 127, 0.3);
+    padding-bottom: 6px;
+}
+
+.luker-sim-review-host {
+    overflow: auto;
+    flex: 1 1 auto;
+    padding-right: 8px;
+}
+
+.luker-sim-review .luker-sim-section,
+.luker-sim-review .luker-sim-subsection,
+.luker-sim-review .luker-sim-subsubsection {
+    border-left: 2px solid rgba(127, 127, 127, 0.25);
+    padding-left: 10px;
+    margin: 8px 0;
+}
+
+.luker-sim-review h1,
+.luker-sim-review h2,
+.luker-sim-review h3,
+.luker-sim-review h4 {
+    margin: 6px 0;
+}
+
+.luker-sim-review pre.luker-sim-pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: rgba(127, 127, 127, 0.08);
+    padding: 6px 8px;
+    border-radius: 4px;
+    margin: 4px 0;
+}
+
+.luker-sim-review .luker-sim-note {
+    color: rgba(127, 127, 127, 0.9);
+    font-style: italic;
+    margin: 2px 0;
+}
+
+mark.luker-sim-annotation {
+    background: rgba(255, 220, 0, 0.45);
+    padding: 0 2px;
+    border-radius: 2px;
+}
+
+.luker-sim-ann-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 2px;
+    padding: 0 6px;
+    min-width: 1.4em;
+    height: 1.4em;
+    font-size: 0.75em;
+    background: rgba(255, 200, 0, 0.6);
+    color: black;
+    border: 1px solid rgba(180, 140, 0, 0.5);
+    border-radius: 999px;
+    cursor: pointer;
+    user-select: none;
+    vertical-align: super;
+}
+
+.luker-sim-ann-chip:hover {
+    background: rgba(255, 200, 0, 0.85);
+}
+
+.luker-sim-float-btn {
+    z-index: 99999;
+    padding: 4px 8px;
+    background: var(--SmartThemeBodyColor, #222);
+    color: var(--SmartThemeQuoteColor, #fff);
+    border: 1px solid rgba(127, 127, 127, 0.5);
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.luker-sim-review .luker-sim-section--collapsed > *:not(h1):not(h2):not(h3):not(h4) {
+    display: none;
+}
+
+.luker-sim-review .luker-sim-section.luker-sim-section--collapsed > h1,
+.luker-sim-review .luker-sim-section.luker-sim-section--collapsed > h2,
+.luker-sim-review .luker-sim-section.luker-sim-section--collapsed > h3,
+.luker-sim-review .luker-sim-section.luker-sim-section--collapsed > h4,
+.luker-sim-review .luker-sim-subsection.luker-sim-section--collapsed > h1,
+.luker-sim-review .luker-sim-subsection.luker-sim-section--collapsed > h2,
+.luker-sim-review .luker-sim-subsection.luker-sim-section--collapsed > h3,
+.luker-sim-review .luker-sim-subsection.luker-sim-section--collapsed > h4,
+.luker-sim-review .luker-sim-subsubsection.luker-sim-section--collapsed > h1,
+.luker-sim-review .luker-sim-subsubsection.luker-sim-section--collapsed > h2,
+.luker-sim-review .luker-sim-subsubsection.luker-sim-section--collapsed > h3,
+.luker-sim-review .luker-sim-subsubsection.luker-sim-section--collapsed > h4 {
+    cursor: pointer;
+    user-select: none;
+}
+
+.luker-sim-review .luker-sim-section > h1::before,
+.luker-sim-review .luker-sim-section > h2::before,
+.luker-sim-review .luker-sim-section > h3::before,
+.luker-sim-review .luker-sim-section > h4::before,
+.luker-sim-review .luker-sim-subsection > h1::before,
+.luker-sim-review .luker-sim-subsection > h2::before,
+.luker-sim-review .luker-sim-subsection > h3::before,
+.luker-sim-review .luker-sim-subsection > h4::before,
+.luker-sim-review .luker-sim-subsubsection > h1::before,
+.luker-sim-review .luker-sim-subsubsection > h2::before,
+.luker-sim-review .luker-sim-subsubsection > h3::before,
+.luker-sim-review .luker-sim-subsubsection > h4::before {
+    content: '▾ ';
+    opacity: 0.6;
+}
+
+.luker-sim-review .luker-sim-section.luker-sim-section--collapsed > h1::before,
+.luker-sim-review .luker-sim-section.luker-sim-section--collapsed > h2::before,
+.luker-sim-review .luker-sim-section.luker-sim-section--collapsed > h3::before,
+.luker-sim-review .luker-sim-section.luker-sim-section--collapsed > h4::before,
+.luker-sim-review .luker-sim-subsection.luker-sim-section--collapsed > h1::before,
+.luker-sim-review .luker-sim-subsection.luker-sim-section--collapsed > h2::before,
+.luker-sim-review .luker-sim-subsection.luker-sim-section--collapsed > h3::before,
+.luker-sim-review .luker-sim-subsection.luker-sim-section--collapsed > h4::before,
+.luker-sim-review .luker-sim-subsubsection.luker-sim-section--collapsed > h1::before,
+.luker-sim-review .luker-sim-subsubsection.luker-sim-section--collapsed > h2::before,
+.luker-sim-review .luker-sim-subsubsection.luker-sim-section--collapsed > h3::before,
+.luker-sim-review .luker-sim-subsubsection.luker-sim-section--collapsed > h4::before {
+    content: '▸ ';
+}
