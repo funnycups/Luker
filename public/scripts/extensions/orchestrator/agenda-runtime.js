@@ -445,6 +445,7 @@ export async function runAgendaPlannerStep(context, payload, messages, profile, 
             {
                 role: 'assistant',
                 content: '',
+                reasoning: '',
                 tool_calls: [{ id: '', name: AGENDA_PLANNER_TOOL, args: plannerStep || {} }],
             },
         ],
@@ -577,6 +578,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
                 {
                     role: 'assistant',
                     content: '',
+                    reasoning: '',
                     tool_calls: [{ id: '', name: AGENDA_RESULT_TOOL, args: { text: String(result?.text || '') } }],
                 },
             ],
@@ -641,6 +643,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
             conversation.messages.push({
                 role: 'assistant',
                 content: String(detailed?.assistantText || ''),
+                reasoning: String(detailed?.reasoning || ''),
                 tool_calls: [{ id: terminator?.id || '', name: AGENDA_RESULT_TOOL, args: terminator?.args || {} }],
                 _round: round,
             });
@@ -665,6 +668,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
         conversation.messages.push({
             role: 'assistant',
             content: String(detailed?.assistantText || ''),
+            reasoning: String(detailed?.reasoning || ''),
             tool_calls: calls.map((tc, i) => ({
                 id: assistantToolCallEntries[i].id,
                 name: String(tc?.name || ''),

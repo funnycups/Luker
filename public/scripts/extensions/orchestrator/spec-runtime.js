@@ -502,6 +502,7 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                 conversation.messages.push({
                     role: 'assistant',
                     content: String(detailed?.assistantText || ''),
+                    reasoning: String(detailed?.reasoning || ''),
                     tool_calls: calls
                         .filter(c => String(c?.name || '').trim() === outputToolName)
                         .map(c => ({ id: c?.id || '', name: String(c?.name || ''), args: c?.args || {} })),
@@ -551,6 +552,7 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                 conversation.messages.push({
                     role: 'assistant',
                     content: String(detailed?.assistantText || ''),
+                    reasoning: String(detailed?.reasoning || ''),
                     tool_calls: loopToolCalls.map((tc, i) => ({
                         id: assistantToolCallEntries[i].id,
                         name: String(tc?.name || ''),
@@ -803,6 +805,7 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
             conversation.messages.push({
                 role: 'assistant',
                 content: String(detailed?.assistantText || ''),
+                reasoning: String(detailed?.reasoning || ''),
                 tool_calls: (Array.isArray(detailed?.toolCalls) ? detailed.toolCalls : [])
                     .map(c => ({ id: c?.id || '', name: String(c?.name || ''), args: c?.args || {} })),
                 _round: round,

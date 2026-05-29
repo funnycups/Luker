@@ -161,11 +161,12 @@ async function defaultSendLlm({ context, settings, messages, tools, runtimeWorld
     if (Array.isArray(result)) {
         // Returned shape when includeAssistantText is false — shouldn't
         // happen here, but normalize defensively.
-        return { toolCalls: result, assistantText: '' };
+        return { toolCalls: result, assistantText: '', reasoning: '' };
     }
     return {
         toolCalls: Array.isArray(result?.toolCalls) ? result.toolCalls : [],
         assistantText: String(result?.assistantText || ''),
+        reasoning: String(result?.reasoning || ''),
     };
 }
 
@@ -801,6 +802,7 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
             if (assistantText) {
                 lastNaturalText = assistantText;
             }
+            const reasoning = String(response?.reasoning || '');
 
             const toolCalls = Array.isArray(response?.toolCalls) ? response.toolCalls : [];
             traceApi.record(trace, 'llm_response', {
@@ -846,6 +848,7 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
             messages.push({
                 role: 'assistant',
                 content: assistantText,
+                reasoning,
                 tool_calls: assistantToolCallEntries,
             });
 

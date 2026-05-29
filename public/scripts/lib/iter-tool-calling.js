@@ -246,11 +246,12 @@ export async function requestToolCallsWithRetry(context, settings, {
                 ? normalizedCalls.filter(call => allowedSet.has(call.name))
                 : normalizedCalls;
             const assistantText = String(result?.assistantText || '');
+            const reasoning = String(result?.reasoning || '');
             let returnValue;
             if (filteredCalls.length === 0) {
                 if (allowNoToolCalls && assistantText) {
                     returnValue = includeAssistantText
-                        ? { toolCalls: [], assistantText, rawAssistantText: assistantText }
+                        ? { toolCalls: [], assistantText, rawAssistantText: assistantText, reasoning }
                         : [];
                 } else {
                     throw new Error('Model response did not contain any matching tool calls.');
@@ -261,7 +262,7 @@ export async function requestToolCallsWithRetry(context, settings, {
                     throw new Error(validationError);
                 }
                 returnValue = includeAssistantText
-                    ? { toolCalls: filteredCalls, assistantText, rawAssistantText: assistantText }
+                    ? { toolCalls: filteredCalls, assistantText, rawAssistantText: assistantText, reasoning }
                     : filteredCalls;
             }
 
