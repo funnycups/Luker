@@ -4,6 +4,7 @@
 
 import {
     converter,
+    generateQuietPrompt,
     getCharacterDescription,
     getCharacterFirstMessage,
     getCharacterMesExample,
@@ -29,6 +30,7 @@ import { openUnifiedCharacterEditorPopup } from './editor-iteration/studio.js';
 import { DEFAULT_SYSTEM_PROMPT as DEFAULT_EDITOR_ITERATION_SYSTEM_PROMPT } from './editor-iteration/studio.js';
 import { DEFAULT_SYSTEM_PROMPT as DEFAULT_CARDAPP_STUDIO_SYSTEM_PROMPT } from './studio/ai-chat.js';
 import { applyEdits } from '../../iteration-library/index.js';
+import { openSimulationReview } from '../../iteration-library/simulation-review/index.js';
 
 
 const MODULE_NAME = 'character_editor_assistant';
@@ -2077,7 +2079,7 @@ function createCharacterEditorSimulateToolApi(context) {
                 type: 'function',
                 function: {
                     name: toolNames.SIMULATE,
-                    description: 'Simulate current prompt assembly with character card and world info. Prefer text to append one user turn to the current chat. Use messages only when the user explicitly supplied a structured message array.',
+                    description: 'Simulate the current card under the live chat, world info, and preset. Pass text=<user turn> and the simulator appends it to the active chat, runs a real (non-persisted) generation, and opens a popup for the user to review. The messages mode is currently unsupported by the generation backend; pass text instead.',
                     parameters: {
                         type: 'object',
                         properties: {
@@ -2109,12 +2111,21 @@ function createCharacterEditorSimulateToolApi(context) {
         isToolName: (name) => String(name || '').trim() === toolNames.SIMULATE,
         invoke: async (call) => {
             const args = call?.args && typeof call.args === 'object' ? call.args : {};
+            const i18nFn = (k, fb) => (typeof context?.t === 'function' ? context.t(k, fb) : fb || k);
             const source = buildCharacterEditorSimulationSourceMessages(context, {
                 text: String(args.text || '').trim(),
                 messages: Array.isArray(args.messages) ? args.messages : null,
             });
             if (source.messages.length === 0) {
                 throw new Error(`${toolNames.SIMULATE} requires either text or messages.`);
+            }
+            if (source.mode === 'messages') {
+                return {
+                    ok: false,
+                    toolResultText: buildCharacterEditorSimulationErrorResult(new Error(
+                        'simulate_prompt does not support the messages-mode input under the current generation backend. Pass text=<single user turn> and the simulator will append it to the live chat.',
+                    )),
+                };
             }
             if (typeof context?.buildPresetAwarePromptMessages !== 'function') {
                 throw new Error('Prompt preset assembly is unavailable.');
@@ -2135,8 +2146,53 @@ function createCharacterEditorSimulateToolApi(context) {
                 },
                 runtimeWorldInfo,
             });
+
+            // Run the real (non-persisting) generation so the popup
+            // shows the model's actual output, not just the assembled
+            // prompt. generateQuietPrompt routes through Generate('quiet'),
+            // which executes the full pipeline (WI, regex, depth, preset,
+            // group routing) without writing the result to chat.
+            const lastUserMsg = source.messages.slice().reverse().find(m => m.role === 'user' || m.is_user);
+            const quietPrompt = String(lastUserMsg?.content || lastUserMsg?.mes || '');
+            let finalOutput = '';
+            try {
+                const generated = await generateQuietPrompt({
+                    quietPrompt,
+                    quietToLoud: false,
+                    skipWIAN: false,
+                    removeReasoning: false,
+                });
+                finalOutput = String(generated || '');
+            } catch (err) {
+                return {
+                    ok: false,
+                    toolResultText: buildCharacterEditorSimulationErrorResult(err),
+                };
+            }
+
+            const worldInfoHits = extractWorldInfoHitsForCharacterEditorSimulation(runtimeWorldInfo);
+            const review = await openSimulationReview({
+                kind: 'cea',
+                payload: {
+                    finalOutput,
+                    reasoning: '',
+                    assembledPrompt: {
+                        systemPrompt: extractSystemPromptForCharacterEditorSimulation(promptMessages),
+                        messages: extractNonSystemMessagesForCharacterEditorSimulation(promptMessages),
+                    },
+                    worldInfoHits,
+                },
+                worldInfoHits,
+                i18n: i18nFn,
+            });
+
             return {
-                ok: true,
+                ok: review.ok,
+                cancelled: review.cancelled,
+                toolResultText: review.toolResultText,
+                // Legacy fields kept so any caller still inspecting them
+                // doesn't break. The new tagged-text envelope on
+                // toolResultText is the canonical workbench-LLM channel.
                 mode: source.mode,
                 sourceMessages: source.messages,
                 runtimeWorldInfo,
@@ -2152,6 +2208,61 @@ function clipLorebookDebugText(value, maxLength = 80) {
         return text;
     }
     return `${text.slice(0, maxLength)}…`;
+}
+
+function extractSystemPromptForCharacterEditorSimulation(promptMessages) {
+    if (!Array.isArray(promptMessages)) return '';
+    const first = promptMessages.find(m => (m?.role || '').toLowerCase() === 'system');
+    return String(first?.content || '');
+}
+
+function extractNonSystemMessagesForCharacterEditorSimulation(promptMessages) {
+    if (!Array.isArray(promptMessages)) return [];
+    return promptMessages
+        .filter(m => (m?.role || '').toLowerCase() !== 'system')
+        .map(m => ({ role: String(m?.role || ''), content: String(m?.content || '') }));
+}
+
+// runtimeWorldInfo returned by st-context.resolveWorldInfoForMessages
+// has shape { worldInfoBeforeEntries: string[], worldInfoAfterEntries:
+// string[], worldInfoDepth: [{depth, role, entries: string[]}], ... }.
+// Each "entry" string is already wi_format-wrapped activation text;
+// the raw book/entry attribution isn't retained at this stage, so we
+// surface the activation text itself as the `entry` field and tag it
+// with the position bucket so the workbench LLM can still see what
+// fired and where. If the field shape ever changes, log a warning so
+// we can adapt without silently dropping hits.
+function extractWorldInfoHitsForCharacterEditorSimulation(runtimeWorldInfo) {
+    if (!runtimeWorldInfo || typeof runtimeWorldInfo !== 'object') return [];
+    const hits = [];
+    const before = Array.isArray(runtimeWorldInfo.worldInfoBeforeEntries) ? runtimeWorldInfo.worldInfoBeforeEntries : [];
+    for (const text of before) {
+        const entry = String(text || '').trim();
+        if (!entry) continue;
+        hits.push({ book: '', entry, position: 'before-char' });
+    }
+    const after = Array.isArray(runtimeWorldInfo.worldInfoAfterEntries) ? runtimeWorldInfo.worldInfoAfterEntries : [];
+    for (const text of after) {
+        const entry = String(text || '').trim();
+        if (!entry) continue;
+        hits.push({ book: '', entry, position: 'after-char' });
+    }
+    const depth = Array.isArray(runtimeWorldInfo.worldInfoDepth) ? runtimeWorldInfo.worldInfoDepth : [];
+    for (const bucket of depth) {
+        const depthVal = Math.max(0, Math.floor(Number(bucket?.depth) || 0));
+        const role = String(bucket?.role || 'system');
+        const entries = Array.isArray(bucket?.entries) ? bucket.entries : [];
+        for (const text of entries) {
+            const entry = String(text || '').trim();
+            if (!entry) continue;
+            hits.push({ book: '', entry, position: `depth-${depthVal}/${role}` });
+        }
+    }
+    return hits;
+}
+
+function buildCharacterEditorSimulationErrorResult(err) {
+    return `<simulation_result kind="cea" ok="false">\n\n<error reason="simulation_failed">\n${String(err?.message || err || '')}\n</error>\n\n</simulation_result>`;
 }
 
 function createCharacterEditorWorldBookListToolApi(context, { avatar = '' } = {}) {

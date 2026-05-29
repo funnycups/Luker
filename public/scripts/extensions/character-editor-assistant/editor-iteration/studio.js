@@ -158,10 +158,22 @@ function resolveCallId(call) {
  * `role: 'tool'` message content. Mirrors
  * `iter-tool-calling.serializeToolResultContent` — kept inline so studio.js
  * has no run-time dep on lib internals beyond the runner umbrella.
+ *
+ * When the executor supplies a `toolResultText` string (e.g. the
+ * simulate_prompt review's tagged-text envelope), pass it through verbatim
+ * so the workbench LLM sees the human-readable `<simulation_result>` /
+ * `<annotations>` markup instead of a JSON-stringified blob with escaped
+ * angle brackets. Falls back to the original JSON serialization for every
+ * other read-tool result.
  */
 function serializeToolResultContent(result) {
     if (typeof result === 'string') return result;
     if (result === null || result === undefined) return '';
+    if (typeof result === 'object'
+        && typeof result.toolResultText === 'string'
+        && result.toolResultText) {
+        return result.toolResultText;
+    }
     try {
         return JSON.stringify(result, null, 2);
     } catch {
@@ -650,6 +662,12 @@ const DEFAULT_SYSTEM_PROMPT = [
     '- simulate_prompt — preview current prompt assembly.',
     '- web_search — search the public web for facts (only when needed).',
     'Read-tool results are returned synchronously in the next round; use them to decide what to edit.',
+    '',
+    'The simulate_prompt tool now opens a popup so the user can review the actual model output produced under the current chat, world-info, and preset. The user may annotate parts they\'re unhappy with. The tool result you receive will be a tagged text envelope:',
+    '- <simulation_chain> contains the full chain; any span wrapped in <<<ANNOTATION id=N>>>...<<</ANNOTATION>>> is flagged by the user.',
+    '- <annotations> lists each [#N] with its location, snippet, and the user\'s comment.',
+    '- <status submitted="false"/> means the user cancelled without annotating.',
+    'Prioritise resolving the annotated points before other improvements.',
     '',
     'Macros in the text you see:',
     '- Card fields and lorebook entries you edit may contain {{user}}, {{char}}, {{getvar::xxx}}, {{//comment}}, {{random:a,b,c}}, and similar placeholders. These are macros — the runtime engine expands them when the card is actually used in chat.',
