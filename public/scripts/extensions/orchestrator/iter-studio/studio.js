@@ -970,6 +970,7 @@ export async function openOrchestratorIterationStudio(deps) {
         live: null,
         pendingEdits: [],
         isBusy: false,
+        aborting: false,
         abortController: null,
     };
 
@@ -1427,7 +1428,9 @@ export async function openOrchestratorIterationStudio(deps) {
         const $sendBtn = $root.find('[data-orch-it-action="send"]');
         $sendBtn.text(state.isBusy ? t('Stop') : t('Send'));
         const $textarea = $root.find('[data-orch-it-input]');
-        $sendBtn.prop('disabled', false);
+        // Disable Stop while the abort is in-flight so a second click
+        // can't queue up before the catch+finally clears state.
+        $sendBtn.prop('disabled', Boolean(state.aborting));
         $textarea.prop('disabled', false);
 
         // Live target preview pane (right column on desktop, Preview tab on
@@ -1648,7 +1651,11 @@ export async function openOrchestratorIterationStudio(deps) {
     }
 
     async function runIterationTurn({ autoContinueFromResult = null } = {}) {
-        const ac = new AbortController();
+        // Reuse the caller-owned AbortController when present so a Stop
+        // click during handleSendMessage / continueAfterReviewDecision's
+        // pre-await (persistSession + render) is honored. Fall back to a
+        // fresh one for callers that don't pre-seed.
+        const ac = state.abortController || new AbortController();
         state.abortController = ac;
 
         loadLive();   // re-read so each turn sees external edits
@@ -2313,6 +2320,10 @@ export async function openOrchestratorIterationStudio(deps) {
         });
 
         state.isBusy = true;
+        // Mirror handleSendMessage: seed the AbortController before the
+        // pre-flight awaits so a Stop click during persist+render is
+        // honored instead of dropped onto a null controller.
+        state.abortController = new AbortController();
         await persistSession();
         await render();
         try {
@@ -2336,6 +2347,7 @@ export async function openOrchestratorIterationStudio(deps) {
             }
         } finally {
             state.isBusy = false;
+            state.aborting = false;
             state.abortController = null;
             await persistSession();
             await render();
@@ -2466,8 +2478,16 @@ export async function openOrchestratorIterationStudio(deps) {
     // ──────────────────────────────────────────────────────────────────
     async function handleSendMessage() {
         if (state.isBusy) {
-            // Stop request: abort the in-flight runner call.
-            try { state.abortController?.abort(); } catch { /* ignore */ }
+            // Stop request: abort the in-flight runner call. Mark
+            // `aborting` and re-render immediately so the button visibly
+            // reflects the click even when the network takes time to
+            // actually drop the request. The original call's finally
+            // clears both flags once the abort lands.
+            if (!state.aborting) {
+                state.aborting = true;
+                try { state.abortController?.abort(); } catch { /* ignore */ }
+                render().catch(() => { /* ignore — best-effort UI nudge */ });
+            }
             return;
         }
         const $textarea = $root.find('[data-orch-it-input]');
@@ -2481,6 +2501,10 @@ export async function openOrchestratorIterationStudio(deps) {
             at: Date.now(),
         });
         state.isBusy = true;
+        // Seed the AbortController before the pre-flight awaits so a
+        // Stop click during persistSession / render isn't dropped onto
+        // a null controller. runIterationTurn reuses this instance.
+        state.abortController = new AbortController();
         await persistSession();
         await render();   // Q6: user message visible before LLM wait
         try {
@@ -2506,6 +2530,7 @@ export async function openOrchestratorIterationStudio(deps) {
             }
         } finally {
             state.isBusy = false;
+            state.aborting = false;
             state.abortController = null;
             await persistSession();
             await render();
@@ -2649,6 +2674,7 @@ export async function openOrchestratorIterationStudio(deps) {
         e.preventDefault();
         try { state.abortController?.abort(); } catch { /* ignore */ }
         state.isBusy = false;
+        state.aborting = false;
         state.abortController = null;
         await startNewSession();
     });
@@ -2657,6 +2683,7 @@ export async function openOrchestratorIterationStudio(deps) {
         e.preventDefault();
         try { state.abortController?.abort(); } catch { /* ignore */ }
         state.isBusy = false;
+        state.aborting = false;
         state.abortController = null;
         await clearAllHistory();
     });
@@ -2669,6 +2696,7 @@ export async function openOrchestratorIterationStudio(deps) {
         if (id && id !== state.session.id) {
             try { state.abortController?.abort(); } catch { /* ignore */ }
             state.isBusy = false;
+            state.aborting = false;
             state.abortController = null;
             await loadSession(id);
         }
@@ -2683,6 +2711,7 @@ export async function openOrchestratorIterationStudio(deps) {
         if (id === state.session?.id) {
             try { state.abortController?.abort(); } catch { /* ignore */ }
             state.isBusy = false;
+            state.aborting = false;
             state.abortController = null;
         }
         await sessionStore.delete(id);
@@ -2809,6 +2838,7 @@ export async function openOrchestratorIterationStudio(deps) {
         try { unsubscribeChatChanged?.(); } catch { /* ignore */ }
         try { state.abortController?.abort(); } catch { /* ignore */ }
         state.isBusy = false;
+        state.aborting = false;
         state.abortController = null;
         try { await persistSession(); } catch { /* ignore */ }
     }

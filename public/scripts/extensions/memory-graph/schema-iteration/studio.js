@@ -505,6 +505,7 @@ export async function openSchemaIterationStudio(deps) {
         live: [],
         pendingEdits: [],
         isBusy: false,
+        aborting: false,
         abortController: null,
     };
 
@@ -714,6 +715,7 @@ export async function openSchemaIterationStudio(deps) {
         // response doesn't land in the newly-loaded session's history.
         try { state.abortController?.abort(); } catch { /* ignore */ }
         state.isBusy = false;
+        state.aborting = false;
         state.abortController = null;
 
         const fallbackAt = Number(loaded.updatedAt) || Date.now();
@@ -740,6 +742,7 @@ export async function openSchemaIterationStudio(deps) {
     async function startNewSession() {
         try { state.abortController?.abort(); } catch { /* ignore */ }
         state.isBusy = false;
+        state.aborting = false;
         state.abortController = null;
         // Carry the user's auto-apply preference across to the fresh session
         // so toggling it once persists for the popup lifetime, not just the
@@ -767,6 +770,7 @@ export async function openSchemaIterationStudio(deps) {
         // can't land in a session that's about to be wiped.
         try { state.abortController?.abort(); } catch { /* ignore */ }
         state.isBusy = false;
+        state.aborting = false;
         state.abortController = null;
         const metas = await sessionStore.list();
         for (const meta of metas) {
@@ -1027,6 +1031,9 @@ export async function openSchemaIterationStudio(deps) {
         // Send / Stop button label
         const $sendBtn = $root.find('[data-mg-schema-it-action="send"]');
         $sendBtn.text(state.isBusy ? t('Stop') : t('Send'));
+        // Disable Stop while the abort is in-flight so a second click
+        // can't queue up before the catch+finally clears state.
+        $sendBtn.prop('disabled', Boolean(state.aborting));
 
         // Sync auto-apply checkbox state — render() is the single source of
         // truth, so a session switch (different auto-apply pref) updates the
@@ -1208,7 +1215,11 @@ export async function openSchemaIterationStudio(deps) {
     }
 
     async function runIterationTurn({ autoContinueFromResult = null } = {}) {
-        const ac = new AbortController();
+        // Reuse the caller-owned AbortController when present so a Stop
+        // click during handleSendMessage / continueAfterReviewDecision's
+        // pre-await (persistSession + render) is honored. Fall back to a
+        // fresh one for callers that don't pre-seed.
+        const ac = state.abortController || new AbortController();
         state.abortController = ac;
 
         await loadLive();   // re-read so the next batch sees external edits
@@ -1730,6 +1741,10 @@ export async function openSchemaIterationStudio(deps) {
         });
 
         state.isBusy = true;
+        // Mirror handleSendMessage: seed the AbortController before the
+        // pre-flight awaits so a Stop click during persist+render is
+        // honored instead of dropped onto a null controller.
+        state.abortController = new AbortController();
         await persistSession();
         await render();
         try {
@@ -1753,6 +1768,7 @@ export async function openSchemaIterationStudio(deps) {
             }
         } finally {
             state.isBusy = false;
+            state.aborting = false;
             state.abortController = null;
             await persistSession();
             await render();
@@ -1874,8 +1890,16 @@ export async function openSchemaIterationStudio(deps) {
     // ──────────────────────────────────────────────────────────────────
     async function handleSendMessage() {
         if (state.isBusy) {
-            // Stop request: abort the in-flight runner call.
-            try { state.abortController?.abort(); } catch { /* ignore */ }
+            // Stop request: abort the in-flight runner call. Mark
+            // `aborting` and re-render immediately so the button visibly
+            // reflects the click even when the network takes time to
+            // actually drop the request. The original call's finally
+            // clears both flags once the abort lands.
+            if (!state.aborting) {
+                state.aborting = true;
+                try { state.abortController?.abort(); } catch { /* ignore */ }
+                render().catch(() => { /* ignore — best-effort UI nudge */ });
+            }
             return;
         }
         const $textarea = $root.find('[data-mg-schema-it-input]');
@@ -1889,6 +1913,10 @@ export async function openSchemaIterationStudio(deps) {
             at: Date.now(),
         });
         state.isBusy = true;
+        // Seed the AbortController before the pre-flight awaits so a
+        // Stop click during persistSession / render isn't dropped onto
+        // a null controller. runIterationTurn reuses this instance.
+        state.abortController = new AbortController();
         await persistSession();
         await render();   // Q6: user message visible before LLM wait
         try {
@@ -1913,6 +1941,7 @@ export async function openSchemaIterationStudio(deps) {
             }
         } finally {
             state.isBusy = false;
+            state.aborting = false;
             state.abortController = null;
             await persistSession();
             await render();
@@ -2060,6 +2089,7 @@ export async function openSchemaIterationStudio(deps) {
         if (id === state.session?.id) {
             try { state.abortController?.abort(); } catch { /* ignore */ }
             state.isBusy = false;
+            state.aborting = false;
             state.abortController = null;
         }
         await sessionStore.delete(id);
@@ -2176,6 +2206,7 @@ export async function openSchemaIterationStudio(deps) {
         try { zoomOverlayUnbind?.(); } catch { /* ignore */ }
         try { state.abortController?.abort(); } catch { /* ignore */ }
         state.isBusy = false;
+        state.aborting = false;
         state.abortController = null;
         try { await persistSession(); } catch { /* ignore */ }
     }

@@ -229,3 +229,60 @@ describe('ORCH-16: lorebook guidance pulled into a separate exported constant', 
         expect(src).toMatch(/withGuidance.*\.\.\.LOREBOOK_READ_GUIDANCE_LINES/s);
     });
 });
+
+describe('iter-studio Stop button: race + immediate feedback', () => {
+    // The previous shape created the AbortController inside runIterationTurn
+    // and only flipped state visibly in the post-await finally. That left
+    // two latent gaps:
+    //   1. A Stop click during the pre-flight (persistSession + render,
+    //      before runIterationTurn fires) hit a null abortController and
+    //      was silently dropped.
+    //   2. Even when the click landed, the button kept saying "Stop" with
+    //      no spinner change until the network actually dropped — which on
+    //      a slow connection looked like the button was broken.
+    // This block locks in: state.aborting flag, pre-seeded AbortController
+    // in handleSendMessage + continueAfterReviewDecision, and runIterationTurn
+    // reusing the caller-owned controller.
+
+    test('state includes the aborting flag', async () => {
+        const src = await readOrch('iter-studio/studio.js');
+        expect(src).toMatch(/aborting:\s*false/);
+    });
+
+    test('busy branch sets aborting and triggers a render before returning', async () => {
+        const src = await readOrch('iter-studio/studio.js');
+        // The whole busy branch should: guard re-entry, set aborting,
+        // call abort, and fire a best-effort render. Match the shape
+        // rather than exact whitespace so future cosmetic edits don't
+        // trip the regression.
+        expect(src).toMatch(/if\s*\(!state\.aborting\)\s*\{[\s\S]*?state\.aborting\s*=\s*true[\s\S]*?state\.abortController\?\.abort\(\)[\s\S]*?render\(\)\.catch/);
+    });
+
+    test('handleSendMessage seeds AbortController before pre-flight awaits', async () => {
+        const src = await readOrch('iter-studio/studio.js');
+        // The fix lifts AC creation above the first await so a Stop
+        // click during persistSession / render isn't dropped.
+        expect(src).toMatch(/state\.isBusy\s*=\s*true;\s*\n\s*\/\/[^\n]*\n[\s\S]*?state\.abortController\s*=\s*new AbortController\(\);[\s\S]*?await\s+persistSession\(\);[\s\S]*?await\s+render\(\);/);
+    });
+
+    test('runIterationTurn reuses the caller-owned AbortController', async () => {
+        const src = await readOrch('iter-studio/studio.js');
+        // The `||` fallback keeps the function safe for callers that
+        // forget to seed, but the production paths now always do.
+        expect(src).toMatch(/state\.abortController\s*\|\|\s*new AbortController\(\)/);
+    });
+
+    test('render disables the Send/Stop button while aborting', async () => {
+        const src = await readOrch('iter-studio/studio.js');
+        expect(src).toMatch(/prop\(['"]disabled['"]\s*,\s*Boolean\(state\.aborting\)\)/);
+    });
+
+    test('finally blocks clear state.aborting alongside isBusy', async () => {
+        const src = await readOrch('iter-studio/studio.js');
+        // Both handleSendMessage and continueAfterReviewDecision share
+        // the same finally pattern; lock in that the new flag is reset
+        // in every spot the existing flags are.
+        const finallyResets = src.match(/state\.aborting\s*=\s*false/g) || [];
+        expect(finallyResets.length).toBeGreaterThanOrEqual(2);
+    });
+});

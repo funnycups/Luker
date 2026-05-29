@@ -1535,6 +1535,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         live: liveSnapshot,
         pendingEdits: [],
         isBusy: false,
+        aborting: false,
         abortController: null,
     };
 
@@ -1909,6 +1910,9 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         const $btn = $root.find('[data-cea-editor-action="send"]');
         if ($btn && $btn.length > 0) {
             $btn.text(state.isBusy ? t('Stop') : t('Send'));
+            // Disable Stop while the abort is in-flight so a second
+            // click can't queue up before the catch+finally clears state.
+            $btn.prop('disabled', Boolean(state.aborting));
         }
     }
 
@@ -2018,7 +2022,16 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
 
     async function handleSendMessage() {
         if (state.isBusy) {
-            try { state.abortController?.abort(); } catch { /* ignore */ }
+            // Stop request: abort the in-flight runner call. Mark
+            // `aborting` and re-render immediately so the button visibly
+            // reflects the click even when the network takes time to
+            // actually drop the request. The original call's finally
+            // clears both flags once the abort lands.
+            if (!state.aborting) {
+                state.aborting = true;
+                try { state.abortController?.abort(); } catch { /* ignore */ }
+                render().catch(() => { /* ignore — best-effort UI nudge */ });
+            }
             return;
         }
         const $textarea = $root?.find('[data-cea-editor-input]');
@@ -2070,6 +2083,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
             }
         } finally {
             state.isBusy = false;
+            state.aborting = false;
             state.abortController = null;
             await persistSession();
             // If the round produced edits and the user has auto-apply on,
@@ -2235,6 +2249,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
             }
         } finally {
             state.isBusy = false;
+            state.aborting = false;
             state.abortController = null;
             await persistSession();
             const autoApplied = await maybeAutoApply();
@@ -2365,6 +2380,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                 }
             } finally {
                 state.isBusy = false;
+                state.aborting = false;
                 state.abortController = null;
                 await persistSession();
                 const autoApplied = await maybeAutoApply();
@@ -2526,6 +2542,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                 }
             } finally {
                 state.isBusy = false;
+                state.aborting = false;
                 state.abortController = null;
                 await persistSession();
                 const autoApplied = await maybeAutoApply();
