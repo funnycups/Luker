@@ -2786,6 +2786,8 @@
     "chat_world_template_multi_hint": "這個聊天現在可以同時綁定多個世界書。Alt+點選按鈕會打開第一個已選世界書。",
     "Enter immersive mode": "進入沉浸模式",
     "Exit immersive mode": "退出沉浸模式",
+    "Keep top bar in immersive mode": "沉浸模式下保留頂部欄",
+    "When immersive mode is on, keep the top bar visible instead of hiding it": "沉浸模式開啟時，頂部欄仍然可見而不會被隱藏。",
     "Plugin Scripts": "插件正規腳本",
     "Read-only regex rules registered by plugins/scripts at runtime.": "由插件/腳本在執行期間註冊的唯讀正規規則。",
     "No plugin scripts found": "未找到插件腳本",

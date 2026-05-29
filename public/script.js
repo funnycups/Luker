@@ -341,6 +341,7 @@ globalThis.SillyTavern = lukerApi;
 export {
     user_avatar,
     setUserAvatar,
+    setImmersiveMode,
     getUserAvatars,
     getUserAvatar,
     nai_settings,
@@ -1187,15 +1188,24 @@ async function onImmersiveFullscreenChanged() {
     }
 }
 
-async function setImmersiveMode(enabled, { useFullscreen = true } = {}) {
+async function setImmersiveMode(enabled, { useFullscreen = true, persist = true } = {}) {
     const shouldEnable = Boolean(enabled);
     immersiveModeUsesFullscreen = shouldEnable ? Boolean(useFullscreen && canUseFullscreenApi()) : false;
     isImmersiveModeEnabled = shouldEnable;
     setAndroidFullscreenState(shouldEnable, document.documentElement);
     document.body.classList.toggle('luker-immersive-mode', shouldEnable);
+    document.body.classList.toggle(
+        'luker-immersive-keep-top-bar',
+        shouldEnable && Boolean(power_user.immersive_mode_keep_top_bar),
+    );
     syncAndroidImmersiveMode(shouldEnable);
     applyImmersiveLayoutOverrides(shouldEnable);
     updateImmersiveModeUi();
+
+    if (persist && power_user.immersive_mode_last_state !== shouldEnable) {
+        power_user.immersive_mode_last_state = shouldEnable;
+        saveSettingsDebounced();
+    }
 
     if (shouldEnable) {
         if (useFullscreen) {
@@ -1216,7 +1226,7 @@ async function toggleImmersiveMode() {
 if (typeof window !== 'undefined') {
     installAndroidFullscreenApiShim();
     window.__lukerSetImmersiveModeFromNative = (enabled) => {
-        void setImmersiveMode(Boolean(enabled), { useFullscreen: false });
+        void setImmersiveMode(Boolean(enabled), { useFullscreen: false, persist: false });
     };
 }
 

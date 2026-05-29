@@ -2,6 +2,7 @@ import { Fuse, Handlebars } from '../lib.js';
 
 import {
     saveSettingsDebounced,
+    setImmersiveMode,
     scrollChatToBottom,
     characters,
     reloadMarkdownProcessor,
@@ -217,6 +218,8 @@ export const power_user = {
     show_group_chat_queue: false,
     allow_name1_display: false,
     allow_name2_display: false,
+    immersive_mode_last_state: false,
+    immersive_mode_keep_top_bar: false,
     hotswap_enabled: true,
     timer_enabled: true,
     timestamps_enabled: true,
@@ -2058,6 +2061,7 @@ export async function loadPowerUserSettings(settings, data) {
     $('#allow_name2_display').prop('checked', power_user.allow_name2_display);
     //$("#removeXML").prop("checked", power_user.removeXML);
     $('#hotswapEnabled').prop('checked', power_user.hotswap_enabled);
+    $('#immersiveKeepTopBar').prop('checked', power_user.immersive_mode_keep_top_bar);
     $('#messageTimerEnabled').prop('checked', power_user.timer_enabled);
     $('#messageTimestampsEnabled').prop('checked', power_user.timestamps_enabled);
     $('#messageModelIconEnabled').prop('checked', power_user.timestamp_model_icon);
@@ -2169,6 +2173,13 @@ export async function loadPowerUserSettings(settings, data) {
     loadCharListState();
     toggleMDHotkeyIconDisplay();
     applyToastrPosition();
+
+    if (power_user.immersive_mode_last_state) {
+        const alreadyOn = document.body.classList.contains('luker-immersive-mode');
+        if (!alreadyOn) {
+            void setImmersiveMode(true, { useFullscreen: false, persist: false });
+        }
+    }
 }
 
 function toggleMDHotkeyIconDisplay() {
@@ -4184,6 +4195,15 @@ jQuery(() => {
         const value = !!$(this).prop('checked');
         power_user.hotswap_enabled = value;
         switchHotswap();
+        saveSettingsDebounced();
+    });
+
+    $('#immersiveKeepTopBar').on('input', function () {
+        const value = !!$(this).prop('checked');
+        power_user.immersive_mode_keep_top_bar = value;
+        if (document.body.classList.contains('luker-immersive-mode')) {
+            document.body.classList.toggle('luker-immersive-keep-top-bar', value);
+        }
         saveSettingsDebounced();
     });
 

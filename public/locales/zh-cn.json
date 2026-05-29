@@ -3699,6 +3699,8 @@
     "Set a group chat scenario": "设置群聊背景",
     "Enter immersive mode": "进入沉浸模式",
     "Exit immersive mode": "退出沉浸模式",
+    "Keep top bar in immersive mode": "沉浸模式下保留顶部栏",
+    "When immersive mode is on, keep the top bar visible instead of hiding it": "沉浸模式开启时，顶部栏仍然可见而不会被隐藏。",
     "Current chat tools": "当前聊天工具",
     "Search current chat": "搜索当前聊天",
     "Enter keyword to search messages in this chat.": "输入关键词以搜索当前聊天消息。",

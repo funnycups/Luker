@@ -753,11 +753,16 @@
         bottom: unset;
     }
 
-    body.luker-immersive-mode #sheld {
+    body.luker-immersive-mode:not(.luker-immersive-keep-top-bar) #sheld {
         top: 0 !important;
         height: 100vh !important;
         height: 100dvh !important;
         max-height: 100dvh !important;
+    }
+
+    body.luker-immersive-mode.luker-immersive-keep-top-bar #sheld {
+        height: calc(100dvh - var(--topBarBlockSize)) !important;
+        max-height: calc(100dvh - var(--topBarBlockSize)) !important;
     }
 
     body.luker-immersive-mode #chat {

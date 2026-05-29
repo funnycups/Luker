@@ -5659,16 +5659,21 @@ body:not(.caption) .mes_img_caption {
 
 }
 
-body.luker-immersive-mode #top-bar,
-body.luker-immersive-mode #top-settings-holder {
+body.luker-immersive-mode:not(.luker-immersive-keep-top-bar) #top-bar,
+body.luker-immersive-mode:not(.luker-immersive-keep-top-bar) #top-settings-holder {
     display: none !important;
 }
 
-body.luker-immersive-mode #sheld {
+body.luker-immersive-mode:not(.luker-immersive-keep-top-bar) #sheld {
     top: 0;
     height: calc(100vh - 1px);
     height: calc(100dvh - 1px);
     max-height: calc(100dvh - 1px);
+}
+
+body.luker-immersive-mode.luker-immersive-keep-top-bar #sheld {
+    height: calc(100dvh - var(--topBarBlockSize) - 1px);
+    max-height: calc(100dvh - var(--topBarBlockSize) - 1px);
 }
 
 body.luker-immersive-mode #chat {
