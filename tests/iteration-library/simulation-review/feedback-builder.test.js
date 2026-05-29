@@ -85,4 +85,20 @@ describe('buildSimulationToolResult', () => {
         });
         expect(out).toContain(`<<<ANNOTATION id=1>>>${tricky}<<</ANNOTATION>>>`);
     });
+
+    test('renders WI hits with book + entry attribution', () => {
+        const out = buildSimulationToolResult({
+            kind: 'cea',
+            cancelled: false,
+            error: null,
+            chainSegments: [{ text: 'output' }],
+            annotations: [],
+            worldInfoHits: [
+                { book: 'City Lore', entry: 'Geography', position: 'depth-4/system' },
+                { book: 'NPC Sheets', entry: 'NPC Alice', position: 'before-char' },
+            ],
+        });
+        expect(out).toContain('Lorebook "City Lore" → entry "Geography" (depth-4/system)');
+        expect(out).toContain('Lorebook "NPC Sheets" → entry "NPC Alice" (before-char)');
+    });
 });

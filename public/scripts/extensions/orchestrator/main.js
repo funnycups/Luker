@@ -3920,10 +3920,15 @@ async function runAiIterationSimulation(context, session, args = {}, abortSignal
 }
 
 function extractOrchestratorSimulationWorldInfoHits(trace) {
-    // The orchestrator's runtime-trace doesn't centralize WI hits today;
-    // each agent resolves WI in its own scope. For Stage 4 we return an
-    // empty list — the popup gracefully handles []. A follow-up can
-    // surface per-agent WI hits if needed.
+    // Each agent (spec / agenda / loop / director) resolves world info in
+    // its own scope, so the orchestrator runtime-trace doesn't have a
+    // single set of WI hits that represents "the simulation". Aggregating
+    // across agents would mislead more than inform — e.g. surfacing the
+    // writer's hits alongside the planner's hits when they fired on
+    // different prompts and different lorebook scopes. Per-agent WI
+    // attribution can be threaded through the trace later if the popup
+    // ever needs to display it; for now we return an empty list and the
+    // shared renderer gracefully omits the world-info block.
     void trace;
     return [];
 }

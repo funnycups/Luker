@@ -1714,6 +1714,35 @@ function normalizeRuntimeWorldInfoDepth(rawDepthEntries) {
         });
 }
 
+function normalizeRuntimeWorldInfoActivatedEntries(rawEntries) {
+    if (!Array.isArray(rawEntries)) return [];
+    const result = [];
+    for (const entry of rawEntries) {
+        if (!entry || typeof entry !== 'object') continue;
+        const normalized = {
+            world: String(entry.world ?? '').trim(),
+            comment: String(entry.comment ?? '').trim(),
+            uid: entry.uid ?? null,
+            position: Number.isFinite(Number(entry.position)) ? Number(entry.position) : null,
+        };
+        // Depth + role are only meaningful for atDepth (position=4); copy them
+        // unconditionally so downstream renderers can still inspect them if
+        // they want, but don't fabricate values when missing.
+        if (entry.depth !== undefined && entry.depth !== null) {
+            normalized.depth = Math.max(0, Math.floor(Number(entry.depth) || 0));
+        }
+        if (entry.role !== undefined && entry.role !== null) {
+            normalized.role = entry.role;
+        }
+        // Outlet name for position=7 — keep so the popup can label outlets.
+        if (typeof entry.outletName === 'string' && entry.outletName.trim()) {
+            normalized.outletName = entry.outletName.trim();
+        }
+        result.push(normalized);
+    }
+    return result;
+}
+
 function normalizeRuntimeWorldInfo(runtimeWorldInfo = null) {
     const source = runtimeWorldInfo && typeof runtimeWorldInfo === 'object' ? runtimeWorldInfo : {};
     return {
@@ -1724,6 +1753,10 @@ function normalizeRuntimeWorldInfo(runtimeWorldInfo = null) {
         worldInfoExamples: normalizeRuntimeWorldInfoExamples(source.worldInfoExamples),
         anBefore: normalizeRuntimeWorldInfoNoteEntries(source.anBefore),
         anAfter: normalizeRuntimeWorldInfoNoteEntries(source.anAfter),
+        // Per-entry attribution (lorebook + comment + position) preserved
+        // alongside the existing pre-formatted text buckets. Consumers that
+        // need book/comment names read this; existing consumers ignore it.
+        activatedEntries: normalizeRuntimeWorldInfoActivatedEntries(source.activatedEntries),
     };
 }
 
@@ -1750,6 +1783,10 @@ function applyWorldInfoPostActivationHook(runtimeWorldInfo = null, postActivatio
         })),
         anBefore: [...normalized.anBefore],
         anAfter: [...normalized.anAfter],
+        // Pass the activated-entry attribution through so post-hooks that
+        // re-shape the payload (e.g. rewriteDepthWorldInfoToAfter) don't
+        // drop the per-entry book / comment data.
+        activatedEntries: normalized.activatedEntries.map(entry => ({ ...entry })),
     };
 
     try {
@@ -1993,6 +2030,11 @@ async function resolveWorldInfoForMessages(messages = [], {
             worldInfoExamples: Array.isArray(resolution?.worldInfoExamples) ? resolution.worldInfoExamples : [],
             anBefore: Array.isArray(resolution?.anBefore) ? resolution.anBefore : [],
             anAfter: Array.isArray(resolution?.anAfter) ? resolution.anAfter : [],
+            // Pass raw activated entries through so the popup can show
+            // per-entry lorebook + comment attribution. See
+            // public/scripts/iteration-library/simulation-review/wi-hits.js
+            // for the consumer.
+            activatedEntries: Array.isArray(resolution?.activatedEntries) ? resolution.activatedEntries : [],
         }, postActivationHook);
     } catch (error) {
         console.warn('[LUKER] resolveWorldInfoForMessages failed', error);

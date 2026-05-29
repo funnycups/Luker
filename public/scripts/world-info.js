@@ -1815,9 +1815,12 @@ export async function getWorldInfoPrompt(chat, maxContext, isDryRun, globalScanD
     worldInfoAfterEntries = Array.isArray(activatedWorldInfo.worldInfoAfterEntries) ? activatedWorldInfo.worldInfoAfterEntries : [];
     const worldInfoString = [...worldInfoBeforeEntries, ...worldInfoAfterEntries].join('\n');
 
-    if (!isDryRun && activatedWorldInfo.allActivatedEntries && activatedWorldInfo.allActivatedEntries.size > 0) {
-        const arg = Array.from(activatedWorldInfo.allActivatedEntries.values());
-        await eventSource.emit(event_types.WORLD_INFO_ACTIVATED, arg);
+    const activatedEntriesList = activatedWorldInfo.allActivatedEntries instanceof Set
+        ? Array.from(activatedWorldInfo.allActivatedEntries.values())
+        : [];
+
+    if (!isDryRun && activatedEntriesList.length > 0) {
+        await eventSource.emit(event_types.WORLD_INFO_ACTIVATED, activatedEntriesList);
     }
 
     return {
@@ -1831,6 +1834,11 @@ export async function getWorldInfoPrompt(chat, maxContext, isDryRun, globalScanD
         anBefore: activatedWorldInfo.ANBeforeEntries ?? [],
         anAfter: activatedWorldInfo.ANAfterEntries ?? [],
         outletEntries: activatedWorldInfo.outletEntries ?? {},
+        // Per-entry attribution (book / comment / position) for consumers
+        // that need to surface which lorebook fired which entry. Existing
+        // consumers ignore this; new consumers (simulation-review popup)
+        // read it via st-context.resolveWorldInfoForMessages.
+        activatedEntries: activatedEntriesList,
     };
 }
 

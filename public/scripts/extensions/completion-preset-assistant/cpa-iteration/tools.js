@@ -24,6 +24,7 @@
 import { lodash } from '../../../../lib.js';
 import { generateQuietPrompt } from '../../../../script.js';
 import { openSimulationReview } from '../../../iteration-library/simulation-review/index.js';
+import { extractWorldInfoHitsFromRuntime } from '../../../iteration-library/simulation-review/wi-hits.js';
 
 export const EDITABLE_TOOL_NAMES = new Set([
     'preset_set_field',
@@ -1053,42 +1054,14 @@ function extractNonSystemMessagesForPresetSimulation(promptMessages) {
         .map(m => ({ role: String(m?.role || ''), content: String(m?.content || '') }));
 }
 
-// runtimeWorldInfo returned by st-context.resolveWorldInfoForMessages
-// has shape { worldInfoBeforeEntries: string[], worldInfoAfterEntries:
-// string[], worldInfoDepth: [{depth, role, entries: string[]}], ... }.
-// Each "entry" string is already wi_format-wrapped activation text;
-// the raw book/entry attribution isn't retained at this stage, so we
-// surface the activation text itself as the `entry` field and tag it
-// with the position bucket so the workbench LLM can still see what
-// fired and where. Mirrors CEA's extractor — see
-// extractWorldInfoHitsForCharacterEditorSimulation in main.js.
+// World-info attribution for the simulation-review popup. The runtime
+// returned by resolveWorldInfoForMessages now carries an activatedEntries[]
+// array with per-entry book + comment names; we delegate to the shared
+// extractor in iteration-library/simulation-review/wi-hits.js so CEA and
+// CPA stay in sync. The shared helper falls back to walking the
+// pre-formatted text buckets if activatedEntries[] is absent (legacy host).
 function extractWorldInfoHitsForPresetSimulation(runtimeWorldInfo) {
-    if (!runtimeWorldInfo || typeof runtimeWorldInfo !== 'object') return [];
-    const hits = [];
-    const before = Array.isArray(runtimeWorldInfo.worldInfoBeforeEntries) ? runtimeWorldInfo.worldInfoBeforeEntries : [];
-    for (const text of before) {
-        const entry = String(text || '').trim();
-        if (!entry) continue;
-        hits.push({ book: '', entry, position: 'before-char' });
-    }
-    const after = Array.isArray(runtimeWorldInfo.worldInfoAfterEntries) ? runtimeWorldInfo.worldInfoAfterEntries : [];
-    for (const text of after) {
-        const entry = String(text || '').trim();
-        if (!entry) continue;
-        hits.push({ book: '', entry, position: 'after-char' });
-    }
-    const depthBuckets = Array.isArray(runtimeWorldInfo.worldInfoDepth) ? runtimeWorldInfo.worldInfoDepth : [];
-    for (const bucket of depthBuckets) {
-        const depthVal = Math.max(0, Math.floor(Number(bucket?.depth) || 0));
-        const role = String(bucket?.role || 'system');
-        const entries = Array.isArray(bucket?.entries) ? bucket.entries : [];
-        for (const text of entries) {
-            const entry = String(text || '').trim();
-            if (!entry) continue;
-            hits.push({ book: '', entry, position: `depth-${depthVal}/${role}` });
-        }
-    }
-    return hits;
+    return extractWorldInfoHitsFromRuntime(runtimeWorldInfo);
 }
 
 function buildPresetSimulationErrorResult(err) {
