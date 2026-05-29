@@ -9,6 +9,28 @@ jest.unstable_mockModule('../../public/lib.js', async () => {
     return { lodash };
 });
 
+// public/script.js cascades into the macro engine and other browser-only
+// runtime that doesn't resolve under jest. tools.js only uses
+// generateQuietPrompt (and only when preset_simulate fires) — mock it to a
+// canned reply so the rest of the file imports cleanly.
+jest.unstable_mockModule('../../public/script.js', () => ({
+    generateQuietPrompt: jest.fn(async () => 'mocked model reply'),
+}));
+
+// simulation-review/index.js pulls in popup-host which imports SillyTavern's
+// popup.js — same browser-only cascade. Mock the public entry to a no-op
+// review that returns a canned tagged-text envelope.
+jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/index.js', () => ({
+    openSimulationReview: jest.fn(async () => ({
+        ok: true,
+        cancelled: false,
+        toolResultText: '<simulation_result kind="cpa" ok="true">mock</simulation_result>',
+        annotations: [],
+        chainText: '<simulation_result kind="cpa" ok="true">mock</simulation_result>',
+    })),
+    buildSimulationToolResult: jest.fn(() => '<simulation_result kind="cpa" ok="true">mock</simulation_result>'),
+}));
+
 let buildToolCatalog;
 let EDITABLE_TOOL_NAMES;
 let READ_TOOL_NAMES;

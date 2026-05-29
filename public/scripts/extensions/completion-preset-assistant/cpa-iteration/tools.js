@@ -22,6 +22,8 @@
  */
 
 import { lodash } from '../../../../lib.js';
+import { generateQuietPrompt } from '../../../../script.js';
+import { openSimulationReview } from '../../../iteration-library/simulation-review/index.js';
 
 export const EDITABLE_TOOL_NAMES = new Set([
     'preset_set_field',
@@ -669,7 +671,7 @@ export function buildToolCatalog({ hasReference = false } = {}) {
             type: 'function',
             function: {
                 name: 'preset_simulate',
-                description: 'Simulate prompt assembly for the current preset. Prefer `text` to append one user message to the current chat; use `messages` only when the user already supplied a structured message array.',
+                description: 'Simulate the current preset against the live chat, world info, and character card. Pass text=<user turn> and the simulator appends it to the active chat, runs a real (non-persisted) generation, and opens a popup for the user to review. The messages mode is currently unsupported by the generation backend; pass text instead.',
                 parameters: {
                     type: 'object',
                     properties: {
@@ -811,11 +813,20 @@ export async function runCpaReadTool(call, ctx = {}) {
         if (!stContext || typeof stContext.buildPresetAwarePromptMessages !== 'function') {
             return { ok: false, error: 'Prompt preset simulator is unavailable in this environment.' };
         }
+        const i18nFn = (k, fb) => (typeof stContext?.t === 'function' ? stContext.t(k, fb) : fb || k);
         const text = String(args.text || '').trim();
         const messages = Array.isArray(args.messages) ? args.messages : null;
         const source = buildSimulateSourceMessages(stContext, { text, messages });
         if (!source || source.messages.length === 0) {
             return { ok: false, error: 'preset_simulate requires either text or messages.' };
+        }
+        if (source.mode === 'messages') {
+            return {
+                ok: false,
+                toolResultText: buildPresetSimulationErrorResult(new Error(
+                    'preset_simulate does not support the messages-mode input under the current generation backend. Pass text=<single user turn> and the simulator will append it to the live chat.',
+                )),
+            };
         }
         try {
             const runtimeWorldInfo = typeof stContext.resolveWorldInfoForMessages === 'function'
@@ -829,20 +840,67 @@ export async function runCpaReadTool(call, ctx = {}) {
                 envelopeOptions: { includeCharacterCard: true, api: 'openai' },
                 runtimeWorldInfo,
             });
-            const assembled_length = Array.isArray(promptMessages)
-                ? promptMessages.reduce((sum, m) => sum + String(m?.content || '').length, 0)
-                : 0;
+
+            // Run the real (non-persisting) generation so the popup
+            // shows the model's actual output, not just the assembled
+            // prompt. generateQuietPrompt routes through Generate('quiet'),
+            // which executes the full pipeline (WI, regex, depth, preset,
+            // group routing) without writing the result to chat.
+            const lastUserMsg = source.messages.slice().reverse().find(m => m.role === 'user' || m.is_user);
+            const quietPrompt = String(lastUserMsg?.content || lastUserMsg?.mes || '');
+            let finalOutput = '';
+            try {
+                const generated = await generateQuietPrompt({
+                    quietPrompt,
+                    quietToLoud: false,
+                    skipWIAN: false,
+                    removeReasoning: false,
+                });
+                finalOutput = String(generated || '');
+            } catch (err) {
+                return {
+                    ok: false,
+                    toolResultText: buildPresetSimulationErrorResult(err),
+                };
+            }
+
+            const worldInfoHits = extractWorldInfoHitsForPresetSimulation(runtimeWorldInfo);
+            const review = await openSimulationReview({
+                kind: 'cpa',
+                payload: {
+                    finalOutput,
+                    reasoning: '',
+                    assembledPrompt: {
+                        systemPrompt: extractSystemPromptForPresetSimulation(promptMessages),
+                        messages: extractNonSystemMessagesForPresetSimulation(promptMessages),
+                    },
+                    worldInfoHits,
+                },
+                worldInfoHits,
+                i18n: i18nFn,
+            });
+
             return {
-                ok: true,
+                ok: review.ok,
+                cancelled: review.cancelled,
+                toolResultText: review.toolResultText,
+                // Legacy fields kept for any caller still inspecting them.
                 result: {
                     mode: source.mode,
                     sourceMessages: source.messages,
                     promptMessages,
-                    assembled_length,
+                    assembled_length: Array.isArray(promptMessages)
+                        ? promptMessages.reduce((sum, m) => sum + String(m?.content || '').length, 0)
+                        : 0,
                 },
             };
         } catch (err) {
-            return { ok: false, error: String(err?.message || err || 'simulate failed') };
+            return {
+                ok: false,
+                cancelled: false,
+                toolResultText: buildPresetSimulationErrorResult(err),
+                error: String(err?.message || err || 'simulate failed'),
+            };
         }
     }
 
@@ -970,6 +1028,61 @@ function buildSimulateSourceMessages(context, { text, messages }) {
         };
     }
     return { mode: 'empty', messages: [] };
+}
+
+function extractSystemPromptForPresetSimulation(promptMessages) {
+    if (!Array.isArray(promptMessages)) return '';
+    const first = promptMessages.find(m => (m?.role || '').toLowerCase() === 'system');
+    return String(first?.content || '');
+}
+
+function extractNonSystemMessagesForPresetSimulation(promptMessages) {
+    if (!Array.isArray(promptMessages)) return [];
+    return promptMessages
+        .filter(m => (m?.role || '').toLowerCase() !== 'system')
+        .map(m => ({ role: String(m?.role || ''), content: String(m?.content || '') }));
+}
+
+// runtimeWorldInfo returned by st-context.resolveWorldInfoForMessages
+// has shape { worldInfoBeforeEntries: string[], worldInfoAfterEntries:
+// string[], worldInfoDepth: [{depth, role, entries: string[]}], ... }.
+// Each "entry" string is already wi_format-wrapped activation text;
+// the raw book/entry attribution isn't retained at this stage, so we
+// surface the activation text itself as the `entry` field and tag it
+// with the position bucket so the workbench LLM can still see what
+// fired and where. Mirrors CEA's extractor — see
+// extractWorldInfoHitsForCharacterEditorSimulation in main.js.
+function extractWorldInfoHitsForPresetSimulation(runtimeWorldInfo) {
+    if (!runtimeWorldInfo || typeof runtimeWorldInfo !== 'object') return [];
+    const hits = [];
+    const before = Array.isArray(runtimeWorldInfo.worldInfoBeforeEntries) ? runtimeWorldInfo.worldInfoBeforeEntries : [];
+    for (const text of before) {
+        const entry = String(text || '').trim();
+        if (!entry) continue;
+        hits.push({ book: '', entry, position: 'before-char' });
+    }
+    const after = Array.isArray(runtimeWorldInfo.worldInfoAfterEntries) ? runtimeWorldInfo.worldInfoAfterEntries : [];
+    for (const text of after) {
+        const entry = String(text || '').trim();
+        if (!entry) continue;
+        hits.push({ book: '', entry, position: 'after-char' });
+    }
+    const depthBuckets = Array.isArray(runtimeWorldInfo.worldInfoDepth) ? runtimeWorldInfo.worldInfoDepth : [];
+    for (const bucket of depthBuckets) {
+        const depthVal = Math.max(0, Math.floor(Number(bucket?.depth) || 0));
+        const role = String(bucket?.role || 'system');
+        const entries = Array.isArray(bucket?.entries) ? bucket.entries : [];
+        for (const text of entries) {
+            const entry = String(text || '').trim();
+            if (!entry) continue;
+            hits.push({ book: '', entry, position: `depth-${depthVal}/${role}` });
+        }
+    }
+    return hits;
+}
+
+function buildPresetSimulationErrorResult(err) {
+    return `<simulation_result kind="cpa" ok="false">\n\n<error reason="simulation_failed">\n${String(err?.message || err || '')}\n</error>\n\n</simulation_result>`;
 }
 
 export async function normalizeToolCallToEdit(call, ctx) {

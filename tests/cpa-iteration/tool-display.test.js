@@ -10,6 +10,24 @@ jest.unstable_mockModule('../../public/lib.js', async () => {
     return { lodash };
 });
 
+// public/script.js + simulation-review/index.js are pulled in by tools.js
+// (for the simulate-prompt → real generate + popup flow) and cascade into
+// browser-only runtime under jest. Mock both at the module boundary so the
+// tool-display registry import resolves cleanly.
+jest.unstable_mockModule('../../public/script.js', () => ({
+    generateQuietPrompt: jest.fn(async () => 'mocked model reply'),
+}));
+jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/index.js', () => ({
+    openSimulationReview: jest.fn(async () => ({
+        ok: true,
+        cancelled: false,
+        toolResultText: '<simulation_result kind="cpa" ok="true">mock</simulation_result>',
+        annotations: [],
+        chainText: '<simulation_result kind="cpa" ok="true">mock</simulation_result>',
+    })),
+    buildSimulationToolResult: jest.fn(() => '<simulation_result kind="cpa" ok="true">mock</simulation_result>'),
+}));
+
 let CPA_TOOL_DISPLAY;
 
 beforeAll(async () => {

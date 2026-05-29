@@ -973,6 +973,18 @@ export async function openCpaIterationStudio(deps) {
     function serializeToolResultContent(result) {
         if (typeof result === 'string') return result;
         if (result === null || result === undefined) return '';
+        // When the executor supplies a `toolResultText` string (e.g. the
+        // preset_simulate review's tagged-text envelope), pass it through
+        // verbatim so the workbench LLM sees the human-readable
+        // `<simulation_result>` / `<annotations>` markup instead of a
+        // JSON-stringified blob with escaped angle brackets. Falls back
+        // to the original JSON serialization for every other read-tool
+        // result.
+        if (typeof result === 'object'
+            && typeof result.toolResultText === 'string'
+            && result.toolResultText) {
+            return result.toolResultText;
+        }
         try { return JSON.stringify(result, null, 2); } catch { return String(result); }
     }
 
@@ -1183,8 +1195,28 @@ export async function openCpaIterationStudio(deps) {
                 const out = await runCpaReadTool({ id: callId, name: call?.name, args }, ctxForReads);
                 if (out?.ok) {
                     resultPayload = out.result;
+                    // Lift tagged-text envelopes (e.g. preset_simulate's review
+                    // popup) up onto the result payload so the serializer can
+                    // emit them verbatim instead of JSON-stringifying. The
+                    // legacy `result.*` blob is preserved for any caller still
+                    // inspecting structured fields.
+                    if (typeof out.toolResultText === 'string' && out.toolResultText) {
+                        const base = (resultPayload && typeof resultPayload === 'object' && !Array.isArray(resultPayload))
+                            ? resultPayload
+                            : { value: resultPayload };
+                        resultPayload = { ...base, toolResultText: out.toolResultText };
+                    }
                 } else {
-                    resultPayload = { error: String(out?.error || 'unknown error') };
+                    // Failures may also carry a tagged-text envelope (e.g. the
+                    // simulator caught an LLM error and built a structured
+                    // <simulation_result ok="false"> block). Surface it so the
+                    // workbench LLM sees the structured error, not a raw
+                    // `{ error: "..." }` JSON blob.
+                    if (typeof out?.toolResultText === 'string' && out.toolResultText) {
+                        resultPayload = { error: String(out?.error || 'simulation failed'), toolResultText: out.toolResultText };
+                    } else {
+                        resultPayload = { error: String(out?.error || 'unknown error') };
+                    }
                     statusLabel = 'fail';
                 }
             } catch (err) {
