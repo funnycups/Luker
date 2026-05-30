@@ -239,6 +239,7 @@ import {
 import { openOrchestratorIterationStudio } from './iter-studio/studio.js';
 import { openSimulationReview } from '../../iteration-library/simulation-review/index.js';
 import { ensureSimulationReviewLocaleData } from '../../iteration-library/simulation-review/i18n/index.js';
+import { captureDryRunPayload } from '../../iteration-library/simulation-review/dry-run-capture.js';
 import {
     exportSpecPayload,
     exportAgendaPayload,
@@ -3899,14 +3900,45 @@ async function runAiIterationSimulation(context, session, args = {}, abortSignal
             // and the simulation-review popup work unchanged.
             directorTrace = await runDirectorSimulationLoop(context, session, simulationMessages, abortSignal);
         } else {
+            // Drive a dryRun Generate so the prompt-build pipeline runs
+            // end-to-end (regex, file-splice, reasoning-splice, World Info
+            // activation, extension hooks) without invoking the model or
+            // persisting. Mirror production's `onWorldInfoFinalized` wiring:
+            // use captured `coreChat` as the messages arg so spec/agenda
+            // template renderers see the same processed chat the live
+            // pipeline would feed them, and transform `allActivatedEntries`
+            // into `__lukerRun.activatedEntryKeys` so loop's
+            // `lorebook_search` dedups the same entries production already
+            // injected into the main context.
+            const captured = await captureDryRunPayload(
+                context,
+                context?.eventTypes?.GENERATION_WORLD_INFO_FINALIZED ?? 'generation_world_info_finalized',
+                { quietPrompt: customText },
+            );
+            const capturedCoreChat = Array.isArray(captured?.coreChat) ? captured.coreChat : null;
+            const chatForRuntime = capturedCoreChat && capturedCoreChat.length > 0
+                ? structuredClone(capturedCoreChat)
+                : structuredClone(simulationMessages);
+            const activatedEntryKeys = new Set();
+            const allActivatedEntries = captured?.allActivatedEntries;
+            if (allActivatedEntries && typeof allActivatedEntries[Symbol.iterator] === 'function') {
+                for (const entry of allActivatedEntries) {
+                    if (!entry) continue;
+                    const world = String(entry.world || '');
+                    const uid = entry.uid;
+                    if (uid === undefined || uid === null) continue;
+                    activatedEntryKeys.add(`${world}.${uid}`);
+                }
+            }
             const payload = {
                 type: String(args?.trigger || 'normal').trim().toLowerCase() || 'normal',
-                coreChat: simulationMessages,
+                coreChat: chatForRuntime,
                 signal: abortSignal,
                 forceWorldInfoResimulate: true,
+                __lukerRun: { activatedEntryKeys },
             };
             try {
-                run = await runOrchestration(context, payload, structuredClone(simulationMessages), profile);
+                run = await runOrchestration(context, payload, chatForRuntime, profile);
             } finally {
                 // Restore the snapshot each attempt so a re-run starts
                 // from the same world state as the first attempt; without
