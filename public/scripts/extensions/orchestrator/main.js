@@ -3678,16 +3678,37 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
         if (typeof reasoning === 'string') latestReasoning = reasoning;
     });
 
+    // Drive a dryRun Generate so the prompt-build pipeline runs end-to-end
+    // (persona, character card, World Info before/after, depth-injected
+    // prompts, extension hooks) without invoking the model or persisting.
+    // Capture CHAT_COMPLETION_PROMPT_READY's prompt array and feed it as
+    // `eventData.generateData.prompt` so the director main agent sees the
+    // same fully-assembled <story_context> body it would see in production.
+    // Falls back to the raw simulationMessages slice if capture fails.
+    const lastUserMsg = simulationMessages.slice().reverse().find(m => m.role === 'user' || m.is_user);
+    const quietPromptText = String(lastUserMsg?.content || lastUserMsg?.mes || '');
+    const capturedPromptPayload = await captureDryRunPayload(
+        context,
+        context?.eventTypes?.CHAT_COMPLETION_PROMPT_READY ?? 'chat_completion_prompt_ready',
+        { quietPrompt: quietPromptText },
+    );
+    const capturedPromptArray = Array.isArray(capturedPromptPayload)
+        ? capturedPromptPayload
+        : (Array.isArray(capturedPromptPayload?.chat) ? capturedPromptPayload.chat : null);
+    const contentPayloadMessages = Array.isArray(capturedPromptArray) && capturedPromptArray.length > 0
+        ? capturedPromptArray
+        : simulationMessages;
+
     // Synthesize the GENERATE_TAKEOVER_DISPATCH eventData the runtime
     // expects. `eventData.generateData.prompt` is the chat-completion
     // messages array that director splices between <story_context>
-    // open/close — we use the simulation-message snapshot here so the
-    // main agent sees the same recent chat slice the workbench-LLM
-    // asked us to simulate against.
+    // open/close — feed the captured prompt array so the main agent
+    // sees the same assembled context the takeover handler would in
+    // production.
     const eventData = {
         type: 'normal',
         placeholderMessageId: 0,
-        generateData: { prompt: simulationMessages },
+        generateData: { prompt: contentPayloadMessages },
         takeoverHandle: handle,
         abortSignal,
     };
@@ -3765,16 +3786,17 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
                 // <story_context> open/close. In production this resolves
                 // via `directorContentCache.get()` (which reads
                 // `eventData.generateData.prompt` lazily); for simulation
-                // we close over the simulation snapshot directly so the
-                // main agent and any sub-agent it dispatches see the same
-                // recent-chat window the workbench-LLM is testing against.
-                getContentPayload: () => ({ messages: simulationMessages }),
+                // we close over the dryRun-captured prompt array so the
+                // main agent and any sub-agent it dispatches see the
+                // fully-assembled context production would build, not a
+                // raw recent-chat slice.
+                getContentPayload: () => ({ messages: contentPayloadMessages }),
                 // `chat` is what the loop-tool dispatcher reads for the
-                // chat namespace (read_range / search). Same simulation
-                // slice so chat reads see the framed window, not the live
-                // chat tail (which could have shifted since the
-                // workbench-LLM captured it).
-                chat: simulationMessages,
+                // chat namespace (read_range / search). Simulation is
+                // read-only and the workbench LLM expects the same
+                // semantics production uses, so point at the live chat
+                // rather than the N-window simulation slice.
+                chat: context.chat,
                 trace,
                 settings,
                 contextForNotes,
