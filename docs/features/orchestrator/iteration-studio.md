@@ -88,7 +88,12 @@ The Studio's AI reads your current profile and patches it via tool calls. The St
 
 ## Per-card lorebook hygiene
 
-When you open the Studio scoped to a character card, the AI also reconciles the orchestration you're building against the card's bound lorebooks. If an entry hard-constrains output (forces a fixed format, demands plain prose, bans markdown, locks turn structure) in a way that conflicts with the orchestration's output contract, the Studio first tries to surgically excise the offending clause and preserve the rest — entries that "hard-constrain output" usually exist because the author wanted the model to attend to something specific (a scene anchor, a persona beat, a story rhythm), and disabling the whole entry would strip that intent along with the format. The Studio only disables an entry outright when it's pure format coercion with no salvageable content. Nothing is ever deleted. Each adjustment appears in the chat history alongside the orchestration proposals.
+When you open the Studio scoped to a character card, the AI also reconciles the orchestration you're building against the card's bound lorebooks. Format-related lorebook entries fall into two camps that need different handling:
+
+- **Process coercion** — entries that pin *how the model thinks during the run* (mandatory thinking templates, every-round CoT prefixes, "always check X before answering", "follow steps 1-N in order before responding"). These poison the agent loop in an orchestration: they fire every tool-call round, force narrative-shaped text where the agent needs to plan and call tools, and starve the planning channel. The Studio strips the format and harvests the underlying intent — the topics, angles, persona habits, scene anchors the author cared about — rewriting it as worldbuilding / persona / scene-anchor content the agent reads as narrative input, not as another rule.
+- **Final-output shape** — entries that describe *what the final committed reply looks like* ("all output must be markdown", "wrap the response in a tag", "end with a closing summary block", "speak in poetry"). These are legitimate stylistic preferences and the Studio keeps them. It only rewrites them so the finalize semantics are explicit, so intermediate orchestration nodes (planner, tool-callers, reviewers) stay free to use whatever form they need on the way to the final commit.
+
+The Studio prefers surgical clause-level rewrites that preserve the rest of an entry; whole-entry disabling happens only when the entry is pure format coercion with no salvageable content. Nothing is ever deleted. Each adjustment appears in the chat history alongside the orchestration proposals.
 
 Global Studio sessions never touch any lorebook — this only runs in character scope.
 
