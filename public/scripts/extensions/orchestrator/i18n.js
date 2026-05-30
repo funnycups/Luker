@@ -358,6 +358,8 @@ export function registerLocaleData() {
         'Node Attempts': '节点尝试',
         'Review Reruns': '复审重跑',
         'Updated At': '更新时间',
+        'Update lorebook entry': '修改世界书条目',
+        'Patch lorebook entry text': '改写世界书条目正文',
     });
     addLocaleData('zh-tw', {
         'Orchestrator': '多智能體編排',
@@ -696,5 +698,7 @@ export function registerLocaleData() {
         'Node Attempts': '節點嘗試',
         'Review Reruns': '複審重跑',
         'Updated At': '更新時間',
+        'Update lorebook entry': '修改世界書條目',
+        'Patch lorebook entry text': '改寫世界書條目正文',
     });
 }

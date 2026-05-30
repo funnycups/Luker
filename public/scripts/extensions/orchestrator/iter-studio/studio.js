@@ -129,6 +129,7 @@ const STYLESHEET_HREF = '/scripts/extensions/orchestrator/iter-studio/studio.css
 // constraints, not to copy lorebook text into prompts.
 // ──────────────────────────────────────────────────────────────────────────
 const { isLorebookReadTool, LOREBOOK_READ_TOOL_DEFS, runLorebookReadTool: runLorebookReadToolShared } = ITER_TOOLS.lorebookReads;
+const { isLorebookWriteTool, LOREBOOK_WRITE_TOOL_DEFS, runLorebookWriteTool: runLorebookWriteToolShared } = ITER_TOOLS.lorebookWrites;
 
 // `luker_orch_simulate` is classified as a read tool too (it runs a
 // throwaway orchestration against the working profile and returns the
@@ -144,8 +145,14 @@ function isSimulateTool(name) {
     return String(name || '') === SIMULATE_TOOL_NAME;
 }
 
-function isReadTool(name) {
-    return isLorebookReadTool(name) || isSimulateTool(name);
+// "Inline-executed" means the popup dispatches the call synchronously and
+// persists the tool_result on the assistant message (so the next round's
+// taskMessages replay carries it back to the model). Lorebook reads,
+// lorebook writes, and simulate all share this path; sandbox-edit tools
+// (luker_orch_set_*) do not — they become diff proposals the user
+// reviews + applies via the popup, never reaching the model directly.
+function isInlineExecutedTool(name) {
+    return isLorebookReadTool(name) || isLorebookWriteTool(name) || isSimulateTool(name);
 }
 
 /**
@@ -156,6 +163,21 @@ function isReadTool(name) {
  */
 async function runLorebookReadTool(call, helperApis = []) {
     return runLorebookReadToolShared(call, {
+        dispatch: runCharacterEditorHelperToolCall,
+        helperApis,
+    });
+}
+
+/**
+ * Execute one lorebook write tool. Mirrors runLorebookReadTool: injects
+ * the same CEA dispatcher into the shared
+ * `iteration-library/tools/lorebook-writes.js` implementation. The
+ * dispatcher routes the legacy `luker_card_update_lorebook_entry` /
+ * `luker_card_str_replace_in_lorebook_entry` wire names to the helper
+ * apis registered in buildCharacterEditorHelperApis.
+ */
+async function runLorebookWriteTool(call, helperApis = []) {
+    return runLorebookWriteToolShared(call, {
         dispatch: runCharacterEditorHelperToolCall,
         helperApis,
     });
@@ -1042,9 +1064,23 @@ export async function openOrchestratorIterationStudio(deps) {
         return cloneWorkingProfileFromEditor(getEditorByScope('global'));
     }
 
+    function buildLorebookFormatAuditHint(display) {
+        return [
+            '# Lorebook format audit',
+            `Because this orchestration is character-scoped, also reconcile "${display}"'s bound lorebook with the output contract your orchestration imposes. Some cards ship entries that hard-constrain output (forcing a specific format, banning markdown, demanding plain prose, locking turn structure, requiring fixed section headers, etc.) — when those constraints contradict the format your nodes will produce, the model receives conflicting instructions at runtime and the output degrades.`,
+            '',
+            'Workflow:',
+            '1. Call `world_book_list` to see which books the card binds. For each book, run both `lorebook_list` (compact uid+name+enabled index — useful for spotting format-related entries by name, and for noticing entries the keyword search would miss) and `lorebook_query` (keyword search over content). Useful query keywords (mix English and Chinese to match either authoring style): format, output, markdown, plain text, json, structure, 必须, 请直接, 不要, 仅, 只, 严格, 简短, 详细, 输出格式, 用…格式.',
+            '2. For each candidate hit, call `lorebook_get` to read the full content and judge whether the constraint actually conflicts with what your orchestration produces. If it does not conflict, leave it alone — do not edit entries that already align with the new design.',
+            '3. To silence a conflicting entry, prefer `lorebook_update_entry` with `{ "disable": true }` — that preserves the text so the user can re-enable later. Use `lorebook_str_replace_in_entry` only when you need to rewrite a small slice of the entry to relax the constraint without disabling the whole thing.',
+            '4. Skip this audit entirely if the user explicitly said not to touch the lorebook, or if the orchestration imposes no specific output format.',
+        ].join('\n');
+    }
+
     function appendScopeHintIfNeeded(basePrompt, helperSession) {
         if (helperSession?.scope !== 'character') return basePrompt;
         const display = String(helperSession?.characterDisplayName || '').trim() || 'this character';
+        const formatAuditHint = buildLorebookFormatAuditHint(display);
         if (!helperSession.hasOverride) {
             // 2-path hint: card has no override yet, the working profile
             // is a copy of the global setup, the AI picks between
@@ -1060,6 +1096,8 @@ export async function openOrchestratorIterationStudio(deps) {
                 `- Author from scratch: call \`${CONTROL_TOOL_NAMES.resetToBlank}\` once to discard the global copy and start with a minimal blank shell. If you already called it earlier this session, the working profile is already blank — continue authoring from there without calling reset again.`,
                 '',
                 'Do not call the reset tool unless the user clearly wants a brand-new orchestration.',
+                '',
+                formatAuditHint,
             ].join('\n');
         }
         // 3-path hint: card already has an override, the working profile
@@ -1078,6 +1116,8 @@ export async function openOrchestratorIterationStudio(deps) {
             `- Match the global profile: call \`${CONTROL_TOOL_NAMES.resetToGlobal}\` once to discard the existing override and start with a fresh clone of the current global profile. If you already called it earlier this session, the working profile already matches global — continue adjusting from there without calling reset again.`,
             '',
             'Do not call either reset tool unless the user clearly asks for that fresh-start path.',
+            '',
+            formatAuditHint,
         ].join('\n');
     }
 
@@ -1550,7 +1590,7 @@ export async function openOrchestratorIterationStudio(deps) {
             const readResults = Array.isArray(m?.toolResults) ? m.toolResults : [];
             const resultIds = new Set(readResults.map(r => String(r?.tool_call_id || '')).filter(Boolean));
             const readCalls = Array.isArray(m?.toolCalls)
-                ? m.toolCalls.filter(tc => isReadTool(tc?.name) || (tc?.id && resultIds.has(String(tc.id))))
+                ? m.toolCalls.filter(tc => isInlineExecutedTool(tc?.name) || (tc?.id && resultIds.has(String(tc.id))))
                 : [];
             if (role === 'assistant' && readCalls.length > 0 && readResults.length > 0) {
                 const toolCallsForHistory = readCalls.map((tc) => ({
@@ -1631,9 +1671,15 @@ export async function openOrchestratorIterationStudio(deps) {
         // Splice in the lorebook read tools when the popup is scoped to a
         // character — the legacy helper-tool dispatcher is per-character,
         // so without an avatar there is nothing to bind these tools to.
-        const lorebookTools = helperSession?.scope === 'character'
+        const lorebookReadTools = helperSession?.scope === 'character'
             && String(context?.characters?.[context?.characterId]?.avatar || '').trim()
             ? LOREBOOK_READ_TOOL_DEFS
+            : [];
+        // Write tools share the same gate. They land in the inline-executed
+        // path (same as reads + simulate), so an avatar is required.
+        const lorebookWriteTools = helperSession?.scope === 'character'
+            && String(context?.characters?.[context?.characterId]?.avatar || '').trim()
+            ? LOREBOOK_WRITE_TOOL_DEFS
             : [];
         // Reset tools only make sense in character scope (the scope hint
         // explicitly tells the AI about them only when scope==='character').
@@ -1647,7 +1693,7 @@ export async function openOrchestratorIterationStudio(deps) {
                 return name !== CONTROL_TOOL_NAMES.resetToBlank
                     && name !== CONTROL_TOOL_NAMES.resetToGlobal;
             });
-        return [...editToolsDeduped, ...lorebookTools, ...controlTools];
+        return [...editToolsDeduped, ...lorebookReadTools, ...lorebookWriteTools, ...controlTools];
     }
 
     async function runIterationTurn({ autoContinueFromResult = null } = {}) {
@@ -1822,8 +1868,8 @@ export async function openOrchestratorIterationStudio(deps) {
         // orchestration without mutating the profile); its result is
         // routed to the read-path persistence so the user sees the chip
         // with a result block instead of silently dropping.
-        const readToolCalls = nonControlCalls.filter((c) => isReadTool(c?.name));
-        const editToolCalls = nonControlCalls.filter((c) => !isReadTool(c?.name));
+        const readToolCalls = nonControlCalls.filter((c) => isInlineExecutedTool(c?.name));
+        const editToolCalls = nonControlCalls.filter((c) => !isInlineExecutedTool(c?.name));
 
         // Execute read tools synchronously. Each call gets a stable id so
         // the persisted tool_result can be matched back to it during chat
@@ -1892,6 +1938,14 @@ export async function openOrchestratorIterationStudio(deps) {
                     if (!execOk) {
                         resultPayload = { simulated: true, message: 'simulation complete' };
                         statusLabel = 'ok';
+                    }
+                } else if (isLorebookWriteTool(call?.name)) {
+                    const out = await runLorebookWriteTool({ id: callId, name: call?.name, args: call?.args }, helperApisForReads);
+                    if (out?.ok) {
+                        resultPayload = out.result;
+                    } else {
+                        resultPayload = { error: String(out?.error || 'unknown error') };
+                        statusLabel = 'fail';
                     }
                 } else {
                     const out = await runLorebookReadTool({ id: callId, name: call?.name, args: call?.args }, helperApisForReads);

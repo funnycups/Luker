@@ -254,4 +254,33 @@ export const ORCH_TOOL_DISPLAY = {
             return [book, uids].filter(Boolean).join(' ');
         },
     },
+    // Lorebook write tools. Same character-scope gate as the read tools above —
+    // the legacy helper-tool dispatcher is per-character so they only appear
+    // when the popup is scoped to a card. `type: 'write'` keeps them out of
+    // the read-only-round hint (their results aren't a "waiting to act" cue;
+    // the AI already mutated the lorebook).
+    lorebook_update_entry: {
+        icon: '✏️',
+        label: 'Update lorebook entry',
+        type: 'write',
+        summarize: (a, r, i18n) => {
+            const book = a?.book_name ? String(a.book_name) : '';
+            const uid = Number.isFinite(a?.uid) ? `#${a.uid}` : '';
+            const fields = (r && typeof r === 'object' && Array.isArray(r.updated_fields))
+                ? r.updated_fields.join(',')
+                : (a?.patch && typeof a.patch === 'object' ? Object.keys(a.patch).join(',') : '');
+            const head = [book, uid].filter(Boolean).join(' ');
+            return fields ? fmt(i18n, '${0} → ${1}', head, fields) : head;
+        },
+    },
+    lorebook_str_replace_in_entry: {
+        icon: '🩹',
+        label: 'Patch lorebook entry text',
+        type: 'write',
+        summarize: (a, r) => {
+            const book = a?.book_name ? String(a.book_name) : '';
+            const uid = Number.isFinite(a?.uid) ? `#${a.uid}` : '';
+            return [book, uid].filter(Boolean).join(' ');
+        },
+    },
 };

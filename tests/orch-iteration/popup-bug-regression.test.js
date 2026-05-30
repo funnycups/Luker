@@ -52,16 +52,19 @@ describe('ORCH-1: luker_orch_simulate is classified as a read tool', () => {
         expect(ORCH_TOOL_DISPLAY.luker_orch_simulate?.type).toBe('read');
     });
 
-    test('iter-studio recognizes simulate via isReadTool / isSimulateTool', async () => {
+    test('iter-studio recognizes simulate via isInlineExecutedTool / isSimulateTool', async () => {
         const src = await readOrch('iter-studio/studio.js');
-        // The popup needs to recognize simulate as a read tool so it
+        // The popup needs to recognize simulate as inline-executed so it
         // routes to the read-path execution that persists results to
         // assistantMsg.toolResults. Bare-string grep is enough: a
         // future refactor that drops this name would have to also
         // re-introduce some other read-routing path explicitly.
         expect(src).toMatch(/SIMULATE_TOOL_NAME\s*=\s*['"]luker_orch_simulate['"]/);
-        // The read/edit split uses isReadTool, not isLorebookReadTool.
-        expect(src).toMatch(/isReadTool\s*\(/);
+        // The read/edit split uses isInlineExecutedTool, the umbrella
+        // predicate that covers reads + writes + simulate. Lorebook
+        // writes share the same inline execution path because they
+        // mutate real data directly (no sandbox-diff proposal step).
+        expect(src).toMatch(/isInlineExecutedTool\s*\(/);
     });
 
     test('persisted assistant message round-trips simulate toolResults', () => {

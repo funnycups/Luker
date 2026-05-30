@@ -86,6 +86,12 @@ Don't want to hand-write the system prompt? Open the Studio in Loop mode and des
 
 The Studio's AI reads your current profile and patches it via tool calls. The Studio auto-continues whenever the AI emits any tool call this round and stops the moment the AI responds with plain text and no tool calls — so iteration just keeps going as long as the AI keeps making changes.
 
+## Per-card lorebook hygiene
+
+When you open the Studio scoped to a character card, the AI also reconciles the orchestration you're building against the card's bound lorebooks. If an entry hard-constrains output (forces a fixed format, demands plain prose, bans markdown, locks turn structure) in a way that conflicts with the orchestration's output contract, the Studio will adjust the entry — typically by disabling it without deleting the text, so the constraint can be re-enabled later. Each adjustment appears in the chat history alongside the orchestration proposals.
+
+Global Studio sessions never touch any lorebook — this only runs in character scope.
+
 ## Sessions
 
 Different cards, different experiments — each keeps its own session.

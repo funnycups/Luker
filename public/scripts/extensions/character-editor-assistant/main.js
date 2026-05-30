@@ -53,6 +53,8 @@ const TOOL_NAMES = Object.freeze({
     GET_ENTRIES: 'luker_card_get_lorebook_entries',
     SIMULATE_PROMPT: 'luker_card_simulate_prompt',
     LIST_WORLD_BOOKS: 'luker_card_list_world_books',
+    UPDATE_ENTRY: 'luker_card_update_lorebook_entry',
+    STR_REPLACE_IN_ENTRY: 'luker_card_str_replace_in_lorebook_entry',
 });
 const CHARACTER_EDITOR_QUERY_LIMIT_DEFAULT = 10;
 const CHARACTER_EDITOR_QUERY_LIMIT_MAX = 20;
@@ -1939,6 +1941,89 @@ async function getCharacterEditorLorebookEntries(context, args = {}) {
     };
 }
 
+async function updateCharacterEditorLorebookEntry(context, args = {}) {
+    const bookName = String(args?.book_name || '').trim();
+    if (!bookName) {
+        throw new Error(`${TOOL_NAMES.UPDATE_ENTRY} requires book_name.`);
+    }
+    const uid = asFiniteInteger(args?.uid, null);
+    if (!Number.isInteger(uid) || uid < 0) {
+        throw new Error(`${TOOL_NAMES.UPDATE_ENTRY} requires a non-negative integer uid.`);
+    }
+    const patch = args?.patch;
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+        throw new Error(`${TOOL_NAMES.UPDATE_ENTRY} requires a patch object.`);
+    }
+    const patchKeys = Object.keys(patch);
+    if (patchKeys.length === 0) {
+        throw new Error(`${TOOL_NAMES.UPDATE_ENTRY} patch must contain at least one field.`);
+    }
+    const data = await context.loadWorldInfo(bookName);
+    if (!data) {
+        throw new Error(`World book "${bookName}" not found.`);
+    }
+    const entry = data.entries?.[uid];
+    if (!entry) {
+        throw new Error(`Entry uid ${uid} not found in "${bookName}".`);
+    }
+    Object.assign(entry, patch);
+    // uid is the address, not a payload field — guard against patches that
+    // try to rewrite it.
+    entry.uid = uid;
+    await context.saveWorldInfo(bookName, data, true);
+    return {
+        ok: true,
+        book_name: bookName,
+        uid,
+        updated_fields: patchKeys.filter(k => k !== 'uid'),
+    };
+}
+
+async function strReplaceInCharacterEditorLorebookEntry(context, args = {}) {
+    const bookName = String(args?.book_name || '').trim();
+    if (!bookName) {
+        throw new Error(`${TOOL_NAMES.STR_REPLACE_IN_ENTRY} requires book_name.`);
+    }
+    const uid = asFiniteInteger(args?.uid, null);
+    if (!Number.isInteger(uid) || uid < 0) {
+        throw new Error(`${TOOL_NAMES.STR_REPLACE_IN_ENTRY} requires a non-negative integer uid.`);
+    }
+    if (typeof args?.old_str !== 'string' || args.old_str.length === 0) {
+        throw new Error(`${TOOL_NAMES.STR_REPLACE_IN_ENTRY} requires a non-empty old_str.`);
+    }
+    if (typeof args?.new_str !== 'string') {
+        throw new Error(`${TOOL_NAMES.STR_REPLACE_IN_ENTRY} requires new_str (use an empty string to delete).`);
+    }
+    const data = await context.loadWorldInfo(bookName);
+    if (!data) {
+        throw new Error(`World book "${bookName}" not found.`);
+    }
+    const entry = data.entries?.[uid];
+    if (!entry) {
+        throw new Error(`Entry uid ${uid} not found in "${bookName}".`);
+    }
+    const content = String(entry.content ?? '');
+    const firstIdx = content.indexOf(args.old_str);
+    if (firstIdx === -1) {
+        throw new Error(`old_str not found in entry ${uid} of "${bookName}".`);
+    }
+    if (content.indexOf(args.old_str, firstIdx + args.old_str.length) !== -1) {
+        // Refuse multi-site edits — caller must narrow old_str to a unique
+        // match. Same contract Anthropic's str_replace_based_edit_tool uses.
+        throw new Error(`old_str occurs more than once in entry ${uid} of "${bookName}"; narrow it to a unique substring.`);
+    }
+    entry.content = content.slice(0, firstIdx) + args.new_str + content.slice(firstIdx + args.old_str.length);
+    entry.uid = uid;
+    await context.saveWorldInfo(bookName, data, true);
+    return {
+        ok: true,
+        book_name: bookName,
+        uid,
+        replaced_chars: args.old_str.length,
+        new_chars: args.new_str.length,
+    };
+}
+
 function createCharacterEditorLorebookToolApi(context, { avatar = '' } = {}) {
     const toolNames = Object.freeze({
         LIST: TOOL_NAMES.LIST_ENTRIES,
@@ -2038,6 +2123,45 @@ function createCharacterEditorLorebookToolApi(context, { avatar = '' } = {}) {
                 return await getCharacterEditorLorebookEntries(context, args);
             }
             throw new Error(`Unsupported character editor lorebook tool: ${name}`);
+        },
+    };
+}
+
+/**
+ * Helper-tool API for lorebook *write* operations (update + str_replace).
+ * Used by iter popups that want the AI to adjust the active character's
+ * world-book entries while iterating (e.g. orchestrator iter-studio
+ * reconciling output-format constraints across preset and lorebook). The
+ * tool schemas are owned by `iteration-library/tools/lorebook-writes.js`
+ * — this api only owns the legacy wire-name dispatch.
+ */
+function createCharacterEditorLorebookWriteToolApi(context, { avatar = '' } = {}) {
+    const toolNames = Object.freeze({
+        UPDATE: TOOL_NAMES.UPDATE_ENTRY,
+        STR_REPLACE: TOOL_NAMES.STR_REPLACE_IN_ENTRY,
+    });
+    return {
+        toolNames,
+        // No schemas here on purpose — popups that splice these tools take
+        // the OpenAI defs from iteration-library/tools/lorebook-writes.js,
+        // which is the single source of truth for the model-facing shape.
+        // Kept as an empty function so api-shape guards that check for
+        // `typeof api.getToolDefs === 'function'` still pass.
+        getToolDefs: () => [],
+        isToolName: (name) => {
+            const normalized = String(name || '').trim();
+            return normalized === toolNames.UPDATE || normalized === toolNames.STR_REPLACE;
+        },
+        invoke: async (call) => {
+            const name = String(call?.name || '').trim();
+            const args = call?.args && typeof call.args === 'object' ? call.args : {};
+            if (name === toolNames.UPDATE) {
+                return await updateCharacterEditorLorebookEntry(context, args);
+            }
+            if (name === toolNames.STR_REPLACE) {
+                return await strReplaceInCharacterEditorLorebookEntry(context, args);
+            }
+            throw new Error(`Unsupported character editor lorebook write tool: ${name}`);
         },
     };
 }
@@ -2806,6 +2930,7 @@ export function buildCharacterEditorHelperApis(context, opts = {}) {
     const searchApi = getCharacterEditorSearchApi();
     return [
         createCharacterEditorLorebookToolApi(context, { avatar }),
+        createCharacterEditorLorebookWriteToolApi(context, { avatar }),
         createCharacterEditorSimulateToolApi(context),
         createCharacterEditorWorldBookListToolApi(context, { avatar }),
         ...(searchApi ? [searchApi] : []),
