@@ -3656,8 +3656,13 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
     // Throwaway handle: production seeds originalText / originalReasoning
     // from the chat slot the kernel will write into; for simulation we
     // start clean — the runtime will write / patch / finalize against an
-    // empty buffer that nobody else reads. The setOnUpdate listener is a
-    // no-op so chat[] is never touched.
+    // empty buffer that nobody else reads. The setOnUpdate listener
+    // doesn't write to chat[] (we have no chat slot to write into) but it
+    // DOES accumulate the latest text/reasoning so the review popup can
+    // surface what the main agent produced — without this the
+    // "Final Message" section in the director popup renders blank.
+    // setOnUpdate signature is `fn(text, reasoning)` (see
+    // message-takeover.js), NOT a single-object callback.
     const handle = createMessageEditorHandle({
         generationType: 'normal',
         originalText: '',
@@ -3665,7 +3670,12 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
         abortSignal,
         owner: 'orchestrator-director-simulate',
     });
-    handle.setOnUpdate(() => { /* simulation: discard handle updates */ });
+    let latestText = '';
+    let latestReasoning = '';
+    handle.setOnUpdate((text, reasoning) => {
+        if (typeof text === 'string') latestText = text;
+        if (typeof reasoning === 'string') latestReasoning = reasoning;
+    });
 
     // Synthesize the GENERATE_TAKEOVER_DISPATCH eventData the runtime
     // expects. `eventData.generateData.prompt` is the chat-completion
@@ -3800,8 +3810,24 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
             const handleStatus = String(outcome?.status || '');
             if (handleStatus === 'aborted' || handleStatus === 'discarded') traceStatus = 'cancelled';
             else if (handleStatus && handleStatus !== 'committed') traceStatus = handleStatus;
+            // Surface what the main agent actually wrote so the review
+            // popup can show it in the "Final Message" section. Prefer
+            // the committed outcome's `finalText` (authoritative —
+            // captured at handle.commit) and fall back to the latest
+            // streamed text from the onUpdate accumulator when the
+            // handle was discarded before commit (e.g. early throw).
+            const finalText = typeof outcome?.finalText === 'string' && outcome.finalText.length > 0
+                ? outcome.finalText
+                : latestText;
+            const finalReasoning = typeof outcome?.finalReasoning === 'string' && outcome.finalReasoning.length > 0
+                ? outcome.finalReasoning
+                : latestReasoning;
+            try { trace.finalMessage = String(finalText || ''); } catch (_) { /* trace is best-effort */ }
+            try { trace.finalReasoning = String(finalReasoning || ''); } catch (_) { /* trace is best-effort */ }
         } catch (_) {
             traceStatus = 'failed';
+            try { trace.finalMessage = String(latestText || ''); } catch (_) { /* trace is best-effort */ }
+            try { trace.finalReasoning = String(latestReasoning || ''); } catch (_) { /* trace is best-effort */ }
         }
         try { finalizeOrchestrationRuntimeTrace(trace, traceStatus, {}); } catch (_) { /* trace is best-effort */ }
     }
