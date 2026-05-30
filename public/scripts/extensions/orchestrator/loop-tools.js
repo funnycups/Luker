@@ -51,6 +51,12 @@ import {
     execMemoryLinkUpsert,
     execMemoryLinkDelete,
     execMemoryCompactNodes,
+    simulateMemoryNodeCreate,
+    simulateMemoryNodeEdit,
+    simulateMemoryNodeDelete,
+    simulateMemoryLinkUpsert,
+    simulateMemoryLinkDelete,
+    simulateMemoryCompactNodes,
 } from './loop-tools/memory.js';
 import { execNoteOpen, execNoteClose } from './loop-tools/note.js';
 import { execSearchSearch, execSearchVisit } from './loop-tools/search.js';
@@ -465,7 +471,7 @@ registerTool('memory_node_create', execMemoryNodeCreate, {
             additionalProperties: false,
         },
     },
-}, { mode: 'write' });
+}, { mode: 'write', simulate: simulateMemoryNodeCreate });
 
 registerTool('memory_node_edit', execMemoryNodeEdit, {
     type: 'function',
@@ -484,7 +490,7 @@ registerTool('memory_node_edit', execMemoryNodeEdit, {
             additionalProperties: false,
         },
     },
-}, { mode: 'write' });
+}, { mode: 'write', simulate: simulateMemoryNodeEdit });
 
 registerTool('memory_node_delete', execMemoryNodeDelete, {
     type: 'function',
@@ -498,7 +504,7 @@ registerTool('memory_node_delete', execMemoryNodeDelete, {
             additionalProperties: false,
         },
     },
-}, { mode: 'write' });
+}, { mode: 'write', simulate: simulateMemoryNodeDelete });
 
 registerTool('memory_link_upsert', execMemoryLinkUpsert, {
     type: 'function',
@@ -528,7 +534,7 @@ registerTool('memory_link_upsert', execMemoryLinkUpsert, {
             additionalProperties: false,
         },
     },
-}, { mode: 'write' });
+}, { mode: 'write', simulate: simulateMemoryLinkUpsert });
 
 registerTool('memory_link_delete', execMemoryLinkDelete, {
     type: 'function',
@@ -547,7 +553,7 @@ registerTool('memory_link_delete', execMemoryLinkDelete, {
             additionalProperties: false,
         },
     },
-}, { mode: 'write' });
+}, { mode: 'write', simulate: simulateMemoryLinkDelete });
 
 registerTool('memory_compact_nodes', execMemoryCompactNodes, {
     type: 'function',
@@ -566,7 +572,7 @@ registerTool('memory_compact_nodes', execMemoryCompactNodes, {
             additionalProperties: false,
         },
     },
-}, { mode: 'write' });
+}, { mode: 'write', simulate: simulateMemoryCompactNodes });
 
 // ---- note namespace -----------------------------------------------------
 

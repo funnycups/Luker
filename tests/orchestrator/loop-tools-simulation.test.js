@@ -73,7 +73,20 @@ describe('sim-mode write interception (Task 2)', () => {
         expect(result).toEqual({ ok: true, simulated: true, unvalidated: true });
     });
 
-    test('placeholder for simulate-path (Task 3 replaces this)', () => {
-        expect(true).toBe(true);
+    test('sim-active write tool with simulate calls the simulate path', async () => {
+        // memory_node_create has both exec and simulate after Task 3.
+        // exec hits a live session — if simulate is bypassed and exec runs,
+        // the absence of __memoryGraphSession on ctx will throw MEMORY_DISABLED.
+        // simulate should be picked first, so the call must succeed with a
+        // simulated payload (no session needed for the create simulate).
+        beginSimulation('run-create');
+        const result = await executeLoopTool(
+            'memory_node_create',
+            { type: 'character_sheet', title: 'Eileen' },
+            { __memoryGraphSession: null },
+        );
+        expect(result).toMatchObject({ ok: true, simulated: true });
+        expect(typeof result.id).toBe('string');
+        expect(result.id.length).toBeGreaterThan(0);
     });
 });

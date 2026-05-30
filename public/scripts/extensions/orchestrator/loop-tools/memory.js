@@ -467,3 +467,218 @@ export async function execMemoryCompactNodes(args, context) {
     });
     return { ok: true, rollup_node_id: result.rollupNodeId };
 }
+
+// ---------------------------------------------------------------------------
+// Simulate handlers
+//
+// Each `simulate*` mirrors its `exec*` peer's accepted arg shape and
+// returns a payload aligned with the exec's success branch, plus a
+// `simulated: true` marker. Validation: simulate refuses obviously
+// malformed calls (missing required ids / non-empty strings / non-empty
+// arrays) with a `ToolError` so the agent sees a structured failure
+// rather than a downstream surprise; the exec only throws
+// `MEMORY_DISABLED`, so simulate carries the arg-shape contract that
+// the real session would otherwise enforce silently by ignoring the op.
+//
+// Feasibility: when `ctx.__memoryGraphSession` is attached, simulate
+// confirms referenced node ids exist on the live graph (same lookup
+// the real write would perform) so the workbench sees the same "node
+// missing" failure pattern it would see in production. When the
+// session is absent (workbench simulating without a graph open), the
+// shape-validation still runs and a structurally valid payload is
+// returned — agents must not crash because the host has no graph.
+// ---------------------------------------------------------------------------
+
+const NODE_NOT_FOUND_HINT = 'Pick an id present in the current graph or create the node first.';
+
+function requireNonEmptyString(value, code, message) {
+    if (typeof value !== 'string' || value.trim() === '') {
+        throw new ToolError(message, code, message);
+    }
+    return value.trim();
+}
+
+function requireNodeExists(session, id, code) {
+    // No session attached — skip feasibility, return shape-valid payload.
+    if (!session || typeof session.getNodeBrief !== 'function') return;
+    if (!session.getNodeBrief(id)) {
+        throw new ToolError(
+            `Node ${id} does not exist on the live memory graph.`,
+            code,
+            NODE_NOT_FOUND_HINT,
+        );
+    }
+}
+
+function simulatedId(prefix) {
+    return `${prefix}-sim-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Simulate node_create. Accepts {type, title, fields?, links?, ref?}
+ * matching the real exec; both `type` and `title` are required to mirror
+ * the tool's JSON schema. When a session is attached, every link's
+ * target_node_id must exist (target_ref points at a sibling create in
+ * the same call, so feasibility is skipped for refs).
+ *
+ * @param {{ type: string, title: string, fields?: object, links?: object[], ref?: string }} args
+ * @param {object} context
+ * @returns {Promise<{ ok: true, simulated: true, id: string }>}
+ */
+export async function simulateMemoryNodeCreate(args, context) {
+    requireNonEmptyString(args?.type, 'MEMORY_NODE_CREATE_BAD_ARGS', 'type is required');
+    requireNonEmptyString(args?.title, 'MEMORY_NODE_CREATE_BAD_ARGS', 'title is required');
+    const session = loadSession(context);
+    if (Array.isArray(args?.links)) {
+        for (const link of args.links) {
+            if (link && typeof link.target_node_id === 'string' && link.target_node_id.trim()) {
+                requireNodeExists(session, link.target_node_id.trim(), 'MEMORY_NODE_CREATE_TARGET_NOT_FOUND');
+            }
+        }
+    }
+    return { ok: true, simulated: true, id: simulatedId('n') };
+}
+
+/**
+ * Simulate node_edit. Requires `node_id` non-empty; at least one of
+ * `set_fields` / `clear_fields` / `title` must be present (a no-op
+ * edit would silently succeed in the real exec, which is exactly the
+ * kind of false-positive simulate exists to catch).
+ *
+ * @param {{ node_id: string, set_fields?: object, clear_fields?: string[], title?: string }} args
+ * @param {object} context
+ * @returns {Promise<{ ok: true, simulated: true }>}
+ */
+export async function simulateMemoryNodeEdit(args, context) {
+    const id = requireNonEmptyString(args?.node_id, 'MEMORY_NODE_EDIT_BAD_ARGS', 'node_id is required');
+    const hasSet = args?.set_fields && typeof args.set_fields === 'object';
+    const hasClear = Array.isArray(args?.clear_fields) && args.clear_fields.length > 0;
+    const hasTitle = typeof args?.title === 'string';
+    if (!hasSet && !hasClear && !hasTitle) {
+        throw new ToolError(
+            'memory_node_edit: at least one of set_fields / clear_fields / title is required.',
+            'MEMORY_NODE_EDIT_BAD_ARGS',
+            'Provide the fields you want to change, fields to clear, or a new title.',
+        );
+    }
+    requireNodeExists(loadSession(context), id, 'MEMORY_NODE_EDIT_NODE_NOT_FOUND');
+    return { ok: true, simulated: true };
+}
+
+/**
+ * Simulate node_delete. Requires `node_id` non-empty and (when a
+ * session is present) the node to exist on the real graph.
+ *
+ * @param {{ node_id: string }} args
+ * @param {object} context
+ * @returns {Promise<{ ok: true, simulated: true }>}
+ */
+export async function simulateMemoryNodeDelete(args, context) {
+    const id = requireNonEmptyString(args?.node_id, 'MEMORY_NODE_DELETE_BAD_ARGS', 'node_id is required');
+    requireNodeExists(loadSession(context), id, 'MEMORY_NODE_DELETE_NODE_NOT_FOUND');
+    return { ok: true, simulated: true };
+}
+
+/**
+ * Simulate link_upsert. Requires a non-empty `links` array; each link
+ * needs a `relation` and a target (id or ref). Source must be specified
+ * via `source_node_id` OR `source_ref`. Feasibility against the live
+ * graph is checked for explicit ids; refs are sibling-create pointers
+ * and are not looked up.
+ *
+ * @param {{ source_node_id?: string, source_ref?: string, links: object[] }} args
+ * @param {object} context
+ * @returns {Promise<{ ok: true, simulated: true, applied: number }>}
+ */
+export async function simulateMemoryLinkUpsert(args, context) {
+    const links = Array.isArray(args?.links) ? args.links : null;
+    if (!links || links.length === 0) {
+        throw new ToolError(
+            'memory_link_upsert: links must be a non-empty array.',
+            'MEMORY_LINK_UPSERT_BAD_ARGS',
+            'Provide at least one link entry with relation + target.',
+        );
+    }
+    const sourceId = typeof args?.source_node_id === 'string' ? args.source_node_id.trim() : '';
+    const sourceRef = typeof args?.source_ref === 'string' ? args.source_ref.trim() : '';
+    if (!sourceId && !sourceRef) {
+        throw new ToolError(
+            'memory_link_upsert: source_node_id or source_ref is required.',
+            'MEMORY_LINK_UPSERT_BAD_ARGS',
+            'Specify the source node by id, or by ref if it was created in the same call.',
+        );
+    }
+    for (const link of links) {
+        if (!link || typeof link !== 'object') {
+            throw new ToolError(
+                'memory_link_upsert: link entries must be objects.',
+                'MEMORY_LINK_UPSERT_BAD_ARGS',
+                'Each link is { target_node_id|target_ref, relation, direction? }.',
+            );
+        }
+        requireNonEmptyString(link.relation, 'MEMORY_LINK_UPSERT_BAD_ARGS', 'link.relation is required');
+        const targetId = typeof link.target_node_id === 'string' ? link.target_node_id.trim() : '';
+        const targetRef = typeof link.target_ref === 'string' ? link.target_ref.trim() : '';
+        if (!targetId && !targetRef) {
+            throw new ToolError(
+                'memory_link_upsert: each link needs target_node_id or target_ref.',
+                'MEMORY_LINK_UPSERT_BAD_ARGS',
+                'Specify the target by id, or by ref if it was created in the same call.',
+            );
+        }
+    }
+    const session = loadSession(context);
+    if (sourceId) requireNodeExists(session, sourceId, 'MEMORY_LINK_UPSERT_NODE_NOT_FOUND');
+    for (const link of links) {
+        const targetId = typeof link.target_node_id === 'string' ? link.target_node_id.trim() : '';
+        if (targetId) requireNodeExists(session, targetId, 'MEMORY_LINK_UPSERT_NODE_NOT_FOUND');
+    }
+    return { ok: true, simulated: true, applied: links.length };
+}
+
+/**
+ * Simulate link_delete. Requires `source_node_id`, `target_node_id`,
+ * and `relation` (matching the tool schema's `required`). Both
+ * endpoints must exist on the live graph when a session is attached.
+ *
+ * @param {{ source_node_id: string, target_node_id: string, relation: string, direction?: string }} args
+ * @param {object} context
+ * @returns {Promise<{ ok: true, simulated: true, removed: number }>}
+ */
+export async function simulateMemoryLinkDelete(args, context) {
+    const source = requireNonEmptyString(args?.source_node_id, 'MEMORY_LINK_DELETE_BAD_ARGS', 'source_node_id is required');
+    const target = requireNonEmptyString(args?.target_node_id, 'MEMORY_LINK_DELETE_BAD_ARGS', 'target_node_id is required');
+    requireNonEmptyString(args?.relation, 'MEMORY_LINK_DELETE_BAD_ARGS', 'relation is required');
+    const session = loadSession(context);
+    requireNodeExists(session, source, 'MEMORY_LINK_DELETE_NODE_NOT_FOUND');
+    requireNodeExists(session, target, 'MEMORY_LINK_DELETE_NODE_NOT_FOUND');
+    return { ok: true, simulated: true, removed: 1 };
+}
+
+/**
+ * Simulate compact_nodes. Requires `type`, a non-empty `child_ids`
+ * array, and `summary`. Every child id must exist on the live graph
+ * when a session is attached.
+ *
+ * @param {{ type: string, child_ids: string[], summary: string, fields?: object }} args
+ * @param {object} context
+ * @returns {Promise<{ ok: true, simulated: true, rollup_node_id: string }>}
+ */
+export async function simulateMemoryCompactNodes(args, context) {
+    requireNonEmptyString(args?.type, 'MEMORY_COMPACT_NODES_BAD_ARGS', 'type is required');
+    const ids = Array.isArray(args?.child_ids) ? args.child_ids : null;
+    if (!ids || ids.length === 0) {
+        throw new ToolError(
+            'memory_compact_nodes: child_ids must be a non-empty array.',
+            'MEMORY_COMPACT_NODES_BAD_ARGS',
+            'List the ids of the child nodes to roll up.',
+        );
+    }
+    requireNonEmptyString(args?.summary, 'MEMORY_COMPACT_NODES_BAD_ARGS', 'summary is required');
+    const session = loadSession(context);
+    for (const id of ids) {
+        const cleanId = requireNonEmptyString(id, 'MEMORY_COMPACT_NODES_BAD_ARGS', 'child_ids entries must be non-empty strings');
+        requireNodeExists(session, cleanId, 'MEMORY_COMPACT_NODES_NODE_NOT_FOUND');
+    }
+    return { ok: true, simulated: true, rollup_node_id: simulatedId('rollup') };
+}
