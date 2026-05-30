@@ -69,6 +69,41 @@ const REGISTRY = new Map();
  */
 const TOOL_SCHEMAS = [];
 
+// ---------------------------------------------------------------------------
+// Simulation state
+//
+// When a workbench simulation runs, the module-level `simulationActive`
+// flag gates write-mode tool dispatch in `executeLoopTool` so model-driven
+// tool calls produce no real side effects (no memory-graph mutations, no
+// notes floor-state writes, no future side-effecting tools). Read tools
+// stay live — the agent must see real current state to make meaningful
+// decisions.
+//
+// Begin/end is intentionally a flat flag (not a stack). Simulations are
+// modal popup-blocking; a second sim cannot start until the first
+// resolves. Nested begin throws to expose a caller bug rather than mask
+// it as a silent stack-pop later.
+// ---------------------------------------------------------------------------
+let simulationActive = false;
+let simulationRunId = null;
+
+export function beginSimulation(runId) {
+    if (simulationActive) {
+        throw new Error(`[loop-tools] Simulation already active: ${simulationRunId}`);
+    }
+    simulationActive = true;
+    simulationRunId = typeof runId === 'string' && runId ? runId : '(unnamed)';
+}
+
+export function endSimulation() {
+    simulationActive = false;
+    simulationRunId = null;
+}
+
+export function isSimulationActive() {
+    return simulationActive;
+}
+
 /** Internal: register a tool, its schema, and its mode in one shot. */
 function registerTool(name, exec, schema, opts = {}) {
     if (typeof exec !== 'function') {
@@ -675,7 +710,22 @@ export async function executeLoopTool(name, args, context) {
             'Pick a registered tool name or call finalize when you have enough information.',
         );
     }
-    return entry.exec(args && typeof args === 'object' ? args : {}, context || {});
+
+    const safeArgs = args && typeof args === 'object' ? args : {};
+    const safeCtx = context || {};
+
+    if (simulationActive && entry.mode === 'write') {
+        try {
+            if (typeof entry.simulate === 'function') {
+                return await entry.simulate(safeArgs, safeCtx);
+            }
+            return { ok: true, simulated: true, unvalidated: true };
+        } catch (err) {
+            return { ok: false, simulated: true, error: String(err?.message ?? err) };
+        }
+    }
+
+    return entry.exec(safeArgs, safeCtx);
 }
 
 /**
