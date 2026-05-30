@@ -69,12 +69,17 @@ const REGISTRY = new Map();
  */
 const TOOL_SCHEMAS = [];
 
-/** Internal: register a tool and its schema in one shot. */
-function registerTool(name, exec, schema) {
+/** Internal: register a tool, its schema, and its mode in one shot. */
+function registerTool(name, exec, schema, opts = {}) {
     if (typeof exec !== 'function') {
         throw new Error(`[loop-tools] cannot register '${name}': exec must be a function.`);
     }
-    REGISTRY.set(name, exec);
+    let mode = opts.mode;
+    if (mode !== 'read' && mode !== 'write') {
+        console.warn(`[loop-tools] '${name}' missing or invalid mode; defaulting to 'write'.`);
+        mode = 'write';
+    }
+    REGISTRY.set(name, { exec, mode, simulate: typeof opts.simulate === 'function' ? opts.simulate : null });
     if (schema) TOOL_SCHEMAS.push(schema);
 }
 
@@ -101,7 +106,7 @@ registerTool('chat_read_range', execChatReadRange, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'read' });
 
 registerTool('chat_search', execChatSearch, {
     type: 'function',
@@ -126,7 +131,7 @@ registerTool('chat_search', execChatSearch, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'read' });
 
 // ---- lorebook namespace -------------------------------------------------
 
@@ -153,7 +158,7 @@ registerTool('lorebook_search', execLorebookSearch, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'read' });
 
 registerTool('lorebook_get', execLorebookGet, {
     type: 'function',
@@ -176,7 +181,7 @@ registerTool('lorebook_get', execLorebookGet, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'read' });
 
 // ---- memory namespace ---------------------------------------------------
 // Read-api pipeline tools. They mirror the inputs the native recall LLM
@@ -214,7 +219,7 @@ registerTool('memory_list_candidates', execMemoryListCandidates, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'read' });
 
 registerTool('memory_edge_summary', execMemoryEdgeSummary, {
     type: 'function',
@@ -243,7 +248,7 @@ registerTool('memory_edge_summary', execMemoryEdgeSummary, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'read' });
 
 registerTool('memory_node_brief', execMemoryNodeBrief, {
     type: 'function',
@@ -271,7 +276,7 @@ registerTool('memory_node_brief', execMemoryNodeBrief, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'read' });
 
 registerTool('memory_expand_seeds', execMemoryExpandSeeds, {
     type: 'function',
@@ -309,7 +314,7 @@ registerTool('memory_expand_seeds', execMemoryExpandSeeds, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'read' });
 
 registerTool('memory_schema', execMemorySchema, {
     type: 'function',
@@ -322,7 +327,7 @@ registerTool('memory_schema', execMemorySchema, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'read' });
 
 registerTool('memory_keyword_search', execMemoryKeywordSearch, {
     type: 'function',
@@ -340,7 +345,7 @@ registerTool('memory_keyword_search', execMemoryKeywordSearch, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'read' });
 
 registerTool('memory_vector_search', execMemoryVectorSearch, {
     type: 'function',
@@ -358,7 +363,7 @@ registerTool('memory_vector_search', execMemoryVectorSearch, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'read' });
 
 registerTool('memory_find_by_name', execMemoryFindByName, {
     type: 'function',
@@ -375,7 +380,7 @@ registerTool('memory_find_by_name', execMemoryFindByName, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'read' });
 
 registerTool('memory_compaction_candidates', execMemoryCompactionCandidates, {
     type: 'function',
@@ -392,7 +397,7 @@ registerTool('memory_compaction_candidates', execMemoryCompactionCandidates, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'read' });
 
 registerTool('memory_node_create', execMemoryNodeCreate, {
     type: 'function',
@@ -425,7 +430,7 @@ registerTool('memory_node_create', execMemoryNodeCreate, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'write' });
 
 registerTool('memory_node_edit', execMemoryNodeEdit, {
     type: 'function',
@@ -444,7 +449,7 @@ registerTool('memory_node_edit', execMemoryNodeEdit, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'write' });
 
 registerTool('memory_node_delete', execMemoryNodeDelete, {
     type: 'function',
@@ -458,7 +463,7 @@ registerTool('memory_node_delete', execMemoryNodeDelete, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'write' });
 
 registerTool('memory_link_upsert', execMemoryLinkUpsert, {
     type: 'function',
@@ -488,7 +493,7 @@ registerTool('memory_link_upsert', execMemoryLinkUpsert, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'write' });
 
 registerTool('memory_link_delete', execMemoryLinkDelete, {
     type: 'function',
@@ -507,7 +512,7 @@ registerTool('memory_link_delete', execMemoryLinkDelete, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'write' });
 
 registerTool('memory_compact_nodes', execMemoryCompactNodes, {
     type: 'function',
@@ -526,7 +531,7 @@ registerTool('memory_compact_nodes', execMemoryCompactNodes, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'write' });
 
 // ---- note namespace -----------------------------------------------------
 
@@ -547,7 +552,7 @@ registerTool('note_open', execNoteOpen, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'write' });
 
 registerTool('note_close', execNoteClose, {
     type: 'function',
@@ -570,7 +575,7 @@ registerTool('note_close', execNoteClose, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'write' });
 
 // ---- search namespace ---------------------------------------------------
 
@@ -611,7 +616,7 @@ registerTool('search_search', execSearchSearch, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'read' });
 
 registerTool('search_visit', execSearchVisit, {
     type: 'function',
@@ -636,7 +641,7 @@ registerTool('search_visit', execSearchVisit, {
             additionalProperties: false,
         },
     },
-});
+}, { mode: 'read' });
 
 // ---- public API ----------------------------------------------------------
 
@@ -662,15 +667,15 @@ export { FINALIZE_TOOL_SCHEMA };
  */
 export async function executeLoopTool(name, args, context) {
     const normalized = String(name || '').replace(/\./g, '_');
-    const exec = REGISTRY.get(normalized);
-    if (typeof exec !== 'function') {
+    const entry = REGISTRY.get(normalized);
+    if (!entry || typeof entry.exec !== 'function') {
         throw new ToolError(
             `Tool '${name}' is not implemented in this build.`,
             'NOT_IMPLEMENTED',
             'Pick a registered tool name or call finalize when you have enough information.',
         );
     }
-    return exec(args && typeof args === 'object' ? args : {}, context || {});
+    return entry.exec(args && typeof args === 'object' ? args : {}, context || {});
 }
 
 /**
