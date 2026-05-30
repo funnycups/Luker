@@ -83,7 +83,7 @@ test('onRerun re-renders the popup with the new payload and feeds the new worldI
     expect(result.chainText).toContain('Lorebook "B"');
 });
 
-test('hint banner is rendered at the top of the popup body', async () => {
+test('annotation toggle starts off; clicking flips host data-annot-mode and aria title', async () => {
     let capturedRoot = null;
     fakePopupHost.open.mockImplementationOnce(async ({ contentRoot, onSubmit }) => {
         document.body.appendChild(contentRoot);
@@ -100,16 +100,95 @@ test('hint banner is rendered at the top of the popup body', async () => {
         },
         i18n: (k, fb) => fb,
     });
-    const hint = capturedRoot.querySelector('.luker-sim-hint');
-    expect(hint).toBeTruthy();
-    // Hint mentions the annotation affordance so a user landing on it
-    // knows the popup is interactive.
-    expect(hint.textContent).toMatch(/Add note/);
-    // The hint sits above the controls bar so users see it before any
-    // re-run / expand-all chrome.
-    const bar = capturedRoot.querySelector('.luker-sim-rerun-bar');
-    expect(bar).toBeTruthy();
-    expect(hint.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const toggle = capturedRoot.querySelector('.sim-review-annot-toggle');
+    expect(toggle).toBeTruthy();
+    // The host's data-annot-mode flag gates the pointerup listener so
+    // selecting text only annotates when the toggle is on.
+    const host = capturedRoot.querySelector('.luker-sim-review');
+    expect(host.dataset.annotMode).toBe('off');
+    expect(toggle.dataset.state).toBe('off');
+    toggle.click();
+    expect(host.dataset.annotMode).toBe('on');
+    expect(toggle.dataset.state).toBe('on');
+    expect(toggle.classList.contains('is-on')).toBe(true);
+    toggle.click();
+    expect(host.dataset.annotMode).toBe('off');
+    expect(toggle.dataset.state).toBe('off');
+    expect(toggle.classList.contains('is-on')).toBe(false);
+});
+
+test('with annotation mode on, pointerup on a selection wraps the text in <mark[data-ann-id]>', async () => {
+    let capturedRoot = null;
+    fakePopupHost.open.mockImplementationOnce(async ({ contentRoot, onSubmit }) => {
+        document.body.appendChild(contentRoot);
+        capturedRoot = contentRoot;
+        const toggle = contentRoot.querySelector('.sim-review-annot-toggle');
+        toggle.click();
+        // Select a span of text inside the final-output <pre>.
+        const pre = contentRoot.querySelector('.luker-sim-pre');
+        const textNode = pre.firstChild;
+        const range = document.createRange();
+        range.setStart(textNode, 0);
+        range.setEnd(textNode, 5); // "Hello"
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        // Fire pointerup on the host — same listener path that mouse,
+        // touch, and pen all share.
+        const host = contentRoot.querySelector('.luker-sim-review');
+        host.dispatchEvent(new Event('pointerup', { bubbles: true }));
+        return onSubmit();
+    });
+    await openSimulationReview({
+        kind: 'cea',
+        payload: {
+            finalOutput: 'Hello world.',
+            reasoning: '',
+            assembledPrompt: { systemPrompt: 'sys', messages: [] },
+            worldInfoHits: [],
+        },
+        i18n: (k, fb) => fb,
+    });
+    const mark = capturedRoot.querySelector('mark[data-ann-id]');
+    expect(mark).toBeTruthy();
+    // textContent includes the inline × control; check that the
+    // annotated snippet is present (the × is appended at the end).
+    expect(mark.textContent).toContain('Hello');
+    // The × control lives inside the <mark>.
+    const removeBtn = mark.querySelector('.sim-review-annot-remove');
+    expect(removeBtn).toBeTruthy();
+    expect(removeBtn.textContent).toBe('×');
+});
+
+test('with annotation mode off, pointerup on a selection does NOT create a mark', async () => {
+    let capturedRoot = null;
+    fakePopupHost.open.mockImplementationOnce(async ({ contentRoot, onSubmit }) => {
+        document.body.appendChild(contentRoot);
+        capturedRoot = contentRoot;
+        // Leave the toggle off — selection alone must NOT annotate.
+        const pre = contentRoot.querySelector('.luker-sim-pre');
+        const textNode = pre.firstChild;
+        const range = document.createRange();
+        range.setStart(textNode, 0);
+        range.setEnd(textNode, 5);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        const host = contentRoot.querySelector('.luker-sim-review');
+        host.dispatchEvent(new Event('pointerup', { bubbles: true }));
+        return onSubmit();
+    });
+    await openSimulationReview({
+        kind: 'cea',
+        payload: {
+            finalOutput: 'Hello world.',
+            reasoning: '',
+            assembledPrompt: { systemPrompt: 'sys', messages: [] },
+            worldInfoHits: [],
+        },
+        i18n: (k, fb) => fb,
+    });
+    expect(capturedRoot.querySelector('mark[data-ann-id]')).toBeNull();
 });
 
 test('process sections are marked data-collapsible="true" and final-output is marked data-sim-final-output', async () => {
@@ -177,43 +256,43 @@ test('expand/collapse toggle button flips classes on every collapsible', async (
     });
 });
 
-test('touchend on the host opens the float "+ Add note" button when a selection is active', async () => {
-    let observedFloatBtn = null;
+test('clicking the inline × inside a mark removes the annotation: mark gone, engine state drained', async () => {
+    let capturedRoot = null;
     fakePopupHost.open.mockImplementationOnce(async ({ contentRoot, onSubmit }) => {
         document.body.appendChild(contentRoot);
-        // Simulate the user selecting text inside the final output.
+        capturedRoot = contentRoot;
+        // Turn annotation mode on and create a mark via the
+        // pointerup path so the wiring matches the production flow.
+        const toggle = contentRoot.querySelector('.sim-review-annot-toggle');
+        toggle.click();
         const pre = contentRoot.querySelector('.luker-sim-pre');
-        expect(pre).toBeTruthy();
+        const textNode = pre.firstChild;
         const range = document.createRange();
-        range.selectNodeContents(pre);
+        range.setStart(textNode, 0);
+        range.setEnd(textNode, 5);
         const sel = window.getSelection();
         sel.removeAllRanges();
         sel.addRange(range);
-        // Fire touchend on the renderedNode (the annotation host).
         const host = contentRoot.querySelector('.luker-sim-review');
-        host.dispatchEvent(new Event('touchend', { bubbles: true }));
-        // Capture the float button BEFORE openSimulationReview's
-        // `finally` cleanup tears it down — the popup teardown
-        // happens after onSubmit returns.
-        observedFloatBtn = document.body.querySelector('.luker-sim-float-btn');
+        host.dispatchEvent(new Event('pointerup', { bubbles: true }));
+        // Click the × — the mark is unwrapped and the chain segments
+        // submitted via onSubmit lose the annotationId.
+        const removeBtn = host.querySelector('.sim-review-annot-remove');
+        removeBtn.click();
         return onSubmit();
     });
-    await openSimulationReview({
+    const result = await openSimulationReview({
         kind: 'cea',
         payload: {
-            finalOutput: 'Hello.',
+            finalOutput: 'Hello world.',
             reasoning: '',
             assembledPrompt: { systemPrompt: 'sys', messages: [] },
             worldInfoHits: [],
         },
         i18n: (k, fb) => fb,
     });
-    // jsdom doesn't implement Range#getBoundingClientRect, so the
-    // popup falls back to viewport-safe defaults — the button still
-    // exists and is positioned via fixed CSS coordinates.
-    expect(observedFloatBtn).toBeTruthy();
-    expect(observedFloatBtn.classList.contains('luker-sim-float-btn')).toBe(true);
-    expect(observedFloatBtn.style.position).toBe('fixed');
+    expect(capturedRoot.querySelector('mark[data-ann-id]')).toBeNull();
+    expect(result.annotations).toEqual([]);
 });
 
 test('openSimulationReview injects the simulation-review stylesheet exactly once', async () => {

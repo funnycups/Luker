@@ -83,3 +83,45 @@ export const appendShared = {
         return p;
     },
 };
+
+/**
+ * Append a status chip to a tool-call section header. The chip reflects
+ * whether the tool actually ran (live read) or was rewritten by the
+ * sim-safe quarantine into a noop / validated stub. The classification
+ * comes from the `result` envelope set by loop-tools.js's exec
+ * dispatch:
+ *   - `result.simulated === true && result.unvalidated === true` →
+ *     unvalidated noop fallback (orange). The tool had no simulate()
+ *     handler so the orchestrator returned `{ok:true, simulated:true,
+ *     unvalidated:true}` without touching state.
+ *   - `result.simulated === true` (no `unvalidated`) → validated
+ *     simulate path (yellow). The tool's `simulate()` ran args
+ *     validation and shape-matched the success envelope.
+ *   - otherwise → live read (green). The tool ran end-to-end against
+ *     real state.
+ *
+ * `sectionEl` is the <section> returned by appendShared.subsection /
+ * subsubsection; we attach the chip to the heading inside it so it
+ * sits on the same line as the tool name and never gets hidden when
+ * the section collapses.
+ */
+export function appendToolStatusChip(sectionEl, result, i18n) {
+    if (!sectionEl) return null;
+    const heading = sectionEl.querySelector('h1, h2, h3, h4');
+    if (!heading) return null;
+    const doc = heading.ownerDocument;
+    const chip = doc.createElement('span');
+    chip.classList.add('sim-review-tool-chip');
+    if (result && result.simulated && result.unvalidated) {
+        chip.classList.add('sim-review-tool-chip--unvalidated');
+        chip.textContent = i18n('sim.tool_status.simulated_unvalidated', 'Simulated (unvalidated)');
+    } else if (result && result.simulated) {
+        chip.classList.add('sim-review-tool-chip--validated');
+        chip.textContent = i18n('sim.tool_status.simulated_validated', 'Simulated (validated)');
+    } else {
+        chip.classList.add('sim-review-tool-chip--read');
+        chip.textContent = i18n('sim.tool_status.read', 'Live read');
+    }
+    heading.appendChild(chip);
+    return chip;
+}

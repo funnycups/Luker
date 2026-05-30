@@ -151,3 +151,131 @@ test('cross-element selection throws friendly error instead of raw DOMException'
     expect(() => engine.addAnnotationFromSelection(window.getSelection(), 'x'))
         .toThrow(/crosses element boundaries/i);
 });
+
+test('addAnnotation inserts an inline × control inside the <mark>', () => {
+    const host = setupHost('<section data-loc-path="A"><p id="t">foo bar baz</p></section>');
+    const target = host.querySelector('#t').firstChild;
+    selectTextInNode(target, 4, 7); // "bar"
+    const engine = createAnnotationEngine({
+        host,
+        i18n: (k, fb) => fb,
+    });
+    engine.addAnnotationFromSelection(window.getSelection(), '');
+    const mark = host.querySelector('mark.luker-sim-annotation');
+    expect(mark).not.toBeNull();
+    const removeBtn = mark.querySelector('.sim-review-annot-remove');
+    expect(removeBtn).not.toBeNull();
+    expect(removeBtn.tagName).toBe('BUTTON');
+    expect(removeBtn.textContent).toBe('×');
+    // ARIA label flows through i18n so screen readers get localized text.
+    expect(removeBtn.getAttribute('aria-label')).toBe('Remove annotation');
+});
+
+test('clicking the inline × deletes the annotation: state empties, mark unwraps, chain has no annotationId', () => {
+    const host = setupHost('<section data-loc-path="A"><p id="t">foo bar baz</p></section>');
+    const target = host.querySelector('#t').firstChild;
+    selectTextInNode(target, 4, 7); // "bar"
+    const engine = createAnnotationEngine({ host, i18n: (k, fb) => fb });
+    const ann = engine.addAnnotationFromSelection(window.getSelection(), '');
+    expect(engine.getAnnotations()).toHaveLength(1);
+    const mark = host.querySelector(`mark[data-ann-id="${ann.id}"]`);
+    const removeBtn = mark.querySelector('.sim-review-annot-remove');
+    removeBtn.click();
+    expect(engine.getAnnotations()).toHaveLength(0);
+    expect(host.querySelector('mark.luker-sim-annotation')).toBeNull();
+    // The chain rebuilt from the (now-unwrapped) DOM must NOT include
+    // the literal "×" glyph — the engine strips the remove button
+    // before unwrapping.
+    const segments = engine.buildChainSegments();
+    const joined = segments.map(s => s.text).join('');
+    expect(joined).toBe('foo bar baz');
+    expect(segments.every(s => s.annotationId == null)).toBe(true);
+});
+
+test('buildChainSegments ignores the × control inside an active <mark>', () => {
+    const host = setupHost('<section data-loc-path="A"><p id="t">foo bar baz</p></section>');
+    const target = host.querySelector('#t').firstChild;
+    selectTextInNode(target, 4, 7); // "bar"
+    const engine = createAnnotationEngine({ host, i18n: (k, fb) => fb });
+    engine.addAnnotationFromSelection(window.getSelection(), '');
+    // The mark still contains the × control as a child, but the chain
+    // segments must reflect the user's original text only.
+    const segments = engine.buildChainSegments();
+    const joined = segments.map(s => s.text).join('');
+    expect(joined).toBe('foo bar baz');
+});
+
+test('addAnnotation inserts an inline comment <input> next to the × control', () => {
+    const host = setupHost('<section data-loc-path="A"><p id="t">foo bar baz</p></section>');
+    const target = host.querySelector('#t').firstChild;
+    selectTextInNode(target, 4, 7); // "bar"
+    const engine = createAnnotationEngine({ host, i18n: (k, fb) => fb });
+    engine.addAnnotationFromSelection(window.getSelection(), '');
+    const mark = host.querySelector('mark.luker-sim-annotation');
+    expect(mark).not.toBeNull();
+    const input = mark.querySelector('input.sim-review-annot-comment');
+    expect(input).not.toBeNull();
+    expect(input.tagName).toBe('INPUT');
+    expect(input.type).toBe('text');
+    // Placeholder flows through i18n so non-English locales get translated text.
+    expect(input.placeholder).toBe('Comment (optional)');
+});
+
+test('addAnnotation pre-fills the inline input with the seed comment value', () => {
+    const host = setupHost('<section data-loc-path="A"><p id="t">foo bar baz</p></section>');
+    const target = host.querySelector('#t').firstChild;
+    selectTextInNode(target, 4, 7); // "bar"
+    const engine = createAnnotationEngine({ host, i18n: (k, fb) => fb });
+    engine.addAnnotationFromSelection(window.getSelection(), 'seed comment');
+    const input = host.querySelector('mark.luker-sim-annotation input.sim-review-annot-comment');
+    expect(input).not.toBeNull();
+    expect(input.value).toBe('seed comment');
+});
+
+test('typing into the inline input live-updates the annotation comment', () => {
+    const host = setupHost('<section data-loc-path="A"><p id="t">foo bar baz</p></section>');
+    const target = host.querySelector('#t').firstChild;
+    selectTextInNode(target, 4, 7); // "bar"
+    const engine = createAnnotationEngine({ host, i18n: (k, fb) => fb });
+    const ann = engine.addAnnotationFromSelection(window.getSelection(), '');
+    const input = host.querySelector('mark.luker-sim-annotation input.sim-review-annot-comment');
+    expect(input).not.toBeNull();
+    input.value = 'feels weak here';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    const stored = engine.getAnnotations().find(a => a.id === ann.id);
+    expect(stored).toBeDefined();
+    expect(stored.comment).toBe('feels weak here');
+});
+
+test('inline input text does NOT leak into buildChainSegments output', () => {
+    const host = setupHost('<section data-loc-path="A"><p id="t">foo bar baz</p></section>');
+    const target = host.querySelector('#t').firstChild;
+    selectTextInNode(target, 4, 7); // "bar"
+    const engine = createAnnotationEngine({ host, i18n: (k, fb) => fb });
+    engine.addAnnotationFromSelection(window.getSelection(), '');
+    const input = host.querySelector('mark.luker-sim-annotation input.sim-review-annot-comment');
+    // Type something that would be unique and easy to spot if it leaked.
+    input.value = 'XXXLEAKXXX';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    const segments = engine.buildChainSegments();
+    const joined = segments.map(s => s.text).join('');
+    expect(joined).toBe('foo bar baz');
+    expect(joined).not.toContain('XXXLEAKXXX');
+});
+
+test('deleteAnnotation strips the inline comment input as well as the × control', () => {
+    const host = setupHost('<section data-loc-path="A"><p id="t">foo bar baz</p></section>');
+    const target = host.querySelector('#t').firstChild;
+    selectTextInNode(target, 4, 7); // "bar"
+    const engine = createAnnotationEngine({ host, i18n: (k, fb) => fb });
+    const ann = engine.addAnnotationFromSelection(window.getSelection(), '');
+    expect(host.querySelector('input.sim-review-annot-comment')).not.toBeNull();
+    const mark = host.querySelector(`mark[data-ann-id="${ann.id}"]`);
+    const removeBtn = mark.querySelector('.sim-review-annot-remove');
+    removeBtn.click();
+    expect(host.querySelector('input.sim-review-annot-comment')).toBeNull();
+    // And the surrounding chain text remains clean.
+    const segments = engine.buildChainSegments();
+    const joined = segments.map(s => s.text).join('');
+    expect(joined).toBe('foo bar baz');
+});

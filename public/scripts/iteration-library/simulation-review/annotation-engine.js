@@ -10,16 +10,25 @@
 
 const ANN_CLASS = 'luker-sim-annotation';
 const ANN_ATTR = 'data-ann-id';
+const ANN_REMOVE_CLASS = 'sim-review-annot-remove';
+const ANN_COMMENT_CLASS = 'sim-review-annot-comment';
 
 /**
  * @param {{
  *   host: HTMLElement,
+ *   i18n?: (key: string, fallback?: string) => string,
  *   onStateChange?: (state: Map<number, Annotation>) => void,
  *   onAnnotationCreated?: (annotation: {id:number,snippet:string,comment:string,path:string}, markEl: HTMLElement) => void,
  *   onAnnotationDeleted?: (id: number) => void,
  * }} opts
  */
-export function createAnnotationEngine({ host, onStateChange = null, onAnnotationCreated = null, onAnnotationDeleted = null }) {
+export function createAnnotationEngine({
+    host,
+    i18n = (_, fallback) => (fallback ?? ''),
+    onStateChange = null,
+    onAnnotationCreated = null,
+    onAnnotationDeleted = null,
+}) {
     if (!host || !(host instanceof HTMLElement)) {
         throw new Error('annotation-engine requires host HTMLElement');
     }
@@ -104,6 +113,42 @@ export function createAnnotationEngine({ host, onStateChange = null, onAnnotatio
             }
             throw err;
         }
+        // Inline × that removes this annotation. Lives inside the
+        // <mark> so the affordance travels with the highlight on
+        // mobile (no floating button to mis-position when the
+        // viewport scrolls).
+        const removeBtn = mark.ownerDocument.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.classList.add(ANN_REMOVE_CLASS);
+        removeBtn.setAttribute('aria-label', i18n('sim.action.remove_annotation', 'Remove annotation'));
+        removeBtn.textContent = '×';
+        removeBtn.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            deleteAnnotation(id);
+        });
+        mark.appendChild(removeBtn);
+
+        // Inline comment input lives next to the × so users can type
+        // a rationale right on the highlight. Every keystroke flows
+        // through editAnnotation() into the engine's record, so
+        // submit-time getAnnotations() reflects whatever is currently
+        // typed without needing an explicit blur/commit. The
+        // pointerdown / click handlers stop propagation so tapping
+        // the field doesn't trigger the surrounding selection / annot
+        // pipeline on touch devices.
+        const commentInput = mark.ownerDocument.createElement('input');
+        commentInput.type = 'text';
+        commentInput.classList.add(ANN_COMMENT_CLASS);
+        commentInput.placeholder = i18n('sim.action.comment_placeholder', 'Comment (optional)');
+        commentInput.value = String(comment || '');
+        commentInput.addEventListener('input', (ev) => {
+            ev.stopPropagation();
+            editAnnotation(id, commentInput.value);
+        });
+        ['pointerdown', 'mousedown', 'click'].forEach((evName) => {
+            commentInput.addEventListener(evName, (ev) => ev.stopPropagation());
+        });
+        mark.appendChild(commentInput);
         selection.removeAllRanges();
         const record = { id, snippet, comment: String(comment || ''), path, markEl: mark };
         state.set(id, record);
@@ -132,6 +177,18 @@ export function createAnnotationEngine({ host, onStateChange = null, onAnnotatio
         if (!rec) return false;
         const mark = rec.markEl;
         if (mark && mark.parentNode) {
+            // Strip the × control and the inline comment input before
+            // unwrap so neither bleeds into the surrounding text — and
+            // so re-runs that snapshot segments don't see a stray "×"
+            // glyph or the input element itself in the DOM.
+            const removeBtn = mark.querySelector(`.${ANN_REMOVE_CLASS}`);
+            if (removeBtn && removeBtn.parentNode === mark) {
+                mark.removeChild(removeBtn);
+            }
+            const commentInput = mark.querySelector(`.${ANN_COMMENT_CLASS}`);
+            if (commentInput && commentInput.parentNode === mark) {
+                mark.removeChild(commentInput);
+            }
             const parent = mark.parentNode;
             while (mark.firstChild) {
                 parent.insertBefore(mark.firstChild, mark);
@@ -162,7 +219,25 @@ export function createAnnotationEngine({ host, onStateChange = null, onAnnotatio
 
     function buildChainSegments() {
         const segments = [];
-        const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT, null);
+        const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT, {
+            acceptNode(node) {
+                // Skip text inside the inline × control and the inline
+                // comment input so neither the literal "×" glyph nor
+                // the user's typed feedback leaks into the chain that
+                // ships to the workbench LLM. (The input's value is
+                // surfaced via the structured <annotations> block in
+                // feedback-builder, not via inline chain segments.)
+                let p = node.parentElement;
+                while (p && p !== host) {
+                    if (p.classList) {
+                        if (p.classList.contains(ANN_REMOVE_CLASS)) return NodeFilter.FILTER_REJECT;
+                        if (p.classList.contains(ANN_COMMENT_CLASS)) return NodeFilter.FILTER_REJECT;
+                    }
+                    p = p.parentElement;
+                }
+                return NodeFilter.FILTER_ACCEPT;
+            },
+        });
         let n;
         while ((n = walker.nextNode())) {
             const text = n.nodeValue;
