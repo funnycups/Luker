@@ -215,3 +215,25 @@ test('touchend on the host opens the float "+ Add note" button when a selection 
     expect(observedFloatBtn.classList.contains('luker-sim-float-btn')).toBe(true);
     expect(observedFloatBtn.style.position).toBe('fixed');
 });
+
+test('openSimulationReview injects the simulation-review stylesheet exactly once', async () => {
+    // First call should add a single <link> tag to <head>.
+    await openSimulationReview({
+        kind: 'cea',
+        payload: { finalOutput: 'x', reasoning: '', assembledPrompt: { systemPrompt: '', messages: [] }, worldInfoHits: [] },
+        i18n: (_, fb) => fb,
+    });
+    const link = document.getElementById('luker_simulation_review_stylesheet');
+    expect(link).not.toBeNull();
+    expect(link.getAttribute('rel')).toBe('stylesheet');
+    expect(link.getAttribute('href')).toBe('/scripts/iteration-library/simulation-review/styles.css');
+
+    // Second call must not duplicate.
+    await openSimulationReview({
+        kind: 'cea',
+        payload: { finalOutput: 'x', reasoning: '', assembledPrompt: { systemPrompt: '', messages: [] }, worldInfoHits: [] },
+        i18n: (_, fb) => fb,
+    });
+    const links = document.querySelectorAll('#luker_simulation_review_stylesheet');
+    expect(links.length).toBe(1);
+});

@@ -4,6 +4,7 @@
 
 import { openSimulationReview as openPopup } from './popup.js';
 import { buildSimulationToolResult } from './feedback-builder.js';
+import { ensureSimulationReviewStylesheetInjected } from './styles.js';
 
 /**
  * @param {{
@@ -18,6 +19,7 @@ import { buildSimulationToolResult } from './feedback-builder.js';
  */
 export async function openSimulationReview(args) {
     const { kind, payload, worldInfoHits = [], i18n, abortSignal, onRerun } = args;
+    ensureSimulationReviewStylesheetInjected();
     // World-info hits travel with each successful re-run and need to flow
     // into the final tool result, but the popup itself only knows about
     // payload geometry. Track the latest hits locally and hand the popup
