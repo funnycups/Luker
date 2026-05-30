@@ -341,6 +341,164 @@
     transform: translateY(0);
 }
 
+/* ── Pending lorebook approval cards ───────────────────────────────── */
+/* Rendered inline below the assistant message that proposed them.
+   Status drives card chrome: pending = neutral, approved = green-tint,
+   rejected = red-tint + struck-through diff. */
+
+.orch_it_lbk_list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--it-space-sm);
+    margin-top: var(--it-space-sm);
+}
+.orch_it_lbk_card {
+    border: 1px solid color-mix(in oklab, var(--it-accent-primary) 25%, transparent);
+    border-radius: var(--it-radius-md, 6px);
+    padding: var(--it-space-sm);
+    background: color-mix(in oklab, var(--it-accent-primary) 4%, transparent);
+}
+.orch_it_lbk_card_approved {
+    border-color: color-mix(in oklab, #2db86b 55%, transparent);
+    background: color-mix(in oklab, #2db86b 10%, transparent);
+}
+.orch_it_lbk_card_rejected {
+    border-color: color-mix(in oklab, #d04848 55%, transparent);
+    background: color-mix(in oklab, #d04848 8%, transparent);
+}
+.orch_it_lbk_card_rejected .orch_it_lbk_body { opacity: 0.55; }
+.orch_it_lbk_header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--it-space-xs);
+    font-size: 0.92em;
+    margin-bottom: var(--it-space-xs);
+}
+.orch_it_lbk_label { font-weight: 600; }
+.orch_it_lbk_target {
+    font-family: var(--monoFontFamily, monospace);
+    font-size: 0.88em;
+    opacity: 0.85;
+}
+.orch_it_lbk_status {
+    margin-left: auto;
+    font-size: 0.82em;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: color-mix(in oklab, currentColor 12%, transparent);
+}
+.orch_it_lbk_status.approved { color: #2db86b; }
+.orch_it_lbk_status.rejected { color: #d04848; }
+.orch_it_lbk_status.pending  { opacity: 0.75; }
+
+.orch_it_lbk_body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--it-space-xs);
+    margin: var(--it-space-xs) 0;
+}
+.orch_it_lbk_field {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--it-space-xs);
+    align-items: baseline;
+    font-size: 0.9em;
+}
+.orch_it_lbk_field_name {
+    font-weight: 600;
+    font-family: var(--monoFontFamily, monospace);
+    font-size: 0.88em;
+}
+.orch_it_lbk_field_long {
+    flex-direction: column;
+    align-items: stretch;
+}
+.orch_it_lbk_block {
+    padding: var(--it-space-xs) var(--it-space-sm);
+    border-radius: var(--it-radius-sm, 4px);
+    border: 1px solid transparent;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: var(--monoFontFamily, monospace);
+    font-size: 0.88em;
+}
+.orch_it_lbk_block_before {
+    background: color-mix(in oklab, #d04848 8%, transparent);
+    border-color: color-mix(in oklab, #d04848 25%, transparent);
+}
+.orch_it_lbk_block_after {
+    background: color-mix(in oklab, #2db86b 10%, transparent);
+    border-color: color-mix(in oklab, #2db86b 30%, transparent);
+}
+.orch_it_lbk_inline_before {
+    color: #d04848;
+    text-decoration: line-through;
+    font-family: var(--monoFontFamily, monospace);
+}
+.orch_it_lbk_inline_after {
+    color: #2db86b;
+    font-family: var(--monoFontFamily, monospace);
+}
+.orch_it_lbk_inline_arrow {
+    opacity: 0.6;
+}
+.orch_it_lbk_nochange {
+    font-style: italic;
+    opacity: 0.6;
+    font-size: 0.9em;
+}
+.orch_it_lbk_controls {
+    display: flex;
+    gap: var(--it-space-xs);
+    justify-content: flex-end;
+    margin-top: var(--it-space-xs);
+}
+.orch_it_lbk_btn {
+    padding: 4px 12px;
+    font-size: 0.88em;
+}
+.orch_it_lbk_btn_approve {
+    background: color-mix(in oklab, #2db86b 18%, transparent);
+    border-color: color-mix(in oklab, #2db86b 55%, transparent);
+}
+.orch_it_lbk_btn_approve:hover:not(:disabled) {
+    background: color-mix(in oklab, #2db86b 28%, transparent);
+}
+.orch_it_lbk_btn_reject {
+    background: color-mix(in oklab, #d04848 18%, transparent);
+    border-color: color-mix(in oklab, #d04848 55%, transparent);
+}
+.orch_it_lbk_btn_reject:hover:not(:disabled) {
+    background: color-mix(in oklab, #d04848 28%, transparent);
+}
+
+.orch_it_lbk_summary {
+    display: flex;
+    align-items: center;
+    gap: var(--it-space-sm);
+    padding: var(--it-space-xs) var(--it-space-sm);
+}
+.orch_it_lbk_summary:empty {
+    display: none;
+}
+.orch_it_lbk_summary_text {
+    font-size: 0.88em;
+    opacity: 0.85;
+    flex: 1;
+}
+.orch_it_lbk_commit_btn {
+    background: color-mix(in oklab, var(--it-accent-primary) 18%, transparent);
+    border: 1px solid color-mix(in oklab, var(--it-accent-primary) 55%, transparent);
+    border-radius: var(--it-radius-sm, 4px);
+    padding: 4px 12px;
+    font-size: 0.88em;
+    cursor: pointer;
+}
+.orch_it_lbk_commit_btn:hover {
+    background: color-mix(in oklab, var(--it-accent-primary) 28%, transparent);
+}
+
 /* ── Narrow viewport ───────────────────────────────────────────────── */
 
 @media (max-width: 720px) {

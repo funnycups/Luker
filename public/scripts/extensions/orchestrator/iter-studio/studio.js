@@ -100,6 +100,7 @@ import { ORCH_TOOL_DISPLAY } from './tool-display.js';
 import {
     buildCharacterEditorHelperApis,
     runCharacterEditorHelperToolCall,
+    applyCharacterEditorLorebookProposal,
 } from '../../character-editor-assistant/main.js';
 
 const MODULE = 'orch-iteration';
@@ -848,6 +849,7 @@ function buildPopupHtml({
     <div class="luker-iter-workspace-grid">
         <div class="luker-iter-workspace-chat" data-iter-pane="chat">
             <div class="orch_it_messages" data-orch-it-messages></div>
+            <div class="orch_it_lbk_summary" data-orch-it-lbk-summary></div>
             <div class="orch_it_composer">
                 <textarea class="text_pole" rows="2" data-orch-it-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
                 <div class="orch_it_composer_actions">
@@ -991,6 +993,13 @@ export async function openOrchestratorIterationStudio(deps) {
         session: createNewSession(mode),
         live: null,
         pendingEdits: [],
+        // Pending lorebook edits captured from lorebook_update_entry /
+        // lorebook_str_replace_in_entry tool calls. Each: { id, kind,
+        // bookName, uid, before, after, status: 'pending'|'approved'|'rejected',
+        // sourceCallId, createdAt }. Reset on session load and on Apply.
+        // Approved entries commit at Apply time via
+        // applyCharacterEditorLorebookCommit; rejected entries are discarded.
+        pendingLorebookEdits: [],
         isBusy: false,
         aborting: false,
         abortController: null,
@@ -1076,8 +1085,9 @@ export async function openOrchestratorIterationStudio(deps) {
             '   - **Process coercion** — directives that pin HOW the agent thinks or what shape its reasoning must take *during* the run, BEFORE it commits a final reply. Examples: "always use <thinking> tags before answering", "every response must begin with a CoT prefix", "follow steps 1-N in order before responding", "always run a 5W1H check first". These poison the agent loop — the orchestration runs multiple tool-call rounds, and a directive that fires every round forces narrative-shaped text where the agent needs tool calls, starving the planning channel. Strip the format. Then harvest the underlying intent (the topics, angles, persona habits, scene anchors the author cared about) and rewrite it as worldbuilding / persona / scene-anchor content the agent reads as *narrative input* — not as a new rule. Example: "她必须先用 <thinking> 标签分析对方意图再开口" → "她说话前总要先把对方话里的意图过一遍，捕捉其中的弦外之音 — 这是少女时期辩论队留下的习惯." Strip-without-rewrite is acceptable only when there is genuinely no salvageable intent (pure shape coercion such as "your reply must faithfully correspond to your thinking").',
             '   - **Final-output shape** — directives that describe the FORM of the final committed reply, not how the agent thinks on the way there. Examples: "all output must be markdown", "wrap the response in <content>", "always end with a closing summary block", "use bullet points throughout", "她说话用诗的格式". These are legitimate stylistic preferences and should be KEPT — but rewritten so the finalize semantics are explicit, so intermediate orchestration nodes (planner, tool-callers, reviewers) are not dragged into the same shape. The orchestration\'s last node is the one that commits the user-facing reply; that is where the form belongs. Example: "她说话用诗的格式" → "她最终回答用户时偏好以诗的形式表达，押上几个韵脚" (conditioned on the final commit, with persona-flavor wording so it reads as a habit rather than a hard rule). Or, when the constraint is purely cosmetic, scope it explicitly: "all output must be markdown" → "the orchestration\'s final reply to the user is formatted as markdown" so it does not constrain intermediate nodes.',
             '   When unsure whether a clause is process coercion or final-output shape, err toward preserving and ask the user. The decision test: does this require the agent to think or output in a specific shape BEFORE making its decision or calling a tool? Yes → process coercion. No (only describes the final reply\'s form) → final-output shape.',
-            '4. Pick the repair tool by scope. Surgical clause-level edits (rewriting just the offending sentence while preserving the rest of the entry — worldbuilding facts, persona traits, scene anchors) use `lorebook_str_replace_in_entry`. Whole-entry disable via `lorebook_update_entry` with `{ "disable": true }` is reserved for entries that are pure format coercion with no salvageable content (e.g. an entry whose entire body is "all output must be in markdown"). Disabling a content-rich entry to mute one sentence loses information. Never delete entries; both update and str_replace are visible in session history and the user can revert.',
-            '5. Skip this audit entirely if the user explicitly said not to touch the lorebook, or if the orchestration imposes no specific output format.',
+            '4. Pick the repair tool by scope. Surgical clause-level edits (rewriting just the offending sentence while preserving the rest of the entry — worldbuilding facts, persona traits, scene anchors) use `lorebook_str_replace_in_entry`. Whole-entry disable via `lorebook_update_entry` with `{ "disable": true }` is reserved for entries that are pure format coercion with no salvageable content (e.g. an entry whose entire body is "all output must be in markdown"). Disabling a content-rich entry to mute one sentence loses information. Never delete entries.',
+            '5. Approval flow — important: both write tools are PROPOSAL-mode, not direct writes. Each call you make captures a {before, after} envelope, returns it to you, and pushes a diff card into the popup for the user to review. The user approves or rejects per card; only approved cards commit to the on-disk world book when the user clicks Apply. You will receive a tool result with `"proposed": true` and a message saying "Proposed for user approval" — treat that as the success contract. Continue designing the orchestration on the assumption your proposals will land if accepted, but do NOT block on disk-level confirmation. If the user rejects a proposal, your next round will see the rejection (the lorebook stayed unchanged) — adjust strategy accordingly.',
+            '6. Skip this audit entirely if the user explicitly said not to touch the lorebook, or if the orchestration imposes no specific output format.',
         ].join('\n');
     }
 
@@ -1194,6 +1204,13 @@ export async function openOrchestratorIterationStudio(deps) {
             pendingEdits: Array.isArray(loaded.pendingEdits) ? loaded.pendingEdits.slice() : [],
         };
         state.pendingEdits = state.session.pendingEdits.slice();
+        // Pending lorebook edits are deliberately session-local (never
+        // persisted): they are proposals against on-disk world books, and
+        // those books may have been edited in a parallel session since the
+        // proposal was captured. Forcing the user to re-propose after a
+        // session swap avoids applying a stale after-image against drifted
+        // entry state.
+        state.pendingLorebookEdits = [];
         // Re-read live so a parallel editor doesn't leave the popup with
         // stale state when the user reopens an older session.
         loadLive();
@@ -1211,6 +1228,12 @@ export async function openOrchestratorIterationStudio(deps) {
             state.session.surfaceState.autoApply = true;
         }
         state.pendingEdits = [];
+        // Lorebook proposals are session-local — a new session starts with
+        // an empty review queue. Without this reset, stale cards from the
+        // prior session linger in the summary row (and remain committable
+        // through the "commit lorebook only" button even though their
+        // sourceCallId no longer matches any rendered message).
+        state.pendingLorebookEdits = [];
         loadLive();
         // Don't save the blank session yet — persistSession's _transient
         // guard defers the write until the first user message.
@@ -1291,6 +1314,118 @@ export async function openOrchestratorIterationStudio(deps) {
         return String(appliedTarget || '');
     }
 
+    // ──────────────────────────────────────────────────────────────────
+    // Pending lorebook edits — approval cards.
+    // Lorebook write tools (lorebook_update_entry / _str_replace_in_entry)
+    // do NOT commit on call; the inline-executed dispatcher captures each
+    // {before, after} envelope into state.pendingLorebookEdits and renders
+    // it inline below the assistant message that proposed it. The user
+    // approves/rejects per card; only approved cards commit at Apply time
+    // via applyCharacterEditorLorebookCommit. This mirrors the orch
+    // profile sandbox-diff flow but targets external (on-disk) world-info
+    // state — the diff card shows full before/after so the user can judge
+    // the impact before authorizing the disk write.
+    // ──────────────────────────────────────────────────────────────────
+    function truncateForLorebookDiff(value, max = 480) {
+        const s = String(value ?? '');
+        if (s.length <= max) return s;
+        return s.slice(0, max) + '…';
+    }
+
+    function renderLorebookUpdateDiffBody(before, after) {
+        const beforeObj = (before && typeof before === 'object') ? before : {};
+        const afterObj = (after && typeof after === 'object') ? after : {};
+        const keys = new Set([...Object.keys(beforeObj), ...Object.keys(afterObj)]);
+        const changed = [];
+        for (const k of keys) {
+            if (k === 'uid') continue;
+            if (JSON.stringify(beforeObj[k]) !== JSON.stringify(afterObj[k])) {
+                changed.push(k);
+            }
+        }
+        if (changed.length === 0) {
+            return `<div class="orch_it_lbk_nochange">${escapeHtmlLocal(t('No field changes'))}</div>`;
+        }
+        return changed.map((k) => {
+            const b = beforeObj[k];
+            const a = afterObj[k];
+            // Content gets stacked before/after panels (long-form); other
+            // fields render inline before → after.
+            if (k === 'content') {
+                return `<div class="orch_it_lbk_field orch_it_lbk_field_long">
+                    <div class="orch_it_lbk_field_name">${escapeHtmlLocal(k)}</div>
+                    <div class="orch_it_lbk_block orch_it_lbk_block_before">${escapeHtmlLocal(truncateForLorebookDiff(b))}</div>
+                    <div class="orch_it_lbk_block orch_it_lbk_block_after">${escapeHtmlLocal(truncateForLorebookDiff(a))}</div>
+                </div>`;
+            }
+            const bRepr = typeof b === 'undefined' ? '(unset)' : JSON.stringify(b);
+            const aRepr = typeof a === 'undefined' ? '(unset)' : JSON.stringify(a);
+            return `<div class="orch_it_lbk_field">
+                <span class="orch_it_lbk_field_name">${escapeHtmlLocal(k)}</span>
+                <span class="orch_it_lbk_inline_before">${escapeHtmlLocal(bRepr)}</span>
+                <span class="orch_it_lbk_inline_arrow">→</span>
+                <span class="orch_it_lbk_inline_after">${escapeHtmlLocal(aRepr)}</span>
+            </div>`;
+        }).join('');
+    }
+
+    function renderLorebookStrReplaceDiffBody(before, after) {
+        const beforeContent = String(before?.content ?? '');
+        const afterContent = String(after?.content ?? '');
+        return `<div class="orch_it_lbk_field orch_it_lbk_field_long">
+            <div class="orch_it_lbk_field_name">content</div>
+            <div class="orch_it_lbk_block orch_it_lbk_block_before">${escapeHtmlLocal(truncateForLorebookDiff(beforeContent))}</div>
+            <div class="orch_it_lbk_block orch_it_lbk_block_after">${escapeHtmlLocal(truncateForLorebookDiff(afterContent))}</div>
+        </div>`;
+    }
+
+    function renderLorebookPendingCard(edit) {
+        const status = String(edit?.status || 'pending');
+        const kind = String(edit?.kind || '');
+        const icon = kind === 'update' ? '✏️' : '🩹';
+        const kindLabel = kind === 'update'
+            ? t('Update lorebook entry')
+            : t('Patch lorebook entry text');
+        const statusLabel = status === 'approved'
+            ? `<span class="orch_it_lbk_status approved">✓ ${escapeHtmlLocal(t('Approved'))}</span>`
+            : status === 'rejected'
+                ? `<span class="orch_it_lbk_status rejected">✗ ${escapeHtmlLocal(t('Rejected'))}</span>`
+                : `<span class="orch_it_lbk_status pending">${escapeHtmlLocal(t('Pending approval'))}</span>`;
+
+        const body = kind === 'update'
+            ? renderLorebookUpdateDiffBody(edit.before, edit.after)
+            : renderLorebookStrReplaceDiffBody(edit.before, edit.after);
+
+        const idAttr = escapeHtmlLocal(String(edit?.id || ''));
+        const controls = (status === 'approved' || status === 'rejected')
+            ? `<button class="menu_button orch_it_lbk_btn" data-orch-it-action="reset-lorebook-decision" data-orch-it-pending-id="${idAttr}">${escapeHtmlLocal(t('Undo decision'))}</button>`
+            : `<button class="menu_button orch_it_lbk_btn orch_it_lbk_btn_approve" data-orch-it-action="approve-lorebook" data-orch-it-pending-id="${idAttr}">${escapeHtmlLocal(t('Approve'))}</button>
+               <button class="menu_button orch_it_lbk_btn orch_it_lbk_btn_reject" data-orch-it-action="reject-lorebook" data-orch-it-pending-id="${idAttr}">${escapeHtmlLocal(t('Reject'))}</button>`;
+
+        const target = `${escapeHtmlLocal(String(edit?.bookName || ''))} #${escapeHtmlLocal(String(edit?.uid ?? ''))}`;
+        return `<div class="orch_it_lbk_card orch_it_lbk_card_${escapeHtmlLocal(status)}" data-orch-it-pending-id="${idAttr}">
+            <div class="orch_it_lbk_header">
+                <span class="orch_it_lbk_icon">${icon}</span>
+                <span class="orch_it_lbk_label">${escapeHtmlLocal(kindLabel)}</span>
+                <span class="orch_it_lbk_target">${target}</span>
+                ${statusLabel}
+            </div>
+            <div class="orch_it_lbk_body">${body}</div>
+            <div class="orch_it_lbk_controls">${controls}</div>
+        </div>`;
+    }
+
+    function renderLorebookPendingForMessage(message) {
+        if (!message || message.role !== 'assistant') return '';
+        const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
+        if (toolCalls.length === 0) return '';
+        const callIds = new Set(toolCalls.map(tc => String(tc?.id || '')).filter(Boolean));
+        const pending = Array.isArray(state.pendingLorebookEdits) ? state.pendingLorebookEdits : [];
+        const matched = pending.filter(p => callIds.has(String(p?.sourceCallId || '')));
+        if (matched.length === 0) return '';
+        return `<div class="orch_it_lbk_list">${matched.map(renderLorebookPendingCard).join('')}</div>`;
+    }
+
     function renderMessageCard(message, idx, allMessages) {
         if (!message) return '';
         const role = String(message.role || 'user');
@@ -1361,7 +1496,8 @@ export async function openOrchestratorIterationStudio(deps) {
         // apply. The shared component emits its own `<div
         // class="luker_lib_message">` inner wrapper; click delegation
         // resolves msgId from both attributes (see handler block below).
-        return `<div class="orch_it_msg ${roleCls}${autoCls}" data-orch-it-msg-id="${escapeHtmlLocal(message.id || '')}">${innerHtml}</div>`;
+        const lorebookHtml = renderLorebookPendingForMessage(message);
+        return `<div class="orch_it_msg ${roleCls}${autoCls}" data-orch-it-msg-id="${escapeHtmlLocal(message.id || '')}">${innerHtml}${lorebookHtml}</div>`;
     }
 
     function renderHistoryItem(meta) {
@@ -1453,6 +1589,49 @@ export async function openOrchestratorIterationStudio(deps) {
                 node.scrollTop = node.scrollHeight;
             }
         } catch { /* DOM not attached (test) */ }
+
+        // Lorebook summary row — sits between the chat scroll area and the
+        // composer. Shows the pending counts and exposes a "Commit lorebook"
+        // button when there are approved entries but no orch profile edits
+        // waiting (the regular per-message Apply button covers the
+        // common case where both are in flight together).
+        try {
+            const $summary = $root.find('[data-orch-it-lbk-summary]');
+            if ($summary.length) {
+                const allPending = Array.isArray(state.pendingLorebookEdits) ? state.pendingLorebookEdits : [];
+                const pendCount = allPending.filter(p => p?.status === 'pending').length;
+                const apprCount = allPending.filter(p => p?.status === 'approved').length;
+                const rejCount = allPending.filter(p => p?.status === 'rejected').length;
+                const orchPending = Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0;
+                if (allPending.length === 0) {
+                    $summary.empty();
+                } else {
+                    const parts = [];
+                    if (pendCount > 0) parts.push(tf('${0} pending', String(pendCount)));
+                    if (apprCount > 0) parts.push(tf('${0} approved', String(apprCount)));
+                    if (rejCount > 0) parts.push(tf('${0} rejected', String(rejCount)));
+                    const summaryLabel = `${t('Lorebook proposals')}: ${parts.join(', ')}`;
+                    // Surface the lorebook-only flush button when there's
+                    // something to act on AND no orch profile commit is
+                    // already covering it. Label adapts: "commit" when
+                    // there are approved entries to write, "clear" when
+                    // the only pending decisions are rejected ones.
+                    const decisionCount = apprCount + rejCount;
+                    const showBtn = decisionCount > 0 && !orchPending;
+                    let btnHtml = '';
+                    if (showBtn) {
+                        const btnLabel = apprCount > 0
+                            ? tf('Commit ${0} lorebook decision(s)', String(decisionCount))
+                            : tf('Clear ${0} rejected', String(rejCount));
+                        btnHtml = `<button class="menu_button orch_it_lbk_commit_btn" data-orch-it-action="commit-lorebook-only">${escapeHtmlLocal(btnLabel)}</button>`;
+                    }
+                    $summary.html(`<span class="orch_it_lbk_summary_text">${escapeHtmlLocal(summaryLabel)}</span>${btnHtml}`);
+                }
+            }
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(`[${MODULE}:${mode}] lorebook summary render failed`, err);
+        }
 
         // Pending edits — single Apply button per spec §3.4. The label
         // resolves to the active iteration scope (character name when a card
@@ -1812,6 +1991,10 @@ export async function openOrchestratorIterationStudio(deps) {
                         if (helper.scope === 'character' && !helper.hasOverride) {
                             state.live = createBlankProfileForMode();
                             state.pendingEdits = [];
+                            // Pending lorebook edits were proposed against
+                            // the old design's output contract; resetting
+                            // the working profile invalidates that contract.
+                            state.pendingLorebookEdits = [];
                             state.session.messages.push({
                                 id: makeMessageId(),
                                 role: 'system',
@@ -1834,6 +2017,9 @@ export async function openOrchestratorIterationStudio(deps) {
                         if (helper.scope === 'character' && helper.hasOverride) {
                             state.live = loadGlobalProfileForMode();
                             state.pendingEdits = [];
+                            // See resetToBlank above — lorebook proposals
+                            // belonged to the old design and are invalid now.
+                            state.pendingLorebookEdits = [];
                             state.session.messages.push({
                                 id: makeMessageId(),
                                 role: 'system',
@@ -1945,7 +2131,59 @@ export async function openOrchestratorIterationStudio(deps) {
                     }
                 } else if (isLorebookWriteTool(call?.name)) {
                     const out = await runLorebookWriteTool({ id: callId, name: call?.name, args: call?.args }, helperApisForReads);
-                    if (out?.ok) {
+                    if (out?.ok && out.result && typeof out.result === 'object' && out.result.before && out.result.after) {
+                        // Proposal mode: the write tool's helper-api invoke
+                        // returned a {before, after, kind} envelope and did
+                        // NOT touch disk. Capture it as a pending lorebook
+                        // edit and hand the model a slim ack — full
+                        // before/after blobs would pad context for no gain,
+                        // since the user reviews the diff in the UI, not
+                        // the model.
+                        const pendingId = `lbk_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+                        if (!Array.isArray(state.pendingLorebookEdits)) state.pendingLorebookEdits = [];
+                        state.pendingLorebookEdits.push({
+                            id: pendingId,
+                            kind: out.result.kind,
+                            bookName: out.result.book_name,
+                            uid: out.result.uid,
+                            before: out.result.before,
+                            after: out.result.after,
+                            // Carry the original tool args so the Apply
+                            // path can re-derive the after-image against
+                            // the entry's CURRENT state. This lets multiple
+                            // approved proposals targeting the same
+                            // book#uid chain correctly (each commit reads
+                            // the prior commit's mutation) and surfaces
+                            // concurrent drift as a fresh validation error.
+                            op: {
+                                kind: out.result.kind,
+                                args: (call?.args && typeof call.args === 'object') ? call.args : {},
+                            },
+                            status: 'pending',
+                            sourceCallId: callId,
+                            createdAt: Date.now(),
+                        });
+                        const summary = out.result.kind === 'update'
+                            ? { updated_fields: Array.isArray(out.result.updated_fields) ? out.result.updated_fields : [] }
+                            : { replaced_chars: out.result.replaced_chars, new_chars: out.result.new_chars };
+                        resultPayload = {
+                            ok: true,
+                            proposed: true,
+                            pending_id: pendingId,
+                            book_name: out.result.book_name,
+                            uid: out.result.uid,
+                            kind: out.result.kind,
+                            ...summary,
+                            message: 'Proposed for user approval. The edit is NOT live yet — the user will review the diff card in the popup and approve or reject it before it is committed at Apply time.',
+                        };
+                    } else if (out?.ok) {
+                        // Defensive: helper api returned ok without the
+                        // expected proposal shape. Surface as-is but log a
+                        // warning so a future refactor breaking the
+                        // {before, after} envelope contract is visible
+                        // instead of silently bypassing the approval flow.
+                        // eslint-disable-next-line no-console
+                        console.warn(`[${MODULE}:${mode}] lorebook write tool returned ok without {before, after} envelope — proposal skipped`, out);
                         resultPayload = out.result;
                     } else {
                         resultPayload = { error: String(out?.error || 'unknown error') };
@@ -2124,6 +2362,7 @@ export async function openOrchestratorIterationStudio(deps) {
                         cleanEdits: outcome.cleanEdits,
                         target: getApplyScopeLabel(),
                         autoApply: true,
+                        lorebook: outcome.lorebook,
                     });
                     state.session.messages.push({
                         id: makeMessageId(),
@@ -2182,9 +2421,140 @@ export async function openOrchestratorIterationStudio(deps) {
     // unapplied assistant message so renderMessageCard can show the
     // Applied label and a Rollback button.
     // ──────────────────────────────────────────────────────────────────
+    /**
+     * Commit approved pending lorebook proposals to disk. Walks the
+     * approved entries in order and calls
+     * applyCharacterEditorLorebookCommit for each — successful commits are
+     * dropped from state.pendingLorebookEdits; rejected entries are also
+     * dropped (decision is final); pending (undecided) entries are
+     * preserved so the user can come back to them. On per-entry failure,
+     * the walk halts and the remaining un-committed approved entries stay
+     * in the list so the user can investigate and retry.
+     *
+     * Called from applyPendingEdits AFTER the orch profile commit phase
+     * succeeds (so a half-applied profile never coexists with newly
+     * committed lorebook entries), and also from the "Commit lorebook
+     * only" button when there are no orch profile edits in flight.
+     */
+    async function commitApprovedLorebookEdits() {
+        const all = Array.isArray(state.pendingLorebookEdits) ? state.pendingLorebookEdits : [];
+        // Snapshot all groups BEFORE mutation so the verdict can report
+        // exactly what the user saw in the panel at click time.
+        const approved = all.filter(p => p?.status === 'approved');
+        const rejected = all.filter(p => p?.status === 'rejected');
+        const stillPending = all.filter(p => p?.status === 'pending');
+        const snap = (e) => ({ bookName: e.bookName, uid: e.uid, kind: e.kind });
+        const decisionsToDrop = (p) => p?.status === 'rejected';
+        if (approved.length === 0) {
+            // No commits to attempt, but still flush rejected decisions so
+            // the panel doesn't grow stale across multiple Apply clicks.
+            const kept = all.filter(p => !decisionsToDrop(p));
+            const droppedRejected = all.length - kept.length;
+            state.pendingLorebookEdits = kept;
+            return {
+                committed: 0,
+                failed: 0,
+                failedAt: null,
+                droppedRejected,
+                verdict: {
+                    committed: [],
+                    rejected_dropped: rejected.map(snap),
+                    still_approved: [],
+                    still_pending: stillPending.map(snap),
+                    failed: null,
+                },
+            };
+        }
+        const committedIds = new Set();
+        let failedAt = null;
+        let failedError = null;
+        for (const entry of approved) {
+            try {
+                // Re-derive the after-image against the entry's CURRENT
+                // on-disk state via applyCharacterEditorLorebookProposal —
+                // not the snapshot `entry.after` captured at proposal time.
+                // This makes multi-proposal chains for the same book#uid
+                // commit correctly (proposal B's mutation lands on top of
+                // proposal A's already-committed state) and surfaces
+                // parallel-session drift as a fresh validation error.
+                await applyCharacterEditorLorebookProposal(context, {
+                    kind: entry.op?.kind ?? entry.kind,
+                    args: entry.op?.args ?? {},
+                });
+                committedIds.add(entry.id);
+            } catch (err) {
+                failedAt = entry;
+                failedError = err;
+                break;
+            }
+        }
+        state.pendingLorebookEdits = all.filter(p => {
+            if (committedIds.has(p?.id)) return false;
+            if (decisionsToDrop(p)) return false;
+            return true;
+        });
+        if (failedAt) {
+            const errText = String(failedError?.message || failedError || 'unknown error');
+            try {
+                toastr.error(tf('Lorebook commit failed at ${0} #${1}: ${2}',
+                    String(failedAt.bookName || ''), String(failedAt.uid ?? ''), errText));
+            } catch { /* toastr may be unavailable in tests */ }
+            state.session.messages.push({
+                id: makeMessageId(),
+                role: 'system',
+                content: tf('Lorebook commit halted: ${0} #${1} failed (${2}). Remaining approved entries left in the pending list for retry.',
+                    String(failedAt.bookName || ''), String(failedAt.uid ?? ''), errText),
+                at: Date.now(),
+            });
+        } else if (committedIds.size > 0) {
+            try {
+                toastr.success(tf('Committed ${0} lorebook edit(s)', String(committedIds.size)));
+            } catch { /* ignore */ }
+        }
+        const committedSnaps = approved.filter(a => committedIds.has(a.id)).map(snap);
+        const stillApprovedSnaps = approved.filter(a => !committedIds.has(a.id)).map(snap);
+        return {
+            committed: committedIds.size,
+            failed: failedAt ? 1 : 0,
+            failedAt,
+            verdict: {
+                committed: committedSnaps,
+                rejected_dropped: rejected.map(snap),
+                still_approved: stillApprovedSnaps,
+                still_pending: stillPending.map(snap),
+                failed: failedAt
+                    ? {
+                        bookName: failedAt.bookName,
+                        uid: failedAt.uid,
+                        kind: failedAt.kind,
+                        error: String(failedError?.message || failedError || 'unknown error'),
+                    }
+                    : null,
+            },
+        };
+    }
+
     async function applyPendingEdits({ skipRender = false } = {}) {
-        if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) {
+        const hasOrchPending = Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0;
+        const hasApprovedLorebook = Array.isArray(state.pendingLorebookEdits)
+            && state.pendingLorebookEdits.some(p => p?.status === 'approved');
+        const hasRejectedLorebook = Array.isArray(state.pendingLorebookEdits)
+            && state.pendingLorebookEdits.some(p => p?.status === 'rejected');
+        if (!hasOrchPending && !hasApprovedLorebook && !hasRejectedLorebook) {
             return { proposed: 0, applied: 0, conflicts: [], alreadyDone: [] };
+        }
+        if (!hasOrchPending) {
+            // Lorebook-only path: handles both approved commits and the
+            // rejected-flush cleanup (which the user can trigger
+            // independently when there are no committable proposals but
+            // their declined decisions are still cluttering the summary
+            // row). commitApprovedLorebookEdits drops rejected entries
+            // unconditionally; that path is reachable whether or not any
+            // approved entries exist.
+            const lorebookResult = await commitApprovedLorebookEdits();
+            await persistSession();
+            if (!skipRender) await render();
+            return { proposed: 0, applied: 0, conflicts: [], alreadyDone: [], lorebook: lorebookResult };
         }
         if (!state.live) await loadLive();
         const liveSnapshot = state.live;
@@ -2286,9 +2656,14 @@ export async function openOrchestratorIterationStudio(deps) {
         }
 
         state.pendingEdits = [];
+        // Lorebook commit phase: only runs once the orch profile commit
+        // succeeded. Approved entries write to disk via CardApp; rejected
+        // entries are dropped; pending (undecided) entries survive into
+        // the next Apply so the user can return to them.
+        const lorebookResult = await commitApprovedLorebookEdits();
         await persistSession();
         if (!skipRender) await render();
-        return { proposed: editsBatch.length, applied: appliedCount, conflicts, alreadyDone, cleanEdits };
+        return { proposed: editsBatch.length, applied: appliedCount, conflicts, alreadyDone, cleanEdits, lorebook: lorebookResult };
     }
 
     async function discardPendingEdits() {
@@ -2313,7 +2688,7 @@ export async function openOrchestratorIterationStudio(deps) {
      * this verbatim — keep the per-edit "skipped because X" detail intact
      * so the LLM can correct its next round.
      */
-    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, target = 'profile', autoApply = false }) {
+    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, target = 'profile', autoApply = false, lorebook = null }) {
         const conflictArr = Array.isArray(conflicts) ? conflicts : [];
         const alreadyArr = Array.isArray(alreadyDone) ? alreadyDone : [];
         const cleanArr = Array.isArray(cleanEdits) ? cleanEdits : [];
@@ -2359,14 +2734,47 @@ export async function openOrchestratorIterationStudio(deps) {
                 lines.push(`  - ${op}(${path || '<root>'})${note}`);
             }
         }
+        // Lorebook decisions — load-bearing for the system-prompt promise
+        // that "your next round will see the rejection". The verdict lists
+        // every group separately so the AI can stop re-proposing entries
+        // the user already declined, and pick up the still-pending ones.
+        if (lorebook && lorebook.verdict) {
+            const v = lorebook.verdict;
+            const fmtEntry = (e) => `    - ${String(e.bookName || '')} #${String(e.uid ?? '')} (${String(e.kind || '?')})`;
+            const hasAny = (v.committed?.length || 0) + (v.rejected_dropped?.length || 0)
+                + (v.still_approved?.length || 0) + (v.still_pending?.length || 0)
+                + (v.failed ? 1 : 0);
+            if (hasAny > 0) {
+                lines.push('Lorebook decisions from this Apply:');
+                if (Array.isArray(v.committed) && v.committed.length > 0) {
+                    lines.push('  Committed (now live on disk):');
+                    for (const e of v.committed) lines.push(fmtEntry(e));
+                }
+                if (Array.isArray(v.rejected_dropped) && v.rejected_dropped.length > 0) {
+                    lines.push('  Rejected by user (dropped, never written to disk; do NOT re-propose without addressing the reason the user might have rejected — they likely have a reason):');
+                    for (const e of v.rejected_dropped) lines.push(fmtEntry(e));
+                }
+                if (Array.isArray(v.still_approved) && v.still_approved.length > 0) {
+                    lines.push('  Still approved but not yet committed (a commit failure halted the walk; the user can retry):');
+                    for (const e of v.still_approved) lines.push(fmtEntry(e));
+                }
+                if (Array.isArray(v.still_pending) && v.still_pending.length > 0) {
+                    lines.push('  Still pending user decision (not yet approved or rejected):');
+                    for (const e of v.still_pending) lines.push(fmtEntry(e));
+                }
+                if (v.failed) {
+                    lines.push(`  Commit failed at ${String(v.failed.bookName || '')} #${String(v.failed.uid ?? '')} (${String(v.failed.kind || '?')}): ${String(v.failed.error || 'unknown')}`);
+                }
+            }
+        }
         lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
         return lines.join('\n');
     }
 
-    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone, cleanEdits }) {
+    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone, cleanEdits, lorebook = null }) {
         if (state.isBusy) return;
         const userText = action === 'apply'
-            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, target: getApplyScopeLabel() })
+            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, target: getApplyScopeLabel(), lorebook })
             : `[User reviewed and discarded ${count} pending edit(s). Reconsider your approach — propose different edits or respond with plain text and no tool calls when finished.]`;
 
         state.session.messages.push({
@@ -2689,6 +3097,46 @@ export async function openOrchestratorIterationStudio(deps) {
     // values via the `actionAttribute: 'data-orch-it-action'` opt — the
     // same convention M1.4's `renderMessageCard` uses for per-message
     // rollback/regenerate buttons (handlers further down).
+
+    // Per-proposal approve/reject/undo for pending lorebook edits. These
+    // only flip the local status flag on state.pendingLorebookEdits; actual
+    // disk writes happen at apply-batch time (orch profile commits first,
+    // then approved lorebook proposals via applyCharacterEditorLorebookCommit).
+    $root.on('click.orchIt', '[data-orch-it-action="approve-lorebook"]', async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const id = String($(e.currentTarget).attr('data-orch-it-pending-id') || '');
+        const entry = (state.pendingLorebookEdits || []).find(p => p?.id === id);
+        if (!entry) return;
+        entry.status = 'approved';
+        await render();
+    });
+
+    $root.on('click.orchIt', '[data-orch-it-action="reject-lorebook"]', async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const id = String($(e.currentTarget).attr('data-orch-it-pending-id') || '');
+        const entry = (state.pendingLorebookEdits || []).find(p => p?.id === id);
+        if (!entry) return;
+        entry.status = 'rejected';
+        await render();
+    });
+
+    $root.on('click.orchIt', '[data-orch-it-action="reset-lorebook-decision"]', async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const id = String($(e.currentTarget).attr('data-orch-it-pending-id') || '');
+        const entry = (state.pendingLorebookEdits || []).find(p => p?.id === id);
+        if (!entry) return;
+        entry.status = 'pending';
+        await render();
+    });
+
+    // Commit approved lorebook proposals when there's no orch profile
+    // commit in flight. Goes through applyPendingEdits' lorebook-only path,
+    // which short-circuits the orch-profile commit machinery.
+    $root.on('click.orchIt', '[data-orch-it-action="commit-lorebook-only"]', async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        await applyPendingEdits();
+    });
+
     $root.on('click.orchIt', '[data-orch-it-action="apply-batch"]', async (e) => {
         e.preventDefault();
         const pendingCount = Array.isArray(state.pendingEdits) ? state.pendingEdits.length : 0;
@@ -2709,6 +3157,7 @@ export async function openOrchestratorIterationStudio(deps) {
                 conflicts: outcome?.conflicts,
                 alreadyDone: outcome?.alreadyDone,
                 cleanEdits: outcome?.cleanEdits,
+                lorebook: outcome?.lorebook,
             });
         }
     });

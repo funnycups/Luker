@@ -1941,7 +1941,17 @@ async function getCharacterEditorLorebookEntries(context, args = {}) {
     };
 }
 
-async function updateCharacterEditorLorebookEntry(context, args = {}) {
+/**
+ * Compute the after-image for an `update_lorebook_entry` proposal without
+ * touching disk. The iter-studio's lorebook-approval flow calls this from
+ * the inline-executed tool path, then renders the {before, after} pair as
+ * a pending diff card for the user to approve or reject. On Apply the
+ * approved after-image is written via {@link applyCharacterEditorLorebookCommit}.
+ *
+ * @returns {{ ok: true, book_name: string, uid: number, kind: 'update',
+ *             before: object, after: object, updated_fields: string[] }}
+ */
+async function computeCharacterEditorLorebookUpdate(context, args = {}) {
     const bookName = String(args?.book_name || '').trim();
     if (!bookName) {
         throw new Error(`${TOOL_NAMES.UPDATE_ENTRY} requires book_name.`);
@@ -1966,20 +1976,35 @@ async function updateCharacterEditorLorebookEntry(context, args = {}) {
     if (!entry) {
         throw new Error(`Entry uid ${uid} not found in "${bookName}".`);
     }
-    Object.assign(entry, patch);
+    // Deep-clone via structuredClone so the proposal carries an independent
+    // before-snapshot and the after image cannot mutate the cached entry.
+    const before = structuredClone(entry);
+    const after = structuredClone(entry);
+    Object.assign(after, patch);
     // uid is the address, not a payload field — guard against patches that
     // try to rewrite it.
-    entry.uid = uid;
-    await context.saveWorldInfo(bookName, data, true);
+    after.uid = uid;
     return {
         ok: true,
         book_name: bookName,
         uid,
+        kind: 'update',
+        before,
+        after,
         updated_fields: patchKeys.filter(k => k !== 'uid'),
     };
 }
 
-async function strReplaceInCharacterEditorLorebookEntry(context, args = {}) {
+/**
+ * Compute the after-image for a `str_replace_in_lorebook_entry` proposal
+ * without touching disk. Validates the single-match contract (old_str must
+ * appear exactly once in the entry's current content). On Apply the
+ * approved after-image is written via {@link applyCharacterEditorLorebookCommit}.
+ *
+ * @returns {{ ok: true, book_name: string, uid: number, kind: 'str_replace',
+ *             before: object, after: object, replaced_chars: number, new_chars: number }}
+ */
+async function computeCharacterEditorLorebookStrReplace(context, args = {}) {
     const bookName = String(args?.book_name || '').trim();
     if (!bookName) {
         throw new Error(`${TOOL_NAMES.STR_REPLACE_IN_ENTRY} requires book_name.`);
@@ -2012,16 +2037,101 @@ async function strReplaceInCharacterEditorLorebookEntry(context, args = {}) {
         // match. Same contract Anthropic's str_replace_based_edit_tool uses.
         throw new Error(`old_str occurs more than once in entry ${uid} of "${bookName}"; narrow it to a unique substring.`);
     }
-    entry.content = content.slice(0, firstIdx) + args.new_str + content.slice(firstIdx + args.old_str.length);
-    entry.uid = uid;
-    await context.saveWorldInfo(bookName, data, true);
+    const before = structuredClone(entry);
+    const after = structuredClone(entry);
+    after.content = content.slice(0, firstIdx) + args.new_str + content.slice(firstIdx + args.old_str.length);
+    after.uid = uid;
     return {
         ok: true,
         book_name: bookName,
         uid,
+        kind: 'str_replace',
+        before,
+        after,
         replaced_chars: args.old_str.length,
         new_chars: args.new_str.length,
     };
+}
+
+/**
+ * Commit an approved lorebook-edit proposal to disk. Loads the book, copies
+ * the supplied `after` entry into `data.entries[uid]` (preserving uid as the
+ * address), and saves. Iter-studio's Apply path calls this once per approved
+ * pending edit, sequentially; if a commit throws the caller logs + halts
+ * (no rollback across entries — successive WorldInfo writes are independent
+ * file ops, and a partial commit just leaves the on-disk book at the state
+ * of the last successful entry).
+ *
+ * @param {object} context  SillyTavern context (provides load/saveWorldInfo).
+ * @param {object} arg
+ * @param {string} arg.book_name
+ * @param {number} arg.uid
+ * @param {object} arg.after  Full entry shape (deep-cloned from the proposal
+ *                            so concurrent edits in the popup cannot leak in).
+ * @returns {Promise<{ ok: true, book_name: string, uid: number }>}
+ */
+export async function applyCharacterEditorLorebookCommit(context, { book_name, uid, after } = {}) {
+    const bookName = String(book_name || '').trim();
+    if (!bookName) {
+        throw new Error('applyCharacterEditorLorebookCommit: book_name is required.');
+    }
+    if (!Number.isInteger(uid) || uid < 0) {
+        throw new Error('applyCharacterEditorLorebookCommit: uid must be a non-negative integer.');
+    }
+    if (!after || typeof after !== 'object' || Array.isArray(after)) {
+        throw new Error('applyCharacterEditorLorebookCommit: after must be an object.');
+    }
+    const data = await context.loadWorldInfo(bookName);
+    if (!data) {
+        throw new Error(`World book "${bookName}" not found.`);
+    }
+    const entry = data.entries?.[uid];
+    if (!entry) {
+        throw new Error(`Entry uid ${uid} not found in "${bookName}".`);
+    }
+    // Merge after over the live entry rather than wholesale-replacing the
+    // reference — preserves any non-payload bookkeeping fields the WorldInfo
+    // runtime may have stamped between proposal time and Apply time.
+    Object.assign(entry, after);
+    entry.uid = uid;
+    await context.saveWorldInfo(bookName, data, true);
+    return { ok: true, book_name: bookName, uid };
+}
+
+/**
+ * Apply-time commit that re-derives the after-image from the proposal's
+ * original tool args against the entry's CURRENT on-disk state, then
+ * writes once. This is the path the iter-studio approval flow uses so
+ * that:
+ *
+ *   1. Multiple approved proposals targeting the same book#uid chain
+ *      correctly (proposal B's mutation lands on top of proposal A's
+ *      already-committed mutation, rather than B's stale `after` snapshot
+ *      clobbering A's change).
+ *   2. Concurrent drift (a parallel session edited the book between
+ *      proposal time and Apply time) surfaces as a fresh validation
+ *      error — for `str_replace`, the unique-match guard fires; for
+ *      `update`, the shallow merge still lands but on the current
+ *      content rather than the proposal author's expectation.
+ *
+ * The proposal's `kind` and original `args` are required; the snapshot
+ * `after` captured at proposal time is intentionally NOT passed here.
+ */
+export async function applyCharacterEditorLorebookProposal(context, { kind, args } = {}) {
+    const safeArgs = (args && typeof args === 'object') ? args : {};
+    let computed;
+    if (kind === 'update') {
+        computed = await computeCharacterEditorLorebookUpdate(context, safeArgs);
+    } else if (kind === 'str_replace') {
+        computed = await computeCharacterEditorLorebookStrReplace(context, safeArgs);
+    } else {
+        throw new Error(`applyCharacterEditorLorebookProposal: unknown kind "${kind}"`);
+    }
+    return applyCharacterEditorLorebookCommit(context, {
+        book_name: computed.book_name,
+        uid: computed.uid,
+        after: computed.after,
+    });
 }
 
 function createCharacterEditorLorebookToolApi(context, { avatar = '' } = {}) {
@@ -2128,11 +2238,13 @@ function createCharacterEditorLorebookToolApi(context, { avatar = '' } = {}) {
 }
 
 /**
- * Helper-tool API for lorebook *write* operations (update + str_replace).
- * Used by iter popups that want the AI to adjust the active character's
- * world-book entries while iterating (e.g. orchestrator iter-studio
- * reconciling output-format constraints across preset and lorebook). The
- * tool schemas are owned by `iteration-library/tools/lorebook-writes.js`
+ * Helper-tool API for lorebook write *proposals* (update + str_replace).
+ * Used by iter popups whose Apply path is approval-gated — invoking a tool
+ * here NEVER touches disk. The dispatcher returns a {before, after, kind}
+ * envelope that the popup captures as a pending diff card; commits happen
+ * only when the user clicks Apply, via {@link applyCharacterEditorLorebookCommit}.
+ *
+ * The tool schemas are owned by `iteration-library/tools/lorebook-writes.js`
  * — this api only owns the legacy wire-name dispatch.
  */
 function createCharacterEditorLorebookWriteToolApi(context, { avatar = '' } = {}) {
@@ -2155,11 +2267,15 @@ function createCharacterEditorLorebookWriteToolApi(context, { avatar = '' } = {}
         invoke: async (call) => {
             const name = String(call?.name || '').trim();
             const args = call?.args && typeof call.args === 'object' ? call.args : {};
+            // Proposal mode: returns {before, after, kind, ...} without
+            // touching disk. The iter-studio captures the result, renders
+            // it as a pending diff card for user approval, and only commits
+            // via applyCharacterEditorLorebookCommit at Apply time.
             if (name === toolNames.UPDATE) {
-                return await updateCharacterEditorLorebookEntry(context, args);
+                return await computeCharacterEditorLorebookUpdate(context, args);
             }
             if (name === toolNames.STR_REPLACE) {
-                return await strReplaceInCharacterEditorLorebookEntry(context, args);
+                return await computeCharacterEditorLorebookStrReplace(context, args);
             }
             throw new Error(`Unsupported character editor lorebook write tool: ${name}`);
         },
