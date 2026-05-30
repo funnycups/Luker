@@ -88,7 +88,7 @@ The Studio's AI reads your current profile and patches it via tool calls. The St
 
 ## Per-card lorebook hygiene
 
-When you open the Studio scoped to a character card, the AI also reconciles the orchestration you're building against the card's bound lorebooks. If an entry hard-constrains output (forces a fixed format, demands plain prose, bans markdown, locks turn structure) in a way that conflicts with the orchestration's output contract, the Studio will adjust the entry — typically by disabling it without deleting the text, so the constraint can be re-enabled later. Each adjustment appears in the chat history alongside the orchestration proposals.
+When you open the Studio scoped to a character card, the AI also reconciles the orchestration you're building against the card's bound lorebooks. If an entry hard-constrains output (forces a fixed format, demands plain prose, bans markdown, locks turn structure) in a way that conflicts with the orchestration's output contract, the Studio first tries to surgically excise the offending clause and preserve the rest — entries that "hard-constrain output" usually exist because the author wanted the model to attend to something specific (a scene anchor, a persona beat, a story rhythm), and disabling the whole entry would strip that intent along with the format. The Studio only disables an entry outright when it's pure format coercion with no salvageable content. Nothing is ever deleted. Each adjustment appears in the chat history alongside the orchestration proposals.
 
 Global Studio sessions never touch any lorebook — this only runs in character scope.
 
