@@ -19,6 +19,33 @@
     padding-right: 8px;
 }
 
+.luker-sim-rerun-bar {
+    display: flex;
+    justify-content: flex-end;
+    padding: 4px 0 8px 0;
+    border-bottom: 1px solid rgba(127, 127, 127, 0.2);
+    margin-bottom: 8px;
+}
+
+.luker-sim-rerun-btn {
+    padding: 4px 10px;
+    background: var(--SmartThemeBodyColor, #2a2a2a);
+    color: var(--SmartThemeQuoteColor, #fff);
+    border: 1px solid rgba(127, 127, 127, 0.4);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85em;
+}
+
+.luker-sim-rerun-btn:hover:not(:disabled) {
+    background: var(--SmartThemeBlurTintColor, #444);
+}
+
+.luker-sim-rerun-btn:disabled {
+    opacity: 0.5;
+    cursor: wait;
+}
+
 .luker-sim-review .luker-sim-section,
 .luker-sim-review .luker-sim-subsection,
 .luker-sim-review .luker-sim-subsubsection {

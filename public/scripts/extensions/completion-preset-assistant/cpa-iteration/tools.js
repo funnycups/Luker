@@ -840,45 +840,36 @@ export async function runCpaReadTool(call, ctx = {}) {
             };
         }
         try {
-            const runtimeWorldInfo = typeof stContext.resolveWorldInfoForMessages === 'function'
-                ? await stContext.resolveWorldInfoForMessages(source.messages, {
-                    type: 'quiet',
-                    fallbackToCurrentChat: false,
-                })
-                : {};
-            const promptMessages = stContext.buildPresetAwarePromptMessages({
-                messages: source.messages,
-                envelopeOptions: { includeCharacterCard: true, api: 'openai' },
-                runtimeWorldInfo,
-            });
+            const runOneCpaSimulationAttempt = async () => {
+                const runtimeWorldInfo = typeof stContext.resolveWorldInfoForMessages === 'function'
+                    ? await stContext.resolveWorldInfoForMessages(source.messages, {
+                        type: 'quiet',
+                        fallbackToCurrentChat: false,
+                    })
+                    : {};
+                const promptMessages = stContext.buildPresetAwarePromptMessages({
+                    messages: source.messages,
+                    envelopeOptions: { includeCharacterCard: true, api: 'openai' },
+                    runtimeWorldInfo,
+                });
 
-            // Run the real (non-persisting) generation so the popup
-            // shows the model's actual output, not just the assembled
-            // prompt. generateQuietPrompt routes through Generate('quiet'),
-            // which executes the full pipeline (WI, regex, depth, preset,
-            // group routing) without writing the result to chat.
-            const lastUserMsg = source.messages.slice().reverse().find(m => m.role === 'user' || m.is_user);
-            const quietPrompt = String(lastUserMsg?.content || lastUserMsg?.mes || '');
-            let finalOutput = '';
-            try {
+                // Run the real (non-persisting) generation so the popup
+                // shows the model's actual output, not just the assembled
+                // prompt. generateQuietPrompt routes through Generate('quiet'),
+                // which executes the full pipeline (WI, regex, depth, preset,
+                // group routing) without writing the result to chat.
+                const lastUserMsg = source.messages.slice().reverse().find(m => m.role === 'user' || m.is_user);
+                const quietPrompt = String(lastUserMsg?.content || lastUserMsg?.mes || '');
                 const generated = await generateQuietPrompt({
                     quietPrompt,
                     quietToLoud: false,
                     skipWIAN: false,
                     removeReasoning: false,
                 });
-                finalOutput = String(generated || '');
-            } catch (err) {
-                return {
-                    ok: false,
-                    toolResultText: buildPresetSimulationErrorResult(err),
-                };
-            }
+                const finalOutput = String(generated || '');
 
-            const worldInfoHits = extractWorldInfoHitsForPresetSimulation(runtimeWorldInfo);
-            const review = await openSimulationReview({
-                kind: 'cpa',
-                payload: {
+                const worldInfoHits = extractWorldInfoHitsForPresetSimulation(runtimeWorldInfo);
+                const payload = {
                     finalOutput,
                     reasoning: '',
                     assembledPrompt: {
@@ -886,9 +877,20 @@ export async function runCpaReadTool(call, ctx = {}) {
                         messages: extractNonSystemMessagesForPresetSimulation(promptMessages),
                     },
                     worldInfoHits,
-                },
-                worldInfoHits,
+                };
+                return { payload, worldInfoHits, promptMessages };
+            };
+
+            const firstAttempt = await runOneCpaSimulationAttempt();
+            const review = await openSimulationReview({
+                kind: 'cpa',
+                payload: firstAttempt.payload,
+                worldInfoHits: firstAttempt.worldInfoHits,
                 i18n: i18nFn,
+                onRerun: async () => {
+                    const next = await runOneCpaSimulationAttempt();
+                    return { payload: next.payload, worldInfoHits: next.worldInfoHits };
+                },
             });
 
             return {
@@ -899,9 +901,9 @@ export async function runCpaReadTool(call, ctx = {}) {
                 result: {
                     mode: source.mode,
                     sourceMessages: source.messages,
-                    promptMessages,
-                    assembled_length: Array.isArray(promptMessages)
-                        ? promptMessages.reduce((sum, m) => sum + String(m?.content || '').length, 0)
+                    promptMessages: firstAttempt.promptMessages,
+                    assembled_length: Array.isArray(firstAttempt.promptMessages)
+                        ? firstAttempt.promptMessages.reduce((sum, m) => sum + String(m?.content || '').length, 0)
                         : 0,
                 },
             };

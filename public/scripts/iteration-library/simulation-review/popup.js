@@ -45,10 +45,11 @@ let isOpen = false;
  *   payload: any,
  *   i18n: (key: string, fallback?: string) => string,
  *   abortSignal?: AbortSignal,
+ *   onRerun?: () => Promise<{ payload: any } | null>,
  * }} args
  * @returns {Promise<{ok: boolean, cancelled: boolean, chainSegments: any[], annotations: any[]}>}
  */
-export async function openSimulationReview({ kind, payload, i18n, abortSignal }) {
+export async function openSimulationReview({ kind, payload, i18n, abortSignal, onRerun }) {
     if (isOpen) {
         const err = new Error('simulate_in_progress');
         err.code = 'simulate_in_progress';
@@ -64,32 +65,61 @@ export async function openSimulationReview({ kind, payload, i18n, abortSignal })
 
     const contentRoot = document.createElement('div');
     contentRoot.className = 'luker-sim-review-host';
-    const renderedNode = renderer(payload, i18n);
-    contentRoot.appendChild(renderedNode);
 
-    const annotationHost = renderedNode;
-    // engine is closed-over by the callbacks; declare with `let` and
-    // assign after the factory call so the callbacks can reach back into
-    // the engine they belong to.
+    // Mutable state read by buildSubmitResult / buildCancelResult at popup
+    // close and by mountContent() at each (re-)mount. Re-runs swap engine
+    // and cleanupSelectionUi out from under the closures, so the latest
+    // mount's state is what the submit/cancel paths observe.
     let engine = null;
-    engine = createAnnotationEngine({
-        host: annotationHost,
-        onAnnotationCreated: (annotation, markEl) => {
-            insertAnnotationChip(annotation, markEl, engine, i18n);
-        },
-        onAnnotationDeleted: (id) => {
-            removeChipForAnnotation(annotationHost, id);
-        },
-    });
-    const cleanupSelectionUi = attachSelectionUi(annotationHost, engine, i18n);
-    attachCollapseToggles(annotationHost);
+    let cleanupSelectionUi = null;
+
+    function mountContent(currentPayload) {
+        // Tear down the previous mount's listeners + DOM. Annotations on
+        // the old chain are dropped because the chain itself has been
+        // replaced — keeping them would re-anchor against text that no
+        // longer exists in the DOM.
+        if (cleanupSelectionUi) {
+            try { cleanupSelectionUi(); } catch (_) { /* best-effort */ }
+            cleanupSelectionUi = null;
+        }
+        while (contentRoot.firstChild) {
+            contentRoot.removeChild(contentRoot.firstChild);
+        }
+        // Re-run bar first so it sits at the top of the popup body. The
+        // bar is recreated on each mount so its disabled state and label
+        // start fresh after a successful re-run.
+        if (typeof onRerun === 'function') {
+            const bar = createRerunBar({
+                onRerun,
+                i18n,
+                onSuccess: (next) => mountContent(next.payload),
+            });
+            contentRoot.appendChild(bar);
+        }
+        const renderedNode = renderer(currentPayload, i18n);
+        contentRoot.appendChild(renderedNode);
+        const annotationHost = renderedNode;
+        engine = createAnnotationEngine({
+            host: annotationHost,
+            onAnnotationCreated: (annotation, markEl) => {
+                insertAnnotationChip(annotation, markEl, engine, i18n);
+            },
+            onAnnotationDeleted: (id) => {
+                removeChipForAnnotation(annotationHost, id);
+            },
+        });
+        cleanupSelectionUi = attachSelectionUi(annotationHost, engine, i18n);
+        attachCollapseToggles(annotationHost);
+    }
+
+    mountContent(payload);
 
     let aborted = false;
     const onAbort = () => { aborted = true; };
     if (abortSignal) {
         if (abortSignal.aborted) {
             isOpen = false;
-            cleanupSelectionUi();
+            if (cleanupSelectionUi) cleanupSelectionUi();
             const err = new Error('aborted_by_user');
             err.code = 'aborted_by_user';
             throw err;
@@ -115,7 +145,7 @@ export async function openSimulationReview({ kind, payload, i18n, abortSignal })
     } finally {
         isOpen = false;
         if (abortSignal) abortSignal.removeEventListener('abort', onAbort);
-        cleanupSelectionUi();
+        if (cleanupSelectionUi) cleanupSelectionUi();
     }
 }
 
@@ -128,6 +158,45 @@ function buildSubmitResult(engine) {
 function buildCancelResult(engine) {
     const chainSegments = engine.buildChainSegments().map(s => ({ text: s.text }));
     return { ok: false, cancelled: true, annotations: [], chainSegments };
+}
+
+function createRerunBar({ onRerun, i18n, onSuccess }) {
+    const bar = document.createElement('div');
+    bar.className = 'luker-sim-rerun-bar';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'luker-sim-rerun-btn';
+    const initialLabel = i18n('sim.action.rerun', '↻ Re-run simulation');
+    btn.textContent = initialLabel;
+    btn.onclick = async () => {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        btn.textContent = i18n('sim.action.rerun_running', 'Re-running…');
+        try {
+            const next = await onRerun();
+            if (next && next.payload) {
+                onSuccess(next);
+                // onSuccess re-mounts contentRoot, which discards this
+                // bar; restoring btn state below would touch a detached
+                // node. Bail before the `finally`.
+                return;
+            }
+        } catch (err) {
+            console.warn('[simulation-review/popup] re-run failed', err);
+            const prefix = i18n('sim.error.rerun_failed', 'Re-run failed.');
+            const detail = err && err.message ? String(err.message) : '';
+            try {
+                window.alert(detail ? `${prefix} ${detail}` : prefix);
+            } catch (alertErr) {
+                // jsdom or restricted contexts may not implement alert.
+                console.warn('[simulation-review/popup] alert unavailable', alertErr);
+            }
+        }
+        btn.disabled = false;
+        btn.textContent = initialLabel;
+    };
+    bar.appendChild(btn);
+    return bar;
 }
 
 function attachSelectionUi(host, engine, i18n) {

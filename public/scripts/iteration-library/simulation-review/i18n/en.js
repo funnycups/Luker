@@ -25,8 +25,11 @@ export default {
     'sim.action.collapse_all': 'Collapse all',
     'sim.action.submit': 'Submit',
     'sim.action.cancel': 'Cancel',
+    'sim.action.rerun': '↻ Re-run simulation',
+    'sim.action.rerun_running': 'Re-running…',
     'sim.prompt.comment': 'Comment:',
     'sim.prompt.annotation_action': 'Edit (OK) or delete (Cancel) this annotation?',
     'sim.prompt.edit_comment': 'Edit comment:',
     'sim.error.cant_annotate': 'Cannot annotate this selection.',
+    'sim.error.rerun_failed': 'Re-run failed.',
 };

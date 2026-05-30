@@ -12,20 +12,42 @@ import { buildSimulationToolResult } from './feedback-builder.js';
  *   worldInfoHits?: any[],
  *   i18n: (key: string, fallback?: string) => string,
  *   abortSignal?: AbortSignal,
+ *   onRerun?: () => Promise<{ payload: any, worldInfoHits?: any[] } | null>,
  * }} args
  * @returns {Promise<{ok:boolean, cancelled:boolean, toolResultText:string, annotations:any[], chainText:string}>}
  */
 export async function openSimulationReview(args) {
-    const { kind, payload, worldInfoHits = [], i18n, abortSignal } = args;
+    const { kind, payload, worldInfoHits = [], i18n, abortSignal, onRerun } = args;
+    // World-info hits travel with each successful re-run and need to flow
+    // into the final tool result, but the popup itself only knows about
+    // payload geometry. Track the latest hits locally and hand the popup
+    // a wrapped onRerun that strips worldInfoHits before forwarding.
+    let currentWorldInfoHits = worldInfoHits;
+    const wrappedOnRerun = (typeof onRerun === 'function')
+        ? async () => {
+            const next = await onRerun();
+            if (!next) return null;
+            if (Array.isArray(next.worldInfoHits)) {
+                currentWorldInfoHits = next.worldInfoHits;
+            }
+            return { payload: next.payload };
+        }
+        : null;
     try {
-        const popupResult = await openPopup({ kind, payload, i18n, abortSignal });
+        const popupResult = await openPopup({
+            kind,
+            payload,
+            i18n,
+            abortSignal,
+            onRerun: wrappedOnRerun,
+        });
         const toolResultText = buildSimulationToolResult({
             kind,
             cancelled: popupResult.cancelled,
             error: null,
             chainSegments: popupResult.chainSegments,
             annotations: popupResult.annotations,
-            worldInfoHits,
+            worldInfoHits: currentWorldInfoHits,
         });
         return {
             ok: popupResult.ok,

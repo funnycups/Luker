@@ -2143,49 +2143,40 @@ function createCharacterEditorSimulateToolApi(context) {
                 throw new Error('Prompt preset assembly is unavailable.');
             }
 
-            const runtimeWorldInfo = typeof context?.resolveWorldInfoForMessages === 'function'
-                ? await context.resolveWorldInfoForMessages(source.messages, {
-                    type: 'quiet',
-                    fallbackToCurrentChat: false,
-                    postActivationHook: rewriteDepthWorldInfoToAfterWithNotes,
-                })
-                : {};
-            const promptMessages = context.buildPresetAwarePromptMessages({
-                messages: source.messages,
-                envelopeOptions: {
-                    includeCharacterCard: true,
-                    api: String(context?.mainApi || 'openai').trim() || 'openai',
-                },
-                runtimeWorldInfo,
-            });
+            const runOneCeaSimulationAttempt = async () => {
+                const runtimeWorldInfo = typeof context?.resolveWorldInfoForMessages === 'function'
+                    ? await context.resolveWorldInfoForMessages(source.messages, {
+                        type: 'quiet',
+                        fallbackToCurrentChat: false,
+                        postActivationHook: rewriteDepthWorldInfoToAfterWithNotes,
+                    })
+                    : {};
+                const promptMessages = context.buildPresetAwarePromptMessages({
+                    messages: source.messages,
+                    envelopeOptions: {
+                        includeCharacterCard: true,
+                        api: String(context?.mainApi || 'openai').trim() || 'openai',
+                    },
+                    runtimeWorldInfo,
+                });
 
-            // Run the real (non-persisting) generation so the popup
-            // shows the model's actual output, not just the assembled
-            // prompt. generateQuietPrompt routes through Generate('quiet'),
-            // which executes the full pipeline (WI, regex, depth, preset,
-            // group routing) without writing the result to chat.
-            const lastUserMsg = source.messages.slice().reverse().find(m => m.role === 'user' || m.is_user);
-            const quietPrompt = String(lastUserMsg?.content || lastUserMsg?.mes || '');
-            let finalOutput = '';
-            try {
+                // Run the real (non-persisting) generation so the popup
+                // shows the model's actual output, not just the assembled
+                // prompt. generateQuietPrompt routes through Generate('quiet'),
+                // which executes the full pipeline (WI, regex, depth, preset,
+                // group routing) without writing the result to chat.
+                const lastUserMsg = source.messages.slice().reverse().find(m => m.role === 'user' || m.is_user);
+                const quietPrompt = String(lastUserMsg?.content || lastUserMsg?.mes || '');
                 const generated = await generateQuietPrompt({
                     quietPrompt,
                     quietToLoud: false,
                     skipWIAN: false,
                     removeReasoning: false,
                 });
-                finalOutput = String(generated || '');
-            } catch (err) {
-                return {
-                    ok: false,
-                    toolResultText: buildCharacterEditorSimulationErrorResult(err),
-                };
-            }
+                const finalOutput = String(generated || '');
 
-            const worldInfoHits = extractWorldInfoHitsForCharacterEditorSimulation(runtimeWorldInfo);
-            const review = await openSimulationReview({
-                kind: 'cea',
-                payload: {
+                const worldInfoHits = extractWorldInfoHitsForCharacterEditorSimulation(runtimeWorldInfo);
+                const payload = {
                     finalOutput,
                     reasoning: '',
                     assembledPrompt: {
@@ -2193,9 +2184,29 @@ function createCharacterEditorSimulateToolApi(context) {
                         messages: extractNonSystemMessagesForCharacterEditorSimulation(promptMessages),
                     },
                     worldInfoHits,
-                },
-                worldInfoHits,
+                };
+                return { payload, worldInfoHits, promptMessages, runtimeWorldInfo };
+            };
+
+            let firstAttempt;
+            try {
+                firstAttempt = await runOneCeaSimulationAttempt();
+            } catch (err) {
+                return {
+                    ok: false,
+                    toolResultText: buildCharacterEditorSimulationErrorResult(err),
+                };
+            }
+
+            const review = await openSimulationReview({
+                kind: 'cea',
+                payload: firstAttempt.payload,
+                worldInfoHits: firstAttempt.worldInfoHits,
                 i18n: i18nFn,
+                onRerun: async () => {
+                    const next = await runOneCeaSimulationAttempt();
+                    return { payload: next.payload, worldInfoHits: next.worldInfoHits };
+                },
             });
 
             return {
@@ -2207,8 +2218,8 @@ function createCharacterEditorSimulateToolApi(context) {
                 // toolResultText is the canonical workbench-LLM channel.
                 mode: source.mode,
                 sourceMessages: source.messages,
-                runtimeWorldInfo,
-                promptMessages,
+                runtimeWorldInfo: firstAttempt.runtimeWorldInfo,
+                promptMessages: firstAttempt.promptMessages,
             };
         },
     };

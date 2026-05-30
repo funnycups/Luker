@@ -3832,20 +3832,14 @@ async function runAiIterationSimulation(context, session, args = {}, abortSignal
             detail: {},
         };
     }
-    let run = null;
-    let directorTrace = null;
-    if (isDirectorIterationSession(session)) {
-        // Director runs via the GENERATE_TAKEOVER_DISPATCH hook in
-        // production, not through `runOrchestration`. We can't pretend to
-        // be the kernel here — instead invoke `runMainAgentLoop` directly
-        // with a throwaway editor handle and a synthesized eventData /
-        // deps wiring that mirrors the production handler at
-        // GENERATE_TAKEOVER_DISPATCH below. The trace produced has the
-        // same shape as a real director turn, so `exportDirectorPayload`
-        // and the simulation-review popup work unchanged.
-        directorTrace = await runDirectorSimulationLoop(context, session, simulationMessages, abortSignal);
-    } else {
-        const profile = isAgendaIterationSession(session)
+    // Sanitize the working profile once and re-use it across re-runs:
+    // re-sanitizing on every attempt would be redundant churn and could
+    // surface different defaults if the user mutated the session in
+    // between (which they can't — the popup blocks the UI). Director runs
+    // through its own profile path inside runDirectorSimulationLoop.
+    const profile = isDirectorIterationSession(session)
+        ? null
+        : isAgendaIterationSession(session)
             ? buildAgendaProfileForRuntime(session?.workingProfile)
             : isLoopIterationSession(session)
                 ? sanitizeLoopProfile(session?.workingProfile)
@@ -3853,18 +3847,6 @@ async function runAiIterationSimulation(context, session, args = {}, abortSignal
                     spec: sanitizeSpec(session?.workingProfile?.spec),
                     presets: sanitizePresetMap(session?.workingProfile?.presets),
                 };
-        const payload = {
-            type: String(args?.trigger || 'normal').trim().toLowerCase() || 'normal',
-            coreChat: simulationMessages,
-            signal: abortSignal,
-            forceWorldInfoResimulate: true,
-        };
-        try {
-            run = await runOrchestration(context, payload, structuredClone(simulationMessages), profile);
-        } finally {
-            setActiveSnapshot(snapshotBefore ? structuredClone(snapshotBefore) : null);
-        }
-    }
     // SillyTavern's context.t is the template-tag function
     // t(strings, ...values); the simulation-review module needs a
     // (key, fallback)-shaped helper. context.translate(text, key)
@@ -3876,41 +3858,81 @@ async function runAiIterationSimulation(context, session, args = {}, abortSignal
             ? globalThis.__i18n.translate
             : null);
     const i18nFn = (k, fb) => (translateFn ? translateFn(fb || k, k) : (fb || k));
-    const trace = directorTrace
-        || run?.runtimeTrace
-        || getLatestOrchestrationRuntimeTrace(context)
-        || null;
-    let kind, payloadForReview;
-    if (isAgendaIterationSession(session)) {
-        kind = 'orch-agenda';
-        payloadForReview = trace
-            ? exportAgendaPayload(trace)
-            : { rounds: [], finalizer: { turns: [], output: '' }, finalComposedOutput: '' };
-    } else if (isLoopIterationSession(session)) {
-        kind = 'orch-loop';
-        payloadForReview = trace
-            ? exportLoopPayload(trace)
-            : { rounds: [], terminationReason: 'max_rounds' };
-    } else if (isDirectorIterationSession(session)) {
-        kind = 'orch-director';
-        payloadForReview = trace
-            ? exportDirectorPayload(trace)
-            : { mainAgent: { rounds: [] }, subagents: [], finalMessage: '' };
-    } else {
-        kind = 'orch-spec';
-        payloadForReview = trace
-            ? exportSpecPayload(trace)
-            : { stages: [] };
-    }
-    const worldInfoHits = extractOrchestratorSimulationWorldInfoHits(trace);
+
+    const runOneOrchestrationSimulationAttempt = async () => {
+        let run = null;
+        let directorTrace = null;
+        if (isDirectorIterationSession(session)) {
+            // Director runs via the GENERATE_TAKEOVER_DISPATCH hook in
+            // production, not through `runOrchestration`. We can't pretend to
+            // be the kernel here — instead invoke `runMainAgentLoop` directly
+            // with a throwaway editor handle and a synthesized eventData /
+            // deps wiring that mirrors the production handler at
+            // GENERATE_TAKEOVER_DISPATCH below. The trace produced has the
+            // same shape as a real director turn, so `exportDirectorPayload`
+            // and the simulation-review popup work unchanged.
+            directorTrace = await runDirectorSimulationLoop(context, session, simulationMessages, abortSignal);
+        } else {
+            const payload = {
+                type: String(args?.trigger || 'normal').trim().toLowerCase() || 'normal',
+                coreChat: simulationMessages,
+                signal: abortSignal,
+                forceWorldInfoResimulate: true,
+            };
+            try {
+                run = await runOrchestration(context, payload, structuredClone(simulationMessages), profile);
+            } finally {
+                // Restore the snapshot each attempt so a re-run starts
+                // from the same world state as the first attempt; without
+                // this each re-run would compound the previous run's
+                // mutations.
+                setActiveSnapshot(snapshotBefore ? structuredClone(snapshotBefore) : null);
+            }
+        }
+        const trace = directorTrace
+            || run?.runtimeTrace
+            || getLatestOrchestrationRuntimeTrace(context)
+            || null;
+        let attemptKind, attemptPayload;
+        if (isAgendaIterationSession(session)) {
+            attemptKind = 'orch-agenda';
+            attemptPayload = trace
+                ? exportAgendaPayload(trace)
+                : { rounds: [], finalizer: { turns: [], output: '' }, finalComposedOutput: '' };
+        } else if (isLoopIterationSession(session)) {
+            attemptKind = 'orch-loop';
+            attemptPayload = trace
+                ? exportLoopPayload(trace)
+                : { rounds: [], terminationReason: 'max_rounds' };
+        } else if (isDirectorIterationSession(session)) {
+            attemptKind = 'orch-director';
+            attemptPayload = trace
+                ? exportDirectorPayload(trace)
+                : { mainAgent: { rounds: [] }, subagents: [], finalMessage: '' };
+        } else {
+            attemptKind = 'orch-spec';
+            attemptPayload = trace
+                ? exportSpecPayload(trace)
+                : { stages: [] };
+        }
+        const attemptWorldInfoHits = extractOrchestratorSimulationWorldInfoHits(trace);
+        return { kind: attemptKind, payload: attemptPayload, worldInfoHits: attemptWorldInfoHits };
+    };
+
+    const firstAttempt = await runOneOrchestrationSimulationAttempt();
+    const kind = firstAttempt.kind;
     let review;
     try {
         review = await openSimulationReview({
             kind,
-            payload: payloadForReview,
-            worldInfoHits,
+            payload: firstAttempt.payload,
+            worldInfoHits: firstAttempt.worldInfoHits,
             i18n: i18nFn,
             abortSignal,
+            onRerun: async () => {
+                const next = await runOneOrchestrationSimulationAttempt();
+                return { payload: next.payload, worldInfoHits: next.worldInfoHits };
+            },
         });
     } catch (err) {
         return {

@@ -25,8 +25,11 @@ export default {
     'sim.action.collapse_all': '全部折疊',
     'sim.action.submit': '提交並繼續',
     'sim.action.cancel': '取消',
+    'sim.action.rerun': '↻ 重新生成',
+    'sim.action.rerun_running': '重新生成中…',
     'sim.prompt.comment': '批註內容:',
     'sim.prompt.annotation_action': '編輯（確定）或刪除（取消）這條批註？',
     'sim.prompt.edit_comment': '編輯批註:',
     'sim.error.cant_annotate': '無法批註此選區。',
+    'sim.error.rerun_failed': '重新生成失敗。',
 };
