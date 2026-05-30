@@ -2614,7 +2614,11 @@ export const DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK = [
     '- <simulation_chain> contains the full chain of main-agent turns, sub-agent dispatches, and tool calls. Spans wrapped in <<<ANNOTATION id=N>>>...<<</ANNOTATION>>> are flagged by the user.',
     '- <annotations> lists each [#N] with its location, snippet, and the user\'s comment.',
     '- <status submitted="false"/> means the user cancelled without annotating.',
-    'Prioritise resolving the annotated points before other improvements.',
+    'Annotations are SYMPTOMS, not patch targets. When you see a <<<ANNOTATION id=N>>>...<<</ANNOTATION>>> span:',
+    '1. Ask: WHY did the model produce that span? Trace it back to a root cause — an underspecified main-agent role, a missing or wrong sub-agent (e.g. no scout for the relevant phase, no analyst before integrate), unclear dispatch criteria the main agent uses to invoke sub-agents, a capsule shape that hides or loses the information the agent needed, or a permissive tool-flag default.',
+    '2. Fix at the ROOT level. Edit the underlying agent role, sub-agent set, dispatch policy, or capsule shape so the same class of issue won\'t recur in a different scene. Prefer general directives over hyper-specific ones. NEVER add a literal countermand to the exact annotated phrase ("do not say X", "avoid \'Y\' when …"); that\'s whack-a-mole and signals you skipped diagnosis.',
+    '3. Simulate again after the fix to verify the root cause was addressed.',
+    'Symptom-level patches are explicitly off-limits when they target the annotated text. If the only viable fix really is local, explain to the user why a structural fix isn\'t possible before reaching for the patch.',
     '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
     '- Keep output practical and concise for real RP usage.',
 ].join('\n');
@@ -2644,7 +2648,11 @@ export const DEFAULT_AGENDA_ITERATION_MODE_BLOCK = [
     '- <simulation_chain> contains the full chain of agent turns and tool calls. Spans wrapped in <<<ANNOTATION id=N>>>...<<</ANNOTATION>>> are flagged by the user.',
     '- <annotations> lists each [#N] with its location, snippet, and the user\'s comment.',
     '- <status submitted="false"/> means the user cancelled without annotating.',
-    'Prioritise resolving the annotated points before other improvements.',
+    'Annotations are SYMPTOMS, not patch targets. When you see a <<<ANNOTATION id=N>>>...<<</ANNOTATION>>> span:',
+    '1. Ask: WHY did the model produce that span? Trace it back to a root cause — an underspecified agent role, missing or wrong dispatch criteria in the planner preset, a finalizer that drops or distorts upstream agent output, a capsule shape that hides relevant context, or a permissive tool-flag default.',
+    '2. Fix at the ROOT level. Edit the underlying agent role, planner preset, dispatch policy, finalizer prompt, or capsule shape so the same class of issue won\'t recur in a different scene. Prefer general directives over hyper-specific ones. NEVER add a literal countermand to the exact annotated phrase ("do not say X", "avoid \'Y\' when …"); that\'s whack-a-mole and signals you skipped diagnosis.',
+    '3. Simulate again after the fix to verify the root cause was addressed.',
+    'Symptom-level patches are explicitly off-limits when they target the annotated text. If the only viable fix really is local, explain to the user why a structural fix isn\'t possible before reaching for the patch.',
     '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
     '- Keep output practical and concise for real RP usage.',
 ].join('\n');
@@ -2680,7 +2688,11 @@ export const DEFAULT_SPEC_ITERATION_MODE_BLOCK = [
     '- <simulation_chain> contains the full chain of node turns and tool calls. Spans wrapped in <<<ANNOTATION id=N>>>...<<</ANNOTATION>>> are flagged by the user.',
     '- <annotations> lists each [#N] with its location, snippet, and the user\'s comment.',
     '- <status submitted="false"/> means the user cancelled without annotating.',
-    'Prioritise resolving the annotated points before other improvements.',
+    'Annotations are SYMPTOMS, not patch targets. When you see a <<<ANNOTATION id=N>>>...<<</ANNOTATION>>> span:',
+    '1. Ask: WHY did the model produce that span? Trace it back to a root cause — an underspecified worker-node role, a review node that fails to catch the relevant class of issue (or is missing entirely after the responsible worker layer), a capsule shape that loses upstream context between stages, a stage layering that mixes concerns, or a permissive tool-flag default.',
+    '2. Fix at the ROOT level. Edit the underlying node role, add or sharpen a review node after the responsible worker layer, restructure the stage layering, or adjust the capsule shape so the same class of issue won\'t recur in a different scene. Prefer general directives over hyper-specific ones. NEVER add a literal countermand to the exact annotated phrase ("do not say X", "avoid \'Y\' when …"); that\'s whack-a-mole and signals you skipped diagnosis.',
+    '3. Simulate again after the fix to verify the root cause was addressed.',
+    'Symptom-level patches are explicitly off-limits when they target the annotated text. If the only viable fix really is local, explain to the user why a structural fix isn\'t possible before reaching for the patch.',
     '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
     '- Keep output practical and concise for real RP usage.',
 ].join('\n');
@@ -3796,6 +3808,9 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
 }
 
 async function runAiIterationSimulation(context, session, args = {}, abortSignal = null) {
+    if (!context) {
+        context = getContext();
+    }
     await loadOrchestratorChatState(context);
     const snapshotBefore = normalizeOrchestrationSnapshot(getActiveSnapshot());
     const simulationMessages = getChatMessagesForSimulation(context, args.recent_messages_n);

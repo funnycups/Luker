@@ -45,7 +45,11 @@ export const LOOP_ITERATION_CONTRACT_LINES = Object.freeze([
     '- <simulation_chain> contains the full chain of rounds and tool calls. Spans wrapped in <<<ANNOTATION id=N>>>...<<</ANNOTATION>>> are flagged by the user.',
     '- <annotations> lists each [#N] with its location, snippet, and the user\'s comment.',
     '- <status submitted="false"/> means the user cancelled without annotating.',
-    'Prioritise resolving the annotated points before other improvements.',
+    'Annotations are SYMPTOMS, not patch targets. When you see a <<<ANNOTATION id=N>>>...<<</ANNOTATION>>> span:',
+    '1. Ask: WHY did the model produce that span? Trace it back to a root cause — an underspecified or contradictory directive in the loop system_prompt, missing termination guidance (so the agent stops early or rambles), a tool namespace the agent needed but lacks (note / chat / lorebook / memory / search), or budget limits (max_rounds / wall_clock_budget_ms) too tight to let the agent self-correct.',
+    '2. Fix at the ROOT level. Edit the loop system_prompt directive, enable the missing tool namespace, or adjust budget limits so the same class of issue won\'t recur in a different scene. Prefer general directives over hyper-specific ones. NEVER add a literal countermand to the exact annotated phrase ("do not say X", "avoid \'Y\' when …"); that\'s whack-a-mole and signals you skipped diagnosis.',
+    '3. Simulate again after the fix to verify the root cause was addressed.',
+    'Symptom-level patches are explicitly off-limits when they target the annotated text. If the only viable fix really is local, explain to the user why a structural fix isn\'t possible before reaching for the patch.',
     '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
     '- Keep output practical and concise for real RP usage.',
 ]);
