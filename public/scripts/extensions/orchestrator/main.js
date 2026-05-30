@@ -3687,11 +3687,21 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
     // Falls back to the raw simulationMessages slice if capture fails.
     const lastUserMsg = simulationMessages.slice().reverse().find(m => m.role === 'user' || m.is_user);
     const quietPromptText = String(lastUserMsg?.content || lastUserMsg?.mes || '');
-    const capturedPromptPayload = await captureDryRunPayload(
-        context,
-        context?.eventTypes?.CHAT_COMPLETION_PROMPT_READY ?? 'chat_completion_prompt_ready',
-        { quietPrompt: quietPromptText },
-    );
+    // Swap to the pure preset around the capture, restore in finally. The
+    // GENERATION_STARTED listener bails on dryRun, so without this the
+    // captured prompt array would carry the user's preset NSFW prompt,
+    // jailbreak, prompt_order and custom prompts.
+    let capturedPromptPayload = null;
+    try {
+        applyPureSyntheticPresetOverride();
+        capturedPromptPayload = await captureDryRunPayload(
+            context,
+            context?.eventTypes?.CHAT_COMPLETION_PROMPT_READY ?? 'chat_completion_prompt_ready',
+            { quietPrompt: quietPromptText },
+        );
+    } finally {
+        try { restorePureSyntheticPresetOverride(); } catch (_) { /* best-effort */ }
+    }
     const capturedPromptArray = Array.isArray(capturedPromptPayload)
         ? capturedPromptPayload
         : (Array.isArray(capturedPromptPayload?.chat) ? capturedPromptPayload.chat : null);
