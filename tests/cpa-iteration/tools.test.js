@@ -12,9 +12,15 @@ jest.unstable_mockModule('../../public/lib.js', async () => {
 // public/script.js cascades into the macro engine and other browser-only
 // runtime that doesn't resolve under jest. tools.js only uses
 // generateQuietPrompt (and only when preset_simulate fires) — mock it to a
-// canned reply so the rest of the file imports cleanly.
+// canned reply so the rest of the file imports cleanly. Generate /
+// eventSource / event_types are imported by the shared dry-run-capture
+// helper (CPA's simulate path subscribes around the quiet generate to
+// snapshot the real prompt) — stub them so the module link succeeds.
 jest.unstable_mockModule('../../public/script.js', () => ({
     generateQuietPrompt: jest.fn(async () => 'mocked model reply'),
+    Generate: jest.fn(async () => undefined),
+    eventSource: { on: jest.fn(), makeLast: jest.fn(), removeListener: jest.fn() },
+    event_types: { CHAT_COMPLETION_PROMPT_READY: 'chat_completion_prompt_ready', GENERATION_WORLD_INFO_FINALIZED: 'generation_world_info_finalized' },
 }));
 
 // simulation-review/index.js pulls in popup-host which imports SillyTavern's

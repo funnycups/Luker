@@ -25,6 +25,10 @@ import { lodash } from '../../../../lib.js';
 import { generateQuietPrompt } from '../../../../script.js';
 import { openSimulationReview } from '../../../iteration-library/simulation-review/index.js';
 import { extractWorldInfoHitsFromRuntime } from '../../../iteration-library/simulation-review/wi-hits.js';
+import {
+    extractSystemFromCapturedPrompt,
+    extractNonSystemFromCapturedPrompt,
+} from '../../../iteration-library/simulation-review/dry-run-capture.js';
 
 export const EDITABLE_TOOL_NAMES = new Set([
     'preset_set_field',
@@ -847,11 +851,30 @@ export async function runCpaReadTool(call, ctx = {}) {
                         fallbackToCurrentChat: false,
                     })
                     : {};
-                const promptMessages = stContext.buildPresetAwarePromptMessages({
-                    messages: source.messages,
-                    envelopeOptions: { includeCharacterCard: true, api: 'openai' },
-                    runtimeWorldInfo,
-                });
+
+                // Subscribe to CHAT_COMPLETION_PROMPT_READY during the real
+                // generateQuietPrompt call so the popup's assembledPrompt
+                // reflects the actual prompt array the model receives —
+                // including token-budget pruning, system-message squashing,
+                // and any extension-driven mutation. Register the listener
+                // last so it fires after extension hooks (those typically
+                // register with `on`, not `makeLast`). If capture fails, we
+                // fall back to the parallel buildPresetAwarePromptMessages
+                // path below so the popup still renders something.
+                const src = stContext?.eventSource ?? null;
+                const eventName = stContext?.eventTypes?.CHAT_COMPLETION_PROMPT_READY
+                    ?? 'chat_completion_prompt_ready';
+                let capturedPromptArray = null;
+                const listener = (eventData) => {
+                    const chat = Array.isArray(eventData) ? eventData : eventData?.chat;
+                    if (!Array.isArray(chat)) return;
+                    try { capturedPromptArray = structuredClone(chat); }
+                    catch { capturedPromptArray = chat; }
+                };
+                const registerLast = src && typeof src.makeLast === 'function'
+                    ? src.makeLast.bind(src)
+                    : src?.on?.bind(src);
+                if (registerLast) registerLast(eventName, listener);
 
                 // Run the real (non-persisting) generation so the popup
                 // shows the model's actual output, not just the assembled
@@ -860,25 +883,50 @@ export async function runCpaReadTool(call, ctx = {}) {
                 // group routing) without writing the result to chat.
                 const lastUserMsg = source.messages.slice().reverse().find(m => m.role === 'user' || m.is_user);
                 const quietPrompt = String(lastUserMsg?.content || lastUserMsg?.mes || '');
-                const generated = await generateQuietPrompt({
-                    quietPrompt,
-                    quietToLoud: false,
-                    skipWIAN: false,
-                    removeReasoning: false,
-                });
-                const finalOutput = String(generated || '');
+                let finalOutput = '';
+                try {
+                    const generated = await generateQuietPrompt({
+                        quietPrompt,
+                        quietToLoud: false,
+                        skipWIAN: false,
+                        removeReasoning: false,
+                    });
+                    finalOutput = String(generated || '');
+                } finally {
+                    if (src && typeof src.removeListener === 'function') {
+                        try { src.removeListener(eventName, listener); } catch (_) { /* best-effort */ }
+                    }
+                }
+
+                let assembledPrompt;
+                let promptMessagesForCaller;
+                if (Array.isArray(capturedPromptArray) && capturedPromptArray.length > 0) {
+                    assembledPrompt = {
+                        systemPrompt: extractSystemFromCapturedPrompt(capturedPromptArray),
+                        messages: extractNonSystemFromCapturedPrompt(capturedPromptArray),
+                    };
+                    promptMessagesForCaller = capturedPromptArray;
+                } else {
+                    const promptMessages = stContext.buildPresetAwarePromptMessages({
+                        messages: source.messages,
+                        envelopeOptions: { includeCharacterCard: true, api: 'openai' },
+                        runtimeWorldInfo,
+                    });
+                    assembledPrompt = {
+                        systemPrompt: extractSystemPromptForPresetSimulation(promptMessages),
+                        messages: extractNonSystemMessagesForPresetSimulation(promptMessages),
+                    };
+                    promptMessagesForCaller = promptMessages;
+                }
 
                 const worldInfoHits = extractWorldInfoHitsForPresetSimulation(runtimeWorldInfo);
                 const payload = {
                     finalOutput,
                     reasoning: '',
-                    assembledPrompt: {
-                        systemPrompt: extractSystemPromptForPresetSimulation(promptMessages),
-                        messages: extractNonSystemMessagesForPresetSimulation(promptMessages),
-                    },
+                    assembledPrompt,
                     worldInfoHits,
                 };
-                return { payload, worldInfoHits, promptMessages };
+                return { payload, worldInfoHits, promptMessages: promptMessagesForCaller };
             };
 
             const firstAttempt = await runOneCpaSimulationAttempt();

@@ -13,9 +13,13 @@ jest.unstable_mockModule('../../public/lib.js', async () => {
 // public/script.js + simulation-review/index.js are pulled in by tools.js
 // (for the simulate-prompt → real generate + popup flow) and cascade into
 // browser-only runtime under jest. Mock both at the module boundary so the
-// tool-display registry import resolves cleanly.
+// tool-display registry import resolves cleanly. The Generate / eventSource /
+// event_types stubs are required by the shared dry-run-capture helper.
 jest.unstable_mockModule('../../public/script.js', () => ({
     generateQuietPrompt: jest.fn(async () => 'mocked model reply'),
+    Generate: jest.fn(async () => undefined),
+    eventSource: { on: jest.fn(), makeLast: jest.fn(), removeListener: jest.fn() },
+    event_types: { CHAT_COMPLETION_PROMPT_READY: 'chat_completion_prompt_ready', GENERATION_WORLD_INFO_FINALIZED: 'generation_world_info_finalized' },
 }));
 jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/index.js', () => ({
     openSimulationReview: jest.fn(async () => ({
