@@ -21,13 +21,16 @@
 
 .luker-sim-rerun-bar {
     display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
     justify-content: flex-end;
     padding: 4px 0 8px 0;
     border-bottom: 1px solid rgba(127, 127, 127, 0.2);
     margin-bottom: 8px;
 }
 
-.luker-sim-rerun-btn {
+.luker-sim-rerun-btn,
+.luker-sim-toggle-btn {
     padding: 4px 10px;
     background: var(--SmartThemeBodyColor, #2a2a2a);
     color: var(--SmartThemeQuoteColor, #fff);
@@ -37,13 +40,25 @@
     font-size: 0.85em;
 }
 
-.luker-sim-rerun-btn:hover:not(:disabled) {
+.luker-sim-rerun-btn:hover:not(:disabled),
+.luker-sim-toggle-btn:hover:not(:disabled) {
     background: var(--SmartThemeBlurTintColor, #444);
 }
 
-.luker-sim-rerun-btn:disabled {
+.luker-sim-rerun-btn:disabled,
+.luker-sim-toggle-btn:disabled {
     opacity: 0.5;
     cursor: wait;
+}
+
+.luker-sim-hint {
+    padding: 6px 10px;
+    background: rgba(100, 150, 255, 0.10);
+    border-left: 3px solid rgba(100, 150, 255, 0.6);
+    border-radius: 4px;
+    font-size: 0.85em;
+    color: var(--SmartThemeBodyColor, inherit);
+    margin: 0 0 8px 0;
 }
 
 .luker-sim-review .luker-sim-section,
@@ -106,12 +121,15 @@ mark.luker-sim-annotation {
 
 .luker-sim-float-btn {
     z-index: 99999;
-    padding: 4px 8px;
+    padding: 8px 14px;
+    min-height: 36px;
     background: var(--SmartThemeBodyColor, #222);
     color: var(--SmartThemeQuoteColor, #fff);
     border: 1px solid rgba(127, 127, 127, 0.5);
     border-radius: 4px;
     cursor: pointer;
+    font-size: 0.95em;
+    touch-action: manipulation;
 }
 
 .luker-sim-review .luker-sim-section--collapsed > *:not(h1):not(h2):not(h3):not(h4) {

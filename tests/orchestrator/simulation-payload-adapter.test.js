@@ -267,7 +267,7 @@ describe('exportDirectorPayload', () => {
                     },
                 ],
             },
-            finalMessage: 'fm',
+            finalMessage: 'The detective stepped onto the rain-slick street.\n\nIn the distance, sirens wailed.',
         };
         const out = exportDirectorPayload(trace);
         expect(out.mainAgent.rounds[0].roundIndex).toBe(0);
@@ -277,6 +277,27 @@ describe('exportDirectorPayload', () => {
         expect(out.subagents[0].subagentId).toBe('writer');
         expect(out.subagents[0].output).toBe('so');
         expect(out.subagents[0].reasoning).toBe('sr');
-        expect(out.finalMessage).toBe('fm');
+        // finalMessage flows through verbatim — this is the text the
+        // simulation popup's "Final Message" section renders. Captured
+        // by the runDirectorSimulationLoop onUpdate listener and / or
+        // the handle.commit() outcome.
+        expect(out.finalMessage).toContain('The detective stepped onto the rain-slick street.');
+        expect(out.finalMessage).toContain('In the distance, sirens wailed.');
+    });
+
+    it('finalMessage falls back to empty string when trace.finalMessage is missing', () => {
+        // Guard for the early-throw path: if runDirectorSimulationLoop
+        // discards the handle before commit, trace.finalMessage stays
+        // empty — the adapter must coerce that to '' so the renderer
+        // doesn't crash on null/undefined.
+        const trace = {
+            mode: 'director',
+            director: {
+                mainAgent: { rounds: [] },
+                subagents: [],
+            },
+        };
+        const out = exportDirectorPayload(trace);
+        expect(out.finalMessage).toBe('');
     });
 });

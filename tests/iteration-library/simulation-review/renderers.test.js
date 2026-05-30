@@ -122,3 +122,51 @@ test('director renderer tags main agent rounds + sub-agent outputs + final messa
     expect(paths).toContain('Sub-agent "writer" → Output');
     expect(paths).toContain('Final Message');
 });
+
+test('every renderer marks exactly one final-output section and collapses process wrappers', () => {
+    // The popup's autoscroll + Expand-all toggle rely on:
+    //   - `[data-sim-final-output="true"]` on the section the user
+    //     came to see (Final Output / Final Capsule / Final Composed
+    //     Output / Capsule / Final Message). Exactly one per popup.
+    //   - `[data-collapsible="true"]` + `.luker-sim-section--collapsed`
+    //     on every process wrapper so the popup opens compact and
+    //     the toggle can re-collapse them after expanding.
+    const ceaRoot = renderCeaCpa({
+        finalOutput: 'X',
+        reasoning: 'thinking',
+        assembledPrompt: { systemPrompt: 'sys', messages: [{ role: 'user', content: 'hi' }] },
+    }, noopI18n);
+    const specRoot = renderSpec({
+        stages: [{ stageIndex: 0, mode: 'serial', nodes: [{ id: 'n', kind: 'worker', turns: [{ reasoning: 'r', assistantText: 'a', toolCalls: [] }], output: 'o' }] }],
+        finalCapsule: 'cap',
+    }, noopI18n);
+    const agendaRoot = renderAgenda({
+        rounds: [{ roundIndex: 0, planner: { turns: [], output: 'p' }, dispatches: [{ todoId: 't', agentName: 'w', taskBrief: 'b', turns: [], output: 'o' }] }],
+        finalizer: { turns: [], output: 'f' },
+        finalComposedOutput: 'composed',
+    }, noopI18n);
+    const loopRoot = renderLoop({
+        rounds: [{ roundIndex: 0, reasoning: 'r', assistantText: 'a', toolCalls: [] }],
+        capsule: 'cap',
+        terminationReason: 'finalize',
+    }, noopI18n);
+    const directorRoot = renderDirector({
+        mainAgent: { rounds: [{ roundIndex: 0, reasoning: 'r', assistantText: 'a', toolCalls: [] }] },
+        subagents: [{ subagentId: 'w', task: 'go', reasoning: 'sr', output: 'so' }],
+        finalMessage: 'final',
+    }, noopI18n);
+    [ceaRoot, specRoot, agendaRoot, loopRoot, directorRoot].forEach((root, i) => {
+        const finals = root.querySelectorAll('[data-sim-final-output="true"]');
+        expect(finals.length).toBe(1);
+        // The final-output section is NEVER collapsible — the user
+        // opened the popup specifically to see it.
+        expect(finals[0].getAttribute('data-collapsible')).toBeNull();
+        // At least one process section exists and is collapsible.
+        const collapsibles = root.querySelectorAll('[data-collapsible="true"]');
+        expect(collapsibles.length).toBeGreaterThan(0);
+        // Every collapsible starts collapsed by default.
+        collapsibles.forEach(s => {
+            expect(s.classList.contains('luker-sim-section--collapsed')).toBe(true);
+        });
+    });
+});
