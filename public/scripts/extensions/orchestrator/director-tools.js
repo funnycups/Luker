@@ -687,10 +687,13 @@ export function createSubagentDispatcher({
         const payloadMessages = Array.isArray(contentPayload?.messages) ? contentPayload.messages : [];
 
         // Main-agent digest reflects rounds that happened AFTER the
-        // shared prefix. Main agent's `parentMessages` starts with
-        // [system_open, ...payload, system_close] (same shape we build
-        // below for the sub) then its tool-using rounds — so the prefix
-        // we ask `renderMainAgentDigest` to skip is
+        // shared prefix. The sub-agent prefix (before this change) was
+        // [system_open, ...payload, system_close]. With the
+        // <orchestration_role> wrapper now sitting BEFORE the
+        // story_context, the prefix length grew by 2 (META_FRAME +
+        // <orchestration_role>). Main agent's parentMessages still uses
+        // the old [system_open, ...payload, system_close+role] shape —
+        // so the prefix we ask `renderMainAgentDigest` to skip is still
         // `payload.length + 1` (the +1 accounts for the </story_context>
         // close; the open is the first system message that
         // renderMainAgentDigest already skips via its built-in
@@ -705,10 +708,43 @@ export function createSubagentDispatcher({
         // for later ones. No-op when the adapter isn't mounted.
         const baseSystemPrompt = await renderSubSystemPromptWithNotes(systemPrompt, contextForNotes);
 
+        // Frame the sub-agent's prompt so it knows where its identity
+        // ends and the roleplay material begins. Without this anti-RP
+        // framing the model sometimes drifts into in-character prose
+        // because the <story_context> block looks like a roleplay setup
+        // and the role description (which used to be concatenated onto
+        // the </story_context> close tag, unwrapped) read like another
+        // scenario line rather than a meta-instruction.
+        //
+        // Order — identity-last so recency bias keeps the agent's role
+        // fresh right before <task>. The payload's chat-completion
+        // preset typically renders its own "You are {{char}}…" system
+        // message inside <story_context>; placing <orchestration_role>
+        // AFTER </story_context> lets it act as the corrective —
+        // model reads the RP setup, then immediately reads "but you
+        // are an orchestration agent", then executes the task. The
+        // top-of-prompt meta-frame still tells the model where to
+        // look for identity / task; it sets the frame, not the order.
+        //
+        //   1. META_FRAME — anti-RP framing: story_context is
+        //      read-only, identity is in <orchestration_role>, work
+        //      is in <task>.
+        //   2. <story_context> ... </story_context> — chat history,
+        //      character card, world info, last user turn (whatever
+        //      the user's preset assembled).
+        //   3. <orchestration_role> — agent's persona / job
+        //      description (plus Open Notes if any), sitting right
+        //      before the task instruction so the model reads its
+        //      identity last.
+        //   4. <main_agent_digest> (optional) and <task> — what to do.
+        const META_FRAME = 'You are an orchestration agent embedded inside a roleplay session. The <story_context> block below is READ-ONLY narrative material — DO NOT continue the roleplay or emit any in-character prose. Your identity is defined inside <orchestration_role>; the specific work you must do is inside <task>. Treat story_context only as background that informs how you carry out the task.';
+
         const subMessages = [
+            { role: 'system', content: META_FRAME },
             { role: 'system', content: '<story_context>' },
             ...payloadMessages,
-            { role: 'system', content: '</story_context>' + (baseSystemPrompt ? '\n\n' + baseSystemPrompt : '') },
+            { role: 'system', content: '</story_context>' },
+            { role: 'system', content: '<orchestration_role>\n' + (baseSystemPrompt || '') + '\n</orchestration_role>' },
             ...(mainRoundsDigest ? [{ role: 'system', content: '<main_agent_digest>\n' + mainRoundsDigest + '\n</main_agent_digest>' }] : []),
             { role: 'system', content: '<task>\n' + String(task || '') + '\n</task>' },
         ];

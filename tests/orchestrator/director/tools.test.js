@@ -530,18 +530,28 @@ describe('subagent dispatcher', () => {
         }));
         // System prompt was the inline one (not whatever a missing spec
         // would have produced — which would have been empty). The
-        // dispatcher folds the caller-provided systemPrompt onto the
-        // `</story_context>` close tag, so it lives in the system message
-        // immediately before <task> rather than at the very start.
+        // dispatcher now wraps the caller-provided systemPrompt in a
+        // dedicated <orchestration_role> system message AFTER
+        // </story_context> (identity-last: recency bias keeps the role
+        // fresh right before <task>; the meta-frame at index 0 tells
+        // the model where to look). The story_context open + close are
+        // clean boundary tags.
         const firstCall = seenCallOpts[0];
-        const systemOpen = firstCall.taskMessages[0];
+        const metaFrame = firstCall.taskMessages[0];
+        expect(metaFrame.role).toBe('system');
+        expect(metaFrame.content).toMatch(/orchestration agent/i);
+        expect(metaFrame.content).toMatch(/READ-ONLY/);
+        const systemOpen = firstCall.taskMessages[1];
         expect(systemOpen).toEqual({ role: 'system', content: '<story_context>' });
         const taskMsg = firstCall.taskMessages[firstCall.taskMessages.length - 1];
         expect(taskMsg).toEqual({ role: 'system', content: '<task>\ngo\n</task>' });
-        const closeMsg = firstCall.taskMessages[firstCall.taskMessages.length - 2];
-        expect(closeMsg.role).toBe('system');
-        expect(closeMsg.content.startsWith('</story_context>')).toBe(true);
-        expect(closeMsg.content).toContain('You are an ad-hoc auditor. Find any continuity errors.');
+        const roleMsg = firstCall.taskMessages[firstCall.taskMessages.length - 2];
+        expect(roleMsg.role).toBe('system');
+        expect(roleMsg.content.startsWith('<orchestration_role>')).toBe(true);
+        expect(roleMsg.content.endsWith('</orchestration_role>')).toBe(true);
+        expect(roleMsg.content).toContain('You are an ad-hoc auditor. Find any continuity errors.');
+        const closeMsg = firstCall.taskMessages[firstCall.taskMessages.length - 3];
+        expect(closeMsg).toEqual({ role: 'system', content: '</story_context>' });
     });
 
     test('dispatchInline: empty systemPrompt is rejected with error result', async () => {
