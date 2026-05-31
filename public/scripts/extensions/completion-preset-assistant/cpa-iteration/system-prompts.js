@@ -492,6 +492,13 @@ export function buildOrchestratorOptimizeModeBlock() {
         '  disabling the whole entry — disable only when the entry is a',
         '  pure aggregator or pure structural scaffolding with no',
         '  salvageable cognitive content.',
+        '- After rewriting a CoT / writing-style entry into cognitive',
+        '  guidance, check its prompt_order slot. If it sits between the',
+        '  chatHistory marker and the trailing Jailbreak / Post-History',
+        '  Instructions, move it to before chatHistory via',
+        '  preset_upsert_prompt_order_item — style and reasoning guidance',
+        '  is followed more reliably when it precedes the long',
+        '  story_context block rather than trailing it.',
         '- When unsure whether a sentence is output coercion or cognitive',
         '  guidance, err toward preserving and ask the user.',
     ].join('\n');
