@@ -31,10 +31,14 @@ describe('CPA — system prompts', () => {
         expect(out.length).toBeGreaterThan(50);
     });
 
-    test('buildModelSystemPrompt with hasReference: true produces longer output than without', () => {
-        const without = buildModelSystemPrompt({ hasReference: false });
-        const withRef = buildModelSystemPrompt({ hasReference: true });
-        expect(withRef.length).toBeGreaterThan(without.length);
+    test('buildModelSystemPrompt with a mode block appends extra content over the default', () => {
+        const def = buildModelSystemPrompt({ mode: SESSION_MODE_DEFAULT });
+        const others = SESSION_MODES.filter(m => m !== SESSION_MODE_DEFAULT);
+        if (others.length === 0) return;
+        for (const altMode of others) {
+            const alt = buildModelSystemPrompt({ mode: altMode });
+            expect(alt.length).toBeGreaterThan(def.length);
+        }
     });
 
     test('buildModelSystemPrompt with an alternate mode differs from default mode', () => {
