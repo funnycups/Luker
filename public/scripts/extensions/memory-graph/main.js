@@ -2052,7 +2052,7 @@ async function commitMemoryStoreReplaceByChatKey(context, chatKey, store, seq, {
  * whatever state floor-state actually holds — even if our beforeStore copy
  * happens to be stale.
  */
-async function commitMemoryStoreDiffByChatKey(context, chatKey, beforeStore, afterStore, seq, { syncPersistentProjection = false } = {}) {
+async function commitMemoryStoreDiffByChatKey(context, chatKey, beforeStore, afterStore, seq, { syncPersistentProjection = false, floor: floorOverride = null } = {}) {
     const target = memoryStoreTargets.get(chatKey);
     if (!target) {
         throw new Error('Memory store target is unavailable.');
@@ -2080,7 +2080,15 @@ async function commitMemoryStoreDiffByChatKey(context, chatKey, beforeStore, aft
 
     if (hasGraphChange) {
         const chatLen = Array.isArray(context?.chat) ? context.chat.length : 0;
-        const floor = seqToFloor(context, normalizedSeq);
+        // Prefer an explicit floor override when the caller already knows the
+        // chat slot (e.g. session writes anchored by resolveInFlightAnchor).
+        // Falling back to seqToFloor walks `isExtractableAssistantMessage`,
+        // which rejects empty placeholders — director sub-agent tool calls
+        // fire before the assistant slot has streamed any text, so the floor
+        // is known but the seq→floor reverse-lookup can't see it.
+        const floor = Number.isInteger(floorOverride) && floorOverride >= 0
+            ? floorOverride
+            : seqToFloor(context, normalizedSeq);
         if (!Number.isInteger(floor) || floor < 0) {
             throw new Error(formatPersistFailureWithSeq({
                 op: 'commit-diff',
@@ -2253,12 +2261,13 @@ export async function commitSessionMutation(context, chatKey, beforeStore, after
     const anchor = resolveInFlightAnchor(context);
     if (anchor !== null) {
         // Diff-mode: append one incremental commit at the in-flight floor.
-        // commitMemoryStoreDiffByChatKey resolves floor via seqToFloor(turnSeq)
-        // and runs fs.update(reducer, { floor }) so the commit lands on the
-        // chat tail's slot — tail-truncation on MESSAGE_DELETED removes it.
+        // anchor.floor is the chat-tail slot the director's write belongs
+        // to. Passing it explicitly bypasses seqToFloor's extractability
+        // check, which rejects empty placeholders — director tool calls
+        // can fire before streaming has produced any text.
         await commitMemoryStoreDiffByChatKey(
             context, key, beforeStore || store, store, anchor.turnSeq,
-            { syncPersistentProjection: false },
+            { syncPersistentProjection: false, floor: anchor.floor },
         );
     } else {
         // Legacy replace-flush for callers without an in-flight chat tail

@@ -251,12 +251,9 @@ describe('session-write deletion sync (end-to-end against in-memory floor-state)
         //   index 4: user
         //   index 5: assistant streaming (extractable, in-flight, seq 3)
         //
-        // The tail message MUST be extractable for `seqToFloor(turnSeq)` to
-        // resolve a chat index — an empty placeholder would make the chain
-        // throw "seq has no matching extractable assistant message". In a
-        // real director write the assistant slot has already started
-        // streaming before any tool call runs, so non-empty content models
-        // production faithfully.
+        // This case covers the common path where streaming has already
+        // produced text by the time the director's tool call fires; the
+        // empty-placeholder variant is covered by the next test.
         const chat = [
             { is_user: true,  mes: 'u1', swipe_id: 0 },
             { is_user: false, mes: 'a1', swipe_id: 0 },
@@ -411,5 +408,92 @@ describe('session-write deletion sync (end-to-end against in-memory floor-state)
         const dataAfter = partition.get('memory_graph');
         expect(dataAfter?.nodes?.[created.id]).toBeUndefined();
         expect(dataAfter?.nodes?.n_pre).toBeTruthy();
+    });
+
+    test('commits at the in-flight floor even when the placeholder is still empty (pre-stream director tool call)', async () => {
+        // Real production trigger: orchestrator director sub-agents can fire
+        // a memory_* tool call before the assistant placeholder has streamed
+        // any text. Previously commitMemoryStoreDiffByChatKey reverse-looked
+        // up the floor via seqToFloor(turnSeq), which requires the tail to
+        // pass isExtractableAssistantMessage (non-empty mes). An empty
+        // placeholder failed the lookup and the commit was dropped, leaving
+        // the in-memory cache holding seq=N nodes the floor-state log never
+        // backed. commitSessionMutation now passes anchor.floor explicitly so
+        // the lookup is unnecessary.
+        const target = { ...MOCKED_TARGET };
+        const io = makeChatStateIO();
+
+        const chat = [
+            { is_user: true,  mes: 'u1', swipe_id: 0 },
+            { is_user: false, mes: 'a1', swipe_id: 0 },
+            { is_user: true,  mes: 'u2', swipe_id: 0 },
+            // Empty placeholder — director fires its tool call here, before
+            // streaming has produced any text. anchor.floor = 3, anchor.turnSeq
+            // = 2 (only one extractable assistant before the tail).
+            { is_user: false, mes: '', swipe_id: 0 },
+        ];
+
+        const buildObjectPatchOperationsAsync = async (prev, next) =>
+            compare(prev ?? {}, next ?? {});
+
+        let fsInstance = null;
+
+        const context = {
+            chat,
+            chatId: 'session-test-chat',
+            getChatState:    (...args) => io.getChatState(...args),
+            updateChatState: (...args) => io.updateChatState(...args),
+            patchChatState:  (...args) => io.patchChatState(...args),
+            buildObjectPatchOperationsAsync,
+            createFloorState: async ({ namespace }) => {
+                fsInstance = createFloorStateWithDeps(
+                    { namespace },
+                    {
+                        getChatState:    (ns, opts) => io.getChatState(ns, { target, ...(opts || {}) }),
+                        updateChatState: (ns, u, opts) => io.updateChatState(ns, u, { target, ...(opts || {}) }),
+                        patchChatState:  (ns, ops, opts) => io.patchChatState(ns, ops, { target, ...(opts || {}) }),
+                        buildObjectPatchOperationsAsync,
+                        getChat: () => chat,
+                    },
+                );
+                await fsInstance.ready();
+                return fsInstance;
+            },
+            characterId: 0,
+            groupId: null,
+        };
+
+        const session = await openSession(context);
+        expect(session).not.toBeNull();
+
+        const created = await session.createNode({
+            type: 'event',
+            title: 'pre-stream-director-write',
+            fields: { what: 'tool call before any streamed text' },
+        });
+        expect(created?.id).toBeTruthy();
+
+        const partition = io.partitionFor(target);
+        const log = partition.get('memory_graph__floor_log');
+        expect(log).toBeTruthy();
+        const floors = log.commits.map(c => c.floor);
+        // The commit must land on the in-flight placeholder (floor 3) so a
+        // subsequent MESSAGE_DELETED at chat.length=3 truncates it away.
+        expect(floors).toContain(3);
+
+        const data = partition.get('memory_graph');
+        expect(data?.nodes?.[created.id]).toBeTruthy();
+
+        // Tail-delete the placeholder; the commit at floor=3 must drop and
+        // the rematerialized data namespace must no longer carry the node.
+        chat.length = 3;
+        await fsInstance.__handleMessageDeleted(3);
+
+        const logAfter = partition.get('memory_graph__floor_log');
+        const floorsAfter = logAfter.commits.map(c => c.floor);
+        expect(floorsAfter).not.toContain(3);
+
+        const dataAfter = partition.get('memory_graph');
+        expect(dataAfter?.nodes?.[created.id]).toBeUndefined();
     });
 });
