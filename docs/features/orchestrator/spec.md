@@ -216,3 +216,4 @@ Each node can use a different API and Chat Completion preset, so you can route d
 - [Agenda mode](/features/orchestrator/agenda) — Planner-driven dynamic dispatch
 - [Loop mode](/features/orchestrator/loop) — single-agent tool loop
 - [Character Card Editor](/features/card-editor/) — shares the diff engine with Iteration Studio
+- [Custom tools](/features/orchestrator/custom-tools) — extension / SillyTavern-bridged / handwritten tools the spec agents can call

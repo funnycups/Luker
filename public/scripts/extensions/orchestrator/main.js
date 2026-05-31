@@ -4,6 +4,7 @@
 
 import { extension_prompt_roles, saveSettings, saveSettingsDebounced } from '../../../script.js';
 import { extension_settings, getContext } from '../../extensions.js';
+import { registerExtensionApi } from '../../extensions.js';
 import { oai_settings } from '../../openai.js';
 import { world_info_position } from '../../world-info.js';
 import {
@@ -90,6 +91,7 @@ import {
     createOrchestrationRuntimeTrace,
     finalizeOrchestrationRuntimeTrace,
     getLatestOrchestrationRuntimeTrace,
+    recordOrchestrationRuntimeEvent,
     truncateOrchestrationRuntimePreview,
     attachOrchestrationRuntimeDirectorState,
 } from './runtime-trace.js';
@@ -163,12 +165,25 @@ import {
 } from './agenda-profile.js';
 import { runAgendaOrchestration } from './agenda-runtime.js';
 import { runSpecOrchestration } from './spec-runtime.js';
-import { runLoopOrchestration, attachNotesFloorState, attachMemoryGraphSession } from './loop-runtime.js';
+import { runLoopOrchestration, attachNotesFloorState } from './loop-runtime.js';
 import { handleDirectorDispatch, runMainAgentLoop } from './director-runtime.js';
 import { createMessageEditorHandle } from '../../message-takeover.js';
 import { buildDirectorDefaultSystemPrompt } from './director-default-prompt.js';
 import { createContentPayloadCache } from './director-content-payload.js';
-import { executeLoopTool, beginSimulation, endSimulation } from './loop-tools.js';
+import { executeLoopTool, beginSimulation, endSimulation, getBuiltinToolRegistry } from './loop-tools.js';
+import {
+    registerOrchestrationTool,
+    unregisterOrchestrationTool,
+    listExtensionTools,
+    bridgeSillyTavernTool,
+    unbridgeSillyTavernTool,
+    listAvailableSillyTavernTools,
+    rehydrateBridgedSillyTavernTools,
+} from './register-custom-tool.js';
+import { openCustomToolEditor } from './custom-tool-editor.js';
+import { openBridgeStToolPicker } from './bridge-st-tool-picker.js';
+import { augmentStudioPromptWithCustomTools } from './studio-prompt-augment.js';
+import { reviewIncomingCustomTools } from './character-import-tools-review.js';
 import { mountNotesPanel } from './notes-panel.js';
 // Note: `ORCH_EXECUTION_MODE_LOOP` is canonically defined in defaults.js
 // (alongside the other mode literals) and re-exported by persistence.js
@@ -250,6 +265,20 @@ import {
 const MODULE_NAME = 'orchestrator';
 const ORCH_RESULT_EVENT = 'luker.orchestrator.result';
 const UI_BLOCK_ID = 'orchestrator_settings';
+
+// Expose the orchestrator custom-tool API surface to other extensions via
+// `getContext().getExtensionApi('orchestrator')`. Matches the three-layer
+// exposure contract documented in register-custom-tool.js: ES-module import
+// (Layer 1), getExtensionApi (Layer 2), and ctx (Layer 3) all resolve to the
+// same function references.
+registerExtensionApi(MODULE_NAME, {
+    registerOrchestrationTool,
+    unregisterOrchestrationTool,
+    listExtensionTools,
+    bridgeSillyTavernTool,
+    unbridgeSillyTavernTool,
+    listAvailableSillyTavernTools,
+});
 // Module-scope cache for the director content payload captured at
 // GENERATE_TAKEOVER_DISPATCH. Director's main + sub agents read from this
 // to build their taskMessages — single source of truth across the whole
@@ -2284,6 +2313,40 @@ function renderAgendaIterationWorkingProfile(session, { profileOverride = null, 
 <div class="luker_orch_iter_stage_list">${agentCards || '<div class="luker_orch_iter_empty">(no agents)</div>'}</div>`;
 }
 
+/**
+ * Return the flat list of custom tool names a sanitized profile (loop /
+ * director shape) actually exposes to the agent. Mirrors the runtime
+ * filter in `getEnabledToolSchemas`: Layer-3 (profile-defined) tools
+ * take precedence on name collisions, then Layer-2 extension entries.
+ * A tool is "enabled" when its flag in `tools.custom` is not explicitly
+ * `false` (matching the default-on contract).
+ *
+ * Used by the iteration-studio sim-summary renderers so the displayed
+ * "enabled tools" line stays in sync with what the dispatcher will
+ * actually expose.
+ */
+function collectEnabledCustomToolNames(profile) {
+    const customFlags = (profile?.tools && typeof profile.tools.custom === 'object')
+        ? profile.tools.custom
+        : {};
+    const profileCustomTools = Array.isArray(profile?.customTools) ? profile.customTools : [];
+    const seen = new Set();
+    const out = [];
+    for (const t of profileCustomTools) {
+        const name = String(t?.name || '');
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        if (customFlags[name] !== false) out.push(name);
+    }
+    for (const ext of listExtensionTools()) {
+        const name = String(ext?.name || '');
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        if (customFlags[name] !== false) out.push(name);
+    }
+    return out;
+}
+
 function renderLoopIterationWorkingProfile(session, { profileOverride = null, previewPending = false } = {}) {
     const profile = sanitizeLoopProfile(
         profileOverride && typeof profileOverride === 'object'
@@ -2297,23 +2360,12 @@ function renderLoopIterationWorkingProfile(session, { profileOverride = null, pr
     if (profile.tools?.chat?.search) enabledTools.push('chat_search');
     if (profile.tools?.lorebook?.search) enabledTools.push('lorebook_search');
     if (profile.tools?.lorebook?.get) enabledTools.push('lorebook_get');
-    if (profile.tools?.memory?.list_candidates) enabledTools.push('memory_list_candidates');
-    if (profile.tools?.memory?.edge_summary) enabledTools.push('memory_edge_summary');
-    if (profile.tools?.memory?.node_brief) enabledTools.push('memory_node_brief');
-    if (profile.tools?.memory?.expand_seeds) enabledTools.push('memory_expand_seeds');
-    if (profile.tools?.memory?.schema) enabledTools.push('memory_schema');
-    if (profile.tools?.memory?.keyword_search) enabledTools.push('memory_keyword_search');
-    if (profile.tools?.memory?.vector_search) enabledTools.push('memory_vector_search');
-    if (profile.tools?.memory?.find_by_name) enabledTools.push('memory_find_by_name');
-    if (profile.tools?.memory?.compaction_candidates) enabledTools.push('memory_compaction_candidates');
-    if (profile.tools?.memory?.node_create) enabledTools.push('memory_node_create');
-    if (profile.tools?.memory?.node_edit) enabledTools.push('memory_node_edit');
-    if (profile.tools?.memory?.node_delete) enabledTools.push('memory_node_delete');
-    if (profile.tools?.memory?.link_upsert) enabledTools.push('memory_link_upsert');
-    if (profile.tools?.memory?.link_delete) enabledTools.push('memory_link_delete');
-    if (profile.tools?.memory?.compact_nodes) enabledTools.push('memory_compact_nodes');
-    if (profile.tools?.search?.search) enabledTools.push('search_search');
-    if (profile.tools?.search?.visit) enabledTools.push('search_visit');
+    // memory_* / search_* live in Layer-2; this also picks up Layer-3
+    // user-defined custom tools and Layer-2 ST bridge entries, mirroring
+    // getEnabledToolSchemas (default-on unless explicitly false).
+    for (const name of collectEnabledCustomToolNames(profile)) {
+        enabledTools.push(name);
+    }
     enabledTools.push('finalize');
     const simulationSummary = session?.lastSimulation
         ? `${i18n('Simulation')}: ${String(session.lastSimulation.summary || '')}`
@@ -2343,6 +2395,11 @@ function renderDirectorIterationWorkingProfile(session, { profileOverride = null
             : session?.workingProfile,
     );
     const d = sanitized;
+    // Layer-3 (profile-defined) customs apply to every agent in the
+    // director profile; per-agent overrides only flip the enable flag on
+    // tools.custom.<name>. Layer-2 (extension registry) entries are
+    // global and resolved at render time.
+    const profileCustomTools = Array.isArray(d.customTools) ? d.customTools : [];
     const collectEnabledVerbs = (tools) => {
         const out = [];
         if (!tools || typeof tools !== 'object') return out;
@@ -2352,23 +2409,23 @@ function renderDirectorIterationWorkingProfile(session, { profileOverride = null
         if (tools.chat?.search) out.push('chat_search');
         if (tools.lorebook?.search) out.push('lorebook_search');
         if (tools.lorebook?.get) out.push('lorebook_get');
-        if (tools.memory?.schema) out.push('memory_schema');
-        if (tools.memory?.list_candidates) out.push('memory_list_candidates');
-        if (tools.memory?.edge_summary) out.push('memory_edge_summary');
-        if (tools.memory?.node_brief) out.push('memory_node_brief');
-        if (tools.memory?.expand_seeds) out.push('memory_expand_seeds');
-        if (tools.memory?.keyword_search) out.push('memory_keyword_search');
-        if (tools.memory?.vector_search) out.push('memory_vector_search');
-        if (tools.memory?.find_by_name) out.push('memory_find_by_name');
-        if (tools.memory?.compaction_candidates) out.push('memory_compaction_candidates');
-        if (tools.memory?.node_create) out.push('memory_node_create');
-        if (tools.memory?.node_edit) out.push('memory_node_edit');
-        if (tools.memory?.node_delete) out.push('memory_node_delete');
-        if (tools.memory?.link_upsert) out.push('memory_link_upsert');
-        if (tools.memory?.link_delete) out.push('memory_link_delete');
-        if (tools.memory?.compact_nodes) out.push('memory_compact_nodes');
-        if (tools.search?.search) out.push('search_search');
-        if (tools.search?.visit) out.push('search_visit');
+        // memory_* / search_* / Layer-3 user tools / Layer-2 bridges all
+        // live in tools.custom now. Mirror getEnabledToolSchemas: a tool
+        // is enabled when customFlags[name] !== false.
+        const customFlags = tools.custom && typeof tools.custom === 'object' ? tools.custom : {};
+        const seen = new Set();
+        for (const t of profileCustomTools) {
+            const name = String(t?.name || '');
+            if (!name || seen.has(name)) continue;
+            seen.add(name);
+            if (customFlags[name] !== false) out.push(name);
+        }
+        for (const ext of listExtensionTools()) {
+            const name = String(ext?.name || '');
+            if (!name || seen.has(name)) continue;
+            seen.add(name);
+            if (customFlags[name] !== false) out.push(name);
+        }
         return out;
     };
     const defaultVerbs = collectEnabledVerbs(d.tools);
@@ -2704,17 +2761,33 @@ function buildAiIterationSystemPrompt(settings, session = null) {
     const base = normalizeTemplateForAiPrompt(String(settings.requestSystemPrompt || '').trim()) || getDefaultRequestSystemPrompt();
     const withGuidance = [base, '', ...LOREBOOK_READ_GUIDANCE_LINES].join('\n');
     const withMacros = [withGuidance, '', ...ITER_STUDIO_MACRO_CONTRACT_LINES].join('\n');
+    let prompt;
     if (isLoopIterationSession(session)) {
-        return `${withMacros}\n\n${settings.iterModePromptLoop || DEFAULT_LOOP_ITERATION_MODE_BLOCK}`;
+        prompt = `${withMacros}\n\n${settings.iterModePromptLoop || DEFAULT_LOOP_ITERATION_MODE_BLOCK}`;
+    } else if (isDirectorIterationSession(session)) {
+        prompt = `${withMacros}\n\n${settings.iterModePromptDirector || DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK}`;
+    } else if (isAgendaIterationSession(session)) {
+        prompt = `${withMacros}\n\n${settings.iterModePromptAgenda || DEFAULT_AGENDA_ITERATION_MODE_BLOCK}`;
+    } else {
+        prompt = `${withMacros}\n\n${settings.iterModePromptSpec || DEFAULT_SPEC_ITERATION_MODE_BLOCK}`;
     }
-    if (isDirectorIterationSession(session)) {
-        return `${withMacros}\n\n${settings.iterModePromptDirector || DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK}`;
-    }
-    if (isAgendaIterationSession(session)) {
-        return `${withMacros}\n\n${settings.iterModePromptAgenda || DEFAULT_AGENDA_ITERATION_MODE_BLOCK}`;
-    }
-    return `${withMacros}\n\n${settings.iterModePromptSpec || DEFAULT_SPEC_ITERATION_MODE_BLOCK}`;
+    // Append a read-only intro listing the visible custom tools so the
+    // Studio AI knows which enable-flag path it can flip — the path varies
+    // by mode (tools.custom.<name> for loop/director, defaultTools.custom.<name>
+    // for agenda, spec.defaultTools.custom.<name> for spec) so we forward
+    // the session mode to the augment helper.
+    const sessionMode = isLoopIterationSession(session) ? 'loop'
+        : isDirectorIterationSession(session) ? 'director'
+            : isAgendaIterationSession(session) ? 'agenda'
+                : 'spec';
+    return augmentStudioPromptWithCustomTools(prompt, session?.workingProfile, listExtensionTools(), sessionMode);
 }
+
+// Re-exported for tests + parity with the iter-studio adapter surface.
+// The augmentation helper lives in its own module so jest can exercise
+// it without dragging main.js's UI surface in; this re-export keeps the
+// public path mentioned in the plan ("export from main.js") intact.
+export { augmentStudioPromptWithCustomTools };
 
 function buildAiIterationUserPrompt(settings, session, userInputText, {
     globalProfile = null,
@@ -3765,19 +3838,15 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
         return await context.generateTask(opts);
     };
 
-    // Notes + memory-graph adapter overlays — same prototype-chain trick
-    // the production handler uses so the loop-tool dispatcher reaches the
-    // live floor-state / memory-session factories. A bare `{}` here would
-    // short-circuit memory_* to MEMORY_DISABLED and notes lookups to [].
+    // Notes adapter overlay — same prototype-chain trick the production
+    // handler uses so the loop-tool dispatcher reaches the live
+    // floor-state factory. A bare `{}` here would short-circuit notes
+    // lookups to []. memory-graph's session is opened lazily inside its
+    // Layer-2 tools (per-ctx cache) — no overlay needed here.
     const contextForNotes = await (async () => {
         const notesCtx = Object.create(context);
         try { await attachNotesFloorState(notesCtx); } catch (_) { /* best-effort */ }
         return notesCtx;
-    })();
-    const contextForSession = await (async () => {
-        const memCtx = Object.create(context);
-        try { await attachMemoryGraphSession(memCtx); } catch (_) { /* best-effort */ }
-        return memCtx;
     })();
 
     try {
@@ -3811,7 +3880,6 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
                 trace,
                 settings,
                 contextForNotes,
-                contextForSession,
             },
         });
         // Natural completion: commit the handle so handle.complete
@@ -5298,6 +5366,44 @@ async function applyAiIterationSessionToGlobal(context, settings, session, root)
 }
 
 async function applyAiIterationSessionToCharacter(context, settings, session, root) {
+    // Apply-to-character is the path that imports a profile (and its
+    // bundled customTools[]) onto a third-party character card. Custom
+    // tools are executable JavaScript that runs with full session
+    // permissions, so we gate the apply on an explicit user decision
+    // when the incoming session carries any.
+    const incomingCustomTools = (() => {
+        const wp = session?.workingProfile;
+        if (!wp) return [];
+        // Spec mode wraps customTools under .spec; every other mode keeps
+        // them at the working-profile root.
+        if (isLoopIterationSession(session) || isAgendaIterationSession(session) || isDirectorIterationSession(session)) {
+            return Array.isArray(wp.customTools) ? wp.customTools : [];
+        }
+        return Array.isArray(wp?.spec?.customTools) ? wp.spec.customTools : [];
+    })();
+    if (incomingCustomTools.length > 0) {
+        const decision = await reviewIncomingCustomTools({
+            tools: incomingCustomTools,
+            t: i18n,
+        });
+        if (decision === 'cancel') {
+            updateUiStatus(i18n('Cancelled'));
+            return;
+        }
+        if (decision === 'without') {
+            // Mutate the session's workingProfile so the existing
+            // per-mode branches below pick up an empty customTools[]
+            // when they sanitize-and-persist.
+            if (session?.workingProfile) {
+                if (isLoopIterationSession(session) || isAgendaIterationSession(session) || isDirectorIterationSession(session)) {
+                    session.workingProfile.customTools = [];
+                } else if (session.workingProfile.spec) {
+                    session.workingProfile.spec.customTools = [];
+                }
+            }
+        }
+    }
+
     if (isLoopIterationSession(session)) {
         const avatar = String(getCurrentAvatar(context) || '').trim();
         if (!avatar) {
@@ -5665,6 +5771,162 @@ function bindUi() {
         }
         editor.tools[namespace][verb] = checked;
         ensureLoopEditorIntegrity(editor);
+    });
+
+    // ─── Custom tools (Layer-2 / Layer-3) handlers ────────────────────
+    // Custom tools live alongside the builtin tool flags but are routed
+    // by `data-orch-mode` since each mode stores them at a different
+    // path:
+    //   loop      → editor.tools.custom        + editor.customTools[]
+    //   director  → editor.tools.custom        + editor.customTools[]
+    //   agenda    → editor.defaultTools.custom + editor.customTools[]
+    //   spec      → editor.spec.defaultTools.custom + editor.spec.customTools[]
+    // The handler mutates the in-memory editor draft only; the user
+    // commits via the existing Save To Global / Save To Character buttons.
+    function resolveCustomToolsHost(element, modeAttr) {
+        const explicitMode = String(modeAttr || jQuery(element).attr('data-orch-mode') || '').toLowerCase();
+        const mode = explicitMode
+            || String(jQuery(element).closest('[data-orch-mode]').attr('data-orch-mode') || '').toLowerCase();
+        let executionMode = mode;
+        if (executionMode === 'loop') executionMode = ORCH_EXECUTION_MODE_LOOP;
+        else if (executionMode === 'agenda') executionMode = ORCH_EXECUTION_MODE_AGENDA;
+        else if (executionMode === 'director') executionMode = ORCH_EXECUTION_MODE_DIRECTOR;
+        else if (executionMode === 'spec') executionMode = ORCH_EXECUTION_MODE_SPEC;
+        else return null;
+        const scope = getScopeFromElementOrMode(element, context, settings, executionMode);
+        if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
+            const editor = getLoopEditorByScope(scope);
+            ensureLoopEditorIntegrity(editor);
+            if (!editor.tools || typeof editor.tools !== 'object') editor.tools = {};
+            if (!editor.tools.custom || typeof editor.tools.custom !== 'object') editor.tools.custom = {};
+            if (!Array.isArray(editor.customTools)) editor.customTools = [];
+            return { mode: 'loop', scope, editor, flagBucket: editor.tools.custom, tools: editor.customTools };
+        }
+        if (executionMode === ORCH_EXECUTION_MODE_DIRECTOR) {
+            const editor = getDirectorEditorByScope(scope);
+            ensureDirectorEditorIntegrity(editor);
+            if (!editor.tools || typeof editor.tools !== 'object') editor.tools = {};
+            if (!editor.tools.custom || typeof editor.tools.custom !== 'object') editor.tools.custom = {};
+            if (!Array.isArray(editor.customTools)) editor.customTools = [];
+            return { mode: 'director', scope, editor, flagBucket: editor.tools.custom, tools: editor.customTools };
+        }
+        if (executionMode === ORCH_EXECUTION_MODE_AGENDA) {
+            const editor = getAgendaEditorByScope(scope);
+            ensureAgendaEditorIntegrity(editor);
+            if (!editor.defaultTools || typeof editor.defaultTools !== 'object') editor.defaultTools = {};
+            if (!editor.defaultTools.custom || typeof editor.defaultTools.custom !== 'object') editor.defaultTools.custom = {};
+            if (!Array.isArray(editor.customTools)) editor.customTools = [];
+            return { mode: 'agenda', scope, editor, flagBucket: editor.defaultTools.custom, tools: editor.customTools };
+        }
+        if (executionMode === ORCH_EXECUTION_MODE_SPEC) {
+            const editor = getEditorByScope(scope);
+            ensureEditorIntegrity(editor);
+            if (!editor.spec || typeof editor.spec !== 'object') editor.spec = {};
+            if (!editor.spec.defaultTools || typeof editor.spec.defaultTools !== 'object') editor.spec.defaultTools = {};
+            if (!editor.spec.defaultTools.custom || typeof editor.spec.defaultTools.custom !== 'object') editor.spec.defaultTools.custom = {};
+            if (!Array.isArray(editor.spec.customTools)) editor.spec.customTools = [];
+            return { mode: 'spec', scope, editor, flagBucket: editor.spec.defaultTools.custom, tools: editor.spec.customTools };
+        }
+        return null;
+    }
+
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-tool-flag], .luker_orch_editor_popup [data-orch-tool-flag]`, function () {
+        const name = String(jQuery(this).attr('data-orch-tool-flag') || '');
+        if (!name) return;
+        const host = resolveCustomToolsHost(this);
+        if (!host) return;
+        const checked = Boolean(this.checked);
+        // Only literal `false` disables. Writing the boolean directly
+        // round-trips through the sanitizer either way.
+        host.flagBucket[name] = checked;
+    });
+
+    // Add custom tool — opens the editor popup, appends to `customTools[]`
+    // on the resolved per-mode editor draft, then re-renders the panel so
+    // the new row appears immediately. Persist still requires Save.
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-action="add-custom-tool"], .luker_orch_editor_popup [data-orch-action="add-custom-tool"]`, async function () {
+        const host = resolveCustomToolsHost(this);
+        if (!host) return;
+        const tools = host.tools;
+        const builtinNames = getBuiltinToolRegistry();
+        const entry = await openCustomToolEditor({
+            initial: null,
+            nameInUse: (n) => tools.some(t => t.name === n),
+            nameConflictsBuiltin: (n) => builtinNames.has(n),
+            t: i18n,
+        });
+        if (!entry) return;
+        tools.push(entry);
+        refreshOrchestrationEditorPopup(context, settings);
+    });
+
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-action="edit-custom-tool"], .luker_orch_editor_popup [data-orch-action="edit-custom-tool"]`, async function () {
+        const host = resolveCustomToolsHost(this);
+        if (!host) return;
+        const idx = Number(jQuery(this).attr('data-orch-ct-idx'));
+        if (!Number.isInteger(idx) || idx < 0) return;
+        const tools = host.tools;
+        const current = tools[idx];
+        if (!current) return;
+        const builtinNames = getBuiltinToolRegistry();
+        const entry = await openCustomToolEditor({
+            initial: current,
+            nameInUse: (n) => tools.some((t, i) => i !== idx && t.name === n),
+            nameConflictsBuiltin: (n) => builtinNames.has(n),
+            t: i18n,
+        });
+        if (!entry) return;
+        tools[idx] = entry;
+        refreshOrchestrationEditorPopup(context, settings);
+    });
+
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-action="duplicate-custom-tool"], .luker_orch_editor_popup [data-orch-action="duplicate-custom-tool"]`, function () {
+        const host = resolveCustomToolsHost(this);
+        if (!host) return;
+        const idx = Number(jQuery(this).attr('data-orch-ct-idx'));
+        if (!Number.isInteger(idx) || idx < 0) return;
+        const tools = host.tools;
+        const src = tools[idx];
+        if (!src) return;
+        let newName = `${src.name}_copy`;
+        let n = 1;
+        while (tools.some(t => t.name === newName)) {
+            n += 1;
+            newName = `${src.name}_copy${n}`;
+        }
+        tools.push({ ...src, name: newName });
+        refreshOrchestrationEditorPopup(context, settings);
+    });
+
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-action="remove-custom-tool"], .luker_orch_editor_popup [data-orch-action="remove-custom-tool"]`, async function () {
+        const host = resolveCustomToolsHost(this);
+        if (!host) return;
+        const idx = Number(jQuery(this).attr('data-orch-ct-idx'));
+        if (!Number.isInteger(idx) || idx < 0) return;
+        const tools = host.tools;
+        if (!tools[idx]) return;
+        const confirmed = await context.callGenericPopup(
+            i18n('Remove this custom tool?'),
+            context.POPUP_TYPE.CONFIRM,
+            '',
+            { okButton: i18n('Remove'), cancelButton: i18n('Cancel') },
+        );
+        if (!confirmed) return;
+        tools.splice(idx, 1);
+        refreshOrchestrationEditorPopup(context, settings);
+    });
+
+    // ST tool bridge picker — mutates the shared Layer-2 registry so the
+    // re-render below picks up the new `st_*` entries across all four
+    // modes' Custom Tools sections regardless of which mode owned the
+    // button the user clicked.
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-action="open-bridge-st-tools"], .luker_orch_editor_popup [data-orch-action="open-bridge-st-tools"]`, async function () {
+        await openBridgeStToolPicker({
+            settings,
+            t: i18n,
+            persist: () => saveSettingsDebounced(),
+        });
+        refreshOrchestrationEditorPopup(context, settings);
     });
 
     // ─── Director-mode editor handlers ────────────────────────────────
@@ -7111,6 +7373,7 @@ jQuery(() => {
     ensureSimulationReviewLocaleData();
     ensureSettings();
     saveSettingsDebounced();
+    void rehydrateBridgedSillyTavernTools(extension_settings[MODULE_NAME]);
     clearCapsulePrompt(context);
     void loadOrchestratorChatState(context).finally(() => ensureUi());
 
@@ -7339,29 +7602,16 @@ jQuery(() => {
                         await attachNotesFloorState(notesCtx);
                         return notesCtx;
                     })(),
-                    // Memory-graph session for sub-agent tool dispatch.
-                    // Mirrors loop-runtime: open the session via the Layer-1
-                    // openSession facade once at director-turn start and let
-                    // every sub-agent tool call share the same
-                    // `__memoryGraphSession` reference. Without this,
-                    // memory_* tools throw MEMORY_DISABLED even when
-                    // memory-graph is enabled — because the sub-agent
-                    // dispatcher never had a path to attach the session.
-                    contextForSession: await (async () => {
-                        // Same prototype-chain trick as contextForNotes
-                        // above. `openSession` reads
-                        // `context.createFloorState` to load the chat-
-                        // scoped store; a bare `{}` short-circuits it to
-                        // `null` and every memory_* tool call lands on
-                        // MEMORY_DISABLED.
-                        const memCtx = Object.create(context);
-                        await attachMemoryGraphSession(memCtx);
-                        return memCtx;
-                    })(),
+                    // memory-graph's session is opened lazily inside its
+                    // Layer-2 tools (per-ctx WeakMap cache) — orchestrator
+                    // no longer threads one. Sub-agent dispatcher's
+                    // executeLoopTool sees the ctx and the memory_* exec
+                    // wrappers open / cache the session on first call.
                     // Injected so director-runtime doesn't have to
                     // import runtime-trace.js (which transitively pulls
                     // in lib.js and breaks Node test environments).
                     finalizeTrace: (trace, status) => finalizeOrchestrationRuntimeTrace(trace, status, {}),
+                    recordTraceEvent: recordOrchestrationRuntimeEvent,
                     // Visible failure surface. Director takes over the
                     // GENERATE path, so ST core's sender never gets to
                     // toast on its behalf — we have to do it here when

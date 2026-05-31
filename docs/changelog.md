@@ -4,6 +4,12 @@
 
 ## Current version
 
+### Orchestrator
+
+- Custom tools — extend agents in any of the four orchestration modes with handwritten tools, tools from other Luker extensions, or bridged SillyTavern function tools.
+- Handwritten custom tools travel with the profile; profile-scoped tools attached to a character override are exported with the card.
+- Iteration Studio sees the visible custom tools and can toggle them on or off per profile.
+
 ### Core features
 
 - **Memory Graph** — Knowledge-graph long-term memory, 9-layer hybrid recall pipeline

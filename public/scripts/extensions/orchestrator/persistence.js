@@ -39,12 +39,56 @@ import {
     normalizeOrchestrationSnapshot,
 } from './anchors.js';
 import { DEFAULT_LOOP_SYSTEM_PROMPT } from './loop-default-prompt.js';
+import { sanitizeCustomTools } from './custom-tools-sanitize.js';
 
 const STATE_NAMESPACE = 'luker_orchestrator_anchors';
 const SCHEMA_NAMESPACE = `${STATE_NAMESPACE}__schema`;
 const LEGACY_INDEX_NAMESPACE = 'luker_orchestrator_state';
 const LEGACY_ANCHOR_NAMESPACE_PREFIX = 'luker_orchestrator_anchor_';
 const SCHEMA_VERSION = 1;
+
+/**
+ * Canonical Layer-2 memory tool names. Mirrors the `MEMORY_TOOL_NAMES`
+ * frozen export in `memory-graph/orchestrator-tools.js`. Inlined here
+ * (rather than imported) to avoid coupling orchestrator persistence to
+ * the memory-graph extension's internal module — orchestrator already
+ * treats Layer-2 names as an external contract for the legacy-flag
+ * translator path. If a memory tool is added / removed, update BOTH
+ * lists; the registration test in
+ * `tests/memory-graph/orchestrator-tools-register.test.js` will catch
+ * drift on the memory-graph side.
+ */
+const MEMORY_TOOL_NAMES = Object.freeze([
+    'memory_list_candidates',
+    'memory_edge_summary',
+    'memory_node_brief',
+    'memory_expand_seeds',
+    'memory_schema',
+    'memory_keyword_search',
+    'memory_vector_search',
+    'memory_find_by_name',
+    'memory_compaction_candidates',
+    'memory_node_create',
+    'memory_node_edit',
+    'memory_node_delete',
+    'memory_link_upsert',
+    'memory_link_delete',
+    'memory_compact_nodes',
+]);
+
+/**
+ * Canonical Layer-2 search tool names. Mirrors the `SEARCH_TOOL_NAMES`
+ * frozen export in `search-tools/orchestrator-tools.js`. Inlined here
+ * (rather than imported) to keep the legacy-flag translator path
+ * loosely coupled — same rationale as MEMORY_TOOL_NAMES above. If a
+ * search tool is added / removed, update BOTH lists; the registration
+ * test in `tests/search-tools/orchestrator-tools-register.test.js`
+ * will catch drift on the search-tools side.
+ */
+const SEARCH_TOOL_NAMES = Object.freeze([
+    'search_search',
+    'search_visit',
+]);
 
 /**
  * Loop execution mode marker (V3 profile schema). Lives next to
@@ -78,24 +122,18 @@ export const ORCH_EXECUTION_MODE_LOOP = 'loop';
  *                            doesn't degenerate into noise
  *   - tools.chat.{read_range, search}  in-chat history tools
  *   - tools.lorebook.{search, get}      world-info lookup tools
- *   - tools.memory.{search, list_recent, get, list_candidates,
- *                   edge_summary, node_brief, expand_seeds, rank, schema}
- *                            memory-graph wrappers. The first three are
- *                            external-api lexical / browse helpers; the
- *                            last six are read-api pipeline tools that
- *                            mirror the inputs the native recall LLM sees
- *                            (the director's `memory_scout` uses them for
- *                            LLM-grade recall). Each requires memory-graph
- *                            enabled.
- *   - tools.search.{search, visit}      web-search tools backed by the
- *                            search-tools plugin (DuckDuckGo / SearXNG /
- *                            Brave); default ON like the other tool
- *                            namespaces. The plugin's own enable flag
- *                            still gates execution at runtime — when
- *                            the plugin is missing or disabled the loop
- *                            tool raises SEARCH_UNAVAILABLE /
- *                            SEARCH_DISABLED as a structured error so
- *                            the agent self-corrects.
+ *   - tools.custom.{memory_*, search_*, ...}  Layer-2 extension tools
+ *                            (registered by memory-graph / search-tools)
+ *                            and any Layer-3 character-card customTools.
+ *                            memory-graph and search-tools verbs default
+ *                            ON via LOOP_PROFILE_DEFAULTS so first-run
+ *                            users keep their out-of-box tool pipeline.
+ *                            Legacy `tools.memory.<verb>` /
+ *                            `tools.search.<verb>` inputs are translated
+ *                            into `tools.custom.memory_<verb>` /
+ *                            `tools.custom.search_<verb>` by
+ *                            `sanitizeAgentToolFlags` so upgraded
+ *                            profiles keep their enabled set.
  *   - tools.finalize        FORCED true; the loop has no other terminator
  *   - max_rounds            hard upper bound on tool-call rounds [1, 50]
  *   - wall_clock_budget_ms  loop deadline; floored at 10000ms (10s)
@@ -110,24 +148,34 @@ const LOOP_PROFILE_DEFAULTS = Object.freeze({
         note: Object.freeze({ open: true, close: true }),
         chat: Object.freeze({ read_range: true, search: true }),
         lorebook: Object.freeze({ search: true, get: true }),
-        memory: Object.freeze({
-            schema: true,
-            list_candidates: true,
-            edge_summary: true,
-            node_brief: true,
-            expand_seeds: true,
-            keyword_search: true,
-            vector_search: true,
-            find_by_name: true,
-            compaction_candidates: true,
-            node_create: true,
-            node_edit: true,
-            node_delete: true,
-            link_upsert: true,
-            link_delete: true,
-            compact_nodes: true,
+        custom: Object.freeze({
+            // memory-graph tools — registered by memory-graph itself via
+            // Layer-2; enabled by default so first-run users get the
+            // same out-of-box pipeline they had before the namespace drop.
+            memory_schema: true,
+            memory_list_candidates: true,
+            memory_edge_summary: true,
+            memory_node_brief: true,
+            memory_expand_seeds: true,
+            memory_keyword_search: true,
+            memory_vector_search: true,
+            memory_find_by_name: true,
+            memory_compaction_candidates: true,
+            memory_node_create: true,
+            memory_node_edit: true,
+            memory_node_delete: true,
+            memory_link_upsert: true,
+            memory_link_delete: true,
+            memory_compact_nodes: true,
+            // search-tools — registered by search-tools itself via
+            // Layer-2; enabled by default so first-run users keep web
+            // search available out of the box. The plugin's own enable
+            // flag still gates execution at runtime — when it's
+            // disabled the Layer-2 exec raises SEARCH_DISABLED /
+            // SEARCH_UNAVAILABLE as a structured error.
+            search_search: true,
+            search_visit: true,
         }),
-        search: Object.freeze({ search: true, visit: true }),
         finalize: true,
     }),
     max_rounds: 20,
@@ -173,7 +221,53 @@ function sanitizeLoopToolFlags(input) {
     // OFF (no tools) when no input was provided. Loop's all-on policy
     // stays the standalone outlier because loop has no "inherit"
     // semantics — its profile root *is* the tools spec.
-    return sanitizeAgentToolFlags(input, { defaultAllOn: true, forceFinalize: true });
+    //
+    // memory + search tools live in Layer-2 (`tools.custom.<name>`) now,
+    // so to preserve the "all on by default" loop policy we pre-resolve
+    // their flags into `tools.custom` here BEFORE the shared sanitizer
+    // sees the input:
+    //
+    //   priority (highest first):
+    //   1. caller's explicit `tools.custom.<name>` (always wins)
+    //   2. caller's legacy `tools.memory.<verb>` / `tools.search.<verb>`
+    //      (auto-translated via sanitizeAgentToolFlags's translator —
+    //      kept here so an explicit `false` from the user overrides the
+    //      default `true`, even though the default would otherwise have
+    //      survived in slot 3 below)
+    //   3. LOOP_PROFILE_DEFAULTS.tools.custom (memory_* / search_*
+    //      default enabled so a bare profile retains the same enabled
+    //      tool set it had before the namespace drop)
+    const callerTools = input && typeof input === 'object' ? input : {};
+    const callerCustom = callerTools.custom && typeof callerTools.custom === 'object'
+        ? callerTools.custom
+        : {};
+    // First translate legacy memory + search into the custom name space so
+    // we can decide priority deterministically.
+    const translatedFromLegacy = {};
+    const legacyMemory = callerTools.memory && typeof callerTools.memory === 'object'
+        ? callerTools.memory
+        : {};
+    for (const [verb, on] of Object.entries(legacyMemory)) {
+        translatedFromLegacy[`memory_${verb}`] = on !== false;
+    }
+    const legacySearch = callerTools.search && typeof callerTools.search === 'object'
+        ? callerTools.search
+        : {};
+    for (const [verb, on] of Object.entries(legacySearch)) {
+        translatedFromLegacy[`search_${verb}`] = on !== false;
+    }
+    // Defaults provide the baseline; legacy overrides defaults; explicit
+    // custom overrides everything.
+    const mergedCustom = {
+        ...LOOP_PROFILE_DEFAULTS.tools.custom,
+        ...translatedFromLegacy,
+        ...callerCustom,
+    };
+    // Drop the legacy memory + search namespaces from what we hand the
+    // shared sanitizer — we've already translated them, no second pass
+    // needed.
+    const seeded = { ...callerTools, memory: undefined, search: undefined, custom: mergedCustom };
+    return sanitizeAgentToolFlags(seeded, { defaultAllOn: true, forceFinalize: true });
 }
 
 /**
@@ -201,9 +295,62 @@ export function sanitizeAgentToolFlags(input, { defaultAllOn = false, forceFinal
     const noteIn = tools.note && typeof tools.note === 'object' ? tools.note : {};
     const chatIn = tools.chat && typeof tools.chat === 'object' ? tools.chat : {};
     const lorebookIn = tools.lorebook && typeof tools.lorebook === 'object' ? tools.lorebook : {};
-    const memoryIn = tools.memory && typeof tools.memory === 'object' ? tools.memory : {};
-    const searchIn = tools.search && typeof tools.search === 'object' ? tools.search : {};
     const collabIn = tools.collab && typeof tools.collab === 'object' ? tools.collab : {};
+    const customIn = tools.custom && typeof tools.custom === 'object' ? tools.custom : {};
+    const customOut = {};
+    for (const [k, v] of Object.entries(customIn)) {
+        customOut[String(k)] = v === false ? false : true;
+    }
+    // Legacy → custom translator. memory + search tools used to live in
+    // their own top-level namespaces; they are now Layer-2 extension tools
+    // registered by memory-graph / search-tools. Translate any legacy
+    // `tools.memory.<verb>` / `tools.search.<verb>` flags to
+    // `tools.custom.memory_<verb>` / `tools.custom.search_<verb>` so an
+    // upgraded profile keeps the same enabled tool set after the namespace
+    // drop. User's explicit `custom.<name>` setting wins over the
+    // translated legacy flag.
+    //
+    // Override-mode discipline (defaultAllOn === false): the pre-Layer-2
+    // namespace contract was "unspecified verbs default off" regardless of
+    // whether the caller mentioned the namespace at all. To preserve that
+    // we emit an explicit `false` for every memory_* / search_* verb the
+    // caller did NOT explicitly enable — otherwise Layer-2's default-on
+    // policy (`customFlags[name] !== false`) would expose every memory /
+    // search tool to override-mode callers (sub-agents) that never asked
+    // for them.
+    //
+    // In default-all-on mode (loop) we leave unspecified verbs undefined
+    // so the default-on policy applies as before.
+    const legacyMemory = tools.memory && typeof tools.memory === 'object' ? tools.memory : null;
+    for (const fullName of MEMORY_TOOL_NAMES) {
+        const verb = fullName.slice('memory_'.length);
+        if (customOut[fullName] !== undefined) continue; // explicit custom.<name> wins
+        const explicit = legacyMemory ? legacyMemory[verb] : undefined;
+        if (explicit !== undefined) {
+            customOut[fullName] = explicit === false ? false : true;
+        } else if (!def) {
+            // Override mode: omitted verbs are explicitly off, matching
+            // the pre-Layer-2 namespace contract.
+            customOut[fullName] = false;
+        }
+        // else (defaultAllOn=true, omitted verb): leave undefined →
+        // Layer-2 default-on policy applies in getEnabledToolSchemas.
+    }
+    const legacySearch = tools.search && typeof tools.search === 'object' ? tools.search : null;
+    for (const fullName of SEARCH_TOOL_NAMES) {
+        const verb = fullName.slice('search_'.length);
+        if (customOut[fullName] !== undefined) continue; // explicit custom.<name> wins
+        const explicit = legacySearch ? legacySearch[verb] : undefined;
+        if (explicit !== undefined) {
+            customOut[fullName] = explicit === false ? false : true;
+        } else if (!def) {
+            // Override mode: omitted verbs are explicitly off, matching
+            // the pre-Layer-2 namespace contract.
+            customOut[fullName] = false;
+        }
+        // else (defaultAllOn=true, omitted verb): leave undefined →
+        // Layer-2 default-on policy applies in getEnabledToolSchemas.
+    }
     return {
         note: {
             // New keys (open/close) win over legacy keys (add/delete). When the
@@ -223,27 +370,7 @@ export function sanitizeAgentToolFlags(input, { defaultAllOn = false, forceFinal
             search: readBooleanFlag(lorebookIn.search, def),
             get: readBooleanFlag(lorebookIn.get, def),
         },
-        memory: {
-            schema: readBooleanFlag(memoryIn.schema, def),
-            list_candidates: readBooleanFlag(memoryIn.list_candidates, def),
-            edge_summary: readBooleanFlag(memoryIn.edge_summary, def),
-            node_brief: readBooleanFlag(memoryIn.node_brief, def),
-            expand_seeds: readBooleanFlag(memoryIn.expand_seeds, def),
-            keyword_search: readBooleanFlag(memoryIn.keyword_search, def),
-            vector_search: readBooleanFlag(memoryIn.vector_search, def),
-            find_by_name: readBooleanFlag(memoryIn.find_by_name, def),
-            compaction_candidates: readBooleanFlag(memoryIn.compaction_candidates, def),
-            node_create: readBooleanFlag(memoryIn.node_create, def),
-            node_edit: readBooleanFlag(memoryIn.node_edit, def),
-            node_delete: readBooleanFlag(memoryIn.node_delete, def),
-            link_upsert: readBooleanFlag(memoryIn.link_upsert, def),
-            link_delete: readBooleanFlag(memoryIn.link_delete, def),
-            compact_nodes: readBooleanFlag(memoryIn.compact_nodes, def),
-        },
-        search: {
-            search: readBooleanFlag(searchIn.search, def),
-            visit: readBooleanFlag(searchIn.visit, def),
-        },
+        custom: customOut,
         // Director-only collaboration verbs. Sub-agents never see these
         // tools regardless of flag value (buildSubAgentToolSchemas hard-
         // excludes them — only the main agent dispatches). For other
@@ -300,16 +427,26 @@ export function resolveAgentToolFlags(nodeTools, profileDefaultTools, builtinDef
  * multi-round tool-loop driver instead of the single-forced-function
  * code path. `finalize` alone doesn't count as "enabled tools" — the
  * tool loop is pointless without at least one non-terminator tool.
+ *
+ * `tools.custom` is walked too so Layer-2 / Layer-3 tools (memory-graph,
+ * search-tools, character-card customTools) opt the loop driver in even
+ * when no builtin namespace has a true flag.
  */
 export function hasAnyToolEnabled(flags) {
     if (!flags || typeof flags !== 'object') return false;
-    const groups = ['note', 'chat', 'lorebook', 'memory', 'search'];
+    const groups = ['note', 'chat', 'lorebook'];
     for (const group of groups) {
         const bag = flags[group];
         if (bag && typeof bag === 'object') {
             for (const key of Object.keys(bag)) {
                 if (bag[key] === true) return true;
             }
+        }
+    }
+    const custom = flags.custom;
+    if (custom && typeof custom === 'object') {
+        for (const key of Object.keys(custom)) {
+            if (custom[key] === true) return true;
         }
     }
     return false;
@@ -355,15 +492,7 @@ function sanitizeLoopCapsuleInject(input) {
  *     note: { open: boolean, close: boolean },
  *     chat: { read_range: boolean, search: boolean },
  *     lorebook: { search: boolean, get: boolean },
- *     memory: {
- *       schema: boolean, list_candidates: boolean, edge_summary: boolean,
- *       node_brief: boolean, expand_seeds: boolean,
- *       keyword_search: boolean, vector_search: boolean, find_by_name: boolean,
- *       compaction_candidates: boolean,
- *       node_create: boolean, node_edit: boolean, node_delete: boolean,
- *       link_upsert: boolean, link_delete: boolean, compact_nodes: boolean
- *     },
- *     search: { search: boolean, visit: boolean },
+ *     custom: { [toolName: string]: boolean },
  *     finalize: true,
  *   },
  *   max_rounds: number,
@@ -403,6 +532,7 @@ export function sanitizeLoopProfile(input) {
             return Math.max(LOOP_WALL_CLOCK_FLOOR_MS, Math.floor(n));
         })(),
         capsule_inject: sanitizeLoopCapsuleInject(source.capsule_inject),
+        customTools: sanitizeCustomTools(source.customTools),
     };
 }
 

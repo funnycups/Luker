@@ -216,3 +216,4 @@ s5 -> out
 - [Agenda 模式](/zh-TW/features/orchestrator/agenda) — Planner 動態調度版本
 - [Loop 模式](/zh-TW/features/orchestrator/loop) — 單 Agent 工具循環
 - [角色卡編輯器](/zh-TW/features/card-editor/) — 與迭代工作台共用 diff 引擎
+- [自訂工具](/zh-TW/features/orchestrator/custom-tools) — Spec Agent 可以呼叫的擴充 / SillyTavern 橋接 / 手寫工具

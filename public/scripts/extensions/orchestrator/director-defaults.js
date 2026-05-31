@@ -21,6 +21,7 @@
 
 import { sanitizeAgentToolFlags, sanitizeOptionalAgentToolFlags } from './persistence.js';
 import { buildDirectorDefaultSystemPrompt } from './director-default-prompt.js';
+import { sanitizeCustomTools } from './custom-tools-sanitize.js';
 
 // Event summary writing rules (body only). Private to orchestrator — memory-graph
 // keeps its own copy. The user wants the two plugins separate: no cross-plugin
@@ -524,7 +525,35 @@ function buildDefaultDirectorTools() {
     // starts enabled. forceFinalize: false → finalize is NOT forced on; we
     // explicitly override it to false below because director has its own
     // finalize tool with the same name.
-    const flags = sanitizeAgentToolFlags({}, { defaultAllOn: true, forceFinalize: false });
+    //
+    // memory + search tools live in Layer-2 and route through
+    // `tools.custom`. The sanitizer's defaultAllOn applies to the
+    // namespaces it manages (note / chat / lorebook / collab), but
+    // custom-tool flags only flip on when explicitly listed. Spell out
+    // the legacy memory_* / search_* verbs here so the director's
+    // default ships with the same enabled tool set users had before
+    // the namespace drop.
+    const input = {
+        memory: {
+            schema: true,
+            list_candidates: true,
+            edge_summary: true,
+            node_brief: true,
+            expand_seeds: true,
+            keyword_search: true,
+            vector_search: true,
+            find_by_name: true,
+            compaction_candidates: true,
+            node_create: true,
+            node_edit: true,
+            node_delete: true,
+            link_upsert: true,
+            link_delete: true,
+            compact_nodes: true,
+        },
+        search: { search: true, visit: true },
+    };
+    const flags = sanitizeAgentToolFlags(input, { defaultAllOn: true, forceFinalize: false });
     flags.finalize = false;
     return flags;
 }
@@ -1481,5 +1510,6 @@ export function sanitizeDirectorProfile(profile) {
         maxTotalSubagentRuns: clampInt(directorFields.maxTotalSubagentRuns, bounds.maxTotalSubagentRuns),
         tools: sanitizedTools,
         discardOnAbort: Boolean(directorFields.discardOnAbort),
+        customTools: sanitizeCustomTools(directorFields.customTools),
     };
 }

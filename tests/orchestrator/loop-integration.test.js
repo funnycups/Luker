@@ -12,17 +12,27 @@
  * via `deps.sendLlm` / `deps.executeTool`, in-memory floor-state adapter
  * for note persistence (matches the production `makeNotesAdapter` shape so
  * `attachNotesFloorState` does not get reached). Real `loop-tools` registry
- * is exercised for chat / lorebook / memory paths via injected fixtures
- * (`__getSortedEntriesFn`, `__memoryGraphSession`,
- * `__floorStateForNotes`) — no `lib.js` dependency is touched, so tests
- * run on the Node-based jest config.
+ * is exercised for chat / lorebook paths via injected fixtures
+ * (`__getSortedEntriesFn`, `__floorStateForNotes`) — no `lib.js`
+ * dependency is touched, so tests run on the Node-based jest config.
+ *
+ * memory-graph tools are no longer Layer-1 builtins; the 6-round happy
+ * path test registers them via memory-graph's Layer-2 module and
+ * pre-populates the session via `__setSessionForTest` so the wrapper
+ * exec finds a stub session without hitting the real Layer-1 store.
  */
 
-import { describe, test, expect, jest } from '@jest/globals';
+import { describe, test, expect, jest, beforeEach, afterEach } from '@jest/globals';
 
 import {
     runLoopOrchestration,
 } from '../../public/scripts/extensions/orchestrator/loop-runtime.js';
+import {
+    registerMemoryGraphOrchestrationTools,
+    unregisterMemoryGraphOrchestrationTools,
+    __setSessionForTest,
+} from '../../public/scripts/extensions/memory-graph/orchestrator-tools.js';
+import { __getExtensionRegistryForTest } from '../../public/scripts/extensions/orchestrator/register-custom-tool.js';
 
 function makeProfile(overrides = {}) {
     return {
@@ -113,7 +123,13 @@ function makeChatContext({ chat = [], notesAdapter = null, sortedEntries = null,
         ctx.__getSortedEntriesFn = async () => sortedEntries;
     }
     if (memorySession !== null) {
-        ctx.__memoryGraphSession = memorySession;
+        // memory-graph's Layer-2 tools open the session lazily and cache
+        // it on a per-ctx WeakMap. Pre-populate via the test helper so
+        // the wrappers see this stub on first call without hitting the
+        // real Layer-1 store. The orchestrator runtime builds toolContext
+        // via Object.create(context), so cache on both the source ctx
+        // and any descendant (when present) via the same helper.
+        __setSessionForTest(ctx, memorySession);
     }
     if (activatedEntryKeys !== null) {
         ctx.__lukerRun = { activatedEntryKeys };
@@ -137,6 +153,20 @@ function eventTypes(trace) {
 }
 
 describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
+    beforeEach(async () => {
+        // memory_* tools live in memory-graph's Layer-2 module now.
+        // Register them once per test so executeLoopTool can dispatch
+        // memory_list_candidates / memory_node_brief; the wrapper exec
+        // looks up the session through the WeakMap pre-populated by
+        // __setSessionForTest in makeChatContext.
+        __getExtensionRegistryForTest().clear();
+        await registerMemoryGraphOrchestrationTools();
+    });
+    afterEach(async () => {
+        await unregisterMemoryGraphOrchestrationTools();
+        __getExtensionRegistryForTest().clear();
+    });
+
     test('model -> note_open -> lorebook_search -> lorebook_get -> memory_list_candidates -> memory_node_brief -> finalize', async () => {
         // Scripted six-round trajectory. Each `mockImplementationOnce` reads
         // the messages array we observed at that round so we can assert

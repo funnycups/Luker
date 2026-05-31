@@ -125,6 +125,7 @@ const zhCNSidebar = [
       { text: '导演模式', link: '/zh-CN/features/orchestrator/director' },
       { text: 'AI 迭代工作台', link: '/zh-CN/features/orchestrator/iteration-studio' },
       { text: '笔记', link: '/zh-CN/features/orchestrator/notes' },
+      { text: '自定义工具', link: '/zh-CN/features/orchestrator/custom-tools' },
     ],
   },
   {
@@ -189,6 +190,7 @@ const zhCNSidebar = [
               { text: '记忆图只读 API', link: '/zh-CN/development/extension-api/memory-graph' },
               { text: 'Edits 库', link: '/zh-CN/development/extension-api/edits-lib' },
               { text: '迭代工作台框架', link: '/zh-CN/development/extension-api/iteration-studio' },
+              { text: '编排器工具 API', link: '/zh-CN/development/extension-api/orchestrator-tools' },
             ],
           },
           { text: '角色卡开发者指南', link: '/zh-CN/development/card-developers' },
@@ -256,6 +258,7 @@ const zhTWSidebar = [
           { text: '導演模式', link: '/zh-TW/features/orchestrator/director' },
           { text: 'AI 迭代工作台', link: '/zh-TW/features/orchestrator/iteration-studio' },
           { text: '便箋', link: '/zh-TW/features/orchestrator/notes' },
+          { text: '自訂工具', link: '/zh-TW/features/orchestrator/custom-tools' },
         ],
       },
       {
@@ -320,6 +323,7 @@ const zhTWSidebar = [
                   { text: '記憶圖唯讀 API', link: '/zh-TW/development/extension-api/memory-graph' },
                   { text: 'Edits 函式庫', link: '/zh-TW/development/extension-api/edits-lib' },
                   { text: '迭代工作台框架', link: '/zh-TW/development/extension-api/iteration-studio' },
+                  { text: '編排器工具 API', link: '/zh-TW/development/extension-api/orchestrator-tools' },
                 ],
               },
               { text: '角色卡開發者指南', link: '/zh-TW/development/card-developers' },
@@ -387,6 +391,7 @@ const enSidebar = [
           { text: 'Director Mode', link: '/features/orchestrator/director' },
           { text: 'AI Iteration Studio', link: '/features/orchestrator/iteration-studio' },
           { text: 'Notes', link: '/features/orchestrator/notes' },
+          { text: 'Custom Tools', link: '/features/orchestrator/custom-tools' },
         ],
       },
       {
@@ -451,6 +456,7 @@ const enSidebar = [
                   { text: 'Memory Graph Read-Only API', link: '/development/extension-api/memory-graph' },
                   { text: 'Edits Library', link: '/development/extension-api/edits-lib' },
                   { text: 'Iteration Studio Framework', link: '/development/extension-api/iteration-studio' },
+                  { text: 'Orchestrator Tools', link: '/development/extension-api/orchestrator-tools' },
                 ],
               },
               { text: 'Card Developer Guide', link: '/development/card-developers' },

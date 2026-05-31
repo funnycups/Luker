@@ -45,6 +45,8 @@ import {
     ensureReasoningSection,
     markReasoningSectionStatus,
 } from './editor-ops.js';
+import { buildPerRunCustomToolRegistry } from './per-run-custom-tools.js';
+import { resolveToolSource } from './loop-tools.js';
 
 /**
  * Resolve the connection-profile name for a director agent: per-agent
@@ -355,6 +357,13 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
     // really wants an empty instruction, not a hidden fallback.
     const systemPrompt = String(director.mainAgent?.systemPrompt || '');
 
+    // Layer-3 custom tools live on the profile root. Built once per
+    // director run and threaded into both the main agent (its tool
+    // schemas + per-call executeLoopTool ctx) and every sub-agent
+    // dispatch (via createSubagentDispatcher's deps bag, which forwards
+    // it into the sub-agent's tool schemas + ctx the same way).
+    const customToolRegistry = buildPerRunCustomToolRegistry(safeProfile, deps?.trace, deps?.recordTraceEvent);
+
     const toolSchemas = buildMainAgentToolSchemas({
         subAgents: director.subAgents || [],
         // Main agent tools: per-agent override (object) wins; null falls
@@ -362,6 +371,7 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         // uses, just rooted at director.mainAgent.tools instead of
         // subAgents[i].tools.
         tools: resolveAgentToolFlags(director.mainAgent?.tools, director.tools) || {},
+        customToolRegistry,
     });
 
     // Resolve the cached content payload (captured by
@@ -418,13 +428,11 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         // — mirrors loop-runtime's behavior so the curator / pickup-
         // scout pipeline sees the same surface as the loop agent does.
         contextForNotes: deps?.contextForNotes,
-        // Memory-graph session overlay merged into the per-tool-call
-        // context the sub-agent dispatcher hands to executeLoopTool.
-        // Carries `__memoryGraphSession` so memory_* tools find a live
-        // session instead of throwing MEMORY_DISABLED. Mounted once per
-        // director turn by main.js; shared by reference across every
-        // sub-agent's tool calls.
-        contextForSession: deps?.contextForSession,
+        // Layer-3 customTools registry compiled once at the top of this
+        // run. The dispatcher forwards it into each sub-agent's tool
+        // schemas (`buildSubAgentToolSchemas`) and into the ctx passed
+        // to `executeLoopTool` for each sub-agent tool call.
+        customToolRegistry,
     });
 
     // Prepend an `## Open Notes` block to the main agent's system
@@ -612,13 +620,23 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         // Record this round in the trace (structured view, independent
         // of the messages-array alias) so the popup can show a per-round
         // breakdown of what the main agent said and what tools it called.
+        // `source` tags each call with the layer that will serve the
+        // dispatch (builtin / extension / profile / st-bridge / unknown)
+        // so the simulation-review popup can render a layer chip.
         if (trace?.director?.mainAgent?.rounds) {
+            const ctxForSource = { __customToolRegistry: customToolRegistry };
             trace.director.mainAgent.rounds.push({
                 round,
                 startedAt: new Date().toISOString(),
                 assistantText: String(result?.assistantText || ''),
                 reasoningText: reasoningAccum || String(result?.reasoning || ''),
-                toolCalls: Array.isArray(toolCalls) ? structuredClone(toolCalls) : [],
+                toolCalls: Array.isArray(toolCalls)
+                    ? toolCalls.map(tc => {
+                        const cloned = structuredClone(tc);
+                        cloned.source = resolveToolSource(String(tc?.name || ''), ctxForSource);
+                        return cloned;
+                    })
+                    : [],
             });
         }
         // text already streamed into the reasoning fold via onChunk;
@@ -642,6 +660,7 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                 name: String(tc?.name || ''),
                 arguments: safeStringifyArgs(tc?.args),
             },
+            source: resolveToolSource(String(tc?.name || ''), { __customToolRegistry: customToolRegistry }),
         }));
         // Push assistant turn with reshaped tool-call records so the
         // next round's history is well-formed.
@@ -685,18 +704,18 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                 finalized = !!toolResult.ok;
             } else if (typeof deps?.executeLoopTool === 'function') {
                 try {
-                    // Spread the same per-feature overlays the dispatcher
-                    // gives sub-agents (`contextForSession` carries
-                    // `__memoryGraphSession`; `contextForNotes` carries
-                    // `__floorStateForNotes`) so memory_* / note_* tools
-                    // invoked by the MAIN agent reach the live adapters
-                    // instead of throwing MEMORY_DISABLED / silently
-                    // losing the floor-state writer. Mirrors
+                    // Spread the same per-feature overlay the dispatcher
+                    // gives sub-agents (`contextForNotes` carries
+                    // `__floorStateForNotes`) so note_* tools invoked by
+                    // the MAIN agent reach the live adapter instead of
+                    // silently losing the floor-state writer. Mirrors
                     // director-tools.js's sub-agent tool-exec context.
+                    // memory-graph's session is opened lazily inside its
+                    // Layer-2 tools — orchestrator does not thread one.
                     const raw = await deps.executeLoopTool(name, args, {
-                        ...(deps?.contextForSession || {}),
                         ...(deps?.contextForNotes || {}),
                         chat: deps.chat,
+                        __customToolRegistry: customToolRegistry,
                     });
                     toolResult = { ok: true, result: raw };
                 } catch (err) {

@@ -1,4 +1,140 @@
 import { renderPresetHelpButton } from '../preset-help.js';
+import { listExtensionTools } from './register-custom-tool.js';
+
+/**
+ * Merge Layer-2 (extension + st-bridge) tools with Layer-3 (profile.customTools[])
+ * for display in the "Custom tools" flag panel. Layer-3 names take
+ * precedence on dedup (a profile-authored handwritten tool with the same
+ * name as an extension tool shadows the extension entry — the runtime
+ * dispatcher resolves the same way).
+ *
+ * `flagBucket` is the `tools.custom` (or `defaultTools.custom`) object on
+ * the profile. Only literal `false` disables; missing or `true` means
+ * the tool is enabled.
+ *
+ * Returns: [{ name, displayName, description, mode, source, enabled }]
+ */
+function listCustomToolsForFlagUi(customTools, flagBucket) {
+    const customFlags = flagBucket && typeof flagBucket === 'object' ? flagBucket : {};
+    const profileTools = Array.isArray(customTools) ? customTools : [];
+    const seen = new Set();
+    const out = [];
+    for (const t of profileTools) {
+        const name = String(t?.name || '');
+        if (!name) continue;
+        seen.add(name);
+        out.push({
+            name,
+            displayName: String(t.displayName || name),
+            description: String(t.description || ''),
+            mode: t.mode === 'read' ? 'read' : 'write',
+            source: 'profile',
+            enabled: customFlags[name] !== false,
+        });
+    }
+    for (const ext of listExtensionTools()) {
+        const name = String(ext?.name || '');
+        if (!name || seen.has(name)) continue;
+        out.push({
+            name,
+            displayName: String(ext.displayName || name),
+            description: String(ext.description || ''),
+            mode: ext.mode === 'read' ? 'read' : 'write',
+            source: ext.source === 'st-bridge' ? 'st-bridge' : 'extension',
+            enabled: customFlags[name] !== false,
+        });
+    }
+    return out;
+}
+
+/**
+ * Render the "Custom tools" panel: Add / Bridge action row, the
+ * grouped checkbox list (Profile / Extension / From SillyTavern), and
+ * the per-row Edit / Duplicate / Remove buttons for handwritten entries.
+ *
+ * The outer wrapper carries `data-orch-mode="<mode>"` so the click
+ * handlers in main.js can route to the correct editor accessor.
+ *
+ * `customTools` is the profile-owned definitions array (`editor.customTools`
+ * for loop/director/agenda, `editor.spec.customTools` for spec).
+ * `flagBucket` is the corresponding `tools.custom` (or `defaultTools.custom`)
+ * enable bucket.
+ */
+function renderCustomToolsSection(deps, safeScope, mode, customTools, flagBucket) {
+    const { escapeHtml, i18n } = deps;
+    const profileTools = Array.isArray(customTools) ? customTools : [];
+    const items = listCustomToolsForFlagUi(profileTools, flagBucket);
+    const byGroup = { profile: [], extension: [], 'st-bridge': [] };
+    for (const it of items) {
+        byGroup[it.source].push(it);
+    }
+    const renderProfileRow = (it, idx) => `
+        <div class="luker_orch_ct_row" data-orch-ct-idx="${idx}" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}">
+            <label class="checkbox_label luker_orch_ct_row_label">
+                <input type="checkbox" data-orch-tool-flag="${escapeHtml(it.name)}" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}" ${it.enabled ? 'checked' : ''} />
+                <span class="luker_orch_ct_name">${escapeHtml(it.displayName)}</span>
+                <span class="luker_orch_ct_mode">[${escapeHtml(it.mode)}]</span>
+                ${it.description ? `<span class="luker_orch_ct_desc">${escapeHtml(it.description)}</span>` : ''}
+            </label>
+            <div class="luker_orch_ct_actions_inline">
+                <button class="menu_button menu_button_small" type="button" data-orch-action="edit-custom-tool" data-orch-ct-idx="${idx}" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}">${escapeHtml(i18n('Edit'))}</button>
+                <button class="menu_button menu_button_small" type="button" data-orch-action="duplicate-custom-tool" data-orch-ct-idx="${idx}" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}">${escapeHtml(i18n('Duplicate'))}</button>
+                <button class="menu_button menu_button_small" type="button" data-orch-action="remove-custom-tool" data-orch-ct-idx="${idx}" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}">${escapeHtml(i18n('Remove'))}</button>
+            </div>
+        </div>
+    `;
+    const renderExtRow = (it) => `
+        <label class="checkbox_label luker_orch_ct_row_label">
+            <input type="checkbox" data-orch-tool-flag="${escapeHtml(it.name)}" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}" ${it.enabled ? 'checked' : ''} />
+            <span class="luker_orch_ct_name">${escapeHtml(it.displayName)}</span>
+            <span class="luker_orch_ct_mode">[${escapeHtml(it.mode)}]</span>
+            ${it.description ? `<span class="luker_orch_ct_desc">${escapeHtml(it.description)}</span>` : ''}
+        </label>
+    `;
+    const profileGroup = byGroup.profile.length === 0
+        ? `<div class="luker_orch_ct_empty">${escapeHtml(i18n('No custom tools yet'))}</div>`
+        : profileTools.map((tool, idx) => {
+            const flagEnabled = flagBucket && flagBucket[String(tool?.name || '')] !== false;
+            const item = {
+                name: String(tool?.name || ''),
+                displayName: String(tool?.displayName || tool?.name || ''),
+                description: String(tool?.description || ''),
+                mode: tool?.mode === 'read' ? 'read' : 'write',
+                source: 'profile',
+                enabled: flagEnabled,
+            };
+            return renderProfileRow(item, idx);
+        }).join('');
+    const extensionGroup = byGroup.extension.length === 0 ? '' : `
+        <div class="luker_orch_ct_subgroup">
+            <div class="luker_orch_ct_subgroup_title">${escapeHtml(i18n('Extension (from other plugins)'))}</div>
+            ${byGroup.extension.map(renderExtRow).join('')}
+        </div>
+    `;
+    const stBridgeGroup = byGroup['st-bridge'].length === 0 ? '' : `
+        <div class="luker_orch_ct_subgroup">
+            <div class="luker_orch_ct_subgroup_title">${escapeHtml(i18n('From SillyTavern'))}</div>
+            ${byGroup['st-bridge'].map(renderExtRow).join('')}
+        </div>
+    `;
+    return `
+<details class="luker_orch_tools_section luker_orch_ct_section" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}">
+    <summary>${escapeHtml(i18n('Custom Tools'))}</summary>
+    <div class="luker_orch_ct_actions">
+        <button class="menu_button menu_button_small" type="button" data-orch-action="add-custom-tool" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}">${escapeHtml(i18n('Add custom tool'))}</button>
+        <button class="menu_button menu_button_small" type="button" data-orch-action="open-bridge-st-tools" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}">${escapeHtml(i18n('Bridge SillyTavern tools...'))}</button>
+    </div>
+    <div class="luker_orch_ct_subgroup">
+        <div class="luker_orch_ct_subgroup_title">${escapeHtml(i18n('Profile (defined in this profile)'))}</div>
+        ${profileGroup}
+    </div>
+    ${extensionGroup}
+    ${stBridgeGroup}
+</details>
+    `;
+}
+
+export { renderCustomToolsSection };
 
 /**
  * Shared checkbox-grid for the orchestration loop tool flags. Used by
@@ -34,8 +170,8 @@ function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}, 
     const note = safe.note || {};
     const chat = safe.chat || {};
     const lorebook = safe.lorebook || {};
-    const memory = safe.memory || {};
-    const search = safe.search || {};
+    // memory + search tools are Layer-2 customs now; the Custom Tools
+    // section rendered alongside this grid surfaces them via tools.custom.*.
     const collab = safe.collab || {};
     const extraAttrParts = Object.entries(extraAttrs)
         .map(([key, value]) => `data-${key}="${escapeHtml(String(value))}"`)
@@ -68,29 +204,6 @@ function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}, 
     <legend>${escapeHtml(i18n('lorebook (world info)'))}</legend>
     ${cb('lorebook.search', lorebook.search, 'lorebook_search')}
     ${cb('lorebook.get', lorebook.get, 'lorebook_get')}
-</fieldset>
-<fieldset class="luker_orch_loop_tools_group">
-    <legend>${escapeHtml(i18n('memory (memory-graph)'))}</legend>
-    ${cb('memory.schema', memory.schema, 'memory_schema')}
-    ${cb('memory.list_candidates', memory.list_candidates, 'memory_list_candidates')}
-    ${cb('memory.edge_summary', memory.edge_summary, 'memory_edge_summary')}
-    ${cb('memory.node_brief', memory.node_brief, 'memory_node_brief')}
-    ${cb('memory.expand_seeds', memory.expand_seeds, 'memory_expand_seeds')}
-    ${cb('memory.keyword_search', memory.keyword_search, 'memory_keyword_search')}
-    ${cb('memory.vector_search', memory.vector_search, 'memory_vector_search')}
-    ${cb('memory.find_by_name', memory.find_by_name, 'memory_find_by_name')}
-    ${cb('memory.compaction_candidates', memory.compaction_candidates, 'memory_compaction_candidates')}
-    ${cb('memory.node_create', memory.node_create, 'memory_node_create')}
-    ${cb('memory.node_edit', memory.node_edit, 'memory_node_edit')}
-    ${cb('memory.node_delete', memory.node_delete, 'memory_node_delete')}
-    ${cb('memory.link_upsert', memory.link_upsert, 'memory_link_upsert')}
-    ${cb('memory.link_delete', memory.link_delete, 'memory_link_delete')}
-    ${cb('memory.compact_nodes', memory.compact_nodes, 'memory_compact_nodes')}
-</fieldset>
-<fieldset class="luker_orch_loop_tools_group">
-    <legend>${escapeHtml(i18n('search (web search)'))}</legend>
-    ${cb('search.search', search.search, 'search_search')}
-    ${cb('search.visit', search.visit, 'search_visit')}
 </fieldset>${collabFieldset}`;
 }
 
@@ -263,6 +376,7 @@ export function renderAgendaWorkspace(deps, scope, editor, title = '') {
                 <input class="text_pole" data-luker-agenda-new-agent="${safeScope}" placeholder="${escapeHtml(i18n('new_preset_id'))}" />
                 <div class="menu_button menu_button_small" data-luker-action="agenda-agent-add" data-scope="${safeScope}">${escapeHtml(i18n('Add Preset'))}</div>
             </div>
+            ${renderCustomToolsSection(deps, safeScope, 'agenda', editor?.customTools || [], (editor?.defaultTools && editor.defaultTools.custom) || {})}
         </div>
     </div>
 </div>`;
@@ -299,6 +413,7 @@ export function renderEditorWorkspace(deps, scope, editor, title) {
                 <input class="text_pole" data-luker-new-preset="${scope}" placeholder="${escapeHtml(i18n('new_preset_id'))}" />
                 <div class="menu_button menu_button_small" data-luker-action="preset-add" data-scope="${scope}">${escapeHtml(i18n('Add Preset'))}</div>
             </div>
+            ${renderCustomToolsSection(deps, safeScope, 'spec', editor?.spec?.customTools || [], (editor?.spec?.defaultTools && editor.spec.defaultTools.custom) || {})}
         </div>
     </div>
 </div>`;
@@ -334,8 +449,10 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
     const note = tools.note || {};
     const chat = tools.chat || {};
     const lorebook = tools.lorebook || {};
-    const memory = tools.memory || {};
-    const search = tools.search || {};
+    // memory + search tools are Layer-2 customs now (translated by
+    // sanitizeAgentToolFlags into tools.custom.<full_name>); the Custom
+    // Tools section below renders them. No legacy memory/search fieldsets
+    // here.
     const wallClockSeconds = Math.max(10, Math.round(Number(editor?.wall_clock_budget_ms || 300000) / 1000));
     const checkbox = (id, field, label, disabled = false, checked = null) => {
         const isChecked = checked === null ? Boolean(field) : Boolean(checked);
@@ -379,32 +496,10 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
                 ${checkbox('lorebook.get', lorebook.get, 'lorebook_get')}
             </fieldset>
             <fieldset class="luker_orch_loop_tools_group">
-                <legend>${escapeHtml(i18n('memory (memory-graph)'))}</legend>
-                ${checkbox('memory.schema', memory.schema, 'memory_schema')}
-                ${checkbox('memory.list_candidates', memory.list_candidates, 'memory_list_candidates')}
-                ${checkbox('memory.edge_summary', memory.edge_summary, 'memory_edge_summary')}
-                ${checkbox('memory.node_brief', memory.node_brief, 'memory_node_brief')}
-                ${checkbox('memory.expand_seeds', memory.expand_seeds, 'memory_expand_seeds')}
-                ${checkbox('memory.keyword_search', memory.keyword_search, 'memory_keyword_search')}
-                ${checkbox('memory.vector_search', memory.vector_search, 'memory_vector_search')}
-                ${checkbox('memory.find_by_name', memory.find_by_name, 'memory_find_by_name')}
-                ${checkbox('memory.compaction_candidates', memory.compaction_candidates, 'memory_compaction_candidates')}
-                ${checkbox('memory.node_create', memory.node_create, 'memory_node_create')}
-                ${checkbox('memory.node_edit', memory.node_edit, 'memory_node_edit')}
-                ${checkbox('memory.node_delete', memory.node_delete, 'memory_node_delete')}
-                ${checkbox('memory.link_upsert', memory.link_upsert, 'memory_link_upsert')}
-                ${checkbox('memory.link_delete', memory.link_delete, 'memory_link_delete')}
-                ${checkbox('memory.compact_nodes', memory.compact_nodes, 'memory_compact_nodes')}
-            </fieldset>
-            <fieldset class="luker_orch_loop_tools_group">
-                <legend>${escapeHtml(i18n('search (web search)'))}</legend>
-                ${checkbox('search.search', search.search, 'search_search')}
-                ${checkbox('search.visit', search.visit, 'search_visit')}
-            </fieldset>
-            <fieldset class="luker_orch_loop_tools_group">
                 <legend>${escapeHtml(i18n('terminator'))}</legend>
                 ${checkbox('finalize', true, `finalize  ${i18n('(forced on)')}`, true, true)}
             </fieldset>
+            ${renderCustomToolsSection(deps, safeScope, 'loop', editor?.customTools || [], (editor?.tools && editor.tools.custom) || {})}
         </div>
     </div>
 </div>`;
@@ -605,6 +700,7 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
             <div class="luker-studio-add-row">
                 <button class="menu_button menu_button_small" type="button" data-orch-add-subagent="1" data-scope="${safeScope}" data-i18n="Add sub-agent">${escapeHtml(i18n('Add sub-agent'))}</button>
             </div>
+            ${renderCustomToolsSection(deps, safeScope, 'director', profile?.customTools || [], (profile?.tools && profile.tools.custom) || {})}
         </div>
     </div>
 </div>`;

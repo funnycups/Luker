@@ -1,4 +1,4 @@
-import { appendShared, appendToolStatusChip, jsonOrText } from './shared.js';
+import { appendShared, appendToolStatusChip, appendToolSourceChip, jsonOrText } from './shared.js';
 
 export function render(payload, i18n) {
     const root = document.createElement('div');
@@ -45,6 +45,7 @@ function renderTurns(parent, turns, basePath, i18n) {
         tcs.forEach((tc, j) => {
             const tcPath = `${turnPath} → Tool call #${j + 1} (${tc.name})`;
             const tcSec = appendShared.subsubsection(turnSec, `Tool call #${j + 1}: ${tc.name}`, null, { collapsedByDefault: true });
+            appendToolSourceChip(tcSec, tc.source);
             appendToolStatusChip(tcSec, tc.result, i18n);
             const argsSec = appendShared.subsubsection(tcSec, i18n('sim.label.args', 'args'), `${tcPath} → args`, { collapsedByDefault: true });
             appendShared.pre(argsSec, jsonOrText(tc.args));

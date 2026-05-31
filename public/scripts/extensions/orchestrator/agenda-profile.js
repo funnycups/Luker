@@ -43,6 +43,7 @@ import {
 } from './editable-spec.js';
 import { sanitizeOptionalAgentToolFlags } from './persistence.js';
 import { toReadableYamlText } from './output-formatting.js';
+import { sanitizeCustomTools } from './custom-tools-sanitize.js';
 
 const MODULE_NAME = 'orchestrator';
 
@@ -116,6 +117,7 @@ export function sanitizeAgendaWorkingProfile(workingProfile = null) {
         // that doesn't override". Per-agent `tools` lives on
         // `agents[id].tools` and takes precedence.
         defaultTools: sanitizeOptionalAgentToolFlags(source?.defaultTools),
+        customTools: sanitizeCustomTools(source?.customTools),
     };
 }
 
@@ -129,6 +131,7 @@ export function ensureAgendaEditorIntegrity(editor) {
     editor.finalAgentId = normalized.finalAgentId;
     editor.limits = normalized.limits;
     editor.defaultTools = normalized.defaultTools;
+    editor.customTools = normalized.customTools;
     if ('avatar' in editor) {
         editor.avatar = String(editor.avatar || '');
     }

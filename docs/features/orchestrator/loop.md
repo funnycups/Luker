@@ -128,6 +128,8 @@ Once a tool call returns, its result lands in the conversation as a light-yellow
 
 ![Loop conversation: tool result feeds straight into the agent's next thought](/images/orchestrator/real-loop-conversation-tool.png)
 
+For agents that need capabilities beyond these builtins, see [Custom tools](./custom-tools.md).
+
 ## Five-layer runaway protection (in priority order)
 
 1. **Abort signal** — user clicks Stop / upper-layer cancel → loop aborts immediately; trace records `cancelled` and **no** half-baked capsule is injected.
@@ -264,4 +266,5 @@ Concrete latency deltas, capsule-quality preferences, and total-token usage acro
 - [Agenda mode](/features/orchestrator/agenda) — Planner-driven dynamic dispatch
 - [Function Call Runtime](/improvements/function-call-runtime) — the runtime tool calls go through
 - [Memory Graph](/features/memory-graph) — data source behind the `memory_*` tools
+- [Custom tools](./custom-tools.md) — register your own tools or bridge SillyTavern function tools into the loop
 - [Notes](/features/orchestrator/notes) — panel usage and detailed concept reference for the open/close note model

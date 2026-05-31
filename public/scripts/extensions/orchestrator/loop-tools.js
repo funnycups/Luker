@@ -14,7 +14,7 @@
  *      for a single source of truth: the runtime's `FINALIZE_TOOL_SCHEMA`
  *      is re-exported so loop-runtime can keep building it directly,
  *      while `getEnabledToolSchemas(profile)` does the profile-driven
- *      filtering for chat / lorebook / memory / note tools.
+ *      filtering for chat / lorebook / note / search tools.
  *
  *   3. `getEnabledToolSchemas(profile)` — derives the active schemas
  *      from `profile.tools.<namespace>.<verb>` flags. `finalize` is
@@ -22,8 +22,10 @@
  *      everything else respects the profile flag.
  *
  * Task 8 introduces the dispatcher with chat tools wired in. Task 9
- * appends `lorebook_search` / `lorebook_get`. Task 10 adds memory tools.
- * Task 11 adds `note_open` / `note_close`.
+ * appends `lorebook_search` / `lorebook_get`. Task 11 adds
+ * `note_open` / `note_close`. Memory + search tools live in Layer-2
+ * — memory-graph and search-tools register their own through
+ * `getExtensionApi('orchestrator').registerOrchestrationTool`.
  *
  * Tool names use `<namespace>_<verb>` (e.g. `chat_read_range`) because
  * Anthropic's tool-name regex `^[a-zA-Z0-9_-]{1,128}$` rejects dots.
@@ -33,33 +35,10 @@
  */
 
 import { FINALIZE_TOOL_SCHEMA, ToolError } from './loop-runtime.js';
+import { getExtensionRegistry } from './register-custom-tool.js';
 import { execChatReadRange, execChatSearch } from './loop-tools/chat.js';
 import { execLorebookSearch, execLorebookGet } from './loop-tools/lorebook.js';
-import {
-    execMemoryListCandidates,
-    execMemoryEdgeSummary,
-    execMemoryNodeBrief,
-    execMemoryExpandSeeds,
-    execMemorySchema,
-    execMemoryKeywordSearch,
-    execMemoryVectorSearch,
-    execMemoryFindByName,
-    execMemoryCompactionCandidates,
-    execMemoryNodeCreate,
-    execMemoryNodeEdit,
-    execMemoryNodeDelete,
-    execMemoryLinkUpsert,
-    execMemoryLinkDelete,
-    execMemoryCompactNodes,
-    simulateMemoryNodeCreate,
-    simulateMemoryNodeEdit,
-    simulateMemoryNodeDelete,
-    simulateMemoryLinkUpsert,
-    simulateMemoryLinkDelete,
-    simulateMemoryCompactNodes,
-} from './loop-tools/memory.js';
 import { execNoteOpen, execNoteClose } from './loop-tools/note.js';
-import { execSearchSearch, execSearchVisit } from './loop-tools/search.js';
 
 /**
  * Map of fully-qualified tool name → async execution function.
@@ -67,6 +46,19 @@ import { execSearchSearch, execSearchVisit } from './loop-tools/search.js';
  * serializable result (or throws `ToolError` on user-facing failures).
  */
 const REGISTRY = new Map();
+
+/**
+ * Layer-3 customToolRegistry shape gate. The per-run registry must be
+ * Map-shaped: support `.get(name)` for dispatch AND iteration of
+ * `[name, entry]` pairs for schema merge. Both `executeLoopTool` and
+ * `getEnabledToolSchemas` use this identically so Layer-3 acceptance
+ * is symmetric.
+ */
+function isToolRegistry(reg) {
+    return reg != null
+        && typeof reg.get === 'function'
+        && typeof reg[Symbol.iterator] === 'function';
+}
 
 /**
  * Array of OpenAI-style tool schemas (each shaped as
@@ -224,356 +216,6 @@ registerTool('lorebook_get', execLorebookGet, {
     },
 }, { mode: 'read' });
 
-// ---- memory namespace ---------------------------------------------------
-// Read-api pipeline tools. They mirror the inputs the native recall LLM
-// sees so a director sub-agent (or the loop main agent) can reproduce an
-// LLM-grade recall pass.
-
-registerTool('memory_list_candidates', execMemoryListCandidates, {
-    type: 'function',
-    function: {
-        name: 'memory_list_candidates',
-        description: 'Enumerate the visible memory-graph candidate pool — the same pool the memory-graph\'s own recall LLM sees. Returns { candidates: [{ id, type, level, title, seqTo, semanticDepth }] } in recency-first order (seqTo desc, semanticDepth desc). Use this as the FIRST step of a recall pipeline.',
-        parameters: {
-            type: 'object',
-            properties: {
-                seq_window: {
-                    type: 'object',
-                    properties: {
-                        from: { type: 'integer', description: 'Inclusive lower bound on node seqTo.' },
-                        to: { type: 'integer', description: 'Inclusive upper bound on node seqTo.' },
-                    },
-                    additionalProperties: false,
-                    description: 'Optional seq range to narrow the pool.',
-                },
-                types: {
-                    type: 'array',
-                    items: { type: 'string' },
-                    description: 'Optional node-type filter (e.g. ["event", "character_sheet"]).',
-                },
-                exclude_recent_messages: {
-                    type: 'integer',
-                    minimum: 0,
-                    description: 'Drop nodes inside the recent-N raw turns window so freshly-injected context is not duplicated.',
-                },
-            },
-            additionalProperties: false,
-        },
-    },
-}, { mode: 'read' });
-
-registerTool('memory_edge_summary', execMemoryEdgeSummary, {
-    type: 'function',
-    function: {
-        name: 'memory_edge_summary',
-        description: 'Get a node\'s edge_summary: { degree, relations: [{ relation, direction, count }], sample_neighbors: [{ id, type, title }] }. The native recall LLM uses this structural signal; reach for it when a brief is overkill and you just need "is this node a hub?".',
-        parameters: {
-            type: 'object',
-            properties: {
-                node_id: {
-                    type: 'string',
-                    description: 'Node id from memory_list_candidates / memory_keyword_search / memory_find_by_name.',
-                },
-                edge_types: {
-                    type: 'array',
-                    items: { type: 'string' },
-                    description: 'Optional relation-type filter.',
-                },
-                limit: {
-                    type: 'integer',
-                    minimum: 1,
-                    description: 'Sample-neighbors cap (default 8).',
-                },
-            },
-            required: ['node_id'],
-            additionalProperties: false,
-        },
-    },
-}, { mode: 'read' });
-
-registerTool('memory_node_brief', execMemoryNodeBrief, {
-    type: 'function',
-    function: {
-        name: 'memory_node_brief',
-        description: 'Get the canonical recall-side brief for one node: { id, title, summary, keyValues, rowValues, toSeq, childCount, exposure, edgeSummary, alwaysInject }. This is the SAME per-row format the memory-graph recall LLM sees. Returns { brief: null } when the node does not exist or is archived.',
-        parameters: {
-            type: 'object',
-            properties: {
-                node_id: {
-                    type: 'string',
-                    description: 'Node id to fetch the brief for.',
-                },
-                include_edge_summary: {
-                    type: 'boolean',
-                    description: 'Include edge_summary in the brief (default true). Set false to save tokens when you only need the textual fields.',
-                },
-                edge_summary_limit: {
-                    type: 'integer',
-                    minimum: 1,
-                    description: 'sample_neighbors cap inside the embedded edge_summary (default 8).',
-                },
-            },
-            required: ['node_id'],
-            additionalProperties: false,
-        },
-    },
-}, { mode: 'read' });
-
-registerTool('memory_expand_seeds', execMemoryExpandSeeds, {
-    type: 'function',
-    function: {
-        name: 'memory_expand_seeds',
-        description: 'BFS-expand from seed ids along children + projected edges (default 1 hop). Returns { nodes: [{ id, type, level, title, seqTo }] } for the union of seeds + reachable nodes. Use SPARINGLY: when a brief is on-topic but compressed (high_only exposure, large childCount) and you need to surface specific children.',
-        parameters: {
-            type: 'object',
-            properties: {
-                seed_ids: {
-                    type: 'array',
-                    items: { type: 'string' },
-                    description: 'Non-empty list of node ids to expand around.',
-                },
-                hops: {
-                    type: 'integer',
-                    minimum: 1,
-                    description: 'BFS depth (default 1). Keep low; wide drilling wastes budget.',
-                },
-                edge_types: {
-                    type: 'array',
-                    items: { type: 'string' },
-                    description: 'Optional relation-type filter for projected edges.',
-                },
-                include_children: {
-                    type: 'boolean',
-                    description: 'Include hierarchical children (rollup → leaves). Default true.',
-                },
-                exclude_internal: {
-                    type: 'boolean',
-                    description: 'Drop nodes reached only through contains / semantic_contains internal edges. Default false (mirrors native expandRouteCandidates).',
-                },
-            },
-            required: ['seed_ids'],
-            additionalProperties: false,
-        },
-    },
-}, { mode: 'read' });
-
-registerTool('memory_schema', execMemorySchema, {
-    type: 'function',
-    function: {
-        name: 'memory_schema',
-        description: 'Return the active node-type schema: { types: [{ type, tableName, tableColumns, requiredColumns, primaryKeyColumns, forceUpdate, alwaysInject, editable, compressionMode }] }. This is the SAME schema_overview the native recall LLM sees. Read once at the start of a recall pass to understand which fields are key vs detail and which types use hierarchical compression.',
-        parameters: {
-            type: 'object',
-            properties: {},
-            additionalProperties: false,
-        },
-    },
-}, { mode: 'read' });
-
-registerTool('memory_keyword_search', execMemoryKeywordSearch, {
-    type: 'function',
-    function: {
-        name: 'memory_keyword_search',
-        description: 'Token-intersection search across node title + projected columns. Always available (no profile required). Returns { results: [{ id, type, title, seqTo, score, scoreMode: "keyword" }] } sorted by score desc. Use to locate existing nodes by name / keyword for dedup or relevance.',
-        parameters: {
-            type: 'object',
-            properties: {
-                query: { type: 'string', description: 'Search query — name, keyword, or short phrase.' },
-                types: { type: 'array', items: { type: 'string' }, description: 'Optional type filter (e.g. ["character_sheet"]).' },
-                k: { type: 'integer', minimum: 1, description: 'Max results (default 20).' },
-            },
-            required: ['query'],
-            additionalProperties: false,
-        },
-    },
-}, { mode: 'read' });
-
-registerTool('memory_vector_search', execMemoryVectorSearch, {
-    type: 'function',
-    function: {
-        name: 'memory_vector_search',
-        description: 'Semantic vector search. REQUIRES an embedding profile configured in memory-graph settings. Throws NO_EMBEDDING_PROFILE error when not configured — fall back to memory_keyword_search in that case. Returns { results: [{ id, type, title, seqTo, score, scoreMode: "vector" }] }.',
-        parameters: {
-            type: 'object',
-            properties: {
-                query: { type: 'string', description: 'Semantic query — descriptive phrase.' },
-                types: { type: 'array', items: { type: 'string' } },
-                k: { type: 'integer', minimum: 1 },
-            },
-            required: ['query'],
-            additionalProperties: false,
-        },
-    },
-}, { mode: 'read' });
-
-registerTool('memory_find_by_name', execMemoryFindByName, {
-    type: 'function',
-    function: {
-        name: 'memory_find_by_name',
-        description: 'Find existing nodes by name (case-insensitive substring match on title + primary key columns including aliases). Use BEFORE creating a character_sheet or location_state to verify the entity is not already in the graph. Returns { matches: [{ id, type, title, seqTo, ... }] } — empty array if no match.',
-        parameters: {
-            type: 'object',
-            properties: {
-                query: { type: 'string', description: 'Name or alias to look up.' },
-                types: { type: 'array', items: { type: 'string' }, description: 'Optional type filter.' },
-            },
-            required: ['query'],
-            additionalProperties: false,
-        },
-    },
-}, { mode: 'read' });
-
-registerTool('memory_compaction_candidates', execMemoryCompactionCandidates, {
-    type: 'function',
-    function: {
-        name: 'memory_compaction_candidates',
-        description: 'Returns the set of node groups currently eligible for hierarchical compaction at the given depth. { groups: [{ depth, childIds, fanIn }] }. Empty groups means no compaction warranted right now. Returns empty for types with compression.mode === "none".',
-        parameters: {
-            type: 'object',
-            properties: {
-                type: { type: 'string', description: 'Type id (e.g. "event").' },
-                depth: { type: 'integer', minimum: 0, description: 'Depth to scan (default 0).' },
-            },
-            required: ['type'],
-            additionalProperties: false,
-        },
-    },
-}, { mode: 'read' });
-
-registerTool('memory_node_create', execMemoryNodeCreate, {
-    type: 'function',
-    function: {
-        name: 'memory_node_create',
-        description: 'Create a new semantic node in the memory graph. Use sparingly — first call memory_find_by_name to check for an existing entity. Returns { ok, id }.',
-        parameters: {
-            type: 'object',
-            properties: {
-                type: { type: 'string', description: 'Node type from schema (e.g. "character_sheet").' },
-                title: { type: 'string', description: 'Canonical short title.' },
-                fields: { type: 'object', description: 'Field values per the type schema.' },
-                links: {
-                    type: 'array',
-                    items: {
-                        type: 'object',
-                        properties: {
-                            target_node_id: { type: 'string' },
-                            target_ref: { type: 'string' },
-                            relation: { type: 'string' },
-                            direction: { type: 'string', enum: ['outgoing', 'incoming', 'bidirectional'] },
-                        },
-                        additionalProperties: false,
-                    },
-                    description: 'Optional: links to add at create time.',
-                },
-                ref: { type: 'string', description: 'Optional ref for same-call link targeting.' },
-            },
-            required: ['type', 'title'],
-            additionalProperties: false,
-        },
-    },
-}, { mode: 'write', simulate: simulateMemoryNodeCreate });
-
-registerTool('memory_node_edit', execMemoryNodeEdit, {
-    type: 'function',
-    function: {
-        name: 'memory_node_edit',
-        description: 'Patch fields on an existing node. Use set_fields for sparse updates; clear_fields to drop specific columns. Returns { ok }.',
-        parameters: {
-            type: 'object',
-            properties: {
-                node_id: { type: 'string' },
-                set_fields: { type: 'object', description: 'Field → new value map. Only these fields are changed.' },
-                clear_fields: { type: 'array', items: { type: 'string' }, description: 'Field names to clear.' },
-                title: { type: 'string', description: 'New title (optional).' },
-            },
-            required: ['node_id'],
-            additionalProperties: false,
-        },
-    },
-}, { mode: 'write', simulate: simulateMemoryNodeEdit });
-
-registerTool('memory_node_delete', execMemoryNodeDelete, {
-    type: 'function',
-    function: {
-        name: 'memory_node_delete',
-        description: 'Delete a node by id. Use only when the node is clearly wrong / duplicate / stale. Returns { ok }.',
-        parameters: {
-            type: 'object',
-            properties: { node_id: { type: 'string' } },
-            required: ['node_id'],
-            additionalProperties: false,
-        },
-    },
-}, { mode: 'write', simulate: simulateMemoryNodeDelete });
-
-registerTool('memory_link_upsert', execMemoryLinkUpsert, {
-    type: 'function',
-    function: {
-        name: 'memory_link_upsert',
-        description: 'Add relation edges between nodes. Use canonical relation vocabulary only. Composite states allowed (multiple relations between same pair). Returns { ok, applied }.',
-        parameters: {
-            type: 'object',
-            properties: {
-                source_node_id: { type: 'string' },
-                source_ref: { type: 'string', description: 'Alternative to source_node_id; references a same-call create.' },
-                links: {
-                    type: 'array',
-                    items: {
-                        type: 'object',
-                        properties: {
-                            target_node_id: { type: 'string' },
-                            target_ref: { type: 'string' },
-                            relation: { type: 'string' },
-                            direction: { type: 'string', enum: ['outgoing', 'incoming', 'bidirectional'] },
-                        },
-                        additionalProperties: false,
-                    },
-                },
-            },
-            required: ['links'],
-            additionalProperties: false,
-        },
-    },
-}, { mode: 'write', simulate: simulateMemoryLinkUpsert });
-
-registerTool('memory_link_delete', execMemoryLinkDelete, {
-    type: 'function',
-    function: {
-        name: 'memory_link_delete',
-        description: 'Delete a relation edge between two nodes. Use when the relation in that direction is no longer in effect (relationship dissolved, alliance broken, debt repaid). Returns { ok, removed }. Do NOT delete to "replace" — composite multi-edge states are valid.',
-        parameters: {
-            type: 'object',
-            properties: {
-                source_node_id: { type: 'string' },
-                target_node_id: { type: 'string' },
-                relation: { type: 'string' },
-                direction: { type: 'string', enum: ['outgoing', 'incoming', 'bidirectional'], description: 'Default: bidirectional.' },
-            },
-            required: ['source_node_id', 'target_node_id', 'relation'],
-            additionalProperties: false,
-        },
-    },
-}, { mode: 'write', simulate: simulateMemoryLinkDelete });
-
-registerTool('memory_compact_nodes', execMemoryCompactNodes, {
-    type: 'function',
-    function: {
-        name: 'memory_compact_nodes',
-        description: 'Compact a group of child nodes into one higher-tier rollup node. Children get reparented; semantic_contains edges added. Use after memory_compaction_candidates returns groups. Summary must follow the type\'s compression style standard. Returns { ok, rollup_node_id }.',
-        parameters: {
-            type: 'object',
-            properties: {
-                type: { type: 'string' },
-                child_ids: { type: 'array', items: { type: 'string' } },
-                summary: { type: 'string', description: 'Telegraphic-style summary per the compression style standard.' },
-                fields: { type: 'object', description: 'Optional additional fields beyond summary.' },
-            },
-            required: ['type', 'child_ids', 'summary'],
-            additionalProperties: false,
-        },
-    },
-}, { mode: 'write', simulate: simulateMemoryCompactNodes });
-
 // ---- note namespace -----------------------------------------------------
 
 registerTool('note_open', execNoteOpen, {
@@ -618,72 +260,6 @@ registerTool('note_close', execNoteClose, {
     },
 }, { mode: 'write' });
 
-// ---- search namespace ---------------------------------------------------
-
-registerTool('search_search', execSearchSearch, {
-    type: 'function',
-    function: {
-        name: 'search_search',
-        description: 'Web search via the search-tools plugin (DuckDuckGo / SearXNG / Brave, depending on plugin settings). Use only when the user asks about current events, fresh facts, or external information not present in chat / lorebook / memory. Returns provider-shaped results (typically a list of {title, url, snippet}). Follow up with search_visit on a specific URL to read full readable text.',
-        parameters: {
-            type: 'object',
-            properties: {
-                query: {
-                    type: 'string',
-                    description: 'Non-empty search query. Whitespace-only is rejected.',
-                },
-                max_results: {
-                    type: 'integer',
-                    description: 'Maximum number of results (1-20). Provider may cap further.',
-                    minimum: 1,
-                    maximum: 20,
-                },
-                safe_search: {
-                    type: 'string',
-                    enum: ['off', 'moderate', 'strict'],
-                    description: 'Safe-search level. Defaults to plugin settings.',
-                },
-                time_range: {
-                    type: 'string',
-                    enum: ['day', 'week', 'month', 'year'],
-                    description: 'Optional time filter. Omit for no filter.',
-                },
-                region: {
-                    type: 'string',
-                    description: 'Optional provider-specific locale or region hint.',
-                },
-            },
-            required: ['query'],
-            additionalProperties: false,
-        },
-    },
-}, { mode: 'read' });
-
-registerTool('search_visit', execSearchVisit, {
-    type: 'function',
-    function: {
-        name: 'search_visit',
-        description: 'Fetch one webpage discovered via search_search and return its readable text. Use sparingly: prefer the search snippet when it already answers the question.',
-        parameters: {
-            type: 'object',
-            properties: {
-                url: {
-                    type: 'string',
-                    description: 'HTTP/HTTPS page URL.',
-                },
-                max_chars: {
-                    type: 'integer',
-                    description: 'Maximum output characters (0-50000). 0 means no truncation.',
-                    minimum: 0,
-                    maximum: 50000,
-                },
-            },
-            required: ['url'],
-            additionalProperties: false,
-        },
-    },
-}, { mode: 'read' });
-
 // ---- public API ----------------------------------------------------------
 
 /**
@@ -708,7 +284,14 @@ export { FINALIZE_TOOL_SCHEMA };
  */
 export async function executeLoopTool(name, args, context) {
     const normalized = String(name || '').replace(/\./g, '_');
-    const entry = REGISTRY.get(normalized);
+    const safeCtx = context || {};
+    const safeArgs = args && typeof args === 'object' ? args : {};
+
+    const perRunReg = safeCtx.__customToolRegistry;
+    let entry = isToolRegistry(perRunReg) ? perRunReg.get(normalized) : null;
+    if (!entry) entry = REGISTRY.get(normalized) || null;
+    if (!entry) entry = getExtensionRegistry().get(normalized) || null;
+
     if (!entry || typeof entry.exec !== 'function') {
         throw new ToolError(
             `Tool '${name}' is not implemented in this build.`,
@@ -716,9 +299,6 @@ export async function executeLoopTool(name, args, context) {
             'Pick a registered tool name or call finalize when you have enough information.',
         );
     }
-
-    const safeArgs = args && typeof args === 'object' ? args : {};
-    const safeCtx = context || {};
 
     if (simulationActive && entry.mode === 'write') {
         try {
@@ -736,23 +316,22 @@ export async function executeLoopTool(name, args, context) {
 
 /**
  * Build the OpenAI-style tools array from a sanitized loop profile.
- * `finalize` is always included; chat / lorebook / memory / note tools
- * follow `profile.tools.<namespace>.<verb>` flags. The schema's flat
+ * `finalize` is always included; chat / lorebook / note tools follow
+ * `profile.tools.<namespace>.<verb>` flags. The schema's flat
  * `<ns>_<verb>` tool name is split on the **first** underscore to
- * recover the profile path (so `memory_list_candidates` reads
- * `flags.memory.list_candidates`). Unknown namespaces are ignored
+ * recover the profile path (so `chat_read_range` reads
+ * `flags.chat.read_range`). Unknown namespaces are ignored
  * (forward compatibility with future task adds).
  */
-export function getEnabledToolSchemas(profile) {
+export function getEnabledToolSchemas(profile, customToolRegistry = null) {
     const flags = profile && typeof profile === 'object' ? (profile.tools || {}) : {};
     const out = [FINALIZE_TOOL_SCHEMA];
+
     for (const schema of TOOL_SCHEMAS) {
         const fullName = String(schema?.function?.name || '');
         if (!fullName) continue;
         const sep = fullName.indexOf('_');
         if (sep < 0) {
-            // Top-level tool flag (e.g. a hypothetical bare name reads
-            // flags[name] === true).
             if (flags?.[fullName]) out.push(schema);
             continue;
         }
@@ -760,15 +339,63 @@ export function getEnabledToolSchemas(profile) {
         const verb = fullName.slice(sep + 1);
         if (flags?.[ns]?.[verb]) out.push(schema);
     }
+
+    const customFlags = (flags && typeof flags.custom === 'object') ? flags.custom : {};
+    const seen = new Set();
+
+    if (isToolRegistry(customToolRegistry)) {
+        for (const [name, entry] of customToolRegistry) {
+            seen.add(name);
+            if (customFlags[name] !== false) out.push(entry.schema);
+        }
+    }
+
+    for (const [name, entry] of getExtensionRegistry()) {
+        if (seen.has(name)) continue;
+        if (customFlags[name] !== false) out.push(entry.schema);
+    }
+
     return out;
 }
 
 /**
- * @internal — exposed for tests. Returns the live REGISTRY map.
+ * Returns the live Layer-1 builtin tool registry. Used at runtime by other
+ * layers (e.g. register-custom-tool's collision check, main.js's
+ * builtin-name set) and by tests for setup.
  */
-export function __getRegistryForTest() {
+export function getBuiltinToolRegistry() {
     return REGISTRY;
 }
+
+/**
+ * Resolve a tool's source layer by name + per-call context. Mirrors the
+ * lookup order used by `executeLoopTool` (Layer-3 → Layer-1 → Layer-2) so
+ * the source label reflects the registry that would actually serve the
+ * dispatch. Used by the runtimes to tag `tool_call` trace entries — the
+ * simulation-review popup then renders a chip for non-builtin tools.
+ *
+ *   - 'profile'   — per-run Layer-3 customTools[] entry (`ctx.__customToolRegistry`)
+ *   - 'builtin'   — Layer-1 entry registered via `registerTool` above
+ *   - 'st-bridge' — Layer-2 ST-bridged tool (`source: 'st-bridge'` on the entry)
+ *   - 'extension' — Layer-2 extension-registered tool (anything else in the
+ *                    extension registry)
+ *   - 'unknown'   — name not found in any registry
+ */
+export function resolveToolSource(name, context) {
+    const normalized = String(name || '').replace(/\./g, '_');
+    const safeCtx = context || {};
+    const perRunReg = safeCtx.__customToolRegistry;
+    if (perRunReg && typeof perRunReg.get === 'function' && perRunReg.get(normalized)) return 'profile';
+    if (REGISTRY.has(normalized)) return 'builtin';
+    const extEntry = getExtensionRegistry().get(normalized);
+    if (extEntry) {
+        return extEntry.source === 'st-bridge' ? 'st-bridge' : 'extension';
+    }
+    return 'unknown';
+}
+
+/** @internal — alias retained for existing test files. */
+export const __getRegistryForTest = getBuiltinToolRegistry;
 
 /**
  * @internal — exposed for tests. Returns the live TOOL_SCHEMAS array

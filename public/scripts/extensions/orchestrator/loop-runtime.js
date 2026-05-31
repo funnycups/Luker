@@ -46,7 +46,8 @@
  */
 
 import { isAbortSignalLike, throwIfAborted } from './abort-utils.js';
-import { executeLoopTool, getEnabledToolSchemas } from './loop-tools.js';
+import { executeLoopTool, getEnabledToolSchemas, resolveToolSource } from './loop-tools.js';
+import { buildPerRunCustomToolRegistry } from './per-run-custom-tools.js';
 
 // runtime-trace and tool-calling are loaded lazily inside the runtime
 // entry point — both pull `lib.js` (a build-only bundle) transitively
@@ -73,6 +74,30 @@ export class ToolError extends Error {
         this.code = String(code || 'TOOL_ERROR');
         this.hint = String(hint || '');
     }
+}
+
+/**
+ * Duck-type predicate for structured tool errors. Layer-2 tools live in
+ * extension modules (e.g. memory-graph/orchestrator-tools.js) that
+ * declare their own `ToolError` class locally to avoid depending on
+ * orchestrator internals. Those errors satisfy the same wire contract
+ * (`name === 'ToolError'`, string `code`/`hint`) but fail
+ * `instanceof ToolError` across the module boundary because they extend
+ * a different `Error` subclass.
+ *
+ * Runtimes (loop / spec / agenda) catch dispatched tool errors and
+ * decide whether to convert them into a structured `role: tool` reply
+ * or rethrow. The gate must duck-type on the wire shape, not on class
+ * identity, so cross-module Layer-2 errors are still surfaced to the
+ * agent as recoverable tool errors rather than crashing the run.
+ */
+export function isStructuredToolError(err) {
+    return Boolean(
+        err
+        && typeof err === 'object'
+        && err.name === 'ToolError'
+        && typeof err.code === 'string',
+    );
 }
 
 /**
@@ -337,34 +362,6 @@ function buildInitialMessages(context, _payload, profile) {
  * full `runLoopOrchestration` loop.
  */
 export const __testBuildInitialMessages = buildInitialMessages;
-
-/**
- * Production wiring for memory.* tools. Opens a session through
- * memory-graph's Layer-1 API and stashes it on `context.__memoryGraphSession`.
- * When memory-graph isn't loaded (extension disabled, test runner)
- * the field is set to null and memory tools surface the structured
- * `ToolError(MEMORY_DISABLED)` rather than crashing the run.
- *
- * Safe to call when memory-graph is not loaded: `getExtensionApi` returns
- * undefined, the optional-chain short-circuits, and the catch swallows
- * any thrown errors. The `extensions.js` import is lazy so the Node test
- * runner (which can't resolve `lib.js`'s build-only `lib.core.bundle.js`)
- * never reaches the build-time bundle.
- *
- * @param {object} context - toolContext object (mutated in place)
- */
-export async function attachMemoryGraphSession(context) {
-    if (!context || typeof context !== 'object') return;
-    try {
-        const { getExtensionApi } = await import('../../extensions.js');
-        const api = getExtensionApi('memory-graph');
-        context.__memoryGraphSession = (api && typeof api.openSession === 'function')
-            ? await api.openSession(context)
-            : null;
-    } catch (_error) {
-        context.__memoryGraphSession = null;
-    }
-}
 
 const NOTES_NAMESPACE = 'luker_orch_loop_notes';
 let notesFloorStatePromise = null;
@@ -655,18 +652,20 @@ export async function attachNotesFloorState(context) {
  *     injected for this turn, populated by the orchestrator's
  *     `onWorldInfoFinalized` hook and forwarded by `main.js` on the
  *     generation payload. `lorebook_search` reads this to dedup.
- *   - `__memoryGraphSession` — chat-scoped memory-graph session opened
- *     via the extension's Layer-1 API; `memory_*` tools surface
- *     `ToolError(MEMORY_DISABLED)` when this is null.
  *   - `__floorStateForNotes` adapter + `__openNotes` — per-chat
  *     persistent notes; `note_open` / `note_close` plus the
  *     system-prompt builder all read this. `__openNotes` carries only
  *     the open subset (closed entries stay in floor storage as
  *     history but are filtered out of the prompt-injection path).
  *
+ * memory-graph's session is no longer threaded on this context —
+ * memory tools live in memory-graph's own Layer-2 module and open the
+ * session lazily on first call (cached by ctx via a WeakMap). The
+ * orchestrator stays unaware of memory-graph.
+ *
  * The returned object is created via `Object.create(context)` so caller
  * sees a fresh frame whose unset fields fall through to the upstream
- * extension context. Tests pre-populate the relevant `__memoryGraphSession` /
+ * extension context. Tests pre-populate the relevant
  * `__floorStateForNotes` / `__openNotes` fields on the upstream context
  * to skip the production loaders — that "undefined means not-set, load
  * it" gate per attachment is preserved here.
@@ -687,10 +686,6 @@ export async function attachToolContext(context, payload) {
         toolContext.__lukerRun = payload.__lukerRun;
     } else if (!toolContext.__lukerRun) {
         toolContext.__lukerRun = { activatedEntryKeys: new Set() };
-    }
-
-    if (toolContext.__memoryGraphSession === undefined) {
-        await attachMemoryGraphSession(toolContext);
     }
 
     if (toolContext.__floorStateForNotes === undefined && toolContext.__openNotes === undefined) {
@@ -744,8 +739,11 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
     const traceApi = await resolveTraceApi(deps);
     const trace = traceApi.create(context, payload, [], { mode: 'loop' });
 
+    const customToolRegistry = buildPerRunCustomToolRegistry(profile, trace, traceApi?.record);
+    toolContext.__customToolRegistry = customToolRegistry;
+
     const messages = buildInitialMessages(toolContext, payload, profile);
-    const tools = getEnabledToolSchemas(profile);
+    const tools = getEnabledToolSchemas(profile, customToolRegistry);
     const maxRounds = Math.max(1, Math.floor(Number(profile?.max_rounds) || 1));
     const wallClockBudgetMs = Math.max(0, Math.floor(Number(profile?.wall_clock_budget_ms) || 0));
     const deadline = wallClockBudgetMs > 0 ? Date.now() + wallClockBudgetMs : null;
@@ -837,14 +835,21 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
             // role:tool results in order). Names are normalized `.` → `_`
             // so a hallucinated dotted name doesn't drift the next round's
             // history out of sync with the (underscore-only) tools list.
-            const assistantToolCallEntries = toolCalls.map(tc => ({
-                id: String(tc?.id || makeToolCallId()),
-                type: 'function',
-                function: {
-                    name: String(tc?.name || '').replace(/\./g, '_'),
-                    arguments: safeStringifyArgs(tc?.args),
-                },
-            }));
+            // `source` tags the layer that will serve the dispatch
+            // (builtin / extension / profile / st-bridge / unknown) so the
+            // trace popup can render a layer chip next to the tool name.
+            const assistantToolCallEntries = toolCalls.map(tc => {
+                const normalizedName = String(tc?.name || '').replace(/\./g, '_');
+                return {
+                    id: String(tc?.id || makeToolCallId()),
+                    type: 'function',
+                    function: {
+                        name: normalizedName,
+                        arguments: safeStringifyArgs(tc?.args),
+                    },
+                    source: resolveToolSource(normalizedName, toolContext),
+                };
+            });
             messages.push({
                 role: 'assistant',
                 content: assistantText,
@@ -857,7 +862,8 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
                 const persistedId = assistantToolCallEntries[i].id;
                 const name = String(tc?.name || '').trim();
                 const args = tc?.args && typeof tc.args === 'object' ? tc.args : {};
-                traceApi.record(trace, 'tool_call', { round, name, tool_call_id: persistedId });
+                const source = assistantToolCallEntries[i].source;
+                traceApi.record(trace, 'tool_call', { round, name, tool_call_id: persistedId, source });
 
                 if (name === 'finalize') {
                     const text = String(args?.capsule_text || '').trim();
@@ -896,7 +902,7 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
                     messages.push(makeOkToolMessage(persistedId, normalizeToolOk(result)));
                     traceApi.record(trace, 'tool_result', { round, name, tool_call_id: persistedId });
                 } catch (error) {
-                    if (error instanceof ToolError) {
+                    if (isStructuredToolError(error)) {
                         messages.push(makeErrorToolMessage(persistedId, error));
                         traceApi.record(trace, 'tool_error', {
                             round,

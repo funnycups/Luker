@@ -90,32 +90,58 @@ export function applyLoopProfilePatchArgs(currentProfile, args) {
             const incoming = incomingTools[group];
             if (incoming && typeof incoming === 'object'
                 && Object.prototype.hasOwnProperty.call(incoming, key)) {
-                next.tools[group][key] = incoming[key];
+                if (next.tools[group] && typeof next.tools[group] === 'object') {
+                    next.tools[group][key] = incoming[key];
+                }
             }
         };
+        // Legacy memory + search namespaces translate into custom entries
+        // (see sanitizeAgentToolFlags). Route their verbs into
+        // `tools.custom.<ns>_<verb>` so a partial-merge patch flips the
+        // post-translation keys instead of trying to mutate the now-
+        // dropped legacy subtree.
+        const mergeLegacyAsCustom = (legacyGroup, prefix, verb) => {
+            const incoming = incomingTools[legacyGroup];
+            if (incoming && typeof incoming === 'object'
+                && Object.prototype.hasOwnProperty.call(incoming, verb)) {
+                if (!next.tools.custom || typeof next.tools.custom !== 'object') {
+                    next.tools.custom = {};
+                }
+                next.tools.custom[`${prefix}${verb}`] = incoming[verb];
+            }
+        };
+        // Patches addressed directly at `tools.custom.<name>` merge wholesale.
+        if (incomingTools.custom && typeof incomingTools.custom === 'object') {
+            if (!next.tools.custom || typeof next.tools.custom !== 'object') {
+                next.tools.custom = {};
+            }
+            for (const [k, v] of Object.entries(incomingTools.custom)) {
+                next.tools.custom[String(k)] = v !== false;
+            }
+        }
         merge('note', 'open');
         merge('note', 'close');
         merge('chat', 'read_range');
         merge('chat', 'search');
         merge('lorebook', 'search');
         merge('lorebook', 'get');
-        merge('memory', 'schema');
-        merge('memory', 'list_candidates');
-        merge('memory', 'edge_summary');
-        merge('memory', 'node_brief');
-        merge('memory', 'expand_seeds');
-        merge('memory', 'keyword_search');
-        merge('memory', 'vector_search');
-        merge('memory', 'find_by_name');
-        merge('memory', 'compaction_candidates');
-        merge('memory', 'node_create');
-        merge('memory', 'node_edit');
-        merge('memory', 'node_delete');
-        merge('memory', 'link_upsert');
-        merge('memory', 'link_delete');
-        merge('memory', 'compact_nodes');
-        merge('search', 'search');
-        merge('search', 'visit');
+        mergeLegacyAsCustom('memory', 'memory_', 'schema');
+        mergeLegacyAsCustom('memory', 'memory_', 'list_candidates');
+        mergeLegacyAsCustom('memory', 'memory_', 'edge_summary');
+        mergeLegacyAsCustom('memory', 'memory_', 'node_brief');
+        mergeLegacyAsCustom('memory', 'memory_', 'expand_seeds');
+        mergeLegacyAsCustom('memory', 'memory_', 'keyword_search');
+        mergeLegacyAsCustom('memory', 'memory_', 'vector_search');
+        mergeLegacyAsCustom('memory', 'memory_', 'find_by_name');
+        mergeLegacyAsCustom('memory', 'memory_', 'compaction_candidates');
+        mergeLegacyAsCustom('memory', 'memory_', 'node_create');
+        mergeLegacyAsCustom('memory', 'memory_', 'node_edit');
+        mergeLegacyAsCustom('memory', 'memory_', 'node_delete');
+        mergeLegacyAsCustom('memory', 'memory_', 'link_upsert');
+        mergeLegacyAsCustom('memory', 'memory_', 'link_delete');
+        mergeLegacyAsCustom('memory', 'memory_', 'compact_nodes');
+        mergeLegacyAsCustom('search', 'search_', 'search');
+        mergeLegacyAsCustom('search', 'search_', 'visit');
         // tools.finalize is ignored — sanitizer forces it back to true.
     }
     return sanitizeLoopProfile(next);

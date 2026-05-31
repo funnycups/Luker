@@ -200,6 +200,7 @@ export function ensureLoopEditorIntegrity(editor) {
     editor.max_rounds = normalized.max_rounds;
     editor.wall_clock_budget_ms = normalized.wall_clock_budget_ms;
     editor.capsule_inject = normalized.capsule_inject;
+    editor.customTools = normalized.customTools;
 }
 
 /**
@@ -263,6 +264,7 @@ export function ensureDirectorEditorIntegrity(editor) {
     editor.maxTotalSubagentRuns = normalized.maxTotalSubagentRuns;
     editor.tools = normalized.tools;
     editor.discardOnAbort = normalized.discardOnAbort;
+    editor.customTools = normalized.customTools;
     // Stale wrapper from any pre-flatten editor object — strip so the
     // editor draft is exclusively the new flat shape.
     delete editor.director;

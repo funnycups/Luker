@@ -125,3 +125,41 @@ export function appendToolStatusChip(sectionEl, result, i18n) {
     heading.appendChild(chip);
     return chip;
 }
+
+/**
+ * Append a tool-source chip (e.g. `[ext]` / `[profile]` / `[ST]`) to a
+ * tool-call section header so users can tell at a glance which dispatch
+ * layer served a given call. Builtin tools — the always-on default
+ * surface — get no chip; adding one for them would just be visual noise.
+ * Unknown sources (e.g. a name that no layer recognizes — the dispatcher
+ * would have surfaced `ToolError(NOT_IMPLEMENTED)`) also get no chip.
+ *
+ *   - 'profile'   → `[profile]` — per-run Layer-3 customTools[] entry
+ *   - 'extension' → `[ext]`     — Layer-2 extension-registered tool
+ *   - 'st-bridge' → `[ST]`      — Layer-2 ST-bridged tool
+ *   - 'builtin' / undefined → no chip
+ *
+ * Source labels are technical/developer-facing — three short tags meant
+ * to disambiguate "which registry served this call" in a debug-oriented
+ * popup. They share the same chip CSS family as `appendToolStatusChip`
+ * above (border-radius / sizing match), with their own color variants.
+ */
+export function appendToolSourceChip(sectionEl, source) {
+    if (!sectionEl) return null;
+    const safe = String(source || '');
+    if (safe !== 'profile' && safe !== 'extension' && safe !== 'st-bridge') return null;
+    const heading = sectionEl.querySelector('h1, h2, h3, h4');
+    if (!heading) return null;
+    const doc = heading.ownerDocument;
+    const chip = doc.createElement('span');
+    chip.classList.add('sim-review-tool-chip');
+    chip.classList.add(`sim-review-tool-chip--source-${safe.replace(/[^a-z0-9]/gi, '-')}`);
+    let label;
+    if (safe === 'profile') label = '[profile]';
+    else if (safe === 'extension') label = '[ext]';
+    else label = '[ST]';
+    chip.textContent = label;
+    chip.setAttribute('title', `tool source: ${safe}`);
+    heading.appendChild(chip);
+    return chip;
+}

@@ -135,6 +135,7 @@ loop.finalize -> out
    - **Loop tools** (enabled per-profile) — same family as loop mode: `chat_*` / `lorebook_*` / `memory_*` / `note_*` (open/close) / `search_*`, for gathering context.
    - **Collaboration tools** — `dispatch_subagent(subagentId, task)` starts a profile-configured sub-agent by id; `dispatch_inline_subagent(systemPrompt, task, ...)` starts an ad-hoc one-shot sub-agent; `await_subagents(handles)` blocks until the named sub-agents finish; `cancel_subagent(handle)` aborts an in-flight one.
    - **Message-production tools** — `write_message(text, mode?)` writes into the message body (`mode='replace'` overwrites, `mode='append'` extends); `apply_message_patches(patches)` makes targeted context-replace edits; `get_draft()` reads back the current draft; `finalize()` commits the turn and ends the loop.
+   - **[Custom tools](./custom-tools.md)** — any tool registered by another Luker extension, bridged from a SillyTavern function tool, or handwritten in the director profile. Sub-agents see the same custom-tool surface (filtered by per-sub-agent overrides where applicable).
 
 3. **Sub-agents are one-shot consultants.** At dispatch time each one gets the chat snapshot, the main agent's task brief, its own system prompt, the enabled loop tools, and `get_draft()`. They don't see each other's existence, don't see the main agent's reasoning, **cannot dispatch deeper sub-agents**, and **cannot write into the message body** — they only return text, and the main agent decides what to do with it.
 
@@ -259,4 +260,5 @@ Director shares the same **Export profile** / **Import profile** buttons as the 
 - [Loop mode](/features/orchestrator/loop) — single agent in a tool loop, producing a capsule
 - [Spec mode](/features/orchestrator/spec) — default DAG, multiple agents per stage producing a capsule
 - [Agenda mode](/features/orchestrator/agenda) — Planner dynamically schedules Workers, producing a capsule
+- [Custom tools](/features/orchestrator/custom-tools) — extend the main agent and sub-agents with tools from extensions, SillyTavern bridges, or handwritten code
 

@@ -192,3 +192,4 @@ Agenda 模式的 Planner 调度通过 OpenAI 工具调用实现，依赖 Luker �
 - [Spec 模式](/zh-CN/features/orchestrator/spec) — 默认的 DAG 模式
 - [Loop 模式](/zh-CN/features/orchestrator/loop) — 单 Agent 工具循环
 - [Function Call Runtime](/zh-CN/improvements/function-call-runtime) — Planner 调度依赖此框架
+- [自定义工具](/zh-CN/features/orchestrator/custom-tools) — Agenda Worker 可以调用的扩展 / SillyTavern 桥接 / 手写工具

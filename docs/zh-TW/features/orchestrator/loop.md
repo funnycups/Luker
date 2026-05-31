@@ -128,6 +128,8 @@ loop.finalize -> out
 
 ![Loop 對話流：工具結果回到 agent 下一輪思考](/images/orchestrator/real-loop-conversation-tool.png)
 
+若你的 agent 需要內建之外的能力，參見[自訂工具](./custom-tools.md)。
+
 ## 失控保護（5 層，按觸發優先級）
 
 1. **abort signal**：使用者點「停止」 / 上層取消 → 立即中止；trace 記 `cancelled`，**不**注入半成品 capsule。
@@ -265,3 +267,4 @@ Loop 模式與 spec / agenda 在效能上有結構性差異：
 - [Function Call Runtime](/zh-TW/improvements/function-call-runtime) — loop 工具呼叫走的運行時
 - [記憶圖](/zh-TW/features/memory-graph) — `memory.*` 工具背後的資料源
 - [Notes](/zh-TW/features/orchestrator/notes) — open/close 便箋模型的面板使用與概念詳解
+- [自訂工具](./custom-tools.md) — 自己註冊工具或把 SillyTavern function tool 橋接進 loop

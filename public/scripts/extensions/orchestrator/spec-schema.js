@@ -35,6 +35,7 @@ import {
 } from './defaults.js';
 import { ORCH_EXECUTION_MODE_DIRECTOR, sanitizeDirectorProfile } from './director-defaults.js';
 import { sanitizeOptionalAgentToolFlags } from './persistence.js';
+import { sanitizeCustomTools } from './custom-tools-sanitize.js';
 
 const MODULE_NAME = 'orchestrator';
 
@@ -141,6 +142,7 @@ export function sanitizeSpec(spec) {
         // resolver picks node.tools first, then this, then mode's all-off
         // built-in default.
         defaultTools: sanitizeOptionalAgentToolFlags(spec.defaultTools),
+        customTools: sanitizeCustomTools(spec.customTools),
     };
 }
 

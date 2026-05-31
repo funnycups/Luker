@@ -76,9 +76,10 @@ describe('director profile round-trip through Studio sanitizer', () => {
         // Tool flags preserved.
         expect(after.tools.chat.read_range).toBe(true);
         expect(after.tools.chat.search).toBe(true);
-        expect(after.tools.memory.list_candidates).toBe(true);
-        expect(after.tools.memory.edge_summary).toBe(false);
-        expect(after.tools.memory.node_brief).toBe(true);
+        // memory.* legacy flags translate to custom.memory_<verb>.
+        expect(after.tools.custom.memory_list_candidates).toBe(true);
+        expect(after.tools.custom.memory_edge_summary).toBe(false);
+        expect(after.tools.custom.memory_node_brief).toBe(true);
         expect(after.tools.lorebook.search).toBe(true);
         // tools.finalize is forced to false (no leakage between modes).
         if (after.tools.finalize !== undefined) {

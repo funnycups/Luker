@@ -135,6 +135,7 @@ loop.finalize -> out
    - **迴圈工具**（在 profile 裡勾選啟用）—— 跟 loop 模式同源：`chat_*` / `lorebook_*` / `memory_*` / `note_*`（開啟/關閉） / `search_*`，用來收集上下文。
    - **協作工具** —— `dispatch_subagent(subagentId, task)` 按 id 啟動 profile 預定義的子代理；`dispatch_inline_subagent(systemPrompt, task, ...)` 啟動一次性 ad-hoc 子代理；`await_subagents(handles)` 阻塞等子代理完工；`cancel_subagent(handle)` 中止跑到一半的子代理。
    - **訊息產出工具** —— `write_message(text, mode?)` 寫正文（`mode='replace'` 覆寫、`mode='append'` 追加）;`apply_message_patches(patches)` 做定點的 context-replace 補丁；`get_draft()` 回讀當前草稿；`finalize()` 提交併收尾。
+   - **[自訂工具](./custom-tools.md)** —— 其他 Luker 擴充註冊的工具、從 SillyTavern function tool 橋接進來的工具、本編排裡手寫的工具。子代理看到的是同一組自訂工具面（在子代理粒度有覆寫時按覆寫過濾）。
 
 3. **子代理是「一次性顧問」**：派遣時拿到當前聊天快照 + 主代理寫的任務簡報 + 自己的系統提示詞 + 啟用的迴圈工具 + `get_draft()`。子代理彼此看不到對方的存在，看不到主代理的推理，**不能再向下派遣**，也**不能直接寫正文**——它們只產出文本，主代理決定怎麼用。
 
@@ -259,4 +260,5 @@ Director 跟其他模式一樣支援 **匯出 profile** / **匯入 profile** 按
 - [Loop 模式](/zh-TW/features/orchestrator/loop) — 單 Agent 跑工具迴圈、產出 capsule
 - [Spec 模式](/zh-TW/features/orchestrator/spec) — 預設 DAG，多 Agent 各 stage 產出 capsule
 - [Agenda 模式](/zh-TW/features/orchestrator/agenda) — Planner 動態排程 Worker，產出 capsule
+- [自訂工具](/zh-TW/features/orchestrator/custom-tools) — 用擴充、SillyTavern 橋接或手寫程式碼給主代理和子代理加新工具
 

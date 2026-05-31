@@ -158,9 +158,11 @@ describe('applyLoopProfilePatchArgs partial-merge contract', () => {
         });
         // Touched flags flip…
         expect(after.tools.lorebook.search).toBe(false);
-        expect(after.tools.memory.list_candidates).toBe(false);
-        expect(after.tools.memory.edge_summary).toBe(false);
-        expect(after.tools.memory.node_brief).toBe(false);
+        // memory.* flags translate into custom.memory_<verb> after the
+        // namespace was moved to Layer-2 in Task 4.5.
+        expect(after.tools.custom.memory_list_candidates).toBe(false);
+        expect(after.tools.custom.memory_edge_summary).toBe(false);
+        expect(after.tools.custom.memory_node_brief).toBe(false);
         // …while siblings the AI did not name remain at their previous
         // value (lorebook.get is still true, all chat flags still true).
         expect(after.tools.lorebook.get).toBe(true);

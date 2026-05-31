@@ -170,3 +170,143 @@ test('every renderer marks exactly one final-output section and collapses proces
         });
     });
 });
+
+describe('tool-source chip rendering (FINAL.1)', () => {
+    // Each renderer reads `source` off the per-tool-call entry produced by
+    // simulation-payload-adapter and appends a layer chip via
+    // `appendToolSourceChip`. Builtin and unknown calls render no chip;
+    // profile / extension / st-bridge each get their own label.
+
+    function chipsOf(root) {
+        return Array.from(root.querySelectorAll('.sim-review-tool-chip[class*="--source-"]'))
+            .map(el => ({
+                text: el.textContent,
+                classList: Array.from(el.classList),
+            }));
+    }
+
+    test('loop renderer emits [profile] / [ext] / [ST] chips for non-builtin sources', () => {
+        const root = renderLoop({
+            rounds: [
+                {
+                    roundIndex: 0,
+                    reasoning: '', assistantText: '',
+                    toolCalls: [
+                        { name: 'chat_read_range', args: {}, result: {}, source: 'builtin' },
+                        { name: 'my_weather', args: {}, result: {}, source: 'profile' },
+                        { name: 'ext_thing', args: {}, result: {}, source: 'extension' },
+                        { name: 'st_read_wi', args: {}, result: {}, source: 'st-bridge' },
+                        { name: 'no_source_field', args: {}, result: {} },
+                    ],
+                },
+            ],
+            terminationReason: 'finalize',
+        }, noopI18n);
+
+        const chips = chipsOf(root);
+        // Exactly 3 chips: profile, ext, ST. builtin + missing-source render no chip.
+        expect(chips).toHaveLength(3);
+        expect(chips.map(c => c.text).sort()).toEqual(['[ST]', '[ext]', '[profile]']);
+        // Each chip carries the family + the source-specific modifier class
+        // so styles.css can color them per layer.
+        expect(chips.find(c => c.text === '[profile]').classList).toContain('sim-review-tool-chip--source-profile');
+        expect(chips.find(c => c.text === '[ext]').classList).toContain('sim-review-tool-chip--source-extension');
+        expect(chips.find(c => c.text === '[ST]').classList).toContain('sim-review-tool-chip--source-st-bridge');
+    });
+
+    test('director renderer emits source chips on main-agent tool calls', () => {
+        const root = renderDirector({
+            mainAgent: {
+                rounds: [
+                    {
+                        roundIndex: 0,
+                        reasoning: '', assistantText: '',
+                        toolCalls: [
+                            { name: 'dispatch_subagent', args: {}, result: {}, source: 'builtin' },
+                            { name: 'my_weather', args: {}, result: {}, source: 'profile' },
+                        ],
+                    },
+                ],
+            },
+            subagents: [],
+            finalMessage: 'fm',
+        }, noopI18n);
+
+        const chips = chipsOf(root);
+        expect(chips).toHaveLength(1);
+        expect(chips[0].text).toBe('[profile]');
+    });
+
+    test('agenda renderer emits source chips on planner + dispatch tool calls', () => {
+        const root = renderAgenda({
+            rounds: [
+                {
+                    roundIndex: 0,
+                    planner: {
+                        turns: [{ reasoning: '', assistantText: '', toolCalls: [{ name: 'ext_thing', args: {}, result: {}, source: 'extension' }] }],
+                        output: '',
+                    },
+                    dispatches: [
+                        {
+                            todoId: 't1', agentName: 'w', taskBrief: '',
+                            turns: [{ reasoning: '', assistantText: '', toolCalls: [{ name: 'my_weather', args: {}, result: {}, source: 'profile' }] }],
+                            output: '',
+                        },
+                    ],
+                },
+            ],
+            finalizer: { turns: [], output: '' },
+            finalComposedOutput: 'composed',
+        }, noopI18n);
+
+        const chips = chipsOf(root);
+        expect(chips).toHaveLength(2);
+        expect(chips.map(c => c.text).sort()).toEqual(['[ext]', '[profile]']);
+    });
+
+    test('spec renderer emits source chips on per-turn tool calls', () => {
+        const root = renderSpec({
+            stages: [
+                {
+                    stageIndex: 0, mode: 'serial',
+                    nodes: [
+                        {
+                            nodeIndex: 0, id: 'n', kind: 'worker',
+                            turns: [
+                                {
+                                    reasoning: '', assistantText: '',
+                                    toolCalls: [{ name: 'st_read_wi', args: {}, result: {}, source: 'st-bridge' }],
+                                },
+                            ],
+                            output: '',
+                        },
+                    ],
+                },
+            ],
+            finalCapsule: 'cap',
+        }, noopI18n);
+
+        const chips = chipsOf(root);
+        expect(chips).toHaveLength(1);
+        expect(chips[0].text).toBe('[ST]');
+    });
+
+    test('unknown source values produce no chip (defensive: future layer additions or broken traces)', () => {
+        const root = renderLoop({
+            rounds: [
+                {
+                    roundIndex: 0,
+                    reasoning: '', assistantText: '',
+                    toolCalls: [
+                        { name: 'x', args: {}, result: {}, source: 'unknown' },
+                        { name: 'y', args: {}, result: {}, source: 'whatever-new' },
+                        { name: 'z', args: {}, result: {}, source: '' },
+                        { name: 'q', args: {}, result: {}, source: null },
+                    ],
+                },
+            ],
+            terminationReason: 'finalize',
+        }, noopI18n);
+        expect(chipsOf(root)).toHaveLength(0);
+    });
+});

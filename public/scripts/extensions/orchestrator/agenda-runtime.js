@@ -74,6 +74,7 @@ import {
     buildOrchestrationRuntimeSlotKey,
     createOrchestrationRuntimeTrace,
     finishOrchestrationRuntimeNodeAttempt,
+    recordOrchestrationRuntimeEvent,
 } from './runtime-trace.js';
 import { getPreviousOrchestrationCapsuleText } from './snapshot-cache.js';
 import {
@@ -98,8 +99,10 @@ import {
 import {
     executeLoopTool,
     getEnabledToolSchemas,
+    resolveToolSource,
 } from './loop-tools.js';
-import { attachToolContext, ToolError } from './loop-runtime.js';
+import { attachToolContext, isStructuredToolError } from './loop-runtime.js';
+import { buildPerRunCustomToolRegistry } from './per-run-custom-tools.js';
 
 const MODULE_NAME = 'orchestrator';
 
@@ -456,6 +459,7 @@ export async function runAgendaPlannerStep(context, payload, messages, profile, 
 export async function runAgendaTextAgent(context, payload, messages, profile, state, dispatch, {
     kind = 'agent',
     finalReason = '',
+    customToolRegistry = null,
 }, abortSignal = null) {
     const settings = extension_settings[MODULE_NAME];
     const planner = createAgendaPlannerDraft(profile?.planner);
@@ -598,11 +602,14 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
     // Multi-round path: agent can interleave loop tool calls with the
     // terminator. We reuse the loop-tool dispatch context (memory store,
     // notes adapter, activated lorebook keys) per attachToolContext.
-    const loopToolSchemas = getEnabledToolSchemas({ tools: resolvedToolFlags })
+    const loopToolSchemas = getEnabledToolSchemas({ tools: resolvedToolFlags }, customToolRegistry)
         .filter(s => String(s?.function?.name || '') !== 'finalize');
     const tools = [...loopToolSchemas, resultToolSchema];
     const allowedNames = new Set(tools.map(t => String(t?.function?.name || '').trim()).filter(Boolean));
     const toolContext = await attachToolContext(context, payload);
+    if (toolContext && customToolRegistry) {
+        toolContext.__customToolRegistry = customToolRegistry;
+    }
     const maxRounds = Math.max(1, getNodeIterationMaxRounds(settings));
     const runtimeToolMessages = [];
     let outputText = '';
@@ -652,14 +659,18 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
 
         // Dispatch loop-tool calls and feed results back so the agent can
         // refine on the next round.
-        const assistantToolCallEntries = calls.map(tc => ({
-            id: String(tc?.id || makeRuntimeToolCallId()),
-            type: 'function',
-            function: {
-                name: String(tc?.name || '').replace(/\./g, '_'),
-                arguments: JSON.stringify(tc?.args && typeof tc.args === 'object' ? tc.args : {}),
-            },
-        }));
+        const assistantToolCallEntries = calls.map(tc => {
+            const normalizedName = String(tc?.name || '').replace(/\./g, '_');
+            return {
+                id: String(tc?.id || makeRuntimeToolCallId()),
+                type: 'function',
+                function: {
+                    name: normalizedName,
+                    arguments: JSON.stringify(tc?.args && typeof tc.args === 'object' ? tc.args : {}),
+                },
+                source: resolveToolSource(normalizedName, toolContext),
+            };
+        });
         runtimeToolMessages.push({
             role: 'assistant',
             content: String(detailed?.assistantText || ''),
@@ -673,6 +684,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
                 id: assistantToolCallEntries[i].id,
                 name: String(tc?.name || ''),
                 args: tc?.args || {},
+                source: assistantToolCallEntries[i].source,
             })),
             _round: round,
         });
@@ -688,7 +700,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
                 );
                 toolResult = { ok: true, data: raw };
             } catch (toolError) {
-                if (toolError instanceof ToolError) {
+                if (isStructuredToolError(toolError)) {
                     toolResult = {
                         ok: false,
                         error: String(toolError.message || ''),
@@ -747,6 +759,12 @@ export async function runAgendaOrchestration(context, payload, messages, profile
         runs: [],
         finalGuidance: '',
     };
+    // Layer-3 custom tools live on the profile root. Built once per
+    // orchestration and threaded into every agent dispatch via the
+    // dispatch options bag (NOT on `state`, which is structuredClone'd
+    // into the runtime trace and would choke on the AsyncFunction refs
+    // the registry holds).
+    const customToolRegistry = buildPerRunCustomToolRegistry(profile, trace, recordOrchestrationRuntimeEvent);
     syncAgendaTrace(trace, state);
     const plannerMaxRounds = Math.min(getAgendaPlannerMaxRounds(settings), Math.max(1, Math.floor(Number(profile?.limits?.plannerMaxRounds) || getAgendaPlannerMaxRounds(settings))));
     let finalizeReason = '';
@@ -808,7 +826,7 @@ export async function runAgendaOrchestration(context, payload, messages, profile
                 slotKey: buildOrchestrationRuntimeSlotKey(round - 1, dispatchIndex + 1, `${dispatch.agent}_${dispatch.todoId}_${round}`),
             });
             try {
-                const result = await runAgendaTextAgent(context, payload, messages, profile, state, dispatch, { kind: 'agent' }, abortSignal);
+                const result = await runAgendaTextAgent(context, payload, messages, profile, state, dispatch, { kind: 'agent', customToolRegistry }, abortSignal);
                 finishOrchestrationRuntimeNodeAttempt(trace, attempt, {
                     status: 'completed',
                     output: result.outputText,
@@ -854,6 +872,7 @@ export async function runAgendaOrchestration(context, payload, messages, profile
     const finalRun = await runAgendaTextAgent(context, payload, messages, profile, state, finalDispatch, {
         kind: 'final',
         finalReason: finalizeReason,
+        customToolRegistry,
     }, abortSignal);
     if (!String(finalRun?.outputText || '').trim()) {
         finishOrchestrationRuntimeNodeAttempt(trace, finalAttempt, {

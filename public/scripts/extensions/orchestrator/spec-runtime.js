@@ -105,8 +105,10 @@ import {
 import {
     executeLoopTool,
     getEnabledToolSchemas,
+    resolveToolSource,
 } from './loop-tools.js';
-import { attachToolContext, ToolError } from './loop-runtime.js';
+import { attachToolContext, isStructuredToolError } from './loop-runtime.js';
+import { buildPerRunCustomToolRegistry } from './per-run-custom-tools.js';
 
 const MODULE_NAME = 'orchestrator';
 
@@ -403,8 +405,9 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
         null,
     );
     const enableLoopTools = hasAnyToolEnabled(resolvedToolFlags);
+    const customToolRegistry = options?.runtime?.customToolRegistry || null;
     const loopToolSchemas = enableLoopTools
-        ? getEnabledToolSchemas({ tools: resolvedToolFlags })
+        ? getEnabledToolSchemas({ tools: resolvedToolFlags }, customToolRegistry)
             .filter(s => String(s?.function?.name || '') !== 'finalize')
         : [];
     const tools = enableLoopTools
@@ -434,6 +437,9 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
     const toolContext = enableLoopTools
         ? await attachToolContext(context, payload)
         : null;
+    if (toolContext && customToolRegistry) {
+        toolContext.__customToolRegistry = customToolRegistry;
+    }
 
     const runtimeWorldInfo = await resolveOrchestrationRuntimeWorldInfo(context, settings, {
         worldInfoMessages: messages,
@@ -536,14 +542,18 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
             // next round. Otherwise the model failed to satisfy the
             // contract — bail out.
             if (enableLoopTools && loopToolCalls.length > 0) {
-                const assistantToolCallEntries = loopToolCalls.map(tc => ({
-                    id: String(tc?.id || makeRuntimeToolCallId()),
-                    type: 'function',
-                    function: {
-                        name: String(tc?.name || '').replace(/\./g, '_'),
-                        arguments: JSON.stringify(tc?.args && typeof tc.args === 'object' ? tc.args : {}),
-                    },
-                }));
+                const assistantToolCallEntries = loopToolCalls.map(tc => {
+                    const normalizedName = String(tc?.name || '').replace(/\./g, '_');
+                    return {
+                        id: String(tc?.id || makeRuntimeToolCallId()),
+                        type: 'function',
+                        function: {
+                            name: normalizedName,
+                            arguments: JSON.stringify(tc?.args && typeof tc.args === 'object' ? tc.args : {}),
+                        },
+                        source: resolveToolSource(normalizedName, toolContext),
+                    };
+                });
                 runtimeToolMessages.push({
                     role: 'assistant',
                     content: String(detailed?.assistantText || ''),
@@ -557,6 +567,7 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                         id: assistantToolCallEntries[i].id,
                         name: String(tc?.name || ''),
                         args: tc?.args || {},
+                        source: assistantToolCallEntries[i].source,
                     })),
                     _round: round,
                 });
@@ -575,7 +586,7 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                             data: toolResult,
                         };
                     } catch (toolError) {
-                        if (toolError instanceof ToolError) {
+                        if (isStructuredToolError(toolError)) {
                             toolResult = {
                                 ok: false,
                                 error: String(toolError.message || ''),
@@ -1033,16 +1044,22 @@ export async function executeStage(context, payload, messages, profile, runtime,
 export async function runSpecOrchestration(context, payload, messages, profile) {
     const spec = sanitizeSpec(profile.spec);
     const stages = Array.isArray(spec?.stages) ? spec.stages : [];
+    const trace = createOrchestrationRuntimeTrace(context, payload, stages);
     const runtime = {
         stages,
         stageOutputs: [],
         reviewRerunCount: 0,
         approvedReviewFeedbackEntries: [],
-        trace: createOrchestrationRuntimeTrace(context, payload, stages),
+        trace,
         // Profile-root tool defaults applied to every node whose own
         // `tools` is null. Node-level override still takes precedence in
         // the resolver inside runWorkerNode.
         specDefaultTools: spec.defaultTools || null,
+        // Layer-3 custom tools live on the profile root (not the spec).
+        // Built once per orchestration and threaded into every node via
+        // `runtime.customToolRegistry`. runWorkerNode forwards it to
+        // both getEnabledToolSchemas and the per-call executeLoopTool ctx.
+        customToolRegistry: buildPerRunCustomToolRegistry(profile, trace, recordOrchestrationRuntimeEvent),
     };
     let previousNodeOutputs = new Map();
     const abortSignal = isAbortSignalLike(payload?.signal) ? payload.signal : null;

@@ -28,6 +28,7 @@ import {
     pickLatestValidSnapshot,
 } from './persistence.js';
 import { POPUP_TYPE, Popup } from '../../popup.js';
+import { registerSearchToolsOrchestrationTools } from './orchestrator-tools.js';
 
 const MODULE_NAME = 'search_tools';
 const UI_BLOCK_ID = 'search_tools_settings';
@@ -2819,6 +2820,11 @@ jQuery(() => {
     const context = getContext();
     registerTools(context);
     ensureUi();
+    // search-tools publishes its 2 read tools into the orchestrator's
+    // Layer-2 registry so any of the four orchestration modes can
+    // dispatch them. Fire-and-forget — when the orchestrator extension
+    // isn't loaded the call is a silent no-op.
+    void registerSearchToolsOrchestrationTools();
     void loadSearchToolsChatState(context, { force: true })
         .then(() => syncSharedLorebookForCurrentChat(context))
         .finally(() => refreshUiStatusForCurrentChat());

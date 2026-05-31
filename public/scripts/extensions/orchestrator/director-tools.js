@@ -23,7 +23,7 @@
  * appearing in the LLM tools array would be ambiguous.
  */
 
-import { FINALIZE_TOOL_SCHEMA, getEnabledToolSchemas } from './loop-tools.js';
+import { FINALIZE_TOOL_SCHEMA, getEnabledToolSchemas, resolveToolSource } from './loop-tools.js';
 import { resolveAgentToolFlags } from './persistence.js';
 import {
     appendText,
@@ -58,8 +58,8 @@ function resolveAgentPromptPresetName(settings, agentConfig) {
         || String(settings?.llmNodePresetName || '').trim();
 }
 
-function loopToolSchemasFor(tools) {
-    const all = getEnabledToolSchemas({ tools });
+function loopToolSchemasFor(tools, customToolRegistry = null) {
+    const all = getEnabledToolSchemas({ tools }, customToolRegistry);
     const loopFinalizeName = FINALIZE_TOOL_SCHEMA?.function?.name || 'finalize';
     return all.filter(s => s?.function?.name !== loopFinalizeName);
 }
@@ -190,7 +190,7 @@ export const CANCEL_SUBAGENT_TOOL = {
     },
 };
 
-export function buildMainAgentToolSchemas({ subAgents, tools }) {
+export function buildMainAgentToolSchemas({ subAgents, tools, customToolRegistry = null }) {
     const hasSubAgents = Array.isArray(subAgents) && subAgents.length > 0;
     // Each dispatcher tool can be turned off via `tools.collab.<verb>` from
     // the main-agent override panel. Missing namespace (or missing key)
@@ -214,17 +214,17 @@ export function buildMainAgentToolSchemas({ subAgents, tools }) {
         ...(anyDispatcherEnabled ? [AWAIT_SUBAGENTS_TOOL, CANCEL_SUBAGENT_TOOL] : []),
     ];
     const messageProduction = [WRITE_MESSAGE_TOOL, APPLY_MESSAGE_PATCHES_TOOL, GET_DRAFT_TOOL, FINALIZE_TOOL];
-    const loop = loopToolSchemasFor(tools);
+    const loop = loopToolSchemasFor(tools, customToolRegistry);
     return [...collab, ...messageProduction, ...loop];
 }
 
-export function buildSubAgentToolSchemas({ tools }) {
+export function buildSubAgentToolSchemas({ tools, customToolRegistry = null }) {
     // Sub-agents always get get_draft (lets analysts read the in-flight
     // draft) plus whichever loop tools the profile enables. They do NOT
     // get the message-editing tools or the dispatch/cancel collaboration
     // tools — only the main agent writes the message and only the main
     // agent dispatches.
-    return [GET_DRAFT_TOOL, ...loopToolSchemasFor(tools)];
+    return [GET_DRAFT_TOOL, ...loopToolSchemasFor(tools, customToolRegistry)];
 }
 
 // ── Tool executors ──
@@ -360,12 +360,6 @@ const SUB_AGENT_MAX_ROUNDS = 16;
  *     by main.js). Receives the sub-agent's tool calls.
  *   - chat: live chat array, forwarded as `ctx.chat` to executeLoopTool
  *     so chat-reading tools work.
- *   - contextForSession: optional overlay carrying `__memoryGraphSession`
- *     (and anything else `loop-runtime::attachMemoryGraphSession` mounts in
- *     the future). Spread into the per-tool-call context so memory_* tools
- *     find a live session — without this, sub-agents hit MEMORY_DISABLED
- *     even when memory-graph is enabled. Mounted by main.js once per
- *     director turn; shared by reference across every tool call.
  */
 export function createSubagentDispatcher({
     subAgents,
@@ -381,7 +375,7 @@ export function createSubagentDispatcher({
     chat,
     trace,
     contextForNotes,
-    contextForSession,
+    customToolRegistry = null,
 }) {
     const list = Array.isArray(subAgents) ? subAgents : [];
     const byId = new Map(list.map(a => [a.id, a]));
@@ -674,7 +668,7 @@ export function createSubagentDispatcher({
         // Per-dispatch tool schemas: agent's own tools override (object)
         // wins; null/undefined falls back to profile.tools default.
         const resolvedTools = resolveAgentToolFlags(agentTools, tools);
-        const subToolSchemas = buildSubAgentToolSchemas({ tools: resolvedTools || {} });
+        const subToolSchemas = buildSubAgentToolSchemas({ tools: resolvedTools || {}, customToolRegistry });
 
         // Splice the takeover-captured messages verbatim between
         // <story_context> open/close system messages. Director hard-codes
@@ -838,6 +832,9 @@ export function createSubagentDispatcher({
                     // name, breaking pairing and triggering 400
                     // "unexpected tool_use_id" from Anthropic. Same fix
                     // as the main-agent loop in director-runtime.js.
+                    // `source` tags each call with the dispatch layer so
+                    // the simulation-review popup can render a layer chip
+                    // (builtin / extension / profile / st-bridge).
                     const assistantToolCallEntries = roundToolCalls.map(tc => ({
                         id: String(tc?.raw?.id || tc?.id || makeSubagentToolCallId()),
                         type: 'function',
@@ -845,6 +842,7 @@ export function createSubagentDispatcher({
                             name: String(tc?.name || ''),
                             arguments: safeStringifyArgs(tc?.args),
                         },
+                        source: resolveToolSource(String(tc?.name || ''), { __customToolRegistry: customToolRegistry }),
                     }));
                     subMessages.push({
                         role: 'assistant',
@@ -862,9 +860,9 @@ export function createSubagentDispatcher({
                         } else if (typeof executeLoopTool === 'function') {
                             try {
                                 const raw = await executeLoopTool(name, args, {
-                                    ...(contextForSession || {}),
                                     ...(contextForNotes || {}),
                                     chat,
+                                    __customToolRegistry: customToolRegistry,
                                 });
                                 toolResult = { ok: true, result: raw };
                             } catch (err) {

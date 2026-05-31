@@ -948,3 +948,4 @@ if (groups.length > 0) {
 - 原生召回路徑：`public/scripts/extensions/memory-graph/main.js`（`chooseRecallRoute`、`collectRootCandidates`、`expandRouteCandidates`）
 - 搭配：orchestrator 透過 `getExtensionApi('memory-graph').openSession(context)` 開啟一個會話，並把它掛在 `__memoryGraphSession` 上供自身的 `memory_*` loop 工具消費 —— 見 [Director 執行期](/zh-TW/features/orchestrator/director)。
 - 相關擴充 API:[外掛整合](/zh-TW/development/extension-api/plugin-integration)，介紹了與其他擴充入口一併發布 `'memory-graph'` 的擴充 API 註冊表。
+- 要從你的擴充往編排器註冊自訂工具（memory-graph 自己就是這樣發布它的讀 / 寫工具的），參見 [編排器工具 API](./orchestrator-tools.md)。

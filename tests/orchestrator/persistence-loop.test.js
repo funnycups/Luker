@@ -46,21 +46,29 @@ describe('sanitizeLoopProfile defaults', () => {
         expect(out.tools.chat.search).toBe(true);
         expect(out.tools.lorebook.search).toBe(true);
         expect(out.tools.lorebook.get).toBe(true);
-        expect(out.tools.memory.list_candidates).toBe(true);
-        expect(out.tools.memory.edge_summary).toBe(true);
-        expect(out.tools.memory.node_brief).toBe(true);
-        expect(out.tools.memory.expand_seeds).toBe(true);
-        expect(out.tools.memory.keyword_search).toBe(true);
-        expect(out.tools.memory.vector_search).toBe(true);
-        expect(out.tools.memory.find_by_name).toBe(true);
-        expect(out.tools.memory.compaction_candidates).toBe(true);
-        expect(out.tools.memory.node_create).toBe(true);
-        expect(out.tools.memory.node_edit).toBe(true);
-        expect(out.tools.memory.node_delete).toBe(true);
-        expect(out.tools.memory.link_upsert).toBe(true);
-        expect(out.tools.memory.link_delete).toBe(true);
-        expect(out.tools.memory.compact_nodes).toBe(true);
-        expect(out.tools.memory.schema).toBe(true);
+        // memory + search tools live in Layer-2 now; the loop profile
+        // defaults pre-populate tools.custom with each verb's flag so
+        // first-run users get the same enabled set as before.
+        expect(out.tools.memory).toBeUndefined();
+        expect(out.tools.search).toBeUndefined();
+        expect(out.tools.custom.memory_list_candidates).toBe(true);
+        expect(out.tools.custom.memory_edge_summary).toBe(true);
+        expect(out.tools.custom.memory_node_brief).toBe(true);
+        expect(out.tools.custom.memory_expand_seeds).toBe(true);
+        expect(out.tools.custom.memory_keyword_search).toBe(true);
+        expect(out.tools.custom.memory_vector_search).toBe(true);
+        expect(out.tools.custom.memory_find_by_name).toBe(true);
+        expect(out.tools.custom.memory_compaction_candidates).toBe(true);
+        expect(out.tools.custom.memory_node_create).toBe(true);
+        expect(out.tools.custom.memory_node_edit).toBe(true);
+        expect(out.tools.custom.memory_node_delete).toBe(true);
+        expect(out.tools.custom.memory_link_upsert).toBe(true);
+        expect(out.tools.custom.memory_link_delete).toBe(true);
+        expect(out.tools.custom.memory_compact_nodes).toBe(true);
+        expect(out.tools.custom.memory_schema).toBe(true);
+        // search-tools also live in tools.custom.
+        expect(out.tools.custom.search_search).toBe(true);
+        expect(out.tools.custom.search_visit).toBe(true);
         expect(out.tools.finalize).toBe(true);
         expect(out.max_rounds).toBe(20);
         expect(out.wall_clock_budget_ms).toBe(300000);
@@ -203,21 +211,23 @@ describe('sanitizeLoopProfile tools handling', () => {
         expect(out.tools.chat.search).toBe(false);
         expect(out.tools.lorebook.search).toBe(false);
         expect(out.tools.lorebook.get).toBe(false);
-        expect(out.tools.memory.list_candidates).toBe(false);
-        expect(out.tools.memory.edge_summary).toBe(false);
-        expect(out.tools.memory.node_brief).toBe(false);
-        expect(out.tools.memory.expand_seeds).toBe(false);
-        expect(out.tools.memory.keyword_search).toBe(false);
-        expect(out.tools.memory.vector_search).toBe(false);
-        expect(out.tools.memory.find_by_name).toBe(false);
-        expect(out.tools.memory.compaction_candidates).toBe(false);
-        expect(out.tools.memory.node_create).toBe(false);
-        expect(out.tools.memory.node_edit).toBe(false);
-        expect(out.tools.memory.node_delete).toBe(false);
-        expect(out.tools.memory.link_upsert).toBe(false);
-        expect(out.tools.memory.link_delete).toBe(false);
-        expect(out.tools.memory.compact_nodes).toBe(false);
-        expect(out.tools.memory.schema).toBe(false);
+        // memory.* legacy flags translate into custom.memory_<verb>.
+        expect(out.tools.memory).toBeUndefined();
+        expect(out.tools.custom.memory_list_candidates).toBe(false);
+        expect(out.tools.custom.memory_edge_summary).toBe(false);
+        expect(out.tools.custom.memory_node_brief).toBe(false);
+        expect(out.tools.custom.memory_expand_seeds).toBe(false);
+        expect(out.tools.custom.memory_keyword_search).toBe(false);
+        expect(out.tools.custom.memory_vector_search).toBe(false);
+        expect(out.tools.custom.memory_find_by_name).toBe(false);
+        expect(out.tools.custom.memory_compaction_candidates).toBe(false);
+        expect(out.tools.custom.memory_node_create).toBe(false);
+        expect(out.tools.custom.memory_node_edit).toBe(false);
+        expect(out.tools.custom.memory_node_delete).toBe(false);
+        expect(out.tools.custom.memory_link_upsert).toBe(false);
+        expect(out.tools.custom.memory_link_delete).toBe(false);
+        expect(out.tools.custom.memory_compact_nodes).toBe(false);
+        expect(out.tools.custom.memory_schema).toBe(false);
         // finalize remains forced on
         expect(out.tools.finalize).toBe(true);
     });
@@ -232,21 +242,28 @@ describe('sanitizeLoopProfile tools handling', () => {
         expect(out.tools.note.close).toBe(true);
         expect(out.tools.lorebook.search).toBe(true);
         expect(out.tools.lorebook.get).toBe(true);
-        expect(out.tools.memory.list_candidates).toBe(true);
-        expect(out.tools.memory.edge_summary).toBe(true);
-        expect(out.tools.memory.node_brief).toBe(true);
-        expect(out.tools.memory.expand_seeds).toBe(true);
-        expect(out.tools.memory.keyword_search).toBe(true);
-        expect(out.tools.memory.vector_search).toBe(true);
-        expect(out.tools.memory.find_by_name).toBe(true);
-        expect(out.tools.memory.compaction_candidates).toBe(true);
-        expect(out.tools.memory.node_create).toBe(true);
-        expect(out.tools.memory.node_edit).toBe(true);
-        expect(out.tools.memory.node_delete).toBe(true);
-        expect(out.tools.memory.link_upsert).toBe(true);
-        expect(out.tools.memory.link_delete).toBe(true);
-        expect(out.tools.memory.compact_nodes).toBe(true);
-        expect(out.tools.memory.schema).toBe(true);
+        // memory lives in tools.custom now; LOOP_PROFILE_DEFAULTS
+        // pre-populates each verb so the first-run enabled set is unchanged.
+        expect(out.tools.custom.memory_list_candidates).toBe(true);
+        expect(out.tools.custom.memory_edge_summary).toBe(true);
+        expect(out.tools.custom.memory_node_brief).toBe(true);
+        expect(out.tools.custom.memory_expand_seeds).toBe(true);
+        expect(out.tools.custom.memory_keyword_search).toBe(true);
+        expect(out.tools.custom.memory_vector_search).toBe(true);
+        expect(out.tools.custom.memory_find_by_name).toBe(true);
+        expect(out.tools.custom.memory_compaction_candidates).toBe(true);
+        expect(out.tools.custom.memory_node_create).toBe(true);
+        expect(out.tools.custom.memory_node_edit).toBe(true);
+        expect(out.tools.custom.memory_node_delete).toBe(true);
+        expect(out.tools.custom.memory_link_upsert).toBe(true);
+        expect(out.tools.custom.memory_link_delete).toBe(true);
+        expect(out.tools.custom.memory_compact_nodes).toBe(true);
+        expect(out.tools.custom.memory_schema).toBe(true);
+        // search-tools also live in tools.custom; LOOP_PROFILE_DEFAULTS
+        // pre-populates both verbs on, neither lives under tools.search.
+        expect(out.tools.search).toBeUndefined();
+        expect(out.tools.custom.search_search).toBe(true);
+        expect(out.tools.custom.search_visit).toBe(true);
     });
 });
 

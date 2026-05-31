@@ -192,3 +192,4 @@ When filing a bug, **Export this run** downloads this JSON as a JSONL file you c
 - [Spec mode](/features/orchestrator/spec) — the default DAG mode
 - [Loop mode](/features/orchestrator/loop) — single-agent tool loop
 - [Function Call Runtime](/improvements/function-call-runtime) — the framework Planner dispatch relies on
+- [Custom tools](/features/orchestrator/custom-tools) — extension / SillyTavern-bridged / handwritten tools that Agenda Workers can call

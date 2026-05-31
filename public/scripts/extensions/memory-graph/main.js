@@ -5,6 +5,11 @@ import { event_types, eventSource, extension_prompt_roles, extension_prompt_type
 import { extension_settings, getContext } from '../../extensions.js';
 // Register the Layer-1 session API at module load.
 import './api.js';
+// Publishes memory-graph's read + write tools into the orchestrator's
+// Layer-2 extension registry so any orchestration mode (loop / spec /
+// agenda / director) can dispatch them. Silent no-op when orchestrator
+// isn't loaded — memory-graph stays independently functional.
+import { registerMemoryGraphOrchestrationTools } from './orchestrator-tools.js';
 import { i18n, i18nFormat, registerLocaleData } from './i18n.js';
 import {
     DEFAULT_PER_TYPE_INSTRUCTIONS,
@@ -14925,6 +14930,11 @@ jQuery(() => {
     saveSettingsDebounced();
     ensureUi();
     void syncPersistentProjectionForCurrentChat();
+    // memory-graph publishes its 15 read/write tools into the
+    // orchestrator's Layer-2 registry so any of the four orchestration
+    // modes can dispatch them. Fire-and-forget — when the orchestrator
+    // extension isn't loaded the call is a silent no-op.
+    void registerMemoryGraphOrchestrationTools();
 
     // ORDER MATTERS for the migration path. When core fires settleChatChanged
     // it walks every floor-state instance through `rematerialize`, which

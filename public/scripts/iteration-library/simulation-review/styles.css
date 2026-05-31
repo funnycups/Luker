@@ -155,6 +155,9 @@ mark[data-ann-id] {
 .sim-review-tool-chip--read         { background: rgba( 90, 200, 120, 0.55); }
 .sim-review-tool-chip--validated    { background: rgba(230, 200,  80, 0.55); }
 .sim-review-tool-chip--unvalidated  { background: rgba(230, 150,  80, 0.55); }
+.sim-review-tool-chip--source-extension { background: rgba(120, 160, 220, 0.55); }
+.sim-review-tool-chip--source-profile   { background: rgba(170, 130, 220, 0.55); }
+.sim-review-tool-chip--source-st-bridge { background: rgba(200, 200, 200, 0.55); }
 
 .luker-sim-review .luker-sim-section--collapsed > *:not(h1):not(h2):not(h3):not(h4) {
     display: none;

@@ -74,6 +74,8 @@ if (api) {
 
 扩展间通信最常见的场景是解耦：一个扩展提供能力，另一个扩展消费能力，而不需要硬编码依赖。例如，CardApp Studio通过`registerExtensionApi`将自身的编辑器API暴露出来，其他扩展可以在Studio就绪后直接调用。
 
+编排器扩展遵循同样的约定 —— 它发布 `'orchestrator'`，带 `registerOrchestrationTool` / `unregisterOrchestrationTool` / `listExtensionTools`（以及 SillyTavern 桥接相关的辅助函数），让任何其他扩展都能贡献工具，由编排 agent 调用。详见 [编排器工具 API](./orchestrator-tools.md)。
+
 ## 事件系统
 
 ### eventSource

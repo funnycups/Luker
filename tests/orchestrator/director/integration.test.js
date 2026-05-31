@@ -1145,66 +1145,6 @@ describe('director integration — scripted main agent', () => {
         expect(digest.content).not.toContain('OUT_A_UNIQUE');
     });
 
-    test('main agent executeLoopTool sees __memoryGraphSession via contextForSession overlay', async () => {
-        // Regression: before this fix, the main-agent's executeLoopTool
-        // call built ctx as `{ chat: deps.chat }` and dropped the
-        // contextForSession overlay main.js wired (sub-agent path got
-        // it via the dispatcher closure). Result: memory_* tools threw
-        // MEMORY_DISABLED even when memory-graph was enabled, and the
-        // director LLM bailed out with "记忆图存储未加载，无法写入任何
-        // 节点。直接结束。" the moment it tried to write.
-        const { chat, handle } = makeHandle();
-        const ev = {
-            type: 'normal',
-            placeholderMessageId: 0,
-            finalPrompt: '',
-            generateData: {},
-            takeoverHandle: handle,
-            abortSignal: new AbortController().signal,
-        };
-
-        const memCtx = { __memoryGraphSession: { listVisibleCandidates: () => [] } };
-
-        const seenToolCtx = [];
-        const executeLoopTool = jest.fn(async (_name, _args, ctx) => {
-            seenToolCtx.push(ctx);
-            return { candidates: [] };
-        });
-
-        const calls = [
-            [{ id: 't1', name: 'memory_list_candidates', args: {} }],
-            [{ id: 'tf', name: 'finalize', args: {} }],
-        ];
-        let i = 0;
-        const fakeStream = jest.fn(async () => ({
-            assistantText: '',
-            toolCalls: calls[i++] || [],
-            reasoning: null,
-            finishReason: 'tool_calls',
-            usage: null,
-            raw: null,
-        }));
-
-        handle.setText('placeholder');
-        await runMainAgentLoop({
-            handle,
-            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 3, tools: { memory: { list_candidates: true } } } },
-            eventData: ev,
-            deps: {
-                generateTaskStreamForMainAgent: fakeStream,
-                generateTask: jest.fn(),
-                chat,
-                executeLoopTool,
-                contextForSession: memCtx,
-            },
-        });
-
-        expect(executeLoopTool).toHaveBeenCalledTimes(1);
-        expect(executeLoopTool.mock.calls[0][0]).toBe('memory_list_candidates');
-        expect(seenToolCtx[0].__memoryGraphSession).toBe(memCtx.__memoryGraphSession);
-        expect(seenToolCtx[0].chat).toBe(chat);
-    });
-
     test('main agent executeLoopTool sees __floorStateForNotes via contextForNotes overlay', async () => {
         // Symmetric regression for the notes adapter: same root cause as
         // the memory overlay miss — main.js wires contextForNotes, but

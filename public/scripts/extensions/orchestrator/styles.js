@@ -546,6 +546,188 @@ export function ensureStyles(uiBlockId) {
     padding: 12px;
     text-align: center;
 }
+/* Custom Tools section (Unit 3 — Layer-2 / Layer-3 panels per mode) */
+.luker_orch_ct_section {
+    margin-top: 12px;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.5));
+    border-radius: 8px;
+    padding: 8px;
+}
+.luker_orch_ct_section > summary {
+    cursor: pointer;
+    font-weight: 600;
+    padding: 4px 0;
+}
+.luker_orch_ct_actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 8px 0;
+}
+.luker_orch_ct_subgroup {
+    margin-top: 8px;
+}
+.luker_orch_ct_subgroup_title {
+    font-size: 0.9em;
+    opacity: 0.7;
+    margin-bottom: 4px;
+}
+.luker_orch_ct_row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 0;
+    border-bottom: 1px dashed rgba(130,130,130,0.2);
+}
+.luker_orch_ct_row:last-child {
+    border-bottom: none;
+}
+.luker_orch_ct_row_label {
+    flex: 1 1 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.luker_orch_ct_name {
+    font-weight: 500;
+}
+.luker_orch_ct_mode {
+    opacity: 0.7;
+    font-size: 0.85em;
+}
+.luker_orch_ct_desc {
+    opacity: 0.7;
+    font-size: 0.85em;
+    margin-left: 6px;
+}
+.luker_orch_ct_actions_inline {
+    display: inline-flex;
+    gap: 4px;
+}
+.luker_orch_ct_empty {
+    opacity: 0.6;
+    font-style: italic;
+    padding: 4px 0;
+}
+/* Custom tool editor popup */
+.luker_orch_ct_editor {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    text-align: left;
+}
+.luker_orch_ct_warning {
+    background: rgba(255, 180, 0, 0.12);
+    border: 1px solid rgba(255, 180, 0, 0.45);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 0.9em;
+}
+.luker_orch_ct_field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.luker_orch_ct_label {
+    font-weight: 500;
+    font-size: 0.9em;
+}
+.luker_orch_ct_validation_msg {
+    background: rgba(255, 80, 80, 0.12);
+    border: 1px solid rgba(255, 80, 80, 0.4);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 0.9em;
+}
+.luker_orch_ct_validation_msg[hidden] {
+    display: none;
+}
+/* ST tool bridge picker */
+.luker_orch_st_picker {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    text-align: left;
+}
+.luker_orch_st_picker_title {
+    font-weight: 600;
+    font-size: 1em;
+}
+.luker_orch_st_picker_row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 0;
+    border-bottom: 1px dashed rgba(130,130,130,0.2);
+}
+.luker_orch_st_picker_row:last-child {
+    border-bottom: none;
+}
+.luker_orch_st_picker_check {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.luker_orch_st_picker_mode {
+    display: inline-flex;
+    gap: 12px;
+    opacity: 0.85;
+    font-size: 0.9em;
+}
+.luker_orch_st_picker_desc {
+    opacity: 0.7;
+    font-size: 0.85em;
+}
+.luker_orch_st_picker_empty {
+    opacity: 0.6;
+    font-style: italic;
+    padding: 8px 0;
+}
+/* Character import review popup */
+.luker_orch_ct_import_review {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    text-align: left;
+}
+.luker_orch_ct_import_list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.luker_orch_ct_import_item {
+    border: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.5));
+    border-radius: 6px;
+    padding: 8px;
+}
+.luker_orch_ct_import_head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.luker_orch_ct_import_name {
+    font-weight: 600;
+}
+.luker_orch_ct_import_desc {
+    opacity: 0.8;
+    font-size: 0.9em;
+    margin-top: 4px;
+}
+.luker_orch_ct_import_body {
+    margin-top: 6px;
+}
+.luker_orch_ct_import_pre {
+    max-height: 200px;
+    overflow: auto;
+    background: rgba(0,0,0,0.2);
+    padding: 6px;
+    border-radius: 4px;
+    font-size: 0.85em;
+}
 @media (max-width: 980px) {
     #${uiBlockId} .luker_orch_workspace_grid {
         grid-template-columns: 1fr;

@@ -593,52 +593,12 @@ describe('subagent dispatcher', () => {
         expect(budgetErrors).toHaveLength(1);
     });
 
-    test('contextForSession overlay reaches executeLoopTool so memory_* tools find the session', async () => {
-        // Sub-agent calls memory_list_candidates once, then terminates.
-        const calls = [
-            { assistantText: '', toolCalls: [{ id: 't1', name: 'memory_list_candidates', args: {} }], reasoning: null, finishReason: 'tool_calls' },
-            { assistantText: 'done', toolCalls: [], reasoning: null, finishReason: 'stop' },
-        ];
-        let i = 0;
-        const fakeGenerate = jest.fn(async () => calls[i++] || { assistantText: '', toolCalls: [], reasoning: null, finishReason: 'stop' });
-
-        const seenToolCtx = [];
-        const executeLoopTool = jest.fn(async (_name, _args, ctx) => {
-            seenToolCtx.push(ctx);
-            return { candidates: [{ id: 'n1', type: 'event', title: 'a bird' }] };
-        });
-
-        const memCtx = { __memoryGraphSession: { listVisibleCandidates: () => [] } };
-        const dispatcher = createSubagentDispatcher({
-            subAgents: [{ id: 's', description: '', systemPrompt: 's' }],
-            limits: { maxTotalSubagentRuns: 5 },
-            generateTask: fakeGenerate,
-            abortSignal: new AbortController().signal,
-            tools: { memory: { list_candidates: true } },
-            executeLoopTool,
-            chat: [],
-            contextForSession: memCtx,
-        });
-        const h = await dispatcher.dispatch({ subagentId: 's', task: 't' });
-        await dispatcher.awaitAll([h]);
-
-        expect(executeLoopTool).toHaveBeenCalledTimes(1);
-        expect(executeLoopTool.mock.calls[0][0]).toBe('memory_list_candidates');
-        // The per-call context must carry the memory session the dispatcher
-        // was wired with — without this, requireSession() throws MEMORY_DISABLED
-        // even when memory-graph is enabled.
-        expect(seenToolCtx[0].__memoryGraphSession).toBe(memCtx.__memoryGraphSession);
-        // And chat is still forwarded (not clobbered by the overlay).
-        expect(seenToolCtx[0].chat).toBeDefined();
-    });
-
     test('contextForNotes overlay reaches executeLoopTool so note_* tools find the floor-state adapter', async () => {
-        // Symmetric to the contextForSession overlay: the dispatcher
-        // owns contextForNotes for system-prompt "## Open Notes"
-        // rendering and must also spread it into the per-tool-call ctx
-        // so note_open / note_close can reach `__floorStateForNotes`.
-        // Without the spread, sub-agents lose write access to notes
-        // even when the adapter is wired by main.js.
+        // The dispatcher owns contextForNotes for system-prompt
+        // "## Open Notes" rendering and must also spread it into the
+        // per-tool-call ctx so note_open / note_close can reach
+        // `__floorStateForNotes`. Without the spread, sub-agents lose
+        // write access to notes even when the adapter is wired by main.js.
         const calls = [
             { assistantText: '', toolCalls: [{ id: 't1', name: 'note_open', args: { text: 'pending' } }], reasoning: null, finishReason: 'tool_calls' },
             { assistantText: 'done', toolCalls: [], reasoning: null, finishReason: 'stop' },
@@ -678,37 +638,6 @@ describe('subagent dispatcher', () => {
         expect(seenToolCtx[0].chat).toBeDefined();
     });
 
-    test('without contextForSession, executeLoopTool sees no __memoryGraphSession (regression guard)', async () => {
-        const calls = [
-            { assistantText: '', toolCalls: [{ id: 't1', name: 'memory_list_candidates', args: {} }], reasoning: null, finishReason: 'tool_calls' },
-            { assistantText: 'done', toolCalls: [], reasoning: null, finishReason: 'stop' },
-        ];
-        let i = 0;
-        const fakeGenerate = jest.fn(async () => calls[i++] || { assistantText: '', toolCalls: [], reasoning: null, finishReason: 'stop' });
-
-        const seenToolCtx = [];
-        const executeLoopTool = jest.fn(async (_name, _args, ctx) => {
-            seenToolCtx.push(ctx);
-            return { nodes: [] };
-        });
-
-        const dispatcher = createSubagentDispatcher({
-            subAgents: [{ id: 's', description: '', systemPrompt: 's' }],
-            limits: { maxTotalSubagentRuns: 5 },
-            generateTask: fakeGenerate,
-            abortSignal: new AbortController().signal,
-            tools: { memory: { list_candidates: true } },
-            executeLoopTool,
-            chat: [],
-            // contextForSession deliberately omitted.
-        });
-        const h = await dispatcher.dispatch({ subagentId: 's', task: 't' });
-        await dispatcher.awaitAll([h]);
-
-        expect(seenToolCtx[0].__memoryGraphSession).toBeUndefined();
-        expect(seenToolCtx[0].chat).toBeDefined();
-    });
-
     test('sub-agent with tools override gets its own schemas; sub-agent without override inherits profile defaults', async () => {
         // Capture the `tools` schema array passed to generateTask so we can
         // assert what each sub-agent dispatch actually saw.
@@ -722,14 +651,13 @@ describe('subagent dispatcher', () => {
         const profileTools = {
             chat: { read_range: true, search: true },
             lorebook: { search: true, get: true },
-            memory: { node_brief: true },
             note: { open: false, close: false },
             search: { search: false, visit: false },
             finalize: false,
         };
         const dispatcher = createSubagentDispatcher({
             subAgents: [
-                // Inheriting sub-agent: should see chat_* + lorebook_* + memory_node_brief + get_draft.
+                // Inheriting sub-agent: should see chat_* + lorebook_* + get_draft.
                 { id: 'inheritor', description: '', systemPrompt: 's' },
                 // Override sub-agent: ONLY note tools enabled, nothing else.
                 {
@@ -740,7 +668,6 @@ describe('subagent dispatcher', () => {
                         note: { open: true, close: true },
                         chat: { read_range: false, search: false },
                         lorebook: { search: false, get: false },
-                        memory: {},
                         search: { search: false, visit: false },
                     },
                 },
@@ -758,15 +685,15 @@ describe('subagent dispatcher', () => {
         const [inheritorSchemas, overriderSchemas] = seenSchemas;
         // Inheritor sees the profile-level tools.
         expect(inheritorSchemas).toContain('chat_read_range');
+        expect(inheritorSchemas).toContain('chat_search');
         expect(inheritorSchemas).toContain('lorebook_search');
-        expect(inheritorSchemas).toContain('memory_node_brief');
+        expect(inheritorSchemas).toContain('lorebook_get');
         expect(inheritorSchemas).not.toContain('note_open');
         // Overrider sees only its own tools (note) + get_draft.
         expect(overriderSchemas).toContain('note_open');
         expect(overriderSchemas).toContain('note_close');
         expect(overriderSchemas).not.toContain('chat_read_range');
         expect(overriderSchemas).not.toContain('lorebook_search');
-        expect(overriderSchemas).not.toContain('memory_node_brief');
     });
 
     test('inline dispatch uses profile default tools (no per-agent override field)', async () => {

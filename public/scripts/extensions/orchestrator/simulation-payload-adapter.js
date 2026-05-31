@@ -92,6 +92,7 @@ function turnsFromConversation(messages, eventsByCallId) {
                 args: tc?.args || (tc?.function?.arguments ? safeJsonParse(tc.function.arguments) : {}),
                 result: typeof result === 'undefined' ? null : result,
                 durationMs: Number(tc?.durationMs || 0),
+                ...(typeof tc?.source === 'string' && tc.source ? { source: tc.source } : {}),
             });
         }
         turns.push({
@@ -278,6 +279,7 @@ export function exportDirectorPayload(trace) {
                     args: c?.args || {},
                     result: typeof c?.result === 'undefined' ? null : c.result,
                     durationMs: Number(c?.durationMs || 0),
+                    ...(typeof c?.source === 'string' && c.source ? { source: c.source } : {}),
                 })),
         }));
     const subs = Array.isArray(d?.subagents) ? d.subagents : [];

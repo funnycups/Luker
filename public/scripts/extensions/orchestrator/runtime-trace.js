@@ -411,7 +411,11 @@ function sanitizeOrchestrationRuntimeToolCall(call) {
     } else {
         args = {};
     }
-    return { id, name, args };
+    const out = { id, name, args };
+    if (typeof call.source === 'string' && call.source) {
+        out.source = call.source;
+    }
+    return out;
 }
 
 /**
