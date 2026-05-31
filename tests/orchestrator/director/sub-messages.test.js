@@ -26,7 +26,19 @@ function makeDispatcherFixture({ payloadMessages = [{ role: 'user', content: 'ch
     const captured = [];
     const generateTask = jest.fn(async ({ taskMessages }) => {
         captured.push(taskMessages.slice());
-        return { assistantText: 'sub output', toolCalls: [], reasoning: null, finishReason: 'stop', usage: null, raw: null };
+        // Sub-agents must terminate via the `submit` tool — no-tool-call
+        // rounds are now treated as failed attempts and retried (see
+        // SUBMIT_TOOL in director-tools.js). The fixture's fake therefore
+        // submits a single-round answer so each dispatch converges
+        // cleanly and we can inspect the captured initial-request shape.
+        return {
+            assistantText: '',
+            toolCalls: [{ id: 't_submit', name: 'submit', args: { output: 'sub output' } }],
+            reasoning: null,
+            finishReason: 'tool_calls',
+            usage: null,
+            raw: null,
+        };
     });
     const payload = { messages: payloadMessages };
     const dispatcher = createSubagentDispatcher({
@@ -68,14 +80,19 @@ describe('director-tools — sub-agent message assembly', () => {
         // [meta, open, payload0, payload1, close, role, digest, task] = 8
         expect(msgs).toHaveLength(8);
 
-        // [0] meta-frame: anti-RP framing. Tells the model story_context
-        // is read-only and its real work is inside <task>.
+        // [0] meta-frame: anti-RP framing + submit contract. Tells the
+        // model story_context is read-only, its real work is inside
+        // <task>, AND that it MUST terminate via `submit`.
         expect(msgs[0].role).toBe('system');
         expect(msgs[0].content).toMatch(/orchestration agent/i);
         expect(msgs[0].content).toMatch(/READ-ONLY/);
         expect(msgs[0].content).toMatch(/<story_context>/);
         expect(msgs[0].content).toMatch(/<orchestration_role>/);
         expect(msgs[0].content).toMatch(/<task>/);
+        // Submit-tool contract is part of META_FRAME.
+        expect(msgs[0].content).toMatch(/CONTRACT/);
+        expect(msgs[0].content).toMatch(/submit/);
+        expect(msgs[0].content).toMatch(/failed attempt/i);
 
         // [1] story_context open.
         expect(msgs[1]).toEqual({ role: 'system', content: '<story_context>' });
@@ -168,7 +185,14 @@ describe('director-tools — sub-agent message assembly', () => {
         const captured = [];
         const generateTask = jest.fn(async ({ taskMessages }) => {
             captured.push(taskMessages.slice());
-            return { assistantText: 'sub output', toolCalls: [], reasoning: null, finishReason: 'stop', usage: null, raw: null };
+            return {
+                assistantText: '',
+                toolCalls: [{ id: 't_submit', name: 'submit', args: { output: 'sub output' } }],
+                reasoning: null,
+                finishReason: 'tool_calls',
+                usage: null,
+                raw: null,
+            };
         });
         const dispatcher = createSubagentDispatcher({
             subAgents: [{ id: 'brainstormer', description: '', systemPrompt: 'You are a brainstormer.' }],
@@ -208,7 +232,14 @@ describe('director-tools — sub-agent message assembly', () => {
         const captured = [];
         const generateTask = jest.fn(async ({ taskMessages }) => {
             captured.push(taskMessages.slice());
-            return { assistantText: 'sub output', toolCalls: [], reasoning: null, finishReason: 'stop', usage: null, raw: null };
+            return {
+                assistantText: '',
+                toolCalls: [{ id: 't_submit', name: 'submit', args: { output: 'sub output' } }],
+                reasoning: null,
+                finishReason: 'tool_calls',
+                usage: null,
+                raw: null,
+            };
         });
         const dispatcher = createSubagentDispatcher({
             subAgents: [{ id: 'brainstormer', description: '', systemPrompt: 'You are a brainstormer.' }],

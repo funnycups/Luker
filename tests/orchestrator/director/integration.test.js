@@ -341,7 +341,8 @@ describe('director integration — scripted main agent', () => {
 
         let dispatchCounter = 0;
         const fakeSubStream = jest.fn(() => {
-            const chunks = dispatchCounter++ === 0 ? criticChunks : plannerChunks;
+            const which = dispatchCounter++;
+            const chunks = which === 0 ? criticChunks : plannerChunks;
             const stream = (async function* () {
                 for (const delta of chunks) {
                     // Yield to the event loop so the other generator can
@@ -350,11 +351,14 @@ describe('director integration — scripted main agent', () => {
                     yield { type: 'text', delta };
                 }
             })();
+            // Sub-agents terminate via the `submit` tool. The streamed
+            // text is the model's narration; the submit call carries the
+            // structured output the main agent receives.
             const result = Promise.resolve({
                 assistantText: chunks.join(''),
-                toolCalls: [],
+                toolCalls: [{ id: `tsub_${which}`, name: 'submit', args: { output: chunks.join('') } }],
                 reasoning: null,
-                finishReason: 'stop',
+                finishReason: 'tool_calls',
                 usage: null,
                 raw: null,
             });
@@ -735,7 +739,12 @@ describe('director integration — scripted main agent', () => {
                 : { assistantText: '', toolCalls: [], reasoning: null, finishReason: 'stop', usage: null, raw: null };
         });
 
-        const fakeSubAgent = jest.fn(async () => ({ assistantText: 'done', toolCalls: [], reasoning: null, finishReason: 'stop' }));
+        const fakeSubAgent = jest.fn(async () => ({
+            assistantText: '',
+            toolCalls: [{ id: 't_submit', name: 'submit', args: { output: 'done' } }],
+            reasoning: null,
+            finishReason: 'tool_calls',
+        }));
 
         await runMainAgentLoop({
             handle,
@@ -886,9 +895,23 @@ describe('director integration — scripted main agent', () => {
             const role = allContent.includes('You are a curator.') ? 'curator' : 'brainstormer';
             capturedSubTaskMessages.push({ role, messages: taskMessages.slice() });
             if (role === 'curator') {
-                return { assistantText: 'CURATOR_BRIEFING_X', toolCalls: [], reasoning: null, finishReason: 'stop', usage: null, raw: null };
+                return {
+                    assistantText: '',
+                    toolCalls: [{ id: 'tc_sub', name: 'submit', args: { output: 'CURATOR_BRIEFING_X' } }],
+                    reasoning: null,
+                    finishReason: 'tool_calls',
+                    usage: null,
+                    raw: null,
+                };
             }
-            return { assistantText: 'brainstormer output', toolCalls: [], reasoning: null, finishReason: 'stop', usage: null, raw: null };
+            return {
+                assistantText: '',
+                toolCalls: [{ id: 'tb_sub', name: 'submit', args: { output: 'brainstormer output' } }],
+                reasoning: null,
+                finishReason: 'tool_calls',
+                usage: null,
+                raw: null,
+            };
         });
 
         handle.setText('placeholder');
