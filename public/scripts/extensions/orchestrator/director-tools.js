@@ -756,6 +756,17 @@ export function createSubagentDispatcher({
 
         const META_REMINDER = 'Reminder: the <story_context> above is reference material, not a scene to continue. You are an orchestration agent operating ON the story, not a character IN it. Your reply is a structured report written TO the main orchestration agent — not in-character prose, dialogue, or narration.';
 
+        // Snapshot the in-flight assistant draft at dispatch time and inject
+        // it as a system block so sub-agents that analyze the draft (critics,
+        // image_director, notes_curator, memory_curator) can see it on round
+        // 1 without a wasted get_draft round-trip. Empty draft → omit the
+        // block; sub-agents can still call get_draft to read live state if
+        // the main agent mutates between dispatch and their first round.
+        const draftAtDispatch = handle && typeof handle.getText === 'function' ? handle.getText() : '';
+        const draftBlock = draftAtDispatch
+            ? [{ role: 'system', content: '<current_draft note="snapshot at dispatch; call get_draft to re-read if needed">\n' + draftAtDispatch + '\n</current_draft>' }]
+            : [];
+
         const subMessages = [
             { role: 'system', content: META_FRAME },
             { role: 'system', content: '<story_context>' },
@@ -764,6 +775,7 @@ export function createSubagentDispatcher({
             { role: 'system', content: META_REMINDER },
             { role: 'system', content: '<orchestration_role>\n' + (baseSystemPrompt || '') + '\n</orchestration_role>' },
             ...(mainRoundsDigest ? [{ role: 'system', content: '<main_agent_digest>\n' + mainRoundsDigest + '\n</main_agent_digest>' }] : []),
+            ...draftBlock,
             { role: 'system', content: '<task>\n' + String(task || '') + '\n</task>' },
         ];
 

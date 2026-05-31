@@ -22,7 +22,7 @@ import { createSubagentDispatcher, renderSubSystemPromptWithNotes } from '../../
  * `<main_agent_digest>` only appears when `__parentMessages` contains
  * post-prefix rounds; `<task>` is always last.
  */
-function makeDispatcherFixture({ payloadMessages = [{ role: 'user', content: 'chat user 0' }, { role: 'assistant', content: 'chat assistant 0' }] } = {}) {
+function makeDispatcherFixture({ payloadMessages = [{ role: 'user', content: 'chat user 0' }, { role: 'assistant', content: 'chat assistant 0' }], handle = null } = {}) {
     const captured = [];
     const generateTask = jest.fn(async ({ taskMessages }) => {
         captured.push(taskMessages.slice());
@@ -37,6 +37,7 @@ function makeDispatcherFixture({ payloadMessages = [{ role: 'user', content: 'ch
         generateTask,
         getContentPayload: () => payload,
         abortSignal: new AbortController().signal,
+        handle,
     });
     return { dispatcher, generateTask, capturedSubMessages: captured };
 }
@@ -268,5 +269,46 @@ describe('director-tools — sub-agent message assembly', () => {
         expect(result).toContain('[c] another open');
         expect(result).not.toContain('closed one');
         expect(result).not.toContain('done');
+    });
+
+    test('dispatch injects <current_draft> when handle has draft text — placed between digest and task', async () => {
+        const handle = { getText: () => 'PROSE BODY snapshot at dispatch' };
+        const { dispatcher, capturedSubMessages } = makeDispatcherFixture({ handle });
+
+        const parent = [
+            { role: 'system', content: '<story_context>' },
+            { role: 'user', content: 'chat user 0' },
+            { role: 'assistant', content: 'chat assistant 0' },
+            { role: 'system', content: '</story_context>' },
+            { role: 'assistant', content: 'main thinking', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'write_message', arguments: '{}' } }] },
+            { role: 'tool', tool_call_id: 'c1', content: '{"ok":true,"currentLength":31}' },
+        ];
+        const h = await dispatcher.dispatch({ subagentId: 'brainstormer', task: 'critique', __parentMessages: parent });
+        await dispatcher.awaitAll([h]);
+
+        const msgs = capturedSubMessages[0];
+        // [meta, open, p0, p1, close, reminder, role, digest, current_draft, task] = 10
+        expect(msgs).toHaveLength(10);
+        expect(msgs[8].role).toBe('system');
+        expect(msgs[8].content.startsWith('<current_draft')).toBe(true);
+        expect(msgs[8].content).toContain('PROSE BODY snapshot at dispatch');
+        expect(msgs[8].content).toContain('call get_draft to re-read');
+        expect(msgs[8].content.endsWith('</current_draft>')).toBe(true);
+        // task is last
+        expect(msgs[9]).toEqual({ role: 'system', content: '<task>\ncritique\n</task>' });
+    });
+
+    test('dispatch OMITS <current_draft> when handle is missing or draft is empty (pre-draft scouts)', async () => {
+        // Case 1: no handle at all.
+        const noHandle = makeDispatcherFixture();
+        const h1 = await noHandle.dispatcher.dispatch({ subagentId: 'brainstormer', task: 'pre-draft scout', __parentMessages: null });
+        await noHandle.dispatcher.awaitAll([h1]);
+        expect(noHandle.capturedSubMessages[0].every(m => !String(m.content || '').includes('<current_draft'))).toBe(true);
+
+        // Case 2: handle exists but draft is empty (main agent hasn't written yet).
+        const emptyHandle = makeDispatcherFixture({ handle: { getText: () => '' } });
+        const h2 = await emptyHandle.dispatcher.dispatch({ subagentId: 'brainstormer', task: 'pre-draft scout', __parentMessages: null });
+        await emptyHandle.dispatcher.awaitAll([h2]);
+        expect(emptyHandle.capturedSubMessages[0].every(m => !String(m.content || '').includes('<current_draft'))).toBe(true);
     });
 });
