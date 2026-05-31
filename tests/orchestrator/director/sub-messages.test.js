@@ -26,19 +26,7 @@ function makeDispatcherFixture({ payloadMessages = [{ role: 'user', content: 'ch
     const captured = [];
     const generateTask = jest.fn(async ({ taskMessages }) => {
         captured.push(taskMessages.slice());
-        // Sub-agents must terminate via the `submit` tool — no-tool-call
-        // rounds are now treated as failed attempts and retried (see
-        // SUBMIT_TOOL in director-tools.js). The fixture's fake therefore
-        // submits a single-round answer so each dispatch converges
-        // cleanly and we can inspect the captured initial-request shape.
-        return {
-            assistantText: '',
-            toolCalls: [{ id: 't_submit', name: 'submit', args: { output: 'sub output' } }],
-            reasoning: null,
-            finishReason: 'tool_calls',
-            usage: null,
-            raw: null,
-        };
+        return { assistantText: 'sub output', toolCalls: [], reasoning: null, finishReason: 'stop', usage: null, raw: null };
     });
     const payload = { messages: payloadMessages };
     const dispatcher = createSubagentDispatcher({
@@ -54,7 +42,7 @@ function makeDispatcherFixture({ payloadMessages = [{ role: 'user', content: 'ch
 }
 
 describe('director-tools — sub-agent message assembly', () => {
-    test('dispatch produces [meta, open, ...payload, close, role, digest, task] when parentMessages has rounds', async () => {
+    test('dispatch produces [meta, open, ...payload, close, reminder, role, digest, task] when parentMessages has rounds', async () => {
         const { dispatcher, capturedSubMessages } = makeDispatcherFixture();
 
         // parentMessages shape mirrors what runMainAgentLoop snapshots:
@@ -77,22 +65,26 @@ describe('director-tools — sub-agent message assembly', () => {
         await dispatcher.awaitAll([h]);
 
         const msgs = capturedSubMessages[0];
-        // [meta, open, payload0, payload1, close, role, digest, task] = 8
-        expect(msgs).toHaveLength(8);
+        // [meta, open, payload0, payload1, close, reminder, role, digest, task] = 9
+        expect(msgs).toHaveLength(9);
 
-        // [0] meta-frame: anti-RP framing + submit contract. Tells the
-        // model story_context is read-only, its real work is inside
-        // <task>, AND that it MUST terminate via `submit`.
+        // [0] meta-frame: anti-RP framing. Tells the model story_context
+        // is read-only and its real work is inside <task>. Now also
+        // enumerates the forbidden RP modalities (prose / dialogue /
+        // narration / sign-offs) explicitly.
         expect(msgs[0].role).toBe('system');
         expect(msgs[0].content).toMatch(/orchestration agent/i);
         expect(msgs[0].content).toMatch(/READ-ONLY/);
         expect(msgs[0].content).toMatch(/<story_context>/);
         expect(msgs[0].content).toMatch(/<orchestration_role>/);
         expect(msgs[0].content).toMatch(/<task>/);
-        // Submit-tool contract is part of META_FRAME.
-        expect(msgs[0].content).toMatch(/CONTRACT/);
-        expect(msgs[0].content).toMatch(/submit/);
-        expect(msgs[0].content).toMatch(/failed attempt/i);
+        // Explicit RP modalities enumerated.
+        expect(msgs[0].content).toMatch(/dialogue/i);
+        expect(msgs[0].content).toMatch(/narration/i);
+        expect(msgs[0].content).toMatch(/sign-offs/i);
+        // Termination protocol (no-tool-call round = final report).
+        expect(msgs[0].content).toMatch(/no tool calls/i);
+        expect(msgs[0].content).toMatch(/structured report/i);
 
         // [1] story_context open.
         expect(msgs[1]).toEqual({ role: 'system', content: '<story_context>' });
@@ -104,24 +96,36 @@ describe('director-tools — sub-agent message assembly', () => {
         // [4] story_context close — clean tag with no role text appended.
         expect(msgs[4]).toEqual({ role: 'system', content: '</story_context>' });
 
-        // [5] <orchestration_role> wraps the agent's persona (sub-agent
-        // systemPrompt, plus optional Open Notes appended). Placed
-        // AFTER </story_context> so identity sits fresh right before
-        // the task instruction (recency bias).
+        // [5] META_REMINDER — short anti-RP reset placed RIGHT AFTER
+        // </story_context> so the model gets the framing back in its
+        // recency window after consuming a potentially huge payload of
+        // RP material (character card + world info + chat history).
+        // Without this, META_FRAME at index 0 gets pushed out of
+        // recency by the time the model reaches <task>.
         expect(msgs[5].role).toBe('system');
-        expect(msgs[5].content.startsWith('<orchestration_role>')).toBe(true);
-        expect(msgs[5].content.endsWith('</orchestration_role>')).toBe(true);
-        expect(msgs[5].content).toContain('You are a brainstormer.');
+        expect(msgs[5].content).toMatch(/^Reminder:/);
+        expect(msgs[5].content).toMatch(/<story_context>/);
+        expect(msgs[5].content).toMatch(/operating ON the story, not a character IN it/);
+        expect(msgs[5].content).toMatch(/structured report/);
 
-        // [6] digest is a system-role message wrapped in <main_agent_digest>.
+        // [6] <orchestration_role> wraps the agent's persona (sub-agent
+        // systemPrompt, plus optional Open Notes appended). Placed
+        // AFTER </story_context> + META_REMINDER so identity sits
+        // fresh right before the task instruction (recency bias).
         expect(msgs[6].role).toBe('system');
-        expect(msgs[6].content.startsWith('<main_agent_digest>')).toBe(true);
-        expect(msgs[6].content.endsWith('</main_agent_digest>')).toBe(true);
-        expect(msgs[6].content).toContain('## Main agent context');
-        expect(msgs[6].content).toContain('curator briefing');
+        expect(msgs[6].content.startsWith('<orchestration_role>')).toBe(true);
+        expect(msgs[6].content.endsWith('</orchestration_role>')).toBe(true);
+        expect(msgs[6].content).toContain('You are a brainstormer.');
 
-        // [7] Task is a system-role message wrapped in <task>.
-        expect(msgs[7]).toEqual({ role: 'system', content: '<task>\ntension up\n</task>' });
+        // [7] digest is a system-role message wrapped in <main_agent_digest>.
+        expect(msgs[7].role).toBe('system');
+        expect(msgs[7].content.startsWith('<main_agent_digest>')).toBe(true);
+        expect(msgs[7].content.endsWith('</main_agent_digest>')).toBe(true);
+        expect(msgs[7].content).toContain('## Main agent context');
+        expect(msgs[7].content).toContain('curator briefing');
+
+        // [8] Task is a system-role message wrapped in <task>.
+        expect(msgs[8]).toEqual({ role: 'system', content: '<task>\ntension up\n</task>' });
     });
 
     test('digest is one system message — no raw assistant/tool from main are spliced in', async () => {
@@ -161,9 +165,9 @@ describe('director-tools — sub-agent message assembly', () => {
         await dispatcher.awaitAll([h]);
 
         const msgs = capturedSubMessages[0];
-        // [meta, open, payload0, payload1, close, role, task] = 7 — NO digest.
-        expect(msgs).toHaveLength(7);
-        expect(msgs[6]).toEqual({ role: 'system', content: '<task>\nfirst task\n</task>' });
+        // [meta, open, payload0, payload1, close, reminder, role, task] = 8 — NO digest.
+        expect(msgs).toHaveLength(8);
+        expect(msgs[7]).toEqual({ role: 'system', content: '<task>\nfirst task\n</task>' });
         // Confirm no <main_agent_digest> anywhere.
         expect(msgs.every(m => !String(m.content || '').includes('<main_agent_digest>'))).toBe(true);
     });
@@ -175,9 +179,9 @@ describe('director-tools — sub-agent message assembly', () => {
         await dispatcher.awaitAll([h]);
 
         const msgs = capturedSubMessages[0];
-        // [meta, open, payload0, payload1, close, role, task] = 7
-        expect(msgs).toHaveLength(7);
-        expect(msgs[6]).toEqual({ role: 'system', content: '<task>\nlegacy\n</task>' });
+        // [meta, open, payload0, payload1, close, reminder, role, task] = 8
+        expect(msgs).toHaveLength(8);
+        expect(msgs[7]).toEqual({ role: 'system', content: '<task>\nlegacy\n</task>' });
         expect(msgs.every(m => !String(m.content || '').includes('<main_agent_digest>'))).toBe(true);
     });
 
@@ -185,14 +189,7 @@ describe('director-tools — sub-agent message assembly', () => {
         const captured = [];
         const generateTask = jest.fn(async ({ taskMessages }) => {
             captured.push(taskMessages.slice());
-            return {
-                assistantText: '',
-                toolCalls: [{ id: 't_submit', name: 'submit', args: { output: 'sub output' } }],
-                reasoning: null,
-                finishReason: 'tool_calls',
-                usage: null,
-                raw: null,
-            };
+            return { assistantText: 'sub output', toolCalls: [], reasoning: null, finishReason: 'stop', usage: null, raw: null };
         });
         const dispatcher = createSubagentDispatcher({
             subAgents: [{ id: 'brainstormer', description: '', systemPrompt: 'You are a brainstormer.' }],
@@ -214,9 +211,9 @@ describe('director-tools — sub-agent message assembly', () => {
         await dispatcher.awaitAll([h]);
 
         const msgs = captured[0];
-        // Empty payload → [meta, open, close, role, task] = 5
-        expect(msgs).toHaveLength(5);
-        const roleMsg = msgs[3];
+        // Empty payload → [meta, open, close, reminder, role, task] = 6
+        expect(msgs).toHaveLength(6);
+        const roleMsg = msgs[4];
         expect(roleMsg.role).toBe('system');
         expect(roleMsg.content.startsWith('<orchestration_role>')).toBe(true);
         expect(roleMsg.content.endsWith('</orchestration_role>')).toBe(true);
@@ -226,20 +223,16 @@ describe('director-tools — sub-agent message assembly', () => {
         expect(roleMsg.content).toContain('[n2] character Y owes a favor to Z');
         // Close tag stays clean — no role / notes concatenated.
         expect(msgs[2]).toEqual({ role: 'system', content: '</story_context>' });
+        // META_REMINDER sits between </story_context> and <orchestration_role>.
+        expect(msgs[3].role).toBe('system');
+        expect(msgs[3].content).toMatch(/^Reminder:/);
     });
 
     test("<orchestration_role> wrapper has NO '## Open Notes' block when there are no notes", async () => {
         const captured = [];
         const generateTask = jest.fn(async ({ taskMessages }) => {
             captured.push(taskMessages.slice());
-            return {
-                assistantText: '',
-                toolCalls: [{ id: 't_submit', name: 'submit', args: { output: 'sub output' } }],
-                reasoning: null,
-                finishReason: 'tool_calls',
-                usage: null,
-                raw: null,
-            };
+            return { assistantText: 'sub output', toolCalls: [], reasoning: null, finishReason: 'stop', usage: null, raw: null };
         });
         const dispatcher = createSubagentDispatcher({
             subAgents: [{ id: 'brainstormer', description: '', systemPrompt: 'You are a brainstormer.' }],

@@ -47,7 +47,7 @@ describe('tool schemas', () => {
         expect(names.some(n => n.startsWith('lorebook_'))).toBe(false);
     });
 
-    test('sub-agent set includes get_draft + submit + loop tools, excludes collaboration / message-editing tools', () => {
+    test('sub-agent set includes get_draft + loop tools, excludes collaboration / message-editing tools', () => {
         const schemas = buildSubAgentToolSchemas({
             tools: {
                 chat: { read_range: true, search: true },
@@ -66,27 +66,9 @@ describe('tool schemas', () => {
         expect(names).not.toContain('write_message');
         expect(names).not.toContain('apply_message_patches');
         expect(names).not.toContain('finalize');
-        // Included: submit (the required terminator), get_draft (always),
-        // plus enabled loop tools.
-        expect(names).toContain('submit');
+        // Included: get_draft (always) + enabled loop tools
         expect(names).toContain('get_draft');
         expect(names.some(n => n.startsWith('chat_'))).toBe(true);
-        // Sub-agent submit has a required `output: string` parameter —
-        // the dispatcher reads it as the sub-agent's final response.
-        const submit = schemas.find(s => s.function.name === 'submit');
-        expect(submit.function.parameters.required).toEqual(['output']);
-        expect(submit.function.parameters.properties.output.type).toBe('string');
-    });
-
-    test('main-agent set does NOT include submit (main owns the message via finalize, not submit)', () => {
-        const schemas = buildMainAgentToolSchemas({
-            subAgents: [{ id: 'critic', description: 'crit' }],
-            tools: {},
-        });
-        const names = schemas.map(s => s.function.name);
-        expect(names).not.toContain('submit');
-        // finalize is still how the main agent terminates.
-        expect(names).toContain('finalize');
     });
 
     test('main agent without configured sub-agents still gets inline-dispatch + await/cancel + message-production', () => {
@@ -327,18 +309,8 @@ describe('finalize executor', () => {
 describe('subagent dispatcher', () => {
     test('dispatch returns a handle id, await resolves to fake output', async () => {
         // Inject a fake generateTaskStream so tests do not need real LLM.
-        // The sub-agent must terminate via the `submit` tool (no-tool-call
-        // rounds are treated as failed attempts and retried — see
-        // SUBMIT_TOOL in director-tools.js).
         const fakeGenerate = jest.fn(async () => {
-            return {
-                assistantText: '',
-                toolCalls: [{ id: 't_submit', name: 'submit', args: { output: 'sub-agent output' } }],
-                reasoning: null,
-                finishReason: 'tool_calls',
-                usage: null,
-                raw: null,
-            };
+            return { assistantText: 'sub-agent output', toolCalls: [], reasoning: null, finishReason: 'stop', usage: null, raw: null };
         });
 
         const dispatcher = createSubagentDispatcher({
@@ -374,14 +346,7 @@ describe('subagent dispatcher', () => {
     });
 
     test('budget exhaustion: dispatch returns budget-exhausted result on Nth + 1 call', async () => {
-        const fakeGenerate = jest.fn(async () => ({
-            assistantText: '',
-            toolCalls: [{ id: 't_submit', name: 'submit', args: { output: 'x' } }],
-            reasoning: null,
-            finishReason: 'tool_calls',
-            usage: null,
-            raw: null,
-        }));
+        const fakeGenerate = jest.fn(async () => ({ assistantText: 'x', toolCalls: [], reasoning: null, finishReason: 'stop', usage: null, raw: null }));
         const dispatcher = createSubagentDispatcher({
             subAgents: [{ id: 's', description: '', systemPrompt: 's' }],
             limits: { maxConcurrentSubagents: 1, maxTotalSubagentRuns: 2 },
@@ -398,14 +363,7 @@ describe('subagent dispatcher', () => {
     });
 
     test('completion notifications: each successful sub-agent pushes one entry, drained after read', async () => {
-        const fakeGenerate = jest.fn(async () => ({
-            assistantText: '',
-            toolCalls: [{ id: 't_submit', name: 'submit', args: { output: 'done' } }],
-            reasoning: null,
-            finishReason: 'tool_calls',
-            usage: null,
-            raw: null,
-        }));
+        const fakeGenerate = jest.fn(async () => ({ assistantText: 'done', toolCalls: [], reasoning: null, finishReason: 'stop', usage: null, raw: null }));
         const dispatcher = createSubagentDispatcher({
             subAgents: [{ id: 's', description: '', systemPrompt: 's' }],
             limits: { maxTotalSubagentRuns: 5 },
@@ -431,12 +389,7 @@ describe('subagent dispatcher', () => {
         const dispatcher = createSubagentDispatcher({
             subAgents: [{ id: 's', description: '', systemPrompt: 's' }],
             limits: { maxTotalSubagentRuns: 1 },
-            generateTask: jest.fn(async () => ({
-                assistantText: '',
-                toolCalls: [{ id: 't_submit', name: 'submit', args: { output: 'x' } }],
-                reasoning: null,
-                finishReason: 'tool_calls',
-            })),
+            generateTask: jest.fn(async () => ({ assistantText: 'x', toolCalls: [], reasoning: null, finishReason: 'stop' })),
             abortSignal: new AbortController().signal,
         });
         const h1 = await dispatcher.dispatch({ subagentId: 's', task: 't' });           // succeeds
@@ -496,12 +449,7 @@ describe('subagent dispatcher', () => {
     });
 
     test('cancel: no-op when handle already completed or unknown', async () => {
-        const fakeGenerate = jest.fn(async () => ({
-            assistantText: '',
-            toolCalls: [{ id: 't_submit', name: 'submit', args: { output: 'done' } }],
-            reasoning: null,
-            finishReason: 'tool_calls',
-        }));
+        const fakeGenerate = jest.fn(async () => ({ assistantText: 'done', toolCalls: [], reasoning: null, finishReason: 'stop' }));
         const dispatcher = createSubagentDispatcher({
             subAgents: [{ id: 's', description: '', systemPrompt: 's' }],
             limits: { maxTotalSubagentRuns: 5 },
@@ -521,13 +469,13 @@ describe('subagent dispatcher', () => {
     test('sub-agent can call get_draft and see the current draft', async () => {
         const { chat, handle } = setupHandle({ initialText: 'pre-draft body' });
         const calls = [
-            // Round 0: call get_draft to read the draft body.
+            // Round 0: call get_draft
             { assistantText: '', toolCalls: [{ id: 't1', name: 'get_draft', args: {} }], reasoning: null, finishReason: 'tool_calls' },
-            // Round 1: terminate via submit, with output referencing the draft length.
-            { assistantText: '', toolCalls: [{ id: 't2', name: 'submit', args: { output: 'I saw the draft (14 chars).' } }], reasoning: null, finishReason: 'tool_calls' },
+            // Round 1: terminate with output that references the draft length
+            { assistantText: 'I saw the draft (14 chars).', toolCalls: [], reasoning: null, finishReason: 'stop' },
         ];
         let i = 0;
-        const fakeGenerate = jest.fn(async () => calls[i++] || { assistantText: '', toolCalls: [{ id: 'tF', name: 'submit', args: { output: 'fallback' } }], reasoning: null, finishReason: 'tool_calls' });
+        const fakeGenerate = jest.fn(async () => calls[i++] || { assistantText: '', toolCalls: [], reasoning: null, finishReason: 'stop' });
 
         const dispatcher = createSubagentDispatcher({
             subAgents: [{ id: 's', description: '', systemPrompt: 's' }],
@@ -560,17 +508,8 @@ describe('subagent dispatcher', () => {
         // overridden by a missing profile spec).
         const seenCallOpts = [];
         const fakeGenerate = jest.fn(async (opts) => {
-            // Snapshot taskMessages because the dispatcher mutates the
-            // live array after the fake returns (pushing the assistant
-            // turn + tool result for submit). Capturing a slice freezes
-            // what the model actually saw on this request.
-            seenCallOpts.push({ ...opts, taskMessages: opts.taskMessages.slice() });
-            return {
-                assistantText: '',
-                toolCalls: [{ id: 't_submit', name: 'submit', args: { output: 'inline output' } }],
-                reasoning: null,
-                finishReason: 'tool_calls',
-            };
+            seenCallOpts.push(opts);
+            return { assistantText: 'inline output', toolCalls: [], reasoning: null, finishReason: 'stop' };
         });
         const dispatcher = createSubagentDispatcher({
             // Crucially: NO sub-agents configured. Inline path must still work.
@@ -593,10 +532,12 @@ describe('subagent dispatcher', () => {
         // would have produced — which would have been empty). The
         // dispatcher now wraps the caller-provided systemPrompt in a
         // dedicated <orchestration_role> system message AFTER
-        // </story_context> (identity-last: recency bias keeps the role
-        // fresh right before <task>; the meta-frame at index 0 tells
-        // the model where to look). The story_context open + close are
-        // clean boundary tags.
+        // </story_context> + META_REMINDER (identity-last: recency bias
+        // keeps the role fresh right before <task>; the meta-frame at
+        // index 0 tells the model where to look; the reminder bridges
+        // story_context and role so a long payload can't push the
+        // anti-RP framing out of recency). The story_context open +
+        // close are clean boundary tags.
         const firstCall = seenCallOpts[0];
         const metaFrame = firstCall.taskMessages[0];
         expect(metaFrame.role).toBe('system');
@@ -604,6 +545,8 @@ describe('subagent dispatcher', () => {
         expect(metaFrame.content).toMatch(/READ-ONLY/);
         const systemOpen = firstCall.taskMessages[1];
         expect(systemOpen).toEqual({ role: 'system', content: '<story_context>' });
+        // Trailing slots, counting back from </task> at -1:
+        //   -1 <task> ; -2 <orchestration_role> ; -3 META_REMINDER ; -4 </story_context>
         const taskMsg = firstCall.taskMessages[firstCall.taskMessages.length - 1];
         expect(taskMsg).toEqual({ role: 'system', content: '<task>\ngo\n</task>' });
         const roleMsg = firstCall.taskMessages[firstCall.taskMessages.length - 2];
@@ -611,7 +554,11 @@ describe('subagent dispatcher', () => {
         expect(roleMsg.content.startsWith('<orchestration_role>')).toBe(true);
         expect(roleMsg.content.endsWith('</orchestration_role>')).toBe(true);
         expect(roleMsg.content).toContain('You are an ad-hoc auditor. Find any continuity errors.');
-        const closeMsg = firstCall.taskMessages[firstCall.taskMessages.length - 3];
+        const reminderMsg = firstCall.taskMessages[firstCall.taskMessages.length - 3];
+        expect(reminderMsg.role).toBe('system');
+        expect(reminderMsg.content).toMatch(/^Reminder:/);
+        expect(reminderMsg.content).toMatch(/operating ON the story/);
+        const closeMsg = firstCall.taskMessages[firstCall.taskMessages.length - 4];
         expect(closeMsg).toEqual({ role: 'system', content: '</story_context>' });
     });
 
@@ -631,12 +578,7 @@ describe('subagent dispatcher', () => {
     });
 
     test('dispatchInline: shares the totalSubagentRuns budget with dispatch by id', async () => {
-        const fakeGenerate = jest.fn(async () => ({
-            assistantText: '',
-            toolCalls: [{ id: 't_submit', name: 'submit', args: { output: 'ok' } }],
-            reasoning: null,
-            finishReason: 'tool_calls',
-        }));
+        const fakeGenerate = jest.fn(async () => ({ assistantText: 'ok', toolCalls: [], reasoning: null, finishReason: 'stop' }));
         const dispatcher = createSubagentDispatcher({
             subAgents: [{ id: 's', description: '', systemPrompt: 's' }],
             limits: { maxTotalSubagentRuns: 2 },
@@ -652,13 +594,13 @@ describe('subagent dispatcher', () => {
     });
 
     test('contextForSession overlay reaches executeLoopTool so memory_* tools find the session', async () => {
-        // Sub-agent calls memory_list_candidates once, then terminates via submit.
+        // Sub-agent calls memory_list_candidates once, then terminates.
         const calls = [
             { assistantText: '', toolCalls: [{ id: 't1', name: 'memory_list_candidates', args: {} }], reasoning: null, finishReason: 'tool_calls' },
-            { assistantText: '', toolCalls: [{ id: 't2', name: 'submit', args: { output: 'done' } }], reasoning: null, finishReason: 'tool_calls' },
+            { assistantText: 'done', toolCalls: [], reasoning: null, finishReason: 'stop' },
         ];
         let i = 0;
-        const fakeGenerate = jest.fn(async () => calls[i++] || { assistantText: '', toolCalls: [{ id: 'tF', name: 'submit', args: { output: 'fallback' } }], reasoning: null, finishReason: 'tool_calls' });
+        const fakeGenerate = jest.fn(async () => calls[i++] || { assistantText: '', toolCalls: [], reasoning: null, finishReason: 'stop' });
 
         const seenToolCtx = [];
         const executeLoopTool = jest.fn(async (_name, _args, ctx) => {
@@ -699,10 +641,10 @@ describe('subagent dispatcher', () => {
         // even when the adapter is wired by main.js.
         const calls = [
             { assistantText: '', toolCalls: [{ id: 't1', name: 'note_open', args: { text: 'pending' } }], reasoning: null, finishReason: 'tool_calls' },
-            { assistantText: '', toolCalls: [{ id: 't2', name: 'submit', args: { output: 'done' } }], reasoning: null, finishReason: 'tool_calls' },
+            { assistantText: 'done', toolCalls: [], reasoning: null, finishReason: 'stop' },
         ];
         let i = 0;
-        const fakeGenerate = jest.fn(async () => calls[i++] || { assistantText: '', toolCalls: [{ id: 'tF', name: 'submit', args: { output: 'fallback' } }], reasoning: null, finishReason: 'tool_calls' });
+        const fakeGenerate = jest.fn(async () => calls[i++] || { assistantText: '', toolCalls: [], reasoning: null, finishReason: 'stop' });
 
         const seenToolCtx = [];
         const executeLoopTool = jest.fn(async (_name, _args, ctx) => {
@@ -739,10 +681,10 @@ describe('subagent dispatcher', () => {
     test('without contextForSession, executeLoopTool sees no __memoryGraphSession (regression guard)', async () => {
         const calls = [
             { assistantText: '', toolCalls: [{ id: 't1', name: 'memory_list_candidates', args: {} }], reasoning: null, finishReason: 'tool_calls' },
-            { assistantText: '', toolCalls: [{ id: 't2', name: 'submit', args: { output: 'done' } }], reasoning: null, finishReason: 'tool_calls' },
+            { assistantText: 'done', toolCalls: [], reasoning: null, finishReason: 'stop' },
         ];
         let i = 0;
-        const fakeGenerate = jest.fn(async () => calls[i++] || { assistantText: '', toolCalls: [{ id: 'tF', name: 'submit', args: { output: 'fallback' } }], reasoning: null, finishReason: 'tool_calls' });
+        const fakeGenerate = jest.fn(async () => calls[i++] || { assistantText: '', toolCalls: [], reasoning: null, finishReason: 'stop' });
 
         const seenToolCtx = [];
         const executeLoopTool = jest.fn(async (_name, _args, ctx) => {
@@ -774,12 +716,7 @@ describe('subagent dispatcher', () => {
         const fakeGenerate = jest.fn(async (opts) => {
             const names = (opts.tools || []).map(s => s?.function?.name).filter(Boolean).sort();
             seenSchemas.push(names);
-            return {
-                assistantText: '',
-                toolCalls: [{ id: 't_submit', name: 'submit', args: { output: 'ok' } }],
-                reasoning: null,
-                finishReason: 'tool_calls',
-            };
+            return { assistantText: 'ok', toolCalls: [], reasoning: null, finishReason: 'stop' };
         });
 
         const profileTools = {
@@ -824,12 +761,9 @@ describe('subagent dispatcher', () => {
         expect(inheritorSchemas).toContain('lorebook_search');
         expect(inheritorSchemas).toContain('memory_node_brief');
         expect(inheritorSchemas).not.toContain('note_open');
-        // Overrider sees only its own tools (note) + the always-on
-        // submit + get_draft.
+        // Overrider sees only its own tools (note) + get_draft.
         expect(overriderSchemas).toContain('note_open');
         expect(overriderSchemas).toContain('note_close');
-        expect(overriderSchemas).toContain('submit');
-        expect(overriderSchemas).toContain('get_draft');
         expect(overriderSchemas).not.toContain('chat_read_range');
         expect(overriderSchemas).not.toContain('lorebook_search');
         expect(overriderSchemas).not.toContain('memory_node_brief');
@@ -839,12 +773,7 @@ describe('subagent dispatcher', () => {
         const seenSchemas = [];
         const fakeGenerate = jest.fn(async (opts) => {
             seenSchemas.push((opts.tools || []).map(s => s?.function?.name).filter(Boolean).sort());
-            return {
-                assistantText: '',
-                toolCalls: [{ id: 't_submit', name: 'submit', args: { output: 'ok' } }],
-                reasoning: null,
-                finishReason: 'tool_calls',
-            };
+            return { assistantText: 'ok', toolCalls: [], reasoning: null, finishReason: 'stop' };
         });
 
         const dispatcher = createSubagentDispatcher({
@@ -860,175 +789,5 @@ describe('subagent dispatcher', () => {
 
         expect(seenSchemas[0]).toContain('chat_read_range');
         expect(seenSchemas[0]).not.toContain('chat_search');
-    });
-
-    // ── submit-contract + no-tool-call retry semantics ──
-    //
-    // Sub-agents must terminate via the `submit` tool. A round emitting
-    // plain text without any tool call is treated as a failed attempt —
-    // discarded from history (so the failed text cannot mislead later
-    // rounds) and retried up to `settings.toolCallRetryMax`. These
-    // tests pin that contract.
-
-    test('submit() with valid output ends the dispatch and returns output as outputText', async () => {
-        const fakeGenerate = jest.fn(async () => ({
-            assistantText: '',
-            toolCalls: [{ id: 't1', name: 'submit', args: { output: 'final answer for main' } }],
-            reasoning: null,
-            finishReason: 'tool_calls',
-        }));
-        const dispatcher = createSubagentDispatcher({
-            subAgents: [{ id: 's', description: '', systemPrompt: 's' }],
-            limits: { maxTotalSubagentRuns: 5 },
-            generateTask: fakeGenerate,
-            abortSignal: new AbortController().signal,
-        });
-        const h = await dispatcher.dispatch({ subagentId: 's', task: 't' });
-        const [awaited] = await dispatcher.awaitAll([h]);
-        expect(awaited.outputText).toBe('final answer for main');
-        expect(awaited.error).toBeUndefined();
-        expect(fakeGenerate).toHaveBeenCalledTimes(1);
-    });
-
-    test('no-tool-call attempt is discarded from subMessages and retried; submit on retry succeeds', async () => {
-        // Round 0: model emits plain text with NO tool call — must be
-        // discarded and retried.
-        // Round 1: model emits submit — dispatch converges.
-        // The second request's taskMessages MUST NOT contain the failed
-        // round-0 assistant text (otherwise the failed reply would
-        // mislead later rounds — exactly what this contract prevents).
-        const calls = [
-            // round 0: balk — no tool call.
-            { assistantText: 'Sure, let me roleplay that scene...', toolCalls: [], reasoning: null, finishReason: 'stop' },
-            // round 1 (retry): submit properly.
-            { assistantText: '', toolCalls: [{ id: 'tS', name: 'submit', args: { output: 'real answer' } }], reasoning: null, finishReason: 'tool_calls' },
-        ];
-        let idx = 0;
-        const seenTaskMessages = [];
-        const fakeGenerate = jest.fn(async (opts) => {
-            seenTaskMessages.push(opts.taskMessages.map(m => ({ role: m.role, content: m.content })));
-            return calls[idx++];
-        });
-        const dispatcher = createSubagentDispatcher({
-            subAgents: [{ id: 's', description: '', systemPrompt: 's' }],
-            limits: { maxTotalSubagentRuns: 5 },
-            settings: { toolCallRetryMax: 2 }, // allow up to 2 retries
-            generateTask: fakeGenerate,
-            abortSignal: new AbortController().signal,
-        });
-        const h = await dispatcher.dispatch({ subagentId: 's', task: 't' });
-        const [awaited] = await dispatcher.awaitAll([h]);
-        // Dispatch succeeds with the submit's output.
-        expect(awaited.outputText).toBe('real answer');
-        expect(awaited.error).toBeUndefined();
-        // Both rounds were requested (1 balk + 1 submit).
-        expect(fakeGenerate).toHaveBeenCalledTimes(2);
-        // Round 1 request's history must NOT include the round-0 balk
-        // assistant text. The dispatcher discards failed attempts —
-        // they never reach subMessages — so the retry request looks
-        // identical to the initial request.
-        const round0Messages = seenTaskMessages[0];
-        const round1Messages = seenTaskMessages[1];
-        expect(round1Messages).toEqual(round0Messages);
-        expect(round1Messages.some(m => String(m.content || '').includes('Sure, let me roleplay'))).toBe(false);
-        // No assistant turn was pushed during the discarded round.
-        expect(round1Messages.every(m => m.role !== 'assistant')).toBe(true);
-    });
-
-    test('no-tool-call retry exhausts: dispatch fails with descriptive error after toolCallRetryMax+1 attempts', async () => {
-        // Model always balks — never calls a tool. With toolCallRetryMax=2,
-        // we get 3 attempts (initial + 2 retries) before giving up.
-        const fakeGenerate = jest.fn(async () => ({
-            assistantText: 'no tools here, just vibes',
-            toolCalls: [],
-            reasoning: null,
-            finishReason: 'stop',
-        }));
-        const dispatcher = createSubagentDispatcher({
-            subAgents: [{ id: 's', description: '', systemPrompt: 's' }],
-            limits: { maxTotalSubagentRuns: 5 },
-            settings: { toolCallRetryMax: 2 },
-            generateTask: fakeGenerate,
-            abortSignal: new AbortController().signal,
-        });
-        const h = await dispatcher.dispatch({ subagentId: 's', task: 't' });
-        const [awaited] = await dispatcher.awaitAll([h]);
-        expect(awaited.outputText).toBeUndefined();
-        expect(awaited.error).toMatch(/no tool call after 3 attempt/);
-        // Exactly toolCallRetryMax+1 = 3 model requests.
-        expect(fakeGenerate).toHaveBeenCalledTimes(3);
-        // Completion notification reflects the failure.
-        const notifs = dispatcher.drainCompletionNotifications();
-        const mine = notifs.find(n => n.handleId === h);
-        expect(mine.status).toBe('failed');
-        expect(mine.summary).toMatch(/no tool call/);
-    });
-
-    test('submit alongside another tool in the same round: tool is still executed, submit ends the loop', async () => {
-        // Round 0: model emits chat_read_range AND submit in the same
-        // round. Both tools execute; submit's output is the final answer.
-        const executeLoopTool = jest.fn(async () => ({ snippets: ['line1', 'line2'] }));
-        const fakeGenerate = jest.fn(async () => ({
-            assistantText: '',
-            toolCalls: [
-                { id: 'tA', name: 'chat_read_range', args: { start: 0, end: 2 } },
-                { id: 'tB', name: 'submit', args: { output: 'answer with chat lookup baked in' } },
-            ],
-            reasoning: null,
-            finishReason: 'tool_calls',
-        }));
-        const dispatcher = createSubagentDispatcher({
-            subAgents: [{ id: 's', description: '', systemPrompt: 's' }],
-            limits: { maxTotalSubagentRuns: 5 },
-            generateTask: fakeGenerate,
-            abortSignal: new AbortController().signal,
-            tools: { chat: { read_range: true } },
-            executeLoopTool,
-            chat: [],
-        });
-        const h = await dispatcher.dispatch({ subagentId: 's', task: 't' });
-        const [awaited] = await dispatcher.awaitAll([h]);
-        expect(awaited.outputText).toBe('answer with chat lookup baked in');
-        // The non-submit tool was actually executed.
-        expect(executeLoopTool).toHaveBeenCalledTimes(1);
-        expect(executeLoopTool.mock.calls[0][0]).toBe('chat_read_range');
-        // Only ONE model request — the loop converged on the first round.
-        expect(fakeGenerate).toHaveBeenCalledTimes(1);
-    });
-
-    test('submit with invalid args (non-string output) surfaces as tool error and does NOT converge; model retries next round', async () => {
-        // Round 0: submit with bad args (number instead of string).
-        // The submit executor returns a tool error; loop continues.
-        // Round 1: submit properly; convergence.
-        const calls = [
-            { assistantText: '', toolCalls: [{ id: 'tBad', name: 'submit', args: { output: 12345 } }], reasoning: null, finishReason: 'tool_calls' },
-            { assistantText: '', toolCalls: [{ id: 'tGood', name: 'submit', args: { output: 'fixed' } }], reasoning: null, finishReason: 'tool_calls' },
-        ];
-        let idx = 0;
-        const seenTaskMessages = [];
-        const fakeGenerate = jest.fn(async (opts) => {
-            seenTaskMessages.push(opts.taskMessages);
-            return calls[idx++];
-        });
-        const dispatcher = createSubagentDispatcher({
-            subAgents: [{ id: 's', description: '', systemPrompt: 's' }],
-            limits: { maxTotalSubagentRuns: 5 },
-            generateTask: fakeGenerate,
-            abortSignal: new AbortController().signal,
-        });
-        const h = await dispatcher.dispatch({ subagentId: 's', task: 't' });
-        const [awaited] = await dispatcher.awaitAll([h]);
-        expect(awaited.outputText).toBe('fixed');
-        expect(fakeGenerate).toHaveBeenCalledTimes(2);
-        // Round 1's history contains the round-0 assistant turn AND the
-        // round-0 tool error response (so the model can self-correct on
-        // the retry). This is different from the no-tool-call discard
-        // path — submit-with-bad-args IS a tool call, it just failed.
-        const round1Messages = seenTaskMessages[1];
-        const errorToolMsg = round1Messages.find(m => m.role === 'tool' && m.tool_call_id === 'tBad');
-        expect(errorToolMsg).toBeDefined();
-        const parsed = JSON.parse(errorToolMsg.content);
-        expect(parsed.ok).toBe(false);
-        expect(parsed.error).toMatch(/output must be a string/);
     });
 });

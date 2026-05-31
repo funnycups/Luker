@@ -164,10 +164,10 @@ describe('director runtime trace', () => {
             finishReason: 'tool_calls',
         }));
         const fakeSubagent = jest.fn(async () => ({
-            assistantText: '',
-            toolCalls: [{ id: 't_submit', name: 'submit', args: { output: 'pacing reads OK' } }],
+            assistantText: 'pacing reads OK',
+            toolCalls: [],
             reasoning: null,
-            finishReason: 'tool_calls',
+            finishReason: 'stop',
         }));
 
         await runMainAgentLoop({
@@ -201,16 +201,14 @@ describe('director runtime trace', () => {
             outputText: 'pacing reads OK',
         }));
         // Conversation alias is populated by the dispatcher (sub-agent's
-        // own messages array). After convergence via `submit`, the
-        // dispatcher has also pushed the assistant turn and the submit
-        // tool-result onto subMessages, so <task> is no longer the last
-        // entry — find it by tag instead of position.
+        // own messages array).
         expect(Array.isArray(entry.conversation?.messages)).toBe(true);
         expect(entry.conversation.messages.length).toBeGreaterThan(0);
-        const taskMsg = entry.conversation.messages.find(m =>
-            m?.role === 'system' && /<task>[\s\S]*critique pacing[\s\S]*<\/task>/.test(String(m?.content || '')),
-        );
-        expect(taskMsg).toBeDefined();
+        // The dispatch entry's task brief lands as the last system-role
+        // message wrapped in <task>.
+        const taskMsg = entry.conversation.messages[entry.conversation.messages.length - 1];
+        expect(taskMsg?.role).toBe('system');
+        expect(taskMsg?.content).toMatch(/<task>[\s\S]*critique pacing[\s\S]*<\/task>/);
     });
 
     test('inline dispatch shows up with isInline=true + systemPromptPreview', async () => {
@@ -237,10 +235,10 @@ describe('director runtime trace', () => {
             finishReason: 'tool_calls',
         }));
         const fakeSubagent = jest.fn(async () => ({
-            assistantText: '',
-            toolCalls: [{ id: 't_submit', name: 'submit', args: { output: 'tone is fine' } }],
+            assistantText: 'tone is fine',
+            toolCalls: [],
             reasoning: null,
-            finishReason: 'tool_calls',
+            finishReason: 'stop',
         }));
 
         await runMainAgentLoop({

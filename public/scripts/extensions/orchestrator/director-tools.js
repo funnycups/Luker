@@ -175,33 +175,6 @@ export const GET_DRAFT_TOOL = {
     },
 };
 
-// Sub-agent-only. Delivers the sub-agent's final response back to the
-// main agent and ends the dispatch. Made an explicit tool (rather than
-// inferring "no tool call = final answer") because, without it, models
-// drift into in-character roleplay prose: the <story_context> block
-// looks like an RP setup, and "just stop emitting tool calls" is a
-// silent exit the model conflates with continuing the scene. Requiring
-// an explicit tool call to terminate forces a deliberate handoff and
-// keeps the model in analyst mode. A round with NO tool calls is now
-// a failed attempt — discarded from history and retried.
-export const SUBMIT_TOOL = {
-    type: 'function',
-    function: {
-        name: 'submit',
-        description: 'Deliver your final response and end this dispatch. Pass your answer as `output`. `submit` is the ONLY way to conclude a dispatch — a round that emits plain assistant text without any tool call is treated as a failed attempt, discarded from history, and retried. Your `output` is a structured report / analysis / recommendation TO the main orchestration agent — NOT in-character roleplay prose, narration, or dialogue.',
-        parameters: {
-            type: 'object',
-            properties: {
-                output: {
-                    type: 'string',
-                    description: 'Your final response for the dispatched task — written as a report to the main agent, not as roleplay prose.',
-                },
-            },
-            required: ['output'],
-        },
-    },
-};
-
 export const CANCEL_SUBAGENT_TOOL = {
     type: 'function',
     function: {
@@ -246,14 +219,12 @@ export function buildMainAgentToolSchemas({ subAgents, tools }) {
 }
 
 export function buildSubAgentToolSchemas({ tools }) {
-    // Sub-agents always get submit (the explicit-handoff terminator;
-    // see SUBMIT_TOOL above for why this can't be turned off) and
-    // get_draft (lets analysts read the in-flight draft), plus whichever
-    // loop tools the profile enables. They do NOT get the
-    // message-editing tools or the dispatch/cancel collaboration tools —
-    // only the main agent writes the message and only the main agent
-    // dispatches.
-    return [SUBMIT_TOOL, GET_DRAFT_TOOL, ...loopToolSchemasFor(tools)];
+    // Sub-agents always get get_draft (lets analysts read the in-flight
+    // draft) plus whichever loop tools the profile enables. They do NOT
+    // get the message-editing tools or the dispatch/cancel collaboration
+    // tools — only the main agent writes the message and only the main
+    // agent dispatches.
+    return [GET_DRAFT_TOOL, ...loopToolSchemasFor(tools)];
 }
 
 // ── Tool executors ──
@@ -319,24 +290,6 @@ export async function executeGetDraftTool(handle) {
     } catch (err) {
         return { ok: false, error: String(err?.message || err) };
     }
-}
-
-/**
- * Validate `submit` arguments. Returns `{ ok: true, output }` on success
- * (the dispatcher uses `output` as the sub-agent's final response) or
- * `{ ok: false, error }` on invalid args — surfaced as a tool error in
- * the assistant's message history so the model can retry on the next
- * round. Empty string is permitted (a deliberate "no findings" answer
- * is still a valid response); the dispatcher passes it through.
- */
-export function executeSubmitTool(args) {
-    if (!args || typeof args !== 'object') {
-        return { ok: false, error: 'submit requires an arguments object with `output`.' };
-    }
-    if (typeof args.output !== 'string') {
-        return { ok: false, error: 'submit.output must be a string.' };
-    }
-    return { ok: true, output: args.output };
 }
 
 // ── Sub-agent dispatcher ──
@@ -763,15 +716,6 @@ export function createSubagentDispatcher({
         // the </story_context> close tag, unwrapped) read like another
         // scenario line rather than a meta-instruction.
         //
-        // META_FRAME also pins the submit-tool contract: every dispatch
-        // MUST terminate with an explicit `submit({output: …})` call.
-        // A round that emits plain assistant text without any tool call
-        // is treated as a failed attempt — discarded from history (so
-        // the failed text cannot mislead later rounds) and retried.
-        // Without this contract, models drift into in-character prose
-        // and "end the turn" by simply not calling a tool, which the
-        // dispatcher historically accepted as the final answer.
-        //
         // Order — identity-last so recency bias keeps the agent's role
         // fresh right before <task>. The payload's chat-completion
         // preset typically renders its own "You are {{char}}…" system
@@ -782,30 +726,42 @@ export function createSubagentDispatcher({
         // top-of-prompt meta-frame still tells the model where to
         // look for identity / task; it sets the frame, not the order.
         //
-        //   1. META_FRAME — anti-RP framing + submit contract: story_
-        //      context is read-only, identity is in <orchestration_role>,
-        //      work is in <task>, and you MUST end by calling `submit`.
+        // Defense against long story_context: when the chat-completion
+        // payload is large (multi-thousand-token character cards, world
+        // info, chat history), the META_FRAME at index 0 gets pushed
+        // out of the model's recency window before it reaches the task.
+        // META_REMINDER bridges </story_context> and <orchestration_role>
+        // — a short anti-RP reset that reads "the story is over, you
+        // are NOT a character in it, write a report TO the main agent".
+        //
+        //   1. META_FRAME — full anti-RP framing + termination protocol
+        //      (story_context is read-only, identity is in
+        //      <orchestration_role>, work is in <task>, terminate with
+        //      a no-tool-call round that contains your final report).
         //   2. <story_context> ... </story_context> — chat history,
         //      character card, world info, last user turn (whatever
         //      the user's preset assembled).
-        //   3. <orchestration_role> — agent's persona / job
+        //   3. META_REMINDER — short anti-RP reset, fresh right after
+        //      the RP material so recency bias works in our favor.
+        //   4. <orchestration_role> — agent's persona / job
         //      description (plus Open Notes if any), sitting right
         //      before the task instruction so the model reads its
         //      identity last.
-        //   4. <main_agent_digest> (optional) and <task> — what to do.
+        //   5. <main_agent_digest> (optional) and <task> — what to do.
         const META_FRAME = [
-            'You are an orchestration agent embedded inside a roleplay session. The <story_context> block below is READ-ONLY narrative material — DO NOT continue the roleplay, do NOT emit any in-character prose, dialogue, or narration. Your identity is defined inside <orchestration_role>; the specific work you must do is inside <task>. Treat story_context only as background that informs how you carry out the task.',
+            'You are an orchestration agent embedded inside a roleplay session. The <story_context> block below is READ-ONLY narrative material — DO NOT continue the roleplay, do NOT emit any in-character prose, dialogue, or narration, and do NOT write "leaving the scene now"-style sign-offs. Your identity is defined inside <orchestration_role>; the specific work you must do is inside <task>. Treat story_context only as background that informs how you carry out the task.',
             '',
-            'CONTRACT — how to reply: you MUST end every dispatch by calling the `submit` tool with your final response as the `output` argument. `submit` is the ONLY way to deliver your answer; the main orchestration agent receives whatever you pass as `output`. A round in which you emit plain assistant text without any tool call is treated as a FAILED ATTEMPT — that round is discarded from your conversation history (so it cannot mislead later rounds) and the same request is retried until the retry budget is exhausted, at which point the dispatch fails entirely.',
-            '',
-            'Therefore: never produce in-character prose, scene continuation, or "leaving the conversation now"-style sign-offs. Your `output` is a structured report / analysis / recommendation written TO the main agent — not roleplay. Any reasoning or partial thoughts go in tool-call arguments (e.g. memory queries, chat lookups) or directly into the final `submit({output})` — never as bare assistant text.',
+            'Your reply is a structured report / analysis / recommendation written TO the main orchestration agent — never in-character prose. When the task is complete, write the report as your final assistant text and emit no tool calls; that text is what the runtime returns to the main agent. While you still need more information, call the appropriate read tools — the loop continues until you produce a no-tool-call round.',
         ].join('\n');
+
+        const META_REMINDER = 'Reminder: the <story_context> above is reference material, not a scene to continue. You are an orchestration agent operating ON the story, not a character IN it. Your reply is a structured report written TO the main orchestration agent — not in-character prose, dialogue, or narration.';
 
         const subMessages = [
             { role: 'system', content: META_FRAME },
             { role: 'system', content: '<story_context>' },
             ...payloadMessages,
             { role: 'system', content: '</story_context>' },
+            { role: 'system', content: META_REMINDER },
             { role: 'system', content: '<orchestration_role>\n' + (baseSystemPrompt || '') + '\n</orchestration_role>' },
             ...(mainRoundsDigest ? [{ role: 'system', content: '<main_agent_digest>\n' + mainRoundsDigest + '\n</main_agent_digest>' }] : []),
             { role: 'system', content: '<task>\n' + String(task || '') + '\n</task>' },
@@ -837,17 +793,6 @@ export function createSubagentDispatcher({
             abortSignal: childSignal,
         };
 
-        // No-tool-call retry budget per round. Same parsing/range as
-        // tool-calling.js so user-facing semantics of
-        // "Tool-call retries (on invalid/missing)" are uniform across
-        // orchestrator modes. 0 = no retry (one shot, then the dispatch
-        // fails). Sub-agent's contract requires `submit` — a round with
-        // zero tool calls is treated as a model balk and that attempt's
-        // assistant text is NEVER pushed into `subMessages` (so the
-        // failed reply cannot mislead later rounds), then the same
-        // history is re-requested up to this many retries.
-        const maxNoToolRetries = Math.max(0, Math.min(10, Math.floor(Number(settings?.toolCallRetryMax) || 0)));
-
         const promise = (async () => {
             // Declared outside the try so the catch arm can include any
             // reasoning the sub-agent emitted before the throw — without
@@ -862,55 +807,15 @@ export function createSubagentDispatcher({
                     if (childSignal.aborted) {
                         break;
                     }
-                    // No-tool-call retry inner loop. Each round MUST
-                    // produce at least one tool call (`submit` is the
-                    // only way to terminate; see SUBMIT_TOOL). A round
-                    // with zero tool calls is treated as a failed
-                    // attempt — the assistant turn is NOT pushed into
-                    // `subMessages` and NOT recorded in the trace, then
-                    // the same history is re-requested until the retry
-                    // budget is exhausted. Mirrors main agent's no-
-                    // tool-call retry in director-runtime.js. Without
-                    // this, models drift into in-character prose and
-                    // "end the turn" by simply not calling a tool — the
-                    // dispatcher historically accepted that as the
-                    // final answer, which let RP text leak into
-                    // sub-agent outputs.
-                    let attempt = null;
-                    let noToolRetries = 0;
-                    while (true) {
-                        if (childSignal.aborted) break;
-                        attempt = await runOneRound(subMessages, label, baseOpts, subToolSchemas);
-                        if (attempt.roundToolCalls.length > 0) break;
-                        // Failed attempt. runOneRound has already
-                        // streamed the failed text into the reasoning
-                        // section chunk-by-chunk; we can't retract it
-                        // from the visible UI, so append a marker that
-                        // makes the retry boundary clear. The text is
-                        // NOT pushed into subMessages — the next
-                        // request sees only the pre-attempt history.
-                        const attemptNumber = noToolRetries + 1;
-                        const totalAllowed = maxNoToolRetries + 1;
-                        safeAppendToSection(
-                            label,
-                            `\n\n[no tool call — discarded attempt ${attemptNumber}/${totalAllowed}; submit() is the only way to terminate]\n\n`,
-                        );
-                        noToolRetries += 1;
-                        if (noToolRetries > maxNoToolRetries) {
-                            const msg = `sub-agent produced no tool call after ${maxNoToolRetries + 1} attempt(s) (toolCallRetryMax=${maxNoToolRetries})`;
-                            safeMarkSectionStatus(label, `error: ${msg}`);
-                            completionNotifications.push({ handleId, subagentId: displayId, status: 'failed', summary: msg });
-                            recordSubagentFinish(traceEntry, { status: 'failed', error: msg, reasoningText: aggregatedReasoning });
-                            return { handleId, subagentId: displayId, error: msg };
-                        }
-                    }
-                    if (childSignal.aborted) {
-                        break;
-                    }
-                    const { roundAssistantText, roundToolCalls, roundReasoningText } = attempt;
+                    const { roundAssistantText, roundToolCalls, roundReasoningText } = await runOneRound(subMessages, label, baseOpts, subToolSchemas);
                     if (roundReasoningText) {
                         if (aggregatedReasoning) aggregatedReasoning += '\n\n';
                         aggregatedReasoning += roundReasoningText;
+                    }
+                    if (roundToolCalls.length === 0) {
+                        finalText = roundAssistantText;
+                        converged = true;
+                        break;
                     }
                     // Reshape `{name, args, raw}` → OpenAI-compatible
                     // `{id, type: 'function', function: {name, arguments}}`
@@ -934,25 +839,13 @@ export function createSubagentDispatcher({
                         content: roundAssistantText || null,
                         tool_calls: assistantToolCallEntries,
                     });
-                    // Track the latest valid submit. If multiple submit
-                    // calls land in the same round (rare model
-                    // behavior), the latest valid one wins — a coherent
-                    // "this is my final answer" interpretation. Invalid
-                    // args surface as a tool error, do NOT converge,
-                    // and let the model retry on the next round.
-                    let pendingSubmitOutput = null;
                     for (let i = 0; i < roundToolCalls.length; i += 1) {
                         const call = roundToolCalls[i];
                         const callId = assistantToolCallEntries[i].id;
                         const name = String(call?.name || '');
                         const args = call?.args;
                         let toolResult;
-                        if (name === 'submit') {
-                            toolResult = executeSubmitTool(args);
-                            if (toolResult.ok) {
-                                pendingSubmitOutput = String(toolResult.output);
-                            }
-                        } else if (name === 'get_draft') {
+                        if (name === 'get_draft') {
                             toolResult = await executeGetDraftTool(handle);
                         } else if (typeof executeLoopTool === 'function') {
                             try {
@@ -973,11 +866,6 @@ export function createSubagentDispatcher({
                             tool_call_id: callId,
                             content: JSON.stringify(toolResult),
                         });
-                    }
-                    if (pendingSubmitOutput !== null) {
-                        finalText = pendingSubmitOutput;
-                        converged = true;
-                        break;
                     }
                 }
                 if (childSignal.aborted && !converged) {
