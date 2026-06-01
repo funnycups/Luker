@@ -5158,6 +5158,7 @@
     ,"note (persistent notes)": "note(持久化笔记)"
     ,"chat (in-chat history)": "chat(聊天历史)"
     ,"lorebook (world info)": "lorebook(世界书)"
+    ,"custom (extension + profile tools)": "custom(扩展与 profile 工具)"
     ,"memory (memory-graph)": "memory(记忆图)"
     ,"search (web search)": "search(联网搜索)"
     ,"terminator": "终止器"

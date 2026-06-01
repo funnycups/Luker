@@ -4996,6 +4996,7 @@
     ,"note (persistent notes)": "note(持久化便箋)"
     ,"chat (in-chat history)": "chat(聊天歷史)"
     ,"lorebook (world info)": "lorebook(世界書)"
+    ,"custom (extension + profile tools)": "custom(擴充功能與 profile 工具)"
     ,"memory (memory-graph)": "memory(記憶圖)"
     ,"search (web search)": "search(聯網搜尋)"
     ,"terminator": "終止器"

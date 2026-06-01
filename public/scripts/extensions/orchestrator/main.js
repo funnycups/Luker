@@ -1546,6 +1546,7 @@ function renderWorkflowBoard(scope, editor) {
         resetAction: 'spec-node-tools-reset',
         inheritedTools: editor?.spec?.defaultTools || null,
         kind: 'node',
+        profileCustomTools: editor?.spec?.customTools || null,
     })}
         </details>
     </div>

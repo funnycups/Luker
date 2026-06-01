@@ -163,15 +163,14 @@ export { renderCustomToolsSection };
  * (loop / spec / agenda / director sub-agent override) leaves it off
  * because those runtimes never expose those tools to the LLM.
  */
-function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}, { includeCollab = false } = {}) {
+function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}, { includeCollab = false, profileCustomTools = null } = {}) {
     const { escapeHtml, i18n } = deps;
     const safeScope = scope === 'character' ? 'character' : 'global';
     const safe = tools && typeof tools === 'object' ? tools : {};
     const note = safe.note || {};
     const chat = safe.chat || {};
     const lorebook = safe.lorebook || {};
-    // memory + search tools are Layer-2 customs now; the Custom Tools
-    // section rendered alongside this grid surfaces them via tools.custom.*.
+    const customFlags = safe.custom && typeof safe.custom === 'object' ? safe.custom : {};
     const collab = safe.collab || {};
     const extraAttrParts = Object.entries(extraAttrs)
         .map(([key, value]) => `data-${key}="${escapeHtml(String(value))}"`)
@@ -189,6 +188,21 @@ function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}, 
     ${cb('collab.dispatch_subagent', collab.dispatch_subagent, 'dispatch_subagent')}
     ${cb('collab.dispatch_inline_subagent', collab.dispatch_inline_subagent, 'dispatch_inline_subagent')}
 </fieldset>` : '';
+
+    // Custom tools fieldset: union of (a) extension/ST-bridge tools
+    // currently in the Layer-2 registry and (b) handwritten tools
+    // declared on this profile (`profileCustomTools`). Each checkbox
+    // writes through to `tools.custom.<name>` so per-agent overrides can
+    // disable individual customs while inheriting the rest from the
+    // profile default.
+    //
+    // Default-on semantics: when the override panel is freshly created
+    // from an inherited tools object, missing custom keys are treated
+    // as enabled (matches getEnabledToolSchemas's `customFlags[name] !== false`
+    // semantics). An explicit `false` on the override surface disables
+    // for this agent only.
+    const customsFieldset = renderCustomFlagsFieldset(deps, scope, customFlags, dataAttrName, extraAttrParts, profileCustomTools);
+
     return `
 <fieldset class="luker_orch_loop_tools_group">
     <legend>${escapeHtml(i18n('note (persistent notes)'))}</legend>
@@ -204,7 +218,64 @@ function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}, 
     <legend>${escapeHtml(i18n('lorebook (world info)'))}</legend>
     ${cb('lorebook.search', lorebook.search, 'lorebook_search')}
     ${cb('lorebook.get', lorebook.get, 'lorebook_get')}
-</fieldset>${collabFieldset}`;
+</fieldset>${collabFieldset}${customsFieldset}`;
+}
+
+/**
+ * Render the per-override Custom Tools fieldset: union of Layer-2
+ * (extension + ST-bridge) entries and the profile's handwritten
+ * `customTools[]`. Each checkbox is keyed by the tool's fully-qualified
+ * name (no namespace prefix — Layer-3 / Layer-2 names are already flat).
+ *
+ * The checkbox `data-<dataAttrName>` field uses the literal key
+ * `custom.<name>` so the existing main.js handler that splits on the
+ * first dot routes the write into `tools.custom[<name>]` automatically.
+ *
+ * `currentFlags` is the override's `tools.custom` bucket (may be empty).
+ * `profileCustomTools` is the profile's `customTools[]` array (may be
+ * null when the caller doesn't carry one through — e.g. spec node
+ * overrides not yet wired).
+ */
+function renderCustomFlagsFieldset(deps, scope, currentFlags, dataAttrName, extraAttrParts, profileCustomTools) {
+    const { escapeHtml, i18n } = deps;
+    const safeScope = scope === 'character' ? 'character' : 'global';
+    const flags = currentFlags && typeof currentFlags === 'object' ? currentFlags : {};
+    const seen = new Set();
+    const rows = [];
+    const pushRow = (name, displayName, mode, source) => {
+        if (!name || seen.has(name)) return;
+        seen.add(name);
+        // Default-on: missing key === enabled; explicit `false` disables.
+        const enabled = flags[name] !== false;
+        const modeChip = mode ? `<span class="luker_orch_ct_mode">[${escapeHtml(mode)}]</span>` : '';
+        const sourceChip = source && source !== 'profile'
+            ? ` <span class="luker_orch_ct_source">(${escapeHtml(source === 'st-bridge' ? 'ST' : source)})</span>`
+            : '';
+        rows.push(`<label class="checkbox_label">
+            <input type="checkbox" data-${dataAttrName}="custom.${escapeHtml(name)}" data-scope="${safeScope}" ${extraAttrParts} ${enabled ? 'checked' : ''} />
+            <span>${escapeHtml(displayName || name)}${modeChip}${sourceChip}</span>
+        </label>`);
+    };
+
+    // Profile-handwritten first so they group before Layer-2.
+    if (Array.isArray(profileCustomTools)) {
+        for (const t of profileCustomTools) {
+            const n = String(t?.name || '');
+            pushRow(n, String(t?.displayName || n), t?.mode === 'read' ? 'read' : 'write', 'profile');
+        }
+    }
+    for (const ext of listExtensionTools()) {
+        pushRow(String(ext.name || ''), String(ext.displayName || ext.name || ''), ext.mode === 'read' ? 'read' : 'write', ext.source);
+    }
+
+    if (rows.length === 0) {
+        return '';  // nothing to show; skip the fieldset entirely
+    }
+    return `
+<fieldset class="luker_orch_loop_tools_group">
+    <legend>${escapeHtml(i18n('custom (extension + profile tools)'))}</legend>
+    ${rows.join('')}
+</fieldset>`;
 }
 
 /**
@@ -225,6 +296,7 @@ export function renderInheritOrOverridePanel(deps, scope, tools, {
     inheritedTools = null,
     kind = 'agent',
     includeCollab = false,
+    profileCustomTools = null,
 }) {
     const { escapeHtml, i18n } = deps;
     const safeScope = scope === 'character' ? 'character' : 'global';
@@ -244,7 +316,7 @@ export function renderInheritOrOverridePanel(deps, scope, tools, {
     }
     return `
 <div class="luker_orch_tools_override_block">
-    ${renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs, { includeCollab })}
+    ${renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs, { includeCollab, profileCustomTools })}
     <div class="menu_button menu_button_small" data-luker-action="${escapeHtml(resetAction)}" data-scope="${safeScope}" ${extraAttrParts}>${escapeHtml(i18n('Reset to inherit'))}</div>
 </div>`;
 }
@@ -314,6 +386,7 @@ function renderAgendaAgentBoard(deps, scope, editor) {
         resetAction: 'agenda-agent-tools-reset',
         inheritedTools: editor?.defaultTools || null,
         kind: 'agent',
+        profileCustomTools: editor?.customTools || null,
     })}
     </details>
 </div>`).join('');
@@ -364,7 +437,7 @@ export function renderAgendaWorkspace(deps, scope, editor, title = '') {
                 <summary>${escapeHtml(i18n('Default tools for all agents'))}</summary>
                 <div class="luker-studio-empty-hint">${escapeHtml(i18n('Each agent can override these defaults below. Leave empty to keep tools off for all agents.'))}</div>
                 ${editor?.defaultTools
-        ? `${renderToolFlagsGrid(deps, safeScope, editor.defaultTools, 'luker-agenda-default-tool')}
+        ? `${renderToolFlagsGrid(deps, safeScope, editor.defaultTools, 'luker-agenda-default-tool', {}, { profileCustomTools: editor?.customTools || null })}
                 <div class="luker-studio-actions-row">
                     <div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable all'))}</div>
                     <div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear'))}</div>
@@ -396,7 +469,7 @@ export function renderEditorWorkspace(deps, scope, editor, title) {
                 <summary>${escapeHtml(i18n('Default tools for all nodes'))}</summary>
                 <div class="luker-studio-empty-hint">${escapeHtml(i18n('Each node can override these defaults below. Leave empty to keep tools off for all nodes.'))}</div>
                 ${specDefaultTools
-        ? `${renderToolFlagsGrid(deps, safeScope, specDefaultTools, 'luker-spec-default-tool')}
+        ? `${renderToolFlagsGrid(deps, safeScope, specDefaultTools, 'luker-spec-default-tool', {}, { profileCustomTools: editor?.spec?.customTools || null })}
                 <div class="luker-studio-actions-row">
                     <div class="menu_button menu_button_small" data-luker-action="spec-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable all'))}</div>
                     <div class="menu_button menu_button_small" data-luker-action="spec-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear'))}</div>
@@ -513,7 +586,7 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
  * are normal in-flight (the sanitizer only drops them at runtime), so
  * the renderer does not validate.
  */
-function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex, directorDefaultTools) {
+function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex, directorDefaultTools, profile = null) {
     const {
         escapeHtml,
         getContext,
@@ -581,6 +654,7 @@ function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex, directo
         resetAction: 'director-subagent-tools-reset',
         inheritedTools: directorDefaultTools || null,
         kind: 'agent',
+        profileCustomTools: profile?.customTools || null,
     })}
     </details>
 </div>`;
@@ -631,7 +705,7 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
     const context = getContext();
     const subAgentRows = subAgents.length === 0
         ? `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No sub-agents yet.'))}</div>`
-        : subAgents.map((subagent, index) => renderDirectorSubAgentRow(deps, safeScope, subagent, index, directorDefaultTools)).join('');
+        : subAgents.map((subagent, index) => renderDirectorSubAgentRow(deps, safeScope, subagent, index, directorDefaultTools, profile)).join('');
     return `
 <div class="luker-studio-workspace luker_orch_director_block" data-luker-scope-root="${safeScope}" data-orch-mode-block="director">
     <div class="luker-studio-workspace-title" data-i18n="Director Orchestration">${escapeHtml(title || i18n('Director Orchestration'))}</div>
@@ -663,6 +737,7 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
         inheritedTools: directorDefaultTools,
         kind: 'agent',
         includeCollab: true,
+        profileCustomTools: profile?.customTools || null,
     })}
             </details>
 
@@ -690,7 +765,7 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
             <details class="luker_orch_tools_section">
                 <summary>${escapeHtml(i18n('Default tools for all agents'))}</summary>
                 <div class="luker-studio-empty-hint">${escapeHtml(i18n('Each agent can override these defaults below. The main agent inherits unless it has its own override.'))}</div>
-                ${renderToolFlagsGrid(deps, safeScope, directorDefaultTools || {}, 'luker-director-default-tool', {}, { includeCollab: true })}
+                ${renderToolFlagsGrid(deps, safeScope, directorDefaultTools || {}, 'luker-director-default-tool', {}, { includeCollab: true, profileCustomTools: profile?.customTools || null })}
                 <div class="luker-studio-actions-row">
                     <div class="menu_button menu_button_small" data-luker-action="director-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable all'))}</div>
                     <div class="menu_button menu_button_small" data-luker-action="director-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear'))}</div>
