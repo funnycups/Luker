@@ -18,6 +18,9 @@
     <string name="crash_report_dialog_title">偵測到上次異常退出</string>
     <string name="crash_report_dialog_intro">應用程式在上次執行時異常退出。以下診斷資訊由系統記錄，請複製並回報給開發者。</string>
     <string name="crash_report_share_subject">Luker 上次崩潰報告</string>
+    <string name="webview_crash_dialog_title">網頁介面崩潰</string>
+    <string name="webview_crash_dialog_intro">網頁介面渲染處理程序已終止。請複製下方診斷資訊並回報給開發者；關閉此對話框後介面將自動重載。</string>
+    <string name="webview_crash_share_subject">Luker 網頁介面崩潰報告</string>
     <string name="runtime_notification_channel_name">Luker 背景服務</string>
     <string name="runtime_notification_channel_description">保持本地 Luker 服務在背景執行</string>
     <string name="runtime_notification_title">Luker</string>

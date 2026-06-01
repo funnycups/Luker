@@ -30,6 +30,7 @@ import android.webkit.CookieManager
 import android.webkit.HttpAuthHandler
 import android.webkit.MimeTypeMap
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
@@ -377,6 +378,34 @@ class MainActivity : AppCompatActivity() {
                 recentHttpAuthAttempts.clear()
                 installBlobDownloadBridge()
                 loadingOverlay.visibility = View.GONE
+            }
+
+            override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
+                val crashed = detail?.didCrash() ?: false
+                val rendererPriority = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    detail?.rendererPriorityAtExit()
+                } else {
+                    null
+                }
+                val url = runCatching { view?.url }.getOrNull()
+                Log.w(tag, "WebView render process gone (didCrash=$crashed, url=$url)")
+                runCatching {
+                    (view?.parent as? ViewGroup)?.removeView(view)
+                    view?.destroy()
+                }
+                val crash = LukerCrashCapture.captureWebViewCrash(
+                    context = applicationContext,
+                    webViewUrl = url,
+                    didCrash = crashed,
+                    rendererPriorityAtExit = rendererPriority,
+                )
+                window.decorView.post {
+                    if (isFinishing || isDestroyed) {
+                        return@post
+                    }
+                    showWebViewCrashDialog(crash.report, crash.reportFile)
+                }
+                return true
             }
         }
         webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
@@ -1836,12 +1865,28 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private fun showWebViewCrashDialog(report: String, reportFile: File?) {
+        showReportDialog(
+            titleRes = R.string.webview_crash_dialog_title,
+            introRes = R.string.webview_crash_dialog_intro,
+            shareSubjectRes = R.string.webview_crash_share_subject,
+            report = report,
+            reportFile = reportFile,
+            onDismiss = {
+                if (!isFinishing && !isDestroyed) {
+                    recreate()
+                }
+            },
+        )
+    }
+
     private fun showReportDialog(
         titleRes: Int,
         introRes: Int,
         shareSubjectRes: Int,
         report: String,
         reportFile: File?,
+        onDismiss: (() -> Unit)? = null,
     ) {
         val reportView = TextView(this).apply {
             text = report
@@ -1880,6 +1925,7 @@ class MainActivity : AppCompatActivity() {
                     startActivity(Intent.createChooser(shareIntent, getString(R.string.runtime_error_share)))
                 }
             }
+            .setOnDismissListener { onDismiss?.invoke() }
             .setCancelable(false)
             .show()
     }

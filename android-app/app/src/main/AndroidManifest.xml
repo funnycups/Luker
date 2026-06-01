@@ -18,6 +18,7 @@
         android:required="false" />
 
     <application
+        android:name=".LukerApplication"
         android:allowBackup="true"
         android:fullBackupContent="true"
         android:icon="@drawable/luker_logo"

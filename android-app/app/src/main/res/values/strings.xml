@@ -18,6 +18,9 @@
     <string name="crash_report_dialog_title">Previous Crash Detected</string>
     <string name="crash_report_dialog_intro">The app exited unexpectedly during the previous session. The diagnostics below were captured by the system; copy them and send to the developer.</string>
     <string name="crash_report_share_subject">Luker previous crash report</string>
+    <string name="webview_crash_dialog_title">Web Interface Crashed</string>
+    <string name="webview_crash_dialog_intro">The web interface renderer terminated. Copy the diagnostics below and send them to the developer; closing this dialog will reload the interface.</string>
+    <string name="webview_crash_share_subject">Luker web interface crash report</string>
     <string name="runtime_notification_channel_name">Luker Background Service</string>
     <string name="runtime_notification_channel_description">Keep the local Luker service running in the background</string>
     <string name="runtime_notification_title">Luker</string>
