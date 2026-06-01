@@ -139,3 +139,53 @@ describe('resolver: resolveDisplayMacros', () => {
             .toBe('m u c');
     });
 });
+
+describe('resolver: variable shorthand reads', () => {
+    test('resolves `{{.x}}` via env.getvar', () => {
+        const env = { getvar: (n) => n === 'x' ? '50' : '' };
+        expect(resolveDisplayMacros('hp={{.x}}', env)).toBe('hp=50');
+    });
+
+    test('resolves `{{$x}}` via env.getglobalvar', () => {
+        const env = { getglobalvar: (n) => n === 'x' ? 'G' : '' };
+        expect(resolveDisplayMacros('{{$x}}', env)).toBe('G');
+    });
+
+    test('passes dotted shorthand through to getvar verbatim', () => {
+        const calls = [];
+        const env = { getvar: (n) => { calls.push(n); return 'leaf'; } };
+        expect(resolveDisplayMacros('{{.roster.alice.hp}}', env)).toBe('leaf');
+        expect(calls).toEqual(['roster.alice.hp']);
+    });
+
+    test('returns empty string when getvar / getglobalvar missing', () => {
+        expect(resolveDisplayMacros('{{.x}}', {})).toBe('');
+        expect(resolveDisplayMacros('{{$x}}', {})).toBe('');
+    });
+
+    test('operator-bearing shorthand is NOT resolved (write — verbatim)', () => {
+        // The resolver does not execute writes; the extractor handles them.
+        // An operator-bearing shorthand inside a display context must remain
+        // verbatim so the literal can later be stripped by the extractor.
+        const env = { getvar: () => 'NEVER' };
+        expect(resolveDisplayMacros('{{.x = 1}}', env)).toBe('{{.x = 1}}');
+        expect(resolveDisplayMacros('{{.x++}}', env)).toBe('{{.x++}}');
+        expect(resolveDisplayMacros('{{.x ||= 0}}', env)).toBe('{{.x ||= 0}}');
+    });
+
+    test('nested shorthand inside setvar value is resolved in place', () => {
+        const env = { getvar: (n) => n === 'a' ? '7' : '' };
+        // Outer is a side-effect op — resolver leaves it verbatim — but the
+        // inner read is resolved on the nested-eval pass.
+        // (Extractor uses this resolver on rawValue of the outer; we exercise
+        //  that contract directly here.)
+        expect(resolveDisplayMacros('value={{.a}}', env)).toBe('value=7');
+    });
+
+    test('case-sensitive identifier names (.X != .x)', () => {
+        const calls = [];
+        const env = { getvar: (n) => { calls.push(n); return n; } };
+        expect(resolveDisplayMacros('{{.X}}', env)).toBe('X');
+        expect(calls).toEqual(['X']);
+    });
+});

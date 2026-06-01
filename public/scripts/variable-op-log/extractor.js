@@ -26,10 +26,12 @@
 import { scanAllSideEffectMacros } from './scanner.js';
 import { resolveDisplayMacros } from './resolver.js';
 import { applyOp } from './apply.js';
+import { normalizeShorthandMatch } from './shorthand-normalize.js';
 
 /**
  * @typedef {import('./apply.js').VarOp} VarOp
  * @typedef {import('./resolver.js').ResolveEnv} ResolveEnv
+ * @typedef {import('./scanner.js').MacroMatch} MacroMatch
  */
 
 /**
@@ -71,6 +73,21 @@ export function extractFromText(text, state, envFactory) {
         // Append text between previous cut and this macro
         stripped += text.slice(cursor, m.start);
         cursor = m.end;
+
+        // Shorthand matches (`{{.x = v}}`, `{{.x++}}`, etc.) are normalized
+        // into one of the seven canonical VarOps before recording. The literal
+        // is stripped from text regardless of whether normalization produces
+        // an op — `{{.x ??= 1}}` against a populated `x` is a no-op but the
+        // literal still must not survive into the message body.
+        if (m.op === 'subvar') {
+            const env = envFactory ? envFactory() : {};
+            const op = normalizeShorthandMatch(m, state, (raw) => resolveDisplayMacros(raw, env));
+            if (op) {
+                applyOp(state, op);
+                ops.push(op);
+            }
+            continue;
+        }
 
         // Build the op, resolving the value template if applicable. Resolve
         // happens *after* prior ops in this message have been applied to

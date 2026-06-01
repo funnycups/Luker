@@ -346,3 +346,103 @@ describe('scanner: JSON-shaped value with trailing }', () => {
         expect(matches[1]).toMatchObject({ op: 'incvar', key: 'n' });
     });
 });
+
+describe('scanner: variable shorthand side-effect forms', () => {
+    test('recognizes `{{.x = 5}}`', () => {
+        const m = findNextSideEffectMacro('{{.x = 5}}');
+        expect(m).toMatchObject({ op: 'subvar', shorthand: '=', key: 'x', rawValue: '5' });
+        expect(m.literal).toBe('{{.x = 5}}');
+    });
+
+    test('recognizes `{{.x=5}}` without surrounding whitespace', () => {
+        const m = findNextSideEffectMacro('{{.x=5}}');
+        expect(m).toMatchObject({ op: 'subvar', shorthand: '=', key: 'x', rawValue: '5' });
+    });
+
+    test('recognizes `{{.x += 1}}`', () => {
+        const m = findNextSideEffectMacro('{{.x += 1}}');
+        expect(m).toMatchObject({ op: 'subvar', shorthand: '+=', key: 'x', rawValue: '1' });
+    });
+
+    test('recognizes `{{.x -= 2}}`', () => {
+        const m = findNextSideEffectMacro('{{.x -= 2}}');
+        expect(m).toMatchObject({ op: 'subvar', shorthand: '-=', key: 'x', rawValue: '2' });
+    });
+
+    test('recognizes `{{.x++}}` and `{{.x--}}` with no value', () => {
+        expect(findNextSideEffectMacro('{{.x++}}')).toMatchObject({ op: 'subvar', shorthand: '++', key: 'x' });
+        expect(findNextSideEffectMacro('{{.x--}}')).toMatchObject({ op: 'subvar', shorthand: '--', key: 'x' });
+        expect(findNextSideEffectMacro('{{.x++}}').rawValue).toBeUndefined();
+    });
+
+    test('recognizes `{{.x ||= 0}}` and `{{.x ??= 1}}`', () => {
+        expect(findNextSideEffectMacro('{{.x ||= 0}}')).toMatchObject({ op: 'subvar', shorthand: '||=', key: 'x', rawValue: '0' });
+        expect(findNextSideEffectMacro('{{.x ??= 1}}')).toMatchObject({ op: 'subvar', shorthand: '??=', key: 'x', rawValue: '1' });
+    });
+
+    test('dotted shorthand splits root and path', () => {
+        const m = findNextSideEffectMacro('{{.roster.alice.hp = 50}}');
+        expect(m).toMatchObject({ op: 'subvar', shorthand: '=', key: 'roster', path: 'alice.hp', rawValue: '50' });
+    });
+
+    test('rejects pure read `{{.x}}` (no operator → no side effect)', () => {
+        expect(findNextSideEffectMacro('{{.x}}')).toBeNull();
+    });
+
+    test('rejects comparison ops (`==`, `!=`, `<=`, etc.)', () => {
+        // Pure reads, no side effect — must not be captured by the op-log.
+        expect(findNextSideEffectMacro('{{.x == 1}}')).toBeNull();
+        expect(findNextSideEffectMacro('{{.x != 1}}')).toBeNull();
+        expect(findNextSideEffectMacro('{{.x > 1}}')).toBeNull();
+        expect(findNextSideEffectMacro('{{.x >= 1}}')).toBeNull();
+        expect(findNextSideEffectMacro('{{.x < 1}}')).toBeNull();
+        expect(findNextSideEffectMacro('{{.x <= 1}}')).toBeNull();
+    });
+
+    test('rejects logical-read ops `||` and `??` (no assign)', () => {
+        expect(findNextSideEffectMacro('{{.x || default}}')).toBeNull();
+        expect(findNextSideEffectMacro('{{.x ?? default}}')).toBeNull();
+    });
+
+    test('rejects global-shorthand writes (`$x = 1` is out of scope, mirrors setglobalvar exclusion)', () => {
+        expect(findNextSideEffectMacro('{{$x = 1}}')).toBeNull();
+        expect(findNextSideEffectMacro('{{$x++}}')).toBeNull();
+    });
+
+    test('rejects identifiers that don\'t look like vars', () => {
+        // Numeric leading char is not a valid identifier.
+        expect(findNextSideEffectMacro('{{.1x = 1}}')).toBeNull();
+        // Trailing dash is rejected (var rules: must end in word char).
+        expect(findNextSideEffectMacro('{{.x- = 1}}')).toBeNull();
+    });
+
+    test('shorthand value tolerates nested display macros', () => {
+        const m = findNextSideEffectMacro('{{.greeting = hi {{user}}}}');
+        expect(m).toMatchObject({ op: 'subvar', shorthand: '=', key: 'greeting' });
+        expect(m.rawValue).toBe('hi {{user}}');
+    });
+
+    test('JSON-trailing rule applies to shorthand value', () => {
+        const m = findNextSideEffectMacro('{{.config = {"x":1}}}');
+        expect(m).toMatchObject({ op: 'subvar', shorthand: '=', key: 'config', rawValue: '{"x":1}' });
+        expect(m.literal).toBe('{{.config = {"x":1}}}');
+    });
+
+    test('scanAllSideEffectMacros mixes conventional + shorthand in order', () => {
+        const text = '{{setvar::a::1}} mid {{.b = 2}} end {{.c++}}';
+        const matches = scanAllSideEffectMacros(text);
+        expect(matches.map(m => m.key)).toEqual(['a', 'b', 'c']);
+        expect(matches.map(m => m.op)).toEqual(['setvar', 'subvar', 'subvar']);
+        expect(matches.map(m => m.shorthand)).toEqual([undefined, '=', '++']);
+    });
+
+    test('stripSideEffectMacros removes shorthand writes too', () => {
+        expect(stripSideEffectMacros('A{{.x = 1}}B{{.y++}}C')).toBe('ABC');
+    });
+
+    test('shorthand obeys backslash escape', () => {
+        // The conventional-form escape applies uniformly — `\{{.x = 1}}` is
+        // treated as literal narrative text.
+        expect(findNextSideEffectMacro('text \\{{.x = 1}} more')).toBeNull();
+    });
+});

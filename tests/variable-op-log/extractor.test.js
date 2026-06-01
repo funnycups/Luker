@@ -232,3 +232,121 @@ describe('extractor: path field propagates from match into op record', () => {
         expect(ops[0].path).toBeUndefined();
     });
 });
+
+describe('extractor: variable shorthand → canonical VarOps', () => {
+    test('`{{.x = 5}}` → setvar', () => {
+        const state = {};
+        const { mes, ops } = extractFromText('hp is {{.x = 5}} ok', state, () => ({}));
+        expect(mes).toBe('hp is  ok');
+        expect(ops).toEqual([{ op: 'setvar', key: 'x', value: '5' }]);
+        expect(state.x).toBe('5');
+    });
+
+    test('`{{.x += 3}}` → addvar', () => {
+        const state = { x: '5' };
+        const { ops } = extractFromText('{{.x += 3}}', state, () => ({}));
+        expect(ops).toEqual([{ op: 'addvar', key: 'x', value: '3' }]);
+        expect(state.x).toBe(8);
+    });
+
+    test('`{{.x -= 2}}` → addvar with negated value', () => {
+        const state = { x: '10' };
+        const { ops } = extractFromText('{{.x -= 2}}', state, () => ({}));
+        expect(ops).toEqual([{ op: 'addvar', key: 'x', value: '-2' }]);
+        expect(state.x).toBe(8);
+    });
+
+    test('`{{.x -= nope}}` (non-numeric) is a no-op but literal is stripped', () => {
+        const state = { x: '10' };
+        const { mes, ops } = extractFromText('A{{.x -= nope}}B', state, () => ({}));
+        expect(mes).toBe('AB');
+        expect(ops).toEqual([]);
+        expect(state.x).toBe('10');
+    });
+
+    test('`{{.x++}}` / `{{.x--}}` → incvar / decvar', () => {
+        const state = { t: '10' };
+        const { ops } = extractFromText('{{.t++}}{{.t--}}', state, () => ({}));
+        expect(ops).toEqual([
+            { op: 'incvar', key: 't' },
+            { op: 'decvar', key: 't' },
+        ]);
+        expect(state.t).toBe(10);
+    });
+
+    test('`{{.x ||= v}}` writes only when current is falsy', () => {
+        const falsy = {};
+        const { ops: ops1 } = extractFromText('{{.x ||= seeded}}', falsy, () => ({}));
+        expect(ops1).toEqual([{ op: 'setvar', key: 'x', value: 'seeded' }]);
+        expect(falsy.x).toBe('seeded');
+
+        const populated = { x: 'already' };
+        const { mes, ops: ops2 } = extractFromText('A{{.x ||= seeded}}B', populated, () => ({}));
+        expect(mes).toBe('AB');
+        expect(ops2).toEqual([]);
+        expect(populated.x).toBe('already');
+    });
+
+    test('`||=` treats ST falsy strings (\'0\', \'false\', \'off\') as falsy', () => {
+        const state = { x: '0' };
+        const { ops } = extractFromText('{{.x ||= 7}}', state, () => ({}));
+        expect(ops).toEqual([{ op: 'setvar', key: 'x', value: '7' }]);
+        expect(state.x).toBe('7');
+    });
+
+    test('`{{.x ??= v}}` writes only when current is undefined', () => {
+        const absent = {};
+        const { ops: ops1 } = extractFromText('{{.x ??= init}}', absent, () => ({}));
+        expect(ops1).toEqual([{ op: 'setvar', key: 'x', value: 'init' }]);
+
+        const empty = { x: '' };
+        // Empty string IS defined — `??=` doesn't write.
+        const { ops: ops2 } = extractFromText('{{.x ??= init}}', empty, () => ({}));
+        expect(ops2).toEqual([]);
+        expect(empty.x).toBe('');
+    });
+
+    test('shorthand value can read prior shorthand effect in same message', () => {
+        const state = {};
+        const env = () => ({ getvar: (k) => state[k] ?? '' });
+        const { ops } = extractFromText('{{.a = 1}} {{.b = {{.a}}}}', state, env);
+        expect(ops).toEqual([
+            { op: 'setvar', key: 'a', value: '1' },
+            { op: 'setvar', key: 'b', value: '1' },
+        ]);
+        expect(state).toEqual({ a: '1', b: '1' });
+    });
+
+    test('dotted shorthand routes through path-flavored setvar', () => {
+        const state = {};
+        const { ops } = extractFromText('{{.roster.alice.hp = 50}}', state, () => ({}));
+        expect(ops).toEqual([{ op: 'setvar', key: 'roster', path: 'alice.hp', value: '50' }]);
+        expect(JSON.parse(state.roster)).toEqual({ alice: { hp: 50 } });
+    });
+
+    test('dotted `||=` checks the leaf, not the root', () => {
+        const state = { roster: JSON.stringify({ alice: { hp: 0 } }) };
+        const { ops } = extractFromText('{{.roster.alice.hp ||= 50}}', state, () => ({}));
+        expect(ops).toEqual([{ op: 'setvar', key: 'roster', path: 'alice.hp', value: '50' }]);
+        expect(JSON.parse(state.roster)).toEqual({ alice: { hp: 50 } });
+    });
+
+    test('dotted `??=` no-op when leaf is defined (even if empty string)', () => {
+        const state = { roster: JSON.stringify({ alice: { hp: '' } }) };
+        const { ops } = extractFromText('{{.roster.alice.hp ??= 50}}', state, () => ({}));
+        expect(ops).toEqual([]);
+        expect(JSON.parse(state.roster)).toEqual({ alice: { hp: '' } });
+    });
+
+    test('shorthand and conventional macros mix correctly in source order', () => {
+        const state = {};
+        const { mes, ops } = extractFromText(
+            '{{setvar::a::1}} {{.b = 2}} {{incvar::c}} {{.d++}}',
+            state,
+            () => ({}),
+        );
+        expect(mes).toBe('   ');
+        expect(ops.map(o => o.op)).toEqual(['setvar', 'setvar', 'incvar', 'incvar']);
+        expect(ops.map(o => o.key)).toEqual(['a', 'b', 'c', 'd']);
+    });
+});

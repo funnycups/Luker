@@ -26,14 +26,39 @@
 
 /**
  * @typedef {Object} MacroMatch
- * @property {'setvar'|'addvar'|'incvar'|'decvar'|'deletevar'|'pushvar'|'popvar'} op
+ * @property {'setvar'|'addvar'|'incvar'|'decvar'|'deletevar'|'pushvar'|'popvar'|'subvar'} op
+ *   `subvar` is an internal scanner-only op produced by shorthand syntax
+ *   (`{{.x=v}}`, `{{.x++}}`, `{{.x||=v}}`, etc.). The extractor normalizes
+ *   it into one of the seven canonical VarOps before recording, so apply /
+ *   rebuilder / panel never see `subvar`. The `shorthand` field distinguishes
+ *   the specific operator.
  * @property {string} key - Top-level variable name (root)
  * @property {string} [path] - Dotted remainder of the key; empty / absent when flat
- * @property {string} [rawValue] - Unresolved value template (for setvar/addvar/pushvar)
+ * @property {string} [rawValue] - Unresolved value template (for setvar/addvar/pushvar/subvar)
+ * @property {'='|'+='|'-='|'++'|'--'|'||='|'??='} [shorthand]
+ *   Only present when this match originated from variable shorthand syntax.
+ *   The scanner does NOT recognize comparison or logical-read operators
+ *   (`==`, `!=`, `<`, `<=`, `>`, `>=`, `||`, `??`) — those are pure reads
+ *   with no side effect and live in the resolver / main macro engine.
  * @property {number} start - Inclusive start index in source text
  * @property {number} end - Exclusive end index in source text
  * @property {string} literal - The exact substring that matched
  */
+
+/**
+ * Shorthand operators that mutate state. Order matters: longer prefixes
+ * must come first so `||=` is tested before `||`-style false positives,
+ * and `++` before any future single-char operator.
+ */
+const SHORTHAND_OPS = /** @type {const} */ (['||=', '??=', '++', '--', '+=', '-=', '=']);
+
+/**
+ * Valid shorthand variable identifier: starts with a letter, ends with a
+ * word character. Mirrors `MACRO_VARIABLE_SHORTHAND_PATTERN` in the main
+ * macro lexer so shapes the engine accepts as a shorthand are recognized
+ * here too. Anchored — full-string match.
+ */
+const SHORTHAND_IDENT_RE = /^[a-zA-Z](?:[\w\-]*[\w])?$/;
 
 /**
  * Scans text for the next side-effect macro starting at or after `cursor`.
@@ -75,6 +100,13 @@ export function findNextSideEffectMacro(text, cursor = 0) {
         }
 
         const afterOpen = openIdx + 2;
+
+        // Try variable-shorthand side-effect form first: `{{.NAME OP VALUE?}}`.
+        // Only the `.` (local) prefix is in scope — `$` writes are global and
+        // not tracked, mirroring the `setglobalvar` exclusion above.
+        const shorthand = parseShorthandBody(text, openIdx, afterOpen);
+        if (shorthand) return shorthand;
+
         const opInfo = matchOpHead(text, afterOpen);
         if (!opInfo) {
             // Not one of our ops — skip this `{{` and keep scanning
@@ -136,7 +168,142 @@ export function stripSideEffectMacros(text) {
     return out;
 }
 
-// ----- internals ---------------------------------------------------------
+/**
+ * Try to parse a variable-shorthand side-effect macro starting at `openIdx`.
+ *
+ * Recognized forms (operator-bearing only — pure reads like `{{.x}}` are
+ * left to the resolver):
+ *   {{.NAME = VALUE}}     → subvar/=
+ *   {{.NAME += VALUE}}    → subvar/+=
+ *   {{.NAME -= VALUE}}    → subvar/-=
+ *   {{.NAME ++}}          → subvar/++
+ *   {{.NAME --}}          → subvar/--
+ *   {{.NAME ||= VALUE}}   → subvar/||=
+ *   {{.NAME ??= VALUE}}   → subvar/??=
+ *
+ * Identifier may be dotted (`{{.roster.alice.hp = 50}}`); the leading dot
+ * is the shorthand prefix, NOT a path separator. Anything after the second
+ * `.` becomes the path. Whitespace around the operator is allowed (the
+ * main macro lexer also allows it).
+ *
+ * Returns `null` when the body is not a recognized shorthand write; callers
+ * fall through to `matchOpHead` for the conventional `{{setvar::...}}` path.
+ *
+ * @param {string} text
+ * @param {number} openIdx Position of the `{{` opener
+ * @param {number} bodyStart Position immediately after `{{`
+ * @returns {MacroMatch | null}
+ */
+function parseShorthandBody(text, openIdx, bodyStart) {
+    const len = text.length;
+    let i = bodyStart;
+
+    // Optional whitespace before the prefix
+    while (i < len && isWs(text[i])) i++;
+    if (i >= len || text[i] !== '.') return null;
+    i++;
+
+    // Identifier (with optional dotted path). Stop at whitespace or operator/close.
+    const identStart = i;
+    while (i < len) {
+        const c = text[i];
+        if (isWs(c)) break;
+        if (c === '}' || c === '{') break;
+        if (isShorthandOpStart(text, i)) break;
+        i++;
+    }
+    const rawIdent = text.slice(identStart, i);
+    if (rawIdent.length === 0) return null;
+    const { root, path } = splitKey(rawIdent);
+    if (!SHORTHAND_IDENT_RE.test(root)) return null;
+    // Path segments must each look like an identifier too — guards against
+    // mistaking arbitrary `.something.` text for a shorthand expression.
+    if (path) {
+        for (const seg of path.split('.')) {
+            if (!SHORTHAND_IDENT_RE.test(seg)) return null;
+        }
+    }
+
+    // Optional whitespace before the operator
+    while (i < len && isWs(text[i])) i++;
+    if (i >= len) return null;
+
+    const opAt = i;
+    let shorthand = null;
+    for (const candidate of SHORTHAND_OPS) {
+        if (text.startsWith(candidate, opAt)) {
+            shorthand = candidate;
+            break;
+        }
+    }
+    if (!shorthand) return null;
+    // Bare `=` must not absorb the first char of comparison ops like `==`
+    // and `!=` — those are pure reads and live outside the op-log. `+=`/`-=`/
+    // `||=`/`??=` already encode the trailing `=`, so this guard is `=`-only.
+    if (shorthand === '=' && text[opAt + 1] === '=') return null;
+    i = opAt + shorthand.length;
+
+    // ++/-- take no value; consume optional whitespace and expect `}}`.
+    if (shorthand === '++' || shorthand === '--') {
+        while (i < len && isWs(text[i])) i++;
+        if (text[i] !== '}' || text[i + 1] !== '}') return null;
+        const end = i + 2;
+        return path
+            ? { op: 'subvar', shorthand, key: root, path, start: openIdx, end, literal: text.slice(openIdx, end) }
+            : { op: 'subvar', shorthand, key: root, start: openIdx, end, literal: text.slice(openIdx, end) };
+    }
+
+    // Value-bearing operators: capture everything until the macro's closing
+    // `}}`, accounting for nested `{{...}}` so embedded display macros
+    // survive verbatim. JSON-trailing-run rule applies here too.
+    const valueStart = i;
+    let depth = 0;
+    while (i < len) {
+        if (text[i] === '{' && text[i + 1] === '{') {
+            depth++;
+            i += 2;
+            continue;
+        }
+        if (text[i] === '}' && text[i + 1] === '}') {
+            if (depth === 0) {
+                if (text[i + 2] === '}') {
+                    i += 1;
+                    continue;
+                }
+                const rawValue = text.slice(valueStart, i).trim();
+                const end = i + 2;
+                const base = { op: 'subvar', shorthand, key: root, rawValue, start: openIdx, end, literal: text.slice(openIdx, end) };
+                return path ? { ...base, path } : base;
+            }
+            depth--;
+            i += 2;
+            continue;
+        }
+        i++;
+    }
+    return null;
+}
+
+/**
+ * Does a shorthand operator start at `text[i]`? Used to terminate identifier
+ * scanning. Tests the longest candidate first; a single `=` not preceded by
+ * a recognized lead-in is still a valid shorthand op start.
+ *
+ * @param {string} text
+ * @param {number} i
+ * @returns {boolean}
+ */
+function isShorthandOpStart(text, i) {
+    for (const op of SHORTHAND_OPS) {
+        if (text.startsWith(op, i)) return true;
+    }
+    return false;
+}
+
+/** @param {string} c */
+function isWs(c) {
+    return c === ' ' || c === '\t' || c === '\n' || c === '\r';
+}
 
 /**
  * Match the op name immediately after a `{{`. Returns the canonical op name

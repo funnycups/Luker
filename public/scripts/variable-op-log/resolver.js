@@ -155,6 +155,16 @@ function renderMacro(inner, originalLiteral, env) {
     const trimmed = inner.trim();
     if (trimmed.length === 0) return originalLiteral;
 
+    // Variable shorthand reads: `{{.name}}` and `{{$name}}` (with optional
+    // dotted path) translate to getvar / getglobalvar. Operator-bearing
+    // shorthand (`{{.x = 1}}`, `{{.x++}}`, etc.) is a write and is left
+    // verbatim — execution belongs to the extractor / main macro engine.
+    const shorthand = matchShorthandRead(trimmed);
+    if (shorthand) {
+        const fn = shorthand.scope === 'local' ? env.getvar : env.getglobalvar;
+        return callWithKey(fn, shorthand.name);
+    }
+
     // Split on first `::` (top-level not needed, inner is already resolved)
     const sepIdx = trimmed.indexOf('::');
     const head = (sepIdx < 0 ? trimmed : trimmed.slice(0, sepIdx)).trim().toLowerCase();
@@ -192,6 +202,31 @@ function renderMacro(inner, originalLiteral, env) {
             return typeof fromExtra === 'function' ? stringify(fromExtra()) : stringify(fromExtra);
         }
     }
+}
+
+/**
+ * Variable shorthand identifier (with optional dotted path). Anchored full
+ * match. Mirrors `MACRO_VARIABLE_SHORTHAND_PATTERN` from the main lexer —
+ * each segment must start with a letter and end with a word char.
+ */
+const SHORTHAND_READ_RE = /^([.$])([a-zA-Z](?:[\w\-]*[\w])?(?:\.[a-zA-Z](?:[\w\-]*[\w])?)*)$/;
+
+/**
+ * Tests whether `inner` (already trimmed) is a pure variable-shorthand read
+ * with no operator. Returns the scope and full identifier (root + path), or
+ * null when this is not a read.
+ *
+ * The full identifier — including dotted path — is handed to env.getvar /
+ * env.getglobalvar; the resolver does not parse paths itself. ST's getvar
+ * already understands dotted addressing.
+ *
+ * @param {string} inner
+ * @returns {{ scope: 'local' | 'global', name: string } | null}
+ */
+function matchShorthandRead(inner) {
+    const m = SHORTHAND_READ_RE.exec(inner);
+    if (!m) return null;
+    return { scope: m[1] === '.' ? 'local' : 'global', name: m[2] };
 }
 
 /**
