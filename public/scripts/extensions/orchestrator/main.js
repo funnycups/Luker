@@ -7594,11 +7594,14 @@ jQuery(() => {
                         // `createFloorState` factory. A bare `{}` here
                         // makes the adapter open as null (the loader
                         // throws "createFloorState API is unavailable"
-                        // and falls through to the catch). Spreading the
-                        // returned object later picks up only own props
-                        // (`__floorStateForNotes` / `__openNotes`) — the
-                        // prototype-side ST APIs do not leak into tool
-                        // ctx. Mirrors loop-runtime's `attachToolContext`.
+                        // and falls through to the catch). The director
+                        // dispatcher rebuilds the per-tool-call ctx via
+                        // `Object.create(contextForNotes)` so prototype-
+                        // side ST APIs (e.g. `updateChatState`) remain
+                        // reachable — Layer-2 tools that lazily open
+                        // chat-scoped state (memory-graph's session)
+                        // depend on this. Mirrors loop-runtime's
+                        // `attachToolContext`.
                         const notesCtx = Object.create(context);
                         await attachNotesFloorState(notesCtx);
                         return notesCtx;
