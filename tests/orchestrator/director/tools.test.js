@@ -638,6 +638,45 @@ describe('subagent dispatcher', () => {
         expect(seenToolCtx[0].chat).toBeDefined();
     });
 
+    test('sub-agent executeLoopTool ctx inherits updateChatState from contextForNotes prototype', async () => {
+        const calls = [
+            { assistantText: '', toolCalls: [{ id: 't1', name: 'memory_keyword_search', args: { query: 'x' } }], reasoning: null, finishReason: 'tool_calls' },
+            { assistantText: 'done', toolCalls: [], reasoning: null, finishReason: 'stop' },
+        ];
+        let i = 0;
+        const fakeGenerate = jest.fn(async () => calls[i++] || { assistantText: '', toolCalls: [], reasoning: null, finishReason: 'stop' });
+
+        const seenToolCtx = [];
+        const executeLoopTool = jest.fn(async (_name, _args, ctx) => {
+            seenToolCtx.push(ctx);
+            return { ok: true };
+        });
+
+        const updateChatState = jest.fn(async () => ({ ok: true }));
+        const stContext = { updateChatState };
+        const notesCtx = Object.create(stContext);
+        notesCtx.__floorStateForNotes = {
+            appendForFloor: async () => 'n1',
+            listAcrossFloors: async () => [],
+            updateStatusById: async () => ({ ok: true }),
+        };
+
+        const dispatcher = createSubagentDispatcher({
+            subAgents: [{ id: 's', description: '', systemPrompt: 's' }],
+            limits: { maxTotalSubagentRuns: 5 },
+            generateTask: fakeGenerate,
+            abortSignal: new AbortController().signal,
+            tools: { custom: { memory_keyword_search: true } },
+            executeLoopTool,
+            chat: [],
+            contextForNotes: notesCtx,
+        });
+        const h = await dispatcher.dispatch({ subagentId: 's', task: 't' });
+        await dispatcher.awaitAll([h]);
+
+        expect(seenToolCtx[0].updateChatState).toBe(updateChatState);
+    });
+
     test('sub-agent with tools override gets its own schemas; sub-agent without override inherits profile defaults', async () => {
         // Capture the `tools` schema array passed to generateTask so we can
         // assert what each sub-agent dispatch actually saw.

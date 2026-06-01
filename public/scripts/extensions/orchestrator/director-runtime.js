@@ -704,19 +704,19 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                 finalized = !!toolResult.ok;
             } else if (typeof deps?.executeLoopTool === 'function') {
                 try {
-                    // Spread the same per-feature overlay the dispatcher
-                    // gives sub-agents (`contextForNotes` carries
-                    // `__floorStateForNotes`) so note_* tools invoked by
-                    // the MAIN agent reach the live adapter instead of
-                    // silently losing the floor-state writer. Mirrors
-                    // director-tools.js's sub-agent tool-exec context.
-                    // memory-graph's session is opened lazily inside its
-                    // Layer-2 tools — orchestrator does not thread one.
-                    const raw = await deps.executeLoopTool(name, args, {
-                        ...(deps?.contextForNotes || {}),
-                        chat: deps.chat,
-                        __customToolRegistry: customToolRegistry,
-                    });
+                    // Inherit from `contextForNotes` (which itself inherits
+                    // from the SillyTavern context via `Object.create`) so
+                    // prototype-resolved methods like `updateChatState` —
+                    // needed by Layer-2 tools that lazily open chat-scoped
+                    // state, e.g. memory-graph's session — remain reachable.
+                    // Spread would drop them; `Object.create` preserves the
+                    // chain. The own-property overlays below carry the
+                    // per-call notes adapter, chat slice, and custom-tool
+                    // registry.
+                    const toolCtx = Object.create(deps?.contextForNotes || null);
+                    toolCtx.chat = deps.chat;
+                    toolCtx.__customToolRegistry = customToolRegistry;
+                    const raw = await deps.executeLoopTool(name, args, toolCtx);
                     toolResult = { ok: true, result: raw };
                 } catch (err) {
                     toolResult = { ok: false, error: String(err?.message || err) };

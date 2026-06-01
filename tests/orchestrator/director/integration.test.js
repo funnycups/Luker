@@ -1208,5 +1208,62 @@ describe('director integration — scripted main agent', () => {
         expect(seenToolCtx[0].__floorStateForNotes).toBe(notesCtx.__floorStateForNotes);
         expect(seenToolCtx[0].chat).toBe(chat);
     });
+
+    test('main agent executeLoopTool ctx inherits updateChatState from contextForNotes prototype', async () => {
+        const { chat, handle } = makeHandle();
+        const ev = {
+            type: 'normal',
+            placeholderMessageId: 0,
+            finalPrompt: '',
+            generateData: {},
+            takeoverHandle: handle,
+            abortSignal: new AbortController().signal,
+        };
+
+        const updateChatState = jest.fn(async () => ({ ok: true }));
+        const stContext = { updateChatState };
+        const notesCtx = Object.create(stContext);
+        notesCtx.__floorStateForNotes = {
+            appendForFloor: async () => 'n1',
+            listAcrossFloors: async () => [],
+            updateStatusById: async () => ({ ok: true }),
+        };
+
+        const seenToolCtx = [];
+        const executeLoopTool = jest.fn(async (_name, _args, ctx) => {
+            seenToolCtx.push(ctx);
+            return { ok: true };
+        });
+
+        const calls = [
+            [{ id: 't1', name: 'memory_keyword_search', args: { query: 'x' } }],
+            [{ id: 'tf', name: 'finalize', args: {} }],
+        ];
+        let i = 0;
+        const fakeStream = jest.fn(async () => ({
+            assistantText: '',
+            toolCalls: calls[i++] || [],
+            reasoning: null,
+            finishReason: 'tool_calls',
+            usage: null,
+            raw: null,
+        }));
+
+        handle.setText('placeholder');
+        await runMainAgentLoop({
+            handle,
+            profile: { mode: 'director', director: { mainAgent: {}, subAgents: [], maxRounds: 3, tools: { custom: { memory_keyword_search: true } } } },
+            eventData: ev,
+            deps: {
+                generateTaskStreamForMainAgent: fakeStream,
+                generateTask: jest.fn(),
+                chat,
+                executeLoopTool,
+                contextForNotes: notesCtx,
+            },
+        });
+
+        expect(seenToolCtx[0].updateChatState).toBe(updateChatState);
+    });
 });
 

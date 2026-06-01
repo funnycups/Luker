@@ -859,11 +859,17 @@ export function createSubagentDispatcher({
                             toolResult = await executeGetDraftTool(handle);
                         } else if (typeof executeLoopTool === 'function') {
                             try {
-                                const raw = await executeLoopTool(name, args, {
-                                    ...(contextForNotes || {}),
-                                    chat,
-                                    __customToolRegistry: customToolRegistry,
-                                });
+                                // Inherit from `contextForNotes` so
+                                // prototype-resolved methods (e.g.
+                                // `updateChatState`, needed by Layer-2
+                                // tools that lazily open chat-scoped
+                                // state) survive on the dispatched ctx.
+                                // See director-runtime.js's main-agent
+                                // path for the matching pattern.
+                                const toolCtx = Object.create(contextForNotes || null);
+                                toolCtx.chat = chat;
+                                toolCtx.__customToolRegistry = customToolRegistry;
+                                const raw = await executeLoopTool(name, args, toolCtx);
                                 toolResult = { ok: true, result: raw };
                             } catch (err) {
                                 toolResult = { ok: false, error: String(err?.message || err) };
