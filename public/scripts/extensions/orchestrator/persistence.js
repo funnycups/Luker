@@ -139,6 +139,81 @@ export const ORCH_EXECUTION_MODE_LOOP = 'loop';
  *   - wall_clock_budget_ms  loop deadline; floored at 10000ms (10s)
  *   - capsule_inject        same shape as spec/agenda capsule injection
  */
+/**
+ * Default Layer-2 customs seed shared across loop / agenda / spec /
+ * director. memory-graph + search-tools register these tools at startup;
+ * a fresh profile ships with them all enabled so first-run users get the
+ * same out-of-box pipeline they had before the namespace drop. Per-
+ * profile `tools.custom.<name>` and per-agent override panels can flip
+ * individual entries off.
+ *
+ * The plugin's own enable flag still gates execution at runtime — when
+ * search-tools is disabled the Layer-2 exec raises SEARCH_DISABLED /
+ * SEARCH_UNAVAILABLE as a structured error.
+ */
+export const DEFAULT_LAYER2_CUSTOMS = Object.freeze({
+    memory_schema: true,
+    memory_list_candidates: true,
+    memory_edge_summary: true,
+    memory_node_brief: true,
+    memory_expand_seeds: true,
+    memory_keyword_search: true,
+    memory_vector_search: true,
+    memory_find_by_name: true,
+    memory_compaction_candidates: true,
+    memory_node_create: true,
+    memory_node_edit: true,
+    memory_node_delete: true,
+    memory_link_upsert: true,
+    memory_link_delete: true,
+    memory_compact_nodes: true,
+    search_search: true,
+    search_visit: true,
+});
+
+/**
+ * Merge a tools-shaped input with the default Layer-2 customs seed using
+ * the priority chain:
+ *
+ *   1. caller's explicit `tools.custom.<name>` (always wins)
+ *   2. caller's legacy `tools.memory.<verb>` / `tools.search.<verb>`
+ *      (auto-translated; respected so an explicit user `false` overrides
+ *      the default-on seed)
+ *   3. DEFAULT_LAYER2_CUSTOMS (memory_* / search_* default enabled)
+ *
+ * Returns a NEW input object with merged `custom` and the legacy memory /
+ * search namespaces dropped (already translated). Caller hands the
+ * result to `sanitizeAgentToolFlags` for the final shape.
+ *
+ * Used by loop (seeded directly), agenda, and spec sanitizers to ship
+ * first-run profiles with the dogfood tools enabled.
+ */
+export function seedDefaultLayer2Customs(input) {
+    const tools = input && typeof input === 'object' ? input : {};
+    const callerCustom = tools.custom && typeof tools.custom === 'object'
+        ? tools.custom
+        : {};
+    const translatedFromLegacy = {};
+    const legacyMemory = tools.memory && typeof tools.memory === 'object'
+        ? tools.memory
+        : {};
+    for (const [verb, on] of Object.entries(legacyMemory)) {
+        translatedFromLegacy[`memory_${verb}`] = on !== false;
+    }
+    const legacySearch = tools.search && typeof tools.search === 'object'
+        ? tools.search
+        : {};
+    for (const [verb, on] of Object.entries(legacySearch)) {
+        translatedFromLegacy[`search_${verb}`] = on !== false;
+    }
+    const mergedCustom = {
+        ...DEFAULT_LAYER2_CUSTOMS,
+        ...translatedFromLegacy,
+        ...callerCustom,
+    };
+    return { ...tools, memory: undefined, search: undefined, custom: mergedCustom };
+}
+
 const LOOP_PROFILE_DEFAULTS = Object.freeze({
     mode: ORCH_EXECUTION_MODE_LOOP,
     apiPresetName: '',
@@ -148,34 +223,7 @@ const LOOP_PROFILE_DEFAULTS = Object.freeze({
         note: Object.freeze({ open: true, close: true }),
         chat: Object.freeze({ read_range: true, search: true }),
         lorebook: Object.freeze({ search: true, get: true }),
-        custom: Object.freeze({
-            // memory-graph tools — registered by memory-graph itself via
-            // Layer-2; enabled by default so first-run users get the
-            // same out-of-box pipeline they had before the namespace drop.
-            memory_schema: true,
-            memory_list_candidates: true,
-            memory_edge_summary: true,
-            memory_node_brief: true,
-            memory_expand_seeds: true,
-            memory_keyword_search: true,
-            memory_vector_search: true,
-            memory_find_by_name: true,
-            memory_compaction_candidates: true,
-            memory_node_create: true,
-            memory_node_edit: true,
-            memory_node_delete: true,
-            memory_link_upsert: true,
-            memory_link_delete: true,
-            memory_compact_nodes: true,
-            // search-tools — registered by search-tools itself via
-            // Layer-2; enabled by default so first-run users keep web
-            // search available out of the box. The plugin's own enable
-            // flag still gates execution at runtime — when it's
-            // disabled the Layer-2 exec raises SEARCH_DISABLED /
-            // SEARCH_UNAVAILABLE as a structured error.
-            search_search: true,
-            search_visit: true,
-        }),
+        custom: { ...DEFAULT_LAYER2_CUSTOMS },
         finalize: true,
     }),
     max_rounds: 20,
@@ -222,51 +270,13 @@ function sanitizeLoopToolFlags(input) {
     // stays the standalone outlier because loop has no "inherit"
     // semantics — its profile root *is* the tools spec.
     //
-    // memory + search tools live in Layer-2 (`tools.custom.<name>`) now,
-    // so to preserve the "all on by default" loop policy we pre-resolve
-    // their flags into `tools.custom` here BEFORE the shared sanitizer
-    // sees the input:
-    //
-    //   priority (highest first):
-    //   1. caller's explicit `tools.custom.<name>` (always wins)
-    //   2. caller's legacy `tools.memory.<verb>` / `tools.search.<verb>`
-    //      (auto-translated via sanitizeAgentToolFlags's translator —
-    //      kept here so an explicit `false` from the user overrides the
-    //      default `true`, even though the default would otherwise have
-    //      survived in slot 3 below)
-    //   3. LOOP_PROFILE_DEFAULTS.tools.custom (memory_* / search_*
-    //      default enabled so a bare profile retains the same enabled
-    //      tool set it had before the namespace drop)
-    const callerTools = input && typeof input === 'object' ? input : {};
-    const callerCustom = callerTools.custom && typeof callerTools.custom === 'object'
-        ? callerTools.custom
-        : {};
-    // First translate legacy memory + search into the custom name space so
-    // we can decide priority deterministically.
-    const translatedFromLegacy = {};
-    const legacyMemory = callerTools.memory && typeof callerTools.memory === 'object'
-        ? callerTools.memory
-        : {};
-    for (const [verb, on] of Object.entries(legacyMemory)) {
-        translatedFromLegacy[`memory_${verb}`] = on !== false;
-    }
-    const legacySearch = callerTools.search && typeof callerTools.search === 'object'
-        ? callerTools.search
-        : {};
-    for (const [verb, on] of Object.entries(legacySearch)) {
-        translatedFromLegacy[`search_${verb}`] = on !== false;
-    }
-    // Defaults provide the baseline; legacy overrides defaults; explicit
-    // custom overrides everything.
-    const mergedCustom = {
-        ...LOOP_PROFILE_DEFAULTS.tools.custom,
-        ...translatedFromLegacy,
-        ...callerCustom,
-    };
-    // Drop the legacy memory + search namespaces from what we hand the
-    // shared sanitizer — we've already translated them, no second pass
-    // needed.
-    const seeded = { ...callerTools, memory: undefined, search: undefined, custom: mergedCustom };
+    // memory + search live in Layer-2 (`tools.custom.<name>`) now;
+    // `seedDefaultLayer2Customs` resolves the priority chain (caller's
+    // explicit customs > caller's legacy memory/search verbs > the
+    // default-on seed) before the shared sanitizer sees the result, so
+    // a bare loop profile keeps the same enabled tool set it had before
+    // the namespace drop.
+    const seeded = seedDefaultLayer2Customs(input);
     return sanitizeAgentToolFlags(seeded, { defaultAllOn: true, forceFinalize: true });
 }
 

@@ -41,7 +41,7 @@ import {
     sanitizeIdentifierToken,
     sanitizePresetMap,
 } from './editable-spec.js';
-import { sanitizeOptionalAgentToolFlags } from './persistence.js';
+import { sanitizeAgentToolFlags, seedDefaultLayer2Customs } from './persistence.js';
 import { toReadableYamlText } from './output-formatting.js';
 import { sanitizeCustomTools } from './custom-tools-sanitize.js';
 
@@ -116,9 +116,37 @@ export function sanitizeAgendaWorkingProfile(workingProfile = null) {
         // An object = "use these flags as the fallback for any agent
         // that doesn't override". Per-agent `tools` lives on
         // `agents[id].tools` and takes precedence.
-        defaultTools: sanitizeOptionalAgentToolFlags(source?.defaultTools),
+        //
+        // Fresh profile (defaultTools key missing from source) gets the
+        // Layer-2 customs seed so memory + search ship enabled out of
+        // the box. Explicit null is preserved as-is so callers that
+        // really want a no-tools default keep that option.
+        defaultTools: sanitizeAgendaProfileDefaultTools(source),
         customTools: sanitizeCustomTools(source?.customTools),
     };
+}
+
+function sanitizeAgendaProfileDefaultTools(source) {
+    const hasKey = source && Object.prototype.hasOwnProperty.call(source, 'defaultTools');
+    if (!hasKey) {
+        // Fresh profile — seed the Layer-2 customs default-on so
+        // memory + search are available to every agent unless overridden.
+        const seeded = seedDefaultLayer2Customs({});
+        return sanitizeAgentToolFlags(seeded);
+    }
+    const raw = source.defaultTools;
+    if (raw === null) {
+        // Explicit caller-chosen null — preserve.
+        return null;
+    }
+    if (raw === undefined) {
+        // Explicit undefined behaves like missing.
+        const seeded = seedDefaultLayer2Customs({});
+        return sanitizeAgentToolFlags(seeded);
+    }
+    // Object form: merge customs seed in (caller's explicit keys win).
+    const seeded = seedDefaultLayer2Customs(raw);
+    return sanitizeAgentToolFlags(seeded);
 }
 
 export function ensureAgendaEditorIntegrity(editor) {

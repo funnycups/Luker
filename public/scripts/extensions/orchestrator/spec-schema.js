@@ -34,7 +34,7 @@ import {
     defaultSpec,
 } from './defaults.js';
 import { ORCH_EXECUTION_MODE_DIRECTOR, sanitizeDirectorProfile } from './director-defaults.js';
-import { sanitizeOptionalAgentToolFlags } from './persistence.js';
+import { sanitizeAgentToolFlags, sanitizeOptionalAgentToolFlags, seedDefaultLayer2Customs } from './persistence.js';
 import { sanitizeCustomTools } from './custom-tools-sanitize.js';
 
 const MODULE_NAME = 'orchestrator';
@@ -141,9 +141,29 @@ export function sanitizeSpec(spec) {
         // flags applied to any node whose own `tools` is null. The runtime
         // resolver picks node.tools first, then this, then mode's all-off
         // built-in default.
-        defaultTools: sanitizeOptionalAgentToolFlags(spec.defaultTools),
+        //
+        // Fresh profile (defaultTools key missing) gets the Layer-2
+        // customs seed so memory + search ship enabled out of the box.
+        // Explicit null is preserved as-is.
+        defaultTools: sanitizeSpecProfileDefaultTools(spec),
         customTools: sanitizeCustomTools(spec.customTools),
     };
+}
+
+function sanitizeSpecProfileDefaultTools(spec) {
+    const hasKey = spec && Object.prototype.hasOwnProperty.call(spec, 'defaultTools');
+    if (!hasKey) {
+        const seeded = seedDefaultLayer2Customs({});
+        return sanitizeAgentToolFlags(seeded);
+    }
+    const raw = spec.defaultTools;
+    if (raw === null) return null;
+    if (raw === undefined) {
+        const seeded = seedDefaultLayer2Customs({});
+        return sanitizeAgentToolFlags(seeded);
+    }
+    const seeded = seedDefaultLayer2Customs(raw);
+    return sanitizeAgentToolFlags(seeded);
 }
 
 export function isReviewNodeSpec(nodeSpec) {
