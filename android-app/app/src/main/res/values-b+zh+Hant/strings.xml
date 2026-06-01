@@ -57,6 +57,8 @@
     <string name="download_saved_fallback_name">檔案</string>
     <string name="download_in_progress">已有下載儲存作業進行中</string>
     <string name="download_default_file_name">下載檔案</string>
+    <string name="download_progress_bytes_only">下載中… %1$s</string>
+    <string name="download_progress_with_total">下載中… %1$s / %2$s</string>
     <string name="http_auth_dialog_title">需要登入</string>
     <string name="http_auth_dialog_message">此端點啟用了 HTTP Basic 驗證，Luker 需要先完成帳號密碼驗證後才能載入。</string>
     <string name="http_auth_dialog_host">端點：%1$s</string>

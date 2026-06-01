@@ -55,11 +55,17 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.ViewCompat
 import java.io.File
+import java.io.BufferedInputStream
 import java.io.IOException
 import java.io.PrintWriter
 import java.io.StringWriter
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.ArrayDeque
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
+import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
     private val tag = "LukerMainActivity"
@@ -68,6 +74,7 @@ class MainActivity : AppCompatActivity() {
     private val messageProgressNotificationChannelId = "luker_message_progress_v1"
     private val messageNotificationId = 12001
     private val messageProgressNotificationId = 12002
+    private val streamDownloadNotificationId = 12003
     private val broadFileChooserExtensions = setOf(
         "byaf",
         "charx",
@@ -94,6 +101,10 @@ class MainActivity : AppCompatActivity() {
     private var pendingSaveBytes: ByteArray? = null
     private var pendingSaveMimeType: String? = null
     private var pendingSaveFileName: String? = null
+    private val streamRequestQueue: ArrayDeque<StreamRequest> = ArrayDeque()
+    private var activeSafRequest: StreamRequest? = null
+    private var activeDownloadRequest: StreamRequest? = null
+    private val streamQueueLock = Any()
     private var pendingApkDownloadId: Long? = null
     private var apkDownloadReceiverRegistered = false
     private var immersiveModeEnabled: Boolean = false
@@ -220,6 +231,22 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+    private val saveFileStreamLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val req: StreamRequest?
+        synchronized(streamQueueLock) {
+            req = activeSafRequest
+            activeSafRequest = null
+        }
+        val targetUri = result.data?.data
+        if (req == null || result.resultCode != RESULT_OK || targetUri == null) {
+            pumpStreamQueue()
+            return@registerForActivityResult
+        }
+        synchronized(streamQueueLock) {
+            activeDownloadRequest = req
+        }
+        Thread { performStreamDownload(req, targetUri) }.start()
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -409,7 +436,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
-            enqueueDownload(url, userAgent, contentDisposition, mimeType)
+            handleWebViewDownload(url, userAgent, contentDisposition, mimeType)
         }
         registerApkDownloadReceiver()
         ensureNotificationPermissionIfNeeded()
@@ -795,14 +822,15 @@ class MainActivity : AppCompatActivity() {
         }
 
         @JavascriptInterface
-        fun downloadFileFromUrl(downloadUrl: String?) {
-            val url = downloadUrl?.trim().orEmpty()
-            if (url.isEmpty()) {
+        fun saveFileFromUrl(requestJson: String?) {
+            val req = parseSaveFileFromUrlRequest(requestJson) ?: run {
+                runOnUiThread { Toast.makeText(this@MainActivity, getString(R.string.download_failed), Toast.LENGTH_SHORT).show() }
                 return
             }
-            runOnUiThread {
-                enqueueDownload(url, null, null, null)
+            synchronized(streamQueueLock) {
+                streamRequestQueue.add(req)
             }
+            runOnUiThread { pumpStreamQueue() }
         }
 
         @JavascriptInterface
@@ -1275,6 +1303,35 @@ class MainActivity : AppCompatActivity() {
         webView.evaluateJavascript(script, null)
     }
 
+    private fun handleWebViewDownload(
+        url: String?,
+        userAgent: String?,
+        contentDisposition: String?,
+        mimeType: String?,
+    ) {
+        val resolvedUrl = resolveDownloadUrl(url) ?: return
+        val resolvedUri = runCatching { Uri.parse(resolvedUrl) }.getOrNull() ?: return
+        if (!LukerRuntimeManager.isSameOriginUrl(resolvedUri)) {
+            enqueueDownload(url, userAgent, contentDisposition, mimeType)
+            return
+        }
+        val fileName = sanitizeFileName(URLUtil.guessFileName(resolvedUrl, contentDisposition, mimeType))
+        val resolvedMime = mimeType?.takeIf { it.isNotBlank() } ?: "application/octet-stream"
+        val req = StreamRequest(
+            id = UUID.randomUUID().toString(),
+            url = resolvedUrl,
+            method = "GET",
+            headers = emptyMap(),
+            body = null,
+            fileName = fileName,
+            mimeType = resolvedMime,
+        )
+        synchronized(streamQueueLock) {
+            streamRequestQueue.add(req)
+        }
+        pumpStreamQueue()
+    }
+
     private fun enqueueDownload(
         url: String?,
         userAgent: String?,
@@ -1362,6 +1419,264 @@ class MainActivity : AppCompatActivity() {
             pendingSaveFileName = null
             Toast.makeText(this, getString(R.string.download_failed), Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun parseSaveFileFromUrlRequest(requestJson: String?): StreamRequest? {
+        if (requestJson.isNullOrBlank()) return null
+        val obj = runCatching { JSONObject(requestJson) }.getOrNull() ?: return null
+        val url = obj.optString("url").trim()
+        if (url.isEmpty()) return null
+        val fileName = sanitizeFileName(obj.optString("fileName"))
+        val mimeRaw = obj.optString("mimeType").trim()
+        val mimeType = if (mimeRaw.isEmpty()) "application/octet-stream" else mimeRaw
+        val method = obj.optString("method").trim().ifEmpty { "GET" }.uppercase(Locale.ROOT)
+        if (method != "GET" && method != "POST") return null
+        val headers = mutableMapOf<String, String>()
+        obj.optJSONObject("headers")?.let { headersObj ->
+            headersObj.keys().forEach { key ->
+                val value = headersObj.optString(key)
+                if (key.isNotBlank()) {
+                    headers[key] = value
+                }
+            }
+        }
+        val body = obj.optString("body").takeIf { obj.has("body") && !obj.isNull("body") }
+            ?.toByteArray(Charsets.UTF_8)
+        return StreamRequest(
+            id = UUID.randomUUID().toString(),
+            url = url,
+            method = method,
+            headers = headers,
+            body = body,
+            fileName = fileName,
+            mimeType = mimeType,
+        )
+    }
+
+    private fun pumpStreamQueue() {
+        val next: StreamRequest?
+        synchronized(streamQueueLock) {
+            if (activeSafRequest != null || activeDownloadRequest != null) return
+            next = streamRequestQueue.pollFirst()
+            if (next == null) return
+            activeSafRequest = next
+        }
+        launchSafPickerFor(next!!)
+    }
+
+    private fun launchSafPickerFor(req: StreamRequest) {
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = req.mimeType.ifBlank { "application/octet-stream" }
+            putExtra(Intent.EXTRA_TITLE, req.fileName)
+        }
+        try {
+            saveFileStreamLauncher.launch(intent)
+        } catch (e: ActivityNotFoundException) {
+            Log.e(tag, "No activity can handle file save intent for stream download", e)
+            synchronized(streamQueueLock) { activeSafRequest = null }
+            Toast.makeText(this, getString(R.string.download_failed), Toast.LENGTH_SHORT).show()
+            pumpStreamQueue()
+        }
+    }
+
+    private fun performStreamDownload(req: StreamRequest, targetUri: Uri) {
+        var connection: HttpURLConnection? = null
+        try {
+            val resolvedUrl = resolveDownloadUrl(req.url)
+            val resolvedUri = resolvedUrl?.let { runCatching { Uri.parse(it) }.getOrNull() }
+            if (resolvedUrl == null || !LukerRuntimeManager.isSameOriginUrl(resolvedUri)) {
+                Log.w(tag, "Rejecting stream download to non-same-origin URL: ${req.url}")
+                showStreamDownloadFailure(req.fileName)
+                return
+            }
+
+            connection = (URL(resolvedUrl).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 15000
+                readTimeout = 0
+                requestMethod = req.method
+                instanceFollowRedirects = false
+            }
+
+            val cookieFromCaller = req.headers.keys.any { it.equals("Cookie", ignoreCase = true) }
+            for ((key, value) in req.headers) {
+                connection.setRequestProperty(key, value)
+            }
+            if (!cookieFromCaller) {
+                val cookies = CookieManager.getInstance().getCookie(resolvedUrl)
+                if (!cookies.isNullOrBlank()) {
+                    connection.setRequestProperty("Cookie", cookies)
+                }
+            }
+            if (req.headers.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
+                runCatching { connection.setRequestProperty("User-Agent", webView.settings.userAgentString) }
+            }
+
+            if (req.method == "POST" && req.body != null) {
+                connection.doOutput = true
+                connection.setFixedLengthStreamingMode(req.body.size)
+                connection.outputStream.use { it.write(req.body) }
+            }
+
+            connection.connect()
+            val code = connection.responseCode
+            if (code !in 200..299) {
+                runCatching { connection.errorStream?.use { it.readBytes() } }
+                Log.w(tag, "Stream download non-2xx (${code}) for ${req.fileName}")
+                showStreamDownloadFailure(req.fileName)
+                return
+            }
+
+            val totalLength = connection.contentLengthLong.let { if (it > 0) it else -1L }
+            postStreamProgressNotification(req.fileName, 0L, totalLength)
+
+            val outStream = contentResolver.openOutputStream(targetUri, "w")
+            if (outStream == null) {
+                Log.w(tag, "openOutputStream returned null for $targetUri")
+                showStreamDownloadFailure(req.fileName)
+                return
+            }
+            outStream.use { out ->
+                BufferedInputStream(connection.inputStream, 16384).use { input ->
+                    val buffer = ByteArray(16384)
+                    var bytesWritten = 0L
+                    var lastNotifyAtBytes = 0L
+                    var lastNotifyAtMs = System.currentTimeMillis()
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read <= 0) break
+                        out.write(buffer, 0, read)
+                        bytesWritten += read
+                        val now = System.currentTimeMillis()
+                        if (bytesWritten - lastNotifyAtBytes >= 200 * 1024 || now - lastNotifyAtMs >= 250) {
+                            postStreamProgressNotification(req.fileName, bytesWritten, totalLength)
+                            lastNotifyAtBytes = bytesWritten
+                            lastNotifyAtMs = now
+                        }
+                    }
+                    out.flush()
+                    postStreamProgressNotification(req.fileName, bytesWritten, totalLength)
+                }
+            }
+            postStreamSuccessNotification(req.fileName, targetUri, req.mimeType)
+            runOnUiThread {
+                Toast.makeText(this, getString(R.string.download_saved, req.fileName), Toast.LENGTH_SHORT).show()
+            }
+        } catch (t: Throwable) {
+            Log.e(tag, "Stream download failed for ${req.fileName}", t)
+            showStreamDownloadFailure(req.fileName)
+        } finally {
+            runCatching { connection?.disconnect() }
+            synchronized(streamQueueLock) { activeDownloadRequest = null }
+            runOnUiThread { pumpStreamQueue() }
+        }
+    }
+
+    private fun showStreamDownloadFailure(fileName: String) {
+        postStreamFailureNotification(fileName)
+        runOnUiThread {
+            Toast.makeText(this, getString(R.string.download_failed), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun postStreamProgressNotification(fileName: String, bytesWritten: Long, totalLength: Long) {
+        if (!hasPostNotificationsPermission()) return
+        ensureMessageNotificationChannels()
+        val builder = NotificationCompat.Builder(this, messageProgressNotificationChannelId)
+            .setSmallIcon(R.drawable.ic_notification_runtime)
+            .setContentTitle(fileName)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .setContentIntent(buildOpenAppPendingIntent())
+        if (totalLength > 0L) {
+            val pct = ((bytesWritten.toDouble() / totalLength.toDouble()) * 100.0).toInt().coerceIn(0, 100)
+            builder.setContentText(getString(R.string.download_progress_with_total, formatBytes(bytesWritten), formatBytes(totalLength)))
+            builder.setProgress(100, pct, false)
+        } else {
+            builder.setContentText(getString(R.string.download_progress_bytes_only, formatBytes(bytesWritten)))
+            builder.setProgress(0, 0, true)
+        }
+        runCatching {
+            NotificationManagerCompat.from(this).notify(streamDownloadNotificationId, builder.build())
+        }.onFailure { Log.w(tag, "Failed to post stream progress notification", it) }
+    }
+
+    private fun postStreamSuccessNotification(fileName: String, targetUri: Uri, mimeType: String) {
+        if (!hasPostNotificationsPermission()) return
+        ensureMessageNotificationChannels()
+        val openIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(targetUri, mimeType.ifBlank { "application/octet-stream" })
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val openPending = PendingIntent.getActivity(
+            this,
+            streamDownloadNotificationId,
+            openIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val builder = NotificationCompat.Builder(this, messageProgressNotificationChannelId)
+            .setSmallIcon(R.drawable.ic_notification_runtime)
+            .setContentTitle(fileName)
+            .setContentText(getString(R.string.download_saved, fileName))
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(false)
+            .setAutoCancel(true)
+            .setContentIntent(openPending)
+        runCatching {
+            NotificationManagerCompat.from(this).notify(streamDownloadNotificationId, builder.build())
+        }.onFailure { Log.w(tag, "Failed to post stream success notification", it) }
+    }
+
+    private fun postStreamFailureNotification(fileName: String) {
+        if (!hasPostNotificationsPermission()) return
+        ensureMessageNotificationChannels()
+        val builder = NotificationCompat.Builder(this, messageProgressNotificationChannelId)
+            .setSmallIcon(R.drawable.ic_notification_runtime)
+            .setContentTitle(fileName)
+            .setContentText(getString(R.string.download_failed))
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(false)
+            .setAutoCancel(true)
+            .setContentIntent(buildOpenAppPendingIntent())
+        runCatching {
+            NotificationManagerCompat.from(this).notify(streamDownloadNotificationId, builder.build())
+        }.onFailure { Log.w(tag, "Failed to post stream failure notification", it) }
+    }
+
+    private fun buildOpenAppPendingIntent(): PendingIntent {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        return PendingIntent.getActivity(
+            this,
+            0,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+    }
+
+    private fun hasPostNotificationsPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun formatBytes(bytes: Long): String {
+        if (bytes < 1024) return "${bytes} B"
+        val units = arrayOf("KB", "MB", "GB", "TB")
+        var value = bytes.toDouble() / 1024.0
+        var unitIndex = 0
+        while (value >= 1024.0 && unitIndex < units.size - 1) {
+            value /= 1024.0
+            unitIndex++
+        }
+        return String.format(Locale.ROOT, "%.1f %s", value, units[unitIndex])
     }
 
     private fun registerApkDownloadReceiver() {
@@ -1954,4 +2269,14 @@ class MainActivity : AppCompatActivity() {
     companion object {
         const val ACTION_OPEN_ENDPOINT_SETTINGS = "com.luker.app.action.OPEN_ENDPOINT_SETTINGS"
     }
+
+    private data class StreamRequest(
+        val id: String,
+        val url: String,
+        val method: String,
+        val headers: Map<String, String>,
+        val body: ByteArray?,
+        val fileName: String,
+        val mimeType: String,
+    )
 }

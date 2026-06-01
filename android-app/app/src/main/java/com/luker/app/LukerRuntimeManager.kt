@@ -2,6 +2,7 @@ package com.luker.app
 
 import android.content.Context
 import android.content.res.AssetManager
+import android.net.Uri
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
@@ -37,6 +38,17 @@ object LukerRuntimeManager {
     private var serverPort: Int = DEFAULT_SERVER_PORT
     val SERVER_URL: String
         get() = "http://127.0.0.1:$serverPort"
+
+    fun isSameOriginUrl(uri: Uri?): Boolean {
+        if (uri == null) return false
+        val scheme = uri.scheme?.lowercase() ?: return false
+        if (scheme != "http") return false
+        val host = uri.host ?: return false
+        if (host != "127.0.0.1") return false
+        val port = uri.port
+        if (port == -1) return false
+        return port == serverPort
+    }
 
     @Volatile
     private var runtimeDir: File? = null

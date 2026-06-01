@@ -636,6 +636,12 @@ async function createUser(form, callback) {
     }
 }
 
+function clientBackupTimestamp() {
+    const d = new Date();
+    const pad2 = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}`;
+}
+
 /**
  * Backup a user's data.
  * @param {string} handle Handle of the user to backup
@@ -662,13 +668,21 @@ async function backupUserData(handle, callback, selection = BACKUP_DEFAULT_SELEC
         );
 
         const androidBridge = globalThis?.LukerAndroid;
-        if (androidBridge && typeof androidBridge.downloadFileFromUrl === 'function') {
-            const query = new URLSearchParams({
-                handle: String(handle),
-                selection: JSON.stringify(selection),
-            });
+        if (androidBridge && typeof androidBridge.saveFileFromUrl === 'function') {
+            const includesSecrets = await canViewSecrets();
+            if (includesSecrets === false) {
+                toastr.warning('The backup will not include secrets due to a server configuration.', 'Secrets Not Included');
+            }
+            const fileName = `${handle}-${clientBackupTimestamp()}.zip`;
             clearProgressToast();
-            androidBridge.downloadFileFromUrl(`/api/users/backup?${query.toString()}`);
+            androidBridge.saveFileFromUrl(JSON.stringify({
+                url: '/api/users/backup',
+                fileName,
+                mimeType: 'application/zip',
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({ handle, selection }),
+            }));
             callback?.();
             return;
         }

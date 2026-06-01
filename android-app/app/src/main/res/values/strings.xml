@@ -57,6 +57,8 @@
     <string name="download_saved_fallback_name">file</string>
     <string name="download_in_progress">Another file save is already in progress</string>
     <string name="download_default_file_name">download</string>
+    <string name="download_progress_bytes_only">Downloading… %1$s</string>
+    <string name="download_progress_with_total">Downloading… %1$s / %2$s</string>
     <string name="http_auth_dialog_title">Sign in required</string>
     <string name="http_auth_dialog_message">This endpoint requires HTTP Basic authentication before Luker can load.</string>
     <string name="http_auth_dialog_host">Endpoint: %1$s</string>

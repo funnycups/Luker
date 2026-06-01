@@ -822,34 +822,6 @@ router.post('/backup', async (request, response) => {
     }
 });
 
-router.get('/backup', async (request, response) => {
-    try {
-        const handle = String(request.query.handle || '').trim();
-
-        if (!handle) {
-            console.warn('Backup failed: Missing required fields');
-            return response.status(400).json({ error: 'Missing required fields' });
-        }
-
-        if (handle !== request.user.profile.handle && !request.user.profile.admin) {
-            console.error('Backup failed: Unauthorized');
-            return response.status(403).json({ error: 'Unauthorized' });
-        }
-
-        const isAdminUser = Boolean(request.user?.profile?.admin);
-        const parsedSelection = parseBackupSelectionPayload(request.query.selection);
-        const selection = sanitizeBackupSelectionForUser(parsedSelection, isAdminUser);
-        if (!Object.values(selection).some(Boolean)) {
-            return response.status(400).json({ error: 'At least one backup category must be selected.' });
-        }
-
-        await createBackupArchive(handle, response, selection, { includeGlobalExtensions: isAdminUser });
-    } catch (error) {
-        console.error('Backup failed', error);
-        return response.sendStatus(500);
-    }
-});
-
 router.post('/lan-migration/offer', async (request, response) => {
     try {
         const handle = String(request.body?.handle || '').trim();
