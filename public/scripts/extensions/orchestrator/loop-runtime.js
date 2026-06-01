@@ -687,6 +687,16 @@ export async function attachToolContext(context, payload) {
     } else if (!toolContext.__lukerRun) {
         toolContext.__lukerRun = { activatedEntryKeys: new Set() };
     }
+    // Expose the abort signal through __lukerRun so custom tools (Layer-2
+    // extension-registered or Layer-3 handwritten) can implement
+    // cooperative cancellation without rummaging through payload. Set
+    // only when the runtime actually has one — null means "no abort
+    // policy bound to this run", which custom tools should treat as
+    // "never aborted".
+    const sig = isAbortSignalLike(payload?.signal) ? payload.signal : null;
+    if (sig && !toolContext.__lukerRun.abortSignal) {
+        toolContext.__lukerRun.abortSignal = sig;
+    }
 
     if (toolContext.__floorStateForNotes === undefined && toolContext.__openNotes === undefined) {
         await attachNotesFloorState(toolContext);
