@@ -21,10 +21,52 @@ Custom tools let you give orchestrator agents new capabilities — beyond the bu
 - **Parameters (OpenAI JSON Schema)** — the JSON Schema for the arguments the LLM passes in. Validated as JSON on Save.
 - **Function body** — async JavaScript. Two parameters are available:
   - `args` — the parsed arguments the LLM sent.
-  - `ctx` — the SillyTavern context, plus any orchestration-specific fields the surrounding mode attached.
+  - `ctx` — the same object SillyTavern hands to extensions (`getContext()` style), augmented with orchestration-specific fields. See [What's on `ctx`](#whats-on-ctx) below for the full surface.
 
   Whatever you `return` becomes the tool result the LLM sees. Throw to surface a tool error.
 - **Simulate body** — optional. Same signature as the function body; used during simulation review for write tools so the simulated run shows the expected return shape without touching real state.
+
+### What's on `ctx`
+
+The `ctx` object inherits everything the standard `getContext()` returns, plus a few orchestration-only fields the runtime mounts.
+
+From SillyTavern (use the same way you'd use `getContext()`):
+
+- `ctx.chat` — the live chat array, latest message last
+- `ctx.characters`, `ctx.characterId` — current character card and its index
+- `ctx.groups`, `ctx.groupId` — current group and its index, when in a group chat
+- `ctx.name1`, `ctx.name2` — `{{user}}` and `{{char}}` resolved to current names
+- `ctx.eventSource`, `ctx.eventTypes` — emit / subscribe to runtime events
+- `ctx.getExtensionApi(name)` — call into another extension's published API (e.g. `ctx.getExtensionApi('memory-graph')`)
+- `ctx.registerOrchestrationTool`, `ctx.bridgeSillyTavernTool`, etc. — same APIs documented in [Orchestrator tools API](/development/extension-api/orchestrator-tools)
+
+Mounted by the orchestrator runtime (only inside an orchestration call):
+
+- `ctx.__lukerRun` — per-run state. Notably `ctx.__lukerRun.activatedEntryKeys` is a `Set` of World Info entry keys already injected this turn (so your tool can dedup if it surfaces lorebook content).
+- `ctx.__floorStateForNotes` — the floor-state instance the `note_open` / `note_close` tools use. Read it if your tool wants to coexist with the notes system.
+- `ctx.__customToolRegistry` — the per-run Layer-3 registry your own tool was compiled into. Most tools never need this; it's exposed for advanced cases (e.g. introspecting other handwritten tools).
+- `ctx.__memoryGraphSession` — opened lazily by the first `memory_*` tool call. Available after at least one memory call this run.
+
+Field name conflicts: SillyTavern owns the top-level names; orchestration adds only `__`-prefixed fields, so the namespaces don't collide.
+
+Minimal patterns:
+
+```js
+// Read the current character name
+return { char: ctx.characters[ctx.characterId]?.name };
+
+// Call another extension's API
+const mg = ctx.getExtensionApi('memory-graph');
+const session = await mg.openSession(ctx);
+
+// Emit an event other code can subscribe to
+ctx.eventSource.emit('my_tool_fired', { args });
+
+// Cooperative cancellation: check the run's abort signal
+if (ctx.__lukerRun?.abortSignal?.aborted) {
+    throw new Error('aborted');
+}
+```
 
 ### Safety
 

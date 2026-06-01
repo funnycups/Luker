@@ -19,12 +19,54 @@
   - **讀（無副作用）** —— 模擬評審期總是真實執行。
   - **寫（修改狀態）** —— 模擬評審期會跳過，除非你提供了模擬本體。
 - **參數（OpenAI JSON Schema）** —— LLM 傳入參數的 JSON Schema 描述。儲存時會按 JSON 解析驗證。
-- **函式本體** —— 非同步 JavaScript，兩個參數：
+- **函式本體** —— 非同步 JavaScript,兩個參數:
   - `args` —— LLM 傳過來已解析的參數。
-  - `ctx` —— SillyTavern 的 context 物件，外加目前編排模式附加的執行時欄位。
+  - `ctx` —— SillyTavern `getContext()` 那個物件,外加編排執行時掛的幾個欄位。完整欄位列表見下面 [ctx 上有什麼](#ctx-上有什麼)。
 
-  你 `return` 什麼，LLM 就看到什麼作為工具結果。`throw` 會把錯誤拋回給 agent。
-- **模擬本體** —— 選填，簽名同函式本體。模擬評審期間對寫工具用，讓模擬跑出來的結果形狀跟真實執行一致，但不會改任何真實狀態。
+  你 `return` 什麼,LLM 就看到什麼作為工具結果。`throw` 會把錯誤拋回給 agent。
+- **模擬本體** —— 選填,簽名同函式本體。模擬評審期間對寫工具用,讓模擬跑出來的結果形狀跟真實執行一致,但不會改任何真實狀態。
+
+### ctx 上有什麼
+
+`ctx` 原型鏈上繼承 SillyTavern `getContext()` 回傳的所有欄位,外加編排執行時掛的幾個內部欄位。
+
+來自 SillyTavern(用法跟 `getContext()` 完全一樣):
+
+- `ctx.chat` —— 即時聊天陣列,最新一則在最後
+- `ctx.characters`、`ctx.characterId` —— 目前角色卡清單與索引
+- `ctx.groups`、`ctx.groupId` —— 群聊時的目前群組與索引
+- `ctx.name1`、`ctx.name2` —— `{{user}}` 與 `{{char}}` 解析後的目前名字
+- `ctx.eventSource`、`ctx.eventTypes` —— 發送 / 訂閱執行時事件
+- `ctx.getExtensionApi(name)` —— 呼叫其他擴充功能發布的 API(例如 `ctx.getExtensionApi('memory-graph')`)
+- `ctx.registerOrchestrationTool`、`ctx.bridgeSillyTavernTool` 等 —— 同 [編排器工具 API](/zh-TW/development/extension-api/orchestrator-tools) 文件描述的那一套
+
+編排執行時掛的(只在編排過程中存在):
+
+- `ctx.__lukerRun` —— 本次 run 的執行時狀態。值得一提的是 `ctx.__lukerRun.activatedEntryKeys` 是一個 `Set`,裡面是本輪已經被注入的 World Info 條目 key(你的工具若要再呈現 lorebook 內容可據此去重)。
+- `ctx.__floorStateForNotes` —— `note_open` / `note_close` 工具底層用的 floor-state 實例。想跟便箋系統協作的工具可以讀它。
+- `ctx.__customToolRegistry` —— 你的工具被編譯進的那個 per-run Layer-3 註冊表。大多數工具用不到,留給少數進階情境(例如反向列舉本編排裡的其他手寫工具)。
+- `ctx.__memoryGraphSession` —— 由第一次 `memory_*` 工具呼叫 lazy 開啟;本輪跑過至少一次 memory 工具之後才會出現。
+
+欄位命名衝突:SillyTavern 占頂層名字空間;編排執行時只掛 `__` 前綴的欄位,所以兩邊互不踩。
+
+最小例子:
+
+```js
+// 讀目前角色名
+return { char: ctx.characters[ctx.characterId]?.name };
+
+// 呼叫另一個擴充功能的 API
+const mg = ctx.getExtensionApi('memory-graph');
+const session = await mg.openSession(ctx);
+
+// 發出事件,別處可以訂閱
+ctx.eventSource.emit('my_tool_fired', { args });
+
+// 協作式取消:檢查本 run 的 abort signal
+if (ctx.__lukerRun?.abortSignal?.aborted) {
+    throw new Error('aborted');
+}
+```
 
 ### 安全提示
 

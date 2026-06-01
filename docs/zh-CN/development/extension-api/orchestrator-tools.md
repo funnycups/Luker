@@ -50,7 +50,29 @@ import { registerOrchestrationTool } from
 
 `exec` 被调用时拿到 LLM 解析后的参数和编排 ctx。返回值就是 LLM 看到的工具结果。`throw` 把错误抛回给 agent。
 
-ctx 对象里有当前编排模式附加的所有运行时字段：聊天数组、运行时状态、手写工具的 per-run 注册表等。保守一些——只依赖你这个工具真正需要的字段。
+### ctx 参数
+
+`ctx` 原型链上继承 SillyTavern `getContext()` 的所有字段,外加编排运行时挂的几个内部字段。用法跟你在 Luker 任何其他地方用 context 一样。
+
+来自 SillyTavern:
+
+- `ctx.chat`、`ctx.characters`、`ctx.characterId`、`ctx.groups`、`ctx.groupId`、`ctx.name1`、`ctx.name2`
+- `ctx.eventSource`、`ctx.eventTypes` —— 运行时事件总线
+- `ctx.getExtensionApi(name)` —— 其他扩展发布的 API
+- `ctx.registerOrchestrationTool`、`ctx.bridgeSillyTavernTool` 等 —— 本文档介绍的整套 API 都挂在 ctx 上
+
+编排运行时挂的(只在编排过程中存在):
+
+| 字段 | 用途 |
+|---|---|
+| `ctx.__lukerRun` | 本次 run 的运行时状态。`ctx.__lukerRun.activatedEntryKeys` 是一个 `Set`,里面是本轮已被注入的 World Info 条目 key(供 lorebook 风格的工具去重)。`ctx.__lukerRun.abortSignal` 是本 run 的 abort signal —— 可取消的工作要尊重它。 |
+| `ctx.__floorStateForNotes` | `note_open` / `note_close` 工具底层的 floor-state 实例。想跟笔记系统协作就读它。 |
+| `ctx.__customToolRegistry` | 本 run 的 Layer-3(手写)工具注册表。绝大多数工具用不到。 |
+| `ctx.__memoryGraphSession` | 由本 run 内第一次 `memory_*` 工具调用 lazy 打开;在那之前不存在。 |
+
+命名:SillyTavern 占顶层 key;编排运行时只挂 `__` 前缀字段,两边互不踩。
+
+保守一些 —— 只依赖你这个工具真正需要的字段,这样下游 context 演进时你也不会坏。
 
 ## 错误处理
 

@@ -52,7 +52,29 @@ Always guard against the orchestrator being absent so your extension remains use
 
 `exec` is called with the LLM's parsed arguments and the orchestration ctx. The return value becomes the tool result the LLM sees. Throw to surface a tool error.
 
-The ctx object includes whatever the surrounding orchestration mode attached: the chat array, runtime state, the per-run handwritten-tools registry, etc. Be conservative — only depend on fields your tool actually needs.
+### The `ctx` argument
+
+`ctx` is built from SillyTavern's `getContext()` (via prototype inheritance), with a few orchestration-only fields mounted as own properties. Use it the same way you'd use the context anywhere else in Luker.
+
+Inherited from SillyTavern:
+
+- `ctx.chat`, `ctx.characters`, `ctx.characterId`, `ctx.groups`, `ctx.groupId`, `ctx.name1`, `ctx.name2`
+- `ctx.eventSource`, `ctx.eventTypes` — runtime event bus
+- `ctx.getExtensionApi(name)` — published APIs of other extensions
+- `ctx.registerOrchestrationTool`, `ctx.bridgeSillyTavernTool`, … — same surface as this doc, mirrored on the context
+
+Mounted by the orchestration runtime (only present inside an active orchestration):
+
+| Field | Purpose |
+|---|---|
+| `ctx.__lukerRun` | per-run state. `ctx.__lukerRun.activatedEntryKeys` is a `Set` of World Info entry keys already injected this turn (dedup hint for lorebook-flavored tools). `ctx.__lukerRun.abortSignal` is the run's abort signal — honor it for cancellable work. |
+| `ctx.__floorStateForNotes` | floor-state instance behind the `note_open` / `note_close` tools. Read it to coexist with the notes system. |
+| `ctx.__customToolRegistry` | per-run Layer-3 (handwritten) tool registry. Most tools won't need this. |
+| `ctx.__memoryGraphSession` | opened lazily by the first `memory_*` tool call this run; absent until then. |
+
+Naming: SillyTavern owns the top-level keys; the orchestrator only adds `__`-prefixed fields, so the namespaces don't collide.
+
+Stay conservative — only depend on fields your tool actually needs, so it keeps working when downstream contexts evolve.
 
 ## Errors
 
