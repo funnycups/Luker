@@ -830,10 +830,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread { Toast.makeText(this@MainActivity, getString(R.string.download_failed), Toast.LENGTH_SHORT).show() }
                 return
             }
-            synchronized(streamQueueLock) {
-                streamRequestQueue.add(req)
-            }
-            runOnUiThread { pumpStreamQueue() }
+            runOnUiThread { enqueueStreamRequest(req) }
         }
 
         @JavascriptInterface
@@ -1314,7 +1311,7 @@ class MainActivity : AppCompatActivity() {
     ) {
         val resolvedUrl = resolveDownloadUrl(url) ?: return
         val resolvedUri = runCatching { Uri.parse(resolvedUrl) }.getOrNull() ?: return
-        if (!LukerRuntimeManager.isSameOriginUrl(resolvedUri)) {
+        if (!isWebViewSameOrigin(resolvedUri)) {
             enqueueDownload(url, userAgent, contentDisposition, mimeType)
             return
         }
@@ -1486,13 +1483,7 @@ class MainActivity : AppCompatActivity() {
     private fun performStreamDownload(req: StreamRequest, targetUri: Uri) {
         var connection: HttpURLConnection? = null
         try {
-            val resolvedUrl = resolveDownloadUrl(req.url)
-            val resolvedUri = resolvedUrl?.let { runCatching { Uri.parse(it) }.getOrNull() }
-            if (resolvedUrl == null || !LukerRuntimeManager.isSameOriginUrl(resolvedUri)) {
-                Log.w(tag, "Rejecting stream download to non-same-origin URL: ${req.url}")
-                showStreamDownloadFailure(req.fileName, "origin reject: ${req.url}")
-                return
-            }
+            val resolvedUrl = req.url
 
             connection = (URL(resolvedUrl).openConnection() as HttpURLConnection).apply {
                 connectTimeout = 15000
@@ -1682,6 +1673,50 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
         return ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun enqueueStreamRequest(req: StreamRequest) {
+        val resolvedUrl = resolveDownloadUrl(req.url)
+        val resolvedUri = resolvedUrl?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        if (resolvedUrl == null || resolvedUri == null || !isWebViewSameOrigin(resolvedUri)) {
+            Log.w(tag, "Rejecting stream download to non-same-origin URL: ${req.url}")
+            showStreamDownloadFailure(req.fileName, "origin reject: ${req.url}")
+            return
+        }
+        val resolved = req.copy(url = resolvedUrl)
+        synchronized(streamQueueLock) {
+            streamRequestQueue.add(resolved)
+        }
+        pumpStreamQueue()
+    }
+
+    private fun isWebViewSameOrigin(targetUri: Uri): Boolean {
+        val targetScheme = targetUri.scheme?.lowercase() ?: return false
+        if (targetScheme != "http" && targetScheme != "https") return false
+        val targetHost = targetUri.host ?: return false
+        val targetPort = effectivePort(targetScheme, targetUri.port)
+
+        val webUrl = if (this::webView.isInitialized) webView.url else null
+        if (!webUrl.isNullOrBlank()) {
+            val webUri = runCatching { Uri.parse(webUrl) }.getOrNull()
+            val webScheme = webUri?.scheme?.lowercase()
+            val webHost = webUri?.host
+            if (webUri != null && webScheme != null && webHost != null &&
+                (webScheme == "http" || webScheme == "https")
+            ) {
+                val webPort = effectivePort(webScheme, webUri.port)
+                return webScheme == targetScheme &&
+                    webHost.equals(targetHost, ignoreCase = true) &&
+                    webPort == targetPort
+            }
+        }
+
+        return LukerRuntimeManager.isSameOriginUrl(targetUri)
+    }
+
+    private fun effectivePort(scheme: String, port: Int): Int {
+        if (port != -1) return port
+        return if (scheme == "https") 443 else 80
     }
 
     private fun formatBytes(bytes: Long): String {
