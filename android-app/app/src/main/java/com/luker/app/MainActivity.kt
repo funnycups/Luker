@@ -104,6 +104,8 @@ class MainActivity : AppCompatActivity() {
     private val streamRequestQueue: ArrayDeque<StreamRequest> = ArrayDeque()
     private var activeSafRequest: StreamRequest? = null
     private var activeDownloadRequest: StreamRequest? = null
+    @Volatile
+    private var cachedUserAgent: String? = null
     private val streamQueueLock = Any()
     private var pendingApkDownloadId: Long? = null
     private var apkDownloadReceiverRegistered = false
@@ -270,6 +272,7 @@ class MainActivity : AppCompatActivity() {
             allowContentAccess = true
             mediaPlaybackRequiresUserGesture = false
         }
+        cachedUserAgent = runCatching { webView.settings.userAgentString }.getOrNull()
         contentRootBasePaddingLeft = contentRoot.paddingLeft
         contentRootBasePaddingTop = contentRoot.paddingTop
         contentRootBasePaddingRight = contentRoot.paddingRight
@@ -1487,7 +1490,7 @@ class MainActivity : AppCompatActivity() {
             val resolvedUri = resolvedUrl?.let { runCatching { Uri.parse(it) }.getOrNull() }
             if (resolvedUrl == null || !LukerRuntimeManager.isSameOriginUrl(resolvedUri)) {
                 Log.w(tag, "Rejecting stream download to non-same-origin URL: ${req.url}")
-                showStreamDownloadFailure(req.fileName)
+                showStreamDownloadFailure(req.fileName, "origin reject: ${req.url}")
                 return
             }
 
@@ -1509,7 +1512,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             if (req.headers.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
-                runCatching { connection.setRequestProperty("User-Agent", webView.settings.userAgentString) }
+                runCatching { connection.setRequestProperty("User-Agent", cachedUserAgent) }
             }
 
             if (req.method == "POST" && req.body != null) {
@@ -1521,9 +1524,11 @@ class MainActivity : AppCompatActivity() {
             connection.connect()
             val code = connection.responseCode
             if (code !in 200..299) {
-                runCatching { connection.errorStream?.use { it.readBytes() } }
-                Log.w(tag, "Stream download non-2xx (${code}) for ${req.fileName}")
-                showStreamDownloadFailure(req.fileName)
+                val errorBody = runCatching {
+                    connection.errorStream?.use { it.readBytes().toString(Charsets.UTF_8) }
+                }.getOrNull().orEmpty().take(200)
+                Log.w(tag, "Stream download non-2xx (${code}) for ${req.fileName}: $errorBody")
+                showStreamDownloadFailure(req.fileName, "HTTP $code${if (errorBody.isNotBlank()) ": $errorBody" else ""}")
                 return
             }
 
@@ -1533,7 +1538,7 @@ class MainActivity : AppCompatActivity() {
             val outStream = contentResolver.openOutputStream(targetUri, "w")
             if (outStream == null) {
                 Log.w(tag, "openOutputStream returned null for $targetUri")
-                showStreamDownloadFailure(req.fileName)
+                showStreamDownloadFailure(req.fileName, "saf open null")
                 return
             }
             outStream.use { out ->
@@ -1564,7 +1569,8 @@ class MainActivity : AppCompatActivity() {
             }
         } catch (t: Throwable) {
             Log.e(tag, "Stream download failed for ${req.fileName}", t)
-            showStreamDownloadFailure(req.fileName)
+            val reason = "${t.javaClass.simpleName}: ${t.message ?: "no message"}"
+            showStreamDownloadFailure(req.fileName, reason)
         } finally {
             runCatching { connection?.disconnect() }
             synchronized(streamQueueLock) { activeDownloadRequest = null }
@@ -1572,10 +1578,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showStreamDownloadFailure(fileName: String) {
-        postStreamFailureNotification(fileName)
+    private fun showStreamDownloadFailure(fileName: String, reason: String? = null) {
+        postStreamFailureNotification(fileName, reason)
         runOnUiThread {
-            Toast.makeText(this, getString(R.string.download_failed), Toast.LENGTH_SHORT).show()
+            val text = if (reason.isNullOrBlank()) {
+                getString(R.string.download_failed)
+            } else {
+                getString(R.string.download_failed) + " (" + reason + ")"
+            }
+            Toast.makeText(this, text, Toast.LENGTH_LONG).show()
         }
     }
 
@@ -1631,13 +1642,19 @@ class MainActivity : AppCompatActivity() {
         }.onFailure { Log.w(tag, "Failed to post stream success notification", it) }
     }
 
-    private fun postStreamFailureNotification(fileName: String) {
+    private fun postStreamFailureNotification(fileName: String, reason: String? = null) {
         if (!hasPostNotificationsPermission()) return
         ensureMessageNotificationChannels()
+        val text = if (reason.isNullOrBlank()) {
+            getString(R.string.download_failed)
+        } else {
+            getString(R.string.download_failed) + " (" + reason + ")"
+        }
         val builder = NotificationCompat.Builder(this, messageProgressNotificationChannelId)
             .setSmallIcon(R.drawable.ic_notification_runtime)
             .setContentTitle(fileName)
-            .setContentText(getString(R.string.download_failed))
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setOnlyAlertOnce(true)
             .setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
