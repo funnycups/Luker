@@ -75,6 +75,7 @@ class MainActivity : AppCompatActivity() {
     private val messageNotificationId = 12001
     private val messageProgressNotificationId = 12002
     private val streamDownloadNotificationId = 12003
+    private val streamDownloadTerminalNotificationId = 12004
     private val broadFileChooserExtensions = setOf(
         "byaf",
         "charx",
@@ -1629,7 +1630,9 @@ class MainActivity : AppCompatActivity() {
             .setAutoCancel(true)
             .setContentIntent(openPending)
         runCatching {
-            NotificationManagerCompat.from(this).notify(streamDownloadNotificationId, builder.build())
+            val nm = NotificationManagerCompat.from(this)
+            nm.cancel(streamDownloadNotificationId)
+            nm.notify(streamDownloadTerminalNotificationId, builder.build())
         }.onFailure { Log.w(tag, "Failed to post stream success notification", it) }
     }
 
@@ -1653,7 +1656,9 @@ class MainActivity : AppCompatActivity() {
             .setAutoCancel(true)
             .setContentIntent(buildOpenAppPendingIntent())
         runCatching {
-            NotificationManagerCompat.from(this).notify(streamDownloadNotificationId, builder.build())
+            val nm = NotificationManagerCompat.from(this)
+            nm.cancel(streamDownloadNotificationId)
+            nm.notify(streamDownloadTerminalNotificationId, builder.build())
         }.onFailure { Log.w(tag, "Failed to post stream failure notification", it) }
     }
 
