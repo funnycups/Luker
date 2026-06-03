@@ -557,6 +557,23 @@ async function getManifests(names) {
 
 /**
  * Tries to activate all available extensions that are not already active.
+ *
+ * Extensions are activated in groups by `loading_order` (ascending):
+ * within the same `loading_order`, activation runs in parallel; between
+ * different `loading_order` values, the next group only starts after the
+ * previous group's activate hooks have all settled. This preserves the
+ * upstream contract that an extension with lower `loading_order` finishes
+ * initializing — including event listener registration — before any
+ * higher-`loading_order` extension starts, while still parallelizing
+ * extensions that share an order.
+ *
+ * Cross-order ordering matters in practice: e.g. ST-Prompt-Template
+ * (`loading_order: 1`) registers a `USER_MESSAGE_RENDERED` listener that
+ * rewrites `.mes_text` via `updateMessageBlock`, and JS-Slash-Runner
+ * registers a listener that wraps `<pre>` into a `TH-render` iframe.
+ * If the iframe-wrapping listener runs first and the DOM-rewriting one
+ * runs second, the iframe is destroyed; the only thing keeping that
+ * order stable is `loading_order`-driven serial init.
  * @returns {Promise<void>}
  */
 async function activateExtensions() {
@@ -564,17 +581,14 @@ async function activateExtensions() {
     const clientVersion = EXTENSIONS_CLIENT_VERSION.split(':')[1];
     const extensions = Object.entries(manifests).sort((a, b) => sortManifestsByOrder(a[1], b[1]));
     const extensionNames = extensions.map(x => x[0]);
-    const promises = [];
 
-    for (let entry of extensions) {
-        const name = entry[0];
-        const manifest = entry[1];
+    async function activateOne(name, manifest) {
         const extensionDependencies = manifest.dependencies;
         const minClientVersion = manifest.minimum_client_version;
         const displayName = manifest.display_name || name;
 
         if (activeExtensions.has(name)) {
-            continue;
+            return;
         }
         // Client version requirement: pass if 'minimum_client_version' is undefined or null.
         let meetsClientMinimumVersion = true;
@@ -609,7 +623,7 @@ async function activateExtensions() {
         if (meetsExtensionDeps && meetsClientMinimumVersion && !isDisabled) {
             try {
                 console.debug('Activating extension', name);
-                const promise = addExtensionLocale(name, manifest)
+                return addExtensionLocale(name, manifest)
                     .finally(() =>
                         Promise.all([addExtensionScript(name, manifest), addExtensionStyle(name, manifest)]),
                     )
@@ -621,7 +635,6 @@ async function activateExtensions() {
                         console.log('Could not activate extension', name, err);
                         extensionLoadErrors.add(t`Extension "${displayName}" failed to load: ${formatExtensionLoadError(err)}`);
                     });
-                promises.push(promise);
             } catch (error) {
                 console.error('Could not activate extension', name, error);
             }
@@ -639,7 +652,26 @@ async function activateExtensions() {
         }
     }
 
-    await Promise.allSettled(promises);
+    // Walk the (already loading_order-sorted) list and flush each
+    // same-order run as a parallel batch before starting the next.
+    let groupStart = 0;
+    while (groupStart < extensions.length) {
+        const groupOrder = parseInt(extensions[groupStart][1].loading_order);
+        let groupEnd = groupStart + 1;
+        while (
+            groupEnd < extensions.length &&
+            parseInt(extensions[groupEnd][1].loading_order) === groupOrder
+        ) {
+            groupEnd++;
+        }
+        const groupPromises = extensions
+            .slice(groupStart, groupEnd)
+            .map(([name, manifest]) => activateOne(name, manifest))
+            .filter(Boolean);
+        await Promise.allSettled(groupPromises);
+        groupStart = groupEnd;
+    }
+
     $('#extensions_details').toggleClass('warning', extensionLoadErrors.size > 0);
 }
 
