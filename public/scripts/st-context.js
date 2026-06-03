@@ -157,6 +157,7 @@ import { getKoboldGenerationData, kai_settings, koboldai_settings, koboldai_sett
 import { getNovelGenerationData, nai_settings, novelai_settings, novelai_setting_names } from './nai-settings.js';
 import * as EDITS_API from './lib/edits/index.js';
 import * as ITERATION_LIBRARY_API_NS from './iteration-library/index.js';
+import { skillsApi } from './skills/api.js';
 
 /**
  * Layer 2 / Layer 3 export of the iteration-library surface (spec section 15).
@@ -2248,6 +2249,7 @@ export function getContext() {
         saveSettingsDebounced,
         iterationLibrary: ITERATION_LIBRARY_API,
         edits: EDITS_API,
+        skills: skillsApi,
         onlineStatus: online_status,
         maxContext: Number(max_context),
         chatMetadata: chat_metadata,

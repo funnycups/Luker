@@ -288,6 +288,7 @@ import { AbortReason } from './scripts/util/AbortReason.js';
 import { initSystemPrompts } from './scripts/sysprompt.js';
 import { registerExtensionSlashCommands as initExtensionSlashCommands } from './scripts/extensions-slashcommands.js';
 import { ToolManager } from './scripts/tool-calling.js';
+import { registerSkillAgentTools } from './scripts/skills/agent-tools.js';
 import { addShowdownPatch } from './scripts/util/showdown-patch.js';
 import { applyBrowserFixes } from './scripts/browser-fixes.js';
 import { initServerHistory } from './scripts/server-history.js';
@@ -1951,6 +1952,7 @@ async function firstLoadInit() {
         () => bootstrapExtensions(),
         () => initExtensionSlashCommands(),
         () => ToolManager.initToolSlashCommands(),
+        () => registerSkillAgentTools(ToolManager),
         () => initTokenizers(),
         () => initPersonas(),
         () => initSlashCommandAutoComplete(),

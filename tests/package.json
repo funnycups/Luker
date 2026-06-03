@@ -17,6 +17,7 @@
         "lodash": "4.17.21"
     },
     "devDependencies": {
-        "jest-environment-jsdom": "^29.7.0"
+        "jest-environment-jsdom": "^29.7.0",
+        "supertest": "^7.2.2"
     }
 }

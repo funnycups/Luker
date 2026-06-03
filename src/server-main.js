@@ -165,6 +165,10 @@ http.globalAgent = new http.Agent({ keepAlive: cliArgs.enableKeepAlive });
 https.globalAgent = new https.Agent({ keepAlive: cliArgs.enableKeepAlive });
 
 const app = express();
+// Root for Luker-shipped scaffolding (e.g. bundled skills under
+// default/skills/global/). Endpoints that consume bundled content read it
+// via req.app.get('lukerDefaultRoot') so tests can override per-request.
+app.set('lukerDefaultRoot', path.join(serverDirectory, 'default'));
 app.use(helmet({
     contentSecurityPolicy: false,
 }));

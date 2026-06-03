@@ -79,6 +79,16 @@ export function buildContext(container, charId, config) {
          */
         get lukerContext() { return getContext(); },
 
+        /**
+         * Skills API namespace. Mirrors `getContext().skills` so CardApp
+         * authors can list/read/install/write/transport skills without
+         * reaching for `lukerContext`. Re-evaluated on each access so the
+         * mirror stays in lockstep with the canonical surface in
+         * st-context.js. See public/scripts/skills/api.js for the full
+         * method list.
+         */
+        get skills() { return getContext().skills; },
+
         // ==================== Renderer ====================
 
         /**
