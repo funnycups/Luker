@@ -7,7 +7,14 @@ import { jest } from '@jest/globals';
 // resolves without dragging the bundle in.
 jest.unstable_mockModule('../../public/lib.js', async () => {
     const { default: lodash } = await import('lodash');
-    return { lodash };
+    return {
+        lodash,
+        // skill-iter-studio-tools.js (pulled in transitively for the CPA skill
+        // toolset) imports `yaml` for skill_update_frontmatter. That handler
+        // never fires under these unit tests; stub the parse/stringify pair so
+        // the module link succeeds.
+        yaml: { parse: () => ({}), stringify: () => '' },
+    };
 });
 
 // public/script.js + simulation-review/index.js are pulled in by tools.js
@@ -20,6 +27,11 @@ jest.unstable_mockModule('../../public/script.js', () => ({
     Generate: jest.fn(async () => undefined),
     eventSource: { on: jest.fn(), makeLast: jest.fn(), removeListener: jest.fn() },
     event_types: { CHAT_COMPLETION_PROMPT_READY: 'chat_completion_prompt_ready', GENERATION_WORLD_INFO_FINALIZED: 'generation_world_info_finalized' },
+    // tools.js statically imports skill-iter-studio-tools.js, which pulls in
+    // skills/api.js (wraps every fetch with getRequestHeaders). The skill
+    // handlers never fire during these tests, but module link requires the
+    // export to exist.
+    getRequestHeaders: jest.fn(() => ({})),
 }));
 jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/index.js', () => ({
     openSimulationReview: jest.fn(async () => ({

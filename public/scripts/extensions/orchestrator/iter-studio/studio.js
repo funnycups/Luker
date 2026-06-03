@@ -102,6 +102,18 @@ import {
     runCharacterEditorHelperToolCall,
     applyCharacterEditorLorebookProposal,
 } from '../../character-editor-assistant/main.js';
+// Plan 2 Unit 7: iter-studio skill management catalog. Spliced into the
+// tool catalog alongside CONTROL_TOOL_DEFS + lorebook reads/writes, routed
+// through the inline-executed path. 14 tools only touch server state and
+// return their result to the AI; the 3 policy-binding tools emit a
+// sandbox-diff pending edit the user reviews + applies via the normal flow.
+import {
+    SKILL_ITER_STUDIO_TOOL_DEFS,
+    isSkillIterStudioTool,
+    runSkillIterStudioTool,
+} from '../skill-iter-studio-tools.js';
+import { augmentIterStudioPromptWithSkills } from '../skill-iter-studio-prompt.js';
+import { buildSkillRuntimeContext } from '../skill-resolution.js';
 
 const MODULE = 'orch-iteration';
 const STYLESHEET_ID = 'orch_it_studio_stylesheet';
@@ -152,8 +164,15 @@ function isSimulateTool(name) {
 // lorebook writes, and simulate all share this path; sandbox-edit tools
 // (luker_orch_set_*) do not — they become diff proposals the user
 // reviews + applies via the popup, never reaching the model directly.
+// Skill iter-studio tools (Plan 2 Unit 7) also use the inline-executed
+// path: 12 server-side tools just return results, and the 3 policy-binding
+// tools synthesize their own sandbox-diff edit so they slot into the
+// existing pendingEdits flow without a separate review affordance.
 function isInlineExecutedTool(name) {
-    return isLorebookReadTool(name) || isLorebookWriteTool(name) || isSimulateTool(name);
+    return isLorebookReadTool(name)
+        || isLorebookWriteTool(name)
+        || isSimulateTool(name)
+        || isSkillIterStudioTool(name);
 }
 
 /**
@@ -1876,7 +1895,12 @@ export async function openOrchestratorIterationStudio(deps) {
                 return name !== CONTROL_TOOL_NAMES.resetToBlank
                     && name !== CONTROL_TOOL_NAMES.resetToGlobal;
             });
-        return [...editToolsDeduped, ...lorebookReadTools, ...lorebookWriteTools, ...controlTools];
+        // Plan 2 Unit 7: skill-management tools (17 total: 4 inventory + 7
+        // authoring + 3 policy + 3 migration) are always advertised — they're
+        // scope-agnostic (server-side scopes are passed in args) and the
+        // iter-studio AI uses them to inspect / author / migrate skills
+        // as part of orchestrator design.
+        return [...editToolsDeduped, ...lorebookReadTools, ...lorebookWriteTools, ...controlTools, ...SKILL_ITER_STUDIO_TOOL_DEFS];
     }
 
     async function runIterationTurn({ autoContinueFromResult = null } = {}) {
@@ -1890,9 +1914,19 @@ export async function openOrchestratorIterationStudio(deps) {
         loadLive();   // re-read so each turn sees external edits
 
         const helperSession = buildHelperSession(state.live);
-        const systemPrompt = appendScopeHintIfNeeded(
+        const scopeHintedPrompt = appendScopeHintIfNeeded(
             buildAiIterationSystemPrompt(settings, helperSession),
             helperSession,
+        );
+        // Plan 2 Unit 7: append the skills discipline + visible-catalog
+        // block. The augment helper is a no-op when the working profile
+        // has no long systemPrompts AND no visible skills, so the prompt
+        // stays clean for sessions that aren't doing skill work.
+        const skillRuntimeContext = buildSkillRuntimeContext(context, null);
+        const systemPrompt = await augmentIterStudioPromptWithSkills(
+            scopeHintedPrompt,
+            state.live,
+            skillRuntimeContext,
         );
 
         // For auto-continue turns, the user-facing "latest user text" is
@@ -2083,6 +2117,16 @@ export async function openOrchestratorIterationStudio(deps) {
             ? buildCharacterEditorHelperApis(context, { avatar: avatarForReads })
             : [];
         const persistedToolResults = [];
+        // Plan 2 Unit 7: skill_bind_to_agent / skill_unbind_from_agent /
+        // skill_set_mode_defaults / skill_replace_in_systemprompt mutate the
+        // working profile via runSkillIterStudioTool, which returns a coarse
+        // `{op:'set', path:'', oldValue, newValue}` pending edit alongside
+        // the tool result. We accumulate those here and inject them into the
+        // edit-tool sandbox-diff loop's chainedBefore (so any orchestrator
+        // edit-tool calls in the SAME round see the skill-mutated profile as
+        // their baseline). Empty when no policy-binding tools fire.
+        const skillToolEdits = [];
+        let skillToolChainedLive = null;
         for (const call of readToolCalls) {
             const callId = String(call?.id || `read_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
             let resultPayload;
@@ -2128,6 +2172,31 @@ export async function openOrchestratorIterationStudio(deps) {
                     if (!execOk) {
                         resultPayload = { simulated: true, message: 'simulation complete' };
                         statusLabel = 'ok';
+                    }
+                } else if (isSkillIterStudioTool(call?.name)) {
+                    // Plan 2 Unit 7: dispatch the skill iter-studio tool.
+                    // Policy-binding tools mutate a clone of the working
+                    // profile and return a coarse sandbox-diff edit; the
+                    // 12 server-side tools return their result verbatim.
+                    // The mutationCtx's getWorkingProfile returns the
+                    // chained skill-side working profile so sequential
+                    // skill mutations in the same round compose.
+                    const out = await runSkillIterStudioTool(
+                        { name: call?.name, args: call?.args },
+                        { getWorkingProfile: () => skillToolChainedLive || state.live },
+                    );
+                    if (out?.ok) {
+                        if (out.pendingEdit) {
+                            skillToolEdits.push(out.pendingEdit);
+                            // Advance the skill-side chain so the next
+                            // policy-binding tool in this round sees the
+                            // prior tool's mutations as its baseline.
+                            skillToolChainedLive = out.pendingEdit.newValue;
+                        }
+                        resultPayload = out.result;
+                    } else {
+                        resultPayload = { error: String(out?.error || 'unknown error') };
+                        statusLabel = 'fail';
                     }
                 } else if (isLorebookWriteTool(call?.name)) {
                     const out = await runLorebookWriteTool({ id: callId, name: call?.name, args: call?.args }, helperApisForReads);
@@ -2233,7 +2302,12 @@ export async function openOrchestratorIterationStudio(deps) {
         // call.
         const edits = [];
         const editToolResults = [];
-        let chainedBefore = null;
+        // Seed chainedBefore with the LAST skill-tool edit's newValue when
+        // present, so any orchestrator edit-tool calls in this same round
+        // see the skill-mutated profile as their baseline. Without this
+        // seeding the first edit-tool call would snapshot the pre-skill
+        // state.live and clobber skill-tool mutations on apply.
+        let chainedBefore = skillToolChainedLive;
         for (const call of editToolCalls) {
             const name = String(call?.name || '');
             const callId = String(call?.id || `edit_${editToolResults.length}_${Date.now().toString(36)}`);
@@ -2327,15 +2401,22 @@ export async function openOrchestratorIterationStudio(deps) {
         if (persistedToolResults.length > 0 || editToolResults.length > 0) {
             assistantMsg.toolResults = [...persistedToolResults, ...editToolResults];
         }
-        if (edits.length > 0) {
-            assistantMsg.edits = edits.slice();
+        // Merge skill-tool sandbox-diff edits with orchestrator edit-tool
+        // edits. Skill edits come FIRST because their chainedBefore was
+        // state.live; orchestrator edit-tool calls used skillToolChainedLive
+        // as their baseline, so concatenation preserves the cumulative
+        // chain (each path:'' edit's newValue = original + all mutations
+        // up to that point).
+        const combinedEdits = [...skillToolEdits, ...edits];
+        if (combinedEdits.length > 0) {
+            assistantMsg.edits = combinedEdits.slice();
         }
         state.session.messages.push(assistantMsg);
 
         // Replace pendingEdits with this round's batch. We don't append:
         // staging is per-round so the user can Apply or Discard cleanly
         // before the next AI request fires.
-        state.pendingEdits = edits;
+        state.pendingEdits = combinedEdits;
 
         // Mobile workspace: if the user was on the Preview tab, bump the
         // chat-tab badge so they know new assistant content arrived without
@@ -2390,8 +2471,8 @@ export async function openOrchestratorIterationStudio(deps) {
             simulations: [],
             toolResults: [],
             finalized: !hadAnyToolCall,
-            changed: edits.length > 0,
-            hasPending: edits.length > 0,
+            changed: combinedEdits.length > 0,
+            hasPending: combinedEdits.length > 0,
         };
 
         return {

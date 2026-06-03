@@ -29,6 +29,90 @@ import {
     extractSystemFromCapturedPrompt,
     extractNonSystemFromCapturedPrompt,
 } from '../../../iteration-library/simulation-review/dry-run-capture.js';
+import {
+    SKILL_ITER_STUDIO_TOOL_DEFS,
+    runSkillIterStudioTool,
+} from '../../orchestrator/skill-iter-studio-tools.js';
+
+// ────────────────────────────────────────────────────────────────────────────
+// Skill toolset exposed by CPA's iteration studio. Mirrors the orchestrator
+// iter-studio's catalog so the AI can convert preset-side style / format rules
+// into skills as part of the same conversation. Two intentional deltas from
+// the orchestrator's 17-tool catalog:
+//
+//   - The 3 policy-binding tools (`skill_bind_to_agent`,
+//     `skill_unbind_from_agent`, `skill_set_mode_defaults`) require an
+//     orchestrator working profile to mutate. CPA edits a preset body, not
+//     an orchestrator profile, so they would have nothing meaningful to bind
+//     against. The system prompt tells the AI to author the skill here and
+//     bind it from the orchestrator iter-studio when the user wants it
+//     attached to a specific agent.
+//
+//   - The 2 migration helpers `skill_propose_extraction` and
+//     `skill_replace_in_systemprompt` walk an agent's `systemPrompt` field.
+//     CPA's analogous surface is `prompts[].content` on the preset, which
+//     the existing `preset_read_live_fields` + `preset_str_delete_in_prompt`
+//     + `preset_str_insert_in_prompt` tools already cover. The system prompt
+//     documents the splice-in-reference workflow so the AI uses those tools
+//     after `skill_create` / `skill_extract_from_text`.
+//
+// `skill_extract_from_text` IS exposed — it has no working-profile dependency
+// (it only takes a verbatim text body and a name), and it carries the same
+// "verbatim, don't paraphrase" discipline that motivates extraction in the
+// first place.
+// ────────────────────────────────────────────────────────────────────────────
+const CPA_SKILL_TOOL_NAME_LIST = Object.freeze([
+    // Inventory inspection (4)
+    'skill_list_visible',
+    'skill_inspect',
+    'skill_read_content',
+    'skill_search_content',
+    // Authoring (7)
+    'skill_create',
+    'skill_update_content',
+    'skill_edit_content',
+    'skill_update_frontmatter',
+    'skill_rename',
+    'skill_change_scope',
+    'skill_delete',
+    // Verbatim extraction helper (1 of the 3 orchestrator migration helpers
+    // that is profile-independent — the other two operate on agent
+    // systemPrompts, which CPA does not have).
+    'skill_extract_from_text',
+]);
+
+export const CPA_SKILL_TOOL_NAMES = new Set(CPA_SKILL_TOOL_NAME_LIST);
+
+export const CPA_SKILL_TOOL_DEFS = Object.freeze(
+    SKILL_ITER_STUDIO_TOOL_DEFS.filter(
+        (def) => CPA_SKILL_TOOL_NAMES.has(String(def?.function?.name || '')),
+    ),
+);
+
+export function isCpaSkillTool(name) {
+    return CPA_SKILL_TOOL_NAMES.has(String(name || ''));
+}
+
+/**
+ * Dispatch one skill tool call. CPA exposes the iter-studio's pure server-side
+ * handlers (inventory + authoring + verbatim extract); none of them need a
+ * working profile, so `mutationCtx.getWorkingProfile` returns null. The result
+ * shape mirrors `runSkillIterStudioTool` minus the `pendingEdit` branch —
+ * none of the CPA-exposed handlers mutate a profile.
+ *
+ * @param {{ id?: string, name: string, args: object }} call
+ * @returns {Promise<{ok: true, result: *} | {ok: false, error: string}>}
+ */
+export async function runCpaSkillTool(call) {
+    const out = await runSkillIterStudioTool(call, { getWorkingProfile: () => null });
+    if (out && out.ok && 'pendingEdit' in out) {
+        // Defensive: the 12 tools CPA exposes never produce pendingEdit, but
+        // strip it if anything ever leaks so studio.js doesn't try to thread
+        // an orchestrator-shaped edit into the preset's edit pipeline.
+        return { ok: true, result: out.result };
+    }
+    return out;
+}
 
 export const EDITABLE_TOOL_NAMES = new Set([
     'preset_set_field',
@@ -69,6 +153,22 @@ export const TOOL_DISPLAY = Object.freeze({
     preset_diff_reference:           '🔍 Diff reference',
     preset_simulate:                 '🧪 Simulate prompt',
     preset_clone_to_new:             '📋 Clone to new preset',
+    // Skill toolset (orchestrator-optimize mode). Legacy string-shape labels
+    // for the buildToolCatalog "every tool has a display label" contract;
+    // the rich icon+label+summarize entries the studio actually renders live
+    // in tool-display.js#CPA_TOOL_DISPLAY.
+    skill_list_visible:              '📚 List skills',
+    skill_inspect:                   '🔎 Inspect skill',
+    skill_read_content:              '📖 Read skill file',
+    skill_search_content:            '🔍 Search skill',
+    skill_create:                    '🆕 Create skill',
+    skill_update_content:            '✏️ Overwrite skill file',
+    skill_edit_content:              '🩹 Patch skill file',
+    skill_update_frontmatter:        '🏷️ Update skill frontmatter',
+    skill_rename:                    '🔤 Rename skill',
+    skill_change_scope:              '📦 Move skill scope',
+    skill_delete:                    '🗑️ Delete skill',
+    skill_extract_from_text:         '✂️ Extract skill from text',
 });
 
 /**
@@ -729,6 +829,12 @@ export function buildToolCatalog({ hasReference = false } = {}) {
             },
         });
     }
+
+    // Skill toolset — always exposed so the AI can lift reusable style /
+    // format rules out of preset content and into shareable skills as part
+    // of the same conversation. See system-prompts.js + skill-prompt.js for
+    // the discipline the AI is asked to follow.
+    for (const def of CPA_SKILL_TOOL_DEFS) tools.push(def);
 
     return tools;
 }

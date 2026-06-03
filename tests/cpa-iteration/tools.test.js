@@ -6,7 +6,14 @@ import { describe, test, expect, beforeAll, jest } from '@jest/globals';
 // stub the facade to a thin { lodash } re-export.
 jest.unstable_mockModule('../../public/lib.js', async () => {
     const { default: lodash } = await import('lodash');
-    return { lodash };
+    return {
+        lodash,
+        // skill-iter-studio-tools.js (pulled in transitively for the CPA skill
+        // toolset) imports `yaml` for skill_update_frontmatter. That handler
+        // never fires under these unit tests; stub the parse/stringify pair so
+        // the module link succeeds.
+        yaml: { parse: () => ({}), stringify: () => '' },
+    };
 });
 
 // public/script.js cascades into the macro engine and other browser-only
@@ -21,6 +28,11 @@ jest.unstable_mockModule('../../public/script.js', () => ({
     Generate: jest.fn(async () => undefined),
     eventSource: { on: jest.fn(), makeLast: jest.fn(), removeListener: jest.fn() },
     event_types: { CHAT_COMPLETION_PROMPT_READY: 'chat_completion_prompt_ready', GENERATION_WORLD_INFO_FINALIZED: 'generation_world_info_finalized' },
+    // skills/api.js (pulled transitively via cpa-iteration/tools.js → orchestrator/
+    // skill-iter-studio-tools.js → skills/api.js) wraps every fetch with
+    // getRequestHeaders(). The skill tools never fire under these tests
+    // (no HTTP available), but module link requires the export to exist.
+    getRequestHeaders: jest.fn(() => ({})),
 }));
 
 // simulation-review/index.js pulls in popup-host which imports SillyTavern's

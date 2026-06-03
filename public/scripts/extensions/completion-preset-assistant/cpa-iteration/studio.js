@@ -70,10 +70,12 @@ import {
     buildToolCatalog,
     normalizeToolCallToEdit,
     runCpaReadTool,
+    runCpaSkillTool,
     EDITABLE_TOOL_NAMES,
     CONTROL_TOOL_NAMES,
     isCpaControlCall,
     isCpaReadTool,
+    isCpaSkillTool,
 } from './tools.js';
 import {
     buildModelSystemPrompt,
@@ -83,6 +85,8 @@ import {
     SESSION_MODES,
     SESSION_MODE_DEFAULT,
 } from './system-prompts.js';
+import { augmentCpaPromptWithSkills } from './skill-prompt.js';
+import { skillsApi } from '../../../skills/api.js';
 import { createCpaIterationSessionStore, makeMessageId, normalizeMessageShape } from './session-store.js';
 import { CPA_TOOL_DISPLAY } from './tool-display.js';
 
@@ -445,6 +449,16 @@ export async function openCpaIterationStudio(deps) {
     // structured error to the model so it can fall back to suggesting a
     // manual clone via the preset dropdown.
     const cloneAndSwitchTarget = deps.cloneAndSwitchTarget || null;
+
+    // Optional wiring for the skill tools' scope hint. When the host plugin
+    // supplies a `getSkillScopeHint()` callable returning the active
+    // (apiId, presetName) pair, the system prompt's skill block tells the AI
+    // to default new skills to that preset scope so they travel with the
+    // preset on export. When omitted, the prompt falls back to generic
+    // wording and the AI passes scope explicitly per call.
+    const getSkillScopeHint = typeof deps.getSkillScopeHint === 'function'
+        ? deps.getSkillScopeHint
+        : null;
 
     if (typeof getTargetRef !== 'function') {
         throw new TypeError('openCpaIterationStudio: deps.getTargetRef is required');
@@ -1065,7 +1079,31 @@ export async function openCpaIterationStudio(deps) {
             : mode === 'jailbreak-only'
                 ? settings.iterModePromptJailbreakOnly
                 : '';
-        const systemPrompt = modeBlock ? `${base}\n${modeBlock}` : base;
+        const baseSystemPrompt = modeBlock ? `${base}\n${modeBlock}` : base;
+        // Skill discipline + catalog augmentation. Only kicks in when mode
+        // is 'orchestrator-optimize' — the other modes don't expose skills
+        // in their guidance. Failing closed (no augmentation) is fine: the
+        // tools are still in the catalog, the AI just lacks the discipline
+        // block telling it when to prefer them.
+        const skillScopeHint = getSkillScopeHint ? (() => {
+            try { return getSkillScopeHint() || {}; }
+            catch { return {}; }
+        })() : {};
+        const systemPrompt = await augmentCpaPromptWithSkills(
+            baseSystemPrompt,
+            mode,
+            skillScopeHint,
+            {
+                listSkillsInScope: async () => {
+                    try {
+                        const all = await skillsApi.list({ scope: 'all' });
+                        return Array.isArray(all) ? all : [];
+                    } catch {
+                        return [];
+                    }
+                },
+            },
+        );
         const tools = buildToolCatalog({ hasReference });
 
         // For auto-continue rounds, splice a synthetic user message into the
@@ -1150,10 +1188,14 @@ export async function openCpaIterationStudio(deps) {
                 ? result.toolCalls.filter((c) => !isCpaControlCall(c))
                 : []);
         // Split: read tools run inline (synchronously) so their results land
-        // in the next round's taskMessages; edit tools normalize into pending
-        // edits the user reviews + applies later.
+        // in the next round's taskMessages; skill tools also run inline
+        // (they hit the skills HTTP API and have no profile mutation); edit
+        // tools normalize into pending edits the user reviews + applies later.
         const readCalls = nonControlCalls.filter(c => isCpaReadTool(String(c?.name || '')));
-        const editToolCalls = nonControlCalls.filter(c => !isCpaReadTool(String(c?.name || '')));
+        const skillCalls = nonControlCalls.filter(c => isCpaSkillTool(String(c?.name || '')));
+        const editToolCalls = nonControlCalls.filter(c =>
+            !isCpaReadTool(String(c?.name || ''))
+            && !isCpaSkillTool(String(c?.name || '')));
         const assistantText = firstAssistantText.trim();
 
         // Execute read tools synchronously. Each result is bound to the
@@ -1231,6 +1273,37 @@ export async function openCpaIterationStudio(deps) {
             readsForTaskHistory.push({ id: callId, name: String(call?.name || ''), args, result: resultPayload });
             // Back-fill call.id so the persisted assistant message references
             // the same id the tool result is keyed under.
+            call.id = callId;
+        }
+
+        // Execute skill tools inline. Each call hits the skills HTTP API
+        // through `runCpaSkillTool`; results are bound to the call's
+        // tool_call_id so the next round's `role: 'tool'` reply matches the
+        // assistant's `tool_calls` entry. Skill tools are profile-
+        // independent in CPA's catalog (no working-profile mutation), so the
+        // result envelope is just `{ ok, result }` or `{ ok: false, error }`.
+        for (const call of skillCalls) {
+            const callId = String(call?.id || `skill_${persistedToolResults.length}_${Date.now().toString(36)}`);
+            const args = call?.args && typeof call.args === 'object' ? call.args : {};
+            let resultPayload;
+            let statusLabel = 'ok';
+            try {
+                const out = await runCpaSkillTool({ id: callId, name: call?.name, args });
+                if (out?.ok) {
+                    resultPayload = out.result;
+                } else {
+                    resultPayload = { error: String(out?.error || 'unknown error') };
+                    statusLabel = 'fail';
+                }
+            } catch (err) {
+                resultPayload = { error: String(err?.message || err || 'unknown error') };
+                statusLabel = 'fail';
+            }
+            persistedToolResults.push({
+                tool_call_id: callId,
+                content: resultPayload,
+                status: statusLabel,
+            });
             call.id = callId;
         }
 
@@ -1340,8 +1413,8 @@ export async function openCpaIterationStudio(deps) {
         // toolCalls + edits + appliedAt fields drive renderMessageCard's
         // collapsible details block, Apply marker, and Rollback button.
         let content = assistantText;
-        if (!content && (readCalls.length > 0 || editToolCalls.length > 0)) {
-            const names = [...readCalls, ...editToolCalls]
+        if (!content && (readCalls.length > 0 || skillCalls.length > 0 || editToolCalls.length > 0)) {
+            const names = [...readCalls, ...skillCalls, ...editToolCalls]
                 .map(c => {
                     const name = String(c?.name || '');
                     const label = CPA_TOOL_DISPLAY[name]?.label || name;
@@ -1360,7 +1433,7 @@ export async function openCpaIterationStudio(deps) {
             content: content || '',
             at: Date.now(),
         };
-        const allCallsForMsg = [...readCalls, ...editToolCalls];
+        const allCallsForMsg = [...readCalls, ...skillCalls, ...editToolCalls];
         if (allCallsForMsg.length > 0) {
             assistantMsg.toolCalls = allCallsForMsg.map(tc => ({
                 id: String(tc?.id || ''),

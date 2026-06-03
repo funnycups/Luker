@@ -106,6 +106,8 @@ Walk through its diff, approve each entry.
 
 ::: tip While you're here, let it tune the preset further
 Adapt for orchestrator is just one of the assistant's three **Editing modes**. Switch the toolbar's **Editing mode** back to the default **General editing**, start a new session, and the same assistant becomes a general-purpose preset editor — useful for things like "add an anti-cliché directive backed by a few negative examples", "tone the prose-style guidance down from purple to restrained close-detail", or "merge these three rules that say the same thing". See [Preset Assistant](/features/preset-assistant) for the full picture.
+
+The Adapt-for-orchestrator pass also **proactively sweeps for reusable style / format / writing-discipline rules** buried in your preset entries and proposes lifting them into shareable skills (verbatim, at this preset's scope, with a pointer left in the original entry). Each is reviewable independently — approve, reject, or ignore the proposals and the rest of the adapt still applies. See [Authoring skills from preset content](/features/preset-assistant#authoring-skills-from-preset-content-agent-orchestration-mode) for the why and the safeguards (one-off tweaks never trigger the sweep).
 :::
 
 ## Step 3 — Switch to Director mode and wire up the two presets

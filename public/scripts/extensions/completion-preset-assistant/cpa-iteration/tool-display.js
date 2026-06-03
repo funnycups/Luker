@@ -87,4 +87,123 @@ export const CPA_TOOL_DISPLAY = {
             return String(a?.new_name || '');
         },
     },
+
+    // ── Skill tools (orchestrator-optimize mode) ─────────────────────────
+    // Inventory inspection — read-only; results render with `read` type so
+    // the message renderer's read-only-round hint kicks in when a turn only
+    // inspects skills.
+    skill_list_visible: {
+        icon: '📚',
+        label: 'List skills',
+        type: 'read',
+        summarize: (a, r, i18n) => {
+            if (r && typeof r === 'object' && r.error) return `❌ ${String(r.error).slice(0, 40)}`;
+            if (r && Array.isArray(r.inventory)) return fmt(i18n, '${0} skills', r.inventory.length);
+            return a?.agentId ? String(a.agentId) : '';
+        },
+    },
+    skill_inspect: {
+        icon: '🔎',
+        label: 'Inspect skill',
+        type: 'read',
+        summarize: (a, r, i18n) => {
+            if (r && typeof r === 'object' && r.error) return `❌ ${String(r.error).slice(0, 40)}`;
+            if (r && Array.isArray(r.fileTree)) return fmt(i18n, '${0} files', r.fileTree.length);
+            return a?.name ? String(a.name) : '';
+        },
+    },
+    skill_read_content: {
+        icon: '📖',
+        label: 'Read skill file',
+        type: 'read',
+        summarize: (a) => {
+            const name = a?.name ? String(a.name) : '';
+            const path = a?.path ? String(a.path) : 'SKILL.md';
+            return name ? `${name} / ${path}` : path;
+        },
+    },
+    skill_search_content: {
+        icon: '🔍',
+        label: 'Search skill',
+        type: 'read',
+        summarize: (a, r, i18n) => {
+            if (r && typeof r === 'object' && r.error) return `❌ ${String(r.error).slice(0, 40)}`;
+            if (r && Array.isArray(r.matches)) return fmt(i18n, '${0} hits', r.matches.length);
+            const name = a?.name ? String(a.name) : '';
+            const query = a?.query ? String(a.query).slice(0, 30) : '';
+            return [name, query].filter(Boolean).join(' ');
+        },
+    },
+    // Authoring — `type: 'write'` (mirrors orchestrator iter-studio's
+    // lorebook write tools) so they stay out of the read-only-round hint
+    // even though they don't produce a preset edit card.
+    skill_create: {
+        icon: '🆕',
+        label: 'Create skill',
+        type: 'write',
+        summarize: (a) => a?.name ? String(a.name) : '',
+    },
+    skill_update_content: {
+        icon: '✏️',
+        label: 'Overwrite skill file',
+        type: 'write',
+        summarize: (a) => {
+            const name = a?.name ? String(a.name) : '';
+            const path = a?.path ? String(a.path) : 'SKILL.md';
+            return name ? `${name} / ${path}` : path;
+        },
+    },
+    skill_edit_content: {
+        icon: '🩹',
+        label: 'Patch skill file',
+        type: 'write',
+        summarize: (a) => {
+            const name = a?.name ? String(a.name) : '';
+            const path = a?.path ? String(a.path) : 'SKILL.md';
+            return name ? `${name} / ${path}` : path;
+        },
+    },
+    skill_update_frontmatter: {
+        icon: '🏷️',
+        label: 'Update skill frontmatter',
+        type: 'write',
+        summarize: (a) => a?.name ? String(a.name) : '',
+    },
+    skill_rename: {
+        icon: '🔤',
+        label: 'Rename skill',
+        type: 'write',
+        summarize: (a) => {
+            const from = a?.fromName ? String(a.fromName) : '';
+            const to = a?.toName ? String(a.toName) : '';
+            return from && to ? `${from} → ${to}` : (to || from);
+        },
+    },
+    skill_change_scope: {
+        icon: '📦',
+        label: 'Move skill scope',
+        type: 'write',
+        summarize: (a) => {
+            const name = a?.name ? String(a.name) : '';
+            const from = a?.fromScope?.kind ? String(a.fromScope.kind) : '';
+            const to = a?.toScope?.kind ? String(a.toScope.kind) : '';
+            return from && to ? `${name} ${from} → ${to}` : name;
+        },
+    },
+    skill_delete: {
+        icon: '🗑️',
+        label: 'Delete skill',
+        type: 'write',
+        summarize: (a) => a?.name ? String(a.name) : '',
+    },
+    skill_extract_from_text: {
+        icon: '✂️',
+        label: 'Extract skill from text',
+        type: 'write',
+        summarize: (a) => {
+            const name = a?.suggestedName ? String(a.suggestedName) : '';
+            const len = typeof a?.sourceText === 'string' ? a.sourceText.length : 0;
+            return name && len ? `${name} (${len} chars)` : name;
+        },
+    },
 };

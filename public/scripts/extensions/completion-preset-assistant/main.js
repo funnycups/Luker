@@ -104,8 +104,8 @@ function registerLocaleData() {
         'Tool-call retries on invalid/missing tool call (N)': '工具调用重试次数（无效/缺失时）',
         'Iteration System Prompts (advanced)': '迭代系统提示词（高级）',
         'Base prompt (sent in every mode)': '基础提示词（每种模式都会发送）',
-        'Mode addition — orchestrator-optimize': '模式追加 —— orchestrator-optimize',
-        'Mode addition — jailbreak-only': '模式追加 —— jailbreak-only',
+        'Mode addition — orchestrator-optimize': '模式追加 —— 编排器适配',
+        'Mode addition — jailbreak-only': '模式追加 —— 仅保留破限',
         'Reset to default': '重置为默认',
         'Current preset is not a stored chat completion preset. Please select a saved preset first.': '当前不是已保存的聊天补全预设，请先选择一个已保存预设。',
         'AI request failed: ${0}': '模型请求失败：${0}',
@@ -146,8 +146,8 @@ function registerLocaleData() {
         'Tool-call retries on invalid/missing tool call (N)': '工具調用重試次數（無效/缺失時）',
         'Iteration System Prompts (advanced)': '迭代系統提示詞（進階）',
         'Base prompt (sent in every mode)': '基礎提示詞（每種模式都會傳送）',
-        'Mode addition — orchestrator-optimize': '模式追加 —— orchestrator-optimize',
-        'Mode addition — jailbreak-only': '模式追加 —— jailbreak-only',
+        'Mode addition — orchestrator-optimize': '模式追加 —— 編排器適配',
+        'Mode addition — jailbreak-only': '模式追加 —— 僅保留破限',
         'Reset to default': '重置為預設',
         'Current preset is not a stored chat completion preset. Please select a saved preset first.': '目前不是已儲存的聊天補全預設，請先選擇一個已儲存預設。',
         'AI request failed: ${0}': '模型請求失敗：${0}',
@@ -418,6 +418,18 @@ async function openCpaIteration() {
             } catch (err) {
                 return { ok: false, error: String(err?.message || err || 'clone failed') };
             }
+        },
+        // Skill tool wiring. Provides the active (apiId, presetName) pair so
+        // the studio's skill-prompt augmentation can tell the AI to default
+        // new skills to this preset's scope — they then ride with the preset
+        // on export. Mirrors `openBundleSkillsForCurrentPreset`'s scope
+        // resolution so an AI-authored skill is visible to the same skill
+        // manager view the user opens via "Bundle skills with this preset".
+        getSkillScopeHint: () => {
+            const ref = getTargetRef();
+            const presetName = String(ref?.name || '').trim();
+            const apiId = resolveActiveConnectionProfileName();
+            return { presetName, apiId };
         },
     });
 }

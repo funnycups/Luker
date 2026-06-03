@@ -103,4 +103,54 @@ describe('CPA — system prompts', () => {
         expect(out).toMatch(/destructive/i);
         expect(out).toMatch(/preset_clone_to_new/);
     });
+
+    test('orchestrator-optimize mode block introduces extract-to-skill as a peer disposition', () => {
+        // With skills available, multi-paragraph reusable rule blocks should
+        // prefer extraction (verbatim → skill + pointer in entry) over the
+        // inline strip-and-rewrite that pre-skill versions defaulted to.
+        // The mode block must call this out as a first-class disposition,
+        // not as an aside, so the AI doesn't keep diluting strong rules into
+        // soft cognitive guidance when extraction would preserve them.
+        const out = buildModelSystemPrompt({ mode: 'orchestrator-optimize' });
+        // Category C must exist alongside A (process coercion) and B (final-
+        // output shape).
+        expect(out).toMatch(/^C\.\s/m);
+        // The category must name skill_create and the splice-in-pointer tools.
+        expect(out).toMatch(/skill_create/);
+        expect(out).toMatch(/preset_str_delete_in_prompt/);
+        expect(out).toMatch(/preset_str_insert_in_prompt/);
+        // The verbatim discipline must be named in the mode block (not only
+        // in the augmentation), so a user-edited mode-block override that
+        // drops the augmentation still preserves the discipline.
+        expect(out).toMatch(/[Vv]erbatim|VERBATIM/);
+        // The category C entry must explain WHY extraction beats inline
+        // rewriting (preservation of imperative force / shareability across
+        // sub-agents). At least one of these reasons must be present.
+        expect(out).toMatch(/imperative|shareability|sub-agent|verbatim preservation/i);
+    });
+
+    test('decision tree adds the orthogonal skill-extraction check', () => {
+        // The decision tree should explicitly tell the AI to do the C check
+        // BEFORE applying the A/B disposition — otherwise the AI defaults
+        // into inline rewriting and never reaches the extraction step.
+        const out = buildModelSystemPrompt({ mode: 'orchestrator-optimize' });
+        expect(out).toMatch(/reusable rule block|category C/i);
+        // The "BEFORE the strip/rewrite" ordering hint must be present —
+        // it's the load-bearing fragment that makes the sweep proactive
+        // during an adapt round.
+        expect(out).toMatch(/BEFORE the strip|before .* strip|extract to skill .* (?:before|first)/i);
+    });
+
+    test('Approach checklist names the per-paragraph category-C check', () => {
+        // The approach checklist now has a step explicitly telling the AI
+        // to run the category-C check on each substantive paragraph. Without
+        // it, the AI silently skips extraction because the prior checklist
+        // didn't ask for it.
+        const out = buildModelSystemPrompt({ mode: 'orchestrator-optimize' });
+        const approachStart = out.indexOf('Approach:');
+        expect(approachStart).toBeGreaterThanOrEqual(0);
+        const approachSlice = out.slice(approachStart);
+        expect(approachSlice).toMatch(/category-C|category C/i);
+        expect(approachSlice).toMatch(/skill_create/);
+    });
 });
