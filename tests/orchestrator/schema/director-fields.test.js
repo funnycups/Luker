@@ -300,42 +300,39 @@ describe('director schema fields', () => {
     });
 
     test('default pre-draft scouts are each scoped to one source (orthogonal — stay in your lane)', () => {
+        // Per-feedback (no-prompt-regex-tests): the lane-scope discipline lives
+        // in the per-sub-agent method skill body, not in the inline systemPrompt.
+        // Verify each single-source scout is bound to its method skill, which is
+        // where the "stay in your lane" rule is enforced.
         const p = createDefaultDirectorProfile();
         const byId = Object.fromEntries(p.subAgents.map(a => [a.id, a]));
-        // Each scout systemPrompt must contain a "stay in your lane"
-        // discipline — meaning: don't read from the other sources.
-        expect(byId.chat_scout.systemPrompt).toMatch(/stay in your lane/i);
-        expect(byId.memory_scout.systemPrompt).toMatch(/stay in your lane/i);
-        expect(byId.lorebook_scout.systemPrompt).toMatch(/stay in your lane/i);
-        expect(byId.canon_scout.systemPrompt).toMatch(/stay in your lane/i);
+        const expectBound = (id, skill) => {
+            const visible = byId[id]?.skills?.visible || [];
+            expect(visible).toContain(skill);
+        };
+        expectBound('chat_scout', 'chat-scout-method-zh');
+        expectBound('memory_scout', 'memory-scout-method-zh');
+        expectBound('lorebook_scout', 'lorebook-scout-method-zh');
+        expectBound('canon_scout', 'canon-scout-method-zh');
     });
 
-    test('chat_scout systemPrompt includes signal-vs-noise filter', () => {
-        // chat_scout retains the original signal-vs-noise judgment shape
-        // (it reads chat, which is exactly where engagement signal lives).
-        // memory_scout has been overhauled in spec 2 — its noise judgment
-        // moved from "did the user engage with this in chat?" to
-        // "is this node a structural hub per the read-api?"; see the
-        // dedicated `memory_scout (spec 2)` test below.
+    test('chat_scout description signals the signal-vs-noise filter', () => {
+        // Per-feedback (no-prompt-regex-tests): inline systemPrompt body no
+        // longer enumerates de-weight rules — they live in chat-scout-method-zh.
+        // Description is the dispatcher-facing one-liner; pin it here so the
+        // main agent can still discover this scout's purpose without skill_read.
         const p = createDefaultDirectorProfile();
         const byId = Object.fromEntries(p.subAgents.map(a => [a.id, a]));
-        expect(byId.chat_scout.systemPrompt).toMatch(/signal[- ]vs[- ]noise|de-?weight|low signal/i);
+        expect(byId.chat_scout.description).toMatch(/signal[- ]vs[- ]noise|de-?weight|low.signal/i);
     });
 
-    test('memory_scout (spec 2) uses read-api pipeline contract instead of chat-grounded signal', () => {
-        // Spec 2 (2026-05-18-memory-scout-uses-readonly-api, refined by the
-        // 2026-05-19 extraction/compaction-api spec): memory_scout's
-        // description + systemPrompt were rewritten to drive the read-only
-        // memory-graph API (enumerate → search → expand → cite — the
-        // shortlist step is "search" now that memory_rank has been
-        // retired in favour of memory_keyword_search /
-        // memory_find_by_name / memory_vector_search). The old
-        // "engaged with" / "build on" / "sedimented" / "traverse" framing
-        // was removed because it required reading chat, which memory_scout
-        // is now explicitly forbidden from doing. Pin both sides — what
-        // the new prompt SAYS and what it deliberately no longer says —
-        // so future edits cannot silently regress the scout to the
-        // pre-read-api workflow.
+    test('memory_scout (spec 2) advertises the read-api pipeline at description level', () => {
+        // Per-feedback (no-prompt-regex-tests): the full enumerate → search →
+        // expand → cite pipeline + tool-table + stay-in-your-lane / drop-stale-
+        // phrasing lives in memory-scout-method-zh. The inline systemPrompt is
+        // a role declaration + "Read skill X" trigger + brief reliance only.
+        // We only pin description-level signals (the dispatcher-facing contract)
+        // and the skill binding here.
         const p = createDefaultDirectorProfile();
         const byId = Object.fromEntries(p.subAgents.map(a => [a.id, a]));
         const ms = byId.memory_scout;
@@ -344,108 +341,51 @@ describe('director schema fields', () => {
         expect(ms.description).not.toMatch(/traverse/i);
         expect(ms.description).toMatch(/enumerate/i);
 
-        // systemPrompt: the new four-verb pipeline shape (enumerate → search
-        // → expand → cite) must be teachable to the LLM verbatim.
-        expect(ms.systemPrompt).toMatch(/enumerate.*search.*expand.*cite/i);
-        expect(ms.systemPrompt).toMatch(/1\.\s*\*\*Enumerate\.\*\*/);
-        expect(ms.systemPrompt).toMatch(/2\.\s*\*\*Shortlist\.\*\*/);
-        expect(ms.systemPrompt).toMatch(/3\.\s*\*\*Brief\.\*\*/);
-        expect(ms.systemPrompt).toMatch(/4\.\s*\*\*Expand/);
-        expect(ms.systemPrompt).toMatch(/5\.\s*\*\*Cite\.\*\*/);
-
-        // Stale chat-grounded judgment phrases must be gone.
-        expect(ms.systemPrompt).not.toMatch(/engaged with/i);
-        expect(ms.systemPrompt).not.toMatch(/build on/i);
-        expect(ms.systemPrompt).not.toMatch(/sedimented/i);
-
-        // The "stay in your lane" discipline still applies — pin it here
-        // too even though `default pre-draft scouts are each scoped to one
-        // source` already covers it, because this test is the dedicated
-        // contract test for the spec-2 rewrite.
-        expect(ms.systemPrompt).toMatch(/stay in your lane/i);
+        // Skill binding: memory_scout must reference memory-scout-method-zh.
+        expect(ms.skills?.visible || []).toContain('memory-scout-method-zh');
     });
 
-    test('canon_scout systemPrompt guards against original-fiction misuse', () => {
+    test('canon_scout description guards against original-fiction misuse', () => {
         const p = createDefaultDirectorProfile();
         const canon = p.subAgents.find(a => a.id === 'canon_scout');
         expect(canon).toBeDefined();
-        // canon_scout is on-demand; its description and systemPrompt
-        // must signal that running it for original fiction is a waste.
+        // canon_scout is on-demand; its description must signal that running
+        // it for original fiction is a waste.
         expect(canon.description).toMatch(/(fanfiction|public IP|fanon)/i);
         expect(canon.description).toMatch(/(do not dispatch|wastes? tokens|original[- ]fiction)/i);
     });
 
-    test('epistemic_scout is cross-source by design and outputs omniscience traps', () => {
+    test('epistemic_scout is cross-source by design (per description + skill binding)', () => {
+        // Per-feedback (no-prompt-regex-tests): the Knows / Doesn't-know /
+        // Omniscience-traps structure and the cross-source method are in
+        // epistemic-scout-method-zh. Pin description-level signals + binding only.
         const p = createDefaultDirectorProfile();
         const epi = p.subAgents.find(a => a.id === 'epistemic_scout');
         expect(epi).toBeDefined();
-        // epistemic_scout is the only pre-draft scout that cross-references
-        // chat against lorebook + memory — the "stay in your lane" rule
-        // explicitly does not apply to it, because cross-referencing IS
-        // its lane. Pin those facts in the prompts so future edits cannot
-        // silently regress the scout to a single-source one.
-        expect(epi.systemPrompt).toMatch(/cross[- ]?source|cross[- ]?reference|joins? chat against/i);
-        // Must produce the per-character knowledge inventory (Knows / Doesn't-know / Omniscience traps).
-        expect(epi.systemPrompt).toMatch(/Knows/);
-        expect(epi.systemPrompt).toMatch(/Doesn'?t know|DOES NOT KNOW/i);
-        expect(epi.systemPrompt).toMatch(/omniscience trap/i);
-        // Description must signal the POV-binding mission and cite the
-        // sources it joins, so the main agent knows when to dispatch.
+        // Description must signal the POV-binding mission and the joined sources.
         expect(epi.description).toMatch(/POV|knowledge boundary|knowledge-boundary/i);
         expect(epi.description).toMatch(/chat/);
         expect(epi.description).toMatch(/lorebook/);
+        // Skill binding.
+        expect(epi.skills?.visible || []).toContain('epistemic-scout-method-zh');
     });
 
-    test('voice_critic systemPrompt has a Hard-fail meta-narration scan with enumerated substrate keywords', () => {
-        // Regression: the main agent repeatedly leaked author-substrate
-        // names ("这是世界书里写的那种 X——X 是 ...") into the in-universe
-        // draft body. voice_critic is the post-draft owner of catching
-        // this; pin both the scan structure and a representative slice of
-        // the keyword/pattern list so future edits cannot quietly strip it.
+    test('voice_critic advertises the Hard-fail meta-narration scan at description level', () => {
+        // Per-feedback (no-prompt-regex-tests): the Class A (config labels) +
+        // Class B (platform-frame leakage) enumerations, the bilingual keyword
+        // list, the in-world replacement examples, and the [Hard-fail] output
+        // tag live in voice-critic-method-zh. Inline contains only role + skill
+        // pointer. Pin description-level + binding.
         const p = createDefaultDirectorProfile();
         const vc = p.subAgents.find(a => a.id === 'voice_critic');
         expect(vc).toBeDefined();
-        // Description must advertise the Hard-fail mode so the main agent
-        // routes meta-leakage to this critic instead of an inline one.
+        // Description signals: Hard-fail mode + both classes (config labels + platform frame).
         expect(vc.description).toMatch(/Hard-fail|HARD-FAIL/);
         expect(vc.description).toMatch(/(meta-narration|fourth-wall)/i);
-        // systemPrompt must contain the dedicated section and enumerate
-        // both CJK and English substrate keywords + at least one of the
-        // forbidden citation patterns.
-        expect(vc.systemPrompt).toMatch(/# Hard-fail/);
-        expect(vc.systemPrompt).toMatch(/(meta-narration|fourth-wall)/i);
-        expect(vc.systemPrompt).toMatch(/世界书/);
-        expect(vc.systemPrompt).toMatch(/lorebook/);
-        expect(vc.systemPrompt).toMatch(/角色卡|character card/);
-        expect(vc.systemPrompt).toMatch(/这是世界书里写的那种|according to the lorebook/);
-        // Output format must include a hard-fail tagged exemplar so the
-        // model produces the right wire shape on findings.
-        expect(vc.systemPrompt).toMatch(/\[Hard-fail\]/);
-    });
-
-    test('voice_critic systemPrompt also catches Class B platform-frame leakage (上一轮 / turn references)', () => {
-        // Regression: the recurring failure mode where the narrator anchors
-        // past events on the conversation structure ("上一轮", "previous round")
-        // instead of an in-world time frame. Pinning this prevents a future
-        // edit from silently dropping platform-frame coverage and leaving
-        // only the config-label scan.
-        const p = createDefaultDirectorProfile();
-        const vc = p.subAgents.find(a => a.id === 'voice_critic');
-        expect(vc).toBeDefined();
-        // Description must advertise the platform-frame class.
         expect(vc.description).toMatch(/platform-frame|上一轮|previous round/i);
         expect(vc.description).toMatch(/旁白|narration/i);
-        // systemPrompt must enumerate at least one CJK and one English
-        // turn/round phrase, plus an in-world replacement to show what the
-        // fix should look like.
-        expect(vc.systemPrompt).toMatch(/Class B/);
-        expect(vc.systemPrompt).toMatch(/上一轮|上一回合|本轮/);
-        expect(vc.systemPrompt).toMatch(/previous round|last turn|this turn|last reply/);
-        expect(vc.systemPrompt).toMatch(/昨夜|三天前/);
-        // Narration must be flagged as the higher-risk site so the critic
-        // weights its scan there rather than treating dialogue and narration
-        // symmetrically.
-        expect(vc.systemPrompt).toMatch(/narration|旁白/i);
+        // Skill binding.
+        expect(vc.skills?.visible || []).toContain('voice-critic-method-zh');
     });
 
     test('sanitizeDirectorProfile preserves director.subAgents entries', () => {

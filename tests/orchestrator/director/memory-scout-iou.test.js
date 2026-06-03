@@ -165,19 +165,6 @@ describe('memory_scout content contract (spec 2 §8.3)', () => {
         expect(scout.systemPrompt).not.toMatch(/sedimented/i);
     });
 
-    test('systemPrompt contains the five-step pipeline markers (spec §4.4 numbered list)', () => {
-        expect(scout.systemPrompt).toContain('1. **Enumerate.**');
-        expect(scout.systemPrompt).toContain('2. **Shortlist.**');
-        expect(scout.systemPrompt).toContain('3. **Brief.**');
-        expect(scout.systemPrompt).toContain('4. **Expand');
-        expect(scout.systemPrompt).toContain('5. **Cite.**');
-    });
-
-    test('systemPrompt preserves stay-in-your-lane (no chat/lorebook reads)', () => {
-        expect(scout.systemPrompt).toMatch(/stay in your lane/i);
-        expect(scout.systemPrompt).toMatch(/do NOT read chat or lorebook/i);
-    });
-
     test('systemPrompt mentions every read-api tool by name (the menu the scout dispatches from)', () => {
         const expectedTools = [
             'memory_schema',
@@ -192,15 +179,6 @@ describe('memory_scout content contract (spec 2 §8.3)', () => {
         for (const tool of expectedTools) {
             expect(scout.systemPrompt).toContain(tool);
         }
-    });
-
-    test('systemPrompt establishes the standard output format (≤6 items + Source + Signal + Demoted note)', () => {
-        // The output-format paragraph is the contract memory_scout's caller
-        // (and the IoU test's extractor) relies on.
-        expect(scout.systemPrompt).toMatch(/cap at 6 items/i);
-        expect(scout.systemPrompt).toMatch(/Source: memory\[id=\.\.\.\]/);
-        expect(scout.systemPrompt).toMatch(/Signal: high\/medium\/low/);
-        expect(scout.systemPrompt).toMatch(/Demoted/);
     });
 });
 
