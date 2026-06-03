@@ -1,7 +1,7 @@
 /**
  * In-memory index of installed skills, layered by scope.
  *
- * Layering for getVisible(ctx): global < preset (active API + preset)
+ * Layering for getVisible(ctx): global < preset (active preset name)
  * < character (active card). Later layers shadow earlier ones on name
  * collision, so a character-scoped skill named "foo" hides a global
  * skill named "foo".
@@ -23,7 +23,7 @@ export function createMemoryIndex(repository) {
             if (e.scope.kind === 'global') {
                 newState.global.set(e.name, e);
             } else if (e.scope.kind === 'preset') {
-                const key = `${e.scope.apiId}/${e.scope.name}`;
+                const key = e.scope.name;
                 if (!newState.preset.has(key)) newState.preset.set(key, new Map());
                 newState.preset.get(key).set(e.name, e);
             } else if (e.scope.kind === 'character') {
@@ -38,9 +38,8 @@ export function createMemoryIndex(repository) {
     function getVisible(ctx) {
         const merged = new Map();
         for (const [name, e] of state.global) merged.set(name, e);
-        if (ctx && ctx.presetApiId && ctx.presetName) {
-            const key = `${ctx.presetApiId}/${ctx.presetName}`;
-            const presetMap = state.preset.get(key);
+        if (ctx && ctx.presetName) {
+            const presetMap = state.preset.get(ctx.presetName);
             if (presetMap) for (const [name, e] of presetMap) merged.set(name, e);
         }
         if (ctx && ctx.characterFile) {

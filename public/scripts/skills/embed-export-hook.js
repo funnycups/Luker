@@ -7,11 +7,10 @@
  * in place to attach extra fields (Luker's regex extension uses this same
  * pattern).
  *
- * UX: if the active connection profile + preset combination has any
- * preset-scope skills, surface a yes/no confirm popup asking whether to
- * include them. On yes, attach `extensions.luker.embedded_skills_source`.
- * If no skills exist for the scope, this hook is a no-op (no spurious
- * dialog).
+ * UX: if the active preset has any preset-scope skills, surface a yes/no
+ * confirm popup asking whether to include them. On yes, attach
+ * `extensions.luker.embedded_skills_source`. If no skills exist for the
+ * scope, this hook is a no-op (no spurious dialog).
  *
  * Character export goes through Luker's image-card serialization, which
  * doesn't currently emit a similar event. Until a CHARACTER_EXPORT_READY
@@ -20,7 +19,6 @@
  */
 
 import { packAndAttachSkillsForExport } from './embed-export-helper.js';
-import { getActiveConnectionProfileName } from './embed-lifecycle.js';
 
 /**
  * Confirm-then-attach for preset export. Resolves to true if the user opted
@@ -38,14 +36,12 @@ export async function maybeAttachSkillsToPresetExport({ context, presetBody, t =
     if (!context || !context.skills) return false;
     if (!presetBody || typeof presetBody !== 'object') return false;
 
-    // We need a target scope to pack from. The preset name comes from the
-    // preset-manager (the preset being exported is the currently selected
-    // one); the apiId is the active connection profile, per the Plan 2
-    // Unit 1 labeling convention.
+    // The preset name comes from the preset manager (the preset being
+    // exported is the currently selected one). Preset-scope skills are
+    // keyed by preset name alone.
     const presetName = resolvePresetName(context);
     if (!presetName) return false;
-    const apiId = getActiveConnectionProfileName(context) || 'openai';
-    const targetScope = { kind: 'preset', apiId, name: presetName };
+    const targetScope = { kind: 'preset', name: presetName };
 
     // Bail early if the scope has no skills — no popup, no payload, just
     // pass through. This is the dominant case for users who don't bind
@@ -88,7 +84,7 @@ async function confirmIncludeSkills({ context, t, list, targetScope }) {
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;',
     })[c]);
     const list_html = names.map(n => `<li>${escHtml(n)}</li>`).join('');
-    const scope_label = `preset: ${escHtml(targetScope.apiId)} / ${escHtml(targetScope.name)}`;
+    const scope_label = `preset: ${escHtml(targetScope.name)}`;
     const html = `
 <div class="luker_skill_export_confirm">
     <div>${escHtml(t('Include preset-scope skills in this export?'))}</div>

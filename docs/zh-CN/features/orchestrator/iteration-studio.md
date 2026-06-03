@@ -107,7 +107,7 @@ AI 说没什么再改的了之后，点 **应用到全局**（到处都用）或
 
 > 帮我写一条 skill，让导演避开翻译腔。别让角色对话出现「当 X 的时候」这种句式，不要用「——」破折号分隔短句，「是吗？」改成「是吧？」这种更本地化的语气词。让导演模式下所有 agent 都看到。
 
-你审批之后，skill 立刻落盘可用。如果你顺便交代了挂载（"让所有 agent 看到"、"给 voice_critic 看"），它会一起挂好；否则之后你也可以自己在 [技能列表](/zh-CN/features/orchestrator/skills) 里加。
+你审批之后，skill 立刻落盘可用。如果你顺便交代了挂载（"让所有 agent 看到"、"给 voice_critic 看"），它会一起挂好；否则之后你也可以自己在 [Skill 列表](/zh-CN/features/orchestrator/skills) 里加。
 
 ![工作台跑完安装](/_screenshots/skills/iter-studio-05-after-llm-round.png)
 

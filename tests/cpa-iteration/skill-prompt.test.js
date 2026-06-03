@@ -19,7 +19,7 @@ beforeAll(async () => {
 
 describe('CPA — skill-prompt format', () => {
     test('formatCpaSkillsAugmentation includes the proactive-sweep header and the "verbatim" warning', () => {
-        const block = formatCpaSkillsAugmentation([], { presetName: 'Atlas', apiId: 'openai' });
+        const block = formatCpaSkillsAugmentation([], { presetName: 'Atlas' });
         expect(block).toMatch(/Skill management/);
         expect(block).toMatch(/Proactive sweep/i);
         expect(block).toMatch(/MUST be verbatim|VERBATIM|verbatim/);
@@ -31,16 +31,16 @@ describe('CPA — skill-prompt format', () => {
         expect(block).toMatch(/same round|do not wait/i);
     });
 
-    test('formatCpaSkillsAugmentation surfaces preset scope hint when both apiId and presetName are present', () => {
-        const block = formatCpaSkillsAugmentation([], { presetName: 'Atlas', apiId: 'openai' });
+    test('formatCpaSkillsAugmentation surfaces preset scope hint when presetName is present', () => {
+        const block = formatCpaSkillsAugmentation([], { presetName: 'Atlas' });
         expect(block).toContain('Atlas');
-        expect(block).toContain('openai');
+        expect(block).toContain("kind: 'preset'");
     });
 
     test('formatCpaSkillsAugmentation falls back to generic scope wording when hint is missing', () => {
         const block = formatCpaSkillsAugmentation([], {});
         // Generic wording uses placeholder tokens, not a specific preset name.
-        expect(block).toContain('apiId');
+        expect(block).toContain("kind: 'preset'");
         expect(block).toContain('name');
         expect(block).not.toContain('Atlas');
     });
@@ -94,9 +94,9 @@ describe('CPA — skill-prompt format', () => {
 describe('CPA — augmentCpaPromptWithSkills', () => {
     test('returns the base prompt unchanged when mode is not orchestrator-optimize', async () => {
         const base = 'Base system prompt.';
-        const out = await augmentCpaPromptWithSkills(base, 'general', { presetName: 'x', apiId: 'y' });
+        const out = await augmentCpaPromptWithSkills(base, 'general', { presetName: 'x' });
         expect(out).toBe(base);
-        const out2 = await augmentCpaPromptWithSkills(base, 'jailbreak-only', { presetName: 'x', apiId: 'y' });
+        const out2 = await augmentCpaPromptWithSkills(base, 'jailbreak-only', { presetName: 'x' });
         expect(out2).toBe(base);
     });
 
@@ -105,7 +105,7 @@ describe('CPA — augmentCpaPromptWithSkills', () => {
         const out = await augmentCpaPromptWithSkills(
             base,
             'orchestrator-optimize',
-            { presetName: 'Atlas', apiId: 'openai' },
+            { presetName: 'Atlas' },
             { listSkillsInScope: async () => [] },
         );
         expect(out.startsWith(base)).toBe(true);
@@ -143,7 +143,7 @@ describe('CPA — augmentCpaPromptWithSkills', () => {
         const out = await augmentCpaPromptWithSkills(
             'B',
             'orchestrator-optimize',
-            { presetName: 'Atlas', apiId: 'openai' },
+            { presetName: 'Atlas' },
         );
         expect(out).toMatch(/Skill management/);
         expect(out).toMatch(/none installed|\(none/);

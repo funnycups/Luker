@@ -16,20 +16,20 @@ import { parseSkillFrontmatter } from './frontmatter-parser.js';
  * On fresh install (user skills/global/ missing or empty), populate from
  * defaultRoot/skills/global/. Does nothing if the user dir already has skills.
  *
- * Always returns `{ populated, installed, replaced }` so callers don't need
- * to branch on the result shape.
+ * Always returns `{ populated, installed, replaced, alreadyInstalled }` so
+ * callers don't need to branch on the result shape.
  *
  * @param {object} opts
  * @param {string} opts.defaultRoot - root containing skills/global/.
  * @param {string} opts.userRoot - user data root.
- * @returns {Promise<{populated:boolean, installed:number, replaced:number}>}
+ * @returns {Promise<{populated:boolean, installed:number, replaced:number, alreadyInstalled:number}>}
  */
 export async function ensureFreshInstallPopulate({ defaultRoot, userRoot }) {
     const userGlobal = join(userRoot, 'skills/global');
     const isDir = await fs.stat(userGlobal).then(s => s.isDirectory()).catch(() => false);
     if (isDir) {
         const items = await fs.readdir(userGlobal);
-        if (items.length > 0) return { populated: false, installed: 0, replaced: 0 };
+        if (items.length > 0) return { populated: false, installed: 0, replaced: 0, alreadyInstalled: 0 };
     }
     const repository = createSkillRepository(userRoot);
     const result = await importBundledSkills({ defaultRoot, repository });
@@ -39,17 +39,21 @@ export async function ensureFreshInstallPopulate({ defaultRoot, userRoot }) {
 /**
  * Explicit "Import bundled" button backend.
  * Overwrites all same-named global skills with bundled versions; adds new ones.
+ * Reports `alreadyInstalled` separately so the UI can distinguish "nothing
+ * happened because user clicked twice" (alreadyInstalled > 0, installed +
+ * replaced == 0) from "nothing happened because bundle is empty" (all zero).
  *
  * @param {object} opts
  * @param {string} opts.defaultRoot - root containing skills/global/.
  * @param {object} opts.repository - SkillRepository instance.
- * @returns {Promise<{installed:number, replaced:number}>}
+ * @returns {Promise<{installed:number, replaced:number, alreadyInstalled:number}>}
  */
 export async function importBundledSkills({ defaultRoot, repository }) {
     const defaultGlobal = join(defaultRoot, 'skills/global');
     const items = (await fs.readdir(defaultGlobal).catch(() => [])).sort();
     let installed = 0;
     let replaced = 0;
+    let alreadyInstalled = 0;
     for (const name of items) {
         const skillDir = join(defaultGlobal, name);
         const stat = await fs.stat(skillDir).catch(() => null);
@@ -62,8 +66,9 @@ export async function importBundledSkills({ defaultRoot, repository }) {
         });
         if (result.action === 'replaced') replaced++;
         else if (result.action === 'installed') installed++;
+        else if (result.action === 'already_installed') alreadyInstalled++;
     }
-    return { installed, replaced };
+    return { installed, replaced, alreadyInstalled };
 }
 
 async function collectFilesAsPayload(rootDir) {

@@ -1,6 +1,6 @@
 # Skills
 
-編排器派發某個 agent 時，那個 agent 只能看到你專門給它"亮出來"的 skills，看不到整個技能庫。這一頁講的是怎麼**讓一個 skill 對某個 agent 可見**。
+編排器派發某個 agent 時，那個 agent 只能看到你專門給它"亮出來"的 skills，看不到整個 Skill 庫。這一頁講的是怎麼**讓一個 skill 對某個 agent 可見**。
 
 skill 本身是什麼、SKILL.md 長什麼樣、怎麼寫——見 [Skills 概覽](/zh-TW/features/skills/)。
 
@@ -8,9 +8,9 @@ skill 本身是什麼、SKILL.md 長什麼樣、怎麼寫——見 [Skills 概�
 
 **讓工作台替你掛（推薦）。** 在 AI 迭代工作台裡讓它寫 skill 或改 skill 的時候，順便告訴它你想讓誰能看到——"讓導演模式下所有 agent 都看到"、"只給 voice_critic 看"——它會在同一輪審批裡把這條掛到對應的位置。你不用想該放哪一層。詳見 [《用 skills 調教 RP 輸出》](/zh-TW/recipes/rp-skills-walkthrough) 和 [工作台的 skill 編寫](/zh-TW/features/orchestrator/iteration-studio#用工作台編寫-skill)。
 
-**自己掛。** 開啟編排器面板裡的導演編輯器，往下滾到技能列表那一節。每個 agent 自己有一份列表，頂上還有一份所有 agent 共享的列表。從下拉裡選一個 skill，點**新增**，儲存。
+**自己掛。** 開啟編排器面板裡的導演編輯器，往下滾到 Skill 列表那一節。每個 agent 自己有一份列表，頂上還有一份所有 agent 共享的列表。從下拉裡選一個 skill，點**新增**，儲存。
 
-![導演編輯器 — 技能列表，剛新增的一條 skill](/_screenshots/skills/rp-demo-11-director-chip-added.png)
+![導演編輯器 — Skill 列表，剛新增的一條 skill](/_screenshots/skills/rp-demo-11-director-chip-added.png)
 
 不確定掛在哪一份裡？讓工作台來更省心——你描述一下需求，剩下的讓它決定。
 
@@ -36,8 +36,8 @@ agent 自己判斷哪條相關。如果某條描述跟當前任務直接相關�
 ## 相關
 
 - [Skills 概覽](/zh-TW/features/skills/) — SKILL.md 長什麼樣、scope 怎麼用
-- [技能管理](/zh-TW/features/skills/management) — 安裝 / 匯入 / 刪除 / 切換作用域
-- [創作技能](/zh-TW/features/skills/authoring) — 技能正文的寫作規則
+- [Skill 管理](/zh-TW/features/skills/management) — 安裝 / 匯入 / 刪除 / 切換作用域
+- [創作 Skill](/zh-TW/features/skills/authoring) — Skill 正文的寫作規則
 - [編排器整合（深度）](/zh-TW/features/skills/orchestrator-integration) — 完整層級策略、繼承規則、萬用字元、deny 列表
-- [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio) — 讓 LLM 替你寫技能
+- [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio) — 讓 LLM 替你寫 Skill
 - [Recipe：用 skills 調教 RP 輸出](/zh-TW/recipes/rp-skills-walkthrough) — 端到端示例

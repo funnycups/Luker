@@ -14,15 +14,12 @@
  *     targetScope is the character's own scope.
  *   - OAI_PRESET_IMPORT_READY → check the freshly-loaded preset body for an
  *     embedded payload; if present, surface the import dialog with preset
- *     scope (using the currently-active connection-profile name as apiId,
- *     per the Plan 2 Unit 1 labeling convention).
+ *     scope (keyed by preset name only — preset-scope skills are decoupled
+ *     from any specific connection profile).
  *   - CHARACTER_DELETED → cascade-delete every skill in that character's
  *     scope. The character's `avatar` is the characterFile id.
  *   - PRESET_DELETED → cascade-delete every preset-scope skill keyed on the
- *     deleted preset's `(apiId, name)`. Note: emitted by openai.js with
- *     apiId='openai' even when the actual connection profile differs; in
- *     practice the resolver also accepts the connection-profile-name form,
- *     so we use the event's reported apiId verbatim.
+ *     deleted preset's `name`.
  *
  * Card-bound preset materialization to character scope (spec §3.3): if a
  * character card embeds BOTH its own skills payload AND a card-bound preset
@@ -32,7 +29,7 @@
  * The "have we already prompted for this asset?" memory uses Luker's
  * `accountStorage` (the same store regex uses for `AlertRegex_*`). Keys:
  *   - `AlertSkills_<avatar>` — character-scope embedded skills prompt
- *   - `AlertSkills_<apiId>_<presetName>` — preset-scope embedded skills prompt
+ *   - `AlertSkills_preset_<presetName>` — preset-scope embedded skills prompt
  *
  * The accountStorage flag is removed on delete so a re-imported asset
  * surfaces the dialog again.
@@ -41,7 +38,7 @@
 import { runEmbedImportFlow, getEmbeddedSkillsSource } from './embed-import-dialog.js';
 
 const CHARACTER_PROMPT_KEY = (avatar) => `AlertSkills_${avatar}`;
-const PRESET_PROMPT_KEY = (apiId, name) => `AlertSkills_${apiId}_${name}`;
+const PRESET_PROMPT_KEY = (name) => `AlertSkills_preset_${name}`;
 
 /**
  * Pluck the embedded_skills_source payloads from a character object. Returns
@@ -92,29 +89,6 @@ export function mergePayloads(payloads) {
         if (Array.isArray(p?.items)) items.push(...p.items);
     }
     return { version: 1, items };
-}
-
-/**
- * Resolve the active connection-profile name. Used as the preset-scope
- * `apiId` per Plan 2 Unit 1's labeling convention. Falls back to the
- * preset-manager's reported apiId when no connection profile is selected
- * (legacy case — pre-Connection-Manager users).
- *
- * @param {object} context - SillyTavern context (must expose extensionSettings)
- * @returns {string|null}
- */
-export function getActiveConnectionProfileName(context) {
-    try {
-        const ext = context?.extensionSettings || context?.extension_settings;
-        const cm = ext?.connectionManager;
-        const selectedId = cm?.selectedProfile;
-        if (selectedId && Array.isArray(cm?.profiles)) {
-            const profile = cm.profiles.find(p => p && p.id === selectedId);
-            const name = profile && typeof profile.name === 'string' ? profile.name.trim() : '';
-            if (name) return name;
-        }
-    } catch (_) { /* swallow */ }
-    return null;
 }
 
 /**
@@ -199,10 +173,7 @@ export async function checkCharEmbeddedSkills({ context, t = (s) => s } = {}) {
  * Per-preset-import check, mounted on OAI_PRESET_IMPORT_READY. The event
  * fires synchronously inside `onPresetImportFileChange`, with the parsed
  * preset body in `event.data`. We pull the embedded payload (if any) and
- * surface the dialog. Default targetScope.apiId is the active connection
- * profile name; users with no profile selected get a stub `openai` so the
- * scope is still a valid SkillScope (server-side preset apiId can be any
- * non-empty string).
+ * surface the dialog with `{kind:'preset', name: presetName}`.
  *
  * @param {object} event - { data: presetBody, presetName: string }
  * @param {object} opts
@@ -217,10 +188,8 @@ export async function checkPresetEmbeddedSkills(event, { context, t = (s) => s }
     const payload = getEmbeddedSkillsSource(presetBody);
     if (!payload) return;
 
-    const apiId = getActiveConnectionProfileName(context) || 'openai';
-
     const accountStorage = context?.accountStorage || globalThis.accountStorage;
-    const promptKey = PRESET_PROMPT_KEY(apiId, presetName);
+    const promptKey = PRESET_PROMPT_KEY(presetName);
     if (accountStorage && accountStorage.getItem && accountStorage.getItem(promptKey)) {
         return;
     }
@@ -228,7 +197,7 @@ export async function checkPresetEmbeddedSkills(event, { context, t = (s) => s }
         accountStorage.setItem(promptKey, 'true');
     }
 
-    const targetScope = { kind: 'preset', apiId, name: presetName };
+    const targetScope = { kind: 'preset', name: presetName };
     try {
         await runEmbedImportFlow({ context, payload, targetScope, t });
     } catch (e) {
@@ -260,22 +229,21 @@ export async function onCharacterDeletedCascade(event, { context } = {}) {
 
 /**
  * Preset delete handler. Removes preset-scope skills keyed on the deleted
- * preset's (apiId, name) + clears the "prompted for this preset" memory.
+ * preset's `name` + clears the "prompted for this preset" memory.
  *
- * @param {object} event - { apiId, name }
+ * @param {object} event - { name } (other fields like apiId are accepted but ignored)
  * @param {object} opts - { context }
  */
 export async function onPresetDeletedCascade(event, { context } = {}) {
-    const apiId = String(event?.apiId || '').trim();
     const name = String(event?.name || '').trim();
-    if (!apiId || !name || !context) return;
+    if (!name || !context) return;
     const accountStorage = context.accountStorage || globalThis.accountStorage;
     if (accountStorage && accountStorage.removeItem) {
-        accountStorage.removeItem(PRESET_PROMPT_KEY(apiId, name));
+        accountStorage.removeItem(PRESET_PROMPT_KEY(name));
     }
     await cascadeDeleteSkillsInScope({
         context,
-        scope: { kind: 'preset', apiId, name },
+        scope: { kind: 'preset', name },
     });
 }
 

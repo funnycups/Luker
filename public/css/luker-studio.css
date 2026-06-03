@@ -2126,3 +2126,818 @@
 .luker-preset-help-body li + li {
     margin-top: 0.35em;
 }
+
+/* ═════════════════════════════════════════════════════════════════════
+   N · SKILL MANAGER PANEL
+   ═════════════════════════════════════════════════════════════════════ */
+
+.popup .luker_skill_manager {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ls-space-md);
+    min-width: 0;
+    color: var(--SmartThemeBodyColor);
+}
+
+/* Tabs ────────────────────────────────────────────────────────────── */
+
+.popup .luker_skill_manager_tabs {
+    display: flex;
+    gap: 2px;
+    padding: 3px;
+    background: var(--ls-panel-bg);
+    border: var(--ls-border-soft);
+    border-radius: var(--ls-radius-md);
+    align-self: flex-start;
+}
+
+.popup .luker_skill_tab {
+    padding: 6px 14px;
+    border-radius: var(--ls-radius-sm);
+    cursor: pointer;
+    font-size: 0.9rem;
+    opacity: var(--ls-text-muted);
+    transition: background var(--ls-motion-fast), opacity var(--ls-motion-fast);
+    user-select: none;
+}
+
+.popup .luker_skill_tab:hover {
+    background: var(--ls-hover-bg);
+    opacity: var(--ls-text-default);
+}
+
+.popup .luker_skill_tab_active {
+    background: color-mix(in oklab, var(--ls-accent-primary) 18%, transparent);
+    opacity: var(--ls-text-strong);
+    font-weight: 500;
+}
+
+.popup .luker_skill_tab_active:hover {
+    background: color-mix(in oklab, var(--ls-accent-primary) 24%, transparent);
+}
+
+/* Toolbar ─────────────────────────────────────────────────────────── */
+
+.popup .luker_skill_manager_toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--ls-space-md);
+    padding: var(--ls-space-sm) var(--ls-space-md);
+    background: var(--ls-panel-bg);
+    border: var(--ls-border-soft);
+    border-radius: var(--ls-radius-md);
+    flex-wrap: wrap;
+}
+
+.popup .luker_skill_filter_label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ls-space-xs);
+    margin: 0;
+    flex-wrap: nowrap;
+}
+
+.popup .luker_skill_filter_label_text {
+    font-size: 0.88rem;
+    opacity: var(--ls-text-muted);
+    white-space: nowrap;
+}
+
+.popup .luker_skill_filter_select {
+    height: 1.9rem;
+    padding: 1px 8px;
+    font-size: 0.85rem;
+    min-width: 10em;
+}
+
+.popup .luker_skill_manager_toolbar_actions {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ls-space-sm);
+    flex-wrap: wrap;
+}
+
+.popup .luker_skill_toolbar_group {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px;
+    border-radius: var(--ls-radius-sm);
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 5%, transparent);
+}
+
+.popup .luker_skill_toolbar_btn {
+    font-size: 0.84rem !important;
+}
+
+.popup .luker_skill_toolbar_btn_primary {
+    background: color-mix(in oklab, var(--ls-accent-primary) 28%, transparent) !important;
+    border-color: color-mix(in oklab, var(--ls-accent-primary) 50%, transparent) !important;
+}
+
+.popup .luker_skill_toolbar_btn_primary:hover {
+    background: color-mix(in oklab, var(--ls-accent-primary) 42%, transparent) !important;
+}
+
+/* Body + groups ───────────────────────────────────────────────────── */
+
+.popup .luker_skill_manager_body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ls-space-lg);
+}
+
+.popup .luker_skill_group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ls-space-xs);
+}
+
+.popup .luker_skill_group_header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--ls-space-sm);
+    padding: 0 4px;
+    flex-wrap: wrap;
+}
+
+.popup .luker_skill_group_count {
+    font-size: 0.82rem;
+    opacity: var(--ls-text-hint);
+}
+
+.popup .luker_skill_group_rows {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ls-space-xs);
+}
+
+/* Scope badge — color-coded per kind ──────────────────────────────── */
+
+.popup .luker_skill_scope_badge {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: var(--ls-radius-pill);
+    font-size: 0.82rem;
+    font-weight: 500;
+    line-height: 1.3;
+    border: 1px solid;
+    user-select: none;
+}
+
+.popup .luker_skill_scope_badge_kind {
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    letter-spacing: 0.04em;
+    font-weight: 700;
+    opacity: 0.85;
+}
+
+.popup .luker_skill_scope_badge_sep {
+    opacity: 0.4;
+}
+
+.popup .luker_skill_scope_badge_id {
+    font-family: var(--monoFontFamily, monospace);
+    font-size: 0.78rem;
+    opacity: var(--ls-text-default);
+}
+
+.popup .luker_skill_scope_badge_global {
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 8%, transparent);
+    border-color: color-mix(in oklab, var(--SmartThemeBodyColor) 22%, transparent);
+}
+
+.popup .luker_skill_scope_badge_preset {
+    background: color-mix(in oklab, var(--ls-accent-user) 14%, transparent);
+    border-color: color-mix(in oklab, var(--ls-accent-user) 38%, transparent);
+}
+
+.popup .luker_skill_scope_badge_character {
+    background: color-mix(in oklab, var(--ls-accent-system) 14%, transparent);
+    border-color: color-mix(in oklab, var(--ls-accent-system) 38%, transparent);
+}
+
+/* Skill row card ──────────────────────────────────────────────────── */
+
+.popup .luker_skill_row {
+    display: flex;
+    gap: var(--ls-space-md);
+    padding: var(--ls-space-sm) var(--ls-space-md);
+    border: var(--ls-border);
+    border-radius: var(--ls-radius-md);
+    background: var(--ls-card-bg);
+    transition: background var(--ls-motion-fast), border-color var(--ls-motion-fast);
+    align-items: flex-start;
+    flex-wrap: wrap;
+}
+
+.popup .luker_skill_row:hover {
+    border-color: color-mix(in oklab, var(--SmartThemeBodyColor) 28%, transparent);
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 9%, transparent);
+}
+
+.popup .luker_skill_row_main {
+    flex: 1 1 320px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.popup .luker_skill_row_head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--ls-space-sm);
+    flex-wrap: wrap;
+}
+
+.popup .luker_skill_row_name {
+    font-weight: 600;
+    font-size: 1rem;
+    line-height: 1.3;
+    color: var(--SmartThemeBodyColor);
+    overflow-wrap: anywhere;
+}
+
+.popup .luker_skill_row_desc {
+    font-size: 0.9rem;
+    line-height: 1.45;
+    opacity: var(--ls-text-default);
+    overflow-wrap: anywhere;
+}
+
+.popup .luker_skill_row_meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+.popup .luker_skill_meta_chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 8px;
+    font-size: 0.74rem;
+    border-radius: var(--ls-radius-pill);
+    background: var(--ls-chip-bg);
+    opacity: var(--ls-text-muted);
+    border: 1px solid transparent;
+    line-height: 1.4;
+}
+
+.popup .luker_skill_meta_chip_warn {
+    background: color-mix(in oklab, var(--ls-accent-danger) 14%, transparent);
+    border-color: color-mix(in oklab, var(--ls-accent-danger) 30%, transparent);
+    color: color-mix(in oklab, var(--ls-accent-danger) 80%, var(--SmartThemeBodyColor));
+    opacity: 1;
+}
+
+/* Row actions ─────────────────────────────────────────────────────── */
+
+.popup .luker_skill_row_actions {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ls-space-sm);
+    flex-wrap: wrap;
+    align-self: center;
+}
+
+.popup .luker_skill_row_actions_group {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 3px;
+    border-radius: var(--ls-radius-sm);
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 4%, transparent);
+}
+
+.popup .luker_skill_row_btn {
+    font-size: 0.82rem !important;
+    min-width: auto;
+}
+
+.popup .luker_skill_row_btn_primary {
+    background: color-mix(in oklab, var(--ls-accent-primary) 22%, transparent) !important;
+    border-color: color-mix(in oklab, var(--ls-accent-primary) 42%, transparent) !important;
+}
+
+.popup .luker_skill_row_btn_primary:hover {
+    background: color-mix(in oklab, var(--ls-accent-primary) 36%, transparent) !important;
+}
+
+.popup .luker_skill_row_btn_danger {
+    color: color-mix(in oklab, var(--ls-accent-danger) 88%, var(--SmartThemeBodyColor)) !important;
+}
+
+.popup .luker_skill_row_btn_danger:hover {
+    background: color-mix(in oklab, var(--ls-accent-danger) 22%, transparent) !important;
+    border-color: color-mix(in oklab, var(--ls-accent-danger) 50%, transparent) !important;
+    color: var(--SmartThemeBodyColor) !important;
+}
+
+/* Empty states ────────────────────────────────────────────────────── */
+
+.popup .luker_skill_empty {
+    opacity: var(--ls-text-muted);
+    font-size: 0.9rem;
+    padding: var(--ls-space-sm) var(--ls-space-md);
+    font-style: italic;
+}
+
+.popup .luker_skill_empty_root {
+    text-align: center;
+    padding: var(--ls-space-xl) var(--ls-space-md);
+    border: 1px dashed color-mix(in oklab, var(--SmartThemeBodyColor) 20%, transparent);
+    border-radius: var(--ls-radius-md);
+    font-style: normal;
+    display: flex;
+    flex-direction: column;
+    gap: var(--ls-space-xs);
+}
+
+.popup .luker_skill_empty_title {
+    font-size: 1.05rem;
+    opacity: var(--ls-text-default);
+}
+
+.popup .luker_skill_empty_hint {
+    font-size: 0.88rem;
+    opacity: var(--ls-text-hint);
+}
+
+/* Bundled tab mount — its own component owns inner styling. We just
+   give the mount itself enough breathing room when it's the active tab. */
+.popup .luker_skill_manager_bundled_mount {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ls-space-md);
+}
+
+/* Compact responsive: stack row actions under the main block on
+   narrow popups so the buttons don't push name/desc into a single
+   cramped column. */
+@media (max-width: 640px) {
+    .popup .luker_skill_row {
+        flex-direction: column;
+    }
+    .popup .luker_skill_row_actions {
+        align-self: stretch;
+        justify-content: flex-end;
+    }
+    .popup .luker_skill_manager_toolbar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .popup .luker_skill_manager_toolbar_actions {
+        justify-content: stretch;
+    }
+}
+
+/* ───────────────────────────────────────────────────────────────────
+   O · SKILL EDITOR — inline editor popup (file tree + textarea pane)
+
+   Replaces the un-styled stacked layout (which made SKILL.md appear
+   "twice" — once as a tree row, once as the pane header path) with a
+   proper two-column shell: file tree as a sidebar on the left, editor
+   pane filling the remaining width on the right.
+
+   Responsive: stacks vertically on narrow popups (<720px).
+   No syntax highlighting in v1 — monospace + generous line-height +
+   theme-aware colours give it a "code editor feel" without pulling
+   CodeMirror.
+   ─────────────────────────────────────────────────────────────────── */
+
+.popup .luker_skill_editor {
+    display: flex;
+    /* Explicit row direction overrides `.popup .luker-studio`'s default
+       `flex-direction: column` — that base rule was authored for stacked
+       studio popups (CardApp, Iter Workspace), but the inline skill
+       editor wants a sidebar + main-pane shell. Same selector specificity,
+       so source order wins; declaring it here keeps the override stable
+       even if the rules are reordered. */
+    flex-direction: row;
+    gap: var(--ls-space-md);
+    align-items: stretch;
+    /* Generous min-height so the editor doesn't sit in the upper-third
+       of a tall popup. min() caps it on small viewports, dvh makes the
+       cap respect mobile address-bar collapse. The .large_dialogue_popup
+       flag (wired in openSkillEditor) gives the popup itself 90dvh, so
+       the editor effectively fills the available content slot. */
+    min-height: min(78dvh, 820px);
+    width: 100%;
+    box-sizing: border-box;
+}
+
+/* File tree — left sidebar ─────────────────────────────────────────── */
+
+.popup .luker_skill_editor_tree {
+    flex: 0 0 220px;
+    display: flex;
+    flex-direction: column;
+    border: var(--ls-border-soft);
+    border-radius: var(--ls-radius-md);
+    background: var(--ls-panel-bg);
+    overflow: hidden;
+    min-width: 0;
+}
+
+.popup .luker_skill_editor_tree_header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--ls-space-xs);
+    padding: var(--ls-space-sm) var(--ls-space-md);
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 8%, transparent);
+    border-bottom: var(--ls-border-soft);
+    font-size: 0.88rem;
+    font-weight: 600;
+    opacity: var(--ls-text-default);
+}
+
+.popup .luker_skill_editor_tree_header > span:first-child {
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.78rem;
+    opacity: var(--ls-text-muted);
+}
+
+.popup .luker_skill_editor_tree_header [data-editor-action="new-file"] {
+    font-size: 0.78rem !important;
+    min-width: auto;
+    padding: 3px var(--ls-space-sm) !important;
+}
+
+.popup .luker_skill_editor_tree_body {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--ls-space-xs);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.popup .luker_skill_editor_file {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--ls-space-xs);
+    padding: var(--ls-space-xs) var(--ls-space-sm);
+    border-radius: var(--ls-radius-sm);
+    cursor: pointer;
+    transition: background var(--ls-motion-fast);
+    min-width: 0;
+}
+
+.popup .luker_skill_editor_file:hover {
+    background: var(--ls-hover-bg);
+}
+
+.popup .luker_skill_editor_file[data-file-active="true"] {
+    background: color-mix(in oklab, var(--ls-accent-primary) 22%, transparent);
+    box-shadow: inset 2px 0 0 var(--ls-accent-primary);
+}
+
+.popup .luker_skill_editor_file[data-file-active="true"] .luker_skill_editor_file_name {
+    font-weight: 600;
+}
+
+.popup .luker_skill_editor_file_name {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--monoFontFamily, 'JetBrains Mono', 'Fira Code', Consolas, monospace);
+    font-size: 0.85rem;
+    line-height: 1.5;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.popup .luker_skill_editor_binary {
+    display: inline-block;
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 14%, transparent);
+    color: var(--SmartThemeBodyColor);
+    font-family: var(--mainFontFamily);
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 1px 5px;
+    border-radius: var(--ls-radius-pill);
+    margin-left: 4px;
+    opacity: var(--ls-text-muted);
+    vertical-align: middle;
+}
+
+.popup .luker_skill_editor_file_actions {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.popup .luker_skill_editor_file_action {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--ls-radius-sm);
+    font-size: 0.9rem;
+    line-height: 1;
+    cursor: pointer;
+    background: transparent;
+    opacity: 0.55;
+    transition: opacity var(--ls-motion-fast), background var(--ls-motion-fast), color var(--ls-motion-fast);
+}
+
+.popup .luker_skill_editor_file:hover .luker_skill_editor_file_action {
+    opacity: 0.85;
+}
+
+.popup .luker_skill_editor_file_action:hover {
+    opacity: 1 !important;
+    background: var(--ls-hover-bg);
+}
+
+.popup .luker_skill_editor_file_rename {
+    color: color-mix(in oklab, var(--ls-accent-primary) 80%, var(--SmartThemeBodyColor));
+}
+
+.popup .luker_skill_editor_file_rename:hover {
+    background: color-mix(in oklab, var(--ls-accent-primary) 18%, transparent);
+}
+
+.popup .luker_skill_editor_file_delete {
+    color: color-mix(in oklab, var(--ls-accent-danger) 80%, var(--SmartThemeBodyColor));
+    /* Reset the legacy stand-alone .luker_skill_editor_file_delete rule
+       below — when this glyph is wrapped in .luker_skill_editor_file_actions
+       it inherits the .luker_skill_editor_file_action box, so no extra
+       sizing needed here. */
+    width: 22px;
+    height: 22px;
+    font-size: 1rem;
+}
+
+.popup .luker_skill_editor_file_delete:hover {
+    background: color-mix(in oklab, var(--ls-accent-danger) 22%, transparent);
+}
+
+/* Editor pane — right ────────────────────────────────────────────── */
+
+.popup .luker_skill_editor_pane {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    border: var(--ls-border-soft);
+    border-radius: var(--ls-radius-md);
+    background: var(--ls-card-bg);
+    overflow: hidden;
+}
+
+.popup .luker_skill_editor_pane_header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--ls-space-sm);
+    padding: var(--ls-space-sm) var(--ls-space-md);
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 8%, transparent);
+    border-bottom: var(--ls-border-soft);
+}
+
+.popup .luker_skill_editor_pane_path {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--monoFontFamily, 'JetBrains Mono', 'Fira Code', Consolas, monospace);
+    font-size: 0.95rem;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: var(--ls-text-strong);
+}
+
+.popup .luker_skill_editor_pane_sha {
+    /* Stash for the JS layer; not visible. */
+    display: none;
+}
+
+.popup .luker_skill_editor_pane_header [data-editor-save] {
+    font-size: 0.85rem !important;
+    background: color-mix(in oklab, var(--ls-accent-primary) 24%, transparent) !important;
+    border-color: color-mix(in oklab, var(--ls-accent-primary) 44%, transparent) !important;
+}
+
+.popup .luker_skill_editor_pane_header [data-editor-save]:hover {
+    background: color-mix(in oklab, var(--ls-accent-primary) 38%, transparent) !important;
+}
+
+.popup textarea.text_pole.luker_skill_editor_textarea {
+    flex: 1;
+    min-height: 360px;
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    background: color-mix(in oklab, var(--SmartThemeBlurTintColor) 86%, transparent);
+    color: var(--SmartThemeBodyColor);
+    font-family: var(--monoFontFamily, 'JetBrains Mono', 'Fira Code', Consolas, monospace);
+    font-size: 0.92rem;
+    line-height: 1.6;
+    padding: var(--ls-space-md);
+    resize: none;
+    tab-size: 4;
+    -moz-tab-size: 4;
+}
+
+.popup textarea.text_pole.luker_skill_editor_textarea:focus {
+    outline: none;
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ls-accent-primary) 38%, transparent);
+}
+
+.popup .luker_skill_editor_pane_footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--ls-space-sm);
+    padding: var(--ls-space-xs) var(--ls-space-md);
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 5%, transparent);
+    border-top: var(--ls-border-soft);
+    font-size: 0.78rem;
+    opacity: var(--ls-text-muted);
+    min-height: 28px;
+}
+
+.popup .luker_skill_editor_hint {
+    font-family: var(--monoFontFamily, 'JetBrains Mono', 'Fira Code', Consolas, monospace);
+    font-size: 0.78rem;
+}
+
+/* Empty states (no file selected; empty tree body) ─────────────── */
+
+.popup .luker_skill_editor_pane.luker_skill_editor_empty {
+    align-items: center;
+    justify-content: center;
+    min-height: 360px;
+    background: var(--ls-panel-bg);
+    color: color-mix(in oklab, var(--SmartThemeBodyColor) 60%, transparent);
+    font-style: italic;
+}
+
+.popup .luker_skill_editor_tree_body .luker_skill_editor_empty {
+    padding: var(--ls-space-md) var(--ls-space-sm);
+    text-align: center;
+    font-size: 0.85rem;
+    opacity: var(--ls-text-hint);
+    font-style: italic;
+}
+
+/* Compact responsive: stack tree on top of editor on narrow popups. */
+@media (max-width: 720px) {
+    .popup .luker_skill_editor {
+        flex-direction: column;
+        min-height: auto;
+        gap: var(--ls-space-sm);
+    }
+    .popup .luker_skill_editor_tree {
+        flex: 0 0 auto;
+        max-height: 35vh;
+    }
+    .popup textarea.text_pole.luker_skill_editor_textarea {
+        min-height: 280px;
+    }
+    /* On narrow screens, always show action buttons (no hover-on-touch) */
+    .popup .luker_skill_editor_file_action {
+        opacity: 0.85;
+    }
+}
+
+/* ───────────────────────────────────────────────────────────────────
+   P · SKILL VIEW POPUP — read-only "View" surface for SKILL.md
+
+   `handleView` in skill-manager-panel.js renders the manifest as a
+   bare `<pre>` inside the generic popup. Without styling the browser
+   default `white-space: pre` keeps newlines but never breaks long
+   lines, so paragraph-length descriptions overflow the popup width.
+   pre-wrap + break-word lets the text reflow within the popup box;
+   overflow-x:auto keeps non-wrappable runs (URLs, hashes) reachable
+   via scroll instead of clipping silently.
+   ─────────────────────────────────────────────────────────────────── */
+
+.popup .luker_skill_view_pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    overflow-x: auto;
+    max-width: 100%;
+    margin: 0;
+    padding: var(--ls-space-md);
+    border: var(--ls-border-soft);
+    border-radius: var(--ls-radius-md);
+    background: var(--ls-card-bg);
+    font-family: var(--monoFontFamily, 'JetBrains Mono', 'Fira Code', Consolas, monospace);
+    font-size: 0.92rem;
+    line-height: 1.6;
+    color: var(--SmartThemeBodyColor);
+    /* The popup inherits text-align:center from `.popup`. Override it
+       here so SKILL.md renders left-aligned like real code, not
+       wedding-invitation-centred. */
+    text-align: start;
+    tab-size: 4;
+    -moz-tab-size: 4;
+}
+
+/* The h3 sibling rendered by handleView gets the same center-align
+   treatment from `.popup`. Left-align it too so the manifest reads as
+   a document header, not a banner. */
+.popup .luker_skill_view_pre + h3,
+.popup h3 + .luker_skill_view_pre,
+.popup:has(.luker_skill_view_pre) h3 {
+    text-align: start;
+    margin-top: 0;
+    margin-bottom: var(--ls-space-sm);
+    padding: var(--ls-space-xs) 0;
+    border-bottom: var(--ls-border-soft);
+}
+
+/* ═════════════════════════════════════════════════════════════════════
+   Q · SCOPE PICKER
+   ─────────────────────────────────────────────────────────────────────
+   Drives the "Move to / Choose scope" dialog. The legacy markup was a
+   plain vertical stack of free-text inputs that ignored the radio
+   selection; the new version renders dropdowns sourced from the
+   connection-manager / preset-manager / character list, and toggles the
+   sub-rows via the `hidden` attribute set by scope-picker.js. We just
+   need the layout to look like a form, not a wall of unlabeled inputs.
+   ─────────────────────────────────────────────────────────────────── */
+
+.popup .luker_skill_scope_picker {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ls-space-md);
+    text-align: start;
+    min-width: min(420px, 90vw);
+}
+
+.popup .luker_skill_scope_picker_title {
+    font-weight: 600;
+    color: var(--SmartThemeBodyColor);
+    text-align: start;
+}
+
+.popup .luker_skill_scope_picker_kinds {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ls-space-md);
+}
+
+.popup .luker_skill_scope_kind_option {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    cursor: pointer;
+    user-select: none;
+}
+
+.popup .luker_skill_scope_preset_fields,
+.popup .luker_skill_scope_character_fields {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ls-space-sm);
+    padding: var(--ls-space-sm) var(--ls-space-md);
+    border: var(--ls-border-soft);
+    border-radius: var(--ls-radius-md);
+    background: var(--ls-card-bg);
+}
+
+/* The `hidden` attribute is the source of truth driven by the radio
+   change handler. Add a flex-friendly fallback in case a global rule
+   reasserts `display: flex` on the row. */
+.popup .luker_skill_scope_preset_fields[hidden],
+.popup .luker_skill_scope_character_fields[hidden] {
+    display: none !important;
+}
+
+.popup .luker_skill_scope_field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.popup .luker_skill_scope_field_label {
+    font-size: 0.85rem;
+    color: var(--SmartThemeQuoteColor, var(--SmartThemeBodyColor));
+    opacity: 0.85;
+}
+
+.popup .luker_skill_scope_field select.text_pole {
+    width: 100%;
+}
+

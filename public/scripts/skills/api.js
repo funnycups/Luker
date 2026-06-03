@@ -7,7 +7,7 @@
  *
  * Scope shapes:
  *   { kind: 'global' }
- *   { kind: 'preset', apiId: string, name: string }
+ *   { kind: 'preset', name: string }
  *   { kind: 'character', characterFile: string }
  *   'all' — only valid for list()
  */
@@ -56,7 +56,7 @@ function scopeToUrl(scope) {
     if (scope === 'all' || !scope) return 'all';
     if (scope.kind === 'global') return 'global';
     if (scope.kind === 'preset') {
-        return `preset/${encodeURIComponent(scope.apiId)}/${encodeURIComponent(scope.name)}`;
+        return `preset/${encodeURIComponent(scope.name)}`;
     }
     if (scope.kind === 'character') {
         return `character/${encodeURIComponent(scope.characterFile)}`;
@@ -165,6 +165,22 @@ export const skillsApi = {
         return jsonFetch(
             `/api/skills/${encodeURIComponent(scopeToUrl(opts.scope))}/${encodeURIComponent(opts.name)}/file?${params}`,
             { method: 'DELETE' },
+        );
+    },
+
+    /**
+     * Rename / move a file within a skill. `toPath` may include new parent
+     * directories — they're created server-side. SKILL.md is excluded from
+     * both ends (renaming it would orphan the manifest, overwriting via
+     * rename would bypass frontmatter validation). Returns
+     * `{ ok, path, sha256 }` so the editor can refresh its optimistic-lock
+     * cache without an extra readFile round-trip.
+     * @param {{scope: object, name: string, fromPath: string, toPath: string}} opts
+     */
+    renameFile(opts) {
+        return jsonFetch(
+            `/api/skills/${encodeURIComponent(scopeToUrl(opts.scope))}/${encodeURIComponent(opts.name)}/file/rename`,
+            { method: 'POST', body: JSON.stringify(opts) },
         );
     },
 

@@ -6,7 +6,7 @@ jest.unstable_mockModule('../../public/scripts/skills/api.js', () => ({
     skillsApi: {
         list: jest.fn(async () => [
             { name: 'foo-skill', description: 'a foo skill', scope: { kind: 'global' }, metadata: { tags: ['t'] } },
-            { name: 'bar-skill', description: 'a bar skill', scope: { kind: 'preset', apiId: 'openai', name: 'rp' }, metadata: { tags: [] } },
+            { name: 'bar-skill', description: 'a bar skill', scope: { kind: 'preset', name: 'rp' }, metadata: { tags: [] } },
         ]),
         readFile: jest.fn(async () => ({ content: 'body', totalLines: 1, truncated: false })),
         search: jest.fn(async () => ({ hits: [{ path: 'SKILL.md', lineStart: 1, lineEnd: 2, snippet: 'hit' }] })),
@@ -107,7 +107,7 @@ describe('registerSkillAgentTools', () => {
         const { skillsApi } = await import('../../public/scripts/skills/api.js');
         skillsApi.list.mockResolvedValueOnce([
             { name: 'shared', description: 'global version', scope: { kind: 'global' } },
-            { name: 'shared', description: 'preset version', scope: { kind: 'preset', apiId: 'openai', name: 'rp' } },
+            { name: 'shared', description: 'preset version', scope: { kind: 'preset', name: 'rp' } },
             { name: 'shared', description: 'char version', scope: { kind: 'character', characterFile: 'a.png' } },
         ]);
 
@@ -123,7 +123,7 @@ describe('registerSkillAgentTools', () => {
         const { skillsApi } = await import('../../public/scripts/skills/api.js');
         skillsApi.list.mockResolvedValueOnce([
             { name: 'shared', description: 'global version', scope: { kind: 'global' } },
-            { name: 'shared', description: 'preset version', scope: { kind: 'preset', apiId: 'openai', name: 'rp' } },
+            { name: 'shared', description: 'preset version', scope: { kind: 'preset', name: 'rp' } },
         ]);
 
         await registered.skill_read.action({ name: 'shared' });

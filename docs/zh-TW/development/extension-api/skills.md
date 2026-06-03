@@ -1,11 +1,11 @@
-# 技能
+# Skills
 
-`context.skills.*` 是用於安裝、讀取、編輯、打包技能的 JavaScript 介面。擴充透過 `Luker.getContext()` 拿到它；CardApp 在自己的 `ctx.skills` 上拿到同樣的形狀。
+`context.skills.*` 是用於安裝、讀取、編輯、打包 Skills 的 JavaScript 介面。擴充透過 `Luker.getContext()` 拿到它；CardApp 在自己的 `ctx.skills` 上拿到同樣的形狀。
 
-技能是編排器使用的[知識包](/zh-TW/features/skills/)；這套 API 是支撐技能管理子面板、內嵌編輯器、迭代工作台 17 個技能工具的讀寫傳輸層。
+Skill 是編排器使用的[知識包](/zh-TW/features/skills/)；這套 API 是支撐 Skill 管理子面板、內嵌編輯器、迭代工作台 17 個 Skill 工具的讀寫傳輸層。
 
 ::: tip 請先讀使用者文件
-關於概念模型 —— 作用域、可見性策略、嵌入生命週期 —— 從 [技能概覽](/zh-TW/features/skills/) 開始。本頁是 API 參考。
+關於概念模型 —— 作用域、可見性策略、嵌入生命週期 —— 從 [Skills 概覽](/zh-TW/features/skills/) 開始。本頁是 API 參考。
 :::
 
 ## 入口
@@ -24,7 +24,7 @@ CardApp ctx 介面是底層同一組函式的薄包裝 —— 呼叫簽名與返
 
 ## scope 形狀
 
-每個技能操作都接受一個 `scope`。三種形狀：
+每個 Skill 操作都接受一個 `scope`。三種形狀：
 
 ```ts
 type SkillScope =
@@ -39,7 +39,7 @@ type SkillScope =
 
 ### `list(opts?)`
 
-列出已安裝的技能索引條目（不含正文）。
+列出已安裝的 Skill 索引條目（不含正文）。
 
 ```ts
 list(opts?: {
@@ -51,15 +51,15 @@ list(opts?: {
 
 | 欄位 | 型別 | 說明 |
 |---|---|---|
-| `scope` | `SkillScope` | 該技能物理所在的作用域。 |
+| `scope` | `SkillScope` | 該 Skill 物理所在的作用域。 |
 | `name` | `string` | frontmatter 的 `name`。 |
 | `description` | `string` | frontmatter 的 `description`。 |
 | `license` | `string \| null` | frontmatter 的 `license`（若有）。 |
 | `metadata` | `object` | Anthropic 標準的自由格式 metadata。 |
 | `installedHash` | `string` | 完整檔案樹的 sha256。讀期間穩定；每次寫入都會變。 |
-| `fileCount` | `number` | 技能目錄裡的檔案總數。 |
+| `fileCount` | `number` | Skill 目錄裡的檔案總數。 |
 | `totalBytes` | `number` | 檔案大小總和。 |
-| `hasScripts` | `boolean` | 技能攜帶 `scripts/` 目錄時為 true。 |
+| `hasScripts` | `boolean` | Skill 攜帶 `scripts/` 目錄時為 true。 |
 | `hasBinary` | `boolean` | 任一檔案看上去是二進位（前 512 位元組有空位元組）時為 true。 |
 | `installedAt` | `string` | 目錄 mtime 的 ISO 時間戳。 |
 
@@ -82,13 +82,13 @@ get(name: string, scope?: SkillScope | 'all'): Promise<SkillIndexEntry | null>
 
 搜尋範圍內沒有該名字時返回 `null`。
 
-省略 `scope` 時返回首個匹配 —— 適合用作「這個技能某處存在嗎」的檢查，但不能替代編排器的後者優先解析。需要確定性查找時傳入特定 scope。
+省略 `scope` 時返回首個匹配 —— 適合用作「這個 Skill 某處存在嗎」的檢查，但不能替代編排器的後者優先解析。需要確定性查找時傳入特定 scope。
 
 ## 讀取內容
 
 ### `readFile(opts)`
 
-讀取技能內的單個檔案。
+讀取 Skill 內的單個檔案。
 
 ```ts
 readFile(opts: {
@@ -110,7 +110,7 @@ readFile(opts: {
 
 ### `listFiles(opts)`
 
-列舉技能裡的每個檔案，帶 size 和 binary 標記。
+列舉 Skill 裡的每個檔案，帶 size 和 binary 標記。
 
 ```ts
 listFiles(opts: {
@@ -125,11 +125,11 @@ listFiles(opts: {
 }>
 ```
 
-`SKILL.md` 永遠在第一位；其餘按 `localeCompare` 排序。在不清楚技能裡有什麼時，先用這個再 `readFile`。
+`SKILL.md` 永遠在第一位；其餘按 `localeCompare` 排序。在不清楚 Skill 裡有什麼時，先用這個再 `readFile`。
 
 ### `search(opts)`
 
-在單個技能的檔案內做子字串搜尋。
+在單個 Skill 的檔案內做子字串搜尋。
 
 ```ts
 search(opts: {
@@ -197,7 +197,7 @@ editFile(opts: {
 
 ### `deleteFile(opts)`
 
-刪除技能內的單個檔案。`SKILL.md` 不能透過這條路徑刪 —— 用 `delete(scope, name)` 刪除整個技能。
+刪除 Skill 內的單個檔案。`SKILL.md` 不能透過這條路徑刪 —— 用 `delete(scope, name)` 刪除整個 Skill。
 
 ```ts
 deleteFile(opts: {
@@ -211,7 +211,7 @@ deleteFile(opts: {
 
 ### `install(opts)`
 
-從 JSON 負載（內聯檔案）或封存安裝一個技能。
+從 JSON 負載（內聯檔案）或封存安裝一個 Skill。
 
 ```ts
 install(opts: {
@@ -228,14 +228,14 @@ install(opts: {
 `SkillInstallPayload` 為以下兩種之一：
 
 ```ts
-// 內聯檔案（推薦給純文字技能，≤ 10 檔案，每個 ≤ 64 KB）
+// 內聯檔案（推薦給純文字 Skill，≤ 10 檔案，每個 ≤ 64 KB）
 {
   bundleFormat: 'inline-files-v1',
   name: string,
   files: Array<{ path: string, encoding: 'utf8' | 'base64', content: string }>
 }
 
-// base64 編碼的 zip（最大可達單技能上限）
+// base64 編碼的 zip（最大可達單 Skill 上限）
 {
   bundleFormat: 'archive-base64-v1',
   name: string,
@@ -245,7 +245,7 @@ install(opts: {
 }
 ```
 
-目標作用域存在同名技能時：
+目標作用域存在同名 Skill 時：
 
 - 內容相同（雜湊匹配）→ 靜默 no-op。
 - 內容不同 → 拋錯，除非 `conflictStrategy: 'replace'`。`'skip'` 在衝突時 no-op。
@@ -256,7 +256,7 @@ install(opts: {
 delete(scope: SkillScope, name: string): Promise<void>
 ```
 
-原子移除技能目錄。參照該技能的編排器 profile 仍保留 `skills.visible` 裡的舊名 —— 派遣時參照軟失敗。
+原子移除 Skill 目錄。參照該 Skill 的編排器 profile 仍保留 `skills.visible` 裡的舊名 —— 派遣時參照軟失敗。
 
 ### `rename(scope, oldName, newName)`
 
@@ -276,27 +276,27 @@ moveScope(
 ): Promise<void>
 ```
 
-跨作用域原子檔案系統 move。編排器參照（只按名字）依然有效。想要覆蓋目標，先刪目標作用域裡的同名技能再 move 即可。
+跨作用域原子檔案系統 move。編排器參照（只按名字）依然有效。想要覆蓋目標，先刪目標作用域裡的同名 Skill 再 move 即可。
 
 ### `importBundled()`
 
-從 `default/skills/global/` 重裝所有出廠技能，覆蓋任何同名本地副本。
+從 `default/skills/global/` 重裝所有出廠 Skill，覆蓋任何同名本地副本。
 
 ```ts
 importBundled(): Promise<{
-  installed: number,   // 處理的出廠技能總數
+  installed: number,   // 處理的出廠 Skill 總數
   replaced: number,    // 本地存在、被覆蓋的
   added: number,       // 本地不存在、新增的
 }>
 ```
 
 ::: warning 破壞性
-這是技能版的 `git reset --hard` —— 它把每個同名全域技能都覆蓋成出廠版本。先備份本地修改。
+這是 Skill 版的 `git reset --hard` —— 它把每個同名全域 Skill 都覆蓋成出廠版本。先備份本地修改。
 :::
 
 ### `listBundledManifest()`
 
-列出 `default/skills/global/` 下出廠的技能，每個都附帶匯入後會生成的 install 雜湊。**瀏覽出廠** tab 用這個來跟本地安裝對比，無需重跑 install。
+列出 `default/skills/global/` 下出廠的 Skill，每個都附帶匯入後會生成的 install 雜湊。**瀏覽出廠** tab 用這個來跟本地安裝對比，無需重跑 install。
 
 ```ts
 listBundledManifest(): Promise<Array<{
@@ -310,11 +310,11 @@ listBundledManifest(): Promise<Array<{
 
 ## 傳輸
 
-這些函式支援透過角色卡和預設跨主機分發技能。
+這些函式支援透過角色卡和預設跨主機分發 Skill。
 
 ### `packForEmbed(opts)`
 
-把一個或多個技能打包成嵌入負載，可塞進預設或角色卡。
+把一個或多個 Skill 打包成嵌入負載，可塞進預設或角色卡。
 
 ```ts
 packForEmbed(opts: {
@@ -333,7 +333,7 @@ packForEmbed(opts: {
 }
 ```
 
-`mode: 'auto'` 時打包器按每技能自選：小且純文字的用內聯，更大或二進位的用封存。
+`mode: 'auto'` 時打包器按每 Skill 自選：小且純文字的用內聯，更大或二進位的用封存。
 
 編排器的嵌入匯出鉤子會把負載寫入 `preset.extensions.luker.embedded_skills_source`（預設）或 `character.data.extensions.luker.embedded_skills_source`（角色卡），在儲存時持久化。
 
@@ -353,11 +353,11 @@ previewExtractEmbed(opts: {
 }>
 ```
 
-技能管理的匯入對話框用它來渲染每技能的跳過/替換選項。
+Skill 管理的匯入對話框用它來渲染每 Skill 的跳過/替換選項。
 
 ### `executeExtractEmbed(opts)`
 
-用每技能的衝突解決方案執行抽取。
+用每 Skill 的衝突解決方案執行抽取。
 
 ```ts
 executeExtractEmbed(opts: {
@@ -371,11 +371,11 @@ executeExtractEmbed(opts: {
 }>
 ```
 
-`conflictStrategies` 按技能名為 key；缺失條目預設按 `'different'` 拋錯。`'same'` 條目永遠靜默 no-op。
+`conflictStrategies` 按 Skill 名為 key；缺失條目預設按 `'different'` 拋錯。`'same'` 條目永遠靜默 no-op。
 
 ### `importFromUrl(opts)`
 
-從 HTTPS URL 拉取單個 `SKILL.md` 並作為單檔案技能安裝。
+從 HTTPS URL 拉取單個 `SKILL.md` 並作為單檔案 Skill 安裝。
 
 ```ts
 importFromUrl(opts: {
@@ -387,7 +387,7 @@ importFromUrl(opts: {
 }>
 ```
 
-多檔案技能不能透過 URL 匯入 —— 用 `install()` 配 `archive-base64-v1` 負載（或技能管理的**從檔案匯入**流程）。
+多檔案 Skill 不能透過 URL 匯入 —— 用 `install()` 配 `archive-base64-v1` 負載（或 Skill 管理的**從檔案匯入**流程）。
 
 ## 錯誤處理
 
@@ -408,7 +408,7 @@ try {
   if (err.status === 409) {
     // SHA 不匹配 —— 檔案在我們讀之後被改過。重載再試。
   } else if (err.status === 404) {
-    // 找不到技能或檔案。
+    // 找不到 Skill 或檔案。
   } else {
     throw err;
   }
@@ -421,11 +421,11 @@ CardApp 的 `ctx.skills` 介面與 `context.skills.*` 1:1 鏡像 —— 簽名�
 
 ```js
 async function init(ctx) {
-  // 列出對任何人可見的技能（CardApp 不受編排器
+  // 列出對任何人可見的 Skill（CardApp 不受編排器
   // per-agent 可見性過濾 —— 它們看到的是原始庫存）。
   const skills = await ctx.skills.list({ scope: 'all' });
 
-  // 讀一個技能的正文
+  // 讀一個 Skill 的正文
   const { content } = await ctx.skills.readFile({
     scope: { kind: 'character', characterFile: ctx.characterFile },
     name: 'card-voice-rules',
@@ -439,8 +439,8 @@ async function init(ctx) {
 
 ## 相關
 
-- [技能概覽](/zh-TW/features/skills/) —— 什麼是技能、三種作用域
-- [創作技能](/zh-TW/features/skills/authoring) —— frontmatter + 正文約定
-- [技能管理](/zh-TW/features/skills/management) —— 同等操作的 UI 介面
+- [Skills 概覽](/zh-TW/features/skills/) —— 什麼是 Skill、三種作用域
+- [創作 Skill](/zh-TW/features/skills/authoring) —— frontmatter + 正文約定
+- [Skill 管理](/zh-TW/features/skills/management) —— 同等操作的 UI 介面
 - [編排器整合](/zh-TW/features/skills/orchestrator-integration) —— 執行時如何按 `skills.visible` / `deny` 過濾
 - [擴充 API 概覽](/zh-TW/development/extension-api/) —— `context.*` 上的其它命名空間

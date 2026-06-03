@@ -107,7 +107,7 @@ AI 說沒什麼再改的了之後，點 **套用到全域**（到處都用）或
 
 > 幫我寫一條 skill，讓導演避開翻譯腔。別讓角色對話出現「當 X 的時候」這種句式，不要用「——」破折號分隔短句，「是嗎？」改成「是吧？」這種更本地化的語氣詞。讓導演模式下所有 agent 都看到。
 
-你審批之後，skill 立刻落盤可用。如果你順便交代了掛載（"讓所有 agent 看到"、"給 voice_critic 看"），它會一起掛好；否則之後你也可以自己在 [技能列表](/zh-TW/features/orchestrator/skills) 裡加。
+你審批之後，skill 立刻落盤可用。如果你順便交代了掛載（"讓所有 agent 看到"、"給 voice_critic 看"），它會一起掛好；否則之後你也可以自己在 [Skill 列表](/zh-TW/features/orchestrator/skills) 裡加。
 
 ![工作台跑完安裝](/_screenshots/skills/iter-studio-05-after-llm-round.png)
 

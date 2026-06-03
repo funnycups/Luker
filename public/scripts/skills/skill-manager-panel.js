@@ -22,7 +22,9 @@
  */
 
 import { openSkillEditor, openCreateNewSkillFlow } from './skill-editor.js';
-import { renderBundledBrowser } from './bundled-browser.js';
+import { renderBundledBrowser, describeBundledImportResult } from './bundled-browser.js';
+import { ensureSkillI18n } from './i18n.js';
+import { pickTargetScope as pickTargetScopeImpl } from './scope-picker.js';
 
 // ── Pure helpers (exported for tests) ─────────────────────────────────────
 
@@ -34,13 +36,13 @@ import { renderBundledBrowser } from './bundled-browser.js';
  * @param {object} scope
  * @returns {string}
  */
-export function formatScopeLabel(scope) {
-    if (!scope || typeof scope !== 'object') return 'unknown';
+export function formatScopeLabel(scope, t = (s) => s) {
+    if (!scope || typeof scope !== 'object') return t('unknown');
     switch (scope.kind) {
-        case 'global': return 'global';
-        case 'preset': return `preset: ${scope.apiId} / ${scope.name}`;
-        case 'character': return `character: ${scope.characterFile}`;
-        default: return 'unknown';
+        case 'global': return t('global');
+        case 'preset': return `${t('preset')}: ${scope.name}`;
+        case 'character': return `${t('character')}: ${scope.characterFile}`;
+        default: return t('unknown');
     }
 }
 
@@ -55,7 +57,7 @@ export function scopesEqual(a, b) {
     if (!a || !b) return false;
     if (a.kind !== b.kind) return false;
     if (a.kind === 'global') return true;
-    if (a.kind === 'preset') return a.apiId === b.apiId && a.name === b.name;
+    if (a.kind === 'preset') return a.name === b.name;
     if (a.kind === 'character') return a.characterFile === b.characterFile;
     return false;
 }
@@ -70,7 +72,7 @@ export function scopeKey(scope) {
     if (!scope || typeof scope !== 'object') return '';
     switch (scope.kind) {
         case 'global': return 'global';
-        case 'preset': return `preset/${scope.apiId}/${scope.name}`;
+        case 'preset': return `preset/${scope.name}`;
         case 'character': return `character/${scope.characterFile}`;
         default: return '';
     }
@@ -79,7 +81,7 @@ export function scopeKey(scope) {
 /**
  * Group a flat skill-index list into ordered groups keyed by scope, in the
  * order: global → preset → character. Within each kind, alphabetize the
- * sub-keys (preset apiId/name, character file). Within a group, skills are
+ * sub-keys (preset name, character file). Within a group, skills are
  * sorted by name.
  *
  * @param {Array} skills - flat list as returned by `context.skills.list({scope:'all'})`
@@ -281,55 +283,91 @@ export function buildPanelHtml(groups, allScopes, selectedFilterKey, activeTab, 
         `<option value="all"${selectedFilterKey === 'all' ? ' selected' : ''}>${esc(t('All scopes'))}</option>`,
         ...allScopes.map(s => {
             const key = scopeKey(s);
-            return `<option value="${esc(key)}"${selectedFilterKey === key ? ' selected' : ''}>${esc(formatScopeLabel(s))}</option>`;
+            return `<option value="${esc(key)}"${selectedFilterKey === key ? ' selected' : ''}>${esc(formatScopeLabel(s, t))}</option>`;
         }),
     ].join('');
 
+    const scopeBadge = (scope) => {
+        const kind = scope?.kind || 'unknown';
+        const kindClass = `luker_skill_scope_badge_${esc(kind)}`;
+        const kindName = esc(t(kind === 'global' ? 'Global' : kind === 'preset' ? 'Preset' : 'Character'));
+        // For preset / character scopes the second segment carries the
+        // identifying detail (preset name or character file). Global has no
+        // sub-identifier, so the badge stops at the kind name — rendering
+        // "Global · Global" would just be redundant noise.
+        const kindLabel = kind === 'preset'
+            ? esc(scope.name || '?')
+            : kind === 'character'
+                ? esc(scope.characterFile || '?')
+                : null;
+        const tail = kindLabel
+            ? `<span class="luker_skill_scope_badge_sep">·</span><span class="luker_skill_scope_badge_id">${kindLabel}</span>`
+            : '';
+        return `<span class="luker_skill_scope_badge ${kindClass}" title="${esc(formatScopeLabel(scope, t))}">
+            <span class="luker_skill_scope_badge_kind">${kindName}</span>
+            ${tail}
+        </span>`;
+    };
+
     const renderRow = (skill) => {
         const scopeStr = JSON.stringify(skill.scope);
+        const fileLabel = t('${0} files').replace('${0}', String(skill.fileCount ?? 0));
         return `
             <div class="luker_skill_row" data-skill-name="${esc(skill.name)}" data-skill-scope="${esc(scopeStr)}">
                 <div class="luker_skill_row_main">
-                    <div class="luker_skill_row_name">${esc(skill.name)}</div>
-                    <div class="luker_skill_row_desc">${esc(skill.description || t('(no description)'))}</div>
-                    <div class="luker_skill_row_meta">
-                        <span class="luker_skill_chip">${esc(formatScopeLabel(skill.scope))}</span>
-                        <span class="luker_skill_chip">${esc(t('${0} files').replace('${0}', String(skill.fileCount ?? 0)))}</span>
-                        ${skill.hasScripts ? `<span class="luker_skill_chip luker_skill_chip_warn">${esc(t('has scripts'))}</span>` : ''}
-                        ${skill.hasBinary ? `<span class="luker_skill_chip">${esc(t('binary'))}</span>` : ''}
+                    <div class="luker_skill_row_head">
+                        <div class="luker_skill_row_name" title="${esc(skill.name)}">${esc(skill.name)}</div>
+                        <div class="luker_skill_row_meta">
+                            <span class="luker_skill_meta_chip">${esc(fileLabel)}</span>
+                            ${skill.hasScripts ? `<span class="luker_skill_meta_chip luker_skill_meta_chip_warn" title="${esc(t('has scripts'))}">${esc(t('has scripts'))}</span>` : ''}
+                            ${skill.hasBinary ? `<span class="luker_skill_meta_chip" title="${esc(t('binary'))}">${esc(t('binary'))}</span>` : ''}
+                        </div>
                     </div>
+                    <div class="luker_skill_row_desc">${esc(skill.description || t('(no description)'))}</div>
                 </div>
                 <div class="luker_skill_row_actions">
-                    <div class="menu_button menu_button_small" data-skill-action="view" title="${esc(t('View'))}">${esc(t('View'))}</div>
-                    <div class="menu_button menu_button_small" data-skill-action="edit" title="${esc(t('Edit'))}">${esc(t('Edit'))}</div>
-                    <div class="menu_button menu_button_small" data-skill-action="move" title="${esc(t('Move to...'))}">${esc(t('Move to...'))}</div>
-                    <div class="menu_button menu_button_small" data-skill-action="rename" title="${esc(t('Rename'))}">${esc(t('Rename'))}</div>
-                    <div class="menu_button menu_button_small luker_skill_row_delete" data-skill-action="delete" title="${esc(t('Delete'))}">${esc(t('Delete'))}</div>
+                    <div class="luker_skill_row_actions_group">
+                        <div class="menu_button menu_button_small luker_skill_row_btn" data-skill-action="view" title="${esc(t('View'))}">${esc(t('View'))}</div>
+                        <div class="menu_button menu_button_small luker_skill_row_btn luker_skill_row_btn_primary" data-skill-action="edit" title="${esc(t('Edit'))}">${esc(t('Edit'))}</div>
+                    </div>
+                    <div class="luker_skill_row_actions_group">
+                        <div class="menu_button menu_button_small luker_skill_row_btn" data-skill-action="move" title="${esc(t('Move to...'))}">${esc(t('Move to...'))}</div>
+                        <div class="menu_button menu_button_small luker_skill_row_btn" data-skill-action="rename" title="${esc(t('Rename'))}">${esc(t('Rename'))}</div>
+                    </div>
+                    <div class="luker_skill_row_actions_group">
+                        <div class="menu_button menu_button_small luker_skill_row_btn luker_skill_row_btn_danger luker_skill_row_delete" data-skill-action="delete" title="${esc(t('Delete'))}">${esc(t('Delete'))}</div>
+                    </div>
                 </div>
             </div>
         `;
     };
 
     const renderGroup = (g) => `
-        <div class="luker_skill_group" data-scope-key="${esc(scopeKey(g.scope))}">
-            <div class="luker_skill_group_header">${esc(g.label)}</div>
+        <section class="luker_skill_group" data-scope-key="${esc(scopeKey(g.scope))}">
+            <header class="luker_skill_group_header">
+                ${scopeBadge(g.scope)}
+                <span class="luker_skill_group_count">${esc(t('${0} skills').replace('${0}', String(g.skills.length)))}</span>
+            </header>
             <div class="luker_skill_group_rows">
                 ${g.skills.length === 0
         ? `<div class="luker_skill_empty">${esc(t('(no skills in this scope)'))}</div>`
         : g.skills.map(renderRow).join('')}
             </div>
-        </div>
+        </section>
     `;
 
     const installedBody = groups.length === 0
-        ? `<div class="luker_skill_empty">${esc(t('No skills installed. Use Import or Create to add some.'))}</div>`
+        ? `<div class="luker_skill_empty luker_skill_empty_root">
+              <div class="luker_skill_empty_title">${esc(t('No skills installed yet.'))}</div>
+              <div class="luker_skill_empty_hint">${esc(t('Use Import or Create to add some.'))}</div>
+           </div>`
         : groups.map(renderGroup).join('');
 
     const installedActive = activeTab !== 'bundled';
     const tabStrip = `
-        <div class="luker_skill_manager_tabs">
-            <div class="luker_skill_tab${installedActive ? ' luker_skill_tab_active' : ''}" data-skill-tab="installed">${esc(t('Installed'))}</div>
-            <div class="luker_skill_tab${installedActive ? '' : ' luker_skill_tab_active'}" data-skill-tab="bundled">${esc(t('Browse bundled'))}</div>
+        <div class="luker_skill_manager_tabs" role="tablist">
+            <div class="luker_skill_tab${installedActive ? ' luker_skill_tab_active' : ''}" data-skill-tab="installed" role="tab">${esc(t('Installed'))}</div>
+            <div class="luker_skill_tab${installedActive ? '' : ' luker_skill_tab_active'}" data-skill-tab="bundled" role="tab">${esc(t('Browse bundled'))}</div>
         </div>
     `;
 
@@ -342,15 +380,19 @@ export function buildPanelHtml(groups, allScopes, selectedFilterKey, activeTab, 
         ? `
     <div class="luker_skill_manager_toolbar">
         <label class="luker_skill_filter_label">
-            <span>${esc(t('Filter by scope:'))}</span>
-            <select class="text_pole" data-skill-filter>${filterOptions}</select>
+            <span class="luker_skill_filter_label_text">${esc(t('Filter by scope:'))}</span>
+            <select class="text_pole luker_skill_filter_select" data-skill-filter>${filterOptions}</select>
         </label>
         <div class="luker_skill_manager_toolbar_actions">
-            <div class="menu_button menu_button_small" data-skill-toolbar="import-bundled">${esc(t('Import bundled'))}</div>
-            <div class="menu_button menu_button_small" data-skill-toolbar="import-file">${esc(t('Import from file...'))}</div>
-            <div class="menu_button menu_button_small" data-skill-toolbar="import-url">${esc(t('Import from URL...'))}</div>
-            <div class="menu_button menu_button_small" data-skill-toolbar="create">${esc(t('Create new'))}</div>
-            <div class="menu_button menu_button_small" data-skill-toolbar="refresh">${esc(t('Refresh'))}</div>
+            <div class="luker_skill_toolbar_group">
+                <div class="menu_button menu_button_small luker_skill_toolbar_btn" data-skill-toolbar="import-bundled" title="${esc(t('Import bundled'))}">${esc(t('Import bundled'))}</div>
+                <div class="menu_button menu_button_small luker_skill_toolbar_btn" data-skill-toolbar="import-file" title="${esc(t('Import from file...'))}">${esc(t('Import from file...'))}</div>
+                <div class="menu_button menu_button_small luker_skill_toolbar_btn" data-skill-toolbar="import-url" title="${esc(t('Import from URL...'))}">${esc(t('Import from URL...'))}</div>
+            </div>
+            <div class="luker_skill_toolbar_group">
+                <div class="menu_button menu_button_small luker_skill_toolbar_btn luker_skill_toolbar_btn_primary" data-skill-toolbar="create" title="${esc(t('Create new'))}">${esc(t('Create new'))}</div>
+                <div class="menu_button menu_button_small luker_skill_toolbar_btn" data-skill-toolbar="refresh" title="${esc(t('Refresh'))}">${esc(t('Refresh'))}</div>
+            </div>
         </div>
     </div>
     <div class="luker_skill_manager_body">${installedBody}</div>
@@ -358,7 +400,7 @@ export function buildPanelHtml(groups, allScopes, selectedFilterKey, activeTab, 
         : bundledMount;
 
     return `
-<div class="luker_skill_manager">
+<div class="luker_skill_manager luker-studio">
     ${tabStrip}
     ${tabBody}
 </div>
@@ -387,6 +429,10 @@ export async function openSkillManagerPanel({ context, initialScope = null, init
     if (!context || !context.skills) {
         throw new Error('openSkillManagerPanel: context.skills missing');
     }
+    // Self-register Skills UI translations so any caller (orchestrator,
+    // completion-preset-assistant, future extensions) gets zh-CN / zh-TW
+    // strings without having to copy our locale table into their own setup.
+    ensureSkillI18n();
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
         '&': '&amp;',
         '<': '&lt;',
@@ -435,6 +481,13 @@ export async function openSkillManagerPanel({ context, initialScope = null, init
         }
         const grouped = groupSkillsByScope(state.skills);
         const allScopes = dedupeScopes(state.skills.map(s => s.scope));
+        // If filterKey points at a scope that's currently empty (e.g. CPA
+        // opened the manager for a brand-new preset that has no skills yet),
+        // the dropdown can't render the scope as selected and the body would
+        // appear blank. Fall back to 'all' so the user sees something.
+        if (state.filterKey !== 'all' && !allScopes.some(s => scopeKey(s) === state.filterKey)) {
+            state.filterKey = 'all';
+        }
         const filtered = filterGroups(grouped, state.filterKey);
         mount.innerHTML = buildPanelHtml(filtered, allScopes, state.filterKey, state.tab, t, esc);
         bindEvents(mount);
@@ -536,11 +589,14 @@ export async function openSkillManagerPanel({ context, initialScope = null, init
     async function handleImportBundled() {
         try {
             const result = await context.skills.importBundled();
-            const installed = Array.isArray(result?.installed) ? result.installed.length : 0;
-            const skipped = Array.isArray(result?.skipped) ? result.skipped.length : 0;
-            toast(t('Bundled import: ${0} installed, ${1} skipped.')
-                .replace('${0}', String(installed))
-                .replace('${1}', String(skipped)), 'success');
+            // The server returns `{installed:number, replaced:number,
+            // alreadyInstalled:number}` — the legacy code here treated them as
+            // arrays via `.length`, which always coerced to 0 and produced the
+            // useless "Bundled import: 0 installed, 0 skipped" toast even on
+            // successful imports. Use the shared formatter so this toolbar and
+            // the Browse bundled tab stay in lock-step.
+            const summary = describeBundledImportResult(result, t);
+            toast(summary.text, summary.level);
             await refresh();
         } catch (e) {
             toast(t('Bundled import failed: ${0}').replace('${0}', e?.message || String(e)), 'error');
@@ -600,7 +656,7 @@ export async function openSkillManagerPanel({ context, initialScope = null, init
         try {
             const result = await context.skills.readFile({ scope, name, path: 'SKILL.md' });
             const body = `<h3>${esc(name)}</h3><pre class="luker_skill_view_pre">${esc(result?.content || '')}</pre>`;
-            await context.callGenericPopup(body, context.POPUP_TYPE.TEXT, formatScopeLabel(scope), {
+            await context.callGenericPopup(body, context.POPUP_TYPE.TEXT, formatScopeLabel(scope, t), {
                 okButton: t('Close'),
                 wide: true,
                 large: true,
@@ -615,7 +671,7 @@ export async function openSkillManagerPanel({ context, initialScope = null, init
         const ok = await context.callGenericPopup(
             t('Delete skill "${0}" from ${1}? This cannot be undone.')
                 .replace('${0}', name)
-                .replace('${1}', formatScopeLabel(scope)),
+                .replace('${1}', formatScopeLabel(scope, t)),
             context.POPUP_TYPE.CONFIRM,
             '',
             { okButton: t('Delete'), cancelButton: t('Cancel') },
@@ -644,7 +700,7 @@ export async function openSkillManagerPanel({ context, initialScope = null, init
             const confirm = await context.callGenericPopup(
                 t('A skill named "${0}" already exists in ${1}. Server will refuse the rename. Try a different name?')
                     .replace('${0}', trimmed)
-                    .replace('${1}', formatScopeLabel(scope)),
+                    .replace('${1}', formatScopeLabel(scope, t)),
                 context.POPUP_TYPE.CONFIRM,
                 '',
                 { okButton: t('Retry'), cancelButton: t('Cancel') },
@@ -676,7 +732,7 @@ export async function openSkillManagerPanel({ context, initialScope = null, init
             const ok = await context.callGenericPopup(
                 t('A skill named "${0}" already exists in ${1}. Move will fail unless you delete the existing one first. Proceed anyway?')
                     .replace('${0}', name)
-                    .replace('${1}', formatScopeLabel(toScope)),
+                    .replace('${1}', formatScopeLabel(toScope, t)),
                 context.POPUP_TYPE.CONFIRM,
                 '',
                 { okButton: t('Proceed'), cancelButton: t('Cancel') },
@@ -687,8 +743,8 @@ export async function openSkillManagerPanel({ context, initialScope = null, init
             await context.skills.moveScope(name, fromScope, toScope);
             toast(t('Moved ${0}: ${1} -> ${2}')
                 .replace('${0}', name)
-                .replace('${1}', formatScopeLabel(fromScope))
-                .replace('${2}', formatScopeLabel(toScope)), 'success');
+                .replace('${1}', formatScopeLabel(fromScope, t))
+                .replace('${2}', formatScopeLabel(toScope, t)), 'success');
             await refresh();
         } catch (e) {
             toast(t('Move failed: ${0}').replace('${0}', e?.message || String(e)), 'error');
@@ -715,7 +771,7 @@ export async function openSkillManagerPanel({ context, initialScope = null, init
                 const ok = await context.callGenericPopup(
                     t('Skill "${0}" already exists in ${1} with different content. Replace it?')
                         .replace('${0}', it.name)
-                        .replace('${1}', formatScopeLabel(targetScope)),
+                        .replace('${1}', formatScopeLabel(targetScope, t)),
                     context.POPUP_TYPE.CONFIRM,
                     '',
                     { okButton: t('Replace'), cancelButton: t('Skip') },
@@ -738,73 +794,8 @@ export async function openSkillManagerPanel({ context, initialScope = null, init
 
     // ── DOM helpers (interactive only) ───────────────────────────────────
 
-    async function pickTargetScope(title, suggestScope) {
-        // Build a minimal HTML with kind selector + sub-fields. Caller
-        // supplies the title; the popup returns null when the user cancels.
-        const suggestKind = suggestScope?.kind || 'global';
-        const suggestApi = suggestScope?.apiId || '';
-        const suggestPreset = suggestScope?.name || '';
-        const suggestChar = suggestScope?.characterFile || '';
-        const html = `
-<div class="luker_skill_scope_picker">
-    <div>${esc(title)}</div>
-    <label><input type="radio" name="luker_skill_scope_kind" value="global" ${suggestKind === 'global' ? 'checked' : ''}> ${esc(t('Global'))}</label>
-    <label><input type="radio" name="luker_skill_scope_kind" value="preset" ${suggestKind === 'preset' ? 'checked' : ''}> ${esc(t('Preset'))}</label>
-    <div class="luker_skill_scope_preset_fields">
-        <input type="text" class="text_pole" placeholder="${esc(t('connection profile (apiId)'))}" data-skill-scope-api value="${esc(suggestApi)}">
-        <input type="text" class="text_pole" placeholder="${esc(t('preset name'))}" data-skill-scope-preset value="${esc(suggestPreset)}">
-    </div>
-    <label><input type="radio" name="luker_skill_scope_kind" value="character" ${suggestKind === 'character' ? 'checked' : ''}> ${esc(t('Character'))}</label>
-    <div class="luker_skill_scope_character_fields">
-        <input type="text" class="text_pole" placeholder="${esc(t('character file (e.g. Alice.png)'))}" data-skill-scope-character value="${esc(suggestChar)}">
-    </div>
-</div>
-        `;
-        const Popup = context.Popup;
-        const POPUP_RESULT = context.POPUP_RESULT;
-        const POPUP_TYPE = context.POPUP_TYPE;
-        if (!Popup) {
-            toast(t('Popup API missing — cannot pick scope.'), 'error');
-            return null;
-        }
-        let chosen = null;
-        const popup = new Popup(html, POPUP_TYPE.CONFIRM, '', {
-            okButton: t('OK'),
-            cancelButton: t('Cancel'),
-            wider: true,
-            onClosing: (p) => {
-                if (p.result !== POPUP_RESULT.AFFIRMATIVE) return true;
-                const dlg = p.dlg;
-                const kind = dlg.querySelector('input[name="luker_skill_scope_kind"]:checked')?.value || 'global';
-                if (kind === 'global') {
-                    chosen = { kind: 'global' };
-                    return true;
-                }
-                if (kind === 'preset') {
-                    const apiId = String(dlg.querySelector('[data-skill-scope-api]')?.value || '').trim();
-                    const name = String(dlg.querySelector('[data-skill-scope-preset]')?.value || '').trim();
-                    if (!apiId || !name) {
-                        toast(t('Preset scope requires connection profile + preset name.'), 'error');
-                        return false;
-                    }
-                    chosen = { kind: 'preset', apiId, name };
-                    return true;
-                }
-                if (kind === 'character') {
-                    const characterFile = String(dlg.querySelector('[data-skill-scope-character]')?.value || '').trim();
-                    if (!characterFile) {
-                        toast(t('Character scope requires a character file name.'), 'error');
-                        return false;
-                    }
-                    chosen = { kind: 'character', characterFile };
-                    return true;
-                }
-                return true;
-            },
-        });
-        const result = await popup.show();
-        if (result !== POPUP_RESULT.AFFIRMATIVE) return null;
-        return chosen;
+    function pickTargetScope(title, suggestScope) {
+        return pickTargetScopeImpl(context, t, title, suggestScope);
     }
 
     async function pickFile(accept) {

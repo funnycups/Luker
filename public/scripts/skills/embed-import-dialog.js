@@ -27,6 +27,8 @@
  * preset-manager hooks) invoke.
  */
 
+import { ensureSkillI18n } from './i18n.js';
+
 // ── Pure helpers (exported for tests) ─────────────────────────────────────
 
 /**
@@ -42,7 +44,7 @@ export function formatScopeLabel(scope) {
     if (!scope || typeof scope !== 'object') return 'unknown';
     switch (scope.kind) {
         case 'global': return 'global';
-        case 'preset': return `preset: ${scope.apiId} / ${scope.name}`;
+        case 'preset': return `preset: ${scope.name}`;
         case 'character': return `character: ${scope.characterFile}`;
         default: return 'unknown';
     }
@@ -233,6 +235,7 @@ export function collectConflictStrategies(root, previewItems) {
  * @returns {Promise<{installed?:Array, skipped?:Array, aborted?:boolean, error?:string}>}
  */
 export async function runEmbedImportFlow({ context, payload, targetScope, t = (s) => s } = {}) {
+    ensureSkillI18n();
     if (!context || !context.skills) {
         throw new Error('runEmbedImportFlow: context.skills missing');
     }

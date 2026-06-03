@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { parseSkillFrontmatter } from './frontmatter-parser.js';
 import { encodeScopePath, scopeLabel } from './scope.js';
@@ -135,12 +135,10 @@ export function createSkillRepository(dataRoot) {
             const all = [];
             all.push(...(await listScope({ kind: 'global' })));
             const presetRoot = join(skillsRoot, 'preset');
-            const apiIds = await fs.readdir(presetRoot).catch(() => []);
-            for (const apiId of apiIds) {
-                const presets = await fs.readdir(join(presetRoot, apiId)).catch(() => []);
-                for (const name of presets) {
-                    all.push(...(await listScope({ kind: 'preset', apiId, name })));
-                }
+            const presetNames = await fs.readdir(presetRoot).catch(() => []);
+            for (const name of presetNames) {
+                if (name.startsWith('.')) continue;
+                all.push(...(await listScope({ kind: 'preset', name })));
             }
             const charRoot = join(skillsRoot, 'character');
             const chars = await fs.readdir(charRoot).catch(() => []);
@@ -396,6 +394,62 @@ export function createSkillRepository(dataRoot) {
         return { ok: true };
     }
 
+    /**
+     * Rename / move a file within a skill. fromPath and toPath are both
+     * skill-relative; if toPath has new parent directories they're created
+     * on the fly, and empty source ancestors are pruned (mirrors deleteFile).
+     * SKILL.md is excluded from both ends — renaming it would orphan the
+     * manifest, and overwriting it via rename would bypass parseSkillFrontmatter.
+     * Returns the destination's sha256 so the editor can update its
+     * optimistic-lock cache without an extra read round-trip.
+     */
+    async function renameFile({ scope, name, fromPath, toPath }) {
+        assertSafeSkillName(name);
+        assertSafeFilePath(fromPath);
+        assertSafeFilePath(toPath);
+        if (fromPath === SKILL_MD) throw new Error('cannot rename SKILL.md');
+        if (toPath === SKILL_MD) throw new Error('cannot overwrite SKILL.md via rename');
+        if (fromPath === toPath) {
+            // No-op rename — still return the current sha256 so callers can
+            // refresh their lock cache.
+            const skillDir = join(skillsRoot, encodeScopePath(scope), name);
+            const buf = await fs.readFile(join(skillDir, fromPath));
+            return { ok: true, path: toPath, sha256: sha256(buf) };
+        }
+        const skillDir = join(skillsRoot, encodeScopePath(scope), name);
+        const fromAbs = join(skillDir, fromPath);
+        const toAbs = join(skillDir, toPath);
+        const fromExists = await fs.stat(fromAbs).then(s => s.isFile()).catch(() => false);
+        if (!fromExists) throw new Error(`source file not found: ${fromPath}`);
+        const toExists = await fs.stat(toAbs).then(() => true).catch(() => false);
+        if (toExists) throw new Error(`destination already exists: ${toPath}`);
+
+        const toParent = dirname(toAbs);
+        if (toParent !== skillDir) await fs.mkdir(toParent, { recursive: true });
+        await fs.rename(fromAbs, toAbs);
+
+        // Prune empty source ancestor directories (same logic as deleteFile).
+        const fromSegs = fromPath.split('/');
+        fromSegs.pop();
+        while (fromSegs.length > 0) {
+            const dir = join(skillDir, fromSegs.join('/'));
+            try {
+                const entries = await fs.readdir(dir);
+                if (entries.length === 0) {
+                    await fs.rmdir(dir);
+                    fromSegs.pop();
+                } else {
+                    break;
+                }
+            } catch {
+                break;
+            }
+        }
+
+        const buf = await fs.readFile(toAbs);
+        return { ok: true, path: toPath, sha256: sha256(buf) };
+    }
+
     // ──────────────────────────── listFiles ────────────────────────────
 
     /**
@@ -499,6 +553,7 @@ export function createSkillRepository(dataRoot) {
         writeFile,
         editFile,
         deleteFile: deleteFileImpl,
+        renameFile,
         readFile,
         listFiles,
         search,

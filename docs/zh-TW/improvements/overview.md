@@ -13,7 +13,7 @@ Luker 對 SillyTavern 的改進不是簡單的功能堆疊，而是從資料傳�
 | 功能 | [角色卡綁定預設與人設](/zh-TW/improvements/card-bound-presets) | 角色卡可攜帶推薦預設和預設人設 |
 | 功能 | [請求檢查器](/zh-TW/improvements/request-inspector) | 追蹤生成請求的完整生命週期與 Token 用量 |
 | 功能 | [預設關聯世界書](/zh-TW/improvements/preset-world-info) | 切換預設時自動啟用對應的世界書 |
-| 功能 | [技能](/zh-TW/features/skills/) | 相容 Anthropic 的本地知識包，編排器 agent 按需讀取 |
+| 功能 | [Skills](/zh-TW/features/skills/) | 相容 Anthropic 的本地知識包，編排器 agent 按需讀取 |
 | 基礎設施 | [統一生成層](/zh-TW/improvements/generation-layer) | 多後端生成請求統一封裝與 Token 計量 |
 | 基礎設施 | [效能最佳化](/zh-TW/improvements/performance) | 並行載入、懶載入、延遲初始化等啟動和執行時最佳化 |
 | 基礎設施 | [WebSocket 代理](/zh-TW/improvements/ws-proxy) | 持久 WS 隧道傳輸，心跳保活與串流偏移恢復 |
@@ -80,11 +80,11 @@ Luker 內建了統一的函數呼叫（Function Calling）執行時，支援兩�
 
 除錯 AI 對話時，使用者經常需要知道「到底發了什麼給 API」。Luker 的請求檢查器追蹤每個 AI 生成請求從發起到完成的完整生命週期，記錄 prompt token、completion token 和總用量。它支援串流回應的 Token 統計（從 SSE 事件中提取 usage 資訊），也覆蓋圖像生成請求的追蹤。請求檢查器追蹤的 Token 用量是獨立的統計功能，與儲存配額管理是兩個獨立的系統。詳見 [請求檢查器](/zh-TW/improvements/request-inspector)。
 
-### 技能
+### Skill
 
-多 agent 編排器 profile 的系統提示詞往往越來越長 —— 每條可重用的寫作規則、每份評審方法、每份工作流契約，過去都內聯在 `systemPrompt` 欄位裡，經常在多個子代理裡重複拷貝。Luker 引入了 **技能（skills）**：相容 Anthropic 的本地知識包（`SKILL.md` + frontmatter + 可選子檔案），agent 按需讀取。技能按名字尋址（參照裡不帶作用域前綴），住在三種作用域下（`global` / `preset` / `character`），派遣時按後者優先解析。
+多 agent 編排器 profile 的系統提示詞往往越來越長 —— 每條可重用的寫作規則、每份評審方法、每份工作流契約，過去都內聯在 `systemPrompt` 欄位裡，經常在多個子代理裡重複拷貝。Luker 引入了 **Skill（skills）**：相容 Anthropic 的本地知識包（`SKILL.md` + frontmatter + 可選子檔案），agent 按需讀取。Skill 按名字尋址（參照裡不帶作用域前綴），住在三種作用域下（`global` / `preset` / `character`），派遣時按後者優先解析。
 
-編排器預設 director profile 自帶 24 個出廠技能，覆蓋共享寫作規則、主代理工作流，以及每個子代理一份方法技能。同一格式與 Anthropic Claude Code 雙向可移植 —— 技能可不經轉換跨平台往返。技能可以跟角色卡（PNG 元資料）或預設（嵌入負載）一起分發，所以分發卡片也就分發了支撐它工作的寫作規則。技能管理子面板覆蓋安裝、編輯、遷移作用域、嵌入匯出；迭代工作台 AI 可以透過專用工具從長 `systemPrompt` 文字裡抽出可重用規則到技能。概念模型見 [技能概覽](/zh-TW/features/skills/)，格式見 [創作技能](/zh-TW/features/skills/authoring)。
+編排器預設 director profile 自帶 24 個出廠 Skill，覆蓋共享寫作規則、主代理工作流，以及每個子代理一份方法 Skill。同一格式與 Anthropic Claude Code 雙向可移植 —— Skill 可不經轉換跨平台往返。Skill 可以跟角色卡（PNG 元資料）或預設（嵌入負載）一起分發，所以分發卡片也就分發了支撐它工作的寫作規則。Skill 管理子面板覆蓋安裝、編輯、遷移作用域、嵌入匯出；迭代工作台 AI 可以透過專用工具從長 `systemPrompt` 文字裡抽出可重用規則到 Skill。概念模型見 [Skills 概覽](/zh-TW/features/skills/)，格式見 [創作 Skill](/zh-TW/features/skills/authoring)。
 
 ## 基礎設施
 

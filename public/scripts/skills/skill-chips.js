@@ -34,6 +34,8 @@
  * never considered missing.
  */
 
+import { ensureSkillI18n } from './i18n.js';
+
 // ── Pure helpers (exported for tests) ─────────────────────────────────────
 
 const INHERIT_SENTINEL = '+';
@@ -332,6 +334,7 @@ export function renderSkillChipsHtml({ value, inheritFrom, availableSkills, t = 
  * @returns {{ rerender: () => void, getValue: () => object }}
  */
 export function mountSkillChips(host, opts = {}) {
+    ensureSkillI18n();
     const t = typeof opts.t === 'function' ? opts.t : (s) => s;
     let current = {
         visible: Array.isArray(opts.value?.visible) ? opts.value.visible.slice() : [],
@@ -388,6 +391,19 @@ export function mountSkillChips(host, opts = {}) {
                 }
             });
         });
+
+        // One-step add: picking from the dropdown commits immediately,
+        // so the user never has to chase a separate Add button. The
+        // hidden open-add button still works for keyboard-only users.
+        const addSelect = host.querySelector('[data-skill-chip-add-select]');
+        if (addSelect && typeof addSelect.addEventListener === 'function') {
+            addSelect.addEventListener('change', (ev) => {
+                if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+                const chosen = String(addSelect.value || '').trim();
+                if (!chosen) return;
+                commit(applyChipAdd(current, chosen));
+            });
+        }
     }
 
     render();

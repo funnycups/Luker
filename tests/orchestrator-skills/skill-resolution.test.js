@@ -65,7 +65,7 @@ describe('resolveAgentVisibleSkills', () => {
         skillsApi.list.mockResolvedValue([
             { name: 'global-a', description: 'g a', scope: { kind: 'global' } },
             { name: 'global-b', description: 'g b', scope: { kind: 'global' } },
-            { name: 'preset-x', description: 'p x', scope: { kind: 'preset', apiId: 'openai', name: 'rp' } },
+            { name: 'preset-x', description: 'p x', scope: { kind: 'preset', name: 'rp' } },
             { name: 'char-y', description: 'c y', scope: { kind: 'character', characterFile: 'alice.png' } },
         ]);
     });
@@ -74,7 +74,7 @@ describe('resolveAgentVisibleSkills', () => {
         const result = await resolveAgentVisibleSkills({
             modeProfile: { skills: { visible: ['*'], deny: [] } },
             agentConfig: null,
-            runtimeContext: { presetApiId: 'openai', presetName: 'rp', characterFile: 'alice.png' },
+            runtimeContext: { presetName: 'rp', characterFile: 'alice.png' },
         });
         expect(result.map(s => s.name).sort()).toEqual(['char-y', 'global-a', 'global-b', 'preset-x']);
     });
@@ -83,7 +83,7 @@ describe('resolveAgentVisibleSkills', () => {
         const result = await resolveAgentVisibleSkills({
             modeProfile: { skills: { visible: ['global-a', 'preset-x'], deny: [] } },
             agentConfig: null,
-            runtimeContext: { presetApiId: 'openai', presetName: 'rp' },
+            runtimeContext: { presetName: 'rp' },
         });
         expect(result.map(s => s.name).sort()).toEqual(['global-a', 'preset-x']);
     });
@@ -92,7 +92,7 @@ describe('resolveAgentVisibleSkills', () => {
         const result = await resolveAgentVisibleSkills({
             modeProfile: { skills: { visible: ['global-a'], deny: [] } },
             agentConfig: { skills: { visible: ['+', 'preset-x'] } },
-            runtimeContext: { presetApiId: 'openai', presetName: 'rp' },
+            runtimeContext: { presetName: 'rp' },
         });
         expect(result.map(s => s.name).sort()).toEqual(['global-a', 'preset-x']);
     });
@@ -101,7 +101,7 @@ describe('resolveAgentVisibleSkills', () => {
         const result = await resolveAgentVisibleSkills({
             modeProfile: { skills: { visible: ['global-a', 'global-b'], deny: [] } },
             agentConfig: { skills: { visible: ['preset-x'] } },
-            runtimeContext: { presetApiId: 'openai', presetName: 'rp' },
+            runtimeContext: { presetName: 'rp' },
         });
         expect(result.map(s => s.name)).toEqual(['preset-x']);
     });
@@ -119,7 +119,7 @@ describe('resolveAgentVisibleSkills', () => {
         const result = await resolveAgentVisibleSkills({
             modeProfile: { skills: { visible: ['*'], deny: ['global-a'] } },
             agentConfig: null,
-            runtimeContext: { presetApiId: 'openai', presetName: 'rp', characterFile: 'alice.png' },
+            runtimeContext: { presetName: 'rp', characterFile: 'alice.png' },
         });
         expect(result.map(s => s.name).sort()).toEqual(['char-y', 'global-b', 'preset-x']);
     });
@@ -128,7 +128,7 @@ describe('resolveAgentVisibleSkills', () => {
         const result = await resolveAgentVisibleSkills({
             modeProfile: { skills: { visible: ['*'], deny: ['global-a'] } },
             agentConfig: { skills: { visible: ['*'], deny: ['preset-x'] } },
-            runtimeContext: { presetApiId: 'openai', presetName: 'rp', characterFile: 'alice.png' },
+            runtimeContext: { presetName: 'rp', characterFile: 'alice.png' },
         });
         expect(result.map(s => s.name).sort()).toEqual(['char-y', 'global-b']);
     });
@@ -163,13 +163,13 @@ describe('resolveAgentVisibleSkills', () => {
         invalidateSkillInventory();
         skillsApi.list.mockResolvedValueOnce([
             { name: 'shared', description: 'global version', scope: { kind: 'global' } },
-            { name: 'shared', description: 'preset version', scope: { kind: 'preset', apiId: 'openai', name: 'rp' } },
+            { name: 'shared', description: 'preset version', scope: { kind: 'preset', name: 'rp' } },
             { name: 'shared', description: 'character version', scope: { kind: 'character', characterFile: 'alice.png' } },
         ]);
         const result = await resolveAgentVisibleSkills({
             modeProfile: { skills: { visible: ['*'], deny: [] } },
             agentConfig: null,
-            runtimeContext: { presetApiId: 'openai', presetName: 'rp', characterFile: 'alice.png' },
+            runtimeContext: { presetName: 'rp', characterFile: 'alice.png' },
         });
         expect(result).toHaveLength(1);
         expect(result[0].description).toBe('character version');
@@ -212,7 +212,7 @@ describe('resolveAgentVisibleSkills', () => {
         const result = await resolveAgentVisibleSkills({
             modeProfile: profile,
             agentConfig: null,
-            runtimeContext: { presetApiId: 'openai', presetName: 'rp' },
+            runtimeContext: { presetName: 'rp' },
         });
         // Default visible=['*'] applied; preset-x reachable since preset ctx provided.
         expect(result.map(s => s.name).sort()).toContain('preset-x');

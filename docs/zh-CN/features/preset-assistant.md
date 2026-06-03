@@ -61,7 +61,7 @@
 
 在「Agent 编排预设」和「仅保留破限」模式下，助手默认会建议**派生一个新预设**（如原名加 `-orchestrator` / `-jailbreak` 后缀），由你确认后执行——原预设保持不动，编辑作用在派生出的新预设上。如果你坚持要改原预设，直接告诉助手即可。
 
-派生出 `-orchestrator` 预设后，助手在工具栏给出一条**为该预设打包技能**链接。点开后会打开编排器的 [技能管理](/zh-CN/features/skills/management) 并自动开启多选模式 —— 挑出你想跟这份预设一起分发的写作规则、评审方法或其他技能，再点**把所选打包进预设……**，它们就会写进预设的 `extensions.luker.embedded_skills_source` 字段。其他用户后续导入这份派生预设时，会看到标准的嵌入抽取对话框，技能自动落到他们的 `preset` 作用域。这是把编排器预设跟支撑它工作的技能一起分发的推荐路径 —— 预设保持自包含。
+派生出 `-orchestrator` 预设后，助手在工具栏给出一条**为该预设打包 Skills**链接。点开后会打开编排器的 [Skill 管理](/zh-CN/features/skills/management) 并自动开启多选模式 —— 挑出你想跟这份预设一起分发的写作规则、评审方法或其他 Skill，再点**把所选打包进预设……**，它们就会写进预设的 `extensions.luker.embedded_skills_source` 字段。其他用户后续导入这份派生预设时，会看到标准的嵌入抽取对话框，Skill 自动落到他们的 `preset` 作用域。这是把编排器预设跟支撑它工作的 Skill 一起分发的推荐路径 —— 预设保持自包含。
 
 ### 把预设里的文风 / 输出格式抽成 Skills（Agent 编排预设模式）
 
@@ -75,7 +75,7 @@
 
 除了常规的 coercion / 格式改写，助手会按候选给你提案：
 
-1. 在这份预设的作用域下创建 skill，正文逐字照搬（不允许改写、压缩或换措辞）。之后你点**为该预设打包技能**导出时它会跟着走。
+1. 在这份预设的作用域下创建 skill，正文逐字照搬（不允许改写、压缩或换措辞）。之后你点**为该预设打包 Skills**导出时它会跟着走。
 2. 从原条目里把这段文字删掉。
 3. 在原位置补一行指针，比如 `参考 skill <skill-name>`，让条目还能提到这条规则的存在 —— 编排器下的 agent 看到指针就会按需把整条 skill 拉出来读。
 
@@ -116,5 +116,5 @@
 
 - [预设解耦](/zh-CN/improvements/preset-decoupling) — 补全预设助手使用当前连接配置进行 AI 调用
 - [多Agent编排](/zh-CN/features/orchestrator/) — 编排器中的节点同样引用 LLM 预设
-- [技能](/zh-CN/features/skills/) — 通过**为该预设打包技能**链接，把写作规则与评审方法跟 `-orchestrator` 预设一起分发
-- [创作技能](/zh-CN/features/skills/authoring) — 助手帮你从预设内容起草技能时遵循的 `SKILL.md` 写法约定
+- [Skills](/zh-CN/features/skills/) — 通过**为该预设打包 Skills**链接，把写作规则与评审方法跟 `-orchestrator` 预设一起分发
+- [创作 Skill](/zh-CN/features/skills/authoring) — 助手帮你从预设内容起草 Skill 时遵循的 `SKILL.md` 写法约定

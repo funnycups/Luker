@@ -820,28 +820,81 @@ export function ensureStyles(uiBlockId) {
 }
 .luker_skill_chip_add {
     display: inline-flex;
+    align-items: stretch;
+    gap: 0;
+    border: 1px dashed rgba(140, 140, 140, 0.55);
+    border-radius: 999px;
+    background: rgba(140, 140, 140, 0.06);
+    overflow: hidden;
+    position: relative;
+    transition: border-color 120ms ease, background 120ms ease;
+}
+.luker_skill_chip_add:hover {
+    border-color: rgba(140, 140, 140, 0.85);
+    background: rgba(140, 140, 140, 0.12);
+}
+.luker_skill_chip_add::before {
+    content: '+';
+    display: inline-flex;
     align-items: center;
-    gap: 4px;
+    padding: 0 8px;
+    font-size: 0.95rem;
+    font-weight: 700;
+    opacity: 0.7;
+    border-right: 1px solid rgba(140, 140, 140, 0.25);
+    background: rgba(140, 140, 140, 0.08);
 }
 .luker_skill_chip_add_select {
-    height: 1.8rem;
-    padding: 1px 6px;
+    height: 1.9rem;
+    padding: 1px 22px 1px 8px;
     font-size: 0.8rem;
-    min-width: 12em;
+    min-width: 11em;
+    border: none !important;
+    background: transparent !important;
+    cursor: pointer;
+}
+.luker_skill_chip_add > [data-skill-chip-action="open-add"] {
+    /* The select auto-commits on change; keep the button as an
+       accessibility/keyboard fallback but visually hide it so the
+       control reads as a single pill. */
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+}
+.luker_skill_chip_add_empty {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+.luker_skill_chip_add_empty::before {
+    opacity: 0.4;
 }
 .luker_skill_chip_add_inherit {
     font-size: 0.78rem !important;
     padding: 2px 8px !important;
+    border-radius: 999px !important;
 }
+.luker_orch_tools_section,
 .luker_orch_skills_section {
     margin: 6px 0;
 }
+.luker_orch_tools_section > summary,
 .luker_orch_skills_section > summary {
     cursor: pointer;
-    padding: 4px 6px;
+    padding: 4px 8px;
     background: rgba(180, 180, 180, 0.07);
     border-radius: 4px;
-    font-size: 0.92rem;
+    font-size: 1rem;
+    font-weight: 500;
+}
+.luker_orch_tools_section > summary:hover,
+.luker_orch_skills_section > summary:hover {
+    background: rgba(180, 180, 180, 0.14);
 }
 </style>`);
 }

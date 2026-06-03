@@ -17,8 +17,14 @@ export function encodeScopePath(scope) {
         case 'global':
             return 'global';
         case 'preset':
-            assertSafe(scope.apiId, scope.name);
-            return `preset/${scope.apiId}/${scope.name}`;
+            // Preset scope is keyed by preset name alone. The earlier
+            // (apiId, name) shape forced users to bind skills to a specific
+            // connection-profile + preset pair, even though a chat-completion
+            // preset is decoupled from any particular connection profile in
+            // Luker. Flattening means the skill follows the preset wherever
+            // the user routes it.
+            assertSafe(scope.name);
+            return `preset/${scope.name}`;
         case 'character':
             assertSafe(scope.characterFile);
             return `character/${scope.characterFile}`;
@@ -37,8 +43,8 @@ export function decodeScopePath(path) {
             if (parts.length !== 1) throw new Error('global scope has no sub-path');
             return { kind: 'global' };
         case 'preset':
-            if (parts.length !== 3) throw new Error('preset scope path: preset/<api>/<name>');
-            return { kind: 'preset', apiId: parts[1], name: parts[2] };
+            if (parts.length !== 2) throw new Error('preset scope path: preset/<name>');
+            return { kind: 'preset', name: parts[1] };
         case 'character':
             if (parts.length !== 2) throw new Error('character scope path: character/<file>');
             return { kind: 'character', characterFile: parts[1] };
@@ -60,7 +66,7 @@ export function scopeLabel(scope) {
     if (!scope || typeof scope !== 'object') return 'unknown';
     switch (scope.kind) {
         case 'global': return 'global';
-        case 'preset': return `preset:${scope.apiId}:${scope.name}`;
+        case 'preset': return `preset:${scope.name}`;
         case 'character': return `character:${scope.characterFile}`;
         default: return 'unknown';
     }

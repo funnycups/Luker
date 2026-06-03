@@ -125,8 +125,8 @@ describe('embed-import-dialog — pure helpers', () => {
 
     test('formatScopeLabel handles all scope kinds', () => {
         expect(mod.formatScopeLabel({ kind: 'global' })).toBe('global');
-        expect(mod.formatScopeLabel({ kind: 'preset', apiId: 'RP4', name: 'pj' }))
-            .toBe('preset: RP4 / pj');
+        expect(mod.formatScopeLabel({ kind: 'preset', name: 'pj' }))
+            .toBe('preset: pj');
         expect(mod.formatScopeLabel({ kind: 'character', characterFile: 'Alice.png' }))
             .toBe('character: Alice.png');
         expect(mod.formatScopeLabel(null)).toBe('unknown');

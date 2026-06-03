@@ -50,11 +50,11 @@ describe('SkillMemoryIndex', () => {
             payload: { files: [{ path: 'SKILL.md', encoding: 'utf8', content: '---\nname: shared\ndescription: global version\n---\n' }] },
         });
         await repo.install({
-            scope: { kind: 'preset', apiId: 'openai', name: 'rp4' },
+            scope: { kind: 'preset', name: 'rp4' },
             payload: { files: [{ path: 'SKILL.md', encoding: 'utf8', content: '---\nname: shared\ndescription: preset version\n---\n' }] },
         });
         await idx.rebuild();
-        const visible = idx.getVisible({ presetApiId: 'openai', presetName: 'rp4' });
+        const visible = idx.getVisible({ presetName: 'rp4' });
         expect(visible.find(e => e.name === 'shared').description).toBe('preset version');
     });
 

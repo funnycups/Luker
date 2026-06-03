@@ -115,8 +115,8 @@ function normalizeScope(scope) {
     if (scope === 'global' || scope === 'all') return { kind: 'global' };
     if (typeof scope === 'string') return { kind: 'global' };
     if (scope.kind === 'global') return { kind: 'global' };
-    if (scope.kind === 'preset' && scope.apiId && scope.name) {
-        return { kind: 'preset', apiId: String(scope.apiId), name: String(scope.name) };
+    if (scope.kind === 'preset' && scope.name) {
+        return { kind: 'preset', name: String(scope.name) };
     }
     if (scope.kind === 'character' && scope.characterFile) {
         return { kind: 'character', characterFile: String(scope.characterFile) };
@@ -420,10 +420,9 @@ export function computeExtractionCandidates(profile, opts = {}) {
 
 const SCOPE_SCHEMA = {
     type: 'object',
-    description: 'Skill scope. Use {kind:\'global\'} for shared skills, {kind:\'preset\', apiId, name} for connection-profile-bound, {kind:\'character\', characterFile} for card-bound. Defaults to global when omitted.',
+    description: 'Skill scope. Use {kind:\'global\'} for shared skills, {kind:\'preset\', name} for preset-bound (preset-scope skills travel with the preset regardless of connection profile), {kind:\'character\', characterFile} for card-bound. Defaults to global when omitted.',
     properties: {
         kind: { type: 'string', enum: ['global', 'preset', 'character'] },
-        apiId: { type: 'string' },
         name: { type: 'string' },
         characterFile: { type: 'string' },
     },

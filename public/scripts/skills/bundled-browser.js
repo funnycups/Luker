@@ -15,17 +15,63 @@
  *
  * The component is mounted by `openSkillManagerPanel` when the user clicks the
  * "Browse bundled" tab. Pure helpers (`computeInstallStates`,
- * `sortBundledRows`, `buildBundledTableHtml`) are exported for tests without a
- * DOM. The interactive `renderBundledBrowser` entry point handles event wiring
- * and invokes `context.skills.importBundled()` for both bulk and per-row
- * install. The bundled mirror runs with `conflictStrategy: 'replace'` and is
- * idempotent (same hash → `already_installed`), so reusing it for the per-row
- * "Install this" button is functionally correct: clicking on a not_installed
- * row will install all bundled skills (which the toast wording surfaces), then
- * re-render with the row flipping to installed_match. A future iteration could
- * add a server route for install-one-bundled if users push back, but right now
- * the simpler shared route avoids divergence between two install paths.
+ * `sortBundledRows`, `buildBundledTableHtml`, `describeBundledImportResult`)
+ * are exported for tests without a DOM. The interactive `renderBundledBrowser`
+ * entry point handles event wiring and invokes `context.skills.importBundled()`
+ * for both bulk and per-row install. The bundled mirror runs with
+ * `conflictStrategy: 'replace'` and is idempotent (same hash →
+ * `already_installed`), so reusing it for the per-row "Install this" button is
+ * functionally correct: clicking on a not_installed row will install all
+ * bundled skills (which the toast wording surfaces), then re-render with the
+ * row flipping to installed_match. A future iteration could add a server route
+ * for install-one-bundled if users push back, but right now the simpler shared
+ * route avoids divergence between two install paths.
  */
+
+import { ensureSkillI18n } from './i18n.js';
+
+/**
+ * Format the `{installed, replaced, alreadyInstalled}` result from
+ * `context.skills.importBundled()` into a toast-ready `{level, text}` pair.
+ * Distinguishes three "nothing visible happened" cases that previously all
+ * surfaced as "0 installed, 0 replaced" — which users mistook for the button
+ * being broken:
+ *   - bundle is empty (no entries at all)
+ *   - bundle exists but every entry matches the on-disk hash
+ *   - actual import happened (installed and/or replaced > 0)
+ *
+ * Exported because both the bundled-browser tab and the manager-panel
+ * "Import bundled" toolbar button render the same toast — keeping the wording
+ * in one place avoids the kind of drift that caused the original bug, where
+ * the toolbar handler treated `installed` as an array (using `.length`) while
+ * the server returned a number.
+ *
+ * @param {{installed?:number, replaced?:number, alreadyInstalled?:number}} result
+ * @param {(s:string) => string} t - i18n helper
+ * @returns {{level: 'info'|'success', text: string}}
+ */
+export function describeBundledImportResult(result, t = (s) => s) {
+    const installed = Number(result?.installed || 0);
+    const replaced = Number(result?.replaced || 0);
+    const alreadyInstalled = Number(result?.alreadyInstalled || 0);
+    if (installed === 0 && replaced === 0 && alreadyInstalled === 0) {
+        return { level: 'info', text: t('No bundled skills available to install.') };
+    }
+    if (installed === 0 && replaced === 0) {
+        return {
+            level: 'info',
+            text: t('Bundled skills already up to date (${0} match).')
+                .replace('${0}', String(alreadyInstalled)),
+        };
+    }
+    return {
+        level: 'success',
+        text: t('Bundled install: ${0} installed, ${1} replaced, ${2} already up to date.')
+            .replace('${0}', String(installed))
+            .replace('${1}', String(replaced))
+            .replace('${2}', String(alreadyInstalled)),
+    };
+}
 
 // ── Pure helpers (exported for tests) ─────────────────────────────────────
 
@@ -191,6 +237,7 @@ export async function renderBundledBrowser({ context, mount, t = (s) => s } = {}
     if (!mount || typeof mount !== 'object') {
         throw new Error('renderBundledBrowser: mount element missing');
     }
+    ensureSkillI18n();
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
         '&': '&amp;',
         '<': '&lt;',
@@ -240,14 +287,15 @@ export async function renderBundledBrowser({ context, mount, t = (s) => s } = {}
         });
     }
 
+    function describeImportResult(result) {
+        return describeBundledImportResult(result, t);
+    }
+
     async function handleInstallAll() {
         try {
             const result = await context.skills.importBundled();
-            const installed = Number(result?.installed || 0);
-            const replaced = Number(result?.replaced || 0);
-            toast(t('Bundled install: ${0} installed, ${1} replaced.')
-                .replace('${0}', String(installed))
-                .replace('${1}', String(replaced)), 'success');
+            const summary = describeImportResult(result);
+            toast(summary.text, summary.level);
             await refresh();
         } catch (e) {
             toast(t('Install all failed: ${0}').replace('${0}', e?.message || String(e)), 'error');
@@ -264,12 +312,9 @@ export async function renderBundledBrowser({ context, mount, t = (s) => s } = {}
         // effect of the click.
         try {
             const result = await context.skills.importBundled();
-            const installed = Number(result?.installed || 0);
-            const replaced = Number(result?.replaced || 0);
-            toast(t('Installed bundled skills (target: ${0}). ${1} new, ${2} replaced.')
-                .replace('${0}', String(name || ''))
-                .replace('${1}', String(installed))
-                .replace('${2}', String(replaced)), 'success');
+            const summary = describeImportResult(result);
+            const prefix = t('Install target: ${0}.').replace('${0}', String(name || '')) + ' ';
+            toast(prefix + summary.text, summary.level);
             await refresh();
         } catch (e) {
             toast(t('Install failed: ${0}').replace('${0}', e?.message || String(e)), 'error');

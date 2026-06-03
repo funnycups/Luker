@@ -120,7 +120,7 @@ describe('REST /api/skills', () => {
         });
 
         test('install on preset scope works with URL-encoded slashes', async () => {
-            const scope = 'preset/openai/my-preset';
+            const scope = 'preset/my-preset';
             const res = await request(app)
                 .post('/api/skills/' + encodeURIComponent(scope))
                 .send({
@@ -312,6 +312,38 @@ describe('REST /api/skills', () => {
                 .query({ path: '../../etc/passwd' });
             expect(res.status).toBe(400);
         });
+
+        test('rename-file moves a non-SKILL.md file in place', async () => {
+            await request(app)
+                .post('/api/skills/global/target/file/write')
+                .send({ path: 'old-name.md', content: 'body\n' });
+            const res = await request(app)
+                .post('/api/skills/global/target/file/rename')
+                .send({ fromPath: 'old-name.md', toPath: 'new-name.md' });
+            expect(res.status).toBe(200);
+            expect(res.body.ok).toBe(true);
+            expect(res.body.path).toBe('new-name.md');
+            expect(res.body.sha256).toBeTruthy();
+            const list = await request(app).get('/api/skills/global/target/files');
+            const paths = list.body.files.map(f => f.path);
+            expect(paths).toContain('new-name.md');
+            expect(paths).not.toContain('old-name.md');
+        });
+
+        test('rename-file refuses SKILL.md on either side', async () => {
+            const asSource = await request(app)
+                .post('/api/skills/global/target/file/rename')
+                .send({ fromPath: 'SKILL.md', toPath: 'other.md' });
+            expect(asSource.status).toBe(400);
+
+            await request(app)
+                .post('/api/skills/global/target/file/write')
+                .send({ path: 'rename-me.md', content: 'x' });
+            const asTarget = await request(app)
+                .post('/api/skills/global/target/file/rename')
+                .send({ fromPath: 'rename-me.md', toPath: 'SKILL.md' });
+            expect(asTarget.status).toBe(400);
+        });
     });
 
     describe('pack-for-embed / extract / bundled / url-import', () => {
@@ -482,12 +514,12 @@ describe('REST /api/skills', () => {
             expect(res.status).toBe(500);
         });
 
-        test('import-bundled returns 0/0 when defaultRoot points at missing dir', async () => {
+        test('import-bundled returns 0/0/0 when defaultRoot points at missing dir', async () => {
             const missing = join(tmpdir(), 'skill-rest-default-missing-' + Date.now());
             const app2 = buildApp(repo, { lukerDefaultRoot: missing });
             const res = await request(app2).post('/api/skills/import-bundled');
             expect(res.status).toBe(200);
-            expect(res.body).toEqual({ installed: 0, replaced: 0 });
+            expect(res.body).toEqual({ installed: 0, replaced: 0, alreadyInstalled: 0 });
         });
 
         test('import-from-url rejects http://', async () => {

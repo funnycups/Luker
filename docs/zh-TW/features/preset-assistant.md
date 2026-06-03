@@ -61,7 +61,7 @@
 
 在「Agent 編排預設」和「僅保留破限」模式下，助手預設會建議**衍生一個新預設**（如原名加 `-orchestrator` / `-jailbreak` 後綴），經你確認後執行——原預設保持不動，編輯作用在衍生出的新預設上。如果你堅持要改原預設，直接告訴助手即可。
 
-衍生出 `-orchestrator` 預設後，助手在工具列給出一條**為該預設打包技能**連結。點開後會打開編排器的 [技能管理](/zh-TW/features/skills/management) 並自動開啟多選模式 —— 挑出你想跟這份預設一起分發的寫作規則、評審方法或其他技能，再點**把所選打包進預設……**，它們就會寫進預設的 `extensions.luker.embedded_skills_source` 欄位。其他使用者後續匯入這份衍生預設時，會看到標準的嵌入抽取對話框，技能自動落到他們的 `preset` 作用域。這是把編排器預設跟支撐它工作的技能一起分發的推薦路徑 —— 預設保持自包含。
+衍生出 `-orchestrator` 預設後，助手在工具列給出一條**為該預設打包 Skills**連結。點開後會打開編排器的 [Skill 管理](/zh-TW/features/skills/management) 並自動開啟多選模式 —— 挑出你想跟這份預設一起分發的寫作規則、評審方法或其他 Skill，再點**把所選打包進預設……**，它們就會寫進預設的 `extensions.luker.embedded_skills_source` 欄位。其他使用者後續匯入這份衍生預設時，會看到標準的嵌入抽取對話框，Skill 自動落到他們的 `preset` 作用域。這是把編排器預設跟支撐它工作的 Skill 一起分發的推薦路徑 —— 預設保持自包含。
 
 ### 把預設裡的文風 / 輸出格式抽成 Skills（Agent 編排預設模式）
 
@@ -75,7 +75,7 @@
 
 除了常規的 coercion / 格式改寫，助手會按候選給你提案：
 
-1. 在這份預設的作用域下建立 skill，正文逐字照搬（不允許改寫、壓縮或換措辭）。之後你點**為該預設打包技能**匯出時它會跟著走。
+1. 在這份預設的作用域下建立 skill，正文逐字照搬（不允許改寫、壓縮或換措辭）。之後你點**為該預設打包 Skills**匯出時它會跟著走。
 2. 從原條目裡把這段文字刪掉。
 3. 在原位置補一行指標，例如 `參考 skill <skill-name>`，讓條目還能提到這條規則的存在 —— 編排器下的 agent 看到指標就會按需把整條 skill 拉出來讀。
 
@@ -116,5 +116,5 @@
 
 - [預設解耦](/zh-TW/improvements/preset-decoupling) — 補全預設助手使用當前連線配置進行 AI 呼叫
 - [多Agent編排](/zh-TW/features/orchestrator/) — 編排器中的節點同樣引用 LLM 預設
-- [技能](/zh-TW/features/skills/) — 透過**為該預設打包技能**連結，把寫作規則與評審方法跟 `-orchestrator` 預設一起分發
-- [建立技能](/zh-TW/features/skills/authoring) — 助手幫你從預設內容起草技能時遵循的 `SKILL.md` 寫法約定
+- [Skills](/zh-TW/features/skills/) — 透過**為該預設打包 Skills**連結，把寫作規則與評審方法跟 `-orchestrator` 預設一起分發
+- [建立 Skill](/zh-TW/features/skills/authoring) — 助手幫你從預設內容起草 Skill 時遵循的 `SKILL.md` 寫法約定

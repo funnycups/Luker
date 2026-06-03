@@ -32,13 +32,13 @@ Skills 是給 agent 用的知識包。導演派發某個 sub-agent（`intent_sco
 
 適合你已經清楚知道想要哪幾段、想自己定措辭、不願被 LLM 套話的時候。
 
-在編排器面板點**管理技能**，再點**新建**。填好名字、描述、作用域，流程會自動落一份模板 SKILL.md 並開啟內嵌編輯器：
+在編排器面板點**管理 Skills**，再點**新建**。填好名字、描述、作用域，流程會自動落一份模板 SKILL.md 並開啟內嵌編輯器：
 
-![內嵌技能編輯器 — 檔案樹 + 正文區](/_screenshots/skills/rp-demo-8.5-editor-body-pasted.png)
+![內嵌 Skill 編輯器 — 檔案樹 + 正文區](/_screenshots/skills/rp-demo-8.5-editor-body-pasted.png)
 
-把模板正文換成你想要的。要找格式參考，隨便開啟一條自帶 skill 看就行——它們用雙語段落、`✗` / `✓` 例子對照，結尾用一個 Self-check 段。儲存之後回到導演編輯器，把新 skill 加進它的技能列表。
+把模板正文換成你想要的。要找格式參考，隨便開啟一條自帶 skill 看就行——它們用雙語段落、`✗` / `✓` 例子對照，結尾用一個 Self-check 段。儲存之後回到導演編輯器，把新 skill 加進它的 Skill 列表。
 
-詳見 [技能管理](/zh-TW/features/skills/management)。
+詳見 [Skill 管理](/zh-TW/features/skills/management)。
 
 ---
 
@@ -47,4 +47,4 @@ Skills 是給 agent 用的知識包。導演派發某個 sub-agent（`intent_sco
 - [Skills 概覽](/zh-TW/features/skills/) — skill 是什麼、scope 怎麼用、agent 怎麼讀
 - [Skills 整合](/zh-TW/features/orchestrator/skills) — 讓 skill 對某個 agent 可見
 - [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio) — 工作台完整能力
-- [創作技能](/zh-TW/features/skills/authoring) — SKILL.md 格式、frontmatter、多檔案
+- [創作 Skill](/zh-TW/features/skills/authoring) — SKILL.md 格式、frontmatter、多檔案

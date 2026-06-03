@@ -32,8 +32,8 @@ describe('skill-manager-panel — pure helpers', () => {
 
     test('formatScopeLabel handles all scope kinds + unknowns', () => {
         expect(mod.formatScopeLabel({ kind: 'global' })).toBe('global');
-        expect(mod.formatScopeLabel({ kind: 'preset', apiId: 'openai', name: 'rp4' }))
-            .toBe('preset: openai / rp4');
+        expect(mod.formatScopeLabel({ kind: 'preset', name: 'rp4' }))
+            .toBe('preset: rp4');
         expect(mod.formatScopeLabel({ kind: 'character', characterFile: 'Alice.png' }))
             .toBe('character: Alice.png');
         expect(mod.formatScopeLabel(null)).toBe('unknown');
@@ -42,8 +42,8 @@ describe('skill-manager-panel — pure helpers', () => {
 
     test('scopesEqual compares by kind and sub-fields', () => {
         expect(mod.scopesEqual({ kind: 'global' }, { kind: 'global' })).toBe(true);
-        expect(mod.scopesEqual({ kind: 'preset', apiId: 'a', name: 'b' }, { kind: 'preset', apiId: 'a', name: 'b' })).toBe(true);
-        expect(mod.scopesEqual({ kind: 'preset', apiId: 'a', name: 'b' }, { kind: 'preset', apiId: 'a', name: 'c' })).toBe(false);
+        expect(mod.scopesEqual({ kind: 'preset', name: 'b' }, { kind: 'preset', name: 'b' })).toBe(true);
+        expect(mod.scopesEqual({ kind: 'preset', name: 'b' }, { kind: 'preset', name: 'c' })).toBe(false);
         expect(mod.scopesEqual({ kind: 'character', characterFile: 'x' }, { kind: 'character', characterFile: 'x' })).toBe(true);
         expect(mod.scopesEqual({ kind: 'global' }, { kind: 'character', characterFile: 'x' })).toBe(false);
         expect(mod.scopesEqual(null, { kind: 'global' })).toBe(false);
@@ -53,7 +53,7 @@ describe('skill-manager-panel — pure helpers', () => {
         const flat = [
             { name: 'b', scope: { kind: 'character', characterFile: 'B.png' } },
             { name: 'a', scope: { kind: 'global' } },
-            { name: 'c', scope: { kind: 'preset', apiId: 'openai', name: 'rp' } },
+            { name: 'c', scope: { kind: 'preset', name: 'rp' } },
             { name: 'd', scope: { kind: 'global' } },
         ];
         const grouped = mod.groupSkillsByScope(flat);
@@ -67,7 +67,7 @@ describe('skill-manager-panel — pure helpers', () => {
     test('filterGroups narrows to one scope when a key is supplied', () => {
         const flat = [
             { name: 'a', scope: { kind: 'global' } },
-            { name: 'b', scope: { kind: 'preset', apiId: 'openai', name: 'rp' } },
+            { name: 'b', scope: { kind: 'preset', name: 'rp' } },
         ];
         const grouped = mod.groupSkillsByScope(flat);
         const onlyGlobal = mod.filterGroups(grouped, 'global');
@@ -93,12 +93,12 @@ describe('skill-manager-panel — pure helpers', () => {
     test('hasMoveScopeCollision finds destination-scope name match', () => {
         const skills = [
             { name: 'shared', scope: { kind: 'global' } },
-            { name: 'shared', scope: { kind: 'preset', apiId: 'openai', name: 'rp' } },
+            { name: 'shared', scope: { kind: 'preset', name: 'rp' } },
         ];
         expect(mod.hasMoveScopeCollision(
             skills, 'shared',
             { kind: 'global' },
-            { kind: 'preset', apiId: 'openai', name: 'rp' },
+            { kind: 'preset', name: 'rp' },
         )).toBe(true);
         expect(mod.hasMoveScopeCollision(
             skills, 'shared',
@@ -183,7 +183,7 @@ describe('skill-manager-panel — pure helpers', () => {
                 description: '',
                 fileCount: 1,
                 hasScripts: true,
-                scope: { kind: 'preset', apiId: 'openai', name: 'rp' },
+                scope: { kind: 'preset', name: 'rp' },
             },
         ];
         const groups = mod.groupSkillsByScope(skills);
@@ -417,7 +417,7 @@ class StubDocument {
     querySelector(sel) { return this.body.querySelector(sel); }
 }
 
-function makeStubContext({ skills = [], bundled = [], scenarios = {} } = {}) {
+function makeStubContext({ skills = [], bundled = [], characters = [], scenarios = {} } = {}) {
     const popupCalls = [];
     const skillsApi = {
         list: jest.fn(async () => skills.slice()),
@@ -453,6 +453,11 @@ function makeStubContext({ skills = [], bundled = [], scenarios = {} } = {}) {
         callGenericPopup,
         POPUP_TYPE,
         POPUP_RESULT,
+        // The scope picker queries these to populate its dropdowns. Tests
+        // that don't exercise the picker leave them empty.
+        characters,
+        extensionSettings: { connectionManager: { profiles: [], selectedProfile: '' } },
+        getPresetManager: () => null,
         Popup: class StubPopup {
             constructor(html, type, _val, opts) {
                 this.html = html; this.type = type; this.opts = opts;
@@ -623,22 +628,33 @@ describe('openSkillManagerPanel — integration scenarios', () => {
         ];
         // Scope-picker returns character/A.png → collision → user accepts proceed.
         const { ctx, mount } = await bootstrap({
+            // The new scope-picker renders the character row as a real <select>
+            // populated from context.characters; we have to advertise A.png as a
+            // selectable option for the test driver to be able to "pick" it.
+            characters: [{ name: 'Alice', avatar: 'A.png' }],
             skills,
             scenarios: {
                 confirm: () => 1, // AFFIRMATIVE — proceed despite warning
                 popupShow: async (popup) => {
                     // Drive the scope-picker: emulate "user picks
-                    // character/A.png". The picker's HTML is already
-                    // parsed into `popup.dlg`; we just flip the checked
-                    // state on the right radio and inject the character
-                    // file value.
+                    // character/A.png". Flip the kind radio to "character"
+                    // and mark the corresponding <option> as selected so the
+                    // stub <select>.value reads A.png.
                     const dlg = popup.dlg;
                     const radios = dlg.querySelectorAll('[name="luker_skill_scope_kind"]');
                     for (const r of radios) {
                         r.checked = (r._attrs.get('value') === 'character');
                     }
-                    const charInput = dlg.querySelector('[data-skill-scope-character]');
-                    if (charInput) charInput.value = 'A.png';
+                    const charSelect = dlg.querySelector('[data-skill-scope-character]');
+                    if (charSelect) {
+                        // Mark the matching <option> as selected — the stub
+                        // <select>.value getter reads from option attrs, not
+                        // from a direct .value setter.
+                        for (const opt of charSelect._children) {
+                            if (opt._attrs.get('value') === 'A.png') opt._attrs.set('selected', '');
+                            else opt._attrs.delete('selected');
+                        }
+                    }
                     if (popup.opts && typeof popup.opts.onClosing === 'function') {
                         const r = popup.opts.onClosing({
                             result: 1,
@@ -757,16 +773,16 @@ describe('openSkillManagerPanel — integration scenarios', () => {
     test('initialScope filter pre-selects scope in dropdown', async () => {
         const skills = [
             { name: 'a', scope: { kind: 'global' }, description: 'g', fileCount: 1 },
-            { name: 'b', scope: { kind: 'preset', apiId: 'openai', name: 'rp' }, description: 'p', fileCount: 1 },
+            { name: 'b', scope: { kind: 'preset', name: 'rp' }, description: 'p', fileCount: 1 },
         ];
         // Open with initialScope filter set to that preset.
-        const initialScope = { kind: 'preset', apiId: 'openai', name: 'rp' };
+        const initialScope = { kind: 'preset', name: 'rp' };
         const { mount } = await bootstrap({ skills, initialScope });
         // The filter dropdown should have the preset scope selected; the panel
         // body should only contain group(s) for that scope.
         const filterSelect = mount.querySelector('[data-skill-filter]');
         expect(filterSelect).toBeTruthy();
-        expect(filterSelect.value).toBe('preset/openai/rp');
+        expect(filterSelect.value).toBe('preset/rp');
         // Global skill 'a' should not appear in the rendered list.
         const rows = mount.querySelectorAll('[data-skill-name]');
         const names = [];

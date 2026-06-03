@@ -53,11 +53,11 @@ Director 是编排器里唯一一种**接管（takeover）模式** —— 这一
 
 整个回合用户只在主对话里看到最终那一段叙事，所有过程性产出停留在折叠里，展开可读。
 
-## 默认技能
+## 默认 Skill
 
-默认 director profile 出厂时配套 **24 个出厂技能**，agent 按需读取。技能是兼容 Anthropic 的紧凑知识包 —— 每一份装载一条写作规则、一份评审方法、或一份工作流契约，过去这些都内联在系统提示词里。把它们移出 prompt、放进 `skill_read` 可访问的文件里，带来三个效果：prompt 短而可编辑；同一条规则可被多个 agent 共用而不必拷贝；卡作者或预设作者可以自己分发变体。
+默认 director profile 出厂时配套 **24 个出厂 Skill**，agent 按需读取。Skill 是兼容 Anthropic 的紧凑知识包 —— 每一份装载一条写作规则、一份评审方法、或一份工作流契约，过去这些都内联在系统提示词里。把它们移出 prompt、放进 `skill_read` 可访问的文件里，带来三个效果：prompt 短而可编辑；同一条规则可被多个 agent 共用而不必拷贝；卡作者或预设作者可以自己分发变体。
 
-24 个出厂技能分三类：
+24 个出厂 Skill 分三类：
 
 | 家族 | 数量 | 谁能看到 | 例子 |
 |---|---|---|---|
@@ -65,13 +65,13 @@ Director 是编排器里唯一一种**接管（takeover）模式** —— 这一
 | 主代理 | 2 | 仅主代理 | `director-turn-workflow-zh`、`director-dispatch-protocol-zh` |
 | 每子代理一份方法 | 17 | 对应那个子代理 | `voice-critic-method-zh`（→ `voice_critic`）、`event-summary-rules-zh`（→ `memory_curator`）、`chat-scout-method-zh`（→ `chat_scout`）…… |
 
-模式级的几条是每个默认 agent 共享的通用写作规则。两条主代理技能装着 7 步回合工作流和派遣协议。每条 per-sub-agent 方法技能装着该子代理的专属契约 —— 例如 `event-summary-rules-zh` 是 `memory_curator` 完整的 V10 事件摘要写作纪律。
+模式级的几条是每个默认 agent 共享的通用写作规则。两条主代理 Skill 装着 7 步回合工作流和派遣协议。每条 per-sub-agent 方法 Skill 装着该子代理的专属契约 —— 例如 `event-summary-rules-zh` 是 `memory_curator` 完整的 V10 事件摘要写作纪律。
 
-默认 profile 相应预填了 `skills.visible`：模式级 visible 覆盖那 5 条共享技能，主代理用 `["+", "director-turn-workflow-zh", "director-dispatch-protocol-zh"]`（继承模式 + 追加两条），每个子代理用 `["+", "<对应方法技能>"]`。所以开箱即用每个 agent 都拿到对的那摞栈，不需要手动绑定。
+默认 profile 相应预填了 `skills.visible`：模式级 visible 覆盖那 5 条共享 Skill，主代理用 `["+", "director-turn-workflow-zh", "director-dispatch-protocol-zh"]`（继承模式 + 追加两条），每个子代理用 `["+", "<对应方法 Skill>"]`。所以开箱即用每个 agent 都拿到对的那摞栈，不需要手动绑定。
 
-服务端首次启动时把 `data/<user>/skills/global/` 从 `default/skills/global/` 填充。之后，编排器面板的 **管理技能** 按钮（以及 `import-bundled` API）是唯一覆盖入口 —— 后续启动不会有隐式自动更新。
+服务端首次启动时把 `data/<user>/skills/global/` 从 `default/skills/global/` 填充。之后，编排器面板的 **管理 Skills** 按钮（以及 `import-bundled` API）是唯一覆盖入口 —— 后续启动不会有隐式自动更新。
 
-技能如何挂到 agent 的完整图景，见 [技能概览](/zh-CN/features/skills/) 与 [编排器集成](/zh-CN/features/skills/orchestrator-integration)。创作约定见 [创作技能](/zh-CN/features/skills/authoring)。
+Skill 如何挂到 agent 的完整图景，见 [Skills 概览](/zh-CN/features/skills/) 与 [编排器集成](/zh-CN/features/skills/orchestrator-integration)。创作约定见 [创作 Skill](/zh-CN/features/skills/authoring)。
 
 ## 怎么切到 Director
 
@@ -275,7 +275,7 @@ Director 跟其他模式一样支持 **导出 profile** / **导入 profile** 按
 ## 相关页面
 
 - [编排器概览](/zh-CN/features/orchestrator/) — 通用配置 / 触发时机 / 角色卡绑定
-- [技能概览](/zh-CN/features/skills/) — director 默认值依赖的知识包底层素材
+- [Skills 概览](/zh-CN/features/skills/) — director 默认值依赖的知识包底层素材
 - [编排器集成](/zh-CN/features/skills/orchestrator-integration) — `skills.visible` 如何按 agent 解析
 - [AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio) — AI 帮你写主代理 / 子代理 system prompt（强烈推荐）
 - [笔记子系统](/zh-CN/features/orchestrator/notes) — `notes_pickup_scout` 读取、`notes_curator` 写入的开/关状态线索仓库

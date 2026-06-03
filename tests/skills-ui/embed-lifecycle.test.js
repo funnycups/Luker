@@ -8,7 +8,7 @@
  *   - onPresetDeletedCascade (PRESET_DELETED → skill cleanup)
  *
  * Plus the pure helpers extractCharacterPayloads / mergePayloads /
- * getActiveConnectionProfileName / cascadeDeleteSkillsInScope.
+ * cascadeDeleteSkillsInScope.
  */
 
 import { describe, test, expect, jest, beforeEach, afterEach } from '@jest/globals';
@@ -144,34 +144,6 @@ describe('embed-lifecycle — pure helpers', () => {
     test('mergePayloads returns single payload unmodified', () => {
         const a = makePayload(['x']);
         expect(mod.mergePayloads([a])).toBe(a);
-    });
-
-    test('getActiveConnectionProfileName reads from connectionManager', () => {
-        const ctx = makeContext({
-            extensionSettings: {
-                connectionManager: {
-                    selectedProfile: 'p1',
-                    profiles: [
-                        { id: 'p1', name: 'RP4-claude4' },
-                        { id: 'p2', name: 'Other' },
-                    ],
-                },
-            },
-        });
-        expect(mod.getActiveConnectionProfileName(ctx)).toBe('RP4-claude4');
-    });
-
-    test('getActiveConnectionProfileName returns null when no selection', () => {
-        const ctx = makeContext({
-            extensionSettings: {
-                connectionManager: {
-                    selectedProfile: null,
-                    profiles: [{ id: 'p1', name: 'X' }],
-                },
-            },
-        });
-        expect(mod.getActiveConnectionProfileName(ctx)).toBeNull();
-        expect(mod.getActiveConnectionProfileName({})).toBeNull();
     });
 
     test('cascadeDeleteSkillsInScope deletes each listed skill', async () => {
@@ -352,16 +324,10 @@ describe('embed-lifecycle — preset handlers', () => {
         expect(ctx.skills.previewExtractEmbed).not.toHaveBeenCalled();
     });
 
-    test('checkPresetEmbeddedSkills: with payload → uses active connection profile as apiId', async () => {
+    test('checkPresetEmbeddedSkills: with payload → opens dialog with preset name as scope', async () => {
         const mod = await import('../../public/scripts/skills/embed-lifecycle.js');
         const payload = makePayload(['s1']);
         const ctx = makeContext({
-            extensionSettings: {
-                connectionManager: {
-                    selectedProfile: 'p1',
-                    profiles: [{ id: 'p1', name: 'RP4-claude4' }],
-                },
-            },
             skills: {
                 previewExtractEmbed: jest.fn(async () => ({ items: [{ name: 's1', conflict: 'new' }] })),
             },
@@ -373,15 +339,23 @@ describe('embed-lifecycle — preset handlers', () => {
         const args = ctx.skills.previewExtractEmbed.mock.calls[0][0];
         expect(args.targetScope).toEqual({
             kind: 'preset',
-            apiId: 'RP4-claude4',
             name: 'pj-romance',
         });
     });
 
-    test('checkPresetEmbeddedSkills: no connection profile → falls back to openai', async () => {
+    test('checkPresetEmbeddedSkills: scope uses preset name regardless of active connection profile', async () => {
         const mod = await import('../../public/scripts/skills/embed-lifecycle.js');
         const payload = makePayload(['s1']);
         const ctx = makeContext({
+            // Even if a connection profile is selected, the scope should not
+            // pick up its name — preset-scope skills are decoupled from
+            // connection profiles.
+            extensionSettings: {
+                connectionManager: {
+                    selectedProfile: 'p1',
+                    profiles: [{ id: 'p1', name: 'RP4-claude4' }],
+                },
+            },
             skills: {
                 previewExtractEmbed: jest.fn(async () => ({ items: [] })),
             },
@@ -391,15 +365,14 @@ describe('embed-lifecycle — preset handlers', () => {
             presetName: 'foo',
         }, { context: ctx });
         const args = ctx.skills.previewExtractEmbed.mock.calls[0][0];
-        expect(args.targetScope.apiId).toBe('openai');
-        expect(args.targetScope.name).toBe('foo');
+        expect(args.targetScope).toEqual({ kind: 'preset', name: 'foo' });
     });
 
     test('checkPresetEmbeddedSkills: already prompted → no-op', async () => {
         const mod = await import('../../public/scripts/skills/embed-lifecycle.js');
         const payload = makePayload(['s1']);
         const ctx = makeContext({});
-        ctx.accountStorage.setItem('AlertSkills_openai_rp4', 'true');
+        ctx.accountStorage.setItem('AlertSkills_preset_rp4', 'true');
         await mod.checkPresetEmbeddedSkills({
             data: { extensions: { luker: { embedded_skills_source: payload } } },
             presetName: 'rp4',
@@ -415,26 +388,25 @@ describe('embed-lifecycle — preset handlers', () => {
                 delete: jest.fn(async () => null),
             },
         });
-        ctx.accountStorage.setItem('AlertSkills_openai_rp4', 'true');
+        ctx.accountStorage.setItem('AlertSkills_preset_rp4', 'true');
         await mod.onPresetDeletedCascade(
-            { apiId: 'openai', name: 'rp4' },
+            { name: 'rp4' },
             { context: ctx },
         );
         expect(ctx.skills.delete).toHaveBeenCalledWith(
-            { kind: 'preset', apiId: 'openai', name: 'rp4' },
+            { kind: 'preset', name: 'rp4' },
             'rp-pal',
         );
-        expect(ctx.accountStorage.getItem('AlertSkills_openai_rp4')).toBeNull();
+        expect(ctx.accountStorage.getItem('AlertSkills_preset_rp4')).toBeNull();
     });
 
-    test('onPresetDeletedCascade: missing apiId/name → no-op', async () => {
+    test('onPresetDeletedCascade: missing name → no-op', async () => {
         const mod = await import('../../public/scripts/skills/embed-lifecycle.js');
         const ctx = makeContext({
             skills: { list: jest.fn(), delete: jest.fn() },
         });
         await mod.onPresetDeletedCascade({}, { context: ctx });
-        await mod.onPresetDeletedCascade({ apiId: 'openai' }, { context: ctx });
-        await mod.onPresetDeletedCascade({ name: 'foo' }, { context: ctx });
+        await mod.onPresetDeletedCascade({ apiId: 'openai' /* ignored */ }, { context: ctx });
         expect(ctx.skills.list).not.toHaveBeenCalled();
     });
 });
@@ -482,11 +454,11 @@ describe('embed-lifecycle — registerSkillEmbedLifecycle', () => {
             },
         });
         mod.registerSkillEmbedLifecycle({ context: ctx });
-        await ctx.eventSource.emit('preset_deleted', { apiId: 'openai', name: 'rp4' });
+        await ctx.eventSource.emit('preset_deleted', { name: 'rp4' });
         // Listener is fire-and-forget (void Promise) — allow the async chain to flush.
         await new Promise(resolve => setTimeout(resolve, 10));
         expect(ctx.skills.delete).toHaveBeenCalledWith(
-            { kind: 'preset', apiId: 'openai', name: 'rp4' },
+            { kind: 'preset', name: 'rp4' },
             'pumpernickel',
         );
     });

@@ -90,7 +90,7 @@ function registerLocaleData() {
         'Completion Preset Assistant': '聊天补全预设助手',
         'Open Assistant': '打开助手',
         'Create New Preset': '新建预设',
-        'Bundle skills with this preset': '将技能打包到此预设',
+        'Bundle skills with this preset': '将 Skills 打包到此预设',
         'No preset is currently selected.': '当前未选择预设。',
         'Character-bound runtime presets are not directly editable.': '角色卡绑定的运行时预设暂不支持直接编辑。',
         'Enter a name for the new preset.': '请输入新预设名称。',
@@ -132,7 +132,7 @@ function registerLocaleData() {
         'Completion Preset Assistant': '聊天補全預設助手',
         'Open Assistant': '開啟助手',
         'Create New Preset': '新建預設',
-        'Bundle skills with this preset': '將技能打包到此預設',
+        'Bundle skills with this preset': '將 Skills 打包到此預設',
         'No preset is currently selected.': '目前未選擇預設。',
         'Character-bound runtime presets are not directly editable.': '角色卡綁定的執行時預設暫不支援直接編輯。',
         'Enter a name for the new preset.': '請輸入新預設名稱。',
@@ -273,50 +273,10 @@ async function handleCreateNewPreset() {
 }
 
 /**
- * Resolve the connection-profile name we should use as the `apiId` portion of
- * the preset scope when the user clicks "Bundle skills with this preset".
- *
- * Source of truth precedence (matches the orchestrator's per-agent override
- * pattern, which is what skill-resolution later reads at runtime):
- *   1. CPA's own `requestApiPresetName` if the user has set it explicitly.
- *   2. The active Connection Manager profile (chat completion mode).
- *   3. The chat completion source string ('openai', 'claude', etc.).
- *   4. Fallback to the literal 'openai'.
- *
- * The returned value is the same kind of string that the orchestrator passes
- * as `presetApiId` into `buildSkillRuntimeContext`, so a skill scoped to the
- * returned (apiId, presetName) pair will resolve at request-time without the
- * user having to re-key anything.
- *
- * @returns {string}
- */
-function resolveActiveConnectionProfileName() {
-    const settings = getSettings();
-    const fromCpa = String(settings?.requestApiPresetName || '').trim();
-    if (fromCpa) return fromCpa;
-
-    try {
-        const cm = extension_settings?.connectionManager;
-        const profiles = Array.isArray(cm?.profiles) ? cm.profiles : [];
-        const active = profiles.find(p => p && p.id === cm?.selectedProfile);
-        const activeName = String(active?.name || '').trim();
-        if (activeName) return activeName;
-    } catch (_) { /* tolerate sparse extension settings */ }
-
-    try {
-        const ctx = getContext();
-        const source = String(ctx?.chatCompletionSettings?.chat_completion_source || ctx?.mainApi || '').trim();
-        if (source) return source;
-    } catch (_) { /* tolerate missing context */ }
-
-    return 'openai';
-}
-
-/**
  * Open the Skill Manager popup pre-filtered to the currently-selected preset.
  *
  * Surfaces the same Skill Manager that the orchestrator config exposes, but
- * seeded with `initialScope = preset/<apiId>/<presetName>` so the user lands
+ * seeded with `initialScope = preset/<presetName>` so the user lands
  * directly on the skills already bound to this preset. From there they can
  * Import / Create / Move skills into the preset scope, or switch to the
  * Browse-bundled tab to install bundled scaffolds.
@@ -328,10 +288,8 @@ async function openBundleSkillsForCurrentPreset() {
         toastr.warning(i18n('No preset is currently selected.'));
         return;
     }
-    const apiId = resolveActiveConnectionProfileName();
     const initialScope = {
         kind: 'preset',
-        apiId,
         name: String(targetRef.name),
     };
     try {
@@ -419,17 +377,17 @@ async function openCpaIteration() {
                 return { ok: false, error: String(err?.message || err || 'clone failed') };
             }
         },
-        // Skill tool wiring. Provides the active (apiId, presetName) pair so
-        // the studio's skill-prompt augmentation can tell the AI to default
-        // new skills to this preset's scope — they then ride with the preset
-        // on export. Mirrors `openBundleSkillsForCurrentPreset`'s scope
-        // resolution so an AI-authored skill is visible to the same skill
-        // manager view the user opens via "Bundle skills with this preset".
+        // Skill tool wiring. Provides the active preset name so the
+        // studio's skill-prompt augmentation can tell the AI to default
+        // new skills to this preset's scope — they then ride with the
+        // preset on export. Mirrors `openBundleSkillsForCurrentPreset`'s
+        // scope resolution so an AI-authored skill is visible to the same
+        // skill manager view the user opens via "Bundle skills with this
+        // preset".
         getSkillScopeHint: () => {
             const ref = getTargetRef();
             const presetName = String(ref?.name || '').trim();
-            const apiId = resolveActiveConnectionProfileName();
-            return { presetName, apiId };
+            return { presetName };
         },
     });
 }

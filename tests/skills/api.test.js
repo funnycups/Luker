@@ -40,9 +40,9 @@ describe('public/scripts/skills/api.js — jsonFetch wrapper', () => {
             return { ok: true, status: 200, json: async () => [] };
         };
 
-        await skillsApi.list({ scope: { kind: 'preset', apiId: 'openai', name: 'rp4' } });
+        await skillsApi.list({ scope: { kind: 'preset', name: 'rp4' } });
 
-        expect(capturedUrl).toContain('scope=preset%2Fopenai%2Frp4');
+        expect(capturedUrl).toContain('scope=preset%2Frp4');
     });
 
     test('list() defaults to scope=all when no scope is supplied', async () => {
@@ -142,14 +142,14 @@ describe('public/scripts/skills/api.js — jsonFetch wrapper', () => {
         };
 
         const r = await skillsApi.listFiles({
-            scope: { kind: 'preset', apiId: 'openai', name: 'rp' },
+            scope: { kind: 'preset', name: 'rp' },
             name: 'demo',
         });
 
         expect(capturedUrl).toContain('/api/skills/');
         expect(capturedUrl).toMatch(/\/demo\/files$/);
-        // The scope segment is URL-encoded so preset/openai/rp survives Express path parsing.
-        expect(capturedUrl).toContain(encodeURIComponent('preset/openai/rp'));
+        // The scope segment is URL-encoded so preset/rp survives Express path parsing.
+        expect(capturedUrl).toContain(encodeURIComponent('preset/rp'));
         expect(Array.isArray(r.files)).toBe(true);
     });
 

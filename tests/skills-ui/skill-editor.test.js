@@ -105,6 +105,26 @@ describe('skill-editor — pure helpers', () => {
         expect(html).toMatch(/data-editor-action="new-file"/);
     });
 
+    test('buildFileTreeHtml: non-SKILL.md files get both rename and delete actions', () => {
+        const files = [
+            { path: 'SKILL.md', size: 100, isBinary: false },
+            { path: 'notes.md', size: 40, isBinary: false },
+        ];
+        const html = mod.buildFileTreeHtml({
+            files,
+            activePath: 'SKILL.md',
+            t: (s) => s,
+            esc: (s) => String(s),
+        });
+        // Rename + delete glyphs for the non-manifest file
+        expect(html).toMatch(/data-editor-action="rename-file"[^>]*data-file-path="notes\.md"/);
+        expect(html).toMatch(/data-editor-action="delete-file"[^>]*data-file-path="notes\.md"/);
+        // SKILL.md never gets rename/delete (server enforces both rejections).
+        // No occurrence of the rename/delete actions paired with SKILL.md.
+        expect(html).not.toMatch(/data-editor-action="rename-file"[^>]*data-file-path="SKILL\.md"/);
+        expect(html).not.toMatch(/data-editor-action="delete-file"[^>]*data-file-path="SKILL\.md"/);
+    });
+
     test('buildEditorHtml: textarea is present and pre-filled', () => {
         const html = mod.buildEditorHtml({
             content: 'hello world',

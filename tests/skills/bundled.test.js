@@ -65,6 +65,20 @@ describe('bundled skills', () => {
         const result = await importBundledSkills({ defaultRoot, repository: repo });
         expect(result.installed).toBe(1);
         expect(result.replaced).toBe(0);
+        expect(result.alreadyInstalled).toBe(0);
+    });
+
+    test('importBundledSkills reports alreadyInstalled when bundle matches disk', async () => {
+        // First run installs the bundle.
+        await importBundledSkills({ defaultRoot, repository: repo });
+        // Second run: same bundled content, same disk content → repository
+        // returns action: 'already_installed' for every entry. This is the
+        // scenario that produced the user-reported "0 installed, 0 replaced"
+        // toast — the new alreadyInstalled counter lets the UI explain it.
+        const result = await importBundledSkills({ defaultRoot, repository: repo });
+        expect(result.installed).toBe(0);
+        expect(result.replaced).toBe(0);
+        expect(result.alreadyInstalled).toBe(1);
     });
 
     test('importBundledSkills handles binary files via base64', async () => {
@@ -89,6 +103,7 @@ describe('bundled skills', () => {
         expect(r1).toHaveProperty('populated');
         expect(r1).toHaveProperty('installed');
         expect(r1).toHaveProperty('replaced');
+        expect(r1).toHaveProperty('alreadyInstalled');
         expect(r1.populated).toBe(true);
 
         // No-op branch (user dir now populated)
@@ -96,5 +111,6 @@ describe('bundled skills', () => {
         expect(r2.populated).toBe(false);
         expect(r2.installed).toBe(0);
         expect(r2.replaced).toBe(0);
+        expect(r2.alreadyInstalled).toBe(0);
     });
 });

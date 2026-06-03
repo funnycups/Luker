@@ -452,10 +452,10 @@ export async function openCpaIterationStudio(deps) {
 
     // Optional wiring for the skill tools' scope hint. When the host plugin
     // supplies a `getSkillScopeHint()` callable returning the active
-    // (apiId, presetName) pair, the system prompt's skill block tells the AI
-    // to default new skills to that preset scope so they travel with the
-    // preset on export. When omitted, the prompt falls back to generic
-    // wording and the AI passes scope explicitly per call.
+    // presetName, the system prompt's skill block tells the AI to default
+    // new skills to that preset scope so they travel with the preset on
+    // export. When omitted, the prompt falls back to generic wording and
+    // the AI passes scope explicitly per call.
     const getSkillScopeHint = typeof deps.getSkillScopeHint === 'function'
         ? deps.getSkillScopeHint
         : null;

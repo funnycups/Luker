@@ -17,7 +17,7 @@ describe('SkillRepository - list / get', () => {
     });
 
     test('list returns preset-scoped skills', async () => {
-        const entries = await repo.list({ scope: { kind: 'preset', apiId: 'openai', name: 'test-preset' } });
+        const entries = await repo.list({ scope: { kind: 'preset', name: 'test-preset' } });
         expect(entries.map(e => e.name)).toEqual(['preset-skill']);
     });
 
@@ -284,6 +284,113 @@ describe('SkillRepository - writeFile / editFile', () => {
             scope: { kind: 'global' }, name: 'edit-target', path: 'SKILL.md',
             oldString: '', newString: 'x',
         })).rejects.toThrow(/non-empty/);
+    });
+});
+
+describe('SkillRepository - renameFile', () => {
+    let tmpRoot, repo;
+
+    beforeEach(async () => {
+        tmpRoot = await fs.mkdtemp(pjoin(tmpdir(), 'skill-test-'));
+        repo = createSkillRepository(tmpRoot);
+        await repo.install({
+            scope: { kind: 'global' },
+            payload: {
+                files: [
+                    { path: 'SKILL.md', encoding: 'utf8', content: '---\nname: rn-target\ndescription: x\n---\n' },
+                    { path: 'old.md', encoding: 'utf8', content: 'body\n' },
+                    { path: 'references/nested.md', encoding: 'utf8', content: 'nested\n' },
+                ],
+            },
+        });
+    });
+
+    afterEach(async () => { await fs.rm(tmpRoot, { recursive: true, force: true }); });
+
+    test('renames file in place', async () => {
+        const r = await repo.renameFile({
+            scope: { kind: 'global' }, name: 'rn-target',
+            fromPath: 'old.md', toPath: 'new.md',
+        });
+        expect(r.ok).toBe(true);
+        expect(r.path).toBe('new.md');
+        expect(r.sha256).toBeTruthy();
+        const exists = await fs.stat(pjoin(tmpRoot, 'skills/global/rn-target/new.md')).then(() => true).catch(() => false);
+        expect(exists).toBe(true);
+        const oldExists = await fs.stat(pjoin(tmpRoot, 'skills/global/rn-target/old.md')).then(() => true).catch(() => false);
+        expect(oldExists).toBe(false);
+    });
+
+    test('moves file across subdirectories, creating the target dir', async () => {
+        await repo.renameFile({
+            scope: { kind: 'global' }, name: 'rn-target',
+            fromPath: 'old.md', toPath: 'archive/2024/old.md',
+        });
+        const moved = await fs.readFile(pjoin(tmpRoot, 'skills/global/rn-target/archive/2024/old.md'), 'utf8');
+        expect(moved).toBe('body\n');
+    });
+
+    test('prunes empty source directories', async () => {
+        await repo.renameFile({
+            scope: { kind: 'global' }, name: 'rn-target',
+            fromPath: 'references/nested.md', toPath: 'flat.md',
+        });
+        const refDirExists = await fs.stat(pjoin(tmpRoot, 'skills/global/rn-target/references')).then(() => true).catch(() => false);
+        expect(refDirExists).toBe(false);
+    });
+
+    test('rejects SKILL.md as source', async () => {
+        await expect(repo.renameFile({
+            scope: { kind: 'global' }, name: 'rn-target',
+            fromPath: 'SKILL.md', toPath: 'other.md',
+        })).rejects.toThrow(/SKILL\.md/);
+    });
+
+    test('rejects SKILL.md as target', async () => {
+        await expect(repo.renameFile({
+            scope: { kind: 'global' }, name: 'rn-target',
+            fromPath: 'old.md', toPath: 'SKILL.md',
+        })).rejects.toThrow(/SKILL\.md/);
+    });
+
+    test('rejects when destination already exists', async () => {
+        await repo.writeFile({
+            scope: { kind: 'global' }, name: 'rn-target',
+            path: 'taken.md', content: 'x',
+        });
+        await expect(repo.renameFile({
+            scope: { kind: 'global' }, name: 'rn-target',
+            fromPath: 'old.md', toPath: 'taken.md',
+        })).rejects.toThrow(/already exists/);
+    });
+
+    test('rejects when source does not exist', async () => {
+        await expect(repo.renameFile({
+            scope: { kind: 'global' }, name: 'rn-target',
+            fromPath: 'missing.md', toPath: 'new.md',
+        })).rejects.toThrow(/not found/);
+    });
+
+    test('rejects path traversal in either path', async () => {
+        await expect(repo.renameFile({
+            scope: { kind: 'global' }, name: 'rn-target',
+            fromPath: '../../etc/passwd', toPath: 'evil.md',
+        })).rejects.toThrow();
+        await expect(repo.renameFile({
+            scope: { kind: 'global' }, name: 'rn-target',
+            fromPath: 'old.md', toPath: '../../etc/passwd',
+        })).rejects.toThrow();
+    });
+
+    test('same fromPath / toPath is a no-op returning current sha256', async () => {
+        const r = await repo.renameFile({
+            scope: { kind: 'global' }, name: 'rn-target',
+            fromPath: 'old.md', toPath: 'old.md',
+        });
+        expect(r.ok).toBe(true);
+        expect(r.sha256).toBeTruthy();
+        const stillThere = await fs.readFile(pjoin(tmpRoot, 'skills/global/rn-target/old.md'), 'utf8');
+        expect(stillThere).toBe('body\n');
     });
 });
 

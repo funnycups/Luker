@@ -86,7 +86,7 @@ export function createSkillsRouter({ getRepository, getMemoryIndex }) {
         // 409 Conflict: existing target blocks the write. (`already_installed`
         // is a SUCCESS action surfaced as r.action, never a thrown message,
         // so it isn't part of this pattern.)
-        if (/collision|already has|exists with|exists.*content|already installed/i.test(msg)) return 409;
+        if (/collision|already has|exists with|exists.*content|already installed|destination already exists/i.test(msg)) return 409;
 
         // 404 Not Found: source resource missing (read or write).
         // Includes ENOENT wrapped by readFile ("cannot read X: ENOENT...").
@@ -97,7 +97,7 @@ export function createSkillsRouter({ getRepository, getMemoryIndex }) {
         // ("SKILL.md must start with...", "must include name", "must include description").
         // `frontmatter` and `file is binary` cover the same parser + readFile
         // user-input failures that previously fell through to 500.
-        if (/illegal|invalid|path traversal|unknown scope|unsupported|missing|must (?:include|start|be)|required|frontmatter|file is binary|no sub-path|scope path|sha256 mismatch|only https|did not return|no YAML|name mismatch|oldString not found|multiple matches|empty|not.*frontmatter|has no files|fetch failed|cannot delete SKILL\.md/i.test(msg)) return 400;
+        if (/illegal|invalid|path traversal|unknown scope|unsupported|missing|must (?:include|start|be)|required|frontmatter|file is binary|no sub-path|scope path|sha256 mismatch|only https|did not return|no YAML|name mismatch|oldString not found|multiple matches|empty|not.*frontmatter|has no files|fetch failed|cannot (?:delete|rename|overwrite) SKILL\.md/i.test(msg)) return 400;
 
         return 500;
     }
@@ -271,6 +271,22 @@ export function createSkillsRouter({ getRepository, getMemoryIndex }) {
             await repo.deleteFile({ scope, name: req.params.name, path: filePath });
             await invalidateIndex(req);
             res.status(204).end();
+        } catch (e) { handleError(e, res); }
+    });
+
+    router.post('/:scope/:name/file/rename', async (req, res) => {
+        try {
+            const repo = getRepository(req);
+            const scope = parseScope(req.params.scope);
+            const { fromPath, toPath } = req.body || {};
+            const result = await repo.renameFile({
+                scope,
+                name: req.params.name,
+                fromPath,
+                toPath,
+            });
+            await invalidateIndex(req);
+            res.json(result);
         } catch (e) { handleError(e, res); }
     });
 

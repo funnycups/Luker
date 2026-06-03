@@ -31,6 +31,9 @@
  * HTML strings into stub elements).
  */
 
+import { ensureSkillI18n } from './i18n.js';
+import { pickTargetScope as pickTargetScopeShared } from './scope-picker.js';
+
 // ── Pure helpers (exported for tests) ─────────────────────────────────────
 
 /**
@@ -142,13 +145,27 @@ export function buildFileTreeHtml({ files, activePath, t, esc }) {
         const binBadge = f.isBinary
             ? ` <span class="luker_skill_editor_binary">${esc(t('binary'))}</span>`
             : '';
-        const deletable = f.path !== 'SKILL.md';
-        const delBtn = deletable
-            ? `<span class="luker_skill_editor_file_delete" data-editor-action="delete-file" data-file-path="${esc(f.path)}" title="${esc(t('Delete file'))}">×</span>`
+        // SKILL.md is excluded from rename + delete: the server refuses
+        // both (would orphan / bypass the manifest), so we hide the
+        // buttons rather than offer an action that always errors. Other
+        // files get a small action row that's always visible — hover-only
+        // hid them entirely on touch devices and at first glance.
+        const editable = f.path !== 'SKILL.md';
+        const actions = editable
+            ? `<span class="luker_skill_editor_file_actions">
+                <span class="luker_skill_editor_file_action luker_skill_editor_file_rename"
+                      data-editor-action="rename-file"
+                      data-file-path="${esc(f.path)}"
+                      title="${esc(t('Rename file'))}">✎</span>
+                <span class="luker_skill_editor_file_action luker_skill_editor_file_delete"
+                      data-editor-action="delete-file"
+                      data-file-path="${esc(f.path)}"
+                      title="${esc(t('Delete file'))}">×</span>
+            </span>`
             : '';
         return `<div class="luker_skill_editor_file" data-file-path="${esc(f.path)}"${active}>
             <span class="luker_skill_editor_file_name">${esc(f.path)}${binBadge}</span>
-            ${delBtn}
+            ${actions}
         </div>`;
     }).join('');
     const empty = list.length === 0
@@ -226,13 +243,13 @@ function isAffirmative(result) {
     return result === 1 || result === true;
 }
 
-function formatScopeLabel(scope) {
-    if (!scope || typeof scope !== 'object') return 'unknown';
+function formatScopeLabel(scope, t = (s) => s) {
+    if (!scope || typeof scope !== 'object') return t('unknown');
     switch (scope.kind) {
-        case 'global': return 'global';
-        case 'preset': return `preset: ${scope.apiId} / ${scope.name}`;
-        case 'character': return `character: ${scope.characterFile}`;
-        default: return 'unknown';
+        case 'global': return t('global');
+        case 'preset': return `${t('preset')}: ${scope.name}`;
+        case 'character': return `${t('character')}: ${scope.characterFile}`;
+        default: return t('unknown');
     }
 }
 
@@ -252,6 +269,7 @@ export async function openSkillEditor({ context, scope, name, t = (s) => s, onCh
     if (!context || !context.skills) {
         throw new Error('openSkillEditor: context.skills missing');
     }
+    ensureSkillI18n();
 
     const state = {
         files: [],
@@ -261,10 +279,11 @@ export async function openSkillEditor({ context, scope, name, t = (s) => s, onCh
     };
 
     const initialHtml = `<div id="${state.mountId}"></div>`;
-    const title = `${t('Edit skill')}: ${name} (${formatScopeLabel(scope)})`;
+    const title = `${t('Edit skill')}: ${name} (${formatScopeLabel(scope, t)})`;
     const popupPromise = context.callGenericPopup(initialHtml, context.POPUP_TYPE.TEXT, title, {
         okButton: t('Close'),
         wide: true,
+        wider: true,
         large: true,
         allowVerticalScrolling: true,
     });
@@ -272,9 +291,10 @@ export async function openSkillEditor({ context, scope, name, t = (s) => s, onCh
     function render() {
         const mount = document.getElementById(state.mountId);
         if (!mount) return;
-        // Two-pane layout
+        // Two-pane layout — the luker-studio root class lets the design
+        // tokens cascade in (sidebar tree + large editor pane).
         mount.innerHTML = `
-<div class="luker_skill_editor">
+<div class="luker_skill_editor luker-studio">
     ${buildFileTreeHtml({ files: state.files, activePath: state.activePath, t, esc })}
     ${buildEditorHtml({ content: state.currentContent || '', path: state.activePath, sha256: state.sha256, t, esc })}
 </div>
@@ -411,18 +431,58 @@ export async function openSkillEditor({ context, scope, name, t = (s) => s, onCh
         }
     }
 
+    async function renameFile(path) {
+        if (path === 'SKILL.md') {
+            toast(t('Cannot rename SKILL.md from the editor — rename the whole skill from the manager.'), 'error');
+            return;
+        }
+        const input = await context.callGenericPopup(
+            t('Rename file "${0}" to:').replace('${0}', path),
+            context.POPUP_TYPE.INPUT,
+            path,
+            { okButton: t('Rename'), cancelButton: t('Cancel') },
+        );
+        if (!input || typeof input !== 'string') return;
+        const check = validateNewFilePath(input);
+        if (!check.ok) {
+            toast(t('Cannot rename: ${0}').replace('${0}', check.error), 'error');
+            return;
+        }
+        if (check.path === path) return; // No-op
+        try {
+            const r = await context.skills.renameFile({
+                scope, name, fromPath: path, toPath: check.path,
+            });
+            toast(t('Renamed: ${0} -> ${1}')
+                .replace('${0}', path)
+                .replace('${1}', check.path), 'success');
+            // If the renamed file was active, follow it.
+            if (state.activePath === path) {
+                state.activePath = check.path;
+                state.sha256 = r?.sha256 || '';
+            }
+            await refreshFiles();
+            render();
+            if (typeof onChange === 'function') {
+                try { onChange(); } catch { /* swallow */ }
+            }
+        } catch (e) {
+            toast(t('Rename failed: ${0}').replace('${0}', e?.message || String(e)), 'error');
+        }
+    }
+
     function bindEvents(root) {
-        // File-tree clicks: open file in editor (but not the delete button).
+        // File-tree clicks: open file in editor (but not the action buttons).
         root.querySelectorAll('[data-file-path]').forEach((el) => {
             el.addEventListener('click', async (ev) => {
                 ev.preventDefault();
                 const path = el.getAttribute('data-file-path');
                 if (!path) return;
-                // If user clicked the delete-x glyph, dispatch the action
-                // instead of loading the file.
-                if (ev.target && ev.target.getAttribute &&
-                    ev.target.getAttribute('data-editor-action') === 'delete-file') {
-                    return; // handled by separate listener
+                // If user clicked an inline action glyph, let its own
+                // listener handle it instead of opening the file.
+                if (ev.target && ev.target.getAttribute) {
+                    const act = ev.target.getAttribute('data-editor-action');
+                    if (act === 'delete-file' || act === 'rename-file') return;
                 }
                 if (path === state.activePath) return;
                 await loadFile(path);
@@ -439,6 +499,22 @@ export async function openSkillEditor({ context, scope, name, t = (s) => s, onCh
                 if (!row) return;
                 const path = row.getAttribute('data-file-path');
                 await deleteFile(path);
+            });
+        });
+
+        // Per-file rename glyph.
+        root.querySelectorAll('[data-editor-action="rename-file"]').forEach((el) => {
+            el.addEventListener('click', async (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                // The glyph itself carries data-file-path so we don't have
+                // to walk up — the .closest('[data-file-path]') ancestor
+                // would resolve to the row, which also works. Use the
+                // glyph's own attribute to keep the contract explicit.
+                const path = el.getAttribute('data-file-path')
+                    || el.closest('[data-file-path]')?.getAttribute('data-file-path');
+                if (!path) return;
+                await renameFile(path);
             });
         });
 
@@ -486,75 +562,12 @@ export async function openSkillEditor({ context, scope, name, t = (s) => s, onCh
 }
 
 /**
- * Reusable scope picker — small popup driving the kind + sub-field inputs.
- * Mirrors the one in skill-manager-panel.js but exported separately so the
- * create-new-skill flow can call it directly.
+ * Reusable scope picker — delegates to the shared scope-picker module so
+ * the create-new-skill flow uses the same dropdowns + show/hide logic as
+ * the manager panel's "Move to" dialog.
  */
 async function pickTargetScope(context, t, title, suggestScope) {
-    const suggestKind = suggestScope?.kind || 'global';
-    const suggestApi = suggestScope?.apiId || '';
-    const suggestPreset = suggestScope?.name || '';
-    const suggestChar = suggestScope?.characterFile || '';
-    const html = `
-<div class="luker_skill_scope_picker">
-    <div>${esc(title)}</div>
-    <label><input type="radio" name="luker_skill_scope_kind" value="global" ${suggestKind === 'global' ? 'checked' : ''}> ${esc(t('Global'))}</label>
-    <label><input type="radio" name="luker_skill_scope_kind" value="preset" ${suggestKind === 'preset' ? 'checked' : ''}> ${esc(t('Preset'))}</label>
-    <div class="luker_skill_scope_preset_fields">
-        <input type="text" class="text_pole" placeholder="${esc(t('connection profile (apiId)'))}" data-skill-scope-api value="${esc(suggestApi)}">
-        <input type="text" class="text_pole" placeholder="${esc(t('preset name'))}" data-skill-scope-preset value="${esc(suggestPreset)}">
-    </div>
-    <label><input type="radio" name="luker_skill_scope_kind" value="character" ${suggestKind === 'character' ? 'checked' : ''}> ${esc(t('Character'))}</label>
-    <div class="luker_skill_scope_character_fields">
-        <input type="text" class="text_pole" placeholder="${esc(t('character file (e.g. Alice.png)'))}" data-skill-scope-character value="${esc(suggestChar)}">
-    </div>
-</div>
-    `;
-    const Popup = context.Popup;
-    const POPUP_RESULT = context.POPUP_RESULT;
-    const POPUP_TYPE = context.POPUP_TYPE;
-    if (!Popup) {
-        toast(t('Popup API missing — cannot pick scope.'), 'error');
-        return null;
-    }
-    let chosen = null;
-    const popup = new Popup(html, POPUP_TYPE.CONFIRM, '', {
-        okButton: t('OK'),
-        cancelButton: t('Cancel'),
-        wider: true,
-        onClosing: (p) => {
-            if (p.result !== POPUP_RESULT.AFFIRMATIVE) return true;
-            const dlg = p.dlg;
-            const kind = dlg.querySelector('input[name="luker_skill_scope_kind"]:checked')?.value || 'global';
-            if (kind === 'global') {
-                chosen = { kind: 'global' };
-                return true;
-            }
-            if (kind === 'preset') {
-                const apiId = String(dlg.querySelector('[data-skill-scope-api]')?.value || '').trim();
-                const presetName = String(dlg.querySelector('[data-skill-scope-preset]')?.value || '').trim();
-                if (!apiId || !presetName) {
-                    toast(t('Preset scope requires connection profile + preset name.'), 'error');
-                    return false;
-                }
-                chosen = { kind: 'preset', apiId, name: presetName };
-                return true;
-            }
-            if (kind === 'character') {
-                const characterFile = String(dlg.querySelector('[data-skill-scope-character]')?.value || '').trim();
-                if (!characterFile) {
-                    toast(t('Character scope requires a character file name.'), 'error');
-                    return false;
-                }
-                chosen = { kind: 'character', characterFile };
-                return true;
-            }
-            return true;
-        },
-    });
-    const result = await popup.show();
-    if (result !== POPUP_RESULT.AFFIRMATIVE) return null;
-    return chosen;
+    return pickTargetScopeShared(context, t, title, suggestScope);
 }
 
 /**
@@ -572,6 +585,7 @@ export async function openCreateNewSkillFlow({ context, t = (s) => s, onChange }
     if (!context || !context.skills) {
         throw new Error('openCreateNewSkillFlow: context.skills missing');
     }
+    ensureSkillI18n();
 
     const nameInput = await context.callGenericPopup(
         t('Skill name (lowercase letters/digits/_/-):'),

@@ -13,10 +13,10 @@
  *   1. A discipline block telling the AI when to prefer authoring a skill
  *      over inline preset edits, and what the splice-in-reference workflow
  *      looks like with CPA's preset-editing tools.
- *   2. A dynamic catalog of skills currently visible in the (apiId, preset)
- *      scope chain — what's already installed for the preset being edited,
- *      so the AI can recommend reusing an existing skill instead of
- *      authoring a duplicate.
+ *   2. A dynamic catalog of skills currently visible in the preset scope
+ *      chain — what's already installed for the preset being edited, so
+ *      the AI can recommend reusing an existing skill instead of authoring
+ *      a duplicate.
  *
  * The block is appended unconditionally when in orchestrator-optimize mode
  * (no "has long systemPrompt" heuristic — CPA always edits preset content,
@@ -35,15 +35,14 @@
  * for unit tests; the live call site is `augmentCpaPromptWithSkills`.
  *
  * @param {Array<{name: string, description: string, scope?: object}>} visibleSkills
- * @param {{ presetName: string, apiId: string }} scopeHint
+ * @param {{ presetName: string }} scopeHint
  * @returns {string}
  */
 export function formatCpaSkillsAugmentation(visibleSkills, scopeHint = {}) {
     const presetName = String(scopeHint.presetName || '').trim();
-    const apiId = String(scopeHint.apiId || '').trim();
-    const presetScopeLine = (presetName && apiId)
-        ? `Skills you create with scope { kind: 'preset', apiId: '${apiId}', name: '${presetName}' } travel with this preset on export. Skills with scope { kind: 'global' } stay on this user only.`
-        : 'Skills you create with scope { kind: \'preset\', apiId, name } travel with the matching preset on export. Skills with scope { kind: \'global\' } stay on this user only.';
+    const presetScopeLine = presetName
+        ? `Skills you create with scope { kind: 'preset', name: '${presetName}' } travel with this preset on export. Skills with scope { kind: 'global' } stay on this user only.`
+        : 'Skills you create with scope { kind: \'preset\', name } travel with the matching preset on export. Skills with scope { kind: \'global\' } stay on this user only.';
 
     const lines = [];
     lines.push('## Skill management (CPA orchestrator-optimize extension)');
@@ -114,7 +113,7 @@ export function formatCpaSkillsAugmentation(visibleSkills, scopeHint = {}) {
  *
  * @param {string} basePrompt
  * @param {string} mode  current session mode ('general' / 'orchestrator-optimize' / 'jailbreak-only')
- * @param {{ presetName: string, apiId: string }} scopeHint
+ * @param {{ presetName: string }} scopeHint
  * @param {{
  *   listSkillsInScope?: () => Promise<Array<{ name: string, description: string, scope?: object }>>,
  * }} [opts]

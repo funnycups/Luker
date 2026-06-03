@@ -67,13 +67,13 @@
 
 ## 選你的執行模式
 
-| 模式 | 是什麼 | 何時用 | 技能 | 詳細文件 |
+| 模式 | 是什麼 | 何時用 | Skill | 詳細文件 |
 |---|---|---|---|---|
 | **Spec**（預設） | 固定的 Stage → Node DAG | 預設。你要一個可預期的管道 | 每節點注入目錄；每節點 `skills.visible` 覆寫 | [Spec 模式](/zh-TW/features/orchestrator/spec) |
 | **單 Agent** | 只有一個節點的 Spec | 便宜快。不需要多 Agent 協作 | 在那一個節點上注入目錄 | [單 Agent 模式](/zh-TW/features/orchestrator/single) |
 | **Agenda** | 一個 Planner Agent 透過工具呼叫動態調度其他 Agent | 流程要動態決定運行什麼，像 Agent loop | Planner + 每個被派遣 worker 上注入目錄 | [Agenda 模式](/zh-TW/features/orchestrator/agenda) |
 | **Loop** | 單 Agent 在同一會話裡循環呼叫工具，自己決定何時 `finalize` | 速度與效果之間想要平衡；探索性研究、動態決策 | 在 loop agent 上注入目錄 | [Loop 模式](/zh-TW/features/orchestrator/loop) |
-| **Director** | 主代理 + 子代理團隊直接寫正文 | 接管模式，用於高品質長篇 RP；出廠自帶預繫結 24 個技能 | 主代理 + 每次子代理派遣時注入目錄 | [Director 模式](/zh-TW/features/orchestrator/director) |
+| **Director** | 主代理 + 子代理團隊直接寫正文 | 接管模式，用於高品質長篇 RP；出廠自帶預繫結 24 個 Skill | 主代理 + 每次子代理派遣時注入目錄 | [Director 模式](/zh-TW/features/orchestrator/director) |
 
 切換模式：擴展抽屜裡 **執行模式** 下拉。Spec 與 Agenda 之間可以從編輯器裡互轉（盡力而為）;Loop 模式結構差異較大，沒有這種互轉入口。
 
@@ -81,8 +81,8 @@
 切到任何模式後，**[AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio)** 都是優先選擇。Spec / Agenda 給你 diff，Loop 直接 patch profile，流程一致。
 :::
 
-::: info 技能這一列
-五種模式共用同一套技能策略形狀（模式級 `skills.visible` / `skills.deny`、每 agent 可選的 `+` 繼承覆寫）。完整模型見 [編排器整合](/zh-TW/features/skills/orchestrator-integration)。Director 是唯一一種開箱即用就帶預繫結預設技能的模式；其它模式起步是 `visible: ["*"]`（所有已安裝技能可見）。
+::: info Skill 這一列
+五種模式共用同一套 Skill 策略形狀（模式級 `skills.visible` / `skills.deny`、每 agent 可選的 `+` 繼承覆寫）。完整模型見 [編排器整合](/zh-TW/features/skills/orchestrator-integration)。Director 是唯一一種開箱即用就帶預繫結預設 Skill 的模式；其它模式起步是 `visible: ["*"]`（所有已安裝 Skill 可見）。
 :::
 
 ## 通用設定
@@ -216,8 +216,8 @@ context.eventSource.on('luker.orchestrator.result', (evt) => {
 - [單 Agent 模式](/zh-TW/features/orchestrator/single) — 退化的 Spec，只跑一個節點
 - [Agenda 模式](/zh-TW/features/orchestrator/agenda) — Planner 動態調度
 - [Loop 模式](/zh-TW/features/orchestrator/loop) — 單 Agent 工具循環
-- [Director 模式](/zh-TW/features/orchestrator/director) — 多 agent 接管；出廠自帶 24 個技能
-- [技能概覽](/zh-TW/features/skills/) — 所有模式共用的知識包底層素材
+- [Director 模式](/zh-TW/features/orchestrator/director) — 多 agent 接管；出廠自帶 24 個 Skill
+- [Skills 概覽](/zh-TW/features/skills/) — 所有模式共用的知識包底層素材
 - [便箋 — 作者側劇情線索](/zh-TW/features/orchestrator/notes) — agent-as-author 線索追蹤器，作用域為當前 chat
 - [Function Call Runtime](/zh-TW/improvements/function-call-runtime) — Agenda / Loop 模式都依賴此框架
 - [角色卡編輯器](/zh-TW/features/card-editor/) — 與迭代工作台共用 diff 引擎

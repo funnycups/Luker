@@ -97,7 +97,7 @@ export function ensureSkillsFieldShape(obj, { isAgent = false } = {}) {
  * @param {object} args
  * @param {object} args.modeProfile - orchestrator mode profile (director, loop, etc.)
  * @param {object|null} args.agentConfig - per-agent config or null for mode-only
- * @param {object} args.runtimeContext - { presetApiId, presetName, characterFile }
+ * @param {object} args.runtimeContext - { presetName, characterFile }
  * @returns {Promise<Array>} visible skills (SkillIndexEntry shape)
  */
 export async function resolveAgentVisibleSkills({ modeProfile, agentConfig, runtimeContext }) {
@@ -121,10 +121,9 @@ export async function resolveAgentVisibleSkills({ modeProfile, agentConfig, runt
     for (const e of inventoryRaw) {
         if (e?.scope?.kind === 'global') merged.set(e.name, e);
     }
-    if (runtimeContext?.presetApiId && runtimeContext?.presetName) {
+    if (runtimeContext?.presetName) {
         for (const e of inventoryRaw) {
             if (e?.scope?.kind === 'preset'
-                && e.scope.apiId === runtimeContext.presetApiId
                 && e.scope.name === runtimeContext.presetName) {
                 merged.set(e.name, e);
             }
@@ -212,26 +211,18 @@ export function invalidateSkillInventory() {
 /**
  * Build a `runtimeContext` bag from a SillyTavern context + agent profile.
  *
- * The resolver uses three fields:
- *   - `presetApiId` — the api id portion of the preset-scope skill match (e.g. 'openai')
- *   - `presetName`  — the preset name portion (e.g. 'rp4')
+ * The resolver uses two fields:
+ *   - `presetName`  — the chat-completion preset name (e.g. 'rp4'); matched
+ *     against `e.scope.name` for preset-scope skills
  *   - `characterFile` — the active character's avatar filename (e.g. 'alice.png')
  *
  * Each is optional; missing values just skip the corresponding scope layer.
  * Callers that want only the character context (no preset routing) can pass
  * a `null` agentProfile.
  *
- * NOTE on `presetApiId`: in the orchestrator profile, `apiPresetName` is the
- * user-facing Connection Manager profile name (e.g. 'RP4-claude4'), not a
- * generic api-provider id like 'openai'. We pass it through as `presetApiId`
- * so preset-scope skills installed under `scope.apiId === <connection-profile-name>`
- * resolve correctly. Users binding skills to a preset scope should use the
- * same connection-profile name they see in their orchestrator config. The
- * Plan 2 skill manager UI will surface this directly to avoid confusion.
- *
  * @param {object|null} sillyTavernContext - typically `getContext()`
- * @param {object|null} agentProfile - agent config with `apiPresetName` / `promptPresetName`
- * @returns {{ presetApiId?: string, presetName?: string, characterFile?: string }}
+ * @param {object|null} agentProfile - agent config with `promptPresetName`
+ * @returns {{ presetName?: string, characterFile?: string }}
  */
 export function buildSkillRuntimeContext(sillyTavernContext, agentProfile = null) {
     const ctx = {};
@@ -253,14 +244,13 @@ export function buildSkillRuntimeContext(sillyTavernContext, agentProfile = null
     // apply (carried in `sillyTavernContext` indirectly via settings).
     // Callers handle the fallback chain themselves; here we just lift what
     // the agent profile explicitly declares.
+    //
+    // The skill-scope `preset` shape is `{kind:'preset', name}` — the
+    // connection profile is intentionally NOT part of the key, so a
+    // preset-scope skill travels with the preset regardless of which
+    // connection profile happens to be routing the request.
     if (agentProfile && typeof agentProfile === 'object') {
-        const apiPresetName = String(agentProfile.apiPresetName || '').trim();
         const promptPresetName = String(agentProfile.promptPresetName || '').trim();
-        // The skill-scope `preset` shape is `{apiId, name}` where `apiId` is
-        // the Connection Manager profile id (mapped to a provider like openai)
-        // and `name` is the chat-completion preset slug. Map our profile names
-        // to that shape.
-        if (apiPresetName) ctx.presetApiId = apiPresetName;
         if (promptPresetName) ctx.presetName = promptPresetName;
     }
 

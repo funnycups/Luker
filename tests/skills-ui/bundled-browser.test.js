@@ -133,6 +133,37 @@ describe('bundled-browser — pure helpers', () => {
         // intent of the tab somewhere so the UI doesn't render a blank pane.
         expect(html).toMatch(/bundled/i);
     });
+
+    test('describeBundledImportResult: empty bundle returns the "no bundled" info toast', () => {
+        const { level, text } = mod.describeBundledImportResult({ installed: 0, replaced: 0, alreadyInstalled: 0 });
+        expect(level).toBe('info');
+        expect(text).toMatch(/no bundled/i);
+    });
+
+    test('describeBundledImportResult: all already up to date is an info toast (not a success)', () => {
+        // The pre-fix regression: this case produced "0 installed, 0 replaced"
+        // with `level: success`, which read identically to a hard failure.
+        const { level, text } = mod.describeBundledImportResult({ installed: 0, replaced: 0, alreadyInstalled: 3 });
+        expect(level).toBe('info');
+        expect(text).toMatch(/already up to date|already match|already/i);
+        expect(text).toContain('3');
+    });
+
+    test('describeBundledImportResult: a real import is a success toast that breaks down all three counts', () => {
+        const { level, text } = mod.describeBundledImportResult({ installed: 2, replaced: 1, alreadyInstalled: 4 });
+        expect(level).toBe('success');
+        expect(text).toContain('2');
+        expect(text).toContain('1');
+        expect(text).toContain('4');
+    });
+
+    test('describeBundledImportResult: tolerates the legacy result shape that omits alreadyInstalled', () => {
+        // An older server returning `{ installed, replaced }` without the new
+        // counter must still produce a sensible toast — defensive against
+        // skew between client + server during rolling updates.
+        const { level } = mod.describeBundledImportResult({ installed: 1, replaced: 0 });
+        expect(level).toBe('success');
+    });
 });
 
 // ── Integration-style tests with a stub DOM + stub context ────────────────
@@ -397,6 +428,43 @@ describe('renderBundledBrowser — integration scenarios', () => {
         btn.click();
         for (let i = 0; i < 5; i++) await Promise.resolve();
         expect(ctx.__skillsApi.listBundledManifest.mock.calls.length).toBeGreaterThan(before);
+    });
+
+    test('Install all surfaces "already up to date" when nothing changed', async () => {
+        // The exact server response the user hit: bundle exists, but every
+        // entry matches the on-disk hash. Pre-fix the toast read
+        // "0 installed, 0 replaced" — meaningless to the user.
+        const bundled = [
+            { name: 'pinned', installedHash: 'H', fileCount: 1, totalBytes: 10, description: '' },
+        ];
+        const installed = [{ name: 'pinned', scope: { kind: 'global' }, installedHash: 'H' }];
+        const { ctx, mount } = await bootstrap({ bundled, installed });
+        ctx.__skillsApi.importBundled.mockImplementation(async () => ({
+            installed: 0,
+            replaced: 0,
+            alreadyInstalled: 1,
+        }));
+        const btn = mount.querySelector('[data-bundled-toolbar="install-all"]');
+        btn.click();
+        for (let i = 0; i < 8; i++) await Promise.resolve();
+        expect(global.toastr.info).toHaveBeenCalled();
+        const msg = global.toastr.info.mock.calls[0][0];
+        expect(msg).toMatch(/already up to date|already match/i);
+    });
+
+    test('Install all surfaces empty-bundle case', async () => {
+        const { ctx, mount } = await bootstrap({ bundled: [], installed: [] });
+        ctx.__skillsApi.importBundled.mockImplementation(async () => ({
+            installed: 0,
+            replaced: 0,
+            alreadyInstalled: 0,
+        }));
+        const btn = mount.querySelector('[data-bundled-toolbar="install-all"]');
+        btn.click();
+        for (let i = 0; i < 8; i++) await Promise.resolve();
+        expect(global.toastr.info).toHaveBeenCalled();
+        const msg = global.toastr.info.mock.calls[0][0];
+        expect(msg).toMatch(/no bundled skills/i);
     });
 
     test('handles errors from listBundledManifest gracefully', async () => {

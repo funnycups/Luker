@@ -7,9 +7,9 @@ describe('SkillScope helpers', () => {
             expect(encodeScopePath({ kind: 'global' })).toBe('global');
         });
 
-        test('encodes preset', () => {
-            expect(encodeScopePath({ kind: 'preset', apiId: 'openai', name: 'claude-rp-4' }))
-                .toBe('preset/openai/claude-rp-4');
+        test('encodes preset (name only — apiId is intentionally not part of the key)', () => {
+            expect(encodeScopePath({ kind: 'preset', name: 'claude-rp-4' }))
+                .toBe('preset/claude-rp-4');
         });
 
         test('encodes character', () => {
@@ -20,7 +20,7 @@ describe('SkillScope helpers', () => {
         test('rejects path traversal', () => {
             expect(() => encodeScopePath({ kind: 'character', characterFile: '../etc' }))
                 .toThrow(/illegal characters/);
-            expect(() => encodeScopePath({ kind: 'preset', apiId: '.', name: 'x' }))
+            expect(() => encodeScopePath({ kind: 'preset', name: '.' }))
                 .toThrow(/illegal characters/);
         });
 
@@ -35,8 +35,8 @@ describe('SkillScope helpers', () => {
         });
 
         test('round-trips preset', () => {
-            expect(decodeScopePath('preset/openai/claude-rp-4'))
-                .toEqual({ kind: 'preset', apiId: 'openai', name: 'claude-rp-4' });
+            expect(decodeScopePath('preset/claude-rp-4'))
+                .toEqual({ kind: 'preset', name: 'claude-rp-4' });
         });
 
         test('round-trips character', () => {
@@ -49,17 +49,18 @@ describe('SkillScope helpers', () => {
         });
 
         test('throws on malformed preset path', () => {
-            expect(() => decodeScopePath('preset/only-one')).toThrow(/preset scope path/);
+            // Only valid shape now is preset/<name> — both bare 'preset' and
+            // the legacy preset/<api>/<name> shape must reject.
+            expect(() => decodeScopePath('preset')).toThrow(/preset scope path/);
+            expect(() => decodeScopePath('preset/openai/rp4')).toThrow(/preset scope path/);
         });
 
-        test('rejects traversal in preset segments', () => {
-            expect(() => decodeScopePath('preset/../x')).toThrow(/illegal characters/);
-            expect(() => decodeScopePath('preset/x/..')).toThrow(/illegal characters/);
+        test('rejects traversal in preset segment', () => {
+            expect(() => decodeScopePath('preset/..')).toThrow(/illegal characters/);
         });
 
         test('rejects empty segments', () => {
-            expect(() => decodeScopePath('preset//x')).toThrow(/illegal characters/);
-            expect(() => decodeScopePath('preset/x/')).toThrow(/illegal characters/);
+            expect(() => decodeScopePath('preset/')).toThrow(/illegal characters/);
         });
 
         test('rejects traversal in character segment', () => {
@@ -70,7 +71,7 @@ describe('SkillScope helpers', () => {
     describe('isValidScope', () => {
         test('accepts valid', () => {
             expect(isValidScope({ kind: 'global' })).toBe(true);
-            expect(isValidScope({ kind: 'preset', apiId: 'a', name: 'b' })).toBe(true);
+            expect(isValidScope({ kind: 'preset', name: 'b' })).toBe(true);
             expect(isValidScope({ kind: 'character', characterFile: 'x.png' })).toBe(true);
         });
 
@@ -84,7 +85,7 @@ describe('SkillScope helpers', () => {
     describe('scopeLabel', () => {
         test('formats human-readable labels', () => {
             expect(scopeLabel({ kind: 'global' })).toBe('global');
-            expect(scopeLabel({ kind: 'preset', apiId: 'openai', name: 'rp' })).toBe('preset:openai:rp');
+            expect(scopeLabel({ kind: 'preset', name: 'rp' })).toBe('preset:rp');
             expect(scopeLabel({ kind: 'character', characterFile: 'alice.png' })).toBe('character:alice.png');
         });
 

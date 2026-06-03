@@ -1,6 +1,6 @@
 # Skills
 
-编排器派发某个 agent 时，那个 agent 只能看到你专门给它"亮出来"的 skills，看不到整个技能库。这一页讲的是怎么**让一个 skill 对某个 agent 可见**。
+编排器派发某个 agent 时，那个 agent 只能看到你专门给它"亮出来"的 skills，看不到整个 Skill 库。这一页讲的是怎么**让一个 skill 对某个 agent 可见**。
 
 skill 本身是什么、SKILL.md 长什么样、怎么写——见 [Skills 概览](/zh-CN/features/skills/)。
 
@@ -8,9 +8,9 @@ skill 本身是什么、SKILL.md 长什么样、怎么写——见 [Skills 概�
 
 **让工作台替你挂（推荐）。** 在 AI 迭代工作台里让它写 skill 或改 skill 的时候，顺便告诉它你想让谁能看到——"让导演模式下所有 agent 都看到"、"只给 voice_critic 看"——它会在同一轮审批里把这条挂到对应的位置。你不用想该放哪一层。详见 [《用 skills 调教 RP 输出》](/zh-CN/recipes/rp-skills-walkthrough) 和 [工作台的 skill 编写](/zh-CN/features/orchestrator/iteration-studio#用工作台编写-skill)。
 
-**自己挂。** 打开编排器面板里的导演编辑器，往下滚到技能列表那一节。每个 agent 自己有一份列表，顶上还有一份所有 agent 共享的列表。从下拉里选一个 skill，点**添加**，保存。
+**自己挂。** 打开编排器面板里的导演编辑器，往下滚到 Skill 列表那一节。每个 agent 自己有一份列表，顶上还有一份所有 agent 共享的列表。从下拉里选一个 skill，点**添加**，保存。
 
-![导演编辑器 — 技能列表，刚添加的一条 skill](/_screenshots/skills/rp-demo-11-director-chip-added.png)
+![导演编辑器 — Skill 列表，刚添加的一条 skill](/_screenshots/skills/rp-demo-11-director-chip-added.png)
 
 不确定挂在哪一份里？让工作台来更省心——你描述一下需求，剩下的让它决定。
 
@@ -36,8 +36,8 @@ agent 自己判断哪条相关。如果某条描述跟当前任务直接相关�
 ## 相关
 
 - [Skills 概览](/zh-CN/features/skills/) — SKILL.md 长什么样、scope 怎么用
-- [技能管理](/zh-CN/features/skills/management) — 安装 / 导入 / 删除 / 切换作用域
-- [创作技能](/zh-CN/features/skills/authoring) — 技能正文的写作规则
+- [Skill 管理](/zh-CN/features/skills/management) — 安装 / 导入 / 删除 / 切换作用域
+- [创作 Skill](/zh-CN/features/skills/authoring) — Skill 正文的写作规则
 - [编排器集成（深度）](/zh-CN/features/skills/orchestrator-integration) — 完整层级策略、继承规则、通配符、deny 列表
-- [AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio) — 让 LLM 替你写技能
+- [AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio) — 让 LLM 替你写 Skill
 - [Recipe：用 skills 调教 RP 输出](/zh-CN/recipes/rp-skills-walkthrough) — 端到端示例
