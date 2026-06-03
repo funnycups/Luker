@@ -75,7 +75,7 @@ export function normalizeNodeSpec(node) {
 
     const id = String(node?.id || node?.node || node?.preset || '').trim();
     const preset = String(node?.preset || id).trim();
-    return {
+    const out = {
         id: id || preset,
         preset,
         type: normalizeNodeType(node?.type),
@@ -85,6 +85,15 @@ export function normalizeNodeSpec(node) {
         // missing flags fall to their default-off disposition.
         tools: sanitizeOptionalAgentToolFlags(node?.tools),
     };
+    // Per-node skills (opt-in). Same shape as elsewhere; left undefined
+    // when absent so the resolver knows to inherit the mode default.
+    if (node && typeof node === 'object' && node.skills && typeof node.skills === 'object') {
+        out.skills = {
+            visible: Array.isArray(node.skills.visible) ? node.skills.visible.slice() : [],
+            deny: Array.isArray(node.skills.deny) ? node.skills.deny.slice() : [],
+        };
+    }
+    return out;
 }
 
 export function sanitizeSpec(spec) {
@@ -122,6 +131,13 @@ export function sanitizeSpec(spec) {
                     if (!compact.preset && compact.id) {
                         compact.preset = compact.id;
                     }
+                    // Per-node skills (opt-in). Mirror normalizeNodeSpec.
+                    if (node.skills && typeof node.skills === 'object') {
+                        compact.skills = {
+                            visible: Array.isArray(node.skills.visible) ? node.skills.visible.slice() : [],
+                            deny: Array.isArray(node.skills.deny) ? node.skills.deny.slice() : [],
+                        };
+                    }
                     return compact.id ? compact : null;
                 }
                 return null;
@@ -135,7 +151,7 @@ export function sanitizeSpec(spec) {
         };
     }).filter(stage => Array.isArray(stage.nodes) && stage.nodes.length > 0);
 
-    return {
+    const out = {
         stages: normalizedStages.length > 0 ? normalizedStages : structuredClone(defaultSpec.stages),
         // null = no profile-level default. An object = canonical tool
         // flags applied to any node whose own `tools` is null. The runtime
@@ -148,6 +164,18 @@ export function sanitizeSpec(spec) {
         defaultTools: sanitizeSpecProfileDefaultTools(spec),
         customTools: sanitizeCustomTools(spec.customTools),
     };
+    // Mode-level skills: ensure the runtime always reads a canonical
+    // `{ visible, deny }` shape. Inline normalizer (see director-defaults.js
+    // for rationale on not importing from skill-resolution.js).
+    if (spec.skills && typeof spec.skills === 'object') {
+        out.skills = {
+            visible: Array.isArray(spec.skills.visible) ? spec.skills.visible.slice() : ['*'],
+            deny: Array.isArray(spec.skills.deny) ? spec.skills.deny.slice() : [],
+        };
+    } else {
+        out.skills = { visible: ['*'], deny: [] };
+    }
+    return out;
 }
 
 function sanitizeSpecProfileDefaultTools(spec) {

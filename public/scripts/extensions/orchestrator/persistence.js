@@ -512,7 +512,7 @@ function sanitizeLoopCapsuleInject(input) {
  */
 export function sanitizeLoopProfile(input) {
     const source = input && typeof input === 'object' ? input : {};
-    return {
+    const out = {
         mode: ORCH_EXECUTION_MODE_LOOP,
         apiPresetName: source.apiPresetName == null ? '' : String(source.apiPresetName),
         promptPresetName: source.promptPresetName == null ? '' : String(source.promptPresetName),
@@ -544,6 +544,18 @@ export function sanitizeLoopProfile(input) {
         capsule_inject: sanitizeLoopCapsuleInject(source.capsule_inject),
         customTools: sanitizeCustomTools(source.customTools),
     };
+    // Loop is a single-agent mode, so the mode-level `skills` field is the
+    // only place a visibility profile can live. Same inline normalizer the
+    // director sanitizer uses; see director-defaults.js for rationale on
+    // why we don't import from skill-resolution.js (lib.js test-env issue).
+    if (source.skills && typeof source.skills === 'object') {
+        out.skills = { ...source.skills };
+        if (!Array.isArray(out.skills.visible)) out.skills.visible = ['*'];
+        if (!Array.isArray(out.skills.deny)) out.skills.deny = [];
+    } else {
+        out.skills = { visible: ['*'], deny: [] };
+    }
+    return out;
 }
 
 let floorStatePromise = null;

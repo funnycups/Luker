@@ -632,7 +632,7 @@ function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex, directo
         <textarea class="text_pole textarea_compact" rows="4" data-orch-subagent-field="systemPrompt" data-subagent-index="${subagentIndex}" data-scope="${safeScope}">${escapeHtml(systemPrompt)}</textarea>
     </label>
     <label>
-        <span data-i18n="API preset">${escapeHtml(i18n('API preset'))}</span>
+        <span data-i18n="API preset (Connection profile)">${escapeHtml(i18n('API preset (Connection profile)'))}</span>
         <select class="text_pole" data-orch-subagent-field="apiPresetName" data-subagent-index="${subagentIndex}" data-scope="${safeScope}">${renderConnectionProfileOptions(apiPresetName, i18n('(Global orchestration API preset)'))}</select>
     </label>
     <label>
@@ -713,7 +713,7 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
         <div class="luker-studio-workspace-col">
             <h4 data-i18n="Main agent">${escapeHtml(i18n('Main agent'))}</h4>
             <label>
-                <span data-i18n="API preset">${escapeHtml(i18n('API preset'))}</span>
+                <span data-i18n="API preset (Connection profile)">${escapeHtml(i18n('API preset (Connection profile)'))}</span>
                 <select class="text_pole" data-orch-director-field="mainAgent.apiPresetName" data-scope="${safeScope}">${renderConnectionProfileOptions(String(mainAgent.apiPresetName || ''), i18n('(Global orchestration API preset)'))}</select>
             </label>
             <label>

@@ -104,6 +104,17 @@ import {
 import { attachToolContext, isStructuredToolError } from './loop-runtime.js';
 import { buildPerRunCustomToolRegistry } from './per-run-custom-tools.js';
 
+// Skill-resolution helpers are loaded lazily (script.js → lib.js dep makes
+// eager import unfriendly to Node tests). Same pattern as director / loop /
+// spec runtimes.
+let _skillResolutionPromise = null;
+async function loadSkillResolution() {
+    if (!_skillResolutionPromise) {
+        _skillResolutionPromise = import('./skill-resolution.js');
+    }
+    return _skillResolutionPromise;
+}
+
 const MODULE_NAME = 'orchestrator';
 
 export const AGENDA_TODO_STATUSES = Object.freeze(['todo', 'doing', 'done', 'blocked', 'dropped']);
@@ -534,6 +545,27 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
     const userText = promptText.trim()
         || 'Use function-call fields only. Do not put JSON strings into summary.';
 
+    // Resolve skills visible to this agenda worker. Mode-level default
+    // lives on `profile.skills`; per-agent `skills` (when set on
+    // `preset`) layers via the `+` inheritance idiom. The catalog block
+    // gets appended to the system prompt below; the visible list rides
+    // on `toolContext.__visibleSkillsForAgent` in the multi-round path
+    // so skill_list / skill_read / skill_search see scoped visibility.
+    let visibleSkillsForAgent = [];
+    let systemTextWithSkills = systemText;
+    try {
+        const skillRes = await loadSkillResolution();
+        visibleSkillsForAgent = await skillRes.resolveAgentVisibleSkills({
+            modeProfile: profile || {},
+            agentConfig: preset,
+            runtimeContext: skillRes.buildSkillRuntimeContext(context, preset),
+        });
+        const block = skillRes.buildAvailableSkillsBlock(visibleSkillsForAgent);
+        if (block) systemTextWithSkills = systemText + '\n\n' + block;
+    } catch (e) {
+        console.warn('[orchestrator-agenda] worker skill resolution failed:', e?.message || e);
+    }
+
     // Tool-cascade: preset.tools overrides profile.defaultTools, which
     // overrides the built-in (null = no tools, the historical agenda
     // behaviour). When the resolved set has any loop tool enabled, run
@@ -564,7 +596,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
     if (!enableLoopTools) {
         const result = await requestToolCallWithRetry(context, settings, {
             taskMessages: [
-                { role: 'system', content: systemText },
+                { role: 'system', content: systemTextWithSkills },
                 { role: 'user', content: userText },
             ],
             runtimeWorldInfo,
@@ -577,7 +609,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
         });
         const conversation = {
             messages: [
-                { role: 'system', content: systemText },
+                { role: 'system', content: systemTextWithSkills },
                 { role: 'user', content: userText },
                 {
                     role: 'assistant',
@@ -610,12 +642,16 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
     if (toolContext && customToolRegistry) {
         toolContext.__customToolRegistry = customToolRegistry;
     }
+    // Make the agent's scoped skill visibility reachable through the
+    // tool dispatch context so skill_list / skill_read / skill_search
+    // resolve against the filtered list.
+    if (toolContext) toolContext.__visibleSkillsForAgent = visibleSkillsForAgent;
     const maxRounds = Math.max(1, getNodeIterationMaxRounds(settings));
     const runtimeToolMessages = [];
     let outputText = '';
     const conversation = {
         messages: [
-            { role: 'system', content: systemText },
+            { role: 'system', content: systemTextWithSkills },
             { role: 'user', content: userText },
         ],
     };
@@ -623,7 +659,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
     for (let round = 1; round <= maxRounds; round += 1) {
         throwIfAborted(abortSignal, 'Orchestration aborted.');
         const taskMessages = [
-            { role: 'system', content: systemText },
+            { role: 'system', content: systemTextWithSkills },
             ...runtimeToolMessages,
             { role: 'user', content: userText },
         ];

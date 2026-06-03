@@ -21,7 +21,7 @@ function buildApp(repo, opts = {}) {
     }
     app.use('/api/skills', createSkillsRouter({
         getRepository: () => repo,
-        memoryIndex: opts.memoryIndex || null,
+        getMemoryIndex: () => opts.memoryIndex || null,
     }));
     return app;
 }

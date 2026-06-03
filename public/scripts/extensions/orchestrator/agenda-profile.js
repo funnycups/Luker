@@ -123,6 +123,16 @@ export function sanitizeAgendaWorkingProfile(workingProfile = null) {
         // really want a no-tools default keep that option.
         defaultTools: sanitizeAgendaProfileDefaultTools(source),
         customTools: sanitizeCustomTools(source?.customTools),
+        // Mode-level skills. Defaults to wildcard so all installed skills
+        // are visible to every agent until the user narrows. Inline shape
+        // normalizer; see director-defaults.js for rationale on not
+        // importing skill-resolution.js here.
+        skills: source?.skills && typeof source.skills === 'object'
+            ? {
+                visible: Array.isArray(source.skills.visible) ? source.skills.visible.slice() : ['*'],
+                deny: Array.isArray(source.skills.deny) ? source.skills.deny.slice() : [],
+            }
+            : { visible: ['*'], deny: [] },
     };
 }
 
@@ -160,6 +170,7 @@ export function ensureAgendaEditorIntegrity(editor) {
     editor.limits = normalized.limits;
     editor.defaultTools = normalized.defaultTools;
     editor.customTools = normalized.customTools;
+    editor.skills = normalized.skills;
     if ('avatar' in editor) {
         editor.avatar = String(editor.avatar || '');
     }
@@ -203,5 +214,6 @@ export function buildAgendaProfileForRuntime(workingProfile = null) {
             maxTotalRuns: profile.limits.maxTotalRuns,
         },
         defaultTools: profile.defaultTools,
+        skills: profile.skills,
     };
 }

@@ -23,6 +23,32 @@ import { sanitizeAgentToolFlags, sanitizeOptionalAgentToolFlags } from './persis
 import { buildDirectorDefaultSystemPrompt } from './director-default-prompt.js';
 import { sanitizeCustomTools } from './custom-tools-sanitize.js';
 
+/**
+ * Inline normalizer for the `skills` field. Kept local rather than imported
+ * from `skill-resolution.js` because the resolver module transitively pulls
+ * in `skillsApi` → `script.js` → the browser-only `lib.js` bundle, which
+ * crashes when sanitizers run under Node (test environment). The logic is
+ * trivial (canonicalize `{visible, deny}` to arrays); `skill-resolution.js`
+ * exports the same idempotent normalizer for runtime callers that already
+ * accept the lib.js dependency.
+ */
+function normalizeSkillsField(obj, { isAgent = false } = {}) {
+    if (!obj || typeof obj !== 'object') return;
+    if (isAgent) {
+        if (obj.skills && typeof obj.skills === 'object') {
+            if (!Array.isArray(obj.skills.visible)) obj.skills.visible = [];
+            if (!Array.isArray(obj.skills.deny)) obj.skills.deny = [];
+        }
+        return;
+    }
+    if (!obj.skills || typeof obj.skills !== 'object') {
+        obj.skills = { visible: ['*'], deny: [] };
+        return;
+    }
+    if (!Array.isArray(obj.skills.visible)) obj.skills.visible = ['*'];
+    if (!Array.isArray(obj.skills.deny)) obj.skills.deny = [];
+}
+
 // Event summary writing rules (body only). Private to orchestrator — memory-graph
 // keeps its own copy. The user wants the two plugins separate: no cross-plugin
 // imports of the prompt body. Maintenance cost: when these rules change, both copies need
@@ -1459,7 +1485,7 @@ export function sanitizeDirectorProfile(profile) {
         const id = String(a.id ?? '').trim();
         const systemPrompt = String(a.systemPrompt ?? '').trim();
         if (!id || !systemPrompt) continue;
-        subAgentMap.set(id, {
+        const entry = {
             id,
             description: String(a.description ?? '').trim(),
             systemPrompt,
@@ -1469,7 +1495,15 @@ export function sanitizeDirectorProfile(profile) {
             maxRounds: Object.prototype.hasOwnProperty.call(a, 'maxRounds')
                 ? clampSubMaxRounds(a.maxRounds)
                 : null,
-        });
+        };
+        // Per-agent `skills` is opt-in: when absent it stays undefined so
+        // the resolver knows to inherit the mode default. When present we
+        // canonicalize the shape (visible / deny arrays).
+        if (a.skills && typeof a.skills === 'object') {
+            entry.skills = a.skills;
+            normalizeSkillsField(entry, { isAgent: true });
+        }
+        subAgentMap.set(id, entry);
     }
 
     // Tools: when input.tools is absent, populate with all-on defaults so
@@ -1495,15 +1529,21 @@ export function sanitizeDirectorProfile(profile) {
     });
     sanitizedTools.finalize = false;
 
-    return {
+    const mainAgentOut = {
+        promptPresetName: String(mainAgent.promptPresetName ?? '').trim(),
+        apiPresetName: String(mainAgent.apiPresetName ?? '').trim(),
+        systemPrompt: String(mainAgent.systemPrompt ?? ''),
+        tools: sanitizeAgentOverride(mainAgent.tools),
+    };
+    if (mainAgent.skills && typeof mainAgent.skills === 'object') {
+        mainAgentOut.skills = mainAgent.skills;
+        normalizeSkillsField(mainAgentOut, { isAgent: true });
+    }
+
+    const result = {
         ...passthrough,
         mode: ORCH_EXECUTION_MODE_DIRECTOR,
-        mainAgent: {
-            promptPresetName: String(mainAgent.promptPresetName ?? '').trim(),
-            apiPresetName: String(mainAgent.apiPresetName ?? '').trim(),
-            systemPrompt: String(mainAgent.systemPrompt ?? ''),
-            tools: sanitizeAgentOverride(mainAgent.tools),
-        },
+        mainAgent: mainAgentOut,
         subAgents: [...subAgentMap.values()],
         maxRounds: clampInt(directorFields.maxRounds, bounds.maxRounds),
         maxConcurrentSubagents: clampInt(directorFields.maxConcurrentSubagents, bounds.maxConcurrentSubagents),
@@ -1512,4 +1552,14 @@ export function sanitizeDirectorProfile(profile) {
         discardOnAbort: Boolean(directorFields.discardOnAbort),
         customTools: sanitizeCustomTools(directorFields.customTools),
     };
+
+    // Mode-level skills: normalize so the runtime always sees the canonical
+    // `{ visible: ['*'], deny: [] }` shape when no value was persisted.
+    // Carries through any explicit value the user set.
+    if (directorFields.skills && typeof directorFields.skills === 'object') {
+        result.skills = directorFields.skills;
+    }
+    normalizeSkillsField(result);
+
+    return result;
 }

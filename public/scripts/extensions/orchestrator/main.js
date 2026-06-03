@@ -180,6 +180,7 @@ import {
     listAvailableSillyTavernTools,
     rehydrateBridgedSillyTavernTools,
 } from './register-custom-tool.js';
+import { registerSkillOrchestrationTools } from './skill-orchestration-tools.js';
 import { openCustomToolEditor } from './custom-tool-editor.js';
 import { openBridgeStToolPicker } from './bridge-st-tool-picker.js';
 import { augmentStudioPromptWithCustomTools } from './studio-prompt-augment.js';
@@ -5633,6 +5634,14 @@ function bindUi() {
     root.on('change.lukerOrch', '#luker_orch_execution_mode', function () {
         settings.executionMode = normalizeExecutionMode(jQuery(this).val());
         settings.singleAgentModeEnabled = settings.executionMode === ORCH_EXECUTION_MODE_SINGLE;
+        // Skill inventory cache is mode-agnostic but the visibility profile
+        // is mode-scoped. Drop the cache so the next agent dispatch under
+        // the new mode re-reads the inventory and re-resolves visibility
+        // against the new profile's `skills` field — keeps stale entries
+        // from the previous mode from leaking into the next turn.
+        import('./skill-resolution.js')
+            .then(m => m.invalidateSkillInventory())
+            .catch(() => { /* lib.js not available (test env): no-op */ });
         saveSettingsDebounced();
         renderDynamicPanels(root, context);
     });
@@ -7375,6 +7384,16 @@ jQuery(() => {
     ensureSettings();
     saveSettingsDebounced();
     void rehydrateBridgedSillyTavernTools(extension_settings[MODULE_NAME]);
+    // Register skill_list / skill_read / skill_search on the orchestrator's
+    // Layer-2 extension registry so `executeLoopTool` can dispatch them.
+    // The same tools are also registered on the ToolManager (via
+    // `registerSkillAgentTools` at app boot) for non-orchestrator callers;
+    // this registration is what makes them reachable inside the orchestrator.
+    try {
+        registerSkillOrchestrationTools();
+    } catch (err) {
+        console.warn(`[${MODULE_NAME}] failed to register skill orchestration tools:`, err);
+    }
     clearCapsulePrompt(context);
     void loadOrchestratorChatState(context).finally(() => ensureUi());
 

@@ -39,17 +39,23 @@ import { importFromUrl } from '../skills/url-import.js';
  * @param {object} options
  * @param {(req:import('express').Request) => object} options.getRepository
  *        Called per-request to resolve the per-user SkillRepository.
- * @param {object|null} [options.memoryIndex]
- *        Optional memory index whose `invalidate()` is called after writes.
- *        Pass `null` when no shared index exists (v1 of the server).
+ * @param {(req:import('express').Request) => (object|null)} [options.getMemoryIndex]
+ *        Optional per-request resolver for a memory index whose
+ *        `invalidate()` is called after writes. Returning `null` (or omitting
+ *        the option entirely) is treated as no-op. The resolver runs once per
+ *        write handler so each user's index can be looked up from the
+ *        authenticated request rather than sharing one global instance —
+ *        without this indirection a write by user A would either invalidate
+ *        nothing (the Plan 1 default) or invalidate every user's cache.
  * @returns {import('express').Router}
  */
 // Factory export (not `export const router = ...`) because each request needs
 // the per-user SkillRepository — resolved through `getRepository(req)` — and
-// optionally a shared memory-index handle for write-side invalidation. Both
-// dependencies are injected at construction time so server.js can wire the
-// real auth/data path while tests substitute fixed-root fakes via supertest.
-export function createSkillsRouter({ getRepository, memoryIndex }) {
+// optionally a per-user memory-index handle for write-side invalidation
+// (resolved through `getMemoryIndex(req)`). Both dependencies are injected at
+// construction time so server.js can wire the real auth/data path while tests
+// substitute fixed-root fakes via supertest.
+export function createSkillsRouter({ getRepository, getMemoryIndex }) {
     const router = express.Router();
 
     // Express auto-decodes %2F in path params, so req.params.scope arrives
@@ -98,9 +104,11 @@ export function createSkillsRouter({ getRepository, memoryIndex }) {
         res.status(status).json({ error: err.message });
     }
 
-    async function invalidateIndex() {
-        if (memoryIndex && typeof memoryIndex.invalidate === 'function') {
-            await memoryIndex.invalidate();
+    async function invalidateIndex(req) {
+        if (!getMemoryIndex) return;
+        const idx = getMemoryIndex(req);
+        if (idx && typeof idx.invalidate === 'function') {
+            await idx.invalidate();
         }
     }
 
@@ -155,7 +163,7 @@ export function createSkillsRouter({ getRepository, memoryIndex }) {
             const result = await materializeFromEmbed({
                 repository: repo, payload, targetScope, conflictStrategies,
             });
-            await invalidateIndex();
+            await invalidateIndex(req);
             res.json(result);
         } catch (e) { handleError(e, res); }
     });
@@ -166,7 +174,7 @@ export function createSkillsRouter({ getRepository, memoryIndex }) {
             const defaultRoot = req.app.get('lukerDefaultRoot');
             if (!defaultRoot) throw new Error('lukerDefaultRoot not configured');
             const result = await importBundledSkills({ defaultRoot, repository: repo });
-            await invalidateIndex();
+            await invalidateIndex(req);
             res.json(result);
         } catch (e) { handleError(e, res); }
     });
@@ -176,7 +184,7 @@ export function createSkillsRouter({ getRepository, memoryIndex }) {
             const repo = getRepository(req);
             const { url, targetScope } = req.body || {};
             const result = await importFromUrl({ url, targetScope, repository: repo });
-            await invalidateIndex();
+            await invalidateIndex(req);
             res.json(result);
         } catch (e) { handleError(e, res); }
     });
@@ -236,7 +244,7 @@ export function createSkillsRouter({ getRepository, memoryIndex }) {
                 fromName: req.params.name,
                 toName: req.body && req.body.toName,
             });
-            await invalidateIndex();
+            await invalidateIndex(req);
             res.json({ ok: true });
         } catch (e) { handleError(e, res); }
     });
@@ -250,7 +258,7 @@ export function createSkillsRouter({ getRepository, memoryIndex }) {
                 fromScope,
                 toScope: req.body && req.body.toScope,
             });
-            await invalidateIndex();
+            await invalidateIndex(req);
             res.json({ ok: true });
         } catch (e) { handleError(e, res); }
     });
@@ -267,7 +275,7 @@ export function createSkillsRouter({ getRepository, memoryIndex }) {
                 content,
                 expectedSha256,
             });
-            await invalidateIndex();
+            await invalidateIndex(req);
             res.json(result);
         } catch (e) { handleError(e, res); }
     });
@@ -285,7 +293,7 @@ export function createSkillsRouter({ getRepository, memoryIndex }) {
                 newString,
                 replaceAll,
             });
-            await invalidateIndex();
+            await invalidateIndex(req);
             res.json(result);
         } catch (e) { handleError(e, res); }
     });
@@ -296,7 +304,7 @@ export function createSkillsRouter({ getRepository, memoryIndex }) {
             const scope = parseScope(req.params.scope);
             const { payload, conflictStrategy } = req.body || {};
             const result = await repo.install({ scope, payload, conflictStrategy });
-            await invalidateIndex();
+            await invalidateIndex(req);
             res.json(result);
         } catch (e) { handleError(e, res); }
     });
@@ -306,7 +314,7 @@ export function createSkillsRouter({ getRepository, memoryIndex }) {
             const repo = getRepository(req);
             const scope = parseScope(req.params.scope);
             await repo.delete(req.params.name, scope);
-            await invalidateIndex();
+            await invalidateIndex(req);
             res.status(204).end();
         } catch (e) { handleError(e, res); }
     });

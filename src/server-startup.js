@@ -57,6 +57,8 @@ import { router as cardAppRouter } from './endpoints/card-app.js';
 import { router as docsRouter } from './endpoints/docs.js';
 import { createSkillsRouter } from './endpoints/skills.js';
 import { createSkillRepository } from './skills/repository.js';
+import { createMemoryIndex } from './skills/memory-index.js';
+import { ensureFreshInstallPopulate } from './skills/bundled.js';
 import { wsTicketRouter } from './ws-proxy.js';
 
 /**
@@ -129,10 +131,75 @@ export function setupPrivateEndpoints(app) {
     // Skills are scoped to the authenticated user's data root, mirroring the
     // card-app pattern. Each request resolves a fresh SkillRepository because
     // request.user.directories.root depends on the authenticated session.
-    // memoryIndex is null in v1 — Plan 2 will introduce a per-user invalidator.
-    app.use('/api/skills', createSkillsRouter({
-        getRepository: (req) => createSkillRepository(req.user.directories.root),
-        memoryIndex: null,
+    //
+    // The skillResourcesByUser cache stores one { repository, memoryIndex }
+    // pair per user-handle for the lifetime of the server process. The memory
+    // index is lazily rebuilt on first lookup so cold starts don't pay the
+    // walk-the-filesystem cost up front; a failure during rebuild is logged
+    // and swallowed (the index becomes empty, getVisible returns []) so a
+    // broken filesystem state never blocks REST traffic. Writes go through
+    // `getMemoryIndex(req).invalidate()` in skills.js, which only touches the
+    // active user's index — other users' caches are unaffected.
+    //
+    // The populate middleware (mounted before the router) lazily mirrors
+    // default/skills/global/ → <userRoot>/skills/global/ on the first
+    // /api/skills request per user per server-process lifetime. Cache key is
+    // request.user.profile.handle — the per-user identifier used elsewhere
+    // in the server. ensureFreshInstallPopulate is itself a no-op if the
+    // user already has any skills in their global scope, so a corrupted
+    // populatedUsers cache (e.g. across server restarts) does not duplicate.
+    // Populate failures are logged and swallowed: a broken default/skills
+    // tree should never block the user from listing their existing skills.
+    const populatedUsers = new Set();
+    const skillResourcesByUser = new Map();
+
+    function getSkillResources(req) {
+        const handle = req.user?.profile?.handle;
+        const root = req.user?.directories?.root;
+        // Anonymous / pre-auth requests: build a one-shot repo with no index.
+        // These should be rare (the auth middleware normally runs before this
+        // router), but a missing handle must not blow up.
+        if (!handle || !root) {
+            return { repository: createSkillRepository(root || '/'), memoryIndex: null };
+        }
+        let entry = skillResourcesByUser.get(handle);
+        if (!entry) {
+            const repository = createSkillRepository(root);
+            const memoryIndex = createMemoryIndex(repository);
+            // Kick off the initial rebuild lazily; subsequent invalidate()s
+            // come from the REST write handlers. Failures don't block the
+            // request — they just leave the index empty until the next write.
+            memoryIndex.rebuild().catch((e) => {
+                console.warn(`[skills] memoryIndex rebuild failed for ${handle}:`, e?.message ?? e);
+            });
+            entry = { repository, memoryIndex };
+            skillResourcesByUser.set(handle, entry);
+        }
+        return entry;
+    }
+
+    app.use('/api/skills', async (req, res, next) => {
+        try {
+            const handle = req.user?.profile?.handle;
+            if (handle && !populatedUsers.has(handle)) {
+                populatedUsers.add(handle);
+                const defaultRoot = app.get('lukerDefaultRoot');
+                if (defaultRoot && req.user?.directories?.root) {
+                    await ensureFreshInstallPopulate({
+                        defaultRoot,
+                        userRoot: req.user.directories.root,
+                    });
+                }
+            }
+        } catch (e) {
+            // Don't block the request on populate failure; bundled skills are
+            // a convenience, not a correctness requirement.
+            console.warn('[skills] ensureFreshInstallPopulate failed:', e?.message ?? e);
+        }
+        next();
+    }, createSkillsRouter({
+        getRepository: (req) => getSkillResources(req).repository,
+        getMemoryIndex: (req) => getSkillResources(req).memoryIndex,
     }));
     app.use('/api/ws-ticket', wsTicketRouter);
 }

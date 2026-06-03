@@ -49,6 +49,18 @@ import { isAbortSignalLike, throwIfAborted } from './abort-utils.js';
 import { executeLoopTool, getEnabledToolSchemas, resolveToolSource } from './loop-tools.js';
 import { buildPerRunCustomToolRegistry } from './per-run-custom-tools.js';
 
+// Skill-resolution helpers are loaded lazily so the transitive import chain
+// (skill-resolution → skillsApi → script.js → lib.js) stays out of module
+// evaluation. Production runs hit the dynamic import once per process; tests
+// that exercise pure helpers never reach it.
+let _skillResolutionPromise = null;
+async function loadSkillResolution() {
+    if (!_skillResolutionPromise) {
+        _skillResolutionPromise = import('./skill-resolution.js');
+    }
+    return _skillResolutionPromise;
+}
+
 // runtime-trace and tool-calling are loaded lazily inside the runtime
 // entry point — both pull `lib.js` (a build-only bundle) transitively
 // and would otherwise refuse to load under the Node-based test runner.
@@ -757,6 +769,36 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
     const maxRounds = Math.max(1, Math.floor(Number(profile?.max_rounds) || 1));
     const wallClockBudgetMs = Math.max(0, Math.floor(Number(profile?.wall_clock_budget_ms) || 0));
     const deadline = wallClockBudgetMs > 0 ? Date.now() + wallClockBudgetMs : null;
+
+    // Resolve skills visible to the loop agent and append the
+    // `<available_skills>` catalog block to its system prompt. Loop is a
+    // single-agent mode, so the resolver sees only the mode-level
+    // `profile.skills` (no per-agent overlay). Failure falls back to an
+    // empty list — the agent runs without a catalog and skill tools
+    // resolve via the global fallback in agent-tools.js.
+    let visibleSkillsForLoop = [];
+    try {
+        const skillRes = await loadSkillResolution();
+        visibleSkillsForLoop = await skillRes.resolveAgentVisibleSkills({
+            modeProfile: profile,
+            agentConfig: null,
+            runtimeContext: skillRes.buildSkillRuntimeContext(context, profile),
+        });
+        const block = skillRes.buildAvailableSkillsBlock(visibleSkillsForLoop);
+        if (block && messages.length > 0 && messages[0]?.role === 'system') {
+            messages[0].content = (messages[0].content || '') + '\n\n' + block;
+        } else if (block) {
+            // No system message — buildInitialMessages returns [] when
+            // both the prompt and notes block are empty. Insert one.
+            messages.unshift({ role: 'system', content: block });
+        }
+    } catch (e) {
+        console.warn('[orchestrator-loop] skill resolution failed:', e?.message || e);
+    }
+    // Make the loop agent's visible-skills list reachable through the
+    // tool dispatch context so skill_list / skill_read / skill_search
+    // see the scoped visibility.
+    toolContext.__visibleSkillsForAgent = visibleSkillsForLoop;
 
     // Alias the running messages array onto the trace so the popup's
     // loop-conversation panel reflects the agent's history as it grows.

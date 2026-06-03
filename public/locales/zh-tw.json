@@ -5331,6 +5331,7 @@
     ,"Loop agent": "循環代理"
     ,"Prompt preset": "提示詞預設"
     ,"API preset": "API 預設"
+    ,"API preset (Connection profile)": "API 預設（Connection profile）"
     ,"Max rounds": "最大輪次"
     ,"Wall-clock budget (s)": "時長預算（秒）"
     ,"System prompt": "系統提示詞"

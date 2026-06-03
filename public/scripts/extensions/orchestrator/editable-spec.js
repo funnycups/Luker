@@ -64,7 +64,7 @@ export function sanitizeIdentifierToken(value, fallback = '') {
 }
 
 export function createPresetDraft(seed = {}) {
-    return {
+    const out = {
         systemPrompt: String(seed.systemPrompt || '').trim(),
         userPromptTemplate: String(seed.userPromptTemplate || '').trim(),
         apiPresetName: getPresetApiPresetName(seed),
@@ -75,6 +75,16 @@ export function createPresetDraft(seed = {}) {
         // this opt-in path; loop mode does its own all-on layering).
         tools: sanitizeOptionalAgentToolFlags(seed.tools),
     };
+    // Per-preset skills (opt-in). Mirrors normalizeNodeSpec — left undefined
+    // when absent so the resolver inherits the mode default. Carries an
+    // explicit value through unchanged otherwise.
+    if (seed && typeof seed === 'object' && seed.skills && typeof seed.skills === 'object') {
+        out.skills = {
+            visible: Array.isArray(seed.skills.visible) ? seed.skills.visible.slice() : [],
+            deny: Array.isArray(seed.skills.deny) ? seed.skills.deny.slice() : [],
+        };
+    }
+    return out;
 }
 
 export function createAgendaPlannerDraft(seed = {}) {

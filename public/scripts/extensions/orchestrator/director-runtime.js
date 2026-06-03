@@ -48,6 +48,20 @@ import {
 import { buildPerRunCustomToolRegistry } from './per-run-custom-tools.js';
 import { resolveToolSource } from './loop-tools.js';
 
+// Skill-resolution helpers are loaded lazily inside the dispatch path so the
+// transitive import chain (skill-resolution → skillsApi → script.js → lib.js)
+// stays out of module evaluation. Unit tests that exercise pure helpers
+// (`buildAgentTaskMessages`, sanitizer contracts) never call the dispatcher
+// and therefore never trigger the dynamic import — the lib.js dependency
+// remains test-friendly.
+let _skillResolutionPromise = null;
+async function loadSkillResolution() {
+    if (!_skillResolutionPromise) {
+        _skillResolutionPromise = import('./skill-resolution.js');
+    }
+    return _skillResolutionPromise;
+}
+
 /**
  * Resolve the connection-profile name for a director agent: per-agent
  * setting wins; falls back to the orchestrator's global LLM-node setting
@@ -389,6 +403,11 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
 
     const dispatcher = createSubagentDispatcher({
         subAgents: director.subAgents || [],
+        // Mode profile carried for sub-agent skill resolution. The
+        // dispatcher reads `directorProfile.skills` to seed the
+        // mode-level visibility default; per-sub-agent overrides
+        // (subAgents[i].skills) layer via the `+` inheritance idiom.
+        directorProfile: director,
         limits,
         settings: deps?.settings,
         generateTask: deps?.generateTask,
@@ -445,8 +464,36 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
     const openNotesForMain = await readOpenNotesFromContextForNotes(deps?.contextForNotes);
     const systemPromptWithOpenNotes = renderMainAgentSystemPromptWithOpenNotes(systemPrompt, openNotesForMain);
 
+    // Resolve visible skills for the main agent + append the
+    // `<available_skills>` catalog block to the system prompt. The
+    // resolver loads the inventory lazily so test environments that
+    // never reach this branch (the orchestrator tests stub `runMainLoop`)
+    // don't pay the import cost. Visible skills also get threaded into
+    // each tool-call's ctx below so skill_list / skill_read / skill_search
+    // see the scoped visibility instead of the fail-open global fallback.
+    let visibleSkillsForMain = [];
+    let mainSystemPromptWithSkills = systemPromptWithOpenNotes;
+    try {
+        const skillRes = await loadSkillResolution();
+        visibleSkillsForMain = await skillRes.resolveAgentVisibleSkills({
+            modeProfile: director,
+            agentConfig: director.mainAgent || null,
+            runtimeContext: skillRes.buildSkillRuntimeContext(
+                deps?.contextForNotes || null,
+                director.mainAgent || null,
+            ),
+        });
+        const block = skillRes.buildAvailableSkillsBlock(visibleSkillsForMain);
+        if (block) mainSystemPromptWithSkills = systemPromptWithOpenNotes + '\n\n' + block;
+    } catch (e) {
+        // Resolution failure must not abort the agent run. Fall back to
+        // an empty visible list (tools resolve via global fallback) and
+        // skip the catalog block.
+        console.warn('[orchestrator-director] skill resolution failed:', e?.message || e);
+    }
+
     const messages = buildAgentTaskMessages(
-        { systemPrompt: systemPromptWithOpenNotes },
+        { systemPrompt: mainSystemPromptWithSkills },
         contentPayload,
     );
 
@@ -716,6 +763,12 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                     const toolCtx = Object.create(deps?.contextForNotes || null);
                     toolCtx.chat = deps.chat;
                     toolCtx.__customToolRegistry = customToolRegistry;
+                    // Thread the resolved visible-skills list onto the
+                    // ctx so any skill_list / skill_read / skill_search
+                    // calls dispatched through this loop see the agent's
+                    // scoped visibility instead of falling back to the
+                    // global skill inventory.
+                    toolCtx.__visibleSkillsForAgent = visibleSkillsForMain;
                     const raw = await deps.executeLoopTool(name, args, toolCtx);
                     toolResult = { ok: true, result: raw };
                 } catch (err) {

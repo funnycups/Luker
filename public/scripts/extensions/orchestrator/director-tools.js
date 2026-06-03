@@ -35,6 +35,17 @@ import {
 } from './editor-ops.js';
 import { isAbortError } from './abort-utils.js';
 
+// Skill-resolution helpers are loaded lazily so the transitive import chain
+// (skill-resolution → skillsApi → script.js → lib.js) stays out of module
+// evaluation. Same pattern as director-runtime.js.
+let _skillResolutionPromise = null;
+async function loadSkillResolution() {
+    if (!_skillResolutionPromise) {
+        _skillResolutionPromise = import('./skill-resolution.js');
+    }
+    return _skillResolutionPromise;
+}
+
 /**
  * Resolve the connection-profile name for a director sub-agent: per-spec
  * setting wins; falls back to the orchestrator's global LLM-node setting
@@ -363,6 +374,7 @@ const SUB_AGENT_MAX_ROUNDS = 16;
  */
 export function createSubagentDispatcher({
     subAgents,
+    directorProfile = null,
     limits,
     settings,
     generateTask,
@@ -600,6 +612,10 @@ export function createSubagentDispatcher({
             agentMaxRounds: Number.isFinite(Number(spec?.maxRounds)) && Number(spec.maxRounds) > 0
                 ? Math.floor(Number(spec.maxRounds))
                 : null,
+            // Pass the sub-agent spec through so the dispatcher can resolve
+            // per-agent skill visibility (its `skills` field layered on
+            // top of the mode-level default in `directorProfile.skills`).
+            agentConfig: spec,
         });
     }
 
@@ -650,10 +666,13 @@ export function createSubagentDispatcher({
             parentMessages: Array.isArray(__parentMessages) ? __parentMessages : null,
             agentTools: null,
             agentMaxRounds: null,
+            // Inline sub-agents have no profile-stored `skills` config —
+            // they inherit the mode-level default.
+            agentConfig: null,
         });
     }
 
-    async function runDispatchInternal({ handleId, displayId, isInline, label, systemPrompt, apiPresetName, promptPresetName, task, parentMessages, agentTools, agentMaxRounds }) {
+    async function runDispatchInternal({ handleId, displayId, isInline, label, systemPrompt, apiPresetName, promptPresetName, task, parentMessages, agentTools, agentMaxRounds, agentConfig = null }) {
         totalRuns++;
         safeEnsureSection(label);
         // Effective per-dispatch round cap: per-agent override if pinned,
@@ -701,6 +720,29 @@ export function createSubagentDispatcher({
         // notes written by earlier sub-agents in this session show up
         // for later ones. No-op when the adapter isn't mounted.
         const baseSystemPrompt = await renderSubSystemPromptWithNotes(systemPrompt, contextForNotes);
+
+        // Resolve visible skills for this sub-agent. Mode-level default
+        // lives on `directorProfile.skills`; per-sub-agent `skills` (when
+        // present on `agentConfig`) layers via the `+` inheritance idiom.
+        // Failure falls back to an empty list — the dispatch proceeds, the
+        // tools resolve via the global fallback in agent-tools.js, and the
+        // catalog block is omitted.
+        let visibleSkillsForSubAgent = [];
+        let baseSystemPromptWithSkills = baseSystemPrompt;
+        if (directorProfile) {
+            try {
+                const skillRes = await loadSkillResolution();
+                visibleSkillsForSubAgent = await skillRes.resolveAgentVisibleSkills({
+                    modeProfile: directorProfile,
+                    agentConfig,
+                    runtimeContext: skillRes.buildSkillRuntimeContext(contextForNotes || null, agentConfig),
+                });
+                const block = skillRes.buildAvailableSkillsBlock(visibleSkillsForSubAgent);
+                if (block) baseSystemPromptWithSkills = baseSystemPrompt + '\n\n' + block;
+            } catch (e) {
+                console.warn('[orchestrator-director] sub-agent skill resolution failed:', e?.message || e);
+            }
+        }
 
         // Frame the sub-agent's prompt so it knows where its identity
         // ends and the roleplay material begins. Without this anti-RP
@@ -767,7 +809,7 @@ export function createSubagentDispatcher({
             ...payloadMessages,
             { role: 'system', content: '</story_context>' },
             { role: 'system', content: META_REMINDER },
-            { role: 'system', content: '<orchestration_role>\n' + (baseSystemPrompt || '') + '\n</orchestration_role>' },
+            { role: 'system', content: '<orchestration_role>\n' + (baseSystemPromptWithSkills || '') + '\n</orchestration_role>' },
             ...(mainRoundsDigest ? [{ role: 'system', content: '<main_agent_digest>\n' + mainRoundsDigest + '\n</main_agent_digest>' }] : []),
             ...draftBlock,
             { role: 'system', content: '<task>\n' + String(task || '') + '\n</task>' },
@@ -869,6 +911,10 @@ export function createSubagentDispatcher({
                                 const toolCtx = Object.create(contextForNotes || null);
                                 toolCtx.chat = chat;
                                 toolCtx.__customToolRegistry = customToolRegistry;
+                                // Sub-agent scoped skill visibility — see
+                                // director-runtime.js main-agent path for
+                                // matching wiring.
+                                toolCtx.__visibleSkillsForAgent = visibleSkillsForSubAgent;
                                 const raw = await executeLoopTool(name, args, toolCtx);
                                 toolResult = { ok: true, result: raw };
                             } catch (err) {

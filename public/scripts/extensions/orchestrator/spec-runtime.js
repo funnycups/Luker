@@ -110,6 +110,17 @@ import {
 import { attachToolContext, isStructuredToolError } from './loop-runtime.js';
 import { buildPerRunCustomToolRegistry } from './per-run-custom-tools.js';
 
+// Skill-resolution helpers are loaded lazily (script.js → lib.js dep makes
+// eager import unfriendly to Node tests). Same pattern as director / loop
+// runtimes.
+let _skillResolutionPromise = null;
+async function loadSkillResolution() {
+    if (!_skillResolutionPromise) {
+        _skillResolutionPromise = import('./skill-resolution.js');
+    }
+    return _skillResolutionPromise;
+}
+
 const MODULE_NAME = 'orchestrator';
 
 export function buildNodeToolSet(nodeSpec, { isFinalStage = false } = {}) {
@@ -441,6 +452,25 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
         toolContext.__customToolRegistry = customToolRegistry;
     }
 
+    // Resolve skills visible to this worker node. Mode-level default
+    // lives on `runtime.spec.skills`; per-node `skills` (when set on
+    // `nodeSpec`) layers via the `+` inheritance idiom. The resolver
+    // dynamic-imports to keep test environments lib.js-free.
+    let visibleSkillsForNode = [];
+    let nodeSystemSuffix = '';
+    try {
+        const skillRes = await loadSkillResolution();
+        visibleSkillsForNode = await skillRes.resolveAgentVisibleSkills({
+            modeProfile: options?.runtime?.spec || {},
+            agentConfig: nodeSpec,
+            runtimeContext: skillRes.buildSkillRuntimeContext(context, preset),
+        });
+        nodeSystemSuffix = skillRes.buildAvailableSkillsBlock(visibleSkillsForNode);
+    } catch (e) {
+        console.warn('[orchestrator-spec] worker skill resolution failed:', e?.message || e);
+    }
+    if (toolContext) toolContext.__visibleSkillsForAgent = visibleSkillsForNode;
+
     const runtimeWorldInfo = await resolveOrchestrationRuntimeWorldInfo(context, settings, {
         worldInfoMessages: messages,
         runtimeWorldInfo: buildRuntimeWorldInfoFromPayload(payload),
@@ -462,8 +492,11 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
             ].filter(Boolean).join('\n\n');
 
             const systemText = String(preset.systemPrompt || '').trim();
+            const systemWithSkills = systemText && nodeSystemSuffix
+                ? systemText + '\n\n' + nodeSystemSuffix
+                : (systemText || nodeSystemSuffix);
             const taskMessages = [
-                ...(systemText ? [{ role: 'system', content: systemText }] : []),
+                ...(systemWithSkills ? [{ role: 'system', content: systemWithSkills }] : []),
                 ...runtimeToolMessages,
                 { role: 'user', content: iterationPrompt },
             ];
@@ -711,6 +744,12 @@ export async function replayStagesToReview(context, payload, messages, profile, 
 }
 
 export async function runReviewNode(context, payload, profile, nodeSpec, preset, messages, previousNodeOutputs, currentStageWorkerOutputs, abortSignal = null, options = {}) {
+    // Review nodes intentionally skip the `<available_skills>` catalog block
+    // and the `__visibleSkillsForAgent` dispatch hint: they audit the
+    // preceding worker's output via specialized review tools
+    // (`luker_orch_review_approve`, `luker_orch_review_rerun`) and shouldn't
+    // be distracted by general skill content. Workers consult skills; review
+    // nodes consult workers' outputs.
     throwIfAborted(abortSignal, 'Orchestration aborted.');
     if (Boolean(options?.isFinalStage)) {
         throw new Error(`Review node '${nodeSpec.id}' cannot be used in the final stage.`);
@@ -1055,6 +1094,11 @@ export async function runSpecOrchestration(context, payload, messages, profile) 
         // `tools` is null. Node-level override still takes precedence in
         // the resolver inside runWorkerNode.
         specDefaultTools: spec.defaultTools || null,
+        // Carries the sanitized spec for downstream skill resolution.
+        // Worker nodes read `runtime.spec.skills` for the mode-level
+        // visibility default; each node's own `skills` (when set) layers
+        // on top via the `+` inheritance idiom.
+        spec,
         // Layer-3 custom tools live on the profile root (not the spec).
         // Built once per orchestration and threaded into every node via
         // `runtime.customToolRegistry`. runWorkerNode forwards it to
