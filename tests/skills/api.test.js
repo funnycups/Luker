@@ -132,4 +132,46 @@ describe('public/scripts/skills/api.js — jsonFetch wrapper', () => {
         expect(capturedHeaders['X-CSRF-Token']).toBe('test-token-123');
         expect(capturedHeaders['Content-Type']).toBe('application/json');
     });
+
+    test('listFiles() targets the /files sub-route with encoded scope', async () => {
+        const { skillsApi } = await import('../../public/scripts/skills/api.js');
+        let capturedUrl;
+        global.fetch = async (url) => {
+            capturedUrl = url;
+            return { ok: true, status: 200, json: async () => ({ files: [{ path: 'SKILL.md', size: 12, isBinary: false }] }) };
+        };
+
+        const r = await skillsApi.listFiles({
+            scope: { kind: 'preset', apiId: 'openai', name: 'rp' },
+            name: 'demo',
+        });
+
+        expect(capturedUrl).toContain('/api/skills/');
+        expect(capturedUrl).toMatch(/\/demo\/files$/);
+        // The scope segment is URL-encoded so preset/openai/rp survives Express path parsing.
+        expect(capturedUrl).toContain(encodeURIComponent('preset/openai/rp'));
+        expect(Array.isArray(r.files)).toBe(true);
+    });
+
+    test('deleteFile() issues DELETE with path query string', async () => {
+        const { skillsApi } = await import('../../public/scripts/skills/api.js');
+        let capturedUrl;
+        let capturedMethod;
+        global.fetch = async (url, opts) => {
+            capturedUrl = url;
+            capturedMethod = opts.method;
+            return { ok: true, status: 204, json: async () => { throw new Error('should not be called'); } };
+        };
+
+        const r = await skillsApi.deleteFile({
+            scope: { kind: 'global' },
+            name: 'demo',
+            path: 'references/note.md',
+        });
+
+        expect(capturedMethod).toBe('DELETE');
+        expect(capturedUrl).toContain('/api/skills/global/demo/file?');
+        expect(capturedUrl).toContain('path=references%2Fnote.md');
+        expect(r).toBeNull();
+    });
 });

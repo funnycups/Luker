@@ -99,6 +99,20 @@ AI 說沒什麼再改的了之後，點 **套用到全域**（到處都用）或
 
 全域編排會話不會動任何世界書——這套調和流程僅在角色卡範圍內生效。
 
+## 用工作台編寫 skill
+
+不想自己寫 SKILL.md？開啟工作台，告訴它你想要什麼。它替你起草、安裝，順便（如果你交代了）掛到對應位置——跟其他改動一樣的逐條審批流程。
+
+一句話就夠，自然語言：
+
+> 幫我寫一條 skill，讓導演避開翻譯腔。別讓角色對話出現「當 X 的時候」這種句式，不要用「——」破折號分隔短句，「是嗎？」改成「是吧？」這種更本地化的語氣詞。讓導演模式下所有 agent 都看到。
+
+你審批之後，skill 立刻落盤可用。如果你順便交代了掛載（"讓所有 agent 看到"、"給 voice_critic 看"），它會一起掛好；否則之後你也可以自己在 [技能列表](/zh-TW/features/orchestrator/skills) 裡加。
+
+![工作台跑完安裝](/_screenshots/skills/iter-studio-05-after-llm-round.png)
+
+詳見 [《用 skills 調教 RP 輸出》](/zh-TW/recipes/rp-skills-walkthrough)。
+
 ## 會話管理
 
 不同卡、不同實驗，各自一個 session。
@@ -135,4 +149,5 @@ Loop 模式只能透過迭代工作台逐步迭代——沒有「一次生成完
 - [單 Agent 模式](/zh-TW/features/orchestrator/single) — 退化的 Spec
 - [Agenda 模式](/zh-TW/features/orchestrator/agenda) — Planner 動態調度
 - [Loop 模式](/zh-TW/features/orchestrator/loop) — 單 Agent 工具循環
+- [Skills 整合](/zh-TW/features/orchestrator/skills) — `skill_create` 寫入的物件
 - [角色卡編輯器](/zh-TW/features/card-editor/) — 與迭代工作台共用 diff 引擎

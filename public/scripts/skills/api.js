@@ -106,6 +106,18 @@ export const skillsApi = {
     },
 
     /**
+     * List metadata (path/size/isBinary) for every file inside a skill.
+     * SKILL.md is sorted to the top; the rest follow localeCompare order.
+     * @param {{scope: object, name: string}} opts
+     * @returns {Promise<{files: Array<{path: string, size: number, isBinary: boolean}>}>}
+     */
+    listFiles(opts) {
+        return jsonFetch(
+            `/api/skills/${encodeURIComponent(scopeToUrl(opts.scope))}/${encodeURIComponent(opts.name)}/files`,
+        );
+    },
+
+    /**
      * Substring search inside a skill's files.
      * @param {{scope: object, name: string, query: string, path?: string, limit?: number, contextLines?: number}} opts
      */
@@ -140,6 +152,19 @@ export const skillsApi = {
         return jsonFetch(
             `/api/skills/${encodeURIComponent(scopeToUrl(opts.scope))}/${encodeURIComponent(opts.name)}/file/edit`,
             { method: 'POST', body: JSON.stringify(opts) },
+        );
+    },
+
+    /**
+     * Delete a single file inside a skill. SKILL.md cannot be deleted via
+     * this route — use `delete(scope, name)` to remove the whole skill.
+     * @param {{scope: object, name: string, path: string}} opts
+     */
+    deleteFile(opts) {
+        const params = new URLSearchParams({ path: String(opts.path || '') });
+        return jsonFetch(
+            `/api/skills/${encodeURIComponent(scopeToUrl(opts.scope))}/${encodeURIComponent(opts.name)}/file?${params}`,
+            { method: 'DELETE' },
         );
     },
 

@@ -11,6 +11,7 @@ This is the complete reference for the Luker Extension API, intended for plugin 
 | [Generation](/development/extension-api/generation) | `generateTask`, tool registration, `generateRaw` / `generateQuietPrompt`, service classes, connection profiles |
 | [Slash Commands](/development/extension-api/slash-commands) | Registering and executing slash commands, named/unnamed arguments, enums |
 | [Macros & Variables](/development/extension-api/macros-and-variables) | Macro registration, built-in macro reference, `substituteParams`, local & global variables |
+| [Skills](/development/extension-api/skills) | `context.skills.*` — install, read, write, search, scope migration, embed pack/extract; CardApp ctx parity |
 | [UI & Popups](/development/extension-api/ui-and-popups) | Popups, loaders, templates, message formatting |
 | [IterationStudio](/development/extension-api/iteration-studio) | Shared popup framework for AI-driven iterative editing — conversation, sessions, diff preview, approve/reject lifecycle. Adapters supply the artifact shape + tools |
 | [Plugin Integration](/development/extension-api/plugin-integration) | Regex runtime, search tools, extension API registry, event system, i18n, settings storage, debug & scraper registration, tokenization, utilities, symbols & constants |
@@ -45,6 +46,7 @@ For quickly finding where an API lives, the context object groups related APIs i
 | `context.constants` | `unset` (the `UNSET_VALUE` sentinel) |
 | `context.macros` | `register`, `registerAlias`, `registry`, `engine`, `category`, `envBuilder` |
 | `context.loader` | `show`, `hide`, `active`, `get`, `isBlocking`, `ToastMode`, `Handle` |
+| `context.skills` | `list`, `get`, `readFile`, `listFiles`, `search`, `writeFile`, `editFile`, `deleteFile`, `install`, `delete`, `rename`, `moveScope`, `importBundled`, `listBundledManifest`, `packForEmbed`, `previewExtractEmbed`, `executeExtractEmbed`, `importFromUrl` |
 
 ## API Differences from SillyTavern
 

@@ -15,8 +15,10 @@ import { importFromUrl } from '../skills/url-import.js';
  * URL scheme:
  *   GET    /api/skills?scope=<global|preset/api/name|character/file|all>
  *   GET    /api/skills/<scope>/<name>/file?path=...&offset=...&limit=...
+ *   GET    /api/skills/<scope>/<name>/files
  *   POST   /api/skills/<scope>                              (install)
  *   DELETE /api/skills/<scope>/<name>
+ *   DELETE /api/skills/<scope>/<name>/file?path=...
  *   POST   /api/skills/<scope>/<name>/rename
  *   POST   /api/skills/<scope>/<name>/move-scope
  *   POST   /api/skills/<scope>/<name>/file/write
@@ -94,7 +96,7 @@ export function createSkillsRouter({ getRepository, getMemoryIndex }) {
         // ("SKILL.md must start with...", "must include name", "must include description").
         // `frontmatter` and `file is binary` cover the same parser + readFile
         // user-input failures that previously fell through to 500.
-        if (/illegal|invalid|path traversal|unknown scope|unsupported|missing|must (?:include|start|be)|required|frontmatter|file is binary|no sub-path|scope path|sha256 mismatch|only https|did not return|no YAML|name mismatch|oldString not found|multiple matches|empty|not.*frontmatter|has no files|fetch failed/i.test(msg)) return 400;
+        if (/illegal|invalid|path traversal|unknown scope|unsupported|missing|must (?:include|start|be)|required|frontmatter|file is binary|no sub-path|scope path|sha256 mismatch|only https|did not return|no YAML|name mismatch|oldString not found|multiple matches|empty|not.*frontmatter|has no files|fetch failed|cannot delete SKILL\.md/i.test(msg)) return 400;
 
         return 500;
     }
@@ -216,6 +218,45 @@ export function createSkillsRouter({ getRepository, getMemoryIndex }) {
                 limit: limit !== undefined ? Number(limit) : undefined,
             });
             res.json(result);
+        } catch (e) { handleError(e, res); }
+    });
+
+    // List file metadata for the skill editor. Returns `{ files: [{path,
+    // size, isBinary}] }` rather than reusing the internal listFiles
+    // (which returns full buffers used by the embed packer) — the browser
+    // doesn't need contents, only a directory listing for the file tree.
+    // Sort SKILL.md to the top because it's the skill's root manifest;
+    // the rest follow in localeCompare order from the repository.
+    router.get('/:scope/:name/files', async (req, res) => {
+        try {
+            const repo = getRepository(req);
+            const scope = parseScope(req.params.scope);
+            const entries = await repo.listFiles({ scope, name: req.params.name });
+            const files = entries.map(e => ({
+                path: e.path,
+                size: e.buffer ? e.buffer.length : 0,
+                isBinary: Boolean(e.isBinary),
+            }));
+            files.sort((a, b) => {
+                if (a.path === 'SKILL.md') return -1;
+                if (b.path === 'SKILL.md') return 1;
+                return a.path.localeCompare(b.path);
+            });
+            res.json({ files });
+        } catch (e) { handleError(e, res); }
+    });
+
+    // Per-file delete used by the inline skill editor. SKILL.md cannot be
+    // deleted (the repository enforces this); deleting the whole skill
+    // goes through the existing DELETE /:scope/:name route.
+    router.delete('/:scope/:name/file', async (req, res) => {
+        try {
+            const repo = getRepository(req);
+            const scope = parseScope(req.params.scope);
+            const filePath = String(req.query.path || '');
+            await repo.deleteFile({ scope, name: req.params.name, path: filePath });
+            await invalidateIndex(req);
+            res.status(204).end();
         } catch (e) { handleError(e, res); }
     });
 

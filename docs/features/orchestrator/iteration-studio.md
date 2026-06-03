@@ -99,6 +99,20 @@ The Studio prefers surgical clause-level rewrites that preserve the rest of an e
 
 Global Studio sessions never touch any lorebook — this only runs in character scope.
 
+## Authoring skills via iter-studio
+
+Don't feel like hand-writing a skill? Open the Studio and tell it what you want. It writes the SKILL.md, installs it, and (if you ask) wires it into the right place — same approval-per-change flow as everything else.
+
+The prompt can be a plain sentence. For example:
+
+> Write a skill that keeps the director from using stiff translated-Chinese phrasing — no "当……的时候" stem, no "——" dash-splitting sentences, prefer "是吧" over "是吗"。Add it so every agent in director mode sees it.
+
+The Studio drafts the SKILL.md, opens the install round, and you approve. The skill lands on disk and is ready to use the moment you approve it. If you also asked the Studio to attach it ("…so every agent sees it" / "…for voice_critic"), it wires it into the right place too; otherwise you can attach it yourself later from the [skill list section](/features/orchestrator/skills) of the director editor.
+
+![Studio after the install round](/_screenshots/skills/iter-studio-05-after-llm-round.png)
+
+See the [recipe](/recipes/rp-skills-walkthrough) for the full walkthrough.
+
 ## Sessions
 
 Different cards, different experiments — each keeps its own session.
@@ -135,4 +149,5 @@ Loop mode iterates only through the Studio — there's no "generate a complete p
 - [Single Agent mode](/features/orchestrator/single) — degenerate Spec
 - [Agenda mode](/features/orchestrator/agenda) — Planner-driven dynamic dispatch
 - [Loop mode](/features/orchestrator/loop) — single-agent tool loop
+- [Skills in the orchestrator](/features/orchestrator/skills) — making a skill visible to a particular agent
 - [Character Card Editor](/features/card-editor/) — shares the diff engine with Iteration Studio

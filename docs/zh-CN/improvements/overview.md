@@ -13,6 +13,7 @@ Luker 对 SillyTavern 的改进不是简单的功能堆叠，而是从数据传�
 | 功能 | [角色卡绑定预设与人设](/zh-CN/improvements/card-bound-presets) | 角色卡可携带推荐预设和默认人设 |
 | 功能 | [请求检查器](/zh-CN/improvements/request-inspector) | 追踪生成请求的完整生命周期与 Token 用量 |
 | 功能 | [预设关联世界书](/zh-CN/improvements/preset-world-info) | 切换预设时自动激活对应的世界书 |
+| 功能 | [技能](/zh-CN/features/skills/) | 兼容 Anthropic 的本地知识包，编排器 agent 按需读取 |
 | 基础设施 | [统一生成层](/zh-CN/improvements/generation-layer) | 多后端生成请求统一封装与 Token 计量 |
 | 基础设施 | [性能优化](/zh-CN/improvements/performance) | 并行加载、懒加载、延迟初始化等启动和运行时优化 |
 | 基础设施 | [WebSocket 代理](/zh-CN/improvements/ws-proxy) | 持久 WS 隧道传输，心跳保活与流偏移恢复 |
@@ -78,6 +79,12 @@ Luker 内置了统一的函数调用（Function Calling）运行时，支持两�
 ### 请求检查器
 
 调试 AI 对话时，用户经常需要知道「到底发了什么给 API」。Luker 的请求检查器追踪每个 AI 生成请求从发起到完成的完整生命周期，记录 prompt token、completion token 和总用量。它支持流式响应的 Token 统计（从 SSE 事件中提取 usage 信息），也覆盖图像生成请求的追踪。请求检查器追踪的 Token 用量是独立的统计功能，与存储配额管理是两个独立的系统。详见 [请求检查器](/zh-CN/improvements/request-inspector)。
+
+### 技能
+
+多 agent 编排器 profile 的系统提示词往往越来越长 —— 每条可复用的写作规则、每份评审方法、每份工作流契约，过去都内联在 `systemPrompt` 字段里，经常在多个子代理里重复拷贝。Luker 引入了 **技能（skills）**：兼容 Anthropic 的本地知识包（`SKILL.md` + frontmatter + 可选子文件），agent 按需读取。技能按名字寻址（引用里不带作用域前缀），住在三种作用域下（`global` / `preset` / `character`），派遣时按后者优先解析。
+
+编排器默认 director profile 自带 24 个出厂技能，覆盖共享写作规则、主代理工作流，以及每个子代理一份方法技能。同一格式与 Anthropic Claude Code 双向可移植 —— 技能可不经转换跨平台往返。技能可以跟角色卡（PNG 元数据）或预设（嵌入载荷）一起分发，所以分发卡片也就分发了支撑它工作的写作规则。技能管理子面板覆盖安装、编辑、迁移作用域、嵌入导出；迭代工作台 AI 可以通过专用工具从长 `systemPrompt` 文本里抽出可复用规则到技能。概念模型见 [技能概览](/zh-CN/features/skills/)，格式见 [创作技能](/zh-CN/features/skills/authoring)。
 
 ## 基础设施
 

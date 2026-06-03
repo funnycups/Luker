@@ -11,6 +11,7 @@ import {
     buildOrchestrationEditorPopupPanelHtml,
     buildOrchestratorSettingsHtml,
     renderInheritOrOverridePanel,
+    renderSkillChipsPlaceholder,
 } from './ui-templates.js';
 import {
     buildLastUserAnchor,
@@ -186,6 +187,9 @@ import { openBridgeStToolPicker } from './bridge-st-tool-picker.js';
 import { augmentStudioPromptWithCustomTools } from './studio-prompt-augment.js';
 import { reviewIncomingCustomTools } from './character-import-tools-review.js';
 import { mountNotesPanel } from './notes-panel.js';
+import { openSkillManagerPanel } from '../../skills/skill-manager-panel.js';
+import { mountSkillChips } from '../../skills/skill-chips.js';
+import { skillsApi } from '../../skills/api.js';
 // Note: `ORCH_EXECUTION_MODE_LOOP` is canonically defined in defaults.js
 // (alongside the other mode literals) and re-exported by persistence.js
 // for callers that want it bundled with `sanitizeLoopProfile`. We import
@@ -1550,6 +1554,14 @@ function renderWorkflowBoard(scope, editor) {
         profileCustomTools: editor?.spec?.customTools || null,
     })}
         </details>
+        <details class="luker_orch_skills_section">
+            <summary>${escapeHtml(i18n('Skills'))}</summary>
+            ${renderSkillChipsPlaceholder({ escapeHtml, i18n }, scope, {
+        mode: 'spec',
+        level: 'agent',
+        agentRef: { kind: 'specNode', stageIndex, nodeIndex },
+    }, i18n('Per-node skill visibility. Use [+ inherit mode default] to combine.'))}
+        </details>
     </div>
 </details>`).join('');
 
@@ -1781,6 +1793,204 @@ function refreshOrchestrationEditorPopup(context, settings) {
         return;
     }
     mount.html(buildOrchestrationEditorPopupPanelHtml(getOrchestratorUiTemplateDeps(), context, settings));
+    // Hydrate per-agent / mode-level skill chips. The renderers above emit
+    // `[data-luker-skill-chips-mount]` placeholders; the hydrate step loads
+    // the inventory once (with a brief cache), resolves each placeholder's
+    // target metadata to the underlying editor field, and mounts the
+    // reusable skill-chips component into the placeholder div.
+    const mountEl = mount.get(0);
+    if (mountEl instanceof HTMLElement) {
+        void hydrateSkillChips(mountEl, context, settings);
+    }
+}
+
+// ── Skill chips hydration ────────────────────────────────────────────────
+
+// Brief inventory cache shared across all chip mounts in a single popup
+// re-render. Re-rendering the popup triggers a fresh load (since the
+// per-refresh closure is new), but the inventory itself is cached for the
+// duration of one refresh so 6+ chip blocks reuse one REST call.
+let _chipInventoryPromise = null;
+let _chipInventoryStamp = 0;
+const CHIP_INVENTORY_TTL_MS = 5000;
+
+async function loadChipsInventory() {
+    const now = Date.now();
+    if (_chipInventoryPromise && (now - _chipInventoryStamp) < CHIP_INVENTORY_TTL_MS) {
+        return _chipInventoryPromise;
+    }
+    _chipInventoryStamp = now;
+    _chipInventoryPromise = (async () => {
+        try {
+            const list = await skillsApi.list({ scope: 'all' });
+            return Array.isArray(list) ? list : [];
+        } catch (err) {
+            console.warn(`[${MODULE_NAME}] failed to load skill inventory for chips:`, err);
+            return [];
+        }
+    })();
+    return _chipInventoryPromise;
+}
+
+/**
+ * Locate the live `skills: {visible, deny}` field on the editor for a
+ * given target metadata. The host object (the parent that owns the
+ * `skills` key) is returned so the caller can replace it atomically
+ * without losing reference stability for the rest of the editor.
+ *
+ * @param {object} target - parsed from `data-luker-chip-target`
+ * @returns {{ host: object|null, mode: string, scope: string }|null}
+ */
+function resolveChipHost(target) {
+    if (!target || typeof target !== 'object') return null;
+    const scope = target.scope === 'character' ? 'character' : 'global';
+    const mode = String(target.mode || '');
+    const level = String(target.level || 'mode');
+    let host = null;
+    if (mode === 'director') {
+        const editor = getDirectorEditorByScope(scope);
+        if (!editor || typeof editor !== 'object') return null;
+        ensureDirectorEditorIntegrity(editor);
+        if (level === 'mode') {
+            host = editor;
+        } else if (target.agentRef === 'main') {
+            if (!editor.mainAgent || typeof editor.mainAgent !== 'object') {
+                editor.mainAgent = {};
+            }
+            host = editor.mainAgent;
+        } else if (target.agentRef && typeof target.agentRef === 'object'
+            && target.agentRef.kind === 'subIndex'
+            && Number.isInteger(target.agentRef.index)) {
+            const subs = Array.isArray(editor.subAgents) ? editor.subAgents : [];
+            host = subs[target.agentRef.index] || null;
+        }
+    } else if (mode === 'loop') {
+        const editor = getLoopEditorByScope(scope);
+        if (!editor || typeof editor !== 'object') return null;
+        host = editor;
+    } else if (mode === 'agenda') {
+        const editor = getAgendaEditorByScope(scope);
+        if (!editor || typeof editor !== 'object') return null;
+        ensureAgendaEditorIntegrity(editor);
+        if (level === 'mode') {
+            host = editor;
+        } else if (target.agentRef === 'planner') {
+            if (!editor.planner || typeof editor.planner !== 'object') {
+                editor.planner = {};
+            }
+            host = editor.planner;
+        } else if (target.agentRef && typeof target.agentRef === 'object'
+            && target.agentRef.kind === 'agendaAgent'
+            && typeof target.agentRef.id === 'string') {
+            const agents = editor.agents && typeof editor.agents === 'object' ? editor.agents : {};
+            host = agents[target.agentRef.id] || null;
+        }
+    } else if (mode === 'spec') {
+        const editor = getEditorByScope(scope);
+        if (!editor || typeof editor !== 'object') return null;
+        ensureEditorIntegrity(editor);
+        if (level === 'mode') {
+            if (!editor.spec || typeof editor.spec !== 'object') {
+                editor.spec = {};
+            }
+            host = editor.spec;
+        } else if (target.agentRef && typeof target.agentRef === 'object'
+            && target.agentRef.kind === 'specNode'
+            && Number.isInteger(target.agentRef.stageIndex)
+            && Number.isInteger(target.agentRef.nodeIndex)) {
+            const stages = Array.isArray(editor.spec?.stages) ? editor.spec.stages : [];
+            const stage = stages[target.agentRef.stageIndex];
+            if (!stage) return null;
+            const nodes = Array.isArray(stage.nodes) ? stage.nodes : [];
+            host = nodes[target.agentRef.nodeIndex] || null;
+        }
+    }
+    if (!host || typeof host !== 'object') return null;
+    return { host, mode, scope, level };
+}
+
+/**
+ * Hydrate all `[data-luker-skill-chips-mount]` placeholders inside the
+ * popup body. Loads the inventory once, then walks each placeholder and
+ * mounts the chips component with the resolved value + inheritFrom +
+ * onChange wiring.
+ *
+ * @param {HTMLElement} root - the popup content container
+ * @param {object} context - SillyTavern context
+ * @param {object} settings - the orchestrator's extension settings
+ */
+async function hydrateSkillChips(root, context, settings) {
+    if (!(root instanceof HTMLElement)) return;
+    const mountDivs = Array.from(root.querySelectorAll('[data-luker-skill-chips-mount]'));
+    if (mountDivs.length === 0) return;
+    const inventory = await loadChipsInventory();
+    // Re-resolve the mountDivs after the await — if the popup re-rendered
+    // mid-load, the old divs are detached; skip them.
+    for (const div of mountDivs) {
+        if (!div.isConnected) continue;
+        const raw = div.getAttribute('data-luker-chip-target');
+        if (!raw) continue;
+        let target;
+        try {
+            target = JSON.parse(raw);
+        } catch (e) {
+            console.warn(`[${MODULE_NAME}] invalid chip target JSON:`, raw);
+            continue;
+        }
+        const resolved = resolveChipHost(target);
+        if (!resolved || !resolved.host) {
+            div.innerHTML = '';
+            continue;
+        }
+        // Determine inheritFrom: for agent-level chips on director / agenda /
+        // spec, look up the mode-level value on the parent editor.
+        let inheritFrom;
+        if (target.level === 'agent') {
+            const parentResolved = resolveChipHost({ scope: resolved.scope, mode: resolved.mode, level: 'mode' });
+            if (parentResolved && parentResolved.host) {
+                const v = parentResolved.host.skills;
+                if (v && typeof v === 'object') {
+                    inheritFrom = {
+                        visible: Array.isArray(v.visible) ? v.visible.slice() : [],
+                        deny: Array.isArray(v.deny) ? v.deny.slice() : [],
+                    };
+                }
+            }
+        }
+        const currentValue = resolved.host.skills && typeof resolved.host.skills === 'object'
+            ? {
+                visible: Array.isArray(resolved.host.skills.visible) ? resolved.host.skills.visible.slice() : [],
+                deny: Array.isArray(resolved.host.skills.deny) ? resolved.host.skills.deny.slice() : [],
+            }
+            : { visible: [], deny: [] };
+        mountSkillChips(div, {
+            value: currentValue,
+            inheritFrom,
+            availableSkills: inventory,
+            t: i18n,
+            onChange(next) {
+                // Re-resolve on each commit so we always write into the
+                // current editor (the user may have switched scopes).
+                const liveResolved = resolveChipHost(target);
+                if (!liveResolved || !liveResolved.host) return;
+                liveResolved.host.skills = {
+                    visible: Array.isArray(next?.visible) ? next.visible.slice() : [],
+                    deny: Array.isArray(next?.deny) ? next.deny.slice() : [],
+                };
+                // The orchestrator profile is persisted by the existing
+                // Save To Global / Save To Character Override buttons; we
+                // don't auto-save here. For safety, debounce a settings
+                // save so non-popup paths (settings panel chip mounts, if
+                // they ever exist) survive a page refresh.
+                try {
+                    saveSettingsDebounced();
+                } catch (e) {
+                    // Fallback for environments where saveSettingsDebounced
+                    // isn't available; silent.
+                }
+            },
+        });
+    }
 }
 
 async function openOrchestrationEditorPopup(context, settings) {
@@ -7346,6 +7556,15 @@ function bindUi() {
 
         if (action === 'open-orch-editor') {
             await openOrchestrationEditorPopup(context, settings);
+            return;
+        }
+
+        if (action === 'manage-skills') {
+            try {
+                await openSkillManagerPanel({ context, t: i18n });
+            } catch (e) {
+                notifyError(i18nFormat('Skill manager failed: ${0}', e?.message || String(e)));
+            }
             return;
         }
     });

@@ -1,7 +1,11 @@
 import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
-    testMatch: '*.e2e.js',
+    // Match both `*.e2e.js` (legacy Luker e2e suites) and the skills-UI
+    // smoke specs under `tests/skills-ui/playwright/*.spec.js` (Plan 2
+    // Unit 8). Keeping both lets the smoke specs follow the Playwright
+    // community `.spec.js` convention while preserving existing files.
+    testMatch: ['**/*.e2e.js', '**/skills-ui/playwright/**/*.spec.js'],
     use: {
         // Honor PLAYWRIGHT_BASE_URL when set so e2e suites run from a
         // worktree-spawned dev server on a non-default port (e.g. when

@@ -67,17 +67,22 @@ You're using the orchestrator now. From here, three branches based on what you w
 
 ## Pick your execution mode
 
-| Mode | What it is | When to use | Detailed docs |
-|---|---|---|---|
-| **Spec** (default) | A fixed Stage → Node DAG | Default. You want a predictable pipeline | [Spec mode](/features/orchestrator/spec) |
-| **Single Agent** | A Spec with exactly one node | Cheap and fast. No multi-agent coordination needed | [Single Agent mode](/features/orchestrator/single) |
-| **Agenda** | A Planner agent dispatches other agents via tool calls | Flow needs to decide who runs based on what's happening, like an agent loop | [Agenda mode](/features/orchestrator/agenda) |
-| **Loop** | One agent calls tools in a single conversation until `finalize` | Strikes the speed/quality balance; exploratory research, dynamic decisions | [Loop mode](/features/orchestrator/loop) |
+| Mode | What it is | When to use | Skills | Detailed docs |
+|---|---|---|---|---|
+| **Spec** (default) | A fixed Stage → Node DAG | Default. You want a predictable pipeline | Catalog injected per node; per-node `skills.visible` overrides | [Spec mode](/features/orchestrator/spec) |
+| **Single Agent** | A Spec with exactly one node | Cheap and fast. No multi-agent coordination needed | Catalog injected on the single node | [Single Agent mode](/features/orchestrator/single) |
+| **Agenda** | A Planner agent dispatches other agents via tool calls | Flow needs to decide who runs based on what's happening, like an agent loop | Catalog injected on planner + each dispatched worker | [Agenda mode](/features/orchestrator/agenda) |
+| **Loop** | One agent calls tools in a single conversation until `finalize` | Strikes the speed/quality balance; exploratory research, dynamic decisions | Catalog injected on the loop agent | [Loop mode](/features/orchestrator/loop) |
+| **Director** | A main agent + sub-agent team writes the message body directly | Takeover mode for high-quality long-form RP; ships with 24 bundled skills pre-bound | Catalog injected on main agent + each sub-agent dispatch | [Director mode](/features/orchestrator/director) |
 
 Switch modes from the **Execution mode** dropdown in the extension drawer. Spec and Agenda can convert into each other from the editor (best-effort); Loop has a different shape, no analogous conversion.
 
 ::: tip Want to customize? Start with the Studio
 After switching to any mode, the [**AI Iteration Studio**](/features/orchestrator/iteration-studio) is the first stop. Spec and Agenda surface diffs you approve; Loop patches the profile directly. Same panel, same workflow.
+:::
+
+::: info Skills column
+All five modes use the same skills policy shape (`skills.visible` / `skills.deny` at the mode level, optional `+`-inheritance overrides per agent). For the full model, see [Orchestrator integration](/features/skills/orchestrator-integration). Director is the only mode that ships with pre-bound default skills out of the box; other modes start with `visible: ["*"]` (every installed skill is visible).
 :::
 
 ## Common configuration
@@ -211,6 +216,8 @@ context.eventSource.on('luker.orchestrator.result', (evt) => {
 - [Single Agent mode](/features/orchestrator/single) — degenerate Spec, single node
 - [Agenda mode](/features/orchestrator/agenda) — Planner-driven dynamic dispatch
 - [Loop mode](/features/orchestrator/loop) — single-agent tool loop
+- [Director mode](/features/orchestrator/director) — multi-agent takeover; ships with 24 bundled skills
+- [Skills overview](/features/skills/) — the knowledge-pack substrate shared across all modes
 - [Notes — author-side plot threads](/features/orchestrator/notes) — agent-as-author thread tracker, scoped to the current chat
 - [Function Call Runtime](/improvements/function-call-runtime) — Agenda and Loop both rely on it
 - [Character Card Editor](/features/card-editor/) — shares the diff engine with Iteration Studio

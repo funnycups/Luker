@@ -53,6 +53,26 @@ The main agent reads the two critics' feedback, patches the prose via `apply_mes
 
 For the whole turn, the user sees only that final paragraph in the main chat; everything procedural stays in the fold, available on demand.
 
+## Default skills
+
+The default director profile ships paired with **24 bundled skills** that the agents read on demand. Skills are small Anthropic-compatible knowledge packs — each one carries a writing rule, a critic method, or a workflow contract that used to live inline in the system prompts. Moving them out of the prompts and into `skill_read`-able files has three effects: the prompts are short and editable, the same rule can be shared across agents without duplication, and a card or preset author can ship their own variants.
+
+The 24 bundled skills group into three families:
+
+| Family | Count | Visible to | Examples |
+|---|---|---|---|
+| Shared (mode-level) | 5 | every default sub-agent | `director-anti-cliche-zh`, `director-character-voice-zh`, `director-no-meta-zh`, `director-output-discipline-zh`, `director-zh-style-baseline` |
+| Main-agent | 2 | main agent only | `director-turn-workflow-zh`, `director-dispatch-protocol-zh` |
+| Per-sub-agent method | 17 | the matching sub-agent only | `voice-critic-method-zh` (→ `voice_critic`), `event-summary-rules-zh` (→ `memory_curator`), `chat-scout-method-zh` (→ `chat_scout`), … |
+
+The mode-level skills are common writing rules every default agent shares. The two main-agent skills carry the 7-step turn workflow and the dispatch protocol. Each per-sub-agent method skill holds the sub-agent's specific contract — e.g. `event-summary-rules-zh` is the full V10 event-summary writing discipline for `memory_curator`.
+
+The default profile pre-fills `skills.visible` accordingly: mode-level visible covers the 5 shared skills, the main agent uses `["+", "director-turn-workflow-zh", "director-dispatch-protocol-zh"]` (inherit mode + add two), and each sub-agent uses `["+", "<its-method-skill>"]`. So out of the box every agent sees its right stack with no manual binding.
+
+The first time the server starts, `data/<user>/skills/global/` populates from `default/skills/global/`. After that, the **Manage skills** button in the orchestrator panel (and the `import-bundled` API) is the only way to overwrite — there's no implicit auto-update on subsequent boots.
+
+For the full picture of how skills plug into agents, see [Skills overview](/features/skills/) and [Orchestrator integration](/features/skills/orchestrator-integration). For authoring conventions, [Authoring skills](/features/skills/authoring).
+
 ## Switching to director
 
 In the extension drawer's **multi-agent orchestration** panel, set **execution mode** to **Director (multi-agent)**. The spec / agenda / loop setting cards collapse and director's setting card appears.
@@ -255,6 +275,8 @@ Director shares the same **Export profile** / **Import profile** buttons as the 
 ## Related pages
 
 - [Orchestrator overview](/features/orchestrator/) — shared configuration / when it triggers / character card binding
+- [Skills overview](/features/skills/) — the knowledge-pack substrate that ships with director defaults
+- [Orchestrator integration](/features/skills/orchestrator-integration) — how `skills.visible` resolves per-agent
 - [AI Iteration Studio](/features/orchestrator/iteration-studio) — let AI write your main-agent / sub-agent system prompts (strongly recommended)
 - [Notes substrate](/features/orchestrator/notes) — the open/close-state thread store consumed by `notes_pickup_scout` and mutated by `notes_curator`
 - [Loop mode](/features/orchestrator/loop) — single agent in a tool loop, producing a capsule

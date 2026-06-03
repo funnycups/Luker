@@ -61,6 +61,8 @@ Mode is fixed at session creation. Switching mode from the toolbar prompts for c
 
 In "Agent orchestration preset" and "Jailbreak-only" modes, the assistant defaults to suggesting that you **derive a new preset** (e.g., appending `-orchestrator` / `-jailbreak` to the original name); once you confirm, edits operate on the derived preset and the original stays untouched. Tell the assistant if you'd rather edit the original directly.
 
+After deriving an `-orchestrator` preset, the assistant offers a **Bundle skills with this preset** link in the toolbar. The link opens the orchestrator's [skill manager](/features/skills/management) with multi-select pre-enabled — pick the writing rules, critic methods, or other skills you want to ship alongside the preset, then **Pack selected into preset…** writes them into the preset's `extensions.luker.embedded_skills_source` field. Anyone importing the derived preset later sees the standard embed-extraction dialog and the skills materialize into their `preset` scope automatically. This is the recommended path for distributing an orchestrator preset together with the skills that make it work — the preset stays self-contained.
+
 ### Integration with Connection Manager
 
 The Completion Preset Assistant uses the current connection configuration for AI calls. This means it provides assistance through your already-configured API backend, requiring no additional API configuration.
@@ -78,3 +80,4 @@ The Completion Preset Assistant uses the current connection configuration for AI
 
 - [Preset Decoupling](/improvements/preset-decoupling) — The Completion Preset Assistant uses the current connection configuration for AI calls
 - [Multi-Agent Orchestration](/features/orchestrator/) — Nodes in the Orchestrator also reference LLM presets
+- [Skills](/features/skills/) — bundle writing rules and critic methods alongside an `-orchestrator` preset via the **Bundle skills with this preset** link

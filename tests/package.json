@@ -6,6 +6,7 @@
         "test": "npm run test:unit && npm run test:e2e",
         "test:unit": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.config.json",
         "test:e2e": "playwright test",
+        "test:e2e:skills:smoke": "playwright test skills-ui/playwright/",
         "lint": "eslint \"**/*.js\" ./*.js",
         "lint:fix": "eslint \"**/*.js\" ./*.js --fix"
     },

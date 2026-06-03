@@ -256,6 +256,62 @@ describe('REST /api/skills', () => {
                 .query({ q: '' });
             expect(res.status).toBe(400);
         });
+
+        test('list-files returns metadata for every file (no buffers)', async () => {
+            // Install a reference file so the skill has more than just SKILL.md
+            await request(app)
+                .post('/api/skills/global/target/file/write')
+                .send({ path: 'references/note.md', content: 'noted\n' });
+            const res = await request(app).get('/api/skills/global/target/files');
+            expect(res.status).toBe(200);
+            expect(Array.isArray(res.body.files)).toBe(true);
+            // SKILL.md is sorted first as the skill's root manifest, then the
+            // rest in localeCompare order.
+            const paths = res.body.files.map(f => f.path);
+            expect(paths[0]).toBe('SKILL.md');
+            expect(paths).toContain('references/note.md');
+            for (const f of res.body.files) {
+                expect(typeof f.path).toBe('string');
+                expect(typeof f.size).toBe('number');
+                expect(typeof f.isBinary).toBe('boolean');
+                // Server must NOT leak buffers / contents in the metadata listing.
+                expect(f).not.toHaveProperty('buffer');
+                expect(f).not.toHaveProperty('content');
+            }
+        });
+
+        test('list-files returns 404 for missing skill', async () => {
+            const res = await request(app).get('/api/skills/global/no-such-skill/files');
+            expect(res.status).toBe(404);
+        });
+
+        test('delete-file removes a non-SKILL.md file', async () => {
+            // Set up an extra file we can delete
+            await request(app)
+                .post('/api/skills/global/target/file/write')
+                .send({ path: 'references/extra.md', content: 'gone soon\n' });
+            const res = await request(app)
+                .delete('/api/skills/global/target/file')
+                .query({ path: 'references/extra.md' });
+            expect(res.status).toBe(204);
+            // Verify it's gone from the file listing
+            const list = await request(app).get('/api/skills/global/target/files');
+            expect(list.body.files.map(f => f.path)).not.toContain('references/extra.md');
+        });
+
+        test('delete-file refuses to delete SKILL.md', async () => {
+            const res = await request(app)
+                .delete('/api/skills/global/target/file')
+                .query({ path: 'SKILL.md' });
+            expect(res.status).toBe(400);
+        });
+
+        test('delete-file rejects path traversal', async () => {
+            const res = await request(app)
+                .delete('/api/skills/global/target/file')
+                .query({ path: '../../etc/passwd' });
+            expect(res.status).toBe(400);
+        });
     });
 
     describe('pack-for-embed / extract / bundled / url-import', () => {

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "bundleFormat": "inline-files-v1",
+      "name": "playwright-smoke-skill",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "encoding": "utf8",
+          "content": "---\nname: playwright-smoke-skill\ndescription: Synthetic skill used by the Playwright embed-import smoke spec. Verifies the dialog renders + installs into character scope without exercising any real character upload flow.\n---\n\nThe model uses this skill when narrating exploration of an unfamiliar valley at dawn. The body is intentionally short so the inline-files-v1 packer keeps the fixture compact.\n"
+        }
+      ]
+    }
+  ]
+}

@@ -279,6 +279,48 @@ function renderCustomFlagsFieldset(deps, scope, currentFlags, dataAttrName, extr
 }
 
 /**
+ * Render a deferred mount point for the per-agent skill chips component.
+ * The placeholder div carries the metadata main.js needs to locate the
+ * underlying `skills: {visible, deny}` field in the editor state when
+ * `hydrateSkillChips` runs after each popup re-render.
+ *
+ * `target` describes which editor field the chips edit:
+ *   - mode-level: `{ scope, mode, level: 'mode' }`
+ *   - director main: `{ scope, mode: 'director', level: 'agent', agentRef: 'main' }`
+ *   - director sub: `{ scope, mode: 'director', level: 'agent', agentRef: { kind: 'subIndex', index: N } }`
+ *   - loop is mode-level only (single-agent runtime)
+ *   - agenda planner: `{ scope, mode: 'agenda', level: 'agent', agentRef: 'planner' }`
+ *   - agenda agent: `{ scope, mode: 'agenda', level: 'agent', agentRef: { kind: 'agendaAgent', id } }`
+ *   - spec node: `{ scope, mode: 'spec', level: 'agent', agentRef: { kind: 'specNode', stageIndex, nodeIndex } }`
+ *
+ * The component itself is not rendered here — only the placeholder. The
+ * runtime hydration step queries `[data-luker-skill-chips-mount]` after
+ * the popup paints and calls `mountSkillChips` per div.
+ *
+ * @param {object} deps
+ * @param {string} scope - 'global' | 'character'
+ * @param {object} target - target metadata as above
+ * @param {string} [label] - optional label rendered above the chips
+ * @returns {string}
+ */
+export function renderSkillChipsPlaceholder(deps, scope, target, label = '') {
+    const { escapeHtml, i18n } = deps;
+    const safeScope = scope === 'character' ? 'character' : 'global';
+    const payload = { ...target, scope: safeScope };
+    const targetJson = escapeHtml(JSON.stringify(payload));
+    const labelHtml = label
+        ? `<div class="luker_skill_chips_label">${escapeHtml(label)}</div>`
+        : '';
+    return `
+<div class="luker_skill_chips_block">
+    ${labelHtml}
+    <div class="luker_skill_chips_mount" data-luker-skill-chips-mount data-luker-chip-target="${targetJson}" data-scope="${safeScope}">
+        <div class="luker_skill_chips_loading">${escapeHtml(i18n('Loading skills...'))}</div>
+    </div>
+</div>`;
+}
+
+/**
  * Render the inherit / override toggle + tools grid for a single node
  * or agent. When `tools` is null we show the inherit hint and an
  * "Override" action; when it's an object we show the grid plus a
@@ -389,6 +431,14 @@ function renderAgendaAgentBoard(deps, scope, editor) {
         profileCustomTools: editor?.customTools || null,
     })}
     </details>
+    <details class="luker_orch_skills_section">
+        <summary>${escapeHtml(i18n('Skills'))}</summary>
+        ${renderSkillChipsPlaceholder(deps, safeScope, {
+        mode: 'agenda',
+        level: 'agent',
+        agentRef: { kind: 'agendaAgent', id: agentId },
+    }, i18n('Per-agent skill visibility. Use [+ inherit mode default] to combine.'))}
+    </details>
 </div>`).join('');
 }
 
@@ -430,6 +480,14 @@ export function renderAgendaWorkspace(deps, scope, editor, title = '') {
             <input id="luker_orch_agenda_max_concurrent" data-scope="${safeScope}" class="text_pole" type="number" min="1" max="12" step="1" value="${escapeHtml(String(editor?.limits?.maxConcurrentAgents || 3))}" />
             <label for="luker_orch_agenda_max_total_runs">${escapeHtml(i18n('Max total agent runs'))}</label>
             <input id="luker_orch_agenda_max_total_runs" data-scope="${safeScope}" class="text_pole" type="number" min="1" max="200" step="1" value="${escapeHtml(String(editor?.limits?.maxTotalRuns || 24))}" />
+            <details class="luker_orch_skills_section">
+                <summary>${escapeHtml(i18n('Planner skills'))}</summary>
+                ${renderSkillChipsPlaceholder(deps, safeScope, {
+        mode: 'agenda',
+        level: 'agent',
+        agentRef: 'planner',
+    }, i18n('Skills visible to the planner. + inherits mode default.'))}
+            </details>
         </div>
         <div class="luker-studio-workspace-col">
             <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Agenda Agents'))}</div>
@@ -450,6 +508,13 @@ export function renderAgendaWorkspace(deps, scope, editor, title = '') {
                 <div class="menu_button menu_button_small" data-luker-action="agenda-agent-add" data-scope="${safeScope}">${escapeHtml(i18n('Add Preset'))}</div>
             </div>
             ${renderCustomToolsSection(deps, safeScope, 'agenda', editor?.customTools || [], (editor?.defaultTools && editor.defaultTools.custom) || {})}
+            <details class="luker_orch_skills_section" open>
+                <summary>${escapeHtml(i18n('Mode-level skills (baseline for every agent)'))}</summary>
+                ${renderSkillChipsPlaceholder(deps, safeScope, {
+        mode: 'agenda',
+        level: 'mode',
+    }, i18n('These visible/deny chips form the baseline every agent sees unless its own chips replace them.'))}
+            </details>
         </div>
     </div>
 </div>`;
@@ -487,6 +552,13 @@ export function renderEditorWorkspace(deps, scope, editor, title) {
                 <div class="menu_button menu_button_small" data-luker-action="preset-add" data-scope="${scope}">${escapeHtml(i18n('Add Preset'))}</div>
             </div>
             ${renderCustomToolsSection(deps, safeScope, 'spec', editor?.spec?.customTools || [], (editor?.spec?.defaultTools && editor.spec.defaultTools.custom) || {})}
+            <details class="luker_orch_skills_section" open>
+                <summary>${escapeHtml(i18n('Mode-level skills (baseline for every node)'))}</summary>
+                ${renderSkillChipsPlaceholder(deps, safeScope, {
+        mode: 'spec',
+        level: 'mode',
+    }, i18n('These visible/deny chips form the baseline every spec node sees unless its own chips replace them.'))}
+            </details>
         </div>
     </div>
 </div>`;
@@ -573,6 +645,13 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
                 ${checkbox('finalize', true, `finalize  ${i18n('(forced on)')}`, true, true)}
             </fieldset>
             ${renderCustomToolsSection(deps, safeScope, 'loop', editor?.customTools || [], (editor?.tools && editor.tools.custom) || {})}
+            <details class="luker_orch_skills_section">
+                <summary>${escapeHtml(i18n('Skills'))}</summary>
+                ${renderSkillChipsPlaceholder(deps, safeScope, {
+        mode: 'loop',
+        level: 'mode',
+    }, i18n('Skills visible to the loop agent.'))}
+            </details>
         </div>
     </div>
 </div>`;
@@ -657,6 +736,14 @@ function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex, directo
         profileCustomTools: profile?.customTools || null,
     })}
     </details>
+    <details class="luker_orch_skills_section">
+        <summary>${escapeHtml(i18n('Skills'))}</summary>
+        ${renderSkillChipsPlaceholder(deps, safeScope, {
+        mode: 'director',
+        level: 'agent',
+        agentRef: { kind: 'subIndex', index: subagentIndex },
+    }, i18n('Per-sub-agent skill visibility. Use [+ inherit mode default] to combine.'))}
+    </details>
 </div>`;
 }
 
@@ -740,6 +827,14 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
         profileCustomTools: profile?.customTools || null,
     })}
             </details>
+            <details class="luker_orch_skills_section">
+                <summary>${escapeHtml(i18n('Main agent skills'))}</summary>
+                ${renderSkillChipsPlaceholder(deps, safeScope, {
+        mode: 'director',
+        level: 'agent',
+        agentRef: 'main',
+    }, i18n('Skills visible to the main agent. + inherits mode default.'))}
+            </details>
 
             <h4 data-i18n="Limits">${escapeHtml(i18n('Limits'))}</h4>
             <label>
@@ -770,6 +865,13 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
                     <div class="menu_button menu_button_small" data-luker-action="director-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable all'))}</div>
                     <div class="menu_button menu_button_small" data-luker-action="director-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear'))}</div>
                 </div>
+            </details>
+            <details class="luker_orch_skills_section" open>
+                <summary>${escapeHtml(i18n('Mode-level skills (baseline for every agent)'))}</summary>
+                ${renderSkillChipsPlaceholder(deps, safeScope, {
+        mode: 'director',
+        level: 'mode',
+    }, i18n('These visible/deny chips form the baseline every agent sees unless its own chips replace them. Per-agent chips can start with [+ inherit mode default] to extend rather than replace.'))}
             </details>
             <div data-orch-subagent-list>${subAgentRows}</div>
             <div class="luker-studio-add-row">
@@ -1098,6 +1200,7 @@ export function buildOrchestratorSettingsHtml(deps) {
                 <div class="flex-container">
                     <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
                     <div class="menu_button" data-luker-action="view-runtime-trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
+                    <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
                 </div>
             </div>
 
@@ -1118,6 +1221,7 @@ export function buildOrchestratorSettingsHtml(deps) {
                     <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
                     <div class="menu_button" data-luker-action="view-runtime-trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
                     <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
+                    <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
                 </div>
             </div>
 
@@ -1137,6 +1241,7 @@ export function buildOrchestratorSettingsHtml(deps) {
                     <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
                     <div class="menu_button" data-luker-action="view-runtime-trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
                     <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
+                    <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
                 </div>
             </div>
 
@@ -1154,6 +1259,7 @@ export function buildOrchestratorSettingsHtml(deps) {
                     <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
                     <div class="menu_button" data-luker-action="view-runtime-trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
                     <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
+                    <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
                 </div>
                 <small class="luker_orch_loop_board_hint">${escapeHtml(i18n('Loop mode runs a single agent that calls tools in a loop and finalizes when ready.'))}</small>
             </div>
@@ -1171,6 +1277,7 @@ export function buildOrchestratorSettingsHtml(deps) {
                     <div class="menu_button" data-luker-action="open-orch-editor" data-i18n="Open Orchestration Editor">${escapeHtml(i18n('Open Orchestration Editor'))}</div>
                     <div class="menu_button" data-luker-action="view-runtime-trace" data-i18n="View Runtime Trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
                     <div class="menu_button" data-luker-action="ai-iterate-open" data-i18n="Open AI Iteration Studio">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
+                    <div class="menu_button" data-luker-action="manage-skills" data-i18n="Manage skills...">${escapeHtml(i18n('Manage skills...'))}</div>
                 </div>
                 <small class="luker_orch_director_board_hint" data-i18n="Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.">${escapeHtml(i18n('Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.'))}</small>
             </div>

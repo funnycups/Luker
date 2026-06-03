@@ -748,5 +748,100 @@ export function ensureStyles(uiBlockId) {
         width: 3.2em;
     }
 }
+
+/* Skill chips component (Plan 2 Unit 3) */
+.luker_skill_chips_block {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 6px 0;
+}
+.luker_skill_chips_label {
+    opacity: 0.78;
+    font-size: 0.85rem;
+}
+.luker_skill_chips_loading {
+    opacity: 0.65;
+    font-size: 0.85rem;
+    font-style: italic;
+}
+.luker_skill_chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+    align-items: center;
+    padding: 4px 0;
+}
+.luker_skill_chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px 2px 8px;
+    border-radius: 999px;
+    font-size: 0.8rem;
+    line-height: 1.2;
+    border: 1px solid rgba(140, 140, 140, 0.35);
+    background: rgba(140, 140, 140, 0.12);
+    cursor: pointer;
+    user-select: none;
+}
+.luker_skill_chip_visible {
+    border-color: rgba(56, 161, 105, 0.55);
+    background: rgba(56, 161, 105, 0.16);
+}
+.luker_skill_chip_deny {
+    border-color: rgba(220, 80, 80, 0.55);
+    background: rgba(220, 80, 80, 0.16);
+}
+.luker_skill_chip_inherit {
+    border-color: rgba(39, 117, 215, 0.55);
+    background: rgba(39, 117, 215, 0.16);
+    font-style: italic;
+    cursor: default;
+}
+.luker_skill_chip_missing {
+    opacity: 0.55;
+    border-style: dashed;
+}
+.luker_skill_chip_x {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.2em;
+    height: 1.2em;
+    padding: 0 2px;
+    border-radius: 999px;
+    font-size: 0.95rem;
+    opacity: 0.75;
+}
+.luker_skill_chip_x:hover {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.18);
+}
+.luker_skill_chip_add {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+.luker_skill_chip_add_select {
+    height: 1.8rem;
+    padding: 1px 6px;
+    font-size: 0.8rem;
+    min-width: 12em;
+}
+.luker_skill_chip_add_inherit {
+    font-size: 0.78rem !important;
+    padding: 2px 8px !important;
+}
+.luker_orch_skills_section {
+    margin: 6px 0;
+}
+.luker_orch_skills_section > summary {
+    cursor: pointer;
+    padding: 4px 6px;
+    background: rgba(180, 180, 180, 0.07);
+    border-radius: 4px;
+    font-size: 0.92rem;
+}
 </style>`);
 }

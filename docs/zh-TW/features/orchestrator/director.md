@@ -53,6 +53,26 @@ Director 是編排器裡唯一一種**接管（takeover）模式** —— 這一
 
 整個回合使用者只在主對話裡看到最終那一段敘事，所有過程性產出停留在摺疊裡，展開可讀。
 
+## 預設技能
+
+預設 director profile 出廠時配套 **24 個出廠技能**，agent 按需讀取。技能是相容 Anthropic 的緊湊知識包 —— 每一份裝載一條寫作規則、一份評審方法、或一份工作流契約，過去這些都內聯在系統提示詞裡。把它們移出 prompt、放進 `skill_read` 可存取的檔案裡，帶來三個效果：prompt 短而可編輯；同一條規則可被多個 agent 共用而不必拷貝；卡作者或預設作者可以自己分發變體。
+
+24 個出廠技能分三類：
+
+| 家族 | 數量 | 誰能看到 | 例子 |
+|---|---|---|---|
+| 共享（模式級） | 5 | 每個預設子代理 | `director-anti-cliche-zh`、`director-character-voice-zh`、`director-no-meta-zh`、`director-output-discipline-zh`、`director-zh-style-baseline` |
+| 主代理 | 2 | 僅主代理 | `director-turn-workflow-zh`、`director-dispatch-protocol-zh` |
+| 每子代理一份方法 | 17 | 對應那個子代理 | `voice-critic-method-zh`（→ `voice_critic`）、`event-summary-rules-zh`（→ `memory_curator`）、`chat-scout-method-zh`（→ `chat_scout`）…… |
+
+模式級的幾條是每個預設 agent 共享的通用寫作規則。兩條主代理技能裝著 7 步回合工作流和派遣協議。每條 per-sub-agent 方法技能裝著該子代理的專屬契約 —— 例如 `event-summary-rules-zh` 是 `memory_curator` 完整的 V10 事件摘要寫作紀律。
+
+預設 profile 相應預填了 `skills.visible`：模式級 visible 覆蓋那 5 條共享技能，主代理用 `["+", "director-turn-workflow-zh", "director-dispatch-protocol-zh"]`（繼承模式 + 追加兩條），每個子代理用 `["+", "<對應方法技能>"]`。所以開箱即用每個 agent 都拿到對的那摞疊，不需要手動繫結。
+
+伺服器首次啟動時把 `data/<user>/skills/global/` 從 `default/skills/global/` 填充。之後，編排器面板的 **管理技能** 按鈕（以及 `import-bundled` API）是唯一覆蓋入口 —— 後續啟動不會有隱式自動更新。
+
+技能如何掛到 agent 的完整圖景，見 [技能概覽](/zh-TW/features/skills/) 與 [編排器整合](/zh-TW/features/skills/orchestrator-integration)。創作約定見 [創作技能](/zh-TW/features/skills/authoring)。
+
 ## 怎麼切到 Director
 
 在擴充套件抽屜的「多智慧體編排」面板裡，把**執行模式**設為 **Director（多代理）**。切到 Director 後，spec / agenda / loop 的設定卡片會自動收起，Director 自己的設定卡片出現。
@@ -255,6 +275,8 @@ Director 跟其他模式一樣支援 **匯出 profile** / **匯入 profile** 按
 ## 相關頁面
 
 - [編排器概覽](/zh-TW/features/orchestrator/) — 通用配置 / 觸發時機 / 角色卡繫結
+- [技能概覽](/zh-TW/features/skills/) — director 預設值依賴的知識包底層素材
+- [編排器整合](/zh-TW/features/skills/orchestrator-integration) — `skills.visible` 如何按 agent 解析
 - [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio) — AI 幫你寫主代理 / 子代理 system prompt（強烈推薦）
 - [便箋子系統](/zh-TW/features/orchestrator/notes) — `notes_pickup_scout` 讀取、`notes_curator` 寫入的開/關狀態線索倉庫
 - [Loop 模式](/zh-TW/features/orchestrator/loop) — 單 Agent 跑工具迴圈、產出 capsule

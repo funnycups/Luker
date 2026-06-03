@@ -353,6 +353,49 @@ export function createSkillRepository(dataRoot) {
         };
     }
 
+    /**
+     * Delete a single file inside a skill. Refuses to delete SKILL.md (the
+     * skill's manifest must always exist — use the skill-level `delete()`
+     * to remove the whole directory). Empty parent directories are pruned
+     * upward to avoid leaving stale folders behind, stopping at the skill
+     * root.
+     */
+    async function deleteFileImpl({ scope, name, path: filePath }) {
+        assertSafeSkillName(name);
+        assertSafeFilePath(filePath);
+        if (filePath === SKILL_MD) {
+            throw new Error('cannot delete SKILL.md; delete the whole skill instead');
+        }
+        const skillDir = join(skillsRoot, encodeScopePath(scope), name);
+        const absFile = join(skillDir, filePath);
+        const exists = await fs.stat(absFile).then(() => true).catch(() => false);
+        if (!exists) throw new Error(`file not found: ${filePath}`);
+        await fs.unlink(absFile);
+
+        // Prune empty ancestor directories up to (but not including) skillDir.
+        // Use a separator-aware split so on POSIX `references/foo.md` →
+        // ['references','foo.md'] and we walk up one level. We stop pruning
+        // as soon as a non-empty directory shows up so we never touch siblings.
+        const segs = filePath.split('/');
+        segs.pop(); // drop the filename
+        while (segs.length > 0) {
+            const dir = join(skillDir, segs.join('/'));
+            try {
+                const entries = await fs.readdir(dir);
+                if (entries.length === 0) {
+                    await fs.rmdir(dir);
+                    segs.pop();
+                } else {
+                    break;
+                }
+            } catch {
+                // Race or missing dir — give up pruning, the file is already gone.
+                break;
+            }
+        }
+        return { ok: true };
+    }
+
     // ──────────────────────────── listFiles ────────────────────────────
 
     /**
@@ -455,6 +498,7 @@ export function createSkillRepository(dataRoot) {
         moveScope,
         writeFile,
         editFile,
+        deleteFile: deleteFileImpl,
         readFile,
         listFiles,
         search,

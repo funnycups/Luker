@@ -124,6 +124,7 @@ const zhCNSidebar = [
       { text: 'Loop 模式', link: '/zh-CN/features/orchestrator/loop' },
       { text: '导演模式', link: '/zh-CN/features/orchestrator/director' },
       { text: 'AI 迭代工作台', link: '/zh-CN/features/orchestrator/iteration-studio' },
+      { text: 'Skills 集成', link: '/zh-CN/features/orchestrator/skills' },
       { text: '笔记', link: '/zh-CN/features/orchestrator/notes' },
       { text: '自定义工具', link: '/zh-CN/features/orchestrator/custom-tools' },
     ],
@@ -157,6 +158,16 @@ const zhCNSidebar = [
       { text: '钩子执行排序', link: '/zh-CN/features/hook-order' },
       { text: '世界书激活链路追踪', link: '/zh-CN/features/world-info-trace' },
       { text: '插件注册正则', link: '/zh-CN/features/regex-provider' },
+      {
+        text: '技能',
+        collapsed: false,
+        items: [
+          { text: '概览', link: '/zh-CN/features/skills/' },
+          { text: '创作', link: '/zh-CN/features/skills/authoring' },
+          { text: '管理', link: '/zh-CN/features/skills/management' },
+          { text: '编排器集成', link: '/zh-CN/features/skills/orchestrator-integration' },
+        ],
+      },
       { text: '其他功能', link: '/zh-CN/features/other-features' },
   ],
   },
@@ -164,6 +175,7 @@ const zhCNSidebar = [
   text: '实战指南',
   items: [
   { text: '多Agent上手：预设、记忆图、网络搜索', link: '/zh-CN/recipes/agent-onboarding' },
+  { text: '用 skills 调教 RP 输出', link: '/zh-CN/recipes/rp-skills-walkthrough' },
   ],
   },
   {
@@ -191,6 +203,7 @@ const zhCNSidebar = [
               { text: 'Edits 库', link: '/zh-CN/development/extension-api/edits-lib' },
               { text: '迭代工作台框架', link: '/zh-CN/development/extension-api/iteration-studio' },
               { text: '编排器工具 API', link: '/zh-CN/development/extension-api/orchestrator-tools' },
+              { text: '技能', link: '/zh-CN/development/extension-api/skills' },
             ],
           },
           { text: '角色卡开发者指南', link: '/zh-CN/development/card-developers' },
@@ -257,6 +270,7 @@ const zhTWSidebar = [
           { text: 'Loop 模式', link: '/zh-TW/features/orchestrator/loop' },
           { text: '導演模式', link: '/zh-TW/features/orchestrator/director' },
           { text: 'AI 迭代工作台', link: '/zh-TW/features/orchestrator/iteration-studio' },
+          { text: 'Skills 整合', link: '/zh-TW/features/orchestrator/skills' },
           { text: '便箋', link: '/zh-TW/features/orchestrator/notes' },
           { text: '自訂工具', link: '/zh-TW/features/orchestrator/custom-tools' },
         ],
@@ -290,6 +304,16 @@ const zhTWSidebar = [
       { text: '鉤子執行排序', link: '/zh-TW/features/hook-order' },
       { text: '世界書啟動鏈路追蹤', link: '/zh-TW/features/world-info-trace' },
       { text: '外掛註冊正則', link: '/zh-TW/features/regex-provider' },
+      {
+        text: '技能',
+        collapsed: false,
+        items: [
+          { text: '概覽', link: '/zh-TW/features/skills/' },
+          { text: '創作', link: '/zh-TW/features/skills/authoring' },
+          { text: '管理', link: '/zh-TW/features/skills/management' },
+          { text: '編排器整合', link: '/zh-TW/features/skills/orchestrator-integration' },
+        ],
+      },
       { text: '其他功能', link: '/zh-TW/features/other-features' },
     ],
   },
@@ -297,6 +321,7 @@ const zhTWSidebar = [
     text: '實戰指南',
     items: [
       { text: '多Agent上手：預設、記憶圖、網路搜尋', link: '/zh-TW/recipes/agent-onboarding' },
+      { text: '用 skills 調教 RP 輸出', link: '/zh-TW/recipes/rp-skills-walkthrough' },
     ],
   },
   {
@@ -324,6 +349,7 @@ const zhTWSidebar = [
                   { text: 'Edits 函式庫', link: '/zh-TW/development/extension-api/edits-lib' },
                   { text: '迭代工作台框架', link: '/zh-TW/development/extension-api/iteration-studio' },
                   { text: '編排器工具 API', link: '/zh-TW/development/extension-api/orchestrator-tools' },
+                  { text: '技能', link: '/zh-TW/development/extension-api/skills' },
                 ],
               },
               { text: '角色卡開發者指南', link: '/zh-TW/development/card-developers' },
@@ -390,6 +416,7 @@ const enSidebar = [
           { text: 'Loop Mode', link: '/features/orchestrator/loop' },
           { text: 'Director Mode', link: '/features/orchestrator/director' },
           { text: 'AI Iteration Studio', link: '/features/orchestrator/iteration-studio' },
+          { text: 'Skills', link: '/features/orchestrator/skills' },
           { text: 'Notes', link: '/features/orchestrator/notes' },
           { text: 'Custom Tools', link: '/features/orchestrator/custom-tools' },
         ],
@@ -423,6 +450,16 @@ const enSidebar = [
       { text: 'Hook Order', link: '/features/hook-order' },
       { text: 'World Info Activation Trace', link: '/features/world-info-trace' },
       { text: 'Plugin-Registered Regex', link: '/features/regex-provider' },
+      {
+        text: 'Skills',
+        collapsed: false,
+        items: [
+          { text: 'Overview', link: '/features/skills/' },
+          { text: 'Authoring', link: '/features/skills/authoring' },
+          { text: 'Management', link: '/features/skills/management' },
+          { text: 'Orchestrator integration', link: '/features/skills/orchestrator-integration' },
+        ],
+      },
       { text: 'Other Features', link: '/features/other-features' },
     ],
   },
@@ -430,6 +467,7 @@ const enSidebar = [
     text: 'Recipes',
     items: [
       { text: 'Multi-agent setup: presets, memory graph, web search', link: '/recipes/agent-onboarding' },
+      { text: 'Shaping RP output with skills', link: '/recipes/rp-skills-walkthrough' },
     ],
   },
   {
@@ -457,6 +495,7 @@ const enSidebar = [
                   { text: 'Edits Library', link: '/development/extension-api/edits-lib' },
                   { text: 'Iteration Studio Framework', link: '/development/extension-api/iteration-studio' },
                   { text: 'Orchestrator Tools', link: '/development/extension-api/orchestrator-tools' },
+                  { text: 'Skills', link: '/development/extension-api/skills' },
                 ],
               },
               { text: 'Card Developer Guide', link: '/development/card-developers' },
