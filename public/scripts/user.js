@@ -741,14 +741,61 @@ function getSelectedRestoreMode(rootElement) {
     return String(selected || 'merge') === 'overwrite' ? 'overwrite' : 'merge';
 }
 
-async function restoreUserData(handle, file, selection, mode, callback, { onProgress = null } = {}) {
+function formatRestorePhaseMessage(event, archiveLabel) {
+    if (!event || typeof event !== 'object') {
+        return '';
+    }
+    const total = Number.isFinite(event.total) ? Number(event.total) : 0;
+    const current = Number.isFinite(event.current) ? Math.min(Number(event.current), total || Number.MAX_SAFE_INTEGER) : 0;
+    const pct = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
+    switch (event.phase) {
+        case 'download':
+            return t`Downloading ${archiveLabel}...`;
+        case 'analyze':
+            return total > 0
+                ? t`Analyzing ${archiveLabel}: ${current} / ${total} entries (${pct}%)`
+                : t`Analyzing ${archiveLabel}...`;
+        case 'snapshot':
+            return total > 0
+                ? t`Snapshotting existing data: ${current} / ${total} (${pct}%)`
+                : t`Snapshotting existing data...`;
+        case 'extract':
+            return total > 0
+                ? t`Restoring files: ${current} / ${total} (${pct}%)`
+                : t`Restoring files...`;
+        case 'finalize':
+            return t`Finalizing restore...`;
+        default:
+            return '';
+    }
+}
+
+async function restoreUserData(handle, file, selection, mode, callback, { onProgress = null, onPhaseProgress = null } = {}) {
     const formData = new FormData();
     formData.append('avatar', file);
     formData.append('handle', handle);
     formData.append('mode', mode);
     formData.append('selection', JSON.stringify(selection));
 
-    const response = await uploadWithProgress('/api/users/restore-backup', formData, { onProgress });
+    const stream = createRestoreProgressStream(onPhaseProgress);
+    const response = await uploadWithProgress('/api/users/restore-backup', formData, {
+        onProgress,
+        onResponseChunk: stream.onChunk,
+        headers: { ...getRequestHeaders({ omitContentType: true }), 'Accept': 'application/x-ndjson, application/json' },
+    });
+    stream.finish(response.text);
+
+    if (stream.streamed) {
+        if (stream.error) {
+            throw new Error(stream.error);
+        }
+        if (!stream.result) {
+            throw new Error('Restore stream ended without a result.');
+        }
+        callback?.(stream.result);
+        return stream.result;
+    }
+
     const data = response.json();
     if (!response.ok) {
         throw new Error(data?.error || 'Failed to restore backup');
@@ -756,6 +803,65 @@ async function restoreUserData(handle, file, selection, mode, callback, { onProg
 
     callback?.(data);
     return data;
+}
+
+/**
+ * @param {((event: any) => void)|null} onPhaseProgress
+ */
+function createRestoreProgressStream(onPhaseProgress) {
+    let buffer = '';
+    const state = { streamed: false, result: null, error: null };
+    const dispatch = typeof onPhaseProgress === 'function' ? onPhaseProgress : null;
+    const consumeLine = (raw) => {
+        const line = raw.trim();
+        if (!line || line[0] !== '{') {
+            return;
+        }
+        let payload;
+        try {
+            payload = JSON.parse(line);
+        } catch {
+            return;
+        }
+        state.streamed = true;
+        if (payload.type === 'progress' && dispatch) {
+            try { dispatch(payload); } catch { /* observer errors must not abort */ }
+        } else if (payload.type === 'result') {
+            const { type, ...rest } = payload;
+            state.result = rest;
+        } else if (payload.type === 'error') {
+            state.error = String(payload.error || 'Restore failed');
+        }
+    };
+    const drain = (text) => {
+        if (typeof text !== 'string' || !text) {
+            return;
+        }
+        buffer += text;
+        let idx = buffer.indexOf('\n');
+        while (idx !== -1) {
+            const raw = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 1);
+            consumeLine(raw);
+            idx = buffer.indexOf('\n');
+        }
+    };
+    return {
+        onChunk: drain,
+        finish(finalText) {
+            if (typeof finalText === 'string' && finalText.length > 0 && !state.streamed) {
+                // Server did not stream — caller will parse the response as a single JSON document.
+                return;
+            }
+            if (buffer) {
+                consumeLine(buffer);
+                buffer = '';
+            }
+        },
+        get streamed() { return state.streamed; },
+        get result() { return state.result; },
+        get error() { return state.error; },
+    };
 }
 
 async function createLanMigrationLink(handle, selection) {
@@ -816,10 +922,10 @@ async function getShareableLanMigrationLink(link) {
     }
 }
 
-async function importLanMigrationLink(handle, url, selection, mode, callback) {
+async function importLanMigrationLink(handle, url, selection, mode, callback, { onPhaseProgress = null } = {}) {
     const response = await fetch('/api/users/lan-migration/import', {
         method: 'POST',
-        headers: getRequestHeaders(),
+        headers: { ...getRequestHeaders(), 'Accept': 'application/x-ndjson, application/json' },
         body: JSON.stringify({
             handle,
             url,
@@ -827,6 +933,30 @@ async function importLanMigrationLink(handle, url, selection, mode, callback) {
             mode,
         }),
     });
+
+    const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+    if (contentType.includes('application/x-ndjson') && response.body) {
+        const stream = createRestoreProgressStream(onPhaseProgress);
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        for (; ;) {
+            const { value, done } = await reader.read();
+            if (done) {
+                break;
+            }
+            stream.onChunk(decoder.decode(value, { stream: true }));
+        }
+        stream.onChunk(decoder.decode());
+        stream.finish('');
+        if (stream.error) {
+            throw new Error(stream.error);
+        }
+        if (!stream.result) {
+            throw new Error('LAN migration stream ended without a result.');
+        }
+        callback?.(stream.result);
+        return stream.result;
+    }
 
     if (!response.ok) {
         const data = await response.json().catch(() => ({}));
@@ -1037,6 +1167,7 @@ async function openBackupManager(handle, callback) {
             const pct = total > 0 ? Math.round((loaded / total) * 100) : 0;
             return t`Uploading ${file.name}: ${pct}% (${humanFileSize(loaded, true, 1)} / ${humanFileSize(total, true, 1)})`;
         };
+        const formatRestorePhase = (event) => formatRestorePhaseMessage(event, file.name);
         try {
             progressToast = toastr.info(
                 formatUploadingStatus(0, file.size),
@@ -1051,6 +1182,12 @@ async function openBackupManager(handle, callback) {
                         return;
                     }
                     updateProgressMessage(formatUploadingStatus(loaded, total));
+                },
+                onPhaseProgress: (event) => {
+                    const message = formatRestorePhase(event);
+                    if (message) {
+                        updateProgressMessage(message);
+                    }
                 },
             });
             toastr.clear(progressToast);
@@ -1230,6 +1367,11 @@ async function openBackupManager(handle, callback) {
         }
 
         let progressToast;
+        const updateLanProgressMessage = (text) => {
+            if (progressToast && typeof progressToast.find === 'function') {
+                progressToast.find('.toast-message').text(text);
+            }
+        };
         try {
             progressToast = toastr.info(
                 t`Please wait...`,
@@ -1237,7 +1379,14 @@ async function openBackupManager(handle, callback) {
                 { timeOut: 0, extendedTimeOut: 0, closeButton: false, tapToDismiss: false },
             );
             setActionBusy(true);
-            const result = await importLanMigrationLink(handle, link, selection, mode);
+            const result = await importLanMigrationLink(handle, link, selection, mode, undefined, {
+                onPhaseProgress: (event) => {
+                    const message = formatRestorePhaseMessage(event, t`migration archive`);
+                    if (message) {
+                        updateLanProgressMessage(message);
+                    }
+                },
+            });
             toastr.clear(progressToast);
             progressToast = null;
             const diagnosticReport = buildRestoreDiagnosticReport({

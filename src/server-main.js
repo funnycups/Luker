@@ -181,7 +181,7 @@ app.use((_, res, next) => {
 app.use(compression({
     filter: (req, res) => {
         const contentType = String(res.getHeader('Content-Type') || '');
-        if (contentType.includes('text/event-stream')) {
+        if (contentType.includes('text/event-stream') || contentType.includes('application/x-ndjson')) {
             return false;
         }
         return compression.filter(req, res);

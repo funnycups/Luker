@@ -1767,10 +1767,11 @@ export function getRequestHeaders({ omitContentType = false } = {}) {
  * @param {FormData} formData
  * @param {object} [options]
  * @param {(progress: UploadProgress) => void} [options.onProgress] Called as bytes are sent, then once with done=true after the upload finishes
+ * @param {(chunk: string) => void} [options.onResponseChunk] Called with each newly-appended slice of response text while the server streams data
  * @param {Record<string,string>} [options.headers] Overrides the default getRequestHeaders({ omitContentType: true })
  * @returns {Promise<UploadResponse>}
  */
-export function uploadWithProgress(url, formData, { onProgress = null, headers = null } = {}) {
+export function uploadWithProgress(url, formData, { onProgress = null, onResponseChunk = null, headers = null } = {}) {
     return new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open('POST', url);
@@ -1790,6 +1791,18 @@ export function uploadWithProgress(url, formData, { onProgress = null, headers =
             });
             xhr.upload.addEventListener('load', () => {
                 onProgress({ loaded: 1, total: 1, done: true });
+            });
+        }
+
+        if (typeof onResponseChunk === 'function') {
+            let deliveredLength = 0;
+            xhr.addEventListener('progress', () => {
+                const text = xhr.responseText || '';
+                if (text.length > deliveredLength) {
+                    const slice = text.slice(deliveredLength);
+                    deliveredLength = text.length;
+                    try { onResponseChunk(slice); } catch { /* observer errors must not abort the upload */ }
+                }
             });
         }
 

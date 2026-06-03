@@ -323,7 +323,7 @@ function resolveRestoreCategoryByTargetPath(targetPath, categoryTargets) {
     return '';
 }
 
-async function analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, targetDirectories, categoryTargets) {
+async function analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, targetDirectories, categoryTargets, onProgress = null) {
     /** @type {Map<string, { targetPath: string, category: string }>} */
     const targetByNormalizedEntry = new Map();
     const categoryStats = Object.fromEntries(
@@ -343,6 +343,11 @@ async function analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, target
         sampleSkippedEntries: [],
     };
     const directoryAliases = buildRestoreDirectoryAliases(targetRoot, targetDirectories);
+    const reportAnalyzeProgress = typeof onProgress === 'function'
+        ? (entryCount) => {
+            try { onProgress({ phase: 'analyze', current: report.totalEntries, total: entryCount }); } catch { /* sink errors ignored */ }
+        }
+        : () => {};
 
     await new Promise((resolve, reject) => {
         yauzl.open(uploadPath, { lazyEntries: true, decodeStrings: true }, (openError, zipfile) => {
@@ -350,6 +355,9 @@ async function analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, target
                 reject(openError);
                 return;
             }
+
+            const entryCount = typeof zipfile.entryCount === 'number' ? zipfile.entryCount : 0;
+            reportAnalyzeProgress(entryCount);
 
             let finished = false;
             const finish = (error) => {
@@ -366,6 +374,7 @@ async function analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, target
 
             zipfile.readEntry();
 
+            let lastProgressAt = 0;
             zipfile.on('entry', (entry) => {
                 try {
                     report.totalEntries += 1;
@@ -406,13 +415,21 @@ async function analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, target
                     if (category && report.categoryStats[category]) {
                         report.categoryStats[category].targetableEntries += 1;
                     }
+                    const now = Date.now();
+                    if (now - lastProgressAt >= 200) {
+                        lastProgressAt = now;
+                        reportAnalyzeProgress(entryCount);
+                    }
                     zipfile.readEntry();
                 } catch (error) {
                     finish(error);
                 }
             });
 
-            zipfile.on('end', () => finish());
+            zipfile.on('end', () => {
+                reportAnalyzeProgress(entryCount);
+                finish();
+            });
             zipfile.on('close', () => finish());
             zipfile.on('error', finish);
         });
@@ -460,6 +477,16 @@ async function rollbackRestoreSnapshots(snapshots) {
 
 async function restoreUserBackupArchive(uploadPath, directories, selection, mode, options = {}) {
     const restoreStart = Date.now();
+    const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+    const reportProgress = (event) => {
+        if (!onProgress) {
+            return;
+        }
+        try {
+            onProgress(event);
+        } catch { /* progress sink errors must not break restore */ }
+    };
+
     let uploadSize = 0;
     try {
         uploadSize = (await fsPromises.stat(uploadPath)).size;
@@ -477,7 +504,7 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
 
     const categoryTargets = buildRestoreCategoryTargets(directories, selection, options);
     const tAnalyze = Date.now();
-    const analysis = await analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, targetDirectories, categoryTargets);
+    const analysis = await analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, targetDirectories, categoryTargets, reportProgress);
     const analyzeMs = Date.now() - tAnalyze;
 
     if (mode === 'overwrite' && analysis.report.targetableEntries === 0) {
@@ -491,24 +518,32 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
     if (mode === 'overwrite') {
         const tSnap = Date.now();
         const snapshotSuffix = `.restore-snapshot-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+        const snapshotTotal = targetFiles.size + targetDirectories.length;
+        let snapshotCurrent = 0;
+        reportProgress({ phase: 'snapshot', current: 0, total: snapshotTotal });
 
         try {
             for (const filePath of targetFiles) {
+                snapshotCurrent += 1;
                 if (!fs.existsSync(filePath)) {
+                    reportProgress({ phase: 'snapshot', current: snapshotCurrent, total: snapshotTotal });
                     continue;
                 }
                 const snapshot = filePath + snapshotSuffix;
                 await fsPromises.rename(filePath, snapshot);
                 snapshots.push({ type: 'file', original: filePath, snapshot });
+                reportProgress({ phase: 'snapshot', current: snapshotCurrent, total: snapshotTotal });
             }
 
             for (const directoryPath of targetDirectories) {
+                snapshotCurrent += 1;
                 if (fs.existsSync(directoryPath)) {
                     const snapshot = directoryPath + snapshotSuffix;
                     await fsPromises.rename(directoryPath, snapshot);
                     snapshots.push({ type: 'directory', original: directoryPath, snapshot });
                 }
                 ensureDirectory(directoryPath);
+                reportProgress({ phase: 'snapshot', current: snapshotCurrent, total: snapshotTotal });
             }
         } catch (snapshotError) {
             const orphaned = await rollbackRestoreSnapshots(snapshots);
@@ -533,6 +568,17 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
     const tExtract = Date.now();
     let extractMs = 0;
     let discardMs = 0;
+    const extractTotal = analysis.report.targetableEntries;
+    reportProgress({ phase: 'extract', current: 0, total: extractTotal });
+    let lastExtractProgressAt = 0;
+    const reportExtractProgress = (force) => {
+        const now = Date.now();
+        if (!force && now - lastExtractProgressAt < 200) {
+            return;
+        }
+        lastExtractProgressAt = now;
+        reportProgress({ phase: 'extract', current: result.restoredCount + result.failedCount, total: extractTotal });
+    };
     try {
         await new Promise((resolve, reject) => {
             yauzl.open(uploadPath, { lazyEntries: true, decodeStrings: true }, (openError, zipfile) => {
@@ -606,6 +652,7 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
                                 if (targetMapping.category && result.preflight.categoryStats[targetMapping.category]) {
                                     result.preflight.categoryStats[targetMapping.category].restoredEntries += 1;
                                 }
+                                reportExtractProgress(false);
                                 zipfile.readEntry();
                             } catch (error) {
                                 result.failedCount += 1;
@@ -613,6 +660,7 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
                                     result.preflight.categoryStats[targetMapping.category].failedEntries += 1;
                                 }
                                 addRestoreReportSample(result.preflight, normalized, `write_failed:${error instanceof Error ? error.message : String(error)}`);
+                                reportExtractProgress(true);
                                 finish(error);
                             }
                         });
@@ -625,9 +673,11 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
             });
         });
         extractMs = Date.now() - tExtract;
+        reportExtractProgress(true);
 
         if (mode === 'overwrite') {
             const tDiscard = Date.now();
+            reportProgress({ phase: 'finalize' });
             await discardRestoreSnapshots(snapshots);
             discardMs = Date.now() - tDiscard;
         }
@@ -654,6 +704,33 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
     const totalMs = Date.now() - restoreStart;
     console.info(`[user-backup] Restore done: mode=${mode} entries=${result.restoredCount}/${analysis.report.totalEntries} failed=${result.failedCount} analyze=${analyzeMs}ms snapshot=${snapshotMs}ms extract=${extractMs}ms discard=${discardMs}ms total=${totalMs}ms`);
     return result;
+}
+
+const RESTORE_STREAM_MIME = 'application/x-ndjson';
+
+function wantsRestoreProgressStream(request) {
+    const accept = String(request.headers['accept'] || '');
+    return accept.includes(RESTORE_STREAM_MIME);
+}
+
+function beginRestoreProgressStream(response) {
+    response.status(200);
+    response.setHeader('Content-Type', `${RESTORE_STREAM_MIME}; charset=utf-8`);
+    response.setHeader('Cache-Control', 'no-store');
+    response.setHeader('X-Accel-Buffering', 'no');
+    if (typeof response.flushHeaders === 'function') {
+        response.flushHeaders();
+    }
+    const writeLine = (payload) => {
+        try {
+            response.write(JSON.stringify(payload) + '\n');
+        } catch { /* downstream disconnect — restore continues, frontend will see broken stream */ }
+    };
+    return {
+        onProgress(event) { writeLine({ type: 'progress', ...event }); },
+        sendResult(payload) { writeLine({ type: 'result', ...payload }); response.end(); },
+        sendError(message) { writeLine({ type: 'error', error: String(message || 'Restore failed') }); response.end(); },
+    };
 }
 
 export const router = express.Router();
@@ -856,6 +933,8 @@ router.post('/lan-migration/offer', async (request, response) => {
 
 router.post('/restore-backup', async (request, response) => {
     let uploadPath = '';
+    const streaming = wantsRestoreProgressStream(request);
+    let stream = null;
 
     try {
         const handle = request.body.handle;
@@ -897,16 +976,33 @@ router.post('/restore-backup', async (request, response) => {
         }
 
         const directories = handle === request.user.profile.handle ? request.user.directories : getUserDirectories(handle);
-        const restoreResult = await restoreUserBackupArchive(uploadPath, directories, selection, mode, { includeGlobalExtensions: isAdminUser });
+
+        if (streaming) {
+            stream = beginRestoreProgressStream(response);
+        }
+
+        const restoreResult = await restoreUserBackupArchive(
+            uploadPath,
+            directories,
+            selection,
+            mode,
+            { includeGlobalExtensions: isAdminUser, onProgress: stream?.onProgress },
+        );
         await invalidateRecentChatIndex(request);
 
-        return response.json({
-            mode,
-            ...restoreResult,
-        });
+        const payload = { mode, ...restoreResult };
+        if (stream) {
+            stream.sendResult(payload);
+            return;
+        }
+        return response.json(payload);
     } catch (error) {
         console.error('Restore failed', error);
         const message = error?.message || 'Restore failed';
+        if (stream) {
+            stream.sendError(message);
+            return;
+        }
         const statusCode = message.includes('Archive does not match selected restore categories') ? 400 : 500;
         return response.status(statusCode).json({ error: message });
     } finally {
@@ -918,6 +1014,8 @@ router.post('/restore-backup', async (request, response) => {
 
 router.post('/lan-migration/import', async (request, response) => {
     let downloadPath = '';
+    const streaming = wantsRestoreProgressStream(request);
+    let stream = null;
 
     try {
         const handle = String(request.body?.handle || '').trim();
@@ -946,23 +1044,40 @@ router.post('/lan-migration/import', async (request, response) => {
         ensureDirectory(uploadsPath);
         downloadPath = path.join(uploadsPath, `lan-migration-${Date.now()}-${crypto.randomBytes(8).toString('hex')}.zip`);
 
+        if (streaming) {
+            stream = beginRestoreProgressStream(response);
+            stream.onProgress({ phase: 'download' });
+        }
+
         await downloadLanMigrationArchive(sourceUrl.toString(), downloadPath);
 
         const directories = handle === request.user.profile.handle ? request.user.directories : getUserDirectories(handle);
-        const restoreResult = await restoreUserBackupArchive(downloadPath, directories, selection, mode, { includeGlobalExtensions: isAdminUser });
+        const restoreResult = await restoreUserBackupArchive(
+            downloadPath,
+            directories,
+            selection,
+            mode,
+            { includeGlobalExtensions: isAdminUser, onProgress: stream?.onProgress },
+        );
         await invalidateRecentChatIndex(request);
 
-        return response.json({
+        const payload = {
             mode,
-            source: {
-                origin: sourceUrl.origin,
-                host: sourceUrl.host,
-            },
+            source: { origin: sourceUrl.origin, host: sourceUrl.host },
             ...restoreResult,
-        });
+        };
+        if (stream) {
+            stream.sendResult(payload);
+            return;
+        }
+        return response.json(payload);
     } catch (error) {
         console.error('LAN migration import failed', error);
         const message = error?.message || 'LAN migration import failed';
+        if (stream) {
+            stream.sendError(message);
+            return;
+        }
         const isValidationError = message.includes('Migration link')
             || message.includes('No migration link provided')
             || message.includes('At least one restore category')
