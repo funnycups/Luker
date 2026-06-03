@@ -6,7 +6,7 @@ import {
     materializeFromEmbed,
     computeEmbedItemHash,
 } from '../skills/embed.js';
-import { importBundledSkills } from '../skills/bundled.js';
+import { importBundledSkills, buildBundledManifest } from '../skills/bundled.js';
 import { importFromUrl } from '../skills/url-import.js';
 
 /**
@@ -28,6 +28,7 @@ import { importFromUrl } from '../skills/url-import.js';
  *   POST   /api/skills/extract-embed/preview
  *   POST   /api/skills/extract-embed/execute
  *   POST   /api/skills/import-bundled
+ *   GET    /api/skills/bundled-manifest
  *   POST   /api/skills/import-from-url
  *
  * The `<scope>` segment must be URL-encoded by callers (preset/character
@@ -178,6 +179,19 @@ export function createSkillsRouter({ getRepository, getMemoryIndex }) {
             const result = await importBundledSkills({ defaultRoot, repository: repo });
             await invalidateIndex(req);
             res.json(result);
+        } catch (e) { handleError(e, res); }
+    });
+
+    // Manifest of what's available in default/skills/global/, including the
+    // install hash each skill would produce — read-only. The "Browse bundled"
+    // tab uses this to mark each row installed_match / installed_differ /
+    // not_installed by comparing against the live skill index.
+    router.get('/bundled-manifest', async (req, res) => {
+        try {
+            const defaultRoot = req.app.get('lukerDefaultRoot');
+            if (!defaultRoot) throw new Error('lukerDefaultRoot not configured');
+            const manifest = await buildBundledManifest({ defaultRoot });
+            res.json(manifest);
         } catch (e) { handleError(e, res); }
     });
 

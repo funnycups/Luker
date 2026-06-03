@@ -190,6 +190,8 @@ import { mountNotesPanel } from './notes-panel.js';
 import { openSkillManagerPanel } from '../../skills/skill-manager-panel.js';
 import { mountSkillChips } from '../../skills/skill-chips.js';
 import { skillsApi } from '../../skills/api.js';
+import { registerSkillEmbedLifecycle } from '../../skills/embed-lifecycle.js';
+import { maybeAttachSkillsToPresetExport } from '../../skills/embed-export-hook.js';
 // Note: `ORCH_EXECUTION_MODE_LOOP` is canonically defined in defaults.js
 // (alongside the other mode literals) and re-exported by persistence.js
 // for callers that want it bundled with `sanitizeLoopProfile`. We import
@@ -7612,6 +7614,27 @@ jQuery(() => {
         registerSkillOrchestrationTools();
     } catch (err) {
         console.warn(`[${MODULE_NAME}] failed to register skill orchestration tools:`, err);
+    }
+    // Hook skills embed lifecycle: character/preset embed import dialog +
+    // cascade-delete on character/preset removal. Listens on context's
+    // own event bus, idempotent.
+    try {
+        registerSkillEmbedLifecycle({ context, t: i18n });
+    } catch (err) {
+        console.warn(`[${MODULE_NAME}] failed to register skill embed lifecycle:`, err);
+    }
+    // Hook preset export: when the user clicks Export, ask whether to bundle
+    // the preset-scope skills into the JSON before download fires. The hook
+    // listens on OAI_PRESET_EXPORT_READY which carries the preset body; we
+    // mutate the body in place to attach `extensions.luker.embedded_skills_source`.
+    if (context.eventTypes?.OAI_PRESET_EXPORT_READY) {
+        context.eventSource.on(context.eventTypes.OAI_PRESET_EXPORT_READY, async (presetBody) => {
+            try {
+                await maybeAttachSkillsToPresetExport({ context, presetBody, t: i18n });
+            } catch (err) {
+                console.warn(`[${MODULE_NAME}] preset export skills attachment failed:`, err);
+            }
+        });
     }
     clearCapsulePrompt(context);
     void loadOrchestratorChatState(context).finally(() => ensureUi());

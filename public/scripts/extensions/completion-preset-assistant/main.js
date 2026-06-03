@@ -16,6 +16,7 @@ import {
     buildOrchestratorOptimizeModeBlock,
     buildJailbreakOnlyModeBlock,
 } from './cpa-iteration/system-prompts.js';
+import { openSkillManagerPanel } from '../../skills/skill-manager-panel.js';
 
 const DEFAULT_CPA_BASE_SYSTEM_PROMPT = buildBaseSystemPrompt();
 const DEFAULT_CPA_MODE_ORCHESTRATOR_OPTIMIZE = buildOrchestratorOptimizeModeBlock();
@@ -25,6 +26,7 @@ const MODULE_NAME = 'completion_preset_assistant';
 const UI_BLOCK_ID = 'completion_preset_assistant_settings';
 const OPEN_BUTTON_ID = 'completion_preset_assistant_open';
 const CREATE_BUTTON_ID = 'completion_preset_assistant_create';
+const SKILLS_BUTTON_ID = 'completion_preset_assistant_bundle_skills';
 const OPENAI_BUTTON_ID = 'completion_preset_assistant_openai_button';
 const TOOL_CALL_RETRY_MAX = 10;
 
@@ -88,6 +90,8 @@ function registerLocaleData() {
         'Completion Preset Assistant': '聊天补全预设助手',
         'Open Assistant': '打开助手',
         'Create New Preset': '新建预设',
+        'Bundle skills with this preset': '将技能打包到此预设',
+        'No preset is currently selected.': '当前未选择预设。',
         'Character-bound runtime presets are not directly editable.': '角色卡绑定的运行时预设暂不支持直接编辑。',
         'Enter a name for the new preset.': '请输入新预设名称。',
         'Preset already exists: ${0}': '预设已存在：${0}',
@@ -128,6 +132,8 @@ function registerLocaleData() {
         'Completion Preset Assistant': '聊天補全預設助手',
         'Open Assistant': '開啟助手',
         'Create New Preset': '新建預設',
+        'Bundle skills with this preset': '將技能打包到此預設',
+        'No preset is currently selected.': '目前未選擇預設。',
         'Character-bound runtime presets are not directly editable.': '角色卡綁定的執行時預設暫不支援直接編輯。',
         'Enter a name for the new preset.': '請輸入新預設名稱。',
         'Preset already exists: ${0}': '預設已存在：${0}',
@@ -266,6 +272,76 @@ async function handleCreateNewPreset() {
     }
 }
 
+/**
+ * Resolve the connection-profile name we should use as the `apiId` portion of
+ * the preset scope when the user clicks "Bundle skills with this preset".
+ *
+ * Source of truth precedence (matches the orchestrator's per-agent override
+ * pattern, which is what skill-resolution later reads at runtime):
+ *   1. CPA's own `requestApiPresetName` if the user has set it explicitly.
+ *   2. The active Connection Manager profile (chat completion mode).
+ *   3. The chat completion source string ('openai', 'claude', etc.).
+ *   4. Fallback to the literal 'openai'.
+ *
+ * The returned value is the same kind of string that the orchestrator passes
+ * as `presetApiId` into `buildSkillRuntimeContext`, so a skill scoped to the
+ * returned (apiId, presetName) pair will resolve at request-time without the
+ * user having to re-key anything.
+ *
+ * @returns {string}
+ */
+function resolveActiveConnectionProfileName() {
+    const settings = getSettings();
+    const fromCpa = String(settings?.requestApiPresetName || '').trim();
+    if (fromCpa) return fromCpa;
+
+    try {
+        const cm = extension_settings?.connectionManager;
+        const profiles = Array.isArray(cm?.profiles) ? cm.profiles : [];
+        const active = profiles.find(p => p && p.id === cm?.selectedProfile);
+        const activeName = String(active?.name || '').trim();
+        if (activeName) return activeName;
+    } catch (_) { /* tolerate sparse extension settings */ }
+
+    try {
+        const ctx = getContext();
+        const source = String(ctx?.chatCompletionSettings?.chat_completion_source || ctx?.mainApi || '').trim();
+        if (source) return source;
+    } catch (_) { /* tolerate missing context */ }
+
+    return 'openai';
+}
+
+/**
+ * Open the Skill Manager popup pre-filtered to the currently-selected preset.
+ *
+ * Surfaces the same Skill Manager that the orchestrator config exposes, but
+ * seeded with `initialScope = preset/<apiId>/<presetName>` so the user lands
+ * directly on the skills already bound to this preset. From there they can
+ * Import / Create / Move skills into the preset scope, or switch to the
+ * Browse-bundled tab to install bundled scaffolds.
+ */
+async function openBundleSkillsForCurrentPreset() {
+    const context = getContext();
+    const targetRef = getCurrentTargetRef(context);
+    if (!targetRef || !targetRef.name) {
+        toastr.warning(i18n('No preset is currently selected.'));
+        return;
+    }
+    const apiId = resolveActiveConnectionProfileName();
+    const initialScope = {
+        kind: 'preset',
+        apiId,
+        name: String(targetRef.name),
+    };
+    try {
+        await openSkillManagerPanel({ context, t: i18n, initialScope });
+    } catch (e) {
+        toastr.error(i18nFormat('AI request failed: ${0}', e?.message || e));
+        console.error(`[${MODULE_NAME}] Failed to open Skill Manager`, e);
+    }
+}
+
 async function openCpaIteration() {
     const context = getContext();
 
@@ -274,9 +350,7 @@ async function openCpaIteration() {
     if (!targetRef || !liveSnapshot?.stored) {
         toastr.warning(i18n('Current preset is not a stored chat completion preset. Please select a saved preset first.'));
         return;
-    }
-
-    function getTargetRef() {
+    }    function getTargetRef() {
         const current = getCurrentTargetRef(context);
         return current || { collection: 'openai', name: targetRef.name };
     }
@@ -388,6 +462,9 @@ function bindUi() {
     root.on('click.cpa', `#${CREATE_BUTTON_ID}`, async function () {
         await handleCreateNewPreset();
     });
+    root.on('click.cpa', `#${SKILLS_BUTTON_ID}`, async function () {
+        await openBundleSkillsForCurrentPreset();
+    });
     root.on('change.cpa', '#cpa_request_llm_preset', function () {
         getSettings().requestLlmPresetName = String(jQuery(this).val() || '').trim();
         saveSettingsDebounced();
@@ -470,6 +547,9 @@ function ensureUi(context = getContext()) {
             <div class="cpa_row">
                 <div id="${OPEN_BUTTON_ID}" class="menu_button">${escapeHtml(i18n('Open Assistant'))}</div>
                 <div id="${CREATE_BUTTON_ID}" class="menu_button">${escapeHtml(i18n('Create New Preset'))}</div>
+                <div id="${SKILLS_BUTTON_ID}" class="menu_button" title="${escapeHtml(i18n('Bundle skills with this preset'))}">
+                    <i class="fa-fw fa-solid fa-cubes"></i> ${escapeHtml(i18n('Bundle skills with this preset'))}
+                </div>
             </div>
             <div class="cpa_hint">${escapeHtml(i18n('Character-bound runtime presets are not directly editable.'))}</div>
             <label for="cpa_request_llm_preset">${escapeHtml(i18n('Iteration AI prompt preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'iteration', targetSelectId: 'cpa_request_llm_preset' })}</label>

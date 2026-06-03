@@ -22,6 +22,7 @@
  */
 
 import { openSkillEditor, openCreateNewSkillFlow } from './skill-editor.js';
+import { renderBundledBrowser } from './bundled-browser.js';
 
 // ── Pure helpers (exported for tests) ─────────────────────────────────────
 
@@ -261,16 +262,21 @@ export function hasMoveScopeCollision(skills, name, fromScope, toScope) {
  * Build the panel's main HTML body from a grouped + filtered list. The
  * caller wires events via delegation on the root container.
  *
+ * The tab strip (Installed / Browse bundled) is always rendered so users can
+ * see what's available even when the chosen tab body is empty. The bundled
+ * tab is rendered by `bundled-browser.js` into the same body container.
+ *
  * @param {Array} groups - filterGroups(groupSkillsByScope(...), filter)
  * @param {Array} allScopes - list of scopes that appear anywhere in the
  *   inventory (used to populate the filter dropdown)
  * @param {string} selectedFilterKey - currently-selected filter ('all' or
  *   a scope key)
+ * @param {'installed'|'bundled'} activeTab
  * @param {(s: string) => string} t - i18n helper
  * @param {(s: string) => string} esc - html-escape helper
  * @returns {string}
  */
-export function buildPanelHtml(groups, allScopes, selectedFilterKey, t, esc) {
+export function buildPanelHtml(groups, allScopes, selectedFilterKey, activeTab, t, esc) {
     const filterOptions = [
         `<option value="all"${selectedFilterKey === 'all' ? ' selected' : ''}>${esc(t('All scopes'))}</option>`,
         ...allScopes.map(s => {
@@ -315,12 +321,25 @@ export function buildPanelHtml(groups, allScopes, selectedFilterKey, t, esc) {
         </div>
     `;
 
-    const body = groups.length === 0
+    const installedBody = groups.length === 0
         ? `<div class="luker_skill_empty">${esc(t('No skills installed. Use Import or Create to add some.'))}</div>`
         : groups.map(renderGroup).join('');
 
-    return `
-<div class="luker_skill_manager">
+    const installedActive = activeTab !== 'bundled';
+    const tabStrip = `
+        <div class="luker_skill_manager_tabs">
+            <div class="luker_skill_tab${installedActive ? ' luker_skill_tab_active' : ''}" data-skill-tab="installed">${esc(t('Installed'))}</div>
+            <div class="luker_skill_tab${installedActive ? '' : ' luker_skill_tab_active'}" data-skill-tab="bundled">${esc(t('Browse bundled'))}</div>
+        </div>
+    `;
+
+    // For the bundled tab, leave an empty mount that renderBundledBrowser
+    // paints into asynchronously — keeps buildPanelHtml synchronous and
+    // unit-testable while still supporting the live tab.
+    const bundledMount = '<div class="luker_skill_manager_bundled_mount"></div>';
+
+    const tabBody = installedActive
+        ? `
     <div class="luker_skill_manager_toolbar">
         <label class="luker_skill_filter_label">
             <span>${esc(t('Filter by scope:'))}</span>
@@ -334,7 +353,14 @@ export function buildPanelHtml(groups, allScopes, selectedFilterKey, t, esc) {
             <div class="menu_button menu_button_small" data-skill-toolbar="refresh">${esc(t('Refresh'))}</div>
         </div>
     </div>
-    <div class="luker_skill_manager_body">${body}</div>
+    <div class="luker_skill_manager_body">${installedBody}</div>
+        `
+        : bundledMount;
+
+    return `
+<div class="luker_skill_manager">
+    ${tabStrip}
+    ${tabBody}
 </div>
     `;
 }
@@ -348,10 +374,16 @@ export function buildPanelHtml(groups, allScopes, selectedFilterKey, t, esc) {
  * @param {object} opts.context - SillyTavern context (must expose
  *   `context.skills`, `context.callGenericPopup`, `context.POPUP_TYPE`,
  *   `context.POPUP_RESULT`).
+ * @param {object|null} [opts.initialScope] - if provided, seed the scope
+ *   filter to this scope (e.g. when launching from the Preset Assistant
+ *   "Bundle skills with this preset" link the panel opens already filtered
+ *   to the current preset). Pass null or omit for default 'all'.
+ * @param {'installed'|'bundled'} [opts.initialTab='installed'] - which tab to
+ *   show first. Pass 'bundled' to land directly on the bundled browser.
  * @param {(s: string) => string} [opts.t] - i18n helper; defaults to identity.
  * @returns {Promise<void>}
  */
-export async function openSkillManagerPanel({ context, t = (s) => s } = {}) {
+export async function openSkillManagerPanel({ context, initialScope = null, initialTab = 'installed', t = (s) => s } = {}) {
     if (!context || !context.skills) {
         throw new Error('openSkillManagerPanel: context.skills missing');
     }
@@ -365,7 +397,8 @@ export async function openSkillManagerPanel({ context, t = (s) => s } = {}) {
 
     const state = {
         skills: [],
-        filterKey: 'all',
+        filterKey: initialScope ? scopeKey(initialScope) : 'all',
+        tab: initialTab === 'bundled' ? 'bundled' : 'installed',
         mountId: `luker_skill_manager_${Date.now()}`,
     };
 
@@ -383,6 +416,12 @@ export async function openSkillManagerPanel({ context, t = (s) => s } = {}) {
     /**
      * Re-fetch the inventory and re-render the panel body. Errors surface as
      * a toast — the panel stays open so the user can retry.
+     *
+     * When `state.tab === 'bundled'`, the body is handed off to
+     * `renderBundledBrowser` which manages its own data fetches; we still
+     * render the tab strip first so the user can switch back. We always fetch
+     * the installed list anyway because the filter dropdown needs the live
+     * scope set even on the bundled tab.
      */
     async function refresh() {
         const mount = document.getElementById(state.mountId);
@@ -397,11 +436,34 @@ export async function openSkillManagerPanel({ context, t = (s) => s } = {}) {
         const grouped = groupSkillsByScope(state.skills);
         const allScopes = dedupeScopes(state.skills.map(s => s.scope));
         const filtered = filterGroups(grouped, state.filterKey);
-        mount.innerHTML = buildPanelHtml(filtered, allScopes, state.filterKey, t, esc);
+        mount.innerHTML = buildPanelHtml(filtered, allScopes, state.filterKey, state.tab, t, esc);
         bindEvents(mount);
+        if (state.tab === 'bundled') {
+            const bundledMount = mount.querySelector('.luker_skill_manager_bundled_mount');
+            if (bundledMount) {
+                try {
+                    await renderBundledBrowser({ context, mount: bundledMount, t });
+                } catch (e) {
+                    toast(t('Failed to render bundled browser: ${0}').replace('${0}', e?.message || String(e)), 'error');
+                }
+            }
+        }
     }
 
     function bindEvents(root) {
+        // Tab switching always available; the per-tab toolbar bindings below
+        // are no-ops when their elements aren't in the current DOM.
+        root.querySelectorAll('[data-skill-tab]').forEach((el) => {
+            el.addEventListener('click', (ev) => {
+                ev.preventDefault();
+                const next = el.getAttribute('data-skill-tab');
+                if (next !== 'installed' && next !== 'bundled') return;
+                if (state.tab === next) return;
+                state.tab = next;
+                void refresh();
+            });
+        });
+
         const filterSelect = root.querySelector('[data-skill-filter]');
         if (filterSelect) {
             filterSelect.addEventListener('change', () => {

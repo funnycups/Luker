@@ -226,6 +226,22 @@ export const skillsApi = {
     },
 
     /**
+     * List the bundled skills shipped under default/skills/global/, each with
+     * the install hash they'd produce when materialized. The "Browse bundled"
+     * tab compares each entry's `installedHash` against the same field on a
+     * locally-installed skill to decide install_match / install_differ /
+     * not_installed without re-running the install path.
+     *
+     * Read-only; no CSRF needed but the wrapper sends it anyway via
+     * getRequestHeaders.
+     *
+     * @returns {Promise<Array<{name:string, installedHash:string, fileCount:number, totalBytes:number, description:string}>>}
+     */
+    listBundledManifest() {
+        return jsonFetch('/api/skills/bundled-manifest');
+    },
+
+    /**
      * Import a skill from a URL pointing to a zipped bundle.
      * @param {{url: string, targetScope: object}} opts
      */

@@ -407,6 +407,81 @@ describe('REST /api/skills', () => {
             expect(res.status).toBe(500);
         });
 
+        test('bundled-manifest lists each skill in default/skills/global/ with name+installedHash', async () => {
+            // Build a fake defaultRoot with two bundled skills so the test
+            // doesn't depend on the project's real bundled content.
+            const fakeDefault = await fs.mkdtemp(join(tmpdir(), 'bundled-manifest-default-'));
+            try {
+                await fs.mkdir(join(fakeDefault, 'skills/global/alpha-skill'), { recursive: true });
+                await fs.writeFile(
+                    join(fakeDefault, 'skills/global/alpha-skill/SKILL.md'),
+                    '---\nname: alpha-skill\ndescription: first bundled\n---\nbody A\n',
+                );
+                await fs.mkdir(join(fakeDefault, 'skills/global/beta-skill'), { recursive: true });
+                await fs.writeFile(
+                    join(fakeDefault, 'skills/global/beta-skill/SKILL.md'),
+                    '---\nname: beta-skill\ndescription: second bundled\n---\nbody B\n',
+                );
+                const app2 = buildApp(repo, { lukerDefaultRoot: fakeDefault });
+                const res = await request(app2).get('/api/skills/bundled-manifest');
+                expect(res.status).toBe(200);
+                expect(Array.isArray(res.body)).toBe(true);
+                // Sorted by name (importBundledSkills sorts readdir output too).
+                expect(res.body.map(e => e.name)).toEqual(['alpha-skill', 'beta-skill']);
+                for (const entry of res.body) {
+                    expect(typeof entry.installedHash).toBe('string');
+                    expect(entry.installedHash).toHaveLength(64);
+                    expect(typeof entry.fileCount).toBe('number');
+                    expect(entry.fileCount).toBeGreaterThanOrEqual(1);
+                    expect(typeof entry.totalBytes).toBe('number');
+                    expect(entry.totalBytes).toBeGreaterThan(0);
+                    expect(typeof entry.description).toBe('string');
+                }
+            } finally {
+                await fs.rm(fakeDefault, { recursive: true, force: true });
+            }
+        });
+
+        test('bundled-manifest returns empty array when defaultRoot missing skills dir', async () => {
+            const missing = join(tmpdir(), 'bundled-manifest-missing-' + Date.now());
+            const app2 = buildApp(repo, { lukerDefaultRoot: missing });
+            const res = await request(app2).get('/api/skills/bundled-manifest');
+            expect(res.status).toBe(200);
+            expect(res.body).toEqual([]);
+        });
+
+        test('bundled-manifest installedHash matches importBundled-installed skill hash', async () => {
+            // Build a fake defaultRoot, install via importBundled, then verify
+            // the manifest hash equals the freshly-installed skill's hash.
+            const fakeDefault = await fs.mkdtemp(join(tmpdir(), 'bundled-manifest-hash-'));
+            try {
+                await fs.mkdir(join(fakeDefault, 'skills/global/check-hash'), { recursive: true });
+                await fs.writeFile(
+                    join(fakeDefault, 'skills/global/check-hash/SKILL.md'),
+                    '---\nname: check-hash\ndescription: x\n---\ncontent for hash\n',
+                );
+                const app2 = buildApp(repo, { lukerDefaultRoot: fakeDefault });
+                const manifestRes = await request(app2).get('/api/skills/bundled-manifest');
+                const bundled = manifestRes.body.find(e => e.name === 'check-hash');
+                expect(bundled).toBeTruthy();
+
+                const importRes = await request(app2).post('/api/skills/import-bundled');
+                expect(importRes.status).toBe(200);
+
+                const list = await request(app2).get('/api/skills?scope=global');
+                const installed = list.body.find(e => e.name === 'check-hash');
+                expect(installed).toBeTruthy();
+                expect(installed.installedHash).toBe(bundled.installedHash);
+            } finally {
+                await fs.rm(fakeDefault, { recursive: true, force: true });
+            }
+        });
+
+        test('bundled-manifest returns 500 when lukerDefaultRoot not configured', async () => {
+            const res = await request(app).get('/api/skills/bundled-manifest');
+            expect(res.status).toBe(500);
+        });
+
         test('import-bundled returns 0/0 when defaultRoot points at missing dir', async () => {
             const missing = join(tmpdir(), 'skill-rest-default-missing-' + Date.now());
             const app2 = buildApp(repo, { lukerDefaultRoot: missing });

@@ -187,7 +187,7 @@ describe('skill-manager-panel — pure helpers', () => {
             },
         ];
         const groups = mod.groupSkillsByScope(skills);
-        const html = mod.buildPanelHtml(groups, [skills[0].scope, skills[1].scope], 'all', t, esc);
+        const html = mod.buildPanelHtml(groups, [skills[0].scope, skills[1].scope], 'all', 'installed', t, esc);
         expect(html).toContain('alpha');
         expect(html).toContain('beta');
         expect(html).toContain('has scripts');
@@ -196,9 +196,17 @@ describe('skill-manager-panel — pure helpers', () => {
         expect(html).toContain('Import from file');
         expect(html).toContain('Import from URL');
         expect(html).toContain('Create new');
+        // Tab strip is always rendered.
+        expect(html).toContain('data-skill-tab="installed"');
+        expect(html).toContain('data-skill-tab="bundled"');
         // Empty state when no groups
-        const emptyHtml = mod.buildPanelHtml([], [], 'all', t, esc);
+        const emptyHtml = mod.buildPanelHtml([], [], 'all', 'installed', t, esc);
         expect(emptyHtml).toContain('No skills installed');
+
+        // On the bundled tab the body is a mount point, not the rows.
+        const bundledHtml = mod.buildPanelHtml(groups, [skills[0].scope], 'all', 'bundled', t, esc);
+        expect(bundledHtml).toContain('luker_skill_manager_bundled_mount');
+        expect(bundledHtml).not.toContain('Import bundled');
     });
 });
 
@@ -222,11 +230,25 @@ class StubElement {
         this._attrs = new Map();
         this._innerHTML = '';
         this.style = {};
-        this.value = '';
+        this._value = '';
         this.checked = false;
         this.files = null;
         this.parentNode = null;
     }
+    get value() {
+        // For <select> elements, mirror real DOM behaviour: the value is the
+        // currently-selected option's value (or first option's if nothing has
+        // an explicit `selected` attribute). For other elements, use the
+        // attribute value or whatever the caller set via the setter.
+        if (this.tagName === 'SELECT') {
+            const opts = this._children.filter(c => c.tagName === 'OPTION');
+            if (opts.length === 0) return this._value;
+            const sel = opts.find(o => o._attrs.has('selected'));
+            return sel ? String(sel._attrs.get('value') ?? '') : String(opts[0]._attrs.get('value') ?? '');
+        }
+        return this._value;
+    }
+    set value(v) { this._value = v; }
     get innerHTML() { return this._innerHTML; }
     set innerHTML(html) {
         this._innerHTML = String(html);
@@ -264,6 +286,7 @@ class StubElement {
         //   `[data-attr="value"]`     → attribute equals value
         //   `input[name="x"]:checked` → tag + attribute + pseudo
         //   `input[name="x"]:checked` (any-order combos with [data-y])
+        //   `.cls`                    → class on this element
         // Anything else returns false; tests will surface that explicitly.
         const tagMatch = /^([a-z][a-z0-9]*)?/i.exec(sel);
         const tagName = tagMatch && tagMatch[1] ? tagMatch[1].toUpperCase() : null;
@@ -278,6 +301,15 @@ class StubElement {
             } else if (this._attrs.get(name) !== value) {
                 return false;
             }
+        }
+        // Class selectors: `.foo` (one or more). We split on `.` and confirm
+        // every class is present in the element's class list.
+        const classRe = /\.([a-z][a-z0-9_-]*)/gi;
+        let cm;
+        const classAttr = String(this._attrs.get('class') || '').split(/\s+/).filter(Boolean);
+        const classes = new Set(classAttr);
+        while ((cm = classRe.exec(remainder))) {
+            if (!classes.has(cm[1])) return false;
         }
         if (remainder.includes(':checked')) {
             if (!this.checked) return false;
@@ -385,7 +417,7 @@ class StubDocument {
     querySelector(sel) { return this.body.querySelector(sel); }
 }
 
-function makeStubContext({ skills = [], scenarios = {} } = {}) {
+function makeStubContext({ skills = [], bundled = [], scenarios = {} } = {}) {
     const popupCalls = [];
     const skillsApi = {
         list: jest.fn(async () => skills.slice()),
@@ -397,6 +429,7 @@ function makeStubContext({ skills = [], scenarios = {} } = {}) {
         importFromUrl: jest.fn(async () => ({ installed: ['from-url'], skipped: [] })),
         previewExtractEmbed: jest.fn(async () => ({ items: [{ name: 'imported', conflict: 'new' }] })),
         executeExtractEmbed: jest.fn(async () => ({ installed: ['imported'], skipped: [] })),
+        listBundledManifest: jest.fn(async () => bundled.slice()),
     };
     const POPUP_TYPE = { TEXT: 1, CONFIRM: 2, INPUT: 3, DISPLAY: 4 };
     const POPUP_RESULT = { AFFIRMATIVE: 1, NEGATIVE: 0, CANCELLED: null };
@@ -482,7 +515,9 @@ describe('openSkillManagerPanel — integration scenarios', () => {
             return null;
         };
 
-        const panelPromise = openSkillManagerPanel({ context: ctx });
+        const panelOpts = { context: ctx };
+        if (opts && opts.initialScope) panelOpts.initialScope = opts.initialScope;
+        const panelPromise = openSkillManagerPanel(panelOpts);
         // Allow the deferred refresh() (Promise.resolve().then(...)) to run.
         await Promise.resolve();
         await Promise.resolve();
@@ -692,5 +727,51 @@ describe('openSkillManagerPanel — integration scenarios', () => {
         expect(textCalls.length).toBeGreaterThanOrEqual(2);
         // listFiles should have been called once the editor's deferred refresh runs.
         expect(ctx.__skillsApi.listFiles).toHaveBeenCalled();
+    });
+
+    test('Browse bundled tab is present and renders bundled rows', async () => {
+        const bundled = [
+            { name: 'bundle-one', installedHash: 'h1', fileCount: 1, totalBytes: 50, description: 'one' },
+        ];
+        const skills = [];
+        const { ctx, mount } = await bootstrap({ skills, bundled });
+        // The tab strip should render two tabs.
+        const installedTab = mount.querySelector('[data-skill-tab="installed"]');
+        const bundledTab = mount.querySelector('[data-skill-tab="bundled"]');
+        expect(installedTab).toBeTruthy();
+        expect(bundledTab).toBeTruthy();
+        // Switch to bundled.
+        bundledTab.click();
+        for (let i = 0; i < 8; i++) await Promise.resolve();
+        // The bundled tab should have called listBundledManifest.
+        expect(ctx.__skillsApi.listBundledManifest).toHaveBeenCalled();
+        // The bundled-browser paints into the inner mount. The stub's
+        // outer-element `.innerHTML` is a snapshot (set during the panel's
+        // own render); we check the inner mount directly.
+        const bundledMount = mount.querySelector('.luker_skill_manager_bundled_mount');
+        expect(bundledMount).toBeTruthy();
+        expect(bundledMount.innerHTML).toContain('bundle-one');
+        expect(bundledMount.innerHTML).toContain('Not installed');
+    });
+
+    test('initialScope filter pre-selects scope in dropdown', async () => {
+        const skills = [
+            { name: 'a', scope: { kind: 'global' }, description: 'g', fileCount: 1 },
+            { name: 'b', scope: { kind: 'preset', apiId: 'openai', name: 'rp' }, description: 'p', fileCount: 1 },
+        ];
+        // Open with initialScope filter set to that preset.
+        const initialScope = { kind: 'preset', apiId: 'openai', name: 'rp' };
+        const { mount } = await bootstrap({ skills, initialScope });
+        // The filter dropdown should have the preset scope selected; the panel
+        // body should only contain group(s) for that scope.
+        const filterSelect = mount.querySelector('[data-skill-filter]');
+        expect(filterSelect).toBeTruthy();
+        expect(filterSelect.value).toBe('preset/openai/rp');
+        // Global skill 'a' should not appear in the rendered list.
+        const rows = mount.querySelectorAll('[data-skill-name]');
+        const names = [];
+        for (const r of rows) names.push(r.getAttribute('data-skill-name'));
+        expect(names).toContain('b');
+        expect(names).not.toContain('a');
     });
 });

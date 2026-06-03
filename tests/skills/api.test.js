@@ -174,4 +174,31 @@ describe('public/scripts/skills/api.js — jsonFetch wrapper', () => {
         expect(capturedUrl).toContain('path=references%2Fnote.md');
         expect(r).toBeNull();
     });
+
+    test('listBundledManifest() GETs the bundled-manifest route', async () => {
+        const { skillsApi } = await import('../../public/scripts/skills/api.js');
+        let capturedUrl;
+        let capturedMethod;
+        global.fetch = async (url, opts) => {
+            capturedUrl = url;
+            // eslint-disable-next-line playwright/no-conditional-in-test
+            capturedMethod = opts ? opts.method : undefined;
+            return {
+                ok: true,
+                status: 200,
+                json: async () => ([
+                    { name: 'alpha', installedHash: 'h1', fileCount: 1, totalBytes: 100, description: 'a' },
+                ]),
+            };
+        };
+
+        const r = await skillsApi.listBundledManifest();
+
+        expect(capturedUrl).toBe('/api/skills/bundled-manifest');
+        // GET — undefined method on fetch defaults to GET.
+        expect(capturedMethod).toBeUndefined();
+        expect(Array.isArray(r)).toBe(true);
+        expect(r[0].name).toBe('alpha');
+        expect(r[0].installedHash).toBe('h1');
+    });
 });
