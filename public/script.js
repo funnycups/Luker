@@ -8492,9 +8492,13 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                         // push time for `normal`/`regenerate`; for `swipe`
                         // the swipe-create logic did it; for `continue`
                         // the existing assistant slot already has them).
+                        // For overswipe→regenerate via swipe, `swipe_id`
+                        // points past `swipe_info.length` — we must extend
+                        // it, not skip, or `loadFromSwipeId` later reads
+                        // undefined and drops `extra` (including reasoning).
                         if (Array.isArray(slot.swipes) && typeof slot.swipe_id === 'number') {
                             slot.swipes[slot.swipe_id] = slot.mes;
-                            if (Array.isArray(slot.swipe_info) && slot.swipe_info[slot.swipe_id]) {
+                            if (Array.isArray(slot.swipe_info)) {
                                 slot.swipe_info[slot.swipe_id] = {
                                     send_date: slot.send_date,
                                     gen_started: slot.gen_started,
