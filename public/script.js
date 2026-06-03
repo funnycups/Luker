@@ -17505,6 +17505,20 @@ export async function swipe(event, direction, { source, repeated, message = chat
             } else if (overswipe == OVERSWIPE_BEHAVIOR.REGENERATE) {
                 //Regenerate the message
                 clearMessageData(chat[mesId]);
+                // Wipe the body/reasoning so any takeover plugin reading
+                // chat[mesId] inside GENERATE_TAKEOVER_DISPATCH sees a
+                // blank starting draft. The streaming path is unaffected
+                // — saveReply's swipe branch also writes mes='' before
+                // chunks land — but takeover plugins read chat directly
+                // and would otherwise inherit the previous swipe's text
+                // as their initial draft.
+                chat[mesId].mes = '';
+                if (chat[mesId].extra && typeof chat[mesId].extra === 'object') {
+                    chat[mesId].extra.reasoning = '';
+                    delete chat[mesId].extra.reasoning_duration;
+                    delete chat[mesId].extra.reasoning_signature;
+                    delete chat[mesId].extra.token_count;
+                }
                 let run_generate = true;
                 //Generate.
                 await animateSwipe(run_generate);
