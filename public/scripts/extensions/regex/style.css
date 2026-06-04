@@ -59,6 +59,24 @@
     opacity: 0.5;
 }
 
+.regex_settings .regex-section {
+    margin-left: 16px;
+}
+
+.regex_settings .regex-section + .regex-section {
+    margin-top: 4px;
+}
+
+.regex_settings .regex-section-header .regex-section-toggle-control {
+    flex: 0 0 auto;
+    margin-right: 6px;
+}
+
+.regex_settings .regex-section-content > small {
+    display: block;
+    margin-top: 2px;
+}
+
 .enable_scoped:checked~.regex-toggle-on,
 .enable_scoped:not(:checked)~.regex-toggle-off {
     display: block;

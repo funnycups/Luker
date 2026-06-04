@@ -793,6 +793,65 @@ function bindRegexReloadOnSettingsClose() {
     observer.observe(panel, { attributes: true, attributeFilter: ['class'] });
 }
 
+const REGEX_SECTION_IDS = ['regex_presets_block', 'global_scripts_block', 'preset_scripts_block', 'scoped_scripts_block', 'plugin_scripts_block'];
+
+function getCollapsedRegexSections() {
+    if (!extension_settings.regex_section_collapsed || typeof extension_settings.regex_section_collapsed !== 'object') {
+        extension_settings.regex_section_collapsed = {};
+    }
+    return extension_settings.regex_section_collapsed;
+}
+
+function applyCollapsedRegexSections() {
+    const state = getCollapsedRegexSections();
+    for (const id of REGEX_SECTION_IDS) {
+        const section = document.getElementById(id);
+        if (!section) continue;
+        const sectionKey = section.getAttribute('data-section') || id;
+        const shouldCollapse = state[sectionKey] === true;
+        const content = section.querySelector(':scope > .inline-drawer-content');
+        const icon = section.querySelector(':scope > .inline-drawer-header .inline-drawer-icon');
+        if (!(content instanceof HTMLElement) || !(icon instanceof HTMLElement)) continue;
+        if (shouldCollapse) {
+            content.style.display = 'none';
+            icon.classList.remove('down', 'fa-circle-chevron-down');
+            icon.classList.add('up', 'fa-circle-chevron-up');
+        } else {
+            // Override the default `.inline-drawer-content { display: none }` so sections are
+            // expanded by default; only sections the user explicitly collapsed stay hidden.
+            content.style.display = 'block';
+            icon.classList.add('down', 'fa-circle-chevron-down');
+            icon.classList.remove('up', 'fa-circle-chevron-up');
+        }
+    }
+}
+
+function bindRegexSectionCollapse() {
+    for (const id of REGEX_SECTION_IDS) {
+        const section = document.getElementById(id);
+        if (!section) continue;
+        const sectionKey = section.getAttribute('data-section') || id;
+        // jQuery .trigger('inline-drawer-toggle') in script.js fires a jQuery custom event,
+        // bind via jQuery so the listener actually runs. The event is dispatched AFTER the
+        // icon class toggles but BEFORE slideToggle changes content display, so we read the
+        // post-toggle state from the icon (`up` = collapsed) rather than from getComputedStyle.
+        $(section).on('inline-drawer-toggle', () => {
+            const icon = section.querySelector(':scope > .inline-drawer-header .inline-drawer-icon');
+            if (!(icon instanceof HTMLElement)) return;
+            const state = getCollapsedRegexSections();
+            if (icon.classList.contains('up')) {
+                state[sectionKey] = true;
+            } else {
+                delete state[sectionKey];
+            }
+            saveSettingsDebounced();
+        });
+    }
+    document.querySelectorAll('#regex_container .regex-section-toggle-control').forEach(label => {
+        label.addEventListener('click', (e) => e.stopPropagation());
+    });
+}
+
 /**
  * Toggle the icon for the "select all" checkbox in the regex settings.
  * - Use `fa-check-double` when the checkbox is unchecked (indicating all scripts are not selected).
@@ -2619,7 +2678,8 @@ export async function init() {
     const settingsHtml = $(await renderExtensionTemplateAsync('regex', 'dropdown'));
     $('#regex_container').append(settingsHtml);
     const regexDrawer = document.querySelector('#regex_container .regex_settings .inline-drawer');
-    regexDrawer?.addEventListener('inline-drawer-toggle', () => {
+    regexDrawer?.addEventListener('inline-drawer-toggle', (e) => {
+        if (e.target !== regexDrawer) return;
         // The custom toggle event fires before slideToggle updates display, so read the open state on the next tick.
         window.setTimeout(() => {
             const content = regexDrawer.querySelector(':scope > .inline-drawer-content');
@@ -2629,6 +2689,8 @@ export async function init() {
             }
         }, 0);
     });
+    applyCollapsedRegexSections();
+    bindRegexSectionCollapse();
     bindRegexReloadOnSettingsClose();
     $('#open_regex_editor').on('click', function () {
         onRegexEditorOpenClick(false, SCRIPT_TYPES.GLOBAL);

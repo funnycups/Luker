@@ -70,75 +70,86 @@
                 </div>
             </div>
             <hr />
-            <div id="regex_presets_block">
-                <div class="flex-container alignItemsBaseline">
+            <div id="regex_presets_block" class="inline-drawer regex-section" data-section="presets">
+                <div class="inline-drawer-toggle inline-drawer-header regex-section-header">
                     <strong class="flex1" data-i18n="ext_regex_presets">Regex Presets</strong>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
-                <small data-i18n="ext_regex_presets_desc">
-                    Save and switch between groups of enabled regex scripts.
-                </small>
-                <div class="flex-container marginTop5">
-                    <select id="regex_presets" class="text_pole flex1"></select>
-                    <div id="regex_preset_create" class="menu_button fa-solid fa-file-circle-plus" data-i18n="[title]ext_regex_preset_create" title="Create a new regex preset"></div>
-                    <div id="regex_preset_update" class="menu_button fa-solid fa-save" data-i18n="[title]ext_regex_preset_update" title="Update existing regex preset"></div>
-                    <div id="regex_preset_apply" class="menu_button fa-solid fa-recycle" data-i18n="[title]ext_regex_preset_apply" title="Re-apply current preset"></div>
-                    <div id="regex_preset_delete" class="menu_button fa-solid fa-trash" data-i18n="[title]ext_regex_preset_delete" title="Delete current preset"></div>
+                <div class="inline-drawer-content regex-section-content">
+                    <small data-i18n="ext_regex_presets_desc">
+                        Save and switch between groups of enabled regex scripts.
+                    </small>
+                    <div class="flex-container marginTop5">
+                        <select id="regex_presets" class="text_pole flex1"></select>
+                        <div id="regex_preset_create" class="menu_button fa-solid fa-file-circle-plus" data-i18n="[title]ext_regex_preset_create" title="Create a new regex preset"></div>
+                        <div id="regex_preset_update" class="menu_button fa-solid fa-save" data-i18n="[title]ext_regex_preset_update" title="Update existing regex preset"></div>
+                        <div id="regex_preset_apply" class="menu_button fa-solid fa-recycle" data-i18n="[title]ext_regex_preset_apply" title="Re-apply current preset"></div>
+                        <div id="regex_preset_delete" class="menu_button fa-solid fa-trash" data-i18n="[title]ext_regex_preset_delete" title="Delete current preset"></div>
+                    </div>
                 </div>
             </div>
-            <hr />
-            <div id="global_scripts_block">
-                <div>
-                    <strong data-i18n="ext_regex_global_scripts">Global Scripts</strong>
+            <div id="global_scripts_block" class="inline-drawer regex-section" data-section="global">
+                <div class="inline-drawer-toggle inline-drawer-header regex-section-header">
+                    <strong class="flex1" data-i18n="ext_regex_global_scripts">Global Scripts</strong>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
-                <small data-i18n="ext_regex_global_scripts_desc">
-                    Available for all characters. Saved to local settings.
-                </small>
-                <div id="saved_regex_scripts" no-scripts-text="No scripts found" data-i18n="[no-scripts-text]No scripts found" class="flex-container regex-script-container flexFlowColumn"></div>
+                <div class="inline-drawer-content regex-section-content">
+                    <small data-i18n="ext_regex_global_scripts_desc">
+                        Available for all characters. Saved to local settings.
+                    </small>
+                    <div id="saved_regex_scripts" no-scripts-text="No scripts found" data-i18n="[no-scripts-text]No scripts found" class="flex-container regex-script-container flexFlowColumn"></div>
+                </div>
             </div>
-            <hr />
-            <div id="preset_scripts_block">
-                <div class="flex-container alignItemsBaseline">
+            <div id="preset_scripts_block" class="inline-drawer regex-section" data-section="preset">
+                <div class="inline-drawer-toggle inline-drawer-header regex-section-header">
                     <strong class="flex1" data-i18n="ext_regex_preset_scripts">Preset Scripts</strong>
-                    <label id="toggle_preset_regex" class="checkbox flex-container" for="regex_preset_toggle">
+                    <label id="toggle_preset_regex" class="checkbox flex-container regex-section-toggle-control" for="regex_preset_toggle">
                         <input type="checkbox" id="regex_preset_toggle" class="enable_scoped" />
                         <span class="regex-toggle-on fa-solid fa-toggle-on fa-lg" data-i18n="[title]ext_regex_disallow_preset" title="Disallow using preset regex"></span>
                         <span class="regex-toggle-off fa-solid fa-toggle-off fa-lg" data-i18n="[title]ext_regex_allow_preset" title="Allow using preset regex"></span>
                     </label>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
-                <small data-i18n="ext_regex_preset_scripts_desc">
-                    Only available for this preset. Saved to the preset data.
-                </small>
-                <div id="saved_preset_scripts" no-scripts-text="No scripts found" data-i18n="[no-scripts-text]No scripts found" class="flex-container regex-script-container flexFlowColumn"></div>
+                <div class="inline-drawer-content regex-section-content">
+                    <small data-i18n="ext_regex_preset_scripts_desc">
+                        Only available for this preset. Saved to the preset data.
+                    </small>
+                    <div id="saved_preset_scripts" no-scripts-text="No scripts found" data-i18n="[no-scripts-text]No scripts found" class="flex-container regex-script-container flexFlowColumn"></div>
+                </div>
             </div>
-            <hr />
-            <div id="scoped_scripts_block">
-                <div class="flex-container alignItemsBaseline">
+            <div id="scoped_scripts_block" class="inline-drawer regex-section" data-section="scoped">
+                <div class="inline-drawer-toggle inline-drawer-header regex-section-header">
                     <strong class="flex1" data-i18n="ext_regex_scoped_scripts">Scoped Scripts</strong>
-                    <label id="toggle_scoped_regex" class="checkbox flex-container" for="regex_scoped_toggle">
+                    <label id="toggle_scoped_regex" class="checkbox flex-container regex-section-toggle-control" for="regex_scoped_toggle">
                         <input type="checkbox" id="regex_scoped_toggle" class="enable_scoped" />
                         <span class="regex-toggle-on fa-solid fa-toggle-on fa-lg" data-i18n="[title]ext_regex_disallow_scoped" title="Disallow using scoped regex"></span>
                         <span class="regex-toggle-off fa-solid fa-toggle-off fa-lg" data-i18n="[title]ext_regex_allow_scoped" title="Allow using scoped regex"></span>
                     </label>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
-                <small data-i18n="ext_regex_scoped_scripts_desc">
-                    Only available for this character. Saved to the card data.
-                </small>
-                <div id="saved_scoped_scripts" no-scripts-text="No scripts found" data-i18n="[no-scripts-text]No scripts found" class="flex-container regex-script-container flexFlowColumn"></div>
+                <div class="inline-drawer-content regex-section-content">
+                    <small data-i18n="ext_regex_scoped_scripts_desc">
+                        Only available for this character. Saved to the card data.
+                    </small>
+                    <div id="saved_scoped_scripts" no-scripts-text="No scripts found" data-i18n="[no-scripts-text]No scripts found" class="flex-container regex-script-container flexFlowColumn"></div>
+                </div>
             </div>
-            <hr />
-            <div id="plugin_scripts_block">
-                <div>
-                    <strong data-i18n="Plugin Scripts">Plugin Scripts</strong>
+            <div id="plugin_scripts_block" class="inline-drawer regex-section" data-section="plugin">
+                <div class="inline-drawer-toggle inline-drawer-header regex-section-header">
+                    <strong class="flex1" data-i18n="Plugin Scripts">Plugin Scripts</strong>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
-                <small data-i18n="Read-only regex rules registered by plugins/scripts at runtime.">
-                    Read-only regex rules registered by plugins/scripts at runtime.
-                </small>
-                <div
-                    id="saved_plugin_scripts"
-                    no-scripts-text="No plugin scripts found"
-                    data-i18n="[no-scripts-text]No plugin scripts found"
-                    class="flex-container regex-script-container flexFlowColumn"
-                ></div>
+                <div class="inline-drawer-content regex-section-content">
+                    <small data-i18n="Read-only regex rules registered by plugins/scripts at runtime.">
+                        Read-only regex rules registered by plugins/scripts at runtime.
+                    </small>
+                    <div
+                        id="saved_plugin_scripts"
+                        no-scripts-text="No plugin scripts found"
+                        data-i18n="[no-scripts-text]No plugin scripts found"
+                        class="flex-container regex-script-container flexFlowColumn"
+                    ></div>
+                </div>
             </div>
         </div>
     </div>
