@@ -87,6 +87,71 @@ function renderTraceJsonBlock(value) {
     return `<pre class="luker-studio-attempt-pre">${escapeHtml(toReadableYamlText(value, '{}'))}</pre>`;
 }
 
+/**
+ * Walk a sanitized messages array once to pair tool results with their
+ * originating assistant `tool_calls[]` entry. Tool results live in the
+ * conversation as separate `role:'tool'` messages keyed by
+ * `tool_call_id`; the renderers want them inlined under the originating
+ * call so users see args + result side-by-side instead of as detached
+ * sibling blocks.
+ *
+ * Returns:
+ *   - `resultMap`: Map<tool_call_id, { content, parsed, isError }>
+ *   - `consumedIndices`: Set<number> of message indices whose tool result
+ *     has been absorbed into a tool_call — callers skip these when
+ *     rendering siblings so the result isn't shown twice. Unpaired
+ *     orphan tool results (no matching assistant tool_call in this
+ *     conversation) are left unconsumed and still render standalone.
+ *
+ * Error detection: structured tool errors are serialized as
+ * `{ok:false, error, code, ...}` by `makeErrorToolMessage`; we parse
+ * the content JSON once here so the renderer can show an "Error" badge
+ * on the call's summary line and auto-expand the failing call.
+ */
+function buildToolResultMap(messages) {
+    const resultMap = new Map();
+    const consumedIndices = new Set();
+    if (!Array.isArray(messages) || messages.length === 0) {
+        return { resultMap, consumedIndices };
+    }
+    const knownToolCallIds = new Set();
+    for (const m of messages) {
+        const tcs = Array.isArray(m?.tool_calls) ? m.tool_calls : [];
+        for (const c of tcs) {
+            const id = String(c?.id || '').trim();
+            if (id) knownToolCallIds.add(id);
+        }
+    }
+    for (let i = 0; i < messages.length; i += 1) {
+        const m = messages[i];
+        if (String(m?.role || '').trim().toLowerCase() !== 'tool') continue;
+        const id = String(m?.tool_call_id || '').trim();
+        if (!id || !knownToolCallIds.has(id)) continue;
+        if (resultMap.has(id)) continue; // first match wins; ignore duplicates
+        const rawContent = m?.content;
+        let parsed = null;
+        let isError = false;
+        if (typeof rawContent === 'string') {
+            const trimmed = rawContent.trim();
+            if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+                try {
+                    parsed = JSON.parse(trimmed);
+                } catch {
+                    parsed = null;
+                }
+            }
+        } else if (rawContent && typeof rawContent === 'object') {
+            parsed = rawContent;
+        }
+        if (parsed && typeof parsed === 'object' && parsed.ok === false) {
+            isError = true;
+        }
+        resultMap.set(id, { content: rawContent, parsed, isError });
+        consumedIndices.add(i);
+    }
+    return { resultMap, consumedIndices };
+}
+
 function formatTraceRoleLabel(role) {
     switch (String(role || '').trim().toLowerCase()) {
         case 'system': return i18n('System');
@@ -97,7 +162,7 @@ function formatTraceRoleLabel(role) {
     }
 }
 
-function renderTraceMessageHtml(message) {
+function renderTraceMessageHtml(message, resultMap) {
     const role = String(message?.role || '').trim().toLowerCase();
     const roleLabel = formatTraceRoleLabel(role);
     const roundBadge = Number.isFinite(Number(message?._round))
@@ -112,6 +177,9 @@ function renderTraceMessageHtml(message) {
 
     if (role === 'tool') {
         // Tool result message — show name + content, collapsed by default.
+        // Reached only when this result couldn't be paired to a tool_call
+        // in the same conversation (orphan); paired results are absorbed
+        // into the originating tool_call's <details> by the loop below.
         return `
 <details class="luker-studio-convo-msg luker-studio-convo-msg-tool">
     <summary>${headerParts}</summary>
@@ -134,10 +202,23 @@ function renderTraceMessageHtml(message) {
     const toolCallsHtml = hasToolCalls
         ? `<div class="luker-studio-convo-toolcalls">${toolCalls.map((call) => {
             const callName = String(call?.name || '');
+            const callId = String(call?.id || '').trim();
+            const pairedResult = (callId && resultMap) ? resultMap.get(callId) : null;
+            const errorBadge = pairedResult?.isError
+                ? ` <span class="luker-studio-badge luker-studio-badge-failed">${escapeHtml(i18n('Error'))}</span>`
+                : '';
+            const resultLabel = pairedResult
+                ? (pairedResult.isError ? i18n('Error') : i18n('Result'))
+                : '';
+            const resultBody = pairedResult
+                ? renderTraceJsonBlock(pairedResult.parsed ?? pairedResult.content ?? '')
+                : '';
             return `
-<details class="luker-studio-convo-toolcall">
-    <summary><span class="luker-studio-convo-toolname">${escapeHtml(callName || 'tool_call')}</span>${call?.id ? `<span class="luker-studio-convo-callid">#${escapeHtml(String(call.id))}</span>` : ''}</summary>
+<details class="luker-studio-convo-toolcall"${pairedResult?.isError ? ' open' : ''}>
+    <summary><span class="luker-studio-convo-toolname">${escapeHtml(callName || 'tool_call')}</span>${callId ? `<span class="luker-studio-convo-callid">#${escapeHtml(callId)}</span>` : ''}${errorBadge}</summary>
+    <div class="luker-studio-attempt-label">${escapeHtml(i18n('Arguments'))}</div>
     ${renderTraceJsonBlock(call?.args ?? {})}
+    ${pairedResult ? `<div class="luker-studio-attempt-label">${escapeHtml(resultLabel)}</div>${resultBody}` : ''}
 </details>`;
         }).join('')}</div>`
         : '';
@@ -162,7 +243,13 @@ function renderTraceMessageHtml(message) {
 function renderTraceConversationHtml(conversation) {
     const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
     if (messages.length === 0) return '';
-    return `<div class="luker-studio-convo">${messages.map(renderTraceMessageHtml).join('')}</div>`;
+    const { resultMap, consumedIndices } = buildToolResultMap(messages);
+    const parts = [];
+    for (let i = 0; i < messages.length; i += 1) {
+        if (consumedIndices.has(i)) continue;
+        parts.push(renderTraceMessageHtml(messages[i], resultMap));
+    }
+    return `<div class="luker-studio-convo">${parts.join('')}</div>`;
 }
 
 export function renderLastOrchestrationResultHtml(entry) {
@@ -588,6 +675,13 @@ function renderDirectorMainAgentRoundsHtml(trace) {
     if (rounds.length === 0) {
         return `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No main-agent rounds recorded.'))}</div>`;
     }
+    // The structured `rounds[].toolCalls[]` records only carry `{id, name,
+    // args}` — the matching tool results live in
+    // `director.mainAgent.conversation` as separate `role:'tool'`
+    // messages keyed by `tool_call_id`. Build the lookup once so each
+    // per-round <li> can show its result alongside the args.
+    const conversation = sanitizeOrchestrationRuntimeConversation(trace?.director?.mainAgent?.conversation);
+    const { resultMap } = buildToolResultMap(Array.isArray(conversation?.messages) ? conversation.messages : []);
     return rounds.map((r) => {
         const round = Number(r?.round ?? 0);
         const text = String(r?.assistantText || '');
@@ -601,7 +695,20 @@ function renderDirectorMainAgentRoundsHtml(trace) {
         const callsSummary = calls.length === 0
             ? `<div class="luker-studio-empty-hint">${escapeHtml(i18n('(no tool calls — reasoning-only round)'))}</div>`
             : `<ul class="luker-studio-attempt-tool-list">${
-                calls.map(c => `<li><b>${escapeHtml(String(c?.name || ''))}</b>${c?.args ? `<pre class="luker-studio-attempt-pre">${escapeHtml(toReadableYamlText(c.args, '{}'))}</pre>` : ''}</li>`).join('')
+                calls.map(c => {
+                    const callId = String(c?.id || '').trim();
+                    const pairedResult = callId ? resultMap.get(callId) : null;
+                    const errorBadge = pairedResult?.isError
+                        ? ` <span class="luker-studio-badge luker-studio-badge-failed">${escapeHtml(i18n('Error'))}</span>`
+                        : '';
+                    const argsBlock = c?.args
+                        ? `<pre class="luker-studio-attempt-pre">${escapeHtml(toReadableYamlText(c.args, '{}'))}</pre>`
+                        : '';
+                    const resultBlock = pairedResult
+                        ? `<div class="luker-studio-attempt-label">${escapeHtml(pairedResult.isError ? i18n('Error') : i18n('Result'))}</div>${renderTraceJsonBlock(pairedResult.parsed ?? pairedResult.content ?? '')}`
+                        : '';
+                    return `<li><b>${escapeHtml(String(c?.name || ''))}</b>${errorBadge}${argsBlock}${resultBlock}</li>`;
+                }).join('')
             }</ul>`;
         return `
 <details class="luker-studio-agenda-attempt luker-studio-agenda-attempt-planner" open>
