@@ -48,12 +48,11 @@ import {
 //     bind it from the orchestrator iter-studio when the user wants it
 //     attached to a specific agent.
 //
-//   - The 2 migration helpers `skill_propose_extraction` and
-//     `skill_replace_in_systemprompt` walk an agent's `systemPrompt` field.
+//   - `skill_replace_in_systemprompt` walks an agent's `systemPrompt` field.
 //     CPA's analogous surface is `prompts[].content` on the preset, which
 //     the existing `preset_read_live_fields` + `preset_str_delete_in_prompt`
 //     + `preset_str_insert_in_prompt` tools already cover. The system prompt
-//     documents the splice-in-reference workflow so the AI uses those tools
+//     documents the splice-in-pointer workflow so the AI uses those tools
 //     after `skill_create` / `skill_extract_from_text`.
 //
 // `skill_extract_from_text` IS exposed — it has no working-profile dependency

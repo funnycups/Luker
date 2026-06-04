@@ -76,7 +76,12 @@ export function formatCpaSkillsAugmentation(visibleSkills, scopeHint = {}) {
     lines.push('For each strong candidate, in the SAME round, propose all three:');
     lines.push('1. `skill_create` (or `skill_extract_from_text`) at PRESET scope, body VERBATIM from the entry — no paraphrase, no compression, no rewording, no token savings.');
     lines.push('2. `preset_str_delete_in_prompt` to remove the slice from the source entry.');
-    lines.push('3. `preset_str_insert_in_prompt` to splice in a one-line pointer (e.g. `参考 skill <skill-name>`) at the same anchor so the entry still acknowledges the rule\'s existence.');
+    lines.push('3. `preset_str_insert_in_prompt` to splice in a pointer at the same anchor. The pointer is the only thing the running agent sees in place of the removed rules, so it must read as a complete imperative instruction containing three pieces: (i) a trigger condition (when the running agent should consult the skill), (ii) the skill name, (iii) a one-line hint about what it covers. Compose a different pointer for every extraction — never reuse one template across slices. The pointer alone determines whether the agent calls `skill_read_content`, so a fragment like `参考 skill X` is not enough; it must be an actionable sentence.');
+    lines.push('   Pointer examples spanning different rule types (do NOT copy verbatim — these illustrate the structure, not the wording):');
+    lines.push('   - 涉及亲密戏码或 NSFW 场景时，请按 skill `nsfw-voice-contract` 中的尺度与文风约束执行。');
+    lines.push('   - 写作正文前，请按 skill `anti-cliche-rules` 列出的反套路清单核对一遍，避免其中标注的陈词。');
+    lines.push('   - 产出最终回复前，请按 skill `finalize-output-shape` 定义的字段顺序与字段约束组织输出。');
+    lines.push('   - 推断与决策环节，请按 skill `reasoning-discipline` 的步骤要求显式分解。');
     lines.push('');
     lines.push('In your assistant text, name each candidate before the tool calls land — for example: "Reusable rules I noticed and prepared as extraction proposals: [name + 1-line reason each]. Each card is reviewable independently — approve / reject per your call." This lets the user veto a candidate before reading the diff.');
     lines.push('');

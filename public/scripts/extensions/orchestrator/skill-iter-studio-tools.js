@@ -6,9 +6,8 @@
  *
  * Plan 2 Unit 7. Exposes the spec §6.1 tools to the iter-studio AI so it
  * can manage skills as part of the orchestrator design conversation.
- * Four categories totalling 17 tools (the unit title says "15-tool" but
- * the actual spec breakdown — 4 inventory + 7 authoring + 3 policy +
- * 3 migration — sums to 17; we ship all 17):
+ * Four categories totalling 16 tools — 4 inventory + 7 authoring + 3
+ * policy + 2 migration:
  *
  *   Inventory inspection (4 — read-only):
  *     skill_list_visible, skill_inspect, skill_read_content, skill_search_content
@@ -21,16 +20,18 @@
  *   surfaces as a pending edit the user reviews + applies):
  *     skill_bind_to_agent, skill_unbind_from_agent, skill_set_mode_defaults
  *
- *   Migration helpers (3 — assist long-systemPrompt extraction without
- *   reducing prompt intensity):
- *     skill_propose_extraction, skill_extract_from_text,
- *     skill_replace_in_systemprompt
+ *   Migration helpers (2 — assist long-systemPrompt extraction without
+ *   reducing prompt intensity. The AI inspects the systemPrompt directly
+ *   from working_state and picks the slice itself; there is no
+ *   heuristic candidate proposer — extraction judgment is the AI's job,
+ *   not a regex in this module):
+ *     skill_extract_from_text, skill_replace_in_systemprompt
  *
  * Wire model:
  *
  *   - studio.js's `runIterationTurn` splits tool calls into inline-executed
- *     (lorebook reads/writes, simulate) vs sandbox-diff edit tools. ALL 17
- *     skill tools are inline-executed: 14 only touch server state, and the
+ *     (lorebook reads/writes, simulate) vs sandbox-diff edit tools. ALL 16
+ *     skill tools are inline-executed: 13 only touch server state, and the
  *     3 policy-binding tools synthesize a sandbox-diff edit themselves
  *     (cloning state.live, applying the mutation, and emitting
  *     `{op:'set', path:'', oldValue, newValue}` so the user reviews + applies
@@ -82,8 +83,7 @@ export const SKILL_ITER_STUDIO_TOOL_NAMES = Object.freeze([
     'skill_bind_to_agent',
     'skill_unbind_from_agent',
     'skill_set_mode_defaults',
-    // Migration helpers (3)
-    'skill_propose_extraction',
+    // Migration helpers (2)
     'skill_extract_from_text',
     'skill_replace_in_systemprompt',
 ]);
@@ -237,180 +237,6 @@ function ensureModeSkillsField(profile) {
     }
     if (!Array.isArray(profile.skills.visible)) profile.skills.visible = ['*'];
     if (!Array.isArray(profile.skills.deny)) profile.skills.deny = [];
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// Long-systemPrompt heuristic for skill_propose_extraction.
-//
-// v2 (Plan 3 Unit 3): paragraph-level segmentation with rule-keyword filter.
-// Each agent's systemPrompt is split on blank lines (`\n{2,}`), filtered to
-// paragraphs >= MIN_PARAGRAPH_CHARS that match the EN/ZH rule keyword regex,
-// and each match becomes its own extraction candidate. Falls back to a single
-// whole-prompt candidate (the v1 behaviour) only when:
-//   - no paragraphs matched the keyword filter AND
-//   - the overall prompt exceeds FALLBACK_WHOLE_MIN_CHARS
-// so we still produce SOMETHING for opaque long prompts, but prefer
-// paragraph-granular candidates whenever the agent author signposted rules.
-//
-// The caller (iter-studio AI) refines the slice/replacement before invoking
-// skill_extract_from_text, which always copies verbatim.
-// ────────────────────────────────────────────────────────────────────────────
-
-export const DEFAULT_EXTRACTION_MIN_CHARS = 1000;
-export const MIN_PARAGRAPH_CHARS = 100;
-export const FALLBACK_WHOLE_MIN_CHARS = 500;
-
-/**
- * Rule-style keywords used to identify paragraphs worth extracting into a
- * skill. Matches English markers (rule/principle/never/always/must/forbidden/
- * required) as case-insensitive word boundaries plus a hand-picked set of
- * Chinese imperative markers commonly used in director-style prompts
- * (重要 / 必须 / 禁止 / 始终 / 永远 / 绝不 / 铁律). Word boundary `\b` does not
- * apply to CJK characters, so they're listed as bare patterns alongside the
- * boundary-anchored English alternation.
- */
-export const RULE_KEYWORDS_RE = /\b(rule|principle|never|always|must|forbidden|required)\b|重要|必须|禁止|始终|永远|绝不|铁律/i;
-
-function listAgentsForExtraction(profile) {
-    const agents = [];
-    if (!profile || typeof profile !== 'object') return agents;
-    if (profile.mainAgent && typeof profile.mainAgent === 'object') {
-        agents.push({ agentId: 'main', container: profile.mainAgent });
-    }
-    if (Array.isArray(profile.subAgents)) {
-        for (const a of profile.subAgents) {
-            if (a && a.id) agents.push({ agentId: String(a.id), container: a });
-        }
-    }
-    if (profile.agents && typeof profile.agents === 'object' && !Array.isArray(profile.agents)) {
-        for (const [id, a] of Object.entries(profile.agents)) {
-            if (a && typeof a === 'object') agents.push({ agentId: id, container: a });
-        }
-    }
-    // Loop mode stores the prompt as `system_prompt` (snake_case) on the
-    // profile root — not `systemPrompt`. Adapt by yielding a synthetic
-    // container whose `systemPrompt` mirrors `profile.system_prompt` so the
-    // per-agent loop below can read it uniformly.
-    if (typeof profile.system_prompt === 'string') {
-        agents.push({ agentId: 'loop', container: { systemPrompt: profile.system_prompt } });
-    }
-    if (profile.presets && typeof profile.presets === 'object') {
-        for (const [id, p] of Object.entries(profile.presets)) {
-            if (p && typeof p === 'object') agents.push({ agentId: id, container: p });
-        }
-    }
-    return agents;
-}
-
-function sanitizeIdForSkillName(id) {
-    return String(id || '').replace(/[^a-z0-9_-]/gi, '-').toLowerCase();
-}
-
-/**
- * Build a safe, length-bounded skill name from `<agentId>-<words>-zh`.
- * Used for paragraph candidates. The "words" portion is the first three
- * "tokens" of the paragraph (Latin letters/digits + CJK characters), so the
- * generated name carries a hint of the paragraph's topic without overflowing
- * the [a-z0-9_-]+ skill name rule. Total length is clamped to 60 chars.
- */
-export function buildParagraphSkillName(agentId, paragraph) {
-    const safeAgent = sanitizeIdForSkillName(agentId);
-    // Strip everything that isn't a Latin letter/digit, CJK, or whitespace —
-    // then collapse whitespace into single hyphens. CJK characters survive
-    // here, but get filtered out in the ASCII pass below since skill names
-    // are [a-z0-9_-]+ only.
-    const cleaned = String(paragraph || '')
-        .replace(/[^\w一-鿿\s]/g, ' ')
-        .trim();
-    const tokens = cleaned.split(/\s+/).filter(Boolean).slice(0, 3);
-    const slug = tokens.join('-').toLowerCase();
-    // Drop any character that isn't part of the skill name charset, then
-    // collapse consecutive hyphens and trim. If the slug becomes empty after
-    // that (e.g. CJK-only paragraph), use `rule` as the placeholder slug
-    // so the final name is `${agent}-rule-zh` rather than `${agent}-zh`.
-    const asciiSlug = slug.replace(/[^a-z0-9_-]/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '');
-    const effectiveSlug = asciiSlug.length > 0 ? asciiSlug : 'rule';
-    const raw = `${safeAgent}-${effectiveSlug}-zh`;
-    return raw.slice(0, 60).replace(/-+$/, '');
-}
-
-/**
- * Pure function: given a working profile, list extraction candidates per the
- * v2 heuristic (paragraph segmentation + keyword filter, with whole-prompt
- * fallback). Exported for unit testing.
- *
- * @param {object} profile
- * @param {{minChars?: number, minParagraphChars?: number}} [opts]
- * @returns {Array<{agentId: string, suggestedName: string, scope: object, contentSlice: string, replacementText: string, description: string, paragraphIndex?: number}>}
- */
-export function computeExtractionCandidates(profile, opts = {}) {
-    const minChars = Number.isFinite(opts.minChars) ? opts.minChars : DEFAULT_EXTRACTION_MIN_CHARS;
-    const minParagraphChars = Number.isFinite(opts.minParagraphChars)
-        ? opts.minParagraphChars
-        : MIN_PARAGRAPH_CHARS;
-    const agents = listAgentsForExtraction(profile);
-    const candidates = [];
-    for (const { agentId, container } of agents) {
-        const prompt = String(container?.systemPrompt || '');
-        if (prompt.length < minChars) continue;
-
-        // Paragraph-level pass: split on blank lines, keep paragraphs that
-        // (a) are at least minParagraphChars long and (b) match the rule
-        // keyword regex.
-        const paragraphs = prompt.split(/\n{2,}/);
-        const perAgent = [];
-        const usedNames = new Set();
-        for (let i = 0; i < paragraphs.length; i++) {
-            const p = paragraphs[i];
-            if (!p || p.trim().length === 0) continue;
-            if (p.length < minParagraphChars) continue;
-            if (!RULE_KEYWORDS_RE.test(p)) continue;
-            let suggestedName = buildParagraphSkillName(agentId, p);
-            // Ensure uniqueness within the agent — append `-2`, `-3`, … on
-            // collision so two near-identical paragraphs both produce a
-            // valid candidate name.
-            if (usedNames.has(suggestedName)) {
-                let n = 2;
-                while (usedNames.has(`${suggestedName}-${n}`)) n++;
-                suggestedName = `${suggestedName}-${n}`;
-            }
-            usedNames.add(suggestedName);
-            const firstLine = p.split('\n')[0].slice(0, 60);
-            perAgent.push({
-                agentId,
-                suggestedName,
-                scope: { kind: 'global' },
-                contentSlice: p,
-                replacementText: `参考: skill \`${suggestedName}\` — ${firstLine}...`,
-                description: `Extracted from ${agentId} systemPrompt (paragraph ${i})`,
-                paragraphIndex: i,
-            });
-        }
-
-        if (perAgent.length > 0) {
-            candidates.push(...perAgent);
-            continue;
-        }
-
-        // Fallback: no keyword-bearing paragraph, but the prompt is long
-        // enough that we should still propose SOMETHING. Surface the whole
-        // prompt as one candidate so the AI can refine. Skip when the prompt
-        // is below FALLBACK_WHOLE_MIN_CHARS — too short to be worth a skill.
-        if (prompt.length > FALLBACK_WHOLE_MIN_CHARS) {
-            const safeId = sanitizeIdForSkillName(agentId);
-            const suggestedName = `${safeId}-rules-extracted-zh`;
-            candidates.push({
-                agentId,
-                suggestedName,
-                scope: { kind: 'global' },
-                contentSlice: prompt,
-                replacementText: `参考: skill \`${suggestedName}\``,
-                description: `Extracted from ${agentId} systemPrompt`,
-                paragraphIndex: 0,
-            });
-        }
-    }
-    return candidates;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -633,19 +459,8 @@ export const SKILL_ITER_STUDIO_TOOL_DEFS = Object.freeze([
 
     // ── Migration helpers ────────────────────────────────────────────────
     fn(
-        'skill_propose_extraction',
-        'Analyze an agent\'s systemPrompt in the working profile and propose extraction candidates. v2 heuristic: paragraphs (split on blank lines) at least 100 chars long whose text contains rule keywords (rule/principle/never/always/must/forbidden/required + 重要/必须/禁止/始终/永远/绝不/铁律) each become a standalone candidate. When no paragraph matches the keyword filter, falls back to one whole-prompt candidate. The AI is expected to refine the slice / replacement text before calling skill_extract_from_text.',
-        {
-            type: 'object',
-            properties: {
-                agentId: { type: 'string', description: 'Optional. When set, only proposes for that agent. Omit to scan ALL agents in the working profile.' },
-                minChars: { type: 'integer', description: 'Optional minimum systemPrompt length (default 1000).' },
-            },
-        },
-    ),
-    fn(
         'skill_extract_from_text',
-        'Create a new skill from a verbatim text block (typically a slice of an agent\'s systemPrompt). The skill\'s SKILL.md body is the supplied text exactly — DO NOT paraphrase, compress, or reword. Use skill_replace_in_systemprompt afterwards to remove the corresponding text from the systemPrompt and insert a reference.',
+        'Create a new skill from a verbatim text block (typically a slice of an agent\'s systemPrompt that you selected yourself by reading working_state — there is no candidate-proposer tool). The skill\'s SKILL.md body is the supplied text exactly — DO NOT paraphrase, compress, or reword. Follow up with skill_replace_in_systemprompt to remove the slice and splice in a per-skill contextual pointer.',
         {
             type: 'object',
             properties: {
@@ -659,7 +474,7 @@ export const SKILL_ITER_STUDIO_TOOL_DEFS = Object.freeze([
     ),
     fn(
         'skill_replace_in_systemprompt',
-        'Remove one or more character ranges from an agent\'s systemPrompt and splice in a replacement string (typically \'See skill X\' reference). removeRanges is a list of [start, end) character offsets, processed in descending order to keep indices stable. Mutates the working profile and emits a pending edit.',
+        'Remove one or more character ranges from an agent\'s systemPrompt and splice in a replacement string at the first removed range. removeRanges is a list of [start, end) character offsets, processed in descending order to keep indices stable. Mutates the working profile and emits a pending edit. `insertText` is the pointer the running agent will read in place of the removed rules — compose it from scratch for THIS specific skill as a complete imperative sentence with three parts: (i) a trigger condition (when the running agent should consult the skill), (ii) the skill name, (iii) a one-line hint about what it covers. Every extraction gets its OWN pointer — never reuse a template across slices.',
         {
             type: 'object',
             properties: {
@@ -669,7 +484,7 @@ export const SKILL_ITER_STUDIO_TOOL_DEFS = Object.freeze([
                     description: 'Array of [start, end) character offsets to remove.',
                     items: { type: 'array', items: { type: 'integer' }, minItems: 2, maxItems: 2 },
                 },
-                insertText: { type: 'string', description: 'Text inserted at the FIRST removed range (typically a skill reference). Use empty string to just delete.' },
+                insertText: { type: 'string', description: 'Pointer text inserted at the FIRST removed range. Must be a complete imperative sentence naming a trigger condition, the skill, and a one-line hint about what it covers — composed per-skill, never a generic template. Use empty string only when the goal is pure deletion with no pointer left behind.' },
             },
             required: ['agentId', 'removeRanges', 'insertText'],
         },
@@ -904,20 +719,6 @@ const HANDLERS = {
     },
 
     // ── Migration helpers ───────────────────────────────────────────────
-    async skill_propose_extraction(args, mctx) {
-        const profile = mctx.getWorkingProfile?.();
-        if (!profile) throw new Error('working profile unavailable');
-        const minChars = Number.isInteger(args?.minChars) ? args.minChars : DEFAULT_EXTRACTION_MIN_CHARS;
-        let candidates = computeExtractionCandidates(profile, { minChars });
-        if (args?.agentId) {
-            candidates = candidates.filter(c => c.agentId === String(args.agentId));
-        }
-        return {
-            candidates,
-            note: 'These are heuristic suggestions (paragraph-level when rule keywords match, whole-prompt otherwise). Refine the contentSlice and replacementText before calling skill_extract_from_text. The skill body MUST be verbatim — do not paraphrase or compress.',
-        };
-    },
-
     async skill_extract_from_text(args) {
         if (typeof args?.sourceText !== 'string' || args.sourceText.length === 0) {
             throw new Error('sourceText is required (non-empty)');

@@ -11,7 +11,7 @@
  *     - SKILL_ITER_STUDIO_TOOL_DEFS: tool catalog spliced into studio.js
  *     - isSkillIterStudioTool / SKILL_ITER_STUDIO_TOOL_NAMES
  *     - runSkillIterStudioTool dispatcher
- *     - applyFrontmatterPatch + computeExtractionCandidates (pure helpers)
+ *     - applyFrontmatterPatch (pure helper)
  *
  *   public/scripts/extensions/orchestrator/skill-iter-studio-prompt.js
  *     - augmentIterStudioPromptWithSkills
@@ -66,8 +66,6 @@ const {
     isSkillIterStudioTool,
     runSkillIterStudioTool,
     applyFrontmatterPatch,
-    computeExtractionCandidates,
-    DEFAULT_EXTRACTION_MIN_CHARS,
 } = await import('../../public/scripts/extensions/orchestrator/skill-iter-studio-tools.js');
 
 const {
@@ -85,14 +83,15 @@ beforeEach(() => {
 // ── Tool catalog shape ───────────────────────────────────────────────────
 //
 // Spec §6.1 categories: inventory (4) + authoring (7) + policy binding (3) +
-// migration helpers (3) = 17 tools total. The unit title in the plan says
-// "15-tool catalog" but the actual category breakdown sums to 17; we ship
-// all 17 spec'd tools (the "15" in the title was a miscount).
+// migration helpers (2) = 16 tools total. The migration category dropped from
+// 3 to 2 when skill_propose_extraction was deleted — extraction-candidate
+// judgment is the iter-studio AI's job, not a regex heuristic baked into
+// this module.
 
 describe('SKILL_ITER_STUDIO_TOOL_DEFS — catalog shape', () => {
-    test('exposes all 17 spec-listed tools (4 inventory + 7 authoring + 3 policy + 3 migration)', () => {
-        expect(SKILL_ITER_STUDIO_TOOL_DEFS).toHaveLength(17);
-        expect(SKILL_ITER_STUDIO_TOOL_NAMES).toHaveLength(17);
+    test('exposes all 16 spec-listed tools (4 inventory + 7 authoring + 3 policy + 2 migration)', () => {
+        expect(SKILL_ITER_STUDIO_TOOL_DEFS).toHaveLength(16);
+        expect(SKILL_ITER_STUDIO_TOOL_NAMES).toHaveLength(16);
     });
 
     test('all names are isSkillIterStudioTool-recognized', () => {
@@ -135,7 +134,7 @@ describe('SKILL_ITER_STUDIO_TOOL_DEFS — catalog shape', () => {
             expect(names.has(n)).toBe(true);
         }
         // migration
-        for (const n of ['skill_propose_extraction', 'skill_extract_from_text', 'skill_replace_in_systemprompt']) {
+        for (const n of ['skill_extract_from_text', 'skill_replace_in_systemprompt']) {
             expect(names.has(n)).toBe(true);
         }
     });
@@ -490,72 +489,6 @@ describe('runSkillIterStudioTool — policy binding', () => {
 // ── Migration helpers ───────────────────────────────────────────────────
 
 describe('runSkillIterStudioTool — migration helpers', () => {
-    test('skill_propose_extraction returns one candidate per long systemPrompt', async () => {
-        // The opaque all-`a` prompt has no rule keywords, so the v2 heuristic
-        // falls through the paragraph pass and surfaces a single whole-prompt
-        // candidate per long agent (the `-rules-extracted-zh` fallback name).
-        const longPrompt = 'a'.repeat(1500);
-        const profile = {
-            mainAgent: { systemPrompt: longPrompt },
-            subAgents: [
-                { id: 'short_agent', systemPrompt: 'tiny' },
-                { id: 'long_agent', systemPrompt: longPrompt },
-            ],
-        };
-        const out = await runSkillIterStudioTool(
-            { name: 'skill_propose_extraction', args: {} },
-            { getWorkingProfile: () => profile },
-        );
-        expect(out.ok).toBe(true);
-        expect(out.result.candidates).toHaveLength(2);
-        const ids = out.result.candidates.map(c => c.agentId).sort();
-        expect(ids).toEqual(['long_agent', 'main']);
-        for (const c of out.result.candidates) {
-            expect(c.suggestedName).toMatch(/-rules-extracted-zh$/);
-            expect(c.contentSlice).toHaveLength(1500);
-            expect(c.replacementText).toMatch(/参考: skill `/);
-            expect(c.replacementText).toMatch(c.suggestedName);
-        }
-    });
-
-    test('skill_propose_extraction filters by agentId when supplied', async () => {
-        const longPrompt = 'a'.repeat(1500);
-        const profile = { mainAgent: { systemPrompt: longPrompt } };
-        const out = await runSkillIterStudioTool(
-            { name: 'skill_propose_extraction', args: { agentId: 'main' } },
-            { getWorkingProfile: () => profile },
-        );
-        expect(out.ok).toBe(true);
-        expect(out.result.candidates).toHaveLength(1);
-        expect(out.result.candidates[0].agentId).toBe('main');
-    });
-
-    test('skill_propose_extraction proposes paragraph-level candidates when rule keywords are present', async () => {
-        // Two keyword-bearing paragraphs separated by filler. The v2 heuristic
-        // should propose one candidate per rule paragraph, not a single
-        // whole-prompt fallback. paragraphIndex is set on each candidate.
-        const rulePara1 = 'IMPORTANT RULE: always speak in character voice. ' + 'detail '.repeat(20);
-        const filler = 'Some narrative prose, no rule markers here at all.';
-        const rulePara2 = 'Never break the fourth wall. Always preserve immersion. ' + 'detail '.repeat(20);
-        const longPrompt = `${rulePara1}\n\n${filler}\n\n${rulePara2}`.padEnd(1100, ' ');
-        const profile = { mainAgent: { systemPrompt: longPrompt } };
-        const out = await runSkillIterStudioTool(
-            { name: 'skill_propose_extraction', args: { agentId: 'main' } },
-            { getWorkingProfile: () => profile },
-        );
-        expect(out.ok).toBe(true);
-        expect(out.result.candidates).toHaveLength(2);
-        // Each paragraph-level candidate has the new fields.
-        for (const c of out.result.candidates) {
-            expect(c.agentId).toBe('main');
-            expect(typeof c.paragraphIndex).toBe('number');
-            expect(c.replacementText).toMatch(/参考: skill `/);
-            expect(c.suggestedName).toMatch(/^[a-z0-9_-]+$/);
-        }
-        // Note text reflects the v2 heuristic.
-        expect(out.result.note).toMatch(/paragraph-level/);
-    });
-
     test('skill_extract_from_text creates a skill verbatim from sourceText', async () => {
         mockSkillsApi.install.mockResolvedValue({ installed: ['extracted-rules'] });
         const sourceText = 'IMPORTANT RULES:\n1. Never break character.\n2. Always preserve voice.\n';
@@ -667,31 +600,6 @@ describe('applyFrontmatterPatch', () => {
     });
 });
 
-describe('computeExtractionCandidates', () => {
-    test('returns nothing when no agent meets threshold', () => {
-        const profile = { mainAgent: { systemPrompt: 'short' } };
-        expect(computeExtractionCandidates(profile, { minChars: 1000 })).toEqual([]);
-    });
-
-    test('returns candidate per long agent', () => {
-        const long = 'x'.repeat(2000);
-        const profile = {
-            mainAgent: { systemPrompt: long },
-            subAgents: [{ id: 'a', systemPrompt: long }, { id: 'b', systemPrompt: 'tiny' }],
-        };
-        const out = computeExtractionCandidates(profile, { minChars: 1000 });
-        expect(out).toHaveLength(2);
-    });
-
-    test('uses default threshold (1000 chars) when minChars omitted', () => {
-        expect(DEFAULT_EXTRACTION_MIN_CHARS).toBe(1000);
-        const profile = { mainAgent: { systemPrompt: 'x'.repeat(900) } };
-        expect(computeExtractionCandidates(profile)).toEqual([]);
-        profile.mainAgent.systemPrompt = 'x'.repeat(1000);
-        expect(computeExtractionCandidates(profile)).toHaveLength(1);
-    });
-});
-
 // ── System prompt augmentation ──────────────────────────────────────────
 
 describe('detectLongSystemPromptAgents', () => {
@@ -735,11 +643,10 @@ describe('formatSkillsAugmentation', () => {
         );
         expect(text).toMatch(/Discipline for skill manipulation/);
         expect(text).toMatch(/skill_create/);
-        expect(text).toMatch(/skill_propose_extraction/);
         expect(text).toMatch(/skill_extract_from_text/);
         expect(text).toMatch(/skill_replace_in_systemprompt/);
         expect(text).toMatch(/VERBATIM/);
-        expect(text).toMatch(/not paraphrased/);
+        expect(text).toMatch(/paraphrase/);
     });
 
     test('lists visible skills as `name: description`', () => {

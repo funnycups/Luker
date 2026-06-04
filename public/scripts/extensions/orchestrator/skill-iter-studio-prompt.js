@@ -5,7 +5,7 @@
  * iter-studio system prompt augmentation: skills catalog + extraction
  * discipline.
  *
- * Plan 2 Unit 7. The iter-studio AI now has 15 skill-management tools. This
+ * Plan 2 Unit 7. The iter-studio AI now has 16 skill-management tools. This
  * module appends a fixed "discipline" block plus a dynamic catalog of
  * currently-visible skills to the iter-studio system prompt at the start of
  * each turn. The catalog uses `resolveAgentVisibleSkills` from Plan 1
@@ -13,15 +13,23 @@
  * lists each skill as `name: description`.
  *
  * The block is appended ONLY when the working profile has at least one
- * agent whose systemPrompt exceeds the heuristic threshold OR the
- * profile has at least one visible skill — otherwise the augmentation is
- * pure noise. (An empty-skill + short-prompt profile means the user
+ * agent whose systemPrompt exceeds the length-notification threshold OR
+ * the profile has at least one visible skill — otherwise the augmentation
+ * is pure noise. (An empty-skill + short-prompt profile means the user
  * hasn't installed anything yet and there's nothing to extract.)
  *
- * The "intensity preservation" warning is the load-bearing piece for the
- * migration helpers (skill_propose_extraction → skill_extract_from_text →
- * skill_replace_in_systemprompt). Without it, the iter-studio AI defaults
- * to summarizing as it extracts, which silently reduces prompt strength.
+ * The "intensity preservation" warning is the load-bearing piece for
+ * `skill_extract_from_text`. Without it, the iter-studio AI defaults to
+ * summarizing as it extracts, which silently reduces prompt strength.
+ *
+ * No code in this module — or in skill-iter-studio-tools.js — decides
+ * what counts as an "extraction candidate." That judgment is the AI's:
+ * the agent's `systemPrompt` is supplied verbatim in `working_state` each
+ * turn, and the AI selects the slice itself based on the discipline text
+ * below. A previous version surfaced regex-filtered "candidates" through
+ * a `skill_propose_extraction` tool; that has been removed because it
+ * encouraged the AI to laze on the regex's guess instead of reading the
+ * source material.
  *
  * Pure module — no orchestrator state held. studio.js owns the call site:
  * one invocation per turn inside runIterationTurn, threading the helper
@@ -101,16 +109,23 @@ export function formatSkillsAugmentation(visibleSkills, longAgents) {
         const labels = longAgents
             .map(a => `${a.agentId} (${a.length} chars)`)
             .join(', ');
-        lines.push(`Current orchestrator profile has agent systemPrompts that may benefit from skill extraction: ${labels}.`);
+        lines.push(`Agent systemPrompts above ${LONG_PROMPT_HEURISTIC_CHARS} chars in this working profile: ${labels}. Length is a signal, not a verdict — whether any of these actually warrant extraction is your judgment (see step 3 below).`);
     } else {
-        lines.push('Current orchestrator profile has no agents with long systemPrompts — extraction is unlikely to be needed this turn.');
+        lines.push(`No agent systemPrompt in this working profile exceeds ${LONG_PROMPT_HEURISTIC_CHARS} chars. Extraction is unlikely to be needed this turn.`);
     }
     lines.push('');
     lines.push('Discipline for skill manipulation:');
     lines.push('1. Adding reusable rules → prefer creating a skill via `skill_create`. Do not bloat systemPrompt.');
     lines.push('2. Modifying rules → prefer modifying the skill (`skill_update_content` / `skill_edit_content`), not the systemPrompt.');
-    lines.push('3. Migrating long systemPrompts → use `skill_propose_extraction` → `skill_extract_from_text` → `skill_replace_in_systemprompt`.');
-    lines.push('   ⚠ Do NOT reduce prompt intensity during migration. Content must be VERBATIM, not paraphrased or compressed. If the original text says "你必须" three times, the extracted skill must say "你必须" three times — preserve repetition, emphasis, and original wording.');
+    lines.push('3. Migrating rules out of a long systemPrompt — done by YOU, not by any candidate-proposer tool. The agent\'s `systemPrompt` is in `working_state`; read it directly and pick the slice yourself.');
+    lines.push('   a. Choose a self-contained rule block (a `## section`, a ban-list with ✗/✓ pairs, a voice contract, a finalize schema) that another agent in this orchestrator would benefit from reading independently. Skip single-line directives ("be concise") and scaffolding wrappers.');
+    lines.push('   b. `skill_extract_from_text` — `sourceText` must be VERBATIM. No paraphrase, no compression, no rewording, no token savings. If the original says "你必须" three times, the extracted skill says "你必须" three times. Preserve repetition, emphasis, and exact wording. Intensity reduction is a separate explicit user ask, never a silent side-effect of extraction.');
+    lines.push('   c. `skill_replace_in_systemprompt` — `insertText` is the pointer that stays in the systemPrompt. Compose it from scratch for THIS specific skill, as a complete imperative instruction containing three pieces: (i) a trigger condition (when the running agent should consult the skill), (ii) the skill name, (iii) a one-line hint about what it covers. Every pointer is per-skill — never reuse one template across multiple extractions in the same preset. The running agent decides whether to call `skill_read_content` based on the pointer alone, so the pointer must read as a complete actionable sentence, not a fragment like `参考 skill X`.');
+    lines.push('   Pointer examples spanning different rule types (do NOT copy verbatim — these illustrate the structure, not the wording):');
+    lines.push('   - 涉及亲密戏码或 NSFW 场景时，请按 skill `nsfw-voice-contract` 中的尺度与文风约束执行。');
+    lines.push('   - 写作正文前，请按 skill `anti-cliche-rules` 列出的反套路清单核对一遍，避免其中标注的陈词。');
+    lines.push('   - 产出最终回复前，请按 skill `finalize-output-shape` 定义的字段顺序与字段约束组织输出。');
+    lines.push('   - 推断与决策环节，请按 skill `reasoning-discipline` 的步骤要求显式分解。');
     lines.push('');
     lines.push('Currently visible skills for this profile:');
     const named = (visibleSkills || []).filter(s => s && typeof s.name === 'string');
