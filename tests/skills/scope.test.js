@@ -27,6 +27,23 @@ describe('SkillScope helpers', () => {
         test('rejects unknown kind', () => {
             expect(() => encodeScopePath({ kind: 'profile' })).toThrow(/unknown scope kind/);
         });
+
+        test('accepts non-ASCII names with spaces (CJK, dots, hyphens)', () => {
+            // Regression: an earlier ASCII-only allow-list rejected user-typed
+            // preset names like the one below with a 400, even though the name
+            // round-trips cleanly through Express and the filesystem.
+            expect(encodeScopePath({ kind: 'preset', name: '夏瑾 双鱼座 Beta 0.36-orchestrator' }))
+                .toBe('preset/夏瑾 双鱼座 Beta 0.36-orchestrator');
+            expect(encodeScopePath({ kind: 'character', characterFile: 'アリス v2.png' }))
+                .toBe('character/アリス v2.png');
+        });
+
+        test('rejects path separators and Windows-illegal characters', () => {
+            expect(() => encodeScopePath({ kind: 'preset', name: 'a/b' })).toThrow(/illegal characters/);
+            expect(() => encodeScopePath({ kind: 'preset', name: 'a\\b' })).toThrow(/illegal characters/);
+            expect(() => encodeScopePath({ kind: 'preset', name: 'a:b' })).toThrow(/illegal characters/);
+            expect(() => encodeScopePath({ kind: 'preset', name: 'a*b' })).toThrow(/illegal characters/);
+        });
     });
 
     describe('decodeScopePath', () => {
@@ -65,6 +82,15 @@ describe('SkillScope helpers', () => {
 
         test('rejects traversal in character segment', () => {
             expect(() => decodeScopePath('character/../foo')).toThrow(/illegal characters/);
+        });
+
+        test('round-trips non-ASCII names with spaces', () => {
+            const name = '夏瑾 双鱼座 Beta 0.36-orchestrator';
+            expect(decodeScopePath(`preset/${name}`))
+                .toEqual({ kind: 'preset', name });
+            const charFile = 'アリス v2.png';
+            expect(decodeScopePath(`character/${charFile}`))
+                .toEqual({ kind: 'character', characterFile: charFile });
         });
     });
 

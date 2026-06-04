@@ -1,11 +1,28 @@
-const SAFE_SEGMENT = /^[A-Za-z0-9._-]+$/;
+// Reject only the characters that actually break the filesystem or
+// allow path traversal — everything else (CJK, spaces, hyphens,
+// internal dots, etc.) is fine on the modern filesystems we target.
+// Block list:
+//   - empty / non-string (no segment at all)
+//   - literal `.` and `..` (path traversal)
+//   - control chars `\x00-\x1f` (can corrupt fs operations)
+//   - `/` and `\` (path separators — would let a segment escape its dir)
+//   - `<>:"|?*` (illegal in Windows filenames, prevent cross-platform breakage)
+// An earlier `^[A-Za-z0-9._-]+$` allow-list rejected any preset or
+// character name containing non-ASCII letters or spaces (e.g.
+// `夏瑾 双鱼座 Beta 0.36-orchestrator`) — those names round-trip
+// fine on disk and through Express, so the strict ASCII gate was
+// causing 400s for legitimate user input.
+const UNSAFE_CHARS = /[\x00-\x1f/\\<>:"|?*]/;
 
 function assertSafe(...segments) {
     for (const s of segments) {
-        if (!s || typeof s !== 'string' || !SAFE_SEGMENT.test(s)) {
+        if (!s || typeof s !== 'string') {
             throw new Error(`scope segment has illegal characters: ${s}`);
         }
         if (s === '.' || s === '..') {
+            throw new Error(`scope segment has illegal characters: ${s}`);
+        }
+        if (UNSAFE_CHARS.test(s)) {
             throw new Error(`scope segment has illegal characters: ${s}`);
         }
     }

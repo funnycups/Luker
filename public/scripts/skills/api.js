@@ -45,9 +45,23 @@ async function jsonFetch(url, options = {}) {
 }
 
 /**
- * Encode a scope (or the literal 'all') into the URL fragment used by the
- * REST router. Express's path matching auto-decodes `%2F` back to `/`, so
- * we pre-encode each scope segment individually.
+ * Build a scope URL fragment (e.g. `preset/夏瑾 双鱼座`) for skill API
+ * routes. Returns the raw `kind/<name>` string with a literal `/`
+ * between the kind and the inner segment.
+ *
+ * Callers MUST wrap this with `encodeURIComponent` when placing it
+ * into either a path slot or a query string — that single outer
+ * encode handles both the structural `/` (becomes `%2F`) and any
+ * non-ASCII or whitespace characters in the inner name. Express
+ * auto-decodes the result back to the original `kind/name` string
+ * on the server.
+ *
+ * Earlier this helper also `encodeURIComponent`'d the inner name,
+ * which double-encoded non-ASCII names: by the time Express's
+ * single-pass path-param decode ran, the inner segment still looked
+ * like `%E5%A4%8F%E7%91%BE`, and `assertSafe` rejected the `%`
+ * characters. Letting the outer encode do all the work keeps the
+ * round-trip lossless.
  *
  * @param {object|string} scope
  * @returns {string}
@@ -56,10 +70,10 @@ function scopeToUrl(scope) {
     if (scope === 'all' || !scope) return 'all';
     if (scope.kind === 'global') return 'global';
     if (scope.kind === 'preset') {
-        return `preset/${encodeURIComponent(scope.name)}`;
+        return `preset/${scope.name}`;
     }
     if (scope.kind === 'character') {
-        return `character/${encodeURIComponent(scope.characterFile)}`;
+        return `character/${scope.characterFile}`;
     }
     throw new Error(`invalid scope kind: ${scope.kind}`);
 }
