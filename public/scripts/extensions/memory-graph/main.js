@@ -106,11 +106,6 @@ import {
     resolveInFlightAnchor,
 } from './persistence.js';
 import {
-    normalizeLog,
-    buildSwipeMapFromChat,
-    computeTargetState,
-} from '../../floor-state/core.js';
-import {
     LEVEL,
     normalizeText,
     normalizeMultilineText,
@@ -133,7 +128,6 @@ import { __recordInjectedNodeIds } from './external-api.js';
 const MODULE_NAME = 'memory_graph';
 const CHAT_STATE_NAMESPACE = MODULE_NAME;
 const META_NAMESPACE = floorStateAdapterConstants.META_NAMESPACE;
-const LOG_NAMESPACE = floorStateAdapterConstants.LOG_NAMESPACE;
 const META_SCHEMA_VERSION = floorStateAdapterConstants.SCHEMA_VERSION;
 const PERSISTED_STORE_VERSION = floorStateAdapterConstants.PERSISTED_STORE_VERSION;
 const UI_BLOCK_ID = 'memory_graph_settings';
@@ -1944,13 +1938,12 @@ async function loadMemoryStoreByTarget(context, target) {
     const isV2 = meta && Number(meta.schemaVersion || 0) >= META_SCHEMA_VERSION;
 
     if (isV2) {
-        // Floor-state log is the source of truth; the data namespace was
-        // deleted by floor-state's one-time migration on first fs.get().
-        // Replay the log to derive the materialized payload.
-        const logRaw = await context.getChatState(LOG_NAMESPACE, { target });
-        const log = normalizeLog(logRaw);
-        const swipeMap = buildSwipeMapFromChat(Array.isArray(context?.chat) ? context.chat : []);
-        const payload = log.commits.length === 0 ? {} : computeTargetState(log.commits, swipeMap);
+        // Floor-state owns the log: replay, swipe-map projection, migration,
+        // and one-shot recovery from a stale data namespace are all centralized
+        // in fs.get(). We never read the log namespace directly here.
+        const fs = await getFloorStateInstance(context);
+        await fs.ready();
+        const payload = (await fs.get()) || {};
         const runtimeStore = buildRuntimeStoreFromGraphPayloadAndMeta(payload, meta);
         return {
             state: synthesizePersistedStateFromStoreAndMeta(runtimeStore, meta),
@@ -15000,19 +14993,22 @@ jQuery(() => {
      */
     const refreshMemoryStoreCacheFromFloorState = async (runtimeContext, chatKey) => {
         if (!chatKey || chatKey === 'invalid_target') return null;
-        // Both call sites (applyMutationInvalidationImpl + CHAT_CHANGED listener)
-        // pass the current chat's key, so we always read via the bound fs
-        // singleton — no cross-target read path is needed or supported.
-        let payload = null;
-        let meta = null;
         const target = memoryStoreTargets.get(chatKey);
+        // fs.get() owns migration + replay-failure recovery. If it still
+        // throws after that, the store is genuinely broken — surface to the
+        // user and leave the cache as-is rather than overwriting with an
+        // empty store (which would visually erase the user's data).
+        let payload;
         try {
             const fs = await getFloorStateInstance(runtimeContext);
             await fs.ready();
             payload = await fs.get();
         } catch (error) {
-            console.warn(`[${MODULE_NAME}] floor-state ready/get failed during cache refresh`, error);
+            console.error(`[${MODULE_NAME}] floor-state get failed during cache refresh`, error);
+            notifyError(i18nFormat('Memory graph load failed: ${0}', error?.message || error));
+            return memoryStoreCache.get(chatKey) || null;
         }
+        let meta = null;
         if (target) {
             try {
                 meta = await loadMetaFields(runtimeContext, target);
