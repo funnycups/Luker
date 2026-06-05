@@ -15053,8 +15053,6 @@ jQuery(() => {
             console.warn(`[${MODULE_NAME}] Failed to clear runtime lorebook projection after generation`, error);
         }
     };
-    const mutationStatusText = i18n('Chat mutation detected. Memory graph will re-sync on next generation.');
-    const mutationInterruptedToastText = i18n('Chat changes interrupted memory graph update. It will re-sync on next generation.');
     /**
      * Gate that exposes the in-flight `applyMutationInvalidation` task.
      * Readers that depend on a settled post-mutation state (currently the
@@ -15143,9 +15141,6 @@ jQuery(() => {
             }
         }
         refreshUiStats();
-        if (isCurrentChat) {
-            updateUiStatus(mutationStatusText);
-        }
         if (scheduleReplay && isCurrentChat && !generationInProgress) {
             scheduleExtraction(getContext());
         }
