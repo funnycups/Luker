@@ -2157,8 +2157,8 @@ async function appendPersistedDiffEntry(context, chatKey, beforeStore, afterStor
     return Boolean(result);
 }
 
-export async function ensureMemoryStoreLoaded(context, { force = false, targetHint = null } = {}) {
-    const target = buildMemoryTargetFromContext(context, targetHint);
+export async function ensureMemoryStoreLoaded(context, { force = false } = {}) {
+    const target = buildMemoryTargetFromContext(context);
     if (!target) {
         return null;
     }
@@ -2211,8 +2211,8 @@ export async function ensureMemoryStoreLoaded(context, { force = false, targetHi
     }
 }
 
-export function getMemoryStore(context, targetHint = null) {
-    const chatKey = getChatKey(context, targetHint);
+export function getMemoryStore(context) {
+    const chatKey = getChatKey(context);
     return memoryStoreCache.get(chatKey) || null;
 }
 
@@ -2222,8 +2222,8 @@ export function getMemoryStore(context, targetHint = null) {
  * Returns an empty string when the context has no resolvable target — the
  * commit path then no-ops, matching `commitSessionMutation`'s guard.
  */
-export function resolveChatKeyForSession(context, targetHint = null) {
-    const target = buildMemoryTargetFromContext(context, targetHint);
+export function resolveChatKeyForSession(context) {
+    const target = buildMemoryTargetFromContext(context);
     if (!target) return '';
     return getChatKey(context, target);
 }
@@ -7788,9 +7788,9 @@ async function runLLMDrivenRecall(context, store, payload) {
     };
 }
 
-async function rebuildStoreFromCurrentChat(context, { abortSignal = null, onBatchStart = null, targetHint = null } = {}) {
-    const chatKey = getChatKey(context, targetHint);
-    const target = memoryStoreTargets.get(chatKey) || buildMemoryTargetFromContext(context, targetHint);
+async function rebuildStoreFromCurrentChat(context, { abortSignal = null, onBatchStart = null } = {}) {
+    const chatKey = getChatKey(context);
+    const target = memoryStoreTargets.get(chatKey) || buildMemoryTargetFromContext(context);
     if (!target) {
         return null;
     }
@@ -7971,17 +7971,17 @@ function alignStoreCoverageToChat(store, context, settings = null) {
     return { changed: false, latestSeq };
 }
 
-async function ensureStoreSyncedWithChat(context, targetHint = null) {
+async function ensureStoreSyncedWithChat(context) {
     // floor-state's settle is driven by core BEFORE this function ever runs
     // (see settleMessageDeleted/settleMessageSwiped/etc in floor-state.js),
     // so the data namespace is already current. We just need to load the
     // runtime store from cache or rebuild it from floor-state.
-    const loaded = await ensureMemoryStoreLoaded(context, { targetHint });
-    let store = getMemoryStore(context, targetHint) || loaded || null;
+    const loaded = await ensureMemoryStoreLoaded(context);
+    let store = getMemoryStore(context) || loaded || null;
     if (!store) {
         return null;
     }
-    const target = buildMemoryTargetFromContext(context, targetHint);
+    const target = buildMemoryTargetFromContext(context);
     if (!target) {
         return store;
     }
@@ -8022,8 +8022,7 @@ async function injectMemoryPrompts(context, payload) {
         return false;
     }
 
-    const targetHint = normalizeExplicitChatStateTarget(payload?.chatStateTarget);
-    const store = await ensureStoreSyncedWithChat(context, targetHint);
+    const store = await ensureStoreSyncedWithChat(context);
     if (!store) {
         updateUiStatus(i18n('Memory store unavailable for current chat.'));
         return false;
@@ -8033,7 +8032,7 @@ async function injectMemoryPrompts(context, payload) {
     throwIfRecallRunInvalid(recallRunToken, payload?.signal, 'Memory recall aborted.');
     const corePacket = normalizeMultilineText(persistentSync.corePacket || '');
     if (isAbortSignalLike(payload?.signal) && payload.signal.aborted) {
-        const chatKey = getChatKey(context, targetHint);
+        const chatKey = getChatKey(context);
         store.lastRecallProjection = { at: Date.now(), blocks: { corePacket, focusPacket: '' } };
         await persistRecallMetadataByChatKey(context, chatKey, {
             trace: store.lastRecallTrace,
@@ -8045,7 +8044,7 @@ async function injectMemoryPrompts(context, payload) {
             : i18n('Memory recall cancelled by user.'));
         return false;
     }
-    const chatKey = getChatKey(context, targetHint);
+    const chatKey = getChatKey(context);
     const anchor = buildLastUserAnchor(context, payload?.coreChat);
     throwIfRecallRunInvalid(recallRunToken, payload?.signal, 'Memory recall aborted.');
     const shouldReuseSnapshot = settings.recallEnabled

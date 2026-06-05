@@ -7446,7 +7446,6 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         type,
         dryRun,
         signal: abortController?.signal || null,
-        chatStateTarget: resolveChatStateTarget(),
         maxContext: this_max_context,
         coreChat,
         chatForWI,
