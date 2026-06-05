@@ -105,6 +105,11 @@ import {
     resolveInFlightAnchor,
 } from './persistence.js';
 import {
+    normalizeLog,
+    buildSwipeMapFromChat,
+    computeTargetState,
+} from '../../floor-state/core.js';
+import {
     LEVEL,
     normalizeText,
     normalizeMultilineText,
@@ -1930,10 +1935,11 @@ async function replaceGraphLogForTarget(context, target, store, seq) {
 
     const targetWriteOption = target ? { target, maxOperations: 16000 } : { maxOperations: 16000 };
     const floor = seqToFloor(context, normalizedSeq);
-    const swipeId = floor === null ? 0 : (activeSwipeIdAtFloor(context, floor) ?? 0);
+    const floorResolved = Number.isInteger(floor) && floor >= 0;
+    const swipeId = floorResolved ? (activeSwipeIdAtFloor(context, floor) ?? 0) : 0;
     const buildObjectPatchOperationsAsync = await resolveBuildObjectPatchOperationsAsync(context);
     const patches = await buildObjectPatchOperationsAsync({}, finalPayload);
-    const hasCommit = Array.isArray(patches) && patches.length > 0 && Number.isInteger(floor) && floor >= 0;
+    const hasCommit = Array.isArray(patches) && patches.length > 0 && floorResolved;
 
     if (hasCommit) {
         await writeChatStateOrThrow(context, LOG_NAMESPACE, {
@@ -1944,17 +1950,31 @@ async function replaceGraphLogForTarget(context, target, store, seq) {
             op: 'replace-log',
             stage: 'data-write',
         });
-    } else {
-        await writeChatStateOrThrow(context, LOG_NAMESPACE, {
-            version: FLOOR_STATE_LOG_VERSION,
-            commits: [],
-        }, targetWriteOption, { op: 'replace-log', stage: 'log-reset' });
-        await writeChatStateOrThrow(context, CHAT_STATE_NAMESPACE, {}, targetWriteOption, {
-            op: 'replace-log',
-            stage: 'data-reset',
-        });
+        return { payload: finalPayload, hasCommit: true, skipped: false };
     }
-    return { payload: finalPayload, hasCommit };
+
+    if (!floorResolved) {
+        // Refuse to wipe when seq cannot resolve to a chat position: this is
+        // the late-write race where chat has moved past the seq the caller
+        // computed against. Wiping log+data here is how the n_237/n_243-246
+        // class of orphan-leaving-no-trace incidents got created. The caller
+        // sees skipped:true and can warn the user; live data stays intact.
+        console.warn(`[${MODULE_NAME}] replace-flush skipped: seq=${normalizedSeq} could not resolve to a chat floor (chat may have been truncated after the caller computed seq). log + data namespaces left untouched.`);
+        return { payload: finalPayload, hasCommit: false, skipped: true };
+    }
+
+    // floor resolved but patches empty — the store is genuinely empty.
+    // Reset both namespaces to the empty baseline so a freshly-cleared chat
+    // doesn't keep stale data on disk.
+    await writeChatStateOrThrow(context, LOG_NAMESPACE, {
+        version: FLOOR_STATE_LOG_VERSION,
+        commits: [],
+    }, targetWriteOption, { op: 'replace-log', stage: 'log-reset' });
+    await writeChatStateOrThrow(context, CHAT_STATE_NAMESPACE, {}, targetWriteOption, {
+        op: 'replace-log',
+        stage: 'data-reset',
+    });
+    return { payload: finalPayload, hasCommit: false, skipped: false };
 }
 
 async function loadMemoryStoreByTarget(context, target) {
@@ -2015,7 +2035,13 @@ async function commitMemoryStoreReplaceByChatKey(context, chatKey, store, seq, {
     const normalizedStore = normalizeStoreForRuntime(store);
     const normalizedSeq = Math.max(0, Math.floor(Number(seq || getStoreCoveredSeqTo(normalizedStore) || 0)));
 
-    const { payload } = await replaceGraphLogForTarget(context, target, normalizedStore, normalizedSeq);
+    const { payload, skipped } = await replaceGraphLogForTarget(context, target, normalizedStore, normalizedSeq);
+    if (skipped) {
+        // Disk untouched; do not advance the in-memory cache to a state that
+        // is not persisted. Existing cache stays the source of truth until
+        // a later write succeeds.
+        return memoryStoreCache.get(chatKey) || normalizedStore;
+    }
 
     const meta = await persistMetaForChatKey(context, chatKey, {
         ...normalizedStore,
