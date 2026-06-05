@@ -52,6 +52,7 @@ async function makeDefaultDeps() {
         getChatState: script.getChatState,
         patchChatState: script.patchChatState,
         updateChatState: script.updateChatState,
+        deleteChatState: script.deleteChatState,
         buildObjectPatchOperationsAsync: script.buildObjectPatchOperationsAsync,
         getChat: () => script.chat,
     };
@@ -190,6 +191,21 @@ export function createFloorStateWithDeps(options, deps) {
         }
     }
 
+    // Replay cache. `fs.get()` derives the materialized state from the log
+    // (commit chain replay) rather than reading a separate persisted data
+    // namespace; this cache memoizes the replay so consecutive `get()` calls
+    // don't re-walk the log. Invalidated on every write path (patch,
+    // structural event handlers) so a stale cache is impossible once a
+    // mutation lands.
+    const CACHE_UNSET = Symbol('floor-state:cache-unset');
+    let cachedReplay = CACHE_UNSET;
+    let migrationDone = false;
+    let migrationPromise = null;
+
+    function invalidateCache() {
+        cachedReplay = CACHE_UNSET;
+    }
+
     /**
      * Read and normalize the private commit log. Returns `{ log, existed }`
      * so callers that need to distinguish "log namespace truly never written"
@@ -240,44 +256,22 @@ export function createFloorStateWithDeps(options, deps) {
     }
 
     /**
-     * Compute the target state from the log + current chat, and overwrite
-     * the data namespace with it.
+     * Invalidate the in-memory replay cache. Called after any structural
+     * change to the log or chat (truncate, swipe-delete, swipe-switch,
+     * chat-changed) so the next `get()` re-runs `computeTargetState` against
+     * the updated log + swipeMap.
      *
-     * The ready gate is managed by the caller (event handlers) so that
-     * compound operations like truncate+rematerialize stay pending in a
-     * single observable transition.
-     *
-     * Defensive skip: if the log namespace has NEVER been written (raw null
-     * from getChatState), we leave the data namespace alone. This prevents
-     * data loss for legacy chats whose data namespace holds un-migrated
-     * payload (e.g. memory-graph v8 opLog) when a structural event fires
-     * before the plugin's migration code has had a chance to populate the
-     * log. Once the log has been written even once (truncate to empty,
-     * appendCommit, etc.), the namespace is "owned" by floor-state and
-     * subsequent rematerializes proceed normally — including legitimate
-     * resets to {} after all messages are deleted.
+     * No disk write: the data namespace is no longer a persisted source of
+     * truth in this design. The log is. So there's nothing to reconcile to —
+     * the next read just replays.
      */
     async function rematerialize() {
         if (destroyed) return;
-        try {
-            const { log, existed } = await readLogWithExistence();
-            if (!existed && log.commits.length === 0) {
-                console.info(`[floor-state:${namespace}] skipping rematerialize: log namespace never written, preserving existing data namespace`);
-                return;
-            }
-            const swipeMap = buildSwipeMapFromChat(runtime.getChat());
-            const targetState = computeTargetState(log.commits, swipeMap);
-            const result = await runtime.updateChatState(namespace, () => targetState);
-            if (!result || result.ok === false) {
-                console.warn(`[floor-state:${namespace}] rematerialize write failed`, result);
-            }
-        } catch (error) {
-            console.warn(`[floor-state:${namespace}] rematerialize failed`, error);
-        }
+        invalidateCache();
     }
 
     /**
-     * Truncate commits at floor >= newChatLength then rematerialize.
+     * Truncate commits at floor >= newChatLength, then invalidate the cache.
      */
     async function handleMessageDeleted(newChatLength) {
         if (destroyed) return;
@@ -288,7 +282,7 @@ export function createFloorStateWithDeps(options, deps) {
             if (survivors.length !== log.commits.length) {
                 await writeLog({ version: LOG_VERSION, commits: survivors });
             }
-            await rematerialize();
+            invalidateCache();
         } catch (error) {
             console.warn(`[floor-state:${namespace}] truncate failed`, error);
         } finally {
@@ -311,7 +305,7 @@ export function createFloorStateWithDeps(options, deps) {
             if (next.length !== log.commits.length || next.some((c, i) => c !== log.commits[i])) {
                 await writeLog({ version: LOG_VERSION, commits: next });
             }
-            await rematerialize();
+            invalidateCache();
         } catch (error) {
             console.warn(`[floor-state:${namespace}] swipe-delete failed`, error);
         } finally {
@@ -320,17 +314,16 @@ export function createFloorStateWithDeps(options, deps) {
     }
 
     /**
-     * Inherit the source chat's commit log into a freshly-created branch / checkpoint
-     * chat. The host (`createBranch` in `bookmarks.js`) only copies the chat file
-     * itself; chat-state sidecars do NOT follow automatically. Without this handler
-     * the next CHAT_CHANGED into the new branch would find an empty log and reset
-     * the data namespace to {}, silently losing all accumulated state.
+     * Inherit the source chat's commit log into a freshly-created branch /
+     * checkpoint chat. The host (`createBranch` in `bookmarks.js`) only copies
+     * the chat file itself; chat-state sidecars do NOT follow automatically.
+     * Without this handler the next CHAT_CHANGED into the new branch would
+     * find an empty log and silently lose all accumulated state.
      *
-     * Strategy: read the source chat's log, truncate commits past the branch point
-     * (mesId is the last included floor; new chat length = mesId + 1), and write
-     * the result to the target chat's log sidecar. We do NOT seed the target's
-     * data namespace — the next CHAT_CHANGED on the new branch will rematerialize
-     * using the branch's actual chat array (and the swipe map derived from it).
+     * Strategy: read the source chat's log, truncate commits past the branch
+     * point (mesId is the last included floor; new chat length = mesId + 1),
+     * and write the result to the target chat's log sidecar. The target's
+     * materialized state is derived on first `get()` against the new log.
      */
     async function handleBranchCreated(payload) {
         if (destroyed) return;
@@ -377,26 +370,25 @@ export function createFloorStateWithDeps(options, deps) {
     // --- public API ---
 
     /**
-     * Apply RFC 6902 operations to the data namespace and append a commit
-     * tagged with the current chat tail (floor, swipeId).
+     * Apply RFC 6902 operations as a new commit at the current chat tail
+     * (floor, swipeId).
      *
      * The operations MUST be an incremental diff from the current materialized
-     * data namespace state to the desired next state. Replay (`computeTargetState`
-     * in core.js) walks commits in order and applies surviving patches against
-     * `{}` — each commit assumes the prior surviving commits' patches are
-     * already in place. Snapshot-from-empty patches (a commit that overwrites
-     * the whole state) defeat the point of the log: every commit then carries
-     * a full state copy, blowing up log size.
+     * state to the desired next state. Replay (`computeTargetState` in core.js)
+     * walks commits in order and applies surviving patches against `{}` — each
+     * commit assumes the prior surviving commits' patches are already in place.
+     * Snapshot-from-empty patches (a commit that overwrites the whole state)
+     * defeat the point of the log: every commit then carries a full state copy,
+     * blowing up log size.
      *
      * If you have a fresh `next` object rather than a precomputed diff, prefer
      * `update(reducer)` — it reads the current state, runs your reducer, and
      * computes the diff for you.
      *
-     * Order is commit-first: appending the log entry before writing the data
-     * namespace makes the log the source of truth in any race with a concurrent
-     * rematerialize. If the data write fails we recover by replaying the log,
-     * so a successful return implies "the operation is recorded and the data
-     * namespace reflects it (or will, after the recovery rematerialize)".
+     * Single-write semantics: the log is the only persisted source of truth.
+     * Materialized state is derived on demand via `get()` (log replay). A
+     * successful patch means exactly one log append landed; there is no
+     * separate data-namespace write that could disagree with the log.
      *
      * Plugins that attach state to a non-tail floor (e.g. a memory extension
      * tagging an older message) can pass an explicit `{ floor }` — the swipeId
@@ -435,12 +427,7 @@ export function createFloorStateWithDeps(options, deps) {
                 patches: operations,
             });
             if (!appended) return false;
-
-            const ok = await runtime.patchChatState(namespace, operations);
-            if (!ok) {
-                console.warn(`[floor-state:${namespace}] patch data-namespace write failed; reconciling from log`);
-                await rematerialize();
-            }
+            invalidateCache();
             return true;
         } finally {
             endPending();
@@ -469,7 +456,7 @@ export function createFloorStateWithDeps(options, deps) {
         if (destroyed) return false;
         if (typeof reducer !== 'function') return false;
 
-        const current = (await runtime.getChatState(namespace)) ?? {};
+        const current = (await get()) ?? {};
         const next = await reducer(current);
         if (!next || typeof next !== 'object' || Array.isArray(next)) return true;
 
@@ -479,13 +466,98 @@ export function createFloorStateWithDeps(options, deps) {
     }
 
     /**
-     * Read current data namespace state.
+     * Materialize the log into in-memory state. Replays surviving commits
+     * filtered by the current chat's swipe map. Pure function over the log
+     * + chat — never touches disk for the data namespace (that namespace is
+     * no longer the source of truth; the log is). Result is structuredClone'd
+     * for the caller so cache contents stay encapsulated.
      *
      * @returns {Promise<object|null>}
      */
     async function get() {
         if (destroyed) return null;
-        return (await runtime.getChatState(namespace)) ?? null;
+        await migrateIfNeeded();
+        if (cachedReplay !== CACHE_UNSET) {
+            return cachedReplay === null ? null : structuredClone(cachedReplay);
+        }
+        const log = await readLog();
+        if (log.commits.length === 0) {
+            cachedReplay = null;
+            return null;
+        }
+        const swipeMap = buildSwipeMapFromChat(runtime.getChat());
+        cachedReplay = computeTargetState(log.commits, swipeMap);
+        return structuredClone(cachedReplay);
+    }
+
+    /**
+     * One-time migration: when this instance loads against a namespace whose
+     * legacy data sidecar still exists (pre-refactor chats), capture any drift
+     * between data-sidecar contents and log replay into a `__orphans` backup
+     * sidecar, then delete the legacy data sidecar. After migration runs,
+     * subsequent loads see a null data namespace and skip immediately.
+     *
+     * Idempotent: the only state we need to remember between calls is whether
+     * the data sidecar still exists. If `deleteChatState` fails (chat_sync
+     * lock, transient backend error), we still mark migrationDone so we don't
+     * loop — the dead sidecar is harmless going forward because reads now
+     * derive from the log, not from data.
+     */
+    async function migrateIfNeeded() {
+        if (migrationDone) return;
+        if (migrationPromise) return migrationPromise;
+        migrationPromise = (async () => {
+            try {
+                const data = await runtime.getChatState(namespace);
+                if (data == null || typeof data !== 'object') {
+                    migrationDone = true;
+                    return;
+                }
+                const log = await readLog();
+                const swipeMap = buildSwipeMapFromChat(runtime.getChat());
+                const replay = log.commits.length === 0
+                    ? {}
+                    : computeTargetState(log.commits, swipeMap);
+                let diff = [];
+                if (typeof runtime.buildObjectPatchOperationsAsync === 'function') {
+                    try {
+                        diff = await runtime.buildObjectPatchOperationsAsync(replay, data);
+                    } catch (diffErr) {
+                        console.warn(`[floor-state:${namespace}] migration: diff failed, treating entire data as drift`, diffErr);
+                        diff = [{ op: 'replace', path: '', value: data }];
+                    }
+                }
+                if (Array.isArray(diff) && diff.length > 0 && typeof runtime.updateChatState === 'function') {
+                    try {
+                        await runtime.updateChatState(
+                            `${namespace}__orphans`,
+                            () => ({
+                                timestamp: new Date().toISOString(),
+                                dataPayload: data,
+                                replayPayload: replay,
+                                diff,
+                            }),
+                            { maxOperations: 16000 },
+                        );
+                    } catch (backupErr) {
+                        console.warn(`[floor-state:${namespace}] migration: orphans backup write failed, continuing`, backupErr);
+                    }
+                }
+                if (typeof runtime.deleteChatState === 'function') {
+                    try {
+                        await runtime.deleteChatState(namespace);
+                    } catch (deleteErr) {
+                        console.warn(`[floor-state:${namespace}] migration: deleteChatState failed, continuing`, deleteErr);
+                    }
+                }
+                migrationDone = true;
+            } catch (error) {
+                console.warn(`[floor-state:${namespace}] migration failed, will retry on next get()`, error);
+            } finally {
+                migrationPromise = null;
+            }
+        })();
+        return migrationPromise;
     }
 
     /**
@@ -541,31 +613,10 @@ export function createFloorStateWithDeps(options, deps) {
         deps.eventSource._bindInstance(instance);
     }
 
-    // Initial rematerialize: catch the data namespace up to the persisted log
-    // so `fs.get()` reflects the source of truth even when the instance is
-    // created after CHAT_CHANGED already fired, or when the previous session
-    // left the namespace out of sync. Skipped when the log is absent or empty
-    // to avoid clobbering a never-touched namespace with `{}`. Wrapped in the
-    // ready gate so callers can `await fs.ready()` to wait for it.
-    beginPending();
-    (async () => {
-        try {
-            if (destroyed) return;
-            const log = await readLog();
-            if (destroyed) return;
-            if (log.commits.length === 0) return;
-            const swipeMap = buildSwipeMapFromChat(runtime.getChat());
-            const targetState = computeTargetState(log.commits, swipeMap);
-            const result = await runtime.updateChatState(namespace, () => targetState);
-            if (!result || result.ok === false) {
-                console.warn(`[floor-state:${namespace}] initial rematerialize write failed`, result);
-            }
-        } catch (error) {
-            console.warn(`[floor-state:${namespace}] initial rematerialize failed`, error);
-        } finally {
-            endPending();
-        }
-    })();
+    // No initial rematerialize: the data namespace is no longer a separate
+    // persisted source of truth. First `get()` lazily replays the log into
+    // the in-memory cache; one-time migration (legacy data sidecar cleanup)
+    // is folded into `get()`'s migrateIfNeeded path.
 
     return instance;
 }

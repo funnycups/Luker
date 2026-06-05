@@ -1981,13 +1981,18 @@ async function loadMemoryStoreByTarget(context, target) {
     if (typeof context.getChatState !== 'function') {
         throw new Error('Chat state API is unavailable in extension context.');
     }
-    const data = await context.getChatState(CHAT_STATE_NAMESPACE, { target });
     const meta = await context.getChatState(META_NAMESPACE, { target });
     const isV2 = meta && Number(meta.schemaVersion || 0) >= META_SCHEMA_VERSION;
 
-    if (isV2 || (data && typeof data === 'object' && !Array.isArray(data) && !Array.isArray(data.opLog))) {
-        // v2 schema: graph payload in main namespace, meta in __meta sidecar.
-        const runtimeStore = buildRuntimeStoreFromGraphPayloadAndMeta(data, meta);
+    if (isV2) {
+        // Floor-state log is the source of truth; the data namespace was
+        // deleted by floor-state's one-time migration on first fs.get().
+        // Replay the log to derive the materialized payload.
+        const logRaw = await context.getChatState(LOG_NAMESPACE, { target });
+        const log = normalizeLog(logRaw);
+        const swipeMap = buildSwipeMapFromChat(Array.isArray(context?.chat) ? context.chat : []);
+        const payload = log.commits.length === 0 ? {} : computeTargetState(log.commits, swipeMap);
+        const runtimeStore = buildRuntimeStoreFromGraphPayloadAndMeta(payload, meta);
         return {
             state: synthesizePersistedStateFromStoreAndMeta(runtimeStore, meta),
             store: runtimeStore,
@@ -1998,6 +2003,8 @@ async function loadMemoryStoreByTarget(context, target) {
     }
 
     // v1 / legacy raw fallback: opLog inside main namespace, no __meta.
+    // Schema-migration will hoist this to v2 on the next ensureMemoryStoreLoaded.
+    const data = await context.getChatState(CHAT_STATE_NAMESPACE, { target });
     const { state, migrated } = normalizePersistedMemoryState(data, context);
     return {
         state,
@@ -15035,17 +15042,16 @@ jQuery(() => {
      */
     const refreshMemoryStoreCacheFromFloorState = async (runtimeContext, chatKey) => {
         if (!chatKey || chatKey === 'invalid_target') return null;
+        // Both call sites (applyMutationInvalidationImpl + CHAT_CHANGED listener)
+        // pass the current chat's key, so we always read via the bound fs
+        // singleton — no cross-target read path is needed or supported.
         let payload = null;
         let meta = null;
         const target = memoryStoreTargets.get(chatKey);
         try {
             const fs = await getFloorStateInstance(runtimeContext);
             await fs.ready();
-            if (chatKey === getChatKey(runtimeContext)) {
-                payload = await fs.get();
-            } else if (target) {
-                payload = await runtimeContext.getChatState(CHAT_STATE_NAMESPACE, { target });
-            }
+            payload = await fs.get();
         } catch (error) {
             console.warn(`[${MODULE_NAME}] floor-state ready/get failed during cache refresh`, error);
         }

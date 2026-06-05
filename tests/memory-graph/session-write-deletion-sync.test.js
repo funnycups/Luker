@@ -379,11 +379,11 @@ describe('session-write deletion sync (end-to-end against in-memory floor-state)
         expect(floors).toContain(3);
         expect(floors).toContain(5);
 
-        // Data namespace reflects the newly-created node so a fresh
-        // rematerialize would surface it. Title is not asserted —
-        // memory-graph derives display titles from `fields.summary` /
-        // schema config which is empty in this fixture.
-        const data = partition.get('memory_graph');
+        // Materialized state (log replay) reflects the newly-created node so a
+        // fresh read surfaces it. Title is not asserted — memory-graph derives
+        // display titles from `fields.summary` / schema config which is empty
+        // in this fixture.
+        const data = await fsInstance.get();
         expect(data?.nodes?.[created.id]).toBeTruthy();
 
         // ---- Simulate MESSAGE_DELETED on the in-flight floor ----
@@ -400,12 +400,12 @@ describe('session-write deletion sync (end-to-end against in-memory floor-state)
         expect(floorsAfter).not.toContain(5);
         expect(floorsAfter).toContain(3);
 
-        // ---- Bonus: rematerialized data namespace no longer carries the
-        // director-written node, but the prior extraction node survives.
-        // Under the legacy replace path, the truncate would have wiped the
-        // single replace-commit and left an empty data namespace —
-        // n_pre would have been collateral damage. ----
-        const dataAfter = partition.get('memory_graph');
+        // ---- Bonus: replayed state no longer carries the director-written
+        // node, but the prior extraction node survives. Under the legacy
+        // replace path, the truncate would have wiped the single
+        // replace-commit and left an empty state — n_pre would have been
+        // collateral damage. ----
+        const dataAfter = await fsInstance.get();
         expect(dataAfter?.nodes?.[created.id]).toBeUndefined();
         expect(dataAfter?.nodes?.n_pre).toBeTruthy();
     });
@@ -481,11 +481,11 @@ describe('session-write deletion sync (end-to-end against in-memory floor-state)
         // subsequent MESSAGE_DELETED at chat.length=3 truncates it away.
         expect(floors).toContain(3);
 
-        const data = partition.get('memory_graph');
+        const data = await fsInstance.get();
         expect(data?.nodes?.[created.id]).toBeTruthy();
 
         // Tail-delete the placeholder; the commit at floor=3 must drop and
-        // the rematerialized data namespace must no longer carry the node.
+        // the replayed state must no longer carry the node.
         chat.length = 3;
         await fsInstance.__handleMessageDeleted(3);
 
@@ -493,7 +493,7 @@ describe('session-write deletion sync (end-to-end against in-memory floor-state)
         const floorsAfter = logAfter.commits.map(c => c.floor);
         expect(floorsAfter).not.toContain(3);
 
-        const dataAfter = partition.get('memory_graph');
+        const dataAfter = await fsInstance.get();
         expect(dataAfter?.nodes?.[created.id]).toBeUndefined();
     });
 });

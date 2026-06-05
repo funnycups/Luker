@@ -359,7 +359,7 @@ describe('floor-state events on adapter commits', () => {
 
         const log = store._raw.get(adapterConstants.LOG_NAMESPACE);
         expect(log.commits.map((c) => c.floor)).toEqual([0, 1]);
-        const data = store._raw.get(adapterConstants.MODULE_NAME);
+        const data = await fs.get();
         expect(Object.keys(data.nodes).sort()).toEqual(['n_1', 'n_2']);
         expect(data.coveredAssistantSeq).toBe(2);
     });
@@ -376,17 +376,15 @@ describe('floor-state events on adapter commits', () => {
             applyMemoryLogEntryToStore,
         );
         const fs = getInstance();
-        expect(Object.keys(store._raw.get(adapterConstants.MODULE_NAME).nodes)).toContain('n_swipe0');
+        expect(Object.keys((await fs.get()).nodes)).toContain('n_swipe0');
 
         // User regenerates → new swipe → swipe_id flips to 1.
         chatRef.value[1].swipe_id = 1;
         await eventSource.emit(event_types.MESSAGE_SWIPED, 1);
         await fs.ready();
 
-        // Floor 1 swipe 1 has no commits, so the data namespace is reset to
-        // the empty object — floor-state's rematerialize starts from {} and
-        // applies nothing when no commit survives the swipeMap filter.
-        const data = store._raw.get(adapterConstants.MODULE_NAME);
+        // Floor 1 swipe 1 has no commits; replayed state is empty.
+        const data = await fs.get();
         expect(data ?? {}).toEqual({});
 
         // Now the new swipe extracts something — commit on swipe 1.
@@ -396,13 +394,13 @@ describe('floor-state events on adapter commits', () => {
             1,
             applyMemoryLogEntryToStore,
         );
-        expect(Object.keys(store._raw.get(adapterConstants.MODULE_NAME).nodes)).toContain('n_swipe1');
+        expect(Object.keys((await fs.get()).nodes)).toContain('n_swipe1');
 
         // Switch back to swipe 0 — n_swipe0 should reappear, n_swipe1 vanish.
         chatRef.value[1].swipe_id = 0;
         await eventSource.emit(event_types.MESSAGE_SWIPED, 1);
         await fs.ready();
-        const dataBack = store._raw.get(adapterConstants.MODULE_NAME);
+        const dataBack = await fs.get();
         expect(Object.keys(dataBack.nodes)).toEqual(['n_swipe0']);
     });
 
@@ -442,7 +440,7 @@ describe('floor-state events on adapter commits', () => {
         await eventSource.emit(event_types.MESSAGE_SWIPE_DELETED, { messageId: 0, swipeId: 1 });
         await fs.ready();
 
-        const data = store._raw.get(adapterConstants.MODULE_NAME);
+        const data = await fs.get();
         expect(Object.keys(data.nodes).sort()).toEqual(['s2']);
         const log = store._raw.get(adapterConstants.LOG_NAMESPACE);
         expect(log.commits.map((c) => c.swipeId).sort()).toEqual([0, 1]);
@@ -625,7 +623,7 @@ describe('migrateLegacyMemoryGraphState', () => {
 
         const log = store._raw.get(adapterConstants.LOG_NAMESPACE);
         expect(log.commits.map((c) => c.floor)).toEqual([0, 1]);
-        const data = store._raw.get(adapterConstants.MODULE_NAME);
+        const data = await fs.get();
         expect(Object.keys(data.nodes).sort()).toEqual(['n_1', 'n_2']);
     });
 
