@@ -81,7 +81,7 @@ getCharaFilename(
 ): string | null
 ```
 
-Returns the avatar filename **without extension** for a character. Falls back to the current character when `chid` is omitted. Pass `manualAvatarKey` when you only have the avatar key string (e.g. from a sidecar entry). Returns `null` if no avatar can be resolved.
+Returns the avatar filename **without extension** for a character. Falls back to the current character when `chid` is omitted. Pass `manualAvatarKey` when you only have the avatar key string (e.g. from a state entry). Returns `null` if no avatar can be resolved.
 
 ```js
 const ctx = Luker.getContext();
@@ -297,9 +297,9 @@ Imports a character or lorebook from an external URL or content UUID. The server
 
 `preserveFileName` overrides the response filename in the dispatch step.
 
-## Per-Character Sidecar State
+## Per-Character State
 
-For data that should follow a character across chats but **not** modify the card JSON, use the per-character sidecar state. This is distinct from extension fields ([`writeExtensionField`](#writeextensionfield)) which are persisted inside the card itself.
+For data that should follow a character across chats but **not** modify the card JSON, use the per-character state file. This is distinct from extension fields ([`writeExtensionField`](#writeextensionfield)) which are persisted inside the card itself.
 
 ### getCharacterState
 
@@ -307,7 +307,7 @@ For data that should follow a character across chats but **not** modify the card
 getCharacterState(avatar: string, namespace: string): Promise<any | null>
 ```
 
-Reads sidecar state for the given character avatar and namespace. Returns `null` when no data exists.
+Reads state for the given character avatar and namespace. Returns `null` when no data exists.
 
 ### setCharacterState
 
@@ -315,7 +315,7 @@ Reads sidecar state for the given character avatar and namespace. Returns `null`
 setCharacterState(avatar: string, namespace: string, data: any): Promise<void>
 ```
 
-Writes sidecar state. Pass `data: null` to delete the sidecar entry for that namespace.
+Writes state. Pass `data: null` to delete the state for that namespace.
 
 ```js
 const ctx = Luker.getContext();

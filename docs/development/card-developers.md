@@ -128,7 +128,7 @@ The CardApp entry module must export an `init(ctx)` function that receives the c
 export async function init(ctx) {
  const container = ctx.container;
 
- // Read persisted state — getChatState is async (server-backed sidecar)
+ // Read persisted state — getChatState is async (server-backed state file)
  const state = await ctx.getChatState('my_app');
  render(state);
 
@@ -174,12 +174,12 @@ The CardApp context object provides the following APIs:
 |-----|-------------|
 | `ctx.getCharacterData()` | Get current character data (read-only) |
 | `ctx.updateCharacterFields(fields)` | Update character fields and save. Supports name, description, personality, scenario, first_mes, mes_example, system_prompt, post_history_instructions, creator_notes, creator, character_version, tags (comma-separated string), talkativeness (number), depth_prompt-related fields |
-| `ctx.getChatState(namespace, options?)` | **async** Read chat-bound sidecar state (server-backed via `/api/chats/state/`). For HP / gold / affinity / inventory / quest flags use chat variables instead. |
-| `ctx.updateChatState(namespace, updater, options?)` | **async** Reducer-style write of chat-bound sidecar. Returns `{ ok, state, updated }`. |
-| `ctx.patchChatState(namespace, operations, options?)` | **async** Apply JSON-patch operations to chat-bound sidecar. |
-| `ctx.deleteChatState(namespace, options?)` | **async** Drop a chat-bound sidecar namespace. |
-| `ctx.getCharacterState(namespace)` | **async** Read character-bound sidecar (avatar auto-resolved). Survives across every chat with this character. |
-| `ctx.setCharacterState(namespace, data)` | **async** Write character-bound sidecar (avatar auto-resolved). Pass `null` to delete. |
+| `ctx.getChatState(namespace, options?)` | **async** Read chat-bound state from disk (server-backed via `/api/chats/state/`). For HP / gold / affinity / inventory / quest flags use chat variables instead. |
+| `ctx.updateChatState(namespace, updater, options?)` | **async** Reducer-style write of chat-bound state. Returns `{ ok, state, updated }`. |
+| `ctx.patchChatState(namespace, operations, options?)` | **async** Apply JSON-patch operations to chat-bound state. |
+| `ctx.deleteChatState(namespace, options?)` | **async** Drop a chat-bound state namespace. |
+| `ctx.getCharacterState(namespace)` | **async** Read character-bound state (avatar auto-resolved). Survives across every chat with this character. |
+| `ctx.setCharacterState(namespace, data)` | **async** Write character-bound state (avatar auto-resolved). Pass `null` to delete. |
 | `ctx.getVariable(key)` | Get a chat variable from `chat_metadata.variables` (same bucket <code v-pre>{{getvar::key}}</code> reads). |
 | `ctx.setVariable(key, value, options?)` | **async** Set a chat variable. Default: writes straight to `chat_metadata.variables` (chat-scoped, persists for the rest of the chat). Pass `{ floor: <messageIndex> }` to bind the write to that floor's current swipe via the variable op-log — swipe-out / swipe-back / deletion / branching all reconcile through the rebuilder so the value rolls back the same way an AI-written <code v-pre>{{setvar}}</code> literal would. The floor-bound path coerces value to a string (the op-log format only carries strings). For structured per-floor state with its own commit log / namespace, use `ctx.lukerContext.createFloorState({ namespace })` instead. |
 

@@ -49,7 +49,7 @@ DIR -> NS2
 
 - `{chat}.jsonl` — 聊天主檔案
 - `{chat}.luker-state.chat_sync.json` — integrity + updated_at（同步中繼資料）
-- `{chat}.luker-state.<namespace>.json` — 各外掛的 namespace 狀態（每個外掛一份獨立 sidecar）
+- `{chat}.luker-state.<namespace>.json` — 各外掛的命名空間狀態（每個外掛一份獨立狀態檔案）
 
 如果狀態檔案不存在（例如從舊版本遷移的聊天），系統會自動回退處理，並在首次寫入時自動建立狀態檔案。
 
@@ -90,7 +90,7 @@ BE."即使前端在收到 ack 後當機,資料已落盤"
 
 1. 前端將寫入任務按到達順序排隊
 2. 按順序逐一呼叫增量端點執行寫入
-3. 每次寫入成功後，後端更新聊天狀態 sidecar 中的 integrity UUID
+3. 每次寫入成功後，後端更新聊天狀態檔案中的 integrity UUID
 4. 若排隊中的請求攜帶過期 integrity，後端回傳 `409 Conflict`
 
 這種「前端串行 + 後端校驗」的組合可保障寫入順序與一致性，而不依賴後端記憶體寫入佇列。

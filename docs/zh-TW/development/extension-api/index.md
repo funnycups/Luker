@@ -5,7 +5,7 @@
 | 頁面 | 涵蓋內容 |
 | --- | --- |
 | [聊天與狀態](/zh-TW/development/extension-api/chat-and-state) | 聊天資料、統一訊息 API、聊天持久化、聊天狀態、樓層狀態、角色狀態、聊天生命週期、swipe API、擴充提示詞、媒體輔助函式 |
-| [角色卡](/zh-TW/development/extension-api/characters) | 角色卡、V2 / 傳統 Proxy 語義、標籤、匯入 / 匯出、角色 sidecar 狀態 |
+| [角色卡](/zh-TW/development/extension-api/characters) | 角色卡、V2 / 傳統 Proxy 語義、標籤、匯入 / 匯出、角色狀態 |
 | [世界書](/zh-TW/development/extension-api/world-info) | 世界書 CRUD、啟動掃描、角色輔助世界書 |
 | [預設與提示詞](/zh-TW/development/extension-api/presets-and-prompts) | `context.presets.*`、`buildPresetAwarePromptMessages`、`resolveWorldInfoForMessages`、信封檢視、推理輔助函式、設定視圖 |
 | [生成請求](/zh-TW/development/extension-api/generation) | `generateTask`、工具註冊、`generateRaw` / `generateQuietPrompt`、Service 類別、connection profile |
@@ -56,7 +56,7 @@ Luker 基於 SillyTavern 建構，但在 API 層面有以下主要差異：
 |------|-------------|-------|
 | 聊天持久化 | 整檔覆寫 | Patch-first（RFC 6902 增量更新） |
 | 聊天綁定狀態 | 僅 `chat_metadata` | 新增聊天狀態機制 + 樓層狀態 |
-| 角色 sidecar 狀態 | 無 | `getCharacterState` / `setCharacterState`（與卡 JSON 分離） |
+| 角色狀態 | 無 | `getCharacterState` / `setCharacterState`（與卡 JSON 分離） |
 | 預設管理 | 直接匯入內部模組 | `context.presets.*` 統一 API |
 | 提示詞組裝 | 需要手動拼接 | `buildPresetAwarePromptMessages()` |
 | 世界書模擬 | 無 | `simulateWorldInfoActivation()` |

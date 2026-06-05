@@ -81,7 +81,7 @@ getCharaFilename(
 ): string | null
 ```
 
-回傳角色的頭像檔案名稱**不含副檔名**。`chid` 省略時退回到當前角色。當你只持有 avatar key 字串時（例如來自 sidecar 條目）可傳 `manualAvatarKey`。無法解析出 avatar 時回傳 `null`。
+回傳角色的頭像檔案名稱**不含副檔名**。`chid` 省略時退回到當前角色。當你只持有 avatar key 字串時（例如來自角色狀態條目）可傳 `manualAvatarKey`。無法解析出 avatar 時回傳 `null`。
 
 ```js
 const ctx = Luker.getContext();
@@ -297,9 +297,9 @@ importFromExternalUrl(
 
 `preserveFileName` 在分派步驟覆寫回應檔名。
 
-## 角色 sidecar 狀態
+## 角色狀態
 
-對於應該跟隨角色跨聊天保留、但**不應**修改角色卡 JSON 的資料，使用角色 sidecar 狀態。這與擴充欄位（[`writeExtensionField`](#writeextensionfield)，持久化在角色卡內部）是不同的東西。
+對於應該跟隨角色跨聊天保留、但**不應**修改角色卡 JSON 的資料，使用角色狀態。這與擴充欄位（[`writeExtensionField`](#writeextensionfield)，持久化在角色卡內部）是不同的東西。
 
 ### getCharacterState
 
@@ -307,7 +307,7 @@ importFromExternalUrl(
 getCharacterState(avatar: string, namespace: string): Promise<any | null>
 ```
 
-讀取指定 avatar 與 namespace 下的 sidecar 狀態。沒有資料時回傳 `null`。
+讀取指定 avatar 與命名空間下的狀態。沒有資料時回傳 `null`。
 
 ### setCharacterState
 
@@ -315,7 +315,7 @@ getCharacterState(avatar: string, namespace: string): Promise<any | null>
 setCharacterState(avatar: string, namespace: string, data: any): Promise<void>
 ```
 
-寫入 sidecar 狀態。傳 `data: null` 可刪除該 namespace 的 sidecar 條目。
+寫入角色狀態。傳 `data: null` 可刪除該命名空間的狀態。
 
 ```js
 const ctx = Luker.getContext();

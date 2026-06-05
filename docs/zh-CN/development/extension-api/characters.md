@@ -81,7 +81,7 @@ getCharaFilename(
 ): string | null
 ```
 
-返回角色头像文件名（**不带扩展名**）。省略 `chid` 时回退到当前角色。当你只有头像 key 字符串时（例如来自 sidecar 条目），传入 `manualAvatarKey`。无法解析头像时返回 `null`。
+返回角色头像文件名（**不带扩展名**）。省略 `chid` 时回退到当前角色。当你只有头像 key 字符串时（例如来自角色状态条目），传入 `manualAvatarKey`。无法解析头像时返回 `null`。
 
 ```js
 const ctx = Luker.getContext();
@@ -297,9 +297,9 @@ importFromExternalUrl(
 
 `preserveFileName` 在 dispatch 步骤中覆盖响应的文件名。
 
-## 按角色的旁挂状态
+## 按角色的状态
 
-如果你的数据应该跟着角色跨聊天保留、又**不应该**修改角色卡 JSON，请使用按角色的旁挂状态。这与扩展字段（[`writeExtensionField`](#writeextensionfield)，存在卡片本身里面）不同。
+如果你的数据应该跟着角色跨聊天保留、又**不应该**修改角色卡 JSON，请使用按角色的状态。这与扩展字段（[`writeExtensionField`](#writeextensionfield)，存在卡片本身里面）不同。
 
 ### getCharacterState
 
@@ -307,7 +307,7 @@ importFromExternalUrl(
 getCharacterState(avatar: string, namespace: string): Promise<any | null>
 ```
 
-读取指定角色头像和命名空间下的旁挂状态。无数据时返回 `null`。
+读取指定角色头像和命名空间下的状态。无数据时返回 `null`。
 
 ### setCharacterState
 
@@ -315,7 +315,7 @@ getCharacterState(avatar: string, namespace: string): Promise<any | null>
 setCharacterState(avatar: string, namespace: string, data: any): Promise<void>
 ```
 
-写入旁挂状态。传 `data: null` 删除该命名空间的旁挂条目。
+写入角色状态。传 `data: null` 删除该命名空间的状态。
 
 ```js
 const ctx = Luker.getContext();
@@ -329,9 +329,9 @@ await ctx.setCharacterState(character.avatar, 'my-plugin', {
 const state = await ctx.getCharacterState(character.avatar, 'my-plugin');
 ```
 
-::: tip 旁挂 vs 扩展字段
+::: tip 角色状态 vs 扩展字段
 - 扩展字段（`writeExtensionField` → `data.extensions.<key>`）是卡片的一部分。会随卡片一起导出，对拿到卡片的任何人可见。
-- 旁挂（`get/setCharacterState`）是放在卡片旁边的独立文件，不会随卡片导出。
+- 角色状态（`get/setCharacterState`）是放在卡片旁边的独立文件，不会随卡片导出。
 :::
 
 ## Proxy 语义

@@ -128,7 +128,7 @@ CardApp 的入口模块必须导出 `init(ctx)` 函数，接收上下文对象�
 export async function init(ctx) {
   const container = ctx.container;
 
-  // 读取持久化状态 — getChatState 是异步的(server-backed sidecar)
+  // 读取持久化状态 — getChatState 是异步的(server-backed 状态)
   const state = await ctx.getChatState('my_app');
   render(state);
 
@@ -174,12 +174,12 @@ CardApp 的上下文对象提供以下 API：
 |-----|------|
 | `ctx.getCharacterData()` | 获取当前角色数据（只读） |
 | `ctx.updateCharacterFields(fields)` | 更新角色字段并保存。支持name、description、personality、scenario、first_mes、mes_example、system_prompt、post_history_instructions、creator_notes、creator、character_version、tags（逗号分隔字符串）、talkativeness（数字）、depth_prompt相关字段 |
-| `ctx.getChatState(namespace, options?)` | **异步** 读取聊天绑定的 sidecar 状态（server-backed，`/api/chats/state/`）。HP / 金币 / 好感度 / 物品 / 任务标志这类用聊天变量。 |
-| `ctx.updateChatState(namespace, updater, options?)` | **异步** reducer 风格写入聊天 sidecar，返回 `{ ok, state, updated }`。 |
-| `ctx.patchChatState(namespace, operations, options?)` | **异步** 对聊天 sidecar 应用 JSON-patch 操作。 |
-| `ctx.deleteChatState(namespace, options?)` | **异步** 删除一个聊天 sidecar 命名空间。 |
-| `ctx.getCharacterState(namespace)` | **异步** 读取角色绑定的 sidecar（avatar 自动绑定），跨该角色的所有聊天保留。 |
-| `ctx.setCharacterState(namespace, data)` | **异步** 写入角色绑定的 sidecar（avatar 自动绑定），传 `null` 表示删除。 |
+| `ctx.getChatState(namespace, options?)` | **异步** 读取聊天绑定的状态（server-backed，`/api/chats/state/`）。HP / 金币 / 好感度 / 物品 / 任务标志这类用聊天变量。 |
+| `ctx.updateChatState(namespace, updater, options?)` | **异步** reducer 风格写入聊天状态，返回 `{ ok, state, updated }`。 |
+| `ctx.patchChatState(namespace, operations, options?)` | **异步** 对聊天状态应用 JSON-patch 操作。 |
+| `ctx.deleteChatState(namespace, options?)` | **异步** 删除一个聊天状态命名空间。 |
+| `ctx.getCharacterState(namespace)` | **异步** 读取角色绑定的状态（avatar 自动绑定），跨该角色的所有聊天保留。 |
+| `ctx.setCharacterState(namespace, data)` | **异步** 写入角色绑定的状态（avatar 自动绑定），传 `null` 表示删除。 |
 | `ctx.getVariable(key)` | 读取聊天变量（来自 `chat_metadata.variables`，即 <code v-pre>{{getvar::key}}</code> 读的同一个桶）。 |
 | `ctx.setVariable(key, value, options?)` | **异步** 设置聊天变量。默认写入 `chat_metadata.variables`（会话级，贯穿整个 chat）。传 `{ floor: <消息序号> }` 则改走变量 op-log，把这次写入绑定到该楼的**当前 swipe**——切 swipe / 切回 / 删楼 / 创建分支都会经过 rebuilder 重放，效果跟 AI 在消息里直接写 <code v-pre>{{setvar}}</code> 一致。绑定楼层的路径会把 value 强转成字符串（op-log 的存储格式只承载字符串）。如果需要"结构化的逐楼状态 + 独立命名空间 + 自己的 commit log"，改用 `ctx.lukerContext.createFloorState({ namespace })`。 |
 

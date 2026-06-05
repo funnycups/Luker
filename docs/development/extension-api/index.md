@@ -5,7 +5,7 @@ This is the complete reference for the Luker Extension API, intended for plugin 
 | Page | What's covered |
 | --- | --- |
 | [Chat & State](/development/extension-api/chat-and-state) | Chat data, the unified Messages API, chat persistence, Chat State, Floor State, Character State, chat lifecycle, swipe API, extension prompts, media helpers |
-| [Characters](/development/extension-api/characters) | Character cards, V2/legacy Proxy semantics, tags, import / export, per-character sidecar state |
+| [Characters](/development/extension-api/characters) | Character cards, V2/legacy Proxy semantics, tags, import / export, per-character state |
 | [World Info](/development/extension-api/world-info) | Lorebook CRUD, activation scanning, character auxiliary world books |
 | [Presets & Prompts](/development/extension-api/presets-and-prompts) | `context.presets.*`, `buildPresetAwarePromptMessages`, `resolveWorldInfoForMessages`, envelope inspection, reasoning helpers, settings views |
 | [Generation](/development/extension-api/generation) | `generateTask`, tool registration, `generateRaw` / `generateQuietPrompt`, service classes, connection profiles |
@@ -56,7 +56,7 @@ Luker is built on SillyTavern but has the following major API-level differences:
 |------|-------------|-------|
 | Chat persistence | Full-file overwrite | Patch-first (RFC 6902 incremental updates) |
 | Chat-bound state | `chat_metadata` only | New Chat State mechanism + Floor State |
-| Per-character sidecar state | None | `getCharacterState` / `setCharacterState` (separate from card JSON) |
+| Per-character state | None | `getCharacterState` / `setCharacterState` (separate from card JSON) |
 | Preset management | Direct import of internal modules | Unified `context.presets.*` API |
 | Prompt assembly | Manual concatenation required | `buildPresetAwarePromptMessages()` |
 | World Info simulation | None | `simulateWorldInfoActivation()` |

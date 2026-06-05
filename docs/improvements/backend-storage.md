@@ -49,7 +49,7 @@ DIR -> NS2
 
 - `{chat}.jsonl` — Chat main file
 - `{chat}.luker-state.chat_sync.json` — integrity + updated_at (sync metadata)
-- `{chat}.luker-state.<namespace>.json` — Per-plugin namespace state (one independent sidecar per plugin)
+- `{chat}.luker-state.<namespace>.json` — Per-plugin namespace state (one independent state file per plugin)
 
 If the state file doesn't exist (e.g., chats migrated from older versions), the system automatically falls back and creates the state file on the first write.
 
@@ -90,7 +90,7 @@ When multiple write operations are triggered close together (e.g., rapid message
 
 1. Frontend write tasks are queued in arrival order
 2. Tasks are executed one by one against incremental endpoints
-3. After each successful write, the backend updates the integrity UUID in the chat state sidecar
+3. After each successful write, the backend updates the integrity UUID in the chat state file
 4. If a queued request carries stale integrity, the backend returns `409 Conflict`
 
 This client-side serialization plus backend integrity validation keeps writes ordered without relying on a backend in-memory write queue.
