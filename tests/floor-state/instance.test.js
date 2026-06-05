@@ -490,6 +490,139 @@ describe('destroy', () => {
         expect(await fs.get()).toBeNull();
         expect(store._raw.size).toBe(0);
     });
+
+    test('destroy({purge: true}) removes the log sidecar from disk', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+
+        await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
+        expect(store._raw.has('foo__floor_log')).toBe(true);
+
+        const ok = await fs.destroy({ purge: true });
+        expect(ok).toBe(true);
+        expect(store._raw.has('foo__floor_log')).toBe(false);
+    });
+
+    test('destroy() without purge leaves the log sidecar intact', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+
+        await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
+        await fs.destroy();
+        expect(store._raw.has('foo__floor_log')).toBe(true);
+    });
+});
+
+describe('reset (log replacement)', () => {
+    test('reset() with non-empty commits replaces the log atomically', async () => {
+        const chatRef = { value: [msg(0), msg(0), msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+
+        // Seed with some earlier history so we can verify it gets fully replaced.
+        await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
+        expect(store._raw.get('foo__floor_log').commits).toHaveLength(1);
+
+        const newCommits = [
+            { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/y', value: 2 }] },
+            { floor: 1, swipeId: 0, patches: [{ op: 'add', path: '/z', value: 3 }] },
+        ];
+        const ok = await fs.reset(newCommits);
+        expect(ok).toBe(true);
+
+        const log = store._raw.get('foo__floor_log');
+        expect(log.commits).toEqual(newCommits);
+        // Cache was invalidated; next get() replays the new log.
+        expect(await fs.get()).toEqual({ y: 2, z: 3 });
+    });
+
+    test('reset([]) clears the log to an empty replay', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+
+        await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
+        expect(await fs.get()).toEqual({ x: 1 });
+
+        const ok = await fs.reset([]);
+        expect(ok).toBe(true);
+        expect(store._raw.get('foo__floor_log').commits).toEqual([]);
+        expect(await fs.get()).toBeNull();
+    });
+
+    test('reset() rejects a batch with an out-of-range floor and leaves the log untouched', async () => {
+        const chatRef = { value: [msg(0), msg(0)] }; // chat.length = 2
+        const { store, deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+
+        await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
+        const before = JSON.stringify(store._raw.get('foo__floor_log'));
+
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const ok = await fs.reset([
+                { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/a', value: 1 }] },
+                { floor: 5, swipeId: 0, patches: [{ op: 'add', path: '/b', value: 2 }] }, // out of range
+            ]);
+            expect(ok).toBe(false);
+            expect(warn).toHaveBeenCalledWith(expect.stringContaining('out of range'));
+        } finally {
+            warn.mockRestore();
+        }
+        // Log unchanged.
+        expect(JSON.stringify(store._raw.get('foo__floor_log'))).toBe(before);
+    });
+
+    test('reset() rejects malformed commits and leaves the log untouched', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            expect(await fs.reset([{ floor: -1, swipeId: 0, patches: [{ op: 'add', path: '/x', value: 1 }] }])).toBe(false);
+            expect(await fs.reset([{ floor: 0, swipeId: 0, patches: [] }])).toBe(false); // empty patches
+            expect(await fs.reset([{ floor: 0, swipeId: 0 }])).toBe(false); // missing patches
+        } finally {
+            warn.mockRestore();
+        }
+        expect(store._raw.get('foo__floor_log')).toBeUndefined();
+    });
+
+    test('reset() rejects non-array input', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+
+        expect(await fs.reset(null)).toBe(false);
+        expect(await fs.reset(undefined)).toBe(false);
+        expect(await fs.reset({ commits: [] })).toBe(false);
+    });
+
+    test('reset() returns false after destroy', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.destroy();
+        expect(await fs.reset([])).toBe(false);
+    });
+
+    test('patch after reset chains onto the new history', async () => {
+        const chatRef = { value: [msg(0), msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+
+        await fs.reset([
+            { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/y', value: 2 }] },
+        ]);
+        await fs.patch([{ op: 'add', path: '/z', value: 3 }]);
+
+        const log = store._raw.get('foo__floor_log');
+        expect(log.commits).toHaveLength(2);
+        expect(await fs.get()).toEqual({ y: 2, z: 3 });
+    });
 });
 
 describe('lazy log replay', () => {

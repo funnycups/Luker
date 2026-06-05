@@ -130,9 +130,17 @@ export async function getFloorStateInstance(context) {
 }
 
 /**
- * Test-only escape hatch: drop the cached singleton so subsequent
- * `getFloorStateInstance` calls create a fresh instance. Production code
- * never needs this — the instance lives for the page session.
+ * Drop the cached singleton so the next `getFloorStateInstance` call
+ * creates a fresh instance against the current chat. Use after
+ * `fs.destroy({purge})`, when the chat target has changed under us, or
+ * in tests that want a cold start.
+ */
+export function resetFloorStateInstance() {
+    floorStatePromise = null;
+}
+
+/**
+ * @deprecated keep the old name around for any test still importing it.
  */
 export function resetFloorStateInstanceForTesting() {
     floorStatePromise = null;

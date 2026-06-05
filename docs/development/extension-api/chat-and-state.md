@@ -259,11 +259,35 @@ await fs.ready();
 
 // Detach from the registry (rarely needed; instances usually live for the page session):
 fs.destroy();
+
+// Wipe this namespace's state from disk and detach:
+await fs.destroy({ purge: true });
 ```
 
 ::: warning
 Reducers must return a plain object. Returning an array, primitive, `null`, or `undefined` is treated as "no change" and the call resolves without writing.
 :::
+
+### Replacing the entire log (import / rebuild)
+
+`update` and `patch` are append-only — every call adds one commit on top of the existing history. When you need to install a fresh history wholesale (import a backup, rebuild from chat, reset to a known baseline), use `reset(commits)`:
+
+```js
+// Atomically replace the log with this exact set of commits.
+const ok = await fs.reset([
+    { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/intro', value: '...' }] },
+    { floor: 3, swipeId: 0, patches: [{ op: 'add', path: '/scene', value: '...' }] },
+]);
+if (!ok) {
+    // Validation failed (malformed commit, floor out of chat range) or the
+    // underlying write was rejected. The log is left in its prior state.
+}
+
+// Empty list clears the log entirely.
+await fs.reset([]);
+```
+
+Every commit is validated against the same structural checks `patch` uses (positive integer `floor` and `swipeId`, non-empty `patches` array), plus a chat-range check on `floor` (must be `< chat.length`). The whole batch is rejected if any commit fails — the log never lands in a partly-valid state. There is no separate data namespace to keep in sync; the next `get()` re-replays the new log and the in-memory cache is invalidated for you.
 
 ### Attaching state to a non-tail floor
 
@@ -309,9 +333,10 @@ The four structural transitions are settled by core synchronously before the mat
 - `createFloorState({ namespace })` — async factory; returns a frozen instance.
 - `instance.update(reducer, options?)` — read-modify-write; reducer receives the current state and returns the next, the diff is computed and committed for you. Optional `options = { floor, swipeId? }` pins the commit to an explicit floor instead of the chat tail. **This is the recommended write API.**
 - `instance.patch(operations, options?)` — advanced: append a commit whose patches you already computed yourself. Operations must be an incremental RFC 6902 diff (`buildObjectPatchOperationsAsync(prev, next)` against `await instance.get()`); not for snapshot-style overwrites. Same `options` shape as `update`.
-- `instance.get()` — read the current data namespace.
-- `instance.ready()` — resolves when no rebuild is in flight.
-- `instance.destroy()` — remove the instance from the registry and freeze it.
+- `instance.reset(commits)` — atomically replace the log with a fresh commit list. Use for import / rebuild / reset workflows. Every commit is validated; the whole batch is rejected if any commit is malformed or its `floor` is out of chat range.
+- `instance.get()` — read the current materialized state. Derived on demand by replaying the log against the current swipe map; never reads a separate data namespace.
+- `instance.ready()` — resolves when no in-flight write is pending.
+- `instance.destroy(options?)` — detach the instance from the registry. Pass `{ purge: true }` to additionally delete this namespace's state from disk (use for permanent reset / wipe workflows).
 
 ## Character State
 
@@ -323,7 +348,7 @@ Character state is persistent storage bound to the Character Card itself, shared
 getCharacterState(avatar: string, namespace: string): Promise<any | null>
 ```
 
-Reads the character sidecar state for the specified avatar and namespace. Returns `null` if no data has been stored for that namespace.
+Reads the character state for the specified avatar and namespace. Returns `null` if no data has been stored for that namespace.
 
 | Parameter | Description |
 |------|------|
@@ -336,7 +361,7 @@ Reads the character sidecar state for the specified avatar and namespace. Return
 setCharacterState(avatar: string, namespace: string, data: any): Promise<void>
 ```
 
-Writes character sidecar state under the specified namespace. Pass `null` as `data` to delete the state for that namespace.
+Writes character state under the specified namespace. Pass `null` as `data` to delete the state for that namespace.
 
 | Parameter | Description |
 |------|------|
@@ -371,7 +396,7 @@ await context.setCharacterState(character.avatar, 'my-extension', null);
 | Scope | Bound to Character Card, shared across all chats | Bound to a single chat |
 | Typical Use | Character-level plugin config, CardApp application state | Temporary in-chat data, conversation context |
 | API | `getCharacterState` / `setCharacterState` | `getChatState` / `getChatStateBatch` / `updateChatState` / `deleteChatState` |
-| Storage Location | Character Card sidecar file | Chat metadata |
+| Storage Location | Character state file (next to the card) | Chat metadata |
 
 ## Chat Lifecycle
 

@@ -258,11 +258,34 @@ await fs.ready();
 
 // 從註冊表移除（極少需要，實例通常與頁面同壽）：
 fs.destroy();
+
+// 抹除該命名空間的狀態並從註冊表移除：
+await fs.destroy({ purge: true });
 ```
 
 ::: warning
 reducer 必須回傳普通物件。回傳陣列、基本型別、`null`、`undefined` 一律視作「無變化」，呼叫直接成功回傳但不寫入。
 :::
+
+### 整盤替換日誌（匯入 / 重建）
+
+`update` 與 `patch` 都是 append-only——每次呼叫都在現有歷史末尾追加一筆提交。當你需要整盤替換歷史（匯入備份、從聊天重建、重置到已知基線）時，請用 `reset(commits)`：
+
+```js
+// 用這組提交原子性替換整段日誌。
+const ok = await fs.reset([
+    { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/intro', value: '...' }] },
+    { floor: 3, swipeId: 0, patches: [{ op: 'add', path: '/scene', value: '...' }] },
+]);
+if (!ok) {
+    // 校驗失敗（提交結構非法、floor 越出目前聊天範圍）或底層寫被拒，日誌保持原狀。
+}
+
+// 傳空陣列等於清空日誌。
+await fs.reset([]);
+```
+
+每筆提交都依 `patch` 同樣的結構校驗（`floor` 與 `swipeId` 是非負整數、`patches` 是非空陣列），外加 `floor < chat.length` 的範圍檢查。任一筆不合規即整批拒絕——日誌絕不會落到「半合規」狀態。沒有獨立的 data 命名空間要同步：下一次 `get()` 會按新日誌重新重放，行程內 cache 自動失效。
 
 ### 把狀態掛到非尾端的樓層
 
@@ -308,9 +331,10 @@ await fs.update((current) => nextState, { floor: targetFloor, swipeId: 0 });
 - `createFloorState({ namespace })`——非同步工廠，回傳凍結的實例。
 - `instance.update(reducer, options?)`——讀—改—寫；reducer 收到目前狀態、回傳下一份狀態，差異自動算完並提交。可選的 `options = { floor, swipeId? }` 把提交掛到指定樓層而非聊天尾端。**這是建議的寫入 API。**
 - `instance.patch(operations, options?)`——進階：追加一筆「自己已經算好 patch」的提交。operations 必須是相對 `await instance.get()` 的增量 RFC 6902 diff（`buildObjectPatchOperationsAsync(prev, next)`），不能是整盤覆寫式 snapshot。`options` 與 `update` 相同。
-- `instance.get()`——讀取業務命名空間。
-- `instance.ready()`——重建結束時解析。
-- `instance.destroy()`——從註冊表移除實例並凍結它。
+- `instance.reset(commits)`——原子性整盤替換日誌為給定提交清單。用於匯入 / 重建 / 重置類工作流。每筆提交都會被校驗，任意一筆結構非法或 `floor` 越界，整批拒絕。
+- `instance.get()`——讀取目前 materialized 狀態。按需對日誌做重放（以目前 swipe map 為準），不讀獨立的 data 命名空間。
+- `instance.ready()`——所有飛行中寫入完成時解析。
+- `instance.destroy(options?)`——從註冊表移除實例。傳 `{ purge: true }` 時同時把該命名空間的狀態從磁碟抹除（用於永久重置 / 抹除場景）。
 
 ## 角色狀態
 
@@ -322,7 +346,7 @@ await fs.update((current) => nextState, { floor: targetFloor, swipeId: 0 });
 getCharacterState(avatar: string, namespace: string): Promise<any | null>
 ```
 
-讀取指定 avatar 與 namespace 下的角色 sidecar 狀態。如果該 namespace 沒有儲存過資料，回傳 `null`。
+讀取指定 avatar 與命名空間下的角色狀態。如果該命名空間沒有儲存過資料，回傳 `null`。
 
 | 參數 | 說明 |
 |------|------|
@@ -335,7 +359,7 @@ getCharacterState(avatar: string, namespace: string): Promise<any | null>
 setCharacterState(avatar: string, namespace: string, data: any): Promise<void>
 ```
 
-在指定 namespace 下寫入角色 sidecar 狀態。傳 `null` 作為 `data` 可以刪除該 namespace 的狀態。
+在指定命名空間下寫入角色狀態。傳 `null` 作為 `data` 可以刪除該命名空間的狀態。
 
 | 參數 | 說明 |
 |------|------|

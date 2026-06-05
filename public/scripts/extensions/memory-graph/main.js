@@ -77,6 +77,7 @@ import {
 } from './diffusion.js';
 import {
     getFloorStateInstance,
+    resetFloorStateInstance,
     resolveBuildObjectPatchOperationsAsync,
     getFloorFromAssistantSeq,
     loadMetaFields,
@@ -133,7 +134,6 @@ const MODULE_NAME = 'memory_graph';
 const CHAT_STATE_NAMESPACE = MODULE_NAME;
 const META_NAMESPACE = floorStateAdapterConstants.META_NAMESPACE;
 const LOG_NAMESPACE = floorStateAdapterConstants.LOG_NAMESPACE;
-const FLOOR_STATE_LOG_VERSION = floorStateAdapterConstants.FLOOR_STATE_LOG_VERSION;
 const META_SCHEMA_VERSION = floorStateAdapterConstants.SCHEMA_VERSION;
 const PERSISTED_STORE_VERSION = floorStateAdapterConstants.PERSISTED_STORE_VERSION;
 const UI_BLOCK_ID = 'memory_graph_settings';
@@ -1849,22 +1849,29 @@ async function deleteMemoryStoreByTarget(context, target) {
     if (typeof context.deleteChatState !== 'function') {
         throw new Error('Chat state delete API is unavailable in extension context.');
     }
-    const ok = await context.deleteChatState(CHAT_STATE_NAMESPACE, { target });
-    if (!ok) {
-        throw new Error('Failed to delete memory store.');
-    }
-    // Sister sidecars created by floor-state and the meta layer. Failure to
-    // delete these is a soft warning — the next migration / load path
-    // overwrites them anyway, but we don't want orphan data lingering.
+    // Floor-state owns the log sidecar — ask it to purge that itself.
+    // memory-graph still owns the META sidecar, so we delete that directly.
+    // The legacy CHAT_STATE_NAMESPACE data sidecar should already be gone
+    // post-migration; deleting it here is a no-op guard for chats whose
+    // first fs.get() never ran (e.g. fresh install meeting an old sidecar).
     try {
-        await context.deleteChatState(LOG_NAMESPACE, { target });
+        const fs = await getFloorStateInstance(context);
+        await fs.destroy({ purge: true });
     } catch (error) {
-        console.warn(`[${MODULE_NAME}] Failed to delete floor-state log sidecar`, { target, error });
+        console.warn(`[${MODULE_NAME}] Failed to purge floor-state log sidecar`, { target, error });
     }
+    // The singleton is now dead; clear the cache so the next mutation gets
+    // a fresh instance bound to the (now-empty) namespace.
+    resetFloorStateInstance();
     try {
         await context.deleteChatState(META_NAMESPACE, { target });
     } catch (error) {
         console.warn(`[${MODULE_NAME}] Failed to delete memory-graph meta sidecar`, { target, error });
+    }
+    try {
+        await context.deleteChatState(CHAT_STATE_NAMESPACE, { target });
+    } catch (error) {
+        console.warn(`[${MODULE_NAME}] Failed to delete legacy memory-graph data sidecar`, { target, error });
     }
 }
 
@@ -1880,50 +1887,23 @@ function formatPersistFailureWithSeq({ op, stage, seq, floor, chatLen, reason })
     );
 }
 
-function formatPersistFailureForNamespace({ op, stage, namespace, reason }) {
-    return i18nFormat(
-        'Memory graph persist failed [op=${0} stage=${1} namespace=${2}]: ${3}',
-        String(op || '?'),
-        String(stage || '?'),
-        String(namespace || '?'),
-        String(reason || 'unknown'),
-    );
-}
-
-async function writeChatStateOrThrow(context, namespace, payload, options, { op, stage }) {
-    let result;
-    try {
-        result = await context.updateChatState(namespace, () => payload, options);
-    } catch (error) {
-        throw new Error(formatPersistFailureForNamespace({
-            op,
-            stage,
-            namespace,
-            reason: `updateChatState threw: ${error?.message || error}`,
-        }));
-    }
-    if (!result || result.ok === false) {
-        throw new Error(formatPersistFailureForNamespace({
-            op,
-            stage,
-            namespace,
-            reason: `updateChatState returned ${JSON.stringify(result)} — patch chain rejected (likely concurrent state/patch conflict after retry)`,
-        }));
-    }
-    return result;
-}
-
 /**
- * Direct overwrite of the floor-state log + data namespaces at a given target.
+ * Replace the floor-state log for the current chat with a single commit that
+ * encodes `store` as a fresh baseline at `seq`'s floor. Used by Reset / Rebuild
+ * / Import paths that need to install a new history rather than append to it.
  *
- * Bypasses the FloorState public API because that API is append-only. We
- * still serialise against the singleton's in-flight queue via fs.ready() to
- * avoid races with rematerialize. Every underlying write is checked — any
- * failure throws a structured persist-failure error so callers see the
- * exact stage that broke (no silent partial writes that rematerialize would
- * later clobber).
+ * Goes through `fs.reset()` so the floor-state singleton owns the write
+ * (single underlying log update + cache invalidation). The data namespace is
+ * not touched: it's no longer a persisted source of truth — `fs.get()`
+ * replays the log on demand.
+ *
+ * When `seq` cannot resolve to a chat position, the operation is skipped and
+ * the caller is notified via `{ skipped: true }`. This protects against the
+ * late-write race where a stale caller (e.g. a director session write fired
+ * before chat truncation) would otherwise install a commit on a vanished
+ * floor.
  */
-async function replaceGraphLogForTarget(context, target, store, seq) {
+async function replaceGraphLogForTarget(context, store, seq) {
     const fs = await getFloorStateInstance(context);
     await fs.ready();
     const normalizedStore = normalizeStoreForRuntime(store);
@@ -1933,48 +1913,27 @@ async function replaceGraphLogForTarget(context, target, store, seq) {
     finalPayload.appliedSeqTo = Math.max(finalPayload.appliedSeqTo, normalizedSeq);
     finalPayload.loggedSeqTo = Math.max(finalPayload.loggedSeqTo, normalizedSeq);
 
-    const targetWriteOption = target ? { target, maxOperations: 16000 } : { maxOperations: 16000 };
     const floor = seqToFloor(context, normalizedSeq);
     const floorResolved = Number.isInteger(floor) && floor >= 0;
     const swipeId = floorResolved ? (activeSwipeIdAtFloor(context, floor) ?? 0) : 0;
     const buildObjectPatchOperationsAsync = await resolveBuildObjectPatchOperationsAsync(context);
     const patches = await buildObjectPatchOperationsAsync({}, finalPayload);
-    const hasCommit = Array.isArray(patches) && patches.length > 0 && floorResolved;
 
-    if (hasCommit) {
-        await writeChatStateOrThrow(context, LOG_NAMESPACE, {
-            version: FLOOR_STATE_LOG_VERSION,
-            commits: [{ floor, swipeId, patches }],
-        }, targetWriteOption, { op: 'replace-log', stage: 'log-write' });
-        await writeChatStateOrThrow(context, CHAT_STATE_NAMESPACE, finalPayload, targetWriteOption, {
-            op: 'replace-log',
-            stage: 'data-write',
-        });
-        return { payload: finalPayload, hasCommit: true, skipped: false };
+    if (Array.isArray(patches) && patches.length > 0 && floorResolved) {
+        const ok = await fs.reset([{ floor, swipeId, patches }]);
+        return { payload: finalPayload, hasCommit: ok, skipped: !ok };
     }
 
     if (!floorResolved) {
-        // Refuse to wipe when seq cannot resolve to a chat position: this is
-        // the late-write race where chat has moved past the seq the caller
-        // computed against. Wiping log+data here is how the n_237/n_243-246
-        // class of orphan-leaving-no-trace incidents got created. The caller
-        // sees skipped:true and can warn the user; live data stays intact.
-        console.warn(`[${MODULE_NAME}] replace-flush skipped: seq=${normalizedSeq} could not resolve to a chat floor (chat may have been truncated after the caller computed seq). log + data namespaces left untouched.`);
+        console.warn(`[${MODULE_NAME}] replace skipped: seq=${normalizedSeq} could not resolve to a chat floor (chat may have been truncated after the caller computed seq).`);
         return { payload: finalPayload, hasCommit: false, skipped: true };
     }
 
     // floor resolved but patches empty — the store is genuinely empty.
-    // Reset both namespaces to the empty baseline so a freshly-cleared chat
-    // doesn't keep stale data on disk.
-    await writeChatStateOrThrow(context, LOG_NAMESPACE, {
-        version: FLOOR_STATE_LOG_VERSION,
-        commits: [],
-    }, targetWriteOption, { op: 'replace-log', stage: 'log-reset' });
-    await writeChatStateOrThrow(context, CHAT_STATE_NAMESPACE, {}, targetWriteOption, {
-        op: 'replace-log',
-        stage: 'data-reset',
-    });
-    return { payload: finalPayload, hasCommit: false, skipped: false };
+    // Clear the log to the empty baseline so a freshly-cleared chat doesn't
+    // keep stale commits on disk.
+    const ok = await fs.reset([]);
+    return { payload: finalPayload, hasCommit: false, skipped: !ok };
 }
 
 async function loadMemoryStoreByTarget(context, target) {
@@ -2042,7 +2001,7 @@ async function commitMemoryStoreReplaceByChatKey(context, chatKey, store, seq, {
     const normalizedStore = normalizeStoreForRuntime(store);
     const normalizedSeq = Math.max(0, Math.floor(Number(seq || getStoreCoveredSeqTo(normalizedStore) || 0)));
 
-    const { payload, skipped } = await replaceGraphLogForTarget(context, target, normalizedStore, normalizedSeq);
+    const { payload, skipped } = await replaceGraphLogForTarget(context, normalizedStore, normalizedSeq);
     if (skipped) {
         // Disk untouched; do not advance the in-memory cache to a state that
         // is not persisted. Existing cache stays the source of truth until

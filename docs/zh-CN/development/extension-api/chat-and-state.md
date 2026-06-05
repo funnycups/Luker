@@ -258,11 +258,34 @@ await fs.ready();
 
 // 从注册表里移除（极少需要，实例通常和页面同寿）：
 fs.destroy();
+
+// 抹除该命名空间的状态并从注册表移除：
+await fs.destroy({ purge: true });
 ```
 
 ::: warning
 reducer 必须返回普通对象。返回数组、基础类型、`null`、`undefined` 一律视作「无变化」，调用直接成功返回但不写入。
 :::
+
+### 整盘替换日志（导入 / 重建）
+
+`update` 和 `patch` 都是 append-only——每次调用都在现有历史末尾追加一条提交。当你要整盘替换历史（导入备份、从聊天重建、重置到已知基线）时，请用 `reset(commits)`：
+
+```js
+// 用这组提交原子性替换整段日志。
+const ok = await fs.reset([
+    { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/intro', value: '...' }] },
+    { floor: 3, swipeId: 0, patches: [{ op: 'add', path: '/scene', value: '...' }] },
+]);
+if (!ok) {
+    // 校验失败（提交结构非法、floor 越出当前聊天范围）或底层写被拒绝，日志保持原状。
+}
+
+// 传空数组等于清空日志。
+await fs.reset([]);
+```
+
+每条提交都按 `patch` 同样的结构校验（`floor` 与 `swipeId` 是非负整数、`patches` 是非空数组），外加 `floor < chat.length` 的范围检查。任意一条不合规就整批拒绝——日志绝不会落到「半合规」状态。没有独立的 data 命名空间要同步：下一次 `get()` 会按新日志重新重放，进程内 cache 自动失效。
 
 ### 把状态挂到非尾部的楼层
 
@@ -308,9 +331,10 @@ await fs.update((current) => nextState, { floor: targetFloor, swipeId: 0 });
 - `createFloorState({ namespace })`——异步工厂，返回冻结的实例。
 - `instance.update(reducer, options?)`——读—改—写；reducer 收到当前状态、返回下一份状态，差异自动算完并提交。可选的 `options = { floor, swipeId? }` 把提交挂到指定楼层而非聊天尾部。**这是推荐的写入 API。**
 - `instance.patch(operations, options?)`——进阶：追加一条「自己已经算好 patch」的提交。operations 必须是相对 `await instance.get()` 的增量 RFC 6902 diff（`buildObjectPatchOperationsAsync(prev, next)`），不能是整盘覆写式 snapshot。`options` 与 `update` 相同。
-- `instance.get()`——读取业务命名空间。
-- `instance.ready()`——重建结束时解决。
-- `instance.destroy()`——从注册表移除实例并冻结它。
+- `instance.reset(commits)`——原子性整盘替换日志为给定提交列表。用于导入 / 重建 / 重置类工作流。每条提交都会被校验，任意一条结构非法或 `floor` 越界，整批拒绝。
+- `instance.get()`——读取当前 materialized 状态。按需对日志做重放（以当前 swipe map 为准），不读独立的 data 命名空间。
+- `instance.ready()`——所有在飞写入完成时解决。
+- `instance.destroy(options?)`——从注册表移除实例。传 `{ purge: true }` 时同时把该命名空间的状态从磁盘抹除（用于永久重置 / 抹除场景）。
 
 ## 角色状态
 
@@ -322,7 +346,7 @@ await fs.update((current) => nextState, { floor: targetFloor, swipeId: 0 });
 getCharacterState(avatar: string, namespace: string): Promise<any | null>
 ```
 
-读取指定头像和命名空间下的角色旁挂状态。如果该命名空间没有存储过数据，返回 `null`。
+读取指定头像和命名空间下的角色状态。如果该命名空间没有存储过数据，返回 `null`。
 
 | 参数 | 说明 |
 |------|------|
@@ -335,7 +359,7 @@ getCharacterState(avatar: string, namespace: string): Promise<any | null>
 setCharacterState(avatar: string, namespace: string, data: any): Promise<void>
 ```
 
-写入指定命名空间下的角色旁挂状态。传入 `null` 作为 `data` 可以删除该命名空间的状态。
+写入指定命名空间下的角色状态。传入 `null` 作为 `data` 可以删除该命名空间的状态。
 
 | 参数 | 说明 |
 |------|------|
@@ -370,7 +394,7 @@ await context.setCharacterState(character.avatar, 'my-extension', null);
 | 作用范围 | 绑定到角色卡，所有聊天共享 | 绑定到单个聊天 |
 | 典型用途 | 角色级别的插件配置、CardApp 应用状态 | 聊天内的临时数据、对话上下文 |
 | API | `getCharacterState` / `setCharacterState` | `getChatState` / `getChatStateBatch` / `updateChatState` / `deleteChatState` |
-| 存储位置 | 角色卡旁挂文件 | 聊天元数据 |
+| 存储位置 | 卡片旁边的状态文件 | 聊天元数据 |
 
 ## 聊天生命周期
 

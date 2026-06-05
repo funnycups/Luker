@@ -466,6 +466,50 @@ export function createFloorStateWithDeps(options, deps) {
     }
 
     /**
+     * Replace the entire commit log with the supplied commit list, atomically.
+     *
+     * Use this for import / rebuild / reset workflows — anything that wants
+     * to install a fresh history rather than append to the existing one.
+     * Passing an empty array clears the log.
+     *
+     * Every commit is validated against `isValidCommit` plus a chat-range
+     * check on its `floor` (must be `< chat.length`); the whole batch is
+     * rejected if any commit fails, so the log never lands in a partly-valid
+     * state. Single underlying write — there is no separate data namespace
+     * to keep in sync (the log is the only persisted source of truth; see
+     * `get()` for replay semantics).
+     *
+     * @param {object[]} commits — commit list in replay order
+     * @returns {Promise<boolean>} true when the new log is durably persisted
+     */
+    async function reset(commits) {
+        if (destroyed) return false;
+        if (!Array.isArray(commits)) return false;
+        const chat = runtime.getChat();
+        const chatLen = Array.isArray(chat) ? chat.length : 0;
+        for (let i = 0; i < commits.length; i++) {
+            const commit = commits[i];
+            if (!isValidCommit(commit)) {
+                console.warn(`[floor-state:${namespace}] reset rejected: commit ${i} is malformed`, commit);
+                return false;
+            }
+            if (commit.floor >= chatLen) {
+                console.warn(`[floor-state:${namespace}] reset rejected: commit ${i} floor=${commit.floor} is out of range (chat.length=${chatLen})`);
+                return false;
+            }
+        }
+        beginPending();
+        try {
+            const ok = await writeLog({ version: LOG_VERSION, commits });
+            if (!ok) return false;
+            invalidateCache();
+            return true;
+        } finally {
+            endPending();
+        }
+    }
+
+    /**
      * Materialize the log into in-memory state. Replays surviving commits
      * filtered by the current chat's swipe map. Pure function over the log
      * + chat — never touches disk for the data namespace (that namespace is
@@ -572,9 +616,19 @@ export function createFloorStateWithDeps(options, deps) {
 
     /**
      * Detach from the registry. Optional — most instances live for the page session.
+     *
+     * `purge: true` additionally deletes the log sidecar from disk for the
+     * current target. Use this when the namespace is being permanently
+     * abandoned (e.g. a plugin's "reset / wipe" UI action). The data
+     * namespace, if any legacy file still exists, is left alone — that one
+     * is migration's responsibility on next mount.
+     *
+     * @param {{purge?: boolean}} [options]
+     * @returns {Promise<boolean>} true on success (always true unless purge
+     *     was requested and the underlying delete failed)
      */
-    function destroy() {
-        if (destroyed) return;
+    async function destroy({ purge = false } = {}) {
+        if (destroyed) return true;
         destroyed = true;
         allInstances.delete(instance);
         // Force-resolve any pending gate so callers awaiting ready() unblock; in-flight
@@ -585,12 +639,26 @@ export function createFloorStateWithDeps(options, deps) {
             pendingResolver = null;
             r();
         }
+        invalidateCache();
+        if (!purge) return true;
+        if (typeof runtime.deleteChatState !== 'function') {
+            console.warn(`[floor-state:${namespace}] destroy(purge): deleteChatState is unavailable; log sidecar left on disk`);
+            return false;
+        }
+        try {
+            await runtime.deleteChatState(logNamespace);
+            return true;
+        } catch (error) {
+            console.warn(`[floor-state:${namespace}] destroy(purge): deleteChatState failed`, error);
+            return false;
+        }
     }
 
     const instance = Object.freeze({
         namespace,
         patch,
         update,
+        reset,
         get,
         ready,
         destroy,
