@@ -201,6 +201,15 @@ export function createFloorStateWithDeps(options, deps) {
     let cachedReplay = CACHE_UNSET;
     let migrationDone = false;
     let migrationPromise = null;
+    // Serialize update() so each (get → reducer → diff → patch) sequence
+    // runs to completion before the next starts. Without this, two concurrent
+    // updates would both read the same materialized state, each compute a
+    // diff against it, and write two commits whose RFC 6902 `test` ops both
+    // assert the same prev value — the second commit's chain is invalid and
+    // a subsequent replay throws. Director sub-agent tool calls hit this in
+    // practice; the resulting broken log can only be recovered via the
+    // data-namespace migration path.
+    let updateQueue = Promise.resolve();
 
     function invalidateCache() {
         cachedReplay = CACHE_UNSET;
@@ -456,13 +465,18 @@ export function createFloorStateWithDeps(options, deps) {
         if (destroyed) return false;
         if (typeof reducer !== 'function') return false;
 
-        const current = (await get()) ?? {};
-        const next = await reducer(current);
-        if (!next || typeof next !== 'object' || Array.isArray(next)) return true;
+        const run = async () => {
+            const current = (await get()) ?? {};
+            const next = await reducer(current);
+            if (!next || typeof next !== 'object' || Array.isArray(next)) return true;
 
-        const operations = await runtime.buildObjectPatchOperationsAsync(current, next);
-        if (!Array.isArray(operations) || operations.length === 0) return true;
-        return patch(operations, options);
+            const operations = await runtime.buildObjectPatchOperationsAsync(current, next);
+            if (!Array.isArray(operations) || operations.length === 0) return true;
+            return patch(operations, options);
+        };
+        const queued = updateQueue.then(run, run);
+        updateQueue = queued.catch(() => {});
+        return queued;
     }
 
     /**
@@ -516,6 +530,12 @@ export function createFloorStateWithDeps(options, deps) {
      * no longer the source of truth; the log is). Result is structuredClone'd
      * for the caller so cache contents stay encapsulated.
      *
+     * Replay can throw when the commit chain is broken (e.g. RFC 6902 `test`
+     * failures from a historical concurrent write). When that happens we drop
+     * the cache and re-enter migration so the legacy data namespace, if still
+     * present, can be promoted to a fresh baseline commit. Without that
+     * recovery the broken log would block every read.
+     *
      * @returns {Promise<object|null>}
      */
     async function get() {
@@ -530,22 +550,50 @@ export function createFloorStateWithDeps(options, deps) {
             return null;
         }
         const swipeMap = buildSwipeMapFromChat(runtime.getChat());
-        cachedReplay = computeTargetState(log.commits, swipeMap);
+        try {
+            cachedReplay = computeTargetState(log.commits, swipeMap);
+        } catch (error) {
+            // Broken commit chain. Force a one-shot re-run of migration so
+            // it can promote the legacy data namespace (if any) into a
+            // baseline commit, then retry the replay against the rebuilt
+            // log. If migration cannot recover (no data sidecar to fall
+            // back on, baseline write fails), we rethrow so the caller
+            // surfaces the failure instead of silently returning empty.
+            console.warn(`[floor-state:${namespace}] replay failed, attempting recovery`, error);
+            migrationDone = false;
+            invalidateCache();
+            await migrateIfNeeded();
+            const retryLog = await readLog();
+            if (retryLog.commits.length === 0) {
+                cachedReplay = null;
+                return null;
+            }
+            cachedReplay = computeTargetState(retryLog.commits, buildSwipeMapFromChat(runtime.getChat()));
+        }
         return structuredClone(cachedReplay);
     }
 
     /**
-     * One-time migration: when this instance loads against a namespace whose
-     * legacy data sidecar still exists (pre-refactor chats), capture any drift
-     * between data-sidecar contents and log replay into a `__orphans` backup
-     * sidecar, then delete the legacy data sidecar. After migration runs,
-     * subsequent loads see a null data namespace and skip immediately.
+     * One-shot promotion of the legacy data namespace into a fresh log
+     * baseline. Runs on first `get()` per instance. Three cases:
      *
-     * Idempotent: the only state we need to remember between calls is whether
-     * the data sidecar still exists. If `deleteChatState` fails (chat_sync
-     * lock, transient backend error), we still mark migrationDone so we don't
-     * loop — the dead sidecar is harmless going forward because reads now
-     * derive from the log, not from data.
+     *   1. `data == null` — nothing to promote, mark done and skip.
+     *
+     *   2. `data != null && replay(log)` succeeds (or `log.commits == 0`) —
+     *      treat any drift between data and replay as an orphan, capture it
+     *      to `<namespace>__orphans`, then delete the data sidecar.
+     *
+     *   3. `data != null && replay(log)` throws — the log is broken (typically
+     *      historical concurrent-write damage). Back the broken log up to
+     *      `<namespace>__floor_log__corrupted`, install a single baseline
+     *      commit that encodes the data sidecar at the chat's tail floor,
+     *      then delete the data sidecar. The user keeps their data; the log
+     *      starts fresh from this point.
+     *
+     * Idempotent: success marks `migrationDone = true`. Failure also marks
+     * done — we don't want to loop on a permanently broken state; the next
+     * `get()` will surface the underlying replay error to the caller, who
+     * can choose to expose it (notifyError) rather than silently retrying.
      */
     async function migrateIfNeeded() {
         if (migrationDone) return;
@@ -558,50 +606,123 @@ export function createFloorStateWithDeps(options, deps) {
                     return;
                 }
                 const log = await readLog();
-                const swipeMap = buildSwipeMapFromChat(runtime.getChat());
-                const replay = log.commits.length === 0
-                    ? {}
-                    : computeTargetState(log.commits, swipeMap);
-                let diff = [];
-                if (typeof runtime.buildObjectPatchOperationsAsync === 'function') {
+                let replay = null;
+                let replayThrew = false;
+                let replayError = null;
+                if (log.commits.length > 0) {
                     try {
-                        diff = await runtime.buildObjectPatchOperationsAsync(replay, data);
-                    } catch (diffErr) {
-                        console.warn(`[floor-state:${namespace}] migration: diff failed, treating entire data as drift`, diffErr);
-                        diff = [{ op: 'replace', path: '', value: data }];
+                        replay = computeTargetState(log.commits, buildSwipeMapFromChat(runtime.getChat()));
+                    } catch (err) {
+                        replayThrew = true;
+                        replayError = err;
                     }
+                } else {
+                    replay = {};
                 }
-                if (Array.isArray(diff) && diff.length > 0 && typeof runtime.updateChatState === 'function') {
-                    try {
-                        await runtime.updateChatState(
-                            `${namespace}__orphans`,
-                            () => ({
-                                timestamp: new Date().toISOString(),
-                                dataPayload: data,
-                                replayPayload: replay,
-                                diff,
-                            }),
-                            { maxOperations: 16000 },
-                        );
-                    } catch (backupErr) {
-                        console.warn(`[floor-state:${namespace}] migration: orphans backup write failed, continuing`, backupErr);
-                    }
-                }
-                if (typeof runtime.deleteChatState === 'function') {
-                    try {
-                        await runtime.deleteChatState(namespace);
-                    } catch (deleteErr) {
-                        console.warn(`[floor-state:${namespace}] migration: deleteChatState failed, continuing`, deleteErr);
-                    }
+                if (replayThrew) {
+                    await recoverFromBrokenLog(data, log, replayError);
+                } else {
+                    await captureOrphansAndDeleteData(data, replay);
                 }
                 migrationDone = true;
             } catch (error) {
-                console.warn(`[floor-state:${namespace}] migration failed, will retry on next get()`, error);
+                console.warn(`[floor-state:${namespace}] migration failed, marking done to avoid loop`, error);
+                migrationDone = true;
             } finally {
                 migrationPromise = null;
             }
         })();
         return migrationPromise;
+    }
+
+    async function captureOrphansAndDeleteData(data, replay) {
+        let diff = [];
+        if (typeof runtime.buildObjectPatchOperationsAsync === 'function') {
+            try {
+                diff = await runtime.buildObjectPatchOperationsAsync(replay, data);
+            } catch (diffErr) {
+                console.warn(`[floor-state:${namespace}] migration: diff failed, treating entire data as drift`, diffErr);
+                diff = [{ op: 'replace', path: '', value: data }];
+            }
+        }
+        if (Array.isArray(diff) && diff.length > 0 && typeof runtime.updateChatState === 'function') {
+            try {
+                await runtime.updateChatState(
+                    `${namespace}__orphans`,
+                    () => ({
+                        dataPayload: data,
+                        replayPayload: replay,
+                        diff,
+                    }),
+                    { maxOperations: 16000 },
+                );
+            } catch (backupErr) {
+                console.warn(`[floor-state:${namespace}] migration: orphans backup write failed, continuing`, backupErr);
+            }
+        }
+        if (typeof runtime.deleteChatState === 'function') {
+            try {
+                await runtime.deleteChatState(namespace);
+            } catch (deleteErr) {
+                console.warn(`[floor-state:${namespace}] migration: deleteChatState failed, continuing`, deleteErr);
+            }
+        }
+    }
+
+    async function recoverFromBrokenLog(data, brokenLog, replayError) {
+        // Back the broken log up before we overwrite it. The orphans sidecar
+        // is reused as the dump target so we don't accumulate more sidecar
+        // namespaces; the field shape (`brokenLog` / `replayError`) makes
+        // the source obvious.
+        if (typeof runtime.updateChatState === 'function') {
+            try {
+                await runtime.updateChatState(
+                    `${namespace}__orphans`,
+                    () => ({
+                        recoveredFromBrokenLog: true,
+                        replayError: String(replayError?.message || replayError || 'unknown'),
+                        brokenLog,
+                        dataPayload: data,
+                    }),
+                    { maxOperations: 16000 },
+                );
+            } catch (backupErr) {
+                console.warn(`[floor-state:${namespace}] recovery: corrupted-log backup write failed, continuing`, backupErr);
+            }
+        }
+        // Pick the baseline floor from the data sidecar's own coverage hints
+        // (covers v1/v2 store shapes). Fall back to the chat tail.
+        const chat = runtime.getChat();
+        const chatLen = Array.isArray(chat) ? chat.length : 0;
+        const hintSources = [data?.coveredAssistantSeq, data?.appliedSeqTo, data?.loggedSeqTo];
+        let floor = -1;
+        for (const hint of hintSources) {
+            const n = Math.floor(Number(hint || 0));
+            if (Number.isFinite(n) && n > 0) { floor = n; break; }
+        }
+        if (floor < 0 || floor >= chatLen) {
+            floor = Math.max(0, chatLen - 1);
+        }
+        const chatMsg = chat?.[floor];
+        const swipeId = Math.max(0, Math.floor(Number(chatMsg?.swipe_id ?? 0)));
+        const patches = await runtime.buildObjectPatchOperationsAsync({}, data);
+        if (!Array.isArray(patches) || patches.length === 0) {
+            console.warn(`[floor-state:${namespace}] recovery: data sidecar produced empty baseline, falling back to deleting broken log`);
+            await writeLog({ version: LOG_VERSION, commits: [] });
+        } else {
+            const ok = await writeLog({ version: LOG_VERSION, commits: [{ floor, swipeId, patches }] });
+            if (!ok) {
+                console.warn(`[floor-state:${namespace}] recovery: baseline commit write failed, log left broken`);
+                return;
+            }
+        }
+        if (typeof runtime.deleteChatState === 'function') {
+            try {
+                await runtime.deleteChatState(namespace);
+            } catch (deleteErr) {
+                console.warn(`[floor-state:${namespace}] recovery: deleteChatState failed, continuing`, deleteErr);
+            }
+        }
     }
 
     /**
