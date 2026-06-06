@@ -298,6 +298,14 @@ context.worldInfoEntry.setGlobalSelection(
 
 Adds or removes a world book from the global activation list (i.e. the multi-select shown at the top of the World Info panel). Persists immediately; UI re-renders on the next selector refresh.
 
+### worldInfoEntry.getSorted
+
+```ts
+context.worldInfoEntry.getSorted(): Promise<WIEntry[]>
+```
+
+Returns all entries from every currently-active world book (per-chat + global + character primary + character aux), pre-merged and sorted by injection order. Use when you need the same view the scanner sees — e.g. a plugin that surfaces "which entries are eligible to trigger right now" without re-running the full activation pass.
+
 ## Chat-Bound World Info
 
 Per-chat world-book bindings live in `chat_metadata.world_info` and travel with the chat. Use `context.chatWorldInfo` to inspect and mutate them.

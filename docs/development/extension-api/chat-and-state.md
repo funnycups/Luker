@@ -124,6 +124,14 @@ getMessageCount(): number
 
 Returns the total number of messages in the current chat.
 
+### sendTextareaMessage
+
+```ts
+sendTextareaMessage(): Promise<void>
+```
+
+Programmatically triggers the user-send pipeline as if the user typed in the message textarea and pressed the send button. Sends whatever is currently in the textarea (use `$('#send_textarea').val(...)` first to seed it), then runs the standard generation flow. Resolves once the send completes.
+
 ---
 
 ::: warning Deprecated Low-Level APIs
@@ -315,6 +323,18 @@ The override only changes what label this commit carries in the log — `MESSAGE
 If you already have an incremental RFC 6902 diff against the current materialized state — for example, you computed it yourself for performance reasons or you're driving a one-shot migration — you can call `instance.patch(operations, options?)` to append it directly. The operations MUST be diffed against `await fs.get()`; a snapshot-from-empty patch (one that overwrites the whole state) is not a valid commit because rebuild assumes each commit's patches compose with the prior surviving commits' patches.
 
 For everything else, prefer `update` — it computes the right diff for you.
+
+### buildObjectPatchOperationsAsync
+
+```ts
+context.buildObjectPatchOperationsAsync(
+    previousState: object,
+    nextState: object,
+    options?: object,
+): Promise<RFC6902Operation[]>
+```
+
+The diff engine that powers Luker's patch-first persistence. Returns the minimal RFC 6902 operations that transform `previousState` into `nextState`. Use this to construct the `operations` argument for `instance.patch()` when you want to commit a pre-computed diff. The same engine drives chat persistence, chat state, floor state, and preset state internally — calling it directly lets plugin code participate in the same incremental-save pipeline.
 
 ### When to await `ready()`
 

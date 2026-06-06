@@ -124,6 +124,14 @@ getMessageCount(): number
 
 回傳當前聊天的訊息總數。
 
+### sendTextareaMessage
+
+```ts
+sendTextareaMessage(): Promise<void>
+```
+
+像「使用者在訊息文字框裡打了字然後按了傳送」一樣,程式化觸發使用者側傳送管道。會傳送文字框裡現有內容（先 `$('#send_textarea').val(...)` 餵入）,然後跑標準生成流程。傳送完成時解析。
+
 ---
 
 ::: warning 已棄用的底層 API
@@ -313,6 +321,18 @@ await fs.update((current) => nextState, { floor: targetFloor, swipeId: 0 });
 如果你已經手上有一份針對目前 materialized 狀態的增量 RFC 6902 diff——例如基於效能考量自己算了 diff、或者在跑一次性遷移——可以呼叫 `instance.patch(operations, options?)` 直接追加。operations 必須是 `buildObjectPatchOperationsAsync(prev, next)` 形式的增量 diff，prev 取自 `await fs.get()`；不能傳「整盤覆寫」式的 snapshot patch，因為重建假設每筆提交的 patch 與前面倖存提交的 patch 依序組合。
 
 其他場景一律走 `update`——它會幫你算好 diff。
+
+### buildObjectPatchOperationsAsync
+
+```ts
+context.buildObjectPatchOperationsAsync(
+    previousState: object,
+    nextState: object,
+    options?: object,
+): Promise<RFC6902Operation[]>
+```
+
+驅動 Luker patch-first 持久化的 diff 引擎。回傳把 `previousState` 變成 `nextState` 的最小 RFC 6902 操作。需要給 `instance.patch()` 餵一份預先算好的 diff 時用。同一個引擎內部驅動聊天持久化、聊天狀態、樓層狀態、預設狀態——直接呼叫它能讓外掛程式加入同一份增量儲存管道。
 
 ### 何時需要 `await ready()`
 

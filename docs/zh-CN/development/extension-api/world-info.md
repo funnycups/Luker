@@ -298,6 +298,14 @@ context.worldInfoEntry.setGlobalSelection(
 
 把某本世界书加入或移出全局激活列表（即世界书面板顶部的多选）。立即持久化;UI 在下次 selector 刷新时同步。
 
+### worldInfoEntry.getSorted
+
+```ts
+context.worldInfoEntry.getSorted(): Promise<WIEntry[]>
+```
+
+返回当前所有激活世界书（按聊天 + 全局 + 角色主书 + 角色辅助书）里的全部条目,预先合并并按注入顺序排好。需要拿到「扫描器当下看到的视图」时用——例如插件想列「现在哪些条目有资格触发」而不想重新跑一遍完整激活流程。
+
 ## 聊天绑定的世界书
 
 按聊天的世界书绑定存在 `chat_metadata.world_info` 中,跟随聊天走。用 `context.chatWorldInfo` 查看和修改。

@@ -103,6 +103,8 @@ import {
     createModelIcon,
     resolveChatStateTarget,
     converter,
+    sendTextareaMessage,
+    buildObjectPatchOperationsAsync,
 } from '../script.js';
 import {
     extension_settings,
@@ -144,7 +146,7 @@ import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { areLookupNamesEqual, findCanonicalNameInList, timestampToMoment, uuidv4, importFromExternalUrl, getCharaFilename, escapeHtml, download, getFileText, getStringHash, createThumbnail, isValidUrl } from './utils.js';
 import { addGlobalVariable, addLocalVariable, decrementGlobalVariable, decrementLocalVariable, deleteGlobalVariable, deleteLocalVariable, existsGlobalVariable, existsLocalVariable, getGlobalVariable, getLocalVariable, incrementGlobalVariable, incrementLocalVariable, popLocalVariable, pushLocalVariable, setGlobalVariable, setLocalVariable } from './variables.js';
-import { convertCharacterBook, getWorldInfoPrompt, loadWorldInfo, loadWorldInfoBatch, reloadEditor, saveWorldInfo, updateWorldInfoList, wi_anchor_position, world_info_position, world_names, getCharaAuxWorlds, createNewWorldInfo, importEmbeddedWorldInfo, charUpdatePrimaryWorld, getCharacterEmbeddedWorld, newWorldInfoEntryTemplate, createWorldInfoEntry, setWorldInfoButtonClass, setGlobalWorldInfoSelection, deleteWorldInfoEntry, selected_world_info, getChatWorldInfoNames, setChatWorldInfoSelection } from './world-info.js';
+import { convertCharacterBook, getWorldInfoPrompt, loadWorldInfo, loadWorldInfoBatch, reloadEditor, saveWorldInfo, updateWorldInfoList, wi_anchor_position, world_info_position, world_names, getCharaAuxWorlds, createNewWorldInfo, importEmbeddedWorldInfo, charUpdatePrimaryWorld, getCharacterEmbeddedWorld, newWorldInfoEntryTemplate, createWorldInfoEntry, setWorldInfoButtonClass, setGlobalWorldInfoSelection, deleteWorldInfoEntry, selected_world_info, getChatWorldInfoNames, setChatWorldInfoSelection, getSortedEntries } from './world-info.js';
 import { ChatCompletionService, TextCompletionService } from './custom-request.js';
 import { ConnectionManagerRequestService } from './extensions/shared.js';
 import { getChatCompletionConnectionProfiles, resolveChatCompletionRequestProfile } from './extensions/connection-manager/profile-resolver.js';
@@ -2539,6 +2541,8 @@ export function getContext() {
         },
         embeddingService: EmbeddingService,
         get markdownConverter() { return converter; },
+        sendTextareaMessage,
+        buildObjectPatchOperationsAsync,
         performFuzzySearch,
         removeReasoningFromString,
         resolveChatStateTarget,
@@ -2556,6 +2560,7 @@ export function getContext() {
             delete: deleteWorldInfoEntry,
             setButtonClass: setWorldInfoButtonClass,
             setGlobalSelection: setGlobalWorldInfoSelection,
+            getSorted: getSortedEntries,
         },
         chatWorldInfo: {
             getNames: getChatWorldInfoNames,
