@@ -88,7 +88,7 @@ import {
     SESSION_MODE_DEFAULT,
 } from './system-prompts.js';
 import { augmentCpaPromptWithSkills } from './skill-prompt.js';
-import { skillsApi } from '../../../skills/api.js';
+const skillsApi = SillyTavern.getContext().skills;
 import { createCpaIterationSessionStore, makeMessageId, normalizeMessageShape } from './session-store.js';
 import { CPA_TOOL_DISPLAY } from './tool-display.js';
 
