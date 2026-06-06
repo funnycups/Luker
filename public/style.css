@@ -5681,6 +5681,37 @@ body.luker-immersive-mode #chat {
     max-height: calc(100dvh - var(--bottomFormBlockSize));
 }
 
+#immersiveExitButton {
+    display: none;
+    position: fixed;
+    top: calc(env(safe-area-inset-top, 0px) + 6px);
+    right: calc(env(safe-area-inset-right, 0px) + 8px);
+    z-index: 10000;
+    margin: 0;
+    padding: 6px 9px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.35);
+    color: #fff;
+    cursor: pointer;
+    opacity: 0.45;
+    transition: opacity 0.18s ease-in-out;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+#immersiveExitButton:hover,
+#immersiveExitButton:focus,
+#immersiveExitButton:active {
+    opacity: 1;
+    outline: none;
+}
+
+body.luker-immersive-mode:not(.luker-immersive-keep-top-bar) #immersiveExitButton {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
 body:has(.drawer-content.maximized) #top-settings-holder:has(.drawer-content.openDrawer:not(.fillLeft):not(.fillRight)),
 body:has(.drawer-content.open) #top-settings-holder:has(.drawer-content.openDrawer:not(.fillLeft):not(.fillRight)),
 body:has(#character_popup.open) #top-settings-holder:has(.drawer-content.openDrawer:not(.fillLeft):not(.fillRight)) {

@@ -19726,6 +19726,15 @@ jQuery(async function () {
     $('#immersive_mode_toggle').on('click', async function () {
         await toggleImmersiveMode();
     });
+    $('#immersiveExitButton').on('click', async function () {
+        await setImmersiveMode(false);
+    });
+    $('#immersiveExitButton').on('keydown', async function (event) {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            await setImmersiveMode(false);
+        }
+    });
     document.addEventListener('fullscreenchange', () => { void onImmersiveFullscreenChanged(); });
     document.addEventListener('webkitfullscreenchange', () => { void onImmersiveFullscreenChanged(); });
     updateImmersiveModeUi();
