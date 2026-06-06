@@ -270,6 +270,14 @@ context.worldInfoEntry.create(name: string, data: WorldInfoData): WIEntry
 
 Creates and inserts a new entry into the supplied World Info `data` object, returning the inserted entry. Allocates the next free `uid`, fills defaults, and mutates `data.entries` in place. Persist with `saveWorldInfo()` afterwards.
 
+### worldInfoEntry.delete
+
+```ts
+context.worldInfoEntry.delete(data: WorldInfoData, uid: number, options?: { silent?: boolean }): Promise<boolean>
+```
+
+Removes the entry with the given `uid` from `data.entries` and returns whether the deletion succeeded. Pass `silent: true` to skip the user-facing confirmation toast — useful for bulk programmatic edits. Persist via `saveWorldInfo()` afterwards.
+
 ### worldInfoEntry.setButtonClass
 
 ```ts
@@ -289,6 +297,37 @@ context.worldInfoEntry.setGlobalSelection(
 ```
 
 Adds or removes a world book from the global activation list (i.e. the multi-select shown at the top of the World Info panel). Persists immediately; UI re-renders on the next selector refresh.
+
+## Chat-Bound World Info
+
+Per-chat world-book bindings live in `chat_metadata.world_info` and travel with the chat. Use `context.chatWorldInfo` to inspect and mutate them.
+
+### chatWorldInfo.getNames
+
+```ts
+context.chatWorldInfo.getNames(
+    metadata?: object,
+    options?: { resolveNames?: boolean, onlyExisting?: boolean },
+): string[]
+```
+
+Returns the list of world-book names bound to the chat. Defaults to the current chat's metadata. `resolveNames: true` (default) maps any uid-style entries back to file names; `onlyExisting: true` (default) drops names whose file no longer exists.
+
+### chatWorldInfo.setSelection
+
+```ts
+context.chatWorldInfo.setSelection(names: string[], metadata?: object): boolean
+```
+
+Replaces the chat-bound world-book selection with `names`. Mutates the metadata in place and returns whether the selection actually changed. Callers persist via `saveMetadata()` / `saveMetadataDebounced()`.
+
+### chatWorldInfo.globalSelection
+
+```ts
+context.chatWorldInfo.globalSelection: string[]
+```
+
+Live read-only snapshot of the user's globally-activated world books (the books active on every chat). Mutate via `worldInfoEntry.setGlobalSelection` — direct writes are not persisted.
 
 ## Position Constants
 

@@ -47,7 +47,8 @@ For quickly finding where an API lives, the context object groups related APIs i
 | `context.macros` | `register`, `registerAlias`, `registry`, `engine`, `category`, `envBuilder` |
 | `context.loader` | `show`, `hide`, `active`, `get`, `isBlocking`, `ToastMode`, `Handle` |
 | `context.skills` | `list`, `get`, `readFile`, `listFiles`, `search`, `writeFile`, `editFile`, `deleteFile`, `install`, `delete`, `rename`, `moveScope`, `importBundled`, `listBundledManifest`, `packForEmbed`, `previewExtractEmbed`, `executeExtractEmbed`, `importFromUrl` |
-| `context.worldInfoEntry` | `template`, `create`, `setButtonClass`, `setGlobalSelection` |
+| `context.worldInfoEntry` | `template`, `create`, `delete`, `setButtonClass`, `setGlobalSelection` |
+| `context.chatWorldInfo` | `getNames`, `setSelection`, `globalSelection` |
 | `context.openai` | `proxies`, `ZAI_ENDPOINT`, `stripPresetConnectionFields` |
 | `context.textCompletion` | `types` |
 | `context.secrets` | `KEYS`, `state` |

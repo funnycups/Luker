@@ -270,6 +270,14 @@ context.worldInfoEntry.create(name: string, data: WorldInfoData): WIEntry
 
 在指定的世界書 `data` 中建立並插入一筆新條目,回傳插入的條目物件。會分配下一個空閒 `uid`,填預設值,並就地修改 `data.entries`。之後用 `saveWorldInfo()` 持久化。
 
+### worldInfoEntry.delete
+
+```ts
+context.worldInfoEntry.delete(data: WorldInfoData, uid: number, options?: { silent?: boolean }): Promise<boolean>
+```
+
+從 `data.entries` 中移除指定 `uid` 的條目,回傳刪除是否成功。傳 `silent: true` 跳過給使用者的確認 toast——批次程式化編輯時有用。之後用 `saveWorldInfo()` 持久化。
+
 ### worldInfoEntry.setButtonClass
 
 ```ts
@@ -289,6 +297,37 @@ context.worldInfoEntry.setGlobalSelection(
 ```
 
 把某本世界書加入或移出全域啟用清單（即世界書面板頂部的多選）。立即持久化;UI 在下次 selector 重整時同步。
+
+## 聊天綁定的世界書
+
+按聊天的世界書綁定存在 `chat_metadata.world_info` 中,跟著聊天走。用 `context.chatWorldInfo` 檢視與修改。
+
+### chatWorldInfo.getNames
+
+```ts
+context.chatWorldInfo.getNames(
+    metadata?: object,
+    options?: { resolveNames?: boolean, onlyExisting?: boolean },
+): string[]
+```
+
+回傳綁定到該聊天的世界書名稱清單。預設走當前聊天的 metadata。`resolveNames: true`（預設）把 uid 形式的條目映射回檔名;`onlyExisting: true`（預設）捨棄檔案已不存在的名稱。
+
+### chatWorldInfo.setSelection
+
+```ts
+context.chatWorldInfo.setSelection(names: string[], metadata?: object): boolean
+```
+
+把聊天綁定的世界書選擇替換為 `names`。就地修改 metadata,回傳選擇是否實際變了。呼叫者透過 `saveMetadata()` / `saveMetadataDebounced()` 持久化。
+
+### chatWorldInfo.globalSelection
+
+```ts
+context.chatWorldInfo.globalSelection: string[]
+```
+
+使用者全域啟用世界書清單（在每個聊天都生效的那些）的唯讀實時快照。要修改請用 `worldInfoEntry.setGlobalSelection`——直接寫入不會持久化。
 
 ## 位置常數
 

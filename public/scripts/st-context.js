@@ -143,7 +143,7 @@ import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { areLookupNamesEqual, findCanonicalNameInList, timestampToMoment, uuidv4, importFromExternalUrl, getCharaFilename, escapeHtml, download, getFileText, getStringHash, createThumbnail, isValidUrl } from './utils.js';
 import { addGlobalVariable, addLocalVariable, decrementGlobalVariable, decrementLocalVariable, deleteGlobalVariable, deleteLocalVariable, existsGlobalVariable, existsLocalVariable, getGlobalVariable, getLocalVariable, incrementGlobalVariable, incrementLocalVariable, popLocalVariable, pushLocalVariable, setGlobalVariable, setLocalVariable } from './variables.js';
-import { convertCharacterBook, getWorldInfoPrompt, loadWorldInfo, loadWorldInfoBatch, reloadEditor, saveWorldInfo, updateWorldInfoList, wi_anchor_position, world_info_position, world_names, getCharaAuxWorlds, createNewWorldInfo, importEmbeddedWorldInfo, charUpdatePrimaryWorld, getCharacterEmbeddedWorld, newWorldInfoEntryTemplate, createWorldInfoEntry, setWorldInfoButtonClass, setGlobalWorldInfoSelection } from './world-info.js';
+import { convertCharacterBook, getWorldInfoPrompt, loadWorldInfo, loadWorldInfoBatch, reloadEditor, saveWorldInfo, updateWorldInfoList, wi_anchor_position, world_info_position, world_names, getCharaAuxWorlds, createNewWorldInfo, importEmbeddedWorldInfo, charUpdatePrimaryWorld, getCharacterEmbeddedWorld, newWorldInfoEntryTemplate, createWorldInfoEntry, setWorldInfoButtonClass, setGlobalWorldInfoSelection, deleteWorldInfoEntry, selected_world_info, getChatWorldInfoNames, setChatWorldInfoSelection } from './world-info.js';
 import { ChatCompletionService, TextCompletionService } from './custom-request.js';
 import { ConnectionManagerRequestService } from './extensions/shared.js';
 import { getChatCompletionConnectionProfiles, resolveChatCompletionRequestProfile } from './extensions/connection-manager/profile-resolver.js';
@@ -2551,8 +2551,14 @@ export function getContext() {
         worldInfoEntry: {
             template: newWorldInfoEntryTemplate,
             create: createWorldInfoEntry,
+            delete: deleteWorldInfoEntry,
             setButtonClass: setWorldInfoButtonClass,
             setGlobalSelection: setGlobalWorldInfoSelection,
+        },
+        chatWorldInfo: {
+            getNames: getChatWorldInfoNames,
+            setSelection: setChatWorldInfoSelection,
+            get globalSelection() { return selected_world_info; },
         },
         openai: {
             get proxies() { return proxies; },
