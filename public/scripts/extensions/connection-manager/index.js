@@ -63,7 +63,6 @@ const CC_COMMANDS = [
     'function-calling-plain-text',
     'function-calling-plain-text-error-retry',
     'function-calling-plain-text-error-retry-max-attempts',
-    'max-request-retries',
     'claude-enable-system-prompt-cache',
     'claude-extended-ttl',
     'claude-caching-at-depth',
