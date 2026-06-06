@@ -236,6 +236,19 @@ const html = ctx.messageFormatting(
 );
 ```
 
+### markdownConverter
+
+```ts
+context.markdownConverter: showdown.Converter
+```
+
+The shared `showdown.Converter` instance configured with Luker's project-wide markdown rules (emoji, mid-word underscores, tables, GitHub-flavored extensions, etc.). Use `.makeHtml(source)` to render markdown the same way Luker's chat pipeline does, without rebuilding a converter and having to mirror its option set. Live binding — read fresh each access (the underlying converter is rebuilt when markdown options change).
+
+```js
+const ctx = Luker.getContext();
+const html = ctx.markdownConverter.makeHtml('**hello**');
+```
+
 ## Utility Wrappers
 
 ### ModuleWorkerWrapper

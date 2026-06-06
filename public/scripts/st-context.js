@@ -102,6 +102,7 @@ import {
     saveSettings,
     createModelIcon,
     resolveChatStateTarget,
+    converter,
 } from '../script.js';
 import {
     extension_settings,
@@ -2537,6 +2538,7 @@ export function getContext() {
             yaml: LIB_BUNDLE.yaml,
         },
         embeddingService: EmbeddingService,
+        get markdownConverter() { return converter; },
         performFuzzySearch,
         removeReasoningFromString,
         resolveChatStateTarget,

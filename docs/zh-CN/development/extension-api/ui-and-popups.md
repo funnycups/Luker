@@ -236,6 +236,19 @@ const html = ctx.messageFormatting(
 );
 ```
 
+### markdownConverter
+
+```ts
+context.markdownConverter: showdown.Converter
+```
+
+Luker 全局 markdown 配置好的共享 `showdown.Converter` 实例（emoji、字中下划线、表格、GitHub-flavored 扩展等）。用 `.makeHtml(source)` 渲染 markdown 跟 Luker 聊天管道一致,无需自建 converter 再镜像它的 option 集。Live binding——每次访问取最新值（markdown 选项变更时底层 converter 会重建）。
+
+```js
+const ctx = Luker.getContext();
+const html = ctx.markdownConverter.makeHtml('**hello**');
+```
+
 ## 工具封装
 
 ### ModuleWorkerWrapper
