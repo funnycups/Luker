@@ -1,8 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 
-import { event_types, eventSource, extension_prompt_roles, extension_prompt_types, resolveChatStateTarget, saveSettings, saveSettingsDebounced } from '../../../script.js';
-import { extension_settings, getContext } from '../../extensions.js';
+const __ctx = SillyTavern.getContext();
+const event_types = __ctx.eventTypes;
+const eventSource = __ctx.eventSource;
+const extension_prompt_roles = __ctx.constants.promptRoles;
+const extension_prompt_types = __ctx.constants.promptTypes;
+const resolveChatStateTarget = __ctx.resolveChatStateTarget;
+const saveSettings = __ctx.saveSettings;
+const saveSettingsDebounced = __ctx.saveSettingsDebounced;
+const extension_settings = __ctx.extensionSettings;
+const getContext = SillyTavern.getContext;
+const performFuzzySearch = __ctx.performFuzzySearch;
+const download = __ctx.download;
+const getFileText = __ctx.getFileText;
+const getStringHash = __ctx.getStringHash;
+const newWorldInfoEntryTemplate = __ctx.worldInfoEntry.template;
+const setGlobalWorldInfoSelection = __ctx.worldInfoEntry.setGlobalSelection;
+const world_info_position = __ctx.constants.wiPosition;
 // Register the Layer-1 session API at module load.
 import './api.js';
 // Publishes memory-graph's read + write tools into the orchestrator's
@@ -44,9 +59,6 @@ import {
 } from './import-export.js';
 import { openSchemaIterationStudio } from './schema-iteration/studio.js';
 import { DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT } from './schema-iteration/system-prompt.js';
-import { performFuzzySearch } from '../../power-user.js';
-import { download, getFileText, getStringHash } from '../../utils.js';
-import { newWorldInfoEntryTemplate, setGlobalWorldInfoSelection, world_info_position } from '../../world-info.js';
 import { registerManagedRegexProvider, regex_placement, substitute_find_regex } from '../regex/engine.js';
 import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import {

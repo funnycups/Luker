@@ -6,8 +6,7 @@
 //
 // This is the surface third-party extensions and the orchestrator consume:
 //
-//   import { getExtensionApi } from '../../extensions.js';
-//   const memoryApi = getExtensionApi('memory-graph');
+//   const memoryApi = Luker.getContext().getExtensionApi('memory-graph');
 //   const session = await memoryApi?.openSession?.(context);
 //   if (session) {
 //       const candidates = session.listVisibleCandidates({ types: ['character_sheet'] });
@@ -22,7 +21,7 @@
 // (handled by memory-graph's own CHAT_CHANGED listener), so callers should
 // open a fresh session per chat.
 
-import { registerExtensionApi } from '../../extensions.js';
+const registerExtensionApi = SillyTavern.getContext().registerExtensionApi;
 import {
     ensureMemoryStoreLoaded,
     resolveChatKeyForSession,

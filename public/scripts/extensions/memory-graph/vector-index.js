@@ -10,7 +10,7 @@
 // `findSimilarNodes` / `syncVectorIndex` orchestration.
 
 import { getEmbeddingProfileById, getRerankProfileById } from '../connection-manager/embed-rerank.js';
-import { EmbeddingService } from '../../embedding-service.js';
+const EmbeddingService = SillyTavern.getContext().embeddingService;
 import {
     validateVectorConfig,
     buildCollectionId,
