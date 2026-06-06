@@ -2236,14 +2236,16 @@ export function getContext() {
         accountStorage,
         chat,
         characters: getCharacterArrayApiProxy(characters),
-        groups,
-        name1,
-        name2,
-        characterId: this_chid,
-        groupId: selected_group,
-        chatId: selected_group
-            ? groups.find(x => x.id == selected_group)?.chat_id
-            : (characters[this_chid]?.chat),
+        get groups() { return groups; },
+        get name1() { return name1; },
+        get name2() { return name2; },
+        get characterId() { return this_chid; },
+        get groupId() { return selected_group; },
+        get chatId() {
+            return selected_group
+                ? groups.find(x => x.id == selected_group)?.chat_id
+                : (characters[this_chid]?.chat);
+        },
         getCurrentChatId,
         getRequestHeaders,
         reloadCurrentChat,
@@ -2256,9 +2258,9 @@ export function getContext() {
         iterationLibrary: ITERATION_LIBRARY_API,
         edits: EDITS_API,
         skills: skillsApi,
-        onlineStatus: online_status,
-        maxContext: Number(max_context),
-        chatMetadata: chat_metadata,
+        get onlineStatus() { return online_status; },
+        get maxContext() { return Number(max_context); },
+        get chatMetadata() { return chat_metadata; },
         saveMetadataDebounced,
         streamingProcessor,
         eventSource,
@@ -2288,7 +2290,7 @@ export function getContext() {
         /** @deprecated Use getTokenCountAsync instead */
         getTokenCount,
         getTokenCountAsync,
-        extensionPrompts: extension_prompts,
+        get extensionPrompts() { return extension_prompts; },
         setExtensionPrompt,
         updateChatMetadata,
         saveChat: saveChatConditional,
@@ -2387,7 +2389,7 @@ export function getContext() {
         showLoader,
         /** @deprecated Use loader.hide instead. */
         hideLoader,
-        mainApi: main_api,
+        get mainApi() { return main_api; },
         extensionSettings: extension_settings,
         ModuleWorkerWrapper,
         getTokenizerModel,
@@ -2407,7 +2409,7 @@ export function getContext() {
         addLocaleData,
         tags,
         tagMap: tag_map,
-        menuType: menu_type,
+        get menuType() { return menu_type; },
         createCharacterData: create_save,
         /** @deprecated Legacy snake-case naming, compatibility with old extensions */
         event_types: event_types,
@@ -2525,7 +2527,7 @@ export function getContext() {
         },
         secrets: {
             KEYS: SECRET_KEYS,
-            state: secret_state,
+            get state() { return secret_state; },
         },
         lib: {
             DOMPurify: LIB_BUNDLE.DOMPurify,
@@ -2553,7 +2555,7 @@ export function getContext() {
             setGlobalSelection: setGlobalWorldInfoSelection,
         },
         openai: {
-            proxies,
+            get proxies() { return proxies; },
             ZAI_ENDPOINT,
             stripPresetConnectionFields: stripOpenAIConnectionFieldsFromPreset,
         },
