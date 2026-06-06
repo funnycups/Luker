@@ -82,17 +82,13 @@ export function listExtensionTools() {
 
 const ST_BRIDGE_PREFIX = 'st_';
 
-let _cachedToolManager = null;
-async function loadToolManager() {
-    if (!_cachedToolManager) {
-        _cachedToolManager = import('../../tool-calling.js').then(m => m.ToolManager);
-    }
-    return _cachedToolManager;
+function getToolManager() {
+    return SillyTavern.getContext().ToolManager;
 }
 
 export async function bridgeSillyTavernTool(stToolName, opts = {}) {
     const mode = opts.mode === 'read' ? 'read' : 'write';
-    const ToolManager = await loadToolManager();
+    const ToolManager = getToolManager();
     const all = Array.isArray(ToolManager?.tools) ? ToolManager.tools : [];
     const stTool = all.find(t => t.name === stToolName);
     if (!stTool) {
@@ -127,7 +123,7 @@ export function unbridgeSillyTavernTool(stToolName) {
 }
 
 export async function listAvailableSillyTavernTools() {
-    const ToolManager = await loadToolManager();
+    const ToolManager = getToolManager();
     const all = Array.isArray(ToolManager?.tools) ? ToolManager.tools : [];
     return all
         .filter(t => !EXTENSION_REGISTRY.has(`${ST_BRIDGE_PREFIX}${t.name}`))

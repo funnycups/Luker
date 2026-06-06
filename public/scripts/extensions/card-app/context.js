@@ -160,16 +160,14 @@ export function buildContext(container, charId, config) {
          */
         async sendMessage(text, options = {}) {
             if (options.silent) {
-                const { generateQuietPrompt } = await import('../../../script.js');
-                return await generateQuietPrompt({ quietPrompt: String(text ?? '') });
+                return await __ctx.generateQuietPrompt({ quietPrompt: String(text ?? '') });
             }
             const textarea = document.getElementById('send_textarea');
             if (textarea) {
                 textarea.value = text;
                 textarea.dispatchEvent(new Event('input', { bubbles: true }));
             }
-            const { sendTextareaMessage } = await import('../../../script.js');
-            await sendTextareaMessage();
+            await __ctx.sendTextareaMessage();
         },
 
         /**
@@ -234,8 +232,7 @@ export function buildContext(container, charId, config) {
          * @returns {Promise<void>}
          */
         async regenerate() {
-            const { Generate } = await import('../../../script.js');
-            await Generate('regenerate');
+            await __ctx.generate('regenerate');
         },
 
         /**
@@ -253,8 +250,7 @@ export function buildContext(container, charId, config) {
          * @returns {Promise<void>}
          */
         async continueGeneration() {
-            const { Generate } = await import('../../../script.js');
-            await Generate('continue');
+            await __ctx.generate('continue');
         },
 
         // ==================== Data ====================

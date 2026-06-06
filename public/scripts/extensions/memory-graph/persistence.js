@@ -25,21 +25,6 @@
  */
 
 import { LEVEL, normalizeText, isExtractableAssistantMessage } from './primitives.js';
-
-/**
- * Resolve buildObjectPatchOperationsAsync. getContext() doesn't expose it
- * (verified May 2026), so we must reach into ../../../script.js. Dynamic
- * import keeps the module out of the static dep graph — important for tests
- * which run in Node without the DOM that script.js touches at module-load
- * time. In production this resolves once per migration call (cheap).
- */
-export async function resolveBuildObjectPatchOperationsAsync(context) {
-    if (typeof context?.buildObjectPatchOperationsAsync === 'function') {
-        return context.buildObjectPatchOperationsAsync;
-    }
-    const script = await import('../../../script.js');
-    return script.buildObjectPatchOperationsAsync;
-}
 import {
     addEdge,
     dropNode,
@@ -257,14 +242,7 @@ export async function migrateLegacyMemoryGraphState(
         chat: Array.isArray(context?.chat) ? context.chat : [],
         isExtractableAssistantMessage,
         applyMemoryLogEntryToStore,
-        // getContext() doesn't expose buildObjectPatchOperationsAsync — see
-        // resolveBuildObjectPatchOperationsAsync above for why we reach into
-        // script.js. Without this, v8-oplog migrate would throw on
-        // `await ctx.buildObjectPatchOperationsAsync({}, next)`, the driver
-        // would catch and return changed:false, and the wrapper would
-        // silently stamp meta only — exactly the bug observed at 00:35
-        // when v8 data didn't migrate to v2 floor-state.
-        buildObjectPatchOperationsAsync: await resolveBuildObjectPatchOperationsAsync(context),
+        buildObjectPatchOperationsAsync: context.buildObjectPatchOperationsAsync,
         getFloorFromAssistantSeq,
         buildMemoryLogOpsFromStore,
         getStoreCoveredSeqTo,

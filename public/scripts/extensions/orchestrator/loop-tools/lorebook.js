@@ -38,18 +38,18 @@ function entryActivationKey(entry) {
 }
 
 /**
- * Production: dynamic-import `getSortedEntries` from the World Info
- * module. Tests: prefer the injected `context.__getSortedEntriesFn`
- * hook to bypass the build-only `lib.js` chain.
+ * Production: read `getSorted` from ctx.worldInfoEntry. Tests: prefer
+ * the injected `context.__getSortedEntriesFn` hook to bypass the
+ * build-only `lib.js` chain.
  */
 async function loadAllEnabledEntries(context) {
     if (typeof context?.__getSortedEntriesFn === 'function') {
         const result = await context.__getSortedEntriesFn();
         return Array.isArray(result) ? result : [];
     }
-    const mod = await import('../../../world-info.js');
-    if (typeof mod?.getSortedEntries !== 'function') return [];
-    const entries = await mod.getSortedEntries();
+    const getSorted = SillyTavern.getContext().worldInfoEntry?.getSorted;
+    if (typeof getSorted !== 'function') return [];
+    const entries = await getSorted();
     return Array.isArray(entries) ? entries : [];
 }
 

@@ -90,7 +90,6 @@ import {
 import {
     getFloorStateInstance,
     resetFloorStateInstance,
-    resolveBuildObjectPatchOperationsAsync,
     getFloorFromAssistantSeq,
     loadMetaFields,
     persistMetaFields,
@@ -1922,7 +1921,7 @@ async function replaceGraphLogForTarget(context, store, seq) {
     const floor = seqToFloor(context, normalizedSeq);
     const floorResolved = Number.isInteger(floor) && floor >= 0;
     const swipeId = floorResolved ? (activeSwipeIdAtFloor(context, floor) ?? 0) : 0;
-    const buildObjectPatchOperationsAsync = await resolveBuildObjectPatchOperationsAsync(context);
+    const buildObjectPatchOperationsAsync = context.buildObjectPatchOperationsAsync;
     const patches = await buildObjectPatchOperationsAsync({}, finalPayload);
 
     if (Array.isArray(patches) && patches.length > 0 && floorResolved) {
@@ -2070,7 +2069,7 @@ async function commitMemoryStoreDiffByChatKey(context, chatKey, beforeStore, aft
     afterPayload.appliedSeqTo = Math.max(afterPayload.appliedSeqTo, normalizedSeq);
     afterPayload.loggedSeqTo = Math.max(afterPayload.loggedSeqTo, normalizedSeq);
 
-    const buildObjectPatchOperationsAsync = await resolveBuildObjectPatchOperationsAsync(context);
+    const buildObjectPatchOperationsAsync = context.buildObjectPatchOperationsAsync;
     const incrementalOps = await buildObjectPatchOperationsAsync(beforePayload, afterPayload);
     const metadataChanged = hasPersistedStoreMetadataChanges(normalizedBefore, normalizedAfter);
     const hasGraphChange = Array.isArray(incrementalOps) && incrementalOps.length > 0;
