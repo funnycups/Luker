@@ -144,6 +144,7 @@
         "start:no-csrf": "node server.js --disableCsrf",
         "lint": "eslint \"src/**/*.js\" \"public/**/*.js\" ./*.js",
         "lint:fix": "eslint \"src/**/*.js\" \"public/**/*.js\" ./*.js --fix",
+        "lint:plugin-imports": "node scripts/check-plugin-imports.js",
         "plugins:update": "node plugins update",
         "plugins:install": "node plugins install"
     },
