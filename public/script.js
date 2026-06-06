@@ -949,12 +949,18 @@ function canUseAndroidImmersiveBridge() {
         && typeof window.LukerAndroid.setImmersiveModeEnabled === 'function';
 }
 
-function syncAndroidImmersiveMode(enabled) {
+function syncAndroidImmersiveMode(enabled, source = 'user') {
     if (!canUseAndroidImmersiveBridge()) {
         return;
     }
     try {
-        window.LukerAndroid.setImmersiveModeEnabled(Boolean(enabled));
+        const bridge = window.LukerAndroid;
+        const resolvedSource = String(source || 'user');
+        if (typeof bridge.setImmersiveModeEnabledWithSource === 'function') {
+            bridge.setImmersiveModeEnabledWithSource(Boolean(enabled), resolvedSource);
+            return;
+        }
+        bridge.setImmersiveModeEnabled(Boolean(enabled));
     } catch (error) {
         console.warn('Failed to sync Android immersive mode', error);
     }
@@ -1032,13 +1038,13 @@ function installAndroidFullscreenApiShim() {
 
     const requestShim = function () {
         setAndroidFullscreenState(true, this);
-        void setImmersiveMode(true, { useFullscreen: false });
+        void setImmersiveMode(true, { useFullscreen: false, source: 'fullscreen_api' });
         return Promise.resolve();
     };
 
     const exitShim = function () {
         setAndroidFullscreenState(false, null);
-        void setImmersiveMode(false, { useFullscreen: false });
+        void setImmersiveMode(false, { useFullscreen: false, source: 'fullscreen_api' });
         return Promise.resolve();
     };
 
@@ -1189,7 +1195,7 @@ async function onImmersiveFullscreenChanged() {
     }
 }
 
-async function setImmersiveMode(enabled, { useFullscreen = true, persist = true } = {}) {
+async function setImmersiveMode(enabled, { useFullscreen = true, persist = true, source = 'user' } = {}) {
     const shouldEnable = Boolean(enabled);
     immersiveModeUsesFullscreen = shouldEnable ? Boolean(useFullscreen && canUseFullscreenApi()) : false;
     isImmersiveModeEnabled = shouldEnable;
@@ -1199,7 +1205,7 @@ async function setImmersiveMode(enabled, { useFullscreen = true, persist = true 
         'luker-immersive-keep-top-bar',
         shouldEnable && Boolean(power_user.immersive_mode_keep_top_bar),
     );
-    syncAndroidImmersiveMode(shouldEnable);
+    syncAndroidImmersiveMode(shouldEnable, source);
     applyImmersiveLayoutOverrides(shouldEnable);
     updateImmersiveModeUi();
 

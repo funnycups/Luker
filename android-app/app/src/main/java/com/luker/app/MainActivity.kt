@@ -111,6 +111,7 @@ class MainActivity : AppCompatActivity() {
     private var pendingApkDownloadId: Long? = null
     private var apkDownloadReceiverRegistered = false
     private var immersiveModeEnabled: Boolean = false
+    private var immersiveModeSource: String = "user"
     private var immersiveModeEnabledBeforeCustomView: Boolean = false
     private var fullscreenCustomView: View? = null
     private var fullscreenCustomViewCallback: WebChromeClient.CustomViewCallback? = null
@@ -128,7 +129,7 @@ class MainActivity : AppCompatActivity() {
                 return
             }
 
-            if (immersiveModeEnabled) {
+            if (immersiveModeEnabled && immersiveModeSource == "fullscreen_api") {
                 applyImmersiveMode(false)
                 syncWebImmersiveMode(false)
                 return
@@ -858,6 +859,15 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun setImmersiveModeEnabled(enabled: Boolean) {
             runOnUiThread {
+                immersiveModeSource = "user"
+                applyImmersiveMode(enabled)
+            }
+        }
+
+        @JavascriptInterface
+        fun setImmersiveModeEnabledWithSource(enabled: Boolean, source: String?) {
+            runOnUiThread {
+                immersiveModeSource = if (source.isNullOrBlank()) "user" else source
                 applyImmersiveMode(enabled)
             }
         }
