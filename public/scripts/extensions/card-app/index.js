@@ -2,12 +2,20 @@
  * CardApp Extension - enables character cards to carry custom frontend UI.
  */
 
-import { eventSource, event_types, getRequestHeaders } from '../../../script.js';
-import { getContext, registerExtensionApi, getCharacterState, setCharacterState } from '../../extensions.js';
-import { addLocaleData, translate } from '../../i18n.js';
 import { createContainer, destroyContainer, injectScopedCSS, loadEntryModule, showError } from './loader.js';
 import { buildContext } from './context.js';
 import { activateRendererBridge, deactivateRendererBridge } from './renderer.js';
+
+const __ctx = SillyTavern.getContext();
+const eventSource = __ctx.eventSource;
+const event_types = __ctx.eventTypes;
+const getRequestHeaders = __ctx.getRequestHeaders;
+const getContext = SillyTavern.getContext;
+const registerExtensionApi = __ctx.registerExtensionApi;
+const getCharacterState = __ctx.getCharacterState;
+const setCharacterState = __ctx.setCharacterState;
+const addLocaleData = __ctx.addLocaleData;
+const translate = __ctx.translate;
 
 const MODULE_NAME = 'card-app';
 

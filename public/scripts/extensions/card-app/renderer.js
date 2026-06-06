@@ -6,7 +6,11 @@
  * since the formatting pipeline is a pure function.
  */
 
-import { eventSource, event_types, chat, messageFormatting } from '../../../script.js';
+const __ctx = SillyTavern.getContext();
+const eventSource = __ctx.eventSource;
+const event_types = __ctx.eventTypes;
+const chat = __ctx.chat;
+const messageFormatting = __ctx.messageFormatting;
 
 const MODULE_NAME = 'card-app/renderer';
 

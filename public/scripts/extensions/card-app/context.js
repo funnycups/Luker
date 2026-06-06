@@ -2,13 +2,7 @@
  * CardApp Context - builds the ctx object passed to CardApp's init() function.
  */
 
-import { eventSource, event_types, chat, chat_metadata, this_chid, characters, getRequestHeaders, openCharacterChat, doNewChat, closeCurrentChat, getPastCharacterChats, deleteMessage as lukerDeleteMessage, deleteLastMessage, swipe_right, saveMetadata, messageFormatting, getChatState as lukerGetChatState, updateChatState as lukerUpdateChatState, patchChatState as lukerPatchChatState, deleteChatState as lukerDeleteChatState, deleteCharacterChatByName, renameChat as lukerRenameChat, setVariable as lukerSetVariable } from '../../../script.js';
-import { getContext, extension_settings, getCharacterState as lukerGetCharacterState, setCharacterState as lukerSetCharacterState } from '../../extensions.js';
-import { executeSlashCommandsWithOptions } from '../../slash-commands.js';
-import { removeReasoningFromString } from '../../reasoning.js';
-import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, createNewWorldInfo, world_names, selected_world_info, getChatWorldInfoNames, setChatWorldInfoSelection, getCharaAuxWorlds } from '../../world-info.js';
 import { getScriptsByType, saveScriptsByType, SCRIPT_TYPES } from '../regex/engine.js';
-import { uuidv4, getCharaFilename } from '../../utils.js';
 import {
     getCharacterOverrideByAvatar as orchGetCharacterOverrideByAvatar,
     getCharacterIndexByAvatar as orchGetCharacterIndexByAvatar,
@@ -25,6 +19,45 @@ import {
     persistCharacterAdvancedOverride as mgPersistCharacterAdvancedOverride,
     removeCharacterAdvancedOverride as mgRemoveCharacterAdvancedOverride,
 } from '../memory-graph/character-overrides.js';
+
+const __ctx = SillyTavern.getContext();
+const eventSource = __ctx.eventSource;
+const event_types = __ctx.eventTypes;
+const chat = __ctx.chat;
+const characters = __ctx.characters;
+const getRequestHeaders = __ctx.getRequestHeaders;
+const openCharacterChat = __ctx.openCharacterChat;
+const doNewChat = __ctx.doNewChat;
+const closeCurrentChat = __ctx.closeCurrentChat;
+const getPastCharacterChats = __ctx.getPastCharacterChats;
+const lukerDeleteMessage = __ctx.deleteMessage;
+const deleteLastMessage = __ctx.deleteLastMessage;
+const swipe_right = __ctx.swipe.right;
+const saveMetadata = __ctx.saveMetadata;
+const messageFormatting = __ctx.messageFormatting;
+const lukerGetChatState = __ctx.getChatState;
+const lukerUpdateChatState = __ctx.updateChatState;
+const lukerPatchChatState = __ctx.patchChatState;
+const lukerDeleteChatState = __ctx.deleteChatState;
+const deleteCharacterChatByName = __ctx.deleteCharacterChat;
+const lukerRenameChat = __ctx.renameChat;
+const lukerSetVariable = __ctx.setVariable;
+const getContext = SillyTavern.getContext;
+const extension_settings = __ctx.extensionSettings;
+const lukerGetCharacterState = __ctx.getCharacterState;
+const lukerSetCharacterState = __ctx.setCharacterState;
+const executeSlashCommandsWithOptions = __ctx.executeSlashCommandsWithOptions;
+const removeReasoningFromString = __ctx.removeReasoningFromString;
+const loadWorldInfo = __ctx.loadWorldInfo;
+const createWorldInfoEntry = __ctx.worldInfoEntry.create;
+const deleteWorldInfoEntry = __ctx.worldInfoEntry.delete;
+const saveWorldInfo = __ctx.saveWorldInfo;
+const createNewWorldInfo = __ctx.createWorldBook;
+const getChatWorldInfoNames = __ctx.chatWorldInfo.getNames;
+const setChatWorldInfoSelection = __ctx.chatWorldInfo.setSelection;
+const getCharaAuxWorlds = __ctx.getCharaAuxWorlds;
+const uuidv4 = __ctx.uuidv4;
+const getCharaFilename = __ctx.getCharaFilename;
 
 /**
  * Map a friendly regex scope label to the engine's SCRIPT_TYPES enum.
@@ -250,7 +283,7 @@ export function buildContext(container, charId, config) {
          * @throws {Error} If no active character
          */
         async updateCharacterFields(fields) {
-            if (this_chid === undefined || this_chid === null) {
+            if (__ctx.characterId === undefined || __ctx.characterId === null) {
                 throw new Error('[CardApp] No active character to update');
             }
 
@@ -282,7 +315,7 @@ export function buildContext(container, charId, config) {
             };
 
             const lukerCtx = getContext();
-            const character = lukerCtx.characters[this_chid];
+            const character = lukerCtx.characters[__ctx.characterId];
             const prevExt = (character?.data?.extensions && typeof character.data.extensions === 'object')
                 ? character.data.extensions
                 : {};
@@ -342,11 +375,11 @@ export function buildContext(container, charId, config) {
             // Apply form-level changes (deep-merge path) first so they're
             // in memory before the extension writes flush.
             if (Object.keys(formPatch).length > 0) {
-                await lukerCtx.updateCharacterData(this_chid, formPatch);
+                await lukerCtx.updateCharacterData(__ctx.characterId, formPatch);
             }
             // Apply each extension blob via writeExtensionField (replace semantics).
             for (const [topKey, value] of Object.entries(extPatchesByTopKey)) {
-                await lukerCtx.writeExtensionField(this_chid, topKey, value);
+                await lukerCtx.writeExtensionField(__ctx.characterId, topKey, value);
             }
         },
 
@@ -356,7 +389,7 @@ export function buildContext(container, charId, config) {
          * @returns {*}
          */
         getVariable(key) {
-            return chat_metadata?.variables?.[key];
+            return __ctx.chatMetadata?.variables?.[key];
         },
 
         /**
@@ -453,7 +486,7 @@ export function buildContext(container, charId, config) {
 
         /**
          * Read character-bound sidecar state for the active character.
-         * Avatar is resolved automatically from `this_chid`; CardApp code
+         * Avatar is resolved automatically from the active character; CardApp code
          * never has to pass it. Same storage as `getContext().getCharacterState(avatar, ns)`.
          *
          * Character-state survives across every chat with this character —
@@ -464,7 +497,7 @@ export function buildContext(container, charId, config) {
          * @returns {Promise<any>}
          */
         async getCharacterState(namespace) {
-            const character = characters[this_chid];
+            const character = characters[__ctx.characterId];
             const avatar = String(character?.avatar || '').trim();
             if (!avatar) throw new Error('[CardApp] No active character');
             return await lukerGetCharacterState(avatar, namespace);
@@ -478,7 +511,7 @@ export function buildContext(container, charId, config) {
          * @returns {Promise<void>}
          */
         async setCharacterState(namespace, data) {
-            const character = characters[this_chid];
+            const character = characters[__ctx.characterId];
             const avatar = String(character?.avatar || '').trim();
             if (!avatar) throw new Error('[CardApp] No active character');
             return await lukerSetCharacterState(avatar, namespace, data);
@@ -658,7 +691,7 @@ export function buildContext(container, charId, config) {
                 entries.push({ name: trimmed, source });
             };
             // Character-bound primary world book
-            const charData = characters[this_chid];
+            const charData = characters[__ctx.characterId];
             push(charData?.data?.extensions?.world, 'character');
             // Character-bound auxiliary world books (world_info.charLore[].extraBooks)
             for (const name of this.getCharacterAuxWorldBooks()) {
@@ -666,13 +699,14 @@ export function buildContext(container, charId, config) {
             }
             // Chat-bound books (chat_metadata.world_info)
             try {
-                for (const name of getChatWorldInfoNames(chat_metadata)) {
+                for (const name of getChatWorldInfoNames(__ctx.chatMetadata)) {
                     push(name, 'chat');
                 }
             } catch { /* extension or chat not ready */ }
             // Globally activated world books
-            if (Array.isArray(selected_world_info)) {
-                for (const name of selected_world_info) push(name, 'global');
+            const globalSelection = __ctx.chatWorldInfo.globalSelection;
+            if (Array.isArray(globalSelection)) {
+                for (const name of globalSelection) push(name, 'global');
             }
             return withSource ? entries : entries.map((e) => e.name);
         },
@@ -690,7 +724,7 @@ export function buildContext(container, charId, config) {
          * @returns {string[]}
          */
         getCharacterAuxWorldBooks() {
-            const fileName = getCharaFilename(this_chid);
+            const fileName = getCharaFilename(__ctx.characterId);
             return getCharaAuxWorlds(fileName);
         },
 
@@ -704,7 +738,7 @@ export function buildContext(container, charId, config) {
          */
         getChatWorldBooks() {
             try {
-                return getChatWorldInfoNames(chat_metadata);
+                return getChatWorldInfoNames(__ctx.chatMetadata);
             } catch {
                 return [];
             }
@@ -719,7 +753,7 @@ export function buildContext(container, charId, config) {
          */
         async setChatWorldBooks(names = []) {
             const list = Array.isArray(names) ? names : [names];
-            const written = setChatWorldInfoSelection(list, chat_metadata);
+            const written = setChatWorldInfoSelection(list, __ctx.chatMetadata);
             await saveMetadata();
             return written;
         },
@@ -765,7 +799,7 @@ export function buildContext(container, charId, config) {
         async createChatWorldBook(name) {
             const target = String(name || '').trim();
             if (!target) throw new Error('[CardApp] createChatWorldBook: name required');
-            if (!world_names.includes(target)) {
+            if (!__ctx.getWorldInfoNames().includes(target)) {
                 const ok = await createNewWorldInfo(target, { interactive: false });
                 if (!ok) throw new Error(`[CardApp] Failed to create world book "${target}"`);
             }
@@ -1012,7 +1046,7 @@ export function buildContext(container, charId, config) {
          */
         getOrchestratorOverride() {
             const lukerCtx = getContext();
-            const charData = characters[this_chid];
+            const charData = characters[__ctx.characterId];
             const avatar = String(charData?.avatar || '').trim();
             if (!avatar) return null;
             return orchGetCharacterOverrideByAvatar(lukerCtx, avatar);
@@ -1040,7 +1074,7 @@ export function buildContext(container, charId, config) {
                 throw new Error('[CardApp] setOrchestratorOverride requires an override object');
             }
             const lukerCtx = getContext();
-            const charData = characters[this_chid];
+            const charData = characters[__ctx.characterId];
             const avatar = String(charData?.avatar || '').trim();
             if (!avatar) throw new Error('[CardApp] No active character');
             const characterIndex = orchGetCharacterIndexByAvatar(lukerCtx, avatar);
@@ -1069,7 +1103,7 @@ export function buildContext(container, charId, config) {
          */
         async clearOrchestratorOverride() {
             const lukerCtx = getContext();
-            const charData = characters[this_chid];
+            const charData = characters[__ctx.characterId];
             const avatar = String(charData?.avatar || '').trim();
             if (!avatar) throw new Error('[CardApp] No active character');
             const characterIndex = orchGetCharacterIndexByAvatar(lukerCtx, avatar);
@@ -1139,7 +1173,7 @@ export function buildContext(container, charId, config) {
          */
         async setMemoryGraphSchema(schema) {
             const lukerCtx = getContext();
-            const charData = characters[this_chid];
+            const charData = characters[__ctx.characterId];
             const avatar = String(charData?.avatar || '').trim();
             if (!avatar) throw new Error('[CardApp] No active character');
             if (schema === null || schema === undefined) {
@@ -1161,7 +1195,7 @@ export function buildContext(container, charId, config) {
          */
         async setMemoryGraphAdvanced(advanced) {
             const lukerCtx = getContext();
-            const charData = characters[this_chid];
+            const charData = characters[__ctx.characterId];
             const avatar = String(charData?.avatar || '').trim();
             if (!avatar) throw new Error('[CardApp] No active character');
             if (advanced === null || advanced === undefined) {
