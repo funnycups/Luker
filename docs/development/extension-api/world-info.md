@@ -245,6 +245,79 @@ convertCharacterBook(characterBook: V2CharacterBook): {
 
 Converts a V2 character-card `character_book` payload into the internal World Info shape. Used when importing character cards or projecting V2 lore into editable entries. `originalData` is preserved for round-trip serialization.
 
+## Entry-Level Helpers
+
+For programmatic entry creation and UI synchronization. All exposed under `context.worldInfoEntry`.
+
+### worldInfoEntry.template
+
+```ts
+context.worldInfoEntry.template: WIEntry
+```
+
+The canonical default entry shape (`uid: 0` placeholder, empty keys, `position: 0`, etc.). Clone-and-modify when constructing entries in bulk, so future additions to the entry schema flow through automatically.
+
+```js
+const ctx = Luker.getContext();
+const fresh = { ...ctx.worldInfoEntry.template, uid: newUid, key: ['npc:Bob'], content: 'A baker.' };
+```
+
+### worldInfoEntry.create
+
+```ts
+context.worldInfoEntry.create(name: string, data: WorldInfoData): WIEntry
+```
+
+Creates and inserts a new entry into the supplied World Info `data` object, returning the inserted entry. Allocates the next free `uid`, fills defaults, and mutates `data.entries` in place. Persist with `saveWorldInfo()` afterwards.
+
+### worldInfoEntry.setButtonClass
+
+```ts
+context.worldInfoEntry.setButtonClass(chid: number | string, forceValue?: boolean): void
+```
+
+Updates the "world info bound" pill class on the character card UI. Pass `forceValue` to override the computed binding state. Call after programmatic binding changes (e.g., after `charUpdatePrimaryWorld`).
+
+### worldInfoEntry.setGlobalSelection
+
+```ts
+context.worldInfoEntry.setGlobalSelection(
+    worldInfoName: string,
+    selected: boolean,
+    options?: object,
+): Promise<void>
+```
+
+Adds or removes a world book from the global activation list (i.e. the multi-select shown at the top of the World Info panel). Persists immediately; UI re-renders on the next selector refresh.
+
+## Position Constants
+
+### context.constants.wiAnchor
+
+```ts
+context.constants.wiAnchor: { before, after }
+```
+
+Numeric enum for the anchor side of an example-dialogue entry. Use when constructing or comparing `worldInfoExamples[i].position`.
+
+### context.constants.wiPosition
+
+```ts
+context.constants.wiPosition: {
+    before, after, ANTop, ANBottom, atDepth, EMTop, EMBottom, outlet,
+}
+```
+
+Numeric enum for entry-level `position` values. Use when constructing entries or filtering by injection slot.
+
+```js
+const ctx = Luker.getContext();
+const entry = {
+    ...ctx.worldInfoEntry.template,
+    position: ctx.constants.wiPosition.before,
+};
+```
+
 ## Practical Patterns
 
 ### Plugin reads + edits a lorebook

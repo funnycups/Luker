@@ -245,6 +245,79 @@ convertCharacterBook(characterBook: V2CharacterBook): {
 
 把 V2 角色卡的 `character_book` payload 轉為內部世界書結構。在匯入角色卡或把 V2 lore 投影成可編輯條目時使用。`originalData` 保留下來供來回往返序列化。
 
+## 條目級輔助函式
+
+用於程式化建立條目與同步 UI。全部掛在 `context.worldInfoEntry` 之下。
+
+### worldInfoEntry.template
+
+```ts
+context.worldInfoEntry.template: WIEntry
+```
+
+條目的標準預設結構（佔位 `uid: 0`、空 key 清單、`position: 0` 等）。批次建構條目時用「複製—修改」方式使用,這樣未來 schema 新增欄位會自動跟上。
+
+```js
+const ctx = Luker.getContext();
+const fresh = { ...ctx.worldInfoEntry.template, uid: newUid, key: ['npc:Bob'], content: '一位麵包師。' };
+```
+
+### worldInfoEntry.create
+
+```ts
+context.worldInfoEntry.create(name: string, data: WorldInfoData): WIEntry
+```
+
+在指定的世界書 `data` 中建立並插入一筆新條目,回傳插入的條目物件。會分配下一個空閒 `uid`,填預設值,並就地修改 `data.entries`。之後用 `saveWorldInfo()` 持久化。
+
+### worldInfoEntry.setButtonClass
+
+```ts
+context.worldInfoEntry.setButtonClass(chid: number | string, forceValue?: boolean): void
+```
+
+更新角色卡 UI 上「世界書已綁定」狀態徽章的樣式類。傳 `forceValue` 可強制覆寫計算出的綁定狀態。程式化改完綁定（例如 `charUpdatePrimaryWorld`）後呼叫。
+
+### worldInfoEntry.setGlobalSelection
+
+```ts
+context.worldInfoEntry.setGlobalSelection(
+    worldInfoName: string,
+    selected: boolean,
+    options?: object,
+): Promise<void>
+```
+
+把某本世界書加入或移出全域啟用清單（即世界書面板頂部的多選）。立即持久化;UI 在下次 selector 重整時同步。
+
+## 位置常數
+
+### context.constants.wiAnchor
+
+```ts
+context.constants.wiAnchor: { before, after }
+```
+
+樣例對話條目錨點側的數值列舉。建構或比對 `worldInfoExamples[i].position` 時使用。
+
+### context.constants.wiPosition
+
+```ts
+context.constants.wiPosition: {
+    before, after, ANTop, ANBottom, atDepth, EMTop, EMBottom, outlet,
+}
+```
+
+條目級 `position` 值的數值列舉。建構條目或依注入槽位過濾時使用。
+
+```js
+const ctx = Luker.getContext();
+const entry = {
+    ...ctx.worldInfoEntry.template,
+    position: ctx.constants.wiPosition.before,
+};
+```
+
 ## 實用模式
 
 ### 外掛讀取 + 編輯一份世界書

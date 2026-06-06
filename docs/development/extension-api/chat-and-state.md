@@ -338,6 +338,16 @@ The four structural transitions are settled by core synchronously before the mat
 - `instance.ready()` — resolves when no in-flight write is pending.
 - `instance.destroy(options?)` — detach the instance from the registry. Pass `{ purge: true }` to additionally delete this namespace's state from disk (use for permanent reset / wipe workflows).
 
+### resolveChatStateTarget
+
+```ts
+context.resolveChatStateTarget(target?: { chatId?: string, characterId?: number | string } | null): { chatId: string, characterId: number | string } | null
+```
+
+Normalizes a chat-state target descriptor against the currently active chat. Pass `null` (or omit) to get the current chat's `{ chatId, characterId }`; pass a partial object to override either field while filling in the other from active state. Returns `null` when no chat is active and the supplied target lacks `chatId`.
+
+Use this when implementing storage layers that should follow the active chat by default but allow programmatic targeting (e.g., the floor-state and chat-state APIs).
+
 ## Character State
 
 Character state is persistent storage bound to the Character Card itself, shared across all chats for that character. Unlike chat state (which is scoped to a single chat), character state is suitable for storing cross-chat, character-level configuration.

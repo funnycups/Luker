@@ -43,10 +43,15 @@ For quickly finding where an API lives, the context object groups related APIs i
 | `context.variables.global` | `get`, `set`, `add`, `inc`, `dec`, `del`, `has` |
 | `context.swipe` | `left`, `right`, `to`, `show`, `hide`, `refresh`, `isAllowed`, `state` |
 | `context.symbols` | `ignore` (the `IGNORE_SYMBOL` sentinel) |
-| `context.constants` | `unset` (the `UNSET_VALUE` sentinel) |
+| `context.constants` | `unset`, `promptRoles`, `promptTypes`, `wiAnchor`, `wiPosition` |
 | `context.macros` | `register`, `registerAlias`, `registry`, `engine`, `category`, `envBuilder` |
 | `context.loader` | `show`, `hide`, `active`, `get`, `isBlocking`, `ToastMode`, `Handle` |
 | `context.skills` | `list`, `get`, `readFile`, `listFiles`, `search`, `writeFile`, `editFile`, `deleteFile`, `install`, `delete`, `rename`, `moveScope`, `importBundled`, `listBundledManifest`, `packForEmbed`, `previewExtractEmbed`, `executeExtractEmbed`, `importFromUrl` |
+| `context.worldInfoEntry` | `template`, `create`, `setButtonClass`, `setGlobalSelection` |
+| `context.openai` | `proxies`, `ZAI_ENDPOINT`, `stripPresetConnectionFields` |
+| `context.textCompletion` | `types` |
+| `context.secrets` | `KEYS`, `state` |
+| `context.lib` | `DOMPurify`, `lodash`, `DiffMatchPatch`, `showdown`, `yaml` |
 
 ## API Differences from SillyTavern
 

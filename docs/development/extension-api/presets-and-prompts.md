@@ -312,6 +312,14 @@ updateReasoningUI(
 
 Triggers a UI refresh of the reasoning block on a message. Pass a chat index, a raw DOM element, or a JQuery wrapper. `reset: true` skips reading the message's current reasoning state — used during swipes when the new reasoning hasn't been written yet.
 
+### removeReasoningFromString
+
+```ts
+removeReasoningFromString(str: string): string
+```
+
+Strips the reasoning prefix/suffix block from a string using the active reasoning template. Returns the input unchanged when no template is configured or no reasoning span is found. Use when you need just the user-facing answer text from a model output that may include `<thinking>...</thinking>`-style sections.
+
 ```js
 const ctx = Luker.getContext();
 const parsed = ctx.parseReasoningFromString(modelOutput);
@@ -352,3 +360,33 @@ Reference to `power_user`. Holds tokenizer choice, reasoning template selection,
 ::: warning Mutate via APIs, not directly
 These views are exposed for inspection only. Writing to them directly may bypass debounced save logic. To change connection or model, use the user-facing UI or [`presets.save`](#presets-save). To change generation parameters, use a chat completion preset.
 :::
+
+## Connection Helpers
+
+### context.openai
+
+```ts
+context.openai: {
+    proxies: Array<{ name: string, url: string, ... }>,
+    ZAI_ENDPOINT: Record<string, string>,
+    stripPresetConnectionFields(preset: object): object,
+}
+```
+
+Helpers for working with chat-completion connection state. `proxies` is the live list of user-configured reverse proxies. `ZAI_ENDPOINT` enumerates the well-known Zhipu / Z.AI endpoint URLs. `stripPresetConnectionFields` returns a clone of a preset with connection-specific fields (api source, model, proxy, etc.) removed — used when exporting a preset that should be portable across user setups.
+
+```js
+const ctx = Luker.getContext();
+const portable = ctx.openai.stripPresetConnectionFields(preset);
+const json = JSON.stringify(portable, null, 2);
+```
+
+### context.textCompletion
+
+```ts
+context.textCompletion: {
+    types: Record<string, string>,
+}
+```
+
+`textCompletion.types` enumerates supported text-completion backend identifiers (`OOBA`, `MANCER`, `APHRODITE`, `KOBOLDCPP`, …). Use when branching behavior on which text-completion provider is active.

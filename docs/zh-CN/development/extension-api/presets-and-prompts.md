@@ -312,6 +312,14 @@ updateReasoningUI(
 
 触发某条消息推理块的 UI 刷新。可传聊天索引、原生 DOM 元素或 JQuery 包装。`reset: true` 时跳过读取消息当前的 reasoning 状态——在 swipe 时新的 reasoning 还没写入时使用。
 
+### removeReasoningFromString
+
+```ts
+removeReasoningFromString(str: string): string
+```
+
+按当前 reasoning 模板从字符串里剥掉 reasoning 前后缀块。没有配置模板或没匹配到 reasoning 段时原样返回。当你只想要模型输出里给用户看的最终答复（去掉 `<thinking>……</thinking>` 之类）时用。
+
 ```js
 const ctx = Luker.getContext();
 const parsed = ctx.parseReasoningFromString(modelOutput);
@@ -352,3 +360,33 @@ context.powerUserSettings: object
 ::: warning 通过 API 修改，不要直接写
 这些视图仅供检视。直接写入可能绕过 debounce 保存逻辑。要更改连接或模型，请使用面向用户的 UI 或 [`presets.save`](#presets-save)。要更改生成参数，请使用 chat completion 预设。
 :::
+
+## 连接相关辅助
+
+### context.openai
+
+```ts
+context.openai: {
+    proxies: Array<{ name: string, url: string, ... }>,
+    ZAI_ENDPOINT: Record<string, string>,
+    stripPresetConnectionFields(preset: object): object,
+}
+```
+
+处理 chat completion 连接状态的辅助集合。`proxies` 是用户配置的反向代理实时列表;`ZAI_ENDPOINT` 列出已知的智谱 / Z.AI 端点 URL;`stripPresetConnectionFields` 返回去掉连接相关字段（API 源、模型、proxy 等）的预设克隆——导出「不同用户环境也能用」的预设时使用。
+
+```js
+const ctx = Luker.getContext();
+const portable = ctx.openai.stripPresetConnectionFields(preset);
+const json = JSON.stringify(portable, null, 2);
+```
+
+### context.textCompletion
+
+```ts
+context.textCompletion: {
+    types: Record<string, string>,
+}
+```
+
+`textCompletion.types` 列举支持的 text-completion 后端标识（`OOBA`、`MANCER`、`APHRODITE`、`KOBOLDCPP`……）。在按当前 text-completion provider 分支行为时使用。

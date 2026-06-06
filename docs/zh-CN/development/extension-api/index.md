@@ -43,10 +43,15 @@ const context = Luker.getContext();
 | `context.variables.global` | `get`、`set`、`add`、`inc`、`dec`、`del`、`has` |
 | `context.swipe` | `left`、`right`、`to`、`show`、`hide`、`refresh`、`isAllowed`、`state` |
 | `context.symbols` | `ignore`（`IGNORE_SYMBOL` 哨兵值） |
-| `context.constants` | `unset`（`UNSET_VALUE` 哨兵值） |
+| `context.constants` | `unset`、`promptRoles`、`promptTypes`、`wiAnchor`、`wiPosition` |
 | `context.macros` | `register`、`registerAlias`、`registry`、`engine`、`category`、`envBuilder` |
 | `context.loader` | `show`、`hide`、`active`、`get`、`isBlocking`、`ToastMode`、`Handle` |
 | `context.skills` | `list`、`get`、`readFile`、`listFiles`、`search`、`writeFile`、`editFile`、`deleteFile`、`install`、`delete`、`rename`、`moveScope`、`importBundled`、`listBundledManifest`、`packForEmbed`、`previewExtractEmbed`、`executeExtractEmbed`、`importFromUrl` |
+| `context.worldInfoEntry` | `template`、`create`、`setButtonClass`、`setGlobalSelection` |
+| `context.openai` | `proxies`、`ZAI_ENDPOINT`、`stripPresetConnectionFields` |
+| `context.textCompletion` | `types` |
+| `context.secrets` | `KEYS`、`state` |
+| `context.lib` | `DOMPurify`、`lodash`、`DiffMatchPatch`、`showdown`、`yaml` |
 
 ## 与 SillyTavern 的 API 差异
 

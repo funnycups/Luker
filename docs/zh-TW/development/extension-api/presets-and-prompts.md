@@ -352,3 +352,33 @@ context.powerUserSettings: object
 ::: warning 透過 API 寫入而非直接突變
 這些視圖僅為檢視而暴露。直接寫入它們可能繞過防抖儲存邏輯。要更改連線或模型，請使用面向使用者的 UI 或 [`presets.save`](#presets-save)。要更改生成參數，請使用 chat completion 預設。
 :::
+
+## 連線相關輔助
+
+### context.openai
+
+```ts
+context.openai: {
+    proxies: Array<{ name: string, url: string, ... }>,
+    ZAI_ENDPOINT: Record<string, string>,
+    stripPresetConnectionFields(preset: object): object,
+}
+```
+
+處理 chat completion 連線狀態的輔助集合。`proxies` 是使用者設定的反向代理實時清單;`ZAI_ENDPOINT` 列出已知的智譜 / Z.AI 端點 URL;`stripPresetConnectionFields` 回傳去掉連線相關欄位（API source、模型、proxy 等）的預設複本——匯出「不同使用者環境也能用」的預設時使用。
+
+```js
+const ctx = Luker.getContext();
+const portable = ctx.openai.stripPresetConnectionFields(preset);
+const json = JSON.stringify(portable, null, 2);
+```
+
+### context.textCompletion
+
+```ts
+context.textCompletion: {
+    types: Record<string, string>,
+}
+```
+
+`textCompletion.types` 列舉支援的 text-completion 後端識別碼（`OOBA`、`MANCER`、`APHRODITE`、`KOBOLDCPP`……）。在按當前 text-completion provider 分支行為時使用。

@@ -336,6 +336,16 @@ await fs.update((current) => nextState, { floor: targetFloor, swipeId: 0 });
 - `instance.ready()`——所有飛行中寫入完成時解析。
 - `instance.destroy(options?)`——從註冊表移除實例。傳 `{ purge: true }` 時同時把該命名空間的狀態從磁碟抹除（用於永久重置 / 抹除場景）。
 
+### resolveChatStateTarget
+
+```ts
+context.resolveChatStateTarget(target?: { chatId?: string, characterId?: number | string } | null): { chatId: string, characterId: number | string } | null
+```
+
+把 chat-state target 描述符按當前活躍聊天做歸一化。傳 `null`（或省略）拿到目前聊天的 `{ chatId, characterId }`;傳部分物件則用提供的欄位覆寫,另一欄位從活躍狀態填補。沒有活躍聊天且 `target` 缺 `chatId` 時回傳 `null`。
+
+實作「預設跟隨活躍聊天但允許程式化指定目標」的儲存層時使用（例如 floor-state、chat-state API）。
+
 ## 角色狀態
 
 角色狀態是綁定到角色卡本身的持久化儲存，在該角色的所有聊天之間共享。與聊天狀態（僅在單個聊天內有效）不同，角色狀態適合儲存跨聊天的角色級別設定。

@@ -99,6 +99,9 @@ import {
     updateCharacterData,
     persistCharacterData,
     persistCharacterDataDebounced,
+    saveSettings,
+    createModelIcon,
+    resolveChatStateTarget,
 } from '../script.js';
 import {
     extension_settings,
@@ -121,9 +124,9 @@ import { addLocaleData, getCurrentLocale, t, translate } from './i18n.js';
 import { hideLoader, showLoader } from './loader.js';
 import { loader } from './action-loader.js';
 import { MacrosParser } from './macros.js';
-import { getChatCompletionModel, oai_settings, sendOpenAIRequest } from './openai.js';
+import { getChatCompletionModel, oai_settings, sendOpenAIRequest, proxies, ZAI_ENDPOINT, stripOpenAIConnectionFieldsFromPreset } from './openai.js';
 import { callGenericPopup, Popup, POPUP_RESULT, POPUP_TYPE } from './popup.js';
-import { power_user, registerDebugFunction } from './power-user.js';
+import { power_user, registerDebugFunction, performFuzzySearch } from './power-user.js';
 import { getPresetManager } from './preset-manager.js';
 import { persistPreset } from './preset-persistence.js';
 import { humanizedDateTime, isMobile, shouldSendOnEnter } from './RossAscends-mods.js';
@@ -134,17 +137,17 @@ import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from '
 import { SlashCommandEnumValue } from './slash-commands/SlashCommandEnumValue.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { tag_map, tags, importTags } from './tags.js';
-import { getTextGenServer, getTextGenGenerationData, textgenerationwebui_settings } from './textgen-settings.js';
+import { getTextGenServer, getTextGenGenerationData, textgenerationwebui_settings, textgen_types } from './textgen-settings.js';
 import { tokenizers, getTextTokens, getTokenCount, getTokenCountAsync, getTokenizerModel } from './tokenizers.js';
 import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
-import { areLookupNamesEqual, findCanonicalNameInList, timestampToMoment, uuidv4, importFromExternalUrl, getCharaFilename } from './utils.js';
+import { areLookupNamesEqual, findCanonicalNameInList, timestampToMoment, uuidv4, importFromExternalUrl, getCharaFilename, escapeHtml, download, getFileText, getStringHash, createThumbnail, isValidUrl } from './utils.js';
 import { addGlobalVariable, addLocalVariable, decrementGlobalVariable, decrementLocalVariable, deleteGlobalVariable, deleteLocalVariable, existsGlobalVariable, existsLocalVariable, getGlobalVariable, getLocalVariable, incrementGlobalVariable, incrementLocalVariable, popLocalVariable, pushLocalVariable, setGlobalVariable, setLocalVariable } from './variables.js';
-import { convertCharacterBook, getWorldInfoPrompt, loadWorldInfo, loadWorldInfoBatch, reloadEditor, saveWorldInfo, updateWorldInfoList, wi_anchor_position, world_names, getCharaAuxWorlds, createNewWorldInfo, importEmbeddedWorldInfo, charUpdatePrimaryWorld, getCharacterEmbeddedWorld } from './world-info.js';
+import { convertCharacterBook, getWorldInfoPrompt, loadWorldInfo, loadWorldInfoBatch, reloadEditor, saveWorldInfo, updateWorldInfoList, wi_anchor_position, world_info_position, world_names, getCharaAuxWorlds, createNewWorldInfo, importEmbeddedWorldInfo, charUpdatePrimaryWorld, getCharacterEmbeddedWorld, newWorldInfoEntryTemplate, createWorldInfoEntry, setWorldInfoButtonClass, setGlobalWorldInfoSelection } from './world-info.js';
 import { ChatCompletionService, TextCompletionService } from './custom-request.js';
 import { ConnectionManagerRequestService } from './extensions/shared.js';
 import { getChatCompletionConnectionProfiles, resolveChatCompletionRequestProfile } from './extensions/connection-manager/profile-resolver.js';
-import { updateReasoningUI, parseReasoningFromString, getReasoningTemplateByName } from './reasoning.js';
+import { updateReasoningUI, parseReasoningFromString, getReasoningTemplateByName, removeReasoningFromString } from './reasoning.js';
 import { IGNORE_SYMBOL, inject_ids } from './constants.js';
 import { macros } from './macros/macro-system.js';
 import { getRegexedString, regex_placement } from './extensions/regex/engine.js';
@@ -158,6 +161,9 @@ import { getNovelGenerationData, nai_settings, novelai_settings, novelai_setting
 import * as EDITS_API from './lib/edits/index.js';
 import * as ITERATION_LIBRARY_API_NS from './iteration-library/index.js';
 import { skillsApi } from './skills/api.js';
+import { SECRET_KEYS, secret_state } from './secrets.js';
+import { EmbeddingService } from './embedding-service.js';
+import * as LIB_BUNDLE from '../lib.js';
 
 /**
  * Layer 2 / Layer 3 export of the iteration-library surface (spec section 15).
@@ -2512,6 +2518,47 @@ export function getContext() {
         },
         constants: {
             unset: UNSET_VALUE,
+            promptRoles: extension_prompt_roles,
+            promptTypes: extension_prompt_types,
+            wiAnchor: wi_anchor_position,
+            wiPosition: world_info_position,
+        },
+        secrets: {
+            KEYS: SECRET_KEYS,
+            state: secret_state,
+        },
+        lib: {
+            DOMPurify: LIB_BUNDLE.DOMPurify,
+            lodash: LIB_BUNDLE.lodash,
+            DiffMatchPatch: LIB_BUNDLE.DiffMatchPatch,
+            showdown: LIB_BUNDLE.showdown,
+            yaml: LIB_BUNDLE.yaml,
+        },
+        embeddingService: EmbeddingService,
+        performFuzzySearch,
+        removeReasoningFromString,
+        resolveChatStateTarget,
+        createModelIcon,
+        saveSettings,
+        escapeHtml,
+        download,
+        getFileText,
+        getStringHash,
+        createThumbnail,
+        isValidUrl,
+        worldInfoEntry: {
+            template: newWorldInfoEntryTemplate,
+            create: createWorldInfoEntry,
+            setButtonClass: setWorldInfoButtonClass,
+            setGlobalSelection: setGlobalWorldInfoSelection,
+        },
+        openai: {
+            proxies,
+            ZAI_ENDPOINT,
+            stripPresetConnectionFields: stripOpenAIConnectionFieldsFromPreset,
+        },
+        textCompletion: {
+            types: textgen_types,
         },
     };
 }

@@ -201,6 +201,14 @@ context.saveSettingsDebounced(): void
 
 debounce 形式的持久化触发。修改 `extensionSettings` 或任何设置对象后调用。短时间内多次调用会合并成一次保存。
 
+### saveSettings
+
+```ts
+context.saveSettings(loopCounter?: number, options?: object): Promise<void>
+```
+
+`saveSettingsDebounced` 的可 await 版本。绕过 debounce 队列,网络往返完成后才解决。仅当后续逻辑依赖「设置已落盘」时才用（罕见——绝大多数调用点都应优先选 debounce 版）。
+
 ### saveMetadataDebounced
 
 ```ts
@@ -380,6 +388,138 @@ shouldSendOnEnter(): boolean
 
 按用户偏好和平台决定回车键是否应该发送（vs 插入换行）。
 
+### escapeHtml
+
+```ts
+context.escapeHtml(str: string): string
+```
+
+转义 `&`、`<`、`>`、`"`、`'`,便于把纯文本安全嵌入 HTML。比手写转义更稳。
+
+### download
+
+```ts
+context.download(content: string | Blob, fileName: string, contentType: string): void
+```
+
+按指定文件名和 MIME 类型触发浏览器下载。`content` 可以是字符串或 `Blob`。
+
+### getFileText
+
+```ts
+context.getFileText(file: File): Promise<string>
+```
+
+把 `<input type="file">` change 事件里的 `File` 当文本读出。读取失败时拒绝。
+
+### getStringHash
+
+```ts
+context.getStringHash(str: string, seed?: number): number
+```
+
+稳定的 32 位 FNV 风格哈希。适合做缓存 key、按内容 debounce 的标识、「上次以来变没变」之类的判断。**不是**加密哈希。
+
+### createThumbnail
+
+```ts
+context.createThumbnail(dataUrl: string, maxWidth?: number, maxHeight?: number, type?: string): Promise<string>
+```
+
+把 data URL 解码为图片再缩成新的 data URL 返回。type 默认 `'image/jpeg'`。任一维度传 `null` 表示只按另一维度约束。
+
+### isValidUrl
+
+```ts
+context.isValidUrl(value: string): boolean
+```
+
+`value` 能被 `new URL()` 解析时返回 `true`。发起 fetch 前做输入校验用。
+
+### performFuzzySearch
+
+```ts
+context.performFuzzySearch(
+    type: string,
+    data: object[],
+    keys: Array<string | { name: string, weight?: number }>,
+    searchValue: string,
+    fuzzySearchCaches?: object | null,
+): Array<{ item: object, score: number, refIndex: number }>
+```
+
+在平台已命名的某个索引（`'characters'`、`'groups'`、`'tags'` 等）上跑一次 Fuse.js 模糊匹配,按相关度排序返回 Fuse 风格的结果对象。传入一个 out-cache 对象可在多次调用之间复用构建好的索引。
+
+## 库捆绑（Lib Bundle）
+
+插件偶尔需要用到核心已经打包进 `lib.core.bundle.js` 的第三方库。比起在每个插件里再打一遍或者依赖全局对象,推荐走 `context.lib`。
+
+### context.lib
+
+```ts
+context.lib: {
+    DOMPurify,
+    lodash,
+    DiffMatchPatch,
+    showdown,
+    yaml,
+}
+```
+
+| 字段 | 库 |
+|------|------|
+| `DOMPurify` | HTML 消毒器（[DOMPurify](https://github.com/cure53/DOMPurify)） |
+| `lodash` | 工具集合（[lodash](https://lodash.com/)） |
+| `DiffMatchPatch` | diff/patch 引擎（[diff-match-patch](https://github.com/google/diff-match-patch)） |
+| `showdown` | Markdown → HTML（[showdown](https://github.com/showdownjs/showdown)） |
+| `yaml` | YAML 解析/序列化（[yaml](https://eemeli.org/yaml/)） |
+
+```js
+const ctx = Luker.getContext();
+const safe = ctx.lib.DOMPurify.sanitize(userHtml);
+const md = new ctx.lib.showdown.Converter().makeHtml(text);
+```
+
+## 密钥（Secrets）
+
+供插件检查或列举连接密钥槽（API key、凭据等）的状态。context 表面只读——具体的 key 值留在 secrets 后端。
+
+### context.secrets.KEYS
+
+```ts
+context.secrets.KEYS: Record<string, string>
+```
+
+公认的密钥槽标识目录（`OPENAI`、`CLAUDE`、`MISTRALAI` 等）。当作 `context.secrets.state` 的 key 使用。
+
+### context.secrets.state
+
+```ts
+context.secrets.state: Record<string, boolean>
+```
+
+每个密钥槽当前是否已填的布尔实时映射。只读快照——直接修改不会持久化。
+
+```js
+const ctx = Luker.getContext();
+if (!ctx.secrets.state[ctx.secrets.KEYS.OPENAI]) {
+    toastr.warning('OpenAI API key 未设置。');
+}
+```
+
+## 向量嵌入服务
+
+### context.embeddingService
+
+```ts
+context.embeddingService: {
+    embed(items: string[], options?: object): Promise<number[][]>,
+    // ……EmbeddingService 完整表面
+}
+```
+
+vectors / memory-graph 子系统共用的向量嵌入服务,会按当前配置的嵌入 provider 走。需要做相似度检索又不想自己复写一遍 provider 装配的插件可以用。
+
 ## 符号与常量
 
 ### context.symbols.ignore
@@ -403,6 +543,29 @@ await ctx.writeExtensionField(chid, 'my_field', ctx.constants.unset);  // 删除
 await ctx.writeExtensionField(chid, 'my_field', null);                  // 设为 null
 ```
 
+### context.constants.promptRoles / promptTypes
+
+```ts
+context.constants.promptRoles: { SYSTEM, USER, ASSISTANT }
+context.constants.promptTypes: { NONE, IN_PROMPT, IN_CHAT, BEFORE_PROMPT }
+```
+
+`setExtensionPrompt` 及相关注入路径用的数值枚举。`promptRoles` 选择被注入 prompt 的 message role;`promptTypes` 选择注入位置。
+
+```js
+const ctx = Luker.getContext();
+ctx.setExtensionPrompt(
+    'my-plugin-pre',
+    '前置上下文备注。',
+    ctx.constants.promptTypes.BEFORE_PROMPT,
+    0,
+    false,
+    ctx.constants.promptRoles.SYSTEM,
+);
+```
+
+关于 `wiAnchor` / `wiPosition` 见[世界书 → 位置常量](/zh-CN/development/extension-api/world-info#位置常量)。
+
 ### CONNECT_API_MAP
 
 ```ts
@@ -410,6 +573,14 @@ context.CONNECT_API_MAP: Record<string, ConnectApiEntry>
 ```
 
 支持的 API 源标识（如 `'openai'`、`'claude'`、`'novel'`）及其 UI 元数据的只读目录。在填充连接相关下拉框时有用。
+
+### createModelIcon
+
+```ts
+context.createModelIcon(apiName: string, modelName?: string): string
+```
+
+返回某 provider 品牌图标的内联 SVG 标记,尺寸适合嵌在下拉框 / chip 里和模型名并排。`apiName` 传 `CONNECT_API_MAP` 的某个 key;可选的 `modelName` 让 helper 挑特定模型的变体（例如 Claude 普通 vs Claude reasoning）。
 
 ### mainApi / maxContext / menuType
 
