@@ -4270,9 +4270,9 @@ async function sendOpenAIRequest(type, messages, signal, {
                 if (canMultiSwipe && Array.isArray(parsed?.choices) && parsed?.choices?.[0]?.index > 0) {
                     const swipeIndex = parsed.choices[0].index - 1;
                     // FIXME: state.reasoning should be an array to support multi-swipe
-                    swipes[swipeIndex] = (swipes[swipeIndex] || '') + getStreamingReply(parsed, state, { overrideShowThoughts: false });
+                    swipes[swipeIndex] = (swipes[swipeIndex] || '') + getStreamingReply(parsed, state, { chatCompletionSource: requestSettings.chat_completion_source, overrideShowThoughts: false });
                 } else {
-                    const replyDelta = getStreamingReply(parsed, state);
+                    const replyDelta = getStreamingReply(parsed, state, { chatCompletionSource: requestSettings.chat_completion_source });
                     if (plainTextToolCallDetector) {
                         const processed = plainTextToolCallDetector.processTextDelta(replyDelta);
                         text += processed.displayDelta;
