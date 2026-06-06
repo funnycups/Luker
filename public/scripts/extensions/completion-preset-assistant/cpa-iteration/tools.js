@@ -21,8 +21,9 @@
  * `ctx.getReferencePresetBody(name)` so this module stays pure.
  */
 
-import { lodash } from '../../../../lib.js';
-import { generateQuietPrompt } from '../../../../script.js';
+const __ctx = SillyTavern.getContext();
+const lodash = __ctx.lib.lodash;
+const generateQuietPrompt = __ctx.generateQuietPrompt;
 import { openSimulationReview } from '../../../iteration-library/simulation-review/index.js';
 import { extractWorldInfoHitsFromRuntime } from '../../../iteration-library/simulation-review/wi-hits.js';
 import {

@@ -55,8 +55,10 @@
  *   - getRequestPresetOptions()           → { llmPresetName, apiPresetName }
  */
 
-import { Popup, POPUP_TYPE } from '../../../popup.js';
-import { stripOpenAIConnectionFieldsFromPreset } from '../../../openai.js';
+const __ctx = SillyTavern.getContext();
+const Popup = __ctx.Popup;
+const POPUP_TYPE = __ctx.POPUP_TYPE;
+const stripOpenAIConnectionFieldsFromPreset = __ctx.openai.stripPresetConnectionFields;
 import {
     applyEdits,
     inverseEdit,
