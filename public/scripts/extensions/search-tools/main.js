@@ -1,12 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 
-import { eventSource, event_types, extension_prompt_roles, getRequestHeaders, saveSettings, saveSettingsDebounced } from '../../../script.js';
-import { extension_settings, getContext } from '../../extensions.js';
-import { addLocaleData, translate } from '../../i18n.js';
-import { SECRET_KEYS, secret_state } from '../../secrets.js';
-import { escapeHtml, getStringHash } from '../../utils.js';
-import { newWorldInfoEntryTemplate, setGlobalWorldInfoSelection, world_info_position } from '../../world-info.js';
 import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import {
     TOOL_PROTOCOL_STYLE,
@@ -27,8 +21,28 @@ import {
     persistFallbackManagedEntries,
     pickLatestValidSnapshot,
 } from './persistence.js';
-import { POPUP_TYPE, Popup } from '../../popup.js';
 import { registerSearchToolsOrchestrationTools } from './orchestrator-tools.js';
+
+const __ctx = SillyTavern.getContext();
+const eventSource = __ctx.eventSource;
+const event_types = __ctx.eventTypes;
+const extension_prompt_roles = __ctx.constants.promptRoles;
+const getRequestHeaders = __ctx.getRequestHeaders;
+const saveSettings = __ctx.saveSettings;
+const saveSettingsDebounced = __ctx.saveSettingsDebounced;
+const extension_settings = __ctx.extensionSettings;
+const getContext = SillyTavern.getContext;
+const addLocaleData = __ctx.addLocaleData;
+const translate = __ctx.translate;
+const SECRET_KEYS = __ctx.secrets.KEYS;
+const secret_state = __ctx.secrets.state;
+const escapeHtml = __ctx.escapeHtml;
+const getStringHash = __ctx.getStringHash;
+const newWorldInfoEntryTemplate = __ctx.worldInfoEntry.template;
+const setGlobalWorldInfoSelection = __ctx.worldInfoEntry.setGlobalSelection;
+const world_info_position = __ctx.constants.wiPosition;
+const POPUP_TYPE = __ctx.POPUP_TYPE;
+const Popup = __ctx.Popup;
 
 const MODULE_NAME = 'search_tools';
 const UI_BLOCK_ID = 'search_tools_settings';
