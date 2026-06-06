@@ -13,14 +13,28 @@ import {
 import { fetchFileList, fetchFileContent, saveFileContent, deleteFile, renameFile } from './studio.js';
 import { applyEdits } from '../../../lib/edits/index.js';
 import { showConflictResolution } from '../../../lib/edits/conflict-ui.js';
-import { characters, this_chid, saveMetadata, chat_metadata, getRequestHeaders } from '../../../../script.js';
-import { loadWorldInfo, createWorldInfoEntry, deleteWorldInfoEntry, saveWorldInfo, createNewWorldInfo, world_names, selected_world_info, charUpdatePrimaryWorld, getChatWorldInfoNames, getCharaAuxWorlds, importEmbeddedWorldInfo, getCharacterEmbeddedWorld } from '../../../world-info.js';
-import { getCharaFilename } from '../../../utils.js';
-import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
-import { getContext } from '../../../st-context.js';
-import { extension_settings, writeExtensionField } from '../../../extensions.js';
 import { getScriptsByType, saveScriptsByType, SCRIPT_TYPES } from '../../regex/engine.js';
-import { uuidv4 } from '../../../utils.js';
+
+const __ctx = SillyTavern.getContext();
+const characters = __ctx.characters;
+const saveMetadata = __ctx.saveMetadata;
+const getRequestHeaders = __ctx.getRequestHeaders;
+const loadWorldInfo = __ctx.loadWorldInfo;
+const createWorldInfoEntry = __ctx.worldInfoEntry.create;
+const deleteWorldInfoEntry = __ctx.worldInfoEntry.delete;
+const saveWorldInfo = __ctx.saveWorldInfo;
+const createNewWorldInfo = __ctx.createWorldBook;
+const charUpdatePrimaryWorld = __ctx.charUpdatePrimaryWorld;
+const getChatWorldInfoNames = __ctx.chatWorldInfo.getNames;
+const getCharaAuxWorlds = __ctx.getCharaAuxWorlds;
+const importEmbeddedWorldInfo = __ctx.importEmbeddedWorldInfo;
+const getCharacterEmbeddedWorld = __ctx.getCharacterEmbeddedWorld;
+const getCharaFilename = __ctx.getCharaFilename;
+const SlashCommandParser = __ctx.SlashCommandParser;
+const getContext = SillyTavern.getContext;
+const extension_settings = __ctx.extensionSettings;
+const writeExtensionField = __ctx.writeExtensionField;
+const uuidv4 = __ctx.uuidv4;
 import {
  getCharacterOverrideByAvatar as orchGetCharacterOverrideByAvatar,
  getCharacterIndexByAvatar as orchGetCharacterIndexByAvatar,
@@ -202,7 +216,7 @@ function buildTools() {
  type: 'function',
  function: {
  name: TOOL_NAMES.WORLDINFO_LIST_BOOKS,
- description: 'List world book names visible to the current character: character primary (from character.data.extensions.world — the card\'s primary book), character auxiliary (from world_info.charLore[].extraBooks — extra books bound via Luker\'s lorebook editor), chat-bound (from chat_metadata.world_info — per-save state, resets on new chat), and globally activated (selected_world_info — every chat). Returns { books: string[], sources: { [name]: \'character\'|\'character_aux\'|\'chat\'|\'global\' } } so you can tell which book lives at which scope. Chat-bound mutation is a CardApp runtime concern (use ctx.setChatWorldBooks in card code) — Studio reads via this tool but never mutates chat-bound bindings.',
+ description: 'List world book names visible to the current character: character primary (from character.data.extensions.world — the card\'s primary book), character auxiliary (from world_info.charLore[].extraBooks — extra books bound via Luker\'s lorebook editor), chat-bound (from chat metadata — per-save state, resets on new chat), and globally activated (every chat). Returns { books: string[], sources: { [name]: \'character\'|\'character_aux\'|\'chat\'|\'global\' } } so you can tell which book lives at which scope. Chat-bound mutation is a CardApp runtime concern (use ctx.setChatWorldBooks in card code) — Studio reads via this tool but never mutates chat-bound bindings.',
  parameters: { type: 'object', properties: {}, additionalProperties: false },
  },
  },
@@ -873,10 +887,10 @@ async function executeTool(charId, toolName, args, options = {}) {
  }
  // ==================== Character Fields ====================
  case TOOL_NAMES.CHARACTER_GET_FIELDS: {
- if (this_chid === undefined || this_chid === null) {
+ if (__ctx.characterId === undefined || __ctx.characterId === null) {
  return { ok: false, error: 'No active character' };
  }
- const char = characters[this_chid];
+ const char = characters[__ctx.characterId];
  const d = char?.data || {};
  return {
  ok: true,
@@ -898,12 +912,12 @@ async function executeTool(charId, toolName, args, options = {}) {
  depth_prompt_prompt: d.depth_prompt?.prompt || '',
  depth_prompt_depth: d.depth_prompt?.depth ?? 4,
  depth_prompt_role: d.depth_prompt?.role || 'system',
- embedded_world: getCharacterEmbeddedWorld(this_chid),
+ embedded_world: getCharacterEmbeddedWorld(__ctx.characterId),
  },
  };
  }
  case TOOL_NAMES.CHARACTER_UPDATE_FIELDS: {
- if (this_chid === undefined || this_chid === null) {
+ if (__ctx.characterId === undefined || __ctx.characterId === null) {
  return { ok: false, error: 'No active character' };
  }
  // Form-level fields go through updateCharacterData (which feeds
@@ -937,7 +951,7 @@ async function executeTool(charId, toolName, args, options = {}) {
  const formPatch = {};
  /** @type {Record<string, any>} */
  const extPatchesByTopKey = {};
- const char = characters[this_chid];
+ const char = characters[__ctx.characterId];
  const prevExt = (char?.data?.extensions && typeof char.data.extensions === 'object')
  ? char.data.extensions
  : {};
@@ -989,25 +1003,25 @@ async function executeTool(charId, toolName, args, options = {}) {
  }
  }
  if (Object.keys(formPatch).length > 0) {
- await getContext().updateCharacterData(this_chid, formPatch, { immediate: true });
+ await getContext().updateCharacterData(__ctx.characterId, formPatch, { immediate: true });
  }
  for (const [topKey, value] of Object.entries(extPatchesByTopKey)) {
- await writeExtensionField(this_chid, topKey, value);
+ await writeExtensionField(__ctx.characterId, topKey, value);
  }
  return { ok: true, message: `Updated fields: ${updated.join(', ')}` };
  }
  // ==================== World Info ====================
  case TOOL_NAMES.WORLDINFO_LIST_BOOKS: {
- const charData = characters[this_chid];
+ const charData = characters[__ctx.characterId];
  const boundBook = String(charData?.data?.extensions?.world || '').trim();
  const auxBooks = (() => {
  const fileName = charData?.avatar ? getCharaFilename(null, { manualAvatarKey: charData.avatar }) : '';
  return getCharaAuxWorlds(fileName);
  })();
  const chatBooks = (() => {
- try { return getChatWorldInfoNames(chat_metadata); } catch { return []; }
+ try { return getChatWorldInfoNames(__ctx.chatMetadata); } catch { return []; }
  })();
- const globalBooks = Array.isArray(selected_world_info) ? selected_world_info : [];
+ const globalBooks = Array.isArray(__ctx.chatWorldInfo.globalSelection) ? __ctx.chatWorldInfo.globalSelection : [];
  const books = [];
  const sources = {};
  const push = (name, source) => {
@@ -1100,7 +1114,7 @@ async function executeTool(charId, toolName, args, options = {}) {
  case TOOL_NAMES.WORLDINFO_CREATE_BOOK: {
  const name = String(args?.book_name || '').trim();
  if (!name) return { ok: false, error: 'book_name required' };
- if (world_names.includes(name)) {
+ if (__ctx.getWorldInfoNames().includes(name)) {
  return { ok: true, book_name: name, message: `World book "${name}" already exists.`, created: false };
  }
  const created = await createNewWorldInfo(name, { interactive: false });
@@ -1108,16 +1122,16 @@ async function executeTool(charId, toolName, args, options = {}) {
  return { ok: true, book_name: name, message: `World book "${name}" created.`, created: true };
  }
  case TOOL_NAMES.CHARACTER_IMPORT_EMBEDDED_WORLD: {
- if (this_chid === undefined || this_chid === null) {
+ if (__ctx.characterId === undefined || __ctx.characterId === null) {
  return { ok: false, error: 'No active character' };
  }
- const charData = characters[this_chid];
+ const charData = characters[__ctx.characterId];
  const book = charData?.data?.character_book;
  if (!book) {
  return { ok: false, error: 'No embedded world book on this character (data.character_book is empty).' };
  }
  const boundName = String(charData?.data?.extensions?.world || '').trim();
- if (boundName && world_names.includes(boundName)) {
+ if (boundName && __ctx.getWorldInfoNames().includes(boundName)) {
  return { ok: true, message: `Character is already bound to world "${boundName}"; embedded book skipped.`, imported: false, world: boundName };
  }
  // Mirror the UI flow in importEmbeddedWorldInfo: stash the chid on the
@@ -1126,7 +1140,7 @@ async function executeTool(charId, toolName, args, options = {}) {
  // sets character.data.extensions.world to the imported name.
  const $info = $('#import_character_info');
  const previousChid = $info.data('chid');
- $info.data('chid', this_chid);
+ $info.data('chid', __ctx.characterId);
  try {
  await importEmbeddedWorldInfo(true);
  } finally {
@@ -1136,7 +1150,7 @@ async function executeTool(charId, toolName, args, options = {}) {
  $info.data('chid', previousChid);
  }
  }
- const importedName = String(characters[this_chid]?.data?.extensions?.world || '').trim();
+ const importedName = String(characters[__ctx.characterId]?.data?.extensions?.world || '').trim();
  return { ok: true, message: `Embedded world imported and bound as "${importedName}".`, imported: true, world: importedName };
  }
  case TOOL_NAMES.WORLDINFO_REPLACE_ENTRIES: {
@@ -1180,7 +1194,7 @@ async function executeTool(charId, toolName, args, options = {}) {
  if (scope !== 'character' && scope !== 'global') {
  return { ok: false, error: `scope must be 'character' or 'global'` };
  }
- if (scope === 'character' && (this_chid === undefined || this_chid === null)) {
+ if (scope === 'character' && (__ctx.characterId === undefined || __ctx.characterId === null)) {
  return { ok: false, error: 'No active character — cannot write card-level regex' };
  }
  const scriptType = scope === 'character' ? SCRIPT_TYPES.SCOPED : SCRIPT_TYPES.GLOBAL;
@@ -1212,7 +1226,7 @@ async function executeTool(charId, toolName, args, options = {}) {
  if (scope !== 'character' && scope !== 'global') {
  return { ok: false, error: `scope must be 'character' or 'global'` };
  }
- if (scope === 'character' && (this_chid === undefined || this_chid === null)) {
+ if (scope === 'character' && (__ctx.characterId === undefined || __ctx.characterId === null)) {
  return { ok: false, error: 'No active character — cannot write card-level regex' };
  }
  const scriptType = scope === 'character' ? SCRIPT_TYPES.SCOPED : SCRIPT_TYPES.GLOBAL;
@@ -1233,7 +1247,7 @@ async function executeTool(charId, toolName, args, options = {}) {
  if (scope !== 'character' && scope !== 'global') {
  return { ok: false, error: `scope must be 'character' or 'global'` };
  }
- if (scope === 'character' && (this_chid === undefined || this_chid === null)) {
+ if (scope === 'character' && (__ctx.characterId === undefined || __ctx.characterId === null)) {
  return { ok: false, error: 'No active character — cannot write card-level regex' };
  }
  const scriptType = scope === 'character' ? SCRIPT_TYPES.SCOPED : SCRIPT_TYPES.GLOBAL;
@@ -1249,18 +1263,18 @@ async function executeTool(charId, toolName, args, options = {}) {
  }
  // ==================== Orchestrator (per-character override) ====================
  case TOOL_NAMES.ORCHESTRATOR_GET_OVERRIDE: {
- if (this_chid === undefined || this_chid === null) {
+ if (__ctx.characterId === undefined || __ctx.characterId === null) {
  return { ok: false, error: 'No active character' };
  }
  const lukerCtx = getContext();
- const charData = characters[this_chid];
+ const charData = characters[__ctx.characterId];
  const avatar = String(charData?.avatar || '').trim();
  if (!avatar) return { ok: false, error: 'Character has no avatar' };
  const override = orchGetCharacterOverrideByAvatar(lukerCtx, avatar);
  return { ok: true, override: override || null };
  }
  case TOOL_NAMES.ORCHESTRATOR_SET_OVERRIDE: {
- if (this_chid === undefined || this_chid === null) {
+ if (__ctx.characterId === undefined || __ctx.characterId === null) {
  return { ok: false, error: 'No active character' };
  }
  const override = args?.override;
@@ -1268,7 +1282,7 @@ async function executeTool(charId, toolName, args, options = {}) {
  return { ok: false, error: 'override must be an object' };
  }
  const lukerCtx = getContext();
- const charData = characters[this_chid];
+ const charData = characters[__ctx.characterId];
  const avatar = String(charData?.avatar || '').trim();
  if (!avatar) return { ok: false, error: 'Character has no avatar' };
  const characterIndex = orchGetCharacterIndexByAvatar(lukerCtx, avatar);
@@ -1286,11 +1300,11 @@ async function executeTool(charId, toolName, args, options = {}) {
  return ok ? { ok: true, message: 'Orchestrator override updated.', mode: nextOverride.mode || null } : { ok: false, error: 'Failed to persist orchestrator override' };
  }
  case TOOL_NAMES.ORCHESTRATOR_CLEAR_OVERRIDE: {
- if (this_chid === undefined || this_chid === null) {
+ if (__ctx.characterId === undefined || __ctx.characterId === null) {
  return { ok: false, error: 'No active character' };
  }
  const lukerCtx = getContext();
- const charData = characters[this_chid];
+ const charData = characters[__ctx.characterId];
  const avatar = String(charData?.avatar || '').trim();
  if (!avatar) return { ok: false, error: 'Character has no avatar' };
  const characterIndex = orchGetCharacterIndexByAvatar(lukerCtx, avatar);
@@ -1321,11 +1335,11 @@ async function executeTool(charId, toolName, args, options = {}) {
  };
  }
  case TOOL_NAMES.MEMORY_GRAPH_SET_SCHEMA: {
- if (this_chid === undefined || this_chid === null) {
+ if (__ctx.characterId === undefined || __ctx.characterId === null) {
  return { ok: false, error: 'No active character' };
  }
  const lukerCtx = getContext();
- const charData = characters[this_chid];
+ const charData = characters[__ctx.characterId];
  const avatar = String(charData?.avatar || '').trim();
  if (!avatar) return { ok: false, error: 'Character has no avatar' };
  const schema = args?.schema;
@@ -1338,11 +1352,11 @@ async function executeTool(charId, toolName, args, options = {}) {
  : { ok: false, error: 'Failed to update memory-graph schema override' };
  }
  case TOOL_NAMES.MEMORY_GRAPH_SET_ADVANCED: {
- if (this_chid === undefined || this_chid === null) {
+ if (__ctx.characterId === undefined || __ctx.characterId === null) {
  return { ok: false, error: 'No active character' };
  }
  const lukerCtx = getContext();
- const charData = characters[this_chid];
+ const charData = characters[__ctx.characterId];
  const avatar = String(charData?.avatar || '').trim();
  if (!avatar) return { ok: false, error: 'Character has no avatar' };
  const advanced = args?.advanced;
@@ -1515,17 +1529,17 @@ async function executeTool(charId, toolName, args, options = {}) {
  }
  }
  case TOOL_NAMES.CARDAPP_SET_ENABLED: {
- if (this_chid === undefined || this_chid === null) {
+ if (__ctx.characterId === undefined || __ctx.characterId === null) {
  return { ok: false, error: 'No active character' };
  }
  const next = !!args?.enabled;
- const char = characters[this_chid];
+ const char = characters[__ctx.characterId];
  if (!char) return { ok: false, error: 'Character not found' };
  const previous = !!char?.data?.extensions?.card_app?.enabled;
  const prevCardApp = (char?.data?.extensions?.card_app && typeof char.data.extensions.card_app === 'object')
  ? char.data.extensions.card_app
  : {};
- await writeExtensionField(this_chid, 'card_app', { ...prevCardApp, enabled: next });
+ await writeExtensionField(__ctx.characterId, 'card_app', { ...prevCardApp, enabled: next });
  // Keep the editor checkbox in sync if the popup is currently open.
  const $checkbox = $('#card_app_enabled');
  if ($checkbox.length > 0 && $checkbox.prop('checked') !== next) {
@@ -1568,7 +1582,7 @@ This is why state injection (a constant world book entry containing \`{{getvar::
 Corollaries:
 - Quick-action buttons work *because* they call \`ctx.sendMessage(text)\` and the text becomes a real user message the AI processes. A button that mutates UI without sending text is invisible to the AI.
 - If your UI tracks something the AI should reason about, that something must end up in the prompt — usually via a chat variable surfaced in the state-injection entry.
-- Conversely, when the AI emits \`{{setvar::aw_hp::20}}\`, the value lands in \`chat_metadata.variables\`. The UI reads from there; the variables are the shared source of truth between AI and UI.
+- Conversely, when the AI emits \`{{setvar::aw_hp::20}}\`, the value lands in \`__ctx.chatMetadata.variables\`. The UI reads from there; the variables are the shared source of truth between AI and UI.
 
 ## What CardApp runtime can and can't reason about
 
@@ -1587,7 +1601,7 @@ Variables the AI sees go through one of three writers:
 2. **first_mes** — embed \`{{setvar::name::initial}}\` so the seed binds to floor 0. Right for initial values.
 3. **CardApp, bound to a floor** — \`ctx.setVariable(key, value, { floor: latestMessageId })\` appends a setvar op to that floor's var_ops; swipe/delete/branch reconcile it like an AI-written macro. Right for UI-driven micro-edits the AI also cares about (a +1 affinity button, inline typo fix in a description).
 
-Never use \`ctx.setVariable(key, value)\` without \`floor\` for state the AI reads — it writes to \`chat_metadata\` and skips op-log, so swipes won't roll it back. The unbound form is only correct for pure UI state the AI doesn't see (open tab, draft form values, panel selection).
+Never use \`ctx.setVariable(key, value)\` without \`floor\` for state the AI reads — it writes to \`__ctx.chatMetadata\` and skips op-log, so swipes won't roll it back. The unbound form is only correct for pure UI state the AI doesn't see (open tab, draft form values, panel selection).
 
 ## Common CardApp request patterns
 
@@ -1661,8 +1675,8 @@ Once the layer set is decided, move on to the actual card content (description, 
 - ctx.getCharacterData() — Get character data object
 - ctx.updateCharacterFields(fields) async — Update card fields (description, personality, scenario, first_mes, mes_example, world, etc.). Same field names as the Studio \`character_update_fields\` tool. Use sparingly from CardApp runtime; most card content is set at authoring time.
 - ctx.getVariable(key) — Get chat variable (use this for HP / gold / affinity / inventory / quest flags — i.e. anything macro-driven and AI-mutable)
-- ctx.setVariable(key, value, options?) async — Set a chat variable. Pass \`{ floor: latestMessageId }\` for AI-readable state — appends a setvar op to that floor's var_ops, so swipe/delete/branch reconcile it like an AI-written \`{{setvar}}\`. Without \`floor\`, writes straight to \`chat_metadata.variables\` and skips op-log — only safe for ephemeral UI state the AI doesn't see (open tab, draft form values, panel selection)
-- ctx.getChatState(namespace, options?) async — Read a chat-bound state namespace (server-backed via /api/chats/state/, NOT chat_metadata). Use for structured CardApp state that doesn't fit a flat variable.
+- ctx.setVariable(key, value, options?) async — Set a chat variable. Pass \`{ floor: latestMessageId }\` for AI-readable state — appends a setvar op to that floor's var_ops, so swipe/delete/branch reconcile it like an AI-written \`{{setvar}}\`. Without \`floor\`, writes straight to \`__ctx.chatMetadata.variables\` and skips op-log — only safe for ephemeral UI state the AI doesn't see (open tab, draft form values, panel selection)
+- ctx.getChatState(namespace, options?) async — Read a chat-bound state namespace (server-backed via /api/chats/state/, NOT __ctx.chatMetadata). Use for structured CardApp state that doesn't fit a flat variable.
 - ctx.updateChatState(namespace, updater, options?) async — Reducer-style write of chat-bound state. Returns { ok, state, updated }.
 - ctx.patchChatState(namespace, operations, options?) async — Apply JSON-patch ops to chat-bound state.
 - ctx.deleteChatState(namespace, options?) async — Drop a chat-bound state namespace.
@@ -1919,13 +1933,13 @@ Pick storage by lifetime. Getting this wrong leaves ghost state from a previous 
 
 | Surface | Scope | Reset on |
 |---------|-------|----------|
-| Chat variables (\`chat_metadata.variables\` — op-log target, \`ctx.getVariable\`/\`ctx.setVariable\`) | Per chat per character | New chat created or switched-to |
+| Chat variables (\`__ctx.chatMetadata.variables\` — op-log target, \`ctx.getVariable\`/\`ctx.setVariable\`) | Per chat per character | New chat created or switched-to |
 | Chat state namespaces (server-backed via \`/api/chats/state/\`, \`ctx.getChatState\` / \`ctx.updateChatState\` / \`ctx.patchChatState\` / \`ctx.deleteChatState\`; or wrapped by Floor State for swipe/delete replay) | Per chat per character | New chat |
-| **Chat-bound world books** (\`chat_metadata.world_info\` — read in Studio via \`worldinfo_list_books\` sources map; mutate from CardApp via \`ctx.setChatWorldBooks\` / \`ctx.createChatWorldBook\`) | Per chat per character | New chat |
+| **Chat-bound world books** (\`__ctx.chatMetadata.world_info\` — read in Studio via \`worldinfo_list_books\` sources map; mutate from CardApp via \`ctx.setChatWorldBooks\` / \`ctx.createChatWorldBook\`) | Per chat per character | New chat |
 | Character card fields (\`description\`, \`first_mes\`, \`extensions.world\`, …) | Per character — shared across **every** chat with that character | Character deleted |
 | Character state namespaces (server-backed, \`ctx.getCharacterState\` / \`ctx.setCharacterState\`) | Per character — shared across every chat with that character | Character deleted |
 | Character-bound (primary) world book entries | Per book — shared across every chat using this character | Book deleted |
-| Globally activated world books (\`selected_world_info\`) | Every chat for every character that has them active | User toggles them off / book deleted |
+| Globally activated world books (every chat) | Every chat for every character that has them active | User toggles them off / book deleted |
 
 Per-run progression (this dungeon's HP, current floor, gold gathered, what's been looted) → **chat variables** (or Floor State for structured slices). Resets cleanly when the player starts a new chat — which is what "new game" means.
 
@@ -1994,7 +2008,7 @@ So a structured collection (the cast of NPCs, a quest journal, a relationship gr
 
 ## Chat-bound world books
 
-\`chat_metadata.world_info\` holds a list of world book names that activate **only for the current chat**. They behave exactly like the character-bound book at prompt-assembly time (keyed entries scan, constant entries always inject) but are scoped to the active save.
+\`__ctx.chatMetadata.world_info\` holds a list of world book names that activate **only for the current chat**. They behave exactly like the character-bound book at prompt-assembly time (keyed entries scan, constant entries always inject) but are scoped to the active save.
 
 When to attach a chat-bound book:
 
@@ -2099,7 +2113,7 @@ These — and only these — are scanned out of every assistant message before i
 
 \`{{addvar::aw_hp::-15}}\` reads as: subtract 15 from \`aw_hp\` (\`addvar\` does numeric arithmetic when both sides parse as numbers; if the current value is a JSON-stringified array, the value is pushed onto it and re-stringified; otherwise it falls through to string concat). Other ST macros (\`{{user}}\`, \`{{getvar::name}}\`, \`{{time}}\`, …) work normally inside the value field — evaluated at scan time, so \`{{setvar::last_event::{{time}}}}\` records a timestamp.
 
-Each scanned op is recorded in \`message.extra.var_ops\` (per-swipe), forward-applied into \`chat_metadata.variables\`, and replayed on swipe / delete / chat change. Users can hand-edit ops via the message-toolbar fa-flask button.
+Each scanned op is recorded in \`message.extra.var_ops\` (per-swipe), forward-applied into \`__ctx.chatMetadata.variables\`, and replayed on swipe / delete / chat change. Users can hand-edit ops via the message-toolbar fa-flask button.
 
 ### What you do (CardApp side)
 
@@ -2111,7 +2125,7 @@ Each scanned op is recorded in \`message.extra.var_ops\` (per-swipe), forward-ap
        ctx.setVariable('aw_maxHp', 100);
    }
    \`\`\`
-   \`ctx.setVariable\` writes directly to \`chat_metadata.variables\` (no var_op recorded) — appropriate for one-time init. Alternatively, embed \`{{setvar::aw_hp::100}}\` etc. in the character's \`first_mes\`; Luker scans first_mes the same way it scans replies, so the bootstrap rides in chat history and resets if the user deletes the first message.
+   \`ctx.setVariable\` writes directly to \`__ctx.chatMetadata.variables\` (no var_op recorded) — appropriate for one-time init. Alternatively, embed \`{{setvar::aw_hp::100}}\` etc. in the character's \`first_mes\`; Luker scans first_mes the same way it scans replies, so the bootstrap rides in chat history and resets if the user deletes the first message.
 3. **Render UI from variables.** Read with sync \`ctx.getVariable('aw_hp')\` and paint.
 4. **Refresh on render events.** In your renderer's \`renderMessage(messageId, data)\`, call \`updateUI()\` whenever \`!data.isStreaming\` — covers new replies (op-log already applied), swipe switches (rebuild already happened), and edited messages. Do not parse \`data.raw\` for state; macros are already gone.
 
@@ -2167,7 +2181,7 @@ Mutate state by emitting these macros anywhere in your reply (they're removed be
 Values persist; if you don't emit a macro, the value doesn't change.
 \`\`\`
 
-**Why the backslashes in the macro list above:** \`{{setvar::...}}\` and friends are **side-effect macros that fire at prompt-assembly time** — including when the macro engine evaluates a world book entry to inject it into the prompt. If you write them bare in a teaching example, every prompt assembly will execute the example macro and corrupt \`chat_metadata.variables\` (e.g. literally setting \`aw_hp\` to the string \`"N"\`). The \`\\{{...}}\` escape tells the engine "this is literal text, not a macro to execute" — the model still sees \`{{setvar::aw_hp::N}}\` in its prompt (the leading backslash is stripped by the engine's unescape pass), so its training kicks in correctly.
+**Why the backslashes in the macro list above:** \`{{setvar::...}}\` and friends are **side-effect macros that fire at prompt-assembly time** — including when the macro engine evaluates a world book entry to inject it into the prompt. If you write them bare in a teaching example, every prompt assembly will execute the example macro and corrupt \`__ctx.chatMetadata.variables\` (e.g. literally setting \`aw_hp\` to the string \`"N"\`). The \`\\{{...}}\` escape tells the engine "this is literal text, not a macro to execute" — the model still sees \`{{setvar::aw_hp::N}}\` in its prompt (the leading backslash is stripped by the engine's unescape pass), so its training kicks in correctly.
 
 **Rule of thumb when writing world book entries containing macro teaching:**
 
@@ -2518,7 +2532,7 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  // Build current CardApp toggle state context
  let cardAppStatusContext = '';
  try {
- const cfg = characters[this_chid]?.data?.extensions?.card_app || {};
+ const cfg = characters[__ctx.characterId]?.data?.extensions?.card_app || {};
  const enabled = !!cfg.enabled;
  cardAppStatusContext = `\n\nCardApp toggle status: ${enabled ? 'ENABLED' : 'DISABLED'} (data.extensions.card_app.enabled = ${enabled}). ${enabled
  ? 'The custom UI is active for this character.'

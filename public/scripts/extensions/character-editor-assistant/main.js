@@ -2,23 +2,6 @@
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 // Implementation source: Toolify: Empower any LLM with function calling capabilities. (https://github.com/funnycups/Toolify)
 
-import {
-    converter,
-    generateQuietPrompt,
-    getCharacterDescription,
-    getCharacterFirstMessage,
-    getCharacterMesExample,
-    getCharacterName,
-    getCharacterPersonality,
-    getCharacterScenario,
-    saveSettingsDebounced,
-} from '../../../script.js';
-import { DOMPurify, lodash } from '../../../lib.js';
-import { extension_settings, getContext, getCharacterState, setCharacterState } from '../../extensions.js';
-import { addLocaleData, translate } from '../../i18n.js';
-import { POPUP_TYPE, Popup } from '../../popup.js';
-import { newWorldInfoEntryTemplate, setWorldInfoButtonClass, updateWorldInfoList, getCharaAuxWorlds, getChatWorldInfoNames, selected_world_info } from '../../world-info.js';
-import { getCharaFilename } from '../../utils.js';
 import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import {
     TOOL_PROTOCOL_STYLE,
@@ -37,6 +20,26 @@ import {
     extractSystemFromCapturedPrompt,
     extractNonSystemFromCapturedPrompt,
 } from '../../iteration-library/simulation-review/dry-run-capture.js';
+
+const __ctx = SillyTavern.getContext();
+const generateQuietPrompt = __ctx.generateQuietPrompt;
+const saveSettingsDebounced = __ctx.saveSettingsDebounced;
+const DOMPurify = __ctx.lib.DOMPurify;
+const lodash = __ctx.lib.lodash;
+const extension_settings = __ctx.extensionSettings;
+const getContext = SillyTavern.getContext;
+const getCharacterState = __ctx.getCharacterState;
+const setCharacterState = __ctx.setCharacterState;
+const addLocaleData = __ctx.addLocaleData;
+const translate = __ctx.translate;
+const POPUP_TYPE = __ctx.POPUP_TYPE;
+const Popup = __ctx.Popup;
+const newWorldInfoEntryTemplate = __ctx.worldInfoEntry.template;
+const setWorldInfoButtonClass = __ctx.worldInfoEntry.setButtonClass;
+const updateWorldInfoList = __ctx.updateWorldInfoList;
+const getCharaAuxWorlds = __ctx.getCharaAuxWorlds;
+const getChatWorldInfoNames = __ctx.chatWorldInfo.getNames;
+const getCharaFilename = __ctx.getCharaFilename;
 
 
 const MODULE_NAME = 'character_editor_assistant';
@@ -2596,8 +2599,9 @@ function createCharacterEditorWorldBookListToolApi(context, { avatar = '' } = {}
                 for (const name of getChatWorldInfoNames(context?.chatMetadata)) push(name, 'chat');
             } catch { /* chat metadata may be unavailable */ }
 
-            if (Array.isArray(selected_world_info)) {
-                for (const name of selected_world_info) push(name, 'global');
+            const globalSelection = __ctx.chatWorldInfo.globalSelection;
+            if (Array.isArray(globalSelection)) {
+                for (const name of globalSelection) push(name, 'global');
             }
 
             return { books, sources };
@@ -2611,6 +2615,7 @@ function renderLorebookSyncAnalysisMarkdown(markdownText) {
         return `<div class="cea_sync_analysis_empty">${escapeHtml(i18n('No analysis output.'))}</div>`;
     }
     try {
+        const converter = __ctx.markdownConverter;
         const html = converter?.makeHtml
             ? converter.makeHtml(source)
             : `<pre>${escapeHtml(source)}</pre>`;

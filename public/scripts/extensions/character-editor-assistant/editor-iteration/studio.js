@@ -53,7 +53,9 @@
  * matches the pre-Apply state byte-for-byte.
  */
 
-import { Popup, POPUP_TYPE } from '../../../popup.js';
+const __ctx = SillyTavern.getContext();
+const Popup = __ctx.Popup;
+const POPUP_TYPE = __ctx.POPUP_TYPE;
 import {
     applyEdits,
     bindIterWorkspaceResizer,

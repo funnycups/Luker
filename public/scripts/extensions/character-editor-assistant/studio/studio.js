@@ -4,10 +4,18 @@
  * Layout: Left panel (AI chat) | Center (real chat/CardApp) | Right panel (code editor)
  */
 
-import { getRequestHeaders, saveSettingsDebounced } from '../../../../script.js';
-import { translate } from '../../../i18n.js';
-import { DOMPurify, DiffMatchPatch, showdown } from '../../../../lib.js';
-import { extension_settings, getContext, getExtensionApi, getCharacterState, setCharacterState } from '../../../extensions.js';
+const __ctx = SillyTavern.getContext();
+const getRequestHeaders = __ctx.getRequestHeaders;
+const saveSettingsDebounced = __ctx.saveSettingsDebounced;
+const translate = __ctx.translate;
+const DOMPurify = __ctx.lib.DOMPurify;
+const DiffMatchPatch = __ctx.lib.DiffMatchPatch;
+const showdown = __ctx.lib.showdown;
+const extension_settings = __ctx.extensionSettings;
+const getContext = SillyTavern.getContext;
+const getExtensionApi = __ctx.getExtensionApi;
+const getCharacterState = __ctx.getCharacterState;
+const setCharacterState = __ctx.setCharacterState;
 import { sendAIMessage, TOOL_NAMES } from './ai-chat.js';
 
 // Markdown converter for AI messages
