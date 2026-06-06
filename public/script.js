@@ -1235,6 +1235,52 @@ if (typeof window !== 'undefined') {
     window.__lukerSetImmersiveModeFromNative = (enabled) => {
         void setImmersiveMode(Boolean(enabled), { useFullscreen: false, persist: false });
     };
+    window.__lukerHandleBack = () => {
+        try {
+            const $ = window.jQuery;
+            if (typeof $ !== 'function') {
+                return 'noop';
+            }
+
+            // Anything the existing Escape handler would react to: dispatch Escape and let it run.
+            // Mirrors the priority order in RossAscends-mods.js #handleEscape.
+            const escapeIsActionable =
+                $('#curEditTextarea').is(':visible')
+                || $('#mes_stop').is(':visible')
+                || !!document.querySelector('dialog[open]')
+                || $('#dialogue_popup, #select_chat_popup, #character_popup, #dialogue_del_mes_cancel').is(':visible')
+                || $('#logprobsViewer, #cfgConfig, #floatingPrompt, #WorldInfo').is(':visible')
+                || $('#movingDivs > div:visible').length > 0
+                || $('.drawer-content.openDrawer')
+                    .not('#WorldInfo').not('#left-nav-panel').not('#right-nav-panel')
+                    .not('#floatingPrompt').not('#cfgConfig').not('#logprobsViewer')
+                    .not('#movingDivs > div')
+                    .filter(':visible').length > 0;
+
+            if (escapeIsActionable) {
+                document.dispatchEvent(new KeyboardEvent('keydown', {
+                    key: 'Escape', code: 'Escape', keyCode: 27, which: 27,
+                    bubbles: true, cancelable: true,
+                }));
+                return 'consumed';
+            }
+
+            // Left/right nav drawers are the primary mobile entry points but Escape does not close them.
+            if ($('#left-nav-panel').hasClass('openDrawer')) {
+                $('#leftNavDrawerIcon').trigger('click');
+                return 'consumed';
+            }
+            if ($('#right-nav-panel').hasClass('openDrawer')) {
+                $('#rightNavDrawerIcon').trigger('click');
+                return 'consumed';
+            }
+
+            return 'unhandled';
+        } catch (error) {
+            console.warn('Failed to handle back press from native', error);
+            return 'noop';
+        }
+    };
 }
 
 // Saved here for performance reasons

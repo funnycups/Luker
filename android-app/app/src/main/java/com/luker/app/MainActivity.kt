@@ -19,6 +19,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.SystemClock
 import android.text.InputType
 import android.util.Base64
 import android.util.Log
@@ -113,6 +114,9 @@ class MainActivity : AppCompatActivity() {
     private var immersiveModeEnabled: Boolean = false
     private var immersiveModeSource: String = "user"
     private var immersiveModeEnabledBeforeCustomView: Boolean = false
+    private var pendingBackCheck: Boolean = false
+    private var lastBackPressForExitMillis: Long = 0L
+    private val confirmExitWindowMillis: Long = 2000L
     private var fullscreenCustomView: View? = null
     private var fullscreenCustomViewCallback: WebChromeClient.CustomViewCallback? = null
     private var contentRootBasePaddingLeft: Int = 0
@@ -125,23 +129,25 @@ class MainActivity : AppCompatActivity() {
     private val backPressedCallback = object : OnBackPressedCallback(true) {
         override fun handleOnBackPressed() {
             if (fullscreenCustomView != null) {
+                lastBackPressForExitMillis = 0L
                 hideCustomFullscreenView()
                 return
             }
 
             if (immersiveModeEnabled && immersiveModeSource == "fullscreen_api") {
+                lastBackPressForExitMillis = 0L
                 applyImmersiveMode(false)
                 syncWebImmersiveMode(false)
                 return
             }
 
             if (this@MainActivity::webView.isInitialized && webView.canGoBack()) {
+                lastBackPressForExitMillis = 0L
                 webView.goBack()
                 return
             }
 
-            isEnabled = false
-            onBackPressedDispatcher.onBackPressed()
+            tryWebHandleBackOrConfirmExit()
         }
     }
 
@@ -1046,6 +1052,40 @@ class MainActivity : AppCompatActivity() {
             "window.__lukerSetImmersiveModeFromNative && window.__lukerSetImmersiveModeFromNative($jsEnabled);",
             null,
         )
+    }
+
+    private fun tryWebHandleBackOrConfirmExit() {
+        if (pendingBackCheck) {
+            return
+        }
+        if (!this::webView.isInitialized) {
+            triggerExitOrConfirmToast()
+            return
+        }
+        pendingBackCheck = true
+        val script = "(function(){try{return (typeof window.__lukerHandleBack === 'function') ? String(window.__lukerHandleBack()) : 'noop';}catch(e){return 'noop';}})();"
+        webView.evaluateJavascript(script) { rawResult ->
+            runOnUiThread {
+                pendingBackCheck = false
+                val result = (rawResult ?: "").trim('"', ' ', '\n', '\r', '\t').lowercase()
+                if (result == "consumed") {
+                    lastBackPressForExitMillis = 0L
+                    return@runOnUiThread
+                }
+                triggerExitOrConfirmToast()
+            }
+        }
+    }
+
+    private fun triggerExitOrConfirmToast() {
+        val now = SystemClock.elapsedRealtime()
+        if (lastBackPressForExitMillis != 0L && now - lastBackPressForExitMillis <= confirmExitWindowMillis) {
+            backPressedCallback.isEnabled = false
+            onBackPressedDispatcher.onBackPressed()
+            return
+        }
+        lastBackPressForExitMillis = now
+        Toast.makeText(this, getString(R.string.press_back_again_to_exit), Toast.LENGTH_SHORT).show()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {

@@ -77,4 +77,5 @@
     <string name="runtime_start_error_native_load_failed">原生运行时加载失败：%1$s</string>
     <string name="runtime_start_error_node_exit_code">Node 进程退出，返回码 %1$d</string>
     <string name="runtime_start_error_no_available_port">在端口范围 %1$d..%2$d 内没有可用端口</string>
+    <string name="press_back_again_to_exit">再按一次返回键退出</string>
 </resources>

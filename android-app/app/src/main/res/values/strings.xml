@@ -77,4 +77,5 @@
     <string name="runtime_start_error_native_load_failed">Native runtime load failed: %1$s</string>
     <string name="runtime_start_error_node_exit_code">Node process exited with code %1$d</string>
     <string name="runtime_start_error_no_available_port">No available port in range %1$d..%2$d</string>
+    <string name="press_back_again_to_exit">Press back again to exit</string>
 </resources>
