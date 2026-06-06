@@ -1275,6 +1275,14 @@ if (typeof window !== 'undefined') {
                 return 'consumed';
             }
 
+            // In a chat? Closing it returns to the welcome screen. closeCurrentChat()
+            // toasts instead of closing while generation is in flight; we still consume
+            // the press so the exit-confirm toast does not stack on top.
+            if (this_chid !== undefined || selected_group) {
+                void closeCurrentChat();
+                return 'consumed';
+            }
+
             return 'unhandled';
         } catch (error) {
             console.warn('Failed to handle back press from native', error);
