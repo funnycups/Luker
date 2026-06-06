@@ -27,7 +27,7 @@
  * with the spec schema.
  */
 
-import { extension_settings } from '../../extensions.js';
+const extension_settings = SillyTavern.getContext().extensionSettings;
 import {
     ORCH_NODE_TYPE_REVIEW,
     ORCH_NODE_TYPE_WORKER,

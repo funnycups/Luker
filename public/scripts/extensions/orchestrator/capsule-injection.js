@@ -34,9 +34,12 @@
  * orchestrator owns at the main.js level.
  */
 
-import { extension_prompt_roles, extension_prompt_types } from '../../../script.js';
-import { extension_settings } from '../../extensions.js';
-import { wi_anchor_position, world_info_position } from '../../world-info.js';
+const __ctx = SillyTavern.getContext();
+const extension_prompt_roles = __ctx.constants.promptRoles;
+const extension_prompt_types = __ctx.constants.promptTypes;
+const extension_settings = __ctx.extensionSettings;
+const wi_anchor_position = __ctx.constants.wiAnchor;
+const world_info_position = __ctx.constants.wiPosition;
 import { SUPPORTED_WORLD_INFO_POSITIONS } from './defaults.js';
 import {
     appendUniqueNoteEntry,

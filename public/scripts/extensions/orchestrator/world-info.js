@@ -24,7 +24,7 @@
  * module by import.
  */
 
-import { wi_anchor_position } from '../../world-info.js';
+const wi_anchor_position = SillyTavern.getContext().constants.wiAnchor;
 
 export function normalizeWorldInfoEntries(rawEntries) {
     return Array.isArray(rawEntries)

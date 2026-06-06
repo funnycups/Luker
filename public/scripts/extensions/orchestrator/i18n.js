@@ -9,7 +9,9 @@
  * else can call `i18n` synchronously after that.
  */
 
-import { addLocaleData, translate } from '../../i18n.js';
+const __ctx = SillyTavern.getContext();
+const addLocaleData = __ctx.addLocaleData;
+const translate = __ctx.translate;
 
 export function i18n(text) {
     return translate(String(text || ''));

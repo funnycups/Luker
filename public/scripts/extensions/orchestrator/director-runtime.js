@@ -31,7 +31,7 @@
 import { ORCH_EXECUTION_MODE_DIRECTOR } from './director-defaults.js';
 import { isAbortError } from './abort-utils.js';
 import { resolveAgentToolFlags } from './persistence.js';
-import { createMessageEditorHandle } from '../../message-takeover.js';
+const createMessageEditorHandle = SillyTavern.getContext().createMessageEditorHandle;
 import {
     buildMainAgentToolSchemas,
     createSubagentDispatcher,

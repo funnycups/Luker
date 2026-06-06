@@ -27,7 +27,7 @@
  * `latestOrchestrationSnapshot` / per-chat state.
  */
 
-import { yaml } from '../../../lib.js';
+const yaml = SillyTavern.getContext().lib.yaml;
 
 export function toCompactJsonText(value, fallback = '{}') {
     try {

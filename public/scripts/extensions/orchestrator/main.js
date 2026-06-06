@@ -2,11 +2,15 @@
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 // Implementation source: Toolify: Empower any LLM with function calling capabilities. (https://github.com/funnycups/Toolify)
 
-import { extension_prompt_roles, saveSettings, saveSettingsDebounced } from '../../../script.js';
-import { extension_settings, getContext } from '../../extensions.js';
-import { registerExtensionApi } from '../../extensions.js';
-import { oai_settings } from '../../openai.js';
-import { world_info_position } from '../../world-info.js';
+const __ctx = SillyTavern.getContext();
+const extension_prompt_roles = __ctx.constants.promptRoles;
+const saveSettings = __ctx.saveSettings;
+const saveSettingsDebounced = __ctx.saveSettingsDebounced;
+const extension_settings = __ctx.extensionSettings;
+const getContext = SillyTavern.getContext;
+const registerExtensionApi = __ctx.registerExtensionApi;
+const oai_settings = __ctx.chatCompletionSettings;
+const world_info_position = __ctx.constants.wiPosition;
 import {
     buildOrchestrationEditorPopupPanelHtml,
     buildOrchestratorSettingsHtml,
@@ -168,7 +172,7 @@ import { runAgendaOrchestration } from './agenda-runtime.js';
 import { runSpecOrchestration } from './spec-runtime.js';
 import { runLoopOrchestration, attachNotesFloorState } from './loop-runtime.js';
 import { handleDirectorDispatch, runMainAgentLoop } from './director-runtime.js';
-import { createMessageEditorHandle } from '../../message-takeover.js';
+const createMessageEditorHandle = __ctx.createMessageEditorHandle;
 import { buildDirectorDefaultSystemPrompt } from './director-default-prompt.js';
 import { createContentPayloadCache } from './director-content-payload.js';
 import { executeLoopTool, beginSimulation, endSimulation, getBuiltinToolRegistry } from './loop-tools.js';
@@ -187,9 +191,9 @@ import { openBridgeStToolPicker } from './bridge-st-tool-picker.js';
 import { augmentStudioPromptWithCustomTools } from './studio-prompt-augment.js';
 import { reviewIncomingCustomTools } from './character-import-tools-review.js';
 import { mountNotesPanel } from './notes-panel.js';
+const skillsApi = __ctx.skills;
 import { openSkillManagerPanel } from '../../skills/skill-manager-panel.js';
 import { mountSkillChips } from '../../skills/skill-chips.js';
-import { skillsApi } from '../../skills/api.js';
 import { registerSkillEmbedLifecycle } from '../../skills/embed-lifecycle.js';
 import { maybeAttachSkillsToPresetExport } from '../../skills/embed-export-hook.js';
 // Note: `ORCH_EXECUTION_MODE_LOOP` is canonically defined in defaults.js

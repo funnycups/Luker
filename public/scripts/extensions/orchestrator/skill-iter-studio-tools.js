@@ -58,8 +58,9 @@
  *     mode, and never touches studio internals directly. Tests stub the bag.
  */
 
-import { skillsApi } from '../../skills/api.js';
-import { yaml } from '../../../lib.js';
+const __ctx = SillyTavern.getContext();
+const skillsApi = __ctx.skills;
+const yaml = __ctx.lib.yaml;
 
 // ────────────────────────────────────────────────────────────────────────────
 // Tool names (kept in a frozen set so isSkillIterStudioTool is a fast lookup

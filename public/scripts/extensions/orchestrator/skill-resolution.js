@@ -37,7 +37,7 @@
  * refresh.
  */
 
-import { skillsApi } from '../../skills/api.js';
+const skillsApi = SillyTavern.getContext().skills;
 
 let cachedInventory = null;
 let cacheStamp = 0;

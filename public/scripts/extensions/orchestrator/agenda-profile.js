@@ -31,7 +31,7 @@
  *      the editor-only fields (`avatar`, `enabled`).
  */
 
-import { extension_settings } from '../../extensions.js';
+const extension_settings = SillyTavern.getContext().extensionSettings;
 import {
     ORCH_EXECUTION_MODE_AGENDA,
     defaultAgendaAgents,

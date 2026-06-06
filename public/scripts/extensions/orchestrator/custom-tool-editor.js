@@ -19,7 +19,10 @@
  * the popup open so the user can fix the field without retyping.
  */
 
-import { Popup, POPUP_TYPE, POPUP_RESULT } from '../../popup.js';
+const __ctx = SillyTavern.getContext();
+const Popup = __ctx.Popup;
+const POPUP_TYPE = __ctx.POPUP_TYPE;
+const POPUP_RESULT = __ctx.POPUP_RESULT;
 import { escapeHtml as esc } from './html-escape.js';
 
 const AsyncFunction = (async () => {}).constructor;

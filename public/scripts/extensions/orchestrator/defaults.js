@@ -16,8 +16,9 @@
  * now and will move into more specific modules in later refactors.
  */
 
-import { extension_prompt_roles } from '../../../script.js';
-import { world_info_position } from '../../world-info.js';
+const __ctx = SillyTavern.getContext();
+const extension_prompt_roles = __ctx.constants.promptRoles;
+const world_info_position = __ctx.constants.wiPosition;
 
 export const DEFAULT_CAPSULE_CUSTOM_INSTRUCTION = 'Follow the orchestration guidance below and prioritize it when drafting the next in-character reply.';
 export const DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT = 'You are a single-agent orchestration planner for roleplay generation. Produce concise, actionable guidance for the next reply while preserving continuity, character consistency, and world constraints. Before function-call output, provide one concise <thought>...</thought> that reflects your role-specific reasoning.';

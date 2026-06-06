@@ -30,8 +30,9 @@
  * persist.
  */
 
-import { saveSettings } from '../../../script.js';
-import { UNSET_VALUE } from '../../extensions.js';
+const __ctx = SillyTavern.getContext();
+const saveSettings = __ctx.saveSettings;
+const UNSET_VALUE = __ctx.constants.unset;
 import {
     ORCH_EXECUTION_MODE_AGENDA,
     ORCH_EXECUTION_MODE_DIRECTOR,

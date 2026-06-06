@@ -31,7 +31,7 @@ import {
     registerOrchestrationTool,
     unregisterOrchestrationTool,
 } from './register-custom-tool.js';
-import { skillsApi } from '../../skills/api.js';
+const skillsApi = SillyTavern.getContext().skills;
 
 const SKILL_TOOL_NAMES = ['skill_list', 'skill_read', 'skill_search'];
 

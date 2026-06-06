@@ -32,8 +32,9 @@
  * dispatch flows.
  */
 
-import { saveSettingsDebounced } from '../../../script.js';
-import { extension_settings } from '../../extensions.js';
+const __ctx = SillyTavern.getContext();
+const saveSettingsDebounced = __ctx.saveSettingsDebounced;
+const extension_settings = __ctx.extensionSettings;
 import {
     ORCH_EXECUTION_MODES,
     ORCH_EXECUTION_MODE_AGENDA,

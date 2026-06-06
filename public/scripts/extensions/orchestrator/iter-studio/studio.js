@@ -80,7 +80,9 @@
  *   - ORCH_EXECUTION_MODES                { SPEC, LOOP, AGENDA, DIRECTOR }
  */
 
-import { Popup, POPUP_TYPE } from '../../../popup.js';
+const __ctx = SillyTavern.getContext();
+const Popup = __ctx.Popup;
+const POPUP_TYPE = __ctx.POPUP_TYPE;
 import {
     applyEdits,
     bindIterWorkspaceResizer,

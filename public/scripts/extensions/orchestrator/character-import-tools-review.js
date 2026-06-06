@@ -15,7 +15,10 @@
  * Pure UI; caller does the actual apply.
  */
 
-import { Popup, POPUP_TYPE, POPUP_RESULT } from '../../popup.js';
+const __ctx = SillyTavern.getContext();
+const Popup = __ctx.Popup;
+const POPUP_TYPE = __ctx.POPUP_TYPE;
+const POPUP_RESULT = __ctx.POPUP_RESULT;
 import { escapeHtml as esc } from './html-escape.js';
 
 const RESULT_WITH = POPUP_RESULT.AFFIRMATIVE;       // 1
