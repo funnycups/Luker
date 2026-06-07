@@ -7,25 +7,21 @@
  *
  * Contract: a Luker-new plugin in `public/scripts/extensions/<plugin>/**`
  * MUST consume core capabilities through `SillyTavern.getContext()` / the
- * three-layer API, never via cross-boundary import. Reverse coupling
- * (core importing a plugin) is also disallowed. Upstream-shipped
+ * three-layer API, never via cross-boundary import. Cross-plugin coupling
+ * (Luker-new plugin → another Luker-new plugin) is also disallowed —
+ * sibling plugins talk over the published `getExtensionApi(name)` registry
+ * (see `docs/development/extension-api/*`). Reverse coupling (core
+ * importing a plugin) is the third banned direction. Upstream-shipped
  * extensions (regex, quick-reply, connection-manager, …) are out of scope.
  *
  * Detection
  * ---------
  * For each Luker-new plugin path, scan every `.js` for `import ... from
- * '<path>'` statements (static + dynamic). Any specifier that escapes the
- * `extensions/` directory (`../../<not-extensions>/...` or
- * `../../../script.js`) is a violation, with two whitelisted exceptions:
- *
- *   1. Luker-self platform layer under `public/scripts/` that pre-dates
- *      this rule (`iteration-library/`, `skills/`, `lib/edits/`,
- *      `vendor/`). The platform layer is exempt — its eventual
- *      relocation is a separate task.
- *
- *   2. Sibling Luker-new plugins (`../<other-luker-plugin>/...`). These
- *      are plugin↔plugin couplings tracked separately and are NOT
- *      flagged here; that boundary has its own task.
+ * '<path>'` statements (static + dynamic). Any specifier resolving to:
+ *   1. A core file (escapes `extensions/` and is not Luker platform), or
+ *   2. A sibling Luker-new plugin directory
+ * is a violation. Luker self-platform layer (`iteration-library/`,
+ * `skills/`, `lib/edits/`, `vendor/`) is the only whitelisted escape.
  *
  * For the reverse direction, scan `public/script.js` plus every
  * `public/scripts/*.js` (non-extensions) plus `src/**\/*.js`, and flag
@@ -134,37 +130,43 @@ function classifyForPlugin(specifier, fromFile, pluginDir) {
     if (relFromExt[0] === pluginDir) return null;
 
     if (LUKER_PLUGIN_DIRS.has(relFromExt[0])) {
-        return { kind: 'plugin', target: relative(REPO_ROOT, resolved) };
+        return { kind: 'plugin', target: relative(REPO_ROOT, resolved), peer: relFromExt[0] };
     }
 
     return null;
 }
 
 function findPluginViolations() {
-    const violations = new Map();
+    const coreViolations = new Map();
+    const pluginViolations = new Map();
     for (const pluginDir of LUKER_PLUGIN_DIRS) {
         const pluginRoot = join(EXT_DIR, pluginDir);
         try { statSync(pluginRoot); } catch { continue; }
         const files = listJsFilesRecursive(pluginRoot);
-        const hits = [];
+        const coreHits = [];
+        const pluginHits = [];
         for (const file of files) {
             const source = readFileSync(file, 'utf8');
             for (const { spec, offset } of extractSpecifiers(source)) {
                 const verdict = classifyForPlugin(spec, file, pluginDir);
                 if (!verdict) continue;
+                const hit = {
+                    file: relative(REPO_ROOT, file),
+                    line: offsetToLine(source, offset),
+                    spec,
+                    target: verdict.target,
+                };
                 if (verdict.kind === 'core') {
-                    hits.push({
-                        file: relative(REPO_ROOT, file),
-                        line: offsetToLine(source, offset),
-                        spec,
-                        target: verdict.target,
-                    });
+                    coreHits.push(hit);
+                } else if (verdict.kind === 'plugin') {
+                    pluginHits.push({ ...hit, peer: verdict.peer });
                 }
             }
         }
-        if (hits.length > 0) violations.set(pluginDir, hits);
+        if (coreHits.length > 0) coreViolations.set(pluginDir, coreHits);
+        if (pluginHits.length > 0) pluginViolations.set(pluginDir, pluginHits);
     }
-    return violations;
+    return { coreViolations, pluginViolations };
 }
 
 function findReverseViolations() {
@@ -201,16 +203,27 @@ function findReverseViolations() {
 }
 
 function main() {
-    const pluginViolations = findPluginViolations();
+    const { coreViolations, pluginViolations } = findPluginViolations();
     const reverseViolations = findReverseViolations();
 
     let total = 0;
-    if (pluginViolations.size > 0) {
+    if (coreViolations.size > 0) {
         console.log('Plugin → core violations:');
-        for (const [plugin, hits] of pluginViolations) {
+        for (const [plugin, hits] of coreViolations) {
             console.log(`  ${plugin}/`);
             for (const h of hits) {
                 console.log(`    ${h.file}:${h.line}  import '${h.spec}'  →  ${h.target}`);
+                total++;
+            }
+        }
+    }
+
+    if (pluginViolations.size > 0) {
+        console.log('Plugin → plugin violations:');
+        for (const [plugin, hits] of pluginViolations) {
+            console.log(`  ${plugin}/`);
+            for (const h of hits) {
+                console.log(`    ${h.file}:${h.line}  import '${h.spec}'  →  ${h.target}   (peer: ${h.peer})`);
                 total++;
             }
         }
@@ -225,12 +238,15 @@ function main() {
     }
 
     if (total === 0) {
-        console.log('No plugin↔core import violations.');
+        console.log('No plugin boundary violations.');
         process.exit(0);
     }
 
     console.error(`\n${total} violation(s) found.`);
-    console.error('Fix:  consume the symbol via SillyTavern.getContext() and remove the cross-boundary import.');
+    console.error('Fix:');
+    console.error('  - plugin → core:    consume via SillyTavern.getContext().');
+    console.error('  - plugin → plugin:  consume via SillyTavern.getContext().getExtensionApi(name); provider publishes via registerExtensionApi(name, api).');
+    console.error('  - core → plugin:    move the symbol the other way; core never imports from extensions/<luker-plugin>/.');
     process.exit(1);
 }
 
