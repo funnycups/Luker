@@ -43,6 +43,7 @@ import {
     PORTABLE_PROFILE_FORMAT_V1,
     PORTABLE_PROFILE_FORMAT_V2,
     PORTABLE_PROFILE_FORMAT_V3,
+    PORTABLE_PROFILE_FORMAT_V4,
     createDefaultDirectorProfile,
     sanitizeDirectorProfile,
     defaultAgendaAgents,
@@ -141,12 +142,14 @@ import {
     getCharacterIndexByAvatar,
     getCharacterLoopOverrideByAvatar,
     getCharacterOverrideByAvatar,
+    getCharacterPresetLibrary,
     getExecutionMode,
     hasCharacterAgendaOverride,
     hasCharacterDirectorOverride,
     hasCharacterLoopOverride,
     hasCharacterOverride,
     hasCharacterSpecOverride,
+    isCharacterPresetActiveOverrideEnabled,
     normalizeCharacterOverrideMode,
     normalizeExecutionMode,
 } from './character-overrides.js';
@@ -211,6 +214,17 @@ import {
     sanitizeAgentToolFlags,
 } from './persistence.js';
 import {
+    createPreset,
+    deletePreset,
+    duplicatePreset,
+    getActivePreset,
+    getActivePresetId,
+    migrateGlobalLegacyToLibraries,
+    renamePreset,
+    setActivePresetId,
+    writeActivePreset,
+} from './preset-library.js';
+import {
     LOOP_ITERATION_CONTRACT_LINES,
     applyLoopProfilePatchArgs,
 } from './loop-iteration.js';
@@ -252,6 +266,7 @@ import {
 import {
     createPortableAgendaProfileFromEditor,
     createPortableDirectorProfileFromEditor,
+    createPortableLoopProfileFromEditor,
     createPortableProfileFromEditor,
     persistCharacterAgendaEditor,
     persistCharacterDirectorEditor,
@@ -403,9 +418,18 @@ let orchInFlight = false;
 let activeRunInfoToast = null;
 let activeOrchRunAbortController = null;
 
-function ensureSettings() {
+export function ensureSettings() {
     if (!extension_settings[MODULE_NAME] || typeof extension_settings[MODULE_NAME] !== 'object') {
         extension_settings[MODULE_NAME] = {};
+    }
+
+    // One-shot legacy → preset-library migration. The flag is persisted
+    // so the migration is a no-op on subsequent startups; per-mode
+    // sanitization for migrated entries happens when each entry is
+    // re-read via preset-library's `getActivePreset`. See preset-library.js.
+    if (!extension_settings[MODULE_NAME].presetLibrariesMigrationDone) {
+        migrateGlobalLegacyToLibraries(extension_settings[MODULE_NAME]);
+        extension_settings[MODULE_NAME].presetLibrariesMigrationDone = 1;
     }
 
     for (const [key, value] of Object.entries(defaultSettings)) {
@@ -420,39 +444,14 @@ function ensureSettings() {
     extension_settings[MODULE_NAME].singleAgentModeEnabled = extension_settings[MODULE_NAME].executionMode === ORCH_EXECUTION_MODE_SINGLE;
     extension_settings[MODULE_NAME].singleAgentSystemPrompt = String(extension_settings[MODULE_NAME].singleAgentSystemPrompt || DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT);
     extension_settings[MODULE_NAME].singleAgentUserPromptTemplate = String(extension_settings[MODULE_NAME].singleAgentUserPromptTemplate || DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE);
-    extension_settings[MODULE_NAME].agendaPlanner = createAgendaPlannerDraft(
-        extension_settings[MODULE_NAME].agendaPlanner || {
-            userPromptTemplate: extension_settings[MODULE_NAME].agendaPlannerPrompt,
-        },
-    );
-    extension_settings[MODULE_NAME].agendaAgents = sanitizePresetMap(extension_settings[MODULE_NAME].agendaAgents);
-    if (Object.keys(extension_settings[MODULE_NAME].agendaAgents).length === 0) {
-        extension_settings[MODULE_NAME].agendaAgents = sanitizePresetMap(defaultAgendaAgents);
-    }
-    extension_settings[MODULE_NAME].agendaFinalAgentId = sanitizeIdentifierToken(
-        extension_settings[MODULE_NAME].agendaFinalAgentId,
-        Object.keys(extension_settings[MODULE_NAME].agendaAgents)[0] || 'finalizer',
-    );
-    if (!extension_settings[MODULE_NAME].agendaAgents[extension_settings[MODULE_NAME].agendaFinalAgentId]) {
-        extension_settings[MODULE_NAME].agendaFinalAgentId = Object.keys(extension_settings[MODULE_NAME].agendaAgents)[0] || 'finalizer';
-    }
-    extension_settings[MODULE_NAME].agendaPlannerMaxRounds = Math.max(
-        1,
-        Math.min(20, Math.floor(Number(extension_settings[MODULE_NAME].agendaPlannerMaxRounds ?? 6) || 6)),
-    );
-    extension_settings[MODULE_NAME].agendaMaxConcurrentAgents = Math.max(
-        1,
-        Math.min(12, Math.floor(Number(extension_settings[MODULE_NAME].agendaMaxConcurrentAgents ?? 3) || 3)),
-    );
-    extension_settings[MODULE_NAME].agendaMaxTotalRuns = Math.max(
-        1,
-        Math.min(200, Math.floor(Number(extension_settings[MODULE_NAME].agendaMaxTotalRuns ?? 24) || 24)),
-    );
+    // Legacy global agenda / spec / loop slots are now owned by
+    // `presetLibraries.<mode>.<id>` and sanitized at read time via
+    // preset-library. `plainTextFunctionCallMode` and
+    // `agendaPlannerPrompt` were always-deleted housekeeping fields the
+    // migration doesn't touch — keep the deletes so settings carried over
+    // from before the agenda-planner / function-call rework get cleaned.
     delete extension_settings[MODULE_NAME].plainTextFunctionCallMode;
     delete extension_settings[MODULE_NAME].agendaPlannerPrompt;
-
-    extension_settings[MODULE_NAME].orchestrationSpec = sanitizeSpec(extension_settings[MODULE_NAME].orchestrationSpec);
-    extension_settings[MODULE_NAME].presets = sanitizePresetMap(extension_settings[MODULE_NAME].presets);
     extension_settings[MODULE_NAME].llmNodeApiPresetName = sanitizeConnectionProfileName(extension_settings[MODULE_NAME].llmNodeApiPresetName || '');
     if (!String(extension_settings[MODULE_NAME].llmNodePresetName || '').trim()) {
         extension_settings[MODULE_NAME].llmNodePresetName = String(extension_settings[MODULE_NAME].llmNodePromptPresetName || '').trim();
@@ -554,12 +553,6 @@ function ensureSettings() {
     if (!extension_settings[MODULE_NAME].chatOverrides || typeof extension_settings[MODULE_NAME].chatOverrides !== 'object') {
         extension_settings[MODULE_NAME].chatOverrides = {};
     }
-    // V3 loop profile: route through sanitizer on every load so older
-    // shapes (missing tools.* groups, missing finalize literal, numeric
-    // values out of bounds) are normalized into the runtime contract.
-    extension_settings[MODULE_NAME].loopProfile = sanitizeLoopProfile(
-        extension_settings[MODULE_NAME].loopProfile || defaultLoopProfile,
-    );
 }
 
 function buildOrchestratorResultEventPayload(context, payload, status, options = {}) {
@@ -781,104 +774,20 @@ function abortActiveOrchestratorRun() {
     clearRunInfoToast();
 }
 
-function getEffectiveProfile(context) {
+export function getEffectiveProfile(context) {
     const settings = extension_settings[MODULE_NAME];
     const avatar = getCurrentAvatar(context);
     // Global executionMode is the source of truth for which branch runs.
     // `applyCharacterExecutionModeForAvatar` syncs global to the character's
     // saved mode on every avatar change, so picking up the character's branch
     // out of dispatch (instead of from settings) would override the user's
-    // explicit mode-selector click after selection — e.g. char has only a
-    // spec override, user picks `loop` in the dropdown, panel shows "global
-    // loop", but dispatch would still run the spec override. The UI scope
-    // resolver (`getStoredDisplayedScopeForMode`) already keys off global
-    // mode and falls back to global when the character has no data for that
-    // branch; this matches that contract.
+    // explicit mode-selector click after selection.
     const executionMode = getExecutionMode(settings);
-    if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
-        // Character loop override beats global. Loop runtime re-sanitizes
-        // via `sanitizeLoopProfile(profile)` before dispatch, so we pass
-        // the resolved profile through directly. `source` / `key` are
-        // attached for telemetry parity with spec/agenda; the loop
-        // runtime ignores them.
-        const characterLoopOverride = getCharacterLoopOverrideByAvatar(context, avatar);
-        if (characterLoopOverride?.enabled) {
-            const profile = sanitizeLoopProfile(characterLoopOverride);
-            return {
-                source: 'character',
-                key: avatar,
-                ...profile,
-            };
-        }
-        const profile = sanitizeLoopProfile(settings.loopProfile || defaultLoopProfile);
-        return {
-            source: 'global',
-            key: 'loop',
-            ...profile,
-        };
-    }
-    if (executionMode === ORCH_EXECUTION_MODE_AGENDA) {
-        const buildAgendaProfile = (source, key, draft) => {
-            const profile = sanitizeAgendaWorkingProfile(draft);
-            return {
-                source: String(source || 'agenda'),
-                key: String(key || 'agenda'),
-                mode: ORCH_EXECUTION_MODE_AGENDA,
-                planner: profile.planner,
-                agents: profile.agents,
-                finalAgentId: profile.finalAgentId,
-                limits: {
-                    plannerMaxRounds: profile.limits.plannerMaxRounds,
-                    maxConcurrentAgents: profile.limits.maxConcurrentAgents,
-                    maxTotalRuns: profile.limits.maxTotalRuns,
-                },
-            };
-        };
 
-        const chatKey = getChatKey(context);
-        const chatOverride = settings.chatOverrides?.[chatKey];
-        if (chatOverride?.agenda?.enabled) {
-            return buildAgendaProfile('chat', chatKey, chatOverride.agenda);
-        }
-
-        const characterAgendaOverride = getCharacterAgendaOverrideByAvatar(context, avatar);
-        if (characterAgendaOverride?.enabled) {
-            return buildAgendaProfile('character', avatar, characterAgendaOverride);
-        }
-
-        return buildAgendaProfile('global', 'agenda', {
-            planner: settings.agendaPlanner,
-            agents: settings.agendaAgents,
-            finalAgentId: settings.agendaFinalAgentId,
-            limits: {
-                plannerMaxRounds: settings.agendaPlannerMaxRounds,
-                maxConcurrentAgents: settings.agendaMaxConcurrentAgents,
-                maxTotalRuns: settings.agendaMaxTotalRuns,
-            },
-        });
-    }
-    if (executionMode === ORCH_EXECUTION_MODE_DIRECTOR) {
-        // Character director override beats global. Sanitize before
-        // returning so the runtime sees the canonical shape.
-        const characterDirectorOverride = getCharacterDirectorOverrideByAvatar(context, avatar);
-        if (characterDirectorOverride?.enabled) {
-            // Card stores the bare director profile (mainAgent / subAgents /
-            // limits / tools / ...). Sanitizer auto-detects + lifts to the
-            // canonical flat shape; spread it into the runtime envelope.
-            const sanitized = sanitizeDirectorProfile(characterDirectorOverride);
-            return {
-                source: 'character',
-                key: avatar,
-                ...sanitized,
-            };
-        }
-        const sanitized = sanitizeDirectorProfile(settings.directorProfile || createDefaultDirectorProfile());
-        return {
-            source: 'global',
-            key: 'director',
-            ...sanitized,
-        };
-    }
+    // Single-agent mode does not participate in the preset library —
+    // its profile is synthesized from the two settings fields and a
+    // fixed one-stage one-node spec. Keep the branch byte-identical
+    // to the pre-refactor body.
     if (executionMode === ORCH_EXECUTION_MODE_SINGLE || settings.singleAgentModeEnabled) {
         return {
             source: 'single',
@@ -903,41 +812,65 @@ function getEffectiveProfile(context) {
             }),
         };
     }
-    const chatKey = getChatKey(context);
-    const chatOverride = settings.chatOverrides?.[chatKey];
-    if (chatOverride?.enabled && chatOverride?.spec) {
-        const overridePresets = resolveOverridePresetMap(chatOverride, settings.presets);
-        const editablePresets = toEditablePresetMap(overridePresets);
-        const editableSpec = toEditableSpec(chatOverride.spec, editablePresets);
+
+    const useCard = Boolean(avatar)
+        && isCharacterPresetActiveOverrideEnabled(context, avatar, executionMode);
+    const scope = useCard ? 'character' : 'global';
+    const active = getActivePreset(settings, executionMode, { scope, context, avatar });
+
+    const sourceLabel = useCard ? 'character' : 'global';
+    const keyLabel = useCard ? avatar : executionMode;
+
+    if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
+        const profile = sanitizeLoopProfile(active || defaultLoopProfile);
         return {
-            source: 'chat',
-            key: chatKey,
-            mode: ORCH_EXECUTION_MODE_SPEC,
-            spec: sanitizeSpec(editableSpec),
-            presets: sanitizePresetMap(editablePresets),
+            source: sourceLabel,
+            key: keyLabel,
+            ...profile,
         };
     }
-
-    const characterOverride = getCharacterOverrideByAvatar(context, avatar);
-    if (characterOverride?.enabled && characterOverride?.spec) {
-        const overridePresets = resolveOverridePresetMap(characterOverride, settings.presets);
-        const editablePresets = toEditablePresetMap(overridePresets);
-        const editableSpec = toEditableSpec(characterOverride.spec, editablePresets);
+    if (executionMode === ORCH_EXECUTION_MODE_AGENDA) {
+        const chatKey = getChatKey(context);
+        const chatOverride = settings.chatOverrides?.[chatKey];
+        if (chatOverride?.agenda?.enabled) {
+            const p = sanitizeAgendaWorkingProfile(chatOverride.agenda);
+            return {
+                source: 'chat',
+                key: chatKey,
+                mode: ORCH_EXECUTION_MODE_AGENDA,
+                planner: p.planner,
+                agents: p.agents,
+                finalAgentId: p.finalAgentId,
+                limits: p.limits,
+            };
+        }
+        const p = sanitizeAgendaWorkingProfile(active || {});
         return {
-            source: 'character',
-            key: avatar,
-            mode: ORCH_EXECUTION_MODE_SPEC,
-            spec: sanitizeSpec(editableSpec),
-            presets: sanitizePresetMap(editablePresets),
+            source: sourceLabel,
+            key: keyLabel,
+            mode: ORCH_EXECUTION_MODE_AGENDA,
+            planner: p.planner,
+            agents: p.agents,
+            finalAgentId: p.finalAgentId,
+            limits: p.limits,
         };
     }
-
+    if (executionMode === ORCH_EXECUTION_MODE_DIRECTOR) {
+        const sanitized = sanitizeDirectorProfile(active || createDefaultDirectorProfile());
+        return {
+            source: sourceLabel,
+            key: keyLabel,
+            ...sanitized,
+        };
+    }
+    // spec
+    const presets = (active?.presets && typeof active.presets === 'object') ? active.presets : {};
     return {
-        source: 'global',
-        key: 'global',
+        source: sourceLabel,
+        key: keyLabel,
         mode: ORCH_EXECUTION_MODE_SPEC,
-        spec: sanitizeSpec(settings.orchestrationSpec),
-        presets: sanitizePresetMap(settings.presets),
+        spec: sanitizeSpec(active?.spec),
+        presets,
     };
 }
 
@@ -1812,6 +1745,138 @@ function renderDynamicPanels(root, context) {
     refreshOrchestrationEditorPopup(context, settings);
 }
 
+// After a preset-library mutation (switch/create/duplicate/rename/delete)
+// the editor draft and the cached active-preset-id maps are stale. Re-run
+// `initializeUiState` to reload every (mode, scope) editor through the
+// active-preset lookup path and re-sync `uiState.{global,character}ActivePresetIds`,
+// then re-render the panel + popup so the dropdown reflects the new active id
+// and the workspace shows the new draft. Mirrors the post-apply sequence used
+// by `applyAiIterationSessionTo{Global,Character}` (load → ensureIntegrity →
+// renderDynamicPanels); `initializeUiState` already wraps that for all modes.
+function reloadOrchestratorEditor(root, context) {
+    initializeUiState(context);
+    renderDynamicPanels(root, context);
+}
+
+// Build the portable {format, mode, exportedAt, profile} envelope for a
+// single preset entry. Mirrors the legacy per-mode export shape exactly:
+// V1 for spec, V2 for agenda, V3 for director, V4 for loop. The `entry`
+// is the already-sanitized preset object as returned by `getActivePreset`
+// (which routes through `sanitizePresetEntry`), so we just project its
+// mode-specific fields back into the legacy profile shape that external
+// tooling and `parseImportedProfilePayload` already understand.
+function buildPortablePayloadForMode(mode, entry) {
+    const exportedAt = new Date().toISOString();
+    if (mode === ORCH_EXECUTION_MODE_AGENDA) {
+        return {
+            format: PORTABLE_PROFILE_FORMAT_V2,
+            mode: ORCH_EXECUTION_MODE_AGENDA,
+            exportedAt,
+            profile: createPortableAgendaProfileFromEditor(entry),
+        };
+    }
+    if (mode === ORCH_EXECUTION_MODE_DIRECTOR) {
+        return {
+            format: PORTABLE_PROFILE_FORMAT_V3,
+            mode: ORCH_EXECUTION_MODE_DIRECTOR,
+            exportedAt,
+            profile: createPortableDirectorProfileFromEditor(entry),
+        };
+    }
+    if (mode === ORCH_EXECUTION_MODE_LOOP) {
+        return {
+            format: PORTABLE_PROFILE_FORMAT_V4,
+            mode: ORCH_EXECUTION_MODE_LOOP,
+            exportedAt,
+            profile: createPortableLoopProfileFromEditor(entry),
+        };
+    }
+    // spec: editor shape mirrors the on-disk shape, so we can hand the
+    // entry straight to createPortableProfileFromEditor (which serializes
+    // `spec` + `presets`).
+    return {
+        format: PORTABLE_PROFILE_FORMAT_V1,
+        mode: ORCH_EXECUTION_MODE_SPEC,
+        exportedAt,
+        profile: createPortableProfileFromEditor(entry),
+    };
+}
+
+// Extract the mode-specific profile-body slice from a parsed payload so
+// `writeActivePreset` (which sanitizes via `sanitizePresetEntry` for the
+// given mode) gets the same shape the editor would feed it on a normal
+// save. Mirrors the per-mode branches in the legacy import handler.
+function extractImportedProfileForMode(imported) {
+    if (imported.mode === ORCH_EXECUTION_MODE_DIRECTOR) return imported.director;
+    if (imported.mode === ORCH_EXECUTION_MODE_AGENDA) return imported.agenda;
+    if (imported.mode === ORCH_EXECUTION_MODE_LOOP) return imported.loop;
+    return { spec: imported.spec, presets: imported.presets };
+}
+
+async function triggerExportActivePreset(mode, scope) {
+    const ctx = getContext();
+    const avatar = String(getCurrentAvatar(ctx) || '').trim();
+    const settings = extension_settings[MODULE_NAME];
+    const active = getActivePreset(settings, mode, { scope, context: ctx, avatar });
+    if (!active) {
+        notifyError(i18n('No active preset to export.'));
+        return;
+    }
+    const payload = buildPortablePayloadForMode(mode, active);
+    const safeName = sanitizeIdentifierToken(active.name || 'preset', 'preset');
+    const fileName = `luker-orchestrator-${mode}-${scope}-${safeName}.json`;
+    downloadJsonFile(fileName, payload);
+    notifySuccess(i18n('Exported preset.'));
+}
+
+async function triggerImportPresetIntoLibrary(mode, scope, root, context) {
+    try {
+        const fileText = await pickJsonFileText();
+        if (!fileText) return;
+        const imported = parseImportedProfilePayload(fileText);
+        if (imported.mode !== mode) {
+            notifyError(i18n('Imported file does not match the current mode.'));
+            return;
+        }
+        const ctx = getContext();
+        const avatar = String(getCurrentAvatar(ctx) || '').trim();
+        const settings = extension_settings[MODULE_NAME];
+        const defaultName = String(extractImportedProfileForMode(imported)?.name || '').trim();
+        const name = await ctx.callGenericPopup(
+            i18n('Enter a name for the imported preset'),
+            ctx.POPUP_TYPE.INPUT,
+            defaultName,
+        );
+        if (!name) return;
+        // Create a fresh slot, mark it active, then overwrite via
+        // `writeActivePreset` (which sanitizes through `sanitizePresetEntry`
+        // for the target mode). Two-step keeps id allocation and active-id
+        // bookkeeping in one path, while letting the imported body land in
+        // the same slot.
+        const id = createPreset(settings, mode, scope, { name: String(name) }, { context: ctx, avatar });
+        if (!id) {
+            notifyError(i18nFormat('Import failed: ${0}', i18n('No active preset to export.')));
+            return;
+        }
+        setActivePresetId(settings, mode, scope, id, { context: ctx, avatar });
+        writeActivePreset(settings, mode, scope, extractImportedProfileForMode(imported),
+            { context: ctx, avatar });
+        if (scope === 'character') {
+            const idx = getCharacterIndexByAvatar(ctx, avatar);
+            if (idx >= 0) {
+                const prev = getCharacterExtensionDataByAvatar(ctx, avatar) || {};
+                await persistOrchestratorCharacterExtension(ctx, idx, { ...prev });
+            }
+        } else {
+            await saveSettings();
+        }
+        reloadOrchestratorEditor(root, context);
+        notifySuccess(i18n('Imported preset.'));
+    } catch (error) {
+        notifyError(i18nFormat('Import failed: ${0}', error?.message || error));
+    }
+}
+
 function refreshOrchestrationEditorPopup(context, settings) {
     const contentId = String(uiState.orchEditorPopupContentId || '');
     if (!contentId) {
@@ -2183,6 +2248,21 @@ function parseImportedProfilePayload(rawText) {
         return {
             mode: ORCH_EXECUTION_MODE_DIRECTOR,
             director: sanitizeDirectorProfile(profile),
+        };
+    }
+
+    // Loop payloads: V4 format OR an envelope whose mode is 'loop'.
+    // sanitizeLoopProfile is idempotent and tolerates the editor / on-disk
+    // shape interchangeably, so we hand the profile straight through.
+    const isLoopPayload = mode === ORCH_EXECUTION_MODE_LOOP
+        || String(parsed?.format || '') === PORTABLE_PROFILE_FORMAT_V4;
+    if (isLoopPayload) {
+        if (!profile || typeof profile !== 'object') {
+            throw new Error(i18n('Invalid profile file format.'));
+        }
+        return {
+            mode: ORCH_EXECUTION_MODE_LOOP,
+            loop: sanitizeLoopProfile(profile),
         };
     }
 
@@ -5873,6 +5953,128 @@ function bindUi() {
     wireOverrideToggle('#luker_orch_loop_override_enabled', setCharacterLoopOverrideEnabled);
     wireOverrideToggle('#luker_orch_director_override_enabled', setCharacterDirectorOverrideEnabled);
 
+    // ─── Preset selector bar handlers ─────────────────────────────────
+    // The selector bar (rendered by `renderPresetSelectorBar` in
+    // ui-templates.js) appears at the top of every mode's workspace board
+    // in both the inline panel (`#${UI_BLOCK_ID}`) and the popup
+    // (`.luker_orch_editor_popup`), so we delegate at the document level
+    // with the .lukerOrchEditor namespace — same pattern the per-mode
+    // form handlers below already use.
+    //
+    // After any preset mutation we go through `reloadOrchestratorEditor`
+    // (defined alongside `renderDynamicPanels`) which re-runs
+    // `initializeUiState` to refresh the (mode, scope) editor draft AND
+    // the cached active-preset-id maps, then re-renders the panel. Without
+    // that reload the dropdown would still show the old `activeId` and
+    // the workspace would keep editing the old preset's draft.
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-preset-select], .luker_orch_editor_popup [data-luker-preset-select]`, async function () {
+        const mode = String(jQuery(this).attr('data-mode') || '');
+        const scope = String(jQuery(this).attr('data-scope') || '');
+        const presetId = String(jQuery(this).val() || '');
+        if (!mode || !scope || !presetId) return;
+        const ctx = getContext();
+        const avatar = String(getCurrentAvatar(ctx) || '').trim();
+        setActivePresetId(extension_settings[MODULE_NAME], mode, scope, presetId,
+            { context: ctx, avatar });
+        if (scope === 'character') {
+            const idx = getCharacterIndexByAvatar(ctx, avatar);
+            if (idx >= 0) {
+                // setActivePresetId already mutated the character's
+                // ext.activePresetIds in place; persist the whole ext as-is.
+                const prev = getCharacterExtensionDataByAvatar(ctx, avatar) || {};
+                await persistOrchestratorCharacterExtension(ctx, idx, { ...prev });
+            }
+        } else {
+            await saveSettings();
+        }
+        reloadOrchestratorEditor(root, context);
+    });
+
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-preset-action], .luker_orch_editor_popup [data-luker-preset-action]`, async function () {
+        const action = String(jQuery(this).attr('data-luker-preset-action') || '');
+        const mode = String(jQuery(this).attr('data-mode') || '');
+        const scope = String(jQuery(this).attr('data-scope') || '');
+        if (!action || !mode || !scope) return;
+        const ctx = getContext();
+        const avatar = String(getCurrentAvatar(ctx) || '').trim();
+        const settingsRef = extension_settings[MODULE_NAME];
+        if (action === 'export') {
+            triggerExportActivePreset(mode, scope);
+            return;
+        }
+        if (action === 'import') {
+            triggerImportPresetIntoLibrary(mode, scope, root, context);
+            return;
+        }
+        if (action === 'new') {
+            const name = await ctx.callGenericPopup(
+                i18n('Enter a name for the new preset'),
+                ctx.POPUP_TYPE.INPUT,
+                '',
+            );
+            if (!name) return;
+            const id = createPreset(settingsRef, mode, scope, { name: String(name) },
+                { context: ctx, avatar });
+            setActivePresetId(settingsRef, mode, scope, id, { context: ctx, avatar });
+        } else if (action === 'duplicate') {
+            const currentId = getActivePresetId(settingsRef, mode, { scope, context: ctx, avatar });
+            const name = await ctx.callGenericPopup(
+                i18n('Enter a name for the new preset'),
+                ctx.POPUP_TYPE.INPUT,
+                '',
+            );
+            if (!name) return;
+            const id = duplicatePreset(settingsRef, mode, scope, currentId, { name: String(name) },
+                { context: ctx, avatar });
+            setActivePresetId(settingsRef, mode, scope, id, { context: ctx, avatar });
+        } else if (action === 'rename') {
+            const currentId = getActivePresetId(settingsRef, mode, { scope, context: ctx, avatar });
+            const lib = scope === 'character'
+                ? getCharacterPresetLibrary(ctx, avatar, mode)
+                : (settingsRef.presetLibraries?.[mode] || {});
+            const oldName = lib[currentId]?.name || '';
+            const name = await ctx.callGenericPopup(
+                i18n('Enter a name for the new preset'),
+                ctx.POPUP_TYPE.INPUT,
+                oldName,
+            );
+            if (!name) return;
+            renamePreset(settingsRef, mode, scope, currentId, { name: String(name) },
+                { context: ctx, avatar });
+        } else if (action === 'delete') {
+            const currentId = getActivePresetId(settingsRef, mode, { scope, context: ctx, avatar });
+            const lib = scope === 'character'
+                ? getCharacterPresetLibrary(ctx, avatar, mode)
+                : (settingsRef.presetLibraries?.[mode] || {});
+            const name = lib[currentId]?.name || '';
+            const confirmed = await ctx.callGenericPopup(
+                i18nFormat('Delete preset "${0}"?', name),
+                ctx.POPUP_TYPE.CONFIRM,
+                '',
+                { okButton: i18n('Delete'), cancelButton: i18n('Cancel') },
+            );
+            if (!confirmed) return;
+            deletePreset(settingsRef, mode, scope, currentId, { context: ctx, avatar });
+        }
+        if (scope === 'character') {
+            const idx = getCharacterIndexByAvatar(ctx, avatar);
+            if (idx >= 0) {
+                // CRUD on character scope mutated
+                // `character.data.extensions.orchestrator.{presetLibraries,
+                // activePresetIds}` in place (see getScopeContainer in
+                // preset-library.js). `getCharacterExtensionDataByAvatar`
+                // returns that already-mutated object, so we persist it
+                // as-is rather than splicing in `settingsRef.*` (which
+                // would be the global library, not the character's).
+                const prev = getCharacterExtensionDataByAvatar(ctx, avatar) || {};
+                await persistOrchestratorCharacterExtension(ctx, idx, { ...prev });
+            }
+        } else {
+            await saveSettings();
+        }
+        reloadOrchestratorEditor(root, context);
+    });
+
     root.on('change.lukerOrch', '#luker_orch_execution_mode', function () {
         settings.executionMode = normalizeExecutionMode(jQuery(this).val());
         settings.singleAgentModeEnabled = settings.executionMode === ORCH_EXECUTION_MODE_SINGLE;
@@ -7291,144 +7493,22 @@ function bindUi() {
         }
 
         if (action === 'import-profile') {
+            // Legacy toolbar Import button. Post-preset-library it would
+            // write to legacy `settings.orchestrationSpec` / `directorProfile`
+            // / `agendaPlanner` etc., which the next `ensureSettings` strips
+            // out via `migrateGlobalLegacyToLibraries`. Redirect to the new
+            // preset bar's import flow, which creates a fresh slot in the
+            // active mode's library, marks it active, then loads it into the
+            // editor — same UX as the per-mode "Import" affordance in the
+            // preset selector. Scope is picked the same way the legacy
+            // path picked it (Confirm dialog: OK = global, Cancel = character).
             syncCharacterEditorWithActiveAvatar(context);
-            try {
-                const fileText = await pickJsonFileText();
-                if (!fileText) {
-                    return;
-                }
-                const imported = parseImportedProfilePayload(fileText);
-                const currentMode = getExecutionMode(settings);
-                const targetMode = currentMode === ORCH_EXECUTION_MODE_AGENDA
-                    ? ORCH_EXECUTION_MODE_AGENDA
-                    : currentMode === ORCH_EXECUTION_MODE_DIRECTOR
-                        ? ORCH_EXECUTION_MODE_DIRECTOR
-                        : ORCH_EXECUTION_MODE_SPEC;
-                if (imported.mode !== targetMode) {
-                    throw new Error(i18n('Imported profile does not match current execution mode.'));
-                }
-                const scope = chooseProfileScopeByConfirm(context, 'Select import target: OK = global profile, Cancel = character override.');
-                if (!scope) {
-                    return;
-                }
-                if (targetMode === ORCH_EXECUTION_MODE_AGENDA) {
-                    if (scope === 'global') {
-                        const profile = sanitizeAgendaWorkingProfile(imported.agenda);
-                        settings.agendaPlanner = createAgendaPlannerDraft(profile.planner);
-                        delete settings.agendaPlannerPrompt;
-                        settings.agendaAgents = sanitizePresetMap(profile.agents);
-                        settings.agendaFinalAgentId = sanitizeIdentifierToken(profile.finalAgentId, 'finalizer');
-                        settings.agendaPlannerMaxRounds = profile.limits.plannerMaxRounds;
-                        settings.agendaMaxConcurrentAgents = profile.limits.maxConcurrentAgents;
-                        settings.agendaMaxTotalRuns = profile.limits.maxTotalRuns;
-                        ensureSettings();
-                        await saveSettings();
-                        uiState.globalAgendaEditor = loadGlobalAgendaEditorState();
-                        ensureAgendaEditorIntegrity(uiState.globalAgendaEditor);
-                        setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA, 'global');
-                        notifySuccess(i18n('Imported to global profile.'));
-                        updateUiStatus(i18n('Imported to global profile.'));
-                    } else {
-                        const avatar = String(getCurrentAvatar(context) || '').trim();
-                        if (!avatar) {
-                            notifyError(i18n('No character selected.'));
-                            return;
-                        }
-                        const importedEditor = {
-                            planner: createAgendaPlannerDraft(imported.agenda.planner || {
-                                userPromptTemplate: imported.agenda.plannerPrompt,
-                            }),
-                            agents: sanitizePresetMap(imported.agenda.agents),
-                            finalAgentId: sanitizeIdentifierToken(imported.agenda.finalAgentId, 'finalizer'),
-                            limits: {
-                                plannerMaxRounds: imported.agenda.limits.plannerMaxRounds,
-                                maxConcurrentAgents: imported.agenda.limits.maxConcurrentAgents,
-                                maxTotalRuns: imported.agenda.limits.maxTotalRuns,
-                            },
-                            enabled: true,
-                        };
-                        const ok = await persistCharacterAgendaEditor(context, settings, avatar, {
-                            editor: importedEditor,
-                            forceEnabled: true,
-                        });
-                        if (!ok) {
-                            notifyError(i18n('Failed to persist character override.'));
-                            return;
-                        }
-                        uiState.characterAgendaEditor = loadCharacterAgendaEditorState(context, avatar);
-                        ensureAgendaEditorIntegrity(uiState.characterAgendaEditor);
-                        setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA, 'character');
-                        notifySuccess(i18nFormat('Imported to character override: ${0}.', getCharacterDisplayNameByAvatar(context, avatar)));
-                        updateUiStatus(i18nFormat('Imported to character override: ${0}.', getCharacterDisplayNameByAvatar(context, avatar)));
-                    }
-                } else if (targetMode === ORCH_EXECUTION_MODE_DIRECTOR) {
-                    const directorProfile = sanitizeDirectorProfile(imported.director);
-                    if (scope === 'global') {
-                        settings.directorProfile = directorProfile;
-                        await saveSettings();
-                        uiState.globalDirectorEditor = loadGlobalDirectorEditorState();
-                        ensureDirectorEditorIntegrity(uiState.globalDirectorEditor);
-                        setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, 'global');
-                        notifySuccess(i18n('Imported to global profile.'));
-                        updateUiStatus(i18n('Imported to global profile.'));
-                    } else {
-                        const avatar = String(getCurrentAvatar(context) || '').trim();
-                        if (!avatar) {
-                            notifyError(i18n('No character selected.'));
-                            return;
-                        }
-                        const ok = await persistCharacterDirectorEditor(context, settings, avatar, {
-                            editor: directorProfile,
-                            forceEnabled: true,
-                        });
-                        if (!ok) {
-                            notifyError(i18n('Failed to persist character override.'));
-                            return;
-                        }
-                        uiState.characterDirectorEditor = loadCharacterDirectorEditorState(context, avatar);
-                        ensureDirectorEditorIntegrity(uiState.characterDirectorEditor);
-                        setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, 'character');
-                        notifySuccess(i18nFormat('Imported to character override: ${0}.', getCharacterDisplayNameByAvatar(context, avatar)));
-                        updateUiStatus(i18nFormat('Imported to character override: ${0}.', getCharacterDisplayNameByAvatar(context, avatar)));
-                    }
-                } else if (scope === 'global') {
-                    settings.orchestrationSpec = sanitizeSpec(imported.spec);
-                    settings.presets = sanitizePresetMap(imported.presets);
-                    await saveSettings();
-                    uiState.globalEditor = loadGlobalEditorState();
-                    ensureEditorIntegrity(uiState.globalEditor);
-                    setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_SPEC, 'global');
-                    notifySuccess(i18n('Imported to global profile.'));
-                    updateUiStatus(i18n('Imported to global profile.'));
-                } else {
-                    const avatar = String(getCurrentAvatar(context) || '').trim();
-                    if (!avatar) {
-                        notifyError(i18n('No character selected.'));
-                        return;
-                    }
-                    const importedEditor = {
-                        spec: toEditableSpec(imported.spec, toEditablePresetMap(imported.presets)),
-                        presets: toEditablePresetMap(imported.presets),
-                        enabled: true,
-                    };
-                    const ok = await persistCharacterEditor(context, settings, avatar, {
-                        editor: importedEditor,
-                        forceEnabled: true,
-                    });
-                    if (!ok) {
-                        notifyError(i18n('Failed to persist character override.'));
-                        return;
-                    }
-                    uiState.characterEditor = loadCharacterEditorState(context, avatar);
-                    ensureEditorIntegrity(uiState.characterEditor);
-                    setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_SPEC, 'character');
-                    notifySuccess(i18nFormat('Imported to character override: ${0}.', getCharacterDisplayNameByAvatar(context, avatar)));
-                    updateUiStatus(i18nFormat('Imported to character override: ${0}.', getCharacterDisplayNameByAvatar(context, avatar)));
-                }
-                renderDynamicPanels(root, context);
-            } catch (error) {
-                notifyError(i18nFormat('Import failed: ${0}', error?.message || error));
+            const currentMode = getExecutionMode(settings);
+            const scope = chooseProfileScopeByConfirm(context, 'Select import target: OK = global profile, Cancel = character override.');
+            if (!scope) {
+                return;
             }
+            await triggerImportPresetIntoLibrary(currentMode, scope, root, context);
             return;
         }
 

@@ -1,5 +1,109 @@
 import { renderPresetHelpButton } from '../preset-help.js';
 import { listExtensionTools } from './register-custom-tool.js';
+import { listPresets } from './preset-library.js';
+import { uiState } from './editor-state.js';
+
+const MODULE_NAME = 'orchestrator';
+
+// Tiny duplicate of editor-state's closure-private helper. Reads the
+// orchestrator slot off the shared ST extension settings so the preset
+// selector bar can call listPresets() without round-tripping through
+// the deps bag. Kept here (instead of exported from editor-state.js)
+// because the read is one line and editor-state owns the loader-side
+// initialization, not the live-read helper.
+function getSettings() {
+    return SillyTavern.getContext().extensionSettings[MODULE_NAME];
+}
+
+/**
+ * Render the preset selector bar shown at the top of each mode's editor
+ * workspace. Displays the active preset dropdown and six action buttons
+ * (New / Duplicate / Rename / Export / Import / Delete). Click + change
+ * handlers are wired in main.js (Task B8); this just emits the HTML.
+ *
+ * When `scope === 'character'` and no character is loaded, the bar
+ * collapses to a single hint span (no dropdown, no buttons) so the user
+ * gets a clear "Select a character first" cue instead of an empty
+ * unusable bar.
+ *
+ * `presets` is an array of `{ id, name }` from `listPresets`. `activeId`
+ * is the currently active preset id for this (mode, scope). `mode` and
+ * `scope` propagate as data-attributes so main.js can route events to
+ * the right (mode, scope) target.
+ */
+function renderPresetSelectorBar(deps, { mode, scope, presets, activeId, disabledReason }) {
+    const { escapeHtml, i18n } = deps;
+    const safeMode = escapeHtml(String(mode));
+    const safeScope = escapeHtml(String(scope));
+    if (disabledReason) {
+        return `<div class="luker_orch_preset_bar luker_orch_preset_bar--disabled"
+                     data-mode="${safeMode}" data-scope="${safeScope}">
+            <span class="luker_orch_preset_bar_hint">${escapeHtml(i18n(disabledReason))}</span>
+        </div>`;
+    }
+    const options = (Array.isArray(presets) ? presets : []).map(p => `
+        <option value="${escapeHtml(p.id)}" ${p.id === activeId ? 'selected' : ''}>${escapeHtml(p.name)}</option>
+    `).join('');
+    return `<div class="luker_orch_preset_bar" data-mode="${safeMode}" data-scope="${safeScope}">
+        <label class="luker_orch_preset_bar_label">${escapeHtml(i18n('Preset'))}</label>
+        <select class="text_pole luker_orch_preset_select"
+                data-luker-preset-select data-mode="${safeMode}" data-scope="${safeScope}">
+            ${options}
+        </select>
+        <button class="menu_button" data-luker-preset-action="new"
+                data-mode="${safeMode}" data-scope="${safeScope}">${escapeHtml(i18n('New preset'))}</button>
+        <button class="menu_button" data-luker-preset-action="duplicate"
+                data-mode="${safeMode}" data-scope="${safeScope}">${escapeHtml(i18n('Duplicate preset'))}</button>
+        <button class="menu_button" data-luker-preset-action="rename"
+                data-mode="${safeMode}" data-scope="${safeScope}">${escapeHtml(i18n('Rename preset'))}</button>
+        <button class="menu_button" data-luker-preset-action="export"
+                data-mode="${safeMode}" data-scope="${safeScope}">${escapeHtml(i18n('Export preset'))}</button>
+        <button class="menu_button" data-luker-preset-action="import"
+                data-mode="${safeMode}" data-scope="${safeScope}">${escapeHtml(i18n('Import preset'))}</button>
+        <button class="menu_button luker_orch_btn_danger" data-luker-preset-action="delete"
+                data-mode="${safeMode}" data-scope="${safeScope}">${escapeHtml(i18n('Delete preset'))}</button>
+    </div>`;
+}
+
+/**
+ * Build the props bundle the four workspace renderers feed into
+ * `renderPresetSelectorBar`. Owns the (mode, scope) → activeId lookup
+ * and the per-scope listPresets call so each workspace renderer stays
+ * a one-line `${renderPresetSelectorBar(deps, presetBarPropsFor(deps, 'spec', safeScope))}`.
+ *
+ * `safeScope` is the already-validated scope ('global' | 'character').
+ * Returns `{ mode, scope, presets, activeId, disabledReason }` ready
+ * to splat into the bar renderer.
+ */
+function presetBarPropsFor(deps, mode, safeScope) {
+    const ctx = deps.getContext();
+    const activeAvatar = String(deps.getCurrentAvatar(ctx) || '').trim();
+    if (safeScope === 'character' && !activeAvatar) {
+        return {
+            mode,
+            scope: safeScope,
+            presets: [],
+            activeId: '',
+            disabledReason: 'Select a character first',
+        };
+    }
+    const settings = getSettings();
+    const presets = listPresets(settings, mode, {
+        scope: safeScope,
+        context: ctx,
+        avatar: activeAvatar,
+    });
+    const activeId = safeScope === 'character'
+        ? String(uiState.characterActivePresetIds?.[mode] || '')
+        : String(uiState.globalActivePresetIds?.[mode] || '');
+    return {
+        mode,
+        scope: safeScope,
+        presets,
+        activeId,
+        disabledReason: '',
+    };
+}
 
 /**
  * Merge Layer-2 (extension + st-bridge) tools with Layer-3 (profile.customTools[])
@@ -461,6 +565,7 @@ export function renderAgendaWorkspace(deps, scope, editor, title = '') {
     return `
 <div class="luker-studio-workspace" data-luker-scope-root="${safeScope}">
     <div class="luker-studio-workspace-title">${escapeHtml(title || i18n('Agenda Orchestration'))}</div>
+    ${renderPresetSelectorBar(deps, presetBarPropsFor(deps, 'agenda', safeScope))}
     <div class="luker-studio-workspace-grid">
         <div class="luker-studio-workspace-col">
             <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Planner Prompt'))}</div>
@@ -527,6 +632,7 @@ export function renderEditorWorkspace(deps, scope, editor, title) {
     return `
 <div class="luker-studio-workspace" data-luker-scope-root="${scope}">
     <div class="luker-studio-workspace-title">${escapeHtml(title)}</div>
+    ${renderPresetSelectorBar(deps, presetBarPropsFor(deps, 'spec', safeScope))}
     <div class="luker-studio-workspace-grid">
         <div class="luker-studio-workspace-col">
             <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Workflow'))}</div>
@@ -609,6 +715,7 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
     return `
 <div class="luker-studio-workspace" data-luker-scope-root="${safeScope}">
     <div class="luker-studio-workspace-title">${escapeHtml(title || i18n('Loop Orchestration'))}</div>
+    ${renderPresetSelectorBar(deps, presetBarPropsFor(deps, 'loop', safeScope))}
     <div class="luker-studio-workspace-grid">
         <div class="luker-studio-workspace-col">
             <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Loop Agent'))}</div>
@@ -796,6 +903,7 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
     return `
 <div class="luker-studio-workspace luker_orch_director_block" data-luker-scope-root="${safeScope}" data-orch-mode-block="director">
     <div class="luker-studio-workspace-title" data-i18n="Director Orchestration">${escapeHtml(title || i18n('Director Orchestration'))}</div>
+    ${renderPresetSelectorBar(deps, presetBarPropsFor(deps, 'director', safeScope))}
     <div class="luker-studio-workspace-grid">
         <div class="luker-studio-workspace-col">
             <h4 data-i18n="Main agent">${escapeHtml(i18n('Main agent'))}</h4>

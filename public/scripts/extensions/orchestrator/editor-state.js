@@ -34,29 +34,26 @@ import {
 } from './defaults.js';
 import {
     applyCharacterExecutionModeForAvatar,
-    getCharacterAgendaOverrideByAvatar,
-    getCharacterDirectorOverrideByAvatar,
-    getCharacterLoopOverrideByAvatar,
-    getCharacterOverrideByAvatar,
+    getCharacterActivePresetId,
     hasCharacterAgendaOverride,
     hasCharacterDirectorOverride,
     hasCharacterLoopOverride,
     hasCharacterSpecOverride,
+    isCharacterPresetActiveOverrideEnabled,
     normalizeExecutionMode,
 } from './character-overrides.js';
 import {
     createPresetDraft,
-    resolveOverridePresetMap,
     toEditablePresetMap,
     toEditableSpec,
 } from './editable-spec.js';
 import {
-    cloneAgendaWorkingProfileFromSettings,
     ensureAgendaEditorIntegrity,
     sanitizeAgendaWorkingProfile,
 } from './agenda-profile.js';
 import { sanitizeLoopProfile } from './persistence.js';
 import { getCurrentAvatar } from './snapshot-cache.js';
+import { getActivePreset, getActivePresetId } from './preset-library.js';
 
 const MODULE_NAME = 'orchestrator';
 
@@ -80,6 +77,8 @@ export const uiState = {
     directorDisplayedScope: 'global',
     aiIterationSession: null,
     orchEditorPopupContentId: '',
+    globalActivePresetIds: { spec: '', agenda: '', loop: '', director: '' },
+    characterActivePresetIds: { spec: '', agenda: '', loop: '', director: '' },
 };
 
 export function ensureEditorIntegrity(editor) {
@@ -122,26 +121,28 @@ export function createNewStage(editor) {
 
 export function loadGlobalEditorState() {
     const settings = getSettings();
-    const presets = toEditablePresetMap(settings.presets);
-    const spec = toEditableSpec(settings.orchestrationSpec, presets);
+    const active = getActivePreset(settings, ORCH_EXECUTION_MODE_SPEC, { scope: 'global' }) || {};
+    const presets = toEditablePresetMap(active.presets);
+    const spec = toEditableSpec(active.spec || defaultSpec, presets);
     return { spec, presets };
 }
 
 export function loadCharacterEditorState(context, avatar) {
     const settings = getSettings();
     const safeAvatar = String(avatar || '');
-    const override = getCharacterOverrideByAvatar(context, safeAvatar);
-    const useOverride = hasCharacterSpecOverride(context, safeAvatar);
+    const globalActive = getActivePreset(settings, ORCH_EXECUTION_MODE_SPEC, { scope: 'global' }) || {};
+    const charActive = getActivePreset(settings, ORCH_EXECUTION_MODE_SPEC,
+        { scope: 'character', context, avatar: safeAvatar });
     // Always merge override on top of the global base so partial overrides
     // inherit missing fields instead of getting filled with empty defaults
-    // by the sanitizers. resolveOverridePresetMap already merges presets;
-    // here we also fall back the top-level spec object key-by-key.
-    const presets = useOverride
-        ? toEditablePresetMap(resolveOverridePresetMap(override, settings.presets))
-        : toEditablePresetMap(settings.presets);
-    const globalSpecSource = settings.orchestrationSpec || defaultSpec;
-    const overrideSpec = useOverride && override?.spec && typeof override.spec === 'object'
-        ? override.spec
+    // by the sanitizers. We merge preset maps (override wins per-id) and
+    // fall back the top-level spec object key-by-key.
+    const presets = charActive
+        ? toEditablePresetMap({ ...(globalActive.presets || {}), ...(charActive.presets || {}) })
+        : toEditablePresetMap(globalActive.presets);
+    const globalSpecSource = globalActive.spec || defaultSpec;
+    const overrideSpec = charActive && charActive.spec && typeof charActive.spec === 'object'
+        ? charActive.spec
         : null;
     const specSource = overrideSpec
         ? { ...globalSpecSource, ...overrideSpec }
@@ -149,32 +150,37 @@ export function loadCharacterEditorState(context, avatar) {
     const spec = toEditableSpec(specSource, presets);
     return {
         avatar: safeAvatar,
-        enabled: useOverride ? Boolean(override?.enabled) : false,
+        enabled: isCharacterPresetActiveOverrideEnabled(context, safeAvatar, ORCH_EXECUTION_MODE_SPEC),
         spec,
         presets,
     };
 }
 
 export function loadGlobalAgendaEditorState() {
-    return cloneAgendaWorkingProfileFromSettings(getSettings());
+    const settings = getSettings();
+    const active = getActivePreset(settings, ORCH_EXECUTION_MODE_AGENDA, { scope: 'global' });
+    return sanitizeAgendaWorkingProfile(active || {});
 }
 
 export function loadCharacterAgendaEditorState(context, avatar) {
     const settings = getSettings();
     const safeAvatar = String(avatar || '');
-    const agendaOverride = getCharacterAgendaOverrideByAvatar(context, safeAvatar);
     // Override merged on top of global base — fields the override doesn't
     // specify inherit from the global profile. Without this, a partial
     // override (e.g. only `{ enabled: true, planner: { systemPrompt } }`)
     // would replace the global agents with the sanitizer's default
     // single-finalizer fallback instead of keeping the global agent set.
-    const globalBase = cloneAgendaWorkingProfileFromSettings(settings);
-    const profile = agendaOverride
-        ? sanitizeAgendaWorkingProfile({ ...globalBase, ...agendaOverride })
+    const globalBase = sanitizeAgendaWorkingProfile(
+        getActivePreset(settings, ORCH_EXECUTION_MODE_AGENDA, { scope: 'global' }) || {},
+    );
+    const charActive = getActivePreset(settings, ORCH_EXECUTION_MODE_AGENDA,
+        { scope: 'character', context, avatar: safeAvatar });
+    const profile = charActive
+        ? sanitizeAgendaWorkingProfile({ ...globalBase, ...charActive })
         : globalBase;
     return {
         avatar: safeAvatar,
-        enabled: Boolean(agendaOverride?.enabled),
+        enabled: isCharacterPresetActiveOverrideEnabled(context, safeAvatar, ORCH_EXECUTION_MODE_AGENDA),
         planner: profile.planner,
         agents: profile.agents,
         finalAgentId: profile.finalAgentId,
@@ -210,10 +216,9 @@ export function ensureLoopEditorIntegrity(editor) {
  */
 export function loadGlobalLoopEditorState() {
     const settings = getSettings();
-    const source = settings?.loopProfile && typeof settings.loopProfile === 'object'
-        ? settings.loopProfile
-        : defaultLoopProfile;
-    return sanitizeLoopProfile(source);
+    return sanitizeLoopProfile(
+        getActivePreset(settings, ORCH_EXECUTION_MODE_LOOP, { scope: 'global' }) || defaultLoopProfile,
+    );
 }
 
 /**
@@ -226,18 +231,21 @@ export function loadGlobalLoopEditorState() {
 export function loadCharacterLoopEditorState(context, avatar) {
     const settings = getSettings();
     const safeAvatar = String(avatar || '');
-    const loopOverride = getCharacterLoopOverrideByAvatar(context, safeAvatar);
     // Override merged on top of global base — fields the override doesn't
     // specify (system_prompt, tools, max_rounds, etc.) inherit from the
     // global loop profile instead of falling back to LOOP_PROFILE_DEFAULTS.
-    const globalBase = sanitizeLoopProfile(settings?.loopProfile || defaultLoopProfile);
-    const baseProfile = loopOverride
-        ? sanitizeLoopProfile({ ...globalBase, ...loopOverride })
-        : globalBase;
+    const globalActive = sanitizeLoopProfile(
+        getActivePreset(settings, ORCH_EXECUTION_MODE_LOOP, { scope: 'global' }) || defaultLoopProfile,
+    );
+    const charActive = getActivePreset(settings, ORCH_EXECUTION_MODE_LOOP,
+        { scope: 'character', context, avatar: safeAvatar });
+    const baseProfile = charActive
+        ? sanitizeLoopProfile({ ...globalActive, ...charActive })
+        : globalActive;
     return {
         ...baseProfile,
         avatar: safeAvatar,
-        enabled: Boolean(loopOverride?.enabled),
+        enabled: isCharacterPresetActiveOverrideEnabled(context, safeAvatar, ORCH_EXECUTION_MODE_LOOP),
     };
 }
 
@@ -278,10 +286,8 @@ export function ensureDirectorEditorIntegrity(editor) {
  */
 export function loadGlobalDirectorEditorState() {
     const settings = getSettings();
-    const source = settings?.directorProfile && typeof settings.directorProfile === 'object'
-        ? settings.directorProfile
-        : createDefaultDirectorProfile();
-    return sanitizeDirectorProfile(source);
+    const active = getActivePreset(settings, ORCH_EXECUTION_MODE_DIRECTOR, { scope: 'global' });
+    return sanitizeDirectorProfile(active || createDefaultDirectorProfile());
 }
 
 /**
@@ -294,28 +300,30 @@ export function loadGlobalDirectorEditorState() {
 export function loadCharacterDirectorEditorState(context, avatar) {
     const settings = getSettings();
     const safeAvatar = String(avatar || '');
-    const directorOverride = getCharacterDirectorOverrideByAvatar(context, safeAvatar);
     // Override merged on top of global base. Without this, a partial
     // override (e.g. only `{ enabled: true, mainAgent: {} }`) would land
     // with an empty mainAgent.systemPrompt and zero sub-agents because
     // sanitizeDirectorProfile fills missing slots with empty defaults
     // rather than inheriting from the global director profile.
-    const globalSource = settings?.directorProfile && typeof settings.directorProfile === 'object'
-        ? settings.directorProfile
-        : createDefaultDirectorProfile();
-    const globalBase = sanitizeDirectorProfile(globalSource);
-    if (!directorOverride) {
+    const globalBase = sanitizeDirectorProfile(
+        getActivePreset(settings, ORCH_EXECUTION_MODE_DIRECTOR, { scope: 'global' })
+            || createDefaultDirectorProfile(),
+    );
+    const charActive = getActivePreset(settings, ORCH_EXECUTION_MODE_DIRECTOR,
+        { scope: 'character', context, avatar: safeAvatar });
+    const overrideEnabled = isCharacterPresetActiveOverrideEnabled(
+        context, safeAvatar, ORCH_EXECUTION_MODE_DIRECTOR,
+    );
+    if (!charActive) {
         return {
             ...globalBase,
             avatar: safeAvatar,
-            enabled: false,
+            enabled: overrideEnabled,
         };
     }
-    // `directorOverride` is the bare flat sub-object stored on the card
-    // (`override.director`) — `mainAgent` / `subAgents` / `maxRounds` /
-    // etc. at top level. The sanitizer auto-detects the input shape and
-    // lifts to flat output regardless, so we pass it straight through.
-    const sanitizedOverride = sanitizeDirectorProfile(directorOverride);
+    // The character active payload is already preset-shaped — sanitize for
+    // the canonical flat shape and merge over the global base.
+    const sanitizedOverride = sanitizeDirectorProfile(charActive);
     const merged = {
         ...globalBase,
         ...sanitizedOverride,
@@ -340,7 +348,7 @@ export function loadCharacterDirectorEditorState(context, avatar) {
     return {
         ...merged,
         avatar: safeAvatar,
-        enabled: Boolean(directorOverride.enabled),
+        enabled: overrideEnabled,
     };
 }
 
@@ -366,6 +374,20 @@ export function initializeUiState(context) {
     ensureLoopEditorIntegrity(uiState.characterLoopEditor);
     ensureDirectorEditorIntegrity(uiState.globalDirectorEditor);
     ensureDirectorEditorIntegrity(uiState.characterDirectorEditor);
+    uiState.globalActivePresetIds = {
+        spec: getActivePresetId(getSettings(), 'spec', { scope: 'global' }),
+        agenda: getActivePresetId(getSettings(), 'agenda', { scope: 'global' }),
+        loop: getActivePresetId(getSettings(), 'loop', { scope: 'global' }),
+        director: getActivePresetId(getSettings(), 'director', { scope: 'global' }),
+    };
+    if (uiState.selectedAvatar) {
+        uiState.characterActivePresetIds = {
+            spec: getCharacterActivePresetId(context, uiState.selectedAvatar, 'spec'),
+            agenda: getCharacterActivePresetId(context, uiState.selectedAvatar, 'agenda'),
+            loop: getCharacterActivePresetId(context, uiState.selectedAvatar, 'loop'),
+            director: getCharacterActivePresetId(context, uiState.selectedAvatar, 'director'),
+        };
+    }
     syncDisplayedScopesFromStoredState(context, getSettings());
 }
 
@@ -384,6 +406,20 @@ export function syncCharacterEditorWithActiveAvatar(context) {
     ensureAgendaEditorIntegrity(uiState.characterAgendaEditor);
     ensureLoopEditorIntegrity(uiState.characterLoopEditor);
     ensureDirectorEditorIntegrity(uiState.characterDirectorEditor);
+    uiState.globalActivePresetIds = {
+        spec: getActivePresetId(getSettings(), 'spec', { scope: 'global' }),
+        agenda: getActivePresetId(getSettings(), 'agenda', { scope: 'global' }),
+        loop: getActivePresetId(getSettings(), 'loop', { scope: 'global' }),
+        director: getActivePresetId(getSettings(), 'director', { scope: 'global' }),
+    };
+    if (uiState.selectedAvatar) {
+        uiState.characterActivePresetIds = {
+            spec: getCharacterActivePresetId(context, uiState.selectedAvatar, 'spec'),
+            agenda: getCharacterActivePresetId(context, uiState.selectedAvatar, 'agenda'),
+            loop: getCharacterActivePresetId(context, uiState.selectedAvatar, 'loop'),
+            director: getCharacterActivePresetId(context, uiState.selectedAvatar, 'director'),
+        };
+    }
     syncDisplayedScopesFromStoredState(context, getSettings());
 }
 

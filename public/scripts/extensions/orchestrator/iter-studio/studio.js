@@ -64,9 +64,7 @@
  *   - root                              jQuery root passed through to apply helpers' refresh callbacks
  *   - i18n, i18nFormat
  *   - getIterationDefaultScope(ctx)
- *   - getEditorByScope, getAgendaEditorByScope, getLoopEditorByScope, getDirectorEditorByScope
  *   - syncCharacterEditorWithActiveAvatar(ctx)
- *   - cloneWorkingProfileFromEditor, cloneAgendaWorkingProfileFromEditor, cloneDirectorWorkingProfileFromEditor
  *   - sanitizeLoopProfile, sanitizeAgendaWorkingProfile, sanitizeDirectorProfile
  *   - buildAiIterationToolSet(session)
  *   - buildAiIterationSystemPrompt(settings, session)
@@ -122,6 +120,8 @@ import {
 } from '../skill-iter-studio-tools.js';
 import { augmentIterStudioPromptWithSkills } from '../skill-iter-studio-prompt.js';
 import { buildSkillRuntimeContext } from '../skill-resolution.js';
+import { getActivePreset } from '../preset-library.js';
+import { getCurrentAvatar } from '../snapshot-cache.js';
 
 const MODULE = 'orch-iteration';
 const STYLESHEET_ID = 'orch_it_studio_stylesheet';
@@ -918,14 +918,7 @@ export async function openOrchestratorIterationStudio(deps) {
         getIterationDefaultScope,
         getCharacterDisplayNameByAvatar,
         hasCharacterOverrideForCurrentMode,
-        getEditorByScope,
-        getAgendaEditorByScope,
-        getLoopEditorByScope,
-        getDirectorEditorByScope,
         syncCharacterEditorWithActiveAvatar,
-        cloneWorkingProfileFromEditor,
-        cloneAgendaWorkingProfileFromEditor,
-        cloneDirectorWorkingProfileFromEditor,
         sanitizeLoopProfile,
         sanitizeAgendaWorkingProfile,
         sanitizeDirectorProfile,
@@ -958,14 +951,27 @@ export async function openOrchestratorIterationStudio(deps) {
     ITER_UI.ensureUiStylesheetInjected();
 
     // Read effective live profile by mode, respecting the iteration scope
-    // (character override falls through to global).
+    // (character override falls through to global). Routed through
+    // preset-library's `getActivePreset` so we read the active preset of
+    // the current (mode, scope) tuple — the underlying source-of-truth
+    // since the preset-library migration. The result is re-sanitized via
+    // `sanitizeForMode` to strip preset-library bookkeeping fields (e.g.
+    // `name`) so state.live matches the shape downstream iter-studio code
+    // expects.
     function loadLiveProfile() {
         try { syncCharacterEditorWithActiveAvatar?.(context); } catch { /* ignore */ }
-        const scope = getIterationDefaultScope(context);
-        if (isLoop) return sanitizeLoopProfile(getLoopEditorByScope(scope));
-        if (isAgenda) return cloneAgendaWorkingProfileFromEditor(getAgendaEditorByScope(scope));
-        if (isDirector) return cloneDirectorWorkingProfileFromEditor(getDirectorEditorByScope(scope));
-        return cloneWorkingProfileFromEditor(getEditorByScope(scope));
+        const baseScope = getIterationDefaultScope(context);
+        const isCharScope = baseScope === 'character';
+        const avatar = getCurrentAvatar(context);
+        const active = isCharScope
+            ? getActivePreset(settings, mode, { scope: 'character', context, avatar })
+            : getActivePreset(settings, mode, { scope: 'global' });
+        if (active) return sanitizeForMode(active);
+        // Fall back to global active when the character scope returned
+        // nothing (e.g. no avatar resolved yet). Keeps the popup usable
+        // instead of opening on an empty profile.
+        const fallback = getActivePreset(settings, mode, { scope: 'global' });
+        return sanitizeForMode(fallback || {});
     }
 
     function sanitizeForMode(profile) {
@@ -1089,15 +1095,15 @@ export async function openOrchestratorIterationStudio(deps) {
     // Used ONLY when scope is character + a character override already
     // exists AND the AI decides the user wants to wipe that override and
     // restart from the current global setup. Mirrors `loadLiveProfile`
-    // but forces `scope = 'global'` so the global editor source is read
-    // regardless of the active iteration scope.
+    // but forces `scope = 'global'` so the global active preset is read
+    // regardless of the active iteration scope. Routed through
+    // preset-library's `getActivePreset` (matches the post-migration
+    // source-of-truth, same as loadLiveProfile).
     // ──────────────────────────────────────────────────────────────────
     function loadGlobalProfileForMode() {
         try { syncCharacterEditorWithActiveAvatar?.(context); } catch { /* ignore */ }
-        if (isLoop) return sanitizeLoopProfile(getLoopEditorByScope('global'));
-        if (isAgenda) return cloneAgendaWorkingProfileFromEditor(getAgendaEditorByScope('global'));
-        if (isDirector) return cloneDirectorWorkingProfileFromEditor(getDirectorEditorByScope('global'));
-        return cloneWorkingProfileFromEditor(getEditorByScope('global'));
+        const active = getActivePreset(settings, mode, { scope: 'global' });
+        return sanitizeForMode(active || {});
     }
 
     function buildLorebookFormatAuditHint(display) {

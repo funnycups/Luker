@@ -9,6 +9,26 @@
 
 import { describe, test, expect, jest, beforeAll, beforeEach } from '@jest/globals';
 
+// spec-runtime.js + defaults.js consume core symbols via
+// `SillyTavern.getContext()` after upstream commit 571c529c2. Provide a
+// shim with the constants + the shared `extensionSettings` binding the
+// runtime captures at module-load time.
+const __sillyTavernSettings = {
+    orchestrator: { nodeIterationMaxRounds: 3 },
+};
+globalThis.SillyTavern = {
+    getContext: () => ({
+        constants: {
+            promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
+            wiPosition: { before: 0, after: 1, ANTop: 2, ANBottom: 3, EMTop: 4, EMBottom: 5, atDepth: 6 },
+        },
+        lib: {
+            yaml: { dump: (v) => JSON.stringify(v), load: (s) => JSON.parse(s) },
+        },
+        extensionSettings: __sillyTavernSettings,
+    }),
+};
+
 jest.unstable_mockModule('../../public/lib.js', () => ({
     Popper: {},
     lodash: {},

@@ -71,6 +71,7 @@ export const ORCH_EXECUTION_MODES = Object.freeze([
 export const PORTABLE_PROFILE_FORMAT_V1 = 'luker_orchestrator_profile_v1';
 export const PORTABLE_PROFILE_FORMAT_V2 = 'luker_orchestrator_profile_v2';
 export const PORTABLE_PROFILE_FORMAT_V3 = 'luker_orchestrator_profile_v3';
+export const PORTABLE_PROFILE_FORMAT_V4 = 'luker_orchestrator_profile_v4';
 export const AGENDA_PLANNER_TOOL = 'luker_orch_planner_step';
 export const AGENDA_RESULT_TOOL = 'luker_orch_submit_result';
 export const DEFAULT_AGENDA_PLANNER_SYSTEM_PROMPT = 'You are an orchestration planner. Maintain a todo list, dispatch the minimum useful set of agents, read every returned result carefully, and stop when the final orchestration guidance is ready. Before the function call, provide one concise <thought>...</thought> that reflects current planning.';

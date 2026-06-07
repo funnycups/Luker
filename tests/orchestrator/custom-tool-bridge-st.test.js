@@ -7,11 +7,28 @@ const mockTools = [
 ];
 const mockInvoke = jest.fn(async (name, params) => JSON.stringify({ called: name, params }));
 
+// register-custom-tool.js reads `SillyTavern.getContext().ToolManager`
+// (post upstream 571c529c2). Surface the same mock via the shim so the
+// bridge resolves the live tool registry.
+const mockToolManager = {
+    get tools() { return mockTools; },
+    invokeFunctionTool: mockInvoke,
+};
+globalThis.SillyTavern = {
+    getContext: () => ({
+        ToolManager: mockToolManager,
+        constants: {
+            promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
+            wiPosition: { before: 0, after: 1, ANTop: 2, ANBottom: 3, EMTop: 4, EMBottom: 5, atDepth: 6 },
+        },
+        lib: {
+            yaml: { dump: (v) => JSON.stringify(v), load: (s) => JSON.parse(s) },
+        },
+    }),
+};
+
 jest.unstable_mockModule('../../public/scripts/tool-calling.js', () => ({
-    ToolManager: {
-        get tools() { return mockTools; },
-        invokeFunctionTool: mockInvoke,
-    },
+    ToolManager: mockToolManager,
 }));
 
 const {

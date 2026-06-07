@@ -229,3 +229,25 @@ describe('preset-library — writeActivePreset + character scope', () => {
         expect(entry.mainAgent.systemPrompt).toBe('CARD-PROMPT');
     });
 });
+
+describe('preset-library — character-scope legacy synthesis', () => {
+    test('legacy override.loop on card is materialized as Default preset on first read', () => {
+        const settings = { presetLibraries: { spec: {}, agenda: {}, loop: {}, director: {} }, activePresetIds: {} };
+        const ctx = { characters: [{ avatar: 'alice.png', data: { extensions: { orchestrator: {
+            override: { mode: 'loop', enabled: true, loop: { system_prompt: 'MY-CUSTOM' } },
+        } } } }] };
+        const active = lib.getActivePreset(settings, 'loop', { scope: 'character', context: ctx, avatar: 'alice.png' });
+        expect(active?.system_prompt).toBe('MY-CUSTOM');
+        // Lazily materialized on card data
+        const cardLib = ctx.characters[0].data.extensions.orchestrator.presetLibraries.loop;
+        expect(Object.keys(cardLib)).toContain('default');
+        expect(cardLib.default.system_prompt).toBe('MY-CUSTOM');
+    });
+
+    test('factory Default still seeded when card has no legacy override either', () => {
+        const settings = { presetLibraries: { spec: {}, agenda: {}, loop: {}, director: {} }, activePresetIds: {} };
+        const ctx = { characters: [{ avatar: 'bob.png', data: { extensions: { orchestrator: {} } } }] };
+        const active = lib.getActivePreset(settings, 'director', { scope: 'character', context: ctx, avatar: 'bob.png' });
+        expect(active?.name).toBe('Default');
+    });
+});

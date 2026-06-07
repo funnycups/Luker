@@ -14,9 +14,67 @@
  * The seed must NOT override explicit null (caller meaning "no tools at
  * all"), only fill in the missing-defaults case.
  */
-import { describe, test, expect } from '@jest/globals';
-import { sanitizeAgendaWorkingProfile } from '../../public/scripts/extensions/orchestrator/agenda-profile.js';
-import { sanitizeSpec } from '../../public/scripts/extensions/orchestrator/spec-schema.js';
+import { describe, test, expect, jest, beforeAll } from '@jest/globals';
+
+// defaults.js (transitively imported by the sanitizers) reads
+// `SillyTavern.getContext().constants.{promptRoles,wiPosition}` at module
+// load time after upstream commit 571c529c2. Provide a minimal shim so
+// module evaluation succeeds. public/lib.js is a build-time bundle that
+// jest cannot resolve — short-circuit it as well.
+globalThis.SillyTavern = {
+    getContext: () => ({
+        constants: {
+            promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
+            wiPosition: { before: 0, after: 1, ANTop: 2, ANBottom: 3, EMTop: 4, EMBottom: 5, atDepth: 6 },
+        },
+        lib: {
+            yaml: { dump: (v) => JSON.stringify(v), load: (s) => JSON.parse(s) },
+        },
+    }),
+};
+
+jest.unstable_mockModule('../../public/lib.js', () => ({
+    Popper: {},
+    lodash: {},
+    yaml: { dump: (v) => JSON.stringify(v), load: (s) => JSON.parse(s) },
+    default: {},
+}));
+jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
+    extension_settings: { orchestrator: {} },
+    getContext: () => ({}),
+    writeExtensionField: () => {},
+    UNSET_VALUE: Symbol('unset'),
+}));
+jest.unstable_mockModule('../../public/script.js', () => ({
+    saveSettingsDebounced: () => {},
+    saveSettings: async () => {},
+    extension_prompt_roles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
+    extension_prompt_types: { IN_PROMPT: 0, IN_CHAT: 1 },
+    substituteParams: (s) => s,
+    chat_metadata: {},
+    this_chid: 0,
+    characters: [],
+    getRequestHeaders: () => ({}),
+}));
+jest.unstable_mockModule('../../public/scripts/world-info.js', () => ({
+    world_info_position: { before: 0, after: 1 },
+    wi_anchor_position: {},
+}));
+// agenda-profile → editable-spec → agent-resolution → openai → group-chats
+// → request-compression → '/lib.js' chain. Sever at agent-resolution to
+// avoid pulling the entire ST chat-completion stack into the test.
+jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/agent-resolution.js', () => ({
+    getPresetApiPresetName: () => '',
+    getPresetPromptPresetName: () => '',
+    resolveAgentToolFlags: (override) => override || null,
+}));
+
+let sanitizeAgendaWorkingProfile;
+let sanitizeSpec;
+beforeAll(async () => {
+    ({ sanitizeAgendaWorkingProfile } = await import('../../public/scripts/extensions/orchestrator/agenda-profile.js'));
+    ({ sanitizeSpec } = await import('../../public/scripts/extensions/orchestrator/spec-schema.js'));
+});
 
 const EXPECTED_CUSTOM_KEYS = [
     'memory_schema', 'memory_list_candidates', 'memory_edge_summary',
@@ -31,7 +89,7 @@ describe('agenda profile defaults seed memory + search customs', () => {
     test('missing defaultTools seeds the 17 custom flags on', () => {
         const out = sanitizeAgendaWorkingProfile({});
         expect(out.defaultTools).not.toBeNull();
-        expect(out.defaultTools).toBeTypeOf('object');
+        expect(typeof out.defaultTools).toBe('object');
         for (const key of EXPECTED_CUSTOM_KEYS) {
             expect(out.defaultTools.custom[key]).toBe(true);
         }

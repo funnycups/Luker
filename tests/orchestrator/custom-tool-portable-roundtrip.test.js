@@ -9,6 +9,22 @@
 
 import { describe, test, expect, jest, beforeAll } from '@jest/globals';
 
+// defaults.js (transitively imported by the sanitizers) reads
+// `SillyTavern.getContext().constants.{promptRoles,wiPosition}` at module
+// load time after upstream commit 571c529c2. Provide a minimal shim so
+// module evaluation succeeds.
+globalThis.SillyTavern = {
+    getContext: () => ({
+        constants: {
+            promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
+            wiPosition: { before: 0, after: 1, ANTop: 2, ANBottom: 3, EMTop: 4, EMBottom: 5, atDepth: 6 },
+        },
+        lib: {
+            yaml: { dump: (v) => JSON.stringify(v), load: (s) => JSON.parse(s) },
+        },
+    }),
+};
+
 jest.unstable_mockModule('../../public/lib.js', () => ({
     Popper: {},
     lodash: {},

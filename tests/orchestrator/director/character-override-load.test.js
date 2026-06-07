@@ -2,20 +2,43 @@
 // changes hit the override". The save IS correct, but the read-back path
 // (`loadCharacterDirectorEditorState`) silently wipes the override.
 //
-// Root cause: `getCharacterDirectorOverrideByAvatar(ctx, avatar)` returns
-// `override.director` directly — the bare director sub-object (mainAgent,
-// subAgents, maxRounds, ...) with NO nested `director` key. Passing it
-// straight into `sanitizeDirectorProfile(directorOverride)` triggers
-// `const input = profile?.director ?? {}`, which finds `undefined` and
-// falls back to defaults. The "sanitized override" then carries empty
-// mainAgent + zero sub-agents + default limits, the global fallbacks in
-// the merge kick in, and the user sees a perfect copy of the global
-// profile masquerading as their override.
+// Root cause (pre-preset-library era): `getCharacterDirectorOverrideByAvatar`
+// returned `override.director` directly — the bare director sub-object
+// (mainAgent, subAgents, maxRounds, ...) with NO nested `director` key.
+// Passing it straight into `sanitizeDirectorProfile(directorOverride)`
+// triggered `const input = profile?.director ?? {}`, which found
+// `undefined` and fell back to defaults. The "sanitized override" then
+// carried empty mainAgent + zero sub-agents + default limits, the global
+// fallbacks in the merge kicked in, and the user saw a perfect copy of
+// the global profile masquerading as their override.
 //
-// Pinning the fix: pass `{ director: directorOverride }` (or otherwise
-// adapt the shape) so the sanitizer reads the override's fields.
+// Pinning the contract post-preset-library: with the new
+// `presetLibraries.director.<id>` shape on the card and `activePresetIds`
+// pointing at it, `loadCharacterDirectorEditorState` must surface those
+// override fields rather than silently collapsing to global defaults.
 
 import { jest } from '@jest/globals';
+
+// defaults.js (transitively imported by editor-state.js) reads
+// `SillyTavern.getContext().constants.{promptRoles,wiPosition}` at module
+// load time after upstream commit 571c529c2. character-overrides.js and
+// editor-state.js also pull `extensionSettings` from the context shim, so
+// surface a single live reference both `getSettings()` paths share.
+const __sillyTavernSettings = { orchestrator: {} };
+globalThis.SillyTavern = {
+    getContext: () => ({
+        constants: {
+            promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
+            wiPosition: { before: 0, after: 1, ANTop: 2, ANBottom: 3, EMTop: 4, EMBottom: 5, atDepth: 6 },
+            unset: Symbol('unset'),
+        },
+        lib: {
+            yaml: { dump: (v) => JSON.stringify(v), load: (s) => JSON.parse(s) },
+        },
+        extensionSettings: __sillyTavernSettings,
+        saveSettings: async () => {},
+    }),
+};
 
 // public/lib.js pulls a browser bundle — short-circuit per existing
 // orchestrator test conventions.
@@ -28,9 +51,8 @@ jest.unstable_mockModule('../../../public/lib.js', async () => {
 // to avoid loading the whole UI runtime + bookmarks/group-chats/request-
 // compression chain (which references the absolute `/lib.js` URL that
 // the Node module resolver cannot find).
-const extensionSettings = { orchestrator: {} };
 jest.unstable_mockModule('../../../public/scripts/extensions.js', () => ({
-    extension_settings: extensionSettings,
+    extension_settings: __sillyTavernSettings,
     getContext: () => ({}),
     writeExtensionField: () => {},
     UNSET_VALUE: Symbol('unset'),
@@ -103,10 +125,32 @@ beforeAll(async () => {
 
 beforeEach(() => {
     // Reset module-private settings between tests.
-    extensionSettings.orchestrator = {};
+    __sillyTavernSettings.orchestrator = {};
 });
 
+// New-shape priming helper: writes the global director preset slot into
+// `settings.presetLibraries.director.default` with `activePresetIds.director`
+// pointing at it. Mirrors what `migrateGlobalLegacyToLibraries` (A6)
+// produces from an inherited `settings.directorProfile`.
+function primeGlobalDirector(profile) {
+    __sillyTavernSettings.orchestrator = {
+        presetLibrariesMigrationDone: 1,
+        presetLibraries: {
+            spec: {},
+            agenda: {},
+            loop: {},
+            director: { default: { name: 'Default', ...profile } },
+        },
+        activePresetIds: { spec: '', agenda: '', loop: '', director: 'default' },
+    };
+}
+
 function makeContextWithOverride(overrideDirector) {
+    // New-shape character payload: `presetLibraries.director.default` is
+    // the saved override, `activePresetIds.director` points at it, and
+    // `override.director.enabled = true` (legacy compat flag still read
+    // by `isCharacterPresetActiveOverrideEnabled`) marks the override as
+    // active.
     return {
         characterId: 0,
         characters: [
@@ -118,8 +162,15 @@ function makeContextWithOverride(overrideDirector) {
                         orchestrator: {
                             override: {
                                 mode: 'director',
-                                director: overrideDirector,
+                                director: { enabled: true },
                             },
+                            presetLibraries: {
+                                spec: {},
+                                agenda: {},
+                                loop: {},
+                                director: { default: { name: 'Override', ...overrideDirector } },
+                            },
+                            activePresetIds: { spec: '', agenda: '', loop: '', director: 'default' },
                         },
                     },
                 },
@@ -130,12 +181,12 @@ function makeContextWithOverride(overrideDirector) {
 
 describe('loadCharacterDirectorEditorState — override merge', () => {
     test('character override fields survive the load (not silently dropped to defaults)', () => {
-        // Global director uses defaults.
-        extensionSettings.orchestrator.directorProfile = createDefaultDirectorProfile();
+        // Global director uses defaults — written into the active preset slot.
+        primeGlobalDirector(createDefaultDirectorProfile());
 
-        // Saved override on the card — shape matches what
-        // persistCharacterDirectorEditor writes: bare director sub-object,
-        // NOT { director: {...} }.
+        // Saved override on the card: bare director sub-object surfaced as
+        // a preset entry. Shape matches what persistCharacterDirectorEditor
+        // (post-preset-library) writes.
         const overrideDirector = {
             mainAgent: {
                 systemPrompt: 'OVERRIDE_MAIN_PROMPT_MARKER',
@@ -158,9 +209,7 @@ describe('loadCharacterDirectorEditorState — override merge', () => {
             maxTotalSubagentRuns: 11,
             tools: {},
             discardOnAbort: true,
-            enabled: true,
             updatedAt: 1234567890,
-            name: 'Seraphina',
         };
 
         const ctx = makeContextWithOverride(overrideDirector);
@@ -184,13 +233,13 @@ describe('loadCharacterDirectorEditorState — override merge', () => {
     test('an empty override (no mainAgent prompt, no sub-agents) still inherits global', () => {
         // Defensive: the "fall back to global when override is empty"
         // ergonomic in loadCharacterDirectorEditorState should keep working
-        // after the fix.
+        // after the preset-library refactor.
         const globalProfile = createDefaultDirectorProfile();
         globalProfile.mainAgent.systemPrompt = 'GLOBAL_PROMPT';
         globalProfile.subAgents = [
             { id: 'global_sub', description: 'd', systemPrompt: 'gp', apiPresetName: '', promptPresetName: '', tools: null },
         ];
-        extensionSettings.orchestrator.directorProfile = globalProfile;
+        primeGlobalDirector(globalProfile);
 
         const overrideDirector = {
             mainAgent: {
@@ -202,7 +251,6 @@ describe('loadCharacterDirectorEditorState — override merge', () => {
             subAgents: [],
             maxRounds: 9,  // valid override field
             tools: {},
-            enabled: true,
         };
 
         const ctx = makeContextWithOverride(overrideDirector);

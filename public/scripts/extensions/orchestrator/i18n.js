@@ -602,6 +602,14 @@ export function registerLocaleData() {
         'Switch active preset': '切换激活预设',
         'When ON, this character uses its own preset library; when OFF, the global active preset applies.':
             '开启后，本角色卡使用自己的预设库激活项；关闭则使用全局激活预设。',
+        // Preset-library import/export wiring (B9). The Import flow is also
+        // reachable from the legacy "Import Profile" toolbar button after B10
+        // redirected it to the new preset-bar path.
+        'No active preset to export.': '当前没有可导出的预设。',
+        'Imported file does not match the current mode.': '导入的文件与当前模式不匹配。',
+        'Enter a name for the imported preset': '为导入的预设输入名称',
+        'Imported preset.': '已导入预设。',
+        'Exported preset.': '已导出预设。',
     });
     addLocaleData('zh-tw', {
         'Orchestrator': '多智能體編排',
@@ -1178,5 +1186,13 @@ export function registerLocaleData() {
         'Switch active preset': '切換激活預設',
         'When ON, this character uses its own preset library; when OFF, the global active preset applies.':
             '開啟後，本角色卡使用自己的預設庫激活項；關閉則使用全域激活預設。',
+        // Preset-library import/export wiring (B9). The Import flow is also
+        // reachable from the legacy "Import Profile" toolbar button after B10
+        // redirected it to the new preset-bar path.
+        'No active preset to export.': '目前沒有可匯出的預設。',
+        'Imported file does not match the current mode.': '匯入的檔案與目前模式不符。',
+        'Enter a name for the imported preset': '為匯入的預設輸入名稱',
+        'Imported preset.': '已匯入預設。',
+        'Exported preset.': '已匯出預設。',
     });
 }

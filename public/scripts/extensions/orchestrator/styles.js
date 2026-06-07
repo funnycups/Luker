@@ -896,5 +896,29 @@ export function ensureStyles(uiBlockId) {
 .luker_orch_skills_section > summary:hover {
     background: rgba(180, 180, 180, 0.14);
 }
+.luker_orch_preset_bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 8px;
+    margin-bottom: 8px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 4px;
+    flex-wrap: wrap;
+}
+.luker_orch_preset_bar--disabled {
+    opacity: 0.6;
+}
+.luker_orch_preset_bar_label {
+    font-weight: 600;
+    margin-right: 4px;
+}
+.luker_orch_preset_select {
+    flex: 1 1 200px;
+    min-width: 160px;
+}
+.luker_orch_btn_danger {
+    color: var(--warning);
+}
 </style>`);
 }

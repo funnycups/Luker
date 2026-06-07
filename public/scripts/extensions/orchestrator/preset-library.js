@@ -30,6 +30,10 @@ import {
 import { sanitizeAgendaWorkingProfile } from './agenda-profile.js';
 import { sanitizeLoopProfile } from './persistence.js';
 import { sanitizeSpec } from './spec-schema.js';
+import {
+    getCharacterPresetLibrary,
+    getCharacterActivePresetId,
+} from './character-overrides.js';
 
 const MODULE_NAME = 'orchestrator';
 const DEFAULT_PRESET_ID = 'default';
@@ -145,8 +149,31 @@ function ensureDefaultSeeded(settings, mode, scope, { context, avatar } = {}) {
     if (!c) return null;
     if (!c.libraries[mode]) c.libraries[mode] = {};
     if (Object.keys(c.libraries[mode]).length === 0) {
-        c.libraries[mode][DEFAULT_PRESET_ID] = sanitizePresetEntry(mode, createFactoryPresetForMode(mode));
-        c.activeIds[mode] = DEFAULT_PRESET_ID;
+        // For character scope, prefer projecting legacy override data into
+        // the library before falling back to the factory default. This is
+        // the lazy on-touch migration for cards saved before the per-mode
+        // preset library shape existed.
+        let seededFromLegacy = false;
+        if (scope === 'character' && context && avatar) {
+            const synthesized = getCharacterPresetLibrary(context, avatar, mode);
+            const synthIds = synthesized && typeof synthesized === 'object'
+                ? Object.keys(synthesized)
+                : [];
+            if (synthIds.length > 0) {
+                for (const id of synthIds) {
+                    c.libraries[mode][id] = sanitizePresetEntry(mode, synthesized[id]);
+                }
+                const synthActive = getCharacterActivePresetId(context, avatar, mode);
+                c.activeIds[mode] = synthActive && c.libraries[mode][synthActive]
+                    ? synthActive
+                    : synthIds[0];
+                seededFromLegacy = true;
+            }
+        }
+        if (!seededFromLegacy) {
+            c.libraries[mode][DEFAULT_PRESET_ID] = sanitizePresetEntry(mode, createFactoryPresetForMode(mode));
+            c.activeIds[mode] = DEFAULT_PRESET_ID;
+        }
     }
     if (!c.activeIds[mode] || !c.libraries[mode][c.activeIds[mode]]) {
         c.activeIds[mode] = Object.keys(c.libraries[mode])[0] || '';

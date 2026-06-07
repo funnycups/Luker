@@ -254,6 +254,66 @@ export function hasCharacterOverride(context, avatar) {
     return hasCharacterSpecOverride(context, avatar);
 }
 
+/**
+ * Dual-shape read accessor. Returns a `{ [presetId]: presetEntry }` map
+ * for the given character + mode:
+ *
+ *   1. New shape: `presetLibraries.<mode>` exists on the card → return it.
+ *   2. Legacy shape: `override.<mode>` (or override.spec/presets) exists →
+ *      synthesize a one-entry library `{ default: { name: 'Default', ...legacyPayload } }`.
+ *   3. Neither → empty `{}`.
+ *
+ * Read-only. Writers go through editor-persist.js which always emits the
+ * new shape and drops legacy keys in the same payload.
+ */
+export function getCharacterPresetLibrary(context, avatar, mode) {
+    const ext = getCharacterExtensionDataByAvatar(context, avatar) || {};
+    const newLib = ext.presetLibraries?.[mode];
+    if (newLib && typeof newLib === 'object' && Object.keys(newLib).length > 0) {
+        return newLib;
+    }
+    // Legacy fall-back
+    const override = ext.override || {};
+    if (mode === ORCH_EXECUTION_MODE_SPEC) {
+        if (override.spec || override.presets) {
+            return { default: { name: 'Default', spec: override.spec, presets: override.presets } };
+        }
+    } else if (override[mode] && typeof override[mode] === 'object') {
+        return { default: { name: 'Default', ...override[mode] } };
+    }
+    return {};
+}
+
+export function getCharacterActivePresetId(context, avatar, mode) {
+    const ext = getCharacterExtensionDataByAvatar(context, avatar) || {};
+    const fromNew = ext.activePresetIds?.[mode];
+    if (fromNew && ext.presetLibraries?.[mode]?.[fromNew]) return String(fromNew);
+    // Legacy: if a legacy override exists for this mode, return 'default' (the synthetic id).
+    const lib = getCharacterPresetLibrary(context, avatar, mode);
+    if (lib.default) return 'default';
+    const firstKey = Object.keys(lib)[0];
+    return firstKey || '';
+}
+
+/**
+ * True when the card's preset library for this mode should override the
+ * global active preset. Reads `override.enabled` for back-compat
+ * (existing tooling already toggles this) and also requires the card
+ * library to actually have a usable entry.
+ */
+export function isCharacterPresetActiveOverrideEnabled(context, avatar, mode) {
+    const ext = getCharacterExtensionDataByAvatar(context, avatar) || {};
+    if (!ext.override?.enabled) {
+        // Also accept per-mode legacy flags
+        if (mode === ORCH_EXECUTION_MODE_SPEC && !ext.override?.enabled) return false;
+        if (mode !== ORCH_EXECUTION_MODE_SPEC && !ext.override?.[mode]?.enabled) return false;
+    }
+    const id = getCharacterActivePresetId(context, avatar, mode);
+    if (!id) return false;
+    const lib = getCharacterPresetLibrary(context, avatar, mode);
+    return Boolean(lib[id]);
+}
+
 export function getCharacterCardSnapshot(context, avatar) {
     const character = getCharacterByAvatar(context, avatar) || {};
     const fromCardFields = (avatar && avatar === getCurrentAvatar(context) && typeof context.getCharacterCardFields === 'function')

@@ -16,12 +16,33 @@
 
 import { jest } from '@jest/globals';
 
+// defaults.js (transitively imported by editor-persist.js) reads
+// `SillyTavern.getContext().constants.{promptRoles,wiPosition}` at module
+// load time after upstream commit 571c529c2. editor-persist.js also
+// captures `SillyTavern.getContext().saveSettings` and `.constants.unset`
+// at module-load. Expose stubs + the shared `extensionSettings` so
+// beforeEach() mutations propagate.
+const extensionSettings = { orchestrator: {} };
+globalThis.SillyTavern = {
+    getContext: () => ({
+        constants: {
+            promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
+            wiPosition: { before: 0, after: 1, ANTop: 2, ANBottom: 3, EMTop: 4, EMBottom: 5, atDepth: 6 },
+            unset: Symbol('unset'),
+        },
+        lib: {
+            yaml: { dump: (v) => JSON.stringify(v), load: (s) => JSON.parse(s) },
+        },
+        extensionSettings,
+        saveSettings: async () => {},
+    }),
+};
+
 jest.unstable_mockModule('../../public/lib.js', async () => {
     const { default: lodash } = await import('lodash');
     return { lodash, yaml: { dump: (v) => JSON.stringify(v), load: (s) => JSON.parse(s) } };
 });
 
-const extensionSettings = { orchestrator: {} };
 jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
     extension_settings: extensionSettings,
     getContext: () => ({}),
