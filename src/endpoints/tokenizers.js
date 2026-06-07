@@ -439,6 +439,7 @@ function getWebTokenizersChunks(tokenizer, ids) {
  * @returns {string} Tokenizer model to use
  */
 export function getTokenizerModel(requestModel) {
+    // PAIRED with public/scripts/client-tokenizers/normalize-model.js — edit both together.
     if (requestModel === 'o1' || requestModel.includes('o1-preview') || requestModel.includes('o1-mini') || requestModel.includes('o3-mini')) {
         return 'o1';
     }
