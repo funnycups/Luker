@@ -68,10 +68,6 @@ import {
     ui as ITER_UI,
 } from '../../../iteration-library/index.js';
 import {
-    buildCharacterEditorHelperApis,
-    runCharacterEditorHelperToolCall,
-} from '../../character-editor-assistant/main.js';
-import {
     TOOL_DEFS,
     TOOL_DISPLAY,
     buildToolCatalog,
@@ -83,6 +79,18 @@ import { MG_SCHEMA_TOOL_DISPLAY } from './tool-display.js';
 import { buildSystemPrompt, DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT } from './system-prompt.js';
 import { createMgSchemaSessionStore, makeMessageId, normalizeMessageShape } from './session-store.js';
 
+// Character-editor-assistant publishes its helper-tool surface via
+// `registerExtensionApi('character-editor-assistant', {...})`. Resolved
+// per-call so a missing CEA install fails when the schema iteration
+// popup is opened, not when this module loads.
+function getCea() {
+    const api = __ctx.getExtensionApi('character-editor-assistant');
+    if (!api) {
+        throw new Error('Memory-graph schema iteration requires the character-editor-assistant extension to be installed and enabled.');
+    }
+    return api;
+}
+
 const MODULE = 'mg-schema-iteration';
 const STYLESHEET_ID = 'mg_schema_it_studio_stylesheet';
 
@@ -93,7 +101,7 @@ const { isLorebookReadTool, LOREBOOK_READ_TOOL_DEFS, runLorebookReadTool: runLor
 
 async function runLorebookReadTool(call, helperApis = []) {
     return runLorebookReadToolShared(call, {
-        dispatch: runCharacterEditorHelperToolCall,
+        dispatch: getCea().runCharacterEditorHelperToolCall,
         helperApis,
     });
 }
@@ -1366,7 +1374,7 @@ export async function openSchemaIterationStudio(deps) {
         // outside character scope, which `runLorebookReadTool` surfaces as
         // an error result the AI can react to.
         const helperApisForReads = (turnSnapshot.helperSession?.scope === 'character' && turnSnapshot.avatar)
-            ? buildCharacterEditorHelperApis(context, { avatar: turnSnapshot.avatar })
+            ? getCea().buildCharacterEditorHelperApis(context, { avatar: turnSnapshot.avatar })
             : [];
         const persistedToolResults = [];
         for (const call of readToolCalls) {
