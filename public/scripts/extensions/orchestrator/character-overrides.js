@@ -233,21 +233,31 @@ export function applyCharacterExecutionModeForAvatar(context, settings, avatar) 
     return true;
 }
 
+function cardHasPresetLibraryForMode(context, avatar, mode) {
+    const ext = getCharacterExtensionDataByAvatar(context, avatar) || {};
+    const lib = ext.presetLibraries?.[mode];
+    return Boolean(lib && typeof lib === 'object' && Object.keys(lib).length > 0);
+}
+
 export function hasCharacterSpecOverride(context, avatar) {
     const override = getCharacterOverrideByAvatar(context, avatar);
-    return hasSpecOverrideData(override);
+    if (hasSpecOverrideData(override)) return true;
+    return cardHasPresetLibraryForMode(context, avatar, ORCH_EXECUTION_MODE_SPEC);
 }
 
 export function hasCharacterAgendaOverride(context, avatar) {
-    return hasAgendaOverrideData(getCharacterOverrideByAvatar(context, avatar));
+    if (hasAgendaOverrideData(getCharacterOverrideByAvatar(context, avatar))) return true;
+    return cardHasPresetLibraryForMode(context, avatar, ORCH_EXECUTION_MODE_AGENDA);
 }
 
 export function hasCharacterLoopOverride(context, avatar) {
-    return hasLoopOverrideData(getCharacterOverrideByAvatar(context, avatar));
+    if (hasLoopOverrideData(getCharacterOverrideByAvatar(context, avatar))) return true;
+    return cardHasPresetLibraryForMode(context, avatar, ORCH_EXECUTION_MODE_LOOP);
 }
 
 export function hasCharacterDirectorOverride(context, avatar) {
-    return hasDirectorOverrideData(getCharacterOverrideByAvatar(context, avatar));
+    if (hasDirectorOverrideData(getCharacterOverrideByAvatar(context, avatar))) return true;
+    return cardHasPresetLibraryForMode(context, avatar, ORCH_EXECUTION_MODE_DIRECTOR);
 }
 
 export function hasCharacterOverride(context, avatar) {
