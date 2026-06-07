@@ -909,23 +909,14 @@ function wrapExecWithSession(exec) {
 }
 
 /**
- * Dynamically load the orchestrator's Layer-2 register helpers. Lazy
- * import so memory-graph can boot before orchestrator without ESM
- * load-order constraints, and so memory-graph stays standalone-usable
- * when orchestrator isn't installed.
- *
- * Returns null when orchestrator cannot be located, so the public
- * register / unregister functions can no-op without throwing.
+ * Resolve the orchestrator's published extension API. Silent null when
+ * orchestrator isn't installed, so the register / unregister functions
+ * can no-op without throwing.
  */
-async function loadOrchestratorRegistrar() {
-    try {
-        const mod = await import('../orchestrator/register-custom-tool.js');
-        if (typeof mod?.registerOrchestrationTool !== 'function') return null;
-        return mod;
-    } catch (_err) {
-        // Orchestrator not installed / not bundled — that's expected.
-        return null;
-    }
+function loadOrchestratorRegistrar() {
+    const orch = SillyTavern.getContext().getExtensionApi('orchestrator');
+    if (!orch || typeof orch.registerOrchestrationTool !== 'function') return null;
+    return orch;
 }
 
 /**
@@ -936,8 +927,8 @@ async function loadOrchestratorRegistrar() {
  * Silent no-op when orchestrator isn't loaded — memory-graph remains
  * independently usable.
  */
-export async function registerMemoryGraphOrchestrationTools() {
-    const orch = await loadOrchestratorRegistrar();
+export function registerMemoryGraphOrchestrationTools() {
+    const orch = loadOrchestratorRegistrar();
     if (!orch) return;
     for (const s of SCHEMAS) {
         orch.registerOrchestrationTool({
@@ -955,8 +946,8 @@ export async function registerMemoryGraphOrchestrationTools() {
  * Remove memory-graph's 15 tools from the orchestrator's Layer-2
  * registry. Silent no-op when orchestrator isn't loaded.
  */
-export async function unregisterMemoryGraphOrchestrationTools() {
-    const orch = await loadOrchestratorRegistrar();
+export function unregisterMemoryGraphOrchestrationTools() {
+    const orch = loadOrchestratorRegistrar();
     if (!orch || typeof orch.unregisterOrchestrationTool !== 'function') return;
     for (const name of MEMORY_TOOL_NAMES) {
         orch.unregisterOrchestrationTool(name);
