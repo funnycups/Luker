@@ -268,3 +268,8 @@ Loop 模式与 spec / agenda 在性能上有结构性差异：
 - [记忆图](/zh-CN/features/memory-graph) — `memory.*` 工具背后的数据源
 - [Notes](/zh-CN/features/orchestrator/notes) — open/close 笔记模型的面板使用与概念详解
 - [自定义工具](./custom-tools.md) — 自己注册工具或把 SillyTavern function tool 桥接进 loop
+
+## 预设
+
+本模式的配置可以保存为命名预设，并在编辑面板中切换。完整工作流见
+[编排预设](./presets.md)。

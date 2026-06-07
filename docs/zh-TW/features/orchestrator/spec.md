@@ -217,3 +217,8 @@ s5 -> out
 - [Loop 模式](/zh-TW/features/orchestrator/loop) — 單 Agent 工具循環
 - [角色卡編輯器](/zh-TW/features/card-editor/) — 與迭代工作台共用 diff 引擎
 - [自訂工具](/zh-TW/features/orchestrator/custom-tools) — Spec Agent 可以呼叫的擴充 / SillyTavern 橋接 / 手寫工具
+
+## 預設
+
+本模式的設定可以儲存為命名預設，並在編輯面板中切換。完整工作流程請見
+[編排預設](./presets.md)。

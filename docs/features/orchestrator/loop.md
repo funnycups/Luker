@@ -268,3 +268,9 @@ Concrete latency deltas, capsule-quality preferences, and total-token usage acro
 - [Memory Graph](/features/memory-graph) — data source behind the `memory_*` tools
 - [Custom tools](./custom-tools.md) — register your own tools or bridge SillyTavern function tools into the loop
 - [Notes](/features/orchestrator/notes) — panel usage and detailed concept reference for the open/close note model
+
+## Presets
+
+This mode's configuration can be saved as a named preset and switched in
+the editor panel. See [Orchestration Presets](./presets.md) for the full
+workflow.

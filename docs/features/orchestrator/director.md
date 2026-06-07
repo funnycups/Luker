@@ -284,3 +284,9 @@ Director shares the same **Export profile** / **Import profile** buttons as the 
 - [Agenda mode](/features/orchestrator/agenda) — Planner dynamically schedules Workers, producing a capsule
 - [Custom tools](/features/orchestrator/custom-tools) — extend the main agent and sub-agents with tools from extensions, SillyTavern bridges, or handwritten code
 
+## Presets
+
+This mode's configuration can be saved as a named preset and switched in
+the editor panel. See [Orchestration Presets](./presets.md) for the full
+workflow.
+

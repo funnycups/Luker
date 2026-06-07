@@ -284,3 +284,8 @@ Director 跟其他模式一样支持 **导出 profile** / **导入 profile** 按
 - [Agenda 模式](/zh-CN/features/orchestrator/agenda) — Planner 动态调度 Worker，产出 capsule
 - [自定义工具](/zh-CN/features/orchestrator/custom-tools) — 用扩展、SillyTavern 桥接或手写代码给主代理和子代理加新工具
 
+## 预设
+
+本模式的配置可以保存为命名预设，并在编辑面板中切换。完整工作流见
+[编排预设](./presets.md)。
+

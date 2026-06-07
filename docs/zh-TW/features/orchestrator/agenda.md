@@ -193,3 +193,8 @@ Agenda 模式的 Planner 調度透過 OpenAI 工具呼叫實現，依賴 Luker �
 - [Loop 模式](/zh-TW/features/orchestrator/loop) — 單 Agent 工具循環
 - [Function Call Runtime](/zh-TW/improvements/function-call-runtime) — Planner 調度依賴此框架
 - [自訂工具](/zh-TW/features/orchestrator/custom-tools) — Agenda Worker 可以呼叫的擴充 / SillyTavern 橋接 / 手寫工具
+
+## 預設
+
+本模式的設定可以儲存為命名預設，並在編輯面板中切換。完整工作流程請見
+[編排預設](./presets.md)。

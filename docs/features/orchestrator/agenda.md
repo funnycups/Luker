@@ -193,3 +193,9 @@ When filing a bug, **Export this run** downloads this JSON as a JSONL file you c
 - [Loop mode](/features/orchestrator/loop) — single-agent tool loop
 - [Function Call Runtime](/improvements/function-call-runtime) — the framework Planner dispatch relies on
 - [Custom tools](/features/orchestrator/custom-tools) — extension / SillyTavern-bridged / handwritten tools that Agenda Workers can call
+
+## Presets
+
+This mode's configuration can be saved as a named preset and switched in
+the editor panel. See [Orchestration Presets](./presets.md) for the full
+workflow.

@@ -75,3 +75,4 @@ android-app/app/.externalNativeBuild/
 !/data/.gitkeep
 !/default/scaffold/README.md
 !/public/scripts/extensions/third-party/.gitkeep
+tests/skills-ui/playwright/_local-*.spec.js

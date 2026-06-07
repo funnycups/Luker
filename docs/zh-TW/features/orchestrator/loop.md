@@ -268,3 +268,8 @@ Loop 模式與 spec / agenda 在效能上有結構性差異：
 - [記憶圖](/zh-TW/features/memory-graph) — `memory.*` 工具背後的資料源
 - [Notes](/zh-TW/features/orchestrator/notes) — open/close 便箋模型的面板使用與概念詳解
 - [自訂工具](./custom-tools.md) — 自己註冊工具或把 SillyTavern function tool 橋接進 loop
+
+## 預設
+
+本模式的設定可以儲存為命名預設，並在編輯面板中切換。完整工作流程請見
+[編排預設](./presets.md)。
