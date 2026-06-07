@@ -29,6 +29,14 @@ import {
 } from './main.js';
 import { getMemoryGraphReadApi } from './read-api.js';
 import { getMemoryGraphWriteApi } from './write-api.js';
+import {
+    getSchemaScopeInfo,
+    getAdvancedScopeInfo,
+    persistCharacterSchemaOverride,
+    removeCharacterSchemaOverride,
+    persistCharacterAdvancedOverride,
+    removeCharacterAdvancedOverride,
+} from './character-overrides.js';
 
 export async function openSession(context) {
     if (!context || typeof context !== 'object') return null;
@@ -81,4 +89,18 @@ export async function openSession(context) {
     });
 }
 
-registerExtensionApi('memory-graph', { openSession });
+registerExtensionApi('memory-graph', {
+    openSession,
+    // Per-character override accessors (character-overrides.js). Sibling
+    // plugins that surface per-character memory-graph config (CardApp's
+    // ctx.getMemoryGraphSchema / setMemoryGraphSchema, CEA Studio's
+    // character_get_memory_graph tool) consume these. Direct ES-module
+    // import from another plugin is forbidden by the plugin↔plugin
+    // boundary rule.
+    getSchemaScopeInfo,
+    getAdvancedScopeInfo,
+    persistCharacterSchemaOverride,
+    removeCharacterSchemaOverride,
+    persistCharacterAdvancedOverride,
+    removeCharacterAdvancedOverride,
+});
