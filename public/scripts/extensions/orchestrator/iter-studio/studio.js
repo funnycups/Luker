@@ -99,11 +99,17 @@ import {
     normalizeMessageShape,
 } from './session-store.js';
 import { ORCH_TOOL_DISPLAY } from './tool-display.js';
-import {
-    buildCharacterEditorHelperApis,
-    runCharacterEditorHelperToolCall,
-    applyCharacterEditorLorebookProposal,
-} from '../../character-editor-assistant/main.js';
+// Character-editor-assistant publishes its helper-tool surface via
+// `registerExtensionApi('character-editor-assistant', {...})`. Resolved
+// per-call so a missing CEA install fails at the iter-studio entry
+// rather than at module load.
+function getCea() {
+    const api = __ctx.getExtensionApi('character-editor-assistant');
+    if (!api) {
+        throw new Error('Orchestrator iter-studio requires the character-editor-assistant extension to be installed and enabled.');
+    }
+    return api;
+}
 // Plan 2 Unit 7: iter-studio skill management catalog. Spliced into the
 // tool catalog alongside CONTROL_TOOL_DEFS + lorebook reads/writes, routed
 // through the inline-executed path. 14 tools only touch server state and
@@ -185,7 +191,7 @@ function isInlineExecutedTool(name) {
  */
 async function runLorebookReadTool(call, helperApis = []) {
     return runLorebookReadToolShared(call, {
-        dispatch: runCharacterEditorHelperToolCall,
+        dispatch: getCea().runCharacterEditorHelperToolCall,
         helperApis,
     });
 }
@@ -200,7 +206,7 @@ async function runLorebookReadTool(call, helperApis = []) {
  */
 async function runLorebookWriteTool(call, helperApis = []) {
     return runLorebookWriteToolShared(call, {
-        dispatch: runCharacterEditorHelperToolCall,
+        dispatch: getCea().runCharacterEditorHelperToolCall,
         helperApis,
     });
 }
@@ -2116,7 +2122,7 @@ export async function openOrchestratorIterationStudio(deps) {
         const helperSessionForReads = buildHelperSession(state.live);
         const avatarForReads = String(context?.characters?.[context?.characterId]?.avatar || '').trim();
         const helperApisForReads = (helperSessionForReads?.scope === 'character' && avatarForReads)
-            ? buildCharacterEditorHelperApis(context, { avatar: avatarForReads })
+            ? getCea().buildCharacterEditorHelperApis(context, { avatar: avatarForReads })
             : [];
         const persistedToolResults = [];
         // Plan 2 Unit 7: skill_bind_to_agent / skill_unbind_from_agent /
@@ -2560,7 +2566,7 @@ export async function openOrchestratorIterationStudio(deps) {
                 // commit correctly (proposal B's mutation lands on top of
                 // proposal A's already-committed state) and surfaces
                 // parallel-session drift as a fresh validation error.
-                await applyCharacterEditorLorebookProposal(context, {
+                await getCea().applyCharacterEditorLorebookProposal(context, {
                     kind: entry.op?.kind ?? entry.kind,
                     args: entry.op?.args ?? {},
                 });
