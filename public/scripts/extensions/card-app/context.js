@@ -3,22 +3,6 @@
  */
 
 import { getScriptsByType, saveScriptsByType, SCRIPT_TYPES } from '../regex/engine.js';
-import {
-    getCharacterOverrideByAvatar as orchGetCharacterOverrideByAvatar,
-    getCharacterIndexByAvatar as orchGetCharacterIndexByAvatar,
-    getCharacterExtensionDataByAvatar as orchGetCharacterExtensionDataByAvatar,
-    normalizeCharacterOverrideMode as orchNormalizeCharacterOverrideMode,
-    applyCharacterExecutionModeForAvatar as orchApplyCharacterExecutionModeForAvatar,
-} from '../orchestrator/character-overrides.js';
-import { persistOrchestratorCharacterExtension } from '../orchestrator/editor-persist.js';
-import {
-    getSchemaScopeInfo as mgGetSchemaScopeInfo,
-    getAdvancedScopeInfo as mgGetAdvancedScopeInfo,
-    persistCharacterSchemaOverride as mgPersistCharacterSchemaOverride,
-    removeCharacterSchemaOverride as mgRemoveCharacterSchemaOverride,
-    persistCharacterAdvancedOverride as mgPersistCharacterAdvancedOverride,
-    removeCharacterAdvancedOverride as mgRemoveCharacterAdvancedOverride,
-} from '../memory-graph/character-overrides.js';
 
 const __ctx = SillyTavern.getContext();
 const eventSource = __ctx.eventSource;
@@ -58,6 +42,20 @@ const setChatWorldInfoSelection = __ctx.chatWorldInfo.setSelection;
 const getCharaAuxWorlds = __ctx.getCharaAuxWorlds;
 const uuidv4 = __ctx.uuidv4;
 const getCharaFilename = __ctx.getCharaFilename;
+
+/**
+ * Look up a sibling plugin's published Extension API. Returns the API
+ * object if the plugin is loaded, or throws a clear error otherwise so
+ * the caller surfaces "needs plugin X installed" instead of a generic
+ * undefined-method crash.
+ */
+function requireExtensionApi(name) {
+    const api = __ctx.getExtensionApi(name);
+    if (!api) {
+        throw new Error(`[CardApp] requires the '${name}' extension to be installed and enabled`);
+    }
+    return api;
+}
 
 /**
  * Map a friendly regex scope label to the engine's SCRIPT_TYPES enum.
@@ -1045,7 +1043,8 @@ export function buildContext(container, charId, config) {
             const charData = characters[__ctx.characterId];
             const avatar = String(charData?.avatar || '').trim();
             if (!avatar) return null;
-            return orchGetCharacterOverrideByAvatar(lukerCtx, avatar);
+            const orch = requireExtensionApi('orchestrator');
+            return orch.getCharacterOverrideByAvatar(lukerCtx, avatar);
         },
 
         /**
@@ -1073,12 +1072,13 @@ export function buildContext(container, charId, config) {
             const charData = characters[__ctx.characterId];
             const avatar = String(charData?.avatar || '').trim();
             if (!avatar) throw new Error('[CardApp] No active character');
-            const characterIndex = orchGetCharacterIndexByAvatar(lukerCtx, avatar);
+            const orch = requireExtensionApi('orchestrator');
+            const characterIndex = orch.getCharacterIndexByAvatar(lukerCtx, avatar);
             if (characterIndex < 0) throw new Error('[CardApp] Character not found in context');
-            const previous = orchGetCharacterExtensionDataByAvatar(lukerCtx, avatar);
-            const nextOverride = orchNormalizeCharacterOverrideMode({ ...override });
+            const previous = orch.getCharacterExtensionDataByAvatar(lukerCtx, avatar);
+            const nextOverride = orch.normalizeCharacterOverrideMode({ ...override });
             const nextPayload = { ...previous, override: nextOverride };
-            const ok = await persistOrchestratorCharacterExtension(lukerCtx, characterIndex, nextPayload);
+            const ok = await orch.persistOrchestratorCharacterExtension(lukerCtx, characterIndex, nextPayload);
             if (ok) {
                 // The orchestrator dispatcher reads the active mode from
                 // extension_settings.orchestrator.executionMode, NOT from the
@@ -1086,7 +1086,7 @@ export function buildContext(container, charId, config) {
                 // that switches modes (e.g. spec → agenda) is silently ignored
                 // by the runtime. This mirrors what the in-app editor does at
                 // orchestrator/main.js:6684.
-                orchApplyCharacterExecutionModeForAvatar(lukerCtx, extension_settings?.orchestrator, avatar);
+                orch.applyCharacterExecutionModeForAvatar(lukerCtx, extension_settings?.orchestrator, avatar);
             }
             return ok;
         },
@@ -1102,21 +1102,22 @@ export function buildContext(container, charId, config) {
             const charData = characters[__ctx.characterId];
             const avatar = String(charData?.avatar || '').trim();
             if (!avatar) throw new Error('[CardApp] No active character');
-            const characterIndex = orchGetCharacterIndexByAvatar(lukerCtx, avatar);
+            const orch = requireExtensionApi('orchestrator');
+            const characterIndex = orch.getCharacterIndexByAvatar(lukerCtx, avatar);
             if (characterIndex < 0) throw new Error('[CardApp] Character not found in context');
-            const previous = orchGetCharacterExtensionDataByAvatar(lukerCtx, avatar);
+            const previous = orch.getCharacterExtensionDataByAvatar(lukerCtx, avatar);
             const nextPayload = { ...previous };
             delete nextPayload.override;
             // If the override was the only key on extensions.orchestrator,
             // pass null so persistOrchestratorCharacterExtension removes the
             // whole blob server-side instead of leaving an empty {} behind.
             const finalPayload = Object.keys(nextPayload).length === 0 ? null : nextPayload;
-            const ok = await persistOrchestratorCharacterExtension(lukerCtx, characterIndex, finalPayload);
+            const ok = await orch.persistOrchestratorCharacterExtension(lukerCtx, characterIndex, finalPayload);
             if (ok) {
                 // After clearing, also realign the dispatcher mode — without
                 // this the runtime keeps using whatever mode the prior
                 // override pinned, even though the override is gone.
-                orchApplyCharacterExecutionModeForAvatar(lukerCtx, extension_settings?.orchestrator, avatar);
+                orch.applyCharacterExecutionModeForAvatar(lukerCtx, extension_settings?.orchestrator, avatar);
             }
             return ok;
         },
@@ -1141,8 +1142,9 @@ export function buildContext(container, charId, config) {
          */
         getMemoryGraphSchema() {
             const lukerCtx = getContext();
-            const schemaInfo = mgGetSchemaScopeInfo(lukerCtx);
-            const advancedInfo = mgGetAdvancedScopeInfo(lukerCtx);
+            const mg = requireExtensionApi('memory-graph');
+            const schemaInfo = mg.getSchemaScopeInfo(lukerCtx);
+            const advancedInfo = mg.getAdvancedScopeInfo(lukerCtx);
             return {
                 schema: {
                     scope: schemaInfo.scope,
@@ -1172,10 +1174,11 @@ export function buildContext(container, charId, config) {
             const charData = characters[__ctx.characterId];
             const avatar = String(charData?.avatar || '').trim();
             if (!avatar) throw new Error('[CardApp] No active character');
+            const mg = requireExtensionApi('memory-graph');
             if (schema === null || schema === undefined) {
-                return await mgRemoveCharacterSchemaOverride(lukerCtx, avatar);
+                return await mg.removeCharacterSchemaOverride(lukerCtx, avatar);
             }
-            return await mgPersistCharacterSchemaOverride(lukerCtx, avatar, schema);
+            return await mg.persistCharacterSchemaOverride(lukerCtx, avatar, schema);
         },
 
         /**
@@ -1194,10 +1197,11 @@ export function buildContext(container, charId, config) {
             const charData = characters[__ctx.characterId];
             const avatar = String(charData?.avatar || '').trim();
             if (!avatar) throw new Error('[CardApp] No active character');
+            const mg = requireExtensionApi('memory-graph');
             if (advanced === null || advanced === undefined) {
-                return await mgRemoveCharacterAdvancedOverride(lukerCtx, avatar);
+                return await mg.removeCharacterAdvancedOverride(lukerCtx, avatar);
             }
-            return await mgPersistCharacterAdvancedOverride(lukerCtx, avatar, advanced);
+            return await mg.persistCharacterAdvancedOverride(lukerCtx, avatar, advanced);
         },
 
         // ==================== Rendering ====================
