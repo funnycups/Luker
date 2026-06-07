@@ -35,22 +35,6 @@ const getContext = SillyTavern.getContext;
 const extension_settings = __ctx.extensionSettings;
 const writeExtensionField = __ctx.writeExtensionField;
 const uuidv4 = __ctx.uuidv4;
-import {
- getCharacterOverrideByAvatar as orchGetCharacterOverrideByAvatar,
- getCharacterIndexByAvatar as orchGetCharacterIndexByAvatar,
- getCharacterExtensionDataByAvatar as orchGetCharacterExtensionDataByAvatar,
- normalizeCharacterOverrideMode as orchNormalizeCharacterOverrideMode,
- applyCharacterExecutionModeForAvatar as orchApplyCharacterExecutionModeForAvatar,
-} from '../../orchestrator/character-overrides.js';
-import { persistOrchestratorCharacterExtension } from '../../orchestrator/editor-persist.js';
-import {
- getSchemaScopeInfo as mgGetSchemaScopeInfo,
- getAdvancedScopeInfo as mgGetAdvancedScopeInfo,
- persistCharacterSchemaOverride as mgPersistCharacterSchemaOverride,
- removeCharacterSchemaOverride as mgRemoveCharacterSchemaOverride,
- persistCharacterAdvancedOverride as mgPersistCharacterAdvancedOverride,
- removeCharacterAdvancedOverride as mgRemoveCharacterAdvancedOverride,
-} from '../../memory-graph/character-overrides.js';
 
 const MODULE_NAME = 'card-app/studio/ai';
 const MAX_TOOL_ROUNDS = 10;
@@ -1266,11 +1250,13 @@ async function executeTool(charId, toolName, args, options = {}) {
  if (__ctx.characterId === undefined || __ctx.characterId === null) {
  return { ok: false, error: 'No active character' };
  }
+ const orch = __ctx.getExtensionApi('orchestrator');
+ if (!orch) return { ok: false, error: 'orchestrator extension is not loaded' };
  const lukerCtx = getContext();
  const charData = characters[__ctx.characterId];
  const avatar = String(charData?.avatar || '').trim();
  if (!avatar) return { ok: false, error: 'Character has no avatar' };
- const override = orchGetCharacterOverrideByAvatar(lukerCtx, avatar);
+ const override = orch.getCharacterOverrideByAvatar(lukerCtx, avatar);
  return { ok: true, override: override || null };
  }
  case TOOL_NAMES.ORCHESTRATOR_SET_OVERRIDE: {
@@ -1281,21 +1267,23 @@ async function executeTool(charId, toolName, args, options = {}) {
  if (!override || typeof override !== 'object') {
  return { ok: false, error: 'override must be an object' };
  }
+ const orch = __ctx.getExtensionApi('orchestrator');
+ if (!orch) return { ok: false, error: 'orchestrator extension is not loaded' };
  const lukerCtx = getContext();
  const charData = characters[__ctx.characterId];
  const avatar = String(charData?.avatar || '').trim();
  if (!avatar) return { ok: false, error: 'Character has no avatar' };
- const characterIndex = orchGetCharacterIndexByAvatar(lukerCtx, avatar);
+ const characterIndex = orch.getCharacterIndexByAvatar(lukerCtx, avatar);
  if (characterIndex < 0) return { ok: false, error: 'Character not found in context' };
- const previous = orchGetCharacterExtensionDataByAvatar(lukerCtx, avatar);
- const nextOverride = orchNormalizeCharacterOverrideMode({ ...override });
- const ok = await persistOrchestratorCharacterExtension(lukerCtx, characterIndex, { ...previous, override: nextOverride });
+ const previous = orch.getCharacterExtensionDataByAvatar(lukerCtx, avatar);
+ const nextOverride = orch.normalizeCharacterOverrideMode({ ...override });
+ const ok = await orch.persistOrchestratorCharacterExtension(lukerCtx, characterIndex, { ...previous, override: nextOverride });
  if (ok) {
  // Realign extension_settings.orchestrator.executionMode so the
  // dispatcher in main.js picks the override's branch on the next
  // generation. Without this an override that switches modes is
  // silently ignored. Mirrors orchestrator/main.js:6684.
- orchApplyCharacterExecutionModeForAvatar(lukerCtx, extension_settings?.orchestrator, avatar);
+ orch.applyCharacterExecutionModeForAvatar(lukerCtx, extension_settings?.orchestrator, avatar);
  }
  return ok ? { ok: true, message: 'Orchestrator override updated.', mode: nextOverride.mode || null } : { ok: false, error: 'Failed to persist orchestrator override' };
  }
@@ -1303,31 +1291,35 @@ async function executeTool(charId, toolName, args, options = {}) {
  if (__ctx.characterId === undefined || __ctx.characterId === null) {
  return { ok: false, error: 'No active character' };
  }
+ const orch = __ctx.getExtensionApi('orchestrator');
+ if (!orch) return { ok: false, error: 'orchestrator extension is not loaded' };
  const lukerCtx = getContext();
  const charData = characters[__ctx.characterId];
  const avatar = String(charData?.avatar || '').trim();
  if (!avatar) return { ok: false, error: 'Character has no avatar' };
- const characterIndex = orchGetCharacterIndexByAvatar(lukerCtx, avatar);
+ const characterIndex = orch.getCharacterIndexByAvatar(lukerCtx, avatar);
  if (characterIndex < 0) return { ok: false, error: 'Character not found in context' };
- const previous = orchGetCharacterExtensionDataByAvatar(lukerCtx, avatar);
+ const previous = orch.getCharacterExtensionDataByAvatar(lukerCtx, avatar);
  const nextPayload = { ...previous };
  delete nextPayload.override;
  // Pass null when nothing else is left so the server-side handler
  // removes the whole extensions.orchestrator blob instead of leaving {}.
  const finalPayload = Object.keys(nextPayload).length === 0 ? null : nextPayload;
- const ok = await persistOrchestratorCharacterExtension(lukerCtx, characterIndex, finalPayload);
+ const ok = await orch.persistOrchestratorCharacterExtension(lukerCtx, characterIndex, finalPayload);
  if (ok) {
  // Realign mode flag — the runtime would otherwise keep the prior
  // override's pinned mode active even though the override is gone.
- orchApplyCharacterExecutionModeForAvatar(lukerCtx, extension_settings?.orchestrator, avatar);
+ orch.applyCharacterExecutionModeForAvatar(lukerCtx, extension_settings?.orchestrator, avatar);
  }
  return ok ? { ok: true, message: 'Orchestrator override cleared (falling back to global).' } : { ok: false, error: 'Failed to clear orchestrator override' };
  }
  // ==================== Memory Graph (per-character override) ====================
  case TOOL_NAMES.MEMORY_GRAPH_GET: {
+ const mg = __ctx.getExtensionApi('memory-graph');
+ if (!mg) return { ok: false, error: 'memory-graph extension is not loaded' };
  const lukerCtx = getContext();
- const schemaInfo = mgGetSchemaScopeInfo(lukerCtx);
- const advancedInfo = mgGetAdvancedScopeInfo(lukerCtx);
+ const schemaInfo = mg.getSchemaScopeInfo(lukerCtx);
+ const advancedInfo = mg.getAdvancedScopeInfo(lukerCtx);
  return {
  ok: true,
  schema: { scope: schemaInfo.scope, hasOverride: !!schemaInfo.hasOverride, schema: schemaInfo.schema },
@@ -1338,6 +1330,8 @@ async function executeTool(charId, toolName, args, options = {}) {
  if (__ctx.characterId === undefined || __ctx.characterId === null) {
  return { ok: false, error: 'No active character' };
  }
+ const mg = __ctx.getExtensionApi('memory-graph');
+ if (!mg) return { ok: false, error: 'memory-graph extension is not loaded' };
  const lukerCtx = getContext();
  const charData = characters[__ctx.characterId];
  const avatar = String(charData?.avatar || '').trim();
@@ -1345,8 +1339,8 @@ async function executeTool(charId, toolName, args, options = {}) {
  const schema = args?.schema;
  const isClear = schema === null || schema === undefined;
  const ok = isClear
- ? await mgRemoveCharacterSchemaOverride(lukerCtx, avatar)
- : await mgPersistCharacterSchemaOverride(lukerCtx, avatar, schema);
+ ? await mg.removeCharacterSchemaOverride(lukerCtx, avatar)
+ : await mg.persistCharacterSchemaOverride(lukerCtx, avatar, schema);
  return ok
  ? { ok: true, message: isClear ? 'Memory-graph schema override cleared (falling back to global).' : 'Memory-graph schema override updated.' }
  : { ok: false, error: 'Failed to update memory-graph schema override' };
@@ -1355,6 +1349,8 @@ async function executeTool(charId, toolName, args, options = {}) {
  if (__ctx.characterId === undefined || __ctx.characterId === null) {
  return { ok: false, error: 'No active character' };
  }
+ const mg = __ctx.getExtensionApi('memory-graph');
+ if (!mg) return { ok: false, error: 'memory-graph extension is not loaded' };
  const lukerCtx = getContext();
  const charData = characters[__ctx.characterId];
  const avatar = String(charData?.avatar || '').trim();
@@ -1362,8 +1358,8 @@ async function executeTool(charId, toolName, args, options = {}) {
  const advanced = args?.advanced;
  const isClear = advanced === null || advanced === undefined;
  const ok = isClear
- ? await mgRemoveCharacterAdvancedOverride(lukerCtx, avatar)
- : await mgPersistCharacterAdvancedOverride(lukerCtx, avatar, advanced);
+ ? await mg.removeCharacterAdvancedOverride(lukerCtx, avatar)
+ : await mg.persistCharacterAdvancedOverride(lukerCtx, avatar, advanced);
  return ok
  ? { ok: true, message: isClear ? 'Memory-graph advanced override cleared (falling back to global).' : 'Memory-graph advanced override updated.' }
  : { ok: false, error: 'Failed to update memory-graph advanced override' };
