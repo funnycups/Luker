@@ -1432,6 +1432,24 @@ export async function initTokenizers() {
             sessionStorage.removeItem(TOKENIZER_WARNING_KEY);
         }
     });
+    // On chat switch, drop per-chat token sub-caches except the active one.
+    // Without eviction tokenCache accumulates one sub-cache per chat opened
+    // in the session — heap snapshots in long sessions showed 8k+ entries
+    // pinned under a single stale chat name (~200 KB each). The IndexedDB
+    // copy is refreshed by the next saveTokenCacheDebounced() flush, so
+    // dropping in-memory state is sufficient.
+    eventSource.on(event_types.CHAT_CHANGED, (newChatId) => {
+        if (!tokenCache || typeof tokenCache !== 'object') return;
+        const keepKey = newChatId != null ? String(newChatId) : null;
+        let evicted = false;
+        for (const key of Object.keys(tokenCache)) {
+            if (key !== keepKey) {
+                delete tokenCache[key];
+                evicted = true;
+            }
+        }
+        if (evicted) saveTokenCacheDebounced();
+    });
     await loadTokenCache();
     registerDebugFunction('resetTokenCache', 'Reset token cache', 'Purges the calculated token counts. Use this if you want to force a full re-tokenization of all chats or suspect the token counts are wrong.', resetTokenCache);
 }
