@@ -57,7 +57,10 @@ export {
     getDirectorLimitBounds,
     sanitizeDirectorProfile,
 } from './director-defaults.js';
-import { ORCH_EXECUTION_MODE_DIRECTOR as _ORCH_EXECUTION_MODE_DIRECTOR } from './director-defaults.js';
+import {
+    ORCH_EXECUTION_MODE_DIRECTOR as _ORCH_EXECUTION_MODE_DIRECTOR,
+    createDefaultDirectorProfile as _createDefaultDirectorProfile,
+} from './director-defaults.js';
 export const ORCH_EXECUTION_MODES = Object.freeze([
     ORCH_EXECUTION_MODE_SPEC,
     ORCH_EXECUTION_MODE_SINGLE,
@@ -524,21 +527,12 @@ export const defaultSettings = {
     capsuleInjectDepth: 0,
     capsuleInjectRole: extension_prompt_roles.SYSTEM,
     capsuleCustomInstruction: DEFAULT_CAPSULE_CUSTOM_INSTRUCTION,
-    orchestrationSpec: defaultSpec,
-    presets: defaultPresets,
-    agendaPlanner: defaultAgendaPlanner,
-    agendaAgents: defaultAgendaAgents,
-    agendaFinalAgentId: 'finalizer',
-    agendaPlannerMaxRounds: 6,
-    agendaMaxConcurrentAgents: 3,
-    agendaMaxTotalRuns: 24,
-    // V3 loop-mode profile. Stored at the global scope only for MVP —
-    // character override of loop profiles will be wired in a follow-up
-    // task once the loop mode itself is validated. The runtime path
-    // (`getEffectiveProfile` in main.js) only reads this when
-    // `executionMode === 'loop'`; spec / agenda continue to use their
-    // own `orchestrationSpec` / `agendaPlanner` settings.
-    loopProfile: defaultLoopProfile,
+    // NEW: per-mode preset libraries + active pointers. Initial Default
+    // entries are seeded lazily by preset-library.js on first read so the
+    // factory data isn't duplicated across this constant.
+    presetLibraries: { spec: {}, agenda: {}, loop: {}, director: {} },
+    activePresetIds: { spec: '', agenda: '', loop: '', director: '' },
+    presetLibrariesMigrationDone: 0,
     chatOverrides: {},
     requestApiPresetName: '',
     requestLlmPresetName: '',
@@ -546,3 +540,27 @@ export const defaultSettings = {
     rpmLimit: 0,
     useStreamingTransport: false,
 };
+
+/**
+ * Build a factory "Default" preset entry for the given mode. Used by
+ * preset-library.js when seeding the first entry of an empty library and
+ * by the global one-shot migration when no legacy data exists.
+ */
+export function createFactoryPresetForMode(mode) {
+    if (mode === ORCH_EXECUTION_MODE_LOOP) {
+        return { name: 'Default', ...defaultLoopProfile };
+    }
+    if (mode === _ORCH_EXECUTION_MODE_DIRECTOR) {
+        return { name: 'Default', ..._createDefaultDirectorProfile() };
+    }
+    if (mode === ORCH_EXECUTION_MODE_AGENDA) {
+        return {
+            name: 'Default',
+            planner: defaultAgendaPlanner,
+            agents: defaultAgendaAgents,
+            finalAgentId: 'finalizer',
+            limits: { plannerMaxRounds: 6, maxConcurrentAgents: 3, maxTotalRuns: 24 },
+        };
+    }
+    return { name: 'Default', spec: defaultSpec, presets: defaultPresets };
+}

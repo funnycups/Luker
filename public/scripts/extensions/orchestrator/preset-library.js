@@ -1,0 +1,284 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 FunnyCups
+
+/**
+ * Per-mode preset library + active-preset resolver for the orchestrator.
+ *
+ * Each of the four orchestration modes (spec / agenda / loop / director)
+ * owns an independent library of named presets. Two scopes exist:
+ *
+ *   - global    → extension_settings.orchestrator.presetLibraries.<mode>
+ *   - character → character.data.extensions.orchestrator.presetLibraries.<mode>
+ *
+ * One preset per (mode, scope) is the "active" one; runtime + editor +
+ * iter-studio all read through `getActivePreset(...)`. The active id lives
+ * in `activePresetIds.<mode>` on the same parent object as the library.
+ *
+ * Per-mode sanitizers (defaults.js + persistence.js + agenda-profile.js)
+ * stay the single source of truth for profile shape — this module wraps
+ * them so the library entry is always canonical on read.
+ */
+
+import {
+    ORCH_EXECUTION_MODE_AGENDA,
+    ORCH_EXECUTION_MODE_DIRECTOR,
+    ORCH_EXECUTION_MODE_LOOP,
+    ORCH_EXECUTION_MODE_SPEC,
+    createFactoryPresetForMode,
+    sanitizeDirectorProfile,
+} from './defaults.js';
+import { sanitizeAgendaWorkingProfile } from './agenda-profile.js';
+import { sanitizeLoopProfile } from './persistence.js';
+import { sanitizeSpec } from './spec-schema.js';
+
+const MODULE_NAME = 'orchestrator';
+const DEFAULT_PRESET_ID = 'default';
+const DEFAULT_PRESET_NAME = 'Default';
+
+const ALL_MODES = Object.freeze([
+    ORCH_EXECUTION_MODE_SPEC,
+    ORCH_EXECUTION_MODE_AGENDA,
+    ORCH_EXECUTION_MODE_LOOP,
+    ORCH_EXECUTION_MODE_DIRECTOR,
+]);
+
+function makePresetId() {
+    return `preset_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function sanitizePresetEntry(mode, entry) {
+    const raw = entry && typeof entry === 'object' ? entry : {};
+    const name = String(raw.name || DEFAULT_PRESET_NAME).trim() || DEFAULT_PRESET_NAME;
+    if (mode === ORCH_EXECUTION_MODE_LOOP) {
+        return { name, ...sanitizeLoopProfile(raw) };
+    }
+    if (mode === ORCH_EXECUTION_MODE_DIRECTOR) {
+        return { name, ...sanitizeDirectorProfile(raw) };
+    }
+    if (mode === ORCH_EXECUTION_MODE_AGENDA) {
+        const p = sanitizeAgendaWorkingProfile(raw);
+        return {
+            name,
+            planner: p.planner,
+            agents: p.agents,
+            finalAgentId: p.finalAgentId,
+            limits: p.limits,
+        };
+    }
+    // spec
+    const spec = sanitizeSpec(raw.spec || {});
+    const presets = raw.presets && typeof raw.presets === 'object' ? raw.presets : {};
+    return { name, spec, presets };
+}
+
+function getScopeContainer(settings, scope, { context, avatar } = {}) {
+    if (scope === 'global') {
+        if (!settings.presetLibraries || typeof settings.presetLibraries !== 'object') {
+            settings.presetLibraries = { spec: {}, agenda: {}, loop: {}, director: {} };
+        }
+        if (!settings.activePresetIds || typeof settings.activePresetIds !== 'object') {
+            settings.activePresetIds = { spec: '', agenda: '', loop: '', director: '' };
+        }
+        return { libraries: settings.presetLibraries, activeIds: settings.activePresetIds };
+    }
+    if (scope === 'character') {
+        if (!context || !avatar) return null;
+        const character = (context.characters || []).find(c => String(c?.avatar || '') === String(avatar));
+        if (!character) return null;
+        const ext = character.data?.extensions?.[MODULE_NAME];
+        if (!ext || typeof ext !== 'object') return null;
+        if (!ext.presetLibraries || typeof ext.presetLibraries !== 'object') {
+            ext.presetLibraries = { spec: {}, agenda: {}, loop: {}, director: {} };
+        }
+        if (!ext.activePresetIds || typeof ext.activePresetIds !== 'object') {
+            ext.activePresetIds = { spec: '', agenda: '', loop: '', director: '' };
+        }
+        return { libraries: ext.presetLibraries, activeIds: ext.activePresetIds };
+    }
+    return null;
+}
+
+export function listPresets(settings, mode, { scope = 'global', context, avatar } = {}) {
+    const c = getScopeContainer(settings, scope, { context, avatar });
+    if (!c) return [];
+    const lib = c.libraries[mode] || {};
+    return Object.keys(lib).map(id => ({ id, name: String(lib[id]?.name || '') }));
+}
+
+export function getPreset(settings, mode, scope, presetId, { context, avatar } = {}) {
+    const c = getScopeContainer(settings, scope, { context, avatar });
+    if (!c) return null;
+    const raw = c.libraries[mode]?.[presetId];
+    if (!raw) return null;
+    return sanitizePresetEntry(mode, raw);
+}
+
+export function createPreset(settings, mode, scope, { name, seedFrom } = {}, { context, avatar } = {}) {
+    const c = getScopeContainer(settings, scope, { context, avatar });
+    if (!c) return '';
+    if (!c.libraries[mode]) c.libraries[mode] = {};
+    const id = makePresetId();
+    const seed = seedFrom && c.libraries[mode][seedFrom]
+        ? structuredClone(c.libraries[mode][seedFrom])
+        : {};
+    const sanitized = sanitizePresetEntry(mode, { ...seed, name: name || DEFAULT_PRESET_NAME });
+    c.libraries[mode][id] = sanitized;
+    return id;
+}
+
+export function getActivePresetId(settings, mode, { scope = 'global', context, avatar } = {}) {
+    const c = getScopeContainer(settings, scope, { context, avatar });
+    if (!c) return '';
+    return String(c.activeIds[mode] || '');
+}
+
+export function setActivePresetId(settings, mode, scope, presetId, { context, avatar } = {}) {
+    const c = getScopeContainer(settings, scope, { context, avatar });
+    if (!c) return false;
+    if (!presetId || !c.libraries[mode]?.[presetId]) return false;
+    c.activeIds[mode] = String(presetId);
+    return true;
+}
+
+function ensureDefaultSeeded(settings, mode, scope, { context, avatar } = {}) {
+    const c = getScopeContainer(settings, scope, { context, avatar });
+    if (!c) return null;
+    if (!c.libraries[mode]) c.libraries[mode] = {};
+    if (Object.keys(c.libraries[mode]).length === 0) {
+        c.libraries[mode][DEFAULT_PRESET_ID] = sanitizePresetEntry(mode, createFactoryPresetForMode(mode));
+        c.activeIds[mode] = DEFAULT_PRESET_ID;
+    }
+    if (!c.activeIds[mode] || !c.libraries[mode][c.activeIds[mode]]) {
+        c.activeIds[mode] = Object.keys(c.libraries[mode])[0] || '';
+    }
+    return c;
+}
+
+export function getActivePreset(settings, mode, { scope = 'global', context, avatar } = {}) {
+    const c = ensureDefaultSeeded(settings, mode, scope, { context, avatar });
+    if (!c) return null;
+    const id = c.activeIds[mode];
+    const raw = c.libraries[mode]?.[id];
+    return raw ? sanitizePresetEntry(mode, raw) : null;
+}
+
+export function deletePreset(settings, mode, scope, presetId, { context, avatar } = {}) {
+    const c = getScopeContainer(settings, scope, { context, avatar });
+    if (!c) return false;
+    if (!c.libraries[mode]?.[presetId]) return false;
+    const wasActive = c.activeIds[mode] === presetId;
+    delete c.libraries[mode][presetId];
+    if (Object.keys(c.libraries[mode]).length === 0) {
+        // Library empty → re-seed Default and make it active.
+        c.libraries[mode][DEFAULT_PRESET_ID] = sanitizePresetEntry(mode, createFactoryPresetForMode(mode));
+        c.activeIds[mode] = DEFAULT_PRESET_ID;
+    } else if (wasActive) {
+        c.activeIds[mode] = Object.keys(c.libraries[mode])[0];
+    }
+    return true;
+}
+
+export function renamePreset(settings, mode, scope, presetId, { name }, { context, avatar } = {}) {
+    const c = getScopeContainer(settings, scope, { context, avatar });
+    if (!c) return false;
+    const entry = c.libraries[mode]?.[presetId];
+    if (!entry) return false;
+    const next = String(name || '').trim();
+    if (!next) return false;
+    entry.name = next;
+    return true;
+}
+
+export function duplicatePreset(settings, mode, scope, sourceId, { name }, { context, avatar } = {}) {
+    const c = getScopeContainer(settings, scope, { context, avatar });
+    if (!c) return '';
+    const source = c.libraries[mode]?.[sourceId];
+    if (!source) return '';
+    const id = makePresetId();
+    c.libraries[mode][id] = structuredClone(source);
+    c.libraries[mode][id].name = String(name || `${source.name} (copy)`).trim() || `${source.name} (copy)`;
+    return id;
+}
+
+/**
+ * Replace the active preset's payload in place. The new payload is run
+ * through the mode's sanitizer; `name` is preserved (callers updating
+ * the name should use `renamePreset`).
+ */
+export function writeActivePreset(settings, mode, scope, payload, { context, avatar } = {}) {
+    const c = getScopeContainer(settings, scope, { context, avatar });
+    if (!c) return false;
+    const id = c.activeIds[mode];
+    const prev = c.libraries[mode]?.[id];
+    if (!prev) return false;
+    const sanitized = sanitizePresetEntry(mode, { ...payload, name: prev.name });
+    c.libraries[mode][id] = sanitized;
+    return true;
+}
+
+export function allModes() {
+    return [...ALL_MODES];
+}
+
+/**
+ * One-shot, idempotent migration of legacy single-slot global fields into
+ * the per-mode preset library shape. Caller is responsible for marking
+ * `settings.presetLibrariesMigrationDone = 1` and persisting; this
+ * function only mutates the in-memory `settings` object.
+ *
+ * Algorithm: for each mode, if a legacy field is present → move into
+ * `presetLibraries.<mode>.default` (with name 'Default'); delete the
+ * legacy field. If no legacy data → seed the factory default. Set
+ * `activePresetIds.<mode> = 'default'`.
+ *
+ * Idempotent: once `default` exists for a mode, subsequent calls leave
+ * it unchanged.
+ */
+export function migrateGlobalLegacyToLibraries(settings) {
+    if (!settings || typeof settings !== 'object') return;
+    if (!settings.presetLibraries) settings.presetLibraries = { spec: {}, agenda: {}, loop: {}, director: {} };
+    if (!settings.activePresetIds) settings.activePresetIds = { spec: '', agenda: '', loop: '', director: '' };
+    for (const mode of ALL_MODES) {
+        if (!settings.presetLibraries[mode]) settings.presetLibraries[mode] = {};
+        if (settings.presetLibraries[mode][DEFAULT_PRESET_ID]) {
+            if (!settings.activePresetIds[mode]) settings.activePresetIds[mode] = DEFAULT_PRESET_ID;
+            continue;
+        }
+        const seed = readLegacyGlobalForMode(settings, mode);
+        const payload = seed
+            ? { name: DEFAULT_PRESET_NAME, ...seed }
+            : createFactoryPresetForMode(mode);
+        settings.presetLibraries[mode][DEFAULT_PRESET_ID] = sanitizePresetEntry(mode, payload);
+        settings.activePresetIds[mode] = DEFAULT_PRESET_ID;
+    }
+    delete settings.loopProfile;
+    delete settings.directorProfile;
+    delete settings.orchestrationSpec;
+    delete settings.presets;
+    delete settings.agendaPlanner;
+    delete settings.agendaAgents;
+    delete settings.agendaFinalAgentId;
+    delete settings.agendaPlannerMaxRounds;
+    delete settings.agendaMaxConcurrentAgents;
+    delete settings.agendaMaxTotalRuns;
+}
+
+function readLegacyGlobalForMode(settings, mode) {
+    if (mode === ORCH_EXECUTION_MODE_LOOP) return settings.loopProfile || null;
+    if (mode === ORCH_EXECUTION_MODE_DIRECTOR) return settings.directorProfile || null;
+    if (mode === ORCH_EXECUTION_MODE_AGENDA) {
+        if (!settings.agendaPlanner && !settings.agendaAgents) return null;
+        return {
+            planner: settings.agendaPlanner,
+            agents: settings.agendaAgents,
+            finalAgentId: settings.agendaFinalAgentId,
+            limits: {
+                plannerMaxRounds: settings.agendaPlannerMaxRounds,
+                maxConcurrentAgents: settings.agendaMaxConcurrentAgents,
+                maxTotalRuns: settings.agendaMaxTotalRuns,
+            },
+        };
+    }
+    if (!settings.orchestrationSpec && !settings.presets) return null;
+    return { spec: settings.orchestrationSpec, presets: settings.presets };
+}

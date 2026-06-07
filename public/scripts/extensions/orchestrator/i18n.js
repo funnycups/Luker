@@ -588,6 +588,20 @@ export function registerLocaleData() {
         'Install all failed: ${0}': '一键安装失败：${0}',
         'Installed bundled skills (target: ${0}). ${1} new, ${2} replaced.': '已安装内置 Skills（目标：${0}）。新装 ${1} 个，替换 ${2} 个。',
         'Install failed: ${0}': '安装失败：${0}',
+        'Preset': '预设',
+        'New preset': '新建预设',
+        'Duplicate preset': '复制预设',
+        'Rename preset': '重命名预设',
+        'Delete preset': '删除预设',
+        'Export preset': '导出预设',
+        'Import preset': '导入预设',
+        'Select a character first': '请先选中角色卡',
+        'Enter a name for the new preset': '输入新预设名称',
+        'Import preset: enter a name': '导入预设：请输入名称',
+        'Delete preset "${0}"?': '确定删除预设「${0}」？',
+        'Switch active preset': '切换激活预设',
+        'When ON, this character uses its own preset library; when OFF, the global active preset applies.':
+            '开启后，本角色卡使用自己的预设库激活项；关闭则使用全局激活预设。',
     });
     addLocaleData('zh-tw', {
         'Orchestrator': '多智能體編排',
@@ -1150,5 +1164,19 @@ export function registerLocaleData() {
         'Install all failed: ${0}': '一鍵安裝失敗：${0}',
         'Installed bundled skills (target: ${0}). ${1} new, ${2} replaced.': '已安裝內建 Skills（目標：${0}）。新裝 ${1} 個，取代 ${2} 個。',
         'Install failed: ${0}': '安裝失敗：${0}',
+        'Preset': '預設',
+        'New preset': '新建預設',
+        'Duplicate preset': '複製預設',
+        'Rename preset': '重新命名預設',
+        'Delete preset': '刪除預設',
+        'Export preset': '匯出預設',
+        'Import preset': '匯入預設',
+        'Select a character first': '請先選中角色卡',
+        'Enter a name for the new preset': '輸入新預設名稱',
+        'Import preset: enter a name': '匯入預設：請輸入名稱',
+        'Delete preset "${0}"?': '確定刪除預設「${0}」？',
+        'Switch active preset': '切換激活預設',
+        'When ON, this character uses its own preset library; when OFF, the global active preset applies.':
+            '開啟後，本角色卡使用自己的預設庫激活項；關閉則使用全域激活預設。',
     });
 }
