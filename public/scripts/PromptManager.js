@@ -3488,6 +3488,18 @@ class PromptManager {
         if (existingAppendSelect instanceof HTMLSelectElement) {
             selectedPromptIndex = existingAppendSelect.selectedIndex;
         }
+        // Drop any prior Sortable instance before wiping the container —
+        // jQuery UI Sortable stashes refs to the old <li> nodes inside its
+        // own instance, so a bare innerHTML='' (followed by makeDraggable()
+        // on the freshly-built list) leaves the previous render's DOM alive
+        // as detached nodes. Heap snapshots showed 228 stale drag handles.
+        // Must run while the old list is still attached so jQuery can find it.
+        const $existingList = $(`#${this.configuration.prefix}prompt_manager_list`);
+        // @ts-ignore
+        if ($existingList.length && $existingList.sortable('instance') !== undefined) {
+            // @ts-ignore
+            $existingList.sortable('destroy');
+        }
         const promptManagerDiv = this.containerElement;
         promptManagerDiv.innerHTML = '';
 
@@ -4601,6 +4613,16 @@ class PromptManager {
         if (this._groupEditMode) return;
 
         const listSelector = `#${this.configuration.prefix}prompt_manager_list`;
+
+        // Destroy any prior Sortable instance attached to this list before
+        // re-initialising — re-init alone does not release the previous
+        // instance's internal references to the old <li> nodes (the
+        // renderPromptManagerListItems() path nukes <li>s via innerHTML='').
+        // @ts-ignore
+        if ($(listSelector).sortable('instance') !== undefined) {
+            // @ts-ignore
+            $(listSelector).sortable('destroy');
+        }
 
         $(listSelector).sortable({
             delay: this.configuration.sortableDelay,
