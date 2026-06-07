@@ -1224,6 +1224,11 @@ async function loadRegexScripts() {
 
     setMoveButtonsVisibility();
 
+    // Re-init Sortable after the lists were rebuilt; without this, jQuery UI
+    // Sortable keeps internal refs to the old <li> nodes and they linger as
+    // detached DOM until full GC (which V8 defers indefinitely under load).
+    setupRegexSortable();
+
     console.info('[Regex] Editor UI loaded', {
         requestId,
         chid: this_chid ?? null,
@@ -2657,6 +2662,81 @@ function onPresetRenamed({ apiId, oldName, newName }) {
     }
 }
 
+/**
+ * (Re-)initialize jQuery UI Sortable for the three script lists. Safe to call
+ * after every loadRegexScripts() — without re-init, Sortable's internal
+ * `instance.items` keeps references to the previous render's <li> nodes, so
+ * .empty()'d DOM stays alive as detached nodes (heap snapshots showed ~44 of
+ * each regex action button lingering across re-renders).
+ */
+function setupRegexSortable() {
+    const sortableDatas = [
+        {
+            selector: '#saved_regex_scripts',
+            setter: scripts => saveScriptsByType(scripts, SCRIPT_TYPES.GLOBAL),
+            getter: () => getScriptsByType(SCRIPT_TYPES.GLOBAL),
+        },
+        {
+            selector: '#saved_scoped_scripts',
+            setter: scripts => saveScriptsByType(scripts, SCRIPT_TYPES.SCOPED),
+            getter: () => getScriptsByType(SCRIPT_TYPES.SCOPED),
+        },
+        {
+            selector: '#saved_preset_scripts',
+            setter: scripts => saveScriptsByType(scripts, SCRIPT_TYPES.PRESET),
+            getter: () => getScriptsByType(SCRIPT_TYPES.PRESET),
+        },
+    ];
+    for (const { selector, setter, getter } of sortableDatas) {
+        const $el = $(selector);
+        // @ts-ignore
+        if ($el.sortable('instance') !== undefined) {
+            // @ts-ignore
+            $el.sortable('destroy');
+        }
+        // @ts-ignore
+        $el.sortable({
+            delay: getRegexSortableDelay(),
+            handle: '.regex-script-handle',
+            helper: (_event, ui) => buildRegexDragHelper(ui),
+            appendTo: document.body,
+            tolerance: 'pointer',
+            forcePlaceholderSize: false,
+            placeholder: 'regex-sortable-placeholder',
+            cursor: 'grabbing',
+            scroll: true,
+            scrollSensitivity: 60,
+            scrollSpeed: 18,
+            start: (_event, ui) => {
+                styleRegexDragPlaceholder(ui);
+            },
+            stop: async function () {
+                const oldScripts = getter();
+                const newScripts = [];
+                $(selector).children().each(function () {
+                    const id = $(this).attr('id');
+                    const existingScript = oldScripts.find((e) => e.id === id);
+                    if (existingScript) {
+                        newScripts.push(existingScript);
+                    }
+                });
+
+                await setter(newScripts);
+                saveSettingsDebounced();
+
+                console.debug(`Regex scripts in ${selector} reordered`);
+                await requestRegexChatReload();
+                await loadRegexScripts();
+            },
+        });
+
+        // Suppress native long-press context menu on drag handles.
+        $el
+            .off('contextmenu.regexHandle', '.regex-script-handle')
+            .on('contextmenu.regexHandle', '.regex-script-handle', (event) => event.preventDefault());
+    }
+}
+
 // Workaround for loading in sequence with other extensions
 // NOTE: Always puts extension at the top of the list, but this is fine since it's static
 export async function init() {
@@ -2864,65 +2944,7 @@ export async function init() {
         await loadRegexScripts();
     });
 
-    let sortableDatas = [
-        {
-            selector: '#saved_regex_scripts',
-            setter: scripts => saveScriptsByType(scripts, SCRIPT_TYPES.GLOBAL),
-            getter: () => getScriptsByType(SCRIPT_TYPES.GLOBAL),
-        },
-        {
-            selector: '#saved_scoped_scripts',
-            setter: scripts => saveScriptsByType(scripts, SCRIPT_TYPES.SCOPED),
-            getter: () => getScriptsByType(SCRIPT_TYPES.SCOPED),
-        },
-        {
-            selector: '#saved_preset_scripts',
-            setter: scripts => saveScriptsByType(scripts, SCRIPT_TYPES.PRESET),
-            getter: () => getScriptsByType(SCRIPT_TYPES.PRESET),
-        },
-    ];
-    for (const { selector, setter, getter } of sortableDatas) {
-        // @ts-ignore
-        $(selector).sortable({
-            delay: getRegexSortableDelay(),
-            handle: '.regex-script-handle',
-            helper: (_event, ui) => buildRegexDragHelper(ui),
-            appendTo: document.body,
-            tolerance: 'pointer',
-            forcePlaceholderSize: false,
-            placeholder: 'regex-sortable-placeholder',
-            cursor: 'grabbing',
-            scroll: true,
-            scrollSensitivity: 60,
-            scrollSpeed: 18,
-            start: (_event, ui) => {
-                styleRegexDragPlaceholder(ui);
-            },
-            stop: async function () {
-                const oldScripts = getter();
-                const newScripts = [];
-                $(selector).children().each(function () {
-                    const id = $(this).attr('id');
-                    const existingScript = oldScripts.find((e) => e.id === id);
-                    if (existingScript) {
-                        newScripts.push(existingScript);
-                    }
-                });
-
-                await setter(newScripts);
-                saveSettingsDebounced();
-
-                console.debug(`Regex scripts in ${selector} reordered`);
-                await requestRegexChatReload();
-                await loadRegexScripts();
-            },
-        });
-
-        // Suppress native long-press context menu on drag handles.
-        $(selector)
-            .off('contextmenu.regexHandle', '.regex-script-handle')
-            .on('contextmenu.regexHandle', '.regex-script-handle', (event) => event.preventDefault());
-    }
+    setupRegexSortable();
 
     $('#regex_scoped_toggle').on('input', function () {
         if (this_chid === undefined) {
