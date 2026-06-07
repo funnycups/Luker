@@ -40,6 +40,7 @@ const updateWorldInfoList = __ctx.updateWorldInfoList;
 const getCharaAuxWorlds = __ctx.getCharaAuxWorlds;
 const getChatWorldInfoNames = __ctx.chatWorldInfo.getNames;
 const getCharaFilename = __ctx.getCharaFilename;
+const registerExtensionApi = __ctx.registerExtensionApi;
 
 
 const MODULE_NAME = 'character_editor_assistant';
@@ -4168,4 +4169,15 @@ jQuery(async () => {
             notifyError(String(error?.message || error));
         }
     });
+});
+
+// Helper-tool APIs consumed by orchestrator iter-studio and memory-graph
+// schema iter-studio popups. Sibling plugins reach for these via
+// `Luker.getContext().getExtensionApi('character-editor-assistant')`
+// — direct ES-module import from another plugin is forbidden by the
+// plugin↔plugin boundary rule.
+registerExtensionApi('character-editor-assistant', {
+    buildCharacterEditorHelperApis,
+    runCharacterEditorHelperToolCall,
+    applyCharacterEditorLorebookProposal,
 });
