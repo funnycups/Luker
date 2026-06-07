@@ -186,6 +186,11 @@ import {
     rehydrateBridgedSillyTavernTools,
 } from './register-custom-tool.js';
 import { registerSkillOrchestrationTools } from './skill-orchestration-tools.js';
+import {
+    SKILL_ITER_STUDIO_TOOL_DEFS,
+    isSkillIterStudioTool,
+    runSkillIterStudioTool,
+} from './skill-iter-studio-tools.js';
 import { openCustomToolEditor } from './custom-tool-editor.js';
 import { openBridgeStToolPicker } from './bridge-st-tool-picker.js';
 import { augmentStudioPromptWithCustomTools } from './studio-prompt-augment.js';
@@ -289,6 +294,25 @@ registerExtensionApi(MODULE_NAME, {
     bridgeSillyTavernTool,
     unbridgeSillyTavernTool,
     listAvailableSillyTavernTools,
+    // Per-character override accessors (character-overrides.js). Plugins
+    // that want to read or pin a character's orchestration override go
+    // through this surface — direct ES-module import from a sibling
+    // plugin is forbidden by the plugin↔plugin boundary rule.
+    getCharacterOverrideByAvatar,
+    getCharacterIndexByAvatar,
+    getCharacterExtensionDataByAvatar,
+    normalizeCharacterOverrideMode,
+    applyCharacterExecutionModeForAvatar,
+    // Character-card extension write path (editor-persist.js). Pair with
+    // the override accessors above when persisting an override edited by
+    // a sibling plugin.
+    persistOrchestratorCharacterExtension,
+    // Iter-studio skill management tool catalog (skill-iter-studio-tools.js).
+    // Exposed so CPA can splice the same tool defs into its preset
+    // iteration studio without importing across the plugin boundary.
+    get SKILL_ITER_STUDIO_TOOL_DEFS() { return SKILL_ITER_STUDIO_TOOL_DEFS; },
+    isSkillIterStudioTool,
+    runSkillIterStudioTool,
 });
 // Module-scope cache for the director content payload captured at
 // GENERATE_TAKEOVER_DISPATCH. Director's main + sub agents read from this
