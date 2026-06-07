@@ -2576,9 +2576,10 @@ function registerWorldInfoSlashCommands() {
         wiUids: (/** @type {import('./slash-commands/SlashCommandExecutor.js').SlashCommandExecutor} */ executor) => {
             const file = executor.namedArgumentList.find(it => it.name == 'file')?.value;
             if (file instanceof SlashCommandClosure) throw new Error('Argument \'file\' does not support closures');
-            // Try find world from cache
-            if (!worldInfoCache.has(file)) return [];
-            const world = worldInfoCache.get(file);
+            // Try find world from cache (cache keys are trimmed; see `cacheWorldInfoData`)
+            const cacheKey = String(file || '').trim();
+            if (!cacheKey || !worldInfoCache.has(cacheKey)) return [];
+            const world = worldInfoCache.get(cacheKey);
             if (!world) return [];
             return Object.entries(world.entries).map(([uid, data]) =>
                 new SlashCommandEnumValue(uid, `${data.comment ? `${data.comment}: ` : ''}${data.key.join(', ')}${data.keysecondary?.length ? ` [${Object.entries(world_info_logic).find(([_, value]) => value == data.selectiveLogic)[0]}] ${data.keysecondary.join(', ')}` : ''} [${getWiPositionString(data)}]`,
@@ -3176,8 +3177,16 @@ export async function updateWorldInfoList() {
 }
 
 function cacheWorldInfoData(name, data, { invalidateSearch = false } = {}) {
-    worldInfoCache.set(name, data);
-    rememberWorldInfoSnapshot(name, data);
+    // Cache keys are trimmed so writes from raw card-supplied names match
+    // reads from `loadWorldInfoBatch` (which always trims) — otherwise an
+    // import of a book whose name has trailing whitespace splits the cache
+    // and the editor opens against an unrelated entry.
+    const key = String(name || '').trim();
+    if (!key) {
+        return;
+    }
+    worldInfoCache.set(key, data);
+    rememberWorldInfoSnapshot(key, data);
     if (invalidateSearch) {
         invalidateWorldInfoManagerEntrySearch();
     }
@@ -8142,15 +8151,21 @@ export async function saveWorldInfo(name, data, immediately = false, options = {
         return;
     }
 
+    // Trim so eager cache writes match the trimmed reads in `loadWorldInfoBatch`.
+    const normalizedName = String(name).trim();
+    if (!normalizedName) {
+        return;
+    }
+
     // Update cache immediately, so any future call can pull from this
-    worldInfoCache.set(name, data);
+    worldInfoCache.set(normalizedName, data);
     const normalizedOptions = normalizeWorldInfoSaveOptions(options);
 
     if (immediately) {
-        return await _save(name, data, normalizedOptions);
+        return await _save(normalizedName, data, normalizedOptions);
     }
 
-    saveWorldDebounced(name, data, normalizedOptions);
+    saveWorldDebounced(normalizedName, data, normalizedOptions);
 }
 
 async function renameWorldInfo(name, data) {
