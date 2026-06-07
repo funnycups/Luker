@@ -120,7 +120,7 @@ loop.finalize -> out
 | `memory_edge_summary(node_id, edge_types?, limit?)` | 仅返回边摘要 `{ degree, relations, sample_neighbors }`。只想判断"这是不是个 hub"而不要整个 brief 时用。 | `memory_edge_summary({ node_id: 'evt_42' })` 只取拓扑信号。 |
 | `memory_expand_seeds(seed_ids, hops?, edge_types?, include_children?)` | 从种子 id 沿子节点 + 投影边做 BFS 扩展。当某节点主题相关但具体细节大概率在子节点或相关 rollup 时用。 | `memory_expand_seeds({ seed_ids: ['evt_42'], hops: 1, include_children: true })` 浮现 `evt_42` 的子节点。 |
 | `memory_schema()` | 一轮一次：有哪些节点类型，哪些字段是 key vs detail，哪些类型走 hierarchical compression。让你能正确解读其他 memory_* 工具的返回。 | 召回开始前 `memory_schema()` 一次，了解可用的类型集。 |
-| `search_search(query)` | **联网搜索**，转发给 [Search Tools](/zh-CN/features/search-tools) 插件（DuckDuckGo / SearXNG / Brave）。默认开启，但需要 search-tools 扩展已加载并配好 provider——否则 Agent 会收到 `SEARCH_UNAVAILABLE` / `SEARCH_DISABLED` 并自行改用其他工具。 | `search_search('某某新闻最新进展')` 返回 provider 形态的结果（通常是 `{title, url, snippet}` 列表）。 |
+| `search_search(query)` | **联网搜索**，转发给 [Search Tools](/zh-CN/features/search-tools) 插件（DuckDuckGo / SearXNG / Brave）。需要 search-tools 扩展已加载并配好 provider；否则 Agent 会收到 `SEARCH_UNAVAILABLE` 并自行改用其他工具。 | `search_search('某某新闻最新进展')` 返回 provider 形态的结果（通常是 `{title, url, snippet}` 列表）。 |
 | `search_visit(url)` | 抓取 `search_search` 命中的某个页面，返回可读正文。 | 拿到搜索结果后，`search_visit('https://example.com/article')` 把整篇正文拉回来。 |
 | `finalize(capsule_text)` | **终止信号**（强制启用）。`capsule_text` 直接注入主模型 prompt。 | `finalize('林晚此刻心情焦虑:刚得知外祖母身世,可能在下一句对白中引出洛阳话题。')` |
 
@@ -242,8 +242,8 @@ A：不会——笔记保存在当前 chat 的持久化状态里。floor-state �
 **Q：连续 3 轮不调工具被打断了怎么办？**
 A：检查 system prompt 是否给了 agent 明确的「产出格式」。多数情况是 agent 在「思考」但不知道何时该 finalize；在 prompt 里加一条「当你掌握的信息足以写出 capsule 时，立即调用 finalize」通常能解决。
 
-**Q：勾选了 `search_search`，Agent 却收到 `SEARCH_UNAVAILABLE` / `SEARCH_DISABLED`?**
-A:web 工具是把请求转发给 [Search Tools](/zh-CN/features/search-tools) 插件的。`SEARCH_UNAVAILABLE` 表示插件没加载；`SEARCH_DISABLED` 表示插件加载了但被关掉了。打开 search-tools 设置面板，选好 provider（DuckDuckGo / SearXNG / Brave）、把总开关打开，再重试即可。
+**Q：勾选了 `search_search`，Agent 却收到 `SEARCH_UNAVAILABLE`?**
+A：web 工具是把请求转发给 [Search Tools](/zh-CN/features/search-tools) 插件的，而该插件未加载。装好并启用 search-tools 扩展、配好 provider（DuckDuckGo / SearXNG / Brave）后重试即可。
 
 ## 性能 trade-off
 

@@ -121,31 +121,19 @@ describe('search-tools orchestrator tools', () => {
         }
     });
 
-    test('exec surfaces SEARCH_DISABLED when the adapter reports the plugin is off', async () => {
+    test('exec ignores the plugin enabled / preRequestEnabled flags (those gate unrelated internal surfaces)', async () => {
         await registerSearchToolsOrchestrationTools();
         const reg = __getExtensionRegistryForTest();
         const adapter = {
-            getSettings: () => ({ enabled: false }),
-            search: async () => ({ results: [] }),
-            visit: async () => ({ content: '' }),
+            getSettings: () => ({ enabled: false, preRequestEnabled: false }),
+            search: async (args) => ({ ok: true, query: args?.query }),
+            visit: async (args) => ({ ok: true, url: args?.url }),
         };
         const ctx = { __searchAdapter: adapter };
-        for (const [name, args] of [
-            ['search_search', { query: 'capybara' }],
-            ['search_visit', { url: 'https://example.com' }],
-        ]) {
-            let caught = null;
-            try {
-                await reg.get(name).exec(args, ctx);
-            } catch (err) {
-                caught = err;
-            }
-            expect(caught).not.toBeNull();
-            expect(caught.name).toBe('ToolError');
-            expect(caught.code).toBe('SEARCH_DISABLED');
-            expect(typeof caught.hint).toBe('string');
-            expect(caught.hint.length).toBeGreaterThan(0);
-        }
+        const searchOut = await reg.get('search_search').exec({ query: 'capybara' }, ctx);
+        const visitOut = await reg.get('search_visit').exec({ url: 'https://example.com' }, ctx);
+        expect(searchOut).toEqual({ ok: true, query: 'capybara' });
+        expect(visitOut).toEqual({ ok: true, url: 'https://example.com' });
     });
 
     test('exec wraps non-ToolError adapter failures as SEARCH_FAILED', async () => {

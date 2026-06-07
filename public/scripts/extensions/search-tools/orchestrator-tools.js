@@ -56,18 +56,6 @@ function assertAdapterReady(adapter) {
             'Ensure the search-tools extension is enabled, then retry.',
         );
     }
-    if (typeof adapter.getSettings === 'function') {
-        let settings = null;
-        try { settings = adapter.getSettings(); } catch { settings = null; }
-        const enabled = Boolean(settings?.enabled || settings?.preRequestEnabled);
-        if (!enabled) {
-            throw new ToolError(
-                'Web search is disabled in plugin settings.',
-                'SEARCH_DISABLED',
-                'Open the search-tools settings panel and enable the plugin (or its pre-request mode), then retry.',
-            );
-        }
-    }
 }
 
 function buildOpts(context) {

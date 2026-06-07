@@ -120,7 +120,7 @@ loop.finalize -> out
 | `memory_edge_summary(node_id, edge_types?, limit?)` | 只回傳邊摘要 `{ degree, relations, sample_neighbors }`。只想判斷「這是不是個 hub」而不要整個 brief 時用。 | `memory_edge_summary({ node_id: 'evt_42' })` 只取拓撲訊號。 |
 | `memory_expand_seeds(seed_ids, hops?, edge_types?, include_children?)` | 從種子 id 沿子節點 + 投影邊做 BFS 擴展。當某節點主題相關但具體細節大機率在子節點或相關 rollup 時用。 | `memory_expand_seeds({ seed_ids: ['evt_42'], hops: 1, include_children: true })` 浮現 `evt_42` 的子節點。 |
 | `memory_schema()` | 一輪一次：有哪些節點型別，哪些欄位是 key vs detail，哪些型別走 hierarchical compression。讓你能正確解讀其他 memory_* 工具的回傳。 | 召回開始前 `memory_schema()` 一次，瞭解可用的型別集。 |
-| `search_search(query)` | **聯網搜尋**，轉發給 [Search Tools](/zh-TW/features/search-tools) 外掛（DuckDuckGo / SearXNG / Brave）。預設開啟，但需要 search-tools 擴展已載入並設定好 provider——否則 Agent 會收到 `SEARCH_UNAVAILABLE` / `SEARCH_DISABLED` 並自行改用其他工具。 | `search_search('某某新聞最新進展')` 返回 provider 形態的結果（通常是 `{title, url, snippet}` 列表）。 |
+| `search_search(query)` | **聯網搜尋**，轉發給 [Search Tools](/zh-TW/features/search-tools) 外掛（DuckDuckGo / SearXNG / Brave）。需要 search-tools 擴展已載入並設定好 provider；否則 Agent 會收到 `SEARCH_UNAVAILABLE` 並自行改用其他工具。 | `search_search('某某新聞最新進展')` 返回 provider 形態的結果（通常是 `{title, url, snippet}` 列表）。 |
 | `search_visit(url)` | 抓取 `search_search` 命中的某個頁面，返回可讀正文。 | 拿到搜尋結果後，`search_visit('https://example.com/article')` 把整篇正文拉回來。 |
 | `finalize(capsule_text)` | **終止訊號**（強制啟用）。`capsule_text` 直接注入主模型 prompt。 | `finalize('林晚此刻心情焦慮:剛得知外祖母身世,可能在下一句對白中引出洛陽話題。')` |
 
@@ -242,8 +242,8 @@ A：不會——便箋保存在當前 chat 的持久化狀態裡。floor-state �
 **Q：連續 3 輪不呼叫工具被打斷了怎麼辦？**
 A：檢查 system prompt 是否給了 agent 明確的「產出格式」。多數情況是 agent 在「思考」但不知道何時該 finalize；在 prompt 裡加一條「當你掌握的資訊足以寫出 capsule 時，立即呼叫 finalize」通常能解決。
 
-**Q：勾選了 `search_search`，Agent 卻收到 `SEARCH_UNAVAILABLE` / `SEARCH_DISABLED`?**
-A:web 工具是把請求轉發給 [Search Tools](/zh-TW/features/search-tools) 外掛的。`SEARCH_UNAVAILABLE` 表示外掛沒載入；`SEARCH_DISABLED` 表示外掛載入了但被關掉了。打開 search-tools 設定面板，選好 provider（DuckDuckGo / SearXNG / Brave）、把總開關打開，再重試即可。
+**Q：勾選了 `search_search`，Agent 卻收到 `SEARCH_UNAVAILABLE`?**
+A：web 工具是把請求轉發給 [Search Tools](/zh-TW/features/search-tools) 外掛的，而該外掛未載入。裝好並啟用 search-tools 擴展、設定好 provider（DuckDuckGo / SearXNG / Brave）後重試即可。
 
 ## 效能 trade-off
 

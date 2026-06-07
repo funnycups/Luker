@@ -120,7 +120,7 @@ Tools follow the OpenAI function-calling protocol; results come back as `role: t
 | `memory_edge_summary(node_id, edge_types?, limit?)` | Edge summary alone: `{ degree, relations, sample_neighbors }`. Use when you only need "is this node a hub?" without the full brief. | `memory_edge_summary({ node_id: 'evt_42' })` returns just the topology signal. |
 | `memory_expand_seeds(seed_ids, hops?, edge_types?, include_children?)` | BFS expansion from seed ids along children + projected edges. Use when a brief suggests a node is topically relevant but richer detail likely lives in its children or related rollup. | `memory_expand_seeds({ seed_ids: ['evt_42'], hops: 1, include_children: true })` surfaces children of `evt_42`. |
 | `memory_schema()` | Once-per-round read: which node types exist, which fields are key vs detail, which types use hierarchical compression. The schema lets you interpret what the other memory tools return. | `memory_schema()` at the start of a recall pass to understand the available types. |
-| `search_search(query)` | **Web search** via the [Search Tools](/features/search-tools) plugin (DuckDuckGo / SearXNG / Brave). Default on, but the search-tools extension must be loaded and have a provider configured — otherwise the agent receives `SEARCH_UNAVAILABLE` / `SEARCH_DISABLED` and pivots. | `search_search('latest news on …')` returns provider-shaped results (typically `{title, url, snippet}`). |
+| `search_search(query)` | **Web search** via the [Search Tools](/features/search-tools) plugin (DuckDuckGo / SearXNG / Brave). Requires the search-tools extension loaded with a provider configured; otherwise the agent receives `SEARCH_UNAVAILABLE` and pivots. | `search_search('latest news on …')` returns provider-shaped results (typically `{title, url, snippet}`). |
 | `search_visit(url)` | Fetch one page discovered via `search_search` and return its readable text. | After a search hit, `search_visit('https://example.com/article')` pulls the full article body. |
 | `finalize(capsule_text)` | **Terminator** (forced on). `capsule_text` becomes the capsule injected into the main model. | `finalize('Lin Wan is anxious right now: she just learned about her grandmother and may steer the next exchange to Luoyang.')` |
 
@@ -242,8 +242,8 @@ A: No — notes live in the current chat's persistent state. Floor-state's settl
 **Q: My loop got cut off after three rounds without tool calls — what now?**
 A: Check whether the system prompt gives the agent a clear "output shape". Most of the time the agent is "thinking" but not sure when to call `finalize`; adding "as soon as you have enough information to write the capsule, call `finalize` immediately" usually fixes it.
 
-**Q: I enabled `search_search` but the agent gets `SEARCH_UNAVAILABLE` / `SEARCH_DISABLED` — why?**
-A: The web tools forward to the [Search Tools](/features/search-tools) plugin. `SEARCH_UNAVAILABLE` means the plugin isn't loaded; `SEARCH_DISABLED` means it's loaded but disabled in its settings. Open the search-tools panel, pick a provider (DuckDuckGo / SearXNG / Brave), turn the master switch on, then retry.
+**Q: I enabled `search_search` but the agent gets `SEARCH_UNAVAILABLE` — why?**
+A: The web tools forward to the [Search Tools](/features/search-tools) plugin, which isn't loaded. Install / enable the search-tools extension and configure a provider (DuckDuckGo / SearXNG / Brave), then retry.
 
 ## Performance trade-offs
 
