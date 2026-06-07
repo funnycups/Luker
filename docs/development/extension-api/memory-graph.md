@@ -84,6 +84,36 @@ For full signatures of each method, see the **Read API** and **Write API** secti
 
 `getMemoryGraphReadApi(store, context)` and `getMemoryGraphWriteApi(store, context)` remain exported for internal callers that already hold a store reference (e.g. the native `chooseRecallRoute` pipeline). Third-party extensions should prefer `openSession` — the session facade handles store loading, fresh-chat fallback, and registration through Luker's standard extension api in one place.
 
+## Per-character override accessors
+
+Alongside `openSession`, the `'memory-graph'` extension api publishes six accessors that other plugins can use to read or persist a character-bound override on the active card. The same surface backs CardApp's `ctx.getMemoryGraphSchema` / `setMemoryGraphSchema` / `setMemoryGraphAdvanced` and the CardApp Studio tools `character_get_memory_graph` / `character_update_memory_graph_schema` / `character_update_memory_graph_advanced`.
+
+```js
+const mg = ctx.getExtensionApi('memory-graph');
+if (!mg) { /* memory-graph not installed */ return; }
+
+const schemaInfo = mg.getSchemaScopeInfo(ctx);
+const advancedInfo = mg.getAdvancedScopeInfo(ctx);
+
+await mg.persistCharacterSchemaOverride(ctx, avatar, schema);
+await mg.removeCharacterSchemaOverride(ctx, avatar);
+
+await mg.persistCharacterAdvancedOverride(ctx, avatar, advancedSettings);
+await mg.removeCharacterAdvancedOverride(ctx, avatar);
+```
+
+| Method | Returns | Purpose |
+| --- | --- | --- |
+| `getSchemaScopeInfo(ctx, settings?)` | `{ avatar, hasAvatar, characterName, hasOverride, scope, schema }` | Resolve the effective node-type schema for the active card, with a `scope` flag distinguishing `'character'` override vs `'global'` fallback. |
+| `getAdvancedScopeInfo(ctx, settings?)` | `{ avatar, hasAvatar, characterName, hasOverride, scope, settings }` | Same shape, but for the advanced settings (recall layout, compression knobs, etc.). |
+| `persistCharacterSchemaOverride(ctx, avatar, schema)` | `Promise<boolean>` | Write `schema` as the per-character override on `avatar`. Sanitized through `normalizeNodeTypeSchema` first. |
+| `removeCharacterSchemaOverride(ctx, avatar)` | `Promise<boolean>` | Delete the schema override and fall back to the global schema. |
+| `persistCharacterAdvancedOverride(ctx, avatar, advanced)` | `Promise<boolean>` | Write `advanced` as the per-character advanced-settings override. Sanitized through `normalizeAdvancedSettings`. |
+| `removeCharacterAdvancedOverride(ctx, avatar)` | `Promise<boolean>` | Delete the advanced override and fall back to the global advanced settings. |
+
+These accessors only touch the character card (`character.data.extensions.memory_graph.{schemaOverride,advancedOverride}`); they never mutate the global memory-graph settings.
+
+
 ## Overview
 
 The memory-graph extension drives Luker's long-term recall by feeding a curated pool of nodes (`character_sheet`, `event`, `relationship`, ...) plus a per-node `edge_summary` to a "route" LLM that picks which memories to inject into the next turn. The native pipeline (`chooseRecallRoute` / `collectRootCandidates` in `main.js`) constructs that LLM input from internal helpers — `buildProjectedEdges`, `getNearestVisibleAncestorId`, `formatNodeBrief`, etc.

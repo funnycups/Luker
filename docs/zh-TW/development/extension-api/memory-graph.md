@@ -84,6 +84,36 @@ orchestrator 的 `memory_*` loop 工具會把 `null` 會話翻譯成 `ToolError(
 
 `getMemoryGraphReadApi(store, context)` 與 `getMemoryGraphWriteApi(store, context)` 仍然匯出，供已經持有 store 參照的內部呼叫端使用（例如原生 `chooseRecallRoute` 流水線）。第三方擴充應優先使用 `openSession` —— 會話外觀把 store 載入、空聊天兜底、透過 Luker 標準 extension api 的註冊都收在了一處。
 
+## 角色級 override 存取器
+
+除了 `openSession`，`'memory-graph'` 這個 extension api 還發布了六個存取器，給其他擴充用於讀取或寫入活動角色卡上的 character-bound override。CardApp 的 `ctx.getMemoryGraphSchema` / `setMemoryGraphSchema` / `setMemoryGraphAdvanced`，以及 CardApp Studio 的工具 `character_get_memory_graph` / `character_update_memory_graph_schema` / `character_update_memory_graph_advanced` 都走這同一套介面。
+
+```js
+const mg = ctx.getExtensionApi('memory-graph');
+if (!mg) { /* 記憶圖未安裝 */ return; }
+
+const schemaInfo = mg.getSchemaScopeInfo(ctx);
+const advancedInfo = mg.getAdvancedScopeInfo(ctx);
+
+await mg.persistCharacterSchemaOverride(ctx, avatar, schema);
+await mg.removeCharacterSchemaOverride(ctx, avatar);
+
+await mg.persistCharacterAdvancedOverride(ctx, avatar, advancedSettings);
+await mg.removeCharacterAdvancedOverride(ctx, avatar);
+```
+
+| 方法 | 回傳 | 用途 |
+| --- | --- | --- |
+| `getSchemaScopeInfo(ctx, settings?)` | `{ avatar, hasAvatar, characterName, hasOverride, scope, schema }` | 解析活動角色當前生效的節點類型 schema；`scope` 欄位標記是 `'character'` override 還是回退到 `'global'`。 |
+| `getAdvancedScopeInfo(ctx, settings?)` | `{ avatar, hasAvatar, characterName, hasOverride, scope, settings }` | 同樣的形狀，針對的是進階設定（召回排版、壓縮參數等）。 |
+| `persistCharacterSchemaOverride(ctx, avatar, schema)` | `Promise<boolean>` | 把 `schema` 作為 `avatar` 的角色級 override 寫入；寫入前會先過 `normalizeNodeTypeSchema`。 |
+| `removeCharacterSchemaOverride(ctx, avatar)` | `Promise<boolean>` | 刪除 schema override，回退到全域 schema。 |
+| `persistCharacterAdvancedOverride(ctx, avatar, advanced)` | `Promise<boolean>` | 把 `advanced` 作為角色級進階設定 override 寫入；寫入前會先過 `normalizeAdvancedSettings`。 |
+| `removeCharacterAdvancedOverride(ctx, avatar)` | `Promise<boolean>` | 刪除進階 override，回退到全域進階設定。 |
+
+這些存取器只動角色卡（`character.data.extensions.memory_graph.{schemaOverride,advancedOverride}`），從來不修改全域記憶圖設定。
+
+
 ## 概覽
 
 記憶圖擴充驅動 Luker 的長期召回 —— 它把精選後的節點池（`character_sheet`、`event`、`relationship`、……）加上每個節點的 `edge_summary` 餵給一個「路由」LLM，由它挑出下一輪要注入哪些記憶。原生流水線（`main.js` 中的 `chooseRecallRoute` / `collectRootCandidates`）透過一組內部 helper —— `buildProjectedEdges`、`getNearestVisibleAncestorId`、`formatNodeBrief` 等等 —— 構造出 LLM 輸入。

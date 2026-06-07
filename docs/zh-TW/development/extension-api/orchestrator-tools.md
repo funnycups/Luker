@@ -101,6 +101,50 @@ throw Object.assign(new Error('Database is read-only.'), {
 
 如果你想精確控制 mode 和 simulate 語意，就用 `registerOrchestrationTool` 包一層；不在意的話橋接是零成本路徑。選擇器的標籤和模式選項透過 `listAvailableSillyTavernTools()` / `bridgeSillyTavernTool(name, { mode })` 暴露，呼叫方想自己驅動橋接也行。
 
+## 角色級 override 存取器
+
+除了工具註冊介面，`'orchestrator'` 這個 extension api 還發布了六個存取器加一個寫入 helper，其他擴充用它讀取或寫入角色級編排 override。CardApp 的 `ctx.getOrchestratorOverride` / `setOrchestratorOverride` / `clearOrchestratorOverride`，以及 CardApp Studio 的工具 `character_get_orchestrator` / `character_update_orchestrator` / `character_clear_orchestrator` 都走這同一套介面。
+
+```js
+const orch = ctx.getExtensionApi('orchestrator');
+if (!orch) { /* 編排器未安裝 */ return; }
+
+const override = orch.getCharacterOverrideByAvatar(ctx, avatar);
+const charIndex = orch.getCharacterIndexByAvatar(ctx, avatar);
+const prev = orch.getCharacterExtensionDataByAvatar(ctx, avatar);
+
+const next = orch.normalizeCharacterOverrideMode({ ...override, mode: 'agenda' });
+await orch.persistOrchestratorCharacterExtension(ctx, charIndex, { ...prev, override: next });
+
+// 同步 extension_settings.orchestrator.executionMode，讓 dispatcher 下次生成
+// 時挑到 override 的分支。不做這一步的話，切換 mode 的 override 會被執行期
+// 靜默忽略。
+orch.applyCharacterExecutionModeForAvatar(ctx, ctx.extensionSettings?.orchestrator, avatar);
+```
+
+| 方法 | 用途 |
+| --- | --- |
+| `getCharacterOverrideByAvatar(ctx, avatar)` | 讀取 `avatar` 對應角色卡上的 `character.data.extensions.orchestrator.override` 原始 payload；不存在時回傳 `null`。 |
+| `getCharacterIndexByAvatar(ctx, avatar)` | 解析 `persistOrchestratorCharacterExtension` 需要的角色索引；找不到回傳 `-1`。 |
+| `getCharacterExtensionDataByAvatar(ctx, avatar)` | 讀取完整的 `character.data.extensions.orchestrator` blob（override 及其他兄弟鍵）。寫入前 spread 一下，避免誤刪兄弟子鍵。 |
+| `normalizeCharacterOverrideMode(override)` | 根據存在的子 payload（`spec` / `agenda` / `loop` / `director`）和最新的 `updatedAt` 釘住 `override.mode`。會原地修改 override 並回傳它。 |
+| `applyCharacterExecutionModeForAvatar(ctx, settings, avatar)` | 把 `settings.executionMode` 重新對齊到該角色已儲存的 mode；變動時回傳 `true`。 |
+| `persistOrchestratorCharacterExtension(ctx, characterIndex, modulePayload)` | 透過 `ctx.writeExtensionField` 持久化整個 `extensions.orchestrator` blob。傳 `null` 作為 `modulePayload` 會把整個 blob 刪除；成功回傳 `true`。 |
+
+這些存取器只動角色卡，從來不修改全域編排器設定。
+
+## Iter-studio 技能工具目錄
+
+編排器的 iter-studio 彈窗用一組技能管理工具（庫存查詢、創作、策略繫結、遷移 helper），其他 iter-studio 風格的彈窗可以把它們 splice 進自己的工具目錄。Extension api 上有三個屬性暴露這個目錄：
+
+| 屬性 | 型別 | 用途 |
+| --- | --- | --- |
+| `SKILL_ITER_STUDIO_TOOL_DEFS` | `readonly array` | OpenAI 形狀的工具定義（編排器 iter-studio 暴露的 17 個 `skill_*` 工具）。按 `function.name` 過濾出彈窗想要的子集。 |
+| `isSkillIterStudioTool(name)` | `(string) => boolean` | 判斷一個工具呼叫名是否屬於技能工具的判定式。 |
+| `runSkillIterStudioTool(call, mutationCtx)` | `async ({name, args}, {getWorkingProfile}) => result` | 單次技能工具呼叫的分發器。純庫存 / 創作 / 遷移 handler 忽略 `mutationCtx`；策略繫結類 handler（`skill_bind_to_agent` / `skill_unbind_from_agent` / `skill_set_mode_defaults` / `skill_replace_in_systemprompt`）則要求 `getWorkingProfile()` 回傳一個可變的編排器工作 profile。 |
+
+CPA 的迭代工作台消費了這套介面，把與 profile 無關的技能工具 splice 進自己的 preset iter-studio（見 `completion-preset-assistant/cpa-iteration/tools.js`）。沒有編排器工作 profile 的兄弟彈窗傳 `{ getWorkingProfile: () => null }`，只暴露與 profile 無關的 handler。
+
 ## 範例 —— memory-graph
 
 memory-graph 擴充正是透過這套 API 發布它的讀 / 寫工具，pattern 如下：
