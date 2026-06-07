@@ -184,7 +184,6 @@ object LukerCrashCapture {
         ApplicationExitInfo.REASON_ANR,
         ApplicationExitInfo.REASON_LOW_MEMORY,
         ApplicationExitInfo.REASON_DEPENDENCY_DIED,
-        ApplicationExitInfo.REASON_SIGNALED,
         ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE,
         ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> true
         else -> false
@@ -234,9 +233,6 @@ object LukerCrashCapture {
             }
             ApplicationExitInfo.REASON_LOW_MEMORY -> {
                 "trace: <Android killed the process because the device was low on memory; no stack trace is produced for this reason>"
-            }
-            ApplicationExitInfo.REASON_SIGNALED -> {
-                "trace: <process was killed by a signal; no stack trace is produced for this reason. If the WebView renderer died, see the WebView crash dialog instead>"
             }
             ApplicationExitInfo.REASON_DEPENDENCY_DIED -> {
                 "trace: <a bound service dependency died; no stack trace is produced for this reason>"

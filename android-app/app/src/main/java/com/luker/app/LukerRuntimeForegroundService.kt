@@ -10,7 +10,6 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import android.os.Process
 import androidx.core.app.NotificationCompat
 import kotlin.system.exitProcess
 
@@ -22,7 +21,6 @@ class LukerRuntimeForegroundService : Service() {
         if (ACTION_EXIT_APP == action) {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
-            Process.killProcess(Process.myPid())
             exitProcess(0)
         }
 
