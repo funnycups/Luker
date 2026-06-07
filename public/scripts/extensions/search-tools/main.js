@@ -2836,9 +2836,16 @@ jQuery(() => {
     ensureUi();
     // search-tools publishes its 2 read tools into the orchestrator's
     // Layer-2 registry so any of the four orchestration modes can
-    // dispatch them. Fire-and-forget — when the orchestrator extension
-    // isn't loaded the call is a silent no-op.
-    void registerSearchToolsOrchestrationTools();
+    // dispatch them. Deferred to APP_READY because search-tools is
+    // loaded at loading_order 109 — before orchestrator (110) — so the
+    // sync `getExtensionApi('orchestrator')` lookup inside
+    // `registerSearchToolsOrchestrationTools` would see no API yet if
+    // invoked from this jQuery ready handler. By APP_READY, every
+    // extension's top-level `registerExtensionApi` has already run.
+    // Silent no-op when orchestrator isn't installed.
+    eventSource.on(event_types.APP_READY, () => {
+        registerSearchToolsOrchestrationTools();
+    });
     void loadSearchToolsChatState(context, { force: true })
         .then(() => syncSharedLorebookForCurrentChat(context))
         .finally(() => refreshUiStatusForCurrentChat());
