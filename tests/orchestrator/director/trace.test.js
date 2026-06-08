@@ -35,7 +35,7 @@ function makeDirectorTrace() {
         status: 'running',
         mode: 'director',
         director: {
-            mainAgent: { rounds: [], conversation: { messages: [] } },
+            mainAgent: { conversation: { messages: [] }, failedRounds: [] },
             subagents: [],
         },
         events: [],
@@ -46,7 +46,7 @@ function makeDirectorTrace() {
 }
 
 describe('director runtime trace', () => {
-    test('main agent rounds are appended to trace.director.mainAgent.rounds', async () => {
+    test('main agent rounds are visible via conversation messages with _round + reasoning', async () => {
         const { chat, handle } = makeHandle();
         const trace = makeDirectorTrace();
         const ev = {
@@ -83,20 +83,26 @@ describe('director runtime trace', () => {
             },
         });
 
-        // Two LLM calls → two recorded rounds.
-        expect(trace.director.mainAgent.rounds).toHaveLength(2);
-        expect(trace.director.mainAgent.rounds[0]).toEqual(expect.objectContaining({
-            round: 0,
-            assistantText: 'thinking before action',
+        const msgs = trace.director.mainAgent.conversation.messages;
+        // Two LLM calls → two assistant turns in the conversation,
+        // tagged with sequential `_round` numbers.
+        const assistantTurns = msgs.filter(m => m.role === 'assistant');
+        expect(assistantTurns).toHaveLength(2);
+        expect(assistantTurns[0]).toEqual(expect.objectContaining({
+            _round: 0,
+            content: 'thinking before action',
         }));
-        expect(Array.isArray(trace.director.mainAgent.rounds[0].toolCalls)).toBe(true);
-        expect(trace.director.mainAgent.rounds[0].toolCalls[0]).toEqual(expect.objectContaining({
-            name: 'write_message',
+        expect(assistantTurns[0].tool_calls[0]).toEqual(expect.objectContaining({
+            function: expect.objectContaining({ name: 'write_message' }),
         }));
-        // Round 1 → finalize tool.
-        expect(trace.director.mainAgent.rounds[1].toolCalls[0]).toEqual(expect.objectContaining({
-            name: 'finalize',
+        expect(assistantTurns[1]).toEqual(expect.objectContaining({
+            _round: 1,
         }));
+        expect(assistantTurns[1].tool_calls[0]).toEqual(expect.objectContaining({
+            function: expect.objectContaining({ name: 'finalize' }),
+        }));
+        // Successful runs leave failedRounds empty.
+        expect(trace.director.mainAgent.failedRounds).toEqual([]);
     });
 
     test('main agent conversation alias mirrors the live messages array', async () => {
@@ -317,15 +323,16 @@ describe('director runtime trace', () => {
         }
     });
 
-    test('no-tool-call exhaustion records a failed round in the trace before throwing', async () => {
+    test('no-tool-call exhaustion records a failed round in failedRounds before throwing', async () => {
         // Regression: previously the push to `trace.director.mainAgent.rounds`
         // happened only after the retry loop broke (success path). When the
         // agent never produced a tool call and `noToolRetries > maxNoToolRetries`
         // triggered, the throw skipped the push entirely, leaving the trace
         // popup with zero rounds even though `### [main-N] (failed: no tool
-        // call)` was already in the reasoning fold. The fix pushes the round
-        // entry before throwing, with `status: 'failed-no-tool-call'` so
-        // consumers can distinguish from success rounds (which omit `status`).
+        // call)` was already in the reasoning fold. After the round-card
+        // unification, success rounds live on `conversation.messages` and
+        // failure rounds live on `failedRounds[]` — the renderer interleaves
+        // them by `round`. This test guards the sidecar push path.
         const { chat, handle } = makeHandle();
         const trace = makeDirectorTrace();
         const ev = {
@@ -360,25 +367,28 @@ describe('director runtime trace', () => {
             },
         })).rejects.toThrow(/Main agent produced no tool call after/);
 
-        // The fix's contract: trace MUST carry the failed round.
-        expect(trace.director.mainAgent.rounds).toHaveLength(1);
-        const r = trace.director.mainAgent.rounds[0];
+        // The failed round lives on the sidecar; messages stays free of
+        // the failed assistant turn (the retry contract requires the
+        // history get re-requested).
+        expect(trace.director.mainAgent.failedRounds).toHaveLength(1);
+        const r = trace.director.mainAgent.failedRounds[0];
         expect(r.round).toBe(0);
-        expect(r.toolCalls).toEqual([]);
-        expect(r.status).toBe('failed-no-tool-call');
+        expect(r.reason).toBe('no-tool-call');
         expect(r.assistantText).toBe('reasoning-only reply, no tool call');
+        // No assistant turn pushed to messages.
+        expect(trace.director.mainAgent.conversation.messages.some(m => m.role === 'assistant')).toBe(false);
         // And reasoning fold still has the `(failed: no tool call)` section
         // header — proving the two recording paths (reasoning + trace) are
-        // now consistent.
+        // consistent.
         expect(chat[0].extra.reasoning).toContain('### [main-0] (failed: no tool call)');
     });
 
-    test('no-tool-call exhaustion after a successful prior round records BOTH rounds', async () => {
-        // Reinforces the per-round contract: when round 0 succeeds (tool
-        // call) and round 1 exhausts retries (no tool call), the trace
-        // should have 2 entries — success (status omitted) + failure
-        // (status: 'failed-no-tool-call'). Without the fix only round 0
-        // would land in the trace.
+    test('no-tool-call exhaustion after a successful prior round splits cleanly across messages + failedRounds', async () => {
+        // Reinforces the contract: when round 0 succeeds (tool call) and
+        // round 1 exhausts retries (no tool call), the successful round
+        // sits in conversation.messages with `_round: 0`, and the failed
+        // round sits in failedRounds with `round: 1` — the renderer
+        // interleaves them in order.
         const { chat, handle } = makeHandle();
         const trace = makeDirectorTrace();
         const ev = {
@@ -417,15 +427,17 @@ describe('director runtime trace', () => {
             },
         })).rejects.toThrow(/Main agent produced no tool call after/);
 
-        expect(trace.director.mainAgent.rounds).toHaveLength(2);
-        // round 0 = success, no status field
-        expect(trace.director.mainAgent.rounds[0].round).toBe(0);
-        expect(trace.director.mainAgent.rounds[0].toolCalls).toHaveLength(1);
-        expect(trace.director.mainAgent.rounds[0].toolCalls[0].name).toBe('write_message');
-        expect(trace.director.mainAgent.rounds[0].status).toBeUndefined();
-        // round 1 = failed, status set
-        expect(trace.director.mainAgent.rounds[1].round).toBe(1);
-        expect(trace.director.mainAgent.rounds[1].toolCalls).toEqual([]);
-        expect(trace.director.mainAgent.rounds[1].status).toBe('failed-no-tool-call');
+        // Successful round 0 → on messages.
+        const assistantTurns = trace.director.mainAgent.conversation.messages.filter(m => m.role === 'assistant');
+        expect(assistantTurns).toHaveLength(1);
+        expect(assistantTurns[0]._round).toBe(0);
+        expect(assistantTurns[0].tool_calls[0]).toEqual(expect.objectContaining({
+            function: expect.objectContaining({ name: 'write_message' }),
+        }));
+        // Failed round 1 → on sidecar.
+        expect(trace.director.mainAgent.failedRounds).toHaveLength(1);
+        expect(trace.director.mainAgent.failedRounds[0].round).toBe(1);
+        expect(trace.director.mainAgent.failedRounds[0].reason).toBe('no-tool-call');
+        expect(trace.director.mainAgent.failedRounds[0].assistantText).toBe('just thinking out loud');
     });
 });

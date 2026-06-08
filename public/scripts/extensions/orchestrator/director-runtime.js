@@ -500,9 +500,13 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
     // Alias the live messages array onto the director trace so the
     // trace popup can render the main agent's running conversation.
     // Mutations to `messages` below show up in the popup at open time
-    // (the alias is by reference). Append per-round records to the
-    // structured rounds list as well — those give a stable view even
-    // if the messages array shape changes between rounds.
+    // (the alias is by reference). No parallel `rounds[]` slot — every
+    // successful round lives in the messages stream itself (assistant +
+    // tool_result entries carry `_round`). The only thing that can't go
+    // there is a no-tool-call exhausted round, because the assistant
+    // turn was deliberately NOT pushed (the retry contract requires the
+    // same history get re-requested); those go into `failedRounds[]`,
+    // which the renderer interleaves with messages-derived rounds.
     const trace = deps?.trace || null;
     if (trace?.director?.mainAgent && typeof trace.director.mainAgent === 'object') {
         if (!trace.director.mainAgent.conversation || typeof trace.director.mainAgent.conversation !== 'object') {
@@ -510,8 +514,8 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         } else {
             trace.director.mainAgent.conversation.messages = messages;
         }
-        if (!Array.isArray(trace.director.mainAgent.rounds)) {
-            trace.director.mainAgent.rounds = [];
+        if (!Array.isArray(trace.director.mainAgent.failedRounds)) {
+            trace.director.mainAgent.failedRounds = [];
         }
     }
 
@@ -644,48 +648,29 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
             try { markReasoningSectionStatus(handle, mainSectionId, 'failed: no tool call'); } catch (_) { /* non-fatal */ }
             noToolRetries++;
             if (noToolRetries > maxNoToolRetries) {
-                // Push the exhausted round to the trace BEFORE throwing.
-                // The success-path push at the bottom of the round-for-loop
-                // never runs once we throw, so without this the trace shows
-                // zero rounds even though `### [main-N] (failed: no tool call)`
-                // sections were appended to the reasoning fold. `status` lets
-                // consumers distinguish from the success path (where the
-                // bottom-of-loop push omits the field).
-                if (trace?.director?.mainAgent?.rounds) {
-                    trace.director.mainAgent.rounds.push({
+                // Record the exhausted round before throwing. The assistant
+                // turn was deliberately NOT pushed into `messages` (the
+                // retry contract requires the next round see the same
+                // history); without this sidecar the trace popup would
+                // show zero evidence of the failed round even though
+                // `### [main-N] (failed: no tool call)` was appended to
+                // the reasoning fold. Renderer interleaves these with
+                // successful rounds by `round` number.
+                if (Array.isArray(trace?.director?.mainAgent?.failedRounds)) {
+                    trace.director.mainAgent.failedRounds.push({
                         round,
-                        startedAt: new Date().toISOString(),
+                        reason: 'no-tool-call',
                         assistantText: String(result?.assistantText || ''),
                         reasoningText: reasoningAccum || String(result?.reasoning || ''),
-                        toolCalls: [],
-                        status: 'failed-no-tool-call',
                     });
                 }
                 throw new Error(`Main agent produced no tool call after ${maxNoToolRetries + 1} attempt(s) (toolCallRetryMax=${maxNoToolRetries}).`);
             }
         }
-        // Record this round in the trace (structured view, independent
-        // of the messages-array alias) so the popup can show a per-round
-        // breakdown of what the main agent said and what tools it called.
-        // `source` tags each call with the layer that will serve the
-        // dispatch (builtin / extension / profile / st-bridge / unknown)
-        // so the simulation-review popup can render a layer chip.
-        if (trace?.director?.mainAgent?.rounds) {
-            const ctxForSource = { __customToolRegistry: customToolRegistry };
-            trace.director.mainAgent.rounds.push({
-                round,
-                startedAt: new Date().toISOString(),
-                assistantText: String(result?.assistantText || ''),
-                reasoningText: reasoningAccum || String(result?.reasoning || ''),
-                toolCalls: Array.isArray(toolCalls)
-                    ? toolCalls.map(tc => {
-                        const cloned = structuredClone(tc);
-                        cloned.source = resolveToolSource(String(tc?.name || ''), ctxForSource);
-                        return cloned;
-                    })
-                    : [],
-            });
-        }
+        // Successful round — the assistant turn (with reasoning + _round)
+        // and each tool_result will be pushed onto `messages` below; the
+        // renderer reconstructs the per-round breakdown from there. No
+        // parallel rounds[] write is needed.
         // text already streamed into the reasoning fold via onChunk;
         // no extra reasoning append needed here.
         // Reshape the toolCalls from generateTask's `{name, args, raw}`

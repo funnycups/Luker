@@ -4052,8 +4052,8 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
     );
     attachOrchestrationRuntimeDirectorState(trace, {
         mainAgent: {
-            rounds: [],
             conversation: { messages: [] },
+            failedRounds: [],
         },
         subagents: [],
     });
@@ -7845,8 +7845,8 @@ jQuery(() => {
                 );
                 attachOrchestrationRuntimeDirectorState(directorTrace, {
                     mainAgent: {
-                        rounds: [],
                         conversation: { messages: [] },
+                        failedRounds: [],
                     },
                     subagents: [],
                 });
