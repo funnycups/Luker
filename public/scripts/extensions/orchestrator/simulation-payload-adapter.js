@@ -2,10 +2,10 @@
  * Reshapes the orchestrator's runtime-trace into per-mode payloads
  * consumed by simulation-review renderers. Failed tool calls are
  * filtered; failed attempts are dropped. Reasoning is sourced from
- * `message.reasoning` (spec/agenda/loop) or `round.reasoningText` /
- * `subagent.reasoningText` (director). Prompt-engineered <thought>
- * tags inside assistantText are left in place — they're body, not
- * reasoning.
+ * `message.reasoning` on each assistant turn across every mode
+ * (spec/agenda/loop/director — the runtime stamps it during push).
+ * Prompt-engineered <thought> tags inside assistantText are left in
+ * place — they're body, not reasoning.
  *
  * Trace-shape notes (for future maintainers):
  *   - Spec attempts come from `trace.attempts[]`, indexed by
@@ -19,10 +19,12 @@
  *   - Loop mode bypasses attempts entirely. `trace.loop.conversation.messages`
  *     is a live alias to the running messages array; the runtime mutates
  *     it across rounds and we sanitize at read time.
- *   - Director mode lives on `trace.director`: `mainAgent.rounds[]` is the
- *     structured per-round record (independent of the messages alias), and
- *     `subagents[]` carries dispatch results with `status ∈ {running,
- *     completed, cancelled, failed}`.
+ *   - Director mode lives on `trace.director`. Main-agent success rounds
+ *     live on `mainAgent.conversation.messages` (each assistant turn
+ *     carries `_round` + `reasoning`); no-tool-call exhaustion rounds
+ *     live on the sparse `mainAgent.failedRounds[]` sidecar. Sub-agent
+ *     dispatches sit on `subagents[]` with the same conversation alias
+ *     pattern as the main agent.
  */
 
 const COMPLETED_STATUSES = new Set(['completed', 'success']);
@@ -258,40 +260,49 @@ export function exportLoopPayload(trace) {
 export function exportDirectorPayload(trace) {
     const d = trace?.director || {};
     const eventsByCallId = indexToolErrors(trace);
-    const rawRounds = Array.isArray(d?.mainAgent?.rounds) ? d.mainAgent.rounds : [];
-    // mainAgent rounds default to success when `status` is unset — the
-    // happy-path runtime push leaves the field off, so an absent status
-    // means "completed normally" rather than a failure. Explicit failure
-    // markers (e.g. 'failed-no-tool-call') are dropped.
-    const mainRounds = rawRounds
-        .filter(r => {
-            const status = String(r?.status || '');
-            return !status || COMPLETED_STATUSES.has(status);
-        })
-        .map((r, idx) => ({
+    // Main agent rounds derive from the live messages alias. Each
+    // successful round is one `turnsFromConversation` turn (assistant
+    // + matched tool results). The director runtime stamps `_round`
+    // on the assistant push so consumers that want explicit round
+    // numbering can read it; here we just enumerate turns in order
+    // and assign `roundIndex` sequentially because the simulation-
+    // review renderer treats roundIndex as "the i-th round shown",
+    // not "the runtime's round number" (failed rounds aren't in this
+    // path — they live on failedRounds[]).
+    const mainMessages = Array.isArray(d?.mainAgent?.conversation?.messages)
+        ? d.mainAgent.conversation.messages
+        : [];
+    const mainRounds = turnsFromConversation(mainMessages, eventsByCallId)
+        .map((t, idx) => ({
             roundIndex: idx,
-            reasoning: String(r.reasoningText || ''),
-            assistantText: String(r.assistantText || ''),
-            toolCalls: (Array.isArray(r.toolCalls) ? r.toolCalls : [])
-                .filter(c => !isToolCallFailed(c, eventsByCallId))
-                .map(c => ({
-                    name: String(c?.name || ''),
-                    args: c?.args || {},
-                    result: typeof c?.result === 'undefined' ? null : c.result,
-                    durationMs: Number(c?.durationMs || 0),
-                    ...(typeof c?.source === 'string' && c.source ? { source: c.source } : {}),
-                })),
+            reasoning: t.reasoning,
+            assistantText: t.assistantText,
+            toolCalls: t.toolCalls,
         }));
     const subs = Array.isArray(d?.subagents) ? d.subagents : [];
     const subagents = subs
         .filter(s => COMPLETED_STATUSES.has(String(s?.status || 'completed')))
-        .map(s => ({
-            subagentId: String(s.subagentId || ''),
-            isInline: Boolean(s.isInline),
-            task: String(s.task || ''),
-            reasoning: String(s.reasoningText || ''),
-            output: String(s.outputText || ''),
-        }));
+        .map(s => {
+            // Reasoning is now per-round on the conversation messages
+            // (each assistant turn carries its own `reasoning`). For the
+            // simulation-review renderer which shows ONE reasoning blob
+            // per sub-agent, aggregate across the conversation in
+            // round order.
+            const msgs = Array.isArray(s?.conversation?.messages) ? s.conversation.messages : [];
+            const reasoningChunks = [];
+            for (const m of msgs) {
+                if (m?.role === 'assistant' && typeof m?.reasoning === 'string' && m.reasoning) {
+                    reasoningChunks.push(m.reasoning);
+                }
+            }
+            return {
+                subagentId: String(s.subagentId || ''),
+                isInline: Boolean(s.isInline),
+                task: String(s.task || ''),
+                reasoning: reasoningChunks.join('\n\n'),
+                output: String(s.outputText || ''),
+            };
+        });
     return {
         mainAgent: { rounds: mainRounds },
         subagents,

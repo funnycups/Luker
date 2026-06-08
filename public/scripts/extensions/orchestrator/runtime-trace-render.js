@@ -252,6 +252,177 @@ function renderTraceConversationHtml(conversation) {
     return `<div class="luker-studio-convo">${parts.join('')}</div>`;
 }
 
+/**
+ * Bucket sanitized messages by `_round` for the round-card renderer.
+ * System frames and any messages without `_round` get bucketed into a
+ * "prelude" entry under round = -1 so they still show up; the card
+ * header labels that bucket "Setup / Prelude" instead of "Round N".
+ *
+ * Returns: Array<{ round: number, messages: Array, isPrelude: boolean }>
+ * sorted by round ascending. Caller interleaves with failedRounds[].
+ */
+function bucketMessagesByRound(messages) {
+    const buckets = new Map();
+    const PRELUDE = -1;
+    for (const m of (Array.isArray(messages) ? messages : [])) {
+        const r = Number.isFinite(Number(m?._round)) ? Number(m._round) : PRELUDE;
+        if (!buckets.has(r)) buckets.set(r, []);
+        buckets.get(r).push(m);
+    }
+    return [...buckets.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([round, msgs]) => ({ round, messages: msgs, isPrelude: round === PRELUDE }));
+}
+
+/**
+ * Round-card renderer. Single visual contract across loop / director main /
+ * director sub: each iteration round becomes a `<details>Round N</details>`
+ * card, with assistant reasoning (collapsed), assistant text, and per-
+ * tool-call args + result paired by `tool_call_id`. Messages without
+ * `_round` (system frames, task brief) get a leading "Setup" card.
+ *
+ * `failedRounds` (sparse sidecar — Director main's no-tool-call retry
+ * exhaustion path) are interleaved by round number with a red status
+ * badge. Other modes pass `[]` / omit.
+ *
+ * Tool-call args/result pairing reuses `buildToolResultMap` so error
+ * badges and auto-expand on failure stay consistent with the raw
+ * conversation view.
+ */
+function renderRoundCardsHtml(conversation, failedRounds = []) {
+    const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
+    const failed = Array.isArray(failedRounds) ? failedRounds : [];
+    if (messages.length === 0 && failed.length === 0) {
+        return `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No rounds recorded yet.'))}</div>`;
+    }
+    const { resultMap } = buildToolResultMap(messages);
+    const buckets = bucketMessagesByRound(messages);
+
+    // Merge buckets + failedRounds into a single ordered stream keyed by
+    // round number. Prelude (round=-1) always comes first. A failed round
+    // and a successful round can't share a round number (one took the
+    // throw path, the other took the push path), so they slot in cleanly.
+    const merged = [];
+    for (const b of buckets) merged.push({ kind: 'success', round: b.round, bucket: b });
+    for (const f of failed) {
+        merged.push({ kind: 'failed', round: Number(f?.round || 0), entry: f });
+    }
+    merged.sort((a, b) => a.round - b.round);
+
+    return merged.map((item) => {
+        if (item.kind === 'failed') {
+            return renderFailedRoundCardHtml(item.entry);
+        }
+        return renderSuccessRoundCardHtml(item.bucket, resultMap);
+    }).join('');
+}
+
+function renderSuccessRoundCardHtml(bucket, resultMap) {
+    const isPrelude = bucket.isPrelude;
+    const title = isPrelude
+        ? i18n('Setup')
+        : i18nFormat('Round ${0}', bucket.round);
+    const assistantMsgs = bucket.messages.filter(m => m?.role === 'assistant');
+    const toolMsgs = bucket.messages.filter(m => m?.role === 'tool');
+    const otherMsgs = bucket.messages.filter(m => m?.role !== 'assistant' && m?.role !== 'tool');
+
+    // Aggregate per-round signals shown in the summary header.
+    const totalCalls = assistantMsgs.reduce((sum, m) => sum + (Array.isArray(m.tool_calls) ? m.tool_calls.length : 0), 0);
+    const callsBadge = isPrelude
+        ? ''
+        : `<span class="luker-studio-badge">${escapeHtml(i18nFormat('${0} tool call(s)', totalCalls))}</span>`;
+
+    // Body: prelude renders system frames verbatim (no per-round
+    // assistant/tool structure to expect); success rounds render the
+    // assistant turn + each tool call paired with its result, plus any
+    // other-role messages (system runtime notices etc.) in order.
+    let body;
+    if (isPrelude) {
+        body = bucket.messages.map(m => renderTraceMessageHtml(m, resultMap)).join('');
+    } else {
+        const parts = [];
+        for (const m of otherMsgs) {
+            parts.push(renderTraceMessageHtml(m, resultMap));
+        }
+        for (const a of assistantMsgs) {
+            const reasoning = String(a?.reasoning || '');
+            const text = String(a?.content || '').trim();
+            const calls = Array.isArray(a?.tool_calls) ? a.tool_calls : [];
+            const reasoningHtml = reasoning
+                ? `<details class="luker-studio-reasoning-details">
+                    <summary>${escapeHtml(i18n('Model reasoning'))}</summary>
+                    <pre class="luker-studio-attempt-pre luker-studio-reasoning-pre">${escapeHtml(reasoning)}</pre>
+                </details>`
+                : '';
+            const textHtml = text
+                ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Assistant text'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(text)}</pre>`
+                : '';
+            const callsHtml = calls.length === 0
+                ? ''
+                : `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Tool calls'))}</div>
+                    <ul class="luker-studio-attempt-tool-list">${
+    calls.map(c => {
+        const callId = String(c?.id || '').trim();
+        const pairedResult = callId ? resultMap.get(callId) : null;
+        const errorBadge = pairedResult?.isError
+            ? ` <span class="luker-studio-badge luker-studio-badge-failed">${escapeHtml(i18n('Error'))}</span>`
+            : '';
+        const argsBlock = c?.args
+            ? `<pre class="luker-studio-attempt-pre">${escapeHtml(toReadableYamlText(c.args, '{}'))}</pre>`
+            : '';
+        const resultBlock = pairedResult
+            ? `<div class="luker-studio-attempt-label">${escapeHtml(pairedResult.isError ? i18n('Error') : i18n('Result'))}</div>${renderTraceJsonBlock(pairedResult.parsed ?? pairedResult.content ?? '')}`
+            : '';
+        return `<li><b>${escapeHtml(String(c?.name || ''))}</b>${errorBadge}${argsBlock}${resultBlock}</li>`;
+    }).join('')
+}</ul>`;
+            parts.push(`${reasoningHtml}${textHtml}${callsHtml}`);
+        }
+        // Orphan tool messages (tool_call_id that didn't match any
+        // assistant tool_calls in this conversation) — render them
+        // verbatim so nothing in the messages stream goes invisible.
+        // `buildToolResultMap` only consumes paired results; unpaired
+        // ones flow through here.
+        const orphanTools = toolMsgs.filter(m => {
+            const id = String(m?.tool_call_id || '').trim();
+            return !id || !resultMap.has(id);
+        });
+        for (const m of orphanTools) {
+            parts.push(renderTraceMessageHtml(m, resultMap));
+        }
+        body = parts.join('');
+    }
+
+    return `
+<details class="luker-studio-agenda-attempt luker-studio-agenda-attempt-planner" open>
+    <summary>
+        <span class="luker-studio-agenda-attempt-title">${escapeHtml(title)}</span>
+        ${callsBadge}
+    </summary>
+    ${body}
+</details>`;
+}
+
+function renderFailedRoundCardHtml(entry) {
+    const round = Number(entry?.round || 0);
+    const reason = String(entry?.reason || 'failed');
+    const assistantText = String(entry?.assistantText || '');
+    const reasoningText = String(entry?.reasoningText || '');
+    const title = i18nFormat('Round ${0}', round);
+    return `
+<details class="luker-studio-agenda-attempt luker-studio-agenda-attempt-planner" open>
+    <summary>
+        <span class="luker-studio-agenda-attempt-title">${escapeHtml(title)}</span>
+        <span class="luker-studio-badge luker-studio-badge-failed">${escapeHtml(reason)}</span>
+    </summary>
+    ${reasoningText ? `<details class="luker-studio-reasoning-details">
+        <summary>${escapeHtml(i18n('Model reasoning'))}</summary>
+        <pre class="luker-studio-attempt-pre luker-studio-reasoning-pre">${escapeHtml(reasoningText)}</pre>
+    </details>` : ''}
+    ${assistantText ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Assistant text'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(assistantText)}</pre>` : ''}
+</details>`;
+}
+
 export function renderLastOrchestrationResultHtml(entry) {
     if (!entry || typeof entry !== 'object') {
         return `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No recent orchestration result available for this chat.'))}</div>`;
@@ -608,14 +779,15 @@ function renderLoopModePanelHtml(trace) {
     // messages array (see attachOrchestrationRuntimeLoopConversation). Sanitize
     // here at render time so assistant tool_calls in raw OpenAI shape
     // (`function.name` / `function.arguments`) get flattened into the
-    // `{ name, args }` shape the renderer expects.
+    // `{ name, args }` shape the renderer expects. The loop agent has no
+    // failed-round sidecar (no-tool-call exhaustion uses the streak-limit
+    // path that emits a `budget_exhausted` event, not a failed round),
+    // so the second arg stays empty.
     const conversation = sanitizeOrchestrationRuntimeConversation(trace?.loop?.conversation);
     return `
 <div class="luker-studio-panel">
-    <div class="luker-studio-panel-title">${escapeHtml(i18n('Agent Conversation'))}</div>
-    ${Array.isArray(conversation?.messages) && conversation.messages.length > 0
-        ? renderTraceConversationHtml(conversation)
-        : `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No agent messages recorded yet.'))}</div>`}
+    <div class="luker-studio-panel-title">${escapeHtml(i18n('Agent Rounds'))}</div>
+    ${renderRoundCardsHtml(conversation, [])}
 </div>`;
 }
 
@@ -639,7 +811,6 @@ function renderDirectorSubagentCardHtml(entry) {
     const isInline = Boolean(entry?.isInline);
     const task = String(entry?.task || '');
     const outputText = String(entry?.outputText || '');
-    const reasoningText = String(entry?.reasoningText || '');
     const previewText = truncateOrchestrationRuntimePreview(outputText, 240);
     const conversation = entry?.conversation && typeof entry.conversation === 'object'
         ? sanitizeOrchestrationRuntimeConversation(entry.conversation)
@@ -658,74 +829,27 @@ function renderDirectorSubagentCardHtml(entry) {
     ${task ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Task brief'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(task)}</pre>` : ''}
     ${systemPromptPreview ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Inline system prompt (preview)'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(systemPromptPreview)}</pre>` : ''}
     ${entry?.error ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Failed'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(String(entry.error || ''))}</pre>` : ''}
-    ${reasoningText ? `<details class="luker-studio-reasoning-details">
-        <summary>${escapeHtml(i18n('Model reasoning'))}</summary>
-        <pre class="luker-studio-attempt-pre luker-studio-reasoning-pre">${escapeHtml(reasoningText)}</pre>
-    </details>` : ''}
     ${previewText ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Output'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(outputText)}</pre>` : ''}
-    ${hasConversation ? `<details class="luker-studio-attempt-convo">
-        <summary>${escapeHtml(i18n('Conversation'))} <span class="luker-studio-convo-count">(${escapeHtml(String(conversation.messages.length))})</span></summary>
-        ${renderTraceConversationHtml(conversation)}
+    ${hasConversation ? `<details class="luker-studio-attempt-convo" open>
+        <summary>${escapeHtml(i18n('Rounds'))} <span class="luker-studio-convo-count">(${escapeHtml(String(conversation.messages.length))})</span></summary>
+        ${renderRoundCardsHtml(conversation, [])}
     </details>` : ''}
 </details>`;
 }
 
 function renderDirectorMainAgentRoundsHtml(trace) {
-    const rounds = Array.isArray(trace?.director?.mainAgent?.rounds) ? trace.director.mainAgent.rounds : [];
-    if (rounds.length === 0) {
-        return `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No main-agent rounds recorded.'))}</div>`;
-    }
-    // The structured `rounds[].toolCalls[]` records only carry `{id, name,
-    // args}` — the matching tool results live in
-    // `director.mainAgent.conversation` as separate `role:'tool'`
-    // messages keyed by `tool_call_id`. Build the lookup once so each
-    // per-round <li> can show its result alongside the args.
+    // Single source of truth: the live messages alias on
+    // `trace.director.mainAgent.conversation`. Each successful round was
+    // pushed there with `_round` stamped on the assistant turn + each
+    // tool_result. No-tool-call retry exhaustion takes the failedRounds
+    // sidecar path (see director-runtime.js — the assistant turn is
+    // deliberately NOT pushed so the retry contract holds). The round-
+    // card renderer interleaves both.
     const conversation = sanitizeOrchestrationRuntimeConversation(trace?.director?.mainAgent?.conversation);
-    const { resultMap } = buildToolResultMap(Array.isArray(conversation?.messages) ? conversation.messages : []);
-    return rounds.map((r) => {
-        const round = Number(r?.round ?? 0);
-        const text = String(r?.assistantText || '');
-        const reasoning = String(r?.reasoningText || '');
-        const calls = Array.isArray(r?.toolCalls) ? r.toolCalls : [];
-        const status = String(r?.status || '').trim();
-        const statusBadge = status
-            ? `<span class="luker-studio-badge luker-studio-badge-failed">${escapeHtml(status)}</span>`
-            : '';
-        const callsBadge = `<span class="luker-studio-badge">${escapeHtml(i18nFormat('${0} tool call(s)', calls.length))}</span>`;
-        const callsSummary = calls.length === 0
-            ? `<div class="luker-studio-empty-hint">${escapeHtml(i18n('(no tool calls — reasoning-only round)'))}</div>`
-            : `<ul class="luker-studio-attempt-tool-list">${
-                calls.map(c => {
-                    const callId = String(c?.id || '').trim();
-                    const pairedResult = callId ? resultMap.get(callId) : null;
-                    const errorBadge = pairedResult?.isError
-                        ? ` <span class="luker-studio-badge luker-studio-badge-failed">${escapeHtml(i18n('Error'))}</span>`
-                        : '';
-                    const argsBlock = c?.args
-                        ? `<pre class="luker-studio-attempt-pre">${escapeHtml(toReadableYamlText(c.args, '{}'))}</pre>`
-                        : '';
-                    const resultBlock = pairedResult
-                        ? `<div class="luker-studio-attempt-label">${escapeHtml(pairedResult.isError ? i18n('Error') : i18n('Result'))}</div>${renderTraceJsonBlock(pairedResult.parsed ?? pairedResult.content ?? '')}`
-                        : '';
-                    return `<li><b>${escapeHtml(String(c?.name || ''))}</b>${errorBadge}${argsBlock}${resultBlock}</li>`;
-                }).join('')
-            }</ul>`;
-        return `
-<details class="luker-studio-agenda-attempt luker-studio-agenda-attempt-planner" open>
-    <summary>
-        <span class="luker-studio-agenda-attempt-title">${escapeHtml(i18nFormat('Round ${0}', round))}</span>
-        ${statusBadge}
-        ${callsBadge}
-    </summary>
-    ${reasoning ? `<details class="luker-studio-reasoning-details">
-        <summary>${escapeHtml(i18n('Model reasoning'))}</summary>
-        <pre class="luker-studio-attempt-pre luker-studio-reasoning-pre">${escapeHtml(reasoning)}</pre>
-    </details>` : ''}
-    ${text ? `<div class="luker-studio-attempt-label">${escapeHtml(i18n('Assistant text'))}</div><pre class="luker-studio-attempt-pre">${escapeHtml(text)}</pre>` : ''}
-    <div class="luker-studio-attempt-label">${escapeHtml(i18n('Tool calls'))}</div>
-    ${callsSummary}
-</details>`;
-    }).join('');
+    const failedRounds = Array.isArray(trace?.director?.mainAgent?.failedRounds)
+        ? trace.director.mainAgent.failedRounds
+        : [];
+    return renderRoundCardsHtml(conversation, failedRounds);
 }
 
 function renderDirectorModePanelsHtml(trace) {
@@ -768,9 +892,24 @@ function renderTraceMetaCardsHtml(trace, mode, isDirectorMode) {
         card(i18n('Generation Type'), String(trace.generationType || 'normal')),
     ];
     if (isDirectorMode) {
-        const rounds = Array.isArray(trace?.director?.mainAgent?.rounds) ? trace.director.mainAgent.rounds.length : 0;
+        // Count distinct `_round` values on the main-agent conversation
+        // (success rounds) + failedRounds sidecar entries (no-tool-call
+        // exhausted). Mirrors the renderer's own bucketing so the meta
+        // card and the rendered card list agree.
+        const mainMsgs = Array.isArray(trace?.director?.mainAgent?.conversation?.messages)
+            ? trace.director.mainAgent.conversation.messages
+            : [];
+        const roundSet = new Set();
+        for (const m of mainMsgs) {
+            if (m?.role === 'assistant' && Number.isFinite(Number(m?._round))) {
+                roundSet.add(Number(m._round));
+            }
+        }
+        const failed = Array.isArray(trace?.director?.mainAgent?.failedRounds)
+            ? trace.director.mainAgent.failedRounds.length
+            : 0;
         const subs = Array.isArray(trace?.director?.subagents) ? trace.director.subagents.length : 0;
-        cards.push(card(i18n('Main agent rounds'), rounds));
+        cards.push(card(i18n('Main agent rounds'), roundSet.size + failed));
         cards.push(card(i18n('Sub-agent dispatches'), subs));
     } else {
         cards.push(card(i18n('Target Layer'), String(trace.targetLayer || 0)));

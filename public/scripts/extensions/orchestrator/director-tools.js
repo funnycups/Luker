@@ -457,7 +457,6 @@ export function createSubagentDispatcher({
             startedAt: new Date().toISOString(),
             finishedAt: '',
             outputText: '',
-            reasoningText: '',
             error: '',
             conversation: { messages: subMessages },
         };
@@ -465,13 +464,12 @@ export function createSubagentDispatcher({
         return entry;
     }
 
-    function recordSubagentFinish(entry, { status, outputText, error, reasoningText }) {
+    function recordSubagentFinish(entry, { status, outputText, error }) {
         if (!entry) return;
         entry.status = String(status || 'completed');
         entry.finishedAt = new Date().toISOString();
         if (typeof outputText === 'string') entry.outputText = outputText;
         if (typeof error === 'string') entry.error = error;
-        if (typeof reasoningText === 'string') entry.reasoningText = reasoningText;
     }
 
     function recordSubagentSyntheticFailure({ handleId, subagentId, isInline, task, status, error }) {
@@ -491,7 +489,6 @@ export function createSubagentDispatcher({
             startedAt: now,
             finishedAt: now,
             outputText: '',
-            reasoningText: '',
             error: String(error || ''),
             conversation: { messages: [] },
         });
@@ -842,12 +839,6 @@ export function createSubagentDispatcher({
         };
 
         const promise = (async () => {
-            // Declared outside the try so the catch arm can include any
-            // reasoning the sub-agent emitted before the throw — without
-            // this, a transport / abort error after the first round
-            // tripped a ReferenceError in the catch's recordSubagentFinish
-            // call (try-block `let` is not visible in catch).
-            let aggregatedReasoning = '';
             try {
                 let finalText = '';
                 let converged = false;
@@ -856,13 +847,24 @@ export function createSubagentDispatcher({
                         break;
                     }
                     const { roundAssistantText, roundToolCalls, roundReasoningText } = await runOneRound(subMessages, label, baseOpts, subToolSchemas);
-                    if (roundReasoningText) {
-                        if (aggregatedReasoning) aggregatedReasoning += '\n\n';
-                        aggregatedReasoning += roundReasoningText;
-                    }
                     if (roundToolCalls.length === 0) {
                         finalText = roundAssistantText;
                         converged = true;
+                        // The terminator round has no tool calls and no
+                        // assistant push (the runtime contract says final
+                        // text returns to the main agent, not the
+                        // conversation). Stamp `_round` on a synthetic
+                        // assistant entry so the round-card renderer
+                        // surfaces the final reply + reasoning under
+                        // `Round r`. Without this, the user sees
+                        // (rounds-1) cards even though the agent did r
+                        // rounds.
+                        subMessages.push({
+                            role: 'assistant',
+                            content: roundAssistantText || '',
+                            reasoning: roundReasoningText || '',
+                            _round: r,
+                        });
                         break;
                     }
                     // Reshape `{name, args, raw}` → OpenAI-compatible
@@ -937,14 +939,14 @@ export function createSubagentDispatcher({
                     const msg = 'cancelled';
                     safeMarkSectionStatus(label, `error: ${msg}`);
                     completionNotifications.push({ handleId, subagentId: displayId, status: 'cancelled', summary: msg });
-                    recordSubagentFinish(traceEntry, { status: 'cancelled', error: msg, reasoningText: aggregatedReasoning });
+                    recordSubagentFinish(traceEntry, { status: 'cancelled', error: msg });
                     return { handleId, subagentId: displayId, error: msg };
                 }
                 if (!converged) {
                     const msg = `did not converge within ${effectiveMaxRounds} rounds`;
                     safeMarkSectionStatus(label, `error: ${msg}`);
                     completionNotifications.push({ handleId, subagentId: displayId, status: 'failed', summary: msg });
-                    recordSubagentFinish(traceEntry, { status: 'failed', error: msg, reasoningText: aggregatedReasoning });
+                    recordSubagentFinish(traceEntry, { status: 'failed', error: msg });
                     return { handleId, subagentId: displayId, error: msg };
                 }
                 safeMarkSectionStatus(label, '');
@@ -954,7 +956,7 @@ export function createSubagentDispatcher({
                     status: 'completed',
                     summary: `output: ${finalText.length} chars`,
                 });
-                recordSubagentFinish(traceEntry, { status: 'completed', outputText: finalText, reasoningText: aggregatedReasoning });
+                recordSubagentFinish(traceEntry, { status: 'completed', outputText: finalText });
                 return { handleId, subagentId: displayId, outputText: finalText };
             } catch (err) {
                 const isAbort = err?.name === 'AbortError' || childSignal.aborted;
@@ -962,7 +964,7 @@ export function createSubagentDispatcher({
                 const msg = isAbort ? 'cancelled' : String(err?.message || err);
                 safeMarkSectionStatus(label, `error: ${msg}`);
                 completionNotifications.push({ handleId, subagentId: displayId, status, summary: msg });
-                recordSubagentFinish(traceEntry, { status, error: msg, reasoningText: aggregatedReasoning });
+                recordSubagentFinish(traceEntry, { status, error: msg });
                 return { handleId, subagentId: displayId, error: msg };
             } finally {
                 childAborts.delete(handleId);

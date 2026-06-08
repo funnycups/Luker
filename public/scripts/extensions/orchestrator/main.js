@@ -3954,7 +3954,9 @@ function getChatMessagesForSimulation(context, recentMessagesN) {
  * @param {object} session           Iteration session (director mode).
  * @param {Array<object>} simulationMessages  Recent-chat snapshot used as story_context.
  * @param {AbortSignal|null} abortSignal      User cancel surface.
- * @returns {Promise<object|null>}   Finalized director trace (with `director.mainAgent.rounds`,
+ * @returns {Promise<object|null>}   Finalized director trace (with
+ *                                   `director.mainAgent.conversation.messages`,
+ *                                   `director.mainAgent.failedRounds`,
  *                                   `director.subagents`, `finalMessage`), or null on early exit.
  */
 async function runDirectorSimulationLoop(context, session, simulationMessages, abortSignal) {

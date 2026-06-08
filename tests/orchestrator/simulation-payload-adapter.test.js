@@ -245,15 +245,30 @@ describe('exportDirectorPayload', () => {
             mode: 'director',
             director: {
                 mainAgent: {
-                    rounds: [
-                        {
-                            round: 1,
-                            assistantText: 'hi',
-                            reasoningText: 'r',
-                            toolCalls: [{ name: 'await_subagents', args: { handles: ['h1'] }, result: { ok: true } }],
-                            // status omitted → treated as success by adapter
-                        },
-                    ],
+                    // After the round-card unification, success rounds live on
+                    // the conversation alias (each assistant turn carries
+                    // `_round` + `reasoning`, plus a matching `role:'tool'`
+                    // message keyed by tool_call_id for its result).
+                    conversation: {
+                        messages: [
+                            {
+                                role: 'assistant',
+                                content: 'hi',
+                                reasoning: 'r',
+                                tool_calls: [
+                                    { id: 'call_1', name: 'await_subagents', args: { handles: ['h1'] } },
+                                ],
+                                _round: 0,
+                            },
+                            {
+                                role: 'tool',
+                                tool_call_id: 'call_1',
+                                content: JSON.stringify({ ok: true }),
+                                _round: 0,
+                            },
+                        ],
+                    },
+                    failedRounds: [],
                 },
                 subagents: [
                     {
@@ -261,9 +276,15 @@ describe('exportDirectorPayload', () => {
                         isInline: false,
                         task: 'go',
                         outputText: 'so',
-                        reasoningText: 'sr',
-                        // status: 'completed' (real runtime) and 'success' (legacy fixture) both pass
                         status: 'completed',
+                        // Reasoning now lives on the per-round assistant
+                        // messages in the conversation alias; the adapter
+                        // aggregates them.
+                        conversation: {
+                            messages: [
+                                { role: 'assistant', content: '', reasoning: 'sr', _round: 0 },
+                            ],
+                        },
                     },
                 ],
             },
@@ -293,7 +314,7 @@ describe('exportDirectorPayload', () => {
         const trace = {
             mode: 'director',
             director: {
-                mainAgent: { rounds: [] },
+                mainAgent: { conversation: { messages: [] }, failedRounds: [] },
                 subagents: [],
             },
         };
