@@ -34,7 +34,7 @@ import {
     markReasoningSectionStatus,
 } from './editor-ops.js';
 import { gatherGrepMatches } from './grep-tool.js';
-import { isAbortError } from './abort-utils.js';
+import { isAbortError, raceAbortSignal, throwIfAborted } from './abort-utils.js';
 
 // Skill-resolution helpers are loaded lazily so the transitive import chain
 // (skill-resolution → skillsApi → script.js → lib.js) stays out of module
@@ -936,6 +936,14 @@ export function createSubagentDispatcher({
                         _round: r,
                     });
                     for (let i = 0; i < roundToolCalls.length; i += 1) {
+                        // Mirror the main-agent loop's abort discipline:
+                        // throw between tool iterations so a stop click
+                        // unwinds this sub-agent's tool stream instead of
+                        // running every queued tool to completion before
+                        // the next round-boundary check. The parent
+                        // signal is chained into childSignal at dispatch
+                        // time, so this also catches main-level aborts.
+                        throwIfAborted(childSignal);
                         const call = roundToolCalls[i];
                         const callId = assistantToolCallEntries[i].id;
                         const name = String(call?.name || '');
@@ -961,9 +969,24 @@ export function createSubagentDispatcher({
                                 // director-runtime.js main-agent path for
                                 // matching wiring.
                                 toolCtx.__visibleSkillsForAgent = visibleSkillsForSubAgent;
-                                const raw = await executeLoopTool(name, args, toolCtx);
+                                // Race against childSignal so a hanging
+                                // tool can't pin this sub-agent open
+                                // after stop. Same pattern + reasoning
+                                // as the main-agent loop.
+                                const raw = await raceAbortSignal(
+                                    executeLoopTool(name, args, toolCtx),
+                                    childSignal,
+                                );
                                 toolResult = { ok: true, result: raw };
                             } catch (err) {
+                                // Let abort errors propagate to the
+                                // outer try / catch which routes the
+                                // sub-agent into the `cancelled` status
+                                // exit; swallowing them here would mask
+                                // the cancel as a generic tool failure
+                                // in the messages stream and let the
+                                // round loop charge ahead.
+                                if (isAbortError(err, childSignal)) throw err;
                                 toolResult = { ok: false, error: String(err?.message || err) };
                             }
                         } else {

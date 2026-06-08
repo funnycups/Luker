@@ -214,3 +214,137 @@ describe('MessageEditorHandle — buffer semantics', () => {
         expect(() => h.setText('')).not.toThrow();
     });
 });
+
+describe('MessageEditorHandle — auto-abort on signal', () => {
+    // Contract: when the caller provides an abortSignal, the handle must
+    // self-settle into the `aborted` terminal state the moment that
+    // signal fires — without waiting for the plugin to call .abort()
+    // itself. This closes the dual-write window where a stop click
+    // aborts the controller but the plugin's loop only checks the
+    // signal at round boundaries; meanwhile the kernel is still
+    // awaiting handle.complete and its setOnUpdate keeps mirroring
+    // writes into chat[slot]. A quick "stop + regenerate" inside that
+    // window lands a fresh takeover on the same slot and you get two
+    // loops writing the same message body in alternation.
+
+    test('signal abort after construction settles handle.complete with aborted status', async () => {
+        const ac = new AbortController();
+        const h = createMessageEditorHandle({
+            generationType: 'normal',
+            originalText: 'orig',
+            originalReasoning: 'origR',
+            abortSignal: ac.signal,
+        });
+        h.setText('partial');
+        h.setReasoning('partial-r');
+        expect(h.complete._settled).toBe(false);
+        ac.abort();
+        const outcome = await h.complete;
+        expect(outcome).toEqual({
+            status: 'aborted',
+            finalText: 'partial',
+            finalReasoning: 'partial-r',
+        });
+    });
+
+    test('signal abort blocks subsequent setText / setReasoning with editor_aborted', async () => {
+        const ac = new AbortController();
+        const h = createMessageEditorHandle({ generationType: 'normal', abortSignal: ac.signal });
+        ac.abort();
+        await h.complete;
+        let err1;
+        try { h.setText('x'); } catch (e) { err1 = e; }
+        expect(err1).toBeInstanceOf(TakeoverError);
+        expect(err1.code).toBe('editor_aborted');
+        let err2;
+        try { h.setReasoning('x'); } catch (e) { err2 = e; }
+        expect(err2.code).toBe('editor_aborted');
+    });
+
+    test('signal already aborted at construction time settles complete immediately', async () => {
+        const ac = new AbortController();
+        ac.abort();
+        const h = createMessageEditorHandle({
+            generationType: 'normal',
+            originalText: 'orig',
+            originalReasoning: '',
+            abortSignal: ac.signal,
+        });
+        // Microtask drain — listener fires from constructor.
+        const outcome = await h.complete;
+        expect(outcome.status).toBe('aborted');
+        // No writes happened, finalText is whatever the buffer was (originalText).
+        expect(outcome.finalText).toBe('orig');
+    });
+
+    test('signal abort force-flushes pending updates before settling', async () => {
+        // Same contract as explicit .abort(): the kernel reads
+        // chat[slot] right after handle.complete resolves, so any
+        // throttled setText that hadn't flushed yet must be visible
+        // by the time the listener resolves complete.
+        const ac = new AbortController();
+        const h = createMessageEditorHandle({
+            generationType: 'normal',
+            abortSignal: ac.signal,
+            flushIntervalMs: 1000,
+        });
+        const updates = [];
+        h.setOnUpdate((text) => updates.push(text));
+        h.setText('streamed before signal abort');
+        expect(updates).toHaveLength(0);
+        ac.abort();
+        await h.complete;
+        expect(updates).toContain('streamed before signal abort');
+    });
+
+    test('signal abort is no-op after commit (committed wins, complete unchanged)', async () => {
+        const ac = new AbortController();
+        const h = createMessageEditorHandle({ generationType: 'normal', abortSignal: ac.signal });
+        h.setText('done');
+        await h.commit();
+        const before = await h.complete;
+        ac.abort();
+        const after = await h.complete;
+        expect(before).toEqual(after);
+        expect(after.status).toBe('committed');
+    });
+
+    test('signal abort is no-op after discard (discarded wins, complete unchanged)', async () => {
+        const ac = new AbortController();
+        const h = createMessageEditorHandle({
+            generationType: 'normal',
+            originalText: 'orig',
+            abortSignal: ac.signal,
+        });
+        h.setText('partial');
+        await h.discard();
+        const before = await h.complete;
+        ac.abort();
+        const after = await h.complete;
+        expect(before).toEqual(after);
+        expect(after.status).toBe('discarded');
+        expect(after.finalText).toBe('orig');
+    });
+
+    test('signal abort is idempotent with explicit handle.abort (first settle wins)', async () => {
+        const ac = new AbortController();
+        const h = createMessageEditorHandle({ generationType: 'normal', abortSignal: ac.signal });
+        h.setText('first');
+        await h.abort();
+        const before = await h.complete;
+        ac.abort();
+        const after = await h.complete;
+        expect(before).toEqual(after);
+        expect(after.status).toBe('aborted');
+        expect(after.finalText).toBe('first');
+    });
+
+    test('handle constructed without abortSignal still works (no listener wiring)', async () => {
+        const h = createMessageEditorHandle({ generationType: 'normal' });
+        h.setText('x');
+        await h.commit();
+        const outcome = await h.complete;
+        expect(outcome.status).toBe('committed');
+        expect(outcome.finalText).toBe('x');
+    });
+});

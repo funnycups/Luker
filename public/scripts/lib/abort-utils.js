@@ -92,3 +92,35 @@ export function linkAbortSignals(...signals) {
     };
 }
 
+/**
+ * Race a promise against an abort signal: settle with the promise's
+ * outcome if it finishes first, OR reject with an AbortError the moment
+ * the signal aborts (whichever happens first).
+ *
+ * Use when a long-running `await` would otherwise hold a loop hostage
+ * past the point where the user-side stop signal has fired — typically
+ * for sub-agent waits, remote tool calls, or any transport that may
+ * not internally honour the signal. The wrapped promise is NOT
+ * cancelled; it keeps running in the background and its eventual
+ * settle is ignored. The caller's only concern is unblocking.
+ *
+ * Falsy / non-signal input → returns the original promise unchanged
+ * so callers can `await raceAbortSignal(p, maybeSignal)` without
+ * pre-checking.
+ */
+export function raceAbortSignal(promise, signal) {
+    if (!isAbortSignalLike(signal)) return promise;
+    if (signal.aborted) return Promise.reject(createAbortError());
+    return new Promise((resolve, reject) => {
+        const onAbort = () => {
+            signal.removeEventListener('abort', onAbort);
+            reject(createAbortError());
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        Promise.resolve(promise).then(
+            (value) => { signal.removeEventListener('abort', onAbort); resolve(value); },
+            (err) => { signal.removeEventListener('abort', onAbort); reject(err); },
+        );
+    });
+}
+

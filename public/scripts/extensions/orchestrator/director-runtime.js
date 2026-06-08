@@ -29,7 +29,7 @@
  */
 
 import { ORCH_EXECUTION_MODE_DIRECTOR } from './director-defaults.js';
-import { isAbortError } from './abort-utils.js';
+import { isAbortError, raceAbortSignal, throwIfAborted } from './abort-utils.js';
 import { resolveAgentToolFlags } from './persistence.js';
 // Resolved lazily inside `handleDirectorDispatch` so test environments
 // can import this module without first installing a SillyTavern global —
@@ -713,19 +713,48 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
 
         let finalized = false;
         for (let i = 0; i < toolCalls.length; i += 1) {
+            // Abort discipline between tool iterations. The round-start
+            // check at the top of this for-of-rounds loop catches signal
+            // abort across rounds; this inner check catches it BETWEEN
+            // tools within a single round so we don't keep dispatching
+            // sub-agents / firing executeLoopTool calls after the user
+            // hit stop. `throwIfAborted` propagates an AbortError that
+            // the outer wrapper recognises as `userAborted` and routes
+            // through `handle.abort()` — the handle is also already in
+            // its `aborted` terminal state via the message-takeover
+            // auto-abort listener, so any builtin tools that try to
+            // mutate it (write_message, apply_message_patches, …) would
+            // throw on their own. Throwing here gives us the same
+            // unwind path uniformly for tools that don't touch the
+            // handle (executeLoopTool, dispatch_subagent, …).
+            throwIfAborted(eventData?.abortSignal);
             const call = toolCalls[i];
             const callId = assistantToolCallEntries[i].id;
             const name = String(call?.name || '');
             const args = call?.args;
             let toolResult;
             if (name === 'dispatch_subagent') {
-                const h = await dispatcher.dispatch({ ...(args || {}), __parentMessages: parentMessagesForRound });
+                const h = await raceAbortSignal(
+                    dispatcher.dispatch({ ...(args || {}), __parentMessages: parentMessagesForRound }),
+                    eventData?.abortSignal,
+                );
                 toolResult = { ok: true, handle: h };
             } else if (name === 'dispatch_inline_subagent') {
-                const h = await dispatcher.dispatchInline({ ...(args || {}), __parentMessages: parentMessagesForRound });
+                const h = await raceAbortSignal(
+                    dispatcher.dispatchInline({ ...(args || {}), __parentMessages: parentMessagesForRound }),
+                    eventData?.abortSignal,
+                );
                 toolResult = { ok: true, handle: h };
             } else if (name === 'await_subagents') {
-                const results = await dispatcher.awaitAll(args?.handles || []);
+                // Race the awaitAll against the user-side signal so a
+                // stop unblocks the main loop even when a sub-agent's
+                // transport is stuck ignoring its (chained) child
+                // signal. The sub-agent promise keeps running in the
+                // background; we just stop waiting on it.
+                const results = await raceAbortSignal(
+                    dispatcher.awaitAll(args?.handles || []),
+                    eventData?.abortSignal,
+                );
                 toolResult = { ok: true, results };
                 // No reasoning-fold surfacing here on purpose: the
                 // dispatcher already streamed each sub-agent's chunks
@@ -765,9 +794,20 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                     // scoped visibility instead of falling back to the
                     // global skill inventory.
                     toolCtx.__visibleSkillsForAgent = visibleSkillsForMain;
-                    const raw = await deps.executeLoopTool(name, args, toolCtx);
+                    // Race the tool against the signal so a hanging
+                    // tool (network stalls, recursive sub-orchestration
+                    // that ignores its own signal) can't pin the loop
+                    // open after the user clicked stop.
+                    const raw = await raceAbortSignal(
+                        deps.executeLoopTool(name, args, toolCtx),
+                        eventData?.abortSignal,
+                    );
                     toolResult = { ok: true, result: raw };
                 } catch (err) {
+                    // Don't swallow abort — let the outer wrapper handle
+                    // it as a user-initiated cancel rather than reporting
+                    // it as a per-tool failure in the messages stream.
+                    if (isAbortError(err, eventData?.abortSignal)) throw err;
                     toolResult = { ok: false, error: String(err?.message || err) };
                 }
             } else {

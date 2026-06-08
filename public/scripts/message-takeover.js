@@ -116,6 +116,35 @@ export function createMessageEditorHandle(opts = {}) {
         }
     }
 
+    // Signal-driven auto-abort. When the caller passes an abortSignal,
+    // a stop click on it must settle this handle into the `aborted`
+    // terminal state immediately — without waiting for the plugin's
+    // loop to notice (round-boundary checks can be seconds late when
+    // a long tool is in flight). This closes the dual-write race:
+    // a fast stop+regenerate would otherwise spawn a new takeover on
+    // the same chat slot while this handle's setOnUpdate keeps firing,
+    // producing the two-agents-alternating bug. No-op if the handle is
+    // already settled (commit / discard / explicit abort wins) so the
+    // mutual-exclusivity contract of the three terminals still holds.
+    function settleAbortedFromSignal() {
+        if (state.committed || state.aborted || state.discarded) return;
+        state.aborted = true;
+        flushNow();
+        state.completeResolve({
+            status: 'aborted',
+            finalText: state.text,
+            finalReasoning: state.reasoning,
+        });
+    }
+    // `signal` (line 34) is already normalised: either the caller's
+    // abortSignal, or a fresh never-aborts fallback. Either way it's a
+    // real AbortSignal we can listen on without first checking shape.
+    if (signal.aborted) {
+        settleAbortedFromSignal();
+    } else {
+        signal.addEventListener('abort', settleAbortedFromSignal, { once: true });
+    }
+
     return {
         getText() { return state.text; },
         getReasoning() { return state.reasoning; },
