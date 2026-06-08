@@ -177,19 +177,6 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/output-fo
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/pure-preset-body.js', () => ({
     DIRECTOR_PURE_PRESET_BODY: {},
 }));
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/runtime-trace.js', () => ({
-    clearLatestOrchestrationRuntimeTrace: () => {},
-    createOrchestrationRuntimeTrace: () => null,
-    finalizeOrchestrationRuntimeTrace: () => {},
-    getLatestOrchestrationRuntimeTrace: () => null,
-    recordOrchestrationRuntimeEvent: () => {},
-    truncateOrchestrationRuntimePreview: (v) => v,
-    attachOrchestrationRuntimeDirectorState: () => {},
-}));
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/runtime-trace-render.js', () => ({
-    renderLastOrchestrationResultHtml: () => '',
-    renderOrchestrationRuntimeTraceHtml: () => '',
-}));
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/snapshot-cache.js', () => ({
     canReuseLatestOrchestrationSnapshot: () => false,
     clearCacheForChatChange: () => {},

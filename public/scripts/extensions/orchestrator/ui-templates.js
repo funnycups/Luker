@@ -1063,7 +1063,7 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
         ${hasActiveCharacter ? `<div class="menu_button" data-luker-action="save-character">${escapeHtml(i18n('Save To Character Override'))}</div>` : ''}
         ${hasActiveCharacter && isCharacterScope ? `<div class="menu_button" data-luker-action="clear-character">${escapeHtml(i18n('Clear Character Override'))}</div>` : ''}
         <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
-        <div class="menu_button" data-luker-action="view-runtime-trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
+        <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
     </div>
     ${renderDirectorWorkspace(deps, scope, editor, profileTitle)}
 </div>`;
@@ -1104,7 +1104,7 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
         ${hasActiveCharacter ? `<div class="menu_button" data-luker-action="save-character">${escapeHtml(i18n('Save To Character Override'))}</div>` : ''}
         ${hasActiveCharacter && isCharacterScope ? `<div class="menu_button" data-luker-action="clear-character">${escapeHtml(i18n('Clear Character Override'))}</div>` : ''}
         <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
-        <div class="menu_button" data-luker-action="view-runtime-trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
+        <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
     </div>
     ${renderLoopWorkspace(deps, scope, editor, profileTitle)}
 </div>`;
@@ -1147,7 +1147,7 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
         ${hasActiveCharacter ? `<div class="menu_button" data-luker-action="save-character">${escapeHtml(i18n('Save To Character Override'))}</div>` : ''}
         ${hasActiveCharacter && isCharacterScope ? `<div class="menu_button" data-luker-action="clear-character">${escapeHtml(i18n('Clear Character Override'))}</div>` : ''}
         <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
-        <div class="menu_button" data-luker-action="view-runtime-trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
+        <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
     </div>
     ${renderAgendaWorkspace(deps, scope, editor, profileTitle)}
 </div>`;
@@ -1307,7 +1307,7 @@ export function buildOrchestratorSettingsHtml(deps) {
             <div id="luker_orch_single_mode_runtime_tools" class="luker_orch_board luker_orch_single_mode_tools">
                 <div class="flex-container">
                     <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
-                    <div class="menu_button" data-luker-action="view-runtime-trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
+                    <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
                     <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
                 </div>
             </div>
@@ -1327,7 +1327,7 @@ export function buildOrchestratorSettingsHtml(deps) {
                     <div class="menu_button" data-luker-action="agenda-copy-from-spec">${escapeHtml(i18n('Copy Spec Agents To Agenda'))}</div>
                     <div class="menu_button" data-luker-action="spec-copy-from-agenda">${escapeHtml(i18n('Copy Agenda Agents To Spec'))}</div>
                     <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
-                    <div class="menu_button" data-luker-action="view-runtime-trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
+                    <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
                     <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
                     <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
                 </div>
@@ -1347,7 +1347,7 @@ export function buildOrchestratorSettingsHtml(deps) {
                     <div class="menu_button" data-luker-action="agenda-copy-from-spec">${escapeHtml(i18n('Copy Spec Agents To Agenda'))}</div>
                     <div class="menu_button" data-luker-action="spec-copy-from-agenda">${escapeHtml(i18n('Copy Agenda Agents To Spec'))}</div>
                     <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
-                    <div class="menu_button" data-luker-action="view-runtime-trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
+                    <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
                     <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
                     <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
                 </div>
@@ -1365,7 +1365,7 @@ export function buildOrchestratorSettingsHtml(deps) {
                 <div class="flex-container">
                     <div class="menu_button" data-luker-action="open-orch-editor">${escapeHtml(i18n('Open Orchestration Editor'))}</div>
                     <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
-                    <div class="menu_button" data-luker-action="view-runtime-trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
+                    <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
                     <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
                     <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
                 </div>
@@ -1383,7 +1383,7 @@ export function buildOrchestratorSettingsHtml(deps) {
                 </div>
                 <div class="flex-container">
                     <div class="menu_button" data-luker-action="open-orch-editor" data-i18n="Open Orchestration Editor">${escapeHtml(i18n('Open Orchestration Editor'))}</div>
-                    <div class="menu_button" data-luker-action="view-runtime-trace" data-i18n="View Runtime Trace">${escapeHtml(i18n('View Runtime Trace'))}</div>
+                    <div class="menu_button" data-luker-action="show-run-panel" data-i18n="Show Run Panel">${escapeHtml(i18n('Show Run Panel'))}</div>
                     <div class="menu_button" data-luker-action="ai-iterate-open" data-i18n="Open AI Iteration Studio">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
                     <div class="menu_button" data-luker-action="manage-skills" data-i18n="Manage skills...">${escapeHtml(i18n('Manage skills...'))}</div>
                 </div>

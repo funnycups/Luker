@@ -1,0 +1,271 @@
+/* public/scripts/extensions/orchestrator/run-panel/panel.css */
+
+#luker-orch-run-panel {
+    --panel-bg: var(--SmartThemeBlurTintColor, rgba(20, 22, 30, 0.96));
+    --panel-fg: var(--SmartThemeBodyColor, #e8e8ee);
+    --panel-accent: var(--SmartThemeQuoteColor, #5aa3ff);
+    --panel-danger: #e0506a;
+    --panel-warn: #d6a14d;
+    --panel-running: #4dd6a1;
+    font-family: var(--mainFontFamily, system-ui, sans-serif);
+    color: var(--panel-fg);
+}
+
+#luker-orch-run-panel[data-state="closed"] {
+    display: none;
+}
+
+#luker-orch-run-panel .panel-backdrop {
+    display: none;
+}
+
+#luker-orch-run-panel .panel-shell {
+    position: fixed;
+    pointer-events: auto;
+    z-index: 9000;
+    background: var(--panel-bg);
+    backdrop-filter: blur(12px);
+    box-shadow: 0 0 32px rgba(0,0,0,0.4);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    color: var(--panel-fg);
+}
+
+/* Sidebar layout (>=1024px) */
+@media (min-width: 1024px) {
+    #luker-orch-run-panel[data-layout="sidebar"] .panel-shell {
+        top: 0;
+        right: 0;
+        width: 420px;
+        height: 100dvh;
+        border-left: 1px solid rgba(255,255,255,0.08);
+    }
+}
+
+/* Drawer layout (<1024px) */
+@media (max-width: 1023px) {
+    #luker-orch-run-panel[data-layout="drawer"] .panel-backdrop {
+        display: block;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100dvh;
+        background: rgba(0,0,0,0.4);
+        pointer-events: auto;
+        z-index: 8999;
+    }
+    #luker-orch-run-panel[data-layout="drawer"] .panel-shell {
+        left: 0;
+        right: 0;
+        width: 100vw;
+        top: 30dvh;
+        height: 70dvh;
+        max-height: 70dvh;
+        border-top-left-radius: 18px;
+        border-top-right-radius: 18px;
+        border-top: 1px solid rgba(255,255,255,0.08);
+    }
+    #luker-orch-run-panel[data-layout="drawer"] .panel-shell::before {
+        content: '';
+        display: block;
+        width: 40px;
+        height: 4px;
+        margin: 8px auto 4px;
+        background: rgba(255,255,255,0.25);
+        border-radius: 4px;
+    }
+}
+
+#luker-orch-run-panel .panel-header {
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    flex-shrink: 0;
+}
+
+#luker-orch-run-panel .panel-title {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    font-size: 13px;
+}
+
+#luker-orch-run-panel .mode-badge {
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.08);
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.5px;
+}
+
+#luker-orch-run-panel .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--panel-running);
+}
+#luker-orch-run-panel .status-dot[data-status="committed"] { background: var(--panel-accent); }
+#luker-orch-run-panel .status-dot[data-status="aborted"] { background: var(--panel-warn); }
+#luker-orch-run-panel .status-dot[data-status="error"] { background: var(--panel-danger); }
+
+#luker-orch-run-panel .panel-actions {
+    display: flex;
+    gap: 4px;
+    margin-top: 6px;
+    justify-content: flex-end;
+}
+#luker-orch-run-panel .panel-actions button {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: var(--panel-fg);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+}
+#luker-orch-run-panel .panel-actions button:hover {
+    background: rgba(255,255,255,0.12);
+}
+
+#luker-orch-run-panel .panel-summary {
+    margin-top: 6px;
+    font-size: 11px;
+    opacity: 0.7;
+}
+
+#luker-orch-run-panel .panel-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 12px;
+    contain: strict;
+}
+
+#luker-orch-run-panel .rounds-list,
+#luker-orch-run-panel .sections-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+#luker-orch-run-panel .round {
+    margin-bottom: 8px;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 6px;
+}
+
+#luker-orch-run-panel .round > details > summary {
+    padding: 6px 8px;
+    cursor: pointer;
+    font-size: 12px;
+    user-select: none;
+}
+
+#luker-orch-run-panel .round[data-status="failed"] > details > summary {
+    color: var(--panel-danger);
+}
+
+#luker-orch-run-panel .section {
+    margin: 4px 8px;
+    border-left: 2px solid rgba(255,255,255,0.06);
+    padding-left: 6px;
+}
+
+#luker-orch-run-panel .section[data-status="failed"] {
+    border-left-color: var(--panel-danger);
+}
+
+#luker-orch-run-panel .section > details > summary {
+    padding: 4px 0;
+    cursor: pointer;
+    font-size: 12px;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+#luker-orch-run-panel .section pre {
+    margin: 4px 0 8px;
+    padding: 6px 8px;
+    background: color-mix(in srgb, var(--panel-fg) 6%, transparent);
+    border: 1px solid color-mix(in srgb, var(--panel-fg) 8%, transparent);
+    border-radius: 4px;
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-width: 100%;
+}
+
+#luker-orch-run-panel .section pre:empty {
+    display: none;
+}
+
+#luker-orch-run-panel .copy-btn {
+    margin-left: auto;
+    background: transparent;
+    border: none;
+    color: var(--panel-fg);
+    opacity: 0.4;
+    cursor: pointer;
+    padding: 0 4px;
+}
+#luker-orch-run-panel .section:hover .copy-btn { opacity: 0.9; }
+
+#luker-orch-run-panel .final-output {
+    margin-top: 16px;
+    padding: 10px;
+    border: 1px solid var(--panel-accent);
+    border-radius: 6px;
+    background: rgba(90, 163, 255, 0.05);
+}
+#luker-orch-run-panel .final-output header {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    opacity: 0.7;
+    margin-bottom: 6px;
+}
+#luker-orch-run-panel .final-output pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+#luker-orch-run-panel .jump-latest {
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    padding: 6px 10px;
+    background: var(--panel-accent);
+    color: #fff;
+    border: none;
+    border-radius: 16px;
+    font-size: 11px;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+#luker-orch-run-panel .empty-state {
+    padding: 24px 16px;
+    text-align: center;
+    opacity: 0.6;
+    font-size: 12px;
+}
+
+/* Floating "running" pill shown when panel is manually closed mid-run */
+#luker-orch-run-pill {
+    position: fixed;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 8900;
+    padding: 4px 10px;
+    background: var(--panel-running, #4dd6a1);
+    color: #001b14;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+}
+#luker-orch-run-pill[hidden] { display: none; }

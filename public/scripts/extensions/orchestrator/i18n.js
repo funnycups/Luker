@@ -7,14 +7,24 @@
  *
  * `registerLocaleData` is called once at module bootstrap; everything
  * else can call `i18n` synchronously after that.
+ *
+ * `SillyTavern.getContext()` is resolved lazily on first call so the
+ * runners (loop / agenda / spec / director) can import this module
+ * under Jest where the SillyTavern global is not set up.
  */
 
-const __ctx = SillyTavern.getContext();
-const addLocaleData = __ctx.addLocaleData;
-const translate = __ctx.translate;
+let _addLocaleData = null;
+let _translate = null;
+function ctx() {
+    if (_addLocaleData && _translate) return;
+    const c = (typeof SillyTavern !== 'undefined') ? SillyTavern.getContext() : null;
+    _addLocaleData = c?.addLocaleData || (() => {});
+    _translate = c?.translate || ((s) => String(s || ''));
+}
 
 export function i18n(text) {
-    return translate(String(text || ''));
+    ctx();
+    return _translate(String(text || ''));
 }
 
 export function i18nFormat(key, ...values) {
@@ -22,7 +32,8 @@ export function i18nFormat(key, ...values) {
 }
 
 export function registerLocaleData() {
-    addLocaleData('zh-cn', {
+    ctx();
+    _addLocaleData('zh-cn', {
         'Orchestrator': '多智能体编排',
         'Enabled': '启用',
         'Execution mode': '执行模式',
@@ -116,13 +127,11 @@ export function registerLocaleData() {
         'Copied agenda agents into spec presets and rebuilt stages as a starting point.': '已将 Agenda Agents 复制到 Spec，并重建阶段作为初始参考。',
         'Agenda Agents': 'Agenda Agents',
         'View Last Run': '查看最近一轮',
-        'View Runtime Trace': '查看运行态轨迹',
         'Latest Orchestration Result': '最近编排结果',
         'Anchored User Turn': '绑定用户楼层',
         'Last run state: none': '最近编排状态：无有效结果',
         'Last run state: none · stored anchors ${0}': '最近编排状态：无有效结果 · 已存锚点 ${0}',
         'Last run state: user turn ${0} · stored anchors ${1}': '最近编排状态：用户楼层 ${0} · 已存锚点 ${1}',
-        'Orchestration Runtime Trace': '编排运行态轨迹',
         'Edit Result': '编辑结果',
         'Edit latest orchestration result text.': '编辑最近一轮编排结果文本。',
         'Orchestration result cannot be empty.': '编排结果不能为空。',
@@ -132,13 +141,10 @@ export function registerLocaleData() {
         'Orchestration history invalidated. Rolled back to user turn ${0}.': '编排历史已失效，已回退到用户楼层 ${0}。',
         'Orchestration history invalidated. No valid stored result remains.': '编排历史已失效，当前没有可用的已存结果。',
         'No runtime orchestration trace available for this chat yet.': '当前聊天暂无可查看的运行态编排轨迹。',
-        'This trace is in-memory only and clears when chat changes.': '该轨迹仅保存在内存中，切换聊天时会清空。',
-        'Trace is still running. Close and reopen to refresh.': '轨迹仍在运行中；关闭后重新打开即可刷新。',
         'Flow Graph': '流程图',
         'Execution Timeline': '执行时间线',
         'Flow Events': '流程事件',
         'Latest capsule text': '最新注入文本',
-        'Raw runtime trace': '原始运行态轨迹',
         'Node Attempts': '节点执行次数',
         'Review Reruns': 'Review 重跑次数',
         'Review feedback': '审查反馈',
@@ -337,8 +343,6 @@ export function registerLocaleData() {
         'Main agent rounds': '主代理轮次',
         'Sub-agent dispatches': '子代理派发',
         'Main agent conversation (raw messages)': '主代理对话（原始消息）',
-        'Main Agent Rounds': '主代理轮次',
-        'Sub-agent Dispatches': '子代理派发',
         'Tool calls': '工具调用',
         'Arguments': '参数',
         'Result': '结果',
@@ -348,18 +352,13 @@ export function registerLocaleData() {
         '${0} tool call(s)': '${0} 个工具调用',
         'Setup': '准备阶段',
         'Rounds': '迭代轮次',
-        'Agent Rounds': '代理迭代轮次',
         'No rounds recorded yet.': '尚未记录任何轮次。',
         'No sub-agents dispatched.': '尚未派发子代理。',
         'No main-agent messages recorded yet.': '尚未记录主代理消息。',
         'Inline system prompt (preview)': '内联系统提示词（预览）',
         'inline': '内联',
-        'This trace is in-memory only and clears when chat changes.': '该轨迹仅保存在内存中，切换聊天会被清空。',
-        'Trace is still running. Close and reopen to refresh.': '轨迹仍在运行中，关闭后重新打开即可刷新。',
-        'Orchestration Runtime Trace': '编排运行态轨迹',
         'Flow Events': '流程事件',
         'Latest capsule text': '最近的胶囊文本',
-        'Raw runtime trace': '原始运行态轨迹',
         'Status': '状态',
         'Mode': '模式',
         'Generation Type': '生成类型',
@@ -610,8 +609,45 @@ export function registerLocaleData() {
         'Enter a name for the imported preset': '为导入的预设输入名称',
         'Imported preset.': '已导入预设。',
         'Exported preset.': '已导出预设。',
+        // Run Panel (Stage 4–5) — live orchestration progress dock that
+        // replaced the per-mode runtime-trace popups. Strings here are
+        // consumed by panel/renderer modules under
+        // public/scripts/extensions/orchestrator/run-panel/. `Stop` and
+        // `Close` reuse the existing global entries; everything else is
+        // new. Format-arg keys use ${0}/${1}/${2} to match i18nFormat.
+        'Show Run Panel': '显示运行面板',
+        'No active run yet. Start a conversation to see orchestration progress here.': '还没有运行中的编排。发起对话后这里会显示编排过程。',
+        'Export trace': '导出运行轨迹',
+        'Collapse all': '全部收起',
+        'Copy': '复制',
+        'Copied': '已复制',
+        'Jump to latest': '跳到最新',
+        'Final output': '最终输出',
+        'Reasoning': '思考',
+        'Text': '文本',
+        'Tool: ${0}': '工具：${0}',
+        'Tool result: ${0}': '工具结果：${0}',
+        'Sub-agent: ${0}': '子代理：${0}',
+        'Sub-agent ${0} · round ${1}': '子代理 ${0} · 第 ${1} 轮',
+        'Messages dump': '消息快照',
+        'Note': '备注',
+        'Director · round ${0}': '主控 · 第 ${0} 轮',
+        'Agent · round ${0}': '代理 · 第 ${0} 轮',
+        'Planner · round ${0}': '计划 · 第 ${0} 轮',
+        'Stage: ${0}': '阶段：${0}',
+        'Node: ${0} (attempt ${1})': '节点：${0}（第 ${1} 次尝试）',
+        'running': '进行中',
+        'done': '已完成',
+        'failed': '失败',
+        'committed': '已提交',
+        'aborted': '已中止',
+        'error': '错误',
+        '${0} rounds · ${1} tool calls · ${2} tokens': '${0} 轮 · ${1} 次工具调用 · ${2} tokens',
+        'Elapsed: ${0}': '耗时：${0}',
+        'Click to reopen': '点击重新打开',
+        'A run is already in progress.': '已有运行中的编排。',
     });
-    addLocaleData('zh-tw', {
+    _addLocaleData('zh-tw', {
         'Orchestrator': '多智能體編排',
         'Enabled': '啟用',
         'Execution mode': '執行模式',
@@ -704,13 +740,11 @@ export function registerLocaleData() {
         'Copied agenda agents into spec presets and rebuilt stages as a starting point.': '已將 Agenda Agents 複製到 Spec，並重建階段作為初始參考。',
         'Agenda Agents': 'Agenda Agents',
         'View Last Run': '查看最近一輪',
-        'View Runtime Trace': '查看執行態軌跡',
         'Latest Orchestration Result': '最近編排結果',
         'Anchored User Turn': '綁定使用者樓層',
         'Last run state: none': '最近編排狀態：無有效結果',
         'Last run state: none · stored anchors ${0}': '最近編排狀態：無有效結果 · 已存錨點 ${0}',
         'Last run state: user turn ${0} · stored anchors ${1}': '最近編排狀態：使用者樓層 ${0} · 已存錨點 ${1}',
-        'Orchestration Runtime Trace': '編排執行態軌跡',
         'Edit Result': '編輯結果',
         'Edit latest orchestration result text.': '編輯最近一輪編排結果文本。',
         'Orchestration result cannot be empty.': '編排結果不能為空。',
@@ -720,13 +754,10 @@ export function registerLocaleData() {
         'Orchestration history invalidated. Rolled back to user turn ${0}.': '編排歷史已失效，已回退到使用者樓層 ${0}。',
         'Orchestration history invalidated. No valid stored result remains.': '編排歷史已失效，目前沒有可用的已存結果。',
         'No runtime orchestration trace available for this chat yet.': '目前聊天尚無可檢視的執行態編排軌跡。',
-        'This trace is in-memory only and clears when chat changes.': '此軌跡僅保存在記憶體中，切換聊天時會清空。',
-        'Trace is still running. Close and reopen to refresh.': '軌跡仍在執行中；關閉後重新打開即可刷新。',
         'Flow Graph': '流程圖',
         'Execution Timeline': '執行時間線',
         'Flow Events': '流程事件',
         'Latest capsule text': '最新注入文本',
-        'Raw runtime trace': '原始執行態軌跡',
         'Node Attempts': '節點執行次數',
         'Review Reruns': 'Review 重跑次數',
         'Review feedback': '審查回饋',
@@ -925,8 +956,6 @@ export function registerLocaleData() {
         'Main agent rounds': '主代理輪次',
         'Sub-agent dispatches': '子代理派發',
         'Main agent conversation (raw messages)': '主代理對話（原始訊息）',
-        'Main Agent Rounds': '主代理輪次',
-        'Sub-agent Dispatches': '子代理派發',
         'Tool calls': '工具呼叫',
         'Arguments': '參數',
         'Result': '結果',
@@ -936,18 +965,13 @@ export function registerLocaleData() {
         '${0} tool call(s)': '${0} 個工具呼叫',
         'Setup': '準備階段',
         'Rounds': '迭代輪次',
-        'Agent Rounds': '代理迭代輪次',
         'No rounds recorded yet.': '尚未記錄任何輪次。',
         'No sub-agents dispatched.': '尚未派發子代理。',
         'No main-agent messages recorded yet.': '尚未記錄主代理訊息。',
         'Inline system prompt (preview)': '內聯系統提示詞（預覽）',
         'inline': '內聯',
-        'This trace is in-memory only and clears when chat changes.': '該軌跡僅保存在記憶體中，切換聊天會被清空。',
-        'Trace is still running. Close and reopen to refresh.': '軌跡仍在運行中，關閉後重新開啟即可重新整理。',
-        'Orchestration Runtime Trace': '編排執行階段軌跡',
         'Flow Events': '流程事件',
         'Latest capsule text': '最近的膠囊文字',
-        'Raw runtime trace': '原始執行階段軌跡',
         'Status': '狀態',
         'Mode': '模式',
         'Generation Type': '生成類型',
@@ -1194,5 +1218,37 @@ export function registerLocaleData() {
         'Enter a name for the imported preset': '為匯入的預設輸入名稱',
         'Imported preset.': '已匯入預設。',
         'Exported preset.': '已匯出預設。',
+        // Run Panel (Stage 4–5) — see zh-cn block above for context.
+        'Show Run Panel': '顯示運行面板',
+        'No active run yet. Start a conversation to see orchestration progress here.': '還沒有運行中的編排。發起對話後這裡會顯示編排過程。',
+        'Export trace': '匯出運行軌跡',
+        'Collapse all': '全部收起',
+        'Copy': '複製',
+        'Copied': '已複製',
+        'Jump to latest': '跳到最新',
+        'Final output': '最終輸出',
+        'Reasoning': '思考',
+        'Text': '文本',
+        'Tool: ${0}': '工具：${0}',
+        'Tool result: ${0}': '工具結果：${0}',
+        'Sub-agent: ${0}': '子代理：${0}',
+        'Sub-agent ${0} · round ${1}': '子代理 ${0} · 第 ${1} 輪',
+        'Messages dump': '訊息快照',
+        'Note': '備註',
+        'Director · round ${0}': '主控 · 第 ${0} 輪',
+        'Agent · round ${0}': '代理 · 第 ${0} 輪',
+        'Planner · round ${0}': '計劃 · 第 ${0} 輪',
+        'Stage: ${0}': '階段：${0}',
+        'Node: ${0} (attempt ${1})': '節點：${0}（第 ${1} 次嘗試）',
+        'running': '進行中',
+        'done': '已完成',
+        'failed': '失敗',
+        'committed': '已提交',
+        'aborted': '已中止',
+        'error': '錯誤',
+        '${0} rounds · ${1} tool calls · ${2} tokens': '${0} 輪 · ${1} 次工具呼叫 · ${2} tokens',
+        'Elapsed: ${0}': '耗時：${0}',
+        'Click to reopen': '點擊重新打開',
+        'A run is already in progress.': '已有運行中的編排。',
     });
 }
