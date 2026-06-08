@@ -714,7 +714,9 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         messages.push({
             role: 'assistant',
             content: result.assistantText || null,
+            reasoning: reasoningAccum || String(result?.reasoning || ''),
             tool_calls: assistantToolCallEntries,
+            _round: round,
         });
 
         let finalized = false;
@@ -781,6 +783,7 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                 role: 'tool',
                 tool_call_id: callId,
                 content: JSON.stringify(toolResult),
+                _round: round,
             });
         }
         if (finalized) return;

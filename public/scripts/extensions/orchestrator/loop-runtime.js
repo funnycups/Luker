@@ -907,6 +907,7 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
                 content: assistantText,
                 reasoning,
                 tool_calls: assistantToolCallEntries,
+                _round: round,
             });
 
             for (let i = 0; i < toolCalls.length; i += 1) {
@@ -928,7 +929,7 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
                             finalized: true,
                         });
                         // Record the finalize tool result for completeness.
-                        messages.push(makeOkToolMessage(persistedId, { ok: true, finalized: true }));
+                        messages.push(makeOkToolMessage(persistedId, { ok: true, finalized: true }, round));
                         break;
                     }
                     // Empty finalize — feed back as a structured error so
@@ -938,7 +939,7 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
                         'FINALIZE_EMPTY',
                         'Provide a non-empty capsule_text describing the guidance for the next turn.',
                     );
-                    messages.push(makeErrorToolMessage(persistedId, finalizeErr));
+                    messages.push(makeErrorToolMessage(persistedId, finalizeErr, round));
                     traceApi.record(trace, 'tool_error', {
                         round,
                         name,
@@ -951,11 +952,11 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
 
                 try {
                     const result = await executeTool(name, args, toolContext);
-                    messages.push(makeOkToolMessage(persistedId, normalizeToolOk(result)));
+                    messages.push(makeOkToolMessage(persistedId, normalizeToolOk(result), round));
                     traceApi.record(trace, 'tool_result', { round, name, tool_call_id: persistedId });
                 } catch (error) {
                     if (isStructuredToolError(error)) {
-                        messages.push(makeErrorToolMessage(persistedId, error));
+                        messages.push(makeErrorToolMessage(persistedId, error, round));
                         traceApi.record(trace, 'tool_error', {
                             round,
                             name,
@@ -1017,15 +1018,16 @@ function safeStringifyArgs(value) {
     }
 }
 
-function makeOkToolMessage(toolCallId, payload) {
+function makeOkToolMessage(toolCallId, payload, round) {
     return {
         role: 'tool',
         tool_call_id: String(toolCallId || ''),
         content: safeStringifyToolPayload(payload),
+        _round: Number(round || 0),
     };
 }
 
-function makeErrorToolMessage(toolCallId, error) {
+function makeErrorToolMessage(toolCallId, error, round) {
     const payload = {
         ok: false,
         error: String(error?.message || error || ''),
@@ -1036,6 +1038,7 @@ function makeErrorToolMessage(toolCallId, error) {
         role: 'tool',
         tool_call_id: String(toolCallId || ''),
         content: safeStringifyToolPayload(payload),
+        _round: Number(round || 0),
     };
 }
 

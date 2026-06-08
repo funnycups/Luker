@@ -889,7 +889,9 @@ export function createSubagentDispatcher({
                     subMessages.push({
                         role: 'assistant',
                         content: roundAssistantText || null,
+                        reasoning: roundReasoningText || '',
                         tool_calls: assistantToolCallEntries,
+                        _round: r,
                     });
                     for (let i = 0; i < roundToolCalls.length; i += 1) {
                         const call = roundToolCalls[i];
@@ -927,6 +929,7 @@ export function createSubagentDispatcher({
                             role: 'tool',
                             tool_call_id: callId,
                             content: JSON.stringify(toolResult),
+                            _round: r,
                         });
                     }
                 }
