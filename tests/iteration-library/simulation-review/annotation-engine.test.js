@@ -279,3 +279,80 @@ test('deleteAnnotation strips the inline comment input as well as the × control
     const joined = segments.map(s => s.text).join('');
     expect(joined).toBe('foo bar baz');
 });
+
+describe('selectionOverlapsExistingAnnotation performance', () => {
+    test('50 existing annotations + 1 fresh-range overlap check completes in < 50ms', () => {
+        // Build a host with 50 paragraphs.
+        let html = '';
+        for (let i = 0; i < 50; i++) {
+            html += `<p id="p${i}">paragraph number ${i} with some content text</p>`;
+        }
+        const host = setupHost(html);
+        const engine = createAnnotationEngine({ host });
+        // Annotate one word inside each paragraph.
+        for (let i = 0; i < 50; i++) {
+            const p = host.querySelector(`#p${i}`);
+            const textNode = p.firstChild;
+            selectTextInNode(textNode, 0, 9); // 'paragraph'
+            engine.addAnnotationFromSelection(window.getSelection(), '');
+        }
+        // Now pick a fresh range in a different paragraph that does NOT
+        // overlap any existing mark — this is the worst case for the
+        // overlap scan since it must inspect every mark.
+        const target = host.querySelector('#p25');
+        // Annotation wrapped 'paragraph' (chars 0-9); ' number 25' starts
+        // at the next text node. Find the text node just after the mark.
+        const afterMark = target.lastChild; // ' number 25 with some content text'
+        selectTextInNode(afterMark, 1, 7); // 'number'
+        const start = performance.now();
+        const ann = engine.addAnnotationFromSelection(window.getSelection(), '');
+        const elapsed = performance.now() - start;
+        expect(ann).toBeDefined();
+        expect(elapsed).toBeLessThan(50);
+    });
+});
+
+describe('selectionOverlapsExistingAnnotation correctness after rewrite', () => {
+    test('rejects exact-overlap selection', () => {
+        const host = setupHost('<p id="p"><span id="target">hello world</span></p>');
+        const engine = createAnnotationEngine({ host });
+        const span = host.querySelector('#target');
+        selectTextInNode(span.firstChild, 0, 5); // 'hello'
+        engine.addAnnotationFromSelection(window.getSelection(), '');
+        // Try to annotate the same range again.
+        selectTextInNode(host.querySelector('mark.luker-sim-annotation').firstChild, 0, 5);
+        expect(() => engine.addAnnotationFromSelection(window.getSelection(), ''))
+            .toThrow(/overlap/i);
+    });
+
+    test('rejects selection that strictly contains an existing mark', () => {
+        const host = setupHost('<p id="p">aaaa BBBB cccc</p>');
+        const engine = createAnnotationEngine({ host });
+        const text = host.querySelector('#p').firstChild;
+        selectTextInNode(text, 5, 9); // 'BBBB'
+        engine.addAnnotationFromSelection(window.getSelection(), '');
+        // Select 'aaaa BBBB cccc' as one range that contains the mark.
+        const p = host.querySelector('#p');
+        const range = document.createRange();
+        range.selectNodeContents(p);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        expect(() => engine.addAnnotationFromSelection(sel, ''))
+            .toThrow(/overlap/i);
+    });
+
+    test('accepts adjacent-but-not-overlapping selection', () => {
+        const host = setupHost('<p id="p">aaaa BBBB cccc</p>');
+        const engine = createAnnotationEngine({ host });
+        const text = host.querySelector('#p').firstChild;
+        selectTextInNode(text, 5, 9); // 'BBBB' annotated
+        engine.addAnnotationFromSelection(window.getSelection(), '');
+        // Select 'cccc' — strictly after the mark.
+        const afterMark = host.querySelector('mark.luker-sim-annotation').nextSibling;
+        selectTextInNode(afterMark, 1, 5);
+        const ann = engine.addAnnotationFromSelection(window.getSelection(), '');
+        expect(ann).toBeDefined();
+        expect(ann.snippet).toBe('cccc');
+    });
+});
