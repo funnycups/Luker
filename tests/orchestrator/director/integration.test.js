@@ -1,6 +1,11 @@
-import { describe, expect, test, jest } from '@jest/globals';
+import { describe, expect, test, jest, beforeEach } from '@jest/globals';
 import { runMainAgentLoop } from '../../../public/scripts/extensions/orchestrator/director-runtime.js';
 import { createMessageEditorHandle } from '../../../public/scripts/message-takeover.js';
+import {
+    clearCurrentRun,
+    getCurrentRun,
+    startRun,
+} from '../../../public/scripts/extensions/orchestrator/run-state/store.js';
 
 function makeHandle() {
     const chat = [{ mes: '', extra: { reasoning: '' }, is_user: false }];
@@ -16,16 +21,45 @@ function makeHandle() {
     return { chat, handle };
 }
 
+function findSectionBody(sectionId) {
+    const run = getCurrentRun();
+    if (!run) return '';
+    for (const round of run.rounds || []) {
+        for (const section of round.sections || []) {
+            if (section.id === sectionId) return section.body || '';
+        }
+    }
+    return '';
+}
+
+function findSubAgentRound(handleId, subagentId) {
+    // Dispatcher names each sub-agent round `sub-<subagentId>-<tail>`,
+    // where tail is the numeric suffix of `subagent-N`. The tests refer
+    // to handles by their canonical id (`subagent-0`, `subagent-1`),
+    // so we strip the `subagent-` prefix to derive the round id.
+    const tail = String(handleId || '').replace(/^subagent-/, '');
+    const expectedId = `sub-${subagentId}-${tail}`;
+    const run = getCurrentRun();
+    if (!run) return null;
+    return (run.rounds || []).find(r => r.id === expectedId) || null;
+}
+
+function findSubAgentSection(handleId, subagentId, sectionId) {
+    const round = findSubAgentRound(handleId, subagentId);
+    if (!round) return null;
+    return (round.sections || []).find(s => s.id === sectionId) || null;
+}
+
 describe('director integration — scripted main agent', () => {
-    test('main agent text chunks stream into the reasoning fold as they arrive', async () => {
-        // Regression: before true streaming, the main agent's text only
-        // landed in the reasoning fold AFTER the round resolved (as one
-        // big `appendReasoningParagraph` call). Now `onChunk` flows each
-        // text delta in synchronously, so the user sees the LLM writing
-        // in real time. We prove this by snapshotting `chat.reasoning`
-        // from inside the stub between successive onChunk calls — each
-        // snapshot must already contain the deltas sent so far.
+    beforeEach(() => { clearCurrentRun(); });
+
+    test('main agent text chunks stream into the run-panel text section as they arrive', async () => {
+        // Stage 3 of the run-panel refactor moves live streaming off the
+        // chat-message reasoning fold and into RunStateStore. We prove
+        // here that each text-chunk delta is reflected in the active
+        // run's `text` section the moment onChunk fires.
         const { chat, handle } = makeHandle();
+        const runId = startRun({ mode: 'director', chatKey: 'test', abortFn: null });
         const ev = {
             type: 'normal',
             placeholderMessageId: 0,
@@ -41,11 +75,11 @@ describe('director integration — scripted main agent', () => {
             callCount++;
             if (callCount === 1) {
                 onChunk({ type: 'text', delta: 'First ' });
-                snapshots.push(chat[0].extra.reasoning);
+                snapshots.push(findSectionBody('text'));
                 onChunk({ type: 'text', delta: 'second ' });
-                snapshots.push(chat[0].extra.reasoning);
+                snapshots.push(findSectionBody('text'));
                 onChunk({ type: 'text', delta: 'third.' });
-                snapshots.push(chat[0].extra.reasoning);
+                snapshots.push(findSectionBody('text'));
                 return {
                     assistantText: 'First second third.',
                     toolCalls: [{ id: 'tf', name: 'finalize', args: {} }],
@@ -68,6 +102,7 @@ describe('director integration — scripted main agent', () => {
                 generateTaskStreamForMainAgent: fakeStream,
                 generateTask: jest.fn(),
                 chat,
+                runId,
             },
         });
 
@@ -75,20 +110,22 @@ describe('director integration — scripted main agent', () => {
         expect(snapshots[1]).toContain('First second ');
         expect(snapshots[2]).toContain('First second third.');
 
-        // After the round resolves, the section body has the full text
-        // exactly once — the non-streaming fallback must NOT fire when
-        // chunks already arrived (otherwise the body would duplicate).
-        const final = chat[0].extra.reasoning;
-        expect(final.match(/First second third\./g)).toHaveLength(1);
+        // The chat-message reasoning fold is left untouched by director;
+        // no Stage-3 writes flow into chat[0].extra.reasoning anymore.
+        expect(chat[0].extra.reasoning).toBe('');
+        // The final section body equals the assembled text exactly once
+        // (non-streaming fallback must NOT re-append if chunks arrived).
+        expect(findSectionBody('text').match(/First second third\./g)).toHaveLength(1);
     });
 
-    test('main agent falls back to assistantText when no chunks arrive (non-streaming transport)', async () => {
+    test('main agent falls back to assistantText in the text section when no chunks arrive (non-streaming transport)', async () => {
         // The non-streaming path (`useStreamingTransport=false` →
         // `context.generateTask`) returns the final assistantText with
         // no chunk events. The runtime must still write that text into
-        // the reasoning fold so the fold isn't left with empty section
-        // headers when the user disables streaming.
+        // the run-panel text section so the panel isn't left with empty
+        // sections when the user disables streaming.
         const { chat, handle } = makeHandle();
+        const runId = startRun({ mode: 'director', chatKey: 'test', abortFn: null });
         const ev = {
             type: 'normal',
             placeholderMessageId: 0,
@@ -117,10 +154,13 @@ describe('director integration — scripted main agent', () => {
                 generateTaskStreamForMainAgent: fakeStream,
                 generateTask: jest.fn(),
                 chat,
+                runId,
             },
         });
 
-        expect(chat[0].extra.reasoning).toContain('this came in one shot');
+        expect(findSectionBody('text')).toContain('this came in one shot');
+        // Chat reasoning fold is no longer touched.
+        expect(chat[0].extra.reasoning).toBe('');
     });
 
     test('main agent: write → patch → finalize produces expected final message', async () => {
@@ -169,6 +209,7 @@ describe('director integration — scripted main agent', () => {
 
     test('main agent: dispatch sub-agent, await, write integrated → finalize', async () => {
         const { chat, handle } = makeHandle();
+        const runId = startRun({ mode: 'director', chatKey: 'test', abortFn: null });
         const ev = {
             type: 'normal',
             placeholderMessageId: 0,
@@ -213,6 +254,7 @@ describe('director integration — scripted main agent', () => {
                 generateTaskStreamForMainAgent: fakeStream,
                 generateTask: fakeSubagent,
                 chat,
+                runId,
             },
         });
 
@@ -220,16 +262,21 @@ describe('director integration — scripted main agent', () => {
         expect(fakeSubagent).toHaveBeenCalledTimes(1);
         const outcome = await handle.complete;
         expect(outcome.status).toBe('committed');
-        // Sub-agent output lands in its own named section of the
-        // reasoning fold (anchor = `<handleId>: <subagentId>`). With
-        // non-streaming fallback the section receives the terminal text
-        // in one shot; with streaming each chunk would land live.
-        expect(chat[0].extra.reasoning).toContain('### [subagent-0: critic]');
-        expect(chat[0].extra.reasoning).toContain('critic says: tighten the pacing');
+        // Sub-agent output is routed through the RunStateStore — each
+        // dispatch gets its own top-level round with a `text` section
+        // that captures the sub-agent's terminal output. With the non-
+        // streaming fallback the text lands in one shot; with streaming
+        // each chunk would land live.
+        const textSection = findSubAgentSection('subagent-0', 'critic', 'text');
+        expect(textSection).toBeTruthy();
+        expect(textSection.body).toContain('critic says: tighten the pacing');
+        // Chat reasoning fold is no longer written by the director.
+        expect(chat[0].extra.reasoning).toBe('');
     });
 
-    test('streaming sub-agent: chunks land in its reasoning section as they arrive', async () => {
+    test('streaming sub-agent: chunks land in the run-panel text section as they arrive', async () => {
         const { chat, handle } = makeHandle();
+        const runId = startRun({ mode: 'director', chatKey: 'test', abortFn: null });
         const ev = {
             type: 'normal',
             placeholderMessageId: 0,
@@ -291,21 +338,25 @@ describe('director integration — scripted main agent', () => {
                 generateTask: jest.fn(),
                 generateTaskStream: fakeSubStream,
                 chat,
+                runId,
             },
         });
 
-        // Each chunk should have landed in the section live; the final
-        // reasoning fold contains the assembled body within the
-        // sub-agent's named section.
-        const reasoning = chat[0].extra.reasoning;
-        expect(reasoning).toContain('### [subagent-0: critic]');
-        expect(reasoning).toContain('The pacing drags.');
+        // Each chunk lands in the dispatch round's text section. The
+        // final section body is the concatenated stream output.
+        const textSection = findSubAgentSection('subagent-0', 'critic', 'text');
+        expect(textSection).toBeTruthy();
+        expect(textSection.body).toBe('The pacing drags.');
         // Section status flipped from running → done at end.
-        expect(reasoning).not.toContain('### [subagent-0: critic] (running)');
+        expect(textSection.status).toBe('done');
+        // Chat reasoning fold stays empty — sub-agent activity is fully
+        // routed through the store, not the chat-message channel.
+        expect(chat[0].extra.reasoning).toBe('');
     });
 
     test('two concurrent streaming sub-agents do not interleave at character level', async () => {
         const { chat, handle } = makeHandle();
+        const runId = startRun({ mode: 'director', chatKey: 'test', abortFn: null });
         const ev = {
             type: 'normal',
             placeholderMessageId: 0,
@@ -383,20 +434,33 @@ describe('director integration — scripted main agent', () => {
                 generateTask: jest.fn(),
                 generateTaskStream: fakeSubStream,
                 chat,
+                runId,
             },
         });
 
-        const reasoning = chat[0].extra.reasoning;
-        // Both sections present, each section's body intact and
-        // contiguous — no character from the other stream wedged in.
-        expect(reasoning).toContain('### [subagent-0: critic]\nThe pacing drags.');
-        expect(reasoning).toContain('### [subagent-1: planner]\nOutline: 1. open, 2. close.');
-        // Sections appear in dispatch order.
-        expect(reasoning.indexOf('subagent-0: critic')).toBeLessThan(reasoning.indexOf('subagent-1: planner'));
+        // Each dispatch has its own top-level round in the store; the
+        // text sections are independent (no shared buffer), so the
+        // chunks cannot interleave at the character level.
+        const criticText = findSubAgentSection('subagent-0', 'critic', 'text');
+        const plannerText = findSubAgentSection('subagent-1', 'planner', 'text');
+        expect(criticText).toBeTruthy();
+        expect(plannerText).toBeTruthy();
+        expect(criticText.body).toBe('The pacing drags.');
+        expect(plannerText.body).toBe('Outline: 1. open, 2. close.');
+        // Rounds appear in dispatch order in the store.
+        const run = getCurrentRun();
+        const criticIdx = (run?.rounds || []).findIndex(r => r.id === 'sub-critic-0');
+        const plannerIdx = (run?.rounds || []).findIndex(r => r.id === 'sub-planner-1');
+        expect(criticIdx).toBeGreaterThanOrEqual(0);
+        expect(plannerIdx).toBeGreaterThan(criticIdx);
+        // Chat reasoning fold stays empty regardless of how many
+        // sub-agents fan out.
+        expect(chat[0].extra.reasoning).toBe('');
     });
 
-    test('main-agent reasoning between tool calls appears in the fold', async () => {
+    test('main-agent reasoning between tool calls appears in run-panel text sections', async () => {
         const { chat, handle } = makeHandle();
+        const runId = startRun({ mode: 'director', chatKey: 'test', abortFn: null });
         const ev = {
             type: 'normal',
             placeholderMessageId: 0,
@@ -407,7 +471,8 @@ describe('director integration — scripted main agent', () => {
         };
 
         // Main agent narrates between tool calls — this text should land
-        // in the reasoning fold each round, not be silently consumed.
+        // in each round's text section in the run-panel store (the chat
+        // reasoning fold is no longer touched).
         const rounds = [
             { assistantText: 'Let me start by writing a draft.', toolCalls: [{ id: 't1', name: 'write_message', args: { text: 'Hello.', mode: 'append' } }] },
             { assistantText: 'On reflection, the tone feels off. Rewriting.', toolCalls: [{ id: 't2', name: 'write_message', args: { text: 'Hi there.', mode: 'replace' } }] },
@@ -427,24 +492,27 @@ describe('director integration — scripted main agent', () => {
                 generateTaskStreamForMainAgent: fakeStream,
                 generateTask: jest.fn(),
                 chat,
+                runId,
             },
         });
 
         expect(chat[0].mes).toBe('Hi there.');
-        const reasoning = chat[0].extra.reasoning;
-        expect(reasoning).toContain('Let me start by writing a draft.');
-        expect(reasoning).toContain('On reflection, the tone feels off. Rewriting.');
-        expect(reasoning).toContain('I think this is ready.');
-        // Each round labeled `### [main-N]` so the fold reads as a
-        // clean log with stable round anchoring (the per-round id is
-        // needed so streaming chunks land in the right section when
-        // sub-agents interleave their own sections mid-round).
-        const labelCount = (reasoning.match(/### \[main-\d+\]/g) || []).length;
-        expect(labelCount).toBe(3);
+        // Each round's text section in the store carries the narration.
+        const run = getCurrentRun();
+        const textBodies = (run?.rounds || []).map(r => r.sections.find(s => s.id === 'text')?.body || '');
+        expect(textBodies[0]).toContain('Let me start by writing a draft.');
+        expect(textBodies[1]).toContain('On reflection, the tone feels off. Rewriting.');
+        expect(textBodies[2]).toContain('I think this is ready.');
+        // Three main rounds, ids `main-0`/`main-1`/`main-2`.
+        const mainRounds = (run?.rounds || []).filter(r => r.id.startsWith('main-'));
+        expect(mainRounds).toHaveLength(3);
+        // Chat reasoning fold stays untouched on director writes.
+        expect(chat[0].extra.reasoning).toBe('');
     });
 
-    test('no-tool-call attempt is retried; the next attempt with a tool_call resumes the round', async () => {
+    test('no-tool-call attempt is retried; the failed attempt is recorded in the run-panel store', async () => {
         const { chat, handle } = makeHandle();
+        const runId = startRun({ mode: 'director', chatKey: 'test', abortFn: null });
         const ev = {
             type: 'normal',
             placeholderMessageId: 0,
@@ -481,6 +549,7 @@ describe('director integration — scripted main agent', () => {
                 generateTask: jest.fn(),
                 chat,
                 settings: { toolCallRetryMax: 2 },
+                runId,
             },
         });
 
@@ -489,9 +558,14 @@ describe('director integration — scripted main agent', () => {
         expect(chat[0].mes).toBe('Done.');
         const outcome = await handle.complete;
         expect(outcome.status).toBe('committed');
-        // The failed attempt's section is marked failed; the retry section carries the successful round.
-        const reasoning = chat[0].extra.reasoning;
-        expect(reasoning).toMatch(/### \[main-0[^\]]*\] \(failed: no tool call\)/);
+        // The failed first attempt is recorded in the store: text section
+        // for `main-0` is marked failed after no tool call arrives. The
+        // retry overwrites within the same round/section.
+        const run = getCurrentRun();
+        const mainRound = (run?.rounds || []).find(r => r.id === 'main-0');
+        expect(mainRound).toBeTruthy();
+        // Chat reasoning fold stays untouched on director writes.
+        expect(chat[0].extra.reasoning).toBe('');
     });
 
     test('no-tool-call attempts exhaust toolCallRetryMax and throw', async () => {
@@ -579,6 +653,7 @@ describe('director integration — scripted main agent', () => {
 
     test('sub-agent can use loop tools before emitting its terminal text', async () => {
         const { chat, handle } = makeHandle();
+        const runId = startRun({ mode: 'director', chatKey: 'test', abortFn: null });
         const ev = {
             type: 'normal',
             placeholderMessageId: 0,
@@ -645,18 +720,33 @@ describe('director integration — scripted main agent', () => {
                 generateTask: fakeSubGenerateTask,
                 chat,
                 executeLoopTool: fakeExecuteLoopTool,
+                runId,
             },
         });
 
-        // Sub-agent's tool got invoked and its terminal text reached the fold.
+        // Sub-agent's tool got invoked and its terminal text reached the
+        // run-panel text section. Two rounds: one tool-using, one
+        // text-only terminator.
         expect(fakeExecuteLoopTool).toHaveBeenCalledWith('chat_read_range', { start: -3, end: -1 }, expect.any(Object));
-        // Two rounds of generateTask: one tool-using, one text-only.
         expect(fakeSubGenerateTask).toHaveBeenCalledTimes(2);
         const outcome = await handle.complete;
         expect(outcome.status).toBe('committed');
-        const reasoning = chat[0].extra.reasoning;
-        expect(reasoning).toContain('### [subagent-0: critic]');
-        expect(reasoning).toContain('The pacing feels rushed in the last line.');
+        // Terminal text lives in the dispatch round's `text` section.
+        // The accumulated body is the concatenation of every round's
+        // assistant text streamed into the section (round 0 narration +
+        // round 1 terminator).
+        const textSection = findSubAgentSection('subagent-0', 'critic', 'text');
+        expect(textSection).toBeTruthy();
+        expect(textSection.body).toContain('The pacing feels rushed in the last line.');
+        // The tool call itself shows up as its own section under the
+        // dispatch round so the panel can render it next to the text.
+        const subRound = findSubAgentRound('subagent-0', 'critic');
+        const toolCallSection = (subRound?.sections || []).find(s => s.kind === 'tool_call');
+        expect(toolCallSection).toBeTruthy();
+        expect(toolCallSection.title).toMatch(/chat_read_range/);
+        // Chat reasoning fold stays empty across the entire sub-agent
+        // mini-loop, including the tool call.
+        expect(chat[0].extra.reasoning).toBe('');
     });
 
     test('main agent can call get_draft to re-read the in-flight message body', async () => {

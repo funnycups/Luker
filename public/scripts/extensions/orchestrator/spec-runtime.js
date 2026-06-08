@@ -61,23 +61,15 @@ import {
     buildPreviousOutputsMarkdown,
     buildStageWorkerOutputMap,
     mergeNodeOutputMaps,
+    toReadableYamlText,
 } from './output-formatting.js';
+import { buildAutoInjectedNodePromptPrelude, buildReviewRuntimeContextText, getRuntimeApprovedReviewFeedbackEntries, trimRuntimeApprovedReviewFeedbackEntries, upsertRuntimeApprovedReviewFeedbackEntry } from './review-feedback.js';
 import {
-    buildAutoInjectedNodePromptPrelude,
-    buildReviewRuntimeContextText,
-    getRuntimeApprovedReviewFeedbackEntries,
-    trimRuntimeApprovedReviewFeedbackEntries,
-    upsertRuntimeApprovedReviewFeedbackEntry,
-} from './review-feedback.js';
-import {
-    beginOrchestrationRuntimeNodeAttempt,
-    beginOrchestrationRuntimeStage,
-    createOrchestrationRuntimeTrace,
-    finishOrchestrationRuntimeNodeAttempt,
-    finishOrchestrationRuntimeStage,
-    recordOrchestrationRuntimeEvent,
-} from './runtime-trace.js';
-import { getPreviousOrchestrationCapsuleText } from './snapshot-cache.js';
+    appendRound, appendToSection, ensureSection,
+    finishRun, setRoundStatus, setSectionStatus, startRun,
+} from './run-state/store.js';
+import { i18n, i18nFormat } from './i18n.js';
+import { getChatKey, getPreviousOrchestrationCapsuleText } from './snapshot-cache.js';
 import {
     getNodeIterationMaxRounds,
     getReviewRerunMaxRounds,
@@ -122,6 +114,249 @@ async function loadSkillResolution() {
 }
 
 const MODULE_NAME = 'orchestrator';
+
+// Inline trace helpers. Replaces the deleted runtime-trace.js module so
+// the existing trace data structure (consumed by the simulation-payload
+// adapter and the legacy runtime-trace popup) is still produced by the
+// runner. Run-panel state lives in run-state/store.js and is written in
+// parallel via startRun / appendRound / appendToSection.
+
+function buildRuntimeSlotKey(stageIndex, nodeIndex, nodeId = '') {
+    return [Number(stageIndex), Number(nodeIndex), String(nodeId || '').trim()].join(':');
+}
+
+function cloneTraceValue(value) {
+    if (typeof value === 'string') return String(value);
+    if (value && typeof value === 'object') return structuredClone(value);
+    return value;
+}
+
+function serializeTraceValue(value) {
+    if (typeof value === 'string') return String(value || '');
+    if (value && typeof value === 'object') return toReadableYamlText(value, '{}');
+    if (value == null) return '';
+    return String(value);
+}
+
+function truncateTracePreview(value, maxChars = 240) {
+    const text = String(value || '').trim();
+    if (!text) return '';
+    return text.length > maxChars ? `${text.slice(0, maxChars).trimEnd()}…` : text;
+}
+
+function sanitizeTraceConversation(conversation) {
+    if (!conversation || typeof conversation !== 'object') return null;
+    const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
+    return { messages: messages.map(m => structuredClone(m)) };
+}
+
+function buildRuntimeStageLayout(stages = []) {
+    return (Array.isArray(stages) ? stages : []).map((stage, stageIndex) => ({
+        stageIndex,
+        id: String(stage?.id || `stage_${stageIndex + 1}`),
+        mode: getStageRuntimeMode(stage),
+        nodes: (Array.isArray(stage?.nodes) ? stage.nodes : []).map((rawNode, nodeIndex) => {
+            const nodeSpec = normalizeNodeSpec(rawNode);
+            return {
+                stageIndex,
+                nodeIndex,
+                slotKey: buildRuntimeSlotKey(stageIndex, nodeIndex, nodeSpec.id),
+                id: String(nodeSpec?.id || ''),
+                preset: String(nodeSpec?.preset || ''),
+                type: normalizeNodeType(nodeSpec?.type),
+            };
+        }).filter(node => node.id),
+    }));
+}
+
+function createRuntimeTrace(context, payload, stages = []) {
+    const now = new Date().toISOString();
+    const trace = {
+        runId: `orch_runtime_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+        chatKey: String(getChatKey(context) || ''),
+        status: 'running',
+        startedAt: now,
+        updatedAt: now,
+        finishedAt: '',
+        generationType: String(payload?.type || '').trim().toLowerCase(),
+        targetLayer: 0,
+        note: '',
+        capsuleText: '',
+        error: '',
+        mode: '',
+        stages: buildRuntimeStageLayout(stages),
+        attempts: [],
+        events: [],
+        nextEventSeq: 1,
+        nextAttemptId: 1,
+        reviewRerunCount: 0,
+    };
+    recordRuntimeEvent(trace, 'run_started', {
+        status: trace.status,
+        generationType: trace.generationType,
+        targetLayer: trace.targetLayer,
+        note: trace.note,
+    });
+    return trace;
+}
+
+function recordRuntimeEvent(trace, type, details = {}) {
+    if (!trace || typeof trace !== 'object') return null;
+    const event = {
+        seq: Number(trace.nextEventSeq || 1),
+        at: new Date().toISOString(),
+        type: String(type || 'event'),
+        ...(details && typeof details === 'object' ? structuredClone(details) : {}),
+    };
+    trace.nextEventSeq = event.seq + 1;
+    trace.updatedAt = event.at;
+    trace.events.push(event);
+    return event;
+}
+
+function finalizeRuntimeTrace(trace, status, details = {}) {
+    if (!trace || typeof trace !== 'object') return;
+    const normalizedStatus = String(status || trace.status || 'completed');
+    trace.status = normalizedStatus;
+    trace.updatedAt = new Date().toISOString();
+    trace.finishedAt = normalizedStatus === 'running' ? '' : trace.updatedAt;
+    if (Object.prototype.hasOwnProperty.call(details || {}, 'capsuleText')) trace.capsuleText = String(details?.capsuleText || '');
+    if (Object.prototype.hasOwnProperty.call(details || {}, 'note')) trace.note = String(details?.note || '');
+    if (Object.prototype.hasOwnProperty.call(details || {}, 'error')) trace.error = String(details?.error || '');
+    if (Object.prototype.hasOwnProperty.call(details || {}, 'reviewRerunCount')) {
+        trace.reviewRerunCount = Math.max(0, Math.floor(Number(details?.reviewRerunCount) || 0));
+    }
+    recordRuntimeEvent(trace, 'run_finished', {
+        status: normalizedStatus,
+        note: trace.note,
+        error: trace.error,
+        reviewRerunCount: Number(trace.reviewRerunCount || 0),
+    });
+}
+
+function beginRuntimeStage(trace, stage, stageIndex, options = {}) {
+    if (!trace || typeof trace !== 'object') return null;
+    const stageState = {
+        stageIndex: Number(stageIndex || 0),
+        stageId: String(stage?.id || `stage_${Number(stageIndex || 0) + 1}`),
+        mode: getStageRuntimeMode(stage),
+        replay: Boolean(options?.replay),
+        partial: Number.isInteger(options?.stopBeforeNodeIndex),
+        stopBeforeNodeIndex: Number.isInteger(options?.stopBeforeNodeIndex) ? Number(options.stopBeforeNodeIndex) : null,
+        startedAt: new Date().toISOString(),
+    };
+    recordRuntimeEvent(trace, 'stage_started', stageState);
+    return stageState;
+}
+
+function finishRuntimeStage(trace, stageState, details = {}) {
+    if (!trace || typeof trace !== 'object' || !stageState || typeof stageState !== 'object') return;
+    recordRuntimeEvent(trace, 'stage_finished', {
+        stageIndex: Number(stageState.stageIndex || 0),
+        stageId: String(stageState.stageId || ''),
+        mode: String(stageState.mode || 'serial'),
+        replay: Boolean(stageState.replay),
+        partial: Boolean(stageState.partial),
+        stopBeforeNodeIndex: Number.isInteger(stageState.stopBeforeNodeIndex) ? stageState.stopBeforeNodeIndex : null,
+        status: String(details?.status || 'completed'),
+        error: String(details?.error || ''),
+        stageOutput: cloneTraceValue(details?.stageOutput),
+    });
+}
+
+function beginRuntimeNodeAttempt(trace, meta = {}) {
+    if (!trace || typeof trace !== 'object') return null;
+    const attempt = {
+        attemptId: `attempt_${Number(trace.nextAttemptId || 1)}`,
+        sequence: Number(trace.nextEventSeq || 1),
+        stageIndex: Number(meta?.stageIndex || 0),
+        stageId: String(meta?.stageId || ''),
+        nodeIndex: Number(meta?.nodeIndex || 0),
+        nodeId: String(meta?.nodeId || ''),
+        preset: String(meta?.preset || ''),
+        nodeType: normalizeNodeType(meta?.nodeType),
+        slotKey: String(meta?.slotKey || buildRuntimeSlotKey(meta?.stageIndex, meta?.nodeIndex, meta?.nodeId)),
+        runKind: String(meta?.runKind || 'worker'),
+        round: Math.max(1, Math.floor(Number(meta?.round) || 1)),
+        startedAt: new Date().toISOString(),
+        endedAt: '',
+        status: 'running',
+        rerunReason: String(meta?.rerunReason || ''),
+        output: null,
+        outputText: '',
+        previewText: '',
+        action: '',
+        targetNodeIds: [],
+        reason: '',
+        replayResult: null,
+        error: '',
+        conversation: null,
+    };
+    trace.nextAttemptId = Number(trace.nextAttemptId || 1) + 1;
+    trace.attempts.push(attempt);
+    recordRuntimeEvent(trace, 'node_started', {
+        attemptId: attempt.attemptId,
+        stageIndex: attempt.stageIndex,
+        stageId: attempt.stageId,
+        nodeIndex: attempt.nodeIndex,
+        nodeId: attempt.nodeId,
+        preset: attempt.preset,
+        nodeType: attempt.nodeType,
+        runKind: attempt.runKind,
+        round: attempt.round,
+        rerunReason: attempt.rerunReason,
+    });
+    return attempt;
+}
+
+function finishRuntimeNodeAttempt(trace, attempt, details = {}) {
+    if (!trace || typeof trace !== 'object' || !attempt || typeof attempt !== 'object') return;
+    attempt.endedAt = new Date().toISOString();
+    attempt.status = String(details?.status || attempt.status || 'completed');
+    attempt.action = String(details?.action || attempt.action || '');
+    attempt.reason = String(details?.reason || attempt.reason || '');
+    attempt.rerunReason = String(
+        Object.prototype.hasOwnProperty.call(details || {}, 'rerunReason')
+            ? details?.rerunReason
+            : attempt.rerunReason,
+    ) || '';
+    attempt.targetNodeIds = Array.isArray(details?.targetNodeIds)
+        ? details.targetNodeIds.map(item => String(item || '').trim()).filter(Boolean)
+        : (Array.isArray(attempt.targetNodeIds) ? attempt.targetNodeIds : []);
+    attempt.replayResult = Object.prototype.hasOwnProperty.call(details || {}, 'replayResult')
+        ? cloneTraceValue(details?.replayResult)
+        : attempt.replayResult;
+    attempt.error = String(details?.error || '');
+    if (Object.prototype.hasOwnProperty.call(details || {}, 'output')) {
+        attempt.output = cloneTraceValue(details?.output);
+        attempt.outputText = serializeTraceValue(details?.output);
+        attempt.previewText = truncateTracePreview(attempt.outputText);
+    }
+    if (Object.prototype.hasOwnProperty.call(details || {}, 'conversation')) {
+        attempt.conversation = sanitizeTraceConversation(details?.conversation);
+    }
+    const eventType = attempt.nodeType === 'review' ? 'review_finished' : 'node_finished';
+    recordRuntimeEvent(trace, eventType, {
+        attemptId: attempt.attemptId,
+        stageIndex: attempt.stageIndex,
+        stageId: attempt.stageId,
+        nodeIndex: attempt.nodeIndex,
+        nodeId: attempt.nodeId,
+        preset: attempt.preset,
+        nodeType: attempt.nodeType,
+        runKind: attempt.runKind,
+        round: attempt.round,
+        status: attempt.status,
+        action: attempt.action,
+        reason: attempt.reason,
+        rerunReason: attempt.rerunReason,
+        targetNodeIds: Array.isArray(attempt.targetNodeIds) ? attempt.targetNodeIds.slice() : [],
+        previewText: attempt.previewText,
+        error: attempt.error,
+        replayResult: cloneTraceValue(attempt.replayResult),
+    });
+}
+
 
 export function buildNodeToolSet(nodeSpec, { isFinalStage = false } = {}) {
     if (isReviewNodeSpec(nodeSpec)) {
@@ -365,7 +600,7 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
     throwIfAborted(abortSignal, 'Orchestration aborted.');
     const isFinalStage = Boolean(options?.isFinalStage);
     const trace = options?.runtime?.trace;
-    const traceAttempt = beginOrchestrationRuntimeNodeAttempt(trace, {
+    const traceAttempt = beginRuntimeNodeAttempt(trace, {
         stageIndex: Number(options?.stageIndex || 0),
         stageId: String(options?.stageId || ''),
         nodeIndex: Number(options?.nodeIndex || 0),
@@ -431,7 +666,8 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
     let lastRound = 0;
 
     // Trace conversation log. Aliased onto the trace attempt at finalize
-    // so the runtime-trace popup can render the per-attempt message thread.
+    // so the simulation-payload adapter (and any legacy trace viewer)
+    // can render the per-attempt message thread.
     // We push system once, then each round's user prompt + assistant
     // response (with any tool_calls) + tool result messages. Aliased
     // rather than cloned so callers reading mid-run see live state.
@@ -552,7 +788,7 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                     if (!finalText.trim()) {
                         throw new Error(`Node '${nodeSpec.id}' returned empty final guidance text.`);
                     }
-                    finishOrchestrationRuntimeNodeAttempt(trace, traceAttempt, {
+                    finishRuntimeNodeAttempt(trace, traceAttempt, {
                         status: 'completed',
                         output: finalText,
                         conversation,
@@ -560,7 +796,7 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                     return finalText;
                 }
                 if (finalizedOutput && typeof finalizedOutput === 'object') {
-                    finishOrchestrationRuntimeNodeAttempt(trace, traceAttempt, {
+                    finishRuntimeNodeAttempt(trace, traceAttempt, {
                         status: 'completed',
                         output: finalizedOutput,
                         conversation,
@@ -652,7 +888,7 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
 
         throw new Error(`Node '${nodeSpec.id}' exceeded max iteration rounds (${maxRounds}) without ${outputToolName}.`);
     } catch (error) {
-        finishOrchestrationRuntimeNodeAttempt(trace, traceAttempt, {
+        finishRuntimeNodeAttempt(trace, traceAttempt, {
             status: 'failed',
             error: String(error?.message || error),
             rerunReason: String(options?.rerunReason || ''),
@@ -673,7 +909,7 @@ export async function replayStagesToReview(context, payload, messages, profile, 
     const stages = Array.isArray(runtime?.stages) ? runtime.stages : [];
     const earliestStageIndex = Math.min(...targetEntries.map(entry => entry.stageIndex));
     const existingStageOutputs = Array.isArray(runtime?.stageOutputs) ? runtime.stageOutputs.slice() : [];
-    recordOrchestrationRuntimeEvent(runtime?.trace, 'replay_started', {
+    recordRuntimeEvent(runtime?.trace, 'replay_started', {
         currentStageIndex: Number(currentStageIndex || 0),
         currentNodeIndex: Number(currentNodeIndex || 0),
         restartStageId: String(stages[earliestStageIndex]?.id || ''),
@@ -734,7 +970,7 @@ export async function replayStagesToReview(context, payload, messages, profile, 
         restart_stage_id: String(stages[earliestStageIndex]?.id || ''),
         target_node_ids: targetEntries.map(entry => entry.nodeId),
     };
-    recordOrchestrationRuntimeEvent(runtime?.trace, 'replay_finished', replayResult);
+    recordRuntimeEvent(runtime?.trace, 'replay_finished', replayResult);
 
     return {
         previousNodeOutputs: currentStagePrefix.previousNodeOutputs,
@@ -782,7 +1018,7 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
 
     for (let round = 1; round <= maxRounds; round++) {
         const trace = options?.runtime?.trace;
-        const traceAttempt = beginOrchestrationRuntimeNodeAttempt(trace, {
+        const traceAttempt = beginRuntimeNodeAttempt(trace, {
             stageIndex: Number(options?.stageIndex || 0),
             stageId: String(options?.stageId || ''),
             nodeIndex: Number(options?.nodeIndex || 0),
@@ -868,7 +1104,7 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
                     nodeId: String(nodeSpec?.id || ''),
                     feedback: String(decision.reason || ''),
                 });
-                finishOrchestrationRuntimeNodeAttempt(trace, traceAttempt, {
+                finishRuntimeNodeAttempt(trace, traceAttempt, {
                     status: 'completed',
                     action: 'approve',
                     reason: String(decision.reason || ''),
@@ -903,7 +1139,7 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
             }, abortSignal);
             currentPreviousNodeOutputs = replay.previousNodeOutputs;
             currentStageOutputs = replay.currentStageWorkerOutputs;
-            finishOrchestrationRuntimeNodeAttempt(trace, traceAttempt, {
+            finishRuntimeNodeAttempt(trace, traceAttempt, {
                 status: 'completed',
                 action: 'rerun',
                 reason: String(decision.reason || ''),
@@ -920,7 +1156,7 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
                 result: replay.result,
             }], detailed?.assistantText || '');
         } catch (error) {
-            finishOrchestrationRuntimeNodeAttempt(trace, traceAttempt, {
+            finishRuntimeNodeAttempt(trace, traceAttempt, {
                 status: 'failed',
                 error: String(error?.message || error),
                 conversation,
@@ -970,11 +1206,23 @@ export async function executeStage(context, payload, messages, profile, runtime,
     const effectiveMode = getStageRuntimeMode(stage);
     const isFullStage = stopBeforeNodeIndex === null;
     const isFinalStage = isFullStage && stageIndex === Number(runtime?.stages?.length || 0) - 1;
-    const traceStageState = beginOrchestrationRuntimeStage(runtime?.trace, stage, stageIndex, {
+    const traceStageState = beginRuntimeStage(runtime?.trace, stage, stageIndex, {
         replay: Boolean(options?.replay || options?.rerunNodeIds instanceof Set || options?.seedStageWorkerOutputs instanceof Map),
         stopBeforeNodeIndex,
     });
     let traceStageWorkerOutputs = mergeNodeOutputMaps(seedStageWorkerOutputs);
+
+    // Run-panel: each stage maps to a round. Replays / partial executes get
+    // a suffixed id so the panel doesn't collide on `stage-<id>`.
+    const panelRoundId = options?.replay || options?.rerunNodeIds instanceof Set
+        ? `stage-${stageId}-replay-${Number(runtime?.reviewRerunCount || 0)}`
+        : `stage-${stageId}`;
+    const panelRunId = runtime?.runId || null;
+    if (panelRunId) {
+        try {
+            appendRound({ runId: panelRunId, round: { id: panelRoundId, label: i18nFormat('Stage: ${0}', stageId) } });
+        } catch (_) { /* run may have been cleared */ }
+    }
 
     try {
         if (effectiveMode === 'parallel' && isFullStage) {
@@ -986,9 +1234,11 @@ export async function executeStage(context, payload, messages, profile, runtime,
                     if (isReviewNodeSpec(nodeSpec)) {
                         throw new Error(`Review node '${nodeSpec.id}' cannot run in a parallel execution stage.`);
                     }
-                    return [
-                        nodeSpec.id,
-                        await runWorkerNode(context, payload, nodeSpec, profile.presets[nodeSpec.preset] || {}, messages, previousNodeOutputs, abortSignal, {
+                    const sectionId = panelRunId
+                        ? ensureSection({ runId: panelRunId, roundId: panelRoundId, section: { id: `node-${nodeSpec.id}`, kind: 'text', title: i18n('Text') } })
+                        : null;
+                    try {
+                        const result = await runWorkerNode(context, payload, nodeSpec, profile.presets[nodeSpec.preset] || {}, messages, previousNodeOutputs, abortSignal, {
                             isFinalStage,
                             rerunReason: resolveRerunReasonForNode(nodeSpec.id),
                             stageIndex,
@@ -996,17 +1246,36 @@ export async function executeStage(context, payload, messages, profile, runtime,
                             nodeIndex,
                             runtime,
                             defaultTools: runtime?.specDefaultTools || null,
-                        }),
-                    ];
+                        });
+                        if (panelRunId && sectionId) {
+                            try {
+                                appendToSection({ runId: panelRunId, roundId: panelRoundId, sectionId, delta: serializeTraceValue(result) });
+                                setSectionStatus({ runId: panelRunId, roundId: panelRoundId, sectionId, status: 'done' });
+                            } catch (_) { /* run may have been cleared */ }
+                        }
+                        return [nodeSpec.id, result];
+                    } catch (err) {
+                        if (panelRunId && sectionId) {
+                            try {
+                                setSectionStatus({ runId: panelRunId, roundId: panelRoundId, sectionId, status: 'failed', meta: { err: String(err?.message || err) } });
+                            } catch (_) { /* run may have been cleared */ }
+                        }
+                        throw err;
+                    }
                 }));
             for (const [nodeId, output] of outputs) {
                 stageWorkerOutputs.set(nodeId, output);
             }
             traceStageWorkerOutputs = mergeNodeOutputMaps(stageWorkerOutputs);
-            finishOrchestrationRuntimeStage(runtime?.trace, traceStageState, {
+            finishRuntimeStage(runtime?.trace, traceStageState, {
                 status: 'completed',
                 stageOutput: createStageOutputSnapshot(stage, stageWorkerOutputs),
             });
+            if (panelRunId) {
+                try {
+                    setRoundStatus({ runId: panelRunId, roundId: panelRoundId, status: 'done' });
+                } catch (_) { /* run may have been cleared */ }
+            }
             return {
                 previousNodeOutputs: mergeNodeOutputMaps(previousNodeOutputs),
                 stageWorkerOutputs,
@@ -1021,61 +1290,106 @@ export async function executeStage(context, payload, messages, profile, runtime,
             const nodeSpec = nodes[nodeIndex];
             const preset = profile.presets[nodeSpec.preset] || {};
             if (isReviewNodeSpec(nodeSpec)) {
-                const reviewResult = await runReviewNode(
-                    context,
-                    payload,
-                    profile,
-                    nodeSpec,
-                    preset,
-                    messages,
-                    currentPreviousNodeOutputs,
-                    currentStageWorkerOutputs,
-                    abortSignal,
-                    {
-                        isFinalStage,
-                        stageIndex,
-                        stageId,
-                        nodeIndex,
-                        runtime,
-                    },
-                );
-                currentPreviousNodeOutputs = reviewResult.previousNodeOutputs;
-                currentStageWorkerOutputs = reviewResult.currentStageWorkerOutputs;
-                traceStageWorkerOutputs = mergeNodeOutputMaps(currentStageWorkerOutputs);
-                continue;
+                const reviewSectionId = panelRunId
+                    ? ensureSection({ runId: panelRunId, roundId: panelRoundId, section: { id: `node-${nodeSpec.id}`, kind: 'note', title: i18n('Note') } })
+                    : null;
+                try {
+                    const reviewResult = await runReviewNode(
+                        context,
+                        payload,
+                        profile,
+                        nodeSpec,
+                        preset,
+                        messages,
+                        currentPreviousNodeOutputs,
+                        currentStageWorkerOutputs,
+                        abortSignal,
+                        {
+                            isFinalStage,
+                            stageIndex,
+                            stageId,
+                            nodeIndex,
+                            runtime,
+                        },
+                    );
+                    if (panelRunId && reviewSectionId) {
+                        try {
+                            setSectionStatus({ runId: panelRunId, roundId: panelRoundId, sectionId: reviewSectionId, status: 'done' });
+                        } catch (_) { /* run may have been cleared */ }
+                    }
+                    currentPreviousNodeOutputs = reviewResult.previousNodeOutputs;
+                    currentStageWorkerOutputs = reviewResult.currentStageWorkerOutputs;
+                    traceStageWorkerOutputs = mergeNodeOutputMaps(currentStageWorkerOutputs);
+                    continue;
+                } catch (err) {
+                    if (panelRunId && reviewSectionId) {
+                        try {
+                            setSectionStatus({ runId: panelRunId, roundId: panelRoundId, sectionId: reviewSectionId, status: 'failed', meta: { err: String(err?.message || err) } });
+                        } catch (_) { /* run may have been cleared */ }
+                    }
+                    throw err;
+                }
             }
 
             if (!shouldRunWorkerNode(nodeSpec.id) && currentStageWorkerOutputs.has(nodeSpec.id)) {
                 continue;
             }
-            const output = await runWorkerNode(context, payload, nodeSpec, preset, messages, currentPreviousNodeOutputs, abortSignal, {
-                isFinalStage,
-                rerunReason: resolveRerunReasonForNode(nodeSpec.id),
-                stageIndex,
-                stageId,
-                nodeIndex,
-                runtime,
-                defaultTools: runtime?.specDefaultTools || null,
-            });
-            currentStageWorkerOutputs.set(nodeSpec.id, output);
-            traceStageWorkerOutputs = mergeNodeOutputMaps(currentStageWorkerOutputs);
-            throwIfAborted(abortSignal, 'Orchestration aborted.');
+            const sectionId = panelRunId
+                ? ensureSection({ runId: panelRunId, roundId: panelRoundId, section: { id: `node-${nodeSpec.id}`, kind: 'text', title: i18n('Text') } })
+                : null;
+            try {
+                const output = await runWorkerNode(context, payload, nodeSpec, preset, messages, currentPreviousNodeOutputs, abortSignal, {
+                    isFinalStage,
+                    rerunReason: resolveRerunReasonForNode(nodeSpec.id),
+                    stageIndex,
+                    stageId,
+                    nodeIndex,
+                    runtime,
+                    defaultTools: runtime?.specDefaultTools || null,
+                });
+                if (panelRunId && sectionId) {
+                    try {
+                        appendToSection({ runId: panelRunId, roundId: panelRoundId, sectionId, delta: serializeTraceValue(output) });
+                        setSectionStatus({ runId: panelRunId, roundId: panelRoundId, sectionId, status: 'done' });
+                    } catch (_) { /* run may have been cleared */ }
+                }
+                currentStageWorkerOutputs.set(nodeSpec.id, output);
+                traceStageWorkerOutputs = mergeNodeOutputMaps(currentStageWorkerOutputs);
+                throwIfAborted(abortSignal, 'Orchestration aborted.');
+            } catch (err) {
+                if (panelRunId && sectionId) {
+                    try {
+                        setSectionStatus({ runId: panelRunId, roundId: panelRoundId, sectionId, status: 'failed', meta: { err: String(err?.message || err) } });
+                    } catch (_) { /* run may have been cleared */ }
+                }
+                throw err;
+            }
         }
 
-        finishOrchestrationRuntimeStage(runtime?.trace, traceStageState, {
+        finishRuntimeStage(runtime?.trace, traceStageState, {
             status: 'completed',
             stageOutput: createStageOutputSnapshot(stage, currentStageWorkerOutputs),
         });
+        if (panelRunId) {
+            try {
+                setRoundStatus({ runId: panelRunId, roundId: panelRoundId, status: 'done' });
+            } catch (_) { /* run may have been cleared */ }
+        }
         return {
             previousNodeOutputs: currentPreviousNodeOutputs,
             stageWorkerOutputs: currentStageWorkerOutputs,
         };
     } catch (error) {
-        finishOrchestrationRuntimeStage(runtime?.trace, traceStageState, {
+        finishRuntimeStage(runtime?.trace, traceStageState, {
             status: 'failed',
             error: String(error?.message || error),
             stageOutput: createStageOutputSnapshot(stage, traceStageWorkerOutputs),
         });
+        if (panelRunId) {
+            try {
+                setRoundStatus({ runId: panelRunId, roundId: panelRoundId, status: 'failed' });
+            } catch (_) { /* run may have been cleared */ }
+        }
         throw error;
     }
 }
@@ -1083,13 +1397,25 @@ export async function executeStage(context, payload, messages, profile, runtime,
 export async function runSpecOrchestration(context, payload, messages, profile) {
     const spec = sanitizeSpec(profile.spec);
     const stages = Array.isArray(spec?.stages) ? spec.stages : [];
-    const trace = createOrchestrationRuntimeTrace(context, payload, stages);
+    const trace = createRuntimeTrace(context, payload, stages);
+    const abortSignal = isAbortSignalLike(payload?.signal) ? payload.signal : null;
+    const chatKey = String(trace.chatKey || '');
+    const runId = startRun({
+        mode: 'spec',
+        chatKey,
+        abortFn: abortSignal ? () => {
+            try { abortSignal.dispatchEvent && abortSignal.dispatchEvent(new Event('abort')); } catch (_) { /* best-effort */ }
+        } : null,
+    });
     const runtime = {
         stages,
         stageOutputs: [],
         reviewRerunCount: 0,
         approvedReviewFeedbackEntries: [],
         trace,
+        // Bound to the run-panel store run so each node attempt can
+        // append its round/section under the right run id.
+        runId,
         // Profile-root tool defaults applied to every node whose own
         // `tools` is null. Node-level override still takes precedence in
         // the resolver inside runWorkerNode.
@@ -1103,19 +1429,38 @@ export async function runSpecOrchestration(context, payload, messages, profile) 
         // Built once per orchestration and threaded into every node via
         // `runtime.customToolRegistry`. runWorkerNode forwards it to
         // both getEnabledToolSchemas and the per-call executeLoopTool ctx.
-        customToolRegistry: buildPerRunCustomToolRegistry(profile, trace, recordOrchestrationRuntimeEvent),
+        customToolRegistry: buildPerRunCustomToolRegistry(profile, trace, recordRuntimeEvent),
     };
     let previousNodeOutputs = new Map();
-    const abortSignal = isAbortSignalLike(payload?.signal) ? payload.signal : null;
     throwIfAborted(abortSignal, 'Orchestration aborted.');
 
-    for (let stageIndex = 0; stageIndex < stages.length; stageIndex++) {
-        throwIfAborted(abortSignal, 'Orchestration aborted.');
-        const stage = stages[stageIndex];
-        const stageResult = await executeStage(context, payload, messages, profile, runtime, stageIndex, previousNodeOutputs, abortSignal);
-        previousNodeOutputs = mergeNodeOutputMaps(stageResult.previousNodeOutputs, stageResult.stageWorkerOutputs);
-        runtime.stageOutputs.push(createStageOutputSnapshot(stage, stageResult.stageWorkerOutputs));
-    }
+    try {
+        for (let stageIndex = 0; stageIndex < stages.length; stageIndex++) {
+            throwIfAborted(abortSignal, 'Orchestration aborted.');
+            const stage = stages[stageIndex];
+            const stageResult = await executeStage(context, payload, messages, profile, runtime, stageIndex, previousNodeOutputs, abortSignal);
+            previousNodeOutputs = mergeNodeOutputMaps(stageResult.previousNodeOutputs, stageResult.stageWorkerOutputs);
+            runtime.stageOutputs.push(createStageOutputSnapshot(stage, stageResult.stageWorkerOutputs));
+        }
 
-    return { stageOutputs: runtime.stageOutputs, previousNodeOutputs, runtimeTrace: runtime.trace, reviewRerunCount: runtime.reviewRerunCount };
+        // Spec mode's final guidance lives in the last stage's `text` node
+        // output; pull it via the snapshot for finishRun.
+        const lastStageSnapshot = runtime.stageOutputs[runtime.stageOutputs.length - 1];
+        const finalText = String(lastStageSnapshot?.nodes?.[0]?.output?.text ?? lastStageSnapshot?.nodes?.[0]?.output ?? '');
+        finalizeRuntimeTrace(trace, 'completed', {
+            capsuleText: finalText,
+            reviewRerunCount: runtime.reviewRerunCount,
+        });
+        try {
+            finishRun({ runId, status: 'committed', finalText });
+        } catch (_) { /* run may already be cleared */ }
+
+        return { stageOutputs: runtime.stageOutputs, previousNodeOutputs, runtimeTrace: runtime.trace, reviewRerunCount: runtime.reviewRerunCount };
+    } catch (error) {
+        finalizeRuntimeTrace(trace, 'failed', { error: String(error?.message || error) });
+        try {
+            finishRun({ runId, status: 'error', error: String(error?.message || error) });
+        } catch (_) { /* run may already be cleared */ }
+        throw error;
+    }
 }

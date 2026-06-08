@@ -29,12 +29,13 @@ import {
     appendText,
     applyPatch,
     EditorOpsError,
-    ensureReasoningSection,
-    appendToReasoningSection,
-    markReasoningSectionStatus,
 } from './editor-ops.js';
 import { gatherGrepMatches } from './grep-tool.js';
 import { isAbortError, raceAbortSignal, throwIfAborted } from './abort-utils.js';
+import {
+    appendRound, appendToSection, ensureSection, setRoundStatus, setSectionStatus,
+} from './run-state/store.js';
+import { i18n, i18nFormat } from './i18n.js';
 
 // Skill-resolution helpers are loaded lazily so the transitive import chain
 // (skill-resolution → skillsApi → script.js → lib.js) stays out of module
@@ -388,14 +389,18 @@ const SUB_AGENT_MAX_ROUNDS = 16;
  *     or as a last resort).
  *   - generateTaskStream: optional streaming provider (takes opts,
  *     returns { stream, result }). When provided, sub-agent text deltas
- *     pipe chunk-by-chunk into the reasoning fold's named section so
- *     the user sees them grow live. When absent, the dispatcher falls
- *     back to generateTask and the section gets each round's text in
- *     one shot.
+ *     pipe chunk-by-chunk into the RunStateStore round/section for live
+ *     panel rendering. When absent, the dispatcher falls back to
+ *     generateTask and the section gets each round's text in one shot.
  *   - handle: MessageEditorHandle for the in-flight assistant message.
- *     Required when live streaming is desired; if omitted, sections are
- *     not surfaced and the inflight promise still resolves to the
- *     terminal output (legacy callers that don't care about visibility).
+ *     Used only for `getText()` (snapshot of the live draft injected
+ *     into the sub-agent's prompt) and as a settle-state probe to bail
+ *     mid-stream when the parent takeover commits/aborts. The dispatcher
+ *     never writes to the chat-message reasoning fold; all live activity
+ *     is routed through RunStateStore.
+ *   - runId: the active director run id (from `startRun` in main.js).
+ *     Required — each sub-agent dispatch gets its own top-level round in
+ *     the store and streams text/reasoning into named sections.
  *   - getContentPayload: () => contentPayload|null callback returning the
  *     cached director content payload (captured at
  *     GENERATE_TAKEOVER_DISPATCH from ST's skeleton-preset assembly).
@@ -420,6 +425,7 @@ export function createSubagentDispatcher({
     generateTask,
     generateTaskStream,
     handle,
+    runId = null,
     getContentPayload,
     abortSignal,
     tools,
@@ -453,47 +459,67 @@ export function createSubagentDispatcher({
         return `subagent-${nextHandleId++}`;
     }
 
-    function sectionLabel(handleId, subagentId) {
-        return `${handleId}: ${subagentId}`;
+    function roundIdFor(handleId, subagentId) {
+        // Spec §4 flat naming: one top-level round per sub-agent dispatch,
+        // id `sub-<subagentId>-<handleId-tail>` so the panel can show each
+        // dispatch as a sibling of the main rounds. The handleId tail (the
+        // numeric suffix of `subagent-N`) keeps the round id unique when
+        // the same sub-agent is dispatched multiple times in a turn.
+        const tail = String(handleId || '').replace(/^subagent-/, '');
+        return `sub-${subagentId}-${tail}`;
     }
 
-    function isExpectedTakeoverSettleError(e) {
-        // The takeover handle has three settle states (committed / aborted
-        // / discarded). Any mutation after settle throws TakeoverError
-        // with one of these codes — which, during streaming, is expected
-        // (the upstream stream lags behind the user's stop click). Swallow
-        // silently so the trace doesn't fill with debug logs. Other codes
-        // (invalid_argument, invalid_op_for_continue) and non-takeover
-        // errors are still surfaced.
-        return e && e.name === 'TakeoverError'
-            && (e.code === 'editor_committed' || e.code === 'editor_aborted' || e.code === 'editor_discarded');
+    function roundLabelFor(subagentId, handleId) {
+        const tail = String(handleId || '').replace(/^subagent-/, '');
+        return i18nFormat('Sub-agent ${0} · dispatch ${1}', subagentId, tail);
     }
 
-    function safeEnsureSection(label) {
-        if (!handle) return;
-        try { ensureReasoningSection(handle, label); }
-        catch (e) {
-            if (isExpectedTakeoverSettleError(e)) return;
-            console.debug('[orchestrator-director] ensureReasoningSection failed:', e);
+    // Per-dispatch round/section bookkeeping. The dispatch promise lives
+    // on its own micro-task chain; when it tries to write into the store
+    // we have to defend against the run already being cleared (e.g. the
+    // user navigated away, the next run started). All store calls below
+    // are wrapped in try/catch so a cleared store cannot crash the
+    // sub-agent's mini-loop.
+    function panelEnsureRound(handleId, subagentId) {
+        if (!runId) return null;
+        const roundId = roundIdFor(handleId, subagentId);
+        try {
+            appendRound({ runId, round: { id: roundId, label: roundLabelFor(subagentId, handleId) } });
+        } catch (_) { /* store may be cleared, or round already exists */ }
+        return roundId;
+    }
+
+    function panelEnsureSection(roundId, sectionId, kind, title, meta) {
+        if (!runId || !roundId) return null;
+        try {
+            ensureSection({
+                runId,
+                roundId,
+                section: { id: sectionId, kind, title, meta: meta == null ? null : meta },
+            });
+            return sectionId;
+        } catch (_) {
+            return null;
         }
     }
 
-    function safeAppendToSection(label, delta) {
-        if (!handle) return;
-        try { appendToReasoningSection(handle, label, delta); }
-        catch (e) {
-            if (isExpectedTakeoverSettleError(e)) return;
-            console.debug('[orchestrator-director] appendToReasoningSection failed:', e);
-        }
+    function panelAppendToSection(roundId, sectionId, delta) {
+        if (!runId || !roundId || !sectionId) return;
+        if (delta == null || String(delta).length === 0) return;
+        try { appendToSection({ runId, roundId, sectionId, delta: String(delta) }); }
+        catch (_) { /* store may be cleared */ }
     }
 
-    function safeMarkSectionStatus(label, status) {
-        if (!handle) return;
-        try { markReasoningSectionStatus(handle, label, status); }
-        catch (e) {
-            if (isExpectedTakeoverSettleError(e)) return;
-            console.debug('[orchestrator-director] markReasoningSectionStatus failed:', e);
-        }
+    function panelSetSectionStatus(roundId, sectionId, status, meta) {
+        if (!runId || !roundId || !sectionId) return;
+        try { setSectionStatus({ runId, roundId, sectionId, status, meta }); }
+        catch (_) { /* store may be cleared */ }
+    }
+
+    function panelSetRoundStatus(roundId, status) {
+        if (!runId || !roundId) return;
+        try { setRoundStatus({ runId, roundId, status }); }
+        catch (_) { /* store may be cleared */ }
     }
 
     // ── Trace recording helpers ──
@@ -570,13 +596,14 @@ export function createSubagentDispatcher({
         return ctrl;
     }
 
-    async function runOneRound(subMessages, sectionLabelForChunks, baseOpts, subToolSchemas) {
+    async function runOneRound(subMessages, panelCtx, baseOpts, subToolSchemas) {
         const callOpts = {
             ...baseOpts,
             taskMessages: subMessages,
             tools: subToolSchemas,
             toolChoice: subToolSchemas.length > 0 ? 'auto' : undefined,
         };
+        const { roundId, textSectionId, reasoningSectionId } = panelCtx || {};
         // Transport-error retry honors `settings.toolCallRetryMax` —
         // same convention as `requestToolCallsWithRetry` (loop / agenda /
         // spec). User-initiated aborts re-throw without retry.
@@ -594,10 +621,10 @@ export function createSubagentDispatcher({
                         // (user pressed stop, parent committed, etc.). The
                         // upstream stream may keep yielding chunks for a
                         // few hundred ms after — without this guard each
-                        // chunk would re-enter safeAppendToSection, throw
-                        // TakeoverError inside setReasoning, and pay the
-                        // 36ms stack-trace + 3ms console.debug serialize
-                        // cost per chunk for no observable effect.
+                        // chunk would keep firing store writes after the
+                        // run has been finalized, which is wasted work
+                        // (the writes are best-effort no-ops at that
+                        // point anyway).
                         if (handle && typeof handle.isSettled === 'function' && handle.isSettled()) {
                             break;
                         }
@@ -605,13 +632,10 @@ export function createSubagentDispatcher({
                         if (typeof chunk.delta !== 'string') continue;
                         if (chunk.type === 'text') {
                             roundText += chunk.delta;
-                            safeAppendToSection(sectionLabelForChunks, chunk.delta);
+                            panelAppendToSection(roundId, textSectionId, chunk.delta);
                         } else if (chunk.type === 'reasoning') {
-                            // Reasoning is captured for the trace popup only,
-                            // not the message reasoning fold. The labeled
-                            // section in the fold keeps only the sub-agent's
-                            // assistant output, free of interleaved thinking.
                             roundReasoning += chunk.delta;
+                            panelAppendToSection(roundId, reasoningSectionId, chunk.delta);
                         }
                     }
                     roundResult = await result;
@@ -619,7 +643,8 @@ export function createSubagentDispatcher({
                     roundResult = await generateTask(callOpts);
                     roundText = String(roundResult?.assistantText ?? '');
                     roundReasoning = String(roundResult?.reasoning ?? '');
-                    if (roundText) safeAppendToSection(sectionLabelForChunks, roundText);
+                    if (roundText) panelAppendToSection(roundId, textSectionId, roundText);
+                    if (roundReasoning) panelAppendToSection(roundId, reasoningSectionId, roundReasoning);
                 }
             } catch (transportErr) {
                 if (isAbortError(transportErr, baseOpts?.abortSignal)) throw transportErr;
@@ -639,11 +664,12 @@ export function createSubagentDispatcher({
 
     async function dispatch({ subagentId, task, __parentMessages }) {
         const handleId = newHandleId();
-        const label = sectionLabel(handleId, subagentId);
         if (totalRuns >= maxTotalSubagentRuns) {
-            safeEnsureSection(label);
-            safeMarkSectionStatus(label, `error: budget exhausted (max=${maxTotalSubagentRuns})`);
+            const roundId = panelEnsureRound(handleId, subagentId);
+            const sectionId = panelEnsureSection(roundId, 'sub_agent', 'sub_agent', i18n('Sub-agent'));
             const errMsg = `subagent budget exhausted (maxTotalSubagentRuns=${maxTotalSubagentRuns})`;
+            panelSetSectionStatus(roundId, sectionId, 'failed', { err: errMsg });
+            panelSetRoundStatus(roundId, 'failed');
             inflight.set(handleId, Promise.resolve({
                 handleId,
                 subagentId,
@@ -655,9 +681,11 @@ export function createSubagentDispatcher({
         }
         const spec = byId.get(subagentId);
         if (!spec) {
-            safeEnsureSection(label);
+            const roundId = panelEnsureRound(handleId, subagentId);
+            const sectionId = panelEnsureSection(roundId, 'sub_agent', 'sub_agent', i18n('Sub-agent'));
             const errMsg = `unknown sub-agent id: ${subagentId}`;
-            safeMarkSectionStatus(label, `error: ${errMsg}`);
+            panelSetSectionStatus(roundId, sectionId, 'failed', { err: errMsg });
+            panelSetRoundStatus(roundId, 'failed');
             inflight.set(handleId, Promise.resolve({
                 handleId,
                 subagentId,
@@ -671,7 +699,6 @@ export function createSubagentDispatcher({
             handleId,
             displayId: subagentId,
             isInline: false,
-            label,
             systemPrompt: String(spec.systemPrompt || ''),
             apiPresetName: resolveAgentApiPresetName(settings, spec),
             promptPresetName: resolveAgentPromptPresetName(settings, spec),
@@ -690,16 +717,17 @@ export function createSubagentDispatcher({
 
     async function dispatchInline({ systemPrompt, task, apiPresetName, promptPresetName, __parentMessages }) {
         const handleId = newHandleId();
-        // For inline (ad-hoc) dispatches we tag the section label as
+        // For inline (ad-hoc) dispatches we tag the round / display id as
         // `(inline)` rather than a profile-configured sub-agent id, so
         // the user can tell at a glance which dispatches are reusable
         // roles vs. one-off scratchpads.
         const displayId = '(inline)';
-        const label = sectionLabel(handleId, displayId);
         if (totalRuns >= maxTotalSubagentRuns) {
-            safeEnsureSection(label);
-            safeMarkSectionStatus(label, `error: budget exhausted (max=${maxTotalSubagentRuns})`);
+            const roundId = panelEnsureRound(handleId, displayId);
+            const sectionId = panelEnsureSection(roundId, 'sub_agent', 'sub_agent', i18n('Sub-agent'));
             const errMsg = `subagent budget exhausted (maxTotalSubagentRuns=${maxTotalSubagentRuns})`;
+            panelSetSectionStatus(roundId, sectionId, 'failed', { err: errMsg });
+            panelSetRoundStatus(roundId, 'failed');
             inflight.set(handleId, Promise.resolve({
                 handleId,
                 subagentId: displayId,
@@ -711,9 +739,11 @@ export function createSubagentDispatcher({
         }
         const trimmedPrompt = String(systemPrompt || '').trim();
         if (!trimmedPrompt) {
-            safeEnsureSection(label);
+            const roundId = panelEnsureRound(handleId, displayId);
+            const sectionId = panelEnsureSection(roundId, 'sub_agent', 'sub_agent', i18n('Sub-agent'));
             const errMsg = 'dispatch_inline_subagent requires non-empty systemPrompt';
-            safeMarkSectionStatus(label, `error: ${errMsg}`);
+            panelSetSectionStatus(roundId, sectionId, 'failed', { err: errMsg });
+            panelSetRoundStatus(roundId, 'failed');
             inflight.set(handleId, Promise.resolve({
                 handleId,
                 subagentId: displayId,
@@ -727,7 +757,6 @@ export function createSubagentDispatcher({
             handleId,
             displayId,
             isInline: true,
-            label,
             systemPrompt: trimmedPrompt,
             apiPresetName: resolveAgentApiPresetName(settings, { apiPresetName }),
             promptPresetName: resolveAgentPromptPresetName(settings, { promptPresetName }),
@@ -741,9 +770,15 @@ export function createSubagentDispatcher({
         });
     }
 
-    async function runDispatchInternal({ handleId, displayId, isInline, label, systemPrompt, apiPresetName, promptPresetName, task, parentMessages, agentTools, agentMaxRounds, agentConfig = null }) {
+    async function runDispatchInternal({ handleId, displayId, isInline, systemPrompt, apiPresetName, promptPresetName, task, parentMessages, agentTools, agentMaxRounds, agentConfig = null }) {
         totalRuns++;
-        safeEnsureSection(label);
+        // Spec §4 flat naming: one top-level round per sub-agent dispatch.
+        // Inside that round we anchor a `reasoning` section and a `text`
+        // section — same shape the main agent uses for its rounds, so the
+        // Stage-4 panel renders both with the same component.
+        const roundId = panelEnsureRound(handleId, displayId);
+        const reasoningSectionId = panelEnsureSection(roundId, 'reasoning', 'reasoning', i18n('Reasoning'), { isInline, task });
+        const textSectionId = panelEnsureSection(roundId, 'text', 'text', i18n('Text'), { isInline });
         // Effective per-dispatch round cap: per-agent override if pinned,
         // otherwise the module-level default. Already clamped to [1, 50]
         // by the sanitizer for configured agents and by the inline-dispatch
@@ -911,6 +946,12 @@ export function createSubagentDispatcher({
         };
 
         const promise = (async () => {
+            // Panel context for runOneRound — the dispatch round and
+            // its reasoning + text sections were ensured at the top of
+            // runDispatchInternal. We pass these ids per call so chunks
+            // stream into the right slot even though the dispatch may be
+            // pumping rounds in a loop.
+            const panelCtx = { roundId, textSectionId, reasoningSectionId };
             try {
                 let finalText = '';
                 let converged = false;
@@ -918,7 +959,7 @@ export function createSubagentDispatcher({
                     if (childSignal.aborted) {
                         break;
                     }
-                    const { roundAssistantText, roundToolCalls, roundReasoningText } = await runOneRound(subMessages, label, baseOpts, subToolSchemas);
+                    const { roundAssistantText, roundToolCalls, roundReasoningText } = await runOneRound(subMessages, panelCtx, baseOpts, subToolSchemas);
                     if (roundToolCalls.length === 0) {
                         finalText = roundAssistantText;
                         converged = true;
@@ -980,6 +1021,20 @@ export function createSubagentDispatcher({
                         const callId = assistantToolCallEntries[i].id;
                         const name = String(call?.name || '');
                         const args = call?.args;
+                        // Record each sub-agent tool invocation as a
+                        // section in this dispatch's round so the panel
+                        // can show the same "tool: X" / "tool result: X"
+                        // breakdown the main agent's rounds have. Section
+                        // ids include round + tool index to keep them
+                        // unique across the mini-loop's multi-round
+                        // tool-call history.
+                        const toolCallSectionId = panelEnsureSection(
+                            roundId,
+                            `tool-${r}-${i}`,
+                            'tool_call',
+                            i18nFormat('Tool: ${0}', name),
+                            { args },
+                        );
                         let toolResult;
                         if (name === 'get_draft') {
                             toolResult = await executeGetDraftTool(handle);
@@ -1030,23 +1085,41 @@ export function createSubagentDispatcher({
                             content: JSON.stringify(toolResult),
                             _round: r,
                         });
+                        // Pair the tool-call section with a tool-result
+                        // section so the panel renders both halves the
+                        // same way the main agent's rounds render them.
+                        const toolResultSectionId = panelEnsureSection(
+                            roundId,
+                            `tool-result-${r}-${i}`,
+                            'tool_result',
+                            i18nFormat('Tool result: ${0}', name),
+                            { ok: !!toolResult?.ok, err: toolResult?.error || null },
+                        );
+                        panelSetSectionStatus(roundId, toolResultSectionId, toolResult?.ok ? 'done' : 'failed');
+                        panelSetSectionStatus(roundId, toolCallSectionId, toolResult?.ok ? 'done' : 'failed');
                     }
                 }
                 if (childSignal.aborted && !converged) {
                     const msg = 'cancelled';
-                    safeMarkSectionStatus(label, `error: ${msg}`);
+                    panelSetSectionStatus(roundId, reasoningSectionId, 'failed', { err: msg });
+                    panelSetSectionStatus(roundId, textSectionId, 'failed', { err: msg });
+                    panelSetRoundStatus(roundId, 'failed');
                     completionNotifications.push({ handleId, subagentId: displayId, status: 'cancelled', summary: msg });
                     recordSubagentFinish(traceEntry, { status: 'cancelled', error: msg });
                     return { handleId, subagentId: displayId, error: msg };
                 }
                 if (!converged) {
                     const msg = `did not converge within ${effectiveMaxRounds} rounds`;
-                    safeMarkSectionStatus(label, `error: ${msg}`);
+                    panelSetSectionStatus(roundId, reasoningSectionId, 'failed', { err: msg });
+                    panelSetSectionStatus(roundId, textSectionId, 'failed', { err: msg });
+                    panelSetRoundStatus(roundId, 'failed');
                     completionNotifications.push({ handleId, subagentId: displayId, status: 'failed', summary: msg });
                     recordSubagentFinish(traceEntry, { status: 'failed', error: msg });
                     return { handleId, subagentId: displayId, error: msg };
                 }
-                safeMarkSectionStatus(label, '');
+                panelSetSectionStatus(roundId, reasoningSectionId, 'done');
+                panelSetSectionStatus(roundId, textSectionId, 'done');
+                panelSetRoundStatus(roundId, 'done');
                 completionNotifications.push({
                     handleId,
                     subagentId: displayId,
@@ -1059,7 +1132,9 @@ export function createSubagentDispatcher({
                 const isAbort = err?.name === 'AbortError' || childSignal.aborted;
                 const status = isAbort ? 'cancelled' : 'failed';
                 const msg = isAbort ? 'cancelled' : String(err?.message || err);
-                safeMarkSectionStatus(label, `error: ${msg}`);
+                panelSetSectionStatus(roundId, reasoningSectionId, 'failed', { err: msg });
+                panelSetSectionStatus(roundId, textSectionId, 'failed', { err: msg });
+                panelSetRoundStatus(roundId, 'failed');
                 completionNotifications.push({ handleId, subagentId: displayId, status, summary: msg });
                 recordSubagentFinish(traceEntry, { status, error: msg });
                 return { handleId, subagentId: displayId, error: msg };

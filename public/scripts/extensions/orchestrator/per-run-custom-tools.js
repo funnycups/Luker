@@ -6,11 +6,11 @@
  * Compile failures (SyntaxError, etc.) skip the offending entry with a
  * console.warn + optional trace event. Other entries continue to work.
  *
- * The trace event helper is injected (rather than imported) to keep the
- * runtime-trace module out of this module's load graph — that module
- * transitively pulls SillyTavern's `public/lib.js` bundle, which doesn't
- * exist under jest. Every caller (loop/spec/agenda/director runtime)
- * already imports `recordOrchestrationRuntimeEvent` and passes it in.
+ * The trace event helper is injected (rather than imported) so this
+ * module stays independent of any per-runner trace implementation. Each
+ * runner (loop / spec / agenda / director) builds its own inline trace
+ * helpers post-Stage-3 of the run-panel refactor and forwards the local
+ * `recordRuntimeEvent` (or equivalent) here.
  */
 
 const AsyncFunction = (async () => {}).constructor;

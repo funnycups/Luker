@@ -26,8 +26,9 @@
  * via `refreshOrchestratorStateAfterStructuralEvent`.
  *
  * `getChatKey` and `getCurrentAvatar` live here because every cache
- * operation needs them; this is also why `runtime-trace.js` no longer
- * has to keep a private duplicate of `getChatKey`.
+ * operation needs them; the runner inline trace builders (loop / agenda
+ * / spec) also import `getChatKey` from this module so the run-panel
+ * store can scope the active run to the current chat.
  */
 
 import {

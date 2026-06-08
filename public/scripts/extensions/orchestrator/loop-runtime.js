@@ -48,6 +48,11 @@
 import { isAbortSignalLike, throwIfAborted } from './abort-utils.js';
 import { executeLoopTool, getEnabledToolSchemas, resolveToolSource } from './loop-tools.js';
 import { buildPerRunCustomToolRegistry } from './per-run-custom-tools.js';
+import {
+    appendRound, appendToSection, ensureSection,
+    finishRun, setRoundStatus, setSectionStatus, startRun,
+} from './run-state/store.js';
+import { i18n, i18nFormat } from './i18n.js';
 
 // Skill-resolution helpers are loaded lazily so the transitive import chain
 // (skill-resolution → skillsApi → script.js → lib.js) stays out of module
@@ -61,11 +66,10 @@ async function loadSkillResolution() {
     return _skillResolutionPromise;
 }
 
-// runtime-trace and tool-calling are loaded lazily inside the runtime
-// entry point — both pull `lib.js` (a build-only bundle) transitively
-// and would otherwise refuse to load under the Node-based test runner.
-// Tests get an in-memory trace shim and inject `deps.sendLlm` directly;
-// production resolves the real modules via dynamic import.
+// tool-calling.js is loaded lazily inside the runtime entry point —
+// it pulls `lib.js` (a build-only bundle) and would otherwise refuse
+// to load under the Node-based test runner. Tests inject `deps.sendLlm`
+// directly; production resolves the real module via dynamic import.
 //
 // loop-tools.js is imported eagerly: it has no `lib.js` dependency, and
 // circular import with this file is safe under ES module hoisting because
@@ -220,12 +224,11 @@ async function defaultExecuteTool(name, args, context) {
     return executeLoopTool(name, args, context);
 }
 
-function makeInMemoryTraceFallback(context, payload, extra) {
-    // Mirrors the runtime-trace API surface used by the loop driver:
-    // create / record / finalize. Used in tests where the real
-    // runtime-trace module pulls the build-time `lib.js` bundle and is
-    // not importable. Production resolves the real module via dynamic
-    // import below.
+function makeInMemoryTrace(context, payload, extra) {
+    // Inline trace builder. The legacy runtime-trace.js module is gone;
+    // the simulation-payload-adapter and the loop test suite still read
+    // the same shape so the runner keeps producing it locally. Run-panel
+    // state lives in run-state/store.js and is written alongside.
     const startedAt = new Date().toISOString();
     const trace = {
         runId: `orch_runtime_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
@@ -251,7 +254,7 @@ function makeInMemoryTraceFallback(context, payload, extra) {
     return trace;
 }
 
-function recordToTraceFallback(trace, type, details = {}) {
+function recordToTrace(trace, type, details = {}) {
     if (!trace || typeof trace !== 'object') return null;
     const event = {
         seq: Number(trace.nextEventSeq || 1),
@@ -265,7 +268,7 @@ function recordToTraceFallback(trace, type, details = {}) {
     return event;
 }
 
-function finalizeTraceFallback(trace, status, details = {}) {
+function finalizeTrace(trace, status, details = {}) {
     if (!trace || typeof trace !== 'object') return;
     const normalizedStatus = String(status || trace.status || 'completed');
     trace.status = normalizedStatus;
@@ -280,49 +283,14 @@ function finalizeTraceFallback(trace, status, details = {}) {
     if (Object.prototype.hasOwnProperty.call(details || {}, 'error')) {
         trace.error = String(details?.error || '');
     }
-    recordToTraceFallback(trace, 'run_finished', {
+    recordToTrace(trace, 'run_finished', {
         status: normalizedStatus,
         note: trace.note,
         error: trace.error,
     });
 }
 
-/**
- * Resolve the trace API. In production we dynamically import the real
- * `runtime-trace.js` so the `getLatestOrchestrationRuntimeTrace(context)`
- * dispatch still finds our run; under Jest the dynamic import fails on
- * the build-only `lib.js` and we fall back to the in-memory shim. The
- * shim exposes the same call shape but doesn't register the trace as
- * "latest" — that path is exercised by main.js integration tests.
- */
-async function resolveTraceApi(deps) {
-    if (deps?.traceApi && typeof deps.traceApi === 'object') {
-        return deps.traceApi;
-    }
-    try {
-        const mod = await import('./runtime-trace.js');
-        if (typeof mod?.createOrchestrationRuntimeTrace === 'function'
-            && typeof mod?.recordOrchestrationRuntimeEvent === 'function'
-            && typeof mod?.finalizeOrchestrationRuntimeTrace === 'function') {
-            return {
-                create: mod.createOrchestrationRuntimeTrace,
-                record: mod.recordOrchestrationRuntimeEvent,
-                finalize: mod.finalizeOrchestrationRuntimeTrace,
-                attachLoopConversation: mod.attachOrchestrationRuntimeLoopConversation,
-            };
-        }
-    } catch (_error) {
-        // Fall through to the in-memory shim.
-    }
-    return {
-        create: (context, payload, _stages, extra) => makeInMemoryTraceFallback(context, payload, extra),
-        record: recordToTraceFallback,
-        finalize: finalizeTraceFallback,
-        attachLoopConversation: attachLoopConversationFallback,
-    };
-}
-
-function attachLoopConversationFallback(trace, conversation) {
+function attachLoopConversation(trace, conversation) {
     if (!trace || typeof trace !== 'object') return;
     if (!conversation || typeof conversation !== 'object') {
         if (trace.loop) delete trace.loop.conversation;
@@ -746,7 +714,7 @@ export async function attachToolContext(context, payload) {
  * @param {object} context — extension context (chat/messages live here)
  * @param {object} payload — generation payload (signal / coreChat / type)
  * @param {object} profile — sanitized loop profile (`sanitizeLoopProfile` output)
- * @param {{ sendLlm?: Function, executeTool?: Function, traceApi?: object, settings?: object, runtimeWorldInfo?: object }} [deps]
+ * @param {{ sendLlm?: Function, executeTool?: Function, settings?: object, runtimeWorldInfo?: object }} [deps]
  * @returns {Promise<{status: string, capsule: string|null, total_rounds: number, runtimeTrace: object}>}
  */
 export async function runLoopOrchestration(context, payload, profile, deps = {}) {
@@ -758,11 +726,22 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
 
     const toolContext = await attachToolContext(context, payload);
 
-    const traceApi = await resolveTraceApi(deps);
-    const trace = traceApi.create(context, payload, [], { mode: 'loop' });
+    const trace = makeInMemoryTrace(context, payload, { mode: 'loop' });
 
-    const customToolRegistry = buildPerRunCustomToolRegistry(profile, trace, traceApi?.record);
+    const customToolRegistry = buildPerRunCustomToolRegistry(profile, trace, recordToTrace);
     toolContext.__customToolRegistry = customToolRegistry;
+
+    // Open a new run on the panel store. `startRun` throws if a previous
+    // run is still flagged running — under normal flow main.js clears the
+    // store between turns; tests preload `clearCurrentRun` in beforeEach.
+    const chatKey = String(context?.chatId || context?.chat_id || '');
+    const runId = startRun({
+        mode: 'loop',
+        chatKey,
+        abortFn: abortSignal ? () => {
+            try { abortSignal.dispatchEvent && abortSignal.dispatchEvent(new Event('abort')); } catch (_) { /* best-effort */ }
+        } : null,
+    });
 
     const messages = buildInitialMessages(toolContext, payload, profile);
     const tools = getEnabledToolSchemas(profile, customToolRegistry);
@@ -804,12 +783,7 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
     // loop-conversation panel reflects the agent's history as it grows.
     // sanitization happens at render time; here we just point at the
     // live array (no clone — avoids per-round O(N) cost for long loops).
-    if (typeof traceApi.attachLoopConversation === 'function') {
-        traceApi.attachLoopConversation(trace, { messages });
-    } else {
-        if (!trace.loop || typeof trace.loop !== 'object') trace.loop = {};
-        trace.loop.conversation = { messages };
-    }
+    attachLoopConversation(trace, { messages });
 
     let capsule = null;
     let totalRounds = 0;
@@ -822,7 +796,7 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
             throwIfAborted(abortSignal, 'Orchestration aborted.');
             if (deadline !== null && Date.now() >= deadline) {
                 exhaustReason = 'wall_clock';
-                traceApi.record(trace, 'budget_exhausted', {
+                recordToTrace(trace, 'budget_exhausted', {
                     round,
                     reason: 'wall_clock',
                     deadline_ms: wallClockBudgetMs,
@@ -830,11 +804,15 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
                 break;
             }
             totalRounds = round;
-            traceApi.record(trace, 'llm_request', {
+            recordToTrace(trace, 'llm_request', {
                 round,
                 max_rounds: maxRounds,
                 message_count: messages.length,
             });
+
+            const roundId = `agent-${round}`;
+            appendRound({ runId, round: { id: roundId, label: i18nFormat('Agent · round ${0}', round) } });
+            const textSectionId = ensureSection({ runId, roundId, section: { id: 'text', kind: 'text', title: i18n('Text') } });
 
             const response = await sendLlm({
                 context,
@@ -851,11 +829,18 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
             const assistantText = String(response?.assistantText || '').trim();
             if (assistantText) {
                 lastNaturalText = assistantText;
+                appendToSection({ runId, roundId, sectionId: textSectionId, delta: assistantText });
             }
             const reasoning = String(response?.reasoning || '');
+            if (reasoning) {
+                const reasoningSectionId = ensureSection({ runId, roundId, section: { id: 'reasoning', kind: 'reasoning', title: i18n('Reasoning') } });
+                appendToSection({ runId, roundId, sectionId: reasoningSectionId, delta: reasoning });
+                setSectionStatus({ runId, roundId, sectionId: reasoningSectionId, status: 'done' });
+            }
+            setSectionStatus({ runId, roundId, sectionId: textSectionId, status: 'done' });
 
             const toolCalls = Array.isArray(response?.toolCalls) ? response.toolCalls : [];
-            traceApi.record(trace, 'llm_response', {
+            recordToTrace(trace, 'llm_response', {
                 round,
                 tool_call_count: toolCalls.length,
                 has_assistant_text: Boolean(assistantText),
@@ -863,13 +848,14 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
 
             if (toolCalls.length === 0) {
                 noToolCallStreak += 1;
-                traceApi.record(trace, 'agent_no_tool_call', {
+                recordToTrace(trace, 'agent_no_tool_call', {
                     round,
                     streak: noToolCallStreak,
                 });
+                setRoundStatus({ runId, roundId, status: 'done' });
                 if (noToolCallStreak >= NO_TOOL_CALL_STREAK_LIMIT) {
                     exhaustReason = 'no_tool_call_streak';
-                    traceApi.record(trace, 'budget_exhausted', {
+                    recordToTrace(trace, 'budget_exhausted', {
                         round,
                         reason: 'no_tool_call_streak',
                         streak: noToolCallStreak,
@@ -916,13 +902,18 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
                 const name = String(tc?.name || '').trim();
                 const args = tc?.args && typeof tc.args === 'object' ? tc.args : {};
                 const source = assistantToolCallEntries[i].source;
-                traceApi.record(trace, 'tool_call', { round, name, tool_call_id: persistedId, source });
+                recordToTrace(trace, 'tool_call', { round, name, tool_call_id: persistedId, source });
+
+                const toolCallSectionId = ensureSection({
+                    runId, roundId,
+                    section: { id: `tool-${i}`, kind: 'tool_call', title: i18nFormat('Tool: ${0}', name), meta: { args, source } },
+                });
 
                 if (name === 'finalize') {
                     const text = String(args?.capsule_text || '').trim();
                     if (text) {
                         capsule = text;
-                        traceApi.record(trace, 'tool_result', {
+                        recordToTrace(trace, 'tool_result', {
                             round,
                             name,
                             tool_call_id: persistedId,
@@ -930,6 +921,12 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
                         });
                         // Record the finalize tool result for completeness.
                         messages.push(makeOkToolMessage(persistedId, { ok: true, finalized: true }, round));
+                        const finalizeResultSectionId = ensureSection({
+                            runId, roundId,
+                            section: { id: `tool-result-${i}`, kind: 'tool_result', title: i18nFormat('Tool result: ${0}', name), meta: { ok: true, finalized: true } },
+                        });
+                        setSectionStatus({ runId, roundId, sectionId: finalizeResultSectionId, status: 'done' });
+                        setSectionStatus({ runId, roundId, sectionId: toolCallSectionId, status: 'done' });
                         break;
                     }
                     // Empty finalize — feed back as a structured error so
@@ -940,58 +937,85 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
                         'Provide a non-empty capsule_text describing the guidance for the next turn.',
                     );
                     messages.push(makeErrorToolMessage(persistedId, finalizeErr, round));
-                    traceApi.record(trace, 'tool_error', {
+                    recordToTrace(trace, 'tool_error', {
                         round,
                         name,
                         tool_call_id: persistedId,
                         code: finalizeErr.code,
                         error: finalizeErr.message,
                     });
+                    const finalizeErrSectionId = ensureSection({
+                        runId, roundId,
+                        section: { id: `tool-result-${i}`, kind: 'tool_result', title: i18nFormat('Tool result: ${0}', name), meta: { ok: false, err: finalizeErr.message, code: finalizeErr.code } },
+                    });
+                    setSectionStatus({ runId, roundId, sectionId: finalizeErrSectionId, status: 'failed' });
+                    setSectionStatus({ runId, roundId, sectionId: toolCallSectionId, status: 'failed' });
                     continue;
                 }
 
                 try {
                     const result = await executeTool(name, args, toolContext);
                     messages.push(makeOkToolMessage(persistedId, normalizeToolOk(result), round));
-                    traceApi.record(trace, 'tool_result', { round, name, tool_call_id: persistedId });
+                    recordToTrace(trace, 'tool_result', { round, name, tool_call_id: persistedId });
+                    const okSectionId = ensureSection({
+                        runId, roundId,
+                        section: { id: `tool-result-${i}`, kind: 'tool_result', title: i18nFormat('Tool result: ${0}', name), meta: { ok: true } },
+                    });
+                    setSectionStatus({ runId, roundId, sectionId: okSectionId, status: 'done' });
+                    setSectionStatus({ runId, roundId, sectionId: toolCallSectionId, status: 'done' });
                 } catch (error) {
                     if (isStructuredToolError(error)) {
                         messages.push(makeErrorToolMessage(persistedId, error, round));
-                        traceApi.record(trace, 'tool_error', {
+                        recordToTrace(trace, 'tool_error', {
                             round,
                             name,
                             tool_call_id: persistedId,
                             code: error.code,
                             error: error.message,
                         });
+                        const errSectionId = ensureSection({
+                            runId, roundId,
+                            section: { id: `tool-result-${i}`, kind: 'tool_result', title: i18nFormat('Tool result: ${0}', name), meta: { ok: false, err: error.message, code: error.code } },
+                        });
+                        setSectionStatus({ runId, roundId, sectionId: errSectionId, status: 'failed' });
+                        setSectionStatus({ runId, roundId, sectionId: toolCallSectionId, status: 'failed' });
                         continue;
                     }
+                    setSectionStatus({ runId, roundId, sectionId: toolCallSectionId, status: 'failed' });
+                    setRoundStatus({ runId, roundId, status: 'failed' });
                     throw error;
                 }
             }
 
+            setRoundStatus({ runId, roundId, status: 'done' });
             if (capsule !== null) break;
         }
         if (!exhaustReason && capsule === null) {
             exhaustReason = 'max_rounds';
-            traceApi.record(trace, 'budget_exhausted', {
+            recordToTrace(trace, 'budget_exhausted', {
                 round: totalRounds,
                 reason: 'max_rounds',
                 limit: maxRounds,
             });
         }
     } catch (error) {
-        traceApi.finalize(trace, 'failed', {
+        finalizeTrace(trace, 'failed', {
             error: String(error?.message || error),
         });
+        try {
+            finishRun({ runId, status: 'error', error: String(error?.message || error) });
+        } catch (_) { /* run may already be cleared */ }
         throw error;
     }
 
     if (capsule === null) {
-        traceApi.finalize(trace, 'budget_exhausted', {
+        finalizeTrace(trace, 'budget_exhausted', {
             note: `Loop exhausted (${exhaustReason || 'max_rounds'}).`,
             capsuleText: lastNaturalText || '',
         });
+        try {
+            finishRun({ runId, status: 'budget_exhausted', finalText: lastNaturalText || '' });
+        } catch (_) { /* run may already be cleared */ }
         return {
             status: 'budget_exhausted',
             capsule: lastNaturalText,
@@ -1000,9 +1024,12 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
         };
     }
 
-    traceApi.finalize(trace, 'completed', {
+    finalizeTrace(trace, 'completed', {
         capsuleText: capsule,
     });
+    try {
+        finishRun({ runId, status: 'committed', finalText: capsule });
+    } catch (_) { /* run may already be cleared */ }
     return { status: 'completed', capsule, total_rounds: totalRounds, runtimeTrace: trace };
 }
 

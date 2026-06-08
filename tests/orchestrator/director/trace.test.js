@@ -377,10 +377,10 @@ describe('director runtime trace', () => {
         expect(r.assistantText).toBe('reasoning-only reply, no tool call');
         // No assistant turn pushed to messages.
         expect(trace.director.mainAgent.conversation.messages.some(m => m.role === 'assistant')).toBe(false);
-        // And reasoning fold still has the `(failed: no tool call)` section
-        // header — proving the two recording paths (reasoning + trace) are
-        // consistent.
-        expect(chat[0].extra.reasoning).toContain('### [main-0] (failed: no tool call)');
+        // The chat reasoning fold is no longer touched by director (Stage 3
+        // moved live progress to RunStateStore); the original reasoning
+        // stays intact, with no `(failed: no tool call)` marker appended.
+        expect(chat[0].extra.reasoning).toBe('');
     });
 
     test('no-tool-call exhaustion after a successful prior round splits cleanly across messages + failedRounds', async () => {

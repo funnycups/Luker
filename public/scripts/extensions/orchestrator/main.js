@@ -93,18 +93,29 @@ import {
 } from './capsule-injection.js';
 import { DIRECTOR_PURE_PRESET_BODY } from './pure-preset-body.js';
 import {
-    clearLatestOrchestrationRuntimeTrace,
-    createOrchestrationRuntimeTrace,
-    finalizeOrchestrationRuntimeTrace,
-    getLatestOrchestrationRuntimeTrace,
-    recordOrchestrationRuntimeEvent,
-    truncateOrchestrationRuntimePreview,
-    attachOrchestrationRuntimeDirectorState,
-} from './runtime-trace.js';
-import {
-    renderLastOrchestrationResultHtml,
-    renderOrchestrationRuntimeTraceHtml,
-} from './runtime-trace-render.js';
+    clearCurrentRun,
+    finishRun,
+    getCurrentRun,
+    startRun,
+} from './run-state/store.js';
+import { openRunPanel, initRunPanel } from './run-panel/panel.js';
+
+// Local no-op stubs for the legacy runtime-trace API. The trace module
+// was deleted in Stage 2 of the run-panel refactor; Stage 3 converted
+// each runner to write run progress through RunStateStore directly.
+// These stubs let main.js continue to compile while downstream code
+// paths (reuse-snapshot finalize, simulation review export) still pass
+// the legacy trace shape around. Wholesale removal of the stubs is
+// deferred until the iter-studio simulation review either reads from
+// RunStateStore directly or accepts a richer per-mode payload.
+const clearLatestOrchestrationRuntimeTrace = () => {};
+const createOrchestrationRuntimeTrace = () => ({ director: null, finalMessage: '', finalReasoning: '' });
+const finalizeOrchestrationRuntimeTrace = () => {};
+const getLatestOrchestrationRuntimeTrace = () => null;
+const recordOrchestrationRuntimeEvent = () => {};
+const truncateOrchestrationRuntimePreview = (s) => String(s || '');
+const attachOrchestrationRuntimeDirectorState = () => {};
+const renderLastOrchestrationResultHtml = () => '';
 import {
     canReuseLatestOrchestrationSnapshot,
     clearCacheForChatChange,
@@ -597,65 +608,6 @@ async function emitOrchestratorResultEvent(context, payload, status, options = {
         await context.eventSource.emit(ORCH_RESULT_EVENT, eventPayload);
     } catch (error) {
         console.warn(`[${MODULE_NAME}] Failed to emit result event`, error);
-    }
-}
-
-async function openOrchestrationRuntimeTrace(context) {
-    const popupId = `luker_orch_runtime_trace_${Date.now()}`;
-    const selector = `#${popupId}`;
-    const namespace = `.lukerOrchRuntimeTrace_${popupId}`;
-    const popupHtml = `<div id="${popupId}" class="luker_orch_runtime_popup_shell">${renderOrchestrationRuntimeTraceHtml(context)}</div>`;
-    const popupPromise = context.callGenericPopup(
-        popupHtml,
-        context.POPUP_TYPE.TEXT,
-        i18n('Orchestration Runtime Trace'),
-        {
-            wide: true,
-            wider: true,
-            large: true,
-            allowVerticalScrolling: true,
-            okButton: i18n('Close'),
-        },
-    );
-
-    jQuery(document).on(`click${namespace}`, `${selector} [data-luker-iter-action="expand-line-diff"]`, function (event) {
-        event.preventDefault();
-        event.stopPropagation();
-        const rootElement = document.querySelector(selector);
-        openOrchExpandedDiff(rootElement, this);
-    });
-
-    jQuery(document).on(`click${namespace}`, `${selector} [data-luker-iter-action="close-line-diff-zoom"], ${selector} .luker_iter_diff_zoom_backdrop`, function (event) {
-        event.preventDefault();
-        event.stopPropagation();
-        const rootElement = document.querySelector(selector);
-        closeOrchExpandedDiff(rootElement);
-    });
-
-    jQuery(document).on(`keydown${namespace}`, function (event) {
-        if (event.key !== 'Escape') {
-            return;
-        }
-        const rootElement = document.querySelector(selector);
-        const overlay = rootElement?.querySelector?.('.luker_iter_diff_zoom_overlay');
-        if (!(overlay instanceof HTMLElement)) {
-            return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        closeOrchExpandedDiff(rootElement);
-    });
-
-    jQuery(document).on(`pointerdown${namespace}`, `${selector} .luker_iter_diff_splitter`, function (event) {
-        beginOrchLineDiffResize(this, event.originalEvent || event);
-    });
-
-    try {
-        await popupPromise;
-    } finally {
-        const rootElement = document.querySelector(selector);
-        closeOrchExpandedDiff(rootElement);
-        jQuery(document).off(namespace);
     }
 }
 
@@ -2482,115 +2434,6 @@ function summarizeStageForUi(stage) {
         mode: String(stage?.mode || 'serial') === 'parallel' ? 'parallel' : 'serial',
         nodeSummary,
     };
-}
-
-function closeOrchExpandedDiff(rootElement) {
-    const root = rootElement instanceof Element ? rootElement : null;
-    if (!(root instanceof HTMLElement)) {
-        return;
-    }
-    root.querySelectorAll('.luker_iter_diff_zoom_overlay').forEach((overlay) => overlay.remove());
-}
-
-function openOrchExpandedDiff(rootElement, triggerElement) {
-    const root = rootElement instanceof Element ? rootElement : null;
-    const trigger = triggerElement instanceof Element ? triggerElement : null;
-    const diffRoot = trigger?.closest?.('.luker_iter_diff');
-    const diffBody = diffRoot?.querySelector?.('.luker_iter_diff_pre');
-    if (!(root instanceof HTMLElement) || !(diffBody instanceof HTMLElement)) {
-        return;
-    }
-
-    closeOrchExpandedDiff(root);
-
-    const diffLabel = String(diffBody.getAttribute('data-luker-iter-diff-label') || i18n('Line diff'));
-    const closeLabel = escapeHtml(i18n('Close expanded diff'));
-    const overlay = document.createElement('div');
-    overlay.className = 'luker_iter_diff_zoom_overlay';
-    overlay.innerHTML = `
-<div class="luker_iter_diff_zoom_backdrop" data-luker-iter-action="close-line-diff-zoom"></div>
-<div class="luker_iter_diff_zoom_dialog" role="dialog" aria-modal="true">
-    <div class="luker_iter_diff_zoom_header">
-        <div class="luker_iter_diff_zoom_title">${escapeHtml(diffLabel)}</div>
-        <button type="button" class="menu_button menu_button_small luker_iter_diff_zoom_close" data-luker-iter-action="close-line-diff-zoom" title="${closeLabel}" aria-label="${closeLabel}">
-            <i class="fa-solid fa-xmark" aria-hidden="true"></i>
-        </button>
-    </div>
-    <div class="luker_iter_diff_zoom_body"></div>
-</div>`;
-
-    const zoomBody = overlay.querySelector('.luker_iter_diff_zoom_body');
-    if (zoomBody instanceof HTMLElement) {
-        zoomBody.append(diffBody.cloneNode(true));
-    }
-
-    root.append(overlay);
-}
-
-function beginOrchLineDiffResize(splitterElement, pointerEvent) {
-    const splitter = splitterElement instanceof HTMLElement ? splitterElement : null;
-    const pointer = pointerEvent instanceof PointerEvent ? pointerEvent : null;
-    const dual = splitter?.closest?.('.luker_iter_diff_dual');
-    if (!(splitter instanceof HTMLElement) || !(pointer instanceof PointerEvent) || !(dual instanceof HTMLElement)) {
-        return;
-    }
-
-    pointer.preventDefault();
-    pointer.stopPropagation();
-
-    const bounds = dual.getBoundingClientRect();
-    if (!Number.isFinite(bounds.width) || bounds.width <= 0) {
-        return;
-    }
-
-    const minPercent = 15;
-    const maxPercent = 85;
-    const pointerId = pointer.pointerId;
-
-    const applySplitAt = (clientX) => {
-        const nextPercent = ((clientX - bounds.left) / bounds.width) * 100;
-        const clampedPercent = Math.max(minPercent, Math.min(maxPercent, nextPercent));
-        dual.style.setProperty('--luker-iter-split-left', `${clampedPercent}%`);
-    };
-
-    const cleanup = () => {
-        splitter.classList.remove('active');
-        window.removeEventListener('pointermove', handlePointerMove);
-        window.removeEventListener('pointerup', handlePointerUp);
-        window.removeEventListener('pointercancel', handlePointerUp);
-        try {
-            splitter.releasePointerCapture(pointerId);
-        } catch {
-            // Ignore release errors when capture was not acquired.
-        }
-    };
-
-    const handlePointerMove = (moveEvent) => {
-        if (!(moveEvent instanceof PointerEvent) || moveEvent.pointerId !== pointerId) {
-            return;
-        }
-        moveEvent.preventDefault();
-        applySplitAt(moveEvent.clientX);
-    };
-
-    const handlePointerUp = (upEvent) => {
-        if (!(upEvent instanceof PointerEvent) || upEvent.pointerId !== pointerId) {
-            return;
-        }
-        upEvent.preventDefault();
-        cleanup();
-    };
-
-    splitter.classList.add('active');
-    applySplitAt(pointer.clientX);
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', handlePointerUp);
-    window.addEventListener('pointercancel', handlePointerUp);
-    try {
-        splitter.setPointerCapture(pointerId);
-    } catch {
-        // Pointer capture may fail in some browsers and is optional here.
-    }
 }
 
 function renderAgendaIterationWorkingProfile(session, { profileOverride = null, previewPending = false } = {}) {
@@ -7661,8 +7504,8 @@ function bindUi() {
             return;
         }
 
-        if (action === 'view-runtime-trace') {
-            await openOrchestrationRuntimeTrace(context);
+        if (action === 'show-run-panel') {
+            openRunPanel(context);
             return;
         }
 
@@ -7712,6 +7555,7 @@ jQuery(() => {
     const context = getContext();
     registerLocaleData();
     ensureSimulationReviewLocaleData();
+    initRunPanel();
     ensureSettings();
     saveSettingsDebounced();
     void rehydrateBridgedSillyTavernTools(extension_settings[MODULE_NAME]);
@@ -7933,6 +7777,17 @@ jQuery(() => {
                     subagents: [],
                 });
 
+                // Open the run-panel store for this director turn. The
+                // abortFn binds to `activeOrchRunAbortController` so the
+                // panel's stop button can halt the in-flight director.
+                const directorRunId = startRun({
+                    mode: 'director',
+                    chatKey: getChatKey(context),
+                    abortFn: () => {
+                        try { abortActiveOrchestratorRun(); } catch (_) { /* best-effort */ }
+                    },
+                });
+
                 await handleDirectorDispatch(eventData, {
                     profile,
                     chat: context.chat,
@@ -7951,6 +7806,7 @@ jQuery(() => {
                         : null,
                     executeLoopTool: (name, args, deps) => executeLoopTool(name, args, deps),
                     trace: directorTrace,
+                    runId: directorRunId,
                     settings,
                     // Notes adapter context — same shape loop-runtime
                     // mounts. Lets sub-agents see persisted notes via the
@@ -7982,9 +7838,8 @@ jQuery(() => {
                     // no longer threads one. Sub-agent dispatcher's
                     // executeLoopTool sees the ctx and the memory_* exec
                     // wrappers open / cache the session on first call.
-                    // Injected so director-runtime doesn't have to
-                    // import runtime-trace.js (which transitively pulls
-                    // in lib.js and breaks Node test environments).
+                    // Injected so director-runtime stays agnostic to the
+                    // trace data structure that main.js manages locally.
                     finalizeTrace: (trace, status) => finalizeOrchestrationRuntimeTrace(trace, status, {}),
                     recordTraceEvent: recordOrchestrationRuntimeEvent,
                     // Visible failure surface. Director takes over the
@@ -8030,7 +7885,14 @@ jQuery(() => {
         const liveContext = getContext();
         abortActiveOrchestratorRun();
         clearCacheForChatChange();
-        clearLatestOrchestrationRuntimeTrace();
+        const run = getCurrentRun();
+        if (run && run.status === 'running' && typeof run.abortFn === 'function') {
+            try { run.abortFn(); } catch (_) { /* best effort */ }
+            try {
+                finishRun({ runId: run.runId, status: 'aborted', error: 'chat changed' });
+            } catch (_) { /* state may already be clean */ }
+        }
+        clearCurrentRun();
         clearCapsulePrompt(liveContext);
         void loadOrchestratorChatState(liveContext).finally(() => ensureUi());
     });

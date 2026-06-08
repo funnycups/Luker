@@ -4,8 +4,8 @@
  * spec/agenda/loop plus memory-graph schema plus any future studio)
  * share one renderer.
  *
- * Kept here so orchestrator-internal consumers (`runtime-trace-render.js`,
- * `main.js` second-diff usage) don't have to update import paths.
+ * Kept here so orchestrator-internal consumers don't have to update
+ * import paths.
  */
 
 export {

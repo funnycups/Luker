@@ -46,13 +46,13 @@ import {
     executeGetDraftTool,
     executeDraftSearchTool,
 } from './director-tools.js';
-import {
-    appendToReasoningSection,
-    ensureReasoningSection,
-    markReasoningSectionStatus,
-} from './editor-ops.js';
 import { buildPerRunCustomToolRegistry } from './per-run-custom-tools.js';
 import { resolveToolSource } from './loop-tools.js';
+import {
+    appendRound, appendToSection, ensureSection,
+    finishRun, setRoundStatus, setSectionStatus,
+} from './run-state/store.js';
+import { i18n, i18nFormat } from './i18n.js';
 
 // Skill-resolution helpers are loaded lazily inside the dispatch path so the
 // transitive import chain (skill-resolution → skillsApi → script.js → lib.js)
@@ -90,12 +90,13 @@ function resolveAgentPromptPresetName(settings, agentConfig) {
     return String(agentConfig?.promptPresetName || '').trim()
         || String(settings?.llmNodePresetName || '').trim();
 }
-// Note: we intentionally do NOT import from `runtime-trace.js` directly.
-// That module transitively pulls in `defaults.js` → `script.js` →
-// `lib.js`, which is a browser-only bundle and breaks Node test
-// environments that exercise the director runtime in isolation. The
-// caller (main.js) wires `deps.finalizeTrace` to the real
-// `finalizeOrchestrationRuntimeTrace`; tests pass a no-op or a mock.
+// Note: director writes runtime trace data only through the deps the
+// caller (main.js) injects (`deps.trace` + `deps.finalizeTrace` +
+// `deps.recordTraceEvent`). main.js builds the trace data structure
+// inline post-Stage-3 of the run-panel refactor (the legacy
+// `runtime-trace.js` module is gone); director-runtime stays
+// agnostic to its exact shape so the test environment can pass a
+// no-op or a mock.
 
 const SUPPORTED_TYPES = new Set(['normal', 'regenerate', 'swipe', 'continue']);
 
@@ -207,16 +208,12 @@ export async function handleDirectorDispatch(eventData, deps) {
                 }
             }
             if (!handle.complete._settled) {
-                // Append a marker into the reasoning fold so the user can
-                // see the turn ended unnaturally (vs. a clean finalize).
-                try {
-                    const current = handle.getReasoning();
-                    const sep = current ? '\n\n' : '';
-                    const marker = userAborted
-                        ? '### [aborted]'
-                        : `### [error]\n${String(err?.message || err)}`;
-                    handle.setReasoning(`${current}${sep}${marker}`);
-                } catch (_) { /* reasoning append is best-effort */ }
+                // Reasoning-fold markers used to be appended here so the user
+                // could see the turn ended unnaturally (vs. a clean finalize),
+                // but Stage 3 of the run-panel refactor moved live progress to
+                // RunStateStore. The chat-message reasoning fold stays
+                // untouched on abort/error so the original seeded reasoning is
+                // preserved.
                 try {
                     if (userAborted) {
                         // User stop: preserve partial output but signal
@@ -244,28 +241,50 @@ export async function handleDirectorDispatch(eventData, deps) {
                 }
             }
         } finally {
-            // Finalize the runtime trace with the resolved handle status
-            // so the trace popup shows a terminal state instead of
-            // "running" forever. Trace creation is optional (caller may
-            // not have supplied one), so guard. The actual finalize
-            // function is injected via deps to avoid a hard import of
-            // runtime-trace.js (which transitively breaks the node test
-            // environment).
-            if (deps?.trace && typeof deps?.finalizeTrace === 'function') {
-                let traceStatus = 'completed';
-                try {
-                    const outcome = await handle.complete;
-                    const handleStatus = String(outcome?.status || '');
-                    if (handleStatus === 'committed') traceStatus = 'completed';
-                    else if (handleStatus === 'aborted') traceStatus = 'cancelled';
-                    else if (handleStatus === 'discarded') traceStatus = 'cancelled';
-                    else traceStatus = handleStatus || 'completed';
-                } catch (_) {
-                    traceStatus = 'failed';
+            // Finalize the runtime trace AND the run-panel store with the
+            // resolved handle status so both back-ends settle into a
+            // terminal state instead of staying "running". Trace creation
+            // is optional (caller may not have supplied one), so guard.
+            // The finalize function is injected via deps so director-
+            // runtime stays agnostic to the caller's trace shape.
+            let resolvedStatus = 'completed';
+            let resolvedFinalText = null;
+            let resolvedError = null;
+            try {
+                const outcome = await handle.complete;
+                const handleStatus = String(outcome?.status || '');
+                if (handleStatus === 'committed') {
+                    resolvedStatus = 'committed';
+                    resolvedFinalText = String(outcome?.finalText ?? '');
+                } else if (handleStatus === 'aborted') {
+                    resolvedStatus = 'aborted';
+                } else if (handleStatus === 'discarded') {
+                    resolvedStatus = 'aborted';
+                } else {
+                    resolvedStatus = handleStatus || 'completed';
                 }
+            } catch (handleErr) {
+                resolvedStatus = 'error';
+                resolvedError = String(handleErr?.message || handleErr);
+            }
+            if (deps?.trace && typeof deps?.finalizeTrace === 'function') {
+                const traceStatus = resolvedStatus === 'committed' ? 'completed'
+                    : resolvedStatus === 'aborted' ? 'cancelled'
+                        : resolvedStatus === 'error' ? 'failed'
+                            : resolvedStatus;
                 try {
                     deps.finalizeTrace(deps.trace, traceStatus);
                 } catch (_) { /* trace is best-effort */ }
+            }
+            if (deps?.runId) {
+                try {
+                    finishRun({
+                        runId: deps.runId,
+                        status: resolvedStatus,
+                        finalText: resolvedFinalText,
+                        error: resolvedError,
+                    });
+                } catch (_) { /* store may already be cleared */ }
             }
         }
     })();
@@ -419,13 +438,21 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         settings: deps?.settings,
         generateTask: deps?.generateTask,
         // When the main.js wiring passed a streaming provider, sub-agent
-        // output streams chunk-by-chunk into its own named section of
-        // the reasoning fold (so parallel sub-agents are visible live
-        // without character-level interleaving). Without it, the
-        // dispatcher falls back to non-streaming and the section gets
-        // the terminal text in one shot.
+        // output streams chunk-by-chunk into the per-dispatch round in
+        // the RunStateStore (so the Stage-4 run panel renders parallel
+        // sub-agents live without character-level interleaving). Without
+        // it, the dispatcher falls back to non-streaming and the section
+        // gets the terminal text in one shot.
         generateTaskStream: deps?.generateTaskStream,
         handle,
+        // The active director run id — each sub-agent dispatch opens its
+        // own top-level round (`sub-<agentName>-<n>`) in the store so
+        // every panel subscriber sees its activity in real time. Null
+        // (legacy tests that don't open a run) makes the dispatcher's
+        // store calls no-op — the inflight promise still resolves and
+        // the sub-agent's mini-loop runs to completion, the activity
+        // just isn't surfaced to the run panel.
+        runId: deps?.runId || null,
         getContentPayload,
         abortSignal: eventData?.abortSignal,
         // Sub-agents run their own tool-call mini-loop using the same
@@ -526,6 +553,8 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         }
     }
 
+    const panelRunId = deps?.runId || null;
+
     for (let round = 0; round < limits.maxRounds; round++) {
         if (eventData?.abortSignal?.aborted) {
             // User clicked stop between rounds. Use handle.abort() to
@@ -567,12 +596,11 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                 content: `[Runtime] sub-agent ${n.handleId} (${n.subagentId}) ${tail}`,
             });
         }
-        // Anchor a named section for this round's main-agent output so
-        // text chunks can flow into the reasoning fold as they arrive,
-        // not at round-end. Unique per round (`main-0`, `main-1`, …) so
-        // multiple rounds don't collide on the same section header —
-        // they need to read top-to-bottom in arrival order alongside any
-        // sub-agent sections that get dispatched mid-round.
+        // Anchor a named section for this round's main-agent output. Live
+        // chunks flow into the run-panel store (Stage 4 panel renders
+        // them); the chat message reasoning fold is no longer touched
+        // by the director runtime, so chat persistence stays untouched
+        // until the final commit writes `mes`.
         // No-tool-call retry inner loop. Each round MUST produce a
         // tool call; an empty toolCalls list means the model balked
         // and we discard that attempt entirely — not pushed into
@@ -581,17 +609,23 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         let result;
         let toolCalls;
         let noToolRetries = 0;
-        let mainSectionId;
-        // Reasoning is captured for the trace popup only (per user's
+        // Reasoning is captured for the run-panel only (per user's
         // request). It is NOT forwarded into the message reasoning fold
-        // — that channel stays text-only so the user still sees agent
+        // — that channel stays untouched so the user still sees agent
         // output without internal thinking interleaved.
         let reasoningAccum = '';
+        let panelRoundId = null;
+        let panelTextSectionId = null;
+        let panelReasoningSectionId = null;
+        if (panelRunId) {
+            panelRoundId = `main-${round}`;
+            try {
+                appendRound({ runId: panelRunId, round: { id: panelRoundId, label: i18nFormat('Director · round ${0}', round + 1) } });
+                panelReasoningSectionId = ensureSection({ runId: panelRunId, roundId: panelRoundId, section: { id: 'reasoning', kind: 'reasoning', title: i18n('Reasoning') } });
+                panelTextSectionId = ensureSection({ runId: panelRunId, roundId: panelRoundId, section: { id: 'text', kind: 'text', title: i18n('Text') } });
+            } catch (_) { /* store may have been cleared */ }
+        }
         while (true) {
-            mainSectionId = noToolRetries === 0
-                ? `main-${round}`
-                : `main-${round}-r${noToolRetries}`;
-            ensureReasoningSection(handle, mainSectionId, { status: 'running' });
             let chunkReceived = false;
             reasoningAccum = '';
             // Transport-error retry honors `settings.toolCallRetryMax` —
@@ -618,9 +652,18 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                         onChunk: (chunk) => {
                             if (chunk?.type === 'text' && typeof chunk.delta === 'string' && chunk.delta.length > 0) {
                                 chunkReceived = true;
-                                appendToReasoningSection(handle, mainSectionId, chunk.delta);
+                                if (panelRunId && panelTextSectionId) {
+                                    try {
+                                        appendToSection({ runId: panelRunId, roundId: panelRoundId, sectionId: panelTextSectionId, delta: chunk.delta });
+                                    } catch (_) { /* store may have been cleared */ }
+                                }
                             } else if (chunk?.type === 'reasoning' && typeof chunk.delta === 'string' && chunk.delta.length > 0) {
                                 reasoningAccum += chunk.delta;
+                                if (panelRunId && panelReasoningSectionId) {
+                                    try {
+                                        appendToSection({ runId: panelRunId, roundId: panelRoundId, sectionId: panelReasoningSectionId, delta: chunk.delta });
+                                    } catch (_) { /* store may have been cleared */ }
+                                }
                             }
                         },
                     });
@@ -633,13 +676,14 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                 }
             }
             if (!chunkReceived) {
-                // Non-streaming transport or tool-only stream: section
-                // header is in place but body is empty. Append the
-                // assembled assistantText so the fold still reflects
-                // what the model said this attempt.
+                // Non-streaming transport or tool-only stream: append the
+                // assembled assistantText so the panel's text section
+                // reflects what the model said this attempt.
                 const text = String(result?.assistantText || '');
-                if (text) {
-                    appendToReasoningSection(handle, mainSectionId, text);
+                if (text && panelRunId && panelTextSectionId) {
+                    try {
+                        appendToSection({ runId: panelRunId, roundId: panelRoundId, sectionId: panelTextSectionId, delta: text });
+                    } catch (_) { /* store may have been cleared */ }
                 }
             }
             const rawToolCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
@@ -649,10 +693,23 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
             // entries, and semantically they aren't actionable.
             toolCalls = rawToolCalls.filter(tc => String(tc?.name || '').trim().length > 0);
             if (toolCalls.length > 0) {
-                try { markReasoningSectionStatus(handle, mainSectionId, ''); } catch (_) { /* non-fatal */ }
+                if (panelRunId && panelTextSectionId) {
+                    try {
+                        setSectionStatus({ runId: panelRunId, roundId: panelRoundId, sectionId: panelTextSectionId, status: 'done' });
+                    } catch (_) { /* store may have been cleared */ }
+                }
+                if (panelRunId && panelReasoningSectionId) {
+                    try {
+                        setSectionStatus({ runId: panelRunId, roundId: panelRoundId, sectionId: panelReasoningSectionId, status: 'done' });
+                    } catch (_) { /* store may have been cleared */ }
+                }
                 break;
             }
-            try { markReasoningSectionStatus(handle, mainSectionId, 'failed: no tool call'); } catch (_) { /* non-fatal */ }
+            if (panelRunId && panelTextSectionId) {
+                try {
+                    setSectionStatus({ runId: panelRunId, roundId: panelRoundId, sectionId: panelTextSectionId, status: 'failed', meta: { err: 'no tool call' } });
+                } catch (_) { /* store may have been cleared */ }
+            }
             noToolRetries++;
             if (noToolRetries > maxNoToolRetries) {
                 // Record the exhausted round before throwing. The assistant
@@ -732,6 +789,15 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
             const callId = assistantToolCallEntries[i].id;
             const name = String(call?.name || '');
             const args = call?.args;
+            let panelToolCallSectionId = null;
+            if (panelRunId && panelRoundId) {
+                try {
+                    panelToolCallSectionId = ensureSection({
+                        runId: panelRunId, roundId: panelRoundId,
+                        section: { id: `tool-${i}`, kind: 'tool_call', title: i18nFormat('Tool: ${0}', name), meta: { args } },
+                    });
+                } catch (_) { /* store may have been cleared */ }
+            }
             let toolResult;
             if (name === 'dispatch_subagent') {
                 const h = await raceAbortSignal(
@@ -819,6 +885,23 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                 content: JSON.stringify(toolResult),
                 _round: round,
             });
+            if (panelRunId && panelRoundId) {
+                try {
+                    const resultSectionId = ensureSection({
+                        runId: panelRunId, roundId: panelRoundId,
+                        section: { id: `tool-result-${i}`, kind: 'tool_result', title: i18nFormat('Tool result: ${0}', name), meta: { ok: !!toolResult?.ok, err: toolResult?.error || null } },
+                    });
+                    setSectionStatus({ runId: panelRunId, roundId: panelRoundId, sectionId: resultSectionId, status: toolResult?.ok ? 'done' : 'failed' });
+                    if (panelToolCallSectionId) {
+                        setSectionStatus({ runId: panelRunId, roundId: panelRoundId, sectionId: panelToolCallSectionId, status: toolResult?.ok ? 'done' : 'failed' });
+                    }
+                } catch (_) { /* store may have been cleared */ }
+            }
+        }
+        if (panelRunId && panelRoundId) {
+            try {
+                setRoundStatus({ runId: panelRunId, roundId: panelRoundId, status: 'done' });
+            } catch (_) { /* store may have been cleared */ }
         }
         if (finalized) return;
     }

@@ -70,12 +70,12 @@ import {
 import { toReadableYamlText } from './output-formatting.js';
 import { buildAutoInjectedNodePromptPrelude } from './review-feedback.js';
 import {
-    beginOrchestrationRuntimeNodeAttempt,
-    buildOrchestrationRuntimeSlotKey,
-    createOrchestrationRuntimeTrace,
-    finishOrchestrationRuntimeNodeAttempt,
-    recordOrchestrationRuntimeEvent,
-} from './runtime-trace.js';
+    appendRound, appendToSection, ensureSection,
+    finishRun, setRoundStatus, setSectionStatus, startRun,
+} from './run-state/store.js';
+import { i18n, i18nFormat } from './i18n.js';
+import { getChatKey } from './snapshot-cache.js';
+import { normalizeNodeType } from './spec-schema.js';
 import { getPreviousOrchestrationCapsuleText } from './snapshot-cache.js';
 import {
     getNodeIterationMaxRounds,
@@ -116,6 +116,198 @@ async function loadSkillResolution() {
 }
 
 const MODULE_NAME = 'orchestrator';
+
+// Inline trace helpers. Replaces the deleted runtime-trace.js module so
+// the existing trace data structure (consumed by the simulation-payload
+// adapter and the legacy runtime-trace popup) is still produced by the
+// runner. Run-panel state lives in run-state/store.js and is written in
+// parallel via startRun / appendRound / appendToSection.
+
+function buildRuntimeSlotKey(stageIndex, nodeIndex, nodeId = '') {
+    return [Number(stageIndex), Number(nodeIndex), String(nodeId || '').trim()].join(':');
+}
+
+function cloneTraceValue(value) {
+    if (typeof value === 'string') return String(value);
+    if (value && typeof value === 'object') return structuredClone(value);
+    return value;
+}
+
+function serializeTraceValue(value) {
+    if (typeof value === 'string') return String(value || '');
+    if (value && typeof value === 'object') return toReadableYamlText(value, '{}');
+    if (value == null) return '';
+    return String(value);
+}
+
+function truncateTracePreview(value, maxChars = 240) {
+    const text = String(value || '').trim();
+    if (!text) return '';
+    return text.length > maxChars ? `${text.slice(0, maxChars).trimEnd()}…` : text;
+}
+
+function sanitizeTraceConversation(conversation) {
+    if (!conversation || typeof conversation !== 'object') return null;
+    const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
+    return { messages: messages.map(m => structuredClone(m)) };
+}
+
+function createRuntimeTrace(context, payload, extra = {}) {
+    const now = new Date().toISOString();
+    const trace = {
+        runId: `orch_runtime_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+        chatKey: String(extra?.chatKey || getChatKey(context) || ''),
+        status: 'running',
+        startedAt: now,
+        updatedAt: now,
+        finishedAt: '',
+        generationType: String(payload?.type || extra?.generationType || '').trim().toLowerCase(),
+        targetLayer: 0,
+        note: String(extra?.note || ''),
+        capsuleText: '',
+        error: '',
+        mode: String(extra?.mode || ''),
+        stages: [],
+        attempts: [],
+        events: [],
+        nextEventSeq: 1,
+        nextAttemptId: 1,
+        reviewRerunCount: 0,
+    };
+    recordRuntimeEvent(trace, 'run_started', {
+        status: trace.status,
+        generationType: trace.generationType,
+        targetLayer: trace.targetLayer,
+        note: trace.note,
+    });
+    return trace;
+}
+
+function recordRuntimeEvent(trace, type, details = {}) {
+    if (!trace || typeof trace !== 'object') return null;
+    const event = {
+        seq: Number(trace.nextEventSeq || 1),
+        at: new Date().toISOString(),
+        type: String(type || 'event'),
+        ...(details && typeof details === 'object' ? structuredClone(details) : {}),
+    };
+    trace.nextEventSeq = event.seq + 1;
+    trace.updatedAt = event.at;
+    trace.events.push(event);
+    return event;
+}
+
+function finalizeRuntimeTrace(trace, status, details = {}) {
+    if (!trace || typeof trace !== 'object') return;
+    const normalizedStatus = String(status || trace.status || 'completed');
+    trace.status = normalizedStatus;
+    trace.updatedAt = new Date().toISOString();
+    trace.finishedAt = normalizedStatus === 'running' ? '' : trace.updatedAt;
+    if (Object.prototype.hasOwnProperty.call(details || {}, 'capsuleText')) trace.capsuleText = String(details?.capsuleText || '');
+    if (Object.prototype.hasOwnProperty.call(details || {}, 'note')) trace.note = String(details?.note || '');
+    if (Object.prototype.hasOwnProperty.call(details || {}, 'error')) trace.error = String(details?.error || '');
+    if (Object.prototype.hasOwnProperty.call(details || {}, 'reviewRerunCount')) {
+        trace.reviewRerunCount = Math.max(0, Math.floor(Number(details?.reviewRerunCount) || 0));
+    }
+    recordRuntimeEvent(trace, 'run_finished', {
+        status: normalizedStatus,
+        note: trace.note,
+        error: trace.error,
+        reviewRerunCount: Number(trace.reviewRerunCount || 0),
+    });
+}
+
+function beginRuntimeNodeAttempt(trace, meta = {}) {
+    if (!trace || typeof trace !== 'object') return null;
+    const attempt = {
+        attemptId: `attempt_${Number(trace.nextAttemptId || 1)}`,
+        sequence: Number(trace.nextEventSeq || 1),
+        stageIndex: Number(meta?.stageIndex || 0),
+        stageId: String(meta?.stageId || ''),
+        nodeIndex: Number(meta?.nodeIndex || 0),
+        nodeId: String(meta?.nodeId || ''),
+        preset: String(meta?.preset || ''),
+        nodeType: normalizeNodeType(meta?.nodeType),
+        slotKey: String(meta?.slotKey || buildRuntimeSlotKey(meta?.stageIndex, meta?.nodeIndex, meta?.nodeId)),
+        runKind: String(meta?.runKind || 'worker'),
+        round: Math.max(1, Math.floor(Number(meta?.round) || 1)),
+        startedAt: new Date().toISOString(),
+        endedAt: '',
+        status: 'running',
+        rerunReason: String(meta?.rerunReason || ''),
+        output: null,
+        outputText: '',
+        previewText: '',
+        action: '',
+        targetNodeIds: [],
+        reason: '',
+        replayResult: null,
+        error: '',
+        conversation: null,
+    };
+    trace.nextAttemptId = Number(trace.nextAttemptId || 1) + 1;
+    trace.attempts.push(attempt);
+    recordRuntimeEvent(trace, 'node_started', {
+        attemptId: attempt.attemptId,
+        stageIndex: attempt.stageIndex,
+        stageId: attempt.stageId,
+        nodeIndex: attempt.nodeIndex,
+        nodeId: attempt.nodeId,
+        preset: attempt.preset,
+        nodeType: attempt.nodeType,
+        runKind: attempt.runKind,
+        round: attempt.round,
+        rerunReason: attempt.rerunReason,
+    });
+    return attempt;
+}
+
+function finishRuntimeNodeAttempt(trace, attempt, details = {}) {
+    if (!trace || typeof trace !== 'object' || !attempt || typeof attempt !== 'object') return;
+    attempt.endedAt = new Date().toISOString();
+    attempt.status = String(details?.status || attempt.status || 'completed');
+    attempt.action = String(details?.action || attempt.action || '');
+    attempt.reason = String(details?.reason || attempt.reason || '');
+    attempt.rerunReason = String(
+        Object.prototype.hasOwnProperty.call(details || {}, 'rerunReason')
+            ? details?.rerunReason
+            : attempt.rerunReason,
+    ) || '';
+    attempt.targetNodeIds = Array.isArray(details?.targetNodeIds)
+        ? details.targetNodeIds.map(item => String(item || '').trim()).filter(Boolean)
+        : (Array.isArray(attempt.targetNodeIds) ? attempt.targetNodeIds : []);
+    attempt.replayResult = Object.prototype.hasOwnProperty.call(details || {}, 'replayResult')
+        ? cloneTraceValue(details?.replayResult)
+        : attempt.replayResult;
+    attempt.error = String(details?.error || '');
+    if (Object.prototype.hasOwnProperty.call(details || {}, 'output')) {
+        attempt.output = cloneTraceValue(details?.output);
+        attempt.outputText = serializeTraceValue(details?.output);
+        attempt.previewText = truncateTracePreview(attempt.outputText);
+    }
+    if (Object.prototype.hasOwnProperty.call(details || {}, 'conversation')) {
+        attempt.conversation = sanitizeTraceConversation(details?.conversation);
+    }
+    recordRuntimeEvent(trace, 'node_finished', {
+        attemptId: attempt.attemptId,
+        stageIndex: attempt.stageIndex,
+        stageId: attempt.stageId,
+        nodeIndex: attempt.nodeIndex,
+        nodeId: attempt.nodeId,
+        preset: attempt.preset,
+        nodeType: attempt.nodeType,
+        runKind: attempt.runKind,
+        round: attempt.round,
+        status: attempt.status,
+        action: attempt.action,
+        reason: attempt.reason,
+        rerunReason: attempt.rerunReason,
+        targetNodeIds: Array.isArray(attempt.targetNodeIds) ? attempt.targetNodeIds.slice() : [],
+        previewText: attempt.previewText,
+        error: attempt.error,
+        replayResult: cloneTraceValue(attempt.replayResult),
+    });
+}
 
 export const AGENDA_TODO_STATUSES = Object.freeze(['todo', 'doing', 'done', 'blocked', 'dropped']);
 
@@ -782,8 +974,14 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
 export async function runAgendaOrchestration(context, payload, messages, profile) {
     const settings = extension_settings[MODULE_NAME];
     const abortSignal = isAbortSignalLike(payload?.signal) ? payload.signal : null;
-    const trace = createOrchestrationRuntimeTrace(context, payload, [], {
-        note: 'Agenda mode runtime',
+    const trace = createRuntimeTrace(context, payload, { mode: ORCH_EXECUTION_MODE_AGENDA, note: 'Agenda mode runtime' });
+    const chatKey = String(trace.chatKey || '');
+    const runId = startRun({
+        mode: 'agenda',
+        chatKey,
+        abortFn: abortSignal ? () => {
+            try { abortSignal.dispatchEvent && abortSignal.dispatchEvent(new Event('abort')); } catch (_) { /* best-effort */ }
+        } : null,
     });
     const state = {
         plannerRounds: 0,
@@ -800,145 +998,187 @@ export async function runAgendaOrchestration(context, payload, messages, profile
     // dispatch options bag (NOT on `state`, which is structuredClone'd
     // into the runtime trace and would choke on the AsyncFunction refs
     // the registry holds).
-    const customToolRegistry = buildPerRunCustomToolRegistry(profile, trace, recordOrchestrationRuntimeEvent);
+    const customToolRegistry = buildPerRunCustomToolRegistry(profile, trace, recordRuntimeEvent);
     syncAgendaTrace(trace, state);
     const plannerMaxRounds = Math.min(getAgendaPlannerMaxRounds(settings), Math.max(1, Math.floor(Number(profile?.limits?.plannerMaxRounds) || getAgendaPlannerMaxRounds(settings))));
     let finalizeReason = '';
 
-    for (let round = 1; round <= plannerMaxRounds; round++) {
-        throwIfAborted(abortSignal, 'Orchestration aborted.');
-        state.plannerRounds = round;
-        syncAgendaTrace(trace, state);
-        const plannerAttempt = beginOrchestrationRuntimeNodeAttempt(trace, {
-            stageIndex: round - 1,
-            stageId: `agenda_planner_round_${round}`,
-            nodeIndex: 0,
-            nodeId: 'agenda_planner',
-            preset: 'agenda_planner',
-            nodeType: ORCH_NODE_TYPE_WORKER,
-            runKind: 'planner',
-            slotKey: buildOrchestrationRuntimeSlotKey(round - 1, 0, `agenda_planner_${round}`),
-        });
-        const { plannerStep, conversation: plannerConversation } = await runAgendaPlannerStep(context, payload, messages, profile, state, abortSignal);
-        finishOrchestrationRuntimeNodeAttempt(trace, plannerAttempt, {
-            status: 'completed',
-            output: plannerStep,
-            conversation: plannerConversation,
-        });
-        applyAgendaPlannerOps(state, plannerStep);
-        const dispatches = normalizeAgendaDispatches(state, plannerStep, profile, settings);
-        const finalizeReasonText = String(plannerStep?.finalize || '').trim();
-        const finalizeRequested = Boolean(finalizeReasonText);
-        if (Array.isArray(plannerStep?.dispatches) && plannerStep.dispatches.length > 0 && dispatches.length === 0 && !finalizeRequested) {
-            throw new Error('Agenda planner dispatched no valid agents. Check available agent ids and selected prior run ids.');
-        }
-        if (finalizeRequested && dispatches.length > 0) {
-            throw new Error('Agenda planner cannot dispatch agents and finalize in the same step.');
-        }
-        for (const dispatch of dispatches) {
-            const todo = state.todos.find(item => String(item?.id || '') === String(dispatch.todoId || ''));
-            if (todo) {
-                todo.status = todo.status === 'done' ? 'done' : 'doing';
-            }
-        }
-        syncAgendaTrace(trace, state);
-        if (finalizeRequested) {
-            finalizeReason = finalizeReasonText;
-            break;
-        }
-        if (dispatches.length === 0) {
-            finalizeReason = finalizeReasonText || 'Planner produced no further dispatches.';
-            break;
-        }
-        const newRuns = await Promise.all(dispatches.map(async (dispatch, dispatchIndex) => {
-            const attempt = beginOrchestrationRuntimeNodeAttempt(trace, {
+    try {
+        for (let round = 1; round <= plannerMaxRounds; round++) {
+            throwIfAborted(abortSignal, 'Orchestration aborted.');
+            state.plannerRounds = round;
+            syncAgendaTrace(trace, state);
+            const plannerAttempt = beginRuntimeNodeAttempt(trace, {
                 stageIndex: round - 1,
-                stageId: `agenda_agents_round_${round}`,
-                nodeIndex: dispatchIndex,
-                nodeId: `${dispatch.agent}:${dispatch.todoId}`,
-                preset: dispatch.agent,
+                stageId: `agenda_planner_round_${round}`,
+                nodeIndex: 0,
+                nodeId: 'agenda_planner',
+                preset: 'agenda_planner',
                 nodeType: ORCH_NODE_TYPE_WORKER,
-                runKind: 'worker',
-                slotKey: buildOrchestrationRuntimeSlotKey(round - 1, dispatchIndex + 1, `${dispatch.agent}_${dispatch.todoId}_${round}`),
+                runKind: 'planner',
+                slotKey: buildRuntimeSlotKey(round - 1, 0, `agenda_planner_${round}`),
             });
-            try {
-                const result = await runAgendaTextAgent(context, payload, messages, profile, state, dispatch, { kind: 'agent', customToolRegistry }, abortSignal);
-                finishOrchestrationRuntimeNodeAttempt(trace, attempt, {
-                    status: 'completed',
-                    output: result.outputText,
-                    conversation: result.conversation,
-                });
-                return result;
-            } catch (error) {
-                finishOrchestrationRuntimeNodeAttempt(trace, attempt, {
-                    status: 'failed',
-                    error: String(error?.message || error),
-                });
-                throw error;
+            const plannerRoundId = `node-agenda_planner-${round}`;
+            appendRound({ runId, round: { id: plannerRoundId, label: i18nFormat('Node: ${0} (attempt ${1})', 'agenda_planner', round) } });
+            const { plannerStep, conversation: plannerConversation } = await runAgendaPlannerStep(context, payload, messages, profile, state, abortSignal);
+            finishRuntimeNodeAttempt(trace, plannerAttempt, {
+                status: 'completed',
+                output: plannerStep,
+                conversation: plannerConversation,
+            });
+            const plannerSectionId = ensureSection({
+                runId, roundId: plannerRoundId,
+                section: { id: 'planner', kind: 'note', title: i18n('Note'), meta: { output: plannerStep } },
+            });
+            appendToSection({ runId, roundId: plannerRoundId, sectionId: plannerSectionId, delta: serializeTraceValue(plannerStep) });
+            setSectionStatus({ runId, roundId: plannerRoundId, sectionId: plannerSectionId, status: 'done' });
+            setRoundStatus({ runId, roundId: plannerRoundId, status: 'done' });
+            applyAgendaPlannerOps(state, plannerStep);
+            const dispatches = normalizeAgendaDispatches(state, plannerStep, profile, settings);
+            const finalizeReasonText = String(plannerStep?.finalize || '').trim();
+            const finalizeRequested = Boolean(finalizeReasonText);
+            if (Array.isArray(plannerStep?.dispatches) && plannerStep.dispatches.length > 0 && dispatches.length === 0 && !finalizeRequested) {
+                throw new Error('Agenda planner dispatched no valid agents. Check available agent ids and selected prior run ids.');
             }
-        }));
-        state.runs.push(...newRuns);
-        syncAgendaTrace(trace, state);
-        if (state.runs.length >= getAgendaMaxTotalRuns(settings)) {
-            finalizeReason = 'Reached maxTotalRuns limit. Finalizing with collected work.';
-            break;
+            if (finalizeRequested && dispatches.length > 0) {
+                throw new Error('Agenda planner cannot dispatch agents and finalize in the same step.');
+            }
+            for (const dispatch of dispatches) {
+                const todo = state.todos.find(item => String(item?.id || '') === String(dispatch.todoId || ''));
+                if (todo) {
+                    todo.status = todo.status === 'done' ? 'done' : 'doing';
+                }
+            }
+            syncAgendaTrace(trace, state);
+            if (finalizeRequested) {
+                finalizeReason = finalizeReasonText;
+                break;
+            }
+            if (dispatches.length === 0) {
+                finalizeReason = finalizeReasonText || 'Planner produced no further dispatches.';
+                break;
+            }
+            const newRuns = await Promise.all(dispatches.map(async (dispatch, dispatchIndex) => {
+                const attempt = beginRuntimeNodeAttempt(trace, {
+                    stageIndex: round - 1,
+                    stageId: `agenda_agents_round_${round}`,
+                    nodeIndex: dispatchIndex,
+                    nodeId: `${dispatch.agent}:${dispatch.todoId}`,
+                    preset: dispatch.agent,
+                    nodeType: ORCH_NODE_TYPE_WORKER,
+                    runKind: 'worker',
+                    slotKey: buildRuntimeSlotKey(round - 1, dispatchIndex + 1, `${dispatch.agent}_${dispatch.todoId}_${round}`),
+                });
+                const workerRoundId = `node-${dispatch.agent}-${dispatch.todoId}-${round}`;
+                appendRound({ runId, round: { id: workerRoundId, label: i18nFormat('Node: ${0} (attempt ${1})', `${dispatch.agent}:${dispatch.todoId}`, round) } });
+                try {
+                    const result = await runAgendaTextAgent(context, payload, messages, profile, state, dispatch, { kind: 'agent', customToolRegistry }, abortSignal);
+                    finishRuntimeNodeAttempt(trace, attempt, {
+                        status: 'completed',
+                        output: result.outputText,
+                        conversation: result.conversation,
+                    });
+                    const workerSectionId = ensureSection({
+                        runId, roundId: workerRoundId,
+                        section: { id: 'output', kind: 'text', title: i18n('Text') },
+                    });
+                    appendToSection({ runId, roundId: workerRoundId, sectionId: workerSectionId, delta: String(result.outputText || '') });
+                    setSectionStatus({ runId, roundId: workerRoundId, sectionId: workerSectionId, status: 'done' });
+                    setRoundStatus({ runId, roundId: workerRoundId, status: 'done' });
+                    return result;
+                } catch (error) {
+                    finishRuntimeNodeAttempt(trace, attempt, {
+                        status: 'failed',
+                        error: String(error?.message || error),
+                    });
+                    setRoundStatus({ runId, roundId: workerRoundId, status: 'failed' });
+                    throw error;
+                }
+            }));
+            state.runs.push(...newRuns);
+            syncAgendaTrace(trace, state);
+            if (state.runs.length >= getAgendaMaxTotalRuns(settings)) {
+                finalizeReason = 'Reached maxTotalRuns limit. Finalizing with collected work.';
+                break;
+            }
         }
-    }
 
-    const finalAgentId = sanitizeIdentifierToken(profile?.finalAgentId, Object.keys(profile?.agents || {})[0] || 'finalizer');
-    if (!profile?.agents?.[finalAgentId]) {
-        throw new Error(`Agenda final agent '${finalAgentId}' is not configured.`);
-    }
-    const finalDispatch = {
-        todoId: 'finalize',
-        agent: finalAgentId,
-        taskBrief: 'Read the resolved todo state and all completed runs, then produce the final orchestration guidance text.',
-        inputRunIds: state.runs.map(run => String(run?.runId || '')).filter(Boolean),
-    };
-    const finalAttempt = beginOrchestrationRuntimeNodeAttempt(trace, {
-        stageIndex: plannerMaxRounds,
-        stageId: 'agenda_finalize',
-        nodeIndex: 0,
-        nodeId: finalAgentId,
-        preset: finalAgentId,
-        nodeType: ORCH_NODE_TYPE_WORKER,
-        runKind: 'final',
-        slotKey: buildOrchestrationRuntimeSlotKey(plannerMaxRounds, 0, `agenda_final_${finalAgentId}`),
-    });
-    const finalRun = await runAgendaTextAgent(context, payload, messages, profile, state, finalDispatch, {
-        kind: 'final',
-        finalReason: finalizeReason,
-        customToolRegistry,
-    }, abortSignal);
-    if (!String(finalRun?.outputText || '').trim()) {
-        finishOrchestrationRuntimeNodeAttempt(trace, finalAttempt, {
-            status: 'failed',
-            error: 'Agenda final agent returned empty guidance text.',
-            conversation: finalRun?.conversation,
+        const finalAgentId = sanitizeIdentifierToken(profile?.finalAgentId, Object.keys(profile?.agents || {})[0] || 'finalizer');
+        if (!profile?.agents?.[finalAgentId]) {
+            throw new Error(`Agenda final agent '${finalAgentId}' is not configured.`);
+        }
+        const finalDispatch = {
+            todoId: 'finalize',
+            agent: finalAgentId,
+            taskBrief: 'Read the resolved todo state and all completed runs, then produce the final orchestration guidance text.',
+            inputRunIds: state.runs.map(run => String(run?.runId || '')).filter(Boolean),
+        };
+        const finalAttempt = beginRuntimeNodeAttempt(trace, {
+            stageIndex: plannerMaxRounds,
+            stageId: 'agenda_finalize',
+            nodeIndex: 0,
+            nodeId: finalAgentId,
+            preset: finalAgentId,
+            nodeType: ORCH_NODE_TYPE_WORKER,
+            runKind: 'final',
+            slotKey: buildRuntimeSlotKey(plannerMaxRounds, 0, `agenda_final_${finalAgentId}`),
         });
-        throw new Error('Agenda final agent returned empty guidance text.');
-    }
-    finishOrchestrationRuntimeNodeAttempt(trace, finalAttempt, {
-        status: 'completed',
-        output: finalRun.outputText,
-        conversation: finalRun.conversation,
-    });
-    state.finalGuidance = String(finalRun.outputText || '').trim();
-    state.runs.push(finalRun);
-    syncAgendaTrace(trace, state);
+        const finalRoundId = `node-${finalAgentId}-final`;
+        appendRound({ runId, round: { id: finalRoundId, label: i18nFormat('Node: ${0} (attempt ${1})', finalAgentId, plannerMaxRounds + 1) } });
+        const finalRun = await runAgendaTextAgent(context, payload, messages, profile, state, finalDispatch, {
+            kind: 'final',
+            finalReason: finalizeReason,
+            customToolRegistry,
+        }, abortSignal);
+        if (!String(finalRun?.outputText || '').trim()) {
+            finishRuntimeNodeAttempt(trace, finalAttempt, {
+                status: 'failed',
+                error: 'Agenda final agent returned empty guidance text.',
+                conversation: finalRun?.conversation,
+            });
+            setRoundStatus({ runId, roundId: finalRoundId, status: 'failed' });
+            throw new Error('Agenda final agent returned empty guidance text.');
+        }
+        finishRuntimeNodeAttempt(trace, finalAttempt, {
+            status: 'completed',
+            output: finalRun.outputText,
+            conversation: finalRun.conversation,
+        });
+        const finalSectionId = ensureSection({
+            runId, roundId: finalRoundId,
+            section: { id: 'final', kind: 'text', title: i18n('Text') },
+        });
+        appendToSection({ runId, roundId: finalRoundId, sectionId: finalSectionId, delta: String(finalRun.outputText || '') });
+        setSectionStatus({ runId, roundId: finalRoundId, sectionId: finalSectionId, status: 'done' });
+        setRoundStatus({ runId, roundId: finalRoundId, status: 'done' });
+        state.finalGuidance = String(finalRun.outputText || '').trim();
+        state.runs.push(finalRun);
+        syncAgendaTrace(trace, state);
 
-    return {
-        stageOutputs: [{
-            id: 'finalize',
-            mode: 'serial',
-            nodes: [{
-                node: finalAgentId,
-                output: state.finalGuidance,
+        finalizeRuntimeTrace(trace, 'completed', { capsuleText: state.finalGuidance });
+        try {
+            finishRun({ runId, status: 'committed', finalText: state.finalGuidance });
+        } catch (_) { /* run may already be cleared */ }
+
+        return {
+            stageOutputs: [{
+                id: 'finalize',
+                mode: 'serial',
+                nodes: [{
+                    node: finalAgentId,
+                    output: state.finalGuidance,
+                }],
             }],
-        }],
-        previousNodeOutputs: new Map([[finalAgentId, state.finalGuidance]]),
-        runtimeTrace: trace,
-        reviewRerunCount: 0,
-        agendaState: structuredClone(state),
-    };
+            previousNodeOutputs: new Map([[finalAgentId, state.finalGuidance]]),
+            runtimeTrace: trace,
+            reviewRerunCount: 0,
+            agendaState: structuredClone(state),
+        };
+    } catch (error) {
+        finalizeRuntimeTrace(trace, 'failed', { error: String(error?.message || error) });
+        try {
+            finishRun({ runId, status: 'error', error: String(error?.message || error) });
+        } catch (_) { /* run may already be cleared */ }
+        throw error;
+    }
 }
