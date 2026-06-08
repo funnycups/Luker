@@ -31,7 +31,12 @@
 import { ORCH_EXECUTION_MODE_DIRECTOR } from './director-defaults.js';
 import { isAbortError } from './abort-utils.js';
 import { resolveAgentToolFlags } from './persistence.js';
-const createMessageEditorHandle = SillyTavern.getContext().createMessageEditorHandle;
+// Resolved lazily inside `handleDirectorDispatch` so test environments
+// can import this module without first installing a SillyTavern global —
+// the loop body (`runMainAgentLoop`) and pure helpers do not need it.
+function getCreateMessageEditorHandle() {
+    return SillyTavern.getContext().createMessageEditorHandle;
+}
 import {
     buildMainAgentToolSchemas,
     createSubagentDispatcher,
@@ -148,6 +153,7 @@ export async function handleDirectorDispatch(eventData, deps) {
     // responsible for mirroring text/reasoning back into chat[slot]
     // plus repainting the DOM. Tests install their own adapter.
     const slot = chat && Number.isInteger(messageId) ? chat[messageId] : null;
+    const createMessageEditorHandle = getCreateMessageEditorHandle();
     const handle = createMessageEditorHandle({
         generationType: eventData.type,
         originalText: String(slot?.mes ?? ''),
