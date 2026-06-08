@@ -7,25 +7,25 @@ The Orchestrator solves this by sending in a small team before the main reply. O
 **The orchestrator ships with a working default Spec workflow — you don't have to design anything. Toggle it on and it just runs.** When you want a different shape later, every execution mode has its own dedicated editor.
 
 ::: info When does it run?
-The Orchestrator triggers on five generation types: `normal`, `continue`, `regenerate`, `swipe`, and `impersonate`. It runs **after** World Info parsing and **before** the main reply. The runtime trace is kept in memory only — it's cleared when you switch chats.
+The Orchestrator triggers on five generation types: `normal`, `continue`, `regenerate`, `swipe`, and `impersonate`. It runs **after** World Info parsing and **before** the main reply. The Run Panel is kept in memory only — it's cleared when you switch chats.
 :::
 
 ## 5-Minute Walkthrough (using the default workflow)
 
 You don't pick a mode first. You don't write a workflow first. The default Spec is already running. This section just gets it turned on so you can see what it actually does for you.
 
-### Step 0 — Prerequisites
+### Step 0 — Prerequisites {#step-0}
 
 - Your main chat already replies normally with a Chat Completion API.
 - The current chat has at least 3 turns of dialogue (so there's something for the workflow to plan against).
 
-### Step 1 — Enable Orchestrator
+### Step 1 — Enable Orchestrator {#step-1}
 
 Open the Extensions drawer (top bar) and find the **Multi-Agent Orchestration** section. Toggle **Enable** on.
 
 ![Orchestrator toggle and presets](/images/orchestrator/orch-toggle.png)
 
-### Step 2 — Pick a model for the agents
+### Step 2 — Pick a model for the agents {#step-2}
 
 Scroll within the same panel to **LLM Node API Preset** and **AI Generation API Preset**. These tell the orchestrator agents which API and which Chat Completion preset to use.
 
@@ -33,27 +33,36 @@ Scroll within the same panel to **LLM Node API Preset** and **AI Generation API 
 The orchestrator can call the LLM 5–10 times per turn (one per node). If your main chat uses an expensive model like Claude Opus, point the orchestrator at something cheaper — Haiku, Gemini Flash — and you'll cut 70%+ of the cost. If you need higher quality, route different nodes to different models (each node has its own API/preset override).
 :::
 
-### Step 3 — Just send a message
+### Step 3 — Just send a message {#step-3}
 
 Send a message in the chat — no other settings to touch. Before the main model replies, the default Spec workflow runs in the background. The first time will be slower than usual (running 5–10 agents in sequence); after that it settles in.
 
-### Step 4 — See what it did for you
+### Step 4 — See what it did for you {#step-4}
 
-Once your reply lands, scroll to the orchestrator panel and click **View Runtime Trace**.
+The moment a run starts, the **Run Panel** slides in beside the chat (or rises from the bottom on narrow screens). It's live: each round is a collapsible card; expand one to see what the model thought, which tools it called, and what they returned.
 
-![Runtime trace overview](/images/orchestrator/orch-runtime-trace.png)
+![The Run Panel as a director run begins](/_screenshots/run-panel/01-panel-initial.png)
 
-Each node card shows what it produced. The distiller — first stage — extracts a tight summary of the recent chat:
+As the model streams output, the panel updates in place — no flicker, no chat reflow:
 
-![Distiller node detail](/images/orchestrator/orch-runtime-trace-distiller.png)
+![Streaming progress: reasoning, text, and tool sections fill in real time](/_screenshots/run-panel/02-panel-streaming.png)
 
-**This text is *not* what gets injected into the main model.** It feeds the next stage. The output that becomes the actual briefing comes from the *last* stage:
+Expand any tool call to see its inputs and outputs:
 
-![Last stage outputs](/images/orchestrator/orch-runtime-trace-laststage.png)
+![A tool call expanded — arguments and results](/_screenshots/run-panel/03-panel-tool-expanded.png)
 
-That final output — and only that — is packaged into a single block of text and inserted into the main model's context. Everything upstream is plumbing.
+On narrow screens, the panel becomes a bottom drawer you can drag up or dismiss:
 
-This is the physical meaning of "the AI thinks before replying." If the reply is bad, you can open the trace and see exactly which stage produced the bad signal.
+![Run Panel on a phone-sized viewport](/_screenshots/run-panel/05-panel-drawer.png)
+
+The panel is in-memory only. Switching chats or refreshing clears it; the chat thread keeps only the final reply, preserved verbatim. You can also:
+
+- **Stop** the run mid-flight
+- **Copy** the raw content of any section
+- **Export** the full run as JSON (handy for bug reports)
+- **Collapse all** to fold every card at once
+
+This is the physical meaning of "the AI thinks before replying." If the reply is bad, open the panel and find exactly where the bad signal came in.
 
 You're using the orchestrator now. From here, three branches based on what you want:
 

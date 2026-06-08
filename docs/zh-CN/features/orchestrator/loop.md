@@ -126,8 +126,6 @@ loop.finalize -> out
 
 工具调用结束后，结果以浅黄色 `工具结果` 块挂在对话流里，agent 下一段 `助手` 块的思考就能直接基于它继续推进。这种「调工具 → 看结果 → 继续 → 适时 finalize」的节奏正是 loop 与 spec / agenda 拉开差距的地方：整段上下文留在 messages 里，没有 stage 之间的断流。
 
-![Loop 对话流：工具结果回到 agent 下一轮思考](/images/orchestrator/real-loop-conversation-tool.png)
-
 如果你的 agent 需要内置之外的能力，参见[自定义工具](./custom-tools.md)。
 
 ## 失控保护（5 层，按触发优先级）
@@ -139,48 +137,19 @@ loop.finalize -> out
 
 触发任一兜底时，loop 会把最后一次 agent 的自然文本作为 capsule 兜底，保证至少有产出送给主模型。
 
-## Trace 面板
+## 看一次 loop 跑
 
-主回复出来后在编排器面板点 **查看运行态轨迹** 就能打开 loop run 的 trace 弹窗。它把整次 loop 拆成几块呈现——顶部元信息、Agent 对话、流程事件时间线、原始数据——下面按面板顺序逐块看。
+[运行面板](/zh-CN/features/orchestrator/#step-4) 会实时显示每次 loop 运行。Agent 每一轮推理是一张卡片，展开就能看 agent 当时怎么想、调了哪些工具。Loop 模式可以重点关注：
 
-### 面板概览
+- **每轮思考 + 工具调用** —— 该轮 agent 的思考，跟着是它派发的工具。工具参数就地展开，不用看 raw JSON。
+- **工具结果反哺下一轮** —— 每个工具的返回也在这张卡片里。对照 system prompt 找 agent 跑岔的位置。
+- **`finalize`** —— agent 调用 `finalize` 工具时 loop 结束。它的 `capsule_text` 参数就是注入主模型的那段文本。
+- **兜底** —— 任一兜底触发（`max_rounds` / 墙钟超时 / 连续不调工具）时，面板会直接显示具体原因，loop 会用 agent 上一次的自然文本作为 capsule 兜底。
 
-最上面一行是状态摘要：状态（已完成 / 取消 / 预算耗尽）、模式（`loop`）、生成类型（`normal` / `continue` / `regenerate` / `swipe` / `impersonate`）、目标楼、节点执行次数、REVIEW 重跑次数、更新时间。
-
-![Loop trace 面板顶部元信息](/images/orchestrator/real-loop-meta.png)
-
-### Agent 对话
-
-「Agent 对话」一栏按消息顺序铺出整轮 loop 的 messages 数组——`系统` 块是 system prompt，`助手` 块是 agent 那一轮的思考与工具调用（参数直接展开，不用看 raw json），后接 `工具结果` 块。整次 loop 的所有上下文都在这里看，对照 prompt 找 agent 跑岔的根因。
-
-![Agent 对话：system 提示词 + 第一轮思考 + chat_read_range 工具调用](/images/orchestrator/real-loop-conversation-system.png)
-
-下一轮里 agent 拿到上一次工具的返回，补一段思考，调 `finalize`。`finalize` 也走 tool_call 通道，`capsule_text` 直接展开成结构化文本——就是会注入主模型的那段。
-
-![Agent 对话：finalize 调用与 capsule_text 全文](/images/orchestrator/real-loop-conversation-assistant.png)
-
-### 流程事件
-
-「流程事件」一栏按时间序号排出每个 trace event，带 ISO 时间戳。run 起止、每轮 llm_request / llm_response、每次 tool_call / tool_result / tool_error 都各占一行；触发兜底时会有 `budget_exhausted` 行，带具体 reason。
-
-![Loop 流程事件：run_started → llm_request/response → tool_call/result → Run completed](/images/orchestrator/real-loop-events.png)
-
-事件类型速查：
-
-- `run_started` / `run_finished`:run 开始 / 结束（含状态：`completed` / `budget_exhausted` / `cancelled`）
-- `llm_request` / `llm_response`：每轮的请求 / 响应（含 `message_count`、`tool_call_count`）
-- `tool_call` / `tool_result` / `tool_error`：每次工具调用的输入和结果（`finalize` 也走这条；空 `capsule_text` 报 `code: FINALIZE_EMPTY`）
-- `agent_no_tool_call`:agent 这一轮没调工具（含连续计数）
-- `budget_exhausted`：触发兜底时的具体 reason(`max_rounds` / `wall_clock` / `no_tool_call_streak`)
-
-### 原始轨迹 / 导出
-
-面板最底下「最新注入文本」是 capsule 终态；接着的「原始运行态轨迹」是整次 run 的 JSON 形态——`runId`、`chatKey`、`generationType`、`capsuleText` 等顶层字段都在这里。报 bug 时点「导出本次 run」会下载这份 JSON 的 jsonl 形式，直接附给开发者。
-
-![Loop 原始轨迹 JSON 与最新注入文本](/images/orchestrator/real-loop-rawtrace.png)
+面板顶部的**导出**按钮把整次 run 下载为 JSON（便于回报问题）。
 
 ::: warning persistTrace 是实验性开关
-设置里的 `persistTrace` 可以让所有 run 自动落盘到扩展数据目录。**目前是实验性的**——没有跨平台稳定的写盘 helper，开关默认关。日常用按需导出就够；只有需要持续追踪某个 chat 的 loop 行为时才打开。
+设置里的 `persistTrace` 可以让所有 run 自动落盘到扩展数据目录。**目前是实验性的**——没有跨平台稳定的写盘 helper，开关默认关。日常用运行面板的按需导出就够；只有需要持续追踪某个 chat 的 loop 行为时才打开。
 :::
 
 ## AI 迭代工作台用法

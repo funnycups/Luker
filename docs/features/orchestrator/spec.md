@@ -152,44 +152,21 @@ Constraints:
 | AI to stop breaking character | Enable Anti-Data Guard; in the [AI Iteration Studio](/features/orchestrator/iteration-studio), ask for "a Constraint Agent that hard-blocks meta-commentary" |
 | Same workflow across all cards | Apply at global scope (don't bind to a card) |
 | Different workflows per card | Open the Studio with the target card selected, then **Apply to Character Card** |
-| Cheaper / faster | See [overview → Step 2](/features/orchestrator/#step-2-pick-a-model-for-the-agents); or switch to [Single Agent mode](/features/orchestrator/single) (one node, one call) |
+| Cheaper / faster | See [overview → Step 2](/features/orchestrator/#step-2); or switch to [Single Agent mode](/features/orchestrator/single) (one node, one call) |
 | Tweak a workflow I built | Studio session — they persist |
 | Migrate to another machine | See [overview → Import / Export](/features/orchestrator/#import--export) |
 | Reset everything | The orchestration editor has a **Reset to Default** button |
 
-## Trace panel
+## Watching a Spec run
 
-Once the main reply lands, click **View runtime trace** in the orchestrator panel. Spec's trace popup splits the run into a few blocks — meta header + flow diagram, execution timeline, event timeline, and conversation + raw data.
+The [Run Panel](/features/orchestrator/#step-4) shows every Spec run live. Each stage is a card you can expand to see the worker's reasoning, the streamed output, and any tool calls. Spec-specific things to look for:
 
-### Panel overview + flow diagram
+- **Node execution count** — how many times any worker ran across the whole DAG.
+- **REVIEW rerun count** — reruns driven by review nodes (default capped at 2; bumpable to 0 to disable or up to 20 in the configuration reference). If a stage triggers a rerun, you'll see the same worker render twice in the panel.
+- **Per-stage output shape** — set by each node's prompt template. The distiller, for example, typically produces a `summary` followed by an `xml_guidance` block with `<story_state>` / `<location>` / `<key_items>` tags that downstream stages parse.
+- **The capsule** — the *last* stage's output is the text packaged into the main model's context. Everything upstream feeds it.
 
-The status header carries two Spec-specific counters: **Node execution count** (how many times any worker ran) and **REVIEW rerun count** (reruns driven by review nodes, default capped at 2 — bumpable to 0 to disable or up to 20 in the configuration reference).
-
-Below the header, the "Flow diagram" visualises the whole DAG: each stage is a coloured block, with worker cards inside listed by node id. Click any card to jump to that worker's detail in the "Execution timeline" panel on the right.
-
-![Spec trace panel: meta header + flow diagram + execution timeline on the right showing one worker's detail](/images/orchestrator/real-spec-meta.png)
-
-### Execution timeline
-
-"Execution timeline" is the right-hand detail panel — it shows the selected worker's full output. The output shape is set by that node's prompt template; in this example the distiller node produced a `summary` followed by an `xml_guidance` block (with `<story_state>` / `<location>` / `<key_items>` tags) that downstream stages can parse for structured fields.
-
-![Spec execution timeline: expanding a worker's detail to see summary and xml_guidance](/images/orchestrator/real-spec-timeline.png)
-
-### Event timeline
-
-The "Event timeline" lays out the DAG's execution rhythm in order: `Run started` → each stage's `stage_started` → each worker's `worker_started` / `worker_completed` (parallel workers within a stage land back-to-back) → `stage_completed` → next stage, finishing with `Run completed`.
-
-![Spec event timeline: stage_started → worker_started/completed → stage_completed, marching through the whole DAG](/images/orchestrator/real-spec-events.png)
-
-If a stage triggers a review rerun, you'll see the same worker fire `worker_started` / `worker_completed` multiple times — cross-reference that count with the top-row **REVIEW rerun count** to see how many times the review node sent it back.
-
-### Raw trace
-
-At the bottom, "Latest injected text" is the final stage's output — the capsule injected into the main model. The "Raw runtime trace" beneath it dumps the run as JSON, with `runId`, `chatKey`, `generationType`, `capsuleText` and other top-level fields.
-
-![Spec raw trace JSON and latest injected text](/images/orchestrator/real-spec-rawtrace.png)
-
-When filing a bug, **Export this run** downloads this JSON as a JSONL file you can hand to the developer.
+Use **Export** at the top of the panel to download the run as JSON (handy for bug reports).
 
 ## Spec configuration reference
 

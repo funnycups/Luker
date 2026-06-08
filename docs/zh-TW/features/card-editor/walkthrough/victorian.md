@@ -119,9 +119,9 @@ Studio 就把 CardApp 寫出來了。它讀的是 chat 變數（`case_name` / `c
 
 ### b. 看 orchestrator 在背後做了什麼
 
-點開擴充功能面板裡 Orchestrator 一節的「View Runtime Trace」，能看到這次 loop 跑了哪些步、呼叫了哪些工具、最終如何 finalize：
+打開聊天區旁的**運行面板**（窄屏下從底部抽屜拉起），就能看到這次 loop 跑了哪些步、呼叫了哪些工具、最終如何 finalize：
 
-![Orchestrator 執行軌跡](/images/walkthrough/victorian/step-07b-stage-output.png)
+![Orchestrator 運行面板](/images/walkthrough/victorian/step-07b-stage-output.png)
 
 如果 loop 出錯（API 配置不對、超時等），這裡會標紅失敗點，並自動 fallback 到無 loop 的直生成 — 端到端體驗依然連續，你只是少了那一層 capsule。
 

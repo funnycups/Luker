@@ -206,7 +206,7 @@ Send a message in the main chat. Expand the reasoning fold and you'll see the ag
 - **Post-draft critics**: sub-agents push back on the main agent's draft; the main agent decides which critiques to accept
 - **Housekeeping**: writes the turn's new facts back to the memory graph
 
-Want a deeper look — each agent's actual reasoning, every tool call's request and response? Click **View Runtime Trace** in the orchestrator panel.
+Want a deeper look — each agent's actual reasoning, every tool call's request and response? Open the **Run Panel** beside the chat (or the bottom drawer on narrow screens) and expand any round.
 
 Not happy? That reasoning fold is the full agent execution log — pinpoint where things went off, then head back to the [AI Iteration Studio](/features/orchestrator/iteration-studio) and describe in natural language what you want changed.
 

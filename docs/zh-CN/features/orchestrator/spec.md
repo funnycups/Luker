@@ -152,44 +152,21 @@ s5 -> out
 | AI 不要轻易出戏 | 启用 Anti-Data Guard;[AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio)描述里要求「加一个硬挡 meta 评论的 Constraint Agent」 |
 | 同一个工作流跨卡通用 | 应用到全局，不要绑卡 |
 | 不同卡用不同工作流 | 在角色卡选中状态打开工作台，**应用到角色卡** |
-| 太慢 / 太贵 | 见[概览 → Step 2](/zh-CN/features/orchestrator/#step-2-给各-agent-选模型)；或切到 [单 Agent 模式](/zh-CN/features/orchestrator/single) 只跑一个节点 |
+| 太慢 / 太贵 | 见[概览 → Step 2](/zh-CN/features/orchestrator/#step-2)；或切到 [单 Agent 模式](/zh-CN/features/orchestrator/single) 只跑一个节点 |
 | 想反复调试同一个工作流 | 工作台的 session 会话——它会持久化 |
 | 换电脑用 | 见[概览 → 导入导出](/zh-CN/features/orchestrator/#导入导出) |
 | 全部重置 | 编排编辑器有 **重置全局** 按钮 |
 
-## Trace 面板
+## 看一次 Spec 跑
 
-主回复出来后在编排器面板点 **查看运行态轨迹**，Spec 的 trace 弹窗会按几块铺出整次 run——顶部元信息 + 流程图、执行时间线、流程事件、对话与原始数据。
+[运行面板](/zh-CN/features/orchestrator/#step-4) 会实时显示每次 Spec 运行。每个 stage 是一张卡片，展开就能看到该 worker 的思考、流式输出和工具调用。Spec 模式可以重点关注：
 
-### 面板概览 + 流程图
+- **节点执行次数** —— 整条 DAG 里所有 worker 跑过的总次数。
+- **REVIEW 重跑次数** —— 审查节点驱动的重跑（默认上限 2 次，可在配置参考里调到 0 关闭或 20 上限）。某 stage 触发重跑时，对应 worker 会在面板里出现两次。
+- **各 stage 输出形态** —— 由节点的 prompt 模板决定。比如 distiller 通常输出一段 `summary` + 一段 `xml_guidance`（带 `<story_state>` / `<location>` / `<key_items>` 之类的标签），后续 stage 可以解析它取结构化字段。
+- **capsule** —— **最后一个** stage 的输出会打包注入主模型的上下文，前面所有 stage 都在为它做准备。
 
-顶部状态摘要里 Spec 模式相关的几项：**节点执行次数**（所有 worker 跑了多少次）、**REVIEW 重跑次数**（审查节点驱动的重跑次数，默认上限 2 次，可在配置参考里调到 0 关闭或 20 上限）。
-
-紧跟在下面的「流程图」可视化整条 DAG：每个 stage 是一个色块，内部按节点 id 排出 worker 卡片。点击某张卡片可以在右侧「执行时间线」里跳到对应 worker 的详情。
-
-![Spec trace 面板：元信息 + 流程图 + 执行时间线右侧展示 worker 详情](/images/orchestrator/real-spec-meta.png)
-
-### 执行时间线
-
-「执行时间线」是右侧详情面板，展示选中 worker 的完整输出。Spec 节点的输出形态由节点的 prompt 模板决定——此例里 distiller 节点输出了一段 `summary` + 一段 `xml_guidance`（带 `<story_state>` / `<location>` / `<key_items>` 这类 XML 标签），后续 stage 可以解析它取出结构化字段。
-
-![Spec 执行时间线：展开 worker 详情查看 summary 与 xml_guidance](/images/orchestrator/real-spec-timeline.png)
-
-### 流程事件
-
-「流程事件」按时间序号铺出整条 DAG 的执行节奏：`Run started` → 每个 stage 的 `stage_started` → 各 worker 的 `worker_started` / `worker_completed`（同 stage 内并行的 worker 时间戳会很接近）→ `stage_completed` → 下一个 stage，最后 `Run completed`。
-
-![Spec 流程事件：stage_started → worker_started/completed → stage_completed，串行展开整条 DAG](/images/orchestrator/real-spec-events.png)
-
-如果某个 stage 触发了审查重跑，事件流里会看到该 worker 多次 `worker_started` / `worker_completed`——拿这个数和顶部 **REVIEW 重跑次数** 对一下就知道审查节点驳回了几次。
-
-### 原始轨迹
-
-面板最底下「最新注入文本」是最后一个 stage 的输出——也就是注入主模型的 capsule。再往下「原始运行态轨迹」是整次 run 的 JSON 形态，顶层字段包含 `runId`、`chatKey`、`generationType`、`capsuleText` 等。
-
-![Spec 原始轨迹 JSON 与最新注入文本](/images/orchestrator/real-spec-rawtrace.png)
-
-报 bug 时点「导出本次 run」会下载这份 JSON 的 jsonl 形式，直接附给开发者。
+面板顶部的**导出**按钮把整次 run 下载为 JSON（便于回报问题）。
 
 ## Spec 配置参考
 

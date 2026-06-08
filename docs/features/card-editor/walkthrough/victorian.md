@@ -129,7 +129,7 @@ The reply shows all layers cooperating: deductions backed by evidence (specific 
 
 ### b. Inspect what the orchestrator did in the background
 
-In the Extensions panel → Orchestrator section → "View Runtime Trace", you can see which steps the loop ran, which tools it called, and how it finalized:
+Open the **Run Panel** beside the chat (or the bottom drawer on narrow screens) and you can see which steps the loop ran, which tools it called, and how it finalized:
 
 ![Orchestrator runtime trace](/images/walkthrough/victorian/step-07b-stage-output.png)
 
