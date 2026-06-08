@@ -1,6 +1,6 @@
 import { Fuse } from '../lib.js';
 
-import { saveSettings, substituteParams, getRequestHeaders, chat_metadata, this_chid, characters, saveCharacterDebounced, menu_type, eventSource, event_types, getExtensionPromptByName, saveMetadata, getCurrentChatId, extension_prompt_roles, create_save, name1, buildObjectPatchOperations, buildObjectPatchOperationsAsync, requestAsyncDiffForNextSettingsSave, getOneCharacter, select_selected_character } from '../script.js';
+import { saveSettings, substituteParams, getRequestHeaders, chat_metadata, this_chid, characters, saveCharacterDebounced, menu_type, eventSource, event_types, getExtensionPromptByName, saveMetadata, getCurrentChatId, extension_prompt_roles, create_save, name1, buildObjectPatchOperationsAsync, requestAsyncDiffForNextSettingsSave, getOneCharacter, select_selected_character } from '../script.js';
 import { areLookupNamesEqual, download, debounce, findCanonicalIndexInList, findCanonicalNameInList, initScrollHeight, resetScrollHeight, parseJsonFile, extractDataFromPng, getFileBuffer, getCharaFilename, getSortableDelay, escapeRegex, PAGINATION_TEMPLATE, navigation_option, waitUntilCondition, isTrueBoolean, setValueByPath, flashHighlight, select2ModifyOptions, getSelect2OptionId, dynamicSelect2DataViaAjax, highlightRegex, select2ChoiceClickSubscribe, isFalseBoolean, getSanitizedFilename, checkOverwriteExistingData, getStringHash, parseStringArray, cancelDebounce, findChar, onlyUnique, equalsIgnoreCaseAndAccents, uuidv4, normalizeArray, getUniqueName, logSlashCommandWarn, addLongPressEvent, escapeHtml } from './utils.js';
 import { extension_settings, getContext, writeExtensionField } from './extensions.js';
 import { NOTE_MODULE_NAME, metadata_keys, shouldWIAddPrompt } from './authors-note.js';
@@ -230,13 +230,13 @@ export let world_info_budget_cap = 0;
 export let world_info_max_recursion_steps = 0;
 function normalizeWorldInfoSaveOptions(options = null) {
     return {
-        asyncDiff: options?.asyncDiff !== false,
+        refreshEditor: options?.refreshEditor === true,
     };
 }
 
 function mergeWorldInfoSaveOptions(baseOptions = null, overrideOptions = null) {
     return {
-        asyncDiff: overrideOptions?.asyncDiff ?? baseOptions?.asyncDiff ?? true,
+        refreshEditor: Boolean(overrideOptions?.refreshEditor) || Boolean(baseOptions?.refreshEditor),
     };
 }
 
@@ -1982,16 +1982,6 @@ export function setWorldInfoSettings(settings, data) {
         if (!hasWorldInfoName(updatedName)) {
             await updateWorldInfoList();
         }
-
-        // Avoid interrupting direct in-editor typing flow from the world editor itself.
-        const activeElement = document.activeElement;
-        const isEditorInputFocused = activeElement instanceof HTMLElement
-            && activeElement.closest('#WorldInfo.openDrawer #world_popup') instanceof HTMLElement;
-        if (isEditorInputFocused) {
-            return;
-        }
-
-        reloadEditor(updatedName);
     });
 
     eventSource.on(event_types.WORLDINFO_FORCE_ACTIVATE, (entries) => {
@@ -8071,9 +8061,7 @@ async function saveWorldInfoInternal(name, data, options = {}) {
     const normalizedOptions = normalizeWorldInfoSaveOptions(options);
 
     if (canPatch) {
-        const operations = normalizedOptions.asyncDiff
-            ? await buildObjectPatchOperationsAsync(previousSnapshot, payload, { maxOperations: 16000 })
-            : buildObjectPatchOperations(previousSnapshot, payload, { maxOperations: 16000 });
+        const operations = await buildObjectPatchOperationsAsync(previousSnapshot, payload, { maxOperations: 16000 });
         if (operations.length === 0) {
             saved = true;
         } else {
@@ -8099,6 +8087,13 @@ async function saveWorldInfoInternal(name, data, options = {}) {
 
     cacheWorldInfoData(name, payload, { invalidateSearch: true });
     await eventSource.emit(event_types.WORLDINFO_UPDATED, name, payload);
+
+    if (normalizedOptions.refreshEditor) {
+        if (!hasWorldInfoName(name)) {
+            await updateWorldInfoList();
+        }
+        reloadEditor(name);
+    }
 }
 
 async function _save(name, data, options = {}) {
@@ -10116,7 +10111,7 @@ export async function importPresetLinkedLorebookPayload(payload) {
         return false;
     }
 
-    await saveWorldInfo(normalized.name, normalized.data, true, { asyncDiff: true });
+    await saveWorldInfo(normalized.name, normalized.data, true);
     await updateWorldInfoList();
     activateLinkedLorebookForPreset(normalized.name);
     return true;
@@ -10307,7 +10302,7 @@ export async function importEmbeddedWorldInfo(skipPopup = false) {
 
     const convertedBook = convertCharacterBook(characters[chid].data.character_book);
 
-    await saveWorldInfo(bookName, convertedBook, true, { asyncDiff: true });
+    await saveWorldInfo(bookName, convertedBook, true);
     await updateWorldInfoList();
     $('#character_world').val(bookName).trigger('change');
 

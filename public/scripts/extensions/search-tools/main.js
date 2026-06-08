@@ -1651,7 +1651,7 @@ async function ensureSharedLorebook(context, allowCreate = true) {
         return { bookName: SHARED_LOREBOOK_NAME, data: null, created: false };
     }
 
-    await context.saveWorldInfo(SHARED_LOREBOOK_NAME, { entries: {} }, true);
+    await context.saveWorldInfo(SHARED_LOREBOOK_NAME, { entries: {} }, true, { refreshEditor: true });
     const created = await context.loadWorldInfo(SHARED_LOREBOOK_NAME);
     return {
         bookName: SHARED_LOREBOOK_NAME,
@@ -1734,7 +1734,7 @@ async function syncSharedLorebookForCurrentChat(context = getContext()) {
     const lorebook = await ensureSharedLorebook(context, true);
     const data = lorebook.data && typeof lorebook.data === 'object' ? structuredClone(lorebook.data) : { entries: {} };
     applyManagedEntriesToLorebook(data, settings, latestManagedEntries);
-    await context.saveWorldInfo(SHARED_LOREBOOK_NAME, data, true);
+    await context.saveWorldInfo(SHARED_LOREBOOK_NAME, data, true, { refreshEditor: true });
     await refreshSharedLorebookVisibilityAndSelection(context, true);
     return { changed: true, bookName: SHARED_LOREBOOK_NAME };
 }
@@ -2340,7 +2340,7 @@ function updatePayloadWorldInfoFromResolution(payload, resolution) {
 }
 
 async function flushLorebookChanges(context, payload, bookName, data) {
-    await context.saveWorldInfo(bookName, data, true);
+    await context.saveWorldInfo(bookName, data, true, { refreshEditor: true });
     if (String(bookName || '').trim() === SHARED_LOREBOOK_NAME) {
         await refreshSharedLorebookVisibilityAndSelection(context, shouldActivateSharedLorebook(getSettings()));
     }

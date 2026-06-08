@@ -77,7 +77,9 @@ saveWorldInfo(
     name: string,
     data: WorldInfoData,
     immediately?: boolean,
-    options?: object,
+    options?: {
+        refreshEditor?: boolean;
+    },
 ): Promise<void>
 ```
 
@@ -88,6 +90,7 @@ Persists a World Info file to disk. Cache is updated synchronously; the network 
 | `name` | File name (without `.json` extension) |
 | `data` | Full World Info object (`{ entries: Record<number, WIEntry> }`) |
 | `immediately` | When `true`, awaits the actual save instead of debouncing |
+| `options.refreshEditor` | Defaults to `false`. When `true`, refreshes the world-info drawer for `name` after the save completes — adds the book to the editor select if new, and re-renders the entry list if the user has that book open. Use this whenever your write may be visible in a drawer the user has open (programmatic edits, tool calls, background-ensure paths). Drawer-internal handlers do not need this — they update their own DOM in place. |
 
 A no-op if `name` or `data` is falsy.
 

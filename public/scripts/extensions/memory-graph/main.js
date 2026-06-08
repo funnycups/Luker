@@ -7321,7 +7321,7 @@ async function ensureSharedLorebook(context, allowCreate = true) {
         return '';
     }
 
-    await context.saveWorldInfo(SHARED_LOREBOOK_NAME, { entries: {} }, true);
+    await context.saveWorldInfo(SHARED_LOREBOOK_NAME, { entries: {} }, true, { refreshEditor: true });
     return SHARED_LOREBOOK_NAME;
 }
 
@@ -7473,7 +7473,7 @@ async function upsertManagedLorebookProjection(context, settings, {
         nextUid += 1;
     }
 
-    await context.saveWorldInfo(bookName, data, true);
+    await context.saveWorldInfo(bookName, data, true, { refreshEditor: true });
     if (bookName === SHARED_LOREBOOK_NAME) {
         await refreshSharedLorebookVisibilityAndSelection(context, Boolean(settings?.enabled));
     }

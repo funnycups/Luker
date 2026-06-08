@@ -825,7 +825,7 @@ export function buildContext(container, charId, config) {
             if (fields && typeof fields === 'object') {
                 Object.assign(newEntry, fields);
             }
-            await saveWorldInfo(bookName, data, true);
+            await saveWorldInfo(bookName, data, true, { refreshEditor: true });
             return newEntry;
         },
 
@@ -844,7 +844,7 @@ export function buildContext(container, charId, config) {
             Object.assign(entry, patch);
             // Prevent uid from being overwritten
             entry.uid = uid;
-            await saveWorldInfo(bookName, data, true);
+            await saveWorldInfo(bookName, data, true, { refreshEditor: true });
         },
 
         /**
@@ -857,7 +857,7 @@ export function buildContext(container, charId, config) {
             const data = await loadWorldInfo(bookName);
             if (!data) throw new Error(`[CardApp] World book "${bookName}" not found`);
             await deleteWorldInfoEntry(data, uid, { silent: true });
-            await saveWorldInfo(bookName, data, true);
+            await saveWorldInfo(bookName, data, true, { refreshEditor: true });
         },
 
         /**
@@ -893,7 +893,7 @@ export function buildContext(container, charId, config) {
                 }
                 created.push(newEntry);
             }
-            await saveWorldInfo(bookName, data, true);
+            await saveWorldInfo(bookName, data, true, { refreshEditor: true });
             return created;
         },
 

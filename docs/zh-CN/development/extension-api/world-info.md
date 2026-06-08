@@ -77,7 +77,9 @@ saveWorldInfo(
     name: string,
     data: WorldInfoData,
     immediately?: boolean,
-    options?: object,
+    options?: {
+        refreshEditor?: boolean;
+    },
 ): Promise<void>
 ```
 
@@ -88,6 +90,7 @@ saveWorldInfo(
 | `name` | 文件名（不含 `.json` 扩展名） |
 | `data` | 完整世界书对象（`{ entries: Record<number, WIEntry> }`） |
 | `immediately` | 为 `true` 时等待真正写入完成而非 debounce |
+| `options.refreshEditor` | 默认 `false`。为 `true` 时会在写入完成后刷新 `name` 对应的世界书抽屉——新书会被加入编辑器下拉，已经打开该书的用户会看到条目列表被重新渲染。任何"用户可能正打开抽屉看着这本书"的写入都该带上（程序化编辑、工具调用、后台按需初始化路径等）。抽屉内自身的 handler 不需要——它们已经就地更新了 DOM。 |
 
 `name` 或 `data` 为 falsy 时直接返回。
 

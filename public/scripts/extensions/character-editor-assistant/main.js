@@ -1376,7 +1376,7 @@ export async function commitLorebookOperations(bookName, liveBook, edits, opts =
     const after = result.newLive || before;
     let persisted = false;
     if (clean.length > 0 && !lodash.isEqual(before, after)) {
-        await context.saveWorldInfo(safeName, after, true);
+        await context.saveWorldInfo(safeName, after, true, { refreshEditor: true });
         persisted = true;
     }
     return { applied: clean.length, conflicts, alreadyDone, persisted };
@@ -1444,11 +1444,11 @@ async function ensureLorebookExists(context, desiredName, fallbackName = 'Charac
     if (loaded && typeof loaded === 'object') {
         if (!loaded.entries || typeof loaded.entries !== 'object') {
             loaded.entries = {};
-            await context.saveWorldInfo(safeName, loaded, true);
+            await context.saveWorldInfo(safeName, loaded, true, { refreshEditor: true });
         }
         return safeName;
     }
-    await context.saveWorldInfo(safeName, { entries: {} }, true);
+    await context.saveWorldInfo(safeName, { entries: {} }, true, { refreshEditor: true });
     return safeName;
 }
 
@@ -2098,7 +2098,7 @@ export async function applyCharacterEditorLorebookCommit(context, { book_name, u
     // runtime may have stamped between proposal time and Apply time.
     Object.assign(entry, after);
     entry.uid = uid;
-    await context.saveWorldInfo(bookName, data, true);
+    await context.saveWorldInfo(bookName, data, true, { refreshEditor: true });
     return { ok: true, book_name: bookName, uid };
 }
 
@@ -3560,7 +3560,7 @@ async function applyLorebookUpsertOperation(context, record, operation) {
     const nextEntry = applyLorebookEntryArgs(beforeEntry, args, uid);
 
     data.entries[uid] = nextEntry;
-    await context.saveWorldInfo(bookName, data, true);
+    await context.saveWorldInfo(bookName, data, true, { refreshEditor: true });
 
     return {
         summary: `Upserted lorebook entry #${uid} in ${bookName}`,
@@ -3597,7 +3597,7 @@ async function applyLorebookDeleteOperation(context, record, operation) {
     }
 
     delete data.entries[entryUid];
-    await context.saveWorldInfo(bookName, data, true);
+    await context.saveWorldInfo(bookName, data, true, { refreshEditor: true });
 
     return {
         summary: `Deleted lorebook entry #${entryUid} from ${bookName}`,
@@ -3781,7 +3781,7 @@ async function rollbackJournalEntry(context, journalEntry, { avatar = '' } = {})
         } else {
             delete lorebookData.entries[entryUid];
         }
-        await context.saveWorldInfo(bookName, lorebookData, true);
+        await context.saveWorldInfo(bookName, lorebookData, true, { refreshEditor: true });
         return `Rolled back lorebook entry #${entryUid} in ${bookName}`;
     }
 

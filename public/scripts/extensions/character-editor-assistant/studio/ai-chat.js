@@ -1075,7 +1075,7 @@ async function executeTool(charId, toolName, args, options = {}) {
  if (Object.keys(entryFields).length > 0) {
  Object.assign(newEntry, entryFields);
  }
- await saveWorldInfo(args.book_name, data, true);
+ await saveWorldInfo(args.book_name, data, true, { refreshEditor: true });
  return { ok: true, entry: newEntry };
  }
  case TOOL_NAMES.WORLDINFO_UPDATE_ENTRY: {
@@ -1085,14 +1085,14 @@ async function executeTool(charId, toolName, args, options = {}) {
  if (!entry) return { ok: false, error: `Entry UID ${args.uid} not found` };
  Object.assign(entry, args.patch);
  entry.uid = args.uid;
- await saveWorldInfo(args.book_name, data, true);
+ await saveWorldInfo(args.book_name, data, true, { refreshEditor: true });
  return { ok: true, message: `Entry ${args.uid} updated` };
  }
  case TOOL_NAMES.WORLDINFO_DELETE_ENTRY: {
  const data = await loadWorldInfo(args.book_name);
  if (!data) return { ok: false, error: `World book "${args.book_name}" not found` };
  await deleteWorldInfoEntry(data, args.uid, { silent: true });
- await saveWorldInfo(args.book_name, data, true);
+ await saveWorldInfo(args.book_name, data, true, { refreshEditor: true });
  return { ok: true, message: `Entry ${args.uid} deleted` };
  }
  case TOOL_NAMES.WORLDINFO_CREATE_BOOK: {
@@ -1152,7 +1152,7 @@ async function executeTool(charId, toolName, args, options = {}) {
  }
  created.push(newEntry);
  }
- await saveWorldInfo(args.book_name, data, true);
+ await saveWorldInfo(args.book_name, data, true, { refreshEditor: true });
  return { ok: true, entries: created, message: `Replaced entries in "${args.book_name}" (${created.length} written).` };
  }
  // ==================== Regex Scripts ====================
