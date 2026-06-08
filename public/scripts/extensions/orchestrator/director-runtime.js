@@ -39,6 +39,7 @@ import {
     executeApplyPatchesTool,
     executeFinalizeTool,
     executeGetDraftTool,
+    executeDraftSearchTool,
 } from './director-tools.js';
 import {
     appendToReasoningSection,
@@ -731,6 +732,8 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                 toolResult = await executeApplyPatchesTool(handle, args);
             } else if (name === 'get_draft') {
                 toolResult = await executeGetDraftTool(handle);
+            } else if (name === 'draft_search') {
+                toolResult = await executeDraftSearchTool(handle, args);
             } else if (name === 'cancel_subagent') {
                 toolResult = dispatcher.cancel(args?.handle);
             } else if (name === 'finalize') {

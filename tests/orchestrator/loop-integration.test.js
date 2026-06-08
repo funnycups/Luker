@@ -189,7 +189,7 @@ describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
                 observedRounds.push({ round: 2, messageCount: messages.length });
                 return {
                     toolCalls: [
-                        { id: 'tc2', name: 'lorebook_search', args: { query: 'festival', limit: 3 } },
+                        { id: 'tc2', name: 'lorebook_search', args: { pattern: 'festival' } },
                     ],
                     assistantText: '',
                 };
@@ -319,7 +319,7 @@ describe('loop mode end-to-end: tool failure -> agent self-correction (Task 15b)
         const sendLlm = jest.fn()
             .mockImplementationOnce(async () => ({
                 toolCalls: [
-                    { id: 'tc1', name: 'lorebook_search', args: { query: '' } },
+                    { id: 'tc1', name: 'lorebook_search', args: { pattern: '' } },
                 ],
                 assistantText: '',
             }))
@@ -330,7 +330,7 @@ describe('loop mode end-to-end: tool failure -> agent self-correction (Task 15b)
                 secondRoundMessages = JSON.parse(JSON.stringify(messages));
                 return {
                     toolCalls: [
-                        { id: 'tc2', name: 'lorebook_search', args: { query: 'autumn', limit: 3 } },
+                        { id: 'tc2', name: 'lorebook_search', args: { pattern: 'autumn' } },
                     ],
                     assistantText: '',
                 };
@@ -399,7 +399,7 @@ describe('loop mode end-to-end: lorebook activated-entry dedup (Task 15c)', () =
         const sendLlm = jest.fn()
             .mockImplementationOnce(async () => ({
                 toolCalls: [
-                    { id: 'tc1', name: 'lorebook_search', args: { query: 'autumn', limit: 5 } },
+                    { id: 'tc1', name: 'lorebook_search', args: { pattern: 'autumn', flags: 'gmi' } },
                 ],
                 assistantText: '',
             }))
@@ -448,12 +448,13 @@ describe('loop mode end-to-end: lorebook activated-entry dedup (Task 15c)', () =
 
         expect(result.status).toBe('completed');
         expect(toolResultObserved).toBeTruthy();
-        // Tool results land under `data` when normalizeToolOk wraps a non-{ok}
-        // payload (lorebook_search returns { entries, excluded_active_count }).
-        const payload = toolResultObserved.data || toolResultObserved;
-        expect(payload.excluded_active_count).toBe(2);
-        expect(payload.entries).toHaveLength(1);
-        expect(payload.entries[0].key).toContain('autumn-end');
+        // grep-style result: { ok: true, output: '...' }. The non-activated
+        // 'autumn-end' entry must appear; the activated 'autumn-rite' and
+        // 'autumn-vow' entries are silently dropped from output.
+        expect(toolResultObserved.ok).toBe(true);
+        expect(toolResultObserved.output).toContain('[global] autumn-end:1: Autumn ends with the first deep frost.');
+        expect(toolResultObserved.output).not.toContain('autumn-rite');
+        expect(toolResultObserved.output).not.toContain('autumn-vow');
     });
 });
 

@@ -154,10 +154,10 @@ loop.finalize -> out
 2. **Tool groups available to the main agent:**
    - **Loop tools** (enabled per-profile) — same family as loop mode: `chat_*` / `lorebook_*` / `memory_*` / `note_*` (open/close) / `search_*`, for gathering context.
    - **Collaboration tools** — `dispatch_subagent(subagentId, task)` starts a profile-configured sub-agent by id; `dispatch_inline_subagent(systemPrompt, task, ...)` starts an ad-hoc one-shot sub-agent; `await_subagents(handles)` blocks until the named sub-agents finish; `cancel_subagent(handle)` aborts an in-flight one.
-   - **Message-production tools** — `write_message(text, mode?)` writes into the message body (`mode='replace'` overwrites, `mode='append'` extends); `apply_message_patches(patches)` makes targeted context-replace edits; `get_draft()` reads back the current draft; `finalize()` commits the turn and ends the loop.
+   - **Message-production tools** — `write_message(text, mode?)` writes into the message body (`mode='replace'` overwrites, `mode='append'` extends); `apply_message_patches(patches)` makes targeted context-replace edits; `get_draft()` reads back the current draft; `draft_search({ pattern, flags? })` runs a regex sweep over that draft and returns grep `-n` style hits (`lineno: line`) — preferable to eye-reading `get_draft` output for systematic vocabulary checks, and available to every sub-agent (notably the critics); `finalize()` commits the turn and ends the loop.
    - **[Custom tools](./custom-tools.md)** — any tool registered by another Luker extension, bridged from a SillyTavern function tool, or handwritten in the director profile. Sub-agents see the same custom-tool surface (filtered by per-sub-agent overrides where applicable).
 
-3. **Sub-agents are one-shot consultants.** At dispatch time each one gets the chat snapshot, the main agent's task brief, its own system prompt, the enabled loop tools, and `get_draft()`. They don't see each other's existence, don't see the main agent's reasoning, **cannot dispatch deeper sub-agents**, and **cannot write into the message body** — they only return text, and the main agent decides what to do with it.
+3. **Sub-agents are one-shot consultants.** At dispatch time each one gets the chat snapshot, the main agent's task brief, its own system prompt, the enabled loop tools, plus `get_draft()` and `draft_search()` so they can inspect what the main agent has written so far. They don't see each other's existence, don't see the main agent's reasoning, **cannot dispatch deeper sub-agents**, and **cannot write into the message body** — they only return text, and the main agent decides what to do with it.
 
 4. **The default profile ships with 12 RP-tuned sub-agents:**
 
@@ -246,7 +246,7 @@ Director's default workflow is "main agent + multiple sub-agents", but a power-u
 
 1. Rewrite the main-agent system prompt to drop all dispatch-related discipline. Replace it with "draft, re-read, revise; when you think it's ready, call `finalize`."
 2. Remove all sub-agents from the profile (or strip every id out of the main-agent prompt) — this way `dispatch_subagent` doesn't appear in the main agent's tool list. `dispatch_inline_subagent` can stay or go; keep it only if you want the main agent to spin up an ad-hoc consultant for unusual cases.
-3. Leave at minimum these tools enabled for the main agent: `write_message` / `apply_message_patches` / `get_draft` / `finalize`, plus whichever loop tools you want it to use (a typical bundle is `chat_*` + `memory_*` + `lorebook_*`).
+3. Leave at minimum these tools enabled for the main agent: `write_message` / `apply_message_patches` / `get_draft` / `draft_search` / `finalize`, plus whichever loop tools you want it to use (a typical bundle is `chat_*` + `memory_*` + `lorebook_*`).
 4. Consider lowering the "maximum tool-calling rounds" cap — the default 20 is high for a single agent.
 
 :::

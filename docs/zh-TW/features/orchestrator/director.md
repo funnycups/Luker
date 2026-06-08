@@ -154,10 +154,10 @@ loop.finalize -> out
 2. **主代理能用的工具組**:
    - **迴圈工具**（在 profile 裡勾選啟用）—— 跟 loop 模式同源：`chat_*` / `lorebook_*` / `memory_*` / `note_*`（開啟/關閉） / `search_*`，用來收集上下文。
    - **協作工具** —— `dispatch_subagent(subagentId, task)` 按 id 啟動 profile 預定義的子代理；`dispatch_inline_subagent(systemPrompt, task, ...)` 啟動一次性 ad-hoc 子代理；`await_subagents(handles)` 阻塞等子代理完工；`cancel_subagent(handle)` 中止跑到一半的子代理。
-   - **訊息產出工具** —— `write_message(text, mode?)` 寫正文（`mode='replace'` 覆寫、`mode='append'` 追加）;`apply_message_patches(patches)` 做定點的 context-replace 補丁；`get_draft()` 回讀當前草稿；`finalize()` 提交併收尾。
+   - **訊息產出工具** —— `write_message(text, mode?)` 寫正文（`mode='replace'` 覆寫、`mode='append'` 追加）;`apply_message_patches(patches)` 做定點的 context-replace 補丁；`get_draft()` 回讀當前草稿；`draft_search({ pattern, flags? })` 對當前草稿做正規表達式掃描，回傳 grep `-n` 風格的命中行（`lineno: line`）——做術語 / 用詞的系統化排查時比眼看 `get_draft` 輸出更可靠，所有子代理（特別是各類 critic）都可呼叫；`finalize()` 提交併收尾。
    - **[自訂工具](./custom-tools.md)** —— 其他 Luker 擴充註冊的工具、從 SillyTavern function tool 橋接進來的工具、本編排裡手寫的工具。子代理看到的是同一組自訂工具面（在子代理粒度有覆寫時按覆寫過濾）。
 
-3. **子代理是「一次性顧問」**：派遣時拿到當前聊天快照 + 主代理寫的任務簡報 + 自己的系統提示詞 + 啟用的迴圈工具 + `get_draft()`。子代理彼此看不到對方的存在，看不到主代理的推理，**不能再向下派遣**，也**不能直接寫正文**——它們只產出文本，主代理決定怎麼用。
+3. **子代理是「一次性顧問」**：派遣時拿到當前聊天快照 + 主代理寫的任務簡報 + 自己的系統提示詞 + 啟用的迴圈工具，外加 `get_draft()` 與 `draft_search()` 讓子代理可檢視主代理目前寫到哪裡。子代理彼此看不到對方的存在，看不到主代理的推理，**不能再向下派遣**，也**不能直接寫正文**——它們只產出文本，主代理決定怎麼用。
 
 4. **預設 profile 自帶 12 個為 RP 最佳化過的子代理**:
 
@@ -246,7 +246,7 @@ Director 預設是「主代理 + 多子代理」的工作流，但有一種 powe
 
 1. 在主代理系統提示詞裡，刪掉所有「派遣子代理」相關的紀律，改寫成「你自己起草、自己回讀、自己改，認為可以了就 `finalize`」。
 2. 在 profile 裡把所有子代理刪掉（或者把它們的 ID 全部從主代理 prompt 裡摘乾淨）——這樣 `dispatch_subagent` 工具不會出現在主代理的工具列表裡，只剩 `dispatch_inline_subagent`（可以保留或不保留，看你想不想讓主代理在特殊場景臨時拉 ad-hoc 子代理）。
-3. 主代理的工具組裡至少保留：`write_message` / `apply_message_patches` / `get_draft` / `finalize`，以及你想讓它用的幾個迴圈工具（典型組合是 `chat_*` + `memory_*` + `lorebook_*`）。
+3. 主代理的工具組裡至少保留：`write_message` / `apply_message_patches` / `get_draft` / `draft_search` / `finalize`，以及你想讓它用的幾個迴圈工具（典型組合是 `chat_*` + `memory_*` + `lorebook_*`）。
 4. 視情況把「工具呼叫最大輪數」往下調一些（預設 20 對單 agent 來說偏多）。
 
 :::

@@ -12,25 +12,21 @@
  *     blow up token budget; over-wide ranges raise a structured
  *     `ToolError(CHAT_RANGE_TOO_LARGE)` so the agent reads the failure
  *     and retries with a saner window.
- *   - chat_search({ query, limit }) is a case-insensitive substring scan
- *     over `mes` text. Results carry `content_preview` truncated to
- *     PREVIEW_LEN to keep the tool result small. Empty queries are
- *     rejected — without that guard `''.includes('')` matches every
- *     floor and wastes the round.
+ *   - chat_search({ pattern, flags }) is a regex scan over `mes` text.
+ *     Results are emitted in grep -n shape: one matched line per result
+ *     as `floor_{N} [{role}]:{lineno}: {line_content}`. Empty patterns
+ *     raise `ToolError(CHAT_PATTERN_EMPTY)`; invalid regex is returned
+ *     as `{ ok: false, error }` with an escape hint so the agent can
+ *     self-correct on the next round.
  *
  * Both tools are pure functions of `(args, context)` and never write back
  * to the chat array; they exist purely to shape input for the agent.
  */
 
 import { ToolError } from '../loop-runtime.js';
+import { gatherGrepMatches } from '../grep-tool.js';
 
-const PREVIEW_LEN = 300;
 const MAX_RANGE = 50;
-
-function preview(text) {
-    const s = String(text || '');
-    return s.length <= PREVIEW_LEN ? s : s.slice(0, PREVIEW_LEN);
-}
 
 /**
  * Resolve a (potentially negative) chat index against `len` chat floors.
@@ -98,35 +94,34 @@ export async function execChatReadRange(args, context) {
 }
 
 /**
- * Substring search across all chat floors. Case-insensitive. Returns up
- * to `limit` (default 10) results in floor-ascending order.
+ * Regex search across all chat floors. Emits grep -n style output with a
+ * "floor_{N} [{role}]" prefix on each match line.
  *
- * @param {{ query: string, limit?: number }} args
+ * @param {{ pattern: string, flags?: string }} args
  * @param {object} context — must expose `context.chat`
- * @returns {Promise<Array<{floor: number, role: string, content_preview: string}>>}
+ * @returns {Promise<{ok: true, output: string} | {ok: false, error: string}>}
  */
 export async function execChatSearch(args, context) {
-    const queryRaw = String(args?.query ?? '');
-    if (!queryRaw.trim()) {
+    const pattern = String(args?.pattern ?? '');
+    if (!pattern) {
         throw new ToolError(
-            'chat_search: query must be non-empty.',
-            'CHAT_QUERY_EMPTY',
-            'Provide a non-empty query string. Use whole words for best results.',
+            'chat_search: pattern must be non-empty.',
+            'CHAT_PATTERN_EMPTY',
+            'Provide a non-empty regex pattern. To match literal text, escape regex metacharacters.',
         );
     }
-    const limit = Math.max(1, Math.min(50, Math.floor(Number(args?.limit) || 10)));
-    const q = queryRaw.toLowerCase();
+    const flags = typeof args?.flags === 'string' && args.flags.length > 0 ? args.flags : 'gm';
     const chat = Array.isArray(context?.chat) ? context.chat : [];
-    const out = [];
-    for (let i = 0; i < chat.length; i += 1) {
-        const text = String(chat[i]?.mes || '');
-        if (!text.toLowerCase().includes(q)) continue;
-        out.push({
-            floor: i,
-            role: roleFromMessage(chat[i]),
-            content_preview: preview(text),
-        });
-        if (out.length >= limit) break;
+
+    function* corpus() {
+        for (let i = 0; i < chat.length; i++) {
+            const msg = chat[i];
+            yield {
+                prefix: `floor_${i} [${roleFromMessage(msg)}]`,
+                content: String(msg?.mes || ''),
+            };
+        }
     }
-    return out;
+
+    return gatherGrepMatches(corpus(), pattern, flags);
 }

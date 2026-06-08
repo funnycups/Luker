@@ -326,7 +326,8 @@ function buildDefaultDirectorSubAgents() {
             apiPresetName: '',
             promptPresetName: '',
             tools: {
-                chat: { read_range: true },
+                chat: { read_range: true, search: true },
+                lorebook: { search: true },
                 memory: {
                     keyword_search: true,
                     node_brief: true,

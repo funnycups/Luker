@@ -2,13 +2,16 @@
 import { describe, test, expect, beforeEach, jest } from '@jest/globals';
 
 /**
- * Unit tests for `skill-orchestration-tools.js`. We mock both the
- * orchestrator's `registerOrchestrationTool` (to capture spec arguments
- * without touching the live registry) and `skillsApi` (to feed deterministic
- * fixtures). The tests then exercise each registered tool's `exec` path:
- * visibility from `ctx.__visibleSkillsForAgent`, the fallback to a global
- * list when context is missing, and scope-precedence ordering in the
- * fallback path.
+ * Unit tests for `skill-orchestration-tools.js`. The source captures
+ * `skillsApi` at module-load via `SillyTavern.getContext().skills` (post
+ * upstream commit 571c529c2), so we install a `globalThis.SillyTavern`
+ * stub BEFORE the dynamic import. `registerOrchestrationTool` is mocked
+ * via `jest.unstable_mockModule` so each call writes into a local
+ * `registered` table the tests can inspect.
+ *
+ * Tests exercise each registered tool's `exec` path: visibility from
+ * `ctx.__visibleSkillsForAgent`, the fallback to a global list when
+ * context is missing, and scope-precedence ordering in the fallback path.
  */
 
 const registered = {};
@@ -25,19 +28,20 @@ jest.unstable_mockModule(
     }),
 );
 
-jest.unstable_mockModule('../../public/scripts/skills/api.js', () => ({
-    skillsApi: {
-        list: jest.fn(async () => [
-            { name: 'foo-skill', description: 'foo', scope: { kind: 'global' }, metadata: { tags: [] } },
-            { name: 'shared', description: 'global ver', scope: { kind: 'global' } },
-            { name: 'shared', description: 'char ver', scope: { kind: 'character', characterFile: 'a.png' } },
-        ]),
-        readFile: jest.fn(async () => ({ content: 'body', totalLines: 1, truncated: false })),
-        search: jest.fn(async () => ({ hits: [] })),
-    },
-}));
+const skillsApi = {
+    list: jest.fn(async () => [
+        { name: 'foo-skill', description: 'foo', scope: { kind: 'global' }, metadata: { tags: [] } },
+        { name: 'shared', description: 'global ver', scope: { kind: 'global' } },
+        { name: 'shared', description: 'char ver', scope: { kind: 'character', characterFile: 'a.png' } },
+    ]),
+    readFile: jest.fn(async () => ({ content: 'body', totalLines: 1, truncated: false })),
+    listFiles: jest.fn(async () => ({ files: [{ path: 'SKILL.md', size: 4, isBinary: false }] })),
+};
 
-const { skillsApi } = await import('../../public/scripts/skills/api.js');
+globalThis.SillyTavern = {
+    getContext: () => ({ skills: skillsApi }),
+};
+
 const { registerSkillOrchestrationTools, unregisterSkillOrchestrationTools } = await import(
     '../../public/scripts/extensions/orchestrator/skill-orchestration-tools.js'
 );
@@ -47,7 +51,7 @@ describe('skill-orchestration-tools', () => {
         for (const k of Object.keys(registered)) delete registered[k];
         skillsApi.list.mockClear();
         skillsApi.readFile.mockClear();
-        skillsApi.search.mockClear();
+        skillsApi.listFiles.mockClear();
         registerSkillOrchestrationTools();
     });
 
@@ -107,15 +111,92 @@ describe('skill-orchestration-tools', () => {
             .rejects.toThrow(/not found/);
     });
 
-    test('skill_search delegates to skillsApi.search with target scope', async () => {
-        await registered.skill_search.exec(
-            { name: 'foo-skill', query: 'q' },
+    test('skill_search regex scans all files when no path supplied (grep -n shape, multi-file prefix)', async () => {
+        skillsApi.listFiles.mockResolvedValueOnce({
+            files: [
+                { path: 'SKILL.md', size: 20, isBinary: false },
+                { path: 'usage.md', size: 20, isBinary: false },
+            ],
+        });
+        skillsApi.readFile
+            .mockResolvedValueOnce({ content: '茶杯在窗边\n手里端着茶杯', totalLines: 2, truncated: false })
+            .mockResolvedValueOnce({ content: '使用方法\n端着茶杯前进', totalLines: 2, truncated: false });
+
+        const result = await registered.skill_search.exec(
+            { name: 'foo-skill', pattern: '茶杯' },
             { __visibleSkillsForAgent: [{ name: 'foo-skill', scope: { kind: 'global' } }] },
         );
-        const lastCall = skillsApi.search.mock.calls[skillsApi.search.mock.calls.length - 1];
-        expect(lastCall[0].name).toBe('foo-skill');
-        expect(lastCall[0].query).toBe('q');
-        expect(lastCall[0].scope.kind).toBe('global');
+
+        expect(result.ok).toBe(true);
+        expect(result.output).toContain('foo-skill/SKILL.md:1: 茶杯在窗边');
+        expect(result.output).toContain('foo-skill/SKILL.md:2: 手里端着茶杯');
+        expect(result.output).toContain('foo-skill/usage.md:2: 端着茶杯前进');
+        // listFiles must be called with the resolved target's scope.
+        expect(skillsApi.listFiles).toHaveBeenCalledWith(expect.objectContaining({
+            scope: { kind: 'global' }, name: 'foo-skill',
+        }));
+    });
+
+    test('skill_search regex scans only supplied path when path argument is set', async () => {
+        skillsApi.readFile.mockResolvedValueOnce({
+            content: '行一\n行二命中\n行三', totalLines: 3, truncated: false,
+        });
+
+        const result = await registered.skill_search.exec(
+            { name: 'foo-skill', pattern: '命中', path: 'notes/extra.md' },
+            { __visibleSkillsForAgent: [{ name: 'foo-skill', scope: { kind: 'global' } }] },
+        );
+
+        expect(result.ok).toBe(true);
+        expect(result.output).toContain('foo-skill/notes/extra.md:2: 行二命中');
+        // When path is supplied, listFiles is bypassed.
+        expect(skillsApi.listFiles).not.toHaveBeenCalled();
+        expect(skillsApi.readFile).toHaveBeenCalledWith(expect.objectContaining({
+            scope: { kind: 'global' }, name: 'foo-skill', path: 'notes/extra.md',
+        }));
+    });
+
+    test('skill_search invalid regex returns ok=false with escape hint', async () => {
+        skillsApi.listFiles.mockResolvedValueOnce({
+            files: [{ path: 'SKILL.md', size: 4, isBinary: false }],
+        });
+        skillsApi.readFile.mockResolvedValueOnce({ content: 'body', totalLines: 1, truncated: false });
+
+        const result = await registered.skill_search.exec(
+            { name: 'foo-skill', pattern: '[bad' },
+            { __visibleSkillsForAgent: [{ name: 'foo-skill', scope: { kind: 'global' } }] },
+        );
+        expect(result.ok).toBe(false);
+        expect(result.error).toMatch(/escape regex metacharacters/);
+    });
+
+    test('skill_search throws when pattern is missing', async () => {
+        await expect(registered.skill_search.exec(
+            { name: 'foo-skill' },
+            { __visibleSkillsForAgent: [{ name: 'foo-skill', scope: { kind: 'global' } }] },
+        )).rejects.toThrow(/pattern/i);
+    });
+
+    test('skill_search throws when pattern is empty string', async () => {
+        await expect(registered.skill_search.exec(
+            { name: 'foo-skill', pattern: '' },
+            { __visibleSkillsForAgent: [{ name: 'foo-skill', scope: { kind: 'global' } }] },
+        )).rejects.toThrow(/pattern/i);
+    });
+
+    test('skill_search uses scope-precedence fallback when no visible set is provided', async () => {
+        skillsApi.listFiles.mockResolvedValueOnce({
+            files: [{ path: 'SKILL.md', size: 4, isBinary: false }],
+        });
+        skillsApi.readFile.mockResolvedValueOnce({ content: 'shared text', totalLines: 1, truncated: false });
+
+        const result = await registered.skill_search.exec({ name: 'shared', pattern: 'shared' });
+        expect(result.ok).toBe(true);
+        expect(result.output).toContain('shared/SKILL.md:1: shared text');
+        // Verify the character-scope `shared` (not global) was chosen.
+        const lastListFilesCall = skillsApi.listFiles.mock.calls[skillsApi.listFiles.mock.calls.length - 1];
+        expect(lastListFilesCall[0].scope.kind).toBe('character');
+        expect(lastListFilesCall[0].scope.characterFile).toBe('a.png');
     });
 
     test('unregisterSkillOrchestrationTools removes the three entries', () => {

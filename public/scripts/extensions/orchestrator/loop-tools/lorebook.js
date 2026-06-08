@@ -4,13 +4,15 @@
  * Two tools cover discovery and verbatim retrieval over the chat's
  * enabled lorebooks:
  *
- *   - lorebook_search({ query, limit }) substring-scans content + key
- *     lists across all enabled entries, **excluding entries already
+ *   - lorebook_search({ pattern, flags?, book? }) regex-scans entry
+ *     content across all enabled entries, **excluding entries already
  *     activated this turn** (those have already been injected into the
  *     main model via main-flow World Info, so the agent rediscovering
  *     them wastes a round). The activated set rides on the run context
  *     at `context.__lukerRun.activatedEntryKeys`, populated by the
- *     orchestrator's `onWorldInfoFinalized` hook.
+ *     orchestrator's `onWorldInfoFinalized` hook. Emits grep -n style
+ *     output: one matched line per result as
+ *     `[{book}] {entry_name}:{lineno}: {line_content}`.
  *   - lorebook_get({ entry_key, book? }) fetches a single entry by key
  *     with full content. Does NOT dedup against the activated set: the
  *     agent may want to quote an injected entry verbatim for
@@ -24,13 +26,7 @@
  */
 
 import { ToolError } from '../loop-runtime.js';
-
-const PREVIEW_LEN = 500;
-
-function preview(text) {
-    const s = String(text || '');
-    return s.length <= PREVIEW_LEN ? s : s.slice(0, PREVIEW_LEN);
-}
+import { gatherGrepMatches } from '../grep-tool.js';
 
 function entryActivationKey(entry) {
     if (!entry) return '';
@@ -53,53 +49,52 @@ async function loadAllEnabledEntries(context) {
     return Array.isArray(entries) ? entries : [];
 }
 
+function entryDisplayName(entry) {
+    const keys = Array.isArray(entry?.key) ? entry.key.map(String).filter(Boolean) : [];
+    if (keys.length > 0) return keys.join('|');
+    return `uid:${entry?.uid ?? '?'}`;
+}
+
 /**
- * Search across all enabled lorebook entries (content + key list).
- * Case-insensitive substring match. Skips entries flagged as already
- * activated this turn so the agent doesn't surface what's already in
- * the main model context.
+ * Regex search across all enabled lorebook entries (content). Emits grep -n
+ * style output with "[{book}] {entry_name}" prefix. Skips entries already
+ * activated this turn (those are already in the main model context).
  *
- * @param {{ query: string, limit?: number }} args
+ * @param {{ pattern: string, flags?: string, book?: string }} args
  * @param {object} context — run context (carries `__lukerRun` + loader hook)
- * @returns {Promise<{entries: Array<{book: string, key: string[], preview: string}>, excluded_active_count: number}>}
+ * @returns {Promise<{ok: true, output: string} | {ok: false, error: string}>}
  */
 export async function execLorebookSearch(args, context) {
-    const queryRaw = String(args?.query ?? '');
-    if (!queryRaw.trim()) {
+    const pattern = String(args?.pattern ?? '');
+    if (!pattern) {
         throw new ToolError(
-            'lorebook_search: query must be non-empty.',
-            'LOREBOOK_QUERY_EMPTY',
-            'Provide a non-empty query. Try a content keyword or part of an entry key.',
+            'lorebook_search: pattern must be non-empty.',
+            'LOREBOOK_PATTERN_EMPTY',
+            'Provide a non-empty regex pattern. To match literal text, escape regex metacharacters.',
         );
     }
-    const limit = Math.max(1, Math.min(50, Math.floor(Number(args?.limit) || 5)));
-    const q = queryRaw.toLowerCase();
+    const flags = typeof args?.flags === 'string' && args.flags.length > 0 ? args.flags : 'gm';
+    const bookFilter = String(args?.book ?? '').trim();
 
     const entries = await loadAllEnabledEntries(context);
     const activated = context?.__lukerRun?.activatedEntryKeys instanceof Set
         ? context.__lukerRun.activatedEntryKeys
         : new Set();
 
-    let excluded = 0;
-    const matches = [];
-    for (const entry of entries) {
-        if (!entry) continue;
-        if (activated.has(entryActivationKey(entry))) {
-            excluded += 1;
-            continue;
+    function* corpus() {
+        for (const entry of entries) {
+            if (!entry) continue;
+            if (activated.has(entryActivationKey(entry))) continue;
+            const book = String(entry.world || '');
+            if (bookFilter && book !== bookFilter) continue;
+            yield {
+                prefix: `[${book}] ${entryDisplayName(entry)}`,
+                content: String(entry.content || ''),
+            };
         }
-        const text = String(entry.content || '');
-        const keys = Array.isArray(entry.key) ? entry.key.map(String) : [];
-        const haystack = `${text}\n${keys.join(' ')}`.toLowerCase();
-        if (!haystack.includes(q)) continue;
-        matches.push({
-            book: String(entry.world || ''),
-            key: keys,
-            preview: preview(text),
-        });
-        if (matches.length >= limit) break;
     }
-    return { entries: matches, excluded_active_count: excluded };
+
+    return gatherGrepMatches(corpus(), pattern, flags);
 }
 
 /**

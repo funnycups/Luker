@@ -154,10 +154,10 @@ loop.finalize -> out
 2. **主代理能用的工具组**:
    - **循环工具**（在 profile 里勾选启用）—— 跟 loop 模式同源：`chat_*` / `lorebook_*` / `memory_*` / `note_*`（开启/关闭） / `search_*`，用来收集上下文。
    - **协作工具** —— `dispatch_subagent(subagentId, task)` 按 id 启动 profile 预定义的子代理；`dispatch_inline_subagent(systemPrompt, task, ...)` 启动一次性 ad-hoc 子代理；`await_subagents(handles)` 阻塞等子代理完工；`cancel_subagent(handle)` 中止跑到一半的子代理。
-   - **消息产出工具** —— `write_message(text, mode?)` 写正文（`mode='replace'` 覆写、`mode='append'` 追加）;`apply_message_patches(patches)` 做定点的 context-replace 补丁；`get_draft()` 回读当前草稿；`finalize()` 提交并收尾。
+   - **消息产出工具** —— `write_message(text, mode?)` 写正文（`mode='replace'` 覆写、`mode='append'` 追加）;`apply_message_patches(patches)` 做定点的 context-replace 补丁；`get_draft()` 回读当前草稿；`draft_search({ pattern, flags? })` 对当前草稿做正则扫描，返回 grep `-n` 风格的命中行（`lineno: line`）——做术语 / 用词的系统化排查时比眼看 `get_draft` 输出更可靠，所有子代理（特别是各类 critic）都可调用；`finalize()` 提交并收尾。
    - **[自定义工具](./custom-tools.md)** —— 其他 Luker 扩展注册的工具、从 SillyTavern function tool 桥接进来的工具、本编排里手写的工具。子代理看到的是同一组自定义工具面（在子代理粒度有覆写时按覆写过滤）。
 
-3. **子代理是「一次性顾问」**：派遣时拿到当前聊天快照 + 主代理写的任务简报 + 自己的系统提示词 + 启用的循环工具 + `get_draft()`。子代理彼此看不到对方的存在，看不到主代理的推理，**不能再向下派遣**，也**不能直接写正文**——它们只产出文本，主代理决定怎么用。
+3. **子代理是「一次性顾问」**：派遣时拿到当前聊天快照 + 主代理写的任务简报 + 自己的系统提示词 + 启用的循环工具，外加 `get_draft()` 与 `draft_search()` 用于检查主代理目前写到哪里。子代理彼此看不到对方的存在，看不到主代理的推理，**不能再向下派遣**，也**不能直接写正文**——它们只产出文本，主代理决定怎么用。
 
 4. **默认 profile 自带 12 个为 RP 优化过的子代理**:
 
@@ -246,7 +246,7 @@ Director 默认是「主代理 + 多子代理」的工作流，但有一种 powe
 
 1. 在主代理系统提示词里，删掉所有「派遣子代理」相关的纪律，改写成「你自己起草、自己回读、自己改，认为可以了就 `finalize`」。
 2. 在 profile 里把所有子代理删掉（或者把它们的 ID 全部从主代理 prompt 里摘干净）——这样 `dispatch_subagent` 工具不会出现在主代理的工具列表里，只剩 `dispatch_inline_subagent`（可以保留或不保留，看你想不想让主代理在特殊场景临时拉 ad-hoc 子代理）。
-3. 主代理的工具组里至少保留：`write_message` / `apply_message_patches` / `get_draft` / `finalize`，以及你想让它用的几个循环工具（典型组合是 `chat_*` + `memory_*` + `lorebook_*`）。
+3. 主代理的工具组里至少保留：`write_message` / `apply_message_patches` / `get_draft` / `draft_search` / `finalize`，以及你想让它用的几个循环工具（典型组合是 `chat_*` + `memory_*` + `lorebook_*`）。
 4. 视情况把「工具调用最大轮数」往下调一些（默认 20 对单 agent 来说偏多）。
 
 :::

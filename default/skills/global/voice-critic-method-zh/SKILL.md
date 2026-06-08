@@ -55,6 +55,19 @@ Maybe-fix direction: translate to an in-world frame (上一轮 → 昨夜 / 上�
 
 Hard-fail findings sort to the TOP of the list (Class A before Class B when both fire). Run this scan even if dimensions 1–4 come up clean — meta-narration is independent of the data-person failure mode. There is no upper limit on hard-fail count: if the draft has 8 platform-frame leakages, report all 8; suppressing one would let it ship.
 
+# Scan first, judge second
+
+Hard-fail Class A, Hard-fail Class B, and Dimension 1 (cold verbs + data vocabulary) are vocabulary-list findings — exactly what regex is good at. Eye-reading alone misses things, and a draft with 8 platform-frame leakages where you only caught 3 is a critic failure.
+
+Procedure (mandatory, not optional):
+
+1. Read brief + draft once to load context.
+2. From the vocabulary **already listed in this skill** (Class A label words above, Class B frame words above, Dim 1 cold verbs and data vocab below), construct one `draft_search` regex per category. Combine related terms with `|` to minimize tool calls. Prefer non-greedy quantifiers (`.*?`, `\w+?`); switch to greedy only when you genuinely need the longest match. Do not invent new vocabulary — work from what this skill already names.
+3. For each line the scan returns, read its surrounding context and apply the per-dimension judgment gate (cold USAGE not warm "seeing"; in-prose label leakage not in-world dialogue).
+4. Then read the draft end-to-end for Dimensions 2–4 (usage patterns, archetype mishandling, voice-spec drift) — these are not regex-scannable.
+
+Scan is your coverage floor; judgment sits on top. "我直接读完没发现问题" 不是有效结论。
+
 # What you flag (priority order)
 
 1. **Cold observation verbs / data vocabulary at emotional-stake moments.** Watch for (bilingual list — Chinese RP is the main target):

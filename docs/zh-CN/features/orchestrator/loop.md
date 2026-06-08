@@ -102,8 +102,8 @@ loop.finalize -> out
 | `note_open(text)` | 开启一条**剧情作者线索**（伏笔、承诺、章节大纲）。笔记会在之后每次 loop 启动时出现在 agent 的 "## Open Notes" 块，直到被关闭。单条上限 16KB。 | agent 发现自己刚埋了一个设定，调 `note_open('林晚:外祖母在洛阳——下次见面兑现')`；之后几轮 loop 都能看到这条线索。 |
 | `note_close(id, reason?)` | 按 id 关闭一条已开启的笔记（已兑现、不再需要等）。笔记从 "## Open Notes" 块中消失，但仍归档保留。 | 章节节拍落地后，`note_close('o_a3f2', '林晚见到外祖母,floor 73')`。 |
 | `chat_read_range(start, end)` | 读 chat 楼层范围。负数从末尾倒数，单次最多 50 楼。 | `chat_read_range(-10, -1)` 读最近 10 楼复习上下文。 |
-| `chat_search(query, limit)` | 全聊天 substring 搜索（大小写不敏感），返回楼层 + 内容预览。 | `chat_search('青冥剑')` 找出之前所有提到「青冥剑」的楼层。 |
-| `lorebook_search(query, limit)` | 在所有启用的世界书里 substring 搜索条目。**默认排除本回合已激活的条目**（那些已经被注入主上下文，再返回会浪费 token）。返回 `entries` + `excluded_active_count`。 | `lorebook_search('落雁城')` 翻出未激活的「落雁城」相关设定。 |
+| `chat_search(pattern, flags?)` | 对所有楼层做正则搜索。返回 grep `-n` 风格的命中行，每行一条结果：`floor_N [role]:lineno: line`。`flags` 默认 `gm`，`g` 缺省时会自动补上。配合 `chat_read_range` 拉回完整楼层内容。 | `chat_search({ pattern: '宴会\|庆典', flags: 'gm' })` 翻出所有提到「宴会」或「庆典」的楼层。 |
+| `lorebook_search(pattern, flags?, book?)` | 在所有启用的世界书条目里做正则搜索。返回 grep `-n` 风格的命中行：`[book] entry_name:lineno: line`。**默认排除本回合已激活的条目**——那些已经被注入主上下文，再返回会浪费 token。传入 `book` 可按世界书名收窄到单本。 | `lorebook_search({ pattern: '李府', book: 'main' })` 在 `main` 世界书里找出所有提到「李府」的设定行。 |
 | `lorebook_get(entry_key)` | 按 key 拉取条目全文。**不去重**——允许 agent 精确引用某条已激活条目以保持术语一致。 | `lorebook_get('落雁城-主城')` 把这一条全文调出来引用。 |
 | `memory_list_candidates(seq_window?, types?, exclude_recent_messages?)` | 枚举可见的记忆图候选池——与记忆图自身召回 LLM 看到的同一组。返回 `{ candidates: [{ id, type, level, title, seqTo, semanticDepth }] }`，按时间倒序。**召回流水线的第一步**。 | `memory_list_candidates({ types: ['event'] })` 返回召回 LLM 会考虑的最近事件节点。 |
 | `memory_keyword_search(query, types?, k?)` | 按 token 匹配 title + 字段值，无需 profile。返回 `{ results: [{ id, type, title, seqTo, score, scoreMode: 'keyword' }] }`，按 score 降序。按关键词或短语查时用。 | `memory_keyword_search({ query: 'family secret', k: 8 })` |

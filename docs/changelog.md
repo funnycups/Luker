@@ -6,6 +6,7 @@
 
 ### Orchestrator
 
+- **Search tools support regex** — `draft_search` (new) and the existing `chat_search` / `lorebook_search` / `skill_search` all accept a `pattern` (JavaScript RegExp source) and return grep `-n` style output. Critics use this to systematically scan for vocabulary patterns instead of relying on eye-reading.
 - Custom tools — extend agents in any of the four orchestration modes with handwritten tools, tools from other Luker extensions, or bridged SillyTavern function tools.
 - Handwritten custom tools travel with the profile; profile-scoped tools attached to a character override are exported with the card.
 - Iteration Studio sees the visible custom tools and can toggle them on or off per profile.
@@ -44,6 +45,8 @@
 - Startup performance optimization
 
 ## Recent breaking changes
+
+- **Search-tool schema rename** — `chat_search`, `lorebook_search`, and `skill_search` now take `pattern` (JavaScript RegExp source) instead of `query` (substring). The old `limit` / `contextLines` parameters are removed; output is grep `-n` style. Any user-customized prompt that hardcoded `query: "..."` in tool-call examples must be updated to `pattern: "..."`. Note: the orchestrator-side `skill_search` (used by orchestrator agents) is migrated; the ToolManager-routed `skill_search` (used by non-orchestrator SillyTavern function-call agents) keeps the substring API for backward compatibility.
 
 - **CardApp Studio reverted to its standalone fullscreen UI** (the iteration-studio shell version shipped in May 2026 was a brief detour that lost viewport ownership and noticeably degraded UX). The studio now takes over the viewport again via two `position:fixed` panels with mobile tab support, file tree, CodeMirror 6 editor, and inline approval cards — the pre-SP-2 UX users were used to. File operations still benefit from edits-lib's drift detection + per-op inverse — new capabilities the original standalone version didn't have. The brief-era session bucket (`cardapp_studio_sessions_v2`) is wiped on first open; CardApp files on disk are untouched.
 

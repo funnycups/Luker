@@ -8,10 +8,11 @@
  *     `{ floor, role, content }`. Caps the slice at MAX_RANGE floors and
  *     surfaces a `ToolError` when the requested range is too wide so the
  *     agent can self-correct on the next round.
- *   - chat_search is a case-insensitive substring scan that returns up to
- *     `limit` results with `content_preview`. Empty queries surface a
- *     `ToolError` so the agent can retry with a non-empty query — empty
- *     strings would otherwise match every chat message and waste a round.
+ *   - chat_search is a regex scan that returns grep -n style output. Each
+ *     match line is prefixed with `floor_{N} [{role}]:{lineno}:` so the
+ *     agent can locate the floor and call chat_read_range to read full
+ *     content. Empty patterns surface a `ToolError`; invalid regex
+ *     returns `{ ok: false, error }` with an escape-hint substring.
  *   - The central dispatcher (`loop-tools.js`) registers both tools plus
  *     the always-on `finalize` schema and exposes a profile-driven
  *     `getEnabledToolSchemas` that loop-runtime uses to assemble the
@@ -96,38 +97,54 @@ describe('execChatSearch (Task 8)', () => {
         { mes: 'spring blossoms',   is_user: false },
     ]);
 
-    test('returns matching floors with content_preview (case-insensitive)', async () => {
-        const result = await execChatSearch({ query: 'autumn', limit: 5 }, ctx);
-        expect(result).toHaveLength(2);
-        expect(result[0]).toHaveProperty('content_preview');
-        expect(result[0]).toHaveProperty('floor');
-        expect(result[0]).toHaveProperty('role');
+    test('returns grep -n style output for matching floors with floor + role prefix', async () => {
+        const result = await execChatSearch({ pattern: 'autumn' }, ctx);
+        expect(result.ok).toBe(true);
+        // Default flags 'gm' are case-sensitive — only the lowercase floors match.
+        expect(result.output).toBe('floor_0 [assistant]:1: autumn leaves');
     });
 
-    test('respects limit', async () => {
-        const result = await execChatSearch({ query: 'autumn', limit: 1 }, ctx);
-        expect(result).toHaveLength(1);
+    test('returns ok=true with empty output when no matches', async () => {
+        const result = await execChatSearch({ pattern: 'platypus' }, ctx);
+        expect(result).toEqual({ ok: true, output: '' });
     });
 
-    test('returns empty array when no matches', async () => {
-        const result = await execChatSearch({ query: 'platypus', limit: 5 }, ctx);
-        expect(result).toEqual([]);
+    test('throws ToolError when pattern is empty', async () => {
+        await expect(execChatSearch({ pattern: '' }, ctx)).rejects.toBeInstanceOf(ToolError);
     });
 
-    test('throws ToolError when query is empty', async () => {
-        await expect(execChatSearch({ query: '' }, ctx)).rejects.toBeInstanceOf(ToolError);
+    test('regex pattern matches across floors and emits grep -n shape with floor prefix', async () => {
+        const chat = [
+            { mes: 'hello world', is_user: true },
+            { mes: 'goodbye\nhello again', is_user: false },
+        ];
+        const result = await execChatSearch({ pattern: 'hello' }, { chat });
+        expect(result).toEqual({
+            ok: true,
+            output: 'floor_0 [user]:1: hello world\nfloor_1 [assistant]:2: hello again',
+        });
     });
 
-    test('throws ToolError when query is whitespace only', async () => {
-        await expect(execChatSearch({ query: '   ' }, ctx)).rejects.toBeInstanceOf(ToolError);
+    test('case-insensitive regex via flags', async () => {
+        const chat = [{ mes: 'Hello', is_user: true }];
+        const result = await execChatSearch({ pattern: 'hello', flags: 'gmi' }, { chat });
+        expect(result.output).toBe('floor_0 [user]:1: Hello');
     });
 
-    test('previews are truncated to PREVIEW_LEN', async () => {
-        const longText = 'autumn '.repeat(200); // > 300 chars
-        const longCtx = makeChatContext([{ mes: longText, is_user: false }]);
-        const result = await execChatSearch({ query: 'autumn' }, longCtx);
-        expect(result).toHaveLength(1);
-        expect(result[0].content_preview.length).toBeLessThanOrEqual(300);
+    test('invalid regex returns ok=false with escape hint', async () => {
+        const chat = [{ mes: 'x', is_user: true }];
+        const result = await execChatSearch({ pattern: '[bad' }, { chat });
+        expect(result.ok).toBe(false);
+        expect(result.error).toMatch(/escape regex metacharacters/);
+    });
+
+    test('empty chat returns empty output', async () => {
+        const result = await execChatSearch({ pattern: '.' }, { chat: [] });
+        expect(result).toEqual({ ok: true, output: '' });
+    });
+
+    test('missing pattern argument rejected', async () => {
+        await expect(execChatSearch({}, { chat: [] })).rejects.toThrow(/pattern/i);
     });
 });
 
@@ -149,8 +166,8 @@ describe('central dispatcher (Task 8)', () => {
 
     test('executeLoopTool dispatches chat_search to execChatSearch', async () => {
         const ctx = makeChatContext([{ mes: 'hello world', is_user: true }]);
-        const result = await executeLoopTool('chat_search', { query: 'hello' }, ctx);
-        expect(result).toHaveLength(1);
+        const result = await executeLoopTool('chat_search', { pattern: 'hello' }, ctx);
+        expect(result).toEqual({ ok: true, output: 'floor_0 [user]:1: hello world' });
     });
 
     test('executeLoopTool throws ToolError(NOT_IMPLEMENTED) for unknown names', async () => {
@@ -161,7 +178,7 @@ describe('central dispatcher (Task 8)', () => {
 
     test('executeLoopTool propagates ToolError from underlying tool', async () => {
         const ctx = makeChatContext([{ mes: 'x', is_user: true }]);
-        await expect(executeLoopTool('chat_search', { query: '' }, ctx))
+        await expect(executeLoopTool('chat_search', { pattern: '' }, ctx))
             .rejects.toBeInstanceOf(ToolError);
     });
 

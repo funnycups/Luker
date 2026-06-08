@@ -6,6 +6,7 @@
 
 ### 編排器
 
+- **搜尋工具支援正則** —— `draft_search`（新增）以及既有的 `chat_search` / `lorebook_search` / `skill_search` 都接受 `pattern` 參數（JavaScript 正則表達式來源），並回傳 grep `-n` 風格輸出。批評者用它系統性地掃描詞彙模式，而不再仰賴肉眼通讀。
 - 自訂工具 —— 四個編排模式都能呼叫三種來源的工具：手寫工具、其他 Luker 擴充貢獻的工具，以及橋接進來的 SillyTavern function tool。
 - 手寫工具跟隨編排走；角色卡覆寫裡的工具會隨角色卡一起匯出。
 - AI 迭代會看到這些自訂工具，並按編排開關。
@@ -43,6 +44,8 @@
 - 啟動效能最佳化
 
 ## 近期破壞性變更
+
+- **搜尋工具 schema 重命名** —— `chat_search`、`lorebook_search`、`skill_search` 現在接受 `pattern`（JavaScript 正則表達式來源）參數，取代原先的 `query`（子字串）。舊的 `limit` / `contextLines` 參數已移除；輸出為 grep `-n` 風格。任何使用者自訂提示詞中硬編碼了 `query: "..."` 的工具呼叫範例，都需要改寫為 `pattern: "..."`。注意：編排器側的 `skill_search`（編排器 agent 使用）已遷移；經由 ToolManager 派發的 `skill_search`（非編排器 SillyTavern function-call agent 使用）為保持向後相容，仍保留子字串 API。
 
 - **CardApp Studio 回滾到獨立全屏 UI**（2026 年 5 月短暫上線的「接入迭代工作台外殼」版本失去了 viewport 所有權，UX 明顯退化）。Studio 現在透過兩塊 `position:fixed` 面板再次接管 viewport，配合行動端 tab、檔案樹、CodeMirror 6 編輯器與對話流內聯的審批卡片 —— 跟 SP-2 之前使用者熟悉的 UX 一致。檔案操作仍然享受 edits-lib 的漂移檢測與單條 inverse —— 這是原獨立版本沒有的新能力。短暫期間的 session 桶（`cardapp_studio_sessions_v2`）首次打開時清空；磁碟上的 CardApp 檔案不受影響。
 

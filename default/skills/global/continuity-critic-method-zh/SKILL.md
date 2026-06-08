@@ -30,6 +30,22 @@ Priority order when reporting:
 
 Use the chat / memory / lorebook read tools (when enabled) to verify the OPPOSING fact exists before flagging. If you can't locate explicit prior text that states NOT-F, do not flag. Speculation is worse than silence.
 
+# Scan as a coverage aid
+
+Knowledge-boundary checks and hard-fact contradictions both depend on enumerating *what the draft actually says*. Eye-reading is unreliable for this — short names, mentioned once, slip past.
+
+Procedure (mandatory before reporting):
+
+1. From the brief: load the in-scene roster, per-character knowledge anchors, and any prior-established facts the main agent flagged for priority.
+2. Use `draft_search` to enumerate candidates in the draft:
+   - For each character in the roster: scan their name(s) and aliases. Matched lines are the scope you check against knowledge boundaries.
+   - For each prior-established fact the brief flagged (a name, place, time): scan the draft for every mention.
+   - For numeric anchors the brief flagged (ages, dates, distances): scan with `\d+` plus the appropriate unit.
+   - Prefer non-greedy quantifiers (`.*?`, `\w+?`); switch to greedy only when you genuinely need the longest match.
+3. With the candidate set in hand, apply the (a)+(b)+(c) gate and the knowledge-boundary check. Use the same regex discipline on `chat_search` / `lorebook_search` to locate the opposing-fact source — don't hand-skim chat looking for "the line where X was established"; scan for it. Then your finding cites the exact `floor_N` or `[book] entry_name` it came from.
+
+Scan finds *candidates*. The cross-corpus comparison still requires your judgment and the (a)+(b)+(c) gate; scan does NOT replace it.
+
 Output format: a list of every finding that passes the strict (a)+(b)+(c) test (or the knowledge-boundary exception). There is NO upper item cap — if the draft has 12 real contradictions, report all 12; if it has zero, say so explicitly in one sentence. Capping a critic would force you to suppress real issues to stay under quota, or pad with borderline findings to fill it; both failure modes ship bugs. Discipline lives in the strict gate, not in a count limit.
 
 Each item:

@@ -1,15 +1,17 @@
 /**
  * loop-tools/lorebook tests.
  *
- * Layered against Plan Task 9:
+ * Layered against Plan Task 9 (migrated to regex search in Task 4 of the
+ * orchestrator search-tools regex plan):
  *
- *   - lorebook_search runs a substring scan over enabled lorebook entries
- *     (content + key list both contribute to the haystack) and excludes
- *     entries already activated this turn so the agent does not waste
- *     rounds rediscovering what main-flow World Info already injected.
- *     The activated set lives at `context.__lukerRun.activatedEntryKeys`
+ *   - lorebook_search runs a regex scan over enabled lorebook entries
+ *     (content only — grep-style line-oriented) and excludes entries
+ *     already activated this turn so the agent does not waste rounds
+ *     rediscovering what main-flow World Info already injected. The
+ *     activated set lives at `context.__lukerRun.activatedEntryKeys`
  *     as a `Set<${world}.${uid}>` populated by the orchestrator's
- *     `onWorldInfoFinalized` hook.
+ *     `onWorldInfoFinalized` hook. Output is grep -n style:
+ *     `[{book}] {entry_name}:{lineno}: {line_content}`.
  *   - lorebook_get fetches a specific entry by key. It does NOT dedup
  *     against the activated set — the agent may legitimately want to
  *     quote an injected entry verbatim for terminology consistency.
@@ -49,71 +51,87 @@ const SAMPLE_ENTRIES = [
     { world: 'character', uid: 4, key: ['scribe'],      content: 'The scribe records every season.' },
 ];
 
-describe('execLorebookSearch (Task 9)', () => {
-    test('returns matching entries with preview/world/key fields', async () => {
-        const ctx = makeFixture(SAMPLE_ENTRIES);
-        const result = await execLorebookSearch({ query: 'autumn', limit: 5 }, ctx);
-        expect(result).toHaveProperty('entries');
-        expect(result).toHaveProperty('excluded_active_count');
-        expect(result.entries).toHaveLength(2);
-        expect(result.entries[0]).toHaveProperty('book');
-        expect(result.entries[0]).toHaveProperty('key');
-        expect(result.entries[0]).toHaveProperty('preview');
-        expect(result.excluded_active_count).toBe(0);
+describe('execLorebookSearch (regex)', () => {
+    test('regex emits grep -n shape with [book] entry-name prefix', async () => {
+        const entries = [
+            { world: 'main', uid: 1, key: ['张明远'], content: '张明远站在窗边\n手里端着茶杯' },
+            { world: 'side', uid: 2, key: ['李府'], content: '李府的庭院冷清' },
+        ];
+        const ctx = { __getSortedEntriesFn: async () => entries, __lukerRun: { activatedEntryKeys: new Set() } };
+        const result = await execLorebookSearch({ pattern: '茶杯|庭院' }, ctx);
+        expect(result.output).toContain('[main] 张明远:2: 手里端着茶杯');
+        expect(result.output).toContain('[side] 李府:1: 李府的庭院冷清');
     });
 
-    test('excludes entries already activated for this turn', async () => {
-        // Mark the second autumn-related entry as activated; only the first
-        // one should appear in results, and excluded_active_count records 1.
-        const ctx = makeFixture(SAMPLE_ENTRIES, { activated: ['global.3'] });
-        const result = await execLorebookSearch({ query: 'autumn', limit: 5 }, ctx);
-        expect(result.excluded_active_count).toBe(1);
-        const keys = result.entries.flatMap(e => e.key);
-        expect(keys).toContain('autumn');
-        expect(keys).not.toContain('autumn-fest');
+    test('book filter narrows scan to one book', async () => {
+        const entries = [
+            { world: 'main', uid: 1, key: ['张'], content: '张三' },
+            { world: 'side', uid: 2, key: ['李'], content: '李四' },
+        ];
+        const ctx = { __getSortedEntriesFn: async () => entries, __lukerRun: { activatedEntryKeys: new Set() } };
+        const result = await execLorebookSearch({ pattern: '.', book: 'side' }, ctx);
+        expect(result.output).toContain('[side]');
+        expect(result.output).not.toContain('[main]');
     });
 
-    test('case-insensitive substring match across content + keys', async () => {
-        const ctx = makeFixture(SAMPLE_ENTRIES);
-        const result = await execLorebookSearch({ query: 'CRISP', limit: 5 }, ctx);
-        expect(result.entries).toHaveLength(1);
-        expect(result.entries[0].key).toContain('autumn');
+    test('activated entries are excluded (silently dropped from output)', async () => {
+        const entries = [
+            { world: 'main', uid: 1, key: ['张'], content: '张三' },
+            { world: 'main', uid: 2, key: ['李'], content: '李四' },
+        ];
+        const ctx = { __getSortedEntriesFn: async () => entries, __lukerRun: { activatedEntryKeys: new Set(['main.1']) } };
+        const result = await execLorebookSearch({ pattern: '.' }, ctx);
+        expect(result.output).not.toContain('张');
+        expect(result.output).toContain('李');
     });
 
-    test('respects limit', async () => {
-        const ctx = makeFixture(SAMPLE_ENTRIES);
-        const result = await execLorebookSearch({ query: 'autumn', limit: 1 }, ctx);
-        expect(result.entries).toHaveLength(1);
+    test('invalid regex returns ok=false with escape hint', async () => {
+        const ctx = { __getSortedEntriesFn: async () => [] };
+        const result = await execLorebookSearch({ pattern: '[bad' }, ctx);
+        expect(result.ok).toBe(false);
+        expect(result.error).toMatch(/escape regex metacharacters/);
     });
 
-    test('throws ToolError when query is empty', async () => {
-        const ctx = makeFixture(SAMPLE_ENTRIES);
-        await expect(execLorebookSearch({ query: '' }, ctx)).rejects.toBeInstanceOf(ToolError);
+    test('missing pattern argument throws ToolError', async () => {
+        const ctx = { __getSortedEntriesFn: async () => [] };
+        await expect(execLorebookSearch({}, ctx)).rejects.toThrow(/pattern/i);
     });
 
-    test('throws ToolError when query is whitespace only', async () => {
+    test('throws ToolError when pattern is empty string', async () => {
         const ctx = makeFixture(SAMPLE_ENTRIES);
-        await expect(execLorebookSearch({ query: '   ' }, ctx)).rejects.toBeInstanceOf(ToolError);
+        await expect(execLorebookSearch({ pattern: '' }, ctx)).rejects.toBeInstanceOf(ToolError);
     });
 
-    test('returns empty entries when nothing matches', async () => {
+    test('returns ok=true with empty output when no matches', async () => {
         const ctx = makeFixture(SAMPLE_ENTRIES);
-        const result = await execLorebookSearch({ query: 'nothing-matches-this' }, ctx);
-        expect(result.entries).toEqual([]);
+        const result = await execLorebookSearch({ pattern: 'nothing-matches-this' }, ctx);
+        expect(result).toEqual({ ok: true, output: '' });
     });
 
     test('handles missing activatedEntryKeys gracefully', async () => {
         const ctx = makeFixture(SAMPLE_ENTRIES); // no activated set in __lukerRun
-        const result = await execLorebookSearch({ query: 'autumn', limit: 5 }, ctx);
-        expect(result.entries.length).toBe(2);
-        expect(result.excluded_active_count).toBe(0);
+        const result = await execLorebookSearch({ pattern: 'autumn', flags: 'gmi' }, ctx);
+        // Both 'Autumn is cold and crisp.' and 'Autumn festival happens yearly.' should match.
+        expect(result.output).toContain('[global] autumn:1: Autumn is cold and crisp.');
+        expect(result.output).toContain('[global] autumn-fest:1: Autumn festival happens yearly.');
     });
 
-    test('preview truncates long content', async () => {
-        const longText = 'autumn '.repeat(200);
-        const ctx = makeFixture([{ world: 'global', uid: 9, key: ['long'], content: longText }]);
-        const result = await execLorebookSearch({ query: 'autumn' }, ctx);
-        expect(result.entries[0].preview.length).toBeLessThanOrEqual(500);
+    test('entry with multiple keys is labelled with keys joined by |', async () => {
+        const entries = [
+            { world: 'main', uid: 1, key: ['张', '李'], content: 'twokeys' },
+        ];
+        const ctx = { __getSortedEntriesFn: async () => entries, __lukerRun: { activatedEntryKeys: new Set() } };
+        const result = await execLorebookSearch({ pattern: 'twokeys' }, ctx);
+        expect(result.output).toContain('[main] 张|李:1: twokeys');
+    });
+
+    test('entry with no keys falls back to uid:<n> label', async () => {
+        const entries = [
+            { world: 'main', uid: 7, key: [], content: 'no-keys-here' },
+        ];
+        const ctx = { __getSortedEntriesFn: async () => entries, __lukerRun: { activatedEntryKeys: new Set() } };
+        const result = await execLorebookSearch({ pattern: 'no-keys-here' }, ctx);
+        expect(result.output).toContain('[main] uid:7:1: no-keys-here');
     });
 });
 
@@ -164,8 +182,9 @@ describe('execLorebookGet (Task 9)', () => {
 describe('central dispatcher includes lorebook tools (Task 9)', () => {
     test('executeLoopTool dispatches lorebook_search', async () => {
         const ctx = makeFixture(SAMPLE_ENTRIES);
-        const result = await executeLoopTool('lorebook_search', { query: 'autumn' }, ctx);
-        expect(result.entries.length).toBeGreaterThan(0);
+        const result = await executeLoopTool('lorebook_search', { pattern: 'autumn', flags: 'gmi' }, ctx);
+        expect(result.ok).toBe(true);
+        expect(result.output).toContain('[global] autumn:1: Autumn is cold and crisp.');
     });
 
     test('executeLoopTool dispatches lorebook_get', async () => {
@@ -212,7 +231,7 @@ describe('runLoopOrchestration propagates payload.__lukerRun into tool context (
         const sendLlm = jest.fn()
             .mockImplementationOnce(async () => ({
                 toolCalls: [
-                    { id: 'tc1', name: 'lorebook_search', args: { query: 'autumn' } },
+                    { id: 'tc1', name: 'lorebook_search', args: { pattern: 'autumn', flags: 'gmi' } },
                 ],
                 assistantText: '',
             }))
@@ -262,14 +281,10 @@ describe('runLoopOrchestration propagates payload.__lukerRun into tool context (
         const toolMsg = (secondRoundMessages || []).find(m => m?.role === 'tool' && m?.tool_call_id === 'tc1');
         expect(toolMsg).toBeTruthy();
         const parsed = typeof toolMsg.content === 'string' ? JSON.parse(toolMsg.content) : toolMsg.content;
-        // Loop runtime wraps successful tool results under `data` when the
-        // tool returned a plain object without an `ok` field.
-        const payloadShape = Object.prototype.hasOwnProperty.call(parsed, 'ok')
-            ? parsed.data || parsed
-            : parsed;
-        expect(payloadShape.excluded_active_count).toBe(1);
-        const keys = (payloadShape.entries || []).flatMap(e => e.key);
-        expect(keys).toContain('autumn');
-        expect(keys).not.toContain('autumn-fest');
+        // grep-style result: { ok: true, output: '...' }. The 'autumn' entry
+        // (uid 1) appears; the activated 'autumn-fest' (uid 3) is excluded.
+        expect(parsed.ok).toBe(true);
+        expect(parsed.output).toContain('[global] autumn:1: Autumn is cold and crisp.');
+        expect(parsed.output).not.toContain('autumn-fest');
     });
 });

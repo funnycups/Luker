@@ -145,22 +145,21 @@ registerTool('chat_search', execChatSearch, {
     type: 'function',
     function: {
         name: 'chat_search',
-        description: 'Substring search across all chat floors. Case-insensitive. Returns matching floors with truncated previews; use chat_read_range to read full content for a specific floor.',
+        description: 'Regex search across all chat floors. Returns grep -n style output: one matched line per result as "floor_{N} [{role}]:{lineno}: {line_content}". Use chat_read_range to read full content for a specific floor.',
         parameters: {
             type: 'object',
             properties: {
-                query: {
+                pattern: {
                     type: 'string',
-                    description: 'Non-empty search string. Whitespace-only is rejected.',
+                    description: 'JavaScript RegExp source. Match literal text by escaping metacharacters (e.g. \\. \\[ \\( \\\\). Prefer non-greedy quantifiers (.*? \\w+?) by default; switch to greedy only when you genuinely need the longest match — greedy can blow up on large corpora.',
                 },
-                limit: {
-                    type: 'integer',
-                    description: 'Max results to return (default 10, max 50).',
-                    minimum: 1,
-                    maximum: 50,
+                flags: {
+                    type: 'string',
+                    description: "RegExp flags. 'gm' by default (global + multiline). Add 'i' for case-insensitive. 'g' is auto-injected if you omit it.",
+                    default: 'gm',
                 },
             },
-            required: ['query'],
+            required: ['pattern'],
             additionalProperties: false,
         },
     },
@@ -172,22 +171,25 @@ registerTool('lorebook_search', execLorebookSearch, {
     type: 'function',
     function: {
         name: 'lorebook_search',
-        description: 'Substring search across all enabled lorebooks (World Info entries). Excludes entries already activated this turn so the agent does not rediscover what main-flow World Info already injected. Returns book + key + truncated preview per match.',
+        description: 'Regex search across all enabled lorebook entries (World Info). Excludes entries already activated this turn so the agent does not rediscover what main-flow World Info already injected. Returns grep -n style output: one matched line per result as "[{book}] {entry_name}:{lineno}: {line_content}".',
         parameters: {
             type: 'object',
             properties: {
-                query: {
+                pattern: {
                     type: 'string',
-                    description: 'Non-empty search string. Matched against entry content and key list.',
+                    description: 'JavaScript RegExp source. Match literal text by escaping metacharacters (e.g. \\. \\[ \\( \\\\). Prefer non-greedy quantifiers (.*? \\w+?) by default.',
                 },
-                limit: {
-                    type: 'integer',
-                    description: 'Max results to return (default 5, max 50).',
-                    minimum: 1,
-                    maximum: 50,
+                flags: {
+                    type: 'string',
+                    description: "RegExp flags. 'gm' by default. 'g' is auto-injected if you omit it.",
+                    default: 'gm',
+                },
+                book: {
+                    type: 'string',
+                    description: 'Optional: narrow by lorebook name (entry.world). All enabled books are scanned if omitted.',
                 },
             },
-            required: ['query'],
+            required: ['pattern'],
             additionalProperties: false,
         },
     },

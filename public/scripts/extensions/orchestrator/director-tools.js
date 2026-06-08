@@ -33,6 +33,7 @@ import {
     appendToReasoningSection,
     markReasoningSectionStatus,
 } from './editor-ops.js';
+import { gatherGrepMatches } from './grep-tool.js';
 import { isAbortError } from './abort-utils.js';
 
 // Skill-resolution helpers are loaded lazily so the transitive import chain
@@ -186,6 +187,29 @@ export const GET_DRAFT_TOOL = {
     },
 };
 
+export const DRAFT_SEARCH_TOOL = {
+    type: 'function',
+    function: {
+        name: 'draft_search',
+        description: 'Regex search across the current draft (the in-flight assistant message). Returns grep -n style output: one matched line per result as "{lineno}: {line_content}". Use this for systematic vocabulary scans instead of re-reading the full draft via get_draft — eye-reading misses things.',
+        parameters: {
+            type: 'object',
+            properties: {
+                pattern: {
+                    type: 'string',
+                    description: 'JavaScript RegExp source. To match literal text, escape regex metacharacters (\\. \\[ \\( \\\\). Prefer non-greedy quantifiers (.*?  \\w+?) by default; switch to greedy only when you genuinely need the longest match — greedy can blow up on large corpora.',
+                },
+                flags: {
+                    type: 'string',
+                    description: "RegExp flags. 'gm' by default (global + multiline) to mirror grep semantics. Add 'i' for case-insensitive, 's' for dotall. 'g' is auto-injected if you omit it. Note: scan is line-oriented like grep; multi-line patterns that require literal \\n cannot match.",
+                    default: 'gm',
+                },
+            },
+            required: ['pattern'],
+        },
+    },
+};
+
 export const CANCEL_SUBAGENT_TOOL = {
     type: 'function',
     function: {
@@ -224,7 +248,7 @@ export function buildMainAgentToolSchemas({ subAgents, tools, customToolRegistry
         ...(dispatchInlineEnabled ? [DISPATCH_INLINE_SUBAGENT_TOOL] : []),
         ...(anyDispatcherEnabled ? [AWAIT_SUBAGENTS_TOOL, CANCEL_SUBAGENT_TOOL] : []),
     ];
-    const messageProduction = [WRITE_MESSAGE_TOOL, APPLY_MESSAGE_PATCHES_TOOL, GET_DRAFT_TOOL, FINALIZE_TOOL];
+    const messageProduction = [WRITE_MESSAGE_TOOL, APPLY_MESSAGE_PATCHES_TOOL, GET_DRAFT_TOOL, DRAFT_SEARCH_TOOL, FINALIZE_TOOL];
     const loop = loopToolSchemasFor(tools, customToolRegistry);
     return [...collab, ...messageProduction, ...loop];
 }
@@ -235,7 +259,7 @@ export function buildSubAgentToolSchemas({ tools, customToolRegistry = null }) {
     // get the message-editing tools or the dispatch/cancel collaboration
     // tools — only the main agent writes the message and only the main
     // agent dispatches.
-    return [GET_DRAFT_TOOL, ...loopToolSchemasFor(tools, customToolRegistry)];
+    return [GET_DRAFT_TOOL, DRAFT_SEARCH_TOOL, ...loopToolSchemasFor(tools, customToolRegistry)];
 }
 
 // ── Tool executors ──
@@ -298,6 +322,22 @@ export async function executeGetDraftTool(handle) {
             return { ok: false, error: 'no handle available' };
         }
         return { ok: true, text: handle.getText() };
+    } catch (err) {
+        return { ok: false, error: String(err?.message || err) };
+    }
+}
+
+export async function executeDraftSearchTool(handle, args) {
+    try {
+        if (!handle || typeof handle.getText !== 'function') {
+            return { ok: false, error: 'no handle available' };
+        }
+        const pattern = String(args?.pattern ?? '');
+        if (!pattern) {
+            return { ok: false, error: 'draft_search requires a non-empty pattern. To match literal text, escape regex metacharacters.' };
+        }
+        const flags = typeof args?.flags === 'string' && args.flags.length > 0 ? args.flags : 'gm';
+        return gatherGrepMatches([{ prefix: '', content: handle.getText() }], pattern, flags);
     } catch (err) {
         return { ok: false, error: String(err?.message || err) };
     }
@@ -903,6 +943,8 @@ export function createSubagentDispatcher({
                         let toolResult;
                         if (name === 'get_draft') {
                             toolResult = await executeGetDraftTool(handle);
+                        } else if (name === 'draft_search') {
+                            toolResult = await executeDraftSearchTool(handle, args);
                         } else if (typeof executeLoopTool === 'function') {
                             try {
                                 // Inherit from `contextForNotes` so

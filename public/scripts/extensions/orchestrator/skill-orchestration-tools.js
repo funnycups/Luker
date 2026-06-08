@@ -31,6 +31,7 @@ import {
     registerOrchestrationTool,
     unregisterOrchestrationTool,
 } from './register-custom-tool.js';
+import { gatherGrepMatches } from './grep-tool.js';
 const skillsApi = SillyTavern.getContext().skills;
 
 const SKILL_TOOL_NAMES = ['skill_list', 'skill_read', 'skill_search'];
@@ -144,29 +145,58 @@ export function registerSkillOrchestrationTools() {
     registerOrchestrationTool({
         name: 'skill_search',
         displayName: 'Search within skill',
-        description: 'Search for a substring inside a single visible skill\'s files. Returns matching snippets with refs.',
+        description: 'Regex search inside a single visible skill\'s files. Returns grep -n style output: one matched line per result as "{skill_name}/{path}:{lineno}: {line_content}". All files are scanned if `path` is omitted.',
         parameters: {
             type: 'object',
             properties: {
                 name: { type: 'string', description: 'Skill name' },
-                query: { type: 'string', description: 'Search substring (case-insensitive)' },
-                path: { type: 'string', description: 'Optional file path (default SKILL.md)' },
-                limit: { type: 'integer', description: 'Max hits' },
-                contextLines: { type: 'integer', description: 'Context lines around each hit' },
+                pattern: {
+                    type: 'string',
+                    description: 'JavaScript RegExp source. Match literal text by escaping regex metacharacters (e.g. \\. \\[ \\( \\\\). Prefer non-greedy quantifiers (.*? \\w+?) by default.',
+                },
+                flags: {
+                    type: 'string',
+                    description: "RegExp flags. 'gm' by default. 'g' is auto-injected if you omit it.",
+                    default: 'gm',
+                },
+                path: { type: 'string', description: 'Optional file path within the skill. All files are scanned if omitted.' },
             },
-            required: ['name', 'query'],
+            required: ['name', 'pattern'],
         },
         mode: 'read',
         exec: async (args, ctx) => {
+            const pattern = String(args?.pattern ?? '');
+            if (!pattern) {
+                throw new Error('skill_search: pattern must be non-empty. To match literal text, escape regex metacharacters.');
+            }
+            const flags = typeof args?.flags === 'string' && args.flags.length > 0 ? args.flags : 'gm';
             const target = await resolveSkillFromCtx(args.name, ctx);
-            return await skillsApi.search({
-                scope: target.scope,
-                name: args.name,
-                query: args.query,
-                path: args.path,
-                limit: args.limit,
-                contextLines: args.contextLines,
-            });
+
+            // Determine which files to scan. Explicit `path` short-circuits
+            // the listing; otherwise we walk every file the skill exposes
+            // (SKILL.md first per skillsApi.listFiles' sort contract).
+            let paths;
+            if (args?.path) {
+                paths = [String(args.path)];
+            } else {
+                const listed = await skillsApi.listFiles({ scope: target.scope, name: args.name });
+                const files = Array.isArray(listed?.files) ? listed.files : [];
+                paths = files
+                    .filter((f) => f && !f.isBinary && typeof f.path === 'string')
+                    .map((f) => f.path);
+            }
+
+            const units = [];
+            for (const p of paths) {
+                const file = await skillsApi.readFile({
+                    scope: target.scope,
+                    name: args.name,
+                    path: p,
+                });
+                const content = typeof file === 'string' ? file : String(file?.content ?? '');
+                units.push({ prefix: `${args.name}/${p}`, content });
+            }
+            return gatherGrepMatches(units, pattern, flags);
         },
     });
 }
