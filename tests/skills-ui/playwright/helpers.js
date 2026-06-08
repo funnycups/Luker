@@ -167,3 +167,219 @@ export async function ensureSkillsApiAvailable(page) {
     });
     test.skip(!hasApi, 'context.skills API not exposed — skill UI features disabled in this build');
 }
+
+/**
+ * Activate a real connection profile if one is configured. Returns the
+ * profile name on success or '' when none usable.
+ *
+ * The picker honors `LUKER_PLAYWRIGHT_PROFILE` (case-insensitive name
+ * match) before falling back to a /claude|openai|gpt|gemini|anthropic/i
+ * heuristic and finally the first profile in the list. Activation goes
+ * through the documented `/profile <name>` slash command path — the
+ * same path the Connection Manager dropdown wires through — and the
+ * function returns the activated name only when `ctx.onlineStatus`
+ * settles off `no_connection` within the 1s grace.
+ *
+ * Mirrors the inline helper used by critic-regex-search.spec.js (and
+ * the now-deleted _local-orch-presets.spec.js); promoted here so live
+ * specs can share it instead of each copying the 30-line block.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @returns {Promise<string>} profile name on success, '' on failure
+ */
+export async function activateConnectionProfile(page) {
+    // Short-circuit: if there are no connection-manager profiles in
+    // settings at all, the dropdown waitForFunction below burns 30s for
+    // nothing. Probe the settings shape first (no DOM access).
+    const hasAnyProfile = await page.evaluate(() => {
+        const ctx = window.SillyTavern?.getContext?.();
+        const profiles = ctx?.extensionSettings?.connectionManager?.profiles;
+        return Array.isArray(profiles) && profiles.length > 0;
+    }).catch(() => false);
+    if (!hasAnyProfile) return '';
+
+    // The connection-manager extension initializes asynchronously after
+    // awaitMainUI returns. Without this wait, /profile activation would
+    // operate on an empty dropdown and never trigger the load.
+    try {
+        await page.waitForFunction(
+            () => Boolean(document.getElementById('connection_profiles')?.options?.length),
+            { timeout: 30000 },
+        );
+    } catch {
+        // Extension didn't initialize — fall through; the next probe
+        // returns '' which the caller treats as "skip".
+    }
+    return await page.evaluate(async () => {
+        const ctx = window.SillyTavern?.getContext?.();
+        if (!ctx) return '';
+        const profiles = ctx.extensionSettings?.connectionManager?.profiles;
+        if (!Array.isArray(profiles) || !profiles.length) return '';
+        const pinned = (
+            (typeof process !== 'undefined' && process.env?.LUKER_PLAYWRIGHT_PROFILE)
+            || ''
+        ).toLowerCase();
+        const pick = profiles.find(p => pinned && String(p.name || '').toLowerCase() === pinned)
+            || profiles.find(p => /claude|openai|gpt|gemini|anthropic/i.test(String(p.name || '')))
+            || profiles[0];
+        if (!pick?.name) return '';
+        try {
+            await ctx.SlashCommandParser.commands.profile?.callback?.({}, pick.name);
+        } catch {
+            await ctx.executeSlashCommandsWithOptions?.(`/profile ${pick.name}`).catch(() => null);
+        }
+        await new Promise(r => setTimeout(r, 1000));
+        const ok = String(ctx.onlineStatus || '').toLowerCase();
+        return (ok && ok !== 'no_connection') ? pick.name : '';
+    });
+}
+
+/**
+ * Ensure a character card is loaded. If one is already selected we
+ * return its avatar; otherwise we activate the first available
+ * character via the `/char <name>` slash command (the DOM-click path
+ * is unreliable in headless Chromium since the tiles wire jQuery
+ * handlers that don't always fire from a synthetic `.click()`).
+ *
+ * Returns the avatar id on success, '' if no character could be loaded.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @returns {Promise<string>} avatar id, or '' when none
+ */
+export async function ensureCharacterLoaded(page) {
+    return await page.evaluate(async () => {
+        const ctx = window.SillyTavern?.getContext?.();
+        if (!ctx) return '';
+        const cur = ctx.characters?.[ctx.characterId];
+        if (cur?.avatar) return String(cur.avatar);
+        const list = Array.isArray(ctx.characters) ? ctx.characters : [];
+        if (!list.length) return '';
+        const first = list.find(c => c?.name && c?.avatar) || list.find(c => c?.avatar) || list[0];
+        if (!first?.name) return '';
+        try {
+            await ctx.executeSlashCommandsWithOptions(`/char ${first.name}`);
+            await new Promise(r => setTimeout(r, 500));
+        } catch {
+            const tile = document.querySelector(`#rm_print_characters_block [chid][bogus_folder='false']`)
+                || document.querySelector(`#rm_print_characters_block [chid]`);
+            if (tile && typeof tile.click === 'function') {
+                tile.click();
+                await new Promise(r => setTimeout(r, 250));
+            }
+        }
+        const reload = ctx.characters?.[ctx.characterId];
+        return String(reload?.avatar || first.avatar || '');
+    });
+}
+
+/**
+ * Ensure the orchestrator extension's director profile is initialized.
+ * Waits for `extension_settings.orchestrator` to exist (the extension's
+ * bootstrap creates it on init), then forces the lazy initialization
+ * of `directorProfile` by reading the orchestrator status from the
+ * context (any path that calls `getDirectorProfileFromSettings`
+ * populates the default profile).
+ *
+ * The active extension namespace is `extension_settings.orchestrator`
+ * (MODULE_NAME = 'orchestrator' in main.js). The unrelated
+ * `extension_settings.luker_orchestrator` is the iter-studio session
+ * store bucket; specs should not write director state there.
+ *
+ * @param {import('@playwright/test').Page} page
+ */
+export async function ensureDirectorProfileInitialized(page) {
+    // Step 1: wait for the orchestrator settings bucket to exist.
+    await page.waitForFunction(() => {
+        const ctx = window.SillyTavern?.getContext?.();
+        const settings = ctx?.extensionSettings?.orchestrator;
+        return Boolean(settings && typeof settings === 'object');
+    }, null, { timeout: 30000 });
+    // Step 2: force the lazy default to materialize. The director
+    // profile is created on first access via createDefaultDirectorProfile;
+    // setting it inline (idempotently — only when absent) is faster
+    // and less brittle than driving a UI path that triggers the lazy.
+    await page.evaluate(async () => {
+        const ctx = window.SillyTavern?.getContext?.();
+        const settings = ctx.extensionSettings.orchestrator;
+        if (settings.directorProfile && typeof settings.directorProfile === 'object') return;
+        try {
+            const mod = await import('/scripts/extensions/orchestrator/director-defaults.js');
+            settings.directorProfile = mod.createDefaultDirectorProfile();
+            if (typeof ctx?.saveSettingsDebounced === 'function') {
+                ctx.saveSettingsDebounced();
+            }
+        } catch (e) {
+            // If the defaults module can't be loaded the spec has a
+            // bigger problem; surface it as a thrown error.
+            throw new Error(`ensureDirectorProfileInitialized: failed to load director-defaults (${e.message})`);
+        }
+    });
+}
+
+/**
+ * Build a synthetic inline-files-v1 embed payload for a single SKILL.md.
+ * Shape mirrors `tests/skills-ui/playwright/fixtures/embed-payload.json`
+ * but parameterized by name / description / body so each spec can plant
+ * its own marker phrases without disturbing the shared fixture file.
+ *
+ * @param {object} args
+ * @param {string} args.name           — skill name (becomes `name:` in frontmatter)
+ * @param {string} args.description    — skill description (becomes `description:` in frontmatter)
+ * @param {string} [args.bodyTail='']  — markdown body appended after frontmatter
+ * @returns {object} embed payload ready for ctx.skills.executeExtractEmbed
+ */
+export function buildSyntheticEmbed({ name, description, bodyTail = '' }) {
+    if (!name) throw new Error('buildSyntheticEmbed: name is required');
+    if (!description) throw new Error('buildSyntheticEmbed: description is required');
+    // YAML quoting: any colon/dash/hash in the value confuses the
+    // bare-scalar parser; wrap the string and escape internal double
+    // quotes. The name is a kebab/underscore identifier so it's safe
+    // bare; the description is free-form prose.
+    const yamlString = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+    const content = [
+        '---',
+        `name: ${name}`,
+        `description: ${yamlString(description)}`,
+        '---',
+        '',
+        String(bodyTail || ''),
+    ].join('\n');
+    return {
+        version: 1,
+        items: [
+            {
+                bundleFormat: 'inline-files-v1',
+                name,
+                files: [
+                    { path: 'SKILL.md', encoding: 'utf8', content },
+                ],
+            },
+        ],
+    };
+}
+
+/**
+ * Delete a skill by name from a given scope, swallowing failures
+ * (e.g. when the skill never existed). Used as both pre-test
+ * cleanup (so a leftover fixture from a crashed run can't poison
+ * the install path) and post-test teardown.
+ *
+ * Scope shape mirrors the public skills API: `{ kind: 'global' }` /
+ * `{ kind: 'character', avatar }` / `{ kind: 'preset', name }`.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {object} scope
+ * @param {string} name
+ */
+export async function cleanupSkill(page, scope, name) {
+    await page.evaluate(async ({ scope, name }) => {
+        try {
+            const ctx = window.SillyTavern?.getContext?.();
+            const api = ctx?.skills;
+            if (!api || typeof api.delete !== 'function') return;
+            await api.delete(scope, name);
+        } catch {
+            // best-effort cleanup
+        }
+    }, { scope, name }).catch(() => null);
+}

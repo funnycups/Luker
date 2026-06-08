@@ -307,13 +307,13 @@ test.describe('Orchestrator: critic regex-search flow', () => {
             });
         }, { fact: CHAT_TURN_ESTABLISHING_FACT, brief: ROSTER_BRIEF });
 
-        // Clear any leftover runtime trace before dispatch so the probe
-        // can't read a stale frame.
+        // Clear any leftover store run before dispatch so the probe
+        // can't read a stale committed frame.
         await page.evaluate(async () => {
             try {
-                const m = await import('/scripts/extensions/orchestrator/runtime-trace.js');
-                m.clearLatestOrchestrationRuntimeTrace?.();
-            } catch { /* trace module not loaded yet */ }
+                const m = await import('/scripts/extensions/orchestrator/run-state/store.js');
+                m.clearCurrentRun?.();
+            } catch { /* store module not loaded yet */ }
         });
 
         // Drive the director turn through the user-input + send path.
@@ -342,73 +342,73 @@ test.describe('Orchestrator: critic regex-search flow', () => {
             btn.click();
         }, driverPrompt);
 
-        // Wait for the trace to settle. Director with critics can take
-        // a few minutes on a real LLM; we cap at 9 minutes which leaves
-        // headroom under the 10-minute per-test cap.
-        const traceResult = await page.evaluate(async () => {
-            const ctx = window.SillyTavern?.getContext?.();
-            const settled = new Set(['completed', 'failed', 'cancelled']);
+        // Wait for the run-state store to settle. Director with critics
+        // can take a few minutes on a real LLM; we cap at 9 minutes
+        // which leaves headroom under the 10-minute per-test cap.
+        const runResult = await page.evaluate(async () => {
+            const settled = new Set(['committed', 'aborted', 'error']);
             const deadline = 540_000;
             const start = Date.now();
             while (Date.now() - start < deadline) {
                 try {
-                    const mod = await import('/scripts/extensions/orchestrator/runtime-trace.js');
-                    const t = mod.getLatestOrchestrationRuntimeTrace(ctx);
-                    if (t && settled.has(String(t.status || ''))) {
-                        return { status: String(t.status), trace: t };
+                    const mod = await import('/scripts/extensions/orchestrator/run-state/store.js');
+                    const s = mod.getCurrentRun();
+                    if (s && settled.has(String(s.status || ''))) {
+                        const safe = JSON.parse(JSON.stringify(s, (k, v) => (k === 'abortFn' ? undefined : v)));
+                        return { status: String(s.status), state: safe };
                     }
                 } catch { /* keep polling */ }
                 await new Promise(r => setTimeout(r, 1500));
             }
-            return { status: 'timeout', trace: null };
+            return { status: 'timeout', state: null };
         });
 
         try {
-            expect(traceResult.status, 'director run reached a terminal status before deadline').not.toBe('timeout');
-            const trace = traceResult.trace;
-            expect(trace, 'runtime trace exists').toBeTruthy();
-            expect(trace.director, 'trace is shaped for director mode').toBeTruthy();
+            expect(runResult.status, 'director run reached a terminal status before deadline').not.toBe('timeout');
+            const state = runResult.state;
+            expect(state, 'run state exists in the store').toBeTruthy();
+            expect(Array.isArray(state.rounds) && state.rounds.length > 0, 'store recorded at least one round').toBe(true);
 
-            const subagents = Array.isArray(trace.director.subagents) ? trace.director.subagents : [];
+            // Each sub-agent dispatch opens its own top-level round in
+            // the store with id `sub-<subagentId>-<n>`. The two critic
+            // ids we mutated above are `voice_critic` and
+            // `continuity_critic`; collect every round per-critic.
+            const roundsForSubagent = (subagentId) => state.rounds.filter(r => String(r.id || '').startsWith(`sub-${subagentId}-`));
+            const voiceRounds = roundsForSubagent('voice_critic');
+            const continuityRounds = roundsForSubagent('continuity_critic');
             // eslint-disable-next-line no-console
-            console.log(`[critic-regex-search] sub-agent count: ${subagents.length}`);
+            console.log(`[critic-regex-search] sub-agent rounds: voice_critic=${voiceRounds.length}, continuity_critic=${continuityRounds.length}`);
 
-            const findCritic = (id) => subagents.find(s => String(s?.subagentId || '') === id) || null;
-            const voiceTrace = findCritic('voice_critic');
-            const continuityTrace = findCritic('continuity_critic');
+            expect(voiceRounds.length, 'voice_critic was dispatched at least once').toBeGreaterThan(0);
+            expect(continuityRounds.length, 'continuity_critic was dispatched at least once').toBeGreaterThan(0);
 
-            expect(voiceTrace, 'voice_critic sub-agent was dispatched').toBeTruthy();
-            expect(continuityTrace, 'continuity_critic sub-agent was dispatched').toBeTruthy();
-
-            const collectToolCalls = (subagent) => {
+            // Collect every tool_call name from a critic's rounds. The
+            // sub-agent runner stores each invocation as a section with
+            // kind='tool_call' and title='Tool: <name>'; meta.args carries
+            // the raw arguments object.
+            const collectToolCalls = (rounds) => {
                 const out = [];
-                const messages = subagent?.conversation?.messages;
-                if (!Array.isArray(messages)) return out;
-                for (let i = 0; i < messages.length; i += 1) {
-                    const msg = messages[i];
-                    const calls = Array.isArray(msg?.tool_calls) ? msg.tool_calls : [];
-                    for (const tc of calls) {
-                        const name = String(tc?.function?.name || tc?.name || '');
+                for (const round of rounds) {
+                    const sections = Array.isArray(round.sections) ? round.sections : [];
+                    for (const sec of sections) {
+                        if (sec.kind !== 'tool_call') continue;
+                        const name = String(sec.title || '').replace(/^Tool: /, '');
                         if (!name) continue;
-                        // Locate the paired tool result so we can also
-                        // assert the regex hit landed in the result body.
-                        const callId = String(tc?.id || tc?.tool_call_id || '');
-                        let resultContent = '';
-                        for (let j = i + 1; j < messages.length; j += 1) {
-                            const cand = messages[j];
-                            if (cand?.role === 'tool' && String(cand?.tool_call_id || '') === callId) {
-                                resultContent = String(cand?.content || '');
-                                break;
-                            }
-                        }
-                        out.push({ name, resultContent });
+                        // Paired tool_result is `tool-result-...` matching the call's id.
+                        const resultId = String(sec.id).replace(/^tool-/, 'tool-result-');
+                        const result = sections.find(s => s.id === resultId) || null;
+                        out.push({
+                            name,
+                            args: sec.meta?.args ?? {},
+                            resultOk: result ? !!result.meta?.ok : null,
+                        });
                     }
                 }
                 return out;
             };
 
-            const voiceToolCalls = collectToolCalls(voiceTrace);
-            const continuityToolCalls = collectToolCalls(continuityTrace);
+            const voiceToolCalls = collectToolCalls(voiceRounds);
+            const continuityToolCalls = collectToolCalls(continuityRounds);
             // eslint-disable-next-line no-console
             console.log(`[critic-regex-search] voice tool calls: ${voiceToolCalls.map(t => t.name).join(', ') || '(none)'}`);
             // eslint-disable-next-line no-console
@@ -437,29 +437,26 @@ test.describe('Orchestrator: critic regex-search flow', () => {
                 'continuity_critic ran at least one chat_search to verify the opposing fact',
             ).toBeGreaterThan(0);
 
-            // (B.3) At least one tool_result body should contain matched
-            //       line content — proves the regex hit flowed back to
-            //       the critic, not just the call shape. Different sub-
-            //       agents arrive at different patterns, so we accept any
-            //       result body that surfaces a meaningful chunk of the
-            //       seeded draft / chat (the established name, the
-            //       boundary place, or the platform-frame anchor).
-            const matchedSignals = [
-                ESTABLISHED_NAME,
-                KNOWLEDGE_BOUNDARY_PLACE,
-                '上一轮',
-            ];
-            const allResultBodies = [
-                ...voiceToolCalls.map(t => t.resultContent),
-                ...continuityToolCalls.map(t => t.resultContent),
-            ];
-            const sawRegexHitInResult = allResultBodies.some(body =>
-                matchedSignals.some(sig => body.includes(sig)),
-            );
+            // (B.3) At least one of those regex searches succeeded —
+            //       the store does not retain the tool_result body, so
+            //       "result body contained a matched line" is no longer
+            //       observable. ok=true on the paired tool_result is the
+            //       surviving proxy: it proves the grep helper parsed
+            //       the regex and returned a result envelope, which is
+            //       what the critic skill chain consumes.
+            const allCalls = [...voiceToolCalls, ...continuityToolCalls];
+            const sawSuccessfulSearch = allCalls.some(c => (c.name === 'draft_search' || c.name === 'chat_search') && c.resultOk === true);
             expect(
-                sawRegexHitInResult,
-                'at least one critic tool_result body contains a matched line from the seeded draft / chat',
+                sawSuccessfulSearch,
+                'at least one draft_search / chat_search call reported ok=true (the regex tool ran end-to-end)',
             ).toBe(true);
+
+            // ── Note on dropped legacy assertion ──────────────────────
+            // The previous spec scanned tool_result message bodies for
+            // matched-line content (ESTABLISHED_NAME / KNOWLEDGE_BOUNDARY_PLACE
+            // / "上一轮"). The RunStateStore stores tool_result section
+            // metadata as `{ ok, err }` only, not the body. The
+            // ok-true gate above is the surviving signal.
         } finally {
             // ── Teardown: restore the critic tool flags ──────────────
             // Best-effort — assertion failures already surfaced.

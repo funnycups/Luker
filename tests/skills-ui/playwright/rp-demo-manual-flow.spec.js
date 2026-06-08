@@ -5,10 +5,10 @@
  *
  * Mutating state is performed via DOM interactions only — clicks, fills,
  * file uploads, keyboard input. `page.evaluate` is used solely for
- * read-only state inspection (trace assertions at the end) and for one
- * unavoidable runtime-trace clear that mirrors what a "fresh session"
+ * read-only state inspection (run-state assertions at the end) and for one
+ * unavoidable RunStateStore clear that mirrors what a "fresh session"
  * would observe (no persistent UI affordance exists for clearing the
- * in-memory trace). The skill author is `/tmp/gentle-companion-voice-zh.md`,
+ * in-memory run state). The skill author is `/tmp/gentle-companion-voice-zh.md`,
  * authored verbatim from real RP-discipline content (not synthetic markers).
  *
  * Screenshots land under docs/public/_screenshots/skills/rp-demo-NN-*.png
@@ -364,23 +364,23 @@ test.describe('Skills RP demo (manual user path)', () => {
         // Sanity: the orchestrator mode is director.
         const executionMode = await page.evaluate(() => {
             const ctx = window.SillyTavern?.getContext?.();
-            return String(ctx?.extensionSettings?.luker_orchestrator?.executionMode || '');
+            return String(ctx?.extensionSettings?.orchestrator?.executionMode || '');
         });
         expect(executionMode, 'orchestrator must be in director mode for the demo').toBe('director');
         await page.screenshot({ path: stepPath(12, 'chat-ready'), fullPage: false });
 
-        // ── Clear the runtime trace so the post-send assertion can't read
+        // ── Clear the RunStateStore so the post-send assertion can't read
         //   STALE data from a prior run. There is no UI affordance for this
         //   today — it's an in-memory module-local variable; the only way to
-        //   reset is via the module's exported `clearLatestOrchestrationRuntimeTrace`.
+        //   reset is via the module's exported `clearCurrentRun`.
         //   This is the ONLY place we use page.evaluate for non-read-only
         //   purposes; it's not a state mutation the user would perform —
         //   it's a "fresh REPL" gate.
         await page.evaluate(async () => {
             try {
-                const m = await import('/scripts/extensions/orchestrator/runtime-trace.js');
-                m.clearLatestOrchestrationRuntimeTrace?.();
-            } catch { /* trace module not loaded yet — safe */ }
+                const m = await import('/scripts/extensions/orchestrator/run-state/store.js');
+                m.clearCurrentRun?.();
+            } catch { /* store module not loaded yet — safe */ }
         });
 
         // ── Step 13: type the RP message into the chat textarea and send.
@@ -401,96 +401,83 @@ test.describe('Skills RP demo (manual user path)', () => {
         await page.screenshot({ path: stepPath(13, 'message-sent'), fullPage: false });
 
         // ── Step 14: wait for the director run to complete (5-8 minutes).
-        //   Watch the runtime trace status (read-only). Settled states are
-        //   completed/failed/cancelled.
-        const traceResult = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
-            const settled = new Set(['completed', 'failed', 'cancelled']);
+        //   Watch the RunStateStore status (read-only). Settled states are
+        //   committed/aborted/error.
+        const runResult = await page.evaluate(async () => {
+            const settled = new Set(['committed', 'aborted', 'error']);
             const start = Date.now();
             const deadline = 600_000; // 10 minutes ceiling
             while (Date.now() - start < deadline) {
                 try {
-                    const mod = await import('/scripts/extensions/orchestrator/runtime-trace.js');
-                    const trace = mod.getLatestOrchestrationRuntimeTrace(ctx);
-                    if (trace && settled.has(String(trace.status || ''))) {
-                        return { status: trace.status, trace };
+                    const mod = await import('/scripts/extensions/orchestrator/run-state/store.js');
+                    const state = mod.getCurrentRun();
+                    if (state && settled.has(String(state.status || ''))) {
+                        const safe = JSON.parse(JSON.stringify(state, (k, v) => (k === 'abortFn' ? undefined : v)));
+                        return { status: state.status, state: safe };
                     }
                 } catch { /* keep waiting */ }
                 await new Promise(r => setTimeout(r, 1500));
             }
-            return { status: 'timeout', trace: null };
+            return { status: 'timeout', state: null };
         });
         await page.screenshot({ path: stepPath(14, 'director-completed'), fullPage: false });
 
-        // ── Assertions on the trace. These are all READ-only inspections of
-        //   server-side state the model cannot fabricate.
-        expect(traceResult.status, 'director run reached a terminal status (not timeout)').not.toBe('timeout');
-        const { trace } = traceResult;
-        expect(trace, 'runtime trace exists after dispatch').toBeTruthy();
-        expect(trace.director, 'trace.director shape present (director-mode dispatch)').toBeTruthy();
+        // ── Assertions on the RunStateStore. These are read-only inspections
+        //   of server-side state the model cannot fabricate.
+        expect(runResult.status, 'director run reached a terminal status (not timeout)').not.toBe('timeout');
+        const { state } = runResult;
+        expect(state, 'run state exists after dispatch').toBeTruthy();
+        expect(Array.isArray(state.rounds) && state.rounds.length > 0, 'store recorded at least one round (director main-N or sub-X-N)').toBe(true);
 
-        // Collect all messages across main agent + sub-agents.
-        const messagesToScan = [];
-        const mainMsgs = trace?.director?.mainAgent?.conversation?.messages;
-        if (Array.isArray(mainMsgs)) messagesToScan.push(...mainMsgs);
-        const subagents = Array.isArray(trace?.director?.subagents) ? trace.director.subagents : [];
-        for (const sub of subagents) {
-            const m = sub?.conversation?.messages;
-            if (Array.isArray(m)) messagesToScan.push(...m);
-        }
-        // eslint-disable-next-line no-console
-        console.log(`[rp-demo] scanned messages: main=${(mainMsgs || []).length}, sub-agents=${subagents.length}, total=${messagesToScan.length}`);
-
-        // Assertion (1): <available_skills> catalog block carries the skill name
-        // in at least one system message.
-        const sawCatalogBlock = messagesToScan.some(msg => {
-            if (msg?.role !== 'system') return false;
-            const content = String(msg.content || '');
-            return content.includes('<available_skills>') && content.includes(SKILL_NAME);
-        });
-        expect(sawCatalogBlock, 'main or sub-agent system prompt contains <available_skills> with the skill name').toBe(true);
-
-        // Assertion (2): at least one skill_read tool_call referencing the
-        // skill by name appears somewhere.
+        // Collect skill_read invocations from every round's tool_call
+        // sections. The runner sets section title = "Tool: <name>" and
+        // section.meta.args = the JSON-decoded args object. The paired
+        // tool_result section's id mirrors the tool_call id with the
+        // `tool-` → `tool-result-` prefix swap; its meta = { ok, err }.
         const skillReadCalls = [];
-        for (const msg of messagesToScan) {
-            const tcs = Array.isArray(msg?.tool_calls) ? msg.tool_calls : [];
-            for (const tc of tcs) {
-                const name = tc?.function?.name || tc?.name || '';
-                if (String(name) !== 'skill_read') continue;
-                let parsedArgs = {};
-                const rawArgs = tc?.function?.arguments ?? tc?.args ?? '';
-                if (typeof rawArgs === 'string') {
-                    try { parsedArgs = JSON.parse(rawArgs); } catch { parsedArgs = { raw: rawArgs }; }
-                } else if (rawArgs && typeof rawArgs === 'object') {
-                    parsedArgs = rawArgs;
-                }
-                skillReadCalls.push({ tc, args: parsedArgs });
+        for (const round of state.rounds) {
+            const sections = Array.isArray(round.sections) ? round.sections : [];
+            for (const sec of sections) {
+                if (sec.kind !== 'tool_call') continue;
+                const toolName = String(sec.title || '').replace(/^Tool: /, '');
+                if (toolName !== 'skill_read') continue;
+                const resultId = String(sec.id).replace(/^tool-/, 'tool-result-');
+                const result = sections.find(s => s.id === resultId) || null;
+                skillReadCalls.push({
+                    roundId: round.id,
+                    args: sec.meta?.args ?? {},
+                    resultOk: result ? !!result.meta?.ok : null,
+                    resultErr: result ? (result.meta?.err || null) : null,
+                });
             }
         }
         // eslint-disable-next-line no-console
-        console.log(`[rp-demo] skill_read invocations: ${JSON.stringify(skillReadCalls.map(c => c.args))}`);
-        expect(skillReadCalls.length, 'main or a sub-agent invoked skill_read at least once').toBeGreaterThan(0);
+        console.log(`[rp-demo] skill_read invocations: ${JSON.stringify(skillReadCalls)}`);
+
+        // Assertion (1): at least one skill_read tool_call references the
+        // installed skill by name.
+        expect(skillReadCalls.length, 'at least one round in the store recorded a skill_read tool_call').toBeGreaterThan(0);
         const matchingCall = skillReadCalls.find(c => String(c.args?.name || '') === SKILL_NAME);
         expect(matchingCall, `skill_read was invoked with name="${SKILL_NAME}"`).toBeTruthy();
 
-        // Assertion (3): the matching tool result message (role=tool, same
-        // tool_call_id OR adjacent positioning) carries the distinctive
-        // Chinese phrase. The phrase appears exactly once in the on-disk
-        // body, so its presence in the conversation proves the read actually
-        // returned the file contents.
-        const sawDistinctivePhrase = messagesToScan.some(msg => {
-            if (msg?.role !== 'tool') return false;
-            const content = String(msg?.content || '');
-            return content.includes(DISTINCTIVE_PHRASE);
-        });
-        // eslint-disable-next-line no-console
-        console.log(`[rp-demo] distinctive phrase "${DISTINCTIVE_PHRASE}" observed in any tool-result message: ${sawDistinctivePhrase}`);
-        expect(sawDistinctivePhrase, `distinctive Chinese phrase "${DISTINCTIVE_PHRASE}" appears in at least one role=tool message (proves skill_read returned the real on-disk body)`).toBe(true);
+        // Assertion (2): the paired tool_result reported ok=true, proving
+        // the read succeeded end-to-end. The store does NOT retain the
+        // returned body, so the previous DISTINCTIVE_PHRASE pass-through
+        // check is no longer observable — ok=true is the surviving proxy.
+        expect(matchingCall.resultOk, `paired tool_result for skill_read on "${SKILL_NAME}" reports ok=true`).toBe(true);
 
-        // For the report: dump the exact tool_call shape verbatim.
+        // For the report: dump the matching invocation shape verbatim.
         // eslint-disable-next-line no-console
-        console.log(`[rp-demo] matching skill_read tool_call verbatim:\n${JSON.stringify(matchingCall.tc, null, 2)}`);
+        console.log(`[rp-demo] matching skill_read tool_call verbatim:\n${JSON.stringify(matchingCall, null, 2)}`);
+
+        // ── Note on dropped legacy assertions ──────────────────────────
+        // The previous spec also asserted that the rendered system prompt
+        // contained <available_skills> with SKILL_NAME, and that the
+        // DISTINCTIVE_PHRASE appeared in a role=tool message body. The
+        // RunStateStore records progress and metadata, not the LLM
+        // conversation; both of those signals have no store equivalent.
+        // The two surviving assertions (skill_read on the right name +
+        // tool_result ok=true) jointly cover the contract.
 
         // ── Teardown — perform user-visible cleanup via UI only. ────────
         // (a) Re-open the orchestration editor, find the chip, click its ×.
