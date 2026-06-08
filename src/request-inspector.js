@@ -16,6 +16,22 @@ function getBuffer(handle) {
  return buffers.get(handle);
 }
 
+/**
+ * Return a copy of the inspector ring buffer for a given user handle. Used by
+ * the debug-export endpoint to bundle every captured request — full
+ * `fullMessages` / `responseText` / `wireRequest`, no truncation. Caller owns
+ * the returned array (it's a shallow clone) but the entries themselves still
+ * point at the live objects, so don't mutate them.
+ *
+ * @param {string} handle
+ * @returns {object[]}
+ */
+export function getBufferForHandle(handle) {
+ const h = String(handle || '');
+ if (!h || !buffers.has(h)) return [];
+ return buffers.get(h).slice();
+}
+
 function pushEntry(handle, entry) {
  const buf = getBuffer(handle);
  buf.push(entry);

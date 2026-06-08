@@ -116,6 +116,7 @@ import {
     getConfigValue,
 } from './util.js';
 import { installLogCapture } from './log-capture.js';
+import { getBufferForHandle as getInspectorBufferForHandle } from './request-inspector.js';
 import {
     UPLOADS_DIRECTORY,
     SERVER_PLUGINS_DIRECTORY,
@@ -479,15 +480,60 @@ app.post('/api/ping', (request, response) => {
     response.sendStatus(204);
 });
 
-// Debug export endpoints
-app.get('/api/debug/backend-logs', (_request, response) => {
-    response.json(backendLogBuffer);
-});
+// Debug export endpoint.
+// One-shot bundle export for troubleshooting: assembles every payload on the
+// server so the browser never has to stringify the full ring buffer. The client
+// posts its frontend-only fields (console logs, perf marks, UA/viewport, etc.)
+// and gets back a single attachment combining everything below, with secrets
+// redacted in one place.
+const DEBUG_EXPORT_REDACT_PATTERNS = [
+    { pattern: /sk-[a-zA-Z0-9]{20,}/g, replacement: 'sk-***REDACTED***' },
+    { pattern: /Bearer\s+[a-zA-Z0-9\-_.]{20,}/g, replacement: 'Bearer ***REDACTED***' },
+    { pattern: /(api[_-]?key|apikey|token|secret|password|passwd)\s*[=:]\s*["']?[^\s"',&]+/gi, replacement: '$1=***REDACTED***' },
+    { pattern: /eyJ[a-zA-Z0-9\-_]{20,}\.[a-zA-Z0-9\-_]{20,}\.[a-zA-Z0-9\-_]{20,}/g, replacement: '***JWT-REDACTED***' },
+    { pattern: /\b[a-f0-9]{40,}\b/gi, replacement: '***HEX-TOKEN-REDACTED***' },
+];
 
-app.get('/api/debug/export', async (request, response) => {
+function redactDebugExportString(input) {
+    let out = String(input);
+    for (const { pattern, replacement } of DEBUG_EXPORT_REDACT_PATTERNS) {
+        out = out.replace(pattern, replacement);
+    }
+    return out;
+}
+
+function redactDebugExportValue(value) {
+    if (typeof value === 'string') return redactDebugExportString(value);
+    if (Array.isArray(value)) return value.map(redactDebugExportValue);
+    if (value && typeof value === 'object') {
+        const cleaned = {};
+        for (const [k, v] of Object.entries(value)) cleaned[k] = redactDebugExportValue(v);
+        return cleaned;
+    }
+    return value;
+}
+
+app.post('/api/debug/export', (request, response) => {
+    const handle = String(request?.user?.profile?.handle || '');
+    const client = (request.body && typeof request.body === 'object') ? request.body : {};
+
     const bundle = {
         exportedAt: new Date().toISOString(),
+        client: {
+            userAgent: typeof client.userAgent === 'string' ? client.userAgent : '',
+            viewport: client.viewport && typeof client.viewport === 'object' ? client.viewport : null,
+            devicePixelRatio: client.devicePixelRatio ?? null,
+            platform: typeof client.platform === 'string' ? client.platform : '',
+            language: typeof client.language === 'string' ? client.language : '',
+            online: typeof client.online === 'boolean' ? client.online : null,
+            connectionType: typeof client.connectionType === 'string' ? client.connectionType : '',
+            memoryGB: client.memoryGB ?? null,
+        },
+        frontendLogs: Array.isArray(client.frontendLogs) ? client.frontendLogs : [],
+        performanceMarks: Array.isArray(client.performanceMarks) ? client.performanceMarks : [],
+        performanceMeasures: Array.isArray(client.performanceMeasures) ? client.performanceMeasures : [],
         backendLogs: backendLogBuffer,
+        requestInspector: handle ? getInspectorBufferForHandle(handle) : [],
         runtime: {
             node: process.version,
             platform: process.platform,
@@ -497,7 +543,12 @@ app.get('/api/debug/export', async (request, response) => {
             cwd: serverDirectory,
         },
     };
-    response.json(bundle);
+
+    const redacted = redactDebugExportValue(bundle);
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    response.setHeader('Content-Type', 'application/json; charset=utf-8');
+    response.setHeader('Content-Disposition', `attachment; filename="luker-debug-${ts}.json"`);
+    response.end(JSON.stringify(redacted, null, 2));
 });
 
 if (cliArgs.enableCorsProxy) {

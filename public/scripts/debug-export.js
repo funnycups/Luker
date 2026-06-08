@@ -1,58 +1,17 @@
 /**
  * One-click debug bundle export for troubleshooting.
- * Collects frontend logs, backend logs, performance marks, and browser info,
- * redacts sensitive data, and downloads as JSON.
+ * Collects frontend-only signals (console buffer, perf marks, UA/viewport),
+ * POSTs them to /api/debug/export so the server can assemble the full bundle
+ * (backend logs, complete request-inspector ring buffer, runtime info) without
+ * the browser having to stringify the whole thing. The response is streamed
+ * straight to disk as the download.
  */
 import { getFrontendLogsSnapshot } from './frontend-log-manager.js';
+import { getRequestHeaders } from '../script.js';
 import { t } from './i18n.js';
 
-const REDACT_PATTERNS = [
-    // API keys: sk-... , Bearer ... , key=...
-    { pattern: /sk-[a-zA-Z0-9]{20,}/g, replacement: 'sk-***REDACTED***' },
-    { pattern: /Bearer\s+[a-zA-Z0-9\-_\.]{20,}/g, replacement: 'Bearer ***REDACTED***' },
-    { pattern: /(api[_-]?key|apikey|token|secret|password|passwd)\s*[=:]\s*["']?[^\s"',&]+/gi, replacement: '$1=***REDACTED***' },
-    // JWT tokens
-    { pattern: /eyJ[a-zA-Z0-9\-_]{20,}\.[a-zA-Z0-9\-_]{20,}\.[a-zA-Z0-9\-_]{20,}/g, replacement: '***JWT-REDACTED***' },
-    // Generic hex tokens (long strings of hex)
-    { pattern: /\b[a-f0-9]{40,}\b/gi, replacement: '***HEX-TOKEN-REDACTED***' },
-];
-
-function redact(str) {
-    let result = String(str);
-    for (const { pattern, replacement } of REDACT_PATTERNS) {
-        result = result.replace(pattern, replacement);
-    }
-    return result;
-}
-
-function redactObject(obj) {
-    if (typeof obj === 'string') return redact(obj);
-    if (Array.isArray(obj)) return obj.map(redactObject);
-    if (obj && typeof obj === 'object') {
-        const cleaned = {};
-        for (const [key, value] of Object.entries(obj)) {
-            cleaned[key] = redactObject(value);
-        }
-        return cleaned;
-    }
-    return obj;
-}
-
-async function fetchBackendLogs() {
-    try {
-        const response = await fetch('/api/debug/backend-logs');
-        if (response.ok) return await response.json();
-    } catch (e) {
-        console.warn('[debug-export] Failed to fetch backend logs:', e.message);
-    }
-    return [];
-}
-
-export async function downloadDebugBundle() {
-    console.log('[debug-export] Collecting debug bundle...');
-
-    const bundle = {
-        exportedAt: new Date().toISOString(),
+function collectClientPayload() {
+    return {
         userAgent: navigator.userAgent,
         viewport: { width: window.innerWidth, height: window.innerHeight },
         devicePixelRatio: window.devicePixelRatio,
@@ -71,12 +30,27 @@ export async function downloadDebugBundle() {
             startTime: m.startTime,
             duration: m.duration,
         })),
-        backendLogs: await fetchBackendLogs(),
     };
+}
 
-    const redacted = redactObject(bundle);
-    const json = JSON.stringify(redacted, null, 2);
-    const blob = new Blob([json], { type: 'application/json' });
+export async function downloadDebugBundle() {
+    console.log('[debug-export] Requesting debug bundle from server...');
+
+    const response = await fetch('/api/debug/export', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify(collectClientPayload()),
+    });
+
+    if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        const message = `Debug export failed: ${response.status} ${response.statusText} ${detail}`.trim();
+        console.error('[debug-export]', message);
+        toastr.error(message);
+        throw new Error(message);
+    }
+
+    const blob = await response.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
