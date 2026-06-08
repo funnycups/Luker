@@ -107,6 +107,7 @@ import hostWhitelistMiddleware from './middleware/hostWhitelist.js';
 import userCssMiddleware from './middleware/userCss.js';
 import {
     getVersion,
+    checkRemoteVersion,
     color,
     removeColorFormatting,
     getSeparator,
@@ -520,6 +521,11 @@ app.get('/version', async function (_, response) {
     response.send(data);
 });
 
+app.post('/api/system/update-check', async function (_, response) {
+    const data = await checkRemoteVersion();
+    response.send(data);
+});
+
 setupPrivateEndpoints(app);
 
 /**
@@ -536,10 +542,12 @@ async function preSetupTasks() {
         const date = new Date(version.commitDate);
         const localDate = date.toLocaleString('en-US', { timeZoneName: 'short' });
         console.log(`Running '${version.gitBranch}' (${version.gitRevision}) - ${localDate}`);
-        if (!version.isLatest && ['staging', 'release'].includes(version.gitBranch)) {
-            console.log('INFO: A newer tagged Luker version is available.');
-            console.log('      Pull latest tags/changes to update.');
-        }
+        checkRemoteVersion().then((remoteData) => {
+            if (!remoteData.isLatest && ['staging', 'release'].includes(version.gitBranch)) {
+                console.log('INFO: A newer tagged Luker version is available.');
+                console.log('      Pull latest tags/changes to update.');
+            }
+        });
     }
     console.log();
 

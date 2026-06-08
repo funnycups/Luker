@@ -153,6 +153,31 @@ export async function getVersion() {
             } catch {
                 // No local git metadata (e.g. Docker image without .git). Continue silently.
             }
+            // Remote check is now handled via checkRemoteVersion
+        }
+    } catch {
+        // suppress exception
+    }
+
+    const stCompatVersion = String(process.env.LUKER_ST_COMPAT_VERSION || '1.18.0').trim() || '1.18.0';
+    const agent = `Luker:${pkgVersion}:Cohee#1207`;
+    const compatAgent = `Luker:${stCompatVersion}:Cohee#1207`;
+    const isDockerRuntime = isDocker();
+    return { agent, compatAgent, stCompatVersion, pkgVersion, gitRevision, gitBranch, commitDate: commitDate?.trim() ?? null, isLatest, isDocker: isDockerRuntime };
+}
+
+/**
+ * Checks GitHub for the latest release tag and determines if an update is available.
+ * @returns {Promise<{isLatest: boolean}>} Update info
+ */
+export async function checkRemoteVersion() {
+    let isLatest = true;
+    try {
+        const require = createRequire(import.meta.url);
+        const pkgJson = require(path.join(serverDirectory, './package.json'));
+        const pkgVersion = pkgJson.version;
+        if (commandExistsSync('git')) {
+            const git = simpleGit({ baseDir: serverDirectory });
             let remoteTags = '';
             try {
                 remoteTags = await git.listRemote(['--tags', 'origin']);
@@ -174,12 +199,7 @@ export async function getVersion() {
     } catch {
         // suppress exception
     }
-
-    const stCompatVersion = String(process.env.LUKER_ST_COMPAT_VERSION || '1.18.0').trim() || '1.18.0';
-    const agent = `Luker:${pkgVersion}:Cohee#1207`;
-    const compatAgent = `Luker:${stCompatVersion}:Cohee#1207`;
-    const isDockerRuntime = isDocker();
-    return { agent, compatAgent, stCompatVersion, pkgVersion, gitRevision, gitBranch, commitDate: commitDate?.trim() ?? null, isLatest, isDocker: isDockerRuntime };
+    return { isLatest };
 }
 
 /**
