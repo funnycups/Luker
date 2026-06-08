@@ -148,6 +148,7 @@ export function createMessageEditorHandle(opts = {}) {
     return {
         getText() { return state.text; },
         getReasoning() { return state.reasoning; },
+        isSettled() { return state.committed || state.aborted || state.discarded; },
         setText(text) {
             if (typeof text !== 'string') throw new TakeoverError('invalid_argument', `setText requires string; got ${typeof text}`);
             assertOpen();
@@ -160,6 +161,14 @@ export function createMessageEditorHandle(opts = {}) {
             if (typeof text !== 'string') throw new TakeoverError('invalid_argument', `setReasoning requires string; got ${typeof text}`);
             assertOpen();
             state.reasoning = text;
+            state.pendingFlush = true;
+            scheduleFlush();
+        },
+        appendReasoning(delta) {
+            if (typeof delta !== 'string') throw new TakeoverError('invalid_argument', `appendReasoning requires string; got ${typeof delta}`);
+            if (delta.length === 0) return;
+            assertOpen();
+            state.reasoning += delta;
             state.pendingFlush = true;
             scheduleFlush();
         },

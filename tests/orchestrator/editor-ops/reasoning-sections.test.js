@@ -145,3 +145,84 @@ describe('markReasoningSectionStatus', () => {
         expect(() => markReasoningSectionStatus(handle, 'missing', '')).toThrow(EditorOpsError);
     });
 });
+
+describe('appendToReasoningSection performance', () => {
+    test('1000 short appends to a section after a 100KB seed completes in < 200ms', () => {
+        const seed = '### [seed]\n' + 'x'.repeat(100 * 1024) + '\n\n### [target] (running)\n';
+        const { handle } = setup(seed);
+        const start = performance.now();
+        for (let i = 0; i < 1000; i++) {
+            appendToReasoningSection(handle, 'target', 'abcd');
+        }
+        const elapsed = performance.now() - start;
+        // The slice+concat path on a 100KB+ string scales linearly with reasoning length,
+        // so 1000 iterations of slice (100KB), concat, setReasoning would take >> 200ms
+        // even on a fast machine. The cached path is amortized O(delta.length).
+        expect(elapsed).toBeLessThan(200);
+        // Sanity: text is correct.
+        const r = handle.getReasoning();
+        expect(r.endsWith('abcd'.repeat(1000))).toBe(true);
+        expect(r.startsWith('### [seed]\n')).toBe(true);
+    });
+
+    test('cache invalidates when markReasoningSectionStatus is called between appends', () => {
+        const { chat, handle } = setup();
+        ensureReasoningSection(handle, 'a');
+        appendToReasoningSection(handle, 'a', 'first');
+        markReasoningSectionStatus(handle, 'a', 'done');
+        appendToReasoningSection(handle, 'a', '-second');
+        // After status change to 'done', the next append must still land in section 'a'
+        // even though the cached endOffset is stale.
+        expect(chat[0].extra.reasoning).toBe('### [a] (done)\nfirst-second');
+    });
+
+    test('cache invalidates when setReasoning is called between appends', () => {
+        const { chat, handle } = setup();
+        ensureReasoningSection(handle, 'a');
+        appendToReasoningSection(handle, 'a', 'one');
+        handle.setReasoning('### [a]\nreset');
+        appendToReasoningSection(handle, 'a', '-two');
+        expect(chat[0].extra.reasoning).toBe('### [a]\nreset-two');
+    });
+
+    test('two interleaved sections still write to their own bodies', () => {
+        // Section 'a' is no longer at the tail once 'b' is created, so 'a' appends fall
+        // into the slow path. The cached fast path applies only to 'b' (the tail section).
+        // Both sections' bodies must stay contiguous regardless of which path runs.
+        const { chat, handle } = setup();
+        ensureReasoningSection(handle, 'a');
+        ensureReasoningSection(handle, 'b');
+        appendToReasoningSection(handle, 'a', 'A1');
+        appendToReasoningSection(handle, 'b', 'B1');
+        appendToReasoningSection(handle, 'a', 'A2');
+        appendToReasoningSection(handle, 'b', 'B2');
+        // Matches the existing slice/concat behavior: section 'a' body is appended
+        // immediately before the next section's header, with a single '\n' separator.
+        // (The blank line that ensureReasoningSection placed gets consumed by
+        // findSectionEnd's trailing-newline walkback when section 'a' has zero body.
+        // After the first append it's stable.)
+        expect(chat[0].extra.reasoning).toBe(
+            '### [a] (running)\nA1A2\n### [b] (running)\nB1B2',
+        );
+    });
+
+    test('after first slow-path bootstrap, subsequent appends to a tail section hit the fast path', () => {
+        const { handle } = setup();
+        // Spy on the two paths.
+        let setCount = 0, appendCount = 0;
+        const origSet = handle.setReasoning.bind(handle);
+        const origAppend = handle.appendReasoning.bind(handle);
+        handle.setReasoning = (...a) => { setCount++; return origSet(...a); };
+        handle.appendReasoning = (...a) => { appendCount++; return origAppend(...a); };
+
+        ensureReasoningSection(handle, 'sub');
+        for (let i = 0; i < 100; i++) {
+            appendToReasoningSection(handle, 'sub', `c${i}`);
+        }
+        // ensure → 1 setReasoning
+        // first append → 1 setReasoning (slow path bootstrap; cache miss)
+        // appends 2..100 → 99 appendReasoning (fast path)
+        expect(setCount).toBe(2);
+        expect(appendCount).toBe(99);
+    });
+});

@@ -348,3 +348,122 @@ describe('MessageEditorHandle — auto-abort on signal', () => {
         expect(outcome.finalText).toBe('x');
     });
 });
+
+describe('isSettled()', () => {
+    test('returns false on a fresh handle', () => {
+        const handle = createMessageEditorHandle({
+            generationType: 'normal',
+            flushIntervalMs: 0,
+        });
+        expect(handle.isSettled()).toBe(false);
+    });
+
+    test('returns true after commit()', async () => {
+        const handle = createMessageEditorHandle({
+            generationType: 'normal',
+            flushIntervalMs: 0,
+        });
+        await handle.commit();
+        expect(handle.isSettled()).toBe(true);
+    });
+
+    test('returns true after abort()', async () => {
+        const handle = createMessageEditorHandle({
+            generationType: 'normal',
+            flushIntervalMs: 0,
+        });
+        await handle.abort();
+        expect(handle.isSettled()).toBe(true);
+    });
+
+    test('returns true after discard()', async () => {
+        const handle = createMessageEditorHandle({
+            generationType: 'normal',
+            flushIntervalMs: 0,
+        });
+        await handle.discard();
+        expect(handle.isSettled()).toBe(true);
+    });
+
+    test('returns true after abortSignal-driven settle', () => {
+        const ctrl = new AbortController();
+        const handle = createMessageEditorHandle({
+            generationType: 'normal',
+            flushIntervalMs: 0,
+            abortSignal: ctrl.signal,
+        });
+        ctrl.abort();
+        expect(handle.isSettled()).toBe(true);
+    });
+});
+
+describe('appendReasoning(delta)', () => {
+    test('appends to existing reasoning', () => {
+        const handle = createMessageEditorHandle({
+            generationType: 'normal',
+            originalReasoning: 'seed',
+            flushIntervalMs: 0,
+        });
+        let lastReasoning = null;
+        handle.setOnUpdate((_text, reasoning) => { lastReasoning = reasoning; });
+        handle.appendReasoning(' more');
+        expect(handle.getReasoning()).toBe('seed more');
+        expect(lastReasoning).toBe('seed more');
+    });
+
+    test('throws TakeoverError when delta is not a string', () => {
+        const handle = createMessageEditorHandle({
+            generationType: 'normal',
+            flushIntervalMs: 0,
+        });
+        expect(() => handle.appendReasoning(123)).toThrow(
+            expect.objectContaining({ name: 'TakeoverError', code: 'invalid_argument' }),
+        );
+    });
+
+    test('throws TakeoverError when handle is committed', async () => {
+        const handle = createMessageEditorHandle({
+            generationType: 'normal',
+            flushIntervalMs: 0,
+        });
+        await handle.commit();
+        expect(() => handle.appendReasoning('x')).toThrow(
+            expect.objectContaining({ name: 'TakeoverError', code: 'editor_committed' }),
+        );
+    });
+
+    test('throws TakeoverError when handle is aborted', async () => {
+        const handle = createMessageEditorHandle({
+            generationType: 'normal',
+            flushIntervalMs: 0,
+        });
+        await handle.abort();
+        expect(() => handle.appendReasoning('x')).toThrow(
+            expect.objectContaining({ name: 'TakeoverError', code: 'editor_aborted' }),
+        );
+    });
+
+    test('throws TakeoverError when handle is discarded', async () => {
+        const handle = createMessageEditorHandle({
+            generationType: 'normal',
+            flushIntervalMs: 0,
+        });
+        await handle.discard();
+        expect(() => handle.appendReasoning('x')).toThrow(
+            expect.objectContaining({ name: 'TakeoverError', code: 'editor_discarded' }),
+        );
+    });
+
+    test('empty delta is a no-op', () => {
+        const handle = createMessageEditorHandle({
+            generationType: 'normal',
+            originalReasoning: 'seed',
+            flushIntervalMs: 0,
+        });
+        const updates = [];
+        handle.setOnUpdate((_t, r) => updates.push(r));
+        handle.appendReasoning('');
+        expect(handle.getReasoning()).toBe('seed');
+        expect(updates).toEqual([]); // no flush scheduled when nothing changed
+    });
+});

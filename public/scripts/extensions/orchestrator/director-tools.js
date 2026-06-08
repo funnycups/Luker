@@ -457,22 +457,43 @@ export function createSubagentDispatcher({
         return `${handleId}: ${subagentId}`;
     }
 
+    function isExpectedTakeoverSettleError(e) {
+        // The takeover handle has three settle states (committed / aborted
+        // / discarded). Any mutation after settle throws TakeoverError
+        // with one of these codes — which, during streaming, is expected
+        // (the upstream stream lags behind the user's stop click). Swallow
+        // silently so the trace doesn't fill with debug logs. Other codes
+        // (invalid_argument, invalid_op_for_continue) and non-takeover
+        // errors are still surfaced.
+        return e && e.name === 'TakeoverError'
+            && (e.code === 'editor_committed' || e.code === 'editor_aborted' || e.code === 'editor_discarded');
+    }
+
     function safeEnsureSection(label) {
         if (!handle) return;
         try { ensureReasoningSection(handle, label); }
-        catch (e) { console.debug('[orchestrator-director] ensureReasoningSection failed:', e); }
+        catch (e) {
+            if (isExpectedTakeoverSettleError(e)) return;
+            console.debug('[orchestrator-director] ensureReasoningSection failed:', e);
+        }
     }
 
     function safeAppendToSection(label, delta) {
         if (!handle) return;
         try { appendToReasoningSection(handle, label, delta); }
-        catch (e) { console.debug('[orchestrator-director] appendToReasoningSection failed:', e); }
+        catch (e) {
+            if (isExpectedTakeoverSettleError(e)) return;
+            console.debug('[orchestrator-director] appendToReasoningSection failed:', e);
+        }
     }
 
     function safeMarkSectionStatus(label, status) {
         if (!handle) return;
         try { markReasoningSectionStatus(handle, label, status); }
-        catch (e) { console.debug('[orchestrator-director] markReasoningSectionStatus failed:', e); }
+        catch (e) {
+            if (isExpectedTakeoverSettleError(e)) return;
+            console.debug('[orchestrator-director] markReasoningSectionStatus failed:', e);
+        }
     }
 
     // ── Trace recording helpers ──
@@ -569,6 +590,17 @@ export function createSubagentDispatcher({
                 if (typeof generateTaskStream === 'function') {
                     const { stream, result } = generateTaskStream(callOpts);
                     for await (const chunk of stream) {
+                        // Bail the moment the takeover handle has settled
+                        // (user pressed stop, parent committed, etc.). The
+                        // upstream stream may keep yielding chunks for a
+                        // few hundred ms after — without this guard each
+                        // chunk would re-enter safeAppendToSection, throw
+                        // TakeoverError inside setReasoning, and pay the
+                        // 36ms stack-trace + 3ms console.debug serialize
+                        // cost per chunk for no observable effect.
+                        if (handle && typeof handle.isSettled === 'function' && handle.isSettled()) {
+                            break;
+                        }
                         if (!chunk || typeof chunk !== 'object') continue;
                         if (typeof chunk.delta !== 'string') continue;
                         if (chunk.type === 'text') {

@@ -18,6 +18,32 @@ export class EditorOpsError extends Error {
     }
 }
 
+// Per-handle cache of (sectionId → { endOffset, reasoningLength }) so
+// streaming appends skip the O(reasoning-length) slice/concat path when
+// no other writer has touched reasoning since our last append. The
+// length check detects invalidations from ensureReasoningSection /
+// markReasoningSectionStatus / setReasoning / setText automatically —
+// any external mutation changes reasoning.length, which forces rebuild.
+const appendCache = new WeakMap();
+
+function getCachedEnd(handle, id, currentLength) {
+    const perHandle = appendCache.get(handle);
+    if (!perHandle) return null;
+    const entry = perHandle.get(id);
+    if (!entry) return null;
+    if (entry.reasoningLength !== currentLength) return null;
+    return entry.endOffset;
+}
+
+function setCachedEnd(handle, id, endOffset, reasoningLength) {
+    let perHandle = appendCache.get(handle);
+    if (!perHandle) {
+        perHandle = new Map();
+        appendCache.set(handle, perHandle);
+    }
+    perHandle.set(id, { endOffset, reasoningLength });
+}
+
 function assertOffsetInRange(offset, max, { name = 'offset' } = {}) {
     if (!Number.isInteger(offset) || offset < 0 || offset > max) {
         throw new EditorOpsError('invalid_offset', `${name} ${offset} out of range [0, ${max}]`, {
@@ -296,6 +322,21 @@ export function appendToReasoningSection(handle, id, delta) {
     }
     if (!delta) return;
     const text = handle.getReasoning();
+
+    // Fast path: cache hot, no external writer touched reasoning since
+    // our last append, AND this section sits at the tail. Append in place
+    // via the takeover handle's appendReasoning API; bump the cached
+    // end-of-section offset. Skips the O(text.length) slice/concat path.
+    const cachedEnd = getCachedEnd(handle, id, text.length);
+    if (cachedEnd !== null && cachedEnd === text.length && typeof handle.appendReasoning === 'function') {
+        handle.appendReasoning(delta);
+        setCachedEnd(handle, id, cachedEnd + delta.length, text.length + delta.length);
+        return;
+    }
+
+    // Slow path: cold cache, stale cache, OR section is not at the tail.
+    // Mirrors the original implementation, then refreshes the cache so
+    // the NEXT append in this section hits the fast path.
     const found = findSectionHeaderLine(text, id);
     if (!found) {
         // Section not yet present — create it at the end with the delta
@@ -303,14 +344,26 @@ export function appendToReasoningSection(handle, id, delta) {
         // before an explicit ensureReasoningSection call.
         const normalized = text.replace(/\n+$/, '');
         const sep = normalized ? '\n\n' : '';
-        handle.setReasoning(normalized + sep + sectionHeader(id, 'running') + '\n' + delta);
+        const newText = normalized + sep + sectionHeader(id, 'running') + '\n' + delta;
+        handle.setReasoning(newText);
+        setCachedEnd(handle, id, newText.length, newText.length);
         return;
     }
     const { headerEnd } = found;
     const sectionEnd = findSectionEnd(text, headerEnd);
     const before = text.slice(0, sectionEnd);
     const after = text.slice(sectionEnd);
-    handle.setReasoning(before + delta + after);
+    const newText = before + delta + after;
+    handle.setReasoning(newText);
+    // Only write the cache when the section was at the tail. When it sits
+    // mid-text (other sections follow), the next fast-path predicate
+    // (cachedEnd === text.length) would fail anyway, so writing is dead.
+    // The tail case is the streaming hot path — without this write the
+    // first chunk's slow path would never bootstrap the fast path for
+    // chunks 2..N.
+    if (after.length === 0) {
+        setCachedEnd(handle, id, sectionEnd + delta.length, newText.length);
+    }
 }
 
 /**
