@@ -1076,6 +1076,35 @@ function rebasePathToTarget(edit) {
 }
 
 /**
+ * Build the live snapshot to hand to `iteration-library/ui/diff.renderDiffCard`
+ * so its str-op preview resolves `edit.path` against the right slot. CEA
+ * edits keep their legacy prefixes when they reach the renderer (the strip
+ * to per-target slots happens in `rebasePathToTarget` at commit time), so
+ * we wrap the matching live slice under the same prefix:
+ *
+ *   - character edit (`card.<field>`)        → { card: state.live.character }
+ *   - lorebook edit (`entries.<uid>.<key>`)  → state.live.lorebooks[bookName]
+ *
+ * Returns `undefined` when the lookup would fail anyway (missing target,
+ * unknown bookName) — the renderer then falls back to today's focused
+ * find→replace card. No-op for non-str-op edits because diff.js only reads
+ * `opts.live` from the str-op branches.
+ */
+function resolveLiveForEdit(edit, live) {
+    if (!edit || !live || typeof live !== 'object') return undefined;
+    const kind = String(edit?.target?.kind || '');
+    if (kind === 'character') {
+        return { card: live?.character || {} };
+    }
+    if (kind === 'lorebook') {
+        const bookName = String(edit?.target?.bookName ?? '').trim();
+        if (!bookName) return undefined;
+        return live?.lorebooks?.[bookName];
+    }
+    return undefined;
+}
+
+/**
  * Apply pending edits to the real character + lorebook(s).
  *
  * Routing is by `edit.target.kind` (annotated upstream by
@@ -1722,10 +1751,30 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         const html = messages
             .map((m, idx) => ITER_UI.message.renderMessageCard(m, {
                 toolDisplay: CEA_EDITOR_TOOL_DISPLAY,
-                renderEditCard: (e) => ITER_UI.diff.renderDiffCard([e], {
-                    i18n: tf,
-                    fieldLabels: computeEditFieldLabels(e, state.live, t),
-                }),
+                renderEditCard: (e, msg) => {
+                    // Forward state.live to the diff renderer only when this
+                    // edit belongs to the latest unapplied assistant turn —
+                    // earlier turns' edits have already been folded into
+                    // state.live, so resolving their `edit.path` against it
+                    // gives a post-edit value. The renderer then falls back
+                    // to the focused find→replace card for those.
+                    //
+                    // CEA edits carry `card.<field>` / `lorebook.<field>` /
+                    // `entries.<uid>.<key>` paths that don't directly resolve
+                    // inside `state.live` (the rebase to per-target slots
+                    // happens at commit time). For the diff renderer we hand
+                    // it the matching per-target slice so `lodash.get` lines
+                    // up: character edits get `state.live.character`,
+                    // lorebook edits get the specific book.
+                    const isLatestUnapplied = !!msg
+                        && String(msg?.id || '') === state.__latestUnappliedAssistantId;
+                    const liveForEdit = isLatestUnapplied ? resolveLiveForEdit(e, state.live) : undefined;
+                    return ITER_UI.diff.renderDiffCard([e], {
+                        i18n: tf,
+                        fieldLabels: computeEditFieldLabels(e, state.live, t),
+                        live: liveForEdit,
+                    });
+                },
                 renderApplyControls: (msg) => {
                     const isLatestUnapplied = String(msg?.id || '') === state.__latestUnappliedAssistantId;
                     // Latest unapplied message: prefer the runtime state.pendingEdits

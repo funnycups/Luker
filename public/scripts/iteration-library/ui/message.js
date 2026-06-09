@@ -14,7 +14,11 @@ import { renderToolCallChip } from './toolcall.js';
  * @param {string} [message.id]
  * @param {Object} opts
  * @param {Object} opts.toolDisplay              tool-name → { icon, label, type, summarize }
- * @param {Function} opts.renderEditCard         (edit) => html
+ * @param {Function} opts.renderEditCard         (edit, message) => html. The `message` arg
+ *                                               is the assistant turn the edit belongs to —
+ *                                               popups use it to gate the "pass live snapshot
+ *                                               to renderDiffCard" path on whether the turn
+ *                                               is still pending vs. already applied.
  * @param {Function} [opts.renderApplyControls]  (message) => html. Rendered between
  *                                               the edit cards and the regen row. Popups
  *                                               typically wire `renderApplyControls`
@@ -104,7 +108,7 @@ export function renderMessageCard(message, opts = {}) {
     }).join('');
 
     const renderEdit = typeof opts.renderEditCard === 'function' ? opts.renderEditCard : () => '';
-    const editsHtml = edits.map(renderEdit).join('');
+    const editsHtml = edits.map(e => renderEdit(e, message)).join('');
 
     // Read-only round hint: assistant message with content empty AND every tool call is read AND no edits AND not finalized
     const allRead = toolCalls.length > 0

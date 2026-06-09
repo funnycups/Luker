@@ -5,6 +5,17 @@ import * as textDiff from '../text-diff.js';
  * @param {Object} opts
  * @param {Object}   [opts.fieldLabels]   Map field path → friendly label.
  * @param {boolean}  [opts.includeRawArgs] Embed a folded raw-args details below each card.
+ * @param {Object}   [opts.live]           Pre-edit snapshot. When provided, str_replace /
+ *                                         str_insert / str_delete resolve `edit.path` against
+ *                                         this object, virtually apply the op, and render the
+ *                                         FULL before/after of the field — so the user sees
+ *                                         surrounding context instead of just the anchor +
+ *                                         inserted/replaced fragment. Pending edits should
+ *                                         pass the studio's live state here. Already-applied
+ *                                         history edits should leave this unset so the
+ *                                         renderer falls back to the focused find→replace
+ *                                         card (the studio's `state.live` has moved on past
+ *                                         them).
  * @param {Function} opts.i18n
  * @returns {string} HTML
  */
@@ -19,24 +30,34 @@ function renderOneEdit(edit, opts) {
     if (edit.op === 'set') {
         return renderSetEdit(edit, opts);
     }
-    // Text-edit ops produced by the cpa / cea str tools. The args carry
-    // `find` + `replace` (or `text` + `position` for inserts); rendering them
-    // as a focused before/after card keeps the diff surface uniform with the
-    // `set` path.
+    // Text-edit ops produced by the cpa / cea str tools. When the caller
+    // passes `opts.live`, we resolve the field's pre-edit value, virtually
+    // apply the op locally, and render a single sub-card with the full
+    // before/after — so the user sees the whole field with the change in
+    // context (the surrounding paragraphs of a prompt, not just the
+    // anchor + inserted snippet). When `opts.live` is missing or the path
+    // doesn't resolve to a string, we fall back to today's focused
+    // find→replace card so historical / malformed edits still render
+    // something useful.
     if (edit.op === 'str_replace') {
+        const ctx = previewStrOpAgainstLive(edit, opts.live);
+        if (ctx) return renderSubCard(ctx.path, ctx.before, ctx.after, opts);
         return renderSubCard(String(edit.path || ''), String(edit.find ?? ''), String(edit.replace ?? ''), opts);
     }
     if (edit.op === 'str_insert') {
-        // Insert renders as "<nothing> → <inserted text>". The actual
-        // anchor (before / after a substring, or at an index) is in
-        // edit.before / edit.after / edit.index — we don't try to show
-        // the surrounding context here because the live snapshot at
-        // render time may have moved on. `insert_text` is CPA's field
-        // name (preset_str_insert); fall back to `text` / `value` for
-        // any future emitter that uses the bare name.
+        const ctx = previewStrOpAgainstLive(edit, opts.live);
+        if (ctx) return renderSubCard(ctx.path, ctx.before, ctx.after, opts);
+        // Fallback: no live snapshot. Render as "<nothing> → <inserted
+        // text>" — the anchor (after_text / before / after / index) is
+        // intentionally omitted because without the live value we can't
+        // place it accurately. `insert_text` is CPA's field name; fall
+        // back to `text` / `value` for any future emitter using the
+        // bare name.
         return renderSubCard(String(edit.path || ''), '', String(edit.insert_text ?? edit.text ?? edit.value ?? ''), opts);
     }
     if (edit.op === 'str_delete') {
+        const ctx = previewStrOpAgainstLive(edit, opts.live);
+        if (ctx) return renderSubCard(ctx.path, ctx.before, ctx.after, opts);
         return renderSubCard(String(edit.path || ''), String(edit.find ?? ''), '', opts);
     }
     // List ops produced by CPA's preset_list_* tools. Each surfaces an
@@ -328,6 +349,74 @@ function getByPath(obj, path) {
         cur = cur[seg];
     }
     return cur;
+}
+
+/**
+ * Virtually apply a str_replace / str_insert / str_delete edit against the
+ * caller-supplied pre-edit snapshot and return { path, before, after } for
+ * the renderer. Mirrors the apply semantics of the engine ops in
+ * `public/scripts/lib/edits/ops/str-*.js` — kept inline so the renderer
+ * never imports the engine (UI / engine are otherwise decoupled).
+ *
+ * Returns null when:
+ *   - `live` is not a plain object (caller didn't pass a snapshot)
+ *   - `edit.path` resolves to a non-string value (drift / wrong path)
+ *   - the anchor isn't present in the live string (anchor_missing — would
+ *     surface as a conflict at apply time; in the renderer we fall back to
+ *     the focused find→replace card so the user still sees the AI's intent)
+ *
+ * Known limitation: each edit is virtual-applied independently against the
+ * SAME `live` snapshot. If a single round emits two str-ops on the same
+ * `edit.path` (e.g. two str_inserts into one prompt), the second one's
+ * anchor may not be present in pre-edit live — it would only exist after
+ * the first edit is applied. The engine handles this correctly at apply
+ * time by threading live forward; the renderer doesn't, because each
+ * `renderOneEdit` call is independent and unaware of sibling edits. In
+ * that case the second card falls back to the focused find→replace
+ * preview, which is still useful (shows what's getting inserted) — just
+ * without the full surrounding context. Multi-edit-on-same-path within a
+ * round is rare; the tool-side uniqueness check (`assertStrOpUniqueness`)
+ * also tends to push the model toward one edit per anchor.
+ *
+ * Null callers fall back to the focused renderSubCard path.
+ */
+function previewStrOpAgainstLive(edit, live) {
+    if (!live || typeof live !== 'object' || Array.isArray(live)) return null;
+    const path = String(edit?.path || '');
+    if (!path) return null;
+    const current = getByPath(live, path);
+    if (typeof current !== 'string') return null;
+    if (edit.op === 'str_replace') {
+        const find = String(edit.find ?? '');
+        if (!find || current.indexOf(find) < 0) return null;
+        // Mirror engine semantics: replaceAll. `expected_count` is enforced
+        // at apply time as a conflict, not here — the renderer's job is to
+        // show what *would* happen if apply succeeds.
+        const replace = String(edit.replace ?? '');
+        const next = current.split(find).join(replace);
+        return { path, before: current, after: next };
+    }
+    if (edit.op === 'str_insert') {
+        const insertText = String(edit.insert_text ?? edit.text ?? edit.value ?? '');
+        const anchor = String(edit.after_text ?? '');
+        if (anchor) {
+            const idx = current.indexOf(anchor);
+            if (idx < 0) return null;
+            const insertAt = idx + anchor.length;
+            const next = current.slice(0, insertAt) + insertText + current.slice(insertAt);
+            return { path, before: current, after: next };
+        }
+        // No anchor: treat as append. This keeps the renderer useful for
+        // future emitters that insert at end-of-field without an anchor.
+        return { path, before: current, after: current + insertText };
+    }
+    if (edit.op === 'str_delete') {
+        const find = String(edit.find ?? '');
+        if (!find || current.indexOf(find) < 0) return null;
+        const next = current.split(find).join('');
+        return { path, before: current, after: next };
+    }
+    return null;
 }
 
 function escapeHtml(s) {

@@ -1294,9 +1294,20 @@ export async function openOrchestratorIterationStudio(deps) {
     // a compact op + path chip. Orchestrator profile shapes are deeply
     // nested objects, not strings, so the diff component's stringifyValue
     // helper JSON-stringifies them before running the inline LCS diff.
+    //
+    // String ops (str_replace / str_insert / str_delete) forward
+    // `state.live` as `opts.live` only on the latest unapplied turn so
+    // the renderer can resolve the field's pre-edit value and emit a
+    // full-field before/after; older / already-applied turns fall back
+    // to the focused find→replace card.
     // ──────────────────────────────────────────────────────────────────
-    function renderPendingEditCard(edit) {
-        return ITER_UI.diff.renderDiffCard([edit], { i18n: tf });
+    function renderPendingEditCard(edit, message) {
+        const isLatestUnapplied = !!message
+            && String(message?.id || '') === state.__latestUnappliedAssistantId;
+        return ITER_UI.diff.renderDiffCard([edit], {
+            i18n: tf,
+            live: isLatestUnapplied ? state.live : undefined,
+        });
     }
 
     // ──────────────────────────────────────────────────────────────────

@@ -658,10 +658,22 @@ export async function openCpaIterationStudio(deps) {
     // ops. Prompt-aware tools normalize to `set` edits inside
     // `tools.js#buildPromptAwareEdits` before reaching this renderer,
     // so the rich library-diff path covers the common case.
+    //
+    // For string ops (str_replace / str_insert / str_delete) we forward
+    // `state.live` as `opts.live` ONLY on the latest unapplied assistant
+    // turn — that turn's edits haven't been folded into live yet, so
+    // resolving `edit.path` against live gives the true pre-edit value
+    // and the renderer can show full-field before/after. Historical
+    // turns (already applied or superseded by a later round) skip the
+    // live snapshot and fall back to the focused find→replace card,
+    // because `state.live` has moved on past their edits.
     // ──────────────────────────────────────────────────────────────────
-    function renderPendingEditCard(edit) {
+    function renderPendingEditCard(edit, message) {
+        const isLatestUnapplied = !!message
+            && String(message?.id || '') === state.__latestUnappliedAssistantId;
         return ITER_UI.diff.renderDiffCard([edit], {
             i18n: tf,
+            live: isLatestUnapplied ? state.live : undefined,
         });
     }
 

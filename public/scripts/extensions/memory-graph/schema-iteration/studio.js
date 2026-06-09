@@ -866,7 +866,7 @@ export async function openSchemaIterationStudio(deps) {
         return ITER_UI.diff.renderDiffCard(syntheticEdits, { i18n: tf, fieldLabels });
     }
 
-    function renderPendingEditCard(edit) {
+    function renderPendingEditCard(edit, message) {
         // Coarse sandbox-diff path: one {op:'set', path:'', oldValue:<arr>,
         // newValue:<arr>}. Fan out into per-changed-id sub-cards so the
         // model's intent shows up as a small number of focused diffs
@@ -878,7 +878,15 @@ export async function openSchemaIterationStudio(deps) {
         // Future fine-grained-op compatibility: anything else flows
         // straight through the shared renderer, which already handles
         // empty-path object sets (per-leaf split) and path-keyed sets.
-        return ITER_UI.diff.renderDiffCard([edit], { i18n: tf });
+        // Pass state.live only for the latest unapplied turn so str-ops
+        // resolve against pre-edit values; older turns fall back to the
+        // focused find→replace card (state.live has moved on past them).
+        const isLatestUnapplied = !!message
+            && String(message?.id || '') === state.__latestUnappliedAssistantId;
+        return ITER_UI.diff.renderDiffCard([edit], {
+            i18n: tf,
+            live: isLatestUnapplied ? state.live : undefined,
+        });
     }
 
     // ──────────────────────────────────────────────────────────────────

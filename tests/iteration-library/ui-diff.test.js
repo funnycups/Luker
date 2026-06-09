@@ -93,11 +93,14 @@ describe('renderDiffCard', () => {
         expect(html).toContain('luker_lib_diff_card');
     });
 
-    it('renders str_replace as a focused find→replace diff card', () => {
+    it('renders str_replace as a focused find→replace diff card when no live snapshot is given', () => {
         // CPA + CEA editor produce {op:'str_replace', path, find, replace}.
         // Before this fix the fallback branch only showed op+path with no
         // content — the user saw an empty "str_replace prompts[7].content"
         // chip and had to expand args to see what was actually changing.
+        // With no `opts.live`, the renderer still falls back to a focused
+        // find→replace card so historical edits (where state.live has
+        // moved on) keep working.
         const html = renderDiffCard(
             [{ op: 'str_replace', path: 'prompts[7].content', find: 'old phrase', replace: 'new phrase' }],
             { i18n: ident },
@@ -109,7 +112,26 @@ describe('renderDiffCard', () => {
         expect(html).toContain('luker_lib_diff_dual');
     });
 
-    it('renders str_insert as a "" → text diff card', () => {
+    it('renders str_replace as a FULL before/after when opts.live is supplied', () => {
+        // Pending-edit path: opts.live carries the pre-edit field value, so
+        // the renderer virtually applies str_replace and shows the whole
+        // field's before/after to the user — they see the surrounding
+        // paragraphs, not just the find→replace fragment. This is what
+        // the user asked for: "I want to see what the entry originally
+        // said, not just the snippet that's getting inserted."
+        const liveContent = 'Para 1.\n\nold phrase\n\nPara 3.';
+        const html = renderDiffCard(
+            [{ op: 'str_replace', path: 'prompts[7].content', find: 'old phrase', replace: 'new phrase' }],
+            { i18n: ident, live: { prompts: [null, null, null, null, null, null, null, { content: liveContent }] } },
+        );
+        expect(html).toContain('luker_lib_diff_card');
+        // text-diff mock echoes its fileLabel — confirming the renderer
+        // routed through the FULL-field path (not the fallback find→replace).
+        expect(html).toContain('luker_lib_diff_dual');
+        expect(html).toContain('prompts[7].content');
+    });
+
+    it('renders str_insert as a "" → text diff card when no live snapshot is given', () => {
         const html = renderDiffCard(
             [{ op: 'str_insert', path: 'prompts[0].content', text: 'inserted' }],
             { i18n: ident },
@@ -118,12 +140,79 @@ describe('renderDiffCard', () => {
         expect(html).toContain('prompts[0].content');
     });
 
-    it('renders str_delete as a text → "" diff card', () => {
+    it('renders str_insert with full surrounding context when opts.live is supplied', () => {
+        // This is the bug the user reported: inserting a few sentences in
+        // the middle of a prompt should show the full prompt's before/after,
+        // not just "" → inserted-snippet. With opts.live the renderer
+        // resolves `path` against live, virtually splices the insert after
+        // the anchor, and emits a dual-column diff over the full string.
+        const liveContent = 'Lead-in paragraph.\n\nAnchor sentence.\n\nTrailing paragraph.';
+        const html = renderDiffCard(
+            [{
+                op: 'str_insert',
+                path: 'prompts[0].content',
+                after_text: 'Anchor sentence.',
+                insert_text: ' INSERTED.',
+            }],
+            { i18n: ident, live: { prompts: [{ content: liveContent }] } },
+        );
+        expect(html).toContain('luker_lib_diff_card');
+        expect(html).toContain('luker_lib_diff_dual');
+        // Renderer routed through the live-aware path (not the "" → snippet fallback).
+        expect(html).toContain('prompts[0].content');
+    });
+
+    it('falls back to "" → text when opts.live exists but path resolves to non-string', () => {
+        // Wrong path / drift case — the renderer must not throw and must
+        // still emit something useful. We exercise this by giving a live
+        // where the resolved value is undefined.
+        const html = renderDiffCard(
+            [{
+                op: 'str_insert',
+                path: 'prompts[99].content',
+                after_text: 'whatever',
+                insert_text: 'X',
+            }],
+            { i18n: ident, live: { prompts: [] } },
+        );
+        expect(html).toContain('luker_lib_diff_card');
+        expect(html).toContain('prompts[99].content');
+    });
+
+    it('falls back to "" → text when opts.live exists but anchor is missing from the live string', () => {
+        // anchor_missing — at apply time this would surface as a conflict;
+        // in the renderer we degrade to the focused fallback so the user
+        // still sees the AI's intent rather than a blank card.
+        const html = renderDiffCard(
+            [{
+                op: 'str_insert',
+                path: 'prompts[0].content',
+                after_text: 'NOT IN LIVE',
+                insert_text: 'Y',
+            }],
+            { i18n: ident, live: { prompts: [{ content: 'some other content' }] } },
+        );
+        expect(html).toContain('luker_lib_diff_card');
+        expect(html).toContain('prompts[0].content');
+    });
+
+    it('renders str_delete as a text → "" diff card when no live snapshot is given', () => {
         const html = renderDiffCard(
             [{ op: 'str_delete', path: 'prompts[0].content', find: 'deleted phrase' }],
             { i18n: ident },
         );
         expect(html).toContain('luker_lib_diff_card');
+        expect(html).toContain('prompts[0].content');
+    });
+
+    it('renders str_delete with full surrounding context when opts.live is supplied', () => {
+        const liveContent = 'Keep me.\n\ndeleted phrase\n\nAlso keep me.';
+        const html = renderDiffCard(
+            [{ op: 'str_delete', path: 'prompts[0].content', find: 'deleted phrase' }],
+            { i18n: ident, live: { prompts: [{ content: liveContent }] } },
+        );
+        expect(html).toContain('luker_lib_diff_card');
+        expect(html).toContain('luker_lib_diff_dual');
         expect(html).toContain('prompts[0].content');
     });
 
