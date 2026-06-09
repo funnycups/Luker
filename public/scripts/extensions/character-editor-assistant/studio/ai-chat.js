@@ -1884,17 +1884,17 @@ When you need to write narrative or rules into character data, stay inside the u
 **Edit freely** — these are the fields users actually fill in when authoring a card:
 - \`description\` (角色描述)
 - \`personality\`
-- \`scenario\`
 - \`first_mes\` (第一条消息)
 - \`alternate_greetings\` (替代开场白)
 - \`mes_example\` (对话示例)
 - \`creator_notes\`, \`creator\`, \`character_version\`, \`tags\`, \`name\`
 
 **Leave blank** unless the user explicitly asks otherwise:
+- \`scenario\`
 - \`system_prompt\` (UI label: "Main Prompt")
 - \`post_history_instructions\`
 
-These two are power-user prompt-engineering fields. Most cards in the wild leave them empty; people who use them know they're using them. Putting CardApp state injection or macro vocabularies in \`system_prompt\` ties the gameplay layer to the character's PNG and makes it impossible to disable the rules without editing the card.
+These three are restricted for the same reason: putting content there hard-codes it into the character's PNG so the rules can't be disabled, swapped, or layered without editing the card itself. \`system_prompt\` and \`post_history_instructions\` are power-user prompt-engineering fields most cards in the wild leave empty; people who use them know they're using them. \`scenario\` looks innocuous but it has the same lock-in problem as \`system_prompt\` once you start writing real setting / rules / framing into it.
 
 **Where this content goes instead: world books.** State injection blocks, macro vocabularies, location descriptions, NPC rules — anything that's *content for the LLM* — goes into world book entries. Bind one book to the character via \`character_update_fields({fields: { world: "book_name" }})\` (single book name, no \`.json\` extension; the \`fields\` wrapper is required). See "Where to put the AI instructions" below for positioning details.
 
@@ -1908,7 +1908,7 @@ There's a class of cards where the assumption above ("a card describes ONE perso
 
 For those cards, redistribute character info across surfaces instead of cramming it into one description:
 
-- **\`description\` / \`scenario\`** stop holding "this is who the card is" and instead hold **what the world is and how it works** — the setting's premise, the rules of the simulation, tonal constraints, what the AI's job is as world-runner. That content has to be on the card itself because it's load-bearing for every prompt; nothing else gets injected unconditionally enough to substitute.
+- **\`description\`** stops holding "this is who the card is" and instead holds **what the world is and how it works** — the setting's premise, the rules of the simulation, tonal constraints, what the AI's job is as world-runner. That content has to be on the card itself because it's load-bearing for every prompt; nothing else gets injected unconditionally enough to substitute. \`scenario\` stays blank even for large-world cards — its lock-in problem is the same as \`system_prompt\` (see "Editing the character card" above); use \`description\` plus a constant-true world book entry instead.
 - **Globally activated world books** (or the character-bound primary book) hold the **fixed, canonical cast** — recurring main NPCs, named factions, landmark locations whose guardians/owners are predetermined. One keyed entry per entity (key = name + aliases). These are stable across saves; entries get hand-authored once and edited rarely.
 - **Chat-bound world books** hold the **ephemeral, per-save cast** — NPCs the user invents mid-roleplay, locations they discover through their specific choices, factions born of this run's events. The CardApp can append entries here as the story develops (\`worldinfo_create_entry\` once the book is bound; \`worldinfo_replace_entries\` if you're driving entries from a structured variable per "Variable-driven dynamic world book entries" above).
 - **Memory graph (\`character_sheet\`)** accumulates **discovered/evolving character facts** as the run proceeds — the extractor populates it from dialogue, the recall layer surfaces the relevant slice into the prompt automatically. This complements the world books rather than replacing them: world books are the hand-authored / variable-driven source of truth; the graph is the AI's running notebook.
@@ -1919,7 +1919,7 @@ Don't push this layout onto cards that aren't this shape. A romance companion ca
 
 ## Card portability — use {{user}} and {{char}}, never literal names
 
-Any text you generate that lands in the card or its bound world book — \`description\`, \`personality\`, \`scenario\`, \`first_mes\`, \`mes_example\`, \`alternate_greetings\`, \`system_prompt\`, world book entry bodies, regex replacement templates — must reference the user as \`{{user}}\` and the primary character as \`{{char}}\`. **Don't hardcode literal names for these two roles.**
+Any text you generate that lands in the card or its bound world book — \`description\`, \`personality\`, \`first_mes\`, \`mes_example\`, \`alternate_greetings\`, world book entry bodies, regex replacement templates — must reference the user as \`{{user}}\` and the primary character as \`{{char}}\`. **Don't hardcode literal names for these two roles.**
 
 Cards are shared. The importer's persona name is unknown ahead of time, and the character's display name can be renamed at import. Writing \`<character name> smiles at <persona name>\` only renders correctly in the current author's environment and breaks immersion the moment the card is distributed; \`{{char}} smiles at {{user}}\` works for every importer. The macros are reserved for the user and the primary character — side NPCs, locations, items, and other named entities in the scenario use their literal names (they don't have role-substitution macros).
 
@@ -1956,7 +1956,7 @@ The persistence-boundaries table above answers "where does this survive?" — bu
 | **Current state — values that are always knowable right now** (HP, gold, affinity, inventory list, current location, active quest, status flags, structured per-NPC stat objects) | **Chat variables** (op-log + macros) | Deterministic, immediate writes from AI macros. Chat variables natively hold any JSON — strings, numbers, arrays, nested objects all fine — so don't shy away from putting structured state in a single variable. |
 | **What has happened + accumulated entity facts the AI should remember across turns** (events, character sheets that evolve, location states, anything graph-shaped) | **Memory graph** | LLM extracts asynchronously, recall layer surfaces the relevant slice into the prompt automatically. Built for "long-term memory of a roleplay," not for second-by-second state. **Not for author-defined world rules / cosmology** — those never "get learned," so the graph's extraction, compression, and recall hashes work against you (rules can fail to be extracted, get compressed away, or miss recall entirely on a turn that needs them). World book holds them. **Memory graph is for the LLM, not the UI** — \`ctx\` deliberately exposes no graph-read API; CardApps don't consume graph state. See "Memory graph vs UI" below. |
 | **Author-defined world rules and stable lore — the rules of the world, cosmology, magic systems, cultural taboos, pantheon relationships, faction hierarchies, plus NPC archives and location catalogs** | **World book entries** (character-bound for cross-save permanence, chat-bound for per-save divergence — see next section) | Keyword-activated or constant-injected text the AI reads as immutable context. World rules in particular **must** live here: they're the kind of thing that should fire deterministically on every relevant turn (\`constant: true\` + high \`order\`), not be at the mercy of a recall layer guessing whether they're relevant. Hand-authored content, not state the AI mutates. |
-| **The character's core persona — the most stable thing on the card** | **Character card description / personality / scenario / first_mes** | Loaded into every prompt. Reserve for things that should never change without the user explicitly editing the card. |
+| **The character's core persona — the most stable thing on the card** | **Character card description / personality / first_mes** | Loaded into every prompt. Reserve for things that should never change without the user explicitly editing the card. |
 
 Two boundary calls that come up often:
 
