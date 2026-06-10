@@ -1,13 +1,12 @@
 /**
  * Floor-state adapter for the memory-graph extension.
  *
- * Memory-graph used to maintain its own log+rematerialize machinery (opLog,
- * swipeTailCache, multiple watermarks) in the chat-state namespace
- * `memory_graph`. The generic FloorState (public/scripts/floor-state.js)
- * supersedes that machinery: it owns one chat-state namespace as a data
- * cell, ships a sibling `<ns>__floor_log` for the commit log, filters
- * commits by (floor, swipeId), and replays automatically on the four
- * structure events.
+ * The generic FloorState (public/scripts/floor-state.js) owns the persistence
+ * model: a commit log in `<ns>__floor_log` is the only source of truth, and
+ * `fs.get()` materializes by replaying surviving commits filtered by
+ * (floor, swipeId) from the live chat. The four structural events
+ * (MESSAGE_DELETED / MESSAGE_SWIPED / MESSAGE_SWIPE_DELETED / CHAT_CHANGED)
+ * are settled by core before plugin listeners observe them.
  *
  * Responsibilities:
  *  - Lazy singleton holding the FloorState instance for the memory-graph
@@ -410,12 +409,7 @@ export function createEmptyPersistedMemoryState() {
  * Always returns a fresh independent object — callers using this for "before
  * snapshot" patterns (commit-diff's `beforeStore` / `afterStore`, editor's
  * pre-edit snapshot, extraction's working+committed pair) rely on that
- * isolation. A previous tag-based short-circuit (returning the same reference
- * for already-normalized inputs) corrupted those patterns: workingStore and
- * committedStore aliased the cached store, so mutations leaked into the
- * "before" snapshot, the diff went empty, and the commit silently became a
- * no-op while cache kept advancing in memory until the next rematerialize
- * wiped it back to log state.
+ * isolation.
  */
 export function normalizeStoreForRuntime(store) {
     const empty = createEmptyStore();

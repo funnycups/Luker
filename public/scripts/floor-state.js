@@ -50,7 +50,6 @@ async function makeDefaultDeps() {
     const script = await import('../script.js');
     return {
         getChatState: script.getChatState,
-        patchChatState: script.patchChatState,
         updateChatState: script.updateChatState,
         deleteChatState: script.deleteChatState,
         buildObjectPatchOperationsAsync: script.buildObjectPatchOperationsAsync,
@@ -167,7 +166,7 @@ export function createFloorStateWithDeps(options, deps) {
     let destroyed = false;
 
     // ready gate: pending while one or more long-running operations
-    // (rematerialize, patch+commit, init) are in flight, resolved otherwise.
+    // (truncate, swipe-delete, patch+commit) are in flight, resolved otherwise.
     // Counted so nested / overlapping begin/end calls compose correctly — the
     // gate only resolves when the LAST in-flight operation completes.
     let pendingCount = 0;
@@ -216,21 +215,11 @@ export function createFloorStateWithDeps(options, deps) {
     }
 
     /**
-     * Read and normalize the private commit log. Returns `{ log, existed }`
-     * so callers that need to distinguish "log namespace truly never written"
-     * from "log namespace exists but is empty" can do so — see the rematerialize
-     * shortcut below for why this matters (a legacy chat with un-migrated data
-     * sitting in the data namespace must not have its data clobbered by a
-     * synthetic empty target state computed from a never-written log).
+     * Read and normalize the private commit log.
      */
-    async function readLogWithExistence() {
-        const raw = await runtime.getChatState(logNamespace);
-        return { log: normalizeLog(raw), existed: raw != null };
-    }
-
     async function readLog() {
-        const { log } = await readLogWithExistence();
-        return log;
+        const raw = await runtime.getChatState(logNamespace);
+        return normalizeLog(raw);
     }
 
     /**
@@ -262,21 +251,6 @@ export function createFloorStateWithDeps(options, deps) {
             return false;
         }
         return true;
-    }
-
-    /**
-     * Invalidate the in-memory replay cache. Called after any structural
-     * change to the log or chat (truncate, swipe-delete, swipe-switch,
-     * chat-changed) so the next `get()` re-runs `computeTargetState` against
-     * the updated log + swipeMap.
-     *
-     * No disk write: the data namespace is no longer a persisted source of
-     * truth in this design. The log is. So there's nothing to reconcile to —
-     * the next read just replays.
-     */
-    async function rematerialize() {
-        if (destroyed) return;
-        invalidateCache();
     }
 
     /**
@@ -363,14 +337,12 @@ export function createFloorStateWithDeps(options, deps) {
     // --- structural-event handlers (driven by core via settle* exports) ---
 
     const __handleChatChanged = async () => {
-        beginPending();
-        try { await rematerialize(); }
-        finally { endPending(); }
+        if (destroyed) return;
+        invalidateCache();
     };
     const __handleMessageSwiped = async () => {
-        beginPending();
-        try { await rematerialize(); }
-        finally { endPending(); }
+        if (destroyed) return;
+        invalidateCache();
     };
     const __handleMessageDeleted = (newChatLength) => handleMessageDeleted(newChatLength);
     const __handleSwipeDeleted = (payload) => handleSwipeDeleted(payload);
@@ -726,8 +698,9 @@ export function createFloorStateWithDeps(options, deps) {
     }
 
     /**
-     * Resolve when no rematerialize is in flight. Plugins that read state
-     * inside event handlers should `await ready()` first to avoid stale reads.
+     * Resolve when no write or structural settle is in flight. Plugins that
+     * read state inside event handlers should `await ready()` first to avoid
+     * stale reads against an unsettled log.
      *
      * @returns {Promise<void>}
      */
@@ -801,11 +774,6 @@ export function createFloorStateWithDeps(options, deps) {
     if (typeof deps?.eventSource?._bindInstance === 'function') {
         deps.eventSource._bindInstance(instance);
     }
-
-    // No initial rematerialize: the data namespace is no longer a separate
-    // persisted source of truth. First `get()` lazily replays the log into
-    // the in-memory cache; one-time migration (legacy data sidecar cleanup)
-    // is folded into `get()`'s migrateIfNeeded path.
 
     return instance;
 }

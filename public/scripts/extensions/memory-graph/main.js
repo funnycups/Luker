@@ -14931,19 +14931,16 @@ jQuery(() => {
     // extension isn't loaded the call is a silent no-op.
     void registerMemoryGraphOrchestrationTools();
 
-    // ORDER MATTERS for the migration path. When core fires settleChatChanged
-    // it walks every floor-state instance through `rematerialize`, which
-    // would clobber the data namespace with `{}` if the log were empty
-    // (the legacy-chat case). Floor-state's defensive skip preserves the
-    // legacy `opLog` payload when its log namespace has never been written,
-    // but we still need our migration to run BEFORE any plugin caches
-    // re-read from the data namespace.
+    // ORDER MATTERS for the migration path. Floor-state's log is the only
+    // persisted source of truth; if a legacy chat (v8 opLog inside the main
+    // namespace) reaches `fs.get()` before our schema migration has hoisted
+    // the opLog into the log namespace, replay sees an empty log and recall
+    // observes a wiped store until the next write rebuilds.
     //
-    // We therefore: (a) subscribe memory-graph's CHAT_CHANGED handler
-    // BEFORE mounting floor-state — its `migrateLegacyMemoryGraphState`
-    // call runs early on every chat switch; (b) run an explicit migration
-    // for the initial chat before mounting the singleton, so the
-    // singleton's initial rematerialize sees the migrated log too.
+    // We therefore: (a) subscribe memory-graph's CHAT_CHANGED handler BEFORE
+    // mounting floor-state — its `migrateLegacyMemoryGraphState` call runs
+    // early on every chat switch; (b) run an explicit migration for the
+    // initial chat before mounting the singleton.
     context.eventSource.on(context.eventTypes.CHAT_CHANGED, async () => {
         latestRecallSnapshot = null;
         ensureUi();
@@ -14967,10 +14964,10 @@ jQuery(() => {
 
     // Mount the floor-state singleton AFTER subscribing the migration
     // handler. The initial migration writes the log for the current chat,
-    // then mounting the instance runs its initial rematerialize against
-    // the migrated log. From this point onward, our CHAT_CHANGED handler
-    // runs after core's settleChatChanged on every switch, and is followed
-    // by the cache-refresh handler below.
+    // so the singleton's first `fs.get()` replays against the migrated log.
+    // From this point onward, our CHAT_CHANGED handler runs after core's
+    // settleChatChanged on every switch, and is followed by the cache-refresh
+    // handler below.
     void (async () => {
         const initialChatKey = getChatKey(context);
         if (initialChatKey && initialChatKey !== 'invalid_target') {
@@ -15080,8 +15077,8 @@ jQuery(() => {
     /**
      * Coalesce structural-event reactions into a microtask:
      *  - cancel any in-flight extraction
-     *  - wait for floor-state to finish its rematerialize/truncate
-     *  - rebuild the in-memory runtime store from the new fs payload
+     *  - wait for floor-state to finish its truncate / swipe-delete settle
+     *  - rebuild the in-memory runtime store from the replayed fs payload
      *  - clear stale recall trace + sourceMessageCount, persist to __meta
      *  - optionally schedule a fresh extraction replay
      *
@@ -15091,8 +15088,8 @@ jQuery(() => {
      *
      * Floor-state has already settled by the time this runs (core invokes
      * `settleMessageDeleted/Swiped/SwipeDeleted` before the corresponding
-     * `eventSource.emit`), so `refreshMemoryStoreCacheFromFloorState` reads
-     * the post-truncate / post-swipe data namespace.
+     * `eventSource.emit`), so `refreshMemoryStoreCacheFromFloorState` replays
+     * the post-truncate / post-swipe log.
      */
     const applyMutationInvalidationImpl = async (fromSeq = null, { scheduleReplay = false } = {}) => {
         const liveContext = getContext();

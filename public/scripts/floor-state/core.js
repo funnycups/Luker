@@ -6,8 +6,8 @@
  *
  * Each FloorState instance owns one chat-state namespace and its private
  * commit log. The instance layer (floor-state.js) wires these helpers to
- * the runtime: chat array, eventSource, getChatState/patchChatState/
- * updateChatState.
+ * the runtime: chat array, eventSource, getChatState/updateChatState/
+ * deleteChatState.
  *
  * Concepts:
  *  - floor: chat array index (0-based) where the commit was created.
