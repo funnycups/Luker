@@ -30,11 +30,13 @@ import {
     normalizeLog,
     buildSwipeMapFromChat,
     computeTargetState,
+    shouldKeepCommit,
     truncateCommits,
     removeSwipeFromCommits,
     inferCommitTargetFromChat,
     resolveCommitTarget,
 } from './floor-state/core.js';
+import { applyPatch } from './util/fast-json-patch.js';
 
 const LOG_SUFFIX = '__floor_log';
 
@@ -502,11 +504,17 @@ export function createFloorStateWithDeps(options, deps) {
      * no longer the source of truth; the log is). Result is structuredClone'd
      * for the caller so cache contents stay encapsulated.
      *
-     * Replay can throw when the commit chain is broken (e.g. RFC 6902 `test`
-     * failures from a historical concurrent write). When that happens we drop
-     * the cache and re-enter migration so the legacy data namespace, if still
-     * present, can be promoted to a fresh baseline commit. Without that
-     * recovery the broken log would block every read.
+     * Replay can throw when the commit chain is broken (RFC 6902 `test`
+     * failures from a historical concurrent write — fs.update is now
+     * serialized but old logs written before that fix may still contain
+     * stale-prev-base commits). When that happens we locate the first
+     * failing commit, identify its `floor`, back the full log up to
+     * `<ns>__orphans`, and truncate every commit on that floor or later.
+     * The race producing these bad commits always writes to the in-flight
+     * (chat-tail) floor, so a truncate by broken floor preserves all prior
+     * floors' state and discards the racing siblings together with the
+     * actual broken commit — equivalent to the user manually deleting the
+     * in-flight message.
      *
      * @returns {Promise<object|null>}
      */
@@ -525,47 +533,98 @@ export function createFloorStateWithDeps(options, deps) {
         try {
             cachedReplay = computeTargetState(log.commits, swipeMap);
         } catch (error) {
-            // Broken commit chain. Force a one-shot re-run of migration so
-            // it can promote the legacy data namespace (if any) into a
-            // baseline commit, then retry the replay against the rebuilt
-            // log. If migration cannot recover (no data sidecar to fall
-            // back on, baseline write fails), we rethrow so the caller
-            // surfaces the failure instead of silently returning empty.
-            console.warn(`[floor-state:${namespace}] replay failed, attempting recovery`, error);
-            migrationDone = false;
-            invalidateCache();
-            await migrateIfNeeded();
-            const retryLog = await readLog();
-            if (retryLog.commits.length === 0) {
+            console.warn(`[floor-state:${namespace}] replay failed, truncating by broken floor`, error);
+            const recovered = await recoverByTruncatingBrokenFloor(log, swipeMap, error);
+            if (recovered === null) {
                 cachedReplay = null;
                 return null;
             }
-            cachedReplay = computeTargetState(retryLog.commits, buildSwipeMapFromChat(runtime.getChat()));
+            cachedReplay = recovered;
         }
         return structuredClone(cachedReplay);
     }
 
     /**
+     * Locate the first commit whose patches throw on replay, back the full
+     * log up to `<ns>__orphans` (annotated with brokenCommitIndex /
+     * brokenFloor / error), then rewrite the log keeping only commits whose
+     * floor is strictly less than the broken floor. Returns the recomputed
+     * target state, or null when nothing survives the truncate.
+     *
+     * Truncating by floor (not by commit index) is deliberate: concurrent
+     * writes that produce broken commits all target the same in-flight chat
+     * tail, so the broken commit's siblings on that floor are part of the
+     * same racing batch and would otherwise leave half-applied garbage in
+     * the graph. Truncating the whole floor produces the same outcome as
+     * the user manually deleting that message — which is what they'd do
+     * anyway once they noticed the broken state.
+     */
+    async function recoverByTruncatingBrokenFloor(log, swipeMap, replayError) {
+        const probe = {};
+        let brokenIndex = -1;
+        for (let i = 0; i < log.commits.length; i++) {
+            const commit = log.commits[i];
+            if (!shouldKeepCommit(commit, swipeMap)) continue;
+            try {
+                applyPatch(probe, commit.patches, false, true);
+            } catch (_) {
+                brokenIndex = i;
+                break;
+            }
+        }
+        if (brokenIndex < 0) {
+            // Either the per-commit probe didn't reproduce the failure (a
+            // race we can't classify) or every commit was filtered out by
+            // swipeMap. Surface the original error rather than silently
+            // returning empty.
+            throw replayError;
+        }
+        const brokenFloor = log.commits[brokenIndex].floor;
+        if (typeof runtime.updateChatState === 'function') {
+            try {
+                await runtime.updateChatState(
+                    `${namespace}__orphans`,
+                    () => ({
+                        recoveredFromBrokenLog: true,
+                        replayError: String(replayError?.message || replayError || 'unknown'),
+                        brokenCommitIndex: brokenIndex,
+                        brokenFloor,
+                        brokenLog: log,
+                    }),
+                    { maxOperations: 16000 },
+                );
+            } catch (backupErr) {
+                console.warn(`[floor-state:${namespace}] recovery: orphans backup write failed, continuing`, backupErr);
+            }
+        }
+        const survivors = log.commits.filter((c) => c.floor < brokenFloor);
+        const ok = await writeLog({ version: LOG_VERSION, commits: survivors });
+        if (!ok) {
+            console.warn(`[floor-state:${namespace}] recovery: truncated log write failed, leaving broken log in place`);
+            throw replayError;
+        }
+        if (survivors.length === 0) return null;
+        return computeTargetState(survivors, buildSwipeMapFromChat(runtime.getChat()));
+    }
+
+    /**
      * One-shot promotion of the legacy data namespace into a fresh log
-     * baseline. Runs on first `get()` per instance. Three cases:
+     * baseline. Runs on first `get()` per instance. Two cases:
      *
      *   1. `data == null` — nothing to promote, mark done and skip.
      *
-     *   2. `data != null && replay(log)` succeeds (or `log.commits == 0`) —
-     *      treat any drift between data and replay as an orphan, capture it
-     *      to `<namespace>__orphans`, then delete the data sidecar.
+     *   2. `data != null` — capture any drift between the data sidecar and
+     *      log replay to `<namespace>__orphans`, then delete the data
+     *      sidecar.
      *
-     *   3. `data != null && replay(log)` throws — the log is broken (typically
-     *      historical concurrent-write damage). Back the broken log up to
-     *      `<namespace>__floor_log__corrupted`, install a single baseline
-     *      commit that encodes the data sidecar at the chat's tail floor,
-     *      then delete the data sidecar. The user keeps their data; the log
-     *      starts fresh from this point.
+     * If replay throws while computing the drift baseline we silently
+     * swallow the failure and still delete the data sidecar: the broken-log
+     * recovery in `get()` handles replay failures on its own and the
+     * orphans backup it writes carries everything needed for forensics.
      *
      * Idempotent: success marks `migrationDone = true`. Failure also marks
      * done — we don't want to loop on a permanently broken state; the next
-     * `get()` will surface the underlying replay error to the caller, who
-     * can choose to expose it (notifyError) rather than silently retrying.
+     * `get()` will surface the underlying error to the caller.
      */
     async function migrateIfNeeded() {
         if (migrationDone) return;
@@ -578,24 +637,18 @@ export function createFloorStateWithDeps(options, deps) {
                     return;
                 }
                 const log = await readLog();
-                let replay = null;
-                let replayThrew = false;
-                let replayError = null;
+                let replay = {};
                 if (log.commits.length > 0) {
                     try {
                         replay = computeTargetState(log.commits, buildSwipeMapFromChat(runtime.getChat()));
-                    } catch (err) {
-                        replayThrew = true;
-                        replayError = err;
+                    } catch (_) {
+                        // Leave replay as {} — the diff will then treat the
+                        // entire data sidecar as drift, which is the right
+                        // call when the log is broken: get()'s recovery
+                        // will truncate the log next.
                     }
-                } else {
-                    replay = {};
                 }
-                if (replayThrew) {
-                    await recoverFromBrokenLog(data, log, replayError);
-                } else {
-                    await captureOrphansAndDeleteData(data, replay);
-                }
+                await captureOrphansAndDeleteData(data, replay);
                 migrationDone = true;
             } catch (error) {
                 console.warn(`[floor-state:${namespace}] migration failed, marking done to avoid loop`, error);
@@ -637,62 +690,6 @@ export function createFloorStateWithDeps(options, deps) {
                 await runtime.deleteChatState(namespace);
             } catch (deleteErr) {
                 console.warn(`[floor-state:${namespace}] migration: deleteChatState failed, continuing`, deleteErr);
-            }
-        }
-    }
-
-    async function recoverFromBrokenLog(data, brokenLog, replayError) {
-        // Back the broken log up before we overwrite it. The orphans sidecar
-        // is reused as the dump target so we don't accumulate more sidecar
-        // namespaces; the field shape (`brokenLog` / `replayError`) makes
-        // the source obvious.
-        if (typeof runtime.updateChatState === 'function') {
-            try {
-                await runtime.updateChatState(
-                    `${namespace}__orphans`,
-                    () => ({
-                        recoveredFromBrokenLog: true,
-                        replayError: String(replayError?.message || replayError || 'unknown'),
-                        brokenLog,
-                        dataPayload: data,
-                    }),
-                    { maxOperations: 16000 },
-                );
-            } catch (backupErr) {
-                console.warn(`[floor-state:${namespace}] recovery: corrupted-log backup write failed, continuing`, backupErr);
-            }
-        }
-        // Pick the baseline floor from the data sidecar's own coverage hints
-        // (covers v1/v2 store shapes). Fall back to the chat tail.
-        const chat = runtime.getChat();
-        const chatLen = Array.isArray(chat) ? chat.length : 0;
-        const hintSources = [data?.coveredAssistantSeq, data?.appliedSeqTo, data?.loggedSeqTo];
-        let floor = -1;
-        for (const hint of hintSources) {
-            const n = Math.floor(Number(hint || 0));
-            if (Number.isFinite(n) && n > 0) { floor = n; break; }
-        }
-        if (floor < 0 || floor >= chatLen) {
-            floor = Math.max(0, chatLen - 1);
-        }
-        const chatMsg = chat?.[floor];
-        const swipeId = Math.max(0, Math.floor(Number(chatMsg?.swipe_id ?? 0)));
-        const patches = await runtime.buildObjectPatchOperationsAsync({}, data);
-        if (!Array.isArray(patches) || patches.length === 0) {
-            console.warn(`[floor-state:${namespace}] recovery: data sidecar produced empty baseline, falling back to deleting broken log`);
-            await writeLog({ version: LOG_VERSION, commits: [] });
-        } else {
-            const ok = await writeLog({ version: LOG_VERSION, commits: [{ floor, swipeId, patches }] });
-            if (!ok) {
-                console.warn(`[floor-state:${namespace}] recovery: baseline commit write failed, log left broken`);
-                return;
-            }
-        }
-        if (typeof runtime.deleteChatState === 'function') {
-            try {
-                await runtime.deleteChatState(namespace);
-            } catch (deleteErr) {
-                console.warn(`[floor-state:${namespace}] recovery: deleteChatState failed, continuing`, deleteErr);
             }
         }
     }

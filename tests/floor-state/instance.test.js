@@ -690,6 +690,140 @@ describe('lazy log replay', () => {
     });
 });
 
+describe('broken-log recovery via floor truncate', () => {
+    test('get() truncates commits at the broken floor, backs up to __orphans, and returns the recovered state', async () => {
+        // Two healthy commits on floor 0 + a stale-prev-base commit on floor 1
+        // that fails RFC 6902 `test`. fs.get() must back the full log up to
+        // foo__orphans (with brokenCommitIndex / brokenFloor / brokenLog),
+        // rewrite the log keeping only commits whose floor < 1, and return
+        // the replay of the survivors.
+        const chatRef = { value: [msg(0), msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+        store._raw.set('foo__floor_log', {
+            version: 1,
+            commits: [
+                { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/x', value: 1 }] },
+                { floor: 0, swipeId: 0, patches: [{ op: 'replace', path: '/x', value: 2 }] },
+                {
+                    floor: 1, swipeId: 0, patches: [
+                        // Stale prev base: asserts /x === 1 but state has /x === 2 by now.
+                        { op: 'test', path: '/x', value: 1 },
+                        { op: 'replace', path: '/x', value: 99 },
+                    ],
+                },
+            ],
+        });
+
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        expect(await fs.get()).toEqual({ x: 2 });
+
+        const orphans = store._raw.get('foo__orphans');
+        expect(orphans).toBeTruthy();
+        expect(orphans.recoveredFromBrokenLog).toBe(true);
+        expect(orphans.brokenCommitIndex).toBe(2);
+        expect(orphans.brokenFloor).toBe(1);
+        expect(typeof orphans.replayError).toBe('string');
+        expect(orphans.brokenLog.commits).toHaveLength(3);
+
+        // Log on disk now holds only the surviving commits (both on floor 0).
+        const rewritten = store._raw.get('foo__floor_log');
+        expect(rewritten.commits).toHaveLength(2);
+        rewritten.commits.forEach((c) => expect(c.floor).toBe(0));
+    });
+
+    test('truncate by floor also drops siblings of the broken commit on the same floor', async () => {
+        // Two writes targeting floor 2 (a race scenario). The first is the
+        // racing-early sibling (its patches happen to compose with the prior
+        // log), the second breaks on a stale `test`. Both should be discarded
+        // — preserving the "early" sibling would leave half-applied garbage
+        // attached to the in-flight floor.
+        const chatRef = { value: [msg(0), msg(0), msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+        store._raw.set('foo__floor_log', {
+            version: 1,
+            commits: [
+                { floor: 1, swipeId: 0, patches: [{ op: 'add', path: '/x', value: 1 }] },
+                // Sibling that happens to compose (race winner that wrote n_259).
+                { floor: 2, swipeId: 0, patches: [{ op: 'add', path: '/y', value: 'sibling' }] },
+                // Race loser: bases on /x === 0 but x is already 1.
+                {
+                    floor: 2, swipeId: 0, patches: [
+                        { op: 'test', path: '/x', value: 0 },
+                        { op: 'replace', path: '/x', value: 2 },
+                    ],
+                },
+            ],
+        });
+
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        // Only the floor-1 commit survives: the sibling on floor 2 goes too.
+        expect(await fs.get()).toEqual({ x: 1 });
+
+        const rewritten = store._raw.get('foo__floor_log');
+        expect(rewritten.commits).toHaveLength(1);
+        expect(rewritten.commits[0].floor).toBe(1);
+    });
+
+    test('returns null when the broken floor is 0 and nothing else survives', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+        store._raw.set('foo__floor_log', {
+            version: 1,
+            commits: [
+                { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/x', value: 1 }] },
+                {
+                    floor: 0, swipeId: 0, patches: [
+                        { op: 'test', path: '/x', value: 999 },
+                        { op: 'replace', path: '/x', value: 2 },
+                    ],
+                },
+            ],
+        });
+
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        expect(await fs.get()).toBeNull();
+
+        const rewritten = store._raw.get('foo__floor_log');
+        expect(rewritten.commits).toHaveLength(0);
+    });
+
+    test('subsequent get() calls hit the rewritten log without re-recovering', async () => {
+        const chatRef = { value: [msg(0), msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+        store._raw.set('foo__floor_log', {
+            version: 1,
+            commits: [
+                { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/x', value: 1 }] },
+                {
+                    floor: 1, swipeId: 0, patches: [
+                        { op: 'test', path: '/x', value: 999 },
+                        { op: 'replace', path: '/x', value: 2 },
+                    ],
+                },
+            ],
+        });
+
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        expect(await fs.get()).toEqual({ x: 1 });
+        const firstOrphan = store._raw.get('foo__orphans');
+        expect(firstOrphan).toBeTruthy();
+
+        // Mutate the orphans entry; if a second get() re-ran recovery it
+        // would overwrite this back to the original shape.
+        store._raw.set('foo__orphans', { ...firstOrphan, tampered: true });
+        expect(await fs.get()).toEqual({ x: 1 });
+        expect(store._raw.get('foo__orphans').tampered).toBe(true);
+    });
+});
+
 describe('concurrency: patch vs structural event', () => {
     test('patch + concurrent CHAT_CHANGED leaves state derived from log', async () => {
         // Stall the appendCommit write so a concurrent CHAT_CHANGED races with
