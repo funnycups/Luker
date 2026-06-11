@@ -130,15 +130,14 @@ export function getBasicAuthHeader(auth) {
 /**
  * Returns the version of the running instance. Get the version from package.json and git metadata.
  * Also returns the agent string for the Horde API.
- * isLatest is computed by comparing package version against the highest remote git tag version.
- * @returns {Promise<{agent: string, compatAgent: string, stCompatVersion: string, pkgVersion: string, gitRevision: string | null, gitBranch: string | null, commitDate: string | null, isLatest: boolean, isDocker: boolean}>} Version info object
+ * Performs only local reads; use checkRemoteVersion() for the upstream tag comparison.
+ * @returns {Promise<{agent: string, compatAgent: string, stCompatVersion: string, pkgVersion: string, gitRevision: string | null, gitBranch: string | null, commitDate: string | null, isDocker: boolean}>} Version info object
  */
 export async function getVersion() {
     let pkgVersion = 'UNKNOWN';
     let gitRevision = null;
     let gitBranch = null;
     let commitDate = null;
-    let isLatest = true;
 
     try {
         const require = createRequire(import.meta.url);
@@ -153,7 +152,6 @@ export async function getVersion() {
             } catch {
                 // No local git metadata (e.g. Docker image without .git). Continue silently.
             }
-            // Remote check is now handled via checkRemoteVersion
         }
     } catch {
         // suppress exception
@@ -163,7 +161,7 @@ export async function getVersion() {
     const agent = `Luker:${pkgVersion}:Cohee#1207`;
     const compatAgent = `Luker:${stCompatVersion}:Cohee#1207`;
     const isDockerRuntime = isDocker();
-    return { agent, compatAgent, stCompatVersion, pkgVersion, gitRevision, gitBranch, commitDate: commitDate?.trim() ?? null, isLatest, isDocker: isDockerRuntime };
+    return { agent, compatAgent, stCompatVersion, pkgVersion, gitRevision, gitBranch, commitDate: commitDate?.trim() ?? null, isDocker: isDockerRuntime };
 }
 
 /**
