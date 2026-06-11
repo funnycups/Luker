@@ -265,6 +265,38 @@ describe('RunStateStore — finish / meta', () => {
         unsub();
     });
 
+    test('addTokenUsage folds camelCase usage into running totals and emits RUN_META', async () => {
+        const { addTokenUsage, subscribe } = await import('../../public/scripts/extensions/orchestrator/run-state/store.js');
+        const events = [];
+        const unsub = subscribe((e) => events.push(e));
+        const runId = startRun({ mode: 'loop', chatKey: 'c' });
+        addTokenUsage({ runId, usage: { promptTokens: 100, completionTokens: 30, totalTokens: 130 } });
+        addTokenUsage({ runId, usage: { promptTokens: 50, completionTokens: 20, totalTokens: 70 } });
+        const s = getCurrentRun();
+        expect(s.tokensSpent).toEqual({ prompt: 150, completion: 50, total: 200 });
+        const metas = events.filter(e => e.type === 'run_meta');
+        expect(metas).toHaveLength(2);
+        expect(metas[0]).toMatchObject({ runId });
+        unsub();
+    });
+
+    test('addTokenUsage is a no-op for null/empty usage', async () => {
+        const { addTokenUsage } = await import('../../public/scripts/extensions/orchestrator/run-state/store.js');
+        const runId = startRun({ mode: 'loop', chatKey: 'c' });
+        addTokenUsage({ runId, usage: null });
+        addTokenUsage({ runId, usage: undefined });
+        addTokenUsage({ runId, usage: {} });
+        addTokenUsage({ runId, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } });
+        expect(getCurrentRun().tokensSpent).toBeNull();
+    });
+
+    test('addTokenUsage derives total from prompt+completion when totalTokens is missing', async () => {
+        const { addTokenUsage } = await import('../../public/scripts/extensions/orchestrator/run-state/store.js');
+        const runId = startRun({ mode: 'loop', chatKey: 'c' });
+        addTokenUsage({ runId, usage: { promptTokens: 7, completionTokens: 3 } });
+        expect(getCurrentRun().tokensSpent).toEqual({ prompt: 7, completion: 3, total: 10 });
+    });
+
     test('startRun overwrites a non-running prior run', async () => {
         const { finishRun } = await import('../../public/scripts/extensions/orchestrator/run-state/store.js');
         const first = startRun({ mode: 'director', chatKey: 'c' });

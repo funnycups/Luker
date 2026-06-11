@@ -50,7 +50,7 @@ import { executeLoopTool, getEnabledToolSchemas, resolveToolSource } from './loo
 import { buildPerRunCustomToolRegistry } from './per-run-custom-tools.js';
 import {
     appendRound, appendToSection, ensureSection,
-    finishRun, setRoundStatus, setSectionStatus, startRun,
+    finishRun, setRoundStatus, setSectionStatus, startRun, addTokenUsage,
 } from './run-state/store.js';
 import { i18n, i18nFormat } from './i18n.js';
 
@@ -168,7 +168,7 @@ const NO_TOOL_CALL_STREAK_LIMIT = 3;
  *
  * Returns `{ toolCalls: Array<{id, name, args}>, assistantText: string }`.
  */
-async function defaultSendLlm({ context, settings, messages, tools, runtimeWorldInfo, apiPresetName, llmPresetName, abortSignal }) {
+async function defaultSendLlm({ context, settings, messages, tools, runtimeWorldInfo, apiPresetName, llmPresetName, abortSignal, onUsage }) {
     const [toolCallingMod, agentResolutionMod] = await Promise.all([
         import('./tool-calling.js'),
         import('./agent-resolution.js'),
@@ -198,6 +198,7 @@ async function defaultSendLlm({ context, settings, messages, tools, runtimeWorld
         // as an LLM error. allowNoToolCalls=true preserves the assistant
         // text so the streak-break fallback can use it as the capsule.
         allowNoToolCalls: true,
+        onUsage: typeof onUsage === 'function' ? onUsage : null,
     });
     if (Array.isArray(result)) {
         // Returned shape when includeAssistantText is false — shouldn't
@@ -824,6 +825,9 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
                 tools,
                 round,
                 abortSignal,
+                onUsage: (usage) => {
+                    try { addTokenUsage({ runId, usage }); } catch (_) { /* store may have been cleared */ }
+                },
             });
 
             const assistantText = String(response?.assistantText || '').trim();

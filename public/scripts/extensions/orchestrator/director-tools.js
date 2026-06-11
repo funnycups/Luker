@@ -33,7 +33,7 @@ import {
 import { gatherGrepMatches } from './grep-tool.js';
 import { isAbortError, raceAbortSignal, throwIfAborted } from './abort-utils.js';
 import {
-    appendRound, appendToSection, ensureSection, setRoundStatus, setSectionStatus,
+    appendRound, appendToSection, ensureSection, setRoundStatus, setSectionStatus, addTokenUsage,
 } from './run-state/store.js';
 import { i18n, i18nFormat } from './i18n.js';
 
@@ -652,6 +652,9 @@ export function createSubagentDispatcher({
                 if (transportAttempt > transportRetries) throw transportErr;
                 console.warn(`[orchestrator-director] sub-agent transport attempt ${transportAttempt}/${transportRetries + 1} failed; retrying:`, transportErr);
                 continue;
+            }
+            if (runId && roundResult?.usage) {
+                try { addTokenUsage({ runId, usage: roundResult.usage }); } catch (_) { /* store may have been cleared */ }
             }
             const roundToolCalls = Array.isArray(roundResult?.toolCalls)
                 ? roundResult.toolCalls.filter(tc => String(tc?.name || '').trim().length > 0)

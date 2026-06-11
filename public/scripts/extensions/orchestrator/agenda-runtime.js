@@ -71,7 +71,7 @@ import { toReadableYamlText } from './output-formatting.js';
 import { buildAutoInjectedNodePromptPrelude } from './review-feedback.js';
 import {
     appendRound, appendToSection, ensureSection,
-    finishRun, setRoundStatus, setSectionStatus, startRun,
+    finishRun, setRoundStatus, setSectionStatus, startRun, addTokenUsage,
 } from './run-state/store.js';
 import { i18n, i18nFormat } from './i18n.js';
 import { getChatKey } from './snapshot-cache.js';
@@ -663,6 +663,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
     kind = 'agent',
     finalReason = '',
     customToolRegistry = null,
+    panelRunId = null,
 }, abortSignal = null) {
     const settings = extension_settings[MODULE_NAME];
     const planner = createAgendaPlannerDraft(profile?.planner);
@@ -865,6 +866,11 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
             abortSignal,
             includeAssistantText: true,
             allowNoToolCalls: false,
+            onUsage: panelRunId
+                ? (usage) => {
+                    try { addTokenUsage({ runId: panelRunId, usage }); } catch (_) { /* store may have been cleared */ }
+                }
+                : null,
         });
         throwIfAborted(abortSignal, 'Orchestration aborted.');
         const calls = Array.isArray(detailed?.toolCalls) ? detailed.toolCalls : [];
@@ -1072,7 +1078,7 @@ export async function runAgendaOrchestration(context, payload, messages, profile
                 const workerRoundId = `node-${dispatch.agent}-${dispatch.todoId}-${round}`;
                 appendRound({ runId, round: { id: workerRoundId, label: i18nFormat('Node: ${0} (attempt ${1})', `${dispatch.agent}:${dispatch.todoId}`, round) } });
                 try {
-                    const result = await runAgendaTextAgent(context, payload, messages, profile, state, dispatch, { kind: 'agent', customToolRegistry }, abortSignal);
+                    const result = await runAgendaTextAgent(context, payload, messages, profile, state, dispatch, { kind: 'agent', customToolRegistry, panelRunId: runId }, abortSignal);
                     finishRuntimeNodeAttempt(trace, attempt, {
                         status: 'completed',
                         output: result.outputText,
@@ -1129,6 +1135,7 @@ export async function runAgendaOrchestration(context, payload, messages, profile
             kind: 'final',
             finalReason: finalizeReason,
             customToolRegistry,
+            panelRunId: runId,
         }, abortSignal);
         if (!String(finalRun?.outputText || '').trim()) {
             finishRuntimeNodeAttempt(trace, finalAttempt, {

@@ -166,3 +166,33 @@ export function setRunMeta({ runId, tokensSpent, cost }) {
     if (cost !== undefined) currentRun.cost = cost;
     emit({ type: EV.RUN_META, runId });
 }
+
+/**
+ * Accumulate per-round token usage into `currentRun.tokensSpent`.
+ *
+ * Runners get a fresh `usage` object from `normalizeResponse` after each
+ * LLM round and call this to fold it into the run-level total — the panel
+ * header reads `tokensSpent.total` and rerenders on the emitted RUN_META.
+ *
+ * Accepts the camelCase shape produced by `generate-task.js`
+ * (`{ promptTokens, completionTokens, totalTokens }`) and stores the
+ * `{ prompt, completion, total }` shape the panel + setRunMeta consumers
+ * expect. Missing fields default to 0; a `null`/`undefined` usage is a no-op
+ * so callers can forward whatever the sender returned without pre-checking.
+ */
+export function addTokenUsage({ runId, usage }) {
+    ensureRunningMatchesId(runId);
+    if (!usage || typeof usage !== 'object') return;
+    const prompt = Number(usage.promptTokens ?? usage.prompt ?? 0) || 0;
+    const completion = Number(usage.completionTokens ?? usage.completion ?? 0) || 0;
+    const totalFromUsage = Number(usage.totalTokens ?? usage.total ?? 0) || 0;
+    const total = totalFromUsage || (prompt + completion);
+    if (prompt === 0 && completion === 0 && total === 0) return;
+    const prev = currentRun.tokensSpent || { prompt: 0, completion: 0, total: 0 };
+    currentRun.tokensSpent = {
+        prompt: prev.prompt + prompt,
+        completion: prev.completion + completion,
+        total: prev.total + total,
+    };
+    emit({ type: EV.RUN_META, runId });
+}

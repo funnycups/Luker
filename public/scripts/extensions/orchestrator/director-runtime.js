@@ -50,7 +50,7 @@ import { buildPerRunCustomToolRegistry } from './per-run-custom-tools.js';
 import { resolveToolSource } from './loop-tools.js';
 import {
     appendRound, appendToSection, ensureSection,
-    finishRun, setRoundStatus, setSectionStatus,
+    finishRun, setRoundStatus, setSectionStatus, addTokenUsage,
 } from './run-state/store.js';
 import { i18n, i18nFormat } from './i18n.js';
 
@@ -674,6 +674,9 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                     if (transportAttempt > transportRetries) throw transportErr;
                     console.warn(`[orchestrator-director] main agent transport attempt ${transportAttempt}/${transportRetries + 1} failed; retrying:`, transportErr);
                 }
+            }
+            if (panelRunId && result?.usage) {
+                try { addTokenUsage({ runId: panelRunId, usage: result.usage }); } catch (_) { /* store may have been cleared */ }
             }
             if (!chunkReceived) {
                 // Non-streaming transport or tool-only stream: append the

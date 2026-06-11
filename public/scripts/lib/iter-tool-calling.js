@@ -184,6 +184,7 @@ export async function requestToolCallsWithRetry(context, settings, {
     onAssistantText = null,
     onToolCall = null,
     onControlCall = null,
+    onUsage = null,
     isControlCall = null,
 } = {}) {
     if (!Array.isArray(tools) || tools.length === 0) {
@@ -276,6 +277,13 @@ export async function requestToolCallsWithRetry(context, settings, {
                     onAssistantText(assistantText);
                 } catch (cbErr) {
                     console.warn('[iter-tool-calling] onAssistantText threw', cbErr);
+                }
+            }
+            if (typeof onUsage === 'function' && result?.usage) {
+                try {
+                    onUsage(result.usage);
+                } catch (cbErr) {
+                    console.warn('[iter-tool-calling] onUsage threw', cbErr);
                 }
             }
             if (filteredCalls.length > 0 && (typeof onToolCall === 'function' || typeof onControlCall === 'function')) {

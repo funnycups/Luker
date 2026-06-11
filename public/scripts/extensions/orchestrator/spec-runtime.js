@@ -66,7 +66,7 @@ import {
 import { buildAutoInjectedNodePromptPrelude, buildReviewRuntimeContextText, getRuntimeApprovedReviewFeedbackEntries, trimRuntimeApprovedReviewFeedbackEntries, upsertRuntimeApprovedReviewFeedbackEntry } from './review-feedback.js';
 import {
     appendRound, appendToSection, ensureSection,
-    finishRun, setRoundStatus, setSectionStatus, startRun,
+    finishRun, setRoundStatus, setSectionStatus, startRun, addTokenUsage,
 } from './run-state/store.js';
 import { i18n, i18nFormat } from './i18n.js';
 import { getChatKey, getPreviousOrchestrationCapsuleText } from './snapshot-cache.js';
@@ -748,6 +748,11 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                 abortSignal,
                 includeAssistantText: true,
                 allowNoToolCalls: false,
+                onUsage: options?.runtime?.runId
+                    ? (usage) => {
+                        try { addTokenUsage({ runId: options.runtime.runId, usage }); } catch (_) { /* store may have been cleared */ }
+                    }
+                    : null,
             });
             throwIfAborted(abortSignal, 'Orchestration aborted.');
             const calls = Array.isArray(detailed?.toolCalls) ? detailed.toolCalls : [];
@@ -1085,6 +1090,11 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
                 abortSignal,
                 includeAssistantText: true,
                 allowNoToolCalls: false,
+                onUsage: options?.runtime?.runId
+                    ? (usage) => {
+                        try { addTokenUsage({ runId: options.runtime.runId, usage }); } catch (_) { /* store may have been cleared */ }
+                    }
+                    : null,
             });
             const decision = extractReviewDecision(detailed?.toolCalls || [], nodeSpec.id);
             // Record the assistant turn with the review decision tool call.
