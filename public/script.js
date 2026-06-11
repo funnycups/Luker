@@ -1373,30 +1373,47 @@ async function getClientVersion() {
     }
 }
 
-function maybeNotifyLukerUpdate(versionData) {
-    if (!versionData || versionData.isLatest !== false) {
+async function doLukerUpdateCheck(versionData) {
+    if (!versionData) {
         return;
     }
 
-    if (versionData.isDocker === true) {
-        if (lukerUpdatePromptShown) {
+    try {
+        const response = await fetch('/api/system/update-check', { 
+            method: 'POST',
+            headers: getRequestHeaders(),
+        });
+        if (!response.ok) return;
+        const updateData = await response.json();
+
+        if (updateData.isLatest !== false) {
             return;
         }
-        lukerUpdatePromptShown = true;
-        toastr.info(
-            t`A Luker update is available for this Docker deployment. Pull the latest image and recreate the container to update.`,
-            t`Update Available`,
-            {
-                timeOut: 0,
-                extendedTimeOut: 0,
-                closeButton: true,
-                preventDuplicates: true,
-            },
-        );
-        return;
-    }
 
-    void showLukerUpdatePrompt(versionData);
+        const combinedData = { ...versionData, ...updateData };
+
+        if (combinedData.isDocker === true) {
+            if (lukerUpdatePromptShown) {
+                return;
+            }
+            lukerUpdatePromptShown = true;
+            toastr.info(
+                t`A Luker update is available for this Docker deployment. Pull the latest image and recreate the container to update.`,
+                t`Update Available`,
+                {
+                    timeOut: 0,
+                    extendedTimeOut: 0,
+                    closeButton: true,
+                    preventDuplicates: true,
+                },
+            );
+            return;
+        }
+
+        void showLukerUpdatePrompt(combinedData);
+    } catch (err) {
+        console.error('Failed to check for Luker updates in background', err);
+    }
 }
 
 let lukerUpdatePromptShown = false;
@@ -1954,7 +1971,7 @@ async function firstLoadInit() {
     }
     await readSecretState();
     await initLocales();
-    maybeNotifyLukerUpdate(clientVersionData);
+    setTimeout(() => doLukerUpdateCheck(clientVersionData), 1);
     initChatUtilities();
     initDefaultSlashCommands();
     registerReasoningSlashCommands();
