@@ -145,6 +145,7 @@ import {
 } from './agent-resolution.js';
 import {
     applyCharacterExecutionModeForAvatar,
+    clearCharacterExtensionForMode,
     getCharacterAgendaOverrideByAvatar,
     getCharacterCardSnapshot,
     getCharacterDirectorOverrideByAvatar,
@@ -7426,45 +7427,8 @@ function bindUi() {
                 return;
             }
             const previous = getCharacterExtensionDataByAvatar(context, avatar);
-            const nextPayload = { ...previous };
-            const nextOverride = previous?.override && typeof previous.override === 'object'
-                ? structuredClone(previous.override)
-                : null;
             const executionMode = getExecutionMode(settings);
-            if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
-                if (nextOverride) {
-                    delete nextOverride.loop;
-                }
-            } else if (executionMode === ORCH_EXECUTION_MODE_AGENDA) {
-                if (nextOverride) {
-                    delete nextOverride.agenda;
-                }
-            } else if (executionMode === ORCH_EXECUTION_MODE_DIRECTOR) {
-                if (nextOverride) {
-                    delete nextOverride.director;
-                }
-            } else if (nextOverride) {
-                delete nextOverride.spec;
-                delete nextOverride.presets;
-                delete nextOverride.presetPatch;
-                delete nextOverride.enabled;
-                delete nextOverride.updatedAt;
-                delete nextOverride.name;
-                delete nextOverride.notes;
-            }
-            normalizeCharacterOverrideMode(nextOverride);
-            if (nextOverride && (
-                (nextOverride.spec && typeof nextOverride.spec === 'object')
-                || (nextOverride.presets && typeof nextOverride.presets === 'object')
-                || (nextOverride.presetPatch && typeof nextOverride.presetPatch === 'object')
-                || (nextOverride.agenda && typeof nextOverride.agenda === 'object')
-                || (nextOverride.loop && typeof nextOverride.loop === 'object')
-                || (nextOverride.director && typeof nextOverride.director === 'object')
-            )) {
-                nextPayload.override = nextOverride;
-            } else {
-                delete nextPayload.override;
-            }
+            const nextPayload = clearCharacterExtensionForMode(previous, executionMode);
             const ok = await persistOrchestratorCharacterExtension(context, characterIndex, nextPayload);
             if (!ok) {
                 notifyError(i18n('Failed to persist character override.'));

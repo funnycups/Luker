@@ -324,6 +324,81 @@ export function isCharacterPresetActiveOverrideEnabled(context, avatar, mode) {
     return Boolean(lib[id]);
 }
 
+/**
+ * Compute the next character-extension payload after a "Clear Character
+ * Override" click for the given execution mode.
+ *
+ * Strips both the legacy `override.<mode>` field AND the new-shape
+ * `presetLibraries.<mode>` / `activePresetIds.<mode>` slots, then drops
+ * empty containers so `hasCharacter*Override` reads false afterwards.
+ * Pure (no I/O) so it can be unit-tested independent of the click
+ * handler — main.js wires this into the persistence + UI reload path.
+ */
+export function clearCharacterExtensionForMode(previous, mode) {
+    const previousExt = previous && typeof previous === 'object' ? previous : {};
+    const normalizedMode = normalizeExecutionMode(mode);
+    const next = { ...previousExt };
+    const nextOverride = previousExt.override && typeof previousExt.override === 'object'
+        ? structuredClone(previousExt.override)
+        : null;
+    const nextLibraries = previousExt.presetLibraries && typeof previousExt.presetLibraries === 'object'
+        ? structuredClone(previousExt.presetLibraries)
+        : null;
+    const nextActiveIds = previousExt.activePresetIds && typeof previousExt.activePresetIds === 'object'
+        ? structuredClone(previousExt.activePresetIds)
+        : null;
+    if (normalizedMode === ORCH_EXECUTION_MODE_LOOP) {
+        if (nextOverride) delete nextOverride.loop;
+    } else if (normalizedMode === ORCH_EXECUTION_MODE_AGENDA) {
+        if (nextOverride) delete nextOverride.agenda;
+    } else if (normalizedMode === ORCH_EXECUTION_MODE_DIRECTOR) {
+        if (nextOverride) delete nextOverride.director;
+    } else if (nextOverride) {
+        delete nextOverride.spec;
+        delete nextOverride.presets;
+        delete nextOverride.presetPatch;
+        delete nextOverride.enabled;
+        delete nextOverride.updatedAt;
+        delete nextOverride.name;
+        delete nextOverride.notes;
+    }
+    if (nextLibraries) {
+        delete nextLibraries[normalizedMode];
+    }
+    if (nextActiveIds) {
+        delete nextActiveIds[normalizedMode];
+    }
+    normalizeCharacterOverrideMode(nextOverride);
+    const overrideStillHasPayload = nextOverride && (
+        (nextOverride.spec && typeof nextOverride.spec === 'object')
+        || (nextOverride.presets && typeof nextOverride.presets === 'object')
+        || (nextOverride.presetPatch && typeof nextOverride.presetPatch === 'object')
+        || (nextOverride.agenda && typeof nextOverride.agenda === 'object')
+        || (nextOverride.loop && typeof nextOverride.loop === 'object')
+        || (nextOverride.director && typeof nextOverride.director === 'object')
+    );
+    if (overrideStillHasPayload) {
+        next.override = nextOverride;
+    } else {
+        delete next.override;
+    }
+    const librariesStillPopulated = nextLibraries && Object.keys(nextLibraries).some(key =>
+        nextLibraries[key] && typeof nextLibraries[key] === 'object' && Object.keys(nextLibraries[key]).length > 0,
+    );
+    if (librariesStillPopulated) {
+        next.presetLibraries = nextLibraries;
+    } else {
+        delete next.presetLibraries;
+    }
+    const activeIdsStillPopulated = nextActiveIds && Object.keys(nextActiveIds).some(key => nextActiveIds[key]);
+    if (activeIdsStillPopulated) {
+        next.activePresetIds = nextActiveIds;
+    } else {
+        delete next.activePresetIds;
+    }
+    return next;
+}
+
 export function getCharacterCardSnapshot(context, avatar) {
     const character = getCharacterByAvatar(context, avatar) || {};
     const fromCardFields = (avatar && avatar === getCurrentAvatar(context) && typeof context.getCharacterCardFields === 'function')
