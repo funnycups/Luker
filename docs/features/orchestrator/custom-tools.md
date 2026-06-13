@@ -86,7 +86,13 @@ Custom tools participate in the simulation pipeline that the [AI Iteration Studi
 
 ## Iteration Studio
 
-The AI iterator can see your profile's custom tools and decide whether to enable or disable each one for a planned iteration. It cannot create, edit, or delete custom tool definitions — those are user-owned.
+The AI iterator can do three things with custom tools:
+
+- **Author them.** Tell the Studio in plain language what you need ("write a tool that checks every reply has an `<overall>` block"), and it calls `luker_orch_set_custom_tool` to add a new entry to `customTools[]`. The new tool's enable flag is auto-set to `true` so the agent sees it immediately. Each authoring call still goes through the normal review pipeline — you see the diff before it lands.
+- **Edit or delete them.** Same calls (`luker_orch_set_custom_tool` to overwrite, `luker_orch_remove_custom_tool` to drop), same review flow.
+- **Toggle enable/disable.** Per-mode flag flips, no review needed.
+
+Layer-2 tools registered by other extensions cannot be authored from the Studio — their definitions live in the registering extension. Only their enable flags are reachable here.
 
 ## Related
 
