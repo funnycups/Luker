@@ -571,7 +571,7 @@ export function renderAgendaWorkspace(deps, scope, editor, title = '') {
             <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Planner Prompt'))}</div>
             <label for="luker_orch_agenda_planner_api_preset">${escapeHtml(i18n('Planner API preset (Connection profile, empty = global orchestration API preset)'))}</label>
             <select id="luker_orch_agenda_planner_api_preset" data-scope="${safeScope}" class="text_pole">${renderConnectionProfileOptions(planner?.apiPresetName, i18n('(Global orchestration API preset)'))}</select>
-            <label for="luker_orch_agenda_planner_prompt_preset">${escapeHtml(i18n('Planner preset (params + prompt, empty = global orchestration preset)'))}${renderPresetHelpButton({ kind: 'agent', targetSelectId: 'luker_orch_agenda_planner_prompt_preset' })}</label>
+            <label for="luker_orch_agenda_planner_prompt_preset">${escapeHtml(i18n('Planner preset (params + prompt, empty = global orchestration preset)'))}${renderPresetHelpButton({ kind: 'agent', agentMode: 'non-director', targetSelectId: 'luker_orch_agenda_planner_prompt_preset' })}</label>
             <select id="luker_orch_agenda_planner_prompt_preset" data-scope="${safeScope}" class="text_pole">${renderOpenAIPresetOptions(context, planner?.promptPresetName, i18n('(Global orchestration prompt preset)'))}</select>
             <label for="luker_orch_agenda_planner_system_prompt">${escapeHtml(i18n('Planner system prompt'))}</label>
             <textarea id="luker_orch_agenda_planner_system_prompt" data-scope="${safeScope}" class="text_pole textarea_compact" rows="5">${escapeHtml(String(planner?.systemPrompt || DEFAULT_AGENDA_PLANNER_SYSTEM_PROMPT))}</textarea>
@@ -721,7 +721,7 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
             <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Loop Agent'))}</div>
             <label for="luker_orch_loop_api_preset">${escapeHtml(i18n('Loop API preset (Connection profile, empty = global orchestration API preset)'))}</label>
             <select id="luker_orch_loop_api_preset" data-scope="${safeScope}" class="text_pole">${renderConnectionProfileOptions(editor?.apiPresetName, i18n('(Global orchestration API preset)'))}</select>
-            <label for="luker_orch_loop_prompt_preset">${escapeHtml(i18n('Loop preset (params + prompt, empty = global orchestration preset)'))}${renderPresetHelpButton({ kind: 'agent', targetSelectId: 'luker_orch_loop_prompt_preset' })}</label>
+            <label for="luker_orch_loop_prompt_preset">${escapeHtml(i18n('Loop preset (params + prompt, empty = global orchestration preset)'))}${renderPresetHelpButton({ kind: 'agent', agentMode: 'non-director', targetSelectId: 'luker_orch_loop_prompt_preset' })}</label>
             <select id="luker_orch_loop_prompt_preset" data-scope="${safeScope}" class="text_pole">${renderOpenAIPresetOptions(context, editor?.promptPresetName, i18n('(Global orchestration prompt preset)'))}</select>
             <label for="luker_orch_loop_system_prompt">${escapeHtml(i18n('Loop system prompt'))}</label>
             <textarea id="luker_orch_loop_system_prompt" data-scope="${safeScope}" class="text_pole textarea_compact" rows="14">${escapeHtml(String(editor?.system_prompt || ''))}</textarea>
@@ -822,7 +822,7 @@ function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex, directo
         <select class="text_pole" data-orch-subagent-field="apiPresetName" data-subagent-index="${subagentIndex}" data-scope="${safeScope}">${renderConnectionProfileOptions(apiPresetName, i18n('(Global orchestration API preset)'))}</select>
     </label>
     <label>
-        <span data-i18n="Prompt preset">${escapeHtml(i18n('Prompt preset'))}</span>${renderPresetHelpButton({ kind: 'agent' })}
+        <span data-i18n="Prompt preset">${escapeHtml(i18n('Prompt preset'))}</span>${renderPresetHelpButton({ kind: 'agent', agentMode: 'director' })}
         <select class="text_pole" data-orch-subagent-field="promptPresetName" data-subagent-index="${subagentIndex}" data-scope="${safeScope}">${renderOpenAIPresetOptions(context, promptPresetName, i18n('(Global orchestration prompt preset)'))}</select>
         <div class="director-preset-help" data-i18n="director_preset_help_pure_instruction">${escapeHtml(i18n('Pick a pure-instruction preset. Typical RP presets that prescribe an output format (forced CoT, mandatory schema blocks) will block the agent\'s tool calls.'))}</div>
     </label>
@@ -912,7 +912,7 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
                 <select class="text_pole" data-orch-director-field="mainAgent.apiPresetName" data-scope="${safeScope}">${renderConnectionProfileOptions(String(mainAgent.apiPresetName || ''), i18n('(Global orchestration API preset)'))}</select>
             </label>
             <label>
-                <span data-i18n="Prompt preset">${escapeHtml(i18n('Prompt preset'))}</span>${renderPresetHelpButton({ kind: 'agent' })}
+                <span data-i18n="Prompt preset">${escapeHtml(i18n('Prompt preset'))}</span>${renderPresetHelpButton({ kind: 'agent', agentMode: 'director' })}
                 <select class="text_pole" data-orch-director-field="mainAgent.promptPresetName" data-scope="${safeScope}">${renderOpenAIPresetOptions(context, String(mainAgent.promptPresetName || ''), i18n('(Global orchestration prompt preset)'))}</select>
                 <div class="director-preset-help" data-i18n="director_preset_help_pure_instruction">${escapeHtml(i18n('Pick a pure-instruction preset. Typical RP presets that prescribe an output format (forced CoT, mandatory schema blocks) will block the agent\'s tool calls.'))}</div>
             </label>
@@ -1229,7 +1229,7 @@ export function buildOrchestratorSettingsHtml(deps) {
             </div>
             <label for="luker_orch_llm_api_preset">${escapeHtml(i18n('LLM node API preset (Connection profile)'))}</label>
             <select id="luker_orch_llm_api_preset" class="text_pole"></select>
-            <label for="luker_orch_llm_preset">${escapeHtml(i18n('LLM node preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'agent' })}</label>
+            <label for="luker_orch_llm_preset">${escapeHtml(i18n('LLM node preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'agent', agentMode: 'dynamic', targetSelectId: 'luker_orch_llm_preset' })}</label>
             <select id="luker_orch_llm_preset" class="text_pole"></select>
             <label for="luker_orch_request_api_preset">${escapeHtml(i18n('Iteration AI API preset (Connection profile)'))}</label>
             <select id="luker_orch_request_api_preset" class="text_pole"></select>

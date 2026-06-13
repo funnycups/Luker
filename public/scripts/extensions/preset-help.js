@@ -10,10 +10,19 @@
  *     that imports the bundled file and selects it in the caller's dropdown.
  *
  *   - `agent` — for agent preset slots (orchestrator Single / Director /
- *     Planner / Loop, search-tools Agent). Recommends an orchestrator-
- *     adapted RP preset (jailbreak + style preserved, format-forcing
- *     stripped), pointing the user at the preset assistant's
- *     "Adapt for orchestrator" mode.
+ *     Planner / Loop, search-tools Agent). The popup body and one-click
+ *     "import bundled preset" action depend on `agentMode`:
+ *       - `director`     — recommends `agent-director` (marker-free, story
+ *                          context is injected by director itself)
+ *       - `non-director` — recommends `agent-non-director` (marker-bearing,
+ *                          mirrors plugin-only's RP/task separation)
+ *       - `dynamic`      — popup reads `#luker_orch_execution_mode` at click
+ *                          time and renders the matching variant. Used by
+ *                          the orchestrator inline-drawer's global "LLM node
+ *                          preset" slot, which is both single-mode's only
+ *                          agent slot and the cross-mode fallback for
+ *                          per-agent empties.
+ *       - omitted        — legacy doc-link-only popup (back-compat)
  *
  * Plugin usage:
  *   import { renderPresetHelpButton } from '../preset-help.js';
@@ -33,6 +42,10 @@ import { getContext } from '../st-context.js';
 const PRESET_HELP_BUTTON_CLASS = 'luker-preset-help';
 const PLUGIN_ONLY_PRESET_NAME = 'plugin-only';
 const PLUGIN_ONLY_PRESET_URL = '/presets/plugin-only.json';
+const AGENT_DIRECTOR_PRESET_NAME = 'agent-director';
+const AGENT_DIRECTOR_PRESET_URL = '/presets/agent-director.json';
+const AGENT_NON_DIRECTOR_PRESET_NAME = 'agent-non-director';
+const AGENT_NON_DIRECTOR_PRESET_URL = '/presets/agent-non-director.json';
 const DOCS_BASE = 'https://luker.cups.moe';
 
 /**
@@ -67,16 +80,23 @@ function t(s) {
  *
  * @param {object} opts
  * @param {'iteration' | 'agent'} opts.kind
+ * @param {'director' | 'non-director' | 'dynamic'} [opts.agentMode] — only
+ *   meaningful when kind === 'agent'. Picks which bundled example preset
+ *   the popup offers to import. Omit for the legacy doc-link-only popup.
  * @param {string} [opts.targetSelectId] — id of the <select> the import
- *   button should populate + select when kind === 'iteration'. Optional for
- *   `agent` (no action button).
+ *   button should populate + select. Optional for legacy `agent` popups
+ *   (no action button); required for `iteration` and for any `agent`
+ *   popup with an `agentMode`.
  * @returns {string}
  */
-export function renderPresetHelpButton({ kind, targetSelectId = '' }) {
+export function renderPresetHelpButton({ kind, agentMode = '', targetSelectId = '' }) {
     const tooltip = kind === 'agent'
         ? t('What preset should I use for the Agent?')
         : t('What preset should I use here?');
-    return `<button type="button" class="${PRESET_HELP_BUTTON_CLASS}" data-luker-preset-help-kind="${escapeAttr(kind)}" data-luker-preset-help-for="${escapeAttr(targetSelectId)}" title="${escapeAttr(tooltip)}" aria-label="${escapeAttr(tooltip)}"><i class="fa-solid fa-circle-question"></i></button>`;
+    const modeAttr = kind === 'agent' && agentMode
+        ? ` data-luker-preset-help-agent-mode="${escapeAttr(agentMode)}"`
+        : '';
+    return `<button type="button" class="${PRESET_HELP_BUTTON_CLASS}" data-luker-preset-help-kind="${escapeAttr(kind)}"${modeAttr} data-luker-preset-help-for="${escapeAttr(targetSelectId)}" title="${escapeAttr(tooltip)}" aria-label="${escapeAttr(tooltip)}"><i class="fa-solid fa-circle-question"></i></button>`;
 }
 
 function buildIterationHelpHtml() {
@@ -93,7 +113,37 @@ function buildIterationHelpHtml() {
         </div>`;
 }
 
-function buildAgentHelpHtml() {
+function buildAgentDirectorHelpHtml() {
+    const recipeUrl = getAgentOnboardingDocUrl();
+    return `
+        <div class="luker-preset-help-body">
+            <p>${escapeAttr(t('This selector is for the preset a Director-mode Agent uses (main agent or a sub-agent). Director already injects the full RP context (character card, persona, world info, chat history) inside a <story_context> envelope before the agent runs — so the agent\'s own preset does NOT need any character / world / persona placeholders. Adding them would only re-inject the same content twice and burn tokens.'))}</p>
+            <p>${escapeAttr(t('What this slot SHOULD carry: jailbreak / content-permission instructions that wrap the <story_context> block, plus the chatHistory marker so the envelope lands in the right place. Style / voice / anti-cliché rules normally belong in the agent\'s system prompt, not here.'))}</p>
+            <p><strong>${escapeAttr(t('Two ways to get a Director-friendly preset:'))}</strong></p>
+            <ul>
+                <li>${escapeAttr(t('Click "Import agent-director preset" below — imports a minimal Luker-bundled preset (marker-free, permission text only) and selects it here. Good as a quick start.'))}</li>
+                <li>${escapeAttr(t('Open the Completion Preset Assistant and start a new session in "Adapt for orchestrator" mode — it will derive a Director-ready version from your existing RP preset, keeping your jailbreak / style / anti-cliché instructions while stripping format-forcing prompts and duplicate injections. Your original preset stays untouched.'))}</li>
+            </ul>
+            <p><a href="${escapeAttr(recipeUrl)}" target="_blank" rel="noopener noreferrer">${escapeAttr(t('For the full multi-Agent setup walkthrough, see the multi-Agent onboarding recipe in the documentation.'))}</a></p>
+        </div>`;
+}
+
+function buildAgentNonDirectorHelpHtml() {
+    const recipeUrl = getAgentOnboardingDocUrl();
+    return `
+        <div class="luker-preset-help-body">
+            <p>${escapeAttr(t('This selector is for the preset a non-Director Agent uses (Single / Spec / Agenda planner / Loop). Unlike Director, these modes do NOT inject the RP context for the agent — so the agent\'s preset is the only path through which character card, persona, and world info reach the model. Markers (charDescription / personaDescription / worldInfoBefore / worldInfoAfter / chatHistory) must stay enabled, and the RP material should be visibly separated from the runtime task instructions so the agent does not mistake them for narrative continuation.'))}</p>
+            <p>${escapeAttr(t('This is the same shape iteration-AI plugins (CPA iter / Memory Graph / CardApp Studio iter) need, just placed in an Agent slot. The bundled preset offered below is identical in structure to the iter-AI plugin-only preset.'))}</p>
+            <p><strong>${escapeAttr(t('Two ways to get a non-Director-friendly preset:'))}</strong></p>
+            <ul>
+                <li>${escapeAttr(t('Click "Import agent-non-director preset" below — imports a Luker-bundled preset (markers enabled, story / user-request envelopes wrap the context) and selects it here. Good as a quick start.'))}</li>
+                <li>${escapeAttr(t('Open the Completion Preset Assistant and start a new session in "Adapt for orchestrator" mode — it will derive a version from your existing RP preset that preserves your jailbreak / style / anti-cliché instructions while stripping format-forcing prompts. Your original preset stays untouched.'))}</li>
+            </ul>
+            <p><a href="${escapeAttr(recipeUrl)}" target="_blank" rel="noopener noreferrer">${escapeAttr(t('For the full multi-Agent setup walkthrough, see the multi-Agent onboarding recipe in the documentation.'))}</a></p>
+        </div>`;
+}
+
+function buildLegacyAgentHelpHtml() {
     const recipeUrl = getAgentOnboardingDocUrl();
     return `
         <div class="luker-preset-help-body">
@@ -104,7 +154,26 @@ function buildAgentHelpHtml() {
         </div>`;
 }
 
-async function importPluginOnlyPreset(targetSelectId) {
+/**
+ * Resolve the actually-effective agent mode at click time.
+ * - 'director' / 'non-director' → returned as-is
+ * - 'dynamic' → reads the orchestrator inline-drawer's execution mode
+ *   selector and maps `director` → 'director', anything else → 'non-director'.
+ *   When the selector is missing (e.g. used in a future caller that lives
+ *   outside the orchestrator UI), falls back to 'non-director' as the
+ *   safer-for-more-callers default.
+ */
+function resolveAgentMode(agentMode) {
+    if (agentMode === 'director' || agentMode === 'non-director') return agentMode;
+    if (agentMode === 'dynamic') {
+        const $select = window.jQuery && window.jQuery('#luker_orch_execution_mode');
+        const value = String($select && $select.length ? $select.val() || '' : '').trim();
+        return value === 'director' ? 'director' : 'non-director';
+    }
+    return '';
+}
+
+async function importBundledPreset(presetName, presetUrl, target) {
     const context = typeof getContext === 'function' ? getContext() : null;
     const manager = context?.getPresetManager?.('openai');
     if (!manager) {
@@ -114,7 +183,7 @@ async function importPluginOnlyPreset(targetSelectId) {
 
     let existing = null;
     try {
-        existing = manager.findPreset?.(PLUGIN_ONLY_PRESET_NAME);
+        existing = manager.findPreset?.(presetName);
     } catch (err) {
         console.warn('[preset-help] findPreset failed', err);
         existing = null;
@@ -130,7 +199,7 @@ async function importPluginOnlyPreset(targetSelectId) {
         //   NEGATIVE   (Keep)       → skip save, just select the existing one
         //   CANCELLED  (Esc)        → abort the whole action
         const confirmPopup = new Popup(
-            escapeAttr(t('A preset named "plugin-only" already exists. Overwrite it with the bundled version, or keep your existing copy and just select it?')),
+            escapeAttr(t('A preset named "{name}" already exists. Overwrite it with the bundled version, or keep your existing copy and just select it?').replace('{name}', presetName)),
             POPUP_TYPE.CONFIRM,
             '',
             {
@@ -148,46 +217,54 @@ async function importPluginOnlyPreset(targetSelectId) {
     if (shouldDownload) {
         let data;
         try {
-            const response = await fetch(PLUGIN_ONLY_PRESET_URL);
+            const response = await fetch(presetUrl);
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             data = await response.json();
         } catch (err) {
-            console.error('[preset-help] Failed to download plugin-only.json', err);
-            toastr.error(t('Failed to download the plugin-only preset.'));
+            console.error(`[preset-help] Failed to download ${presetName}.json`, err);
+            toastr.error(t('Failed to download the "{name}" preset.').replace('{name}', presetName));
             return false;
         }
         try {
             if (data && typeof data === 'object') {
-                data.name = PLUGIN_ONLY_PRESET_NAME;
+                data.name = presetName;
             }
-            await manager.savePreset(PLUGIN_ONLY_PRESET_NAME, data);
-            toastr.success(existing
-                ? t('Overwrote preset: plugin-only')
-                : t('Imported preset: plugin-only'));
+            await manager.savePreset(presetName, data);
+            toastr.success((existing
+                ? t('Overwrote preset: {name}')
+                : t('Imported preset: {name}')).replace('{name}', presetName));
         } catch (err) {
-            console.error('[preset-help] Failed to save plugin-only preset', err);
-            toastr.error(t('Failed to save the plugin-only preset.'));
+            console.error(`[preset-help] Failed to save ${presetName} preset`, err);
+            toastr.error(t('Failed to save the "{name}" preset.').replace('{name}', presetName));
             return false;
         }
     } else {
-        toastr.info(t('Selecting your existing "plugin-only" preset.'));
+        toastr.info(t('Selecting your existing "{name}" preset.').replace('{name}', presetName));
     }
 
-    if (targetSelectId) {
-        const $select = $(`#${$.escapeSelector(targetSelectId)}`);
-        if ($select.length) {
-            const escapedValue = escapeAttr(PLUGIN_ONLY_PRESET_NAME);
-            if ($select.find(`option[value="${escapedValue}"]`).length === 0) {
-                $select.append(`<option value="${escapedValue}">${escapedValue}</option>`);
-            }
-            $select.val(PLUGIN_ONLY_PRESET_NAME).trigger('change');
+    // `target` may be either a string id (legacy callers pass
+    // `targetSelectId`) or a jQuery object that already points at the
+    // <select>. The DOM-walk fallback path used by callers that don't have
+    // a stable id (orchestrator director main / sub-agent slots) goes
+    // through the latter.
+    let $select = null;
+    if (target && typeof target === 'object' && typeof target.length === 'number') {
+        $select = target;
+    } else if (typeof target === 'string' && target) {
+        $select = $(`#${$.escapeSelector(target)}`);
+    }
+    if ($select && $select.length) {
+        const escapedValue = escapeAttr(presetName);
+        if ($select.find(`option[value="${escapedValue}"]`).length === 0) {
+            $select.append(`<option value="${escapedValue}">${escapedValue}</option>`);
         }
+        $select.val(presetName).trigger('change');
     }
 
     return true;
 }
 
-async function showIterationPopup(targetSelectId) {
+async function showIterationPopup(target) {
     const popup = new Popup(buildIterationHelpHtml(), POPUP_TYPE.TEXT, '', {
         okButton: t('Close'),
         cancelButton: false,
@@ -197,7 +274,7 @@ async function showIterationPopup(targetSelectId) {
             icon: 'fa-download',
             result: 2,
             action: async () => {
-                await importPluginOnlyPreset(targetSelectId);
+                await importBundledPreset(PLUGIN_ONLY_PRESET_NAME, PLUGIN_ONLY_PRESET_URL, target);
             },
             appendAtEnd: true,
         }],
@@ -205,8 +282,44 @@ async function showIterationPopup(targetSelectId) {
     await popup.show();
 }
 
-async function showAgentPopup() {
-    const popup = new Popup(buildAgentHelpHtml(), POPUP_TYPE.TEXT, '', {
+async function showAgentDirectorPopup(target) {
+    const popup = new Popup(buildAgentDirectorHelpHtml(), POPUP_TYPE.TEXT, '', {
+        okButton: t('Close'),
+        cancelButton: false,
+        wider: true,
+        customButtons: [{
+            text: t('Import agent-director preset'),
+            icon: 'fa-download',
+            result: 2,
+            action: async () => {
+                await importBundledPreset(AGENT_DIRECTOR_PRESET_NAME, AGENT_DIRECTOR_PRESET_URL, target);
+            },
+            appendAtEnd: true,
+        }],
+    });
+    await popup.show();
+}
+
+async function showAgentNonDirectorPopup(target) {
+    const popup = new Popup(buildAgentNonDirectorHelpHtml(), POPUP_TYPE.TEXT, '', {
+        okButton: t('Close'),
+        cancelButton: false,
+        wider: true,
+        customButtons: [{
+            text: t('Import agent-non-director preset'),
+            icon: 'fa-download',
+            result: 2,
+            action: async () => {
+                await importBundledPreset(AGENT_NON_DIRECTOR_PRESET_NAME, AGENT_NON_DIRECTOR_PRESET_URL, target);
+            },
+            appendAtEnd: true,
+        }],
+    });
+    await popup.show();
+}
+
+async function showLegacyAgentPopup() {
+    const popup = new Popup(buildLegacyAgentHelpHtml(), POPUP_TYPE.TEXT, '', {
         okButton: t('Got it'),
         cancelButton: false,
         wider: true,
@@ -224,12 +337,36 @@ function installHandlersOnce() {
         e.stopPropagation();
         const $btn = window.jQuery(this);
         const kind = String($btn.attr('data-luker-preset-help-kind') || '');
+        const agentMode = String($btn.attr('data-luker-preset-help-agent-mode') || '');
         const targetSelectId = String($btn.attr('data-luker-preset-help-for') || '');
+        // Two ways the popup finds the target <select>:
+        //   1. explicit id passed via data-luker-preset-help-for (preferred
+        //      when the caller has a stable id; e.g. CPA iter, MG iter, the
+        //      orchestrator inline-drawer slots, the agenda/loop preset
+        //      slots).
+        //   2. DOM walk — climb to the closest <label> and grab its sibling
+        //      <select>. Used by callers whose <select> has no id (director
+        //      main / sub-agent rows, which key off data-orch-* attributes).
+        const target = targetSelectId
+            ? targetSelectId
+            : (function () {
+                const $label = $btn.closest('label');
+                if ($label.length === 0) return null;
+                const $select = $label.find('select').first();
+                return $select.length ? $select : null;
+            })();
         try {
             if (kind === 'agent') {
-                await showAgentPopup();
+                const resolved = resolveAgentMode(agentMode);
+                if (resolved === 'director') {
+                    await showAgentDirectorPopup(target);
+                } else if (resolved === 'non-director') {
+                    await showAgentNonDirectorPopup(target);
+                } else {
+                    await showLegacyAgentPopup();
+                }
             } else {
-                await showIterationPopup(targetSelectId);
+                await showIterationPopup(target);
             }
         } catch (err) {
             console.error('[preset-help] handler failed', err);
