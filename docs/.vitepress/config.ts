@@ -176,6 +176,7 @@ const zhCNSidebar = [
   items: [
   { text: '多Agent上手：预设、记忆图、网络搜索', link: '/zh-CN/recipes/agent-onboarding' },
   { text: '用 skills 调教 RP 输出', link: '/zh-CN/recipes/rp-skills-walkthrough' },
+  { text: '给一张角色卡做专属编排', link: '/zh-CN/recipes/card-customization-walkthrough' },
   ],
   },
   {
@@ -323,6 +324,7 @@ const zhTWSidebar = [
     items: [
       { text: '多Agent上手：預設、記憶圖、網路搜尋', link: '/zh-TW/recipes/agent-onboarding' },
       { text: '用 skills 調教 RP 輸出', link: '/zh-TW/recipes/rp-skills-walkthrough' },
+      { text: '給一張角色卡做專屬編排', link: '/zh-TW/recipes/card-customization-walkthrough' },
     ],
   },
   {
@@ -470,6 +472,7 @@ const enSidebar = [
     items: [
       { text: 'Multi-agent setup: presets, memory graph, web search', link: '/recipes/agent-onboarding' },
       { text: 'Shaping RP output with skills', link: '/recipes/rp-skills-walkthrough' },
+      { text: 'Building a card-specific orchestration', link: '/recipes/card-customization-walkthrough' },
     ],
   },
   {
