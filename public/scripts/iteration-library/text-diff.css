@@ -29,12 +29,15 @@
     padding: 8px 10px;
     font-size: 0.92rem;
     font-weight: 500;
+    flex-wrap: wrap;
 }
 .luker_lib_diff_summary_main {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 4px 8px;
     min-width: 0;
+    flex-wrap: wrap;
+    white-space: nowrap;
 }
 .luker_lib_diff_meta {
     display: inline-flex;
@@ -43,6 +46,8 @@
     font-size: 0.85rem;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     opacity: 0.85;
+    flex-wrap: wrap;
+    white-space: nowrap;
 }
 .luker_lib_diff_meta_add {
     color: #2ea043;
@@ -51,6 +56,7 @@
     padding: 1px 6px;
     border-radius: 999px;
     font-weight: 600;
+    white-space: nowrap;
 }
 .luker_lib_diff_meta_del {
     color: #f85149;
@@ -59,6 +65,7 @@
     padding: 1px 6px;
     border-radius: 999px;
     font-weight: 600;
+    white-space: nowrap;
 }
 .luker_lib_diff_expand_btn {
     display: inline-flex;

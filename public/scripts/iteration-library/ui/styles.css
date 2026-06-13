@@ -174,12 +174,13 @@
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    gap: 8px;
+    gap: 4px 8px;
     margin-bottom: 4px;
+    flex-wrap: wrap;
 }
-.luker_lib_diff_op    { font-weight: 600; }
+.luker_lib_diff_op    { font-weight: 600; word-break: break-word; overflow-wrap: anywhere; min-width: 0; }
 .luker_lib_diff_path  { opacity: 0.7; }
-.luker_lib_diff_delta { opacity: 0.6; font-size: 0.85em; }
+.luker_lib_diff_delta { opacity: 0.6; font-size: 0.85em; white-space: nowrap; flex-shrink: 0; }
 .luker_lib_diff_list_preview {
     margin: 0;
     padding: 6px;
