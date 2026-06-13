@@ -418,7 +418,6 @@ describe('SkillRepository - readFile', () => {
     test('reads full SKILL.md by default', async () => {
         const out = await repo.readFile({ scope: { kind: 'global' }, name: 'rr' });
         expect(out.content).toContain('Line 100');
-        expect(out.truncated).toBe(false);
         expect(out.totalLines).toBeGreaterThan(100);
     });
 
@@ -435,10 +434,13 @@ describe('SkillRepository - readFile', () => {
         expect(out.content).not.toContain('Line 13');
     });
 
-    test('truncates response at 50 KB hard cap', async () => {
+    test('returns full file content even when large (no arbitrary character cap)', async () => {
+        // Regression: a previous 50 KB response cap silently truncated reads
+        // and broke `skill_edit_content` calls whose oldString lived past
+        // the cut-off — the edit endpoint did a literal string match against
+        // the full file, but the model only ever saw the truncated head.
         const out = await repo.readFile({ scope: { kind: 'global' }, name: 'rr', path: 'references/big.md' });
-        expect(out.content.length).toBeLessThanOrEqual(50 * 1024);
-        expect(out.truncated).toBe(true);
+        expect(out.content.length).toBe(80 * 1024);
     });
 
     test('rejects binary file', async () => {

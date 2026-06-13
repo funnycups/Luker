@@ -13,8 +13,6 @@ const LIMITS = {
     skillMd: 512 * 1024,              // 512 KB
 };
 
-const READ_HARD_CAP = 50 * 1024;    // 50 KB single skill_read response cap
-
 function assertSafeSkillName(n) {
     if (typeof n !== 'string' || !/^[a-z0-9_-]+$/.test(n) || n.length > 128) {
         throw new Error(`illegal skill name: ${n}`);
@@ -533,13 +531,8 @@ export function createSkillRepository(dataRoot) {
             const end = Number.isInteger(limit) ? start + limit : allLines.length;
             slice = allLines.slice(start, end);
         }
-        let content = slice.join('\n');
-        let truncated = false;
-        if (content.length > READ_HARD_CAP) {
-            content = content.slice(0, READ_HARD_CAP);
-            truncated = true;
-        }
-        return { content, totalLines, truncated };
+        const content = slice.join('\n');
+        return { content, totalLines };
     }
 
     return {

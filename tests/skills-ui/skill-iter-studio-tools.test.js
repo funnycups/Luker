@@ -212,7 +212,7 @@ describe('runSkillIterStudioTool — inventory inspection', () => {
     });
 
     test('skill_read_content wraps skillsApi.readFile', async () => {
-        mockSkillsApi.readFile.mockResolvedValue({ content: 'body', totalLines: 1, truncated: false });
+        mockSkillsApi.readFile.mockResolvedValue({ content: 'body', totalLines: 1 });
         const out = await runSkillIterStudioTool(
             { name: 'skill_read_content', args: { name: 'foo', path: 'helpers.md', offset: 1, limit: 50 } },
             { getWorkingProfile: () => ({}) },

@@ -327,7 +327,7 @@ function makeStubContext({ files = [], readContent = '---\nname: x\ndescription:
     const skillsApi = {
         list: jest.fn(async () => []),
         listFiles: jest.fn(async () => ({ files: files.slice() })),
-        readFile: jest.fn(async () => ({ content: readContent, sha256: readSha, totalLines: readContent.split('\n').length, truncated: false })),
+        readFile: jest.fn(async () => ({ content: readContent, sha256: readSha, totalLines: readContent.split('\n').length })),
         writeFile: jest.fn(async () => ({ sha256: 'sha-after-write' })),
         editFile: jest.fn(async () => ({ sha256: 'sha-after-edit', changesApplied: 1 })),
         deleteFile: jest.fn(async () => null),
@@ -447,7 +447,6 @@ describe('openSkillEditor — integration scenarios', () => {
             content: 'NOTES BODY',
             sha256: 'sha-notes',
             totalLines: 1,
-            truncated: false,
         }));
         target.click();
         for (let i = 0; i < 6; i++) await Promise.resolve();
@@ -546,7 +545,7 @@ describe('openSkillEditor — integration scenarios', () => {
                 target = btn; break;
             }
         }
-        ctx.__skillsApi.readFile.mockImplementationOnce(async () => ({ content: 'plain text', sha256: 'n1', totalLines: 1, truncated: false }));
+        ctx.__skillsApi.readFile.mockImplementationOnce(async () => ({ content: 'plain text', sha256: 'n1', totalLines: 1 }));
         target.click();
         for (let i = 0; i < 6; i++) await Promise.resolve();
 

@@ -112,7 +112,7 @@ export function registerSkillAgentTools(toolManager) {
     toolManager.registerFunctionTool({
         name: 'skill_read',
         displayName: 'Read skill file',
-        description: 'Read a file inside a visible skill. Default path is SKILL.md. Use offset/limit for line ranges. Responses are capped at 50 KB; if truncated=true, use offset to continue.',
+        description: 'Read a file inside a visible skill. Default path is SKILL.md. Use offset/limit for line ranges.',
         parameters: {
             type: 'object',
             properties: {

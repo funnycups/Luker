@@ -8,7 +8,7 @@ jest.unstable_mockModule('../../public/scripts/skills/api.js', () => ({
             { name: 'foo-skill', description: 'a foo skill', scope: { kind: 'global' }, metadata: { tags: ['t'] } },
             { name: 'bar-skill', description: 'a bar skill', scope: { kind: 'preset', name: 'rp' }, metadata: { tags: [] } },
         ]),
-        readFile: jest.fn(async () => ({ content: 'body', totalLines: 1, truncated: false })),
+        readFile: jest.fn(async () => ({ content: 'body', totalLines: 1 })),
         search: jest.fn(async () => ({ hits: [{ path: 'SKILL.md', lineStart: 1, lineEnd: 2, snippet: 'hit' }] })),
     },
 }));
