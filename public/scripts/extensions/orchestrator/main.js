@@ -145,7 +145,6 @@ import {
     applyCharacterExecutionModeForAvatar,
     clearCharacterExtensionForMode,
     getCharacterAgendaOverrideByAvatar,
-    getCharacterCardSnapshot,
     getCharacterDirectorOverrideByAvatar,
     getCharacterDisplayNameByAvatar,
     getCharacterExtensionDataByAvatar,
@@ -236,6 +235,10 @@ import {
     applyLoopProfilePatchArgs,
 } from './loop-iteration.js';
 import { sanitizeProfileForAiPrompt } from './profile-projection.js';
+import {
+    SYSTEM_PROMPT_PATCH_SCHEMA_FIELDS,
+    applyStringPatch,
+} from './system-prompt-patch.js';
 import {
     createNewStage,
     ensureDirectorEditorIntegrity,
@@ -2822,6 +2825,7 @@ export const DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK = [
     '- Use `luker_orch_set_director_main_agent` to patch any subset of mainAgent fields. Omitted fields keep their current value.',
     '- Use `luker_orch_set_director_subagent` to create-or-update one sub-agent at a time. `id` is required; other fields are patches when the sub-agent exists, initial values when it does not.',
     '- Use `luker_orch_remove_director_subagent` to delete one sub-agent by id.',
+    '- For incremental edits to a long systemPrompt, prefer `luker_orch_patch_director_main_agent_system_prompt` / `luker_orch_patch_director_subagent_system_prompt` over resending the whole field via the `set_*` tools. `oldString` must be unique unless `replaceAll: true`.',
     '- For memory: read tools (`memory.schema / list_candidates / edge_summary / node_brief / expand_seeds / keyword_search / vector_search / find_by_name / compaction_candidates`) are safe for scouts and analysts; write tools (`memory.node_create / node_edit / node_delete / link_upsert / link_delete / compact_nodes`) should only be enabled on mutation sub-agents (`memory_curator` by default).',
     '- Use `luker_orch_set_director_limits` for budget changes (maxRounds, maxConcurrentSubagents, maxTotalSubagentRuns, discardOnAbort).',
     '- Tool flags cascade: every sub-agent inherits `director.tools` unless it has its own override; the main agent inherits the same default unless `mainAgent.tools` is set. Use:',
@@ -2858,6 +2862,7 @@ export const DEFAULT_AGENDA_ITERATION_MODE_BLOCK = [
     '- Keep the planner preset as the main orchestration contract and keep agent prompts concrete and task-oriented.',
     '- Use luker_orch_set_agenda_planner to create or update the agenda planner preset.',
     '- Use luker_orch_set_agenda_agent to create or update one agenda agent at a time.',
+    '- For incremental edits to a long systemPrompt, prefer `luker_orch_patch_agenda_planner_system_prompt` / `luker_orch_patch_agenda_agent_system_prompt` over resending the whole field. `oldString` must be unique unless `replaceAll: true`.',
     '- Use luker_orch_set_agenda_final_agent to point final output to an existing agent id.',
     '- Use luker_orch_set_agenda_limits only for real budget changes, not for stylistic edits.',
     '- Tool flags cascade: every agenda agent inherits `defaultTools` unless it has its own override. Use:',
@@ -3314,6 +3319,35 @@ function buildAiIterationToolSet(session = null) {
             {
                 type: 'function',
                 function: {
+                    name: 'luker_orch_patch_director_main_agent_system_prompt',
+                    description: 'Apply a find/replace patch to the director main agent\'s systemPrompt without resending the whole field. Default `oldString` must occur exactly once — widen with surrounding context until unique. Pass `replaceAll: true` to replace every occurrence. Prefer this over `luker_orch_set_director_main_agent` when only tweaking a few lines of a long prompt.',
+                    parameters: {
+                        type: 'object',
+                        properties: { ...SYSTEM_PROMPT_PATCH_SCHEMA_FIELDS },
+                        required: ['oldString', 'newString'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_patch_director_subagent_system_prompt',
+                    description: 'Apply a find/replace patch to one director sub-agent\'s systemPrompt without resending the whole field. `id` selects the sub-agent. Default `oldString` must occur exactly once — widen with surrounding context until unique. Pass `replaceAll: true` to replace every occurrence. Prefer this over `luker_orch_set_director_subagent` when only tweaking a few lines of a long prompt.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            id: { type: 'string' },
+                            ...SYSTEM_PROMPT_PATCH_SCHEMA_FIELDS,
+                        },
+                        required: ['id', 'oldString', 'newString'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
                     name: 'luker_orch_remove_director_subagent',
                     description: 'Remove one director sub-agent by id.',
                     parameters: {
@@ -3508,6 +3542,19 @@ function buildAiIterationToolSet(session = null) {
             {
                 type: 'function',
                 function: {
+                    name: 'luker_orch_patch_loop_system_prompt',
+                    description: 'Apply a find/replace patch to the loop profile\'s system_prompt without resending the whole field. Default `oldString` must occur exactly once — widen with surrounding context until unique. Pass `replaceAll: true` to replace every occurrence. Prefer this over `luker_orch_set_loop_profile` when only tweaking a few lines of a long prompt.',
+                    parameters: {
+                        type: 'object',
+                        properties: { ...SYSTEM_PROMPT_PATCH_SCHEMA_FIELDS },
+                        required: ['oldString', 'newString'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
                     name: 'luker_orch_simulate',
                     description: 'Run loop orchestration simulation against recent chat messages or a custom user message.',
                     parameters: {
@@ -3557,6 +3604,35 @@ function buildAiIterationToolSet(session = null) {
                             promptPresetName: { type: 'string' },
                         },
                         required: ['agent_id', 'systemPrompt', 'userPromptTemplate'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_patch_agenda_planner_system_prompt',
+                    description: 'Apply a find/replace patch to the agenda planner\'s systemPrompt without resending the whole field. Default `oldString` must occur exactly once — widen with surrounding context until unique. Pass `replaceAll: true` to replace every occurrence. Prefer this over `luker_orch_set_agenda_planner` when only tweaking a few lines of a long prompt.',
+                    parameters: {
+                        type: 'object',
+                        properties: { ...SYSTEM_PROMPT_PATCH_SCHEMA_FIELDS },
+                        required: ['oldString', 'newString'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'luker_orch_patch_agenda_agent_system_prompt',
+                    description: 'Apply a find/replace patch to one agenda agent\'s systemPrompt without resending the whole field. `agent_id` selects the agent. Default `oldString` must occur exactly once — widen with surrounding context until unique. Pass `replaceAll: true` to replace every occurrence. Prefer this over `luker_orch_set_agenda_agent` when only tweaking a few lines of a long prompt.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            agent_id: { type: 'string' },
+                            ...SYSTEM_PROMPT_PATCH_SCHEMA_FIELDS,
+                        },
+                        required: ['agent_id', 'oldString', 'newString'],
                         additionalProperties: false,
                     },
                 },
@@ -4391,6 +4467,29 @@ async function executeAgendaIterationToolCalls(context, session, toolCalls, abor
             changed = true;
             continue;
         }
+        if (name === 'luker_orch_patch_agenda_planner_system_prompt') {
+            const planner = session.workingProfile.planner || {};
+            const currentPrompt = String(planner.systemPrompt || '');
+            const result = applyStringPatch(currentPrompt, args);
+            if (!result.ok) {
+                const actionText = `Agenda planner system-prompt patch failed: ${result.error}.`;
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: result.error, detail: result.detail, action: actionText });
+                continue;
+            }
+            const profileChanged = result.nextText !== currentPrompt;
+            session.workingProfile.planner = createAgendaPlannerDraft({
+                ...planner,
+                systemPrompt: result.nextText,
+            });
+            const actionText = profileChanged
+                ? 'Agenda planner system prompt patched.'
+                : 'Agenda planner system-prompt patch produced no changes.';
+            actions.push(actionText);
+            pushToolResult({ ok: true, changed: profileChanged, action: actionText, systemPrompt: result.nextText });
+            if (profileChanged) changed = true;
+            continue;
+        }
         if (name === 'luker_orch_set_agenda_agent') {
             const agentId = sanitizeIdentifierToken(args.agent_id, '');
             if (!agentId) {
@@ -4415,6 +4514,42 @@ async function executeAgendaIterationToolCalls(context, session, toolCalls, abor
             actions.push(actionText);
             pushToolResult({ ok: true, changed: true, action: actionText, agent_id: agentId });
             changed = true;
+            continue;
+        }
+        if (name === 'luker_orch_patch_agenda_agent_system_prompt') {
+            const agentId = sanitizeIdentifierToken(args.agent_id, '');
+            if (!agentId) {
+                const actionText = 'Skipped agenda agent system-prompt patch: missing agent_id.';
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: 'invalid_args', action: actionText });
+                continue;
+            }
+            const beforeAgent = session.workingProfile.agents[agentId];
+            if (!beforeAgent) {
+                const actionText = `Skipped agenda agent system-prompt patch: "${agentId}" not found.`;
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: 'not_found', action: actionText, agent_id: agentId });
+                continue;
+            }
+            const currentPrompt = String(beforeAgent.systemPrompt || '');
+            const result = applyStringPatch(currentPrompt, args);
+            if (!result.ok) {
+                const actionText = `Agenda agent "${agentId}" system-prompt patch failed: ${result.error}.`;
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: result.error, detail: result.detail, action: actionText });
+                continue;
+            }
+            const profileChanged = result.nextText !== currentPrompt;
+            session.workingProfile.agents[agentId] = createPresetDraft({
+                ...beforeAgent,
+                systemPrompt: result.nextText,
+            });
+            const actionText = profileChanged
+                ? `Agenda agent "${agentId}" system prompt patched.`
+                : `Agenda agent "${agentId}" system-prompt patch produced no changes.`;
+            actions.push(actionText);
+            pushToolResult({ ok: true, changed: profileChanged, action: actionText, agent_id: agentId, systemPrompt: result.nextText });
+            if (profileChanged) changed = true;
             continue;
         }
         if (name === 'luker_orch_remove_agenda_agent') {
@@ -4675,6 +4810,27 @@ async function executeLoopIterationToolCalls(context, session, toolCalls, abortS
             }
             continue;
         }
+        if (name === 'luker_orch_patch_loop_system_prompt') {
+            const before = sanitizeLoopProfile(session.workingProfile);
+            const currentPrompt = String(before.system_prompt || '');
+            const result = applyStringPatch(currentPrompt, args);
+            if (!result.ok) {
+                const actionText = `Loop system-prompt patch failed: ${result.error}.`;
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: result.error, detail: result.detail, action: actionText });
+                continue;
+            }
+            const after = applyLoopProfilePatchArgs(before, { system_prompt: result.nextText });
+            session.workingProfile = after;
+            const profileChanged = JSON.stringify(before) !== JSON.stringify(after);
+            const actionText = profileChanged
+                ? 'Loop system prompt patched.'
+                : 'Loop system-prompt patch produced no changes.';
+            actions.push(actionText);
+            pushToolResult({ ok: true, changed: profileChanged, action: actionText, profile: after });
+            if (profileChanged) changed = true;
+            continue;
+        }
         if (name === 'luker_orch_simulate') {
             const simulation = await runAiIterationSimulation(context, session, args, abortSignal);
             simulations.push(simulation);
@@ -4821,6 +4977,65 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
             actions.push(actionText);
             pushToolResult({ ok: true, changed: profileChanged || existingIndex < 0, action: actionText, subagent: next });
             if (profileChanged || existingIndex < 0) changed = true;
+            continue;
+        }
+
+        if (name === 'luker_orch_patch_director_main_agent_system_prompt') {
+            if (!director.mainAgent || typeof director.mainAgent !== 'object') {
+                director.mainAgent = {};
+            }
+            const currentPrompt = String(director.mainAgent.systemPrompt || '');
+            const result = applyStringPatch(currentPrompt, args);
+            if (!result.ok) {
+                const actionText = `Director main-agent system-prompt patch failed: ${result.error}.`;
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: result.error, detail: result.detail, action: actionText });
+                continue;
+            }
+            const profileChanged = result.nextText !== currentPrompt;
+            director.mainAgent.systemPrompt = result.nextText;
+            const actionText = profileChanged
+                ? 'Director main-agent system prompt patched.'
+                : 'Director main-agent system-prompt patch produced no changes.';
+            actions.push(actionText);
+            pushToolResult({ ok: true, changed: profileChanged, action: actionText, systemPrompt: result.nextText });
+            if (profileChanged) changed = true;
+            continue;
+        }
+
+        if (name === 'luker_orch_patch_director_subagent_system_prompt') {
+            const id = sanitizeIdentifierToken(args.id, '');
+            if (!id) {
+                const actionText = 'Skipped sub-agent system-prompt patch: missing id.';
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: 'invalid_args', action: actionText });
+                continue;
+            }
+            const subAgents = Array.isArray(director.subAgents) ? director.subAgents : [];
+            const subIndex = subAgents.findIndex(a => String(a?.id || '') === id);
+            if (subIndex < 0) {
+                const actionText = `Skipped sub-agent system-prompt patch: id "${id}" not found.`;
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: 'not_found', action: actionText });
+                continue;
+            }
+            const currentPrompt = String(subAgents[subIndex].systemPrompt || '');
+            const result = applyStringPatch(currentPrompt, args);
+            if (!result.ok) {
+                const actionText = `Sub-agent "${id}" system-prompt patch failed: ${result.error}.`;
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: result.error, detail: result.detail, action: actionText });
+                continue;
+            }
+            const profileChanged = result.nextText !== currentPrompt;
+            subAgents[subIndex] = { ...subAgents[subIndex], systemPrompt: result.nextText };
+            director.subAgents = subAgents;
+            const actionText = profileChanged
+                ? `Sub-agent "${id}" system prompt patched.`
+                : `Sub-agent "${id}" system-prompt patch produced no changes.`;
+            actions.push(actionText);
+            pushToolResult({ ok: true, changed: profileChanged, action: actionText, id, systemPrompt: result.nextText });
+            if (profileChanged) changed = true;
             continue;
         }
 

@@ -94,6 +94,18 @@ export const ORCH_TOOL_DISPLAY = {
         type: 'edit',
         summarize: (a, r, i18n) => (typeof i18n === 'function' ? i18n('tools') : 'tools'),
     },
+    luker_orch_patch_director_main_agent_system_prompt: {
+        icon: '🩹',
+        label: 'Patch director main agent system prompt',
+        type: 'edit',
+        summarize: (a, r, i18n) => (typeof i18n === 'function' ? i18n('main agent') : 'main agent'),
+    },
+    luker_orch_patch_director_subagent_system_prompt: {
+        icon: '🩹',
+        label: 'Patch director sub-agent system prompt',
+        type: 'edit',
+        summarize: (a) => String(a?.id || ''),
+    },
 
     // ── Loop mode ───────────────────────────────────────────────────
     luker_orch_set_loop_profile: {
@@ -101,6 +113,12 @@ export const ORCH_TOOL_DISPLAY = {
         label: 'Update loop profile',
         type: 'edit',
         summarize: (a, r, i18n) => (typeof i18n === 'function' ? i18n('loop profile') : 'loop profile'),
+    },
+    luker_orch_patch_loop_system_prompt: {
+        icon: '🩹',
+        label: 'Patch loop system prompt',
+        type: 'edit',
+        summarize: (a, r, i18n) => (typeof i18n === 'function' ? i18n('system_prompt') : 'system_prompt'),
     },
 
     // ── Agenda mode ─────────────────────────────────────────────────
@@ -115,6 +133,18 @@ export const ORCH_TOOL_DISPLAY = {
         label: 'Upsert agenda agent',
         type: 'edit',
         summarize: (a) => String(a?.id || ''),
+    },
+    luker_orch_patch_agenda_planner_system_prompt: {
+        icon: '🩹',
+        label: 'Patch agenda planner system prompt',
+        type: 'edit',
+        summarize: (a, r, i18n) => (typeof i18n === 'function' ? i18n('planner') : 'planner'),
+    },
+    luker_orch_patch_agenda_agent_system_prompt: {
+        icon: '🩹',
+        label: 'Patch agenda agent system prompt',
+        type: 'edit',
+        summarize: (a) => String(a?.agent_id || ''),
     },
     luker_orch_remove_agenda_agent: {
         icon: '🗑️',
