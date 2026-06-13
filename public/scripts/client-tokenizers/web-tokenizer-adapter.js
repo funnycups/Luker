@@ -6,6 +6,11 @@
 //   const count = tokenizer.encode(convertedPrompt).length;
 // `convertClaudePrompt` is ported below from src/prompt-converters.js:115 —
 // only the subset reachable with the all-false call args is needed.
+//
+// All tokenization runs in a dedicated worker (workers/tokenizer-worker.js).
+// The WASM encode of a long-chat prompt blocked the main thread for >30s in
+// mobile traces; moving it off-thread keeps the UI responsive. A synchronous
+// in-thread fallback stays available for environments without Web Workers.
 
 import { loadUmdScript } from './umd-loader.js';
 
@@ -13,6 +18,7 @@ const LIB_URL = '/lib/tokenizers/web-tokenizers/index.js';
 
 // Model name -> tokenizer.json URL on our static mount.
 // Matches dispatch in src/endpoints/tokenizers.js:920-982.
+// Keep in sync with workers/tokenizer-worker.js TOKENIZER_URLS.
 const TOKENIZER_URLS = {
     claude: '/tokenizers/claude.json',
     llama3: '/tokenizers/llama3.json',
@@ -26,7 +32,81 @@ const TOKENIZER_URLS = {
     deepseek: '/tokenizers-remote/deepseek.json.gz',
 };
 
-const instanceCache = new Map();
+// ---- Worker bridge -------------------------------------------------------
+
+let workerInstance = null;
+let workerDisabled = false;
+let workerSequence = 0;
+const workerPending = new Map();
+const WORKER_REQUEST_TIMEOUT_MS = 30000;
+
+function ensureWorker() {
+    if (workerDisabled || typeof Worker === 'undefined') return null;
+    if (workerInstance) return workerInstance;
+
+    try {
+        workerInstance = new Worker(new URL('../workers/tokenizer-worker.js', import.meta.url));
+    } catch (error) {
+        console.warn('[web-tokenizer-adapter] Failed to spawn worker, falling back to main-thread tokenizer', error);
+        workerDisabled = true;
+        workerInstance = null;
+        return null;
+    }
+
+    workerInstance.addEventListener('message', (event) => {
+        const id = Number(event?.data?.id);
+        if (!Number.isInteger(id)) return;
+        const pending = workerPending.get(id);
+        if (!pending) return;
+        clearTimeout(pending.timeoutId);
+        workerPending.delete(id);
+        if (event.data?.ok) {
+            pending.resolve(event.data.result);
+        } else {
+            pending.reject(new Error(String(event.data?.error || 'tokenizer worker failed')));
+        }
+    });
+
+    workerInstance.addEventListener('error', (event) => {
+        console.warn('[web-tokenizer-adapter] Worker crashed, disabling and falling back', event?.error || event);
+        const crashErr = event?.error || new Error('tokenizer worker crashed');
+        for (const [, pending] of workerPending) {
+            clearTimeout(pending.timeoutId);
+            pending.reject(crashErr);
+        }
+        workerPending.clear();
+        try { workerInstance?.terminate(); } catch { /* ignore */ }
+        workerInstance = null;
+        workerDisabled = true;
+    });
+
+    return workerInstance;
+}
+
+function callWorker(op, payload) {
+    const worker = ensureWorker();
+    if (!worker) return Promise.reject(new Error('tokenizer worker unavailable'));
+
+    return new Promise((resolve, reject) => {
+        const id = ++workerSequence;
+        const timeoutId = setTimeout(() => {
+            workerPending.delete(id);
+            reject(new Error(`tokenizer worker ${op} timed out`));
+        }, WORKER_REQUEST_TIMEOUT_MS);
+        workerPending.set(id, { resolve, reject, timeoutId });
+        try {
+            worker.postMessage({ id, op, ...payload });
+        } catch (error) {
+            clearTimeout(timeoutId);
+            workerPending.delete(id);
+            reject(error);
+        }
+    });
+}
+
+// ---- In-thread fallback (also exercised on worker errors) ----------------
+
+const fallbackInstanceCache = new Map();
 
 async function fetchTokenizerJson(url) {
     const res = await fetch(url);
@@ -40,8 +120,8 @@ async function fetchTokenizerJson(url) {
     return new Uint8Array(await res.arrayBuffer());
 }
 
-async function getInstance(model) {
-    if (instanceCache.has(model)) return instanceCache.get(model);
+async function getFallbackInstance(model) {
+    if (fallbackInstanceCache.has(model)) return fallbackInstanceCache.get(model);
     const promise = (async () => {
         const ns = await loadUmdScript(LIB_URL, 'tokenizers');
         const url = TOKENIZER_URLS[model];
@@ -51,8 +131,8 @@ async function getInstance(model) {
     })();
     // Cache the promise so concurrent callers share it. If it rejects, evict
     // so a later call can retry instead of permanently failing.
-    instanceCache.set(model, promise);
-    promise.catch(() => instanceCache.delete(model));
+    fallbackInstanceCache.set(model, promise);
+    promise.catch(() => fallbackInstanceCache.delete(model));
     return promise;
 }
 
@@ -61,6 +141,7 @@ async function getInstance(model) {
 //   convertClaudePrompt(messages, false, '', false, false, '', false)
 // With all flags off, only these branches execute. Mutates the messages array
 // (matching server behavior); callers pass throwaway copies.
+// Kept in sync with workers/tokenizer-worker.js convertClaudePromptForCount.
 function convertClaudePromptForCount(messages) {
     if (messages.length > 0) {
         messages.forEach((m) => {
@@ -95,26 +176,54 @@ function convertClaudePromptForCount(messages) {
     }).join('');
 }
 
-export async function countMessages(model, messages) {
-    const tok = await getInstance(model);
+async function countMessagesFallback(model, messages) {
+    const tok = await getFallbackInstance(model);
     const copy = messages.map(m => ({ ...m }));
     const prompt = convertClaudePromptForCount(copy);
     const out = tok.encode(prompt);
-    // out may be a typed array, plain Array, or { ids: [...] } depending on lib version
     if (typeof out?.length === 'number') return out.length;
     return out?.ids?.length ?? 0;
 }
 
-export async function encode(model, text) {
-    const tok = await getInstance(model);
+async function encodeFallback(model, text) {
+    const tok = await getFallbackInstance(model);
     const out = tok.encode(String(text ?? ''));
     if (typeof out?.length === 'number') return Array.from(out);
     return Array.from(out?.ids ?? []);
 }
 
-export async function decode(model, ids) {
-    const tok = await getInstance(model);
+async function decodeFallback(model, ids) {
+    const tok = await getFallbackInstance(model);
     return tok.decode(Array.from(ids));
+}
+
+// ---- Public surface ------------------------------------------------------
+
+export async function countMessages(model, messages) {
+    try {
+        return await callWorker('countMessages', { model, messages });
+    } catch (error) {
+        console.warn(`[web-tokenizer-adapter] worker countMessages failed for ${model}, falling back`, error);
+        return countMessagesFallback(model, messages);
+    }
+}
+
+export async function encode(model, text) {
+    try {
+        return await callWorker('encode', { model, text });
+    } catch (error) {
+        console.warn(`[web-tokenizer-adapter] worker encode failed for ${model}, falling back`, error);
+        return encodeFallback(model, text);
+    }
+}
+
+export async function decode(model, ids) {
+    try {
+        return await callWorker('decode', { model, ids });
+    } catch (error) {
+        console.warn(`[web-tokenizer-adapter] worker decode failed for ${model}, falling back`, error);
+        return decodeFallback(model, ids);
+    }
 }
 
 export function supports(model) {

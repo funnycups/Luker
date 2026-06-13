@@ -64,6 +64,13 @@ module.exports = {
                 SillyTavern: 'readonly',
             },
         },
+        {
+            // Worker scripts use the worker global scope (self, importScripts, postMessage, ...).
+            files: ['public/scripts/workers/**/*.js'],
+            env: {
+                worker: true,
+            },
+        },
     ],
     ignorePatterns: [
         '**/node_modules/**',
