@@ -115,6 +115,7 @@ import {
     setupLogLevel,
     setWindowTitle,
     getConfigValue,
+    ensureDirectory,
 } from './util.js';
 import { installLogCapture } from './log-capture.js';
 import { getBufferForHandle as getInspectorBufferForHandle } from './request-inspector.js';
@@ -562,9 +563,18 @@ if (cliArgs.enableCorsProxy) {
     });
 }
 
-// File uploads
+// File uploads — re-ensure destination per request so the upload doesn't
+// ENOENT if the directory is removed after process start.
 const uploadsPath = path.join(cliArgs.dataRoot, UPLOADS_DIRECTORY);
-app.use(multer({ dest: uploadsPath, limits: { fieldSize: 500 * 1024 * 1024 } }).single('avatar'));
+app.use(multer({
+    storage: multer.diskStorage({
+        destination: (_req, _file, cb) => {
+            ensureDirectory(uploadsPath);
+            cb(null, uploadsPath);
+        },
+    }),
+    limits: { fieldSize: 500 * 1024 * 1024 },
+}).single('avatar'));
 app.use(multerMonkeyPatch);
 
 app.get('/version', async function (_, response) {
