@@ -5476,11 +5476,19 @@ async function executeAiIterationToolCalls(context, session, toolCalls, abortSig
 }
 
 async function applyAiIterationSessionToGlobal(context, settings, session, root) {
+    // All four modes commit through writeActivePreset(settings, mode, 'global', payload):
+    // the active preset slot under `presetLibraries.<mode>.<activeId>` is the
+    // single source of truth that getActivePreset reads back. Writing the
+    // legacy flat fields (settings.directorProfile, settings.loopProfile,
+    // settings.agendaPlanner+friends, settings.orchestrationSpec/settings.presets)
+    // is a no-op now — the preset-library migration strips them on next
+    // startup AND the runtime / iter-studio / global panel all read via
+    // getActivePreset, never via the legacy fields.
     if (isLoopIterationSession(session)) {
         const profile = sanitizeLoopProfile(session?.workingProfile);
         settings.executionMode = ORCH_EXECUTION_MODE_LOOP;
         settings.singleAgentModeEnabled = false;
-        settings.loopProfile = profile;
+        writeActivePreset(settings, ORCH_EXECUTION_MODE_LOOP, 'global', profile);
         await saveSettings();
         uiState.globalLoopEditor = loadGlobalLoopEditorState();
         ensureLoopEditorIntegrity(uiState.globalLoopEditor);
@@ -5493,13 +5501,7 @@ async function applyAiIterationSessionToGlobal(context, settings, session, root)
         const profile = sanitizeAgendaWorkingProfile(session?.workingProfile);
         settings.executionMode = ORCH_EXECUTION_MODE_AGENDA;
         settings.singleAgentModeEnabled = false;
-        settings.agendaPlanner = createAgendaPlannerDraft(profile.planner);
-        delete settings.agendaPlannerPrompt;
-        settings.agendaAgents = sanitizePresetMap(profile.agents);
-        settings.agendaFinalAgentId = sanitizeIdentifierToken(profile.finalAgentId, 'finalizer');
-        settings.agendaPlannerMaxRounds = profile.limits.plannerMaxRounds;
-        settings.agendaMaxConcurrentAgents = profile.limits.maxConcurrentAgents;
-        settings.agendaMaxTotalRuns = profile.limits.maxTotalRuns;
+        writeActivePreset(settings, ORCH_EXECUTION_MODE_AGENDA, 'global', profile);
         await saveSettings();
         uiState.globalAgendaEditor = loadGlobalAgendaEditorState();
         ensureAgendaEditorIntegrity(uiState.globalAgendaEditor);
@@ -5512,7 +5514,7 @@ async function applyAiIterationSessionToGlobal(context, settings, session, root)
         const profile = sanitizeDirectorProfile(session?.workingProfile);
         settings.executionMode = ORCH_EXECUTION_MODE_DIRECTOR;
         settings.singleAgentModeEnabled = false;
-        settings.directorProfile = profile;
+        writeActivePreset(settings, ORCH_EXECUTION_MODE_DIRECTOR, 'global', profile);
         await saveSettings();
         uiState.globalDirectorEditor = loadGlobalDirectorEditorState();
         ensureDirectorEditorIntegrity(uiState.globalDirectorEditor);
@@ -5521,8 +5523,11 @@ async function applyAiIterationSessionToGlobal(context, settings, session, root)
         updateUiStatus(i18n('Iteration session applied to global profile.'));
         return;
     }
-    settings.orchestrationSpec = sanitizeSpec(session?.workingProfile?.spec);
-    settings.presets = sanitizePresetMap(session?.workingProfile?.presets);
+    const specPayload = {
+        spec: sanitizeSpec(session?.workingProfile?.spec),
+        presets: sanitizePresetMap(session?.workingProfile?.presets),
+    };
+    writeActivePreset(settings, ORCH_EXECUTION_MODE_SPEC, 'global', specPayload);
     await saveSettings();
     uiState.globalEditor = loadGlobalEditorState();
     ensureEditorIntegrity(uiState.globalEditor);
