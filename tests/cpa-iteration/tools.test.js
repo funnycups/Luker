@@ -107,12 +107,20 @@ describe('CPA — tools', () => {
         expect(edits).toEqual([{ op: 'set', path: 'tools_array', oldValue: [], newValue: [{ id: 1 }] }]);
     });
 
-    test('preset_str_replace → str_replace edit with expected_count', async () => {
+    test('preset_str_replace → str_replace edit (unique-or-fail default, expected_count: 1)', async () => {
         const edits = await normalizeToolCallToEdit(
-            call('preset_str_replace', { path: 'main', find: 'old', replace: 'new', expected_count: 2 }),
+            call('preset_str_replace', { path: 'main', oldString: 'old', newString: 'new' }),
             { live: {} },
         );
-        expect(edits).toEqual([{ op: 'str_replace', path: 'main', find: 'old', replace: 'new', expected_count: 2 }]);
+        expect(edits).toEqual([{ op: 'str_replace', path: 'main', find: 'old', replace: 'new', expected_count: 1 }]);
+    });
+
+    test('preset_str_replace with replaceAll → expected_count matches live occurrence count', async () => {
+        const edits = await normalizeToolCallToEdit(
+            call('preset_str_replace', { path: 'main', oldString: 'X', newString: 'Y', replaceAll: true }),
+            { live: { main: 'X and X and X' } },
+        );
+        expect(edits).toEqual([{ op: 'str_replace', path: 'main', find: 'X', replace: 'Y', expected_count: 3 }]);
     });
 
     test('preset_str_insert → str_insert edit', async () => {

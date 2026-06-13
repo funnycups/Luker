@@ -17,9 +17,10 @@
  *   - `lorebook_update_entry(book_name, uid, patch)` — shallow merge.
  *     Use it to toggle `disable`, rewrite `content` wholesale, or adjust
  *     keys / activation flags.
- *   - `lorebook_str_replace_in_entry(book_name, uid, old_str, new_str)` —
- *     surgical text edit. Cheaper than re-sending the whole content. Fails
- *     if `old_str` appears zero times or more than once.
+ *   - `lorebook_str_replace_in_entry(book_name, uid, oldString, newString, replaceAll?)` —
+ *     surgical text edit. Cheaper than re-sending the whole content. By
+ *     default `oldString` must occur exactly once; pass `replaceAll: true`
+ *     to replace every occurrence.
  */
 
 export const LOREBOOK_WRITE_TOOL_LEGACY_NAMES = Object.freeze({
@@ -59,16 +60,17 @@ export const LOREBOOK_WRITE_TOOL_DEFS = [
         type: 'function',
         function: {
             name: 'lorebook_str_replace_in_entry',
-            description: 'Replace one substring inside an entry\'s `content` field. `old_str` must appear exactly once in the current content — fails otherwise so accidental multi-site edits are not possible. Prefer this over lorebook_update_entry when you only need to tweak a few sentences of a long entry.',
+            description: 'Replace a substring inside an entry\'s `content` field. By default `oldString` must appear exactly once — fails otherwise so accidental multi-site edits are not possible; widen the substring with surrounding context until it is unique. Pass `replaceAll: true` to replace every occurrence. Prefer this over lorebook_update_entry when you only need to tweak a few sentences of a long entry.',
             parameters: {
                 type: 'object',
                 properties: {
                     book_name: { type: 'string', description: 'Required. Target world book.' },
                     uid: { type: 'integer', description: 'Required. UID of the entry to edit.' },
-                    old_str: { type: 'string', description: 'Required. Substring to find. Must occur exactly once in the entry\'s current content.' },
-                    new_str: { type: 'string', description: 'Required. Replacement text. May be the empty string to delete `old_str`.' },
+                    oldString: { type: 'string', description: 'Required. Substring to find. Must occur exactly once in the entry\'s current content unless `replaceAll` is true.' },
+                    newString: { type: 'string', description: 'Required. Replacement text. May be the empty string to delete `oldString`.' },
+                    replaceAll: { type: 'boolean', description: 'Optional. When true, replace every occurrence of `oldString`. Default false (unique-or-fail).' },
                 },
-                required: ['book_name', 'uid', 'old_str', 'new_str'],
+                required: ['book_name', 'uid', 'oldString', 'newString'],
                 additionalProperties: false,
             },
         },

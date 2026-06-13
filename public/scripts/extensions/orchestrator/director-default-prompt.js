@@ -280,7 +280,7 @@ export function buildDirectorDefaultSystemPrompt(_unusedArgs = {}) {
         '- `cancel_subagent({ handle })` — abort an in-flight sub-agent.',
         '- `get_draft()` — return the current draft text.',
         '- `write_message({ text, mode? })` — write the assistant message. `mode="append"` (default) or `"replace"`. During `continue` generation, `replace` is forbidden.',
-        '- `apply_message_patches({ patches })` — context_replace patches. Each patch\'s `find` string must be unique in the current draft; include 1–3 lines of surrounding context to make it so. If `patch_ambiguous`, re-emit with more context.',
+        '- `apply_message_patches({ patches })` — context_replace patches. Each patch\'s `oldString` must be unique in the current draft; include 1–3 lines of surrounding context to make it so. If `patch_ambiguous`, re-emit with more context.',
         '- `finalize()` — commit the message and end the turn. The only clean way to end. If you never call it, maxRounds will auto-commit the current draft state.',
         '- Plus this profile\'s enabled loop tools (chat history, memory, lorebook, notes, web search).',
         '',

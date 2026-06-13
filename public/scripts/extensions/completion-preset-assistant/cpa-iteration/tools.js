@@ -499,17 +499,17 @@ export function buildToolCatalog({ hasReference = false } = {}) {
             type: 'function',
             function: {
                 name: 'preset_str_replace',
-                description: 'Replace a unique substring inside a string-valued preset field. Cheaper than rewriting the whole field and surfaces drift if surrounding text changed externally. `find` must occur exactly expected_count times (default 1).',
+                description: 'Replace a substring inside a string-valued preset field. Cheaper than rewriting the whole field and surfaces drift if surrounding text changed externally. By default `oldString` must occur exactly once — widen with surrounding context until unique. Pass `replaceAll: true` to replace every occurrence.',
                 parameters: {
                     type: 'object',
                     properties: {
                         path: { type: 'string' },
-                        find: { type: 'string' },
-                        replace: { type: 'string' },
-                        expected_count: { type: 'integer' },
+                        oldString: { type: 'string' },
+                        newString: { type: 'string' },
+                        replaceAll: { type: 'boolean', description: 'Optional. When true, replace every occurrence of `oldString`. Default false (unique-or-fail).' },
                         reason: { type: 'string' },
                     },
-                    required: ['path', 'find', 'replace'],
+                    required: ['path', 'oldString', 'newString'],
                 },
             },
         },
@@ -562,17 +562,17 @@ export function buildToolCatalog({ hasReference = false } = {}) {
             type: 'function',
             function: {
                 name: 'preset_str_replace_in_prompt',
-                description: 'Replace a unique substring inside a prompts[] entry\'s content, addressed by stable identifier (uuid). Use this instead of preset_str_replace on prompts[N].content — you do not have to compute the array index, and the index resolves at apply time so concurrent reorders cannot drift it. `find` must occur exactly expected_count times (default 1).',
+                description: 'Replace a substring inside a prompts[] entry\'s content, addressed by stable identifier (uuid). Use this instead of preset_str_replace on prompts[N].content — you do not have to compute the array index, and the index resolves at apply time so concurrent reorders cannot drift it. By default `oldString` must occur exactly once; pass `replaceAll: true` to replace every occurrence.',
                 parameters: {
                     type: 'object',
                     properties: {
                         identifier: { type: 'string', description: 'Stable prompt identifier (the entry.identifier field, e.g. a uuid).' },
-                        find: { type: 'string' },
-                        replace: { type: 'string' },
-                        expected_count: { type: 'integer', minimum: 1, default: 1, description: 'Number of expected matches for "find" (default 1). The op fails if matches != expected_count.' },
+                        oldString: { type: 'string' },
+                        newString: { type: 'string' },
+                        replaceAll: { type: 'boolean', description: 'Optional. When true, replace every occurrence of `oldString`. Default false (unique-or-fail).' },
                         reason: { type: 'string' },
                     },
-                    required: ['identifier', 'find', 'replace'],
+                    required: ['identifier', 'oldString', 'newString'],
                 },
             },
         },
@@ -1265,12 +1265,28 @@ export async function normalizeToolCallToEdit(call, ctx) {
         }];
     }
     if (name === 'preset_str_replace') {
+        // Lower Edit-tool args (`oldString`/`newString`/`replaceAll`) into
+        // engine-op shape (`find`/`replace`/`expected_count`). `replaceAll`
+        // = true → count actual occurrences on live and pass that count, so
+        // the engine's conflict gate still rejects external drift while
+        // replacing every current match. Default false → expected_count: 1
+        // (the engine's unique-or-fail invariant).
+        const find = String(args.oldString ?? '');
+        const replace = String(args.newString ?? '');
+        let expectedCount = 1;
+        if (args.replaceAll) {
+            const currentValue = lodash.get(live, args.path);
+            const occurrences = typeof currentValue === 'string' && find
+                ? countOccurrences(currentValue, find)
+                : 0;
+            expectedCount = Math.max(1, occurrences);
+        }
         return [{
             op: 'str_replace',
             path: args.path,
-            find: args.find,
-            replace: args.replace,
-            expected_count: args.expected_count,
+            find,
+            replace,
+            expected_count: expectedCount,
         }];
     }
     if (name === 'preset_str_insert') {
@@ -1322,17 +1338,22 @@ export async function normalizeToolCallToEdit(call, ctx) {
         const path = `prompts[${idx}].content`;
         const value = lodash.get(live, path);
         if (name === 'preset_str_replace_in_prompt') {
-            assertStrOpUniqueness({
-                path, value, needle: args.find,
-                expected_count: args.expected_count,
-                opLabel: 'preset_str_replace_in_prompt',
-            });
+            // Edit-tool args lowering (mirrors preset_str_replace above).
+            const find = String(args.oldString ?? '');
+            const replace = String(args.newString ?? '');
+            let expectedCount = 1;
+            if (args.replaceAll) {
+                const occurrences = typeof value === 'string' && find
+                    ? countOccurrences(value, find)
+                    : 0;
+                expectedCount = Math.max(1, occurrences);
+            }
             return [{
                 op: 'str_replace',
                 path,
-                find: args.find,
-                replace: args.replace,
-                expected_count: args.expected_count,
+                find,
+                replace,
+                expected_count: expectedCount,
             }];
         }
         if (name === 'preset_str_insert_in_prompt') {

@@ -148,7 +148,7 @@ export const APPLY_MESSAGE_PATCHES_TOOL = {
     type: 'function',
     function: {
         name: 'apply_message_patches',
-        description: 'Apply context_replace patches. Each patch finds an exact byte-for-byte substring in the current message and replaces it. The `find` string MUST be unique in the current message body — include enough surrounding context (typically 1–3 lines before and/or after the target) to make it so. If `find` matches multiple locations, the call fails — extend the context until it is unique. No fuzzy / heuristic matching: whitespace, case, indentation, line endings, and Unicode form must all match exactly.',
+        description: 'Apply context_replace patches. Each patch finds an exact byte-for-byte substring in the current message and replaces it. The `oldString` MUST be unique in the current message body — include enough surrounding context (typically 1–3 lines before and/or after the target) to make it so. If `oldString` matches multiple locations, the call fails — extend the context until it is unique. No fuzzy / heuristic matching: whitespace, case, indentation, line endings, and Unicode form must all match exactly.',
         parameters: {
             type: 'object',
             properties: {
@@ -158,10 +158,10 @@ export const APPLY_MESSAGE_PATCHES_TOOL = {
                         type: 'object',
                         properties: {
                             kind: { type: 'string', enum: ['context_replace'] },
-                            find: { type: 'string', description: 'Exact substring (with surrounding context for uniqueness).' },
-                            replaceWith: { type: 'string', description: 'Replacement text.' },
+                            oldString: { type: 'string', description: 'Exact substring (with surrounding context for uniqueness).' },
+                            newString: { type: 'string', description: 'Replacement text.' },
                         },
-                        required: ['kind', 'find', 'replaceWith'],
+                        required: ['kind', 'oldString', 'newString'],
                     },
                 },
             },

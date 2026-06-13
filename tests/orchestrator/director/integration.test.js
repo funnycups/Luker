@@ -177,7 +177,7 @@ describe('director integration — scripted main agent', () => {
         // Scripted tool-call sequence.
         const calls = [
             [{ id: 't1', name: 'write_message', args: { text: 'The cat sat on the mat.', mode: 'append' } }],
-            [{ id: 't2', name: 'apply_message_patches', args: { patches: [{ kind: 'context_replace', find: 'cat', replaceWith: 'dog' }] } }],
+            [{ id: 't2', name: 'apply_message_patches', args: { patches: [{ kind: 'context_replace', oldString: 'cat', newString: 'dog' }] } }],
             [{ id: 't3', name: 'finalize', args: {} }],
         ];
         let i = 0;

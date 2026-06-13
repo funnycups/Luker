@@ -35,10 +35,10 @@ function fmt(i18n, template, ...values) {
 
 export const CPA_TOOL_DISPLAY = {
     preset_set_field:                    { icon: '✏️', label: 'Set preset field',         type: 'edit',  summarize: (a) => a?.path || '' },
-    preset_str_replace:                  { icon: '🔄', label: 'Replace field text',       type: 'edit',  summarize: (a) => `${a?.path || ''}${a?.expected_count != null ? ` (×${a.expected_count})` : ''}` },
+    preset_str_replace:                  { icon: '🔄', label: 'Replace field text',       type: 'edit',  summarize: (a) => `${a?.path || ''}${a?.replaceAll ? ' (all)' : ''}` },
     preset_str_insert:                   { icon: '➕', label: 'Insert into field',        type: 'edit',  summarize: (a) => a?.path || '' },
     preset_str_delete:                   { icon: '🗑️', label: 'Delete inside field',      type: 'edit',  summarize: (a) => a?.path || '' },
-    preset_str_replace_in_prompt:        { icon: '🔄', label: 'Replace text in prompt',   type: 'edit',  summarize: (a) => `${a?.identifier || ''}${a?.expected_count != null ? ` (×${a.expected_count})` : ''}` },
+    preset_str_replace_in_prompt:        { icon: '🔄', label: 'Replace text in prompt',   type: 'edit',  summarize: (a) => `${a?.identifier || ''}${a?.replaceAll ? ' (all)' : ''}` },
     preset_str_insert_in_prompt:         { icon: '➕', label: 'Insert text in prompt',    type: 'edit',  summarize: (a) => a?.identifier || '' },
     preset_str_delete_in_prompt:         { icon: '🗑️', label: 'Delete text in prompt',    type: 'edit',  summarize: (a) => a?.identifier || '' },
     preset_list_insert:                  { icon: '📋', label: 'List insert',              type: 'edit',  summarize: (a) => `${a?.path || ''} @ ${a?.anchor?.after != null ? 'after ' + a.anchor.after : (a?.anchor?.before != null ? 'before ' + a.anchor.before : '?')}` },

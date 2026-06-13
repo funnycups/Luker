@@ -42,9 +42,9 @@ describe('LOREBOOK_WRITE_TOOL_DEFS — public surface', () => {
         expect(def.function.parameters.properties.patch.additionalProperties).toBe(true);
     });
 
-    test('lorebook_str_replace_in_entry requires book_name, uid, old_str, new_str', () => {
+    test('lorebook_str_replace_in_entry requires book_name, uid, oldString, newString', () => {
         const def = LOREBOOK_WRITE_TOOL_DEFS.find(d => d.function.name === 'lorebook_str_replace_in_entry');
-        expect([...def.function.parameters.required].sort()).toEqual(['book_name', 'new_str', 'old_str', 'uid']);
+        expect([...def.function.parameters.required].sort()).toEqual(['book_name', 'newString', 'oldString', 'uid']);
     });
 });
 
@@ -103,7 +103,7 @@ describe('runLorebookWriteTool — dispatch behaviour', () => {
             {
                 id: 't2',
                 name: 'lorebook_str_replace_in_entry',
-                args: { book_name: 'B', uid: 7, old_str: 'foo', new_str: 'bar' },
+                args: { book_name: 'B', uid: 7, oldString: 'foo', newString: 'bar' },
             },
             { dispatch },
         );

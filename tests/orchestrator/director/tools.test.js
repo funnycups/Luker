@@ -118,8 +118,8 @@ describe('tool schemas', () => {
         expect(apply).toBeDefined();
         const itemProps = apply.function.parameters.properties.patches.items.properties;
         expect(itemProps).toHaveProperty('kind');
-        expect(itemProps).toHaveProperty('find');
-        expect(itemProps).toHaveProperty('replaceWith');
+        expect(itemProps).toHaveProperty('oldString');
+        expect(itemProps).toHaveProperty('newString');
         expect(itemProps).not.toHaveProperty('occurrence');
         // Description should instruct the model on context-uniqueness.
         expect(apply.function.description).toMatch(/(unique|surrounding context)/i);
@@ -272,7 +272,7 @@ describe('apply_message_patches executor', () => {
     test('valid context_replace patches succeed', async () => {
         const { chat, handle } = setupHandle({ initialText: 'The cat sat.' });
         const result = await executeApplyPatchesTool(handle, {
-            patches: [{ kind: 'context_replace', find: 'cat', replaceWith: 'dog' }],
+            patches: [{ kind: 'context_replace', oldString: 'cat', newString: 'dog' }],
         });
         expect(result.ok).toBe(true);
         expect(chat[0].mes).toBe('The dog sat.');
@@ -281,7 +281,7 @@ describe('apply_message_patches executor', () => {
     test('ambiguous patch returns error in tool result (no throw)', async () => {
         const { chat, handle } = setupHandle({ initialText: 'cat cat cat' });
         const result = await executeApplyPatchesTool(handle, {
-            patches: [{ kind: 'context_replace', find: 'cat', replaceWith: 'dog' }],
+            patches: [{ kind: 'context_replace', oldString: 'cat', newString: 'dog' }],
         });
         expect(result.ok).toBe(false);
         // Strict structured-failure assertion: rely on the code field, not

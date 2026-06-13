@@ -126,38 +126,38 @@ function applySinglePatch(handle, patch) {
 }
 
 function applyContextReplace(handle, patch) {
-    const find = String(patch.find ?? '');
-    if (!find) {
-        throw new EditorOpsError('patch_not_found', 'context_replace.find must be a non-empty string', {
-            details: { find: patch.find },
+    const oldString = String(patch.oldString ?? '');
+    if (!oldString) {
+        throw new EditorOpsError('patch_not_found', 'context_replace.oldString must be a non-empty string', {
+            details: { oldString: patch.oldString },
         });
     }
-    const replaceWith = String(patch.replaceWith ?? '');
+    const newString = String(patch.newString ?? '');
 
     const current = handle.getText();
-    const firstIdx = current.indexOf(find);
+    const firstIdx = current.indexOf(oldString);
     if (firstIdx === -1) {
         throw new EditorOpsError(
             'patch_not_found',
-            'find string not present in current message body. The body may have been changed by an earlier patch — re-read getText() and produce a fresh `find` based on the current content.',
-            { details: { find, replaceWith } },
+            'oldString not present in current message body. The body may have been changed by an earlier patch — re-read getText() and produce a fresh `oldString` based on the current content.',
+            { details: { oldString, newString } },
         );
     }
     // Check for a second match — if there is one, the patch is ambiguous
     // by design. We do NOT accept an occurrence index: the standard way
     // codebase-edit LLM tools (Aider, Claude Code Edit, Cursor) resolve
-    // ambiguity is to require the caller to expand `find` with surrounding
-    // context until it is unique. Counting occurrences is error-prone for
-    // models on long bodies and encourages the wrong habit.
-    const secondIdx = current.indexOf(find, firstIdx + 1);
+    // ambiguity is to require the caller to expand `oldString` with
+    // surrounding context until it is unique. Counting occurrences is
+    // error-prone for models on long bodies and encourages the wrong habit.
+    const secondIdx = current.indexOf(oldString, firstIdx + 1);
     if (secondIdx !== -1) {
         throw new EditorOpsError(
             'patch_ambiguous',
-            'find string is not unique in the current message body. Extend the `find` string to include surrounding context (a few lines before and/or after the target) until it matches exactly one location.',
-            { details: { find, replaceWith, firstMatch: firstIdx, secondMatch: secondIdx } },
+            'oldString is not unique in the current message body. Extend it to include surrounding context (a few lines before and/or after the target) until it matches exactly one location.',
+            { details: { oldString, newString, firstMatch: firstIdx, secondMatch: secondIdx } },
         );
     }
-    replaceRange(handle, firstIdx, firstIdx + find.length, replaceWith);
+    replaceRange(handle, firstIdx, firstIdx + oldString.length, newString);
 }
 
 export function patchBySemantic(handle, spec) {

@@ -2025,9 +2025,10 @@ async function computeCharacterEditorLorebookUpdate(context, args = {}) {
 
 /**
  * Compute the after-image for a `str_replace_in_lorebook_entry` proposal
- * without touching disk. Validates the single-match contract (old_str must
- * appear exactly once in the entry's current content). On Apply the
- * approved after-image is written via {@link applyCharacterEditorLorebookCommit}.
+ * without touching disk. Validates the unique-match contract (oldString
+ * must appear exactly once in the entry's current content unless
+ * `replaceAll` is true). On Apply the approved after-image is written via
+ * {@link applyCharacterEditorLorebookCommit}.
  *
  * @returns {{ ok: true, book_name: string, uid: number, kind: 'str_replace',
  *             before: object, after: object, replaced_chars: number, new_chars: number }}
@@ -2041,12 +2042,13 @@ async function computeCharacterEditorLorebookStrReplace(context, args = {}) {
     if (!Number.isInteger(uid) || uid < 0) {
         throw new Error(`${TOOL_NAMES.STR_REPLACE_IN_ENTRY} requires a non-negative integer uid.`);
     }
-    if (typeof args?.old_str !== 'string' || args.old_str.length === 0) {
-        throw new Error(`${TOOL_NAMES.STR_REPLACE_IN_ENTRY} requires a non-empty old_str.`);
+    if (typeof args?.oldString !== 'string' || args.oldString.length === 0) {
+        throw new Error(`${TOOL_NAMES.STR_REPLACE_IN_ENTRY} requires a non-empty oldString.`);
     }
-    if (typeof args?.new_str !== 'string') {
-        throw new Error(`${TOOL_NAMES.STR_REPLACE_IN_ENTRY} requires new_str (use an empty string to delete).`);
+    if (typeof args?.newString !== 'string') {
+        throw new Error(`${TOOL_NAMES.STR_REPLACE_IN_ENTRY} requires newString (use an empty string to delete).`);
     }
+    const replaceAll = Boolean(args?.replaceAll);
     const data = await context.loadWorldInfo(bookName);
     if (!data) {
         throw new Error(`World book "${bookName}" not found.`);
@@ -2056,18 +2058,22 @@ async function computeCharacterEditorLorebookStrReplace(context, args = {}) {
         throw new Error(`Entry uid ${uid} not found in "${bookName}".`);
     }
     const content = String(entry.content ?? '');
-    const firstIdx = content.indexOf(args.old_str);
+    const firstIdx = content.indexOf(args.oldString);
     if (firstIdx === -1) {
-        throw new Error(`old_str not found in entry ${uid} of "${bookName}".`);
+        throw new Error(`oldString not found in entry ${uid} of "${bookName}".`);
     }
-    if (content.indexOf(args.old_str, firstIdx + args.old_str.length) !== -1) {
-        // Refuse multi-site edits — caller must narrow old_str to a unique
-        // match. Same contract Anthropic's str_replace_based_edit_tool uses.
-        throw new Error(`old_str occurs more than once in entry ${uid} of "${bookName}"; narrow it to a unique substring.`);
+    if (!replaceAll && content.indexOf(args.oldString, firstIdx + args.oldString.length) !== -1) {
+        // Refuse multi-site edits — caller must narrow oldString to a unique
+        // match (or opt in via replaceAll). Same contract Anthropic's
+        // str_replace_based_edit_tool uses.
+        throw new Error(`oldString occurs more than once in entry ${uid} of "${bookName}"; narrow it to a unique substring or pass replaceAll: true.`);
     }
     const before = structuredClone(entry);
     const after = structuredClone(entry);
-    after.content = content.slice(0, firstIdx) + args.new_str + content.slice(firstIdx + args.old_str.length);
+    const nextContent = replaceAll
+        ? content.split(args.oldString).join(args.newString)
+        : content.slice(0, firstIdx) + args.newString + content.slice(firstIdx + args.oldString.length);
+    after.content = nextContent;
     after.uid = uid;
     return {
         ok: true,
@@ -2076,8 +2082,8 @@ async function computeCharacterEditorLorebookStrReplace(context, args = {}) {
         kind: 'str_replace',
         before,
         after,
-        replaced_chars: args.old_str.length,
-        new_chars: args.new_str.length,
+        replaced_chars: args.oldString.length,
+        new_chars: args.newString.length,
     };
 }
 

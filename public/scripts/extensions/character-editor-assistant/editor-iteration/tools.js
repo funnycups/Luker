@@ -99,7 +99,7 @@ const CEA_EDIT_TOOL_DEFS = [
         type: 'function',
         function: {
             name: 'cea_str_replace_card_field',
-            description: 'Find-and-replace a substring inside a character card field. `field` is restricted to the canonical card fields enum.',
+            description: 'Find-and-replace a substring inside a character card field. By default `oldString` must occur exactly once — fails otherwise; widen with surrounding context until unique, or pass `replaceAll: true` to replace every occurrence. `field` is restricted to the canonical card fields enum.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -108,10 +108,11 @@ const CEA_EDIT_TOOL_DEFS = [
                         enum: [...CEA_CARD_FIELD_ENUM],
                         description: 'Card field name. Restricted to the canonical card fields enum (see cea_set_card_field).',
                     },
-                    find: { type: 'string', description: 'Substring to locate.' },
-                    replace: { type: 'string', description: 'Replacement text.' },
+                    oldString: { type: 'string', description: 'Substring to locate. Must occur exactly once unless `replaceAll` is true.' },
+                    newString: { type: 'string', description: 'Replacement text.' },
+                    replaceAll: { type: 'boolean', description: 'Optional. When true, replace every occurrence of `oldString`. Default false (unique-or-fail).' },
                 },
-                required: ['field', 'find', 'replace'],
+                required: ['field', 'oldString', 'newString'],
             },
         },
     },
@@ -156,18 +157,18 @@ const CEA_EDIT_TOOL_DEFS = [
         type: 'function',
         function: {
             name: 'cea_str_replace_lorebook_entry_field',
-            description: 'Find-and-replace a substring inside a single field of a lorebook entry. Mirrors cea_str_replace_card_field for lorebook entries — preferred over cea_update_lorebook_entry when you only want to tweak a portion of one field (typically `content`) without resending the entire field. Bails out without staging an edit when `find` is not present in the current value or when `expected_count` is supplied and the occurrence count does not match.',
+            description: 'Find-and-replace a substring inside a single field of a lorebook entry. Mirrors cea_str_replace_card_field for lorebook entries — preferred over cea_update_lorebook_entry when you only want to tweak a portion of one field (typically `content`) without resending the entire field. By default `oldString` must occur exactly once; pass `replaceAll: true` to replace every occurrence. Bails out without staging an edit when `oldString` is not present in the current value.',
             parameters: {
                 type: 'object',
                 properties: {
                     book_name: { type: 'string', description: 'Target world book name.' },
                     uid: { type: 'integer', description: 'uid of the entry to edit.' },
                     field: { type: 'string', description: 'Entry field to edit (commonly `content`; also valid: `comment`, `key`, etc.).' },
-                    find: { type: 'string', description: 'Substring to locate inside the field.' },
-                    replace: { type: 'string', description: 'Replacement text.' },
-                    expected_count: { type: 'integer', minimum: 1, description: 'Optional. When supplied, the edit is staged only if `find` occurs exactly this many times in the field — guards against unintended over-replacement on common substrings.' },
+                    oldString: { type: 'string', description: 'Substring to locate inside the field. Must occur exactly once unless `replaceAll` is true.' },
+                    newString: { type: 'string', description: 'Replacement text.' },
+                    replaceAll: { type: 'boolean', description: 'Optional. When true, replace every occurrence of `oldString`. Default false (unique-or-fail).' },
                 },
-                required: ['book_name', 'uid', 'field', 'find', 'replace'],
+                required: ['book_name', 'uid', 'field', 'oldString', 'newString'],
             },
         },
     },
@@ -253,11 +254,25 @@ async function normalizeUnifiedToolCallToEdit(call, ctx) {
         }];
     }
     if (name === 'cea_str_replace_card_field') {
+        // Engine op uses `find`/`replace` field names (load-bearing — persisted
+        // in CEA session storage via normalizeEdit). Tool args use the
+        // Edit-tool naming `oldString`/`newString`/`replaceAll`; we lower
+        // them into engine-op shape here. `replaceAll: true` → count actual
+        // occurrences on live and pass that as expected_count, so the
+        // engine's conflict gate still rejects external drift while
+        // replacing every current match. `replaceAll: false` (default) →
+        // expected_count: 1, the engine's unique-or-fail invariant.
+        const find = String(args.oldString ?? '');
+        const replace = String(args.newString ?? '');
+        const liveValue = String(live?.character?.[args.field] ?? '');
+        const occurrences = find ? liveValue.split(find).length - 1 : 0;
+        const expectedCount = Boolean(args.replaceAll) ? Math.max(1, occurrences) : 1;
         return [{
             op: 'str_replace',
             path: `card.${args.field}`,
-            find: String(args.find ?? ''),
-            replace: String(args.replace ?? ''),
+            find,
+            replace,
+            expected_count: expectedCount,
         }];
     }
     if (name === 'cea_add_lorebook_entry') {
@@ -296,24 +311,18 @@ async function normalizeUnifiedToolCallToEdit(call, ctx) {
         // detector path can stay shared with the full-update variant.
         const field = String(args.field ?? '');
         if (!field) return [];
-        const find = String(args.find ?? '');
-        const replace = String(args.replace ?? '');
+        const find = String(args.oldString ?? '');
+        const replace = String(args.newString ?? '');
         const cur = liveBook?.entries?.[args.uid];
         const currentValue = cur && Object.hasOwn(cur, field) ? String(cur[field] ?? '') : '';
-        const expectedCount = Number.isFinite(Number(args.expected_count))
-            ? Number(args.expected_count)
-            : null;
         if (find === '') return [];
         // Apply the replacement client-side so we can stage a precise
         // `{ before, patch }` pair: the apply step won't re-run the find
-        // (it sees this as a plain field update). expected_count gate:
-        // bail out if the count doesn't match — but only when the caller
-        // supplied one. `replaceAll` is safe even when find appears once.
+        // (it sees this as a plain field update). Default semantics:
+        // `oldString` must occur exactly once unless `replaceAll: true`.
         const occurrences = currentValue.split(find).length - 1;
-        if (expectedCount != null && occurrences !== expectedCount) {
-            return [];
-        }
         if (occurrences === 0) return [];
+        if (!args.replaceAll && occurrences !== 1) return [];
         const nextValue = currentValue.split(find).join(replace);
         return [{
             op: 'lorebook_entry_update',

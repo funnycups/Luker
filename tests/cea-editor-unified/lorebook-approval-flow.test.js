@@ -236,7 +236,7 @@ describe('lorebook write proposals: str_replace_in_entry compute path', () => {
         const api = buildApi(ctx);
         const result = await api.invoke({
             name: 'luker_card_str_replace_in_lorebook_entry',
-            args: { book_name: 'BookA', uid: 5, old_str: 'must speak in poetry', new_str: 'prefers a poetic cadence' },
+            args: { book_name: 'BookA', uid: 5, oldString: 'must speak in poetry', newString: 'prefers a poetic cadence' },
         });
         expect(result.ok).toBe(true);
         expect(result.kind).toBe('str_replace');
@@ -254,40 +254,40 @@ describe('lorebook write proposals: str_replace_in_entry compute path', () => {
         const api = buildApi(ctx);
         await expect(api.invoke({
             name: 'luker_card_str_replace_in_lorebook_entry',
-            args: { book_name: 'BookA', uid: 5, old_str: 'must', new_str: 'might' },
+            args: { book_name: 'BookA', uid: 5, oldString: 'must', newString: 'might' },
         })).rejects.toThrow(/more than once/);
     });
 
-    test('rejects when old_str not present', async () => {
+    test('rejects when oldString not present', async () => {
         const { ctx } = makeStubContext({
             BookA: { entries: { 5: { uid: 5, content: 'unrelated text' } } },
         });
         const api = buildApi(ctx);
         await expect(api.invoke({
             name: 'luker_card_str_replace_in_lorebook_entry',
-            args: { book_name: 'BookA', uid: 5, old_str: 'must use markdown', new_str: '' },
+            args: { book_name: 'BookA', uid: 5, oldString: 'must use markdown', newString: '' },
         })).rejects.toThrow(/not found/);
     });
 
-    test('rejects empty old_str', async () => {
+    test('rejects empty oldString', async () => {
         const { ctx } = makeStubContext({
             BookA: { entries: { 5: { uid: 5, content: 'x' } } },
         });
         const api = buildApi(ctx);
         await expect(api.invoke({
             name: 'luker_card_str_replace_in_lorebook_entry',
-            args: { book_name: 'BookA', uid: 5, old_str: '', new_str: 'y' },
-        })).rejects.toThrow(/non-empty old_str/);
+            args: { book_name: 'BookA', uid: 5, oldString: '', newString: 'y' },
+        })).rejects.toThrow(/non-empty oldString/);
     });
 
-    test('empty new_str is allowed (used to delete a clause)', async () => {
+    test('empty newString is allowed (used to delete a clause)', async () => {
         const { ctx } = makeStubContext({
             BookA: { entries: { 5: { uid: 5, content: 'keep [DROP THIS] tail' } } },
         });
         const api = buildApi(ctx);
         const result = await api.invoke({
             name: 'luker_card_str_replace_in_lorebook_entry',
-            args: { book_name: 'BookA', uid: 5, old_str: ' [DROP THIS]', new_str: '' },
+            args: { book_name: 'BookA', uid: 5, oldString: ' [DROP THIS]', newString: '' },
         });
         expect(result.after.content).toBe('keep tail');
     });
@@ -413,7 +413,7 @@ describe('applyCharacterEditorLorebookProposal — re-derived commit (chained ed
         // Second commit's str_replace should match the new content.
         await CEA.applyCharacterEditorLorebookProposal(ctx, {
             kind: 'str_replace',
-            args: { book_name: 'BookA', uid: 5, old_str: 'must use markdown', new_str: 'prefers markdown' },
+            args: { book_name: 'BookA', uid: 5, oldString: 'must use markdown', newString: 'prefers markdown' },
         });
         expect(books.BookA.entries[5].content).toBe('prefers markdown sometimes');
     });
@@ -428,7 +428,7 @@ describe('applyCharacterEditorLorebookProposal — re-derived commit (chained ed
         });
         await expect(CEA.applyCharacterEditorLorebookProposal(ctx, {
             kind: 'str_replace',
-            args: { book_name: 'BookA', uid: 5, old_str: 'must use markdown', new_str: 'prefers markdown' },
+            args: { book_name: 'BookA', uid: 5, oldString: 'must use markdown', newString: 'prefers markdown' },
         })).rejects.toThrow(/not found/);
         expect(saveSpy).not.toHaveBeenCalled();
     });
