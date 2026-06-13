@@ -27,12 +27,10 @@ import { describe, test, expect, beforeEach, jest } from '@jest/globals';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 // ── Module-boundary mocks ────────────────────────────────────────────────
-// lib.js is heavy + DOM-bound; supply yaml so applyFrontmatterPatch works.
-jest.unstable_mockModule('../../public/lib.js', () => ({
-    yaml: { parse: parseYaml, stringify: stringifyYaml },
-}));
-
-// skillsApi: each test resets the mock fns so we can assert per-call args.
+// skill-iter-studio-tools.js captures both `skillsApi` and `yaml` from
+// `SillyTavern.getContext()` at module load (post upstream commit 571c529c2
+// that reverted direct cross-boundary imports). Install a SillyTavern stub
+// BEFORE the dynamic import so the module gets a working bag.
 const mockSkillsApi = {
     list: jest.fn(),
     get: jest.fn(),
@@ -46,9 +44,12 @@ const mockSkillsApi = {
     moveScope: jest.fn(),
     delete: jest.fn(),
 };
-jest.unstable_mockModule('../../public/scripts/skills/api.js', () => ({
-    skillsApi: mockSkillsApi,
-}));
+globalThis.SillyTavern = {
+    getContext: () => ({
+        skills: mockSkillsApi,
+        lib: { yaml: { parse: parseYaml, stringify: stringifyYaml } },
+    }),
+};
 
 // skill-resolution.js: prompt augmentation calls resolveAgentVisibleSkills.
 const mockResolve = jest.fn();
@@ -483,6 +484,45 @@ describe('runSkillIterStudioTool — policy binding', () => {
         );
         expect(out.ok).toBe(true);
         expect(out.pendingEdit.newValue.mainAgent.skills.visible).toEqual(['foo']);
+    });
+
+    // ── Regression: inherit-mode seed ────────────────────────────────────
+    // When an agent had no `skills` field at all it was inheriting the
+    // mode-level visible set in full (see skill-resolution.js: "agent visible
+    // empty → use mode default"). A naive first-time bind that initialized
+    // `skills.visible = []` and then pushed the new name would silently
+    // narrow that agent from "every mode-visible skill" down to "only this
+    // one skill" (the resolver's "non-empty, no '+' prefix → REPLACE mode
+    // default" branch). The fix seeds first-time `skills.visible` with the
+    // inherit sentinel `'+'` so the bind/unbind appends/removes one entry
+    // while preserving inheritance.
+    test('skill_bind_to_agent on field-less agent seeds visible with [+] (inherits + appends)', async () => {
+        const profile = {
+            skills: { visible: ['*'], deny: [] },
+            subAgents: [{ id: 'memory_curator', systemPrompt: 'x' }], // no skills field
+        };
+        const out = await runSkillIterStudioTool(
+            { name: 'skill_bind_to_agent', args: { agentId: 'memory_curator', skillName: 'new-skill', list: 'visible' } },
+            { getWorkingProfile: () => profile },
+        );
+        expect(out.ok).toBe(true);
+        expect(out.pendingEdit.newValue.subAgents[0].skills.visible).toEqual(['+', 'new-skill']);
+        expect(out.pendingEdit.newValue.subAgents[0].skills.deny).toEqual([]);
+    });
+
+    test('skill_unbind_from_agent on field-less agent seeds visible with [+] (inherits, removes nothing)', async () => {
+        const profile = {
+            skills: { visible: ['*'], deny: [] },
+            subAgents: [{ id: 'memory_curator', systemPrompt: 'x' }], // no skills field
+        };
+        const out = await runSkillIterStudioTool(
+            { name: 'skill_unbind_from_agent', args: { agentId: 'memory_curator', skillName: 'never-bound', list: 'visible' } },
+            { getWorkingProfile: () => profile },
+        );
+        expect(out.ok).toBe(true);
+        // Inheritance preserved; no spurious replacement.
+        expect(out.pendingEdit.newValue.subAgents[0].skills.visible).toEqual(['+']);
+        expect(out.pendingEdit.newValue.subAgents[0].skills.deny).toEqual([]);
     });
 });
 

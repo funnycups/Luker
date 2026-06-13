@@ -225,10 +225,17 @@ function resolveAgentSkillsContainer(profile, agentId) {
 }
 
 function ensureAgentSkillsField(container) {
+    // First-time seed uses the `'+'` inherit-sentinel from skill-resolution.js
+    // (see `agentVisible[0] === '+'` branch there) so a bind/unbind on an agent
+    // that previously had no skills field — i.e. one that was inheriting the
+    // mode-level visible set in full — preserves that inheritance and merely
+    // appends/removes one entry, rather than silently replacing the whole
+    // visible set with the single bound name (effectively narrowing the agent
+    // from "all skills" down to one).
     if (!container.skills || typeof container.skills !== 'object') {
-        container.skills = { visible: [], deny: [] };
+        container.skills = { visible: ['+'], deny: [] };
     }
-    if (!Array.isArray(container.skills.visible)) container.skills.visible = [];
+    if (!Array.isArray(container.skills.visible)) container.skills.visible = ['+'];
     if (!Array.isArray(container.skills.deny)) container.skills.deny = [];
 }
 
