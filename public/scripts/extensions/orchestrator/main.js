@@ -160,14 +160,11 @@ import {
     hasCharacterOverride,
     hasCharacterSpecOverride,
     isCharacterPresetActiveOverrideEnabled,
-    normalizeCharacterOverrideMode,
     normalizeExecutionMode,
 } from './character-overrides.js';
 import {
     createAgendaPlannerDraft,
     createPresetDraft,
-    mergePresetMaps,
-    resolveOverridePresetMap,
     sanitizeIdentifierToken,
     sanitizePresetMap,
     serializeEditorPresetMap,
@@ -326,7 +323,6 @@ registerExtensionApi(MODULE_NAME, {
     getCharacterOverrideByAvatar,
     getCharacterIndexByAvatar,
     getCharacterExtensionDataByAvatar,
-    normalizeCharacterOverrideMode,
     applyCharacterExecutionModeForAvatar,
     // Character-card extension write path (editor-persist.js). Pair with
     // the override accessors above when persisting an override edited by
@@ -2402,11 +2398,12 @@ function hasCharacterOverrideForCurrentMode(context, avatar, mode) {
     return hasCharacterSpecOverride(context, avatar);
 }
 
-// Director profile is stored at settings.directorProfile (global) and
-// optionally at the character card under `override.director` (character
-// scope). The editor uses uiState.globalDirectorEditor /
-// uiState.characterDirectorEditor as working state — edits go to the
-// editor, save persists editor → settings or character card.
+// Director profile is stored at settings.presetLibraries.director (global)
+// and optionally at the character card under
+// `presetLibraries.director` (character scope). The editor uses
+// uiState.globalDirectorEditor / uiState.characterDirectorEditor as
+// working state — edits go to the editor, save persists editor →
+// settings or character card.
 function getDirectorEditorByScope(scope) {
     if (String(scope || '') === 'character') {
         return uiState.characterDirectorEditor;

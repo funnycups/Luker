@@ -30,10 +30,6 @@ import {
 import { sanitizeAgendaWorkingProfile } from './agenda-profile.js';
 import { sanitizeLoopProfile } from './persistence.js';
 import { sanitizeSpec } from './spec-schema.js';
-import {
-    getCharacterPresetLibrary,
-    getCharacterActivePresetId,
-} from './character-overrides.js';
 
 const MODULE_NAME = 'orchestrator';
 const DEFAULT_PRESET_ID = 'default';
@@ -149,43 +145,20 @@ function ensureDefaultSeeded(settings, mode, scope, { context, avatar } = {}) {
     if (!c) return null;
     if (!c.libraries[mode]) c.libraries[mode] = {};
     if (Object.keys(c.libraries[mode]).length === 0) {
-        // For character scope, prefer projecting legacy override data into
-        // the library before falling back. This is the lazy on-touch
-        // migration for cards saved before the per-mode preset library
-        // shape existed.
-        let seededFromLegacy = false;
-        if (scope === 'character' && context && avatar) {
-            const synthesized = getCharacterPresetLibrary(context, avatar, mode);
-            const synthIds = synthesized && typeof synthesized === 'object'
-                ? Object.keys(synthesized)
-                : [];
-            if (synthIds.length > 0) {
-                for (const id of synthIds) {
-                    c.libraries[mode][id] = sanitizePresetEntry(mode, synthesized[id]);
-                }
-                const synthActive = getCharacterActivePresetId(context, avatar, mode);
-                c.activeIds[mode] = synthActive && c.libraries[mode][synthActive]
-                    ? synthActive
-                    : synthIds[0];
-                seededFromLegacy = true;
-            }
+        // Character scope: do NOT seed a factory default. Seeding here
+        // would (a) create a phantom override for cards that have never
+        // been customized — `hasCharacter*Override` reads
+        // `presetLibraries.<mode>` non-empty and would flip to true after
+        // the first popup render — and (b) make "Clear Character
+        // Override" a no-op since the next `loadCharacterEditorState →
+        // getActivePreset` would immediately re-seed the just-cleared
+        // library. Return null so callers fall back to the global
+        // active preset.
+        if (scope === 'character') {
+            return null;
         }
-        if (!seededFromLegacy) {
-            // Character scope with no legacy data: do NOT seed a factory
-            // default. Seeding here would (a) create a phantom override
-            // for cards that have never been customized — `hasCharacterX
-            // Override` reads `presetLibraries.<mode>` non-empty and
-            // would flip to true after the first popup render — and
-            // (b) make "Clear Character Override" no-op since the next
-            // `loadCharacterEditorState → getActivePreset` would
-            // immediately re-seed the just-cleared library. Return null
-            // so callers fall back to the global active preset.
-            if (scope === 'character') {
-                return null;
-            }
-            c.libraries[mode][DEFAULT_PRESET_ID] = sanitizePresetEntry(mode, createFactoryPresetForMode(mode));
-            c.activeIds[mode] = DEFAULT_PRESET_ID;
-        }
+        c.libraries[mode][DEFAULT_PRESET_ID] = sanitizePresetEntry(mode, createFactoryPresetForMode(mode));
+        c.activeIds[mode] = DEFAULT_PRESET_ID;
     }
     if (!c.activeIds[mode] || !c.libraries[mode][c.activeIds[mode]]) {
         c.activeIds[mode] = Object.keys(c.libraries[mode])[0] || '';

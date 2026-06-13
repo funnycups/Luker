@@ -148,9 +148,7 @@ function primeGlobalDirector(profile) {
 function makeContextWithOverride(overrideDirector) {
     // New-shape character payload: `presetLibraries.director.default` is
     // the saved override, `activePresetIds.director` points at it, and
-    // `override.director.enabled = true` (legacy compat flag still read
-    // by `isCharacterPresetActiveOverrideEnabled`) marks the override as
-    // active.
+    // `overrideEnabled.director = true` marks the override as active.
     return {
         characterId: 0,
         characters: [
@@ -160,10 +158,7 @@ function makeContextWithOverride(overrideDirector) {
                 data: {
                     extensions: {
                         orchestrator: {
-                            override: {
-                                mode: 'director',
-                                director: { enabled: true },
-                            },
+                            override: { mode: 'director' },
                             presetLibraries: {
                                 spec: {},
                                 agenda: {},
@@ -171,6 +166,7 @@ function makeContextWithOverride(overrideDirector) {
                                 director: { default: { name: 'Override', ...overrideDirector } },
                             },
                             activePresetIds: { spec: '', agenda: '', loop: '', director: 'default' },
+                            overrideEnabled: { director: true },
                         },
                     },
                 },

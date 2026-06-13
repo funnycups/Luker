@@ -443,7 +443,7 @@ function buildTools() {
  type: 'function',
  function: {
  name: TOOL_NAMES.ORCHESTRATOR_GET_OVERRIDE,
- description: 'Read the orchestrator override stored on the active character card (character.data.extensions.orchestrator.override). Always character-scoped — never reads global orchestrator settings. Returns the raw payload or null. Shape: { mode: \'spec\'|\'agenda\'|\'loop\', enabled, spec?, agenda?, loop?, presets?, name?, notes?, updatedAt }. Use this to design multi-agent orchestration tailored to this card.',
+ description: 'Read the orchestrator override summary for the active character card. Always character-scoped — never reads global orchestrator settings. Returns `{ mode, enabled }` for the saved execution mode (or null when no per-character preset library exists for that mode). The full per-mode preset payload (spec / agenda / loop / director) is stored in `presetLibraries.<mode>` on the card and is managed through the orchestrator iteration studio rather than this tool.',
  parameters: { type: 'object', properties: {}, additionalProperties: false },
  },
  },
@@ -451,13 +451,13 @@ function buildTools() {
  type: 'function',
  function: {
  name: TOOL_NAMES.ORCHESTRATOR_SET_OVERRIDE,
- description: 'Replace the entire orchestrator override on the active character card. Mode is auto-pinned by content (mode field reset based on whichever sub-payload is present + freshest updatedAt). Always character-scoped — global orchestrator settings are never touched. The shape must match the orchestrator schema; consult docs (development/extension-api/orchestrator.md if available, or read_luker_doc on orchestrator-related files) and existing override (via character_get_orchestrator) before writing.',
+ description: 'Toggle the per-character orchestrator override enabled flag for the saved execution mode (overrideEnabled[mode]). The card\'s preset library is preserved either way; only the flag flips. Always character-scoped — global orchestrator settings are never touched. The card must already have a preset library for the saved mode (otherwise there is nothing to enable / disable); populate it through the orchestrator iteration studio first.',
  parameters: {
  type: 'object',
  properties: {
- override: { type: 'object', description: 'Full override payload to persist. Required keys vary by mode: spec mode needs spec+presets; agenda mode needs agenda; loop mode needs loop. enabled/name/notes/updatedAt are optional metadata.', additionalProperties: true },
+ enabled: { type: 'boolean', description: 'true → apply the card\'s preset library; false → fall back to the global profile while preserving the library for re-enabling later.' },
  },
- required: ['override'],
+ required: ['enabled'],
  additionalProperties: false,
  },
  },
@@ -466,7 +466,7 @@ function buildTools() {
  type: 'function',
  function: {
  name: TOOL_NAMES.ORCHESTRATOR_CLEAR_OVERRIDE,
- description: 'Remove the orchestrator override from the active character card so the card falls back to global orchestrator settings. Always character-scoped.',
+ description: 'Remove every orchestrator override from the active character card. Wipes the per-mode preset libraries, the active-preset ids, the enabled flags, and the saved-mode pin so the card falls back to global orchestrator settings. Always character-scoped.',
  parameters: { type: 'object', properties: {}, additionalProperties: false },
  },
  },
@@ -1263,9 +1263,8 @@ async function executeTool(charId, toolName, args, options = {}) {
  if (__ctx.characterId === undefined || __ctx.characterId === null) {
  return { ok: false, error: 'No active character' };
  }
- const override = args?.override;
- if (!override || typeof override !== 'object') {
- return { ok: false, error: 'override must be an object' };
+ if (typeof args?.enabled !== 'boolean') {
+ return { ok: false, error: 'enabled must be a boolean' };
  }
  const orch = __ctx.getExtensionApi('orchestrator');
  if (!orch) return { ok: false, error: 'orchestrator extension is not loaded' };
@@ -1273,19 +1272,28 @@ async function executeTool(charId, toolName, args, options = {}) {
  const charData = characters[__ctx.characterId];
  const avatar = String(charData?.avatar || '').trim();
  if (!avatar) return { ok: false, error: 'Character has no avatar' };
- const characterIndex = orch.getCharacterIndexByAvatar(lukerCtx, avatar);
- if (characterIndex < 0) return { ok: false, error: 'Character not found in context' };
- const previous = orch.getCharacterExtensionDataByAvatar(lukerCtx, avatar);
- const nextOverride = orch.normalizeCharacterOverrideMode({ ...override });
- const ok = await orch.persistOrchestratorCharacterExtension(lukerCtx, characterIndex, { ...previous, override: nextOverride });
+ const savedMode = orch.getCharacterSavedExecutionModeByAvatar
+ ? orch.getCharacterSavedExecutionModeByAvatar(lukerCtx, avatar)
+ : '';
+ if (!savedMode) {
+ return { ok: false, error: 'Character has no orchestrator preset library to enable. Populate one through the orchestrator iteration studio first.' };
+ }
+ const setter = ({
+ spec: orch.setCharacterSpecOverrideEnabled,
+ agenda: orch.setCharacterAgendaOverrideEnabled,
+ loop: orch.setCharacterLoopOverrideEnabled,
+ director: orch.setCharacterDirectorOverrideEnabled,
+ })[savedMode];
+ if (typeof setter !== 'function') {
+ return { ok: false, error: `No enable-toggle setter for mode "${savedMode}"` };
+ }
+ const ok = await setter(lukerCtx, avatar, args.enabled);
  if (ok) {
- // Realign extension_settings.orchestrator.executionMode so the
- // dispatcher in main.js picks the override's branch on the next
- // generation. Without this an override that switches modes is
- // silently ignored. Mirrors orchestrator/main.js:6684.
  orch.applyCharacterExecutionModeForAvatar(lukerCtx, extension_settings?.orchestrator, avatar);
  }
- return ok ? { ok: true, message: 'Orchestrator override updated.', mode: nextOverride.mode || null } : { ok: false, error: 'Failed to persist orchestrator override' };
+ return ok
+ ? { ok: true, message: `Orchestrator override ${args.enabled ? 'enabled' : 'disabled'} for mode "${savedMode}".`, mode: savedMode, enabled: args.enabled }
+ : { ok: false, error: 'Failed to toggle orchestrator override flag' };
  }
  case TOOL_NAMES.ORCHESTRATOR_CLEAR_OVERRIDE: {
  if (__ctx.characterId === undefined || __ctx.characterId === null) {
@@ -1302,6 +1310,9 @@ async function executeTool(charId, toolName, args, options = {}) {
  const previous = orch.getCharacterExtensionDataByAvatar(lukerCtx, avatar);
  const nextPayload = { ...previous };
  delete nextPayload.override;
+ delete nextPayload.presetLibraries;
+ delete nextPayload.activePresetIds;
+ delete nextPayload.overrideEnabled;
  // Pass null when nothing else is left so the server-side handler
  // removes the whole extensions.orchestrator blob instead of leaving {}.
  const finalPayload = Object.keys(nextPayload).length === 0 ? null : nextPayload;

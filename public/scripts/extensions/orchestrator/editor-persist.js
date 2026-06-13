@@ -18,11 +18,10 @@
  *      mode), `persistCharacterAgendaEditor` (agenda mode),
  *      `persistCharacterLoopEditor` (loop mode), and
  *      `persistCharacterDirectorEditor` (director mode). Each writes
- *      into the active slot of the card-scoped `presetLibraries.<mode>`
- *      and atomically strips any legacy `override.<mode>` payload from
- *      the same write so on-card data migrates to the new shape on next
- *      save. All character writes delegate to
- *      `persistOrchestratorCharacterExtension`.
+ *      into the active slot of the card-scoped `presetLibraries.<mode>`,
+ *      records the per-mode `overrideEnabled.<mode>` flag, and pins the
+ *      saved execution mode via `override.mode`. All character writes
+ *      delegate to `persistOrchestratorCharacterExtension`.
  *
  * `createPortableProfileFromEditor` and
  * `createPortableAgendaProfileFromEditor` turn an editor draft into a
@@ -47,7 +46,6 @@ import {
 import {
     getCharacterExtensionDataByAvatar,
     getCharacterIndexByAvatar,
-    normalizeCharacterOverrideMode,
 } from './character-overrides.js';
 import {
     createAgendaPlannerDraft,
@@ -115,6 +113,56 @@ export async function persistGlobalDirectorEditorFrom(settings, editor) {
     await saveSettings();
 }
 
+function clonePreviousLibrariesAndIds(previous) {
+    const libraries = previous?.presetLibraries && typeof previous.presetLibraries === 'object'
+        ? structuredClone(previous.presetLibraries)
+        : { spec: {}, agenda: {}, loop: {}, director: {} };
+    const activeIds = previous?.activePresetIds && typeof previous.activePresetIds === 'object'
+        ? structuredClone(previous.activePresetIds)
+        : { spec: '', agenda: '', loop: '', director: '' };
+    return { libraries, activeIds };
+}
+
+function clonePreviousEnabledFlags(previous) {
+    return previous?.overrideEnabled && typeof previous.overrideEnabled === 'object'
+        ? structuredClone(previous.overrideEnabled)
+        : {};
+}
+
+function writeModeLibrarySlot(libraries, activeIds, mode, sanitizedPayload) {
+    if (!libraries[mode] || Object.keys(libraries[mode]).length === 0) {
+        libraries[mode] = { default: { name: 'Default', ...sanitizedPayload } };
+        activeIds[mode] = 'default';
+        return;
+    }
+    const activeId = activeIds[mode] && libraries[mode][activeIds[mode]]
+        ? activeIds[mode]
+        : Object.keys(libraries[mode])[0];
+    const prev = libraries[mode][activeId] || {};
+    libraries[mode][activeId] = { name: prev.name || 'Default', ...sanitizedPayload };
+    activeIds[mode] = activeId;
+}
+
+function nextOverridePin(previous, mode) {
+    const previousOverride = previous?.override && typeof previous.override === 'object'
+        ? { ...previous.override }
+        : {};
+    previousOverride.mode = mode;
+    // Strip any stale legacy payload fields that older builds may have
+    // left on this envelope. The new shape only carries `mode` here.
+    delete previousOverride.enabled;
+    delete previousOverride.spec;
+    delete previousOverride.presets;
+    delete previousOverride.presetPatch;
+    delete previousOverride.agenda;
+    delete previousOverride.loop;
+    delete previousOverride.director;
+    delete previousOverride.updatedAt;
+    delete previousOverride.name;
+    delete previousOverride.notes;
+    return previousOverride;
+}
+
 export async function persistCharacterEditor(context, settings, avatar, {
     editor,
     forceEnabled = null,
@@ -134,43 +182,21 @@ export async function persistCharacterEditor(context, settings, avatar, {
     const enabledFlag = forceEnabled === null ? Boolean(sourceEnabled) : Boolean(forceEnabled);
 
     const previous = getCharacterExtensionDataByAvatar(context, target);
-    const previousLibraries = previous?.presetLibraries && typeof previous.presetLibraries === 'object'
-        ? structuredClone(previous.presetLibraries)
-        : { spec: {}, agenda: {}, loop: {}, director: {} };
-    const previousActiveIds = previous?.activePresetIds && typeof previous.activePresetIds === 'object'
-        ? structuredClone(previous.activePresetIds)
-        : { spec: '', agenda: '', loop: '', director: '' };
+    const { libraries, activeIds } = clonePreviousLibrariesAndIds(previous);
+    const overrideEnabled = clonePreviousEnabledFlags(previous);
 
-    const sanitizedPayload = {
+    writeModeLibrarySlot(libraries, activeIds, ORCH_EXECUTION_MODE_SPEC, {
         spec: serializeEditorSpec(editor.spec),
         presets: serializeEditorPresetMap(editor.presets),
-    };
-    if (!previousLibraries.spec || Object.keys(previousLibraries.spec).length === 0) {
-        previousLibraries.spec = { default: { name: 'Default', ...sanitizedPayload } };
-        previousActiveIds.spec = 'default';
-    } else {
-        const activeId = previousActiveIds.spec && previousLibraries.spec[previousActiveIds.spec]
-            ? previousActiveIds.spec
-            : Object.keys(previousLibraries.spec)[0];
-        const prev = previousLibraries.spec[activeId] || {};
-        previousLibraries.spec[activeId] = { name: prev.name || 'Default', ...sanitizedPayload };
-        previousActiveIds.spec = activeId;
-    }
-
-    const previousOverride = previous?.override && typeof previous.override === 'object'
-        ? structuredClone(previous.override)
-        : {};
-    previousOverride.mode = ORCH_EXECUTION_MODE_SPEC;
-    previousOverride.enabled = enabledFlag;
-    delete previousOverride.spec;
-    delete previousOverride.presets;
-    delete previousOverride.presetPatch;
+    });
+    overrideEnabled[ORCH_EXECUTION_MODE_SPEC] = enabledFlag;
 
     const nextPayload = {
         ...previous,
-        override: normalizeCharacterOverrideMode(previousOverride),
-        presetLibraries: previousLibraries,
-        activePresetIds: previousActiveIds,
+        override: nextOverridePin(previous, ORCH_EXECUTION_MODE_SPEC),
+        presetLibraries: libraries,
+        activePresetIds: activeIds,
+        overrideEnabled,
     };
     return await persistOrchestratorCharacterExtension(context, characterIndex, nextPayload);
 }
@@ -194,14 +220,10 @@ export async function persistCharacterAgendaEditor(context, settings, avatar, {
     const enabledFlag = forceEnabled === null ? Boolean(sourceEnabled) : Boolean(forceEnabled);
 
     const previous = getCharacterExtensionDataByAvatar(context, target);
-    const previousLibraries = previous?.presetLibraries && typeof previous.presetLibraries === 'object'
-        ? structuredClone(previous.presetLibraries)
-        : { spec: {}, agenda: {}, loop: {}, director: {} };
-    const previousActiveIds = previous?.activePresetIds && typeof previous.activePresetIds === 'object'
-        ? structuredClone(previous.activePresetIds)
-        : { spec: '', agenda: '', loop: '', director: '' };
+    const { libraries, activeIds } = clonePreviousLibrariesAndIds(previous);
+    const overrideEnabled = clonePreviousEnabledFlags(previous);
 
-    const sanitizedPayload = {
+    writeModeLibrarySlot(libraries, activeIds, ORCH_EXECUTION_MODE_AGENDA, {
         planner: createAgendaPlannerDraft(editor.planner),
         agents: sanitizePresetMap(editor.agents),
         finalAgentId: sanitizeIdentifierToken(editor.finalAgentId, 'finalizer'),
@@ -210,31 +232,15 @@ export async function persistCharacterAgendaEditor(context, settings, avatar, {
             maxConcurrentAgents: Math.max(1, Math.min(12, Math.floor(Number(editor?.limits?.maxConcurrentAgents) || 3))),
             maxTotalRuns: Math.max(1, Math.min(200, Math.floor(Number(editor?.limits?.maxTotalRuns) || 24))),
         },
-    };
-    if (!previousLibraries.agenda || Object.keys(previousLibraries.agenda).length === 0) {
-        previousLibraries.agenda = { default: { name: 'Default', ...sanitizedPayload } };
-        previousActiveIds.agenda = 'default';
-    } else {
-        const activeId = previousActiveIds.agenda && previousLibraries.agenda[previousActiveIds.agenda]
-            ? previousActiveIds.agenda
-            : Object.keys(previousLibraries.agenda)[0];
-        const prev = previousLibraries.agenda[activeId] || {};
-        previousLibraries.agenda[activeId] = { name: prev.name || 'Default', ...sanitizedPayload };
-        previousActiveIds.agenda = activeId;
-    }
-
-    const previousOverride = previous?.override && typeof previous.override === 'object'
-        ? structuredClone(previous.override)
-        : {};
-    previousOverride.mode = ORCH_EXECUTION_MODE_AGENDA;
-    previousOverride.enabled = enabledFlag;
-    delete previousOverride.agenda;
+    });
+    overrideEnabled[ORCH_EXECUTION_MODE_AGENDA] = enabledFlag;
 
     const nextPayload = {
         ...previous,
-        override: normalizeCharacterOverrideMode(previousOverride),
-        presetLibraries: previousLibraries,
-        activePresetIds: previousActiveIds,
+        override: nextOverridePin(previous, ORCH_EXECUTION_MODE_AGENDA),
+        presetLibraries: libraries,
+        activePresetIds: activeIds,
+        overrideEnabled,
     };
     return await persistOrchestratorCharacterExtension(context, characterIndex, nextPayload);
 }
@@ -242,10 +248,9 @@ export async function persistCharacterAgendaEditor(context, settings, avatar, {
 /**
  * Persist a loop-mode editor draft as a character override. Writes into
  * the active slot of `presetLibraries.loop` on the character card,
- * strips any legacy `override.loop` payload from the same write (atomic
- * migration to the new shape), normalizes the active mode, and routes
- * through `persistOrchestratorCharacterExtension` for the network
- * write.
+ * records `overrideEnabled.loop`, pins the saved execution mode, and
+ * routes through `persistOrchestratorCharacterExtension` for the
+ * network write.
  *
  * The loop payload runs through `sanitizeLoopProfile` so the on-card
  * shape matches the V3 schema regardless of how the editor mutated the
@@ -270,38 +275,18 @@ export async function persistCharacterLoopEditor(context, settings, avatar, {
     const enabledFlag = forceEnabled === null ? Boolean(sourceEnabled) : Boolean(forceEnabled);
 
     const previous = getCharacterExtensionDataByAvatar(context, target);
-    const previousLibraries = previous?.presetLibraries && typeof previous.presetLibraries === 'object'
-        ? structuredClone(previous.presetLibraries)
-        : { spec: {}, agenda: {}, loop: {}, director: {} };
-    const previousActiveIds = previous?.activePresetIds && typeof previous.activePresetIds === 'object'
-        ? structuredClone(previous.activePresetIds)
-        : { spec: '', agenda: '', loop: '', director: '' };
+    const { libraries, activeIds } = clonePreviousLibrariesAndIds(previous);
+    const overrideEnabled = clonePreviousEnabledFlags(previous);
 
-    const sanitizedProfile = sanitizeLoopProfile(editor);
-    if (!previousLibraries.loop || Object.keys(previousLibraries.loop).length === 0) {
-        previousLibraries.loop = { default: { name: 'Default', ...sanitizedProfile } };
-        previousActiveIds.loop = 'default';
-    } else {
-        const activeId = previousActiveIds.loop && previousLibraries.loop[previousActiveIds.loop]
-            ? previousActiveIds.loop
-            : Object.keys(previousLibraries.loop)[0];
-        const prev = previousLibraries.loop[activeId] || {};
-        previousLibraries.loop[activeId] = { name: prev.name || 'Default', ...sanitizedProfile };
-        previousActiveIds.loop = activeId;
-    }
-
-    const previousOverride = previous?.override && typeof previous.override === 'object'
-        ? structuredClone(previous.override)
-        : {};
-    previousOverride.mode = ORCH_EXECUTION_MODE_LOOP;
-    previousOverride.enabled = enabledFlag;
-    delete previousOverride.loop;
+    writeModeLibrarySlot(libraries, activeIds, ORCH_EXECUTION_MODE_LOOP, sanitizeLoopProfile(editor));
+    overrideEnabled[ORCH_EXECUTION_MODE_LOOP] = enabledFlag;
 
     const nextPayload = {
         ...previous,
-        override: normalizeCharacterOverrideMode(previousOverride),
-        presetLibraries: previousLibraries,
-        activePresetIds: previousActiveIds,
+        override: nextOverridePin(previous, ORCH_EXECUTION_MODE_LOOP),
+        presetLibraries: libraries,
+        activePresetIds: activeIds,
+        overrideEnabled,
     };
     return await persistOrchestratorCharacterExtension(context, characterIndex, nextPayload);
 }
@@ -309,8 +294,7 @@ export async function persistCharacterLoopEditor(context, settings, avatar, {
 /**
  * Persist a director-mode editor draft as a character override. Writes
  * into the active slot of `presetLibraries.director` on the character
- * card, strips any legacy `override.director` payload from the same
- * write (atomic migration to the new shape), normalizes the active
+ * card, records `overrideEnabled.director`, pins the saved execution
  * mode, and routes through `persistOrchestratorCharacterExtension`
  * for the network write.
  *
@@ -338,17 +322,13 @@ export async function persistCharacterDirectorEditor(context, settings, avatar, 
     const enabledFlag = forceEnabled === null ? Boolean(sourceEnabled) : Boolean(forceEnabled);
 
     const previous = getCharacterExtensionDataByAvatar(context, target);
-    const previousLibraries = previous?.presetLibraries && typeof previous.presetLibraries === 'object'
-        ? structuredClone(previous.presetLibraries)
-        : { spec: {}, agenda: {}, loop: {}, director: {} };
-    const previousActiveIds = previous?.activePresetIds && typeof previous.activePresetIds === 'object'
-        ? structuredClone(previous.activePresetIds)
-        : { spec: '', agenda: '', loop: '', director: '' };
+    const { libraries, activeIds } = clonePreviousLibrariesAndIds(previous);
+    const overrideEnabled = clonePreviousEnabledFlags(previous);
 
     const sanitizedProfile = sanitizeDirectorProfile(editor);
     // Explicitly list the director payload fields so the on-card shape
     // never accidentally carries editor passthrough (avatar / mode etc.).
-    const sanitizedPayload = {
+    writeModeLibrarySlot(libraries, activeIds, ORCH_EXECUTION_MODE_DIRECTOR, {
         mainAgent: sanitizedProfile.mainAgent,
         subAgents: sanitizedProfile.subAgents,
         maxRounds: sanitizedProfile.maxRounds,
@@ -356,118 +336,63 @@ export async function persistCharacterDirectorEditor(context, settings, avatar, 
         maxTotalSubagentRuns: sanitizedProfile.maxTotalSubagentRuns,
         tools: sanitizedProfile.tools,
         discardOnAbort: sanitizedProfile.discardOnAbort,
-    };
-    if (!previousLibraries.director || Object.keys(previousLibraries.director).length === 0) {
-        previousLibraries.director = { default: { name: 'Default', ...sanitizedPayload } };
-        previousActiveIds.director = 'default';
-    } else {
-        const activeId = previousActiveIds.director && previousLibraries.director[previousActiveIds.director]
-            ? previousActiveIds.director
-            : Object.keys(previousLibraries.director)[0];
-        const prev = previousLibraries.director[activeId] || {};
-        previousLibraries.director[activeId] = { name: prev.name || 'Default', ...sanitizedPayload };
-        previousActiveIds.director = activeId;
-    }
-
-    const previousOverride = previous?.override && typeof previous.override === 'object'
-        ? structuredClone(previous.override)
-        : {};
-    previousOverride.mode = ORCH_EXECUTION_MODE_DIRECTOR;
-    previousOverride.enabled = enabledFlag;
-    delete previousOverride.director;
+    });
+    overrideEnabled[ORCH_EXECUTION_MODE_DIRECTOR] = enabledFlag;
 
     const nextPayload = {
         ...previous,
-        override: normalizeCharacterOverrideMode(previousOverride),
-        presetLibraries: previousLibraries,
-        activePresetIds: previousActiveIds,
+        override: nextOverridePin(previous, ORCH_EXECUTION_MODE_DIRECTOR),
+        presetLibraries: libraries,
+        activePresetIds: activeIds,
+        overrideEnabled,
     };
     return await persistOrchestratorCharacterExtension(context, characterIndex, nextPayload);
 }
 
 /**
  * Flip the per-character "override enabled" flag for one execution mode
- * without disturbing the rest of the override payload.
+ * without disturbing the stored preset payload. The runtime
+ * (`getEffectiveProfile`) already falls back to the global profile when
+ * `overrideEnabled[mode]` is false, so this single setter lets the
+ * panel offer a switch alongside the "configured, currently disabled"
+ * status label: the card's preset library is preserved as-is for
+ * re-enabling later.
  *
- * Runtime resolution (`getEffectiveProfile`) already falls back to the
- * global profile when `<override>?.enabled` is false, so these helpers
- * are the minimum surface needed to let the panel offer a switch
- * alongside the "configured, currently disabled" status label: the
- * stored spec / agenda / loop / director payload is preserved as-is
- * for re-enabling later.
- *
- *   - Spec mode stores `enabled` at the override root
- *     (`override.enabled`); the other three modes store it on their
- *     sub-object (`override.agenda.enabled`, `override.loop.enabled`,
- *     `override.director.enabled`).
- *   - Returns `false` and writes nothing when the matching payload is
- *     absent, so a stray click on a hidden control cannot synthesize
- *     an empty record.
- *   - Touches `updatedAt` on the affected layer only.
+ * Refuses to write when the card has no preset library for the mode, so
+ * a stray click on a hidden control cannot synthesize a phantom override.
  */
-async function setCharacterOverrideEnabledForMode(context, avatar, nextEnabled, {
-    hasPayload,
-    apply,
-}) {
+async function setCharacterPresetOverrideEnabled(context, avatar, mode, nextEnabled) {
     const target = String(avatar || '');
     if (!target) return false;
     const characterIndex = getCharacterIndexByAvatar(context, target);
     if (characterIndex < 0) return false;
     const previous = getCharacterExtensionDataByAvatar(context, target);
-    const previousOverride = previous?.override && typeof previous.override === 'object'
-        ? previous.override
-        : null;
-    if (!previousOverride || !hasPayload(previousOverride)) return false;
-    const nextOverride = structuredClone(previousOverride);
-    apply(nextOverride, Boolean(nextEnabled));
+    const lib = previous?.presetLibraries?.[mode];
+    const hasLib = Boolean(lib && typeof lib === 'object' && Object.keys(lib).length > 0);
+    if (!hasLib) return false;
+    const overrideEnabled = clonePreviousEnabledFlags(previous);
+    overrideEnabled[mode] = Boolean(nextEnabled);
     const nextPayload = {
         ...previous,
-        override: normalizeCharacterOverrideMode(nextOverride),
+        overrideEnabled,
     };
     return await persistOrchestratorCharacterExtension(context, characterIndex, nextPayload);
 }
 
 export async function setCharacterSpecOverrideEnabled(context, avatar, nextEnabled) {
-    return setCharacterOverrideEnabledForMode(context, avatar, nextEnabled, {
-        hasPayload: (override) =>
-            (override.spec && typeof override.spec === 'object')
-            || (override.presets && typeof override.presets === 'object')
-            || (override.presetPatch && typeof override.presetPatch === 'object'),
-        apply(override, value) {
-            override.enabled = value;
-            override.updatedAt = Date.now();
-        },
-    });
+    return setCharacterPresetOverrideEnabled(context, avatar, ORCH_EXECUTION_MODE_SPEC, nextEnabled);
 }
 
 export async function setCharacterAgendaOverrideEnabled(context, avatar, nextEnabled) {
-    return setCharacterOverrideEnabledForMode(context, avatar, nextEnabled, {
-        hasPayload: (override) => override.agenda && typeof override.agenda === 'object',
-        apply(override, value) {
-            override.agenda.enabled = value;
-            override.agenda.updatedAt = Date.now();
-        },
-    });
+    return setCharacterPresetOverrideEnabled(context, avatar, ORCH_EXECUTION_MODE_AGENDA, nextEnabled);
 }
 
 export async function setCharacterLoopOverrideEnabled(context, avatar, nextEnabled) {
-    return setCharacterOverrideEnabledForMode(context, avatar, nextEnabled, {
-        hasPayload: (override) => override.loop && typeof override.loop === 'object',
-        apply(override, value) {
-            override.loop.enabled = value;
-            override.loop.updatedAt = Date.now();
-        },
-    });
+    return setCharacterPresetOverrideEnabled(context, avatar, ORCH_EXECUTION_MODE_LOOP, nextEnabled);
 }
 
 export async function setCharacterDirectorOverrideEnabled(context, avatar, nextEnabled) {
-    return setCharacterOverrideEnabledForMode(context, avatar, nextEnabled, {
-        hasPayload: (override) => override.director && typeof override.director === 'object',
-        apply(override, value) {
-            override.director.enabled = value;
-            override.director.updatedAt = Date.now();
-        },
-    });
+    return setCharacterPresetOverrideEnabled(context, avatar, ORCH_EXECUTION_MODE_DIRECTOR, nextEnabled);
 }
 
 export async function persistOrchestratorCharacterExtension(context, characterIndex, modulePayload) {

@@ -250,28 +250,15 @@ describe('preset-library — writeActivePreset + character scope', () => {
     });
 });
 
-describe('preset-library — character-scope legacy synthesis', () => {
-    test('legacy override.loop on card is materialized as Default preset on first read', () => {
-        const settings = { presetLibraries: { spec: {}, agenda: {}, loop: {}, director: {} }, activePresetIds: {} };
-        const ctx = { characters: [{ avatar: 'alice.png', data: { extensions: { orchestrator: {
-            override: { mode: 'loop', enabled: true, loop: { system_prompt: 'MY-CUSTOM' } },
-        } } } }] };
-        const active = lib.getActivePreset(settings, 'loop', { scope: 'character', context: ctx, avatar: 'alice.png' });
-        expect(active?.system_prompt).toBe('MY-CUSTOM');
-        // Lazily materialized on card data
-        const cardLib = ctx.characters[0].data.extensions.orchestrator.presetLibraries.loop;
-        expect(Object.keys(cardLib)).toContain('default');
-        expect(cardLib.default.system_prompt).toBe('MY-CUSTOM');
-    });
-
-    test('card with no legacy override and no card-scope library returns null — does NOT auto-seed', () => {
+describe('preset-library — character-scope absence behavior', () => {
+    test('card with no card-scope library returns null — does NOT auto-seed', () => {
         // Regression: previously, character-scope getActivePreset would
         // synthesize a factory Default into the card on first touch
-        // whenever the card had no legacy override and no preset library.
-        // That silently made `hasCharacter*Override` flip to true and made
-        // "Clear Character Override" a no-op (the next render would re-seed
-        // immediately). Now the call returns null and the card data is
-        // untouched; callers fall back to the global active preset.
+        // whenever the card had no preset library. That silently made
+        // `hasCharacter*Override` flip to true and made "Clear Character
+        // Override" a no-op (the next render would re-seed immediately).
+        // Now the call returns null and the card data is untouched;
+        // callers fall back to the global active preset.
         const settings = { presetLibraries: { spec: {}, agenda: {}, loop: {}, director: {} }, activePresetIds: {} };
         const ctx = { characters: [{ avatar: 'bob.png', data: { extensions: { orchestrator: {} } } }] };
         const active = lib.getActivePreset(settings, 'director', { scope: 'character', context: ctx, avatar: 'bob.png' });

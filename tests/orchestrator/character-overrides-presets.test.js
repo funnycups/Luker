@@ -82,19 +82,8 @@ function makeCtx(avatar, ext) {
     return { characters: [{ avatar, data: { extensions: { orchestrator: ext || {} } } }] };
 }
 
-describe('character-overrides — dual-shape preset library reads', () => {
-    test('legacy override.loop is exposed as a library with one Default preset', () => {
-        const ctx = makeCtx('alice.png', {
-            override: { mode: 'loop', enabled: true, loop: { system_prompt: 'LEGACY-LOOP' } },
-        });
-        const lib = overrides.getCharacterPresetLibrary(ctx, 'alice.png', 'loop');
-        const ids = Object.keys(lib);
-        expect(ids).toHaveLength(1);
-        expect(lib[ids[0]].name).toBe('Default');
-        expect(lib[ids[0]].system_prompt).toBe('LEGACY-LOOP');
-    });
-
-    test('new presetLibraries.loop is exposed as-is', () => {
+describe('character-overrides — preset library reads', () => {
+    test('presetLibraries.loop is exposed as-is', () => {
         const ctx = makeCtx('alice.png', {
             presetLibraries: { loop: { foo: { name: 'Foo', system_prompt: 'NEW' } } },
             activePresetIds: { loop: 'foo' },
@@ -104,25 +93,32 @@ describe('character-overrides — dual-shape preset library reads', () => {
         expect(overrides.getCharacterActivePresetId(ctx, 'alice.png', 'loop')).toBe('foo');
     });
 
-    test('legacy override.loop active id resolves to a synthetic "default"', () => {
-        const ctx = makeCtx('alice.png', {
-            override: { mode: 'loop', enabled: true, loop: { system_prompt: 'LEGACY' } },
-        });
-        expect(overrides.getCharacterActivePresetId(ctx, 'alice.png', 'loop')).toBe('default');
+    test('empty library returns {} (no synthetic fallback)', () => {
+        const ctx = makeCtx('alice.png', {});
+        expect(overrides.getCharacterPresetLibrary(ctx, 'alice.png', 'loop')).toEqual({});
+        expect(overrides.getCharacterActivePresetId(ctx, 'alice.png', 'loop')).toBe('');
     });
 
-    test('override.enabled-for-mode reads from new shape activePresetIds presence', () => {
+    test('isCharacterPresetActiveOverrideEnabled requires both library entry and overrideEnabled flag', () => {
         const ctx = makeCtx('alice.png', {
-            override: { mode: 'loop', enabled: true },
             presetLibraries: { loop: { id1: { name: 'A' } } },
             activePresetIds: { loop: 'id1' },
+            overrideEnabled: { loop: true },
         });
         expect(overrides.isCharacterPresetActiveOverrideEnabled(ctx, 'alice.png', 'loop')).toBe(true);
     });
 
-    test('override.enabled=false on new shape disables override', () => {
+    test('overrideEnabled.loop=false disables override even when library is populated', () => {
         const ctx = makeCtx('alice.png', {
-            override: { mode: 'loop', enabled: false },
+            presetLibraries: { loop: { id1: { name: 'A' } } },
+            activePresetIds: { loop: 'id1' },
+            overrideEnabled: { loop: false },
+        });
+        expect(overrides.isCharacterPresetActiveOverrideEnabled(ctx, 'alice.png', 'loop')).toBe(false);
+    });
+
+    test('missing overrideEnabled container reads as disabled', () => {
+        const ctx = makeCtx('alice.png', {
             presetLibraries: { loop: { id1: { name: 'A' } } },
             activePresetIds: { loop: 'id1' },
         });

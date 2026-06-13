@@ -1,18 +1,18 @@
 // Tests for the per-character "override enabled" toggle helpers.
 //
 // The runtime in main.js:getEffectiveProfile already gates each mode on
-// `<override>?.enabled`, falling back to the global profile when the
+// `overrideEnabled[mode]`, falling back to the global profile when the
 // flag is false. The UI side, however, had no affordance to flip that
 // flag without re-saving the entire override; the only nearby option
 // was "Clear Character Override", which destroys the data.
 //
-// These tests pin the four lightweight helpers added in editor-persist.js
-// to fill that gap. Each helper writes the same `override` object back
-// with a single `enabled` field flipped — payloads, names, and
-// timestamps for *other* sub-modes must stay byte-identical, and the
-// helper must refuse to write when there is no matching sub-override
-// to toggle (so a stray click on a hidden control cannot synthesize a
-// half-empty payload).
+// These tests pin the four lightweight helpers exported from
+// editor-persist.js. Each helper writes the card-scoped
+// `overrideEnabled[mode]` flag back with a single bit flipped — the
+// per-mode preset library, active id, sibling enabled flags, and the
+// saved-mode pin must stay byte-identical. The helper refuses to write
+// when there is no preset library for that mode (so a stray click on a
+// hidden control cannot synthesize a phantom override).
 
 import { jest } from '@jest/globals';
 
@@ -114,14 +114,14 @@ beforeEach(() => {
 
 const AVATAR = 'default_Seraphina.png';
 
-function makeContext(override) {
+function makeContext(orchestratorExt) {
     const writes = [];
     const character = {
         avatar: AVATAR,
         name: 'Seraphina',
         data: {
             extensions: {
-                orchestrator: override ? { override } : {},
+                orchestrator: orchestratorExt || {},
             },
         },
     };
@@ -139,43 +139,43 @@ function makeContext(override) {
             },
         },
         writes,
-        readOverride() {
-            return character.data?.extensions?.orchestrator?.override ?? null;
+        readExt() {
+            return character.data?.extensions?.orchestrator ?? null;
         },
     };
 }
 
 describe('setCharacterSpecOverrideEnabled', () => {
-    test('flips override.enabled and preserves the spec payload', async () => {
+    test('flips overrideEnabled.spec and preserves preset libraries + sibling flags', async () => {
         const original = {
-            mode: 'spec',
-            enabled: true,
-            spec: { stages: [{ id: 's1', mode: 'serial', nodes: [{ id: 'n1', preset: 'p1' }] }] },
-            presets: { p1: { systemPrompt: 'KEEP_ME' } },
-            presetPatch: { p1: { userPromptTemplate: 'KEEP_ME_TOO' } },
-            updatedAt: 1000,
-            name: 'Seraphina',
+            override: { mode: 'spec' },
+            presetLibraries: {
+                spec: { default: { name: 'Default', spec: { stages: [] }, presets: { p1: { systemPrompt: 'KEEP' } } } },
+                loop: { default: { name: 'Default', system_prompt: 'LOOP_KEEP' } },
+            },
+            activePresetIds: { spec: 'default', loop: 'default' },
+            overrideEnabled: { spec: true, loop: true },
         };
-        const { ctx, writes, readOverride } = makeContext(structuredClone(original));
+        const { ctx, writes, readExt } = makeContext(structuredClone(original));
 
         const ok = await setCharacterSpecOverrideEnabled(ctx, AVATAR, false);
 
         expect(ok).toBe(true);
         expect(writes).toHaveLength(1);
-        const next = readOverride();
-        expect(next.enabled).toBe(false);
-        expect(next.spec).toEqual(original.spec);
-        expect(next.presets).toEqual(original.presets);
-        expect(next.presetPatch).toEqual(original.presetPatch);
-        expect(next.name).toBe(original.name);
-        expect(typeof next.updatedAt).toBe('number');
-        expect(next.updatedAt).toBeGreaterThanOrEqual(original.updatedAt);
+        const next = readExt();
+        expect(next.overrideEnabled.spec).toBe(false);
+        expect(next.overrideEnabled.loop).toBe(true);
+        expect(next.presetLibraries).toEqual(original.presetLibraries);
+        expect(next.activePresetIds).toEqual(original.activePresetIds);
+        expect(next.override).toEqual(original.override);
     });
 
-    test('refuses to toggle when no spec override exists', async () => {
+    test('refuses to toggle when no preset library for spec exists', async () => {
         const { ctx, writes } = makeContext({
-            mode: 'loop',
-            loop: { enabled: true, updatedAt: 2000 },
+            override: { mode: 'loop' },
+            presetLibraries: { loop: { default: { name: 'Default' } } },
+            activePresetIds: { loop: 'default' },
+            overrideEnabled: { loop: true },
         });
 
         const ok = await setCharacterSpecOverrideEnabled(ctx, AVATAR, false);
@@ -184,58 +184,42 @@ describe('setCharacterSpecOverrideEnabled', () => {
         expect(writes).toHaveLength(0);
     });
 
-    test('idempotent when target value equals current value', async () => {
-        const { ctx, readOverride } = makeContext({
-            mode: 'spec',
-            enabled: true,
-            spec: { stages: [] },
-            presets: {},
-            updatedAt: 3000,
+    test('synthesizes overrideEnabled container when previously absent', async () => {
+        const { ctx, readExt } = makeContext({
+            presetLibraries: { spec: { default: { name: 'Default', spec: {}, presets: {} } } },
+            activePresetIds: { spec: 'default' },
         });
 
         const ok = await setCharacterSpecOverrideEnabled(ctx, AVATAR, true);
 
         expect(ok).toBe(true);
-        expect(readOverride().enabled).toBe(true);
-        expect(readOverride().spec).toEqual({ stages: [] });
+        expect(readExt().overrideEnabled).toEqual({ spec: true });
     });
 });
 
 describe('setCharacterAgendaOverrideEnabled', () => {
-    test('flips override.agenda.enabled and preserves the agenda payload', async () => {
+    test('flips overrideEnabled.agenda and preserves the agenda preset payload', async () => {
         const original = {
-            mode: 'agenda',
-            agenda: {
-                enabled: true,
-                planner: { systemPrompt: 'AGENDA_KEEP' },
-                agents: { a1: { systemPrompt: 'A1' } },
-                finalAgentId: 'a1',
-                limits: { plannerMaxRounds: 5, maxConcurrentAgents: 2, maxTotalRuns: 10 },
-                updatedAt: 1000,
-                name: 'Seraphina',
+            presetLibraries: {
+                agenda: { default: { name: 'Default', planner: { systemPrompt: 'P' }, agents: {}, finalAgentId: 'finalizer', limits: {} } },
             },
+            activePresetIds: { agenda: 'default' },
+            overrideEnabled: { agenda: true },
         };
-        const { ctx, readOverride } = makeContext(structuredClone(original));
+        const { ctx, readExt } = makeContext(structuredClone(original));
 
         const ok = await setCharacterAgendaOverrideEnabled(ctx, AVATAR, false);
 
         expect(ok).toBe(true);
-        const next = readOverride();
-        expect(next.agenda.enabled).toBe(false);
-        expect(next.agenda.planner).toEqual(original.agenda.planner);
-        expect(next.agenda.agents).toEqual(original.agenda.agents);
-        expect(next.agenda.finalAgentId).toBe(original.agenda.finalAgentId);
-        expect(next.agenda.limits).toEqual(original.agenda.limits);
-        expect(next.agenda.name).toBe(original.agenda.name);
-        expect(next.agenda.updatedAt).toBeGreaterThanOrEqual(original.agenda.updatedAt);
+        const next = readExt();
+        expect(next.overrideEnabled.agenda).toBe(false);
+        expect(next.presetLibraries).toEqual(original.presetLibraries);
     });
 
-    test('refuses to toggle when no agenda sub-override exists', async () => {
+    test('refuses to toggle when no agenda preset library exists', async () => {
         const { ctx, writes } = makeContext({
-            mode: 'spec',
-            enabled: true,
-            spec: { stages: [] },
-            updatedAt: 1000,
+            presetLibraries: { spec: { default: { name: 'Default' } } },
+            activePresetIds: { spec: 'default' },
         });
 
         const ok = await setCharacterAgendaOverrideEnabled(ctx, AVATAR, false);
@@ -244,54 +228,48 @@ describe('setCharacterAgendaOverrideEnabled', () => {
         expect(writes).toHaveLength(0);
     });
 
-    test('leaves sibling sub-overrides untouched', async () => {
-        const { ctx, readOverride } = makeContext({
-            mode: 'agenda',
-            enabled: true,
-            spec: { stages: [{ id: 's1', mode: 'serial', nodes: [] }] },
-            presets: { keep: { systemPrompt: 'X' } },
-            agenda: { enabled: true, planner: { systemPrompt: 'P' }, updatedAt: 1000 },
-            loop: { enabled: true, updatedAt: 2000 },
+    test('leaves sibling enabled flags untouched', async () => {
+        const { ctx, readExt } = makeContext({
+            presetLibraries: {
+                spec: { default: { name: 'Default' } },
+                agenda: { default: { name: 'Default' } },
+                loop: { default: { name: 'Default' } },
+            },
+            activePresetIds: { spec: 'default', agenda: 'default', loop: 'default' },
+            overrideEnabled: { spec: true, agenda: true, loop: true },
         });
 
         await setCharacterAgendaOverrideEnabled(ctx, AVATAR, false);
 
-        const next = readOverride();
-        expect(next.enabled).toBe(true); // spec-level enabled untouched
-        expect(next.spec).toEqual({ stages: [{ id: 's1', mode: 'serial', nodes: [] }] });
-        expect(next.presets).toEqual({ keep: { systemPrompt: 'X' } });
-        expect(next.loop).toEqual({ enabled: true, updatedAt: 2000 });
-        expect(next.agenda.enabled).toBe(false);
+        const next = readExt();
+        expect(next.overrideEnabled).toEqual({ spec: true, agenda: false, loop: true });
     });
 });
 
 describe('setCharacterLoopOverrideEnabled', () => {
-    test('flips override.loop.enabled and preserves the loop payload', async () => {
+    test('flips overrideEnabled.loop and preserves the loop preset payload', async () => {
         const original = {
-            mode: 'loop',
-            loop: {
-                enabled: true,
-                tools: { search: { enabled: true } },
-                systemPrompt: 'LOOP_KEEP',
-                updatedAt: 1000,
-                name: 'Seraphina',
+            presetLibraries: {
+                loop: { default: { name: 'Default', system_prompt: 'LOOP_KEEP', tools: {} } },
             },
+            activePresetIds: { loop: 'default' },
+            overrideEnabled: { loop: true },
         };
-        const { ctx, readOverride } = makeContext(structuredClone(original));
+        const { ctx, readExt } = makeContext(structuredClone(original));
 
         const ok = await setCharacterLoopOverrideEnabled(ctx, AVATAR, false);
 
         expect(ok).toBe(true);
-        const next = readOverride();
-        expect(next.loop.enabled).toBe(false);
-        expect(next.loop.tools).toEqual(original.loop.tools);
-        expect(next.loop.systemPrompt).toBe(original.loop.systemPrompt);
-        expect(next.loop.name).toBe(original.loop.name);
-        expect(next.loop.updatedAt).toBeGreaterThanOrEqual(original.loop.updatedAt);
+        const next = readExt();
+        expect(next.overrideEnabled.loop).toBe(false);
+        expect(next.presetLibraries.loop).toEqual(original.presetLibraries.loop);
     });
 
-    test('refuses to toggle when no loop sub-override exists', async () => {
-        const { ctx, writes } = makeContext({ mode: 'spec', enabled: true, spec: { stages: [] } });
+    test('refuses to toggle when no loop preset library exists', async () => {
+        const { ctx, writes } = makeContext({
+            presetLibraries: { spec: { default: { name: 'Default' } } },
+            activePresetIds: { spec: 'default' },
+        });
 
         const ok = await setCharacterLoopOverrideEnabled(ctx, AVATAR, false);
 
@@ -301,42 +279,40 @@ describe('setCharacterLoopOverrideEnabled', () => {
 });
 
 describe('setCharacterDirectorOverrideEnabled', () => {
-    test('flips override.director.enabled and preserves the director payload', async () => {
+    test('flips overrideEnabled.director and preserves the director preset payload', async () => {
         const original = {
-            mode: 'director',
-            director: {
-                enabled: true,
-                mainAgent: { systemPrompt: 'DIRECTOR_KEEP' },
-                subAgents: [{ id: 'critic', systemPrompt: 'c' }],
-                maxRounds: 7,
-                maxConcurrentSubagents: 2,
-                maxTotalSubagentRuns: 11,
-                tools: {},
-                discardOnAbort: true,
-                updatedAt: 1000,
-                name: 'Seraphina',
+            presetLibraries: {
+                director: {
+                    default: {
+                        name: 'Default',
+                        mainAgent: { systemPrompt: 'DIRECTOR_KEEP' },
+                        subAgents: [{ id: 'critic', systemPrompt: 'c' }],
+                        maxRounds: 7,
+                        maxConcurrentSubagents: 2,
+                        maxTotalSubagentRuns: 11,
+                        tools: {},
+                        discardOnAbort: true,
+                    },
+                },
             },
+            activePresetIds: { director: 'default' },
+            overrideEnabled: { director: true },
         };
-        const { ctx, readOverride } = makeContext(structuredClone(original));
+        const { ctx, readExt } = makeContext(structuredClone(original));
 
         const ok = await setCharacterDirectorOverrideEnabled(ctx, AVATAR, false);
 
         expect(ok).toBe(true);
-        const next = readOverride();
-        expect(next.director.enabled).toBe(false);
-        expect(next.director.mainAgent).toEqual(original.director.mainAgent);
-        expect(next.director.subAgents).toEqual(original.director.subAgents);
-        expect(next.director.maxRounds).toBe(original.director.maxRounds);
-        expect(next.director.maxConcurrentSubagents).toBe(original.director.maxConcurrentSubagents);
-        expect(next.director.maxTotalSubagentRuns).toBe(original.director.maxTotalSubagentRuns);
-        expect(next.director.tools).toEqual(original.director.tools);
-        expect(next.director.discardOnAbort).toBe(true);
-        expect(next.director.name).toBe(original.director.name);
-        expect(next.director.updatedAt).toBeGreaterThanOrEqual(original.director.updatedAt);
+        const next = readExt();
+        expect(next.overrideEnabled.director).toBe(false);
+        expect(next.presetLibraries.director).toEqual(original.presetLibraries.director);
     });
 
-    test('refuses to toggle when no director sub-override exists', async () => {
-        const { ctx, writes } = makeContext({ mode: 'spec', enabled: true, spec: { stages: [] } });
+    test('refuses to toggle when no director preset library exists', async () => {
+        const { ctx, writes } = makeContext({
+            presetLibraries: { spec: { default: { name: 'Default' } } },
+            activePresetIds: { spec: 'default' },
+        });
 
         const ok = await setCharacterDirectorOverrideEnabled(ctx, AVATAR, false);
 

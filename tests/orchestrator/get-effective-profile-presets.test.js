@@ -377,7 +377,7 @@ describe('getEffectiveProfile — picks active preset from current scope', () =>
         expect(profile.source).toBe('global');
     });
 
-    test('director mode + character with override.enabled → returns character active preset', () => {
+    test('director mode + character with overrideEnabled.director → returns character active preset', () => {
         extensionSettings.orchestrator = {
             executionMode: 'director',
             presetLibrariesMigrationDone: 1,
@@ -399,7 +399,8 @@ describe('getEffectiveProfile — picks active preset from current scope', () =>
             activePresetIds: { spec: '', agenda: '', loop: '', director: 'gd' },
         };
         const ctx = ctxWithCard('alice.png', {
-            override: { mode: 'director', enabled: true, director: { enabled: true } },
+            override: { mode: 'director' },
+            overrideEnabled: { director: true },
             presetLibraries: {
                 director: {
                     cd: {

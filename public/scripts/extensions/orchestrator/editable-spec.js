@@ -30,10 +30,6 @@
  *     helper — kebab-friendly characters only, replaces whitespace with
  *     underscore, falls back to the supplied default when the value
  *     normalizes to empty.
- *   - `resolveOverridePresetMap(override, basePresets)` returns the
- *     effective preset map for a per-character override, honoring both
- *     the modern `override.presets` shape and the legacy `override.presetPatch`
- *     fallback that merges into the base map.
  *
  * All functions are pure and side-effect-free except for the in-place
  * `presets[defaultPreset] = …` writes in `toEditableSpec`, which mutates
@@ -235,15 +231,4 @@ export function serializeEditorSpec(editorSpec) {
 
 export function serializeEditorPresetMap(editorPresets) {
     return sanitizePresetMap(editorPresets || {});
-}
-
-export function resolveOverridePresetMap(override, basePresets = {}) {
-    if (override?.presets && typeof override.presets === 'object') {
-        return sanitizePresetMap(override.presets);
-    }
-    // Legacy compatibility: older overrides stored only presetPatch.
-    if (override?.presetPatch && typeof override.presetPatch === 'object') {
-        return mergePresetMaps(basePresets, override.presetPatch);
-    }
-    return {};
 }

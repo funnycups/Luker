@@ -112,14 +112,12 @@ describe('editor-persist — global writes land in active preset', () => {
     });
 });
 
-describe('editor-persist — character writes strip legacy override.<mode>', () => {
-    test('persistCharacterLoopEditor writes new shape AND drops override.loop', async () => {
+describe('editor-persist — character writes record overrideEnabled + pin saved mode', () => {
+    test('persistCharacterLoopEditor seeds presetLibraries.loop and sets overrideEnabled.loop', async () => {
         const character = {
             avatar: 'alice.png',
             name: 'Alice',
-            data: { extensions: { orchestrator: {
-                override: { mode: 'loop', enabled: true, loop: { system_prompt: 'LEGACY-LOOP' } },
-            } } },
+            data: { extensions: { orchestrator: {} } },
         };
         const ctx = {
             characters: [character],
@@ -137,6 +135,24 @@ describe('editor-persist — character writes strip legacy override.<mode>', () 
         const ids = Object.keys(payload.presetLibraries.loop);
         expect(ids.length).toBe(1);
         expect(payload.presetLibraries.loop[ids[0]].system_prompt).toBe('NEW-CARD-LOOP');
-        expect(payload.override.loop).toBeUndefined();
+        expect(payload.overrideEnabled.loop).toBe(true);
+        expect(payload.override.mode).toBe('loop');
+    });
+
+    test('persistCharacterLoopEditor honors forceEnabled=false even when editor says enabled', async () => {
+        const character = {
+            avatar: 'bob.png',
+            name: 'Bob',
+            data: { extensions: { orchestrator: {} } },
+        };
+        const ctx = {
+            characters: [character],
+            writeExtensionField: async (id, key, value) => { writes.push({ id, key, value }); },
+        };
+        await persist.persistCharacterLoopEditor(ctx, extensionSettings.orchestrator, 'bob.png', {
+            editor: { mode: 'loop', system_prompt: 'X', tools: {}, max_rounds: 8, wall_clock_budget_ms: 60000, enabled: true },
+            forceEnabled: false,
+        });
+        expect(writes[0].value.overrideEnabled.loop).toBe(false);
     });
 });

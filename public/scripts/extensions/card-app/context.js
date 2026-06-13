@@ -1029,12 +1029,13 @@ export function buildContext(container, charId, config) {
         // ==================== Orchestrator (per-character override) ====================
 
         /**
-         * Get the orchestrator override stored on the active character card.
-         * Returns the raw payload from `character.data.extensions.orchestrator.override`
-         * (or `null` if none). Always character-scoped — this never reads the
-         * global `extension_settings.orchestrator`.
-         *
-         * Shape: `{ mode: 'spec'|'agenda'|'loop', enabled, spec?, agenda?, loop?, presets?, name?, notes?, updatedAt }`.
+         * Get the orchestrator override summary for the active character.
+         * Returns a `{ mode, enabled }` view per active mode (or `null`
+         * when no per-character preset library exists for that mode).
+         * Always character-scoped — never reads the global
+         * `extension_settings.orchestrator`. The full per-mode preset
+         * payload is read separately through the preset-library
+         * accessors.
          *
          * @returns {object|null}
          */
@@ -1048,25 +1049,21 @@ export function buildContext(container, charId, config) {
         },
 
         /**
-         * Replace the orchestrator override on the active character card.
-         * The override is sanitized through `normalizeCharacterOverrideMode`
-         * (which pins `mode` based on which sub-payload is present + freshest
-         * `updatedAt`) and persisted via the existing character-extension
-         * write path. Always character-scoped — global orchestrator settings
-         * are never touched.
+         * Toggle the per-character orchestrator override enabled flag for
+         * the saved execution mode (`overrideEnabled[mode]`). The card's
+         * preset library is preserved either way; only the flag flips.
+         * Always character-scoped.
          *
-         * Pass the full override object you want stored. Mode-specific
-         * sub-payloads (`spec`, `agenda`, `loop`) should already match the
-         * orchestrator's internal schemas; if you're starting from an
-         * existing override, fetch it via {@link getOrchestratorOverride}
-         * and mutate.
+         * The override mode must already have a preset library on the
+         * card (otherwise there is nothing to enable / disable). Use the
+         * orchestrator editor to populate it first.
          *
-         * @param {object} override - The override payload to persist
+         * @param {{enabled:boolean}} options
          * @returns {Promise<boolean>} true on success
          */
-        async setOrchestratorOverride(override) {
-            if (!override || typeof override !== 'object') {
-                throw new Error('[CardApp] setOrchestratorOverride requires an override object');
+        async setOrchestratorOverride(options) {
+            if (!options || typeof options !== 'object' || typeof options.enabled !== 'boolean') {
+                throw new Error('[CardApp] setOrchestratorOverride requires { enabled: boolean }');
             }
             const lukerCtx = getContext();
             const charData = characters[__ctx.characterId];
@@ -1075,26 +1072,29 @@ export function buildContext(container, charId, config) {
             const orch = requireExtensionApi('orchestrator');
             const characterIndex = orch.getCharacterIndexByAvatar(lukerCtx, avatar);
             if (characterIndex < 0) throw new Error('[CardApp] Character not found in context');
-            const previous = orch.getCharacterExtensionDataByAvatar(lukerCtx, avatar);
-            const nextOverride = orch.normalizeCharacterOverrideMode({ ...override });
-            const nextPayload = { ...previous, override: nextOverride };
-            const ok = await orch.persistOrchestratorCharacterExtension(lukerCtx, characterIndex, nextPayload);
+            const savedMode = orch.getCharacterSavedExecutionModeByAvatar
+                ? orch.getCharacterSavedExecutionModeByAvatar(lukerCtx, avatar)
+                : '';
+            if (!savedMode) return false;
+            const setter = ({
+                spec: orch.setCharacterSpecOverrideEnabled,
+                agenda: orch.setCharacterAgendaOverrideEnabled,
+                loop: orch.setCharacterLoopOverrideEnabled,
+                director: orch.setCharacterDirectorOverrideEnabled,
+            })[savedMode];
+            if (typeof setter !== 'function') return false;
+            const ok = await setter(lukerCtx, avatar, options.enabled);
             if (ok) {
-                // The orchestrator dispatcher reads the active mode from
-                // extension_settings.orchestrator.executionMode, NOT from the
-                // override directly. Without realigning that flag, an override
-                // that switches modes (e.g. spec → agenda) is silently ignored
-                // by the runtime. This mirrors what the in-app editor does at
-                // orchestrator/main.js:6684.
                 orch.applyCharacterExecutionModeForAvatar(lukerCtx, extension_settings?.orchestrator, avatar);
             }
             return ok;
         },
 
         /**
-         * Remove the orchestrator override from the active character card,
-         * letting it fall back to global orchestrator settings. Always
-         * character-scoped.
+         * Remove the orchestrator override from the active character card
+         * so it falls back to global orchestrator settings. Wipes every
+         * mode's preset library, active-preset id, enabled flag, and
+         * the saved-mode pin. Always character-scoped.
          * @returns {Promise<boolean>} true on success
          */
         async clearOrchestratorOverride() {
@@ -1108,15 +1108,15 @@ export function buildContext(container, charId, config) {
             const previous = orch.getCharacterExtensionDataByAvatar(lukerCtx, avatar);
             const nextPayload = { ...previous };
             delete nextPayload.override;
-            // If the override was the only key on extensions.orchestrator,
-            // pass null so persistOrchestratorCharacterExtension removes the
-            // whole blob server-side instead of leaving an empty {} behind.
+            delete nextPayload.presetLibraries;
+            delete nextPayload.activePresetIds;
+            delete nextPayload.overrideEnabled;
+            // If nothing else is left on the orchestrator blob, pass null
+            // so persistOrchestratorCharacterExtension removes the whole
+            // key server-side instead of leaving an empty {} behind.
             const finalPayload = Object.keys(nextPayload).length === 0 ? null : nextPayload;
             const ok = await orch.persistOrchestratorCharacterExtension(lukerCtx, characterIndex, finalPayload);
             if (ok) {
-                // After clearing, also realign the dispatcher mode — without
-                // this the runtime keeps using whatever mode the prior
-                // override pinned, even though the override is gone.
                 orch.applyCharacterExecutionModeForAvatar(lukerCtx, extension_settings?.orchestrator, avatar);
             }
             return ok;

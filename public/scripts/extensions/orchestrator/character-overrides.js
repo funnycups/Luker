@@ -1,12 +1,13 @@
 /**
  * Per-character override accessors for the orchestrator.
  *
- * Characters can override the global orchestration spec / agenda / loop
- * profile / preset map by writing under
- * `character.data.extensions.orchestrator.override`. This module owns
- * the read-side helpers for those overrides plus the execution-mode
- * resolution that decides which override branch (`spec` vs `agenda`
- * vs `loop`) is active for a given character.
+ * Characters override the global orchestration spec / agenda / loop / director
+ * profile by storing their own per-mode preset libraries under
+ * `character.data.extensions.orchestrator.presetLibraries.<mode>` (with the
+ * active id in `activePresetIds.<mode>`). A boolean flag per mode in
+ * `overrideEnabled.<mode>` decides whether the card's library is actually
+ * applied or the global profile wins. A small `override` envelope persists
+ * the saved execution mode for the card (`override.mode`).
  *
  * Three layers of helpers live here:
  *
@@ -14,18 +15,20 @@
  *      `getCharacterDisplayName`, `getCharacterDisplayNameByAvatar`.
  *   2. Override read accessors — `getCharacterExtensionDataByAvatar`,
  *      `getCharacterOverrideByAvatar`, `getCharacterAgendaOverrideByAvatar`,
- *      `getCharacterLoopOverrideByAvatar`,
- *      `hasSpecOverrideData`, `hasAgendaOverrideData`, `hasLoopOverrideData`,
+ *      `getCharacterLoopOverrideByAvatar`, `getCharacterDirectorOverrideByAvatar`,
  *      `hasCharacterSpecOverride`, `hasCharacterAgendaOverride`,
- *      `hasCharacterLoopOverride`, `hasCharacterOverride`,
- *      `getCharacterCardSnapshot`.
+ *      `hasCharacterLoopOverride`, `hasCharacterDirectorOverride`,
+ *      `hasCharacterOverride`, `getCharacterCardSnapshot`. The four
+ *      per-mode `getCharacter*OverrideByAvatar` accessors return a
+ *      lightweight `{ mode, enabled }` view stitched together from the
+ *      `overrideEnabled[mode]` flag — they exist for UI render paths that
+ *      only need the enabled bit, not the full preset payload.
  *   3. Execution-mode resolution — `normalizeExecutionMode`,
- *      `getExecutionMode`, `getCharacterOverrideExecutionMode`,
- *      `normalizeCharacterOverrideMode`, `getCharacterSavedExecutionModeByAvatar`,
- *      `applyCharacterExecutionModeForAvatar`. The character override can
- *      pin a mode (`override.mode = 'spec' | 'agenda' | 'loop'`); if absent
- *      the mode is inferred from which sub-payload is present, falling
- *      back to whichever updatedAt is newer when multiple are present.
+ *      `getExecutionMode`, `getCharacterSavedExecutionModeByAvatar`,
+ *      `applyCharacterExecutionModeForAvatar`. The card pins the saved
+ *      mode via `override.mode`; the dispatcher reads global
+ *      `extension_settings.orchestrator.executionMode` and is realigned
+ *      to that pinned mode whenever the card becomes active.
  *
  * Writers (`persist*Editor`, character-extension write paths) stay in
  * the editor-state layer and main.js since they wire into save / event
@@ -92,134 +95,51 @@ export function getCharacterExtensionDataByAvatar(context, avatar) {
     return payload && typeof payload === 'object' ? payload : {};
 }
 
+function readOverrideEnabledFlag(ext, mode) {
+    const flags = ext?.overrideEnabled;
+    if (!flags || typeof flags !== 'object') return false;
+    return Boolean(flags[mode]);
+}
+
+/**
+ * Light `{ mode, enabled }` view of a card's override for one mode. UI
+ * render paths only need the enabled bit; the full preset payload is
+ * read separately through the preset-library accessors. Returns null
+ * when the card has no library for this mode.
+ */
+function makeOverrideView(context, avatar, mode) {
+    if (!cardHasPresetLibraryForMode(context, avatar, mode)) return null;
+    const ext = getCharacterExtensionDataByAvatar(context, avatar) || {};
+    return { mode, enabled: readOverrideEnabledFlag(ext, mode) };
+}
+
 export function getCharacterOverrideByAvatar(context, avatar) {
-    const payload = getCharacterExtensionDataByAvatar(context, avatar);
-    const override = payload?.override;
-    return override && typeof override === 'object' ? override : null;
+    return makeOverrideView(context, avatar, ORCH_EXECUTION_MODE_SPEC);
 }
 
 export function getCharacterAgendaOverrideByAvatar(context, avatar) {
-    const override = getCharacterOverrideByAvatar(context, avatar);
-    const agenda = override?.agenda;
-    return agenda && typeof agenda === 'object' ? agenda : null;
+    return makeOverrideView(context, avatar, ORCH_EXECUTION_MODE_AGENDA);
 }
 
 export function getCharacterLoopOverrideByAvatar(context, avatar) {
-    const override = getCharacterOverrideByAvatar(context, avatar);
-    const loop = override?.loop;
-    return loop && typeof loop === 'object' ? loop : null;
+    return makeOverrideView(context, avatar, ORCH_EXECUTION_MODE_LOOP);
 }
 
 export function getCharacterDirectorOverrideByAvatar(context, avatar) {
-    const override = getCharacterOverrideByAvatar(context, avatar);
-    const director = override?.director;
-    return director && typeof director === 'object' ? director : null;
-}
-
-export function hasSpecOverrideData(override) {
-    return Boolean(override && (
-        (override.spec && typeof override.spec === 'object')
-        || (override.presets && typeof override.presets === 'object')
-        || (override.presetPatch && typeof override.presetPatch === 'object')
-    ));
-}
-
-export function hasAgendaOverrideData(override) {
-    return Boolean(override?.agenda && typeof override.agenda === 'object');
-}
-
-export function hasLoopOverrideData(override) {
-    return Boolean(override?.loop && typeof override.loop === 'object');
-}
-
-export function hasDirectorOverrideData(override) {
-    return Boolean(override?.director && typeof override.director === 'object');
-}
-
-export function getCharacterOverrideExecutionMode(override) {
-    if (!override || typeof override !== 'object') {
-        return '';
-    }
-    const explicitMode = normalizeExecutionMode(override.mode);
-    const hasSpec = hasSpecOverrideData(override);
-    const hasAgenda = hasAgendaOverrideData(override);
-    const hasLoop = hasLoopOverrideData(override);
-    const hasDirector = hasDirectorOverrideData(override);
-    if (explicitMode === ORCH_EXECUTION_MODE_SPEC && hasSpec) {
-        return explicitMode;
-    }
-    if (explicitMode === ORCH_EXECUTION_MODE_AGENDA && hasAgenda) {
-        return explicitMode;
-    }
-    if (explicitMode === ORCH_EXECUTION_MODE_LOOP && hasLoop) {
-        return explicitMode;
-    }
-    if (explicitMode === ORCH_EXECUTION_MODE_DIRECTOR && hasDirector) {
-        return explicitMode;
-    }
-    const presentBranches = [
-        hasSpec ? ORCH_EXECUTION_MODE_SPEC : null,
-        hasAgenda ? ORCH_EXECUTION_MODE_AGENDA : null,
-        hasLoop ? ORCH_EXECUTION_MODE_LOOP : null,
-        hasDirector ? ORCH_EXECUTION_MODE_DIRECTOR : null,
-    ].filter(Boolean);
-    if (presentBranches.length === 1) {
-        return presentBranches[0];
-    }
-    if (presentBranches.length > 1) {
-        // Pick the most recently updated branch. `override.updatedAt` is
-        // owned by the spec branch (legacy convention). Agenda + loop +
-        // director each store their own `updatedAt` on the sub-payload.
-        const candidates = [];
-        if (hasSpec) {
-            candidates.push({
-                mode: ORCH_EXECUTION_MODE_SPEC,
-                updatedAt: Math.max(0, Number(override.updatedAt) || 0),
-            });
-        }
-        if (hasAgenda) {
-            candidates.push({
-                mode: ORCH_EXECUTION_MODE_AGENDA,
-                updatedAt: Math.max(0, Number(override.agenda?.updatedAt) || 0),
-            });
-        }
-        if (hasLoop) {
-            candidates.push({
-                mode: ORCH_EXECUTION_MODE_LOOP,
-                updatedAt: Math.max(0, Number(override.loop?.updatedAt) || 0),
-            });
-        }
-        if (hasDirector) {
-            candidates.push({
-                mode: ORCH_EXECUTION_MODE_DIRECTOR,
-                updatedAt: Math.max(0, Number(override.director?.updatedAt) || 0),
-            });
-        }
-        candidates.sort((left, right) => right.updatedAt - left.updatedAt);
-        const top = candidates[0];
-        const second = candidates[1];
-        if (top && (!second || top.updatedAt > second.updatedAt)) {
-            return top.mode;
-        }
-    }
-    return '';
-}
-
-export function normalizeCharacterOverrideMode(override) {
-    if (!override || typeof override !== 'object') {
-        return override;
-    }
-    const mode = getCharacterOverrideExecutionMode(override);
-    if (mode) {
-        override.mode = mode;
-    } else {
-        delete override.mode;
-    }
-    return override;
+    return makeOverrideView(context, avatar, ORCH_EXECUTION_MODE_DIRECTOR);
 }
 
 export function getCharacterSavedExecutionModeByAvatar(context, avatar) {
-    return getCharacterOverrideExecutionMode(getCharacterOverrideByAvatar(context, avatar));
+    const ext = getCharacterExtensionDataByAvatar(context, avatar) || {};
+    const pinned = normalizeExecutionMode(ext?.override?.mode);
+    if (pinned && cardHasPresetLibraryForMode(context, avatar, pinned)) {
+        return pinned;
+    }
+    for (const mode of ORCH_EXECUTION_MODES) {
+        if (mode === ORCH_EXECUTION_MODE_SINGLE) continue;
+        if (cardHasPresetLibraryForMode(context, avatar, mode)) return mode;
+    }
+    return '';
 }
 
 export function applyCharacterExecutionModeForAvatar(context, settings, avatar) {
@@ -240,23 +160,18 @@ function cardHasPresetLibraryForMode(context, avatar, mode) {
 }
 
 export function hasCharacterSpecOverride(context, avatar) {
-    const override = getCharacterOverrideByAvatar(context, avatar);
-    if (hasSpecOverrideData(override)) return true;
     return cardHasPresetLibraryForMode(context, avatar, ORCH_EXECUTION_MODE_SPEC);
 }
 
 export function hasCharacterAgendaOverride(context, avatar) {
-    if (hasAgendaOverrideData(getCharacterOverrideByAvatar(context, avatar))) return true;
     return cardHasPresetLibraryForMode(context, avatar, ORCH_EXECUTION_MODE_AGENDA);
 }
 
 export function hasCharacterLoopOverride(context, avatar) {
-    if (hasLoopOverrideData(getCharacterOverrideByAvatar(context, avatar))) return true;
     return cardHasPresetLibraryForMode(context, avatar, ORCH_EXECUTION_MODE_LOOP);
 }
 
 export function hasCharacterDirectorOverride(context, avatar) {
-    if (hasDirectorOverrideData(getCharacterOverrideByAvatar(context, avatar))) return true;
     return cardHasPresetLibraryForMode(context, avatar, ORCH_EXECUTION_MODE_DIRECTOR);
 }
 
@@ -265,31 +180,15 @@ export function hasCharacterOverride(context, avatar) {
 }
 
 /**
- * Dual-shape read accessor. Returns a `{ [presetId]: presetEntry }` map
- * for the given character + mode:
- *
- *   1. New shape: `presetLibraries.<mode>` exists on the card → return it.
- *   2. Legacy shape: `override.<mode>` (or override.spec/presets) exists →
- *      synthesize a one-entry library `{ default: { name: 'Default', ...legacyPayload } }`.
- *   3. Neither → empty `{}`.
- *
- * Read-only. Writers go through editor-persist.js which always emits the
- * new shape and drops legacy keys in the same payload.
+ * Per-character preset library for one mode. Returns the `{ [presetId]:
+ * presetEntry }` map from `presetLibraries.<mode>`, or `{}` when the
+ * card has none. Writers go through editor-persist.js.
  */
 export function getCharacterPresetLibrary(context, avatar, mode) {
     const ext = getCharacterExtensionDataByAvatar(context, avatar) || {};
-    const newLib = ext.presetLibraries?.[mode];
-    if (newLib && typeof newLib === 'object' && Object.keys(newLib).length > 0) {
-        return newLib;
-    }
-    // Legacy fall-back
-    const override = ext.override || {};
-    if (mode === ORCH_EXECUTION_MODE_SPEC) {
-        if (override.spec || override.presets) {
-            return { default: { name: 'Default', spec: override.spec, presets: override.presets } };
-        }
-    } else if (override[mode] && typeof override[mode] === 'object') {
-        return { default: { name: 'Default', ...override[mode] } };
+    const lib = ext.presetLibraries?.[mode];
+    if (lib && typeof lib === 'object' && Object.keys(lib).length > 0) {
+        return lib;
     }
     return {};
 }
@@ -298,26 +197,19 @@ export function getCharacterActivePresetId(context, avatar, mode) {
     const ext = getCharacterExtensionDataByAvatar(context, avatar) || {};
     const fromNew = ext.activePresetIds?.[mode];
     if (fromNew && ext.presetLibraries?.[mode]?.[fromNew]) return String(fromNew);
-    // Legacy: if a legacy override exists for this mode, return 'default' (the synthetic id).
     const lib = getCharacterPresetLibrary(context, avatar, mode);
-    if (lib.default) return 'default';
     const firstKey = Object.keys(lib)[0];
     return firstKey || '';
 }
 
 /**
  * True when the card's preset library for this mode should override the
- * global active preset. Reads `override.enabled` for back-compat
- * (existing tooling already toggles this) and also requires the card
- * library to actually have a usable entry.
+ * global active preset. Requires both (a) a `presetLibraries.<mode>`
+ * entry exists, and (b) `overrideEnabled.<mode>` is true.
  */
 export function isCharacterPresetActiveOverrideEnabled(context, avatar, mode) {
     const ext = getCharacterExtensionDataByAvatar(context, avatar) || {};
-    if (!ext.override?.enabled) {
-        // Also accept per-mode legacy flags
-        if (mode === ORCH_EXECUTION_MODE_SPEC && !ext.override?.enabled) return false;
-        if (mode !== ORCH_EXECUTION_MODE_SPEC && !ext.override?.[mode]?.enabled) return false;
-    }
+    if (!readOverrideEnabledFlag(ext, mode)) return false;
     const id = getCharacterActivePresetId(context, avatar, mode);
     if (!id) return false;
     const lib = getCharacterPresetLibrary(context, avatar, mode);
@@ -326,11 +218,12 @@ export function isCharacterPresetActiveOverrideEnabled(context, avatar, mode) {
 
 /**
  * Compute the next character-extension payload after a "Clear Character
- * Override" click for the given execution mode.
- *
- * Strips both the legacy `override.<mode>` field AND the new-shape
- * `presetLibraries.<mode>` / `activePresetIds.<mode>` slots, then drops
- * empty containers so `hasCharacter*Override` reads false afterwards.
+ * Override" click for the given execution mode. Strips
+ * `presetLibraries.<mode>`, `activePresetIds.<mode>`, and the
+ * `overrideEnabled.<mode>` flag, dropping empty containers so the
+ * `hasCharacter*Override` probe reads false afterwards. Also drops the
+ * `override.mode` pin when it was pointing at the cleared mode so the
+ * dispatcher does not keep that mode active after the data is gone.
  * Pure (no I/O) so it can be unit-tested independent of the click
  * handler — main.js wires this into the persistence + UI reload path.
  */
@@ -338,50 +231,19 @@ export function clearCharacterExtensionForMode(previous, mode) {
     const previousExt = previous && typeof previous === 'object' ? previous : {};
     const normalizedMode = normalizeExecutionMode(mode);
     const next = { ...previousExt };
-    const nextOverride = previousExt.override && typeof previousExt.override === 'object'
-        ? structuredClone(previousExt.override)
-        : null;
     const nextLibraries = previousExt.presetLibraries && typeof previousExt.presetLibraries === 'object'
         ? structuredClone(previousExt.presetLibraries)
         : null;
     const nextActiveIds = previousExt.activePresetIds && typeof previousExt.activePresetIds === 'object'
         ? structuredClone(previousExt.activePresetIds)
         : null;
-    if (normalizedMode === ORCH_EXECUTION_MODE_LOOP) {
-        if (nextOverride) delete nextOverride.loop;
-    } else if (normalizedMode === ORCH_EXECUTION_MODE_AGENDA) {
-        if (nextOverride) delete nextOverride.agenda;
-    } else if (normalizedMode === ORCH_EXECUTION_MODE_DIRECTOR) {
-        if (nextOverride) delete nextOverride.director;
-    } else if (nextOverride) {
-        delete nextOverride.spec;
-        delete nextOverride.presets;
-        delete nextOverride.presetPatch;
-        delete nextOverride.enabled;
-        delete nextOverride.updatedAt;
-        delete nextOverride.name;
-        delete nextOverride.notes;
-    }
-    if (nextLibraries) {
-        delete nextLibraries[normalizedMode];
-    }
-    if (nextActiveIds) {
-        delete nextActiveIds[normalizedMode];
-    }
-    normalizeCharacterOverrideMode(nextOverride);
-    const overrideStillHasPayload = nextOverride && (
-        (nextOverride.spec && typeof nextOverride.spec === 'object')
-        || (nextOverride.presets && typeof nextOverride.presets === 'object')
-        || (nextOverride.presetPatch && typeof nextOverride.presetPatch === 'object')
-        || (nextOverride.agenda && typeof nextOverride.agenda === 'object')
-        || (nextOverride.loop && typeof nextOverride.loop === 'object')
-        || (nextOverride.director && typeof nextOverride.director === 'object')
-    );
-    if (overrideStillHasPayload) {
-        next.override = nextOverride;
-    } else {
-        delete next.override;
-    }
+    const nextEnabledFlags = previousExt.overrideEnabled && typeof previousExt.overrideEnabled === 'object'
+        ? structuredClone(previousExt.overrideEnabled)
+        : null;
+    if (nextLibraries) delete nextLibraries[normalizedMode];
+    if (nextActiveIds) delete nextActiveIds[normalizedMode];
+    if (nextEnabledFlags) delete nextEnabledFlags[normalizedMode];
+
     const librariesStillPopulated = nextLibraries && Object.keys(nextLibraries).some(key =>
         nextLibraries[key] && typeof nextLibraries[key] === 'object' && Object.keys(nextLibraries[key]).length > 0,
     );
@@ -395,6 +257,40 @@ export function clearCharacterExtensionForMode(previous, mode) {
         next.activePresetIds = nextActiveIds;
     } else {
         delete next.activePresetIds;
+    }
+    const enabledFlagsStillPopulated = nextEnabledFlags && Object.keys(nextEnabledFlags).some(key => nextEnabledFlags[key]);
+    if (enabledFlagsStillPopulated) {
+        next.overrideEnabled = nextEnabledFlags;
+    } else {
+        delete next.overrideEnabled;
+    }
+
+    const previousOverride = previousExt.override && typeof previousExt.override === 'object'
+        ? previousExt.override
+        : null;
+    if (previousOverride) {
+        const previousPinnedMode = normalizeExecutionMode(previousOverride.mode);
+        if (previousPinnedMode === normalizedMode) {
+            // The pin pointed at the mode we just cleared. Re-anchor to
+            // whichever library still has data, or drop the envelope.
+            let nextPinnedMode = '';
+            for (const candidate of ORCH_EXECUTION_MODES) {
+                if (candidate === ORCH_EXECUTION_MODE_SINGLE) continue;
+                if (next.presetLibraries?.[candidate]) {
+                    nextPinnedMode = candidate;
+                    break;
+                }
+            }
+            if (nextPinnedMode) {
+                next.override = { ...previousOverride, mode: nextPinnedMode };
+            } else {
+                delete next.override;
+            }
+        } else {
+            next.override = previousOverride;
+        }
+    } else {
+        delete next.override;
     }
     return next;
 }

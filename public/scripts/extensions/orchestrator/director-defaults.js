@@ -474,9 +474,9 @@ function clampInt(value, { min, max, default: def }) {
  *      use this. Lifted to flat output on read so on-disk data migrates
  *      transparently — no separate migration script.
  *   3. Bare director sub-object — `{ mainAgent, subAgents, ... }` with no
- *      outer envelope. This is what character-card overrides store
- *      (`override.director = bareSubObject`). The loader can pass it
- *      straight through.
+ *      outer envelope. This is what preset-library entries store
+ *      (per-mode `presetLibraries.director[<id>]` payloads). The loader
+ *      can pass it straight through.
  *
  * Returns a flat object. Non-director top-level fields on the input
  * (`avatar`, `enabled`, etc. that ride along on editor / portable

@@ -70,39 +70,30 @@ beforeAll(async () => {
     overrides = await import('../../public/scripts/extensions/orchestrator/character-overrides.js');
 });
 
-describe('clearCharacterExtensionForMode — drops new-shape preset library so probes read false', () => {
-    test('loop: drops presetLibraries.loop + activePresetIds.loop, leaves other modes intact', () => {
+describe('clearCharacterExtensionForMode — drops per-mode preset library so probes read false', () => {
+    test('loop: drops presetLibraries.loop + activePresetIds.loop + overrideEnabled.loop, leaves other modes intact', () => {
         const before = {
             presetLibraries: {
                 spec: { default: { name: 'Default', spec: {}, presets: {} } },
                 loop: { id1: { name: 'A', system_prompt: 'X' } },
             },
             activePresetIds: { spec: 'default', loop: 'id1' },
+            overrideEnabled: { spec: true, loop: true },
         };
         const after = overrides.clearCharacterExtensionForMode(before, 'loop');
         expect(after.presetLibraries?.loop).toBeUndefined();
         expect(after.activePresetIds?.loop).toBeUndefined();
+        expect(after.overrideEnabled?.loop).toBeUndefined();
         expect(after.presetLibraries?.spec).toEqual({ default: { name: 'Default', spec: {}, presets: {} } });
         expect(after.activePresetIds?.spec).toBe('default');
+        expect(after.overrideEnabled?.spec).toBe(true);
     });
 
-    test('loop: also strips legacy override.loop when present', () => {
+    test('after clear, hasCharacterLoopOverride reads false', () => {
         const before = {
-            override: { mode: 'loop', enabled: true, loop: { system_prompt: 'LEGACY' } },
             presetLibraries: { loop: { id1: { name: 'A' } } },
             activePresetIds: { loop: 'id1' },
-        };
-        const after = overrides.clearCharacterExtensionForMode(before, 'loop');
-        expect(after.override).toBeUndefined();
-        expect(after.presetLibraries).toBeUndefined();
-        expect(after.activePresetIds).toBeUndefined();
-    });
-
-    test('after clear, hasCharacterLoopOverride reads false (the bug)', () => {
-        const before = {
-            override: { mode: 'loop', enabled: true },
-            presetLibraries: { loop: { id1: { name: 'A' } } },
-            activePresetIds: { loop: 'id1' },
+            overrideEnabled: { loop: true },
         };
         const after = overrides.clearCharacterExtensionForMode(before, 'loop');
         const ctx = { characters: [{ avatar: 'a.png', data: { extensions: { orchestrator: after } } }] };
@@ -131,21 +122,39 @@ describe('clearCharacterExtensionForMode — drops new-shape preset library so p
         expect(overrides.hasCharacterAgendaOverride(ctx, 'a.png')).toBe(false);
     });
 
-    test('spec: drops presetLibraries.spec + activePresetIds.spec and legacy override.spec/presets/enabled', () => {
+    test('spec: drops presetLibraries.spec + activePresetIds.spec + overrideEnabled.spec', () => {
         const before = {
-            override: { mode: 'spec', enabled: true, spec: { foo: 1 }, presets: { bar: 2 } },
             presetLibraries: { spec: { default: { name: 'Default', spec: {}, presets: {} } } },
             activePresetIds: { spec: 'default' },
+            overrideEnabled: { spec: true },
         };
         const after = overrides.clearCharacterExtensionForMode(before, 'spec');
         const ctx = { characters: [{ avatar: 'a.png', data: { extensions: { orchestrator: after } } }] };
         expect(overrides.hasCharacterSpecOverride(ctx, 'a.png')).toBe(false);
-        expect(after.override).toBeUndefined();
+        expect(after.overrideEnabled).toBeUndefined();
     });
 
-    test('clearing one mode preserves other modes both old + new', () => {
+    test('clearing one mode preserves other modes (libraries + flags)', () => {
         const before = {
-            override: { mode: 'loop', enabled: true, agenda: { foo: 1 } },
+            presetLibraries: {
+                loop: { l1: { name: 'L' } },
+                spec: { s1: { name: 'S' } },
+            },
+            activePresetIds: { loop: 'l1', spec: 's1' },
+            overrideEnabled: { loop: true, spec: true },
+        };
+        const after = overrides.clearCharacterExtensionForMode(before, 'loop');
+        expect(after.presetLibraries?.spec).toEqual({ s1: { name: 'S' } });
+        expect(after.activePresetIds?.spec).toBe('s1');
+        expect(after.overrideEnabled?.spec).toBe(true);
+        expect(after.presetLibraries?.loop).toBeUndefined();
+        expect(after.activePresetIds?.loop).toBeUndefined();
+        expect(after.overrideEnabled?.loop).toBeUndefined();
+    });
+
+    test('re-pins override.mode to the surviving mode when the pinned mode was cleared', () => {
+        const before = {
+            override: { mode: 'loop' },
             presetLibraries: {
                 loop: { l1: { name: 'L' } },
                 spec: { s1: { name: 'S' } },
@@ -153,21 +162,17 @@ describe('clearCharacterExtensionForMode — drops new-shape preset library so p
             activePresetIds: { loop: 'l1', spec: 's1' },
         };
         const after = overrides.clearCharacterExtensionForMode(before, 'loop');
-        expect(after.override?.agenda).toEqual({ foo: 1 });
-        expect(after.presetLibraries?.spec).toEqual({ s1: { name: 'S' } });
-        expect(after.activePresetIds?.spec).toBe('s1');
-        expect(after.presetLibraries?.loop).toBeUndefined();
-        expect(after.activePresetIds?.loop).toBeUndefined();
+        expect(after.override?.mode).toBe('spec');
     });
 
-    test('handles missing presetLibraries / activePresetIds gracefully (legacy-only card)', () => {
+    test('drops override envelope entirely when no surviving libraries remain', () => {
         const before = {
-            override: { mode: 'loop', enabled: true, loop: { system_prompt: 'X' } },
+            override: { mode: 'loop' },
+            presetLibraries: { loop: { l1: { name: 'L' } } },
+            activePresetIds: { loop: 'l1' },
         };
         const after = overrides.clearCharacterExtensionForMode(before, 'loop');
         expect(after.override).toBeUndefined();
-        expect(after.presetLibraries).toBeUndefined();
-        expect(after.activePresetIds).toBeUndefined();
     });
 
     test('handles empty/null previous ext (defensive)', () => {
