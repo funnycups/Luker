@@ -1124,8 +1124,41 @@ export async function openOrchestratorIterationStudio(deps) {
         ].join('\n');
     }
 
+    // Global-scope counterpart of buildLorebookFormatAuditHint. The global
+    // orchestration profile is loaded for every chat (no character override
+    // present), so any world book the user has globally selected — or that
+    // gets pulled in as chat-bound when authoring against a sample chat —
+    // can ship the same kinds of process-coercion / final-output-shape
+    // directives that derail orchestration. Same diagnosis + repair logic
+    // as the character version; only the targeting language changes ("the
+    // currently-active world books" instead of "this card's bound lorebook").
+    function buildGlobalLorebookFormatAuditHint() {
+        return [
+            '# Lorebook format audit (global scope)',
+            'World books selected globally (and any chat-bound book in the active chat) are loaded for every conversation that uses this global orchestration profile. If they contain entries that hard-constrain output (forcing a specific format, banning markdown, demanding plain prose, locking turn structure, requiring fixed section headers, etc.) the model will receive conflicting instructions at runtime and the output degrades. Reconcile those entries against the output contract your orchestration imposes.',
+            '',
+            'Workflow:',
+            '1. Call `world_book_list` to see which books are visible right now — globally-selected entries are returned tagged `global`, plus any chat-bound books tagged `chat` (and a primary `character` / `character_aux` book if a card happens to be loaded, even though this is the global profile). For each book, run both `lorebook_list` (compact uid+name+enabled index — useful for spotting format-related entries by name, and for noticing entries the keyword search would miss) and `lorebook_query` (keyword search over content). Useful query keywords (mix English and Chinese to match either authoring style): format, output, markdown, plain text, json, structure, 必须, 请直接, 不要, 仅, 只, 严格, 简短, 详细, 输出格式, 用…格式.',
+            '2. For each candidate hit, call `lorebook_get` to read the full content and judge whether the constraint actually conflicts with what your orchestration produces. If it does not conflict, leave it alone — do not edit entries that already align with the new design. Be especially conservative editing `global`-scoped books, since they affect every chat the user runs.',
+            '3. Classify each conflicting clause before deciding the repair. Two kinds of "format constraint" appear in lorebook entries and they need opposite treatment:',
+            '   - **Process coercion** — directives that pin HOW the agent thinks or what shape its reasoning must take *during* the run, BEFORE it commits a final reply. Examples: "always use <thinking> tags before answering", "every response must begin with a CoT prefix", "follow steps 1-N in order before responding", "always run a 5W1H check first". These poison the agent loop — the orchestration runs multiple tool-call rounds, and a directive that fires every round forces narrative-shaped text where the agent needs tool calls, starving the planning channel. Strip the format. Then harvest the underlying intent (the topics, angles, narrative habits the author cared about) and rewrite it as worldbuilding / persona / scene-anchor content the agent reads as *narrative input* — not as a new rule. Strip-without-rewrite is acceptable only when there is genuinely no salvageable intent (pure shape coercion such as "your reply must faithfully correspond to your thinking").',
+            '   - **Final-output shape** — directives that describe the FORM of the final committed reply, not how the agent thinks on the way there. Examples: "all output must be markdown", "wrap the response in <content>", "always end with a closing summary block", "use bullet points throughout". These are legitimate stylistic preferences and should be KEPT — but rewritten so the finalize semantics are explicit, so intermediate orchestration nodes (planner, tool-callers, reviewers) are not dragged into the same shape. The orchestration\'s last node is the one that commits the user-facing reply; that is where the form belongs. Example: "all output must be markdown" → "the orchestration\'s final reply to the user is formatted as markdown" so it does not constrain intermediate nodes.',
+            '   When unsure whether a clause is process coercion or final-output shape, err toward preserving and ask the user. The decision test: does this require the agent to think or output in a specific shape BEFORE making its decision or calling a tool? Yes → process coercion. No (only describes the final reply\'s form) → final-output shape.',
+            '4. Pick the repair tool by scope. Surgical clause-level edits (rewriting just the offending sentence while preserving the rest of the entry) use `lorebook_str_replace_in_entry`. Whole-entry disable via `lorebook_update_entry` with `{ "disable": true }` is reserved for entries that are pure format coercion with no salvageable content. Disabling a content-rich entry to mute one sentence loses information. Never delete entries.',
+            '5. Approval flow — important: both write tools are PROPOSAL-mode, not direct writes. Each call you make captures a {before, after} envelope, returns it to you, and pushes a diff card into the popup for the user to review. The user approves or rejects per card; only approved cards commit to the on-disk world book when the user clicks Apply. You will receive a tool result with `"proposed": true` and a message saying "Proposed for user approval" — treat that as the success contract. Continue designing the orchestration on the assumption your proposals will land if accepted, but do NOT block on disk-level confirmation. If the user rejects a proposal, your next round will see the rejection (the lorebook stayed unchanged) — adjust strategy accordingly.',
+            '6. Skip this audit entirely if the user explicitly said not to touch any world book, or if the orchestration imposes no specific output format. Prefer narrow, well-justified edits over sweeping ones — global books are shared across every chat.',
+        ].join('\n');
+    }
+
     function appendScopeHintIfNeeded(basePrompt, helperSession) {
-        if (helperSession?.scope !== 'character') return basePrompt;
+        if (helperSession?.scope !== 'character') {
+            // Global scope: no character-scope hint to append, but the
+            // lorebook tools ARE exposed in global scope (globally-selected
+            // world books are active for every chat that uses this profile),
+            // so the model needs the same audit guidance written against
+            // those books rather than against a card's bound lorebook.
+            return [basePrompt, '', buildGlobalLorebookFormatAuditHint()].join('\n');
+        }
         const display = String(helperSession?.characterDisplayName || '').trim() || 'this character';
         const formatAuditHint = buildLorebookFormatAuditHint(display);
         if (!helperSession.hasOverride) {
@@ -1895,19 +1928,21 @@ export async function openOrchestratorIterationStudio(deps) {
             if (droppedNames.has(name)) return false;
             return true;
         });
-        // Splice in the lorebook read tools when the popup is scoped to a
-        // character — the legacy helper-tool dispatcher is per-character,
-        // so without an avatar there is nothing to bind these tools to.
-        const lorebookReadTools = helperSession?.scope === 'character'
-            && String(context?.characters?.[context?.characterId]?.avatar || '').trim()
-            ? LOREBOOK_READ_TOOL_DEFS
-            : [];
-        // Write tools share the same gate. They land in the inline-executed
-        // path (same as reads + simulate), so an avatar is required.
-        const lorebookWriteTools = helperSession?.scope === 'character'
-            && String(context?.characters?.[context?.characterId]?.avatar || '').trim()
-            ? LOREBOOK_WRITE_TOOL_DEFS
-            : [];
+        // Lorebook read + write tools work in BOTH scopes:
+        //   - character scope: the audit reconciles the card's bound books
+        //     (character / character_aux / chat / global) against the
+        //     orchestration's output contract.
+        //   - global scope: there is no card to inherit books from, but
+        //     globally-selected world books are still active for every chat
+        //     and can carry format coercion that conflicts with the global
+        //     orchestration. The underlying helper-tool dispatcher
+        //     (`createCharacterEditorWorldBookListToolApi`,
+        //     `createCharacterEditorLorebookToolApi`,
+        //     `createCharacterEditorLorebookWriteToolApi`) loads books by
+        //     `book_name` and lists globally-selected entries with no
+        //     avatar dependency, so both surfaces work without an avatar.
+        const lorebookReadTools = LOREBOOK_READ_TOOL_DEFS;
+        const lorebookWriteTools = LOREBOOK_WRITE_TOOL_DEFS;
         // Reset tools only make sense in character scope (the scope hint
         // explicitly tells the AI about them only when scope==='character').
         // Filter them out of the catalog in global scope so the LLM can't
@@ -2136,11 +2171,15 @@ export async function openOrchestratorIterationStudio(deps) {
         //     is unavailable, fall back to a `{simulated: true, message}`
         //     placeholder so the user still sees a chip with a result
         //     block — better than the previous silent drop.
-        const helperSessionForReads = buildHelperSession(state.live);
+        // Lorebook dispatcher is constructed in BOTH scopes — the
+        // underlying helper APIs load books by `book_name` and rely on the
+        // avatar only to scope the world-book-list output to a card's
+        // character/character_aux bindings. In global scope, `avatar` is
+        // an empty string, which `createCharacterEditorWorldBookListToolApi`
+        // accepts: it falls back to listing chat-bound and globally-active
+        // books only (the right surface for a global orchestration).
         const avatarForReads = String(context?.characters?.[context?.characterId]?.avatar || '').trim();
-        const helperApisForReads = (helperSessionForReads?.scope === 'character' && avatarForReads)
-            ? getCea().buildCharacterEditorHelperApis(context, { avatar: avatarForReads })
-            : [];
+        const helperApisForReads = getCea().buildCharacterEditorHelperApis(context, { avatar: avatarForReads });
         const persistedToolResults = [];
         // Plan 2 Unit 7: skill_bind_to_agent / skill_unbind_from_agent /
         // skill_set_mode_defaults / skill_replace_in_systemprompt mutate the
