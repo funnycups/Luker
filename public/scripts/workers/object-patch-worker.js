@@ -123,23 +123,29 @@ function attachObjectPatchTests(previousState, operations) {
     return guardedOperations;
 }
 
+function isDiffableContainer(value) {
+    return isPlainObject(value) || Array.isArray(value);
+}
+
 function buildObjectPatchOperations(previousState, nextState, options = {}) {
     const maxOperations = Number.isInteger(options?.maxOperations) && options.maxOperations > 0
         ? options.maxOperations
         : 2000;
+    const attachTests = options?.attachTests !== false;
 
-    const next = isPlainObject(nextState) ? nextState : null;
-    if (!next) {
+    if (!isDiffableContainer(nextState)) {
         return [];
     }
 
-    const previous = isPlainObject(previousState) ? previousState : {};
-    const operations = compareJsonPatch(previous, next);
+    const previous = isDiffableContainer(previousState)
+        ? previousState
+        : (Array.isArray(nextState) ? [] : {});
+    const operations = compareJsonPatch(previous, nextState);
     if (operations.length > maxOperations) {
-        return [{ op: 'replace', path: '', value: cloneJsonValue(next) }];
+        return [{ op: 'replace', path: '', value: cloneJsonValue(nextState) }];
     }
 
-    return attachObjectPatchTests(previous, operations);
+    return attachTests ? attachObjectPatchTests(previous, operations) : operations;
 }
 
 self.addEventListener('message', (event) => {
@@ -147,6 +153,7 @@ self.addEventListener('message', (event) => {
     const previousState = event?.data?.previousState;
     const nextState = event?.data?.nextState;
     const maxOperations = Number(event?.data?.maxOperations);
+    const attachTests = event?.data?.attachTests !== false;
 
     if (!Number.isInteger(id)) {
         return;
@@ -155,6 +162,7 @@ self.addEventListener('message', (event) => {
     try {
         const operations = buildObjectPatchOperations(previousState, nextState, {
             maxOperations: Number.isInteger(maxOperations) && maxOperations > 0 ? maxOperations : 2000,
+            attachTests,
         });
         self.postMessage({ id, ok: true, operations });
     } catch (error) {

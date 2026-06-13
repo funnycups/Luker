@@ -695,7 +695,7 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
     let requestSummary = null;
 
     if (!force && Array.isArray(previousMessages)) {
-        const operations = buildChatMessagePatchOperations(previousMessages, messagesSnapshot);
+        const operations = await buildChatMessagePatchOperations(previousMessages, messagesSnapshot);
         if (operations.length > 0) {
             // Pull live integrity in case a concurrent save advanced it after our
             // saveContext was captured (see script.js helper jsdoc).
@@ -882,7 +882,7 @@ export async function renameGroupMember(oldAvatar, newAvatar, newName) {
 
                     if (hadChanges) {
                         await eventSource.emit(event_types.CHARACTER_RENAMED_IN_PAST_CHAT, messages, oldAvatar, newAvatar);
-                        const operations = buildChatMessagePatchOperations(previousMessages, messages.slice(1));
+                        const operations = await buildChatMessagePatchOperations(previousMessages, messages.slice(1));
                         if (operations.length === 0) {
                             continue;
                         }

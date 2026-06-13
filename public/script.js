@@ -11016,7 +11016,7 @@ async function renamePastChats(oldAvatar, newAvatar, newName) {
                 currentChat[lineIndex] = nextMessage;
             }
 
-            const operations = buildChatMessagePatchOperations(previousMessages, currentChat.slice(1));
+            const operations = await buildChatMessagePatchOperations(previousMessages, currentChat.slice(1));
 
             if (operations.length === 0) {
                 continue;
@@ -11399,6 +11399,7 @@ async function buildObjectPatchOperationsWithWorker(previousState, nextState, op
     const timeoutMs = Number.isInteger(options?.timeoutMs) && options.timeoutMs > 0
         ? options.timeoutMs
         : 15000;
+    const attachTests = options?.attachTests !== false;
 
     const worker = ensureObjectPatchWorker();
     if (!worker) {
@@ -11415,7 +11416,7 @@ async function buildObjectPatchOperationsWithWorker(previousState, nextState, op
         objectPatchWorkerPending.set(id, { resolve, reject, timeoutId });
 
         try {
-            worker.postMessage({ id, previousState, nextState, maxOperations });
+            worker.postMessage({ id, previousState, nextState, maxOperations, attachTests });
         } catch (error) {
             clearTimeout(timeoutId);
             objectPatchWorkerPending.delete(id);
@@ -11609,14 +11610,23 @@ function attachChatMessagePatchTests(previousMessages, operations) {
     return guardedOperations;
 }
 
-export function buildChatMessagePatchOperations(previousMessages, nextMessages) {
+export async function buildChatMessagePatchOperations(previousMessages, nextMessages) {
     const previous = Array.isArray(previousMessages) ? previousMessages : [];
     // Wire-form the next side so compare matches what server would see, not
     // the structured shape that mutated chat[] still carries (sparse slots,
     // undefined fields). previous is already wire-form because
     // rememberChatMessageSnapshot writes it that way.
     const next = Array.isArray(nextMessages) ? cloneAsJsonWire(nextMessages) : [];
-    const operations = compareJsonPatch(previous, next);
+    let operations;
+    try {
+        operations = await buildObjectPatchOperationsWithWorker(previous, next, {
+            maxOperations: 2000,
+            attachTests: false,
+        });
+    } catch (error) {
+        console.warn('Falling back to synchronous chat message diff', error);
+        operations = compareJsonPatch(previous, next);
+    }
     return attachChatMessagePatchTests(previous, operations);
 }
 
@@ -13601,7 +13611,7 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
         const previousMessages = chatMessageSnapshotCache.get(getChatMessageSnapshotKey(writeTarget));
 
         if (!force && Array.isArray(previousMessages)) {
-            const operations = buildChatMessagePatchOperations(previousMessages, trimmedChat);
+            const operations = await buildChatMessagePatchOperations(previousMessages, trimmedChat);
 
             if (operations.length > 0) {
                 refreshSnapshotIntegrityFromActiveLive(writeTarget, metadata);
