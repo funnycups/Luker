@@ -140,7 +140,94 @@ export function setActivePresetId(settings, mode, scope, presetId, { context, av
     return true;
 }
 
+/**
+ * One-shot in-place migration of a card's legacy `override.<mode>` payload
+ * into `presetLibraries.<mode>.default`. Runs the first time a card is
+ * touched after the upgrade; subsequent reads short-circuit because the
+ * library entry now exists. The legacy fields are deleted from
+ * `ext.override` in the same pass, and the legacy `enabled` flag is
+ * translated into the new flat `overrideEnabled.<mode>` container so the
+ * card's old "on/off" state survives the upgrade.
+ *
+ * Returns true when something was migrated (caller can use that to
+ * trigger a debounced save), false otherwise. Pure-ish: only mutates
+ * the supplied character's extension blob in place.
+ */
+function migrateLegacyCardOverrideForMode(context, avatar, mode) {
+    if (!context || !avatar) return false;
+    const character = (context.characters || []).find(c => String(c?.avatar || '') === String(avatar));
+    if (!character) return false;
+    const ext = character.data?.extensions?.[MODULE_NAME];
+    if (!ext || typeof ext !== 'object') return false;
+    const override = ext.override && typeof ext.override === 'object' ? ext.override : null;
+    if (!override) return false;
+    let legacyPayload = null;
+    let legacyEnabled = null;
+    if (mode === ORCH_EXECUTION_MODE_SPEC) {
+        const hasSpecPayload = (override.spec && typeof override.spec === 'object')
+            || (override.presets && typeof override.presets === 'object')
+            || (override.presetPatch && typeof override.presetPatch === 'object');
+        if (hasSpecPayload) {
+            legacyPayload = { spec: override.spec, presets: override.presets };
+            legacyEnabled = typeof override.enabled === 'boolean' ? override.enabled : null;
+        }
+    } else {
+        const sub = override[mode];
+        if (sub && typeof sub === 'object') {
+            // The agenda/loop/director sub-payload carried its own
+            // `enabled` and `updatedAt` fields; strip those, keep the
+            // profile body.
+            const { enabled, updatedAt, ...rest } = sub;
+            legacyPayload = rest;
+            legacyEnabled = typeof enabled === 'boolean' ? enabled : null;
+        }
+    }
+    if (!legacyPayload) return false;
+    if (!ext.presetLibraries || typeof ext.presetLibraries !== 'object') {
+        ext.presetLibraries = { spec: {}, agenda: {}, loop: {}, director: {} };
+    }
+    if (!ext.activePresetIds || typeof ext.activePresetIds !== 'object') {
+        ext.activePresetIds = { spec: '', agenda: '', loop: '', director: '' };
+    }
+    if (!ext.presetLibraries[mode] || typeof ext.presetLibraries[mode] !== 'object') {
+        ext.presetLibraries[mode] = {};
+    }
+    if (Object.keys(ext.presetLibraries[mode]).length === 0) {
+        ext.presetLibraries[mode][DEFAULT_PRESET_ID] = sanitizePresetEntry(mode, {
+            name: DEFAULT_PRESET_NAME,
+            ...legacyPayload,
+        });
+        ext.activePresetIds[mode] = DEFAULT_PRESET_ID;
+    }
+    if (legacyEnabled !== null) {
+        if (!ext.overrideEnabled || typeof ext.overrideEnabled !== 'object') {
+            ext.overrideEnabled = {};
+        }
+        if (typeof ext.overrideEnabled[mode] !== 'boolean') {
+            ext.overrideEnabled[mode] = legacyEnabled;
+        }
+    }
+    // Strip the legacy fields we just consumed so the next render does
+    // not re-migrate them and the on-card blob settles into the new
+    // shape on the next save.
+    if (mode === ORCH_EXECUTION_MODE_SPEC) {
+        delete override.spec;
+        delete override.presets;
+        delete override.presetPatch;
+        delete override.enabled;
+        delete override.updatedAt;
+        delete override.name;
+        delete override.notes;
+    } else {
+        delete override[mode];
+    }
+    return true;
+}
+
 function ensureDefaultSeeded(settings, mode, scope, { context, avatar } = {}) {
+    if (scope === 'character' && context && avatar) {
+        migrateLegacyCardOverrideForMode(context, avatar, mode);
+    }
     const c = getScopeContainer(settings, scope, { context, avatar });
     if (!c) return null;
     if (!c.libraries[mode]) c.libraries[mode] = {};

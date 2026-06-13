@@ -268,3 +268,80 @@ describe('preset-library — character-scope absence behavior', () => {
         expect(Object.keys(cardLib)).toHaveLength(0);
     });
 });
+
+describe('preset-library — legacy override migration', () => {
+    test('legacy override.loop on a card is migrated to presetLibraries.loop.default on first read', () => {
+        const settings = { presetLibraries: { spec: {}, agenda: {}, loop: {}, director: {} }, activePresetIds: {} };
+        const character = { avatar: 'alice.png', data: { extensions: { orchestrator: {
+            override: { mode: 'loop', loop: { enabled: true, system_prompt: 'MY-CUSTOM', updatedAt: 42 } },
+        } } } };
+        const ctx = { characters: [character] };
+
+        const active = lib.getActivePreset(settings, 'loop', { scope: 'character', context: ctx, avatar: 'alice.png' });
+        expect(active?.system_prompt).toBe('MY-CUSTOM');
+
+        const cardExt = character.data.extensions.orchestrator;
+        expect(cardExt.presetLibraries.loop.default.system_prompt).toBe('MY-CUSTOM');
+        expect(cardExt.activePresetIds.loop).toBe('default');
+        // Legacy enabled flag is translated into the new flat container.
+        expect(cardExt.overrideEnabled.loop).toBe(true);
+        // Legacy payload is stripped so subsequent renders do not re-migrate.
+        expect(cardExt.override.loop).toBeUndefined();
+        // The override envelope is preserved as the mode pin.
+        expect(cardExt.override.mode).toBe('loop');
+    });
+
+    test('legacy spec override migrates spec+presets and translates the top-level enabled flag', () => {
+        const settings = { presetLibraries: { spec: {}, agenda: {}, loop: {}, director: {} }, activePresetIds: {} };
+        const character = { avatar: 'alice.png', data: { extensions: { orchestrator: {
+            override: {
+                mode: 'spec',
+                enabled: false,
+                spec: { stages: [{ id: 's1', mode: 'serial', nodes: [{ id: 'n1', preset: 'p1' }] }] },
+                presets: { p1: { systemPrompt: 'KEEP' } },
+                updatedAt: 99,
+            },
+        } } } };
+        const ctx = { characters: [character] };
+
+        lib.getActivePreset(settings, 'spec', { scope: 'character', context: ctx, avatar: 'alice.png' });
+
+        const cardExt = character.data.extensions.orchestrator;
+        expect(cardExt.presetLibraries.spec.default.spec.stages).toHaveLength(1);
+        expect(cardExt.presetLibraries.spec.default.presets.p1.systemPrompt).toBe('KEEP');
+        expect(cardExt.overrideEnabled.spec).toBe(false);
+        expect(cardExt.override.spec).toBeUndefined();
+        expect(cardExt.override.presets).toBeUndefined();
+        expect(cardExt.override.enabled).toBeUndefined();
+    });
+
+    test('second read is a no-op when the library already exists', () => {
+        const settings = { presetLibraries: { spec: {}, agenda: {}, loop: {}, director: {} }, activePresetIds: {} };
+        const character = { avatar: 'alice.png', data: { extensions: { orchestrator: {
+            presetLibraries: { loop: { existing: { name: 'Existing', system_prompt: 'ALREADY' } } },
+            activePresetIds: { loop: 'existing' },
+            override: { mode: 'loop' },
+        } } } };
+        const ctx = { characters: [character] };
+
+        const active = lib.getActivePreset(settings, 'loop', { scope: 'character', context: ctx, avatar: 'alice.png' });
+        expect(active?.system_prompt).toBe('ALREADY');
+        // No `default` slot synthesized on top of the existing library.
+        expect(character.data.extensions.orchestrator.presetLibraries.loop.default).toBeUndefined();
+    });
+
+    test('migration does not clobber a pre-existing overrideEnabled flag', () => {
+        const settings = { presetLibraries: { spec: {}, agenda: {}, loop: {}, director: {} }, activePresetIds: {} };
+        const character = { avatar: 'alice.png', data: { extensions: { orchestrator: {
+            override: { mode: 'loop', loop: { enabled: true, system_prompt: 'MIGRATE' } },
+            overrideEnabled: { loop: false },
+        } } } };
+        const ctx = { characters: [character] };
+
+        lib.getActivePreset(settings, 'loop', { scope: 'character', context: ctx, avatar: 'alice.png' });
+
+        // The user's explicit `false` from the new shape wins over the
+        // legacy `true` — the migration must not flip it back on.
+        expect(character.data.extensions.orchestrator.overrideEnabled.loop).toBe(false);
+    });
+});
