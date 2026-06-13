@@ -454,6 +454,43 @@
     background: color-mix(in oklab, var(--it-accent-primary) 28%, transparent);
 }
 
+/* ── Skill-visibility context strip ───────────────────────────────────
+   Prepended above the raw structural diff card for skill_bind_to_agent /
+   skill_unbind_from_agent / skill_set_mode_defaults edits. Surfaces the
+   effective skill set in plain words because the literal diff (e.g.
+   `visible: undefined → ['+', 'foo']`) hides the resolver semantics. */
+.orch_it_skill_visibility_ctx {
+    border: 1px dashed color-mix(in oklab, var(--it-accent-primary) 35%, transparent);
+    border-radius: var(--it-radius-md, 6px);
+    padding: var(--it-space-sm);
+    margin-bottom: var(--it-space-xs);
+    background: color-mix(in oklab, var(--it-accent-primary) 5%, transparent);
+    font-size: 0.9em;
+}
+.orch_it_skill_visibility_ctx_header {
+    font-weight: 600;
+    margin-bottom: var(--it-space-xs);
+    opacity: 0.92;
+}
+.orch_it_skill_visibility_ctx_row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--it-space-xs);
+    line-height: 1.4;
+}
+.orch_it_skill_visibility_ctx_when {
+    font-weight: 600;
+    min-width: 4em;
+    opacity: 0.75;
+}
+.orch_it_skill_visibility_ctx_set {
+    font-family: var(--monoFontFamily, monospace);
+    font-size: 0.92em;
+    word-break: break-word;
+    flex: 1;
+}
+
 /* ── Narrow viewport ───────────────────────────────────────────────── */
 
 @media (max-width: 720px) {

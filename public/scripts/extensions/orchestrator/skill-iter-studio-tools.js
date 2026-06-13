@@ -247,6 +247,74 @@ function ensureModeSkillsField(profile) {
     if (!Array.isArray(profile.skills.deny)) profile.skills.deny = [];
 }
 
+/**
+ * Extract the raw `skills` field that the resolver actually consults for a
+ * given (profile, agentId) pair. Returns `{ visible, deny }` with array
+ * values, or `null` when the agent has no skills field set (i.e. the
+ * resolver will inherit the mode default for that agent).
+ *
+ * Used by `buildSkillVisibilityChange` to assemble the before/after snapshot
+ * pinned onto a policy-binding tool's `pendingEdit`. The renderer in
+ * studio.js consumes that snapshot to surface a human-readable "effective
+ * skills" line above the raw structural diff card so the user sees what the
+ * change means for runtime visibility (e.g. `[+, foo]` is "inherit mode +
+ * foo", not "only foo").
+ */
+function readAgentSkillsField(profile, agentId) {
+    const container = resolveAgentSkillsContainer(profile, agentId);
+    if (!container || !container.skills || typeof container.skills !== 'object') return null;
+    const visible = Array.isArray(container.skills.visible) ? [...container.skills.visible] : [];
+    const deny = Array.isArray(container.skills.deny) ? [...container.skills.deny] : [];
+    return { visible, deny };
+}
+
+function readModeSkillsField(profile) {
+    if (!profile?.skills || typeof profile.skills !== 'object') {
+        return { visible: ['*'], deny: [] };
+    }
+    return {
+        visible: Array.isArray(profile.skills.visible) ? [...profile.skills.visible] : ['*'],
+        deny: Array.isArray(profile.skills.deny) ? [...profile.skills.deny] : [],
+    };
+}
+
+/**
+ * Build the `skillVisibilityChange` blob that policy-binding tools attach to
+ * their `pendingEdit`. Pure shape:
+ *
+ *   {
+ *     kind: 'agent' | 'mode',
+ *     agentId?: string,                // present iff kind === 'agent'
+ *     list: 'visible' | 'deny',
+ *     mode:  { before, after },        // mode-level raw fields (always present)
+ *     agent?: { before, after },       // per-agent raw fields (kind === 'agent')
+ *                                       // each side null when no field is set
+ *   }
+ *
+ * The renderer in studio.js translates this into a "Skills now visible:
+ * <effective set>" line — including expanding the `'+'` inherit sentinel
+ * and the `'*'` wildcard against the mode default — so the user sees
+ * runtime semantics rather than the literal `['+', 'foo']` shape.
+ */
+export function buildSkillVisibilityChange(beforeProfile, afterProfile, { kind, agentId, list }) {
+    const out = {
+        kind,
+        list,
+        mode: {
+            before: readModeSkillsField(beforeProfile),
+            after: readModeSkillsField(afterProfile),
+        },
+    };
+    if (kind === 'agent') {
+        out.agentId = String(agentId);
+        out.agent = {
+            before: readAgentSkillsField(beforeProfile, agentId),
+            after: readAgentSkillsField(afterProfile, agentId),
+        };
+    }
+    return out;
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Tool defs. OpenAI-shape; spliced into the iter-studio catalog by studio.js
 // alongside CONTROL_TOOL_DEFS. Names match SKILL_ITER_STUDIO_TOOL_NAMES.
@@ -686,7 +754,10 @@ const HANDLERS = {
         if (!list.includes(args.skillName)) list.push(args.skillName);
         return {
             result: { ok: true, agentId: args.agentId, skillName: args.skillName, list: args.list, skills: container.skills },
-            pendingEdit: { op: 'set', path: '', oldValue: before, newValue: next },
+            pendingEdit: {
+                op: 'set', path: '', oldValue: before, newValue: next,
+                skillVisibilityChange: buildSkillVisibilityChange(before, next, { kind: 'agent', agentId: String(args.agentId), list: args.list }),
+            },
         };
     },
 
@@ -708,7 +779,10 @@ const HANDLERS = {
         if (idx >= 0) list.splice(idx, 1);
         return {
             result: { ok: true, agentId: args.agentId, skillName: args.skillName, list: args.list, skills: container.skills },
-            pendingEdit: { op: 'set', path: '', oldValue: before, newValue: next },
+            pendingEdit: {
+                op: 'set', path: '', oldValue: before, newValue: next,
+                skillVisibilityChange: buildSkillVisibilityChange(before, next, { kind: 'agent', agentId: String(args.agentId), list: args.list }),
+            },
         };
     },
 
@@ -722,7 +796,10 @@ const HANDLERS = {
         if (Array.isArray(args?.deny)) next.skills.deny = args.deny.map(String);
         return {
             result: { ok: true, skills: next.skills },
-            pendingEdit: { op: 'set', path: '', oldValue: before, newValue: next },
+            pendingEdit: {
+                op: 'set', path: '', oldValue: before, newValue: next,
+                skillVisibilityChange: buildSkillVisibilityChange(before, next, { kind: 'mode', list: 'visible' }),
+            },
         };
     },
 

@@ -67,6 +67,7 @@ const {
     isSkillIterStudioTool,
     runSkillIterStudioTool,
     applyFrontmatterPatch,
+    buildSkillVisibilityChange,
 } = await import('../../public/scripts/extensions/orchestrator/skill-iter-studio-tools.js');
 
 const {
@@ -750,5 +751,110 @@ describe('augmentIterStudioPromptWithSkills', () => {
         );
         expect(customResolve).toHaveBeenCalled();
         expect(out).toMatch(/- custom: d/);
+    });
+});
+
+// ── Skill-visibility change hint ────────────────────────────────────────
+//
+// Policy-binding tools attach a `skillVisibilityChange` blob to their
+// pendingEdit so the studio.js renderer can surface the runtime-effective
+// skill set above the raw structural diff (which is opaque because
+// `['+', name]` reads as "tiny addition" but actually means "inherit mode
+// default and append"). buildSkillVisibilityChange is the pure helper that
+// extracts the before/after mode + agent raw fields; the same blob is also
+// returned end-to-end by runSkillIterStudioTool so studio.js receives it
+// verbatim on the pendingEdit.
+
+describe('buildSkillVisibilityChange', () => {
+    test('mode-level kind captures mode visible before/after, no agent slot', () => {
+        const before = { skills: { visible: ['*'], deny: [] } };
+        const after = { skills: { visible: ['foo', 'bar'], deny: ['baz'] } };
+        const change = buildSkillVisibilityChange(before, after, { kind: 'mode', list: 'visible' });
+        expect(change.kind).toBe('mode');
+        expect(change.list).toBe('visible');
+        expect(change.mode.before.visible).toEqual(['*']);
+        expect(change.mode.after.visible).toEqual(['foo', 'bar']);
+        expect(change.mode.after.deny).toEqual(['baz']);
+        expect(change.agent).toBeUndefined();
+        expect(change.agentId).toBeUndefined();
+    });
+
+    test('agent-level kind captures both mode and agent sides, agent null when field absent', () => {
+        const before = {
+            skills: { visible: ['*'], deny: [] },
+            subAgents: [{ id: 'mem', systemPrompt: 'x' }], // no skills field
+        };
+        const after = {
+            skills: { visible: ['*'], deny: [] },
+            subAgents: [{ id: 'mem', systemPrompt: 'x', skills: { visible: ['+', 'foo'], deny: [] } }],
+        };
+        const change = buildSkillVisibilityChange(before, after, { kind: 'agent', agentId: 'mem', list: 'visible' });
+        expect(change.kind).toBe('agent');
+        expect(change.agentId).toBe('mem');
+        expect(change.list).toBe('visible');
+        expect(change.mode.before.visible).toEqual(['*']);
+        expect(change.mode.after.visible).toEqual(['*']);
+        expect(change.agent.before).toBeNull();
+        expect(change.agent.after.visible).toEqual(['+', 'foo']);
+    });
+
+    test('agent kind handles director main agent path', () => {
+        const before = { mainAgent: { systemPrompt: 'x', skills: { visible: ['a'], deny: [] } } };
+        const after = { mainAgent: { systemPrompt: 'x', skills: { visible: ['a', 'b'], deny: [] } } };
+        const change = buildSkillVisibilityChange(before, after, { kind: 'agent', agentId: 'main', list: 'visible' });
+        expect(change.agent.before.visible).toEqual(['a']);
+        expect(change.agent.after.visible).toEqual(['a', 'b']);
+    });
+});
+
+describe('runSkillIterStudioTool — skillVisibilityChange wiring on pendingEdit', () => {
+    test('skill_bind_to_agent attaches agent-level change with before/after agent + mode', async () => {
+        const profile = {
+            skills: { visible: ['*'], deny: [] },
+            subAgents: [{ id: 'mem', systemPrompt: 'x' }],
+        };
+        const out = await runSkillIterStudioTool(
+            { name: 'skill_bind_to_agent', args: { agentId: 'mem', skillName: 'foo', list: 'visible' } },
+            { getWorkingProfile: () => profile },
+        );
+        expect(out.ok).toBe(true);
+        const ch = out.pendingEdit.skillVisibilityChange;
+        expect(ch.kind).toBe('agent');
+        expect(ch.agentId).toBe('mem');
+        expect(ch.list).toBe('visible');
+        expect(ch.mode.before.visible).toEqual(['*']);
+        expect(ch.mode.after.visible).toEqual(['*']);
+        expect(ch.agent.before).toBeNull();
+        expect(ch.agent.after.visible).toEqual(['+', 'foo']);
+    });
+
+    test('skill_unbind_from_agent emits an agent-level change too', async () => {
+        const profile = {
+            skills: { visible: ['*'], deny: [] },
+            subAgents: [{ id: 'mem', systemPrompt: 'x', skills: { visible: ['+', 'foo', 'bar'], deny: [] } }],
+        };
+        const out = await runSkillIterStudioTool(
+            { name: 'skill_unbind_from_agent', args: { agentId: 'mem', skillName: 'foo', list: 'visible' } },
+            { getWorkingProfile: () => profile },
+        );
+        expect(out.ok).toBe(true);
+        const ch = out.pendingEdit.skillVisibilityChange;
+        expect(ch.kind).toBe('agent');
+        expect(ch.agent.before.visible).toEqual(['+', 'foo', 'bar']);
+        expect(ch.agent.after.visible).toEqual(['+', 'bar']);
+    });
+
+    test('skill_set_mode_defaults emits a mode-level change', async () => {
+        const profile = { skills: { visible: ['*'], deny: [] } };
+        const out = await runSkillIterStudioTool(
+            { name: 'skill_set_mode_defaults', args: { visible: ['only', 'these'], deny: ['x'] } },
+            { getWorkingProfile: () => profile },
+        );
+        expect(out.ok).toBe(true);
+        const ch = out.pendingEdit.skillVisibilityChange;
+        expect(ch.kind).toBe('mode');
+        expect(ch.mode.before.visible).toEqual(['*']);
+        expect(ch.mode.after.visible).toEqual(['only', 'these']);
+        expect(ch.mode.after.deny).toEqual(['x']);
     });
 });

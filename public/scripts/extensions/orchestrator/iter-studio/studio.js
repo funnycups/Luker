@@ -1348,14 +1348,97 @@ export async function openOrchestratorIterationStudio(deps) {
     // the renderer can resolve the field's pre-edit value and emit a
     // full-field before/after; older / already-applied turns fall back
     // to the focused find→replace card.
+    //
+    // Skill-policy edits (skill_bind_to_agent / skill_unbind_from_agent /
+    // skill_set_mode_defaults) carry a `skillVisibilityChange` blob on
+    // the edit envelope. We prepend an effective-set context strip so
+    // the user sees the runtime semantics — e.g. `['+', foo]` is
+    // "inherit mode default + foo", not "only foo" — which is otherwise
+    // invisible in the raw `visible: ... → ['+', foo]` structural diff.
     // ──────────────────────────────────────────────────────────────────
     function renderPendingEditCard(edit, message) {
         const isLatestUnapplied = !!message
             && String(message?.id || '') === state.__latestUnappliedAssistantId;
-        return ITER_UI.diff.renderDiffCard([edit], {
+        const skillContext = edit?.skillVisibilityChange
+            ? renderSkillVisibilityContext(edit.skillVisibilityChange)
+            : '';
+        const diffHtml = ITER_UI.diff.renderDiffCard([edit], {
             i18n: tf,
             live: isLatestUnapplied ? state.live : undefined,
         });
+        return `${skillContext}${diffHtml}`;
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Skill-visibility context strip. Translates the structured
+    // `skillVisibilityChange` blob attached by skill-iter-studio-tools
+    // policy-binding handlers into a small "Effective visible skills"
+    // header rendered above the raw structural diff card.
+    //
+    // The raw diff alone is opaque for skill policy edits because the
+    // resolver's semantics (`'+'` = inherit mode + append, `'*'` =
+    // wildcard, empty agent list = inherit mode) hide the actual impact
+    // behind sentinel values. A bind that changes `visible: undefined →
+    // ['+', 'foo']` for an agent whose mode default is `['*']` looks like
+    // a tiny addition but is actually "agent now sees mode wildcard PLUS
+    // foo" — the user benefits from seeing that summarized in words.
+    //
+    // Layout: a single block with two rows ("before" / "after"), each
+    // showing the effective skill name set, with the inherit-from-mode
+    // case spelled out as "(inherit mode = …)" rather than the literal
+    // `+` chip. Kept intentionally text-y rather than chip-styled to
+    // avoid pulling in new CSS — the structural diff card below carries
+    // the heavy visual weight.
+    // ──────────────────────────────────────────────────────────────────
+    function renderSkillVisibilityContext(change) {
+        if (!change || typeof change !== 'object') return '';
+        const kind = String(change.kind || '');
+        const list = String(change.list || 'visible');
+        const listLabel = list === 'deny' ? t('deny') : t('visible');
+
+        const formatSet = (modeSide, agentSide) => {
+            // Mode-level row: simple expansion (wildcard → "all skills").
+            if (kind === 'mode' || !agentSide) {
+                const v = Array.isArray(modeSide?.[list]) ? modeSide[list] : [];
+                if (v.includes('*')) return t('(all skills)');
+                if (v.length === 0) return t('(none)');
+                return v.map(escapeHtmlLocal).join(', ');
+            }
+            // Agent-level row. Three resolver shapes (skill-resolution.js):
+            //   - agent field absent (null) OR empty list → inherit mode default
+            //   - first element '+' → inherit mode default + remaining names
+            //   - otherwise → REPLACE mode default with this exact list
+            const modeV = Array.isArray(modeSide?.[list]) ? modeSide[list] : [];
+            const agentV = agentSide && Array.isArray(agentSide[list]) ? agentSide[list] : null;
+            const modeExpansion = modeV.includes('*') ? t('(all skills)')
+                : (modeV.length === 0 ? t('(none)') : modeV.map(escapeHtmlLocal).join(', '));
+            if (agentV === null || agentV.length === 0) {
+                return tf('inherit mode = ${0}', modeExpansion);
+            }
+            if (agentV[0] === '+') {
+                const extras = agentV.slice(1);
+                if (extras.length === 0) return tf('inherit mode = ${0}', modeExpansion);
+                return tf('inherit mode (${0}) + ${1}', modeExpansion, extras.map(escapeHtmlLocal).join(', '));
+            }
+            return tf('only ${0} (overrides mode)', agentV.map(escapeHtmlLocal).join(', '));
+        };
+
+        const beforeLabel = formatSet(change.mode?.before, change.agent?.before);
+        const afterLabel = formatSet(change.mode?.after, change.agent?.after);
+        const headerText = kind === 'agent'
+            ? tf('Effective ${0} skills for agent "${1}"', listLabel, String(change.agentId || ''))
+            : tf('Effective mode-level ${0} skills', listLabel);
+        return `<div class="orch_it_skill_visibility_ctx">
+            <div class="orch_it_skill_visibility_ctx_header">${escapeHtmlLocal(headerText)}</div>
+            <div class="orch_it_skill_visibility_ctx_row">
+                <span class="orch_it_skill_visibility_ctx_when">${escapeHtmlLocal(t('Before'))}:</span>
+                <span class="orch_it_skill_visibility_ctx_set">${beforeLabel}</span>
+            </div>
+            <div class="orch_it_skill_visibility_ctx_row">
+                <span class="orch_it_skill_visibility_ctx_when">${escapeHtmlLocal(t('After'))}:</span>
+                <span class="orch_it_skill_visibility_ctx_set">${afterLabel}</span>
+            </div>
+        </div>`;
     }
 
     // ──────────────────────────────────────────────────────────────────
