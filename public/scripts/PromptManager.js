@@ -519,8 +519,24 @@ class PromptManager {
         this.renderDebounced = debounce(this.render.bind(this), debounce_timeout.relaxed);
         this.renderRequestId = 0;
         this.deferredTryGenerateRequestId = 0;
+        /**
+         * Schedules the dry-run Generate that powers token-count display.
+         *
+         * Mobile-open-chat traces show this debounced timer firing 4× during a
+         * single chat-open burst (events fan out from CHAT_LOADED,
+         * OAI_PRESET_CHANGED_AFTER, WORLDINFO_SETTINGS_UPDATED, etc.) and each
+         * dry run dumps tens of thousands of microtasks onto the main thread,
+         * blocking it for >10s on big presets. Yielding the actual fire to a
+         * requestIdleCallback slot lets the chat-open work drain first; the
+         * 2s timeout caps additional latency. Mirrors updateTokenDisplayDebounced.
+         */
         this.scheduleDeferredTryGenerate = debounce((requestId) => {
-            void this.runDeferredTryGenerate(requestId);
+            const run = () => { void this.runDeferredTryGenerate(requestId); };
+            if (typeof globalThis.requestIdleCallback === 'function') {
+                globalThis.requestIdleCallback(run, { timeout: 2000 });
+            } else {
+                run();
+            }
         }, debounce_timeout.standard);
 
         /**
