@@ -69,7 +69,6 @@ export async function reviewIncomingCustomTools({ tools, t }) {
         okButton: t('Apply with tools'),
         cancelButton: t('Cancel'),
         wide: true,
-        large: true,
         allowVerticalScrolling: true,
         customButtons: [
             { text: t('Apply without tools'), result: RESULT_WITHOUT, appendAtEnd: true },

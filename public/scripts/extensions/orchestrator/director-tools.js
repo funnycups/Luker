@@ -1055,6 +1055,18 @@ export function createSubagentDispatcher({
                                 const toolCtx = Object.create(contextForNotes || null);
                                 toolCtx.chat = chat;
                                 toolCtx.__customToolRegistry = customToolRegistry;
+                                // Mirror director-runtime.js main-agent path:
+                                // give custom tools a stable sync way to read
+                                // the in-flight draft body without round-tripping
+                                // through the built-in `get_draft` tool.
+                                toolCtx.director = {
+                                    getDraft() {
+                                        try {
+                                            if (handle && typeof handle.getText === 'function') return handle.getText();
+                                        } catch (_) { /* fall through */ }
+                                        return '';
+                                    },
+                                };
                                 // Sub-agent scoped skill visibility — see
                                 // director-runtime.js main-agent path for
                                 // matching wiring.

@@ -240,6 +240,7 @@ export function getDefaultRequestSystemPrompt() {
         'Design for robust RP quality: user-intent understanding, character independence, anti-OOC, realism, and world autonomy.',
         'Flexibility policy: treat the provided blueprint as a strong baseline, not a prison.',
         'Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
+        'Batch independent edits in a single response. When the user request implies several independent changes (e.g. patch main prompt + edit a skill + flip a flag), emit all of them as parallel tool calls in one round rather than serializing one-per-round. Sequential rounds are only for changes whose later step truly depends on the earlier step\'s result (e.g. read a file, then patch based on what it said).',
     ].join('\n');
 }
 

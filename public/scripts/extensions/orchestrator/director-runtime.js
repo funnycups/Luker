@@ -857,6 +857,21 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                     const toolCtx = Object.create(deps?.contextForNotes || null);
                     toolCtx.chat = deps.chat;
                     toolCtx.__customToolRegistry = customToolRegistry;
+                    // Custom tools in director mode often want to inspect the
+                    // in-flight draft (e.g. a pre-finalize skeleton check). The
+                    // built-in `get_draft` tool returns `handle.getText()`, so
+                    // expose the same path here as `ctx.director.getDraft()` so
+                    // Layer-3 tool bodies have a stable, sync, no-tool-roundtrip
+                    // way to read the live message body. Sub-agents inherit a
+                    // separate handle and get their own director.getDraft below.
+                    toolCtx.director = {
+                        getDraft() {
+                            try {
+                                if (handle && typeof handle.getText === 'function') return handle.getText();
+                            } catch (_) { /* fall through */ }
+                            return '';
+                        },
+                    };
                     // Thread the resolved visible-skills list onto the
                     // ctx so any skill_list / skill_read / skill_search
                     // calls dispatched through this loop see the agent's

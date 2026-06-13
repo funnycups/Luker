@@ -586,8 +586,10 @@ export function ensureStyles(uiBlockId) {
 .luker_orch_ct_row_label {
     flex: 1 1 auto;
     display: inline-flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 6px;
+    min-width: 0;
 }
 .luker_orch_ct_name {
     font-weight: 500;
@@ -599,7 +601,10 @@ export function ensureStyles(uiBlockId) {
 .luker_orch_ct_desc {
     opacity: 0.7;
     font-size: 0.85em;
-    margin-left: 6px;
+    flex: 1 1 100%;
+    min-width: 0;
+    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 .luker_orch_ct_actions_inline {
     display: inline-flex;
