@@ -165,6 +165,26 @@ describe('preset-library — delete / rename / duplicate', () => {
         expect(settings.activePresetIds.director).toBe('default');
     });
 
+    test('deleting the last character-scope preset leaves the library empty', () => {
+        // Regression: previously, deleting the last character-scope preset
+        // would re-seed a factory Default into the card, creating a
+        // phantom override that `hasCharacter*Override` reads as true.
+        // The user-visible bug: "Clear Character Override" appeared to do
+        // nothing because the next render would immediately re-seed.
+        // Now the library stays empty and activeId is '' so callers fall
+        // back to the global active preset.
+        const settings = { presetLibraries: { spec: {}, agenda: {}, loop: {}, director: {} }, activePresetIds: {} };
+        const ctx = { characters: [{ avatar: 'alice.png', data: { extensions: { orchestrator: {} } } }] };
+        const id = lib.createPreset(settings, 'director', 'character',
+            { name: 'OnlyOne' }, { context: ctx, avatar: 'alice.png' });
+        lib.setActivePresetId(settings, 'director', 'character', id,
+            { context: ctx, avatar: 'alice.png' });
+        lib.deletePreset(settings, 'director', 'character', id, { context: ctx, avatar: 'alice.png' });
+        const cardExt = ctx.characters[0].data.extensions.orchestrator;
+        expect(Object.keys(cardExt.presetLibraries.director)).toHaveLength(0);
+        expect(cardExt.activePresetIds.director).toBe('');
+    });
+
     test('renamePreset updates name without changing id', () => {
         const settings = freshSettings();
         const id = lib.createPreset(settings, 'spec', 'global', { name: 'Old' });
@@ -244,10 +264,20 @@ describe('preset-library — character-scope legacy synthesis', () => {
         expect(cardLib.default.system_prompt).toBe('MY-CUSTOM');
     });
 
-    test('factory Default still seeded when card has no legacy override either', () => {
+    test('card with no legacy override and no card-scope library returns null — does NOT auto-seed', () => {
+        // Regression: previously, character-scope getActivePreset would
+        // synthesize a factory Default into the card on first touch
+        // whenever the card had no legacy override and no preset library.
+        // That silently made `hasCharacter*Override` flip to true and made
+        // "Clear Character Override" a no-op (the next render would re-seed
+        // immediately). Now the call returns null and the card data is
+        // untouched; callers fall back to the global active preset.
         const settings = { presetLibraries: { spec: {}, agenda: {}, loop: {}, director: {} }, activePresetIds: {} };
         const ctx = { characters: [{ avatar: 'bob.png', data: { extensions: { orchestrator: {} } } }] };
         const active = lib.getActivePreset(settings, 'director', { scope: 'character', context: ctx, avatar: 'bob.png' });
-        expect(active?.name).toBe('Default');
+        expect(active).toBeNull();
+        // Card data must not be mutated by a phantom seed.
+        const cardLib = ctx.characters[0].data.extensions.orchestrator.presetLibraries?.director || {};
+        expect(Object.keys(cardLib)).toHaveLength(0);
     });
 });

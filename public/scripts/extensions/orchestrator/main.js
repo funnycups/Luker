@@ -45,13 +45,11 @@ import {
     PORTABLE_PROFILE_FORMAT_V3,
     PORTABLE_PROFILE_FORMAT_V4,
     createDefaultDirectorProfile,
+    createFactoryPresetForMode,
     sanitizeDirectorProfile,
     defaultAgendaAgents,
-    defaultAgendaPlanner,
     defaultLoopProfile,
-    defaultPresets,
     defaultSettings,
-    defaultSpec,
     getCriticPromptReminderLines,
     getCriticReviewNodeContractShape,
     getDefaultRequestSystemPrompt,
@@ -7157,70 +7155,40 @@ function bindUi() {
         }
 
         if (action === 'reset-global') {
-            if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_LOOP) {
-                if (!window.confirm(i18n('Reset global orchestration profile to defaults? This will overwrite current global workflow and presets.'))) {
-                    return;
-                }
-                settings.loopProfile = sanitizeLoopProfile(defaultLoopProfile);
-                await saveSettings();
-                uiState.globalLoopEditor = loadGlobalLoopEditorState();
-                ensureLoopEditorIntegrity(uiState.globalLoopEditor);
-                renderDynamicPanels(root, context);
-                notifySuccess(i18n('Global orchestration profile reset to defaults.'));
-                updateUiStatus(i18n('Reset global profile to defaults.'));
-                return;
-            }
-            if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_AGENDA) {
-                if (!window.confirm(i18n('Reset global orchestration profile to defaults? This will overwrite current global workflow and presets.'))) {
-                    return;
-                }
-                settings.executionMode = ORCH_EXECUTION_MODE_AGENDA;
-                settings.singleAgentModeEnabled = false;
-                settings.agendaPlanner = structuredClone(defaultAgendaPlanner);
-                delete settings.agendaPlannerPrompt;
-                settings.agendaAgents = sanitizePresetMap(defaultAgendaAgents);
-                settings.agendaFinalAgentId = 'finalizer';
-                settings.agendaPlannerMaxRounds = 6;
-                settings.agendaMaxConcurrentAgents = 3;
-                settings.agendaMaxTotalRuns = 24;
-                await saveSettings();
-                uiState.globalAgendaEditor = loadGlobalAgendaEditorState();
-                ensureAgendaEditorIntegrity(uiState.globalAgendaEditor);
-                renderDynamicPanels(root, context);
-                notifySuccess(i18n('Global orchestration profile reset to defaults.'));
-                updateUiStatus(i18n('Reset global profile to defaults.'));
-                return;
-            }
-            if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_DIRECTOR) {
-                if (!window.confirm(i18n('Reset global orchestration profile to defaults? This will overwrite current global workflow and presets.'))) {
-                    return;
-                }
-                // Director's profile lives directly in settings — no
-                // separate editor working-state to flush. createDefault
-                // gives us the canonical profile + the 5 default
-                // analyst sub-agents the default main-agent prompt is
-                // coupled to.
-                settings.directorProfile = createDefaultDirectorProfile();
-                await saveSettings();
-                // Refresh editor so the popup reflects the reset state.
-                uiState.globalDirectorEditor = loadGlobalDirectorEditorState();
-                ensureDirectorEditorIntegrity(uiState.globalDirectorEditor);
-                renderDynamicPanels(root, context);
-                notifySuccess(i18n('Global orchestration profile reset to defaults.'));
-                updateUiStatus(i18n('Reset global profile to defaults.'));
-                return;
-            }
             if (!window.confirm(i18n('Reset global orchestration profile to defaults? This will overwrite current global workflow and presets.'))) {
                 return;
             }
-            settings.orchestrationSpec = structuredClone(defaultSpec);
-            settings.presets = structuredClone(defaultPresets);
+            // Reset writes the factory payload into the CURRENTLY ACTIVE
+            // preset slot via `writeActivePreset`, so the same path the
+            // editor reads from (`getActivePreset` → `presetLibraries.<mode>
+            // .<activeId>`) shows the freshly reset profile. Writing to
+            // legacy fields like `settings.loopProfile` / `directorProfile`
+            // / `agendaPlanner` / `orchestrationSpec` would no-op since
+            // those slots are stripped by `migrateGlobalLegacyToLibraries`
+            // and never read at runtime — the active preset would keep
+            // showing the pre-reset content until the user reopened the
+            // popup (and even then only because of the migration deleting
+            // legacy fields).
+            const currentMode = getExecutionMode(settings);
+            const factoryPayload = createFactoryPresetForMode(currentMode);
+            writeActivePreset(settings, currentMode, 'global', factoryPayload);
             await saveSettings();
-            uiState.globalEditor = loadGlobalEditorState();
-            ensureEditorIntegrity(uiState.globalEditor);
+            if (currentMode === ORCH_EXECUTION_MODE_LOOP) {
+                uiState.globalLoopEditor = loadGlobalLoopEditorState();
+                ensureLoopEditorIntegrity(uiState.globalLoopEditor);
+            } else if (currentMode === ORCH_EXECUTION_MODE_AGENDA) {
+                uiState.globalAgendaEditor = loadGlobalAgendaEditorState();
+                ensureAgendaEditorIntegrity(uiState.globalAgendaEditor);
+            } else if (currentMode === ORCH_EXECUTION_MODE_DIRECTOR) {
+                uiState.globalDirectorEditor = loadGlobalDirectorEditorState();
+                ensureDirectorEditorIntegrity(uiState.globalDirectorEditor);
+            } else {
+                uiState.globalEditor = loadGlobalEditorState();
+                ensureEditorIntegrity(uiState.globalEditor);
+            }
+            renderDynamicPanels(root, context);
             notifySuccess(i18n('Global orchestration profile reset to defaults.'));
             updateUiStatus(i18n('Reset global profile to defaults.'));
-            renderDynamicPanels(root, context);
             return;
         }
 

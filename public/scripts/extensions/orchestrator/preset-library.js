@@ -150,9 +150,9 @@ function ensureDefaultSeeded(settings, mode, scope, { context, avatar } = {}) {
     if (!c.libraries[mode]) c.libraries[mode] = {};
     if (Object.keys(c.libraries[mode]).length === 0) {
         // For character scope, prefer projecting legacy override data into
-        // the library before falling back to the factory default. This is
-        // the lazy on-touch migration for cards saved before the per-mode
-        // preset library shape existed.
+        // the library before falling back. This is the lazy on-touch
+        // migration for cards saved before the per-mode preset library
+        // shape existed.
         let seededFromLegacy = false;
         if (scope === 'character' && context && avatar) {
             const synthesized = getCharacterPresetLibrary(context, avatar, mode);
@@ -171,6 +171,18 @@ function ensureDefaultSeeded(settings, mode, scope, { context, avatar } = {}) {
             }
         }
         if (!seededFromLegacy) {
+            // Character scope with no legacy data: do NOT seed a factory
+            // default. Seeding here would (a) create a phantom override
+            // for cards that have never been customized — `hasCharacterX
+            // Override` reads `presetLibraries.<mode>` non-empty and
+            // would flip to true after the first popup render — and
+            // (b) make "Clear Character Override" no-op since the next
+            // `loadCharacterEditorState → getActivePreset` would
+            // immediately re-seed the just-cleared library. Return null
+            // so callers fall back to the global active preset.
+            if (scope === 'character') {
+                return null;
+            }
             c.libraries[mode][DEFAULT_PRESET_ID] = sanitizePresetEntry(mode, createFactoryPresetForMode(mode));
             c.activeIds[mode] = DEFAULT_PRESET_ID;
         }
@@ -196,9 +208,19 @@ export function deletePreset(settings, mode, scope, presetId, { context, avatar 
     const wasActive = c.activeIds[mode] === presetId;
     delete c.libraries[mode][presetId];
     if (Object.keys(c.libraries[mode]).length === 0) {
-        // Library empty → re-seed Default and make it active.
-        c.libraries[mode][DEFAULT_PRESET_ID] = sanitizePresetEntry(mode, createFactoryPresetForMode(mode));
-        c.activeIds[mode] = DEFAULT_PRESET_ID;
+        if (scope === 'character') {
+            // Character scope deletes its last preset → leave the library
+            // empty rather than re-seeding a factory default. Seeding here
+            // would synthesize a phantom override (the card would read
+            // `hasCharacter*Override === true` again on the next render)
+            // and silently undo the user's intent to clear that mode.
+            c.activeIds[mode] = '';
+        } else {
+            // Global scope must always have at least one preset to render
+            // an editable workspace → re-seed Default and make it active.
+            c.libraries[mode][DEFAULT_PRESET_ID] = sanitizePresetEntry(mode, createFactoryPresetForMode(mode));
+            c.activeIds[mode] = DEFAULT_PRESET_ID;
+        }
     } else if (wasActive) {
         c.activeIds[mode] = Object.keys(c.libraries[mode])[0];
     }
