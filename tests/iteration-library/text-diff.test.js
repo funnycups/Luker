@@ -205,15 +205,17 @@ describe('iteration-library/text-diff — renderInlineTextDiffHtml', () => {
 
     test('i18n option translates the summary and Expand label', () => {
         const dict = {
-            'Line diff (+${0} -${1})': '行级 diff (+${0} -${1})',
+            'Line diff': '行级 diff',
             'Expand diff': '放大',
             'Resize diff columns': '拖动',
         };
         const fakeI18n = (s) => (Object.hasOwn(dict, s) ? dict[s] : s);
         const html = renderInlineTextDiffHtml('hello', 'world', { i18n: fakeI18n });
-        // The decoded summary should carry the translated template
-        // (with the placeholders filled in for adds / removes).
-        expect(decodeEntities(html)).toContain('行级 diff (+1 -1)');
+        // The summary label is translated; +/- counts render as colored
+        // chips beside it rather than inline placeholders.
+        expect(decodeEntities(html)).toContain('行级 diff');
+        expect(html).toContain('luker_lib_diff_meta_add">+1');
+        expect(html).toContain('luker_lib_diff_meta_del">-1');
         // The Expand button title attribute should be translated too.
         expect(html).toContain('title="放大"');
     });

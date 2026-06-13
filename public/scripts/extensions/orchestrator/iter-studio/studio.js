@@ -1150,14 +1150,25 @@ export async function openOrchestratorIterationStudio(deps) {
         ].join('\n');
     }
 
+    function buildNoContentDuplicationHint() {
+        return [
+            '# No content duplication',
+            'Information that already lives elsewhere in the runtime is delivered at run time by Luker — never copy it into another prompt.',
+            '- **Lorebook entries**: the world-info system injects activated entries into the runtime context. When an entry is not injected, the agent can still call `lorebook_get` at run time to fetch it on demand. Therefore, never paste an entry\'s body into an agent\'s systemPrompt. Reference the entry by book name + uid + topic instead, and at most quote a short identifying phrase if the agent needs to recognize it.',
+            '- **Sibling / sub-agent prompts**: each agent\'s systemPrompt describes ONLY that agent\'s own responsibilities. Sub-agent task details belong in the sub-agent\'s own systemPrompt; the orchestrator dispatches each agent with its own prompt. Never copy a sibling agent\'s or sub-agent\'s prompt into another agent\'s prompt — that is dead weight that crowds the active agent\'s context and drifts when one prompt is later edited.',
+            '- General rule: if you find yourself transcribing a body of text the runtime will provide (lorebook content, another agent\'s prompt, character description, preset content, etc.), STOP — replace the transcription with a one-line pointer naming the source. Verbatim duplication is always a smell.',
+        ].join('\n');
+    }
+
     function appendScopeHintIfNeeded(basePrompt, helperSession) {
+        const noDup = buildNoContentDuplicationHint();
         if (helperSession?.scope !== 'character') {
             // Global scope: no character-scope hint to append, but the
             // lorebook tools ARE exposed in global scope (globally-selected
             // world books are active for every chat that uses this profile),
             // so the model needs the same audit guidance written against
             // those books rather than against a card's bound lorebook.
-            return [basePrompt, '', buildGlobalLorebookFormatAuditHint()].join('\n');
+            return [basePrompt, '', buildGlobalLorebookFormatAuditHint(), '', noDup].join('\n');
         }
         const display = String(helperSession?.characterDisplayName || '').trim() || 'this character';
         const formatAuditHint = buildLorebookFormatAuditHint(display);
@@ -1178,6 +1189,8 @@ export async function openOrchestratorIterationStudio(deps) {
                 'Do not call the reset tool unless the user clearly wants a brand-new orchestration.',
                 '',
                 formatAuditHint,
+                '',
+                noDup,
             ].join('\n');
         }
         // 3-path hint: card already has an override, the working profile
@@ -1198,6 +1211,8 @@ export async function openOrchestratorIterationStudio(deps) {
             'Do not call either reset tool unless the user clearly asks for that fresh-start path.',
             '',
             formatAuditHint,
+            '',
+            noDup,
         ].join('\n');
     }
 
@@ -1402,59 +1417,68 @@ export async function openOrchestratorIterationStudio(deps) {
     // profile sandbox-diff flow but targets external (on-disk) world-info
     // state — the diff card shows full before/after so the user can judge
     // the impact before authorizing the disk write.
+    //
+    // Both write tools deliver `before`/`after` as full entry objects, so
+    // the body delegates to the shared `iteration-library/ui/diff`
+    // renderer (same visuals + per-field LCS + empty-noise filtering used
+    // by every other diff card in the popup). The renderer walks the
+    // diff into per-leaf sub-cards: scalar fields (disable / order / keys)
+    // get a compact card, long content gets the side-by-side LCS table.
     // ──────────────────────────────────────────────────────────────────
-    function truncateForLorebookDiff(value, max = 480) {
-        const s = String(value ?? '');
-        if (s.length <= max) return s;
-        return s.slice(0, max) + '…';
-    }
+    const LOREBOOK_FIELD_LABELS = Object.freeze({
+        content: 'content',
+        comment: 'label',
+        disable: 'disabled',
+        key: 'keys',
+        keysecondary: 'secondary keys',
+        constant: 'always-active',
+        order: 'order',
+        position: 'position',
+        depth: 'depth',
+        probability: 'probability',
+        useProbability: 'use probability',
+        selectiveLogic: 'selective logic',
+        excludeRecursion: 'exclude recursion',
+        preventRecursion: 'prevent recursion',
+        delayUntilRecursion: 'delay until recursion',
+        scanDepth: 'scan depth',
+        caseSensitive: 'case sensitive',
+        matchWholeWords: 'match whole words',
+        useGroupScoringSourceForCheck: 'use group scoring',
+        automationId: 'automation id',
+    });
 
-    function renderLorebookUpdateDiffBody(before, after) {
+    function renderLorebookDiffBody(before, after) {
         const beforeObj = (before && typeof before === 'object') ? before : {};
         const afterObj = (after && typeof after === 'object') ? after : {};
-        const keys = new Set([...Object.keys(beforeObj), ...Object.keys(afterObj)]);
-        const changed = [];
-        for (const k of keys) {
-            if (k === 'uid') continue;
-            if (JSON.stringify(beforeObj[k]) !== JSON.stringify(afterObj[k])) {
-                changed.push(k);
-            }
-        }
-        if (changed.length === 0) {
+        // Strip uid before diffing — it's the address, not a payload field,
+        // and the lorebook write helpers carry it on both sides.
+        const stripUid = (obj) => {
+            if (!obj || typeof obj !== 'object') return obj;
+            // eslint-disable-next-line no-unused-vars
+            const { uid, ...rest } = obj;
+            return rest;
+        };
+        const edit = {
+            op: 'set',
+            path: '',
+            oldValue: stripUid(beforeObj),
+            newValue: stripUid(afterObj),
+        };
+        const html = ITER_UI.diff.renderDiffCard([edit], {
+            i18n: tf,
+            fieldLabels: LOREBOOK_FIELD_LABELS,
+            // Live snapshot is the BEFORE side itself: lorebook proposals
+            // re-derive against the on-disk entry at Apply time, so the
+            // diff renderer treating before as live is correct.
+            live: stripUid(beforeObj),
+        });
+        if (!html) {
             return `<div class="orch_it_lbk_nochange">${escapeHtmlLocal(t('No field changes'))}</div>`;
         }
-        return changed.map((k) => {
-            const b = beforeObj[k];
-            const a = afterObj[k];
-            // Content gets stacked before/after panels (long-form); other
-            // fields render inline before → after.
-            if (k === 'content') {
-                return `<div class="orch_it_lbk_field orch_it_lbk_field_long">
-                    <div class="orch_it_lbk_field_name">${escapeHtmlLocal(k)}</div>
-                    <div class="orch_it_lbk_block orch_it_lbk_block_before">${escapeHtmlLocal(truncateForLorebookDiff(b))}</div>
-                    <div class="orch_it_lbk_block orch_it_lbk_block_after">${escapeHtmlLocal(truncateForLorebookDiff(a))}</div>
-                </div>`;
-            }
-            const bRepr = typeof b === 'undefined' ? '(unset)' : JSON.stringify(b);
-            const aRepr = typeof a === 'undefined' ? '(unset)' : JSON.stringify(a);
-            return `<div class="orch_it_lbk_field">
-                <span class="orch_it_lbk_field_name">${escapeHtmlLocal(k)}</span>
-                <span class="orch_it_lbk_inline_before">${escapeHtmlLocal(bRepr)}</span>
-                <span class="orch_it_lbk_inline_arrow">→</span>
-                <span class="orch_it_lbk_inline_after">${escapeHtmlLocal(aRepr)}</span>
-            </div>`;
-        }).join('');
+        return html;
     }
-
-    function renderLorebookStrReplaceDiffBody(before, after) {
-        const beforeContent = String(before?.content ?? '');
-        const afterContent = String(after?.content ?? '');
-        return `<div class="orch_it_lbk_field orch_it_lbk_field_long">
-            <div class="orch_it_lbk_field_name">content</div>
-            <div class="orch_it_lbk_block orch_it_lbk_block_before">${escapeHtmlLocal(truncateForLorebookDiff(beforeContent))}</div>
-            <div class="orch_it_lbk_block orch_it_lbk_block_after">${escapeHtmlLocal(truncateForLorebookDiff(afterContent))}</div>
-        </div>`;
-    }
+    // ──────────────────────────────────────────────────────────────────
 
     function renderLorebookPendingCard(edit) {
         const status = String(edit?.status || 'pending');
@@ -1469,9 +1493,7 @@ export async function openOrchestratorIterationStudio(deps) {
                 ? `<span class="orch_it_lbk_status rejected">✗ ${escapeHtmlLocal(t('Rejected'))}</span>`
                 : `<span class="orch_it_lbk_status pending">${escapeHtmlLocal(t('Pending approval'))}</span>`;
 
-        const body = kind === 'update'
-            ? renderLorebookUpdateDiffBody(edit.before, edit.after)
-            : renderLorebookStrReplaceDiffBody(edit.before, edit.after);
+        const body = renderLorebookDiffBody(edit.before, edit.after);
 
         const idAttr = escapeHtmlLocal(String(edit?.id || ''));
         const controls = (status === 'approved' || status === 'rejected')

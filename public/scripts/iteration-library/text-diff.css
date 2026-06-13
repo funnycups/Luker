@@ -16,9 +16,9 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 
 .luker_lib_diff {
-    border: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.3));
+    border: 1px solid color-mix(in oklab, var(--SmartThemeBorderColor, rgba(130,130,130,0.5)) 70%, transparent);
     border-radius: 6px;
-    background: rgba(0,0,0,0.2);
+    background: color-mix(in oklab, var(--SmartThemeBlurTintColor) 88%, transparent);
 }
 .luker_lib_diff > summary {
     cursor: pointer;
@@ -26,8 +26,9 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 6px 8px;
-    font-size: 0.9rem;
+    padding: 8px 10px;
+    font-size: 0.92rem;
+    font-weight: 500;
 }
 .luker_lib_diff_summary_main {
     display: inline-flex;
@@ -36,8 +37,28 @@
     min-width: 0;
 }
 .luker_lib_diff_meta {
-    opacity: 0.78;
-    font-size: 0.88rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    opacity: 0.85;
+}
+.luker_lib_diff_meta_add {
+    color: #2ea043;
+    background: color-mix(in oklab, #2ea043 18%, transparent);
+    border: 1px solid color-mix(in oklab, #2ea043 40%, transparent);
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-weight: 600;
+}
+.luker_lib_diff_meta_del {
+    color: #f85149;
+    background: color-mix(in oklab, #f85149 18%, transparent);
+    border: 1px solid color-mix(in oklab, #f85149 40%, transparent);
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-weight: 600;
 }
 .luker_lib_diff_expand_btn {
     display: inline-flex;
@@ -52,7 +73,7 @@
 .luker_lib_diff_pre {
     margin: 0;
     padding: 6px;
-    border-top: 1px dashed var(--SmartThemeBorderColor, rgba(130,130,130,0.3));
+    border-top: 1px solid color-mix(in oklab, var(--SmartThemeBorderColor, rgba(130,130,130,0.5)) 50%, transparent);
     max-height: 320px;
     overflow-x: hidden;
     overflow-y: auto;
@@ -63,10 +84,10 @@
 .luker_lib_diff_pre { min-width: 0; max-width: 100%; box-sizing: border-box; }
 .luker_lib_diff_dual { --luker-lib-split-left: 50%; --luker-lib-splitter-width: 12px; display: grid; grid-template-columns: minmax(0, var(--luker-lib-split-left)) var(--luker-lib-splitter-width) minmax(0, calc(100% - var(--luker-lib-split-left) - var(--luker-lib-splitter-width))); gap: 0; width: 100%; min-width: 0; align-items: stretch; }
 .luker_lib_diff_splitter { position: relative; cursor: col-resize; touch-action: none; user-select: none; background: transparent; }
-.luker_lib_diff_splitter::before { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-50%); border-radius: 999px; background: color-mix(in oklab, var(--SmartThemeBodyColor) 20%, transparent); transition: background-color .12s ease; }
+.luker_lib_diff_splitter::before { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-50%); border-radius: 999px; background: color-mix(in oklab, var(--SmartThemeBodyColor) 22%, transparent); transition: background-color .12s ease; }
 .luker_lib_diff_splitter:hover::before,
-.luker_lib_diff_splitter.active::before { background: color-mix(in oklab, var(--SmartThemeBodyColor) 38%, transparent); }
-.luker_lib_diff_side { border: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.32)); border-radius: 6px; background: rgba(0,0,0,0.12); min-width: 0; overflow: hidden; }
+.luker_lib_diff_splitter.active::before { background: color-mix(in oklab, var(--SmartThemeBodyColor) 45%, transparent); }
+.luker_lib_diff_side { border: 1px solid color-mix(in oklab, var(--SmartThemeBorderColor, rgba(130,130,130,0.5)) 55%, transparent); border-radius: 6px; background: color-mix(in oklab, var(--SmartThemeBlurTintColor) 70%, transparent); min-width: 0; overflow: hidden; }
 .luker_lib_diff_side_scroll { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; touch-action: auto; }
 .luker_lib_diff_table {
     width: max-content;
@@ -81,7 +102,7 @@
 .luker_lib_diff_text,
 .luker_lib_diff_text_inner { text-align: left; }
 .luker_lib_diff_row td {
-    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.24));
+    border-bottom: 1px solid color-mix(in oklab, var(--SmartThemeBorderColor, rgba(130,130,130,0.5)) 28%, transparent);
     padding: 2px 6px;
     vertical-align: top;
 }
@@ -89,13 +110,13 @@
 .luker_lib_diff_ln {
     width: 3.8em;
     text-align: right;
-    color: color-mix(in oklab, var(--SmartThemeBodyColor) 72%, transparent);
+    color: color-mix(in oklab, var(--SmartThemeBodyColor) 70%, transparent);
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     position: sticky;
     left: 0;
     z-index: 3;
-    background-color: var(--SmartThemeBlurTintColor);
-    box-shadow: 1px 0 0 var(--SmartThemeBorderColor);
+    background-color: color-mix(in oklab, var(--SmartThemeBlurTintColor) 96%, transparent);
+    box-shadow: 1px 0 0 color-mix(in oklab, var(--SmartThemeBorderColor, rgba(130,130,130,0.5)) 50%, transparent);
     background-image: none;
     opacity: 1;
 }
@@ -112,19 +133,19 @@
     min-width: max-content;
 }
 .luker_lib_diff_word_add {
-    background: color-mix(in oklab, #4caf50 30%, transparent);
+    background: color-mix(in oklab, #2ea043 52%, transparent);
     border-radius: 3px;
     padding: 0 1px;
 }
 .luker_lib_diff_word_del {
-    background: color-mix(in oklab, #d9534f 30%, transparent);
+    background: color-mix(in oklab, #f85149 52%, transparent);
     border-radius: 3px;
     padding: 0 1px;
 }
-.luker_lib_diff_row_add .luker_lib_diff_text.new { background: color-mix(in oklab, #4caf50 12%, transparent); }
-.luker_lib_diff_row_del .luker_lib_diff_text.old { background: color-mix(in oklab, #d9534f 12%, transparent); }
-.luker_lib_diff_row_mod .luker_lib_diff_text.old { background: color-mix(in oklab, #d9534f 10%, transparent); }
-.luker_lib_diff_row_mod .luker_lib_diff_text.new { background: color-mix(in oklab, #4caf50 10%, transparent); }
+.luker_lib_diff_row_add .luker_lib_diff_text.new { background: color-mix(in oklab, #2ea043 22%, transparent); }
+.luker_lib_diff_row_del .luker_lib_diff_text.old { background: color-mix(in oklab, #f85149 22%, transparent); }
+.luker_lib_diff_row_mod .luker_lib_diff_text.old { background: color-mix(in oklab, #f85149 18%, transparent); }
+.luker_lib_diff_row_mod .luker_lib_diff_text.new { background: color-mix(in oklab, #2ea043 18%, transparent); }
 .luker_lib_diff_zoom_overlay {
     position: fixed;
     inset: 0;
@@ -248,4 +269,77 @@
 .luker_lib_diff_row {
     content-visibility: auto;
     contain-intrinsic-size: auto 28px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   List-op cards (preset_list_insert / _remove / _move). These don't use the
+   side-by-side LCS table — they show a header + before/after neighborhood
+   strips so the user sees WHERE the item landed (`… [3] foo · [4] BAR · [5] baz …`)
+   without us dumping the moved item's JSON payload into the card body.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.luker_lib_diff_card_list_op {
+    border: 1px solid color-mix(in oklab, var(--SmartThemeBorderColor, rgba(130,130,130,0.5)) 60%, transparent);
+    border-radius: 6px;
+    background: color-mix(in oklab, var(--SmartThemeBlurTintColor) 90%, transparent);
+    padding: 8px 10px;
+    margin: 4px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.luker_lib_diff_list_strip_label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    opacity: 0.7;
+    margin-top: 2px;
+}
+.luker_lib_diff_list_strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 6px;
+    font-size: 0.84rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    line-height: 1.45;
+}
+.luker_lib_diff_list_strip_item {
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 6%, transparent);
+    border: 1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 14%, transparent);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.luker_lib_diff_list_strip_idx {
+    opacity: 0.55;
+    margin-right: 4px;
+    font-weight: 600;
+}
+.luker_lib_diff_list_strip_sep {
+    opacity: 0.3;
+}
+/* Highlights — match the same hues as row-level add/del in the LCS table
+   so the visual vocabulary stays consistent. */
+.luker_lib_diff_list_strip_add {
+    background: color-mix(in oklab, #2ea043 22%, transparent);
+    border-color: color-mix(in oklab, #2ea043 55%, transparent);
+}
+.luker_lib_diff_list_strip_del {
+    background: color-mix(in oklab, #f85149 22%, transparent);
+    border-color: color-mix(in oklab, #f85149 55%, transparent);
+}
+.luker_lib_diff_list_strip_move_src {
+    background: color-mix(in oklab, #f85149 16%, transparent);
+    border-color: color-mix(in oklab, #f85149 45%, transparent);
+}
+.luker_lib_diff_list_strip_move_dst {
+    background: color-mix(in oklab, #2ea043 22%, transparent);
+    border-color: color-mix(in oklab, #2ea043 55%, transparent);
+}
+.luker_lib_diff_list_strip_anchor {
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 14%, transparent);
+    border-color: color-mix(in oklab, var(--SmartThemeBodyColor) 30%, transparent);
+    font-weight: 600;
 }

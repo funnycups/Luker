@@ -331,10 +331,6 @@ function defaultI18n(s) {
     return String(s ?? '');
 }
 
-function applyI18nFormat(template, ...values) {
-    return String(template ?? '').replace(/\$\{(\d+)\}/g, (_, index) => String(values[Number(index)] ?? ''));
-}
-
 /**
  * Render an HTML `<details>` block containing a side-by-side word/line
  * LCS diff of `beforeValue` vs `afterValue`. The returned markup is safe
@@ -386,8 +382,7 @@ export function renderInlineTextDiffHtml(beforeValue, afterValue, optionsOrLabel
     // `${0}` / `${1}` placeholders (substituted them to empty) and the
     // diff summary rendered as "Line diff (+ -)" — visually identical to
     // the apply-label bug fixed in the CEA studio.
-    const translatedSummary = i18n('Line diff (+${0} -${1})', payload.added, payload.removed);
-    const summary = applyI18nFormat(translatedSummary, payload.added, payload.removed);
+    const summaryLabel = i18n('Line diff');
     const safeLabel = escapeHtml(String(fileLabel));
     const renderedRows = buildLineDiffVisualRows(payload.operations);
     const expandLabel = escapeHtml(i18n('Expand diff'));
@@ -401,8 +396,12 @@ export function renderInlineTextDiffHtml(beforeValue, afterValue, optionsOrLabel
 <details class="luker_lib_diff"${(forceOpen || (payload.openByDefault && !isNarrowViewport())) ? ' open' : ''}>
     <summary>
         <span class="luker_lib_diff_summary_main">
-            <span>${escapeHtml(summary)}</span>
-            <span class="luker_lib_diff_meta">=${escapeHtml(String(payload.unchanged))}</span>
+            <span>${escapeHtml(summaryLabel)}</span>
+            <span class="luker_lib_diff_meta">
+                <span class="luker_lib_diff_meta_add">+${escapeHtml(String(payload.added))}</span>
+                <span class="luker_lib_diff_meta_del">-${escapeHtml(String(payload.removed))}</span>
+                <span>=${escapeHtml(String(payload.unchanged))}</span>
+            </span>
         </span>
         ${expandBtnHtml}
     </summary>

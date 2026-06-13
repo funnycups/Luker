@@ -29,12 +29,16 @@ describe('renderDiffCard', () => {
         expect(html).not.toMatch(/"keep":\s*"same"/);
     });
 
-    it('falls back to whole-object render when >20 leaves changed', () => {
+    it('walks every changed leaf into its own card (no JSON-dump fallback)', () => {
+        // The whole point of the per-leaf walker is "all changes shown, no
+        // surprise JSON blobs". 25 leaves should produce 25 cards, NOT one
+        // collapsed card. The 50-leaf cap is a runaway-input backstop, not
+        // a normal-flow trigger.
         const oldObj = {};
         const newObj = {};
         for (let i = 0; i < 25; i++) { oldObj[`k${i}`] = 'a'; newObj[`k${i}`] = 'b'; }
         const html = renderDiffCard([{ op: 'set', path: '', oldValue: oldObj, newValue: newObj }], { i18n: ident });
-        expect((html.match(/luker_lib_diff_card/g) || []).length).toBe(1);
+        expect((html.match(/luker_lib_diff_card/g) || []).length).toBe(25);
     });
 
     it('renders short two-sided edit with dual-column line diff (not inline arrow)', () => {
@@ -78,11 +82,25 @@ describe('renderDiffCard', () => {
         //   { op:'set', path:'nodeTypeSchema.foo', oldValue:undefined, newValue:{...} }
         // stringifyValue(undefined) used to return undefined (JSON.stringify of
         // undefined), which crashed at `beforeText.length` in renderSubCard.
+        // The new value must have at least one non-empty leaf, otherwise
+        // the empty-noise filter (correctly) suppresses the whole card.
         const html = renderDiffCard(
-            [{ op: 'set', path: 'nodeTypeSchema.foo', oldValue: undefined, newValue: { fields: [] } }],
+            [{ op: 'set', path: 'nodeTypeSchema.foo', oldValue: undefined, newValue: { name: 'Foo', enabled: true } }],
             { i18n: ident },
         );
         expect(html).toContain('luker_lib_diff_card');
+    });
+
+    it('suppresses the card when oldValue+newValue collapse to all empty leaves', () => {
+        // User principle: changes between "empty" and null / undefined /
+        // '' / [] / {} are not real changes and must never render. An
+        // inserted object whose only fields are blank defaults is a no-op
+        // to the user and the renderer drops it.
+        const html = renderDiffCard(
+            [{ op: 'set', path: 'nodeTypeSchema.bar', oldValue: undefined, newValue: { fields: [], comment: '' } }],
+            { i18n: ident },
+        );
+        expect(html).toBe('');
     });
 
     it('renders a removed entry (newValue undefined) without crashing', () => {
@@ -234,9 +252,9 @@ describe('renderDiffCard', () => {
 
     it('renders list_insert with anchor.after position in the path label', () => {
         // CPA's preset_list_insert tool emits { op: 'list_insert', path,
-        // anchor: { after: N } | { before: N }, value }. Before the fix
-        // this hit the bare `(unknown op)` fallback with no content; the
-        // user couldn't see what was being inserted or where.
+        // anchor: { after: N } | { before: N }, value }. Card surfaces the
+        // anchor description + item label so the user can see what's being
+        // inserted and where, without dumping the value's full JSON.
         const html = renderDiffCard(
             [{
                 op: 'list_insert',
@@ -246,11 +264,12 @@ describe('renderDiffCard', () => {
             }],
             { i18n: ident },
         );
-        expect(html).toContain('luker_lib_diff_card');
-        // Anchor label is rendered as part of the path, not stripped.
-        expect(html).toContain('@after 3');
-        // The new value flows through fileLabel into the mocked diff renderer.
-        expect(html).toContain('luker_lib_diff_dual');
+        expect(html).toContain('luker_lib_diff_card_list_op');
+        // The item is summarized by its `.name` and the anchor surfaces in
+        // the header detail.
+        expect(html).toContain('Insert into prompts');
+        expect(html).toContain('New prompt');
+        expect(html).toContain('after 3');
     });
 
     it('renders list_insert with anchor.before position', () => {
@@ -263,7 +282,9 @@ describe('renderDiffCard', () => {
             }],
             { i18n: ident },
         );
-        expect(html).toContain('@before 0');
+        expect(html).toContain('luker_lib_diff_card_list_op');
+        expect(html).toContain('firstPrompt');
+        expect(html).toContain('before 0');
     });
 
     it('renders list_remove with index in the path label', () => {
@@ -276,14 +297,16 @@ describe('renderDiffCard', () => {
             }],
             { i18n: ident },
         );
-        expect(html).toContain('luker_lib_diff_card');
-        expect(html).toContain('prompts[2]');
+        expect(html).toContain('luker_lib_diff_card_list_op');
+        expect(html).toContain('Remove from prompts');
+        expect(html).toContain('staleEntry');
+        expect(html).toContain('[2]');
     });
 
     it('renders list_move with from→to indices', () => {
         // list_move is rendered as a header-only card (Reorder ${path}:
-        // [${from}] → [${to}]) plus an optional expected-value preview —
-        // there's no before/after pairing because the elements are the
+        // [${from}] → [${to}]) plus optional before/after neighborhood
+        // strips — there's no LCS table because the elements are the
         // same, just reordered.
         const html = renderDiffCard(
             [{
@@ -295,8 +318,9 @@ describe('renderDiffCard', () => {
             }],
             { i18n: ident },
         );
-        expect(html).toContain('luker_lib_diff_card');
+        expect(html).toContain('luker_lib_diff_card_list_op');
         expect(html).toContain('Reorder prompt_order');
+        expect(html).toContain('movedItem');
         expect(html).toContain('[1]');
         expect(html).toContain('[4]');
     });
@@ -304,8 +328,9 @@ describe('renderDiffCard', () => {
     it('splits a whole-array set into per-id sub-cards when elements have stable ids', () => {
         // MG schema's whole-array edits (e.g. nodeTypes) used to fall
         // through to one giant JSON dump. When elements carry a stable
-        // `id` we walk by id and emit one card per added / removed /
-        // changed entry instead.
+        // `id` we walk by id and recurse into each changed entry's leaves
+        // — so updates (1 changed leaf) and inserts (each new leaf) all
+        // surface as their own focused card.
         const html = renderDiffCard(
             [{
                 op: 'set',
@@ -322,8 +347,9 @@ describe('renderDiffCard', () => {
             }],
             { i18n: ident },
         );
-        // 'a' changed + 'c' added → two cards. ('b' unchanged is skipped.)
-        expect((html.match(/luker_lib_diff_card/g) || []).length).toBe(2);
+        // a.label changed (1) + c inserted with id+label leaves (2) = 3 cards.
+        // ('b' unchanged is skipped.)
+        expect((html.match(/luker_lib_diff_card/g) || []).length).toBe(3);
     });
 
     it('falls back to whole-object render for arrays without stable ids', () => {
