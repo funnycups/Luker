@@ -526,6 +526,27 @@ async function sendClaudeRequest(request, response) {
             functionTools[functionTools.length - 1]['cache_control'] = { type: 'ephemeral', ttl: cacheTTL };
         }
 
+        // When `systemPrompt` ends up empty — either because `custom_prompt_post_processing`
+        // (strict/merge/claude/semi) baked the system content into the first user
+        // message, or because `use_sysprompt: false` shoved every system message
+        // into the user turns — the cache_control attachments above don't cover
+        // the actual system content. Cache the first user message's last text
+        // block so the real prefix gets cached. This complements rather than
+        // replaces the tools[last] attachment: tools alone covers only the
+        // prefix up to tools, which excludes any system content sitting in
+        // messages[0].
+        if (enableSystemPromptCache && (!Array.isArray(convertedPrompt.systemPrompt) || convertedPrompt.systemPrompt.length === 0)) {
+            const firstUser = Array.isArray(convertedPrompt.messages) ? convertedPrompt.messages[0] : null;
+            if (firstUser && firstUser.role === 'user' && Array.isArray(firstUser.content)) {
+                for (let i = firstUser.content.length - 1; i >= 0; i--) {
+                    if (firstUser.content[i]?.type === 'text') {
+                        firstUser.content[i].cache_control = { type: 'ephemeral', ttl: cacheTTL };
+                        break;
+                    }
+                }
+            }
+        }
+
         if (functionTools.length) {
             requestBody.tools = functionTools;
 
