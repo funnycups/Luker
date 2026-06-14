@@ -46,9 +46,16 @@ describe('resolveProfile', () => {
     });
 
     test('throws GenerateTaskError when no resolver available and SillyTavern absent', () => {
-        // Tests run in node env without globalThis.SillyTavern set
-        expect(() => resolveProfile('AnyName', { resolver: null }))
-            .toThrow(expect.objectContaining({ name: 'GenerateTaskError', code: 'unknown' }));
+        // jest.setup.js installs a SillyTavern stub by default; this test
+        // needs the no-host fallback path, so clear it for the duration.
+        const prev = { Luker: globalThis.Luker, st: globalThis.st, SillyTavern: globalThis.SillyTavern };
+        delete globalThis.Luker; delete globalThis.st; delete globalThis.SillyTavern;
+        try {
+            expect(() => resolveProfile('AnyName', { resolver: null }))
+                .toThrow(expect.objectContaining({ name: 'GenerateTaskError', code: 'unknown' }));
+        } finally {
+            Object.assign(globalThis, prev);
+        }
     });
 });
 
@@ -226,9 +233,16 @@ describe('renderForApi', () => {
     });
 
     test('non-openai requestApi without rawPromptBuilder and no globalThis → throws unsupported_api', () => {
-        // jest env has no globalThis.SillyTavern, no injection → expect throw
-        expect(() => renderForApi('kobold', messages, { rawPromptBuilder: null }))
-            .toThrow(expect.objectContaining({ name: 'GenerateTaskError', code: 'unsupported_api' }));
+        // jest.setup.js installs a SillyTavern stub by default; this test
+        // needs the no-host fallback path, so clear it for the duration.
+        const prev = { Luker: globalThis.Luker, st: globalThis.st, SillyTavern: globalThis.SillyTavern };
+        delete globalThis.Luker; delete globalThis.st; delete globalThis.SillyTavern;
+        try {
+            expect(() => renderForApi('kobold', messages, { rawPromptBuilder: null }))
+                .toThrow(expect.objectContaining({ name: 'GenerateTaskError', code: 'unsupported_api' }));
+        } finally {
+            Object.assign(globalThis, prev);
+        }
     });
 });
 

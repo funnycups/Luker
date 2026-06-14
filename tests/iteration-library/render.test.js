@@ -1,18 +1,8 @@
 import { describe, test, expect, beforeEach, jest } from '@jest/globals';
 
-// lib.js is heavy (DOM-bound); mock it. showdown + DOMPurify get the same
-// minimal shape the real module exports.
-jest.unstable_mockModule('../../public/lib.js', () => ({
-    showdown: {
-        Converter: class {
-            constructor() {}
-            makeHtml(text) { return `<p>${text}</p>`; }
-        },
-    },
-    DOMPurify: {
-        sanitize: (html) => html.replace(/onclick="[^"]*"/g, ''),
-    },
-}));
+// public/lib.js is redirected to tests/util/lib-stub.js via jest config's
+// moduleNameMapper — that supplies the real showdown + DOMPurify so this
+// test gets a faithful Converter without a per-test mock.
 
 let renderMessageMarkdown;
 let ensureMarkdownDeps;

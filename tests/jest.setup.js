@@ -21,13 +21,15 @@ if (!globalThis.DATA_ROOT) {
 
 if (typeof globalThis.SillyTavern === 'undefined') {
     // ---------------------------------------------------------------------
-    // SillyTavern global stub.
+    // SillyTavern / Luker / st global stub.
     //
     // Browser-side modules in public/scripts/extensions/** capture references
-    // at module-load time via `const x = SillyTavern.getContext().y;`. Under
-    // jest (Node ESM) there is no SillyTavern global, so the import-time
-    // evaluation throws ReferenceError and the entire test suite fails to
-    // load.
+    // at module-load time via `const x = SillyTavern.getContext().y;` (or
+    // increasingly via `Luker.getContext()` — public/script.js binds
+    // `globalThis.{Luker,st,SillyTavern}` to the same object so all three
+    // are user-facing aliases). Under jest (Node ESM) none of those globals
+    // exist, so the import-time evaluation throws ReferenceError and the
+    // entire test suite fails to load.
     //
     // We install a recursive Proxy that synthesizes any accessed field as a
     // callable no-op (or as a nested proxy when accessed as an object).
@@ -85,7 +87,21 @@ if (typeof globalThis.SillyTavern === 'undefined') {
     }
 
     function makeContextProxy() {
-        const base = { getExtensionApi };
+        // Common ctx fields where production code does `c?.fn || fallback`
+        // for capability detection. The Proxy default is truthy, so without
+        // explicit identity / null defaults the fallback never fires and
+        // tests get the Proxy stringified to "silly-tavern-stub" in
+        // unexpected places (i18n strings, lib helpers, etc.). Override
+        // any of these in a test by assigning a new globalThis.SillyTavern.
+        const base = {
+            getExtensionApi,
+            // i18n helpers (e.g. orchestrator/i18n.js)
+            translate: (s) => String(s ?? ''),
+            addLocaleData: () => {},
+            // capability detection sentinels
+            createMessageEditorHandle: null,
+            registerExtensionApi: () => {},
+        };
         return new Proxy(base, {
             get(t, prop) {
                 if (prop in t) return t[prop];
@@ -100,9 +116,17 @@ if (typeof globalThis.SillyTavern === 'undefined') {
         });
     }
 
-    globalThis.SillyTavern = {
+    const stub = {
         getContext: () => makeContextProxy(),
     };
+    // Mirror public/script.js:338-340 — Luker / st / SillyTavern are all
+    // aliases for the same plugin-facing API object. Plugins still pick
+    // whichever name they were last touched with (see
+    // `grep -rn "Luker\\.getContext\\b" public/scripts/extensions/`), so
+    // all three must resolve to the same stub.
+    globalThis.Luker = stub;
+    globalThis.st = stub;
+    globalThis.SillyTavern = stub;
 }
 
 // ---------------------------------------------------------------------------
