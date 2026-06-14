@@ -735,11 +735,15 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
     // Open a new run on the panel store. `startRun` throws if a previous
     // run is still flagged running — under normal flow main.js clears the
     // store between turns; tests preload `clearCurrentRun` in beforeEach.
+    // `payload.__lukerSimulate` marks iter-studio dry-runs; the panel
+    // skips auto-open + pill for those so the iter-studio popup + the
+    // simulation review popup are the only surfaces the user sees.
     const chatKey = String(context?.chatId || context?.chat_id || '');
     const runId = startRun({
         mode: 'loop',
         chatKey,
         abortFn: () => { try { context.stopGeneration?.(); } catch (_) { /* best-effort */ } },
+        quiet: Boolean(payload?.__lukerSimulate),
     });
 
     const messages = buildInitialMessages(toolContext, payload, profile);

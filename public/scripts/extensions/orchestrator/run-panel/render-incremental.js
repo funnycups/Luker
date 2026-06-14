@@ -347,4 +347,36 @@ export class PanelRenderer {
             try { run.abortFn(); } catch (_) { /* ignore */ }
         }
     }
+
+    /**
+     * Rebuild the panel from the live store snapshot. Used when the user
+     * manually opens the panel during (or after) a quiet run — those
+     * skip the auto-open + incremental wiring on RUN_STARTED, so the
+     * panel DOM is empty until we replay the round/section history.
+     *
+     * Tail sections that are still mid-stream stay live: the rAF append
+     * coalescer keeps pointing at the freshly-recreated <pre> nodes, so
+     * subsequent SECTION_APPENDED events continue to land in the right
+     * spot without rebinding.
+     */
+    replayFromStore() {
+        const run = getCurrentRun();
+        if (!run) return;
+        this._renderRunStart();
+        for (const round of run.rounds) {
+            this._renderRoundAppended(round.id);
+            for (const section of round.sections) {
+                this._renderSectionEnsured(round.id, section.id);
+                if (section.status !== 'running') {
+                    this._renderSectionStatus(round.id, section.id, section.status);
+                }
+            }
+            if (round.status !== 'running') {
+                this._renderRoundStatus(round.id, round.status);
+            }
+        }
+        if (run.status !== 'running') {
+            this._renderRunFinished(run.status);
+        }
+    }
 }

@@ -986,6 +986,7 @@ export async function runAgendaOrchestration(context, payload, messages, profile
         mode: 'agenda',
         chatKey,
         abortFn: () => { try { Luker.getContext().stopGeneration(); } catch (_) { /* best-effort */ } },
+        quiet: Boolean(payload?.__lukerSimulate),
     });
     const state = {
         plannerRounds: 0,

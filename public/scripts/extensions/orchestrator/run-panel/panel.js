@@ -153,6 +153,13 @@ export function openRunPanel(_context) {
         empty.textContent = i18n('No active run yet. Start a conversation to see orchestration progress here.');
         body.appendChild(empty);
     }
+    // If a run is in the store but the panel never rendered it
+    // incrementally (quiet sim runs skip auto-open; manual open is
+    // the only entry), replay from the store snapshot so the user
+    // sees what's already been recorded.
+    if (run && renderer && body && body.querySelector('.rounds-list')?.children.length === 0) {
+        renderer.replayFromStore();
+    }
     openPanel();
 }
 
@@ -168,6 +175,13 @@ export function initRunPanel() {
         // Mount the DOM lazily on first relevant event so users who never
         // run the orchestrator don't pay the cost.
         if (event.type === EV.RUN_STARTED) {
+            // Quiet runs (e.g. iter-studio simulate) write trace to the
+            // store but never auto-open the panel or float the pill.
+            // The simulate path renders the trace inside its own review
+            // popup; surfacing a second UI on top would just be noise.
+            // Skip mountOnce entirely so the first non-quiet run still
+            // pays the lazy mount cost, not the simulate path.
+            if (event.quiet) return;
             mountOnce();
             renderer.handle(event);
             openPanel();

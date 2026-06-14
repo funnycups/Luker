@@ -33,7 +33,7 @@ function ensureRunningMatchesId(runId) {
     // Note: status is NOT checked here. finishRun/setRunMeta must mutate after status change.
 }
 
-export function startRun({ mode, chatKey, abortFn = null }) {
+export function startRun({ mode, chatKey, abortFn = null, quiet = false }) {
     if (currentRun && currentRun.status === 'running') {
         throw new Error('A run is already in progress.');
     }
@@ -53,8 +53,9 @@ export function startRun({ mode, chatKey, abortFn = null }) {
         tokensSpent: null,
         cost: null,
         abortFn: typeof abortFn === 'function' ? abortFn : null,
+        quiet: Boolean(quiet),
     };
-    emit({ type: EV.RUN_STARTED, runId, mode: currentRun.mode });
+    emit({ type: EV.RUN_STARTED, runId, mode: currentRun.mode, quiet: currentRun.quiet });
     return runId;
 }
 

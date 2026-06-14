@@ -4100,6 +4100,7 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
         mode: 'director',
         chatKey: getChatKey(context),
         abortFn: () => { try { simulationAbortController.abort(); } catch (_) { /* best-effort */ } },
+        quiet: true,
     });
 
     try {
@@ -4279,6 +4280,12 @@ async function runAiIterationSimulation(context, session, args = {}, abortSignal
                     signal: abortSignal,
                     forceWorldInfoResimulate: true,
                     __lukerRun: { activatedEntryKeys },
+                    // Mark this as a simulate-driven orchestration so the
+                    // spec/agenda/loop runtimes' startRun skips the panel
+                    // auto-open. The simulation review popup is the only
+                    // surface that should pop for sim; the run panel can
+                    // still be opened manually to inspect the trace.
+                    __lukerSimulate: true,
                 };
                 try {
                     run = await runOrchestration(context, payload, chatForRuntime, profile);

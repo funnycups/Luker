@@ -1414,6 +1414,7 @@ export async function runSpecOrchestration(context, payload, messages, profile) 
         mode: 'spec',
         chatKey,
         abortFn: () => { try { Luker.getContext().stopGeneration(); } catch (_) { /* best-effort */ } },
+        quiet: Boolean(payload?.__lukerSimulate),
     });
     const runtime = {
         stages,
