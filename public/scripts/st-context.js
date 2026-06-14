@@ -32,6 +32,7 @@ import {
     reloadCurrentChat,
     renameChat,
     saveChatConditional,
+    saveChatDebounced,
     saveMetadata,
     saveReply,
     saveSettingsDebounced,
@@ -2297,6 +2298,7 @@ export function getContext() {
         setExtensionPrompt,
         updateChatMetadata,
         saveChat: saveChatConditional,
+        saveChatDebounced,
         /** @deprecated Internal, use addMessages() instead */
         appendChatMessages,
         /** @deprecated Internal, use updateMessages()/deleteMessages() instead */

@@ -516,6 +516,14 @@ saveChat(): Promise<void>
 
 Writes the current chat to disk if it's not already being saved. Waits up to a short window for any in-progress save to complete before triggering its own. Most plugins should not need to call this — the [Messages API](#messages-api) persists automatically.
 
+### saveChatDebounced
+
+```ts
+saveChatDebounced(): void
+```
+
+Schedules a chat save after 1 second of inactivity. Repeated calls within the window collapse into a single save, so it's the preferred choice when persisting a burst of edits (e.g. one save per image as a batch of generated images is inserted into a message). Returns synchronously; the actual save runs in the background via [`saveChat`](#savechat).
+
 ### printMessages
 
 ```ts
