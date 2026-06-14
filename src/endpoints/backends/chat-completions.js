@@ -299,12 +299,110 @@ const CLAUDE_STOP_REASON_TO_OAI = {
 };
 
 /**
+ * Normalize a Claude usage object into OpenAI snake_case shape:
+ * `{ prompt_tokens, completion_tokens, total_tokens, prompt_tokens_details? }`.
+ * `prompt_tokens_details` is emitted only when Claude reports cache reads
+ * or writes; OpenAI itself uses the same `cached_tokens` key on that
+ * sub-object, so downstream `usage` consumers see one shape across providers.
+ * Returns `undefined` if the source has no usage fields at all.
+ * @param {any} raw Claude `usage` object
+ * @returns {object|undefined}
+ */
+function normalizeClaudeUsage(raw) {
+    if (!raw || typeof raw !== 'object') return undefined;
+    const promptTokens = Number(raw.input_tokens);
+    const completionTokens = Number(raw.output_tokens);
+    if (!Number.isFinite(promptTokens) && !Number.isFinite(completionTokens)) return undefined;
+    const prompt = Number.isFinite(promptTokens) ? promptTokens : 0;
+    const completion = Number.isFinite(completionTokens) ? completionTokens : 0;
+    const out = {
+        prompt_tokens: prompt,
+        completion_tokens: completion,
+        total_tokens: prompt + completion,
+    };
+    const cacheRead = Number(raw.cache_read_input_tokens);
+    const cacheCreate = Number(raw.cache_creation_input_tokens);
+    const details = {};
+    if (Number.isFinite(cacheRead)) details.cached_tokens = cacheRead;
+    if (Number.isFinite(cacheCreate)) details.cache_creation_tokens = cacheCreate;
+    if (Object.keys(details).length) out.prompt_tokens_details = details;
+    return out;
+}
+
+/**
+ * Normalize a Gemini `usageMetadata` object into OpenAI snake_case shape.
+ * Gemini reports `thoughtsTokenCount` separately from `candidatesTokenCount`;
+ * those reasoning tokens are billed as output, so they are folded into
+ * `completion_tokens` and additionally surfaced under
+ * `completion_tokens_details.reasoning_tokens` (the OpenAI o-series shape).
+ * Returns `undefined` if the source has no usage fields at all.
+ * @param {any} meta Gemini `usageMetadata` object
+ * @returns {object|undefined}
+ */
+function normalizeGeminiUsage(meta) {
+    if (!meta || typeof meta !== 'object') return undefined;
+    const promptTokens = Number(meta.promptTokenCount);
+    const candidatesTokens = Number(meta.candidatesTokenCount);
+    const thoughtsTokens = Number(meta.thoughtsTokenCount);
+    const totalTokens = Number(meta.totalTokenCount);
+    if (!Number.isFinite(promptTokens) && !Number.isFinite(candidatesTokens) && !Number.isFinite(totalTokens)) {
+        return undefined;
+    }
+    const prompt = Number.isFinite(promptTokens) ? promptTokens : 0;
+    const candidates = Number.isFinite(candidatesTokens) ? candidatesTokens : 0;
+    const thoughts = Number.isFinite(thoughtsTokens) ? thoughtsTokens : 0;
+    const completion = candidates + thoughts;
+    const total = Number.isFinite(totalTokens) ? totalTokens : (prompt + completion);
+    const out = {
+        prompt_tokens: prompt,
+        completion_tokens: completion,
+        total_tokens: total,
+    };
+    const cached = Number(meta.cachedContentTokenCount);
+    if (Number.isFinite(cached)) {
+        out.prompt_tokens_details = { cached_tokens: cached };
+    }
+    if (Number.isFinite(thoughtsTokens)) {
+        out.completion_tokens_details = { reasoning_tokens: thoughts };
+    }
+    return out;
+}
+
+/**
+ * Normalize a Cohere v2 usage object into OpenAI snake_case shape. Prefers
+ * Cohere's `billed_units` (the chargeable counts) over `tokens` (raw counts
+ * that include system prompts). Also accepts already-OpenAI-shaped usage
+ * for forward-compat with future Cohere endpoints or proxies.
+ * Returns `undefined` if the source has no usage fields at all.
+ * @param {any} raw Cohere `usage` object
+ * @returns {object|undefined}
+ */
+function normalizeCohereUsage(raw) {
+    if (!raw || typeof raw !== 'object') return undefined;
+    const billed = raw.billed_units;
+    const tokens = raw.tokens;
+    const candidate = (billed && typeof billed === 'object') ? billed
+        : (tokens && typeof tokens === 'object') ? tokens
+            : raw;
+    const prompt = Number(candidate.input_tokens ?? candidate.prompt_tokens);
+    const completion = Number(candidate.output_tokens ?? candidate.completion_tokens);
+    if (!Number.isFinite(prompt) && !Number.isFinite(completion)) return undefined;
+    const p = Number.isFinite(prompt) ? prompt : 0;
+    const c = Number.isFinite(completion) ? completion : 0;
+    return {
+        prompt_tokens: p,
+        completion_tokens: c,
+        total_tokens: p + c,
+    };
+}
+
+/**
  * Normalize a non-streaming Claude Messages API response into OAI chat-completion shape.
  * Preserves the original `content` array on the reply for callers that still need it.
  * @param {any} raw Claude response JSON
  * @returns {object} OAI chat-completion shaped reply
  */
-function normalizeClaudeResponseToOAI(raw) {
+export function normalizeClaudeResponseToOAI(raw) {
     const content = Array.isArray(raw?.content) ? raw.content : [];
     let text = '';
     let thinking = '';
@@ -336,11 +434,13 @@ function normalizeClaudeResponseToOAI(raw) {
 
     const finishReason = CLAUDE_STOP_REASON_TO_OAI[String(raw?.stop_reason || '')] ?? 'stop';
 
-    return {
+    const reply = {
         choices: [{ message, finish_reason: finishReason, index: 0 }],
-        usage: raw?.usage,
         content,
     };
+    const usage = normalizeClaudeUsage(raw?.usage);
+    if (usage) reply.usage = usage;
+    return reply;
 }
 
 const GEMINI_FINISH_REASON_TO_OAI = {
@@ -362,7 +462,7 @@ const GEMINI_FINISH_REASON_TO_OAI = {
  * @param {any} raw Google response JSON
  * @returns {object} OAI chat-completion shaped reply
  */
-function normalizeGeminiResponseToOAI(raw) {
+export function normalizeGeminiResponseToOAI(raw) {
     const candidate = Array.isArray(raw?.candidates) ? raw.candidates[0] : null;
     const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
     let text = '';
@@ -400,11 +500,13 @@ function normalizeGeminiResponseToOAI(raw) {
     let finishReason = GEMINI_FINISH_REASON_TO_OAI[rawReason] ?? 'stop';
     if (hasFunctionCall) finishReason = 'tool_calls';
 
-    return {
+    const reply = {
         choices: [{ message, finish_reason: finishReason, index: 0 }],
-        usage: raw?.usageMetadata,
         responseContent: candidate?.content,
     };
+    const usage = normalizeGeminiUsage(raw?.usageMetadata);
+    if (usage) reply.usage = usage;
+    return reply;
 }
 
 const COHERE_FINISH_REASON_TO_OAI = {
@@ -423,7 +525,7 @@ const COHERE_FINISH_REASON_TO_OAI = {
  * @param {any} raw Cohere response JSON
  * @returns {object} OAI chat-completion shaped reply
  */
-function normalizeCohereResponseToOAI(raw) {
+export function normalizeCohereResponseToOAI(raw) {
     const rawMessage = raw?.message ?? {};
     const content = typeof rawMessage.content === 'string'
         ? rawMessage.content
@@ -449,11 +551,13 @@ function normalizeCohereResponseToOAI(raw) {
 
     const finishReason = COHERE_FINISH_REASON_TO_OAI[String(raw?.finish_reason || '').toLowerCase()] ?? 'stop';
 
-    return {
+    const reply = {
         id: raw?.id,
         choices: [{ message, finish_reason: finishReason, index: 0 }],
-        usage: raw?.usage,
     };
+    const usage = normalizeCohereUsage(raw?.usage);
+    if (usage) reply.usage = usage;
+    return reply;
 }
 
 /**
