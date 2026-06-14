@@ -2494,6 +2494,19 @@ export function getContext() {
         getTextGenServer,
         extractMessageFromData,
         getPresetManager,
+        // Preset ↔ lorebook embed pipeline (Luker symmetry with the skills
+        // and character-card embed paths). Lazy-loaded to keep the heavy
+        // world-info.js import out of the context module's load chain.
+        presetLorebook: {
+            extractFromPresetBody: (presetBody) => import('./preset-lorebook-embed.js')
+                .then((m) => m.extractEmbeddedLorebookPayload(presetBody)),
+            bind: (opts) => import('./preset-lorebook-embed.js')
+                .then((m) => m.bindLorebookToPreset(opts)),
+            unbind: (opts) => import('./preset-lorebook-embed.js')
+                .then((m) => m.unbindLorebookFromPreset(opts)),
+            applyFromPresetBody: (opts) => import('./preset-lorebook-embed.js')
+                .then((m) => m.applyEmbeddedLorebookFromPreset(opts)),
+        },
         getActivePromptPresetEnvelope,
         getActivePromptLayout,
         formatPromptPresetEnvelope,
