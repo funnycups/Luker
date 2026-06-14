@@ -431,7 +431,6 @@ export function createSubagentDispatcher({
     tools,
     executeLoopTool,
     chat,
-    trace,
     contextForNotes,
     customToolRegistry = null,
 }) {
@@ -523,64 +522,6 @@ export function createSubagentDispatcher({
     }
 
     // ── Trace recording helpers ──
-    // Each dispatch (preconfigured or inline) is recorded as one entry
-    // in trace.director.subagents the moment it starts. The entry's
-    // `conversation.messages` aliases the live subMessages array so the
-    // trace popup can render the sub-agent's full mini-loop conversation
-    // when it's opened. Finish updates status + outputText / error.
-    function recordSubagentStart({ handleId, subagentId, isInline, task, systemPrompt, subMessages }) {
-        if (!trace || typeof trace !== 'object') return null;
-        if (!trace.director || typeof trace.director !== 'object') return null;
-        if (!Array.isArray(trace.director.subagents)) {
-            trace.director.subagents = [];
-        }
-        const entry = {
-            handleId: String(handleId || ''),
-            subagentId: String(subagentId || ''),
-            isInline: Boolean(isInline),
-            task: String(task || ''),
-            systemPromptPreview: isInline ? String(systemPrompt || '').slice(0, 240) : '',
-            status: 'running',
-            startedAt: new Date().toISOString(),
-            finishedAt: '',
-            outputText: '',
-            error: '',
-            conversation: { messages: subMessages },
-        };
-        trace.director.subagents.push(entry);
-        return entry;
-    }
-
-    function recordSubagentFinish(entry, { status, outputText, error }) {
-        if (!entry) return;
-        entry.status = String(status || 'completed');
-        entry.finishedAt = new Date().toISOString();
-        if (typeof outputText === 'string') entry.outputText = outputText;
-        if (typeof error === 'string') entry.error = error;
-    }
-
-    function recordSubagentSyntheticFailure({ handleId, subagentId, isInline, task, status, error }) {
-        if (!trace || typeof trace !== 'object') return;
-        if (!trace.director || typeof trace.director !== 'object') return;
-        if (!Array.isArray(trace.director.subagents)) {
-            trace.director.subagents = [];
-        }
-        const now = new Date().toISOString();
-        trace.director.subagents.push({
-            handleId: String(handleId || ''),
-            subagentId: String(subagentId || ''),
-            isInline: Boolean(isInline),
-            task: String(task || ''),
-            systemPromptPreview: '',
-            status: String(status || 'failed'),
-            startedAt: now,
-            finishedAt: now,
-            outputText: '',
-            error: String(error || ''),
-            conversation: { messages: [] },
-        });
-    }
-
     function makeChildAbort() {
         const ctrl = new AbortController();
         if (abortSignal) {
@@ -679,7 +620,6 @@ export function createSubagentDispatcher({
                 error: errMsg,
             }));
             completionNotifications.push({ handleId, subagentId, status: 'failed', summary: errMsg });
-            recordSubagentSyntheticFailure({ handleId, subagentId, isInline: false, task, status: 'failed', error: errMsg });
             return handleId;
         }
         const spec = byId.get(subagentId);
@@ -695,7 +635,6 @@ export function createSubagentDispatcher({
                 error: errMsg,
             }));
             completionNotifications.push({ handleId, subagentId, status: 'failed', summary: errMsg });
-            recordSubagentSyntheticFailure({ handleId, subagentId, isInline: false, task, status: 'failed', error: errMsg });
             return handleId;
         }
         return runDispatchInternal({
@@ -737,7 +676,6 @@ export function createSubagentDispatcher({
                 error: errMsg,
             }));
             completionNotifications.push({ handleId, subagentId: displayId, status: 'failed', summary: errMsg });
-            recordSubagentSyntheticFailure({ handleId, subagentId: displayId, isInline: true, task, status: 'failed', error: errMsg });
             return handleId;
         }
         const trimmedPrompt = String(systemPrompt || '').trim();
@@ -753,7 +691,6 @@ export function createSubagentDispatcher({
                 error: errMsg,
             }));
             completionNotifications.push({ handleId, subagentId: displayId, status: 'failed', summary: errMsg });
-            recordSubagentSyntheticFailure({ handleId, subagentId: displayId, isInline: true, task, status: 'failed', error: errMsg });
             return handleId;
         }
         return runDispatchInternal({
@@ -922,18 +859,6 @@ export function createSubagentDispatcher({
             { role: 'system', content: '<task>\n' + String(task || '') + '\n</task>' },
         ];
 
-        // Record the dispatch in the trace BEFORE kicking off the
-        // background promise — the trace popup can show "running"
-        // entries as soon as it's opened.
-        const traceEntry = recordSubagentStart({
-            handleId,
-            subagentId: displayId,
-            isInline,
-            task,
-            systemPrompt: baseSystemPrompt,
-            subMessages,
-        });
-
         const childCtrl = makeChildAbort();
         childAborts.set(handleId, childCtrl);
         const childSignal = childCtrl.signal;
@@ -1031,13 +956,15 @@ export function createSubagentDispatcher({
                         // ids include round + tool index to keep them
                         // unique across the mini-loop's multi-round
                         // tool-call history.
+                        const callSource = assistantToolCallEntries[i].source;
                         const toolCallSectionId = panelEnsureSection(
                             roundId,
                             `tool-${r}-${i}`,
                             'tool_call',
                             i18nFormat('Tool: ${0}', name),
-                            { args },
+                            { args, source: callSource },
                         );
+                        panelAppendToSection(roundId, toolCallSectionId, stringifyForSection(args));
                         let toolResult;
                         if (name === 'get_draft') {
                             toolResult = await executeGetDraftTool(handle);
@@ -1110,6 +1037,7 @@ export function createSubagentDispatcher({
                             i18nFormat('Tool result: ${0}', name),
                             { ok: !!toolResult?.ok, err: toolResult?.error || null },
                         );
+                        panelAppendToSection(roundId, toolResultSectionId, stringifyForSection(toolResult));
                         panelSetSectionStatus(roundId, toolResultSectionId, toolResult?.ok ? 'done' : 'failed');
                         panelSetSectionStatus(roundId, toolCallSectionId, toolResult?.ok ? 'done' : 'failed');
                     }
@@ -1120,7 +1048,6 @@ export function createSubagentDispatcher({
                     panelSetSectionStatus(roundId, textSectionId, 'failed', { err: msg });
                     panelSetRoundStatus(roundId, 'failed');
                     completionNotifications.push({ handleId, subagentId: displayId, status: 'cancelled', summary: msg });
-                    recordSubagentFinish(traceEntry, { status: 'cancelled', error: msg });
                     return { handleId, subagentId: displayId, error: msg };
                 }
                 if (!converged) {
@@ -1129,7 +1056,6 @@ export function createSubagentDispatcher({
                     panelSetSectionStatus(roundId, textSectionId, 'failed', { err: msg });
                     panelSetRoundStatus(roundId, 'failed');
                     completionNotifications.push({ handleId, subagentId: displayId, status: 'failed', summary: msg });
-                    recordSubagentFinish(traceEntry, { status: 'failed', error: msg });
                     return { handleId, subagentId: displayId, error: msg };
                 }
                 panelSetSectionStatus(roundId, reasoningSectionId, 'done');
@@ -1141,7 +1067,6 @@ export function createSubagentDispatcher({
                     status: 'completed',
                     summary: `output: ${finalText.length} chars`,
                 });
-                recordSubagentFinish(traceEntry, { status: 'completed', outputText: finalText });
                 return { handleId, subagentId: displayId, outputText: finalText };
             } catch (err) {
                 const isAbort = err?.name === 'AbortError' || childSignal.aborted;
@@ -1151,7 +1076,6 @@ export function createSubagentDispatcher({
                 panelSetSectionStatus(roundId, textSectionId, 'failed', { err: msg });
                 panelSetRoundStatus(roundId, 'failed');
                 completionNotifications.push({ handleId, subagentId: displayId, status, summary: msg });
-                recordSubagentFinish(traceEntry, { status, error: msg });
                 return { handleId, subagentId: displayId, error: msg };
             } finally {
                 childAborts.delete(handleId);
@@ -1205,6 +1129,13 @@ function safeStringifyArgs(value) {
     } catch {
         return '{}';
     }
+}
+
+function stringifyForSection(value) {
+    if (value == null) return '';
+    if (typeof value === 'string') return value;
+    try { return JSON.stringify(value, null, 2); }
+    catch { return String(value); }
 }
 
 /**

@@ -1355,5 +1355,77 @@ describe('director integration — scripted main agent', () => {
 
         expect(seenToolCtx[0].updateChatState).toBe(updateChatState);
     });
+
+    test('tool_call / tool_result sections carry full args + result in body, plus source meta', async () => {
+        // The simulation review popup reads tool args and results out of
+        // the RunStateStore section bodies (the panel uses meta for chip
+        // labels; the popup needs the full payload). director-runtime
+        // appends the JSON-serialized arg / result to each section body
+        // alongside ensureSection, and stamps the tool's source layer
+        // (builtin / extension / profile) onto meta.source.
+        const { chat, handle } = makeHandle();
+        clearCurrentRun();
+        const runId = startRun({ mode: 'director', chatKey: 'k' });
+
+        const ev = {
+            type: 'normal',
+            placeholderMessageId: 0,
+            finalPrompt: '',
+            generateData: {},
+            takeoverHandle: handle,
+            abortSignal: new AbortController().signal,
+        };
+        // Use a Layer-1 loop-tool (chat_read_range) routed through
+        // executeLoopTool — resolveToolSource recognizes it as 'builtin'.
+        // Director's own native tools (write_message / finalize / etc.)
+        // are owned by director-runtime, not the loop-tool registry, so
+        // they would tag as 'unknown'; the source value surfaces verbatim
+        // on meta so the popup can decide whether to render the layer
+        // chip either way.
+        const calls = [
+            [{ id: 't1', name: 'chat_read_range', args: { start: 0, end: 1 } }],
+            [{ id: 'tf', name: 'finalize', args: {} }],
+        ];
+        let i = 0;
+        const fakeStream = jest.fn(async () => ({
+            assistantText: '',
+            toolCalls: calls[i++] || [],
+            reasoning: null,
+            finishReason: 'tool_calls',
+        }));
+        const executeLoopTool = jest.fn(async () => ({ ok: true, lines: ['line0'] }));
+
+        handle.setText('placeholder');
+        await runMainAgentLoop({
+            handle,
+            profile: { mode: 'director', mainAgent: {}, subAgents: [], maxRounds: 3, tools: { chat: { read_range: true } } },
+            eventData: ev,
+            deps: {
+                generateTaskStreamForMainAgent: fakeStream,
+                generateTask: jest.fn(),
+                chat,
+                executeLoopTool,
+                runId,
+            },
+        });
+
+        const run = getCurrentRun();
+        const mainRound = run.rounds.find(r => r.id === 'main-0');
+        expect(mainRound).toBeDefined();
+        const toolCallSection = mainRound.sections.find(s => s.kind === 'tool_call' && s.id === 'tool-0');
+        const toolResultSection = mainRound.sections.find(s => s.kind === 'tool_result' && s.id === 'tool-result-0');
+        expect(toolCallSection).toBeDefined();
+        expect(toolResultSection).toBeDefined();
+        // args land in both meta (for the panel's chip) and body (for
+        // the simulation review popup's full-payload card).
+        expect(toolCallSection.meta?.args).toEqual({ start: 0, end: 1 });
+        expect(JSON.parse(toolCallSection.body)).toEqual({ start: 0, end: 1 });
+        // chat_read_range lives in loop-tools' REGISTRY → 'builtin'.
+        expect(toolCallSection.meta?.source).toBe('builtin');
+        // tool_result body carries the executor's return wrapped in `{ok, result}`.
+        const parsedResult = JSON.parse(toolResultSection.body);
+        expect(parsedResult.ok).toBe(true);
+        expect(parsedResult.result).toEqual({ ok: true, lines: ['line0'] });
+    });
 });
 

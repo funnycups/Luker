@@ -90,13 +90,11 @@ function resolveAgentPromptPresetName(settings, agentConfig) {
     return String(agentConfig?.promptPresetName || '').trim()
         || String(settings?.llmNodePresetName || '').trim();
 }
-// Note: director writes runtime trace data only through the deps the
-// caller (main.js) injects (`deps.trace` + `deps.finalizeTrace` +
-// `deps.recordTraceEvent`). main.js builds the trace data structure
-// inline post-Stage-3 of the run-panel refactor (the legacy
-// `runtime-trace.js` module is gone); director-runtime stays
-// agnostic to its exact shape so the test environment can pass a
-// no-op or a mock.
+// Note: director writes process state through the RunStateStore (panel
+// + simulation review popup read from there). For backward compat the
+// loop still accepts optional `deps.trace` + `deps.finalizeTrace` hooks
+// — they let a caller post-process a trace-shaped record if one is
+// supplied, but no in-tree caller does so anymore.
 
 const SUPPORTED_TYPES = new Set(['normal', 'regenerate', 'swipe', 'continue']);
 
@@ -464,11 +462,6 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         tools: director.tools || {},
         executeLoopTool: deps?.executeLoopTool,
         chat: deps?.chat,
-        // Runtime trace, optional. When present the dispatcher records
-        // each subagent dispatch (handleId, role, task, status, output,
-        // conversation alias) into trace.director.subagents — the trace
-        // popup reads from there.
-        trace: deps?.trace,
         // Notes adapter context (same shape loop-runtime mounts on its
         // own context for the note_open / note_close tools). When
         // provided:
@@ -530,28 +523,6 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         { systemPrompt: mainSystemPromptWithSkills },
         contentPayload,
     );
-
-    // Alias the live messages array onto the director trace so the
-    // trace popup can render the main agent's running conversation.
-    // Mutations to `messages` below show up in the popup at open time
-    // (the alias is by reference). No parallel `rounds[]` slot — every
-    // successful round lives in the messages stream itself (assistant +
-    // tool_result entries carry `_round`). The only thing that can't go
-    // there is a no-tool-call exhausted round, because the assistant
-    // turn was deliberately NOT pushed (the retry contract requires the
-    // same history get re-requested); those go into `failedRounds[]`,
-    // which the renderer interleaves with messages-derived rounds.
-    const trace = deps?.trace || null;
-    if (trace?.director?.mainAgent && typeof trace.director.mainAgent === 'object') {
-        if (!trace.director.mainAgent.conversation || typeof trace.director.mainAgent.conversation !== 'object') {
-            trace.director.mainAgent.conversation = { messages };
-        } else {
-            trace.director.mainAgent.conversation.messages = messages;
-        }
-        if (!Array.isArray(trace.director.mainAgent.failedRounds)) {
-            trace.director.mainAgent.failedRounds = [];
-        }
-    }
 
     const panelRunId = deps?.runId || null;
 
@@ -715,22 +686,13 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
             }
             noToolRetries++;
             if (noToolRetries > maxNoToolRetries) {
-                // Record the exhausted round before throwing. The assistant
-                // turn was deliberately NOT pushed into `messages` (the
-                // retry contract requires the next round see the same
-                // history); without this sidecar the trace popup would
-                // show zero evidence of the failed round even though
-                // `### [main-N] (failed: no tool call)` was appended to
-                // the reasoning fold. Renderer interleaves these with
-                // successful rounds by `round` number.
-                if (Array.isArray(trace?.director?.mainAgent?.failedRounds)) {
-                    trace.director.mainAgent.failedRounds.push({
-                        round,
-                        reason: 'no-tool-call',
-                        assistantText: String(result?.assistantText || ''),
-                        reasoningText: reasoningAccum || String(result?.reasoning || ''),
-                    });
-                }
+                // No-tool-call exhaustion: the assistant turn was
+                // deliberately NOT pushed into `messages` (the retry
+                // contract requires the next round see the same
+                // history). RunStateStore already captured the failure
+                // via `setSectionStatus({status:'failed', meta:{err:'no tool call'}})`
+                // above, so the run-panel and the simulation review popup
+                // both have the evidence of the failed round.
                 throw new Error(`Main agent produced no tool call after ${maxNoToolRetries + 1} attempt(s) (toolCallRetryMax=${maxNoToolRetries}).`);
             }
         }
@@ -792,13 +754,15 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
             const callId = assistantToolCallEntries[i].id;
             const name = String(call?.name || '');
             const args = call?.args;
+            const callSource = assistantToolCallEntries[i].source;
             let panelToolCallSectionId = null;
             if (panelRunId && panelRoundId) {
                 try {
                     panelToolCallSectionId = ensureSection({
                         runId: panelRunId, roundId: panelRoundId,
-                        section: { id: `tool-${i}`, kind: 'tool_call', title: i18nFormat('Tool: ${0}', name), meta: { args } },
+                        section: { id: `tool-${i}`, kind: 'tool_call', title: i18nFormat('Tool: ${0}', name), meta: { args, source: callSource } },
                     });
+                    appendToSection({ runId: panelRunId, roundId: panelRoundId, sectionId: panelToolCallSectionId, delta: stringifyForSection(args) });
                 } catch (_) { /* store may have been cleared */ }
             }
             let toolResult;
@@ -909,6 +873,7 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                         runId: panelRunId, roundId: panelRoundId,
                         section: { id: `tool-result-${i}`, kind: 'tool_result', title: i18nFormat('Tool result: ${0}', name), meta: { ok: !!toolResult?.ok, err: toolResult?.error || null } },
                     });
+                    appendToSection({ runId: panelRunId, roundId: panelRoundId, sectionId: resultSectionId, delta: stringifyForSection(toolResult) });
                     setSectionStatus({ runId: panelRunId, roundId: panelRoundId, sectionId: resultSectionId, status: toolResult?.ok ? 'done' : 'failed' });
                     if (panelToolCallSectionId) {
                         setSectionStatus({ runId: panelRunId, roundId: panelRoundId, sectionId: panelToolCallSectionId, status: toolResult?.ok ? 'done' : 'failed' });
@@ -939,6 +904,13 @@ function safeStringifyArgs(value) {
     } catch {
         return '{}';
     }
+}
+
+function stringifyForSection(value) {
+    if (value == null) return '';
+    if (typeof value === 'string') return value;
+    try { return JSON.stringify(value, null, 2); }
+    catch { return String(value); }
 }
 
 /**

@@ -240,85 +240,77 @@ describe('exportLoopPayload', () => {
 });
 
 describe('exportDirectorPayload', () => {
-    it('reshapes mainAgent rounds + subagents from trace.director', () => {
-        const trace = {
+    it('reshapes mainAgent rounds + subagents from a RunStateStore snapshot', () => {
+        // The director simulation drives the live RunStateStore (same as
+        // the run panel observes), then hands `getCurrentRun()` to the
+        // adapter. Each main-agent round is `rounds[]` with id `main-<n>`;
+        // each sub-agent dispatch is `rounds[]` with id `sub-<id>-<tail>`.
+        const runSnapshot = {
             mode: 'director',
-            director: {
-                mainAgent: {
-                    // After the round-card unification, success rounds live on
-                    // the conversation alias (each assistant turn carries
-                    // `_round` + `reasoning`, plus a matching `role:'tool'`
-                    // message keyed by tool_call_id for its result).
-                    conversation: {
-                        messages: [
-                            {
-                                role: 'assistant',
-                                content: 'hi',
-                                reasoning: 'r',
-                                tool_calls: [
-                                    { id: 'call_1', name: 'await_subagents', args: { handles: ['h1'] } },
-                                ],
-                                _round: 0,
-                            },
-                            {
-                                role: 'tool',
-                                tool_call_id: 'call_1',
-                                content: JSON.stringify({ ok: true }),
-                                _round: 0,
-                            },
-                        ],
-                    },
-                    failedRounds: [],
-                },
-                subagents: [
-                    {
-                        subagentId: 'writer',
-                        isInline: false,
-                        task: 'go',
-                        outputText: 'so',
-                        status: 'completed',
-                        // Reasoning now lives on the per-round assistant
-                        // messages in the conversation alias; the adapter
-                        // aggregates them.
-                        conversation: {
-                            messages: [
-                                { role: 'assistant', content: '', reasoning: 'sr', _round: 0 },
-                            ],
+            rounds: [
+                {
+                    id: 'main-0',
+                    status: 'done',
+                    sections: [
+                        { id: 'reasoning', kind: 'reasoning', title: 'Reasoning', body: 'r', meta: null },
+                        { id: 'text', kind: 'text', title: 'Text', body: 'hi', meta: null },
+                        {
+                            id: 'tool-0',
+                            kind: 'tool_call',
+                            title: 'Tool: await_subagents',
+                            body: '{"handles":["h1"]}',
+                            meta: { args: { handles: ['h1'] }, source: 'builtin' },
                         },
-                    },
-                ],
-            },
-            finalMessage: 'The detective stepped onto the rain-slick street.\n\nIn the distance, sirens wailed.',
+                        {
+                            id: 'tool-result-0',
+                            kind: 'tool_result',
+                            title: 'Tool result: await_subagents',
+                            body: '{"ok":true}',
+                            meta: { ok: true },
+                        },
+                    ],
+                },
+                {
+                    id: 'sub-writer-1',
+                    status: 'done',
+                    sections: [
+                        { id: 'reasoning', kind: 'reasoning', title: 'Reasoning', body: 'sr', meta: { isInline: false, task: 'go' } },
+                        { id: 'text', kind: 'text', title: 'Text', body: 'so', meta: { isInline: false } },
+                    ],
+                },
+            ],
+            finalText: 'The detective stepped onto the rain-slick street.\n\nIn the distance, sirens wailed.',
         };
-        const out = exportDirectorPayload(trace);
+        const out = exportDirectorPayload(runSnapshot);
         expect(out.mainAgent.rounds[0].roundIndex).toBe(0);
         expect(out.mainAgent.rounds[0].assistantText).toBe('hi');
         expect(out.mainAgent.rounds[0].reasoning).toBe('r');
         expect(out.mainAgent.rounds[0].toolCalls[0].name).toBe('await_subagents');
+        expect(out.mainAgent.rounds[0].toolCalls[0].args).toEqual({ handles: ['h1'] });
+        expect(out.mainAgent.rounds[0].toolCalls[0].result).toEqual({ ok: true });
         expect(out.subagents[0].subagentId).toBe('writer');
         expect(out.subagents[0].output).toBe('so');
         expect(out.subagents[0].reasoning).toBe('sr');
-        // finalMessage flows through verbatim — this is the text the
+        expect(out.subagents[0].task).toBe('go');
+        expect(out.subagents[0].isInline).toBe(false);
+        // finalText flows through verbatim — this is the text the
         // simulation popup's "Final Message" section renders. Captured
         // by the runDirectorSimulationLoop onUpdate listener and / or
-        // the handle.commit() outcome.
+        // the handle.commit() outcome, surfaced as runSnapshot.finalText
+        // by runMainAgentLoop's finishRun() call.
         expect(out.finalMessage).toContain('The detective stepped onto the rain-slick street.');
         expect(out.finalMessage).toContain('In the distance, sirens wailed.');
     });
 
-    it('finalMessage falls back to empty string when trace.finalMessage is missing', () => {
+    it('finalMessage falls back to empty string when finalText is missing', () => {
         // Guard for the early-throw path: if runDirectorSimulationLoop
-        // discards the handle before commit, trace.finalMessage stays
-        // empty — the adapter must coerce that to '' so the renderer
+        // discards the handle before commit, finishRun was called without
+        // finalText — the adapter must coerce that to '' so the renderer
         // doesn't crash on null/undefined.
-        const trace = {
-            mode: 'director',
-            director: {
-                mainAgent: { conversation: { messages: [] }, failedRounds: [] },
-                subagents: [],
-            },
-        };
-        const out = exportDirectorPayload(trace);
+        const runSnapshot = { mode: 'director', rounds: [] };
+        const out = exportDirectorPayload(runSnapshot);
         expect(out.finalMessage).toBe('');
+        expect(out.mainAgent.rounds).toEqual([]);
+        expect(out.subagents).toEqual([]);
     });
 });

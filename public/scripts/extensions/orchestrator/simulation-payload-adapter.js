@@ -1,11 +1,9 @@
 /**
- * Reshapes the orchestrator's runtime-trace into per-mode payloads
- * consumed by simulation-review renderers. Failed tool calls are
- * filtered; failed attempts are dropped. Reasoning is sourced from
- * `message.reasoning` on each assistant turn across every mode
- * (spec/agenda/loop/director — the runtime stamps it during push).
- * Prompt-engineered <thought> tags inside assistantText are left in
- * place — they're body, not reasoning.
+ * Reshapes orchestrator runtime output into per-mode payloads consumed
+ * by simulation-review renderers. Failed tool calls are filtered; failed
+ * attempts are dropped. Reasoning is sourced from `message.reasoning` on
+ * each assistant turn for spec/agenda/loop (their internal trace), and
+ * from the RunStateStore round's `reasoning` section for director.
  *
  * Trace-shape notes (for future maintainers):
  *   - Spec attempts come from `trace.attempts[]`, indexed by
@@ -19,12 +17,11 @@
  *   - Loop mode bypasses attempts entirely. `trace.loop.conversation.messages`
  *     is a live alias to the running messages array; the runtime mutates
  *     it across rounds and we sanitize at read time.
- *   - Director mode lives on `trace.director`. Main-agent success rounds
- *     live on `mainAgent.conversation.messages` (each assistant turn
- *     carries `_round` + `reasoning`); no-tool-call exhaustion rounds
- *     live on the sparse `mainAgent.failedRounds[]` sidecar. Sub-agent
- *     dispatches sit on `subagents[]` with the same conversation alias
- *     pattern as the main agent.
+ *   - Director mode reads from a RunStateStore snapshot instead of a
+ *     trace object. Main-agent rounds are `rounds[]` whose id is
+ *     `main-<n>`; sub-agent dispatches are `rounds[]` whose id is
+ *     `sub-<subagentId>-<handleTail>`. Per-section bodies carry full
+ *     tool args / results so the popup can show them at full fidelity.
  */
 
 const COMPLETED_STATUSES = new Set(['completed', 'success']);
@@ -257,55 +254,87 @@ export function exportLoopPayload(trace) {
     };
 }
 
-export function exportDirectorPayload(trace) {
-    const d = trace?.director || {};
-    const eventsByCallId = indexToolErrors(trace);
-    // Main agent rounds derive from the live messages alias. Each
-    // successful round is one `turnsFromConversation` turn (assistant
-    // + matched tool results). The director runtime stamps `_round`
-    // on the assistant push so consumers that want explicit round
-    // numbering can read it; here we just enumerate turns in order
-    // and assign `roundIndex` sequentially because the simulation-
-    // review renderer treats roundIndex as "the i-th round shown",
-    // not "the runtime's round number" (failed rounds aren't in this
-    // path — they live on failedRounds[]).
-    const mainMessages = Array.isArray(d?.mainAgent?.conversation?.messages)
-        ? d.mainAgent.conversation.messages
-        : [];
-    const mainRounds = turnsFromConversation(mainMessages, eventsByCallId)
-        .map((t, idx) => ({
-            roundIndex: idx,
-            reasoning: t.reasoning,
-            assistantText: t.assistantText,
-            toolCalls: t.toolCalls,
-        }));
-    const subs = Array.isArray(d?.subagents) ? d.subagents : [];
-    const subagents = subs
-        .filter(s => COMPLETED_STATUSES.has(String(s?.status || 'completed')))
-        .map(s => {
-            // Reasoning is now per-round on the conversation messages
-            // (each assistant turn carries its own `reasoning`). For the
-            // simulation-review renderer which shows ONE reasoning blob
-            // per sub-agent, aggregate across the conversation in
-            // round order.
-            const msgs = Array.isArray(s?.conversation?.messages) ? s.conversation.messages : [];
-            const reasoningChunks = [];
-            for (const m of msgs) {
-                if (m?.role === 'assistant' && typeof m?.reasoning === 'string' && m.reasoning) {
-                    reasoningChunks.push(m.reasoning);
-                }
-            }
+export function exportDirectorPayload(runSnapshot) {
+    // RunStateStore snapshot shape: { rounds: [{ id, status, sections: [{ id, kind, title, body, meta }] }], finalText }
+    // Main-agent rounds: id matches `main-<n>` (n = round index, 0-based).
+    // Sub-agent dispatches: id matches `sub-<subagentId>-<handleTail>`; one round per dispatch.
+    const rounds = Array.isArray(runSnapshot?.rounds) ? runSnapshot.rounds : [];
+    const mainRoundEntries = rounds
+        .filter(r => /^main-/.test(String(r?.id || '')))
+        .map(r => {
+            const n = Number(String(r.id).slice(5));
+            return { idx: Number.isFinite(n) ? n : 0, round: r };
+        })
+        .sort((a, b) => a.idx - b.idx);
+    const mainRounds = mainRoundEntries.map(({ idx, round }) => {
+        const sections = Array.isArray(round.sections) ? round.sections : [];
+        const reasoning = sections.find(s => s.id === 'reasoning' && s.kind === 'reasoning')?.body || '';
+        const assistantText = sections.find(s => s.id === 'text' && s.kind === 'text')?.body || '';
+        const toolCalls = sectionsToToolCalls(sections);
+        return { roundIndex: idx, reasoning, assistantText, toolCalls };
+    });
+
+    const subagents = rounds
+        .filter(r => /^sub-/.test(String(r?.id || '')))
+        .map(round => {
+            const sections = Array.isArray(round.sections) ? round.sections : [];
+            const reasoningSection = sections.find(s => s.id === 'reasoning' && s.kind === 'reasoning');
+            const textSection = sections.find(s => s.id === 'text' && s.kind === 'text');
+            // round.id format: sub-<subagentId>-<handleTail>; subagentId can
+            // include dashes (`(inline)`) so we strip the prefix and the
+            // trailing handle tail rather than splitting on `-`.
+            const rawId = String(round.id || '');
+            const withoutPrefix = rawId.replace(/^sub-/, '');
+            const lastDash = withoutPrefix.lastIndexOf('-');
+            const subagentId = lastDash >= 0 ? withoutPrefix.slice(0, lastDash) : withoutPrefix;
+            const meta = reasoningSection?.meta || textSection?.meta || null;
             return {
-                subagentId: String(s.subagentId || ''),
-                isInline: Boolean(s.isInline),
-                task: String(s.task || ''),
-                reasoning: reasoningChunks.join('\n\n'),
-                output: String(s.outputText || ''),
+                subagentId,
+                isInline: Boolean(meta?.isInline),
+                task: String(meta?.task || ''),
+                reasoning: String(reasoningSection?.body || ''),
+                output: String(textSection?.body || ''),
             };
         });
+
     return {
         mainAgent: { rounds: mainRounds },
         subagents,
-        finalMessage: String(trace?.finalMessage || ''),
+        finalMessage: String(runSnapshot?.finalText || ''),
     };
+}
+
+// Walk a round's sections, pairing each tool_call with its matching
+// tool_result, into the `{name, args, result, source}` shape the popup
+// renderer expects. tool_call id `tool-<i>` (main) or `tool-<r>-<i>`
+// (sub-agent); the matching result is `tool-result-<...>` with the
+// same trailing index.
+function sectionsToToolCalls(sections) {
+    const calls = sections.filter(s => s?.kind === 'tool_call');
+    const out = [];
+    for (const call of calls) {
+        // Pair: replace `tool-` prefix with `tool-result-`. Both naming
+        // conventions in director-runtime.js / director-tools.js follow
+        // this rule.
+        const resultId = String(call.id).replace(/^tool-/, 'tool-result-');
+        const result = sections.find(s => s?.id === resultId && s?.kind === 'tool_result');
+        const meta = call.meta || {};
+        // Result body is the full JSON dump (the section body we append
+        // alongside ensureSection). meta.ok/err is panel-friendly status
+        // bookkeeping; the body carries the actual payload the AI saw.
+        let resultValue = null;
+        if (result) {
+            try { resultValue = JSON.parse(result.body); }
+            catch { resultValue = result.body || null; }
+        }
+        // Strip the `Tool: ` prefix the runtime adds for display.
+        const name = String(call.title || '').replace(/^Tool:\s*/, '') || '?';
+        out.push({
+            name,
+            args: meta.args && typeof meta.args === 'object' ? meta.args : {},
+            result: resultValue,
+            source: meta.source || undefined,
+        });
+    }
+    return out;
 }

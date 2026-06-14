@@ -4045,25 +4045,6 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
         abortSignal,
     };
 
-    // Build a fresh director trace (same shape and lifecycle as the
-    // production handler) so `exportDirectorPayload` can reshape it for
-    // the review popup. Clear any prior trace first to avoid the popup
-    // looking up a stale one if the runtime errors before populating.
-    clearLatestOrchestrationRuntimeTrace(context);
-    const trace = createOrchestrationRuntimeTrace(
-        context,
-        { type: 'normal' },
-        [],
-        { mode: 'director' },
-    );
-    attachOrchestrationRuntimeDirectorState(trace, {
-        mainAgent: {
-            conversation: { messages: [] },
-            failedRounds: [],
-        },
-        subagents: [],
-    });
-
     // Mirror the GENERATE_TAKEOVER_DISPATCH `generateTaskRouter` so
     // simulation honours the same streaming-transport toggle real runs
     // use. Director-runtime invokes this twice (main agent + sub-agent
@@ -4097,6 +4078,20 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
         return notesCtx;
     })();
 
+    // Open a fresh RunStateStore run for this simulation. director-runtime
+    // writes per-round / per-section data through the same store the live
+    // run-panel observes; the simulation review popup just reads a snapshot
+    // of that data after the loop settles. No parallel trace structure to
+    // maintain — RunStateStore is the single source of process truth.
+    // `startRun` throws when a prior run is still flagged running; we
+    // proactively clear so a previous simulation that errored mid-flight
+    // doesn't block a retry.
+    try { clearCurrentRun(); } catch (_) { /* best-effort */ }
+    const directorRunId = startRun({
+        mode: 'director',
+        chatKey: getChatKey(context),
+    });
+
     try {
         await runMainAgentLoop({
             handle,
@@ -4125,7 +4120,7 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
                 // semantics production uses, so point at the live chat
                 // rather than the N-window simulation slice.
                 chat: context.chat,
-                trace,
+                runId: directorRunId,
                 settings,
                 contextForNotes,
             },
@@ -4133,55 +4128,39 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
         // Natural completion: commit the handle so handle.complete
         // settles. Nothing reads the committed buffer — the throwaway
         // setOnUpdate discards updates — but settling the promise lets
-        // future call sites (and the trace finalize below) read the
-        // outcome cleanly.
+        // future call sites (and the finalize below) read the outcome
+        // cleanly.
         if (!handle.complete._settled) {
             try { await handle.commit(); } catch (_) { /* best-effort */ }
         }
     } catch (err) {
-        // Same error-handling contract as the production wrapper: user
-        // aborts settle as abort; other errors settle as commit so the
-        // partial trace is still visible. Either way the trace records
-        // every round completed before the throw.
         if (!handle.complete._settled) {
             try { await handle.discard(); } catch (_) { /* best-effort */ }
         }
         console.warn(`[${MODULE_NAME}] director simulation main loop threw:`, err);
-    } finally {
-        // Resolve the trace's terminal status from the handle outcome —
-        // committed → completed (natural / max_rounds), aborted →
-        // cancelled (user stop), discarded → cancelled (we discarded on
-        // throw above). Mirrors the takeover dispatch handler's finalize
-        // path so the popup shows a consistent terminal status across
-        // simulation and real runs.
-        let traceStatus = 'completed';
-        try {
-            const outcome = await handle.complete;
-            const handleStatus = String(outcome?.status || '');
-            if (handleStatus === 'aborted' || handleStatus === 'discarded') traceStatus = 'cancelled';
-            else if (handleStatus && handleStatus !== 'committed') traceStatus = handleStatus;
-            // Surface what the main agent actually wrote so the review
-            // popup can show it in the "Final Message" section. Prefer
-            // the committed outcome's `finalText` (authoritative —
-            // captured at handle.commit) and fall back to the latest
-            // streamed text from the onUpdate accumulator when the
-            // handle was discarded before commit (e.g. early throw).
-            const finalText = typeof outcome?.finalText === 'string' && outcome.finalText.length > 0
-                ? outcome.finalText
-                : latestText;
-            const finalReasoning = typeof outcome?.finalReasoning === 'string' && outcome.finalReasoning.length > 0
-                ? outcome.finalReasoning
-                : latestReasoning;
-            try { trace.finalMessage = String(finalText || ''); } catch (_) { /* trace is best-effort */ }
-            try { trace.finalReasoning = String(finalReasoning || ''); } catch (_) { /* trace is best-effort */ }
-        } catch (_) {
-            traceStatus = 'failed';
-            try { trace.finalMessage = String(latestText || ''); } catch (_) { /* trace is best-effort */ }
-            try { trace.finalReasoning = String(latestReasoning || ''); } catch (_) { /* trace is best-effort */ }
-        }
-        try { finalizeOrchestrationRuntimeTrace(trace, traceStatus, {}); } catch (_) { /* trace is best-effort */ }
     }
-    return trace;
+    // Resolve final text + run status from the handle outcome — same
+    // mapping the production handler uses (committed → completed,
+    // aborted / discarded → cancelled). runMainAgentLoop already calls
+    // finishRun via its own finally block (it sees deps.runId), so we
+    // just snapshot the store and return what the popup needs.
+    let finalText = '';
+    try {
+        const outcome = await handle.complete;
+        finalText = typeof outcome?.finalText === 'string' && outcome.finalText.length > 0
+            ? outcome.finalText
+            : latestText;
+    } catch (_) {
+        finalText = latestText;
+    }
+    void latestReasoning;
+    const liveRun = getCurrentRun();
+    // structuredClone strips the abortFn (functions are non-clonable) and
+    // gives the caller a stable snapshot independent of the live store —
+    // critical because the next simulation will clear / restart the run.
+    const snapshot = liveRun ? JSON.parse(JSON.stringify(liveRun, (k, v) => (k === 'abortFn' ? undefined : v))) : null;
+    if (snapshot && !snapshot.finalText) snapshot.finalText = finalText;
+    return snapshot;
 }
 
 async function runAiIterationSimulation(context, session, args = {}, abortSignal = null) {
@@ -4240,17 +4219,18 @@ async function runAiIterationSimulation(context, session, args = {}, abortSignal
         beginSimulation(simRunId);
         try {
             let run = null;
-            let directorTrace = null;
+            let directorSnapshot = null;
             if (isDirectorIterationSession(session)) {
                 // Director runs via the GENERATE_TAKEOVER_DISPATCH hook in
                 // production, not through `runOrchestration`. We can't pretend to
                 // be the kernel here — instead invoke `runMainAgentLoop` directly
                 // with a throwaway editor handle and a synthesized eventData /
                 // deps wiring that mirrors the production handler at
-                // GENERATE_TAKEOVER_DISPATCH below. The trace produced has the
-                // same shape as a real director turn, so `exportDirectorPayload`
-                // and the simulation-review popup work unchanged.
-                directorTrace = await runDirectorSimulationLoop(context, session, simulationMessages, abortSignal);
+                // GENERATE_TAKEOVER_DISPATCH below. The simulation drives the
+                // same RunStateStore the live panel observes; the returned
+                // snapshot is what `exportDirectorPayload` reshapes for the
+                // review popup.
+                directorSnapshot = await runDirectorSimulationLoop(context, session, simulationMessages, abortSignal);
             } else {
                 // Drive a dryRun Generate so the prompt-build pipeline runs
                 // end-to-end (regex, file-splice, reasoning-splice, World Info
@@ -4299,8 +4279,7 @@ async function runAiIterationSimulation(context, session, args = {}, abortSignal
                     setActiveSnapshot(snapshotBefore ? structuredClone(snapshotBefore) : null);
                 }
             }
-            const trace = directorTrace
-                || run?.runtimeTrace
+            const trace = run?.runtimeTrace
                 || getLatestOrchestrationRuntimeTrace(context)
                 || null;
             let attemptKind, attemptPayload;
@@ -4316,8 +4295,10 @@ async function runAiIterationSimulation(context, session, args = {}, abortSignal
                     : { rounds: [], terminationReason: 'max_rounds' };
             } else if (isDirectorIterationSession(session)) {
                 attemptKind = 'orch-director';
-                attemptPayload = trace
-                    ? exportDirectorPayload(trace)
+                // Director feeds the simulation popup straight from the
+                // RunStateStore snapshot — no intermediate trace structure.
+                attemptPayload = directorSnapshot
+                    ? exportDirectorPayload(directorSnapshot)
                     : { mainAgent: { rounds: [] }, subagents: [], finalMessage: '' };
             } else {
                 attemptKind = 'orch-spec';
@@ -7914,27 +7895,6 @@ jQuery(() => {
                     return context.chat.length;
                 };
 
-                // Create a fresh runtime trace for this director turn.
-                // Director's trace shape lives at `trace.director` —
-                // mainAgent rounds + conversation alias, and a list of
-                // sub-agent dispatches. Clearing first avoids the
-                // popup showing a stale trace from a prior loop /
-                // agenda / spec run on the same chat.
-                clearLatestOrchestrationRuntimeTrace(context);
-                const directorTrace = createOrchestrationRuntimeTrace(
-                    context,
-                    { type: eventData?.type || 'normal' },
-                    [],
-                    { mode: 'director' },
-                );
-                attachOrchestrationRuntimeDirectorState(directorTrace, {
-                    mainAgent: {
-                        conversation: { messages: [] },
-                        failedRounds: [],
-                    },
-                    subagents: [],
-                });
-
                 // Open the run-panel store for this director turn. The
                 // abortFn binds to `activeOrchRunAbortController` so the
                 // panel's stop button can halt the in-flight director.
@@ -7963,7 +7923,6 @@ jQuery(() => {
                         ? (opts) => context.generateTaskStream(opts)
                         : null,
                     executeLoopTool: (name, args, deps) => executeLoopTool(name, args, deps),
-                    trace: directorTrace,
                     runId: directorRunId,
                     settings,
                     // Notes adapter context — same shape loop-runtime
@@ -7996,10 +7955,6 @@ jQuery(() => {
                     // no longer threads one. Sub-agent dispatcher's
                     // executeLoopTool sees the ctx and the memory_* exec
                     // wrappers open / cache the session on first call.
-                    // Injected so director-runtime stays agnostic to the
-                    // trace data structure that main.js manages locally.
-                    finalizeTrace: (trace, status) => finalizeOrchestrationRuntimeTrace(trace, status, {}),
-                    recordTraceEvent: recordOrchestrationRuntimeEvent,
                     // Visible failure surface. Director takes over the
                     // GENERATE path, so ST core's sender never gets to
                     // toast on its behalf — we have to do it here when
