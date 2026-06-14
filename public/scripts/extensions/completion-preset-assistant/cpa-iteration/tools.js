@@ -30,15 +30,13 @@ import {
     extractSystemFromCapturedPrompt,
     extractNonSystemFromCapturedPrompt,
 } from '../../../iteration-library/simulation-review/dry-run-capture.js';
-
-// Orchestrator publishes the iter-studio skill tool catalog via
-// `registerExtensionApi('orchestrator', {...})`. Resolved per-call so a
-// missing orchestrator install only surfaces when CPA's iter-studio
-// actually tries to splice the skill defs into its tool catalog, not at
-// module load.
-function getOrch() {
-    return __ctx.getExtensionApi('orchestrator') || null;
-}
+// Skill iter-studio tools live in the shared `public/scripts/skills/` layer
+// and are plugin-agnostic — orchestrator and CPA both import them directly
+// from there, without going through `getExtensionApi('orchestrator')`.
+import {
+    SKILL_ITER_STUDIO_TOOL_DEFS,
+    runSkillIterStudioTool,
+} from '../../../skills/iter-studio-tools.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Skill toolset exposed by CPA's iteration studio. Mirrors the orchestrator
@@ -89,18 +87,13 @@ const CPA_SKILL_TOOL_NAME_LIST = Object.freeze([
 export const CPA_SKILL_TOOL_NAMES = new Set(CPA_SKILL_TOOL_NAME_LIST);
 
 /**
- * Resolve the CPA-exposed subset of the orchestrator's iter-studio skill
- * tool catalog. Lazy by design: the orchestrator extension may register
- * its API after CPA's module-eval phase, so a module-level filter would
- * stamp an empty array. Returns [] when orchestrator isn't installed; the
- * AI then sees no `skill_*` tools in the catalog, which is the expected
- * graceful-degradation behaviour.
+ * Resolve the CPA-exposed subset of the shared iter-studio skill tool
+ * catalog. Filters by tool name so CPA's catalog only includes the 12
+ * profile-independent tools.
  */
 function getCpaSkillToolDefs() {
-    const orch = getOrch();
-    const defs = orch?.SKILL_ITER_STUDIO_TOOL_DEFS;
-    if (!Array.isArray(defs)) return [];
-    return defs.filter((def) => CPA_SKILL_TOOL_NAMES.has(String(def?.function?.name || '')));
+    if (!Array.isArray(SKILL_ITER_STUDIO_TOOL_DEFS)) return [];
+    return SKILL_ITER_STUDIO_TOOL_DEFS.filter((def) => CPA_SKILL_TOOL_NAMES.has(String(def?.function?.name || '')));
 }
 
 export function isCpaSkillTool(name) {
@@ -118,11 +111,7 @@ export function isCpaSkillTool(name) {
  * @returns {Promise<{ok: true, result: *} | {ok: false, error: string}>}
  */
 export async function runCpaSkillTool(call) {
-    const orch = getOrch();
-    if (!orch || typeof orch.runSkillIterStudioTool !== 'function') {
-        return { ok: false, error: 'orchestrator extension is not loaded' };
-    }
-    const out = await orch.runSkillIterStudioTool(call, { getWorkingProfile: () => null });
+    const out = await runSkillIterStudioTool(call, { getWorkingProfile: () => null });
     if (out && out.ok && 'pendingEdit' in out) {
         // Defensive: the 12 tools CPA exposes never produce pendingEdit, but
         // strip it if anything ever leaks so studio.js doesn't try to thread

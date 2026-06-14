@@ -22,7 +22,7 @@
  * `skill_extract_from_text`. Without it, the iter-studio AI defaults to
  * summarizing as it extracts, which silently reduces prompt strength.
  *
- * No code in this module — or in skill-iter-studio-tools.js — decides
+ * No code in this module — or in skills/iter-studio-tools.js — decides
  * what counts as an "extraction candidate." That judgment is the AI's:
  * the agent's `systemPrompt` is supplied verbatim in `working_state` each
  * turn, and the AI selects the slice itself based on the discipline text

@@ -7,7 +7,7 @@
  *
  * Two source modules under test:
  *
- *   public/scripts/extensions/orchestrator/skill-iter-studio-tools.js
+ *   public/scripts/skills/iter-studio-tools.js
  *     - SKILL_ITER_STUDIO_TOOL_DEFS: tool catalog spliced into studio.js
  *     - isSkillIterStudioTool / SKILL_ITER_STUDIO_TOOL_NAMES
  *     - runSkillIterStudioTool dispatcher
@@ -68,7 +68,7 @@ const {
     runSkillIterStudioTool,
     applyFrontmatterPatch,
     buildSkillVisibilityChange,
-} = await import('../../public/scripts/extensions/orchestrator/skill-iter-studio-tools.js');
+} = await import('../../public/scripts/skills/iter-studio-tools.js');
 
 const {
     augmentIterStudioPromptWithSkills,

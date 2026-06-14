@@ -2,12 +2,11 @@
 // Copyright (C) 2026 FunnyCups
 
 /**
- * iter-studio-side skill management tool catalog.
+ * iter-studio skill management tool catalog.
  *
- * Plan 2 Unit 7. Exposes the spec §6.1 tools to the iter-studio AI so it
- * can manage skills as part of the orchestrator design conversation.
- * Four categories totalling 16 tools — 4 inventory + 7 authoring + 3
- * policy + 2 migration:
+ * Exposes the spec §6.1 skill tools to any iteration AI that wants to
+ * manage skills as part of its design conversation. Four categories
+ * totalling 16 tools — 4 inventory + 7 authoring + 3 policy + 2 migration:
  *
  *   Inventory inspection (4 — read-only):
  *     skill_list_visible, skill_inspect, skill_read_content, skill_search_content
@@ -16,7 +15,7 @@
  *     skill_create, skill_update_content, skill_edit_content,
  *     skill_update_frontmatter, skill_rename, skill_change_scope, skill_delete
  *
- *   Policy binding (3 — mutates the iter-studio working profile in place;
+ *   Policy binding (3 — mutates the caller's working profile in place;
  *   surfaces as a pending edit the user reviews + applies):
  *     skill_bind_to_agent, skill_unbind_from_agent, skill_set_mode_defaults
  *
@@ -27,35 +26,32 @@
  *   not a regex in this module):
  *     skill_extract_from_text, skill_replace_in_systemprompt
  *
- * Wire model:
+ * Sharing model:
  *
- *   - studio.js's `runIterationTurn` splits tool calls into inline-executed
- *     (lorebook reads/writes, simulate) vs sandbox-diff edit tools. ALL 16
- *     skill tools are inline-executed: 13 only touch server state, and the
- *     3 policy-binding tools synthesize a sandbox-diff edit themselves
- *     (cloning state.live, applying the mutation, and emitting
- *     `{op:'set', path:'', oldValue, newValue}` so the user reviews + applies
- *     in the normal flow).
+ *   - Plugin-agnostic: only depends on the global `skillsApi`
+ *     (`SillyTavern.getContext().skills`) and `yaml`. Any iter popup may
+ *     import this directly.
  *
- *   - This module exports `SKILL_ITER_STUDIO_TOOL_DEFS` (OpenAI-shape tool
- *     defs spliced into the catalog by studio.js), `isSkillIterStudioTool`
- *     (predicate routing into the inline-executed path), and
- *     `runSkillIterStudioTool` (the dispatcher studio.js calls per matched
- *     tool call).
+ *   - Consumers today: orchestrator iter-studio (uses all 16) and CPA
+ *     iter-studio (uses 12 — the 3 policy-binding tools and
+ *     skill_replace_in_systemprompt depend on a working profile, which
+ *     CPA does not have; CPA filters by tool-name when splicing defs and
+ *     supplies `getWorkingProfile: () => null` when dispatching). Other
+ *     popups that want skill management may do the same.
  *
- *   - `runSkillIterStudioTool` returns one of three shapes:
+ *   - Returns one of three shapes from `runSkillIterStudioTool`:
  *       { ok: true, result: ... }                    plain server-side result
  *       { ok: true, result: ..., pendingEdit: {...} }  mutated working profile
  *       { ok: false, error: '...' }                    handled failure
  *
- *     The pendingEdit shape mirrors normalizeToolCallToEditInline's coarse
- *     `{op:'set', path:'', oldValue, newValue}` so it slots directly into
- *     state.pendingEdits and applies through the existing applyPendingEdits
- *     path. No special-casing in apply.
+ *     The pendingEdit shape uses a coarse `{op:'set', path:'', oldValue,
+ *     newValue}` so it slots directly into the popup's pendingEdits array
+ *     and applies through whatever applyPendingEdits path the popup
+ *     already runs — no special-casing in apply.
  *
- *   - studio.js owns the working-profile mutation API surface; this module
+ *   - The popup owns the working-profile mutation surface; this module
  *     receives a `mutationCtx` bag with the current working profile and
- *     mode, and never touches studio internals directly. Tests stub the bag.
+ *     never touches popup internals directly. Tests stub the bag.
  */
 
 const __ctx = SillyTavern.getContext();

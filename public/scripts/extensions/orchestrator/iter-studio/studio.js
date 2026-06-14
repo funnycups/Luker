@@ -117,7 +117,7 @@ import {
     SKILL_ITER_STUDIO_TOOL_DEFS,
     isSkillIterStudioTool,
     runSkillIterStudioTool,
-} from '../skill-iter-studio-tools.js';
+} from '../../../skills/iter-studio-tools.js';
 import { augmentIterStudioPromptWithSkills } from '../skill-iter-studio-prompt.js';
 import { buildSkillRuntimeContext } from '../skill-resolution.js';
 import { getActivePreset } from '../preset-library.js';
@@ -1371,7 +1371,7 @@ export async function openOrchestratorIterationStudio(deps) {
 
     // ──────────────────────────────────────────────────────────────────
     // Skill-visibility context strip. Translates the structured
-    // `skillVisibilityChange` blob attached by skill-iter-studio-tools
+    // `skillVisibilityChange` blob attached by skills/iter-studio-tools
     // policy-binding handlers into a small "Effective visible skills"
     // header rendered above the raw structural diff card.
     //

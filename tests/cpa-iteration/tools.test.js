@@ -1,6 +1,40 @@
 // tests/cpa-iteration/tools.test.js
 import { describe, test, expect, beforeAll, jest } from '@jest/globals';
 
+// skills/iter-studio-tools.js captures `skillsApi` + `yaml` from
+// `SillyTavern.getContext()` at module load. Stub it before the dynamic
+// import so the module's eval succeeds. The CPA-exposed tools all touch
+// these (skill_list_visible / skill_inspect / skill_create / etc), but
+// these unit tests never fire those handlers — the stub just satisfies
+// the module-link contract.
+//
+// CPA's own tools.js also captures __ctx.lib.lodash + generateQuietPrompt
+// at module load; the lib.lodash slot must be a real lodash so the editable
+// tool tests' lodash.get/lodash.cloneDeep calls work.
+const lodashDefault = (await import('lodash')).default;
+globalThis.SillyTavern = {
+    getContext: () => ({
+        skills: {
+            list: jest.fn(async () => []),
+            get: jest.fn(),
+            listFiles: jest.fn(),
+            readFile: jest.fn(),
+            search: jest.fn(),
+            writeFile: jest.fn(),
+            editFile: jest.fn(),
+            install: jest.fn(),
+            rename: jest.fn(),
+            moveScope: jest.fn(),
+            delete: jest.fn(),
+        },
+        lib: {
+            yaml: { parse: () => ({}), stringify: () => '' },
+            lodash: lodashDefault,
+        },
+        generateQuietPrompt: async () => 'mocked',
+    }),
+};
+
 // public/lib.js pulls in a browser bundle that can't be resolved under jest.
 // Mirror the same workaround used by tests/iteration-studio-adapters/cpa-smoke.test.js:
 // stub the facade to a thin { lodash } re-export.
@@ -8,10 +42,6 @@ jest.unstable_mockModule('../../public/lib.js', async () => {
     const { default: lodash } = await import('lodash');
     return {
         lodash,
-        // skill-iter-studio-tools.js (pulled in transitively for the CPA skill
-        // toolset) imports `yaml` for skill_update_frontmatter. That handler
-        // never fires under these unit tests; stub the parse/stringify pair so
-        // the module link succeeds.
         yaml: { parse: () => ({}), stringify: () => '' },
     };
 });
@@ -28,8 +58,8 @@ jest.unstable_mockModule('../../public/script.js', () => ({
     Generate: jest.fn(async () => undefined),
     eventSource: { on: jest.fn(), makeLast: jest.fn(), removeListener: jest.fn() },
     event_types: { CHAT_COMPLETION_PROMPT_READY: 'chat_completion_prompt_ready', GENERATION_WORLD_INFO_FINALIZED: 'generation_world_info_finalized' },
-    // skills/api.js (pulled transitively via cpa-iteration/tools.js → orchestrator/
-    // skill-iter-studio-tools.js → skills/api.js) wraps every fetch with
+    // skills/api.js (pulled transitively via cpa-iteration/tools.js →
+    // skills/iter-studio-tools.js → skills/api.js) wraps every fetch with
     // getRequestHeaders(). The skill tools never fire under these tests
     // (no HTTP available), but module link requires the export to exist.
     getRequestHeaders: jest.fn(() => ({})),

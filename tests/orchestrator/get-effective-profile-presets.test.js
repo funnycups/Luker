@@ -228,7 +228,7 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/register-
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/skill-orchestration-tools.js', () => ({
     registerSkillOrchestrationTools: () => {},
 }));
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/skill-iter-studio-tools.js', () => ({
+jest.unstable_mockModule('../../public/scripts/skills/iter-studio-tools.js', () => ({
     SKILL_ITER_STUDIO_TOOL_DEFS: [],
     isSkillIterStudioTool: () => false,
     runSkillIterStudioTool: async () => null,
