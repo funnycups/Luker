@@ -5611,6 +5611,47 @@ function loadOpenAISettings(data, settings) {
             }
         }
     }
+    // Preserve preset-body alias keys that the active preset (or programmatic
+    // callers) mirrored onto oai_settings before save. default_settings only
+    // covers runtime keys (e.g. `temp_openai`), so without this any extra
+    // alias (e.g. `temperature`) is dropped on reload — leaving callers that
+    // read via the preset-body shape with undefined after a restart.
+    if (settings && typeof settings === 'object') {
+        for (const key of Object.keys(settings)) {
+            if (key in default_settings) {
+                continue;
+            }
+            if (key in oai_settings) {
+                continue;
+            }
+            if (!Object.hasOwn(settingsToUpdate, key)) {
+                continue;
+            }
+            oai_settings[key] = settings[key];
+        }
+    }
+    // Fall back to the active preset body for any alias key still missing.
+    // settings.json is debounced and may lag behind the persisted preset file
+    // when a switch happens immediately before a process restart — in that
+    // window settings.json carries the previous preset's runtime keys but
+    // the preset cache (just hydrated above) carries the canonical body.
+    const activePresetIndex = openai_setting_names?.[oai_settings.preset_settings_openai];
+    const activePresetBody = Number.isInteger(activePresetIndex) ? openai_settings?.[activePresetIndex] : null;
+    if (activePresetBody && typeof activePresetBody === 'object') {
+        for (const [presetKey, value] of Object.entries(activePresetBody)) {
+            const mapping = settingsToUpdate[presetKey];
+            if (!mapping) {
+                continue;
+            }
+            const [, settingsKey] = mapping;
+            if (!(presetKey in oai_settings)) {
+                oai_settings[presetKey] = value;
+            }
+            if (settingsKey && !(settingsKey in default_settings) && !(settingsKey in oai_settings)) {
+                oai_settings[settingsKey] = value;
+            }
+        }
+    }
     oai_settings.custom_models_by_source = normalizeCustomModelsBySource(oai_settings.custom_models_by_source);
 
     const selectedOpenAIPresetValue = openai_setting_names[oai_settings.preset_settings_openai];
@@ -7048,6 +7089,15 @@ async function onSettingsPresetChange(event) {
 
             if (preset[key] !== undefined) {
                 oai_settings[setting] = preset[key];
+                // Mirror the preset-body key onto oai_settings as well when it
+                // differs from the runtime settings key (e.g. preset body uses
+                // `temperature`, runtime uses `temp_openai`). Without this,
+                // reads via the preset-body alias return whatever the previous
+                // session left behind, which can disagree with the active
+                // preset after a switch-away/back cycle.
+                if (key !== setting) {
+                    oai_settings[key] = preset[key];
+                }
 
                 if (!selector || selector === '#NULL_SELECTOR') {
                     continue;

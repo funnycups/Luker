@@ -1007,23 +1007,33 @@ class PresetManager {
         const { presets, preset_names } = this.getPresetList();
         const presetExists = this.isKeyedApi() ? preset_names.includes(name) : Object.keys(preset_names).includes(name);
 
+        // Detach the cached preset body from the caller's reference. Some callers
+        // (notably the openai PresetManager path) pass the live runtime settings
+        // object directly; storing that reference would let subsequent in-place
+        // mutations (e.g. switching to another preset and writing its values into
+        // oai_settings) silently corrupt this preset's cached copy and make
+        // switch-back read stale fields.
+        const storedPreset = preset && typeof preset === 'object'
+            ? structuredClone(preset)
+            : preset;
+
         if (presetExists) {
             if (this.isKeyedApi()) {
-                presets[preset_names.indexOf(name)] = preset;
+                presets[preset_names.indexOf(name)] = storedPreset;
                 if (select) {
                     $(this.select).find(`option[value="${name}"]`).prop('selected', true);
                     $(this.select).val(name).trigger('change');
                 }
             } else {
                 const value = preset_names[name];
-                presets[value] = preset;
+                presets[value] = storedPreset;
                 if (select) {
                     $(this.select).find(`option[value="${value}"]`).prop('selected', true);
                     $(this.select).val(value).trigger('change');
                 }
             }
         } else {
-            presets.push(preset);
+            presets.push(storedPreset);
             const value = presets.length - 1;
 
             if (this.isKeyedApi()) {

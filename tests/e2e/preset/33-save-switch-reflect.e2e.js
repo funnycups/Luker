@@ -40,15 +40,6 @@ test.afterAll(async () => {
 });
 
 test.describe('#33 — preset save → switch → field roundtrip', () => {
-    // KNOWN BUG: switch-away/back loses openai_max_tokens (and any other
-    // alias-mapped fields) — savePreset writes them to disk, but the
-    // preset re-apply path on switch back reads from the base preset's
-    // copy, not the saved file. Confirmed: storedAfterSave reads 1337
-    // correctly, in-memory after switch-back reads 300 (the default).
-    // Batch 4 agent's #38 spec mitigates by asserting only against the
-    // on-disk preset body (which is safe). Leaving this as test.fail so
-    // a future fix to the switch-back read path flips it green.
-    test.fail();
     test('saved preset reflects every field after switch-away/back + restart', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
 
