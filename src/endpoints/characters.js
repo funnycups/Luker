@@ -780,7 +780,15 @@ function toStoredV2Character(character) {
             continue;
         }
 
-        _.set(character, spec.path, spec.normalize(character[field]));
+        // `data.<field>` is the canonical V2 slot; the legacy root field is a
+        // backwards-compat shim. When both are present (the runtime shape after
+        // `projectRuntimeCharacterFields`), the canonical value must win — the
+        // legacy root may be stale after a partial mutation that only updated
+        // the data path. Only fall back to the legacy root when the canonical
+        // slot is genuinely missing (real V1 import case).
+        const canonicalValue = _.get(character, spec.path);
+        const sourceValue = canonicalValue === undefined ? character[field] : canonicalValue;
+        _.set(character, spec.path, spec.normalize(sourceValue));
     }
 
     if (_.isPlainObject(character.extensions)) {

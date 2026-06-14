@@ -111,7 +111,7 @@ test.describe('#82 — CEA Character iter-studio Apply → character description
     // file. The Apply round-trip writes the stale v1 legacy root description
     // back to disk when both root and data.description are present on the
     // in-memory character (the default state for cards loaded from disk).
-    test.fail('Apply writes Seraphina.description to disk; survives restart', async ({ page }) => {
+    test('Apply writes Seraphina.description to disk; survives restart', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
 
