@@ -36,10 +36,38 @@ export class PanelRenderer {
         this._pendingAppends = new Map();
         this._rafScheduled = false;
         this._scrollPinned = true;
+        // Tracks user-driven expand/collapse on round/section <details>.
+        // Auto-collapse on terminal status skips any entry the user has
+        // touched so a manually-pinned section stays pinned.
         this._manualToggles = new Map();
+        // Guards against `_setDetailsOpen` recording its own programmatic
+        // flip as a "user toggle" — we set this before mutating .open and
+        // clear it after, so the toggle listener can ignore the bounce.
+        this._suppressToggleRecord = false;
         this._elapsedTimer = null;
 
         this._bindScrollPin();
+    }
+
+    /**
+     * Flip `<details>.open` programmatically without polluting
+     * `_manualToggles`. Use this for round/section auto-fold on
+     * terminal status; direct `details.open = ...` is only safe at
+     * construction (before the toggle listener is attached).
+     */
+    _setDetailsOpen(detailsEl, open) {
+        if (!detailsEl) return;
+        if (detailsEl.open === Boolean(open)) return;
+        this._suppressToggleRecord = true;
+        try {
+            detailsEl.open = Boolean(open);
+        } finally {
+            // Clear after the synchronous assignment — the toggle event
+            // fires asynchronously, so flip the flag back in a microtask
+            // so the very next handler sees the suppression and later
+            // user-driven toggles see it cleared.
+            queueMicrotask(() => { this._suppressToggleRecord = false; });
+        }
     }
 
     _bindScrollPin() {
@@ -160,8 +188,11 @@ export class PanelRenderer {
         details.appendChild(ol);
 
         // Track manual toggles so subsequent status updates don't override
-        // user-driven expand/collapse decisions.
+        // user-driven expand/collapse decisions. Programmatic flips via
+        // `_setDetailsOpen` (terminal-status auto-fold) set
+        // `_suppressToggleRecord` so they don't masquerade as user input.
         details.addEventListener('toggle', () => {
+            if (this._suppressToggleRecord) return;
             this._manualToggles.set(`round:${roundId}`, details.open);
         });
 
@@ -215,6 +246,7 @@ export class PanelRenderer {
         details.appendChild(pre);
 
         details.addEventListener('toggle', () => {
+            if (this._suppressToggleRecord) return;
             this._manualToggles.set(`section:${roundId}:${sectionId}`, details.open);
         });
 
@@ -254,6 +286,16 @@ export class PanelRenderer {
         );
         if (!li) return;
         li.dataset.status = status;
+        // Auto-fold finished sections so a long run doesn't keep every
+        // tool_call / tool_result expanded — mobile dies under that.
+        // Skip when the user has manually toggled this section: their
+        // pin overrides the auto-fold.
+        if (status === 'done' || status === 'failed') {
+            if (!this._manualToggles.has(`section:${roundId}:${sectionId}`)) {
+                const details = li.querySelector(':scope > details');
+                this._setDetailsOpen(details, false);
+            }
+        }
     }
 
     _renderRoundStatus(roundId, status) {
@@ -265,6 +307,12 @@ export class PanelRenderer {
             const run = getCurrentRun();
             const round = run?.rounds.find(r => r.id === roundId);
             if (round) summary.textContent = `● ${round.label} · ${status}`;
+        }
+        if (status === 'done' || status === 'failed') {
+            if (!this._manualToggles.has(`round:${roundId}`)) {
+                const details = li.querySelector(':scope > details');
+                this._setDetailsOpen(details, false);
+            }
         }
     }
 
@@ -282,6 +330,23 @@ export class PanelRenderer {
         if (run && run.finalText != null && this.finalOutputEl) {
             this.finalOutputEl.hidden = false;
             this.finalOutputEl.querySelector('pre').textContent = run.finalText;
+        }
+        // Final sweep: collapse every round/section that never reached
+        // a terminal status — covers aborted runs and edge cases where
+        // a SECTION_STATUS / ROUND_STATUS event was skipped. The final
+        // output stays open; user-pinned entries stay pinned.
+        for (const li of this.roundsListEl.querySelectorAll('.round')) {
+            const roundId = li.dataset.roundId;
+            if (!roundId || this._manualToggles.has(`round:${roundId}`)) continue;
+            this._setDetailsOpen(li.querySelector(':scope > details'), false);
+        }
+        for (const sli of this.roundsListEl.querySelectorAll('.section')) {
+            const sectionId = sli.dataset.sectionId;
+            const roundLi = sli.closest('.round');
+            const roundId = roundLi?.dataset.roundId;
+            if (!sectionId || !roundId) continue;
+            if (this._manualToggles.has(`section:${roundId}:${sectionId}`)) continue;
+            this._setDetailsOpen(sli.querySelector(':scope > details'), false);
         }
         this._renderHeader();
         this._maybeScroll();
