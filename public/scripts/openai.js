@@ -79,6 +79,7 @@ import {
 } from './utils.js';
 import { countTokensOpenAIAsync, countTokensOpenAIItemsAsync, getTokenizerModel } from './tokenizers.js';
 import { extractStreamingUsage, mergeStreamingUsage } from './openai-streaming-usage.js';
+import { setLastUsage } from './last-usage.js';
 import { isMobile } from './RossAscends-mods.js';
 import { saveLogprobsForActiveMessage } from './logprobs.js';
 import { persistPreset } from './preset-persistence.js';
@@ -4016,6 +4017,8 @@ async function sendOpenAIRequest(type, messages, signal, {
         signal = new AbortController().signal;
     }
 
+    setLastUsage(null);
+
     // RPM throttle gate. When apiPresetName is provided (typical for
     // generateTask callers), look the named profile up so plugin requests
     // get throttled against their own profile's bucket rather than the
@@ -4239,6 +4242,7 @@ async function sendOpenAIRequest(type, messages, signal, {
                     if (await finalizePlainTextToolCalls()) {
                         yield { text, swipes: swipes, logprobs: null, toolCalls: toolCalls, state: state };
                     }
+                    setLastUsage(state.usage);
                     return;
                 }
                 const rawData = value.data;
@@ -4342,6 +4346,7 @@ async function sendOpenAIRequest(type, messages, signal, {
             delay(1).then(() => saveLogprobsForActiveMessage(logprobs, null));
         }
 
+        setLastUsage(data?.usage);
         return data;
     }
 }

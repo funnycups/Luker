@@ -249,6 +249,7 @@ import {
 } from './scripts/instruct-mode.js';
 import { initLocales, t } from './scripts/i18n.js';
 import { getFriendlyTokenizerName, getTokenCount, getTokenCountAsync, initTokenizers, saveTokenCacheDebounced, flushTokenCacheSave } from './scripts/tokenizers.js';
+import { consumeLastUsage } from './scripts/last-usage.js';
 import {
     user_avatar,
     getUserAvatars,
@@ -6079,6 +6080,26 @@ function hideStopButton() {
     }
 }
 
+/**
+ * Compute the assistant message token count for the just-finished generation,
+ * preferring the provider's real `completion_tokens` (set by the chat-completion
+ * request layer) and falling back to the local tokenizer for paths that didn't
+ * surface a usage object (textgen / kobold / horde / aborted streams).
+ * The real value includes reasoning/thinking tokens, matching what the provider
+ * bills — so `t/s` derived from this number is the true throughput, not just
+ * the visible-text throughput.
+ * @param {string} tokenCountText Fallback text for local-tokenizer estimation
+ * @returns {Promise<number>}
+ */
+async function resolveAssistantTokenCount(tokenCountText) {
+    const usage = consumeLastUsage();
+    const realTokens = Number(usage?.completion_tokens);
+    if (Number.isFinite(realTokens)) {
+        return realTokens;
+    }
+    return await getTokenCountAsync(tokenCountText, 0);
+}
+
 class StreamingProcessor {
     /**
      * Creates a new streaming processor.
@@ -6236,7 +6257,7 @@ class StreamingProcessor {
 
             // Token count update.
             const tokenCountText = this.reasoningHandler.reasoning + processedText;
-            const currentTokenCount = isFinal && power_user.message_token_count_enabled ? await getTokenCountAsync(tokenCountText, 0) : 0;
+            const currentTokenCount = isFinal && power_user.message_token_count_enabled ? await resolveAssistantTokenCount(tokenCountText) : 0;
             if (currentTokenCount) {
                 chat[messageId].extra.token_count = currentTokenCount;
                 if (this.messageTokenCounterDom instanceof HTMLElement) {
@@ -8574,7 +8595,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                         slot.send_date = getMessageTimeStamp();
                         if (power_user.message_token_count_enabled) {
                             const tokenCountText = (finalReasoning || '') + cleanedText;
-                            slot.extra.token_count = await getTokenCountAsync(tokenCountText, 0);
+                            slot.extra.token_count = await resolveAssistantTokenCount(tokenCountText);
                         }
                         // Sync mes into the active swipe slot (saveReply
                         // initialised `swipes`/`swipe_info` at placeholder
@@ -10335,7 +10356,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
             await processImageAttachment(lastMessage, { imageUrls });
             if (power_user.message_token_count_enabled) {
                 const tokenCountText = (reasoning || '') + lastMessage.mes;
-                lastMessage.extra.token_count = await getTokenCountAsync(tokenCountText, 0);
+                lastMessage.extra.token_count = await resolveAssistantTokenCount(tokenCountText);
             }
             const chat_id = (chat.length - 1);
             extractMessageById(chat_id);
@@ -10361,7 +10382,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         await processImageAttachment(lastMessage, { imageUrls });
         if (power_user.message_token_count_enabled) {
             const tokenCountText = (reasoning || '') + lastMessage.mes;
-            lastMessage.extra.token_count = await getTokenCountAsync(tokenCountText, 0);
+            lastMessage.extra.token_count = await resolveAssistantTokenCount(tokenCountText);
         }
         const chat_id = (chat.length - 1);
         extractMessageById(chat_id);
@@ -10384,7 +10405,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         // We don't know if the reasoning duration extended, so we don't update it here on purpose.
         if (power_user.message_token_count_enabled) {
             const tokenCountText = (reasoning || '') + lastMessage.mes;
-            lastMessage.extra.token_count = await getTokenCountAsync(tokenCountText, 0);
+            lastMessage.extra.token_count = await resolveAssistantTokenCount(tokenCountText);
         }
         const chat_id = (chat.length - 1);
         extractMessageById(chat_id);
@@ -10414,7 +10435,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
 
         if (power_user.message_token_count_enabled) {
             const tokenCountText = (reasoning || '') + newMessage.mes;
-            newMessage.extra.token_count = await getTokenCountAsync(tokenCountText, 0);
+            newMessage.extra.token_count = await resolveAssistantTokenCount(tokenCountText);
         }
 
         if (selected_group) {
