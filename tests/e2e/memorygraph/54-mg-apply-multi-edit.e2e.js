@@ -47,8 +47,8 @@ test.afterAll(async () => {
 });
 
 test.describe('#54 — MG schema-iteration Apply: multi-edit batch lands every empty-path entry', () => {
-    test.fail(
-        'known bug: MG multi-edit drops empty-path entries; fix is rollbackBatch every-gate pattern',
+    test(
+        'a 5-edit empty-path batch + a granular non-empty-path edit all land in one Apply',
         async ({ page }) => {
             await awaitMainUI(page, server.baseURL);
 

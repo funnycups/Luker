@@ -154,20 +154,250 @@ function isAbortError(err, signal) {
 // ──────────────────────────────────────────────────────────────────────────
 
 /**
- * Apply a single coarse `{ op: 'set', path: '', newValue }` edit by replacing
- * `live` outright with a deep clone of `newValue`. The shared `applyEdits`
- * engine is lodash-backed and `lodash.set(target, '', value)` is a no-op, so
- * sandbox-diff edits would otherwise silently skip — leaving both the manual
- * Apply button and composer-row auto-apply as UI-only with no commit. Pure
- * function; caller owns the resulting object.
+ * Stable canonical-JSON serialization for deep-equality and multiset diffing.
+ * Sorts object keys recursively so `{a:1,b:2}` and `{b:2,a:1}` map to the
+ * same string. Falls back to `String(value)` for non-JSONable inputs (which
+ * we don't expect in schema payloads but guard for safety).
  *
- * @param {*} _live   Current live value (unused; only the new value matters
- *                    when the engine emits a full-replacement edit).
- * @param {{op:string, path:string, newValue:*}} edit  The empty-path set edit.
- * @returns {*} A `structuredClone` of `edit.newValue`.
+ * @param {*} v
+ * @returns {string}
  */
-function applyEmptyPathSet(_live, edit) {
-    return structuredClone(edit.newValue);
+function canonicalize(v) {
+    if (v === null || typeof v !== 'object') {
+        try { return JSON.stringify(v); } catch { return String(v); }
+    }
+    if (Array.isArray(v)) {
+        return '[' + v.map(canonicalize).join(',') + ']';
+    }
+    const keys = Object.keys(v).sort();
+    return '{' + keys.map(k => JSON.stringify(k) + ':' + canonicalize(v[k])).join(',') + '}';
+}
+
+function isPlainObject(x) {
+    return typeof x === 'object' && x !== null && !Array.isArray(x);
+}
+
+/**
+ * 3-way array merge with id-key preference + multiset fallback.
+ *
+ * When array items are objects carrying an `id`, match by id so that an item
+ * present in `cursor` (mutated by a parallel edit) and present in `oldValue`/
+ * `newValue` (this edit's basis/target) is treated as the same logical entity
+ * and merged in place. When items are primitives or objects without an `id`,
+ * compute the multiset difference between oldValue and newValue:
+ *   - items in newValue but not oldValue → INSERTIONS, appended to cursor
+ *   - items in oldValue but not newValue → REMOVALS, filtered from cursor
+ *   - items present in both             → no-op for this edit
+ *
+ * Deduplicates insertions by canonical form so two parallel edits that both
+ * add the same item don't double-insert.
+ *
+ * @param {Array} cursor
+ * @param {Array} oldValue
+ * @param {Array} newValue
+ * @returns {Array}
+ */
+function mergeArrayAdditive(cursor, oldValue, newValue) {
+    const safeCursor = Array.isArray(cursor) ? cursor : [];
+    const safeOld = Array.isArray(oldValue) ? oldValue : [];
+    const safeNew = Array.isArray(newValue) ? newValue : [];
+
+    // id-keyed merge path: applies when EVERY item in both oldValue and
+    // newValue is an object carrying an id (i.e. the schema's node-type list
+    // and the per-type fields list, both of which the iteration tools key by id).
+    const oldHasIds = safeOld.every(it => isPlainObject(it) && typeof it.id === 'string' && it.id);
+    const newHasIds = safeNew.every(it => isPlainObject(it) && typeof it.id === 'string' && it.id);
+    if ((safeOld.length > 0 || safeNew.length > 0) && oldHasIds && newHasIds) {
+        const oldById = new Map(safeOld.map(it => [it.id, it]));
+        const newById = new Map(safeNew.map(it => [it.id, it]));
+        const cursorIds = new Set(
+            safeCursor
+                .filter(it => isPlainObject(it) && typeof it.id === 'string' && it.id)
+                .map(it => it.id),
+        );
+
+        // Walk cursor first (preserving its ordering) and merge per-id;
+        // drop entries the edit explicitly removed (in oldValue but not newValue).
+        const merged = [];
+        for (const item of safeCursor) {
+            if (!isPlainObject(item) || typeof item.id !== 'string' || !item.id) {
+                merged.push(structuredClone(item));
+                continue;
+            }
+            const inOld = oldById.has(item.id);
+            const inNew = newById.has(item.id);
+            if (inOld && !inNew) {
+                // This edit deleted this id. Drop from cursor.
+                continue;
+            }
+            if (inOld && inNew) {
+                // This edit may have changed inner fields. Recurse-merge.
+                merged.push(mergeValueAdditive(item, oldById.get(item.id), newById.get(item.id)));
+                continue;
+            }
+            // Not in this edit's basis or target → preserve cursor's item as-is.
+            merged.push(structuredClone(item));
+        }
+        // Append ids the edit ADDED that aren't already in cursor (a parallel
+        // edit may have already added the same id; don't duplicate).
+        for (const item of safeNew) {
+            if (!isPlainObject(item) || typeof item.id !== 'string' || !item.id) continue;
+            if (cursorIds.has(item.id)) continue;
+            if (oldById.has(item.id)) continue;
+            merged.push(structuredClone(item));
+        }
+        return merged;
+    }
+
+    // Multiset fallback: compute additions/removals by canonical-equality.
+    const oldSerialized = safeOld.map(canonicalize);
+    const newSerialized = safeNew.map(canonicalize);
+    const oldFreq = new Map();
+    const newFreq = new Map();
+    for (const s of oldSerialized) oldFreq.set(s, (oldFreq.get(s) || 0) + 1);
+    for (const s of newSerialized) newFreq.set(s, (newFreq.get(s) || 0) + 1);
+    const removalFreq = new Map();
+    for (const [s, n] of oldFreq) {
+        const diff = n - (newFreq.get(s) || 0);
+        if (diff > 0) removalFreq.set(s, diff);
+    }
+    const additions = [];
+    const cursorSerialized = safeCursor.map(canonicalize);
+    const cursorFreq = new Map();
+    for (const s of cursorSerialized) cursorFreq.set(s, (cursorFreq.get(s) || 0) + 1);
+    for (let i = 0; i < safeNew.length; i++) {
+        const s = newSerialized[i];
+        const added = (newFreq.get(s) || 0) - (oldFreq.get(s) || 0);
+        if (added <= 0) continue;
+        // Skip if cursor already has at least as many of this exact item as
+        // we'd add (parallel edit dedupe).
+        const have = cursorFreq.get(s) || 0;
+        if (have >= added) continue;
+        additions.push(safeNew[i]);
+        cursorFreq.set(s, have + 1);
+    }
+    const filteredCursor = [];
+    for (let i = 0; i < safeCursor.length; i++) {
+        const s = cursorSerialized[i];
+        const remaining = removalFreq.get(s) || 0;
+        if (remaining > 0) {
+            removalFreq.set(s, remaining - 1);
+            continue;
+        }
+        filteredCursor.push(structuredClone(safeCursor[i]));
+    }
+    for (const a of additions) filteredCursor.push(structuredClone(a));
+    return filteredCursor;
+}
+
+/**
+ * Recursively merge `newValue` into `cursor` using `oldValue` as the basis
+ * for "what this edit actually changed". Per-key for objects, per-item for
+ * arrays (see `mergeArrayAdditive`). Primitives and type-mismatched values
+ * fall through to a deep clone of `newValue` so the edit's intent wins.
+ *
+ * Used by `applyEmptyPathSet` for empty-path set edits so that 2+ parallel
+ * tool calls in one batch (each emitting a coarse full-schema replace) all
+ * land — instead of last-write-wins clobbering N-1 of them.
+ *
+ * @param {*} cursor    current live state at this subtree
+ * @param {*} oldValue  this edit's basis at this subtree
+ * @param {*} newValue  this edit's target at this subtree
+ * @returns {*}         merged value (always isolated from the inputs)
+ */
+function mergeValueAdditive(cursor, oldValue, newValue) {
+    // No-change branch: this edit didn't touch this subtree, so the cursor's
+    // value (potentially shaped by other parallel edits) stands.
+    try {
+        if (canonicalize(oldValue) === canonicalize(newValue)) {
+            return structuredClone(cursor);
+        }
+    } catch { /* fall through to per-shape merge */ }
+
+    // Arrays: id-keyed merge or multiset diff.
+    if (Array.isArray(oldValue) && Array.isArray(newValue)) {
+        return mergeArrayAdditive(Array.isArray(cursor) ? cursor : [], oldValue, newValue);
+    }
+
+    // Plain objects: per-key recurse.
+    if (isPlainObject(oldValue) && isPlainObject(newValue)) {
+        const out = isPlainObject(cursor) ? { ...cursor } : {};
+        const allKeys = new Set([
+            ...Object.keys(oldValue),
+            ...Object.keys(newValue),
+            ...(isPlainObject(cursor) ? Object.keys(cursor) : []),
+        ]);
+        for (const k of allKeys) {
+            const ov = oldValue[k];
+            const nv = newValue[k];
+            const cv = isPlainObject(cursor) ? cursor[k] : undefined;
+            const inOld = Object.prototype.hasOwnProperty.call(oldValue, k);
+            const inNew = Object.prototype.hasOwnProperty.call(newValue, k);
+            if (inOld && !inNew) {
+                // This edit deleted the key.
+                delete out[k];
+                continue;
+            }
+            if (!inOld && inNew) {
+                // Pure addition by this edit. Recurse so a parallel edit's
+                // value at this key (already on cursor) isn't clobbered.
+                out[k] = mergeValueAdditive(cv, undefined, nv);
+                continue;
+            }
+            if (inOld && inNew) {
+                out[k] = mergeValueAdditive(cv, ov, nv);
+                continue;
+            }
+            // Key only on cursor (no opinion from this edit). Preserve.
+            out[k] = structuredClone(cv);
+        }
+        return out;
+    }
+
+    // Primitive or type-mismatch: edit's newValue wins.
+    return structuredClone(newValue);
+}
+
+/**
+ * Apply a single coarse `{ op: 'set', path: '', oldValue, newValue }` edit.
+ *
+ * The shared `applyEdits` engine is lodash-backed and `lodash.set(target, '',
+ * value)` is a no-op, so sandbox-diff edits otherwise silently skip — leaving
+ * both the manual Apply button and composer-row auto-apply as UI-only with no
+ * commit. This helper applies the edit by recursively MERGING `newValue` into
+ * `live` using `oldValue` as the basis for "what this edit actually changed".
+ *
+ * Why a merge instead of a wholesale `structuredClone(newValue)` replace:
+ * when an LLM emits N tool calls in one round, each call's normalized edit
+ * carries the WHOLE schema as `newValue`. If the runner failed to chain the
+ * sandbox baseline across calls, each edit's `newValue` reflects only that
+ * call's slice of mutation against the same `oldValue`. A wholesale replace
+ * keeps only the LAST edit's slice and silently drops the prior N-1. The
+ * merge pattern composes them additively: each edit contributes its diff
+ * (oldValue → newValue) into the running cursor, so all N land.
+ *
+ * For chained edits (each oldValue = the previous newValue) the merge
+ * collapses to the same answer the legacy replace produced, since each
+ * edit's `newValue` is already the cumulative state.
+ *
+ * Backwards-compat: edits with no `oldValue` (legacy callers that only
+ * provide `newValue`) fall back to a deep clone of `newValue`, matching
+ * the pre-merge behavior.
+ *
+ * Pure function; caller owns the resulting object.
+ *
+ * @param {*} live    Current live value (cursor) the edit composes onto.
+ * @param {{op:string, path:string, oldValue?:*, newValue:*}} edit
+ * @returns {*} Merged result.
+ */
+function applyEmptyPathSet(live, edit) {
+    if (!edit || typeof edit !== 'object') {
+        return structuredClone(live);
+    }
+    if (!Object.prototype.hasOwnProperty.call(edit, 'oldValue')) {
+        return structuredClone(edit.newValue);
+    }
+    return mergeValueAdditive(live, edit.oldValue, edit.newValue);
 }
 
 function computeChangedPathSet(live, pendingEdits) {
@@ -1574,27 +1804,46 @@ export async function openSchemaIterationStudio(deps) {
         const editsBatch = state.pendingEdits.slice();
         // Sandbox-diff emits a coarse {op:'set', path:'', newValue:<whole schema>}
         // per tool call. lodash.set with empty path is a no-op, so the shared
-        // applyEdits engine silently skips them. Chain-apply each edit so that
-        // batches of 2+ empty-path sets (multiple mg_schema_* calls in one
-        // turn) land both — falling back to applyEdits for any non-empty-path
-        // edit keeps fine-grained ops working too. Accumulate per-edit
-        // outcomes so the apply truth (clean vs conflict vs already-done)
-        // can travel back to the AI through the synthetic feedback message.
+        // applyEdits engine silently skips empty-path edits — applyEmptyPathSet
+        // (a 3-way merge of cursor / oldValue / newValue) routes around that.
+        //
+        // Every-gate pattern (mirrors rollbackBatch's pre-flight): walk the
+        // batch building up a cumulative live cursor, recording per-edit
+        // outcomes (clean / conflict / already-done). If the walk itself
+        // throws — applyEdits dispatching to an unknown op, or a malformed
+        // edit shape — the entire batch is rejected and state.live is
+        // untouched, so partial application can never strand the schema in
+        // an inconsistent intermediate state.
         let liveCursor = state.live;
         const cleanEdits = [];
         const conflicts = [];
         const alreadyDone = [];
-        for (const edit of editsBatch) {
-            if (edit?.op === 'set' && edit?.path === '' && typeof edit?.newValue !== 'undefined') {
-                liveCursor = applyEmptyPathSet(liveCursor, edit);
-                cleanEdits.push(edit);
-            } else {
-                const result = applyEdits([edit], liveCursor);
-                liveCursor = result?.newLive ?? liveCursor;
-                if (Array.isArray(result?.clean)) cleanEdits.push(...result.clean);
-                if (Array.isArray(result?.conflicts)) conflicts.push(...result.conflicts);
-                if (Array.isArray(result?.alreadyDone)) alreadyDone.push(...result.alreadyDone);
+        try {
+            for (const edit of editsBatch) {
+                if (edit?.op === 'set' && edit?.path === '' && typeof edit?.newValue !== 'undefined') {
+                    liveCursor = applyEmptyPathSet(liveCursor, edit);
+                    cleanEdits.push(edit);
+                } else {
+                    const result = applyEdits([edit], liveCursor);
+                    liveCursor = result?.newLive ?? liveCursor;
+                    if (Array.isArray(result?.clean)) cleanEdits.push(...result.clean);
+                    if (Array.isArray(result?.conflicts)) conflicts.push(...result.conflicts);
+                    if (Array.isArray(result?.alreadyDone)) alreadyDone.push(...result.alreadyDone);
+                }
             }
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(`[${MODULE}] applyPendingEdits batch walk failed`, err);
+            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* toastr may be unavailable in tests */ }
+            state.session.messages.push({
+                id: makeMessageId(),
+                role: 'system',
+                content: tf('Failed to apply edits: ${0}', String(err?.message || err)),
+                at: Date.now(),
+            });
+            await persistSession();
+            if (!skipRender) await render();
+            return { proposed: editsBatch.length, applied: 0, conflicts, alreadyDone, batchRejected: true };
         }
         const appliedCount = cleanEdits.length;
 
