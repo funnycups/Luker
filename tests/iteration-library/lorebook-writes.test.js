@@ -2,19 +2,36 @@
  * Unit tests for iteration-library/tools/lorebook-writes.js — the shared
  * module that exposes lorebook *write* tools to iter popups.
  *
- * Mirrors tests/iteration-library/runner.test.js in style: real module
- * imports (no jest.unstable_mockModule needed) since the writes module is
- * plugin-agnostic and only translates names + forwards to an injected
- * dispatch function.
+ * The module is plugin-agnostic: it owns the proposal computation
+ * (`runLorebookWriteTool` — returns {before, after, kind} without touching
+ * disk) and the apply-time commit (`applyLorebookProposal` — re-derives
+ * from args against the entry's CURRENT on-disk state and writes once).
+ * Both paths only need a SillyTavern-shaped context (loadWorldInfo +
+ * saveWorldInfo); no cross-plugin dispatcher.
  */
 
 import { describe, test, expect, jest } from '@jest/globals';
 import {
     LOREBOOK_WRITE_TOOL_DEFS,
-    LOREBOOK_WRITE_TOOL_LEGACY_NAMES,
+    LOREBOOK_WRITE_TOOL_NAMES,
     isLorebookWriteTool,
     runLorebookWriteTool,
+    applyLorebookProposal,
+    applyLorebookCommit,
 } from '../../public/scripts/iteration-library/tools/lorebook-writes.js';
+
+function makeBook(entries) {
+    return { entries: structuredClone(entries) };
+}
+
+function makeContext(books) {
+    const state = structuredClone(books);
+    return {
+        loadWorldInfo: jest.fn(async (name) => state[name] ?? null),
+        saveWorldInfo: jest.fn(async (name, data) => { state[name] = data; }),
+        _state: state,
+    };
+}
 
 describe('LOREBOOK_WRITE_TOOL_DEFS — public surface', () => {
     test('exposes exactly the two write tools by short name', () => {
@@ -36,8 +53,6 @@ describe('LOREBOOK_WRITE_TOOL_DEFS — public surface', () => {
     test('lorebook_update_entry requires book_name, uid, patch', () => {
         const def = LOREBOOK_WRITE_TOOL_DEFS.find(d => d.function.name === 'lorebook_update_entry');
         expect([...def.function.parameters.required].sort()).toEqual(['book_name', 'patch', 'uid']);
-        // patch is an open object so the model can pass any subset of entry
-        // fields (content, disable, key, comment, …).
         expect(def.function.parameters.properties.patch.type).toBe('object');
         expect(def.function.parameters.properties.patch.additionalProperties).toBe(true);
     });
@@ -46,19 +61,13 @@ describe('LOREBOOK_WRITE_TOOL_DEFS — public surface', () => {
         const def = LOREBOOK_WRITE_TOOL_DEFS.find(d => d.function.name === 'lorebook_str_replace_in_entry');
         expect([...def.function.parameters.required].sort()).toEqual(['book_name', 'newString', 'oldString', 'uid']);
     });
-});
 
-describe('LOREBOOK_WRITE_TOOL_LEGACY_NAMES — short → legacy wire names', () => {
-    test('maps lorebook_update_entry → luker_card_update_lorebook_entry', () => {
-        expect(LOREBOOK_WRITE_TOOL_LEGACY_NAMES.lorebook_update_entry).toBe('luker_card_update_lorebook_entry');
-    });
-
-    test('maps lorebook_str_replace_in_entry → luker_card_str_replace_in_lorebook_entry', () => {
-        expect(LOREBOOK_WRITE_TOOL_LEGACY_NAMES.lorebook_str_replace_in_entry).toBe('luker_card_str_replace_in_lorebook_entry');
-    });
-
-    test('is frozen so callers cannot mutate the mapping at runtime', () => {
-        expect(Object.isFrozen(LOREBOOK_WRITE_TOOL_LEGACY_NAMES)).toBe(true);
+    test('LOREBOOK_WRITE_TOOL_NAMES is frozen and matches the defs', () => {
+        expect(Object.isFrozen(LOREBOOK_WRITE_TOOL_NAMES)).toBe(true);
+        expect([...LOREBOOK_WRITE_TOOL_NAMES].sort()).toEqual([
+            'lorebook_str_replace_in_entry',
+            'lorebook_update_entry',
+        ]);
     });
 });
 
@@ -78,98 +87,120 @@ describe('isLorebookWriteTool — predicate', () => {
     });
 });
 
-describe('runLorebookWriteTool — dispatch behaviour', () => {
-    test('routes lorebook_update_entry to its legacy wire name with args preserved', async () => {
-        const dispatch = jest.fn().mockResolvedValue({ ok: true });
-        await runLorebookWriteTool(
-            {
-                id: 't1',
-                name: 'lorebook_update_entry',
-                args: { book_name: 'Book A', uid: 5, patch: { disable: true } },
-            },
-            { dispatch, helperApis: [{ tag: 'apiSentinel' }] },
-        );
-        expect(dispatch).toHaveBeenCalledTimes(1);
-        const [legacyCall, helperApis] = dispatch.mock.calls[0];
-        expect(legacyCall.name).toBe('luker_card_update_lorebook_entry');
-        expect(legacyCall.id).toBe('t1');
-        expect(legacyCall.args).toEqual({ book_name: 'Book A', uid: 5, patch: { disable: true } });
-        expect(helperApis).toEqual([{ tag: 'apiSentinel' }]);
-    });
-
-    test('routes lorebook_str_replace_in_entry to its legacy wire name', async () => {
-        const dispatch = jest.fn().mockResolvedValue('done');
-        await runLorebookWriteTool(
-            {
-                id: 't2',
-                name: 'lorebook_str_replace_in_entry',
-                args: { book_name: 'B', uid: 7, oldString: 'foo', newString: 'bar' },
-            },
-            { dispatch },
-        );
-        expect(dispatch.mock.calls[0][0].name).toBe('luker_card_str_replace_in_lorebook_entry');
-    });
-
-    test('unwraps { result } envelope when the dispatcher returns one', async () => {
-        const dispatch = jest.fn().mockResolvedValue({ result: { ok: true, uid: 5 } });
+describe('runLorebookWriteTool — proposal mode (no disk writes)', () => {
+    test('lorebook_update_entry returns {before, after, kind:update}', async () => {
+        const ctx = makeContext({
+            'Book A': makeBook({ 5: { uid: 5, content: 'old', disable: false, comment: 'C' } }),
+        });
         const out = await runLorebookWriteTool(
-            { id: 'x', name: 'lorebook_update_entry', args: { book_name: 'B', uid: 5, patch: { disable: true } } },
-            { dispatch },
-        );
-        expect(out).toEqual({ ok: true, result: { ok: true, uid: 5 } });
-    });
-
-    test('passes raw value through when dispatcher returns a plain payload (no `result` key)', async () => {
-        const dispatch = jest.fn().mockResolvedValue({ ok: true, uid: 5 });
-        const out = await runLorebookWriteTool(
-            { id: 'x', name: 'lorebook_update_entry', args: { book_name: 'B', uid: 5, patch: { disable: true } } },
-            { dispatch },
+            { id: 't1', name: 'lorebook_update_entry', args: { book_name: 'Book A', uid: 5, patch: { disable: true } } },
+            { context: ctx },
         );
         expect(out.ok).toBe(true);
-        expect(out.result).toEqual({ ok: true, uid: 5 });
+        expect(out.result.kind).toBe('update');
+        expect(out.result.before.disable).toBe(false);
+        expect(out.result.after.disable).toBe(true);
+        // proposal mode never writes
+        expect(ctx.saveWorldInfo).not.toHaveBeenCalled();
     });
 
-    test('captures dispatcher errors as { ok: false, error } rather than throwing', async () => {
-        const dispatch = jest.fn().mockRejectedValue(new Error('boom'));
+    test('lorebook_str_replace_in_entry returns {before, after, kind:str_replace}', async () => {
+        const ctx = makeContext({
+            'B': makeBook({ 7: { uid: 7, content: 'hello world' } }),
+        });
         const out = await runLorebookWriteTool(
-            { id: 'x', name: 'lorebook_update_entry', args: { book_name: 'B', uid: 5, patch: { disable: true } } },
-            { dispatch },
+            { id: 't2', name: 'lorebook_str_replace_in_entry', args: { book_name: 'B', uid: 7, oldString: 'hello', newString: 'hi' } },
+            { context: ctx },
         );
-        expect(out).toEqual({ ok: false, error: 'boom' });
+        expect(out.ok).toBe(true);
+        expect(out.result.kind).toBe('str_replace');
+        expect(out.result.after.content).toBe('hi world');
+        expect(ctx.saveWorldInfo).not.toHaveBeenCalled();
     });
 
-    test('rejects non-write tool names without invoking dispatch', async () => {
-        const dispatch = jest.fn();
+    test('rejects non-write tool names without touching context', async () => {
+        const ctx = makeContext({});
         const out = await runLorebookWriteTool(
             { name: 'lorebook_get', args: {} },
-            { dispatch },
+            { context: ctx },
         );
         expect(out.ok).toBe(false);
         expect(out.error).toMatch(/Not a lorebook write tool/);
-        expect(dispatch).not.toHaveBeenCalled();
+        expect(ctx.loadWorldInfo).not.toHaveBeenCalled();
     });
 
-    test('returns an error when dispatch is missing', async () => {
+    test('returns an error when context is missing', async () => {
+        const out = await runLorebookWriteTool({ name: 'lorebook_update_entry', args: {} });
+        expect(out.ok).toBe(false);
+        expect(out.error).toMatch(/context is required/);
+    });
+
+    test('captures throw paths as { ok: false, error }', async () => {
+        const ctx = makeContext({});
         const out = await runLorebookWriteTool(
-            { name: 'lorebook_update_entry', args: {} },
+            { name: 'lorebook_update_entry', args: { book_name: 'Missing', uid: 0, patch: { x: 1 } } },
+            { context: ctx },
         );
         expect(out.ok).toBe(false);
-        expect(out.error).toMatch(/dispatch must be a function/);
+        expect(out.error).toMatch(/not found/);
     });
 
-    test('normalizes args to {} when the caller omits or passes a non-object', async () => {
-        const dispatch = jest.fn().mockResolvedValue({});
-        await runLorebookWriteTool(
-            { name: 'lorebook_update_entry' },
-            { dispatch },
-        );
-        expect(dispatch.mock.calls[0][0].args).toEqual({});
+    test('normalizes args to {} when caller omits or passes a non-object', async () => {
+        const ctx = makeContext({});
+        const out = await runLorebookWriteTool({ name: 'lorebook_update_entry' }, { context: ctx });
+        // book_name missing → throws inside computeUpdate → captured as error
+        expect(out.ok).toBe(false);
+        expect(out.error).toMatch(/book_name/);
+    });
+});
 
-        dispatch.mockClear();
-        await runLorebookWriteTool(
-            { name: 'lorebook_update_entry', args: 'not-an-object' },
-            { dispatch },
-        );
-        expect(dispatch.mock.calls[0][0].args).toEqual({});
+describe('applyLorebookProposal — apply-time commit re-derives from args', () => {
+    test('update kind: writes once with the patch applied to current on-disk state', async () => {
+        const ctx = makeContext({
+            'B': makeBook({ 5: { uid: 5, content: 'live', disable: false } }),
+        });
+        const res = await applyLorebookProposal(ctx, {
+            kind: 'update',
+            args: { book_name: 'B', uid: 5, patch: { disable: true } },
+        });
+        expect(res).toEqual({ ok: true, book_name: 'B', uid: 5 });
+        expect(ctx.saveWorldInfo).toHaveBeenCalledTimes(1);
+        expect(ctx._state['B'].entries[5].disable).toBe(true);
+    });
+
+    test('str_replace kind: writes new content derived from current entry', async () => {
+        const ctx = makeContext({
+            'B': makeBook({ 7: { uid: 7, content: 'foo bar baz' } }),
+        });
+        const res = await applyLorebookProposal(ctx, {
+            kind: 'str_replace',
+            args: { book_name: 'B', uid: 7, oldString: 'bar', newString: 'qux' },
+        });
+        expect(res.ok).toBe(true);
+        expect(ctx._state['B'].entries[7].content).toBe('foo qux baz');
+    });
+
+    test('rejects unknown kind', async () => {
+        const ctx = makeContext({});
+        await expect(applyLorebookProposal(ctx, { kind: 'wat', args: {} })).rejects.toThrow(/unknown kind/);
+    });
+});
+
+describe('applyLorebookCommit — direct commit with a pre-computed after', () => {
+    test('merges after over the live entry, preserving uid as the address', async () => {
+        const ctx = makeContext({
+            'B': makeBook({ 5: { uid: 5, content: 'old', _bookkeeping: 'keep-me' } }),
+        });
+        await applyLorebookCommit(ctx, { book_name: 'B', uid: 5, after: { content: 'new', uid: 999 } });
+        expect(ctx._state['B'].entries[5].content).toBe('new');
+        // uid is the address — apply must NOT honor a uid in after.
+        expect(ctx._state['B'].entries[5].uid).toBe(5);
+        // unrelated bookkeeping fields are preserved (Object.assign merge).
+        expect(ctx._state['B'].entries[5]._bookkeeping).toBe('keep-me');
+    });
+
+    test('throws on missing book / uid', async () => {
+        const ctx = makeContext({});
+        await expect(applyLorebookCommit(ctx, { book_name: '', uid: 0, after: {} })).rejects.toThrow(/book_name/);
     });
 });

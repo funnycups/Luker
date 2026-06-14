@@ -79,31 +79,16 @@ import { MG_SCHEMA_TOOL_DISPLAY } from './tool-display.js';
 import { buildSystemPrompt, DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT } from './system-prompt.js';
 import { createMgSchemaSessionStore, makeMessageId, normalizeMessageShape } from './session-store.js';
 
-// Character-editor-assistant publishes its helper-tool surface via
-// `registerExtensionApi('character-editor-assistant', {...})`. Resolved
-// per-call so a missing CEA install fails when the schema iteration
-// popup is opened, not when this module loads.
-function getCea() {
-    const api = __ctx.getExtensionApi('character-editor-assistant');
-    if (!api) {
-        throw new Error('Memory-graph schema iteration requires the character-editor-assistant extension to be installed and enabled.');
-    }
-    return api;
-}
-
 const MODULE = 'mg-schema-iteration';
 const STYLESHEET_ID = 'mg_schema_it_studio_stylesheet';
 
-// Shared lorebook read tools (also used by orch iter-studio). The
-// dispatcher is CEA-owned and injected per-call so the shared module
-// stays plugin-agnostic.
+// Shared lorebook read tools (also used by orch iter-studio + CEA
+// editor). The shared module is plugin-agnostic — disabling CEA does not
+// break mg schema iteration.
 const { isLorebookReadTool, LOREBOOK_READ_TOOL_DEFS, runLorebookReadTool: runLorebookReadToolShared } = ITER_TOOLS.lorebookReads;
 
-async function runLorebookReadTool(call, helperApis = []) {
-    return runLorebookReadToolShared(call, {
-        dispatch: getCea().runCharacterEditorHelperToolCall,
-        helperApis,
-    });
+async function runLorebookReadTool(call, avatar = '') {
+    return runLorebookReadToolShared(call, { context: __ctx, avatar });
 }
 const STYLESHEET_HREF = '/scripts/extensions/memory-graph/schema-iteration/studio.css';
 
@@ -1377,20 +1362,20 @@ export async function openSchemaIterationStudio(deps) {
 
         // Execute read tools synchronously. Each call gets a stable id so
         // the persisted tool_result can be matched back to it during chat
-        // rendering AND during the next round's taskMessages replay. The
-        // helper-tool dispatcher is per-character — `helperApis` is empty
-        // outside character scope, which `runLorebookReadTool` surfaces as
-        // an error result the AI can react to.
-        const helperApisForReads = (turnSnapshot.helperSession?.scope === 'character' && turnSnapshot.avatar)
-            ? getCea().buildCharacterEditorHelperApis(context, { avatar: turnSnapshot.avatar })
-            : [];
+        // rendering AND during the next round's taskMessages replay.
+        // `world_book_list` needs an avatar to surface character-bound
+        // books; outside character scope the avatar is an empty string and
+        // the tool falls back to listing chat-bound + globally-active books.
+        const avatarForReads = (turnSnapshot.helperSession?.scope === 'character' && turnSnapshot.avatar)
+            ? String(turnSnapshot.avatar)
+            : '';
         const persistedToolResults = [];
         for (const call of readToolCalls) {
             const callId = String(call?.id || `read_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
             let resultPayload;
             let statusLabel = 'ok';
             try {
-                const out = await runLorebookReadTool({ id: callId, name: call?.name, args: call?.args }, helperApisForReads);
+                const out = await runLorebookReadTool({ id: callId, name: call?.name, args: call?.args }, avatarForReads);
                 if (out?.ok) {
                     resultPayload = out.result;
                 } else {

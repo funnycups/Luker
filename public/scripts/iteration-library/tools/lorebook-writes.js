@@ -2,43 +2,50 @@
 // Copyright (C) 2026 FunnyCups
 
 /**
- * Lorebook write tools shared by iter popups. Mirror of `lorebook-reads.js`:
- * short name → legacy `luker_card_*` wire name, dispatched through a
- * popup-injected runner. The plugin-side handlers (in
- * `character-editor-assistant/main.js`) ultimately reach
- * `CardApp.ctx.updateWorldBookEntry`.
+ * Lorebook write tools shared by iter popups. Mirror of `lorebook-reads.js`.
  *
- * Why writes are character-scoped: the legacy helper-tool dispatcher binds
- * to one avatar, so a popup that wants the AI to edit a card's lorebook
- * must already know which character is being designed. Popups in global
- * scope SHOULD NOT splice these into their catalog.
+ * Architecture: plugin-agnostic. Two-phase contract:
+ *
+ *   1. `runLorebookWriteTool(call, { context })` — proposal phase. Returns
+ *      `{ before, after, kind, ... }` WITHOUT touching disk. Popups capture
+ *      the result as a pending diff card the user reviews.
+ *
+ *   2. `applyLorebookProposal(context, { kind, args })` — apply phase.
+ *      Re-derives `after` from `args` against the entry's CURRENT on-disk
+ *      state and writes once. Re-derivation lets multiple approved
+ *      proposals chain correctly and surfaces concurrent drift as a fresh
+ *      validation error rather than clobbering.
+ *
+ * Why writes are character-scoped: the popups that invoke writes (e.g.
+ * orchestrator iter-studio) shape the iteration around one card. Global
+ * popups SHOULD NOT splice these into their catalog. Nothing in this
+ * module enforces avatar scope — that's the popup's call.
  *
  * Tools:
  *   - `lorebook_update_entry(book_name, uid, patch)` — shallow merge.
- *     Use it to toggle `disable`, rewrite `content` wholesale, or adjust
- *     keys / activation flags.
- *   - `lorebook_str_replace_in_entry(book_name, uid, oldString, newString, replaceAll?)` —
- *     surgical text edit. Cheaper than re-sending the whole content. By
- *     default `oldString` must occur exactly once; pass `replaceAll: true`
- *     to replace every occurrence.
+ *   - `lorebook_str_replace_in_entry(book_name, uid, oldString, newString, replaceAll?)`
  */
 
-export const LOREBOOK_WRITE_TOOL_LEGACY_NAMES = Object.freeze({
-    lorebook_update_entry: 'luker_card_update_lorebook_entry',
-    lorebook_str_replace_in_entry: 'luker_card_str_replace_in_lorebook_entry',
+import { lorebookHelpers as H } from './_lorebook-helpers.js';
+
+const TOOL_NAMES = Object.freeze({
+    LOREBOOK_UPDATE_ENTRY: 'lorebook_update_entry',
+    LOREBOOK_STR_REPLACE_IN_ENTRY: 'lorebook_str_replace_in_entry',
 });
 
-const LOREBOOK_WRITE_TOOL_NAME_SET = new Set(Object.keys(LOREBOOK_WRITE_TOOL_LEGACY_NAMES));
+export const LOREBOOK_WRITE_TOOL_NAMES = Object.freeze(Object.values(TOOL_NAMES));
+
+const NAME_SET = new Set(LOREBOOK_WRITE_TOOL_NAMES);
 
 export function isLorebookWriteTool(name) {
-    return LOREBOOK_WRITE_TOOL_NAME_SET.has(String(name || ''));
+    return NAME_SET.has(String(name || ''));
 }
 
 export const LOREBOOK_WRITE_TOOL_DEFS = [
     {
         type: 'function',
         function: {
-            name: 'lorebook_update_entry',
+            name: TOOL_NAMES.LOREBOOK_UPDATE_ENTRY,
             description: 'Update fields of one world-book entry by uid (shallow merge). Common patch fields: `content` (string), `disable` (boolean — true hides the entry from activation), `comment` (string label shown in the UI), `key` / `keysecondary` (string arrays), `constant` (boolean — always-active), `order` (integer). The uid itself cannot be changed. Call lorebook_get first to read the current entry before patching unless you are toggling `disable`.',
             parameters: {
                 type: 'object',
@@ -59,7 +66,7 @@ export const LOREBOOK_WRITE_TOOL_DEFS = [
     {
         type: 'function',
         function: {
-            name: 'lorebook_str_replace_in_entry',
+            name: TOOL_NAMES.LOREBOOK_STR_REPLACE_IN_ENTRY,
             description: 'Replace a substring inside an entry\'s `content` field. By default `oldString` must appear exactly once — fails otherwise so accidental multi-site edits are not possible; widen the substring with surrounding context until it is unique. Pass `replaceAll: true` to replace every occurrence. Prefer this over lorebook_update_entry when you only need to tweak a few sentences of a long entry.',
             parameters: {
                 type: 'object',
@@ -77,38 +84,169 @@ export const LOREBOOK_WRITE_TOOL_DEFS = [
     },
 ];
 
+async function computeUpdate(context, args) {
+    const bookName = String(args?.book_name || '').trim();
+    if (!bookName) throw new Error('lorebook_update_entry requires book_name.');
+    const uid = H.asFiniteInteger(args?.uid, null);
+    if (!Number.isInteger(uid) || uid < 0) {
+        throw new Error('lorebook_update_entry requires a non-negative integer uid.');
+    }
+    const patch = args?.patch;
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+        throw new Error('lorebook_update_entry requires a patch object.');
+    }
+    const patchKeys = Object.keys(patch);
+    if (patchKeys.length === 0) {
+        throw new Error('lorebook_update_entry patch must contain at least one field.');
+    }
+    const data = await context.loadWorldInfo(bookName);
+    if (!data) throw new Error(`World book "${bookName}" not found.`);
+    const entry = data.entries?.[uid];
+    if (!entry) throw new Error(`Entry uid ${uid} not found in "${bookName}".`);
+    const before = structuredClone(entry);
+    const after = structuredClone(entry);
+    Object.assign(after, patch);
+    after.uid = uid;
+    return {
+        ok: true,
+        book_name: bookName,
+        uid,
+        kind: 'update',
+        before,
+        after,
+        updated_fields: patchKeys.filter(k => k !== 'uid'),
+    };
+}
+
+async function computeStrReplace(context, args) {
+    const bookName = String(args?.book_name || '').trim();
+    if (!bookName) throw new Error('lorebook_str_replace_in_entry requires book_name.');
+    const uid = H.asFiniteInteger(args?.uid, null);
+    if (!Number.isInteger(uid) || uid < 0) {
+        throw new Error('lorebook_str_replace_in_entry requires a non-negative integer uid.');
+    }
+    if (typeof args?.oldString !== 'string' || args.oldString.length === 0) {
+        throw new Error('lorebook_str_replace_in_entry requires a non-empty oldString.');
+    }
+    if (typeof args?.newString !== 'string') {
+        throw new Error('lorebook_str_replace_in_entry requires newString (use an empty string to delete).');
+    }
+    const replaceAll = Boolean(args?.replaceAll);
+    const data = await context.loadWorldInfo(bookName);
+    if (!data) throw new Error(`World book "${bookName}" not found.`);
+    const entry = data.entries?.[uid];
+    if (!entry) throw new Error(`Entry uid ${uid} not found in "${bookName}".`);
+    const content = String(entry.content ?? '');
+    const firstIdx = content.indexOf(args.oldString);
+    if (firstIdx === -1) {
+        throw new Error(`oldString not found in entry ${uid} of "${bookName}".`);
+    }
+    if (!replaceAll && content.indexOf(args.oldString, firstIdx + args.oldString.length) !== -1) {
+        throw new Error(`oldString occurs more than once in entry ${uid} of "${bookName}"; narrow it to a unique substring or pass replaceAll: true.`);
+    }
+    const before = structuredClone(entry);
+    const after = structuredClone(entry);
+    const nextContent = replaceAll
+        ? content.split(args.oldString).join(args.newString)
+        : content.slice(0, firstIdx) + args.newString + content.slice(firstIdx + args.oldString.length);
+    after.content = nextContent;
+    after.uid = uid;
+    return {
+        ok: true,
+        book_name: bookName,
+        uid,
+        kind: 'str_replace',
+        before,
+        after,
+        replaced_chars: args.oldString.length,
+        new_chars: args.newString.length,
+    };
+}
+
 /**
- * Execute one lorebook write tool. Translates the short canonical name to
- * the legacy `luker_card_*` wire name and dispatches through the supplied
- * helper-tool runner. The dispatcher itself is plugin-owned (lives in
- * `character-editor-assistant/main.js#runCharacterEditorHelperToolCall`)
- * and is injected via `dispatch` so this module stays plugin-agnostic.
+ * Commit an approved lorebook-edit proposal to disk. Loads the book, copies
+ * the supplied `after` entry into `data.entries[uid]` (preserving uid as the
+ * address), and saves. Iter-studio's Apply path calls this once per approved
+ * pending edit, sequentially.
+ */
+export async function applyLorebookCommit(context, { book_name, uid, after } = {}) {
+    const bookName = String(book_name || '').trim();
+    if (!bookName) throw new Error('applyLorebookCommit: book_name is required.');
+    if (!Number.isInteger(uid) || uid < 0) {
+        throw new Error('applyLorebookCommit: uid must be a non-negative integer.');
+    }
+    if (!after || typeof after !== 'object' || Array.isArray(after)) {
+        throw new Error('applyLorebookCommit: after must be an object.');
+    }
+    const data = await context.loadWorldInfo(bookName);
+    if (!data) throw new Error(`World book "${bookName}" not found.`);
+    const entry = data.entries?.[uid];
+    if (!entry) throw new Error(`Entry uid ${uid} not found in "${bookName}".`);
+    Object.assign(entry, after);
+    entry.uid = uid;
+    await context.saveWorldInfo(bookName, data, true, { refreshEditor: true });
+    return { ok: true, book_name: bookName, uid };
+}
+
+/**
+ * Apply-time commit that re-derives the after-image from the proposal's
+ * original tool args against the entry's CURRENT on-disk state, then
+ * writes once. The popup approval flow calls this so:
+ *
+ *   1. Multiple approved proposals on the same book#uid chain correctly
+ *      (B lands on top of A's already-committed mutation rather than B's
+ *      stale `after` snapshot clobbering A's change).
+ *   2. Concurrent drift (a parallel session edited the book between
+ *      proposal time and Apply time) surfaces as a fresh validation
+ *      error — for `str_replace`, the unique-match guard fires; for
+ *      `update`, the shallow merge lands on the current content rather
+ *      than the proposal author's expectation.
+ */
+export async function applyLorebookProposal(context, { kind, args } = {}) {
+    const safeArgs = (args && typeof args === 'object') ? args : {};
+    let computed;
+    if (kind === 'update') {
+        computed = await computeUpdate(context, safeArgs);
+    } else if (kind === 'str_replace') {
+        computed = await computeStrReplace(context, safeArgs);
+    } else {
+        throw new Error(`applyLorebookProposal: unknown kind "${kind}"`);
+    }
+    return applyLorebookCommit(context, {
+        book_name: computed.book_name,
+        uid: computed.uid,
+        after: computed.after,
+    });
+}
+
+/**
+ * Execute one lorebook write tool. Plugin-agnostic — proposal mode only;
+ * returns the {before, after, ...} envelope without touching disk. Commit
+ * via `applyLorebookProposal` after user approval.
  *
  * @param {object} call — `{ id, name, args }` from the runner
  * @param {object} ctx
- * @param {(legacyCall: object, helperApis: any) => Promise<any>} ctx.dispatch
- * @param {any[]} [ctx.helperApis] — per-character helper APIs (avatar-scoped)
+ * @param {object} ctx.context — SillyTavern context (provides loadWorldInfo)
  * @returns {Promise<{ ok: true, result: any } | { ok: false, error: string }>}
  */
-export async function runLorebookWriteTool(call, { dispatch, helperApis = [] } = {}) {
-    const shortName = String(call?.name || '');
-    if (!isLorebookWriteTool(shortName)) {
-        return { ok: false, error: `Not a lorebook write tool: ${shortName || '(empty)'}` };
+export async function runLorebookWriteTool(call, { context } = {}) {
+    const name = String(call?.name || '');
+    if (!isLorebookWriteTool(name)) {
+        return { ok: false, error: `Not a lorebook write tool: ${name || '(empty)'}` };
     }
-    if (typeof dispatch !== 'function') {
-        return { ok: false, error: 'runLorebookWriteTool: ctx.dispatch must be a function' };
+    if (!context || typeof context !== 'object') {
+        return { ok: false, error: 'runLorebookWriteTool: ctx.context is required' };
     }
-    const legacyName = LOREBOOK_WRITE_TOOL_LEGACY_NAMES[shortName];
-    const legacyCall = {
-        id: call?.id,
-        name: legacyName,
-        args: call?.args && typeof call.args === 'object' ? call.args : {},
-    };
+    const args = call?.args && typeof call.args === 'object' ? call.args : {};
     try {
-        const raw = await dispatch(legacyCall, helperApis);
-        const result = raw && typeof raw === 'object' && Object.hasOwn(raw, 'result')
-            ? raw.result
-            : raw;
+        let result;
+        if (name === TOOL_NAMES.LOREBOOK_UPDATE_ENTRY) {
+            result = await computeUpdate(context, args);
+        } else if (name === TOOL_NAMES.LOREBOOK_STR_REPLACE_IN_ENTRY) {
+            result = await computeStrReplace(context, args);
+        } else {
+            return { ok: false, error: `Unhandled lorebook write tool: ${name}` };
+        }
         return { ok: true, result };
     } catch (err) {
         return { ok: false, error: String(err?.message || err || 'unknown error') };

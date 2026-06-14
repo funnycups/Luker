@@ -97,17 +97,11 @@ import {
     normalizeMessageShape,
 } from './session-store.js';
 import { ORCH_TOOL_DISPLAY } from './tool-display.js';
-// Character-editor-assistant publishes its helper-tool surface via
-// `registerExtensionApi('character-editor-assistant', {...})`. Resolved
-// per-call so a missing CEA install fails at the iter-studio entry
-// rather than at module load.
-function getCea() {
-    const api = __ctx.getExtensionApi('character-editor-assistant');
-    if (!api) {
-        throw new Error('Orchestrator iter-studio requires the character-editor-assistant extension to be installed and enabled.');
-    }
-    return api;
-}
+// Lorebook read/write tools and the apply-proposal commit are
+// plugin-agnostic and live in `iteration-library/tools/`. Orchestrator
+// iter-studio no longer needs `getExtensionApi('character-editor-assistant')`
+// — disabling CEA does not break orch iter-studio.
+import { applyLorebookProposal } from '../../../iteration-library/tools/lorebook-writes.js';
 // Plan 2 Unit 7: iter-studio skill management catalog. Spliced into the
 // tool catalog alongside CONTROL_TOOL_DEFS + lorebook reads/writes, routed
 // through the inline-executed path. 14 tools only touch server state and
@@ -139,9 +133,9 @@ const STYLESHEET_HREF = '/scripts/extensions/orchestrator/iter-studio/studio.css
 // the iteration AI the same lorebook visibility the CEA editor has.
 //
 // Implementation: shared with sibling iter popups (memory-graph schema
-// iter) via `iteration-library/tools/lorebook-reads.js`. The legacy
-// dispatcher (`runCharacterEditorHelperToolCall`) is injected per-call
-// so the shared module stays plugin-agnostic.
+// iter, CEA editor) via `iteration-library/tools/lorebook-reads.js` and
+// `lorebook-writes.js`. Plugin-agnostic — only needs the SillyTavern
+// context + the active avatar.
 //
 // IMPORTANT: results are read-only and informational. They are NOT
 // duplicated into any generated node's systemPrompt — the runtime already
@@ -184,31 +178,22 @@ function isInlineExecutedTool(name) {
 }
 
 /**
- * Execute one lorebook read tool. Thin wrapper that injects the CEA
- * dispatcher into the shared `iteration-library/tools/lorebook-reads.js`
+ * Execute one lorebook read tool. Thin wrapper that threads the SillyTavern
+ * context + avatar through the shared `iteration-library/tools/lorebook-reads.js`
  * implementation. Kept as a local helper so existing call sites that pass
- * `(call, helperApis)` continue to work without restructuring.
+ * `(call, avatar)` continue to work without restructuring.
  */
-async function runLorebookReadTool(call, helperApis = []) {
-    return runLorebookReadToolShared(call, {
-        dispatch: getCea().runCharacterEditorHelperToolCall,
-        helperApis,
-    });
+async function runLorebookReadTool(call, avatar = '') {
+    return runLorebookReadToolShared(call, { context: __ctx, avatar });
 }
 
 /**
- * Execute one lorebook write tool. Mirrors runLorebookReadTool: injects
- * the same CEA dispatcher into the shared
- * `iteration-library/tools/lorebook-writes.js` implementation. The
- * dispatcher routes the legacy `luker_card_update_lorebook_entry` /
- * `luker_card_str_replace_in_lorebook_entry` wire names to the helper
- * apis registered in buildCharacterEditorHelperApis.
+ * Execute one lorebook write tool. Mirrors runLorebookReadTool. Proposal
+ * mode only — returns `{before, after, ...}` without touching disk; commit
+ * via `applyLorebookProposal` after user approval.
  */
-async function runLorebookWriteTool(call, helperApis = []) {
-    return runLorebookWriteToolShared(call, {
-        dispatch: getCea().runCharacterEditorHelperToolCall,
-        helperApis,
-    });
+async function runLorebookWriteTool(call) {
+    return runLorebookWriteToolShared(call, { context: __ctx });
 }
 
 const CONTROL_TOOL_NAMES = Object.freeze({
@@ -1031,7 +1016,7 @@ export async function openOrchestratorIterationStudio(deps) {
         // bookName, uid, before, after, status: 'pending'|'approved'|'rejected',
         // sourceCallId, createdAt }. Reset on session load and on Apply.
         // Approved entries commit at Apply time via
-        // applyCharacterEditorLorebookCommit; rejected entries are discarded.
+        // applyLorebookProposal; rejected entries are discarded.
         pendingLorebookEdits: [],
         isBusy: false,
         aborting: false,
@@ -1496,7 +1481,7 @@ export async function openOrchestratorIterationStudio(deps) {
     // {before, after} envelope into state.pendingLorebookEdits and renders
     // it inline below the assistant message that proposed it. The user
     // approves/rejects per card; only approved cards commit at Apply time
-    // via applyCharacterEditorLorebookCommit. This mirrors the orch
+    // via applyLorebookProposal. This mirrors the orch
     // profile sandbox-diff flow but targets external (on-disk) world-info
     // state — the diff card shows full before/after so the user can judge
     // the impact before authorizing the disk write.
@@ -2276,15 +2261,11 @@ export async function openOrchestratorIterationStudio(deps) {
         //     is unavailable, fall back to a `{simulated: true, message}`
         //     placeholder so the user still sees a chip with a result
         //     block — better than the previous silent drop.
-        // Lorebook dispatcher is constructed in BOTH scopes — the
-        // underlying helper APIs load books by `book_name` and rely on the
-        // avatar only to scope the world-book-list output to a card's
-        // character/character_aux bindings. In global scope, `avatar` is
-        // an empty string, which `createCharacterEditorWorldBookListToolApi`
-        // accepts: it falls back to listing chat-bound and globally-active
-        // books only (the right surface for a global orchestration).
+        // Lorebook tools are plugin-agnostic; the avatar scopes
+        // `world_book_list` to a card's bindings. In global scope, the
+        // avatar is an empty string and `world_book_list` falls back to
+        // listing chat-bound and globally-active books only.
         const avatarForReads = String(context?.characters?.[context?.characterId]?.avatar || '').trim();
-        const helperApisForReads = getCea().buildCharacterEditorHelperApis(context, { avatar: avatarForReads });
         const persistedToolResults = [];
         // Plan 2 Unit 7: skill_bind_to_agent / skill_unbind_from_agent /
         // skill_set_mode_defaults / skill_replace_in_systemprompt mutate the
@@ -2368,7 +2349,7 @@ export async function openOrchestratorIterationStudio(deps) {
                         statusLabel = 'fail';
                     }
                 } else if (isLorebookWriteTool(call?.name)) {
-                    const out = await runLorebookWriteTool({ id: callId, name: call?.name, args: call?.args }, helperApisForReads);
+                    const out = await runLorebookWriteTool({ id: callId, name: call?.name, args: call?.args });
                     if (out?.ok && out.result && typeof out.result === 'object' && out.result.before && out.result.after) {
                         // Proposal mode: the write tool's helper-api invoke
                         // returned a {before, after, kind} envelope and did
@@ -2428,7 +2409,7 @@ export async function openOrchestratorIterationStudio(deps) {
                         statusLabel = 'fail';
                     }
                 } else {
-                    const out = await runLorebookReadTool({ id: callId, name: call?.name, args: call?.args }, helperApisForReads);
+                    const out = await runLorebookReadTool({ id: callId, name: call?.name, args: call?.args }, avatarForReads);
                     if (out?.ok) {
                         resultPayload = out.result;
                     } else {
@@ -2674,7 +2655,7 @@ export async function openOrchestratorIterationStudio(deps) {
     /**
      * Commit approved pending lorebook proposals to disk. Walks the
      * approved entries in order and calls
-     * applyCharacterEditorLorebookCommit for each — successful commits are
+     * applyLorebookProposal for each — successful commits are
      * dropped from state.pendingLorebookEdits; rejected entries are also
      * dropped (decision is final); pending (undecided) entries are
      * preserved so the user can come back to them. On per-entry failure,
@@ -2721,13 +2702,13 @@ export async function openOrchestratorIterationStudio(deps) {
         for (const entry of approved) {
             try {
                 // Re-derive the after-image against the entry's CURRENT
-                // on-disk state via applyCharacterEditorLorebookProposal —
-                // not the snapshot `entry.after` captured at proposal time.
-                // This makes multi-proposal chains for the same book#uid
-                // commit correctly (proposal B's mutation lands on top of
-                // proposal A's already-committed state) and surfaces
-                // parallel-session drift as a fresh validation error.
-                await getCea().applyCharacterEditorLorebookProposal(context, {
+                // on-disk state via applyLorebookProposal — not the
+                // snapshot `entry.after` captured at proposal time. This
+                // makes multi-proposal chains for the same book#uid commit
+                // correctly (proposal B's mutation lands on top of proposal
+                // A's already-committed state) and surfaces parallel-session
+                // drift as a fresh validation error.
+                await applyLorebookProposal(context, {
                     kind: entry.op?.kind ?? entry.kind,
                     args: entry.op?.args ?? {},
                 });
@@ -3351,7 +3332,7 @@ export async function openOrchestratorIterationStudio(deps) {
     // Per-proposal approve/reject/undo for pending lorebook edits. These
     // only flip the local status flag on state.pendingLorebookEdits; actual
     // disk writes happen at apply-batch time (orch profile commits first,
-    // then approved lorebook proposals via applyCharacterEditorLorebookCommit).
+    // then approved lorebook proposals via applyLorebookProposal).
     $root.on('click.orchIt', '[data-orch-it-action="approve-lorebook"]', async (e) => {
         e.preventDefault(); e.stopPropagation();
         const id = String($(e.currentTarget).attr('data-orch-it-pending-id') || '');
