@@ -78,6 +78,7 @@ import {
     uuidv4,
 } from './utils.js';
 import { countTokensOpenAIAsync, countTokensOpenAIItemsAsync, getTokenizerModel } from './tokenizers.js';
+import { extractStreamingUsage, mergeStreamingUsage } from './openai-streaming-usage.js';
 import { isMobile } from './RossAscends-mods.js';
 import { saveLogprobsForActiveMessage } from './logprobs.js';
 import { persistPreset } from './preset-persistence.js';
@@ -4168,7 +4169,7 @@ async function sendOpenAIRequest(type, messages, signal, {
             let text = '';
             const swipes = [];
             const toolCalls = [];
-            const state = { reasoning: '', images: [], signature: '', toolSignatures: {} };
+            const state = { reasoning: '', images: [], signature: '', toolSignatures: {}, usage: null };
             const plainTextToolCallDetector = runtimeFunctionCallContext
                 ? new PlainTextFunctionCallStreamDetector({ triggerSignal: runtimeFunctionCallContext.triggerSignal })
                 : null;
@@ -4282,6 +4283,11 @@ async function sendOpenAIRequest(type, messages, signal, {
                 }
 
                 ToolManager.parseToolCalls(toolCalls, parsed, state.toolSignatures, { force: normalizedTools.length > 0 });
+
+                const usageDelta = extractStreamingUsage(parsed, requestSettings.chat_completion_source);
+                if (usageDelta) {
+                    state.usage = mergeStreamingUsage(state.usage, usageDelta);
+                }
 
                 yield { text, swipes: swipes, logprobs: parseChatCompletionLogprobs(parsed), toolCalls: toolCalls, state: state };
             }
