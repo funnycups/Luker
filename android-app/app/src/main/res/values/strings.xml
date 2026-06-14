@@ -26,6 +26,7 @@
     <string name="runtime_notification_title">Luker</string>
     <string name="runtime_notification_text">Local service is running in the background</string>
     <string name="runtime_notification_endpoint">Endpoint</string>
+    <string name="runtime_notification_reload">Reload</string>
     <string name="runtime_notification_exit">Exit App</string>
     <string name="loading_custom_endpoint">Connecting to endpoint: %1$s</string>
     <string name="endpoint_status_notification_channel_name">Luker Custom Endpoint</string>

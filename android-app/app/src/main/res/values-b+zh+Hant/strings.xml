@@ -26,6 +26,7 @@
     <string name="runtime_notification_title">Luker</string>
     <string name="runtime_notification_text">本地服務正在背景執行</string>
     <string name="runtime_notification_endpoint">端點</string>
+    <string name="runtime_notification_reload">重新整理頁面</string>
     <string name="runtime_notification_exit">退出應用程式</string>
     <string name="loading_custom_endpoint">正在連線到端點：%1$s</string>
     <string name="endpoint_status_notification_channel_name">Luker 自訂端點</string>

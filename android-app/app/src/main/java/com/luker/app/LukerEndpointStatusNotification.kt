@@ -33,6 +33,16 @@ object LukerEndpointStatusNotification {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
+        val reloadIntent = PendingIntent.getActivity(
+            context,
+            1,
+            Intent(context, MainActivity::class.java).apply {
+                action = MainActivity.ACTION_RELOAD_WEBVIEW
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
         val endpointText = context.getString(
             R.string.endpoint_status_notification_text,
             selection.resolveBaseUrl(),
@@ -54,6 +64,11 @@ object LukerEndpointStatusNotification {
                 android.R.drawable.ic_menu_manage,
                 context.getString(R.string.runtime_notification_endpoint),
                 openEndpointSettingsIntent,
+            )
+            .addAction(
+                android.R.drawable.ic_menu_rotate,
+                context.getString(R.string.runtime_notification_reload),
+                reloadIntent,
             )
             .build()
 

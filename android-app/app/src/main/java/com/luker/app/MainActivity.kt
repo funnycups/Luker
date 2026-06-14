@@ -2123,11 +2123,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleLaunchIntent(intent: Intent?) {
-        if (intent?.action != ACTION_OPEN_ENDPOINT_SETTINGS) {
-            return
+        when (intent?.action) {
+            ACTION_OPEN_ENDPOINT_SETTINGS -> {
+                intent.action = null
+                window.decorView.post { showEndpointDialog() }
+            }
+            ACTION_RELOAD_WEBVIEW -> {
+                intent.action = null
+                if (this::webView.isInitialized) {
+                    webView.reload()
+                }
+            }
         }
-        intent.action = null
-        window.decorView.post { showEndpointDialog() }
     }
 
     private fun showEndpointDialog() {
@@ -2375,6 +2382,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         const val ACTION_OPEN_ENDPOINT_SETTINGS = "com.luker.app.action.OPEN_ENDPOINT_SETTINGS"
+        const val ACTION_RELOAD_WEBVIEW = "com.luker.app.action.RELOAD_WEBVIEW"
     }
 
     private data class StreamRequest(

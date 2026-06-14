@@ -76,6 +76,15 @@ class LukerRuntimeForegroundService : Service() {
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        val reloadIntent = PendingIntent.getActivity(
+            this,
+            3,
+            Intent(this, MainActivity::class.java).apply {
+                action = MainActivity.ACTION_RELOAD_WEBVIEW
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
         val exitIntent = PendingIntent.getService(
             this,
             2,
@@ -98,6 +107,11 @@ class LukerRuntimeForegroundService : Service() {
                 android.R.drawable.ic_menu_manage,
                 getString(R.string.runtime_notification_endpoint),
                 endpointIntent,
+            )
+            .addAction(
+                android.R.drawable.ic_menu_rotate,
+                getString(R.string.runtime_notification_reload),
+                reloadIntent,
             )
             .addAction(
                 android.R.drawable.ic_menu_close_clear_cancel,
