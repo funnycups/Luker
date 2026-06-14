@@ -176,8 +176,8 @@ describe('calculateGoogleBudgetTokens', () => {
     });
 
     describe('flash (non-gemini-3)', () => {
-        test('auto returns -1', () => {
-            expect(mod.calculateGoogleBudgetTokens(8192, 'auto', 'gemini-2.0-flash')).toBe(-1);
+        test('auto returns null', () => {
+            expect(mod.calculateGoogleBudgetTokens(8192, 'auto', 'gemini-2.0-flash')).toBeNull();
         });
 
         test('min returns 0', () => {

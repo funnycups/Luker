@@ -31,18 +31,8 @@
 
 import { describe, test, expect, jest } from '@jest/globals';
 
-// public/lib.js pulls in a browser bundle that can't be resolved under
-// jest. Mirror the workaround used by the other mg-schema-iteration tests.
-jest.unstable_mockModule('../../public/lib.js', async () => {
-    const { default: lodash } = await import('lodash');
-    return {
-        lodash,
-        showdown: {
-            Converter: class { makeHtml(text) { return `<p>${text}</p>`; } },
-        },
-        DOMPurify: { sanitize: (html) => html },
-    };
-});
+// public/lib.js is redirected to tests/util/lib-stub.js via jest config's
+// moduleNameMapper — no per-test mock needed.
 
 // popup.js drags in the entire UI shell — stub to no-op exports.
 jest.unstable_mockModule('../../public/scripts/popup.js', () => ({

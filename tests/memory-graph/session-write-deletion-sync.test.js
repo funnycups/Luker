@@ -60,17 +60,8 @@ const MOCKED_TARGET = Object.freeze({
 
 const extensionSettingsMock = { memory_graph: {} };
 
-// public/lib.js bundles vendor modules; request-compression pulls it in via
-// its bare `'/lib.js'` import. Provide the small surface main.js actually
-// touches plus the lodash default the test fixtures use.
-jest.unstable_mockModule('../../public/lib.js', async () => {
-    const { default: lodash } = await import('lodash');
-    return {
-        lodash,
-        showdown: { Converter: class { makeHtml(t) { return String(t || ''); } } },
-        DOMPurify: { sanitize: (h) => h },
-    };
-});
+// public/lib.js is redirected to tests/util/lib-stub.js via jest config's
+// moduleNameMapper — no per-test mock needed.
 jest.unstable_mockModule('../../public/scripts/request-compression.js', () => ({
     compressRequest: async (r) => r,
 }));

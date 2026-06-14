@@ -1,29 +1,16 @@
 // tests/iter-workspace/preview-renderers.test.js
 import { describe, test, expect, beforeAll, jest } from '@jest/globals';
 
-// public/lib.js pulls in a browser bundle that can't be resolved under jest.
-// Mirror the same workaround used by tests/cpa-iteration/tools.test.js:
-// stub the facade to a thin { lodash } re-export.
-jest.unstable_mockModule('../../public/lib.js', async () => {
-    const { default: lodash } = await import('lodash');
-    return {
-        lodash,
-        // showdown / DOMPurify are pulled in by render.js; stub to minimum.
-        showdown: {
-            Converter: class {
-                makeHtml(text) { return `<p>${text}</p>`; }
-            },
-        },
-        DOMPurify: {
-            sanitize: (html) => html,
-        },
-    };
-});
+// public/lib.js is redirected to tests/util/lib-stub.js via jest config's
+// moduleNameMapper — no per-test mock needed.
 
 // popup.js drags in the entire UI shell — stub to no-op exports.
 jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
     Popup: class { constructor() {} show() { return Promise.resolve(); } },
-    POPUP_TYPE: { DISPLAY: 0 },
+    POPUP_TYPE: { DISPLAY: 0, INPUT: 1, CONFIRM: 2 },
+    POPUP_RESULT: { CANCELLED: 0, AFFIRMATIVE: 1, NEGATIVE: 2 },
+    callGenericPopup: () => Promise.resolve(),
+    fixToastrForDialogs: () => {},
 }));
 
 // Runner pulls in iter-tool-calling which needs the LLM stack — stub.
