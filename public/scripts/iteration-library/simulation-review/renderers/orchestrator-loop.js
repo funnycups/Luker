@@ -3,6 +3,12 @@ import { appendShared, appendToolStatusChip, appendToolSourceChip, jsonOrText } 
 export function render(payload, i18n) {
     const root = document.createElement('div');
     root.className = 'luker-sim-review luker-sim-review--orch-loop';
+
+    if (payload?.capsule) {
+        const sec = appendShared.section(root, i18n('sim.section.capsule', 'Capsule'), 'Capsule', { isFinalOutput: true });
+        appendShared.pre(sec, payload.capsule);
+    }
+
     appendShared.note(root, `Termination: ${payload?.terminationReason || ''}`);
 
     const rounds = Array.isArray(payload?.rounds) ? payload.rounds : [];
@@ -30,9 +36,5 @@ export function render(payload, i18n) {
         });
     });
 
-    if (payload?.capsule) {
-        const sec = appendShared.section(root, i18n('sim.section.capsule', 'Capsule'), 'Capsule', { isFinalOutput: true });
-        appendShared.pre(sec, payload.capsule);
-    }
     return root;
 }

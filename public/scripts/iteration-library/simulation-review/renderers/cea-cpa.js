@@ -4,13 +4,13 @@ export function render(payload, i18n) {
     const root = document.createElement('div');
     root.className = 'luker-sim-review luker-sim-review--singleshot';
 
+    const out = appendShared.section(root, i18n('sim.section.final_output', 'Final Output'), 'Final Output', { isFinalOutput: true });
+    appendShared.pre(out, payload?.finalOutput || '');
+
     if (payload?.reasoning) {
         const sec = appendShared.section(root, i18n('sim.section.reasoning', 'Reasoning'), 'Reasoning', { collapsedByDefault: true });
         appendShared.pre(sec, payload.reasoning);
     }
-
-    const out = appendShared.section(root, i18n('sim.section.final_output', 'Final Output'), 'Final Output', { isFinalOutput: true });
-    appendShared.pre(out, payload?.finalOutput || '');
 
     if (payload?.assembledPrompt) {
         const ap = appendShared.section(root, i18n('sim.section.assembled_prompt', 'Assembled Prompt'), null, { collapsedByDefault: true });

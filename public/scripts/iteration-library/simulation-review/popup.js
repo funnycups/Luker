@@ -108,12 +108,6 @@ export async function openSimulationReview({ kind, payload, i18n, abortSignal, o
         });
         cleanupAnnotationListener = attachAnnotationListener(annotationHost, engine);
         attachCollapseToggles(annotationHost);
-
-        // Auto-scroll the final-output section into view so the popup
-        // opens with the most relevant content visible — director's 11
-        // rounds of sub-agent chatter make the popup unreadable
-        // otherwise. We schedule via rAF so the layout is settled.
-        scheduleScrollToFinalOutput(contentRoot, renderedNode);
     }
 
     mountContent(payload);
@@ -312,26 +306,6 @@ function attachAnnotationListener(host, engine) {
     return function cleanup() {
         host.removeEventListener('pointerup', onPointerUp);
     };
-}
-
-function scheduleScrollToFinalOutput(scrollContainer, renderedNode) {
-    // Defer scroll to after layout so getBoundingClientRect /
-    // scrollIntoView see settled positions. requestAnimationFrame is
-    // the canonical hook; in jsdom it's polyfilled to setTimeout(0)
-    // which is fine for tests.
-    const schedule = (typeof requestAnimationFrame === 'function')
-        ? requestAnimationFrame
-        : ((cb) => setTimeout(cb, 0));
-    schedule(() => {
-        try {
-            const target = renderedNode.querySelector('[data-sim-final-output="true"]');
-            if (target && typeof target.scrollIntoView === 'function') {
-                target.scrollIntoView({ behavior: 'auto', block: 'start' });
-            }
-        } catch (err) {
-            console.warn('[simulation-review/popup] auto-scroll failed', err);
-        }
-    });
 }
 
 function attachCollapseToggles(host) {

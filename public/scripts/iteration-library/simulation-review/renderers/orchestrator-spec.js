@@ -4,6 +4,11 @@ export function render(payload, i18n) {
     const root = document.createElement('div');
     root.className = 'luker-sim-review luker-sim-review--orch-spec';
 
+    if (typeof payload?.finalCapsule === 'string' && payload.finalCapsule) {
+        const sec = appendShared.section(root, i18n('sim.section.final_capsule', 'Final Capsule'), 'Final Capsule', { isFinalOutput: true });
+        appendShared.pre(sec, payload.finalCapsule);
+    }
+
     const stages = Array.isArray(payload?.stages) ? payload.stages : [];
     stages.forEach(stage => {
         const stageLabel = `Stage ${stage.stageIndex + 1}`;
@@ -21,10 +26,6 @@ export function render(payload, i18n) {
         });
     });
 
-    if (typeof payload?.finalCapsule === 'string' && payload.finalCapsule) {
-        const sec = appendShared.section(root, i18n('sim.section.final_capsule', 'Final Capsule'), 'Final Capsule', { isFinalOutput: true });
-        appendShared.pre(sec, payload.finalCapsule);
-    }
     return root;
 }
 

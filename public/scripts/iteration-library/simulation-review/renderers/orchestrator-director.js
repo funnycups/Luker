@@ -4,6 +4,10 @@ export function render(payload, i18n) {
     const root = document.createElement('div');
     root.className = 'luker-sim-review luker-sim-review--orch-director';
 
+    // Final message first — that's what the user opened the popup for.
+    const finSec = appendShared.section(root, i18n('sim.section.final_message', 'Final Message'), 'Final Message', { isFinalOutput: true });
+    appendShared.pre(finSec, payload?.finalMessage || '');
+
     const mainSec = appendShared.section(root, i18n('sim.section.main_agent', 'Main Agent'), null, { collapsedByDefault: true });
     const rounds = Array.isArray(payload?.mainAgent?.rounds) ? payload.mainAgent.rounds : [];
     rounds.forEach(round => {
@@ -44,7 +48,5 @@ export function render(payload, i18n) {
         appendShared.pre(out, sub.output || '');
     });
 
-    const finSec = appendShared.section(root, i18n('sim.section.final_message', 'Final Message'), 'Final Message', { isFinalOutput: true });
-    appendShared.pre(finSec, payload?.finalMessage || '');
     return root;
 }

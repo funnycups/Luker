@@ -4,6 +4,9 @@ export function render(payload, i18n) {
     const root = document.createElement('div');
     root.className = 'luker-sim-review luker-sim-review--orch-agenda';
 
+    const composedSec = appendShared.section(root, i18n('sim.section.final_composed', 'Final Composed Output'), 'Final Composed Output', { isFinalOutput: true });
+    appendShared.pre(composedSec, payload?.finalComposedOutput || '');
+
     const rounds = Array.isArray(payload?.rounds) ? payload.rounds : [];
     rounds.forEach(round => {
         const roundLabel = `Round ${round.roundIndex + 1}`;
@@ -33,8 +36,6 @@ export function render(payload, i18n) {
     const finOut = appendShared.subsection(finSec, i18n('sim.label.output', 'Output'), 'Finalizer → Output', { collapsedByDefault: true });
     appendShared.pre(finOut, finalizer.output || '');
 
-    const composedSec = appendShared.section(root, i18n('sim.section.final_composed', 'Final Composed Output'), 'Final Composed Output', { isFinalOutput: true });
-    appendShared.pre(composedSec, payload?.finalComposedOutput || '');
     return root;
 }
 
