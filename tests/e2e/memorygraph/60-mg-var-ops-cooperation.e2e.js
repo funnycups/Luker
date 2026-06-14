@@ -240,8 +240,8 @@ test.describe('#60 — MG + var_ops co-operation via macro evaluation', () => {
         ).not.toContain('{{getvar::');
     });
 
-    test.fail(
-        'real bug: ctx.setVariable(name, value) chat-scoped (no floor) calls saveMetadataDebounced which is not imported in public/script.js',
+    test(
+        'ctx.setVariable(name, value) chat-scoped (no floor) persists via saveMetadataDebounced',
         async ({ page }) => {
             await awaitMainUI(page, server.baseURL);
             await selectCharacterByName(page, 'Seraphina');
