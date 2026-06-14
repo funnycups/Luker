@@ -4087,9 +4087,19 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
     // proactively clear so a previous simulation that errored mid-flight
     // doesn't block a retry.
     try { clearCurrentRun(); } catch (_) { /* best-effort */ }
+    // Local controller so the run-panel's stop button can abort this
+    // simulation. linkAbortSignals folds the upstream iter abortSignal
+    // (already on eventData.abortSignal) and the local controller's signal
+    // into one — director-runtime aborts as soon as either fires. Re-point
+    // eventData.abortSignal at the linked signal so internal generateTask
+    // calls + throwIfAborted checks all see the union.
+    const simulationAbortController = new AbortController();
+    const linkedSimAbort = linkAbortSignals(eventData.abortSignal, simulationAbortController.signal);
+    if (linkedSimAbort.signal) eventData.abortSignal = linkedSimAbort.signal;
     const directorRunId = startRun({
         mode: 'director',
         chatKey: getChatKey(context),
+        abortFn: () => { try { simulationAbortController.abort(); } catch (_) { /* best-effort */ } },
     });
 
     try {
@@ -4154,6 +4164,7 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
         finalText = latestText;
     }
     void latestReasoning;
+    try { linkedSimAbort.cleanup(); } catch (_) { /* best-effort */ }
     const liveRun = getCurrentRun();
     // structuredClone strips the abortFn (functions are non-clonable) and
     // gives the caller a stable snapshot independent of the live store —
@@ -7895,15 +7906,15 @@ jQuery(() => {
                     return context.chat.length;
                 };
 
-                // Open the run-panel store for this director turn. The
-                // abortFn binds to `activeOrchRunAbortController` so the
-                // panel's stop button can halt the in-flight director.
+                // Open the run-panel store for this director turn. abortFn
+                // calls ST's stopGeneration() — same effect as the user
+                // pressing the global stop button. abortController.signal
+                // (which director-runtime consumes via eventData.abortSignal)
+                // goes aborted and the run unwinds.
                 const directorRunId = startRun({
                     mode: 'director',
                     chatKey: getChatKey(context),
-                    abortFn: () => {
-                        try { abortActiveOrchestratorRun(); } catch (_) { /* best-effort */ }
-                    },
+                    abortFn: () => { try { getContext().stopGeneration(); } catch (_) { /* best-effort */ } },
                 });
 
                 await handleDirectorDispatch(eventData, {

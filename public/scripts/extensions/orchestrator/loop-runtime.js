@@ -739,9 +739,7 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
     const runId = startRun({
         mode: 'loop',
         chatKey,
-        abortFn: abortSignal ? () => {
-            try { abortSignal.dispatchEvent && abortSignal.dispatchEvent(new Event('abort')); } catch (_) { /* best-effort */ }
-        } : null,
+        abortFn: () => { try { context.stopGeneration?.(); } catch (_) { /* best-effort */ } },
     });
 
     const messages = buildInitialMessages(toolContext, payload, profile);

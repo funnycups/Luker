@@ -1413,9 +1413,7 @@ export async function runSpecOrchestration(context, payload, messages, profile) 
     const runId = startRun({
         mode: 'spec',
         chatKey,
-        abortFn: abortSignal ? () => {
-            try { abortSignal.dispatchEvent && abortSignal.dispatchEvent(new Event('abort')); } catch (_) { /* best-effort */ }
-        } : null,
+        abortFn: () => { try { Luker.getContext().stopGeneration(); } catch (_) { /* best-effort */ } },
     });
     const runtime = {
         stages,
